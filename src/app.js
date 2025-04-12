@@ -6,8 +6,6 @@ import { initFirebase } from './firebase/admin.js'; // 👈 importar Firebase
 dotenv.config();
 initFirebase();
 
-console.log("🧪 Firebase PRIVATE_KEY:", process.env.FIREBASE_PRIVATE_KEY ? '✅ CARGADA' : '❌ VACÍA');
-
 import authRoutes from './routes/auth.js';
 
 const app = express();
