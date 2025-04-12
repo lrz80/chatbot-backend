@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import { initFirebase } from './firebase/admin.js'; // 👈 importar Firebase
 
 dotenv.config();
-initFirebase(); // 👈 inicializar Firebase
+initFirebase();
 
 console.log("🧪 Firebase PRIVATE_KEY:", process.env.FIREBASE_PRIVATE_KEY ? '✅ CARGADA' : '❌ VACÍA');
 
