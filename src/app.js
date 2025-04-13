@@ -25,10 +25,11 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
-// 👀 Keep-alive para Railway
 const SELF_URL = process.env.SELF_URL || `http://localhost:${PORT}`;
+
 setInterval(() => {
-  fetch(SELF_URL)
-    .then(() => console.log('🔁 Ping interno enviado para mantener activo'))
-    .catch(err => console.error('⚠️ Error en ping interno:', err.message));
-}, 4 * 60 * 1000); // cada 4 minutos
+  globalThis
+    .fetch(SELF_URL)
+    .then(() => console.log('🔁 Keep-alive ping enviado'))
+    .catch(err => console.error('⚠️ Error al hacer ping interno:', err.message));
+}, 1000 * 60 * 4); // Cada 4 minutos
