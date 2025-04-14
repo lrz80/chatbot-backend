@@ -1,11 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { initFirebase } from './firebase/admin.js'; // 👈 importar Firebase
-import fetch from 'node-fetch'; // si estás en Node <18
 
 dotenv.config();
-initFirebase();
 
 import authRoutes from './routes/auth.js';
 
