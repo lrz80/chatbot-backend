@@ -3,7 +3,7 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import pool from '../lib/db';
+import pool from '../lib/db.js';
 import { v4 as uuidv4 } from 'uuid';
 
 const router = express.Router();
