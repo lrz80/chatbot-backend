@@ -1,25 +1,87 @@
 import express from 'express';
-import { getAuth } from 'firebase-admin/auth';
-import { initFirebase } from '../firebase/admin.js';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+import pool from '../lib/db.js';
+import { v4 as uuidv4 } from 'uuid';
 
-initFirebase();
 const router = express.Router();
-
-router.post('/login', async (req, res) => {
-  return res.status(501).send("Handled on frontend using Firebase SDK.");
-});
+const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
 router.post('/register', async (req, res) => {
-  return res.status(501).send("Handled on frontend using Firebase SDK.");
+  const { nombre, apellido, email, telefono, password } = req.body;
+
+  if (!nombre || !apellido || !email || !telefono || !password) {
+    return res.status(400).json({ error: 'Todos los campos son requeridos' });
+  }
+
+  try {
+    const exists = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (exists.rows.length > 0) {
+      return res.status(409).json({ error: 'El correo ya está registrado' });
+    }
+
+    const password_hash = await bcrypt.hash(password, 10);
+    const uid = uuidv4();
+    const owner_name = `${nombre} ${apellido}`;
+
+    await pool.query(
+      `INSERT INTO users (uid, email, password, role, owner_name) VALUES ($1, $2, $3, $4, $5)`,
+      [uid, email, password_hash, 'admin', owner_name]
+    );
+
+    const token = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '7d' });
+
+    res.status(201).json({ token, uid });
+  } catch (error) {
+    console.error('❌ Error en registro:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Correo y contraseña requeridos' });
+  }
+
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const user = result.rows[0];
+
+    if (!user) {
+      return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+      return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+
+    const token = jwt.sign({ uid: user.uid, email: user.email }, JWT_SECRET, {
+      expiresIn: '7d',
+    });
+
+    res.status(200).json({ token, uid: user.uid });
+  } catch (error) {
+    console.error('❌ Error en login:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
 });
 
 router.post('/validate', async (req, res) => {
   const { token } = req.body;
+
+  if (!token) {
+    return res.status(400).json({ error: 'Token requerido' });
+  }
+
   try {
-    const decodedToken = await getAuth().verifyIdToken(token);
-    res.status(200).json({ uid: decodedToken.uid });
+    const decoded = jwt.verify(token, JWT_SECRET);
+    res.status(200).json({ uid: decoded.uid, email: decoded.email });
   } catch (error) {
-    res.status(401).json({ error: "Invalid token" });
+    console.error('❌ Token inválido:', error);
+    res.status(401).json({ error: 'Token inválido' });
   }
 });
 
