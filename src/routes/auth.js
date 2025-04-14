@@ -1,12 +1,15 @@
+// 📁 chatbot-backend/src/routes/auth.ts
+
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import pool from '../lib/db.js';
+import pool from '../lib/db';
 import { v4 as uuidv4 } from 'uuid';
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
+// ✅ Registro adaptado
 router.post('/register', async (req, res) => {
   const { nombre, apellido, email, telefono, password } = req.body;
 
@@ -25,12 +28,12 @@ router.post('/register', async (req, res) => {
     const owner_name = `${nombre} ${apellido}`;
 
     await pool.query(
-      `INSERT INTO users (uid, email, password, role, owner_name) VALUES ($1, $2, $3, $4, $5)`,
+      `INSERT INTO users (uid, email, password, role, owner_name, created_at)
+       VALUES ($1, $2, $3, $4, $5, NOW())`,
       [uid, email, password_hash, 'admin', owner_name]
     );
 
     const token = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '7d' });
-
     res.status(201).json({ token, uid });
   } catch (error) {
     console.error('❌ Error en registro:', error);
@@ -38,6 +41,7 @@ router.post('/register', async (req, res) => {
   }
 });
 
+// ✅ Login
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
@@ -69,6 +73,7 @@ router.post('/login', async (req, res) => {
   }
 });
 
+// ✅ Validar token JWT
 router.post('/validate', async (req, res) => {
   const { token } = req.body;
 
