@@ -1,6 +1,5 @@
 // 📁 src/app.ts
 import express from 'express';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 
@@ -28,7 +27,7 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   }
   if (req.method === 'OPTIONS') {
-    return res.sendStatus(204); // ⬅️ Muy importante
+    return res.sendStatus(204); // ✅ responde preflight manualmente
   }
   next();
 });
