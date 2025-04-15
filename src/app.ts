@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 import authRoutes from './routes/auth';
 import settingsRoutes from './routes/settings'; // ✅ Importa el nuevo archivo
 import dotenv from 'dotenv';
+import tenantRoutes from './routes/tenants';
 
 dotenv.config();
 
@@ -39,6 +40,8 @@ app.use('/api/settings', settingsRoutes); // ✅ Ruta de settings agregada
 app.get('/', (req, res) => {
   res.send('Backend corriendo 🟢');
 });
+
+app.use('/api/tenants', tenantRoutes);
 
 // ✅ Servidor
 app.listen(PORT, () => {
