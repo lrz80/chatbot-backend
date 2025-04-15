@@ -1,5 +1,8 @@
+[phases.setup]
+nixPkgs = ["nodejs", "coreutils"]
+
 [phases.build]
-cmds = ["npm install", "npx tsc"]
+cmds = ["npx tsc"]
 
 [start]
 cmd = "node dist/app.js"
