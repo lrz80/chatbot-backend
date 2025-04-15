@@ -17,17 +17,21 @@ const allowedOrigins = [
   'https://www.aamy.ai',
 ];
 
-// CORS Middleware seguro con credentials
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error(`❌ Not allowed by CORS: ${origin}`));
-    }
-  },
-  credentials: true,
-}));
+// CORS config que funciona con cookies en producción
+
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204); // ⬅️ Muy importante
+  }
+  next();
+});
 
 app.use(express.json());
 app.use(cookieParser());
