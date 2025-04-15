@@ -16,6 +16,12 @@
     "pg": "^8.14.1"
   },
   "devDependencies": {
-    "nodemon": "^2.0.22"
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
+    "@types/jsonwebtoken": "^9.0.9",
+    "@types/pg": "^8.11.13",
+    "@types/uuid": "^10.0.0",
+    "nodemon": "^2.0.22",
+    "typescript": "^5.8.3"
   }
 }
