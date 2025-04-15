@@ -2,9 +2,9 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
-
 import authRoutes from './routes/auth';
 import settingsRoutes from './routes/settings';
+import cors from 'cors';
 
 dotenv.config();
 
@@ -13,18 +13,19 @@ const app = express();
 // ✅ Middleware manual para CORS con cookies
 const allowedOrigins = [
   'http://localhost:3000',
-  'https://www.aamy.ai',
+  'https://www.aamy.ai'
 ];
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+
   if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   }
-  console.log("🟢 CORS configurado correctamente");
+
+  res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
 
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
