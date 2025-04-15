@@ -1,5 +1,3 @@
-// 📁 src/routes/settings.ts
-
 import { Router, Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
@@ -8,7 +6,7 @@ const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
 router.get('/', async (req: Request, res: Response) => {
-  const token = req.cookies.token; // ✅ Leer token desde cookie
+  const token = req.cookies.token;
 
   if (!token) {
     return res.status(401).json({ error: 'Token requerido' });
@@ -30,7 +28,7 @@ router.get('/', async (req: Request, res: Response) => {
       owner_name: user.owner_name,
     });
   } catch (error) {
-    console.error('❌ Error en /settings:', error);
+    console.error('❌ Error en /api/settings:', error);
     return res.status(401).json({ error: 'Token inválido' });
   }
 });

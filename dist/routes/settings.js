@@ -1,5 +1,4 @@
 "use strict";
-// 📁 src/routes/settings.ts
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -10,7 +9,7 @@ const db_1 = __importDefault(require("../lib/db"));
 const router = (0, express_1.Router)();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 router.get('/', async (req, res) => {
-    const token = req.cookies.token; // ✅ Leer token desde cookie
+    const token = req.cookies.token;
     if (!token) {
         return res.status(401).json({ error: 'Token requerido' });
     }
@@ -28,7 +27,7 @@ router.get('/', async (req, res) => {
         });
     }
     catch (error) {
-        console.error('❌ Error en /settings:', error);
+        console.error('❌ Error en /api/settings:', error);
         return res.status(401).json({ error: 'Token inválido' });
     }
 });

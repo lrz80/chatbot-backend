@@ -1,8 +1,8 @@
-// 📁 src/app.ts
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import authRoutes from './routes/auth';
+import settingsRoutes from './routes/settings'; // ✅ Importa el nuevo archivo
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -33,8 +33,9 @@ app.use(cookieParser());
 
 // ✅ Rutas
 app.use('/auth', authRoutes);
+app.use('/api/settings', settingsRoutes); // ✅ Ruta de settings agregada
 
-// ✅ Opcional: ping de salud
+// ✅ Ping de salud
 app.get('/', (req, res) => {
   res.send('Backend corriendo 🟢');
 });
