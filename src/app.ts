@@ -1,61 +1,45 @@
 // 📁 src/app.ts
 import express from 'express';
-import dotenv from 'dotenv';
+import cors from 'cors';
 import cookieParser from 'cookie-parser';
-
 import authRoutes from './routes/auth';
-import settingsRoutes from './routes/settings';
+import dotenv from 'dotenv';
 
 dotenv.config();
 
 const app = express();
+const PORT = process.env.PORT || 3001;
 
 const allowedOrigins = [
   'http://localhost:3000',
   'https://www.aamy.ai',
 ];
 
-// 🚫 No uses app.use(cors(...)) aquí
+// ✅ CORS middleware
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+}));
 
-// ✅ Middleware CORS personalizado
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin && allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  }
-
-  res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204);
-  }
-
-  next();
-});
-
+// ✅ Middlewares base
 app.use(express.json());
 app.use(cookieParser());
 
+// ✅ Rutas
 app.use('/auth', authRoutes);
-app.use('/api/settings', settingsRoutes);
 
-const PORT = process.env.PORT || 8080;
-
+// ✅ Opcional: ping de salud
 app.get('/', (req, res) => {
-  res.send('✅ Backend activo');
+  res.send('Backend corriendo 🟢');
 });
 
+// ✅ Servidor
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
 });
-
-const SELF_URL = process.env.SELF_URL || `http://localhost:${PORT}`;
-
-setInterval(() => {
-  globalThis
-    .fetch(SELF_URL)
-    .then(() => console.log('🔁 Keep-alive ping enviado'))
-    .catch(err => console.error('⚠️ Error al hacer ping interno:', err.message));
-}, 1000 * 30); // cada 30 segundos
