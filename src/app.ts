@@ -10,7 +10,7 @@ dotenv.config();
 
 const app = express();
 
-// ✅ Middleware CORS manual compatible con cookies
+// ✅ Middleware manual para CORS con credenciales
 const allowedOrigins = [
   'http://localhost:3000',
   'https://www.aamy.ai',
