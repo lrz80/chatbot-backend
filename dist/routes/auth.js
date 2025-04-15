@@ -1,14 +1,5 @@
 "use strict";
 // 📁 src/routes/auth.ts
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -22,20 +13,20 @@ const router = (0, express_1.Router)();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 // ✅ Registro
 router.post('/register', (req, res) => {
-    (() => __awaiter(void 0, void 0, void 0, function* () {
+    (async () => {
         const { nombre, apellido, email, telefono, password } = req.body;
         if (!nombre || !apellido || !email || !telefono || !password) {
             return res.status(400).json({ error: 'Todos los campos son requeridos' });
         }
         try {
-            const exists = yield db_1.default.query('SELECT * FROM users WHERE email = $1', [email]);
+            const exists = await db_1.default.query('SELECT * FROM users WHERE email = $1', [email]);
             if (exists.rows.length > 0) {
                 return res.status(409).json({ error: 'El correo ya está registrado' });
             }
-            const password_hash = yield bcryptjs_1.default.hash(password, 10);
+            const password_hash = await bcryptjs_1.default.hash(password, 10);
             const uid = (0, uuid_1.v4)();
             const owner_name = `${nombre} ${apellido}`;
-            yield db_1.default.query(`INSERT INTO users (uid, email, password, role, owner_name, created_at)
+            await db_1.default.query(`INSERT INTO users (uid, email, password, role, owner_name, created_at)
          VALUES ($1, $2, $3, $4, $5, NOW())`, [uid, email, password_hash, 'admin', owner_name]);
             const token = jsonwebtoken_1.default.sign({ uid, email }, JWT_SECRET, { expiresIn: '7d' });
             res.status(201).json({ token, uid });
@@ -44,22 +35,22 @@ router.post('/register', (req, res) => {
             console.error('❌ Error en registro:', error);
             res.status(500).json({ error: 'Error interno del servidor' });
         }
-    }))();
+    })();
 });
 // ✅ Login
 router.post('/login', (req, res) => {
-    (() => __awaiter(void 0, void 0, void 0, function* () {
+    (async () => {
         const { email, password } = req.body;
         if (!email || !password) {
             return res.status(400).json({ error: 'Correo y contraseña requeridos' });
         }
         try {
-            const result = yield db_1.default.query('SELECT * FROM users WHERE email = $1', [email]);
+            const result = await db_1.default.query('SELECT * FROM users WHERE email = $1', [email]);
             const user = result.rows[0];
             if (!user) {
                 return res.status(401).json({ error: 'Credenciales inválidas' });
             }
-            const match = yield bcryptjs_1.default.compare(password, user.password);
+            const match = await bcryptjs_1.default.compare(password, user.password);
             if (!match) {
                 return res.status(401).json({ error: 'Credenciales inválidas' });
             }
@@ -72,11 +63,11 @@ router.post('/login', (req, res) => {
             console.error('❌ Error en login:', error);
             res.status(500).json({ error: 'Error interno del servidor' });
         }
-    }))();
+    })();
 });
 // ✅ Validación de token
 router.post('/validate', (req, res) => {
-    (() => __awaiter(void 0, void 0, void 0, function* () {
+    (async () => {
         const { token } = req.body;
         if (!token) {
             return res.status(400).json({ error: 'Token requerido' });
@@ -92,6 +83,6 @@ router.post('/validate', (req, res) => {
             console.error('❌ Token inválido:', error);
             res.status(401).json({ error: 'Token inválido' });
         }
-    }))();
+    })();
 });
 exports.default = router;
