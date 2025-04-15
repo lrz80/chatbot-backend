@@ -11,17 +11,19 @@ dotenv.config();
 
 const app = express();
 
+// Lista blanca de dominios permitidos (local + producción)
 const allowedOrigins = [
   'http://localhost:3000',
-  'https://www.aamy.ai'
+  'https://www.aamy.ai',
 ];
 
+// CORS Middleware seguro con credentials
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error(`❌ Not allowed by CORS: ${origin}`));
     }
   },
   credentials: true,
@@ -43,6 +45,7 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
+// Ping para mantener Railway activo
 const SELF_URL = process.env.SELF_URL || `http://localhost:${PORT}`;
 
 setInterval(() => {
@@ -50,4 +53,4 @@ setInterval(() => {
     .fetch(SELF_URL)
     .then(() => console.log('🔁 Keep-alive ping enviado'))
     .catch(err => console.error('⚠️ Error al hacer ping interno:', err.message));
-}, 1000 * 30); // cada 30 segundos
+}, 1000 * 30);
