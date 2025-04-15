@@ -10,13 +10,11 @@ dotenv.config();
 
 const app = express();
 
-// Lista blanca de dominios permitidos (local + producción)
+// ✅ Middleware CORS manual compatible con cookies
 const allowedOrigins = [
   'http://localhost:3000',
   'https://www.aamy.ai',
 ];
-
-// CORS config que funciona con cookies en producción
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
@@ -26,9 +24,11 @@ app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   }
+
   if (req.method === 'OPTIONS') {
-    return res.sendStatus(204); // ✅ responde preflight manualmente
+    return res.sendStatus(204);
   }
+
   next();
 });
 
@@ -48,7 +48,6 @@ app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
 
-// Ping para mantener Railway activo
 const SELF_URL = process.env.SELF_URL || `http://localhost:${PORT}`;
 
 setInterval(() => {
@@ -56,4 +55,4 @@ setInterval(() => {
     .fetch(SELF_URL)
     .then(() => console.log('🔁 Keep-alive ping enviado'))
     .catch(err => console.error('⚠️ Error al hacer ping interno:', err.message));
-}, 1000 * 30);
+}, 1000 * 30); // cada 30 segundos
