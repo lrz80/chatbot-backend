@@ -37,10 +37,10 @@ router.post('/register', async (req: Request, res: Response) => {
 
     res.cookie('token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // ⚠️ para cookies cross-domain
+      secure: true,           // 🔒 siempre true en producción HTTPS
+      sameSite: 'none',       // 🌍 necesario para cross-domain
       maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    });    
 
     res.status(201).json({ uid });
   } catch (error) {
@@ -76,10 +76,10 @@ router.post('/login', async (req: Request, res: Response) => {
 
     res.cookie('token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      secure: true,           // 🔒 siempre true en producción HTTPS
+      sameSite: 'none',       // 🌍 necesario para cross-domain
       maxAge: 7 * 24 * 60 * 60 * 1000,
-    });
+    });    
 
     res.status(200).json({ uid: user.uid });
   } catch (error) {
