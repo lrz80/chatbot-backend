@@ -10,7 +10,7 @@ dotenv.config();
 
 const app = express();
 
-// ✅ Middleware manual para CORS con credenciales
+// ✅ Middleware manual para CORS con cookies
 const allowedOrigins = [
   'http://localhost:3000',
   'https://www.aamy.ai',
@@ -49,10 +49,9 @@ app.listen(PORT, () => {
 });
 
 const SELF_URL = process.env.SELF_URL || `http://localhost:${PORT}`;
-
 setInterval(() => {
   globalThis
     .fetch(SELF_URL)
     .then(() => console.log('🔁 Keep-alive ping enviado'))
     .catch(err => console.error('⚠️ Error al hacer ping interno:', err.message));
-}, 1000 * 30); // cada 30 segundos
+}, 1000 * 30);
