@@ -16,7 +16,7 @@ app.use(express.json());
 app.use('/auth', authRoutes);
 app.use('/api/settings', settingsRoutes);
 
-const PORT = process.env.PORT || 8080;
+const PORT = process.env.PORT as string;
 
 app.get('/', (req, res) => {
   res.send('✅ Backend activo');
@@ -33,4 +33,4 @@ setInterval(() => {
     .fetch(SELF_URL)
     .then(() => console.log('🔁 Keep-alive ping enviado'))
     .catch(err => console.error('⚠️ Error al hacer ping interno:', err.message));
-}, 1000 * 60 * 4); // Cada 4 minutos
+}, 1000 * 30); // Cada 30 segundos
