@@ -5,6 +5,8 @@ import authRoutes from './routes/auth';
 import settingsRoutes from './routes/settings'; // ✅ Importa el nuevo archivo
 import dotenv from 'dotenv';
 import tenantRoutes from './routes/tenants';
+import promptRoutes from './routes/prompt';
+import voiceConfigRoutes from './routes/voiceConfig';
 
 dotenv.config();
 
@@ -42,6 +44,8 @@ app.get('/', (req, res) => {
 });
 
 app.use('/api/tenants', tenantRoutes);
+app.use('/api/prompt', promptRoutes);
+app.use('/api/voice-config', voiceConfigRoutes);
 
 // ✅ Servidor
 app.listen(PORT, () => {
