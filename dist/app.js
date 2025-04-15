@@ -5,27 +5,39 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 // 📁 src/app.ts
 const express_1 = __importDefault(require("express"));
-const cors = require('cors'); // ✅ compatible con TypeScript sin errores
-const dotenv_1 = __importDefault(require("dotenv"));
+const cors_1 = __importDefault(require("cors"));
+const cookie_parser_1 = __importDefault(require("cookie-parser"));
 const auth_1 = __importDefault(require("./routes/auth"));
-const settings_1 = __importDefault(require("./routes/settings"));
+const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
-app.use(cors());
+const PORT = process.env.PORT || 3001;
+const allowedOrigins = [
+    'http://localhost:3000',
+    'https://www.aamy.ai',
+];
+// ✅ CORS middleware
+app.use((0, cors_1.default)({
+    origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        }
+        else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+}));
+// ✅ Middlewares base
 app.use(express_1.default.json());
+app.use((0, cookie_parser_1.default)());
+// ✅ Rutas
 app.use('/auth', auth_1.default);
-app.use('/api/settings', settings_1.default);
-const PORT = process.env.PORT || 8080;
+// ✅ Opcional: ping de salud
 app.get('/', (req, res) => {
-    res.send('✅ Backend activo');
+    res.send('Backend corriendo 🟢');
 });
+// ✅ Servidor
 app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
 });
-const SELF_URL = process.env.SELF_URL || `http://localhost:${PORT}`;
-setInterval(() => {
-    globalThis
-        .fetch(SELF_URL)
-        .then(() => console.log('🔁 Keep-alive ping enviado'))
-        .catch(err => console.error('⚠️ Error al hacer ping interno:', err.message));
-}, 1000 * 60 * 4); // Cada 4 minutos
