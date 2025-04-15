@@ -2,23 +2,24 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
+
 import authRoutes from './routes/auth';
 import settingsRoutes from './routes/settings';
-import cors from 'cors';
 
 dotenv.config();
 
 const app = express();
 
-// ✅ Middleware manual para CORS con cookies
 const allowedOrigins = [
   'http://localhost:3000',
-  'https://www.aamy.ai'
+  'https://www.aamy.ai',
 ];
 
+// 🚫 No uses app.use(cors(...)) aquí
+
+// ✅ Middleware CORS personalizado
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-
   if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
@@ -51,9 +52,10 @@ app.listen(PORT, () => {
 });
 
 const SELF_URL = process.env.SELF_URL || `http://localhost:${PORT}`;
+
 setInterval(() => {
   globalThis
     .fetch(SELF_URL)
     .then(() => console.log('🔁 Keep-alive ping enviado'))
     .catch(err => console.error('⚠️ Error al hacer ping interno:', err.message));
-}, 1000 * 30);
+}, 1000 * 30); // cada 30 segundos
