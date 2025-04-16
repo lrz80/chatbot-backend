@@ -34,14 +34,14 @@ router.get('/', async (req: Request, res: Response) => {
       uid: user.uid,
       email: user.email,
       owner_name: user.owner_name,
+      membresia_activa: tenant?.membresia_activa ?? false,
+      membresia_vigencia: tenant?.membresia_vigencia ?? null,
       negocio: tenant
         ? {
             tenant_id: tenant.id,
             nombre_negocio: tenant.name,
             slug: tenant.slug,
             plan: tenant.plan,
-            membresia_activa: tenant.membresia_activa,
-            membresia_vigencia: tenant.membresia_vigencia,
             idioma: tenant.idioma,
             categoria: tenant.categoria,
             prompt: tenant.prompt,
@@ -51,7 +51,7 @@ router.get('/', async (req: Request, res: Response) => {
             horario_atencion: tenant.horario_atencion,
           }
         : null,
-    });
+    });    
   } catch (error) {
     console.error('❌ Error en /api/settings:', error);
     return res.status(401).json({ error: 'Token inválido' });
