@@ -28,10 +28,10 @@ router.post('/register', async (req: Request, res: Response) => {
     const owner_name = `${nombre} ${apellido}`;
 
     await pool.query(
-      `INSERT INTO users (uid, email, password, role, owner_name, created_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())`,
-      [uid, email, password_hash, 'admin', owner_name]
-    );
+      `INSERT INTO users (uid, email, password, role, owner_name, telefono, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+      [uid, email, password_hash, 'admin', owner_name, telefono]
+    );    
 
     const token = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '7d' });
 
