@@ -7,6 +7,7 @@ import pool from '../lib/db';
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
+// GET: Obtener perfil del negocio
 router.get('/', async (req: Request, res: Response) => {
   const token = req.cookies.token;
 
@@ -17,19 +18,14 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
 
-    // Obtener datos del usuario
     const userRes = await pool.query('SELECT * FROM users WHERE uid = $1', [decoded.uid]);
     const user = userRes.rows[0];
 
-    if (!user) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    // Buscar tenant que le pertenece
     const tenantRes = await pool.query('SELECT * FROM tenants WHERE admin_uid = $1', [user.uid]);
     const tenant = tenantRes.rows[0];
 
-    // ✅ Si no tiene tenant, permite continuar pero con negocio = null
     return res.status(200).json({
       uid: user.uid,
       email: user.email,
@@ -46,12 +42,17 @@ router.get('/', async (req: Request, res: Response) => {
             categoria: tenant.categoria,
             prompt: tenant.prompt,
             bienvenida: tenant.bienvenida,
-            onboarding_completado: tenant.onboarding_completado,
             direccion: tenant.direccion,
             horario_atencion: tenant.horario_atencion,
+            twilio_number: tenant.twilio_number,
+            twilio_sms_number: tenant.twilio_sms_number,
+            twilio_voice_number: tenant.twilio_voice_number,
+            fecha_registro: tenant.fecha_registro,
+            membresia_activa: tenant.membresia_activa,
+            membresia_vigencia: tenant.membresia_vigencia,
           }
         : null,
-    });    
+    });
   } catch (error) {
     console.error('❌ Error en /api/settings:', error);
     return res.status(401).json({ error: 'Token inválido' });
@@ -65,20 +66,29 @@ router.post('/', async (req: Request, res: Response) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-    const { name, categoria, idioma, direccion, horario_atencion, prompt, bienvenida } = req.body;
 
-    // Verificar si el usuario existe
+    const {
+      nombre_negocio,
+      categoria,
+      idioma,
+      direccion,
+      horario_atencion,
+      prompt,
+      bienvenida,
+      twilio_number,
+      twilio_sms_number,
+      twilio_voice_number,
+    } = req.body;
+
     const userRes = await pool.query('SELECT * FROM users WHERE uid = $1', [decoded.uid]);
     const user = userRes.rows[0];
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    // Verificar si el tenant existe
     const tenantRes = await pool.query('SELECT * FROM tenants WHERE admin_uid = $1', [user.uid]);
     if (tenantRes.rows.length === 0) {
       return res.status(404).json({ error: 'Negocio no encontrado' });
     }
 
-    // Actualizar el tenant
     await pool.query(
       `UPDATE tenants SET 
         name = $1,
@@ -87,9 +97,24 @@ router.post('/', async (req: Request, res: Response) => {
         direccion = $4,
         horario_atencion = $5,
         prompt = $6,
-        bienvenida = $7
-      WHERE admin_uid = $8`,
-      [name, categoria, idioma, direccion, horario_atencion, prompt, bienvenida, user.uid]
+        bienvenida = $7,
+        twilio_number = $8,
+        twilio_sms_number = $9,
+        twilio_voice_number = $10
+      WHERE admin_uid = $11`,
+      [
+        nombre_negocio,
+        categoria,
+        idioma,
+        direccion,
+        horario_atencion,
+        prompt,
+        bienvenida,
+        twilio_number,
+        twilio_sms_number,
+        twilio_voice_number,
+        user.uid,
+      ]
     );
 
     return res.status(200).json({ message: 'Perfil actualizado correctamente' });
