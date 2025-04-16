@@ -25,7 +25,13 @@ const allowedOrigins = [
 
 // ✅ CORS middleware
 app.use(cors({
-  origin: 'https://www.aamy.ai',
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, origin); // ✅ devolver el origin exacto
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
 }));
 
