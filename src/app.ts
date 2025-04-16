@@ -7,6 +7,9 @@ import dotenv from 'dotenv';
 import tenantRoutes from './routes/tenants';
 import promptRoutes from './routes/prompt';
 import voiceConfigRoutes from './routes/voiceConfig';
+import keywordsRoutes from './routes/keywords';
+import usageRoutes from './routes/usage';
+import statsRoutes from './routes/stats-kpis';
 
 dotenv.config();
 
@@ -46,6 +49,9 @@ app.get('/', (req, res) => {
 app.use('/api/tenants', tenantRoutes);
 app.use('/api/prompt', promptRoutes);
 app.use('/api/voice-config', voiceConfigRoutes);
+app.use('/api/keywords', keywordsRoutes);
+app.use('/api/usage', usageRoutes);
+app.use('/api/stats', statsRoutes);
 
 // ✅ Servidor
 app.listen(PORT, () => {
