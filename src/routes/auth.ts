@@ -37,8 +37,8 @@ router.post('/register', async (req: Request, res: Response) => {
 
     res.cookie('token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      secure: false, // ⚠️ IMPORTANTE para localhost
+      sameSite: 'lax', // ⚠️ IMPORTANTE para que funcione sin HTTPS
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });    
 
@@ -76,8 +76,8 @@ router.post('/login', async (req: Request, res: Response) => {
 
     res.cookie('token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      secure: false, // ⚠️ IMPORTANTE para localhost
+      sameSite: 'lax', // ⚠️ IMPORTANTE para que funcione sin HTTPS
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });    
 

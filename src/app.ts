@@ -62,3 +62,10 @@ app.use('/api/stats/monthly', statsMonthlyRoutes);
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
 });
+
+// Ping para mantener activo Railway
+setInterval(() => {
+  fetch('https://chatbot-backend-production-5c39.up.railway.app/')
+    .then(() => console.log('🔁 Ping enviado a backend'))
+    .catch(() => console.warn('⚠️ Ping fallido'));
+}, 14 * 30); // cada 30 segundos
