@@ -48,6 +48,8 @@ app.get('/', (req, res) => {
   res.send('Backend corriendo 🟢');
 });
 
+console.log('🔄 Reiniciando servidor con nuevas rutas...');
+
 app.use('/api/tenants', tenantRoutes);
 app.use('/api/prompt', promptRoutes);
 app.use('/api/voice-config', voiceConfigRoutes);
