@@ -37,9 +37,9 @@ router.post('/register', async (req: Request, res: Response) => {
 
     res.cookie('token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production', // 👈 esto debe ser false en dev
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      secure: false, // 👈 desactiva secure en desarrollo local
+      sameSite: 'lax', // 👈 compatible con localhost
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 días
     });    
 
     res.status(201).json({ uid });
@@ -76,9 +76,9 @@ router.post('/login', async (req: Request, res: Response) => {
 
     res.cookie('token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production', // 👈 esto debe ser false en dev
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      secure: false, // 👈 desactiva secure en desarrollo local
+      sameSite: 'lax', // 👈 compatible con localhost
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 días
     });    
 
     res.status(200).json({ uid: user.uid });
