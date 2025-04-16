@@ -10,6 +10,8 @@ import voiceConfigRoutes from './routes/voiceConfig';
 import keywordsRoutes from './routes/keywords';
 import usageRoutes from './routes/usage';
 import statsRoutes from './routes/stats-kpis';
+import statsMonthlyRoutes from './routes/stats-monthly';
+
 
 dotenv.config();
 
@@ -52,6 +54,7 @@ app.use('/api/voice-config', voiceConfigRoutes);
 app.use('/api/keywords', keywordsRoutes);
 app.use('/api/usage', usageRoutes);
 app.use('/api/stats', statsRoutes);
+app.use('/api/stats/monthly', statsMonthlyRoutes);
 
 // ✅ Servidor
 app.listen(PORT, () => {
