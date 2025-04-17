@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import OpenAI from 'openai';
 import twilio from 'twilio';
+import { incrementarUsoPorNumero } from '../../lib/incrementUsage'; // ✅ importar función
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -59,6 +60,9 @@ router.post('/', async (req: Request, res: Response) => {
        VALUES ($1, 'bot', $2, NOW(), 'whatsapp')`,
       [tenant.id, respuesta]
     );
+
+    // 🔢 Incrementar uso real
+    await incrementarUsoPorNumero(numero); // ✅ sumamos 1 solo si es canal real
 
     // 📤 Responder a WhatsApp
     const twiml = new MessagingResponse();

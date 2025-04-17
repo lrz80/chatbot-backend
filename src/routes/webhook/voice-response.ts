@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { twiml } from 'twilio';
 import pool from '../../lib/db';
 import OpenAI from 'openai';
+import { incrementarUsoPorNumero } from '../../lib/incrementUsage'; // ✅ importar función
 
 const router = Router();
 
@@ -51,6 +52,9 @@ router.post('/', async (req, res) => {
       [tenant.id, respuesta]
     );
 
+    // 🔢 Incrementar uso real
+    await incrementarUsoPorNumero(numero); // ✅ sumamos 1 solo si es canal real
+    
     // 🗣️ Responder por voz
     const response = new twiml.VoiceResponse();
     response.say(

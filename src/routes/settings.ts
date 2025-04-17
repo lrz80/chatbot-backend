@@ -42,6 +42,7 @@ router.get('/', async (req: Request, res: Response) => {
       informacion_negocio: tenant?.informacion_negocio || '',
       funciones_asistente: tenant?.funciones_asistente || '',
       info_clave: tenant?.info_clave || '',
+      limite_uso: tenant?.limite_uso || 150,
     });
   } catch (error) {
     console.error('❌ Error en /api/settings:', error);
@@ -71,6 +72,7 @@ router.post('/', async (req: Request, res: Response) => {
       informacion_negocio,
       funciones_asistente,
       info_clave,
+      limite_uso,
     } = req.body;
 
     if (!nombre_negocio) {
@@ -100,8 +102,9 @@ router.post('/', async (req: Request, res: Response) => {
         twilio_voice_number = $10,
         informacion_negocio = $11,
         funciones_asistente = $12,
-        info_clave = $13
-      WHERE admin_uid = $14`,
+        info_clave = $13,
+        limite_uso = $14
+      WHERE admin_uid = $15`,
       [
         nombre_negocio,
         categoria || '',
@@ -116,6 +119,7 @@ router.post('/', async (req: Request, res: Response) => {
         informacion_negocio || '',
         funciones_asistente || '',
         info_clave || '',
+        limite_uso || 150,
         user.uid,
       ]
     );

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
+import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 
 const router = Router();
 
@@ -27,7 +28,10 @@ router.post('/', async (req: Request, res: Response) => {
       [tenant.id, userInput, fromNumber]
     );
 
-    // 📨 Respuesta básica opcional
+    // 🔢 Incrementar uso real
+    await incrementarUsoPorNumero(toNumber);
+
+    // 📨 Respuesta básica
     res.type('text/xml');
     res.send(`<Response><Message>Recibido por SMS ✅</Message></Response>`);
   } catch (err) {

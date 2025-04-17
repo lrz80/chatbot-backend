@@ -1,5 +1,3 @@
-// 📁 src/routes/usage.ts
-
 import { Router, Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
@@ -17,16 +15,24 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
 
-    const result = await pool.query(
-      'SELECT used, limit, porcentaje, plan FROM usage_limits WHERE uid = $1',
+    const tenantRes = await pool.query(
+      'SELECT used, limite_uso, plan FROM tenants WHERE admin_uid = $1',
       [decoded.uid]
     );
 
-    if (result.rows.length === 0) {
+    if (tenantRes.rows.length === 0) {
       return res.status(200).json({ used: 0, limit: 0, porcentaje: 0, plan: "free" });
     }
 
-    return res.status(200).json(result.rows[0]);
+    const { used, limite_uso, plan } = tenantRes.rows[0];
+    const porcentaje = limite_uso > 0 ? Math.round((used / limite_uso) * 100) : 0;
+
+    return res.status(200).json({
+      used: used || 0,
+      limit: limite_uso || 0,
+      porcentaje,
+      plan: plan || "free",
+    });
   } catch (error) {
     console.error('❌ Error en /usage:', error);
     return res.status(500).json({ error: 'Error interno del servidor' });
@@ -34,3 +40,4 @@ router.get('/', async (req: Request, res: Response) => {
 });
 
 export default router;
+
