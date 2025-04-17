@@ -15,9 +15,10 @@ const openai = new OpenAI({
 router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
 
-  const from = req.body.From || '';
-  const numero = from.replace('whatsapp:', '').replace('tel:', '');
+  const to = req.body.To || '';
+  const numero = to.replace('whatsapp:', '').replace('tel:', ''); // ✅ Número del negocio (Twilio)
   const userInput = req.body.Body || '';
+  console.log('🔍 Buscando negocio con número:', numero);
 
   try {
     const tenantRes = await pool.query(
