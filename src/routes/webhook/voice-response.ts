@@ -10,8 +10,10 @@ const openai = new OpenAI({
 });
 
 router.post('/', async (req, res) => {
-  const from = req.body.To || '';
-  const numero = from.replace('tel:', '');
+  const to = req.body.To || '';
+  const from = req.body.From || '';
+  const numero = to.replace('tel:', '');
+  const fromNumber = from.replace('tel:', '');
   const userInput = req.body.SpeechResult || 'No se recibió mensaje.';
 
   try {
@@ -23,6 +25,8 @@ router.post('/', async (req, res) => {
     if (!tenant) return res.sendStatus(404);
 
     const prompt = tenant.prompt || 'Eres un asistente telefónico amigable y profesional.';
+
+    // 🔮 Generar respuesta con OpenAI
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
@@ -33,6 +37,21 @@ router.post('/', async (req, res) => {
 
     const respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
 
+    // 💾 Guardar mensaje del usuario (voz)
+    await pool.query(
+      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
+       VALUES ($1, 'user', $2, NOW(), 'voice', $3)`,
+      [tenant.id, userInput, fromNumber]
+    );
+
+    // 💾 Guardar respuesta del bot
+    await pool.query(
+      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
+       VALUES ($1, 'bot', $2, NOW(), 'voice')`,
+      [tenant.id, respuesta]
+    );
+
+    // 🗣️ Responder por voz
     const response = new twiml.VoiceResponse();
     response.say(
       { voice: tenant.voice_name || 'alice', language: tenant.voice_language || 'es-ES' },

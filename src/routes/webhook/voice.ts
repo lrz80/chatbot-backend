@@ -1,19 +1,15 @@
 import { Router } from 'express';
 import { twiml } from 'twilio';
 import pool from '../../lib/db';
-import OpenAI from 'openai';
 
 const router = Router();
-
-// Configuración de OpenAI
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-  });
 
 // Primer paso: saludo inicial y recopilación por voz
 router.post('/', async (req, res) => {
   const to = req.body.To || '';
+  const from = req.body.From || '';
   const numero = to.replace('tel:', '');
+  const fromNumber = from.replace('tel:', '');
 
   try {
     const tenantRes = await pool.query(
@@ -25,17 +21,26 @@ router.post('/', async (req, res) => {
 
     const response = new twiml.VoiceResponse();
 
+    // 💬 Saludo inicial
     response.say(
       { voice: 'alice', language: tenant.voice_language || 'es-ES' },
       tenant.bienvenida || 'Hola, gracias por llamar. Por favor, dime en qué puedo ayudarte después del tono.'
     );
 
+    // 💾 Registrar llamada entrante (sin texto aún)
+    await pool.query(
+      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
+       VALUES ($1, 'user', $2, NOW(), 'voice', $3)`,
+      [tenant.id, '[Inicio de llamada]', fromNumber]
+    );
+
+    // 🎙️ Recolección de voz
     response.gather({
       input: ['speech'],
       action: '/webhook/voice-response',
       method: 'POST',
       language: tenant.voice_language || 'es-ES',
-      speechTimeout: 'auto'
+      speechTimeout: 'auto',
     });
 
     res.type('text/xml');
@@ -47,4 +52,3 @@ router.post('/', async (req, res) => {
 });
 
 export default router;
-

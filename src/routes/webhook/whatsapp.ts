@@ -1,5 +1,3 @@
-// src/routes/webhook/whatsapp.ts
-
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import OpenAI from 'openai';
@@ -16,8 +14,11 @@ router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
 
   const to = req.body.To || '';
+  const from = req.body.From || '';
   const numero = to.replace('whatsapp:', '').replace('tel:', ''); // ✅ Número del negocio (Twilio)
+  const fromNumber = from.replace('whatsapp:', '').replace('tel:', ''); // ✅ Número del cliente
   const userInput = req.body.Body || '';
+
   console.log('🔍 Buscando negocio con número:', numero);
 
   try {
@@ -34,7 +35,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     const prompt = tenant.prompt || 'Eres un asistente útil para clientes en WhatsApp.';
 
-    // 🔮 Respuesta con OpenAI
+    // 🔮 Obtener respuesta de OpenAI
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
@@ -47,9 +48,9 @@ router.post('/', async (req: Request, res: Response) => {
 
     // 💾 Guardar mensaje del usuario
     await pool.query(
-      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
-       VALUES ($1, 'user', $2, NOW(), 'whatsapp')`,
-      [tenant.id, userInput]
+      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
+       VALUES ($1, 'user', $2, NOW(), 'whatsapp', $3)`,
+      [tenant.id, userInput, fromNumber]
     );
 
     // 💾 Guardar respuesta del bot
@@ -63,21 +64,6 @@ router.post('/', async (req: Request, res: Response) => {
     const twiml = new MessagingResponse();
     twiml.message(respuesta);
 
-    // Guardar mensajes en la base de datos
-    await pool.query(
-        `INSERT INTO messages (tenant_id, sender, content, timestamp, canal) VALUES 
-        ($1, $2, $3, NOW(), $4), 
-        ($1, $5, $6, NOW(), $4)`,
-        [
-        tenant.id,
-        'user',
-        userInput,
-        'whatsapp',
-        'bot',
-        respuesta
-        ]
-    );
-  
     res.type('text/xml');
     res.send(twiml.toString());
   } catch (error) {

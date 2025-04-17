@@ -29,26 +29,19 @@ router.get('/', async (req: Request, res: Response) => {
       owner_name: user.owner_name,
       membresia_activa: tenant?.membresia_activa ?? false,
       membresia_vigencia: tenant?.membresia_vigencia ?? null,
-      negocio: tenant
-        ? {
-            tenant_id: tenant.id,
-            nombre_negocio: tenant.name,
-            slug: tenant.slug,
-            plan: tenant.plan,
-            idioma: tenant.idioma,
-            categoria: tenant.categoria,
-            prompt: tenant.prompt,
-            bienvenida: tenant.bienvenida,
-            direccion: tenant.direccion,
-            horario_atencion: tenant.horario_atencion,
-            twilio_number: tenant.twilio_number,
-            twilio_sms_number: tenant.twilio_sms_number,
-            twilio_voice_number: tenant.twilio_voice_number,
-            fecha_registro: tenant.fecha_registro,
-            membresia_activa: tenant.membresia_activa,
-            membresia_vigencia: tenant.membresia_vigencia,
-          }
-        : null,
+      name: tenant?.name || '',
+      categoria: tenant?.categoria || '',
+      idioma: tenant?.idioma || 'es',
+      prompt: tenant?.prompt || '',
+      bienvenida: tenant?.bienvenida || '',
+      direccion: tenant?.direccion || '',
+      horario_atencion: tenant?.horario_atencion || '',
+      twilio_number: tenant?.twilio_number || '',
+      twilio_sms_number: tenant?.twilio_sms_number || '',
+      twilio_voice_number: tenant?.twilio_voice_number || '',
+      informacion_negocio: tenant?.informacion_negocio || '',
+      funciones_asistente: tenant?.funciones_asistente || '',
+      info_clave: tenant?.info_clave || '',
     });
   } catch (error) {
     console.error('❌ Error en /api/settings:', error);
@@ -74,7 +67,10 @@ router.post('/', async (req: Request, res: Response) => {
       bienvenida,
       twilio_number,
       twilio_sms_number,
-      twilio_voice_number
+      twilio_voice_number,
+      informacion_negocio,
+      funciones_asistente,
+      info_clave,
     } = req.body;
 
     if (!nombre_negocio) {
@@ -101,8 +97,11 @@ router.post('/', async (req: Request, res: Response) => {
         bienvenida = $7,
         twilio_number = $8,
         twilio_sms_number = $9,
-        twilio_voice_number = $10
-      WHERE admin_uid = $11`,
+        twilio_voice_number = $10,
+        informacion_negocio = $11,
+        funciones_asistente = $12,
+        info_clave = $13
+      WHERE admin_uid = $14`,
       [
         nombre_negocio,
         categoria || '',
@@ -114,7 +113,10 @@ router.post('/', async (req: Request, res: Response) => {
         twilio_number || '',
         twilio_sms_number || '',
         twilio_voice_number || '',
-        user.uid
+        informacion_negocio || '',
+        funciones_asistente || '',
+        info_clave || '',
+        user.uid,
       ]
     );
 
