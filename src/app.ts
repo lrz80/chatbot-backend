@@ -11,6 +11,10 @@ import keywordsRoutes from './routes/keywords';
 import usageRoutes from './routes/usage';
 import statsRoutes from './routes/stats-kpis';
 import statsMonthlyRoutes from './routes/stats-monthly';
+import whatsappWebhook from './routes/webhook/whatsapp';
+import smsWebhook from './routes/webhook/sms';
+import voiceWebhook from './routes/webhook/voice';
+import voiceResponse from './routes/webhook/voice-response';
 
 
 dotenv.config();
@@ -57,6 +61,11 @@ app.use('/api/keywords', keywordsRoutes);
 app.use('/api/usage', usageRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/stats/monthly', statsMonthlyRoutes);
+app.use('/webhook/whatsapp', whatsappWebhook);
+app.use('/webhook/sms', smsWebhook);
+app.use('/webhook/voice', voiceWebhook);
+app.use('/webhook/voice', voiceWebhook);
+app.use('/webhook/voice-response', voiceResponse);
 
 // ✅ Servidor
 app.listen(PORT, () => {
