@@ -74,7 +74,7 @@ app.listen(PORT, () => {
 
 // Ping para mantener activo Railway
 setInterval(() => {
-  fetch('https://chatbot-backend-production-5c39.up.railway.app/')
+  fetch('https://chatbot-backend-production-8668.up.railway.app/')
     .then(() => console.log('🔁 Ping enviado a backend'))
     .catch(() => console.warn('⚠️ Ping fallido'));
-}, 14 * 30); // cada 30 segundos
+}, 1000 * 30); // cada 30 segundos
