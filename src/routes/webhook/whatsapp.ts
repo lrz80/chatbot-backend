@@ -63,6 +63,21 @@ router.post('/', async (req: Request, res: Response) => {
     const twiml = new MessagingResponse();
     twiml.message(respuesta);
 
+    // Guardar mensajes en la base de datos
+    await pool.query(
+        `INSERT INTO messages (tenant_id, sender, content, timestamp, canal) VALUES 
+        ($1, $2, $3, NOW(), $4), 
+        ($1, $5, $6, NOW(), $4)`,
+        [
+        tenant.id,
+        'user',
+        userInput,
+        'whatsapp',
+        'bot',
+        respuesta
+        ]
+    );
+  
     res.type('text/xml');
     res.send(twiml.toString());
   } catch (error) {
