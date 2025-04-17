@@ -16,6 +16,7 @@ import smsWebhook from './routes/webhook/sms';
 import voiceWebhook from './routes/webhook/voice';
 import voiceResponse from './routes/webhook/voice-response';
 import messagesRoutes from './routes/messages';
+import generarPromptRouter from "./routes/generar-prompt";
 
 dotenv.config();
 
@@ -66,6 +67,7 @@ app.use('/webhook/sms', smsWebhook);
 app.use('/webhook/voice', voiceWebhook);
 app.use('/webhook/voice-response', voiceResponse);
 app.use('/api/messages', messagesRoutes);
+app.use("/api/generar-prompt", generarPromptRouter);
 
 // ✅ Servidor
 app.listen(PORT, () => {
