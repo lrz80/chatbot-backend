@@ -15,6 +15,7 @@ import whatsappWebhook from './routes/webhook/whatsapp';
 import smsWebhook from './routes/webhook/sms';
 import voiceWebhook from './routes/webhook/voice';
 import voiceResponse from './routes/webhook/voice-response';
+import messagesRoutes from './routes/messages';
 
 dotenv.config();
 
@@ -64,6 +65,7 @@ app.use('/webhook/whatsapp', whatsappWebhook);
 app.use('/webhook/sms', smsWebhook);
 app.use('/webhook/voice', voiceWebhook);
 app.use('/webhook/voice-response', voiceResponse);
+app.use('/api/messages', messagesRoutes);
 
 // ✅ Servidor
 app.listen(PORT, () => {
