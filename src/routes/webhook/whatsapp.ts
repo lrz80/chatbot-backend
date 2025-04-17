@@ -1,4 +1,4 @@
-// 📁 src/routes/webhook/whatsapp.ts
+// src/routes/webhook/whatsapp.ts
 
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
@@ -15,10 +15,8 @@ const openai = new OpenAI({
 router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
 
-  const from = req.body.To || ''; // ✅ CAMBIO: usamos "To" en lugar de "From"
-  const numero = from.replace('whatsapp:', '').replace('tel:', '').trim();
-  console.log("🔍 Buscando negocio con número:", numero);
-
+  const from = req.body.From || '';
+  const numero = from.replace('whatsapp:', '').replace('tel:', '');
   const userInput = req.body.Body || '';
 
   try {
@@ -35,6 +33,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     const prompt = tenant.prompt || 'Eres un asistente útil para clientes en WhatsApp.';
 
+    // 🔮 Respuesta con OpenAI
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
@@ -45,6 +44,21 @@ router.post('/', async (req: Request, res: Response) => {
 
     const respuesta = completion.choices[0]?.message?.content || 'Lo siento, no entendí eso.';
 
+    // 💾 Guardar mensaje del usuario
+    await pool.query(
+      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
+       VALUES ($1, 'user', $2, NOW(), 'whatsapp')`,
+      [tenant.id, userInput]
+    );
+
+    // 💾 Guardar respuesta del bot
+    await pool.query(
+      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
+       VALUES ($1, 'bot', $2, NOW(), 'whatsapp')`,
+      [tenant.id, respuesta]
+    );
+
+    // 📤 Responder a WhatsApp
     const twiml = new MessagingResponse();
     twiml.message(respuesta);
 
