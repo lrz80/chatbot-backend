@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import authRoutes from './routes/auth';
-import settingsRoutes from './routes/settings'; // ✅ Importa el nuevo archivo
+import settingsRoutes from './routes/settings';
 import dotenv from 'dotenv';
 import tenantRoutes from './routes/tenants';
 import promptRoutes from './routes/prompt';
@@ -15,7 +15,6 @@ import whatsappWebhook from './routes/webhook/whatsapp';
 import smsWebhook from './routes/webhook/sms';
 import voiceWebhook from './routes/webhook/voice';
 import voiceResponse from './routes/webhook/voice-response';
-
 
 dotenv.config();
 
@@ -31,7 +30,7 @@ const allowedOrigins = [
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, origin); // ✅ devolver el origin exacto
+      callback(null, origin);
     } else {
       callback(new Error('Not allowed by CORS'));
     }
@@ -41,13 +40,13 @@ app.use(cors({
 
 // ✅ Middlewares base
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // 👈 NECESARIO para Twilio
 app.use(cookieParser());
 
 // ✅ Rutas
 app.use('/auth', authRoutes);
-app.use('/api/settings', settingsRoutes); // ✅ Ruta de settings agregada
+app.use('/api/settings', settingsRoutes);
 
-// ✅ Ping de salud
 app.get('/', (req, res) => {
   res.send('Backend corriendo 🟢');
 });
@@ -64,7 +63,6 @@ app.use('/api/stats/monthly', statsMonthlyRoutes);
 app.use('/webhook/whatsapp', whatsappWebhook);
 app.use('/webhook/sms', smsWebhook);
 app.use('/webhook/voice', voiceWebhook);
-app.use('/webhook/voice', voiceWebhook);
 app.use('/webhook/voice-response', voiceResponse);
 
 // ✅ Servidor
@@ -72,9 +70,9 @@ app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
 });
 
-// Ping para mantener activo Railway
+// 🔁 Ping para mantener activo Railway
 setInterval(() => {
   fetch('https://chatbot-backend-production-8668.up.railway.app/')
     .then(() => console.log('🔁 Ping enviado a backend'))
     .catch(() => console.warn('⚠️ Ping fallido'));
-}, 1000 * 30); // cada 30 segundos
+}, 1000 * 30);
