@@ -85,10 +85,10 @@ router.post('/', async (req: Request, res: Response) => {
 
     const tenantRes = await pool.query('SELECT * FROM tenants WHERE admin_uid = $1', [user.uid]);
     if (tenantRes.rows.length === 0) {
-      return res.status(404).json({ error: 'Negocio no encontrado' });
+      return res.status(404).json({ error: 'Negocio no encontrado para este usuario' });
     }
 
-    await pool.query(
+    const result = await pool.query(
       `UPDATE tenants SET 
         name = $1,
         categoria = $2,
@@ -123,6 +123,10 @@ router.post('/', async (req: Request, res: Response) => {
         user.uid,
       ]
     );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: 'No se actualizó ningún negocio. Verifica el admin_uid.' });
+    }
 
     return res.status(200).json({ message: 'Perfil actualizado correctamente' });
   } catch (error) {
