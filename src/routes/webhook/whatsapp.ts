@@ -1,3 +1,5 @@
+// 📁 src/routes/webhook/whatsapp.ts
+
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import OpenAI from 'openai';
@@ -7,12 +9,13 @@ const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY!,
 });
 
 router.post('/', async (req: Request, res: Response) => {
   const from = req.body.From || '';
-  const numero = from.replace('whatsapp:', '');
+  const numero = from.replace('whatsapp:', '').replace('tel:', ''); // ✅ Compatibilidad con ambos
+
   const userInput = req.body.Body || '';
 
   try {
@@ -28,7 +31,7 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     const prompt = tenant.prompt || 'Eres un asistente útil para clientes en WhatsApp.';
-    
+
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
