@@ -13,8 +13,11 @@ const openai = new OpenAI({
 });
 
 router.post('/', async (req: Request, res: Response) => {
-  const from = req.body.From || '';
-  const numero = from.replace('whatsapp:', '').replace('tel:', ''); // ✅ Compatibilidad con ambos
+  console.log("📩 Webhook recibido:", req.body);
+
+  const from = req.body.To || ''; // ✅ CAMBIO: usamos "To" en lugar de "From"
+  const numero = from.replace('whatsapp:', '').replace('tel:', '').trim();
+  console.log("🔍 Buscando negocio con número:", numero);
 
   const userInput = req.body.Body || '';
 
