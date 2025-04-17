@@ -1,5 +1,3 @@
-// 📁 src/routes/settings.ts
-
 import { Router, Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
@@ -20,7 +18,6 @@ router.get('/', async (req: Request, res: Response) => {
 
     const userRes = await pool.query('SELECT * FROM users WHERE uid = $1', [decoded.uid]);
     const user = userRes.rows[0];
-
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
     const tenantRes = await pool.query('SELECT * FROM tenants WHERE admin_uid = $1', [user.uid]);
@@ -77,8 +74,12 @@ router.post('/', async (req: Request, res: Response) => {
       bienvenida,
       twilio_number,
       twilio_sms_number,
-      twilio_voice_number,
+      twilio_voice_number
     } = req.body;
+
+    if (!nombre_negocio) {
+      return res.status(400).json({ error: 'El nombre del negocio es obligatorio' });
+    }
 
     const userRes = await pool.query('SELECT * FROM users WHERE uid = $1', [decoded.uid]);
     const user = userRes.rows[0];
@@ -104,16 +105,16 @@ router.post('/', async (req: Request, res: Response) => {
       WHERE admin_uid = $11`,
       [
         nombre_negocio,
-        categoria,
-        idioma,
-        direccion,
-        horario_atencion,
-        prompt,
-        bienvenida,
-        twilio_number,
-        twilio_sms_number,
-        twilio_voice_number,
-        user.uid,
+        categoria || '',
+        idioma || 'es',
+        direccion || '',
+        horario_atencion || '',
+        prompt || '',
+        bienvenida || '',
+        twilio_number || '',
+        twilio_sms_number || '',
+        twilio_voice_number || '',
+        user.uid
       ]
     );
 
