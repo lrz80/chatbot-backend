@@ -17,6 +17,9 @@ import voiceWebhook from './routes/webhook/voice';
 import voiceResponse from './routes/webhook/voice-response';
 import messagesRoutes from './routes/messages';
 import generarPromptRouter from "./routes/generar-prompt";
+import previewRouter from "./routes/preview";
+import faqRouter from "./routes/faq";
+import intentsRouter from "./routes/intents";
 
 dotenv.config();
 
@@ -68,6 +71,9 @@ app.use('/webhook/voice', voiceWebhook);
 app.use('/webhook/voice-response', voiceResponse);
 app.use('/api/messages', messagesRoutes);
 app.use("/api/generar-prompt", generarPromptRouter);
+app.use("/api/preview", previewRouter);
+app.use("/api/faq", faqRouter);
+app.use("/api/intents", intentsRouter);
 
 // ✅ Servidor
 app.listen(PORT, () => {
