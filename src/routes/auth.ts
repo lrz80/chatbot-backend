@@ -5,9 +5,19 @@ import jwt, { JwtPayload } from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import pool from '../lib/db';
 import { v4 as uuidv4 } from 'uuid';
+import nodemailer from 'nodemailer';
 
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
+
+// ✅ Transport para enviar emails
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_FROM,
+    pass: process.env.EMAIL_PASS,
+  },
+});
 
 // ✅ Registro
 router.post('/register', async (req: Request, res: Response) => {
@@ -26,12 +36,20 @@ router.post('/register', async (req: Request, res: Response) => {
     const password_hash = await bcrypt.hash(password, 10);
     const uid = uuidv4();
     const owner_name = `${nombre} ${apellido}`;
+    const verification_code = Math.floor(100000 + Math.random() * 900000).toString();
 
     await pool.query(
-      `INSERT INTO users (uid, email, password, role, owner_name, telefono, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-      [uid, email, password_hash, 'admin', owner_name, telefono]
-    );    
+      `INSERT INTO users (uid, email, password, role, owner_name, telefono, created_at, verificado, codigo_verificacion)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), false, $7)`,
+      [uid, email, password_hash, 'admin', owner_name, telefono, verification_code]
+    );
+
+    await transporter.sendMail({
+      from: process.env.EMAIL_FROM,
+      to: email,
+      subject: 'Código de verificación',
+      text: `Tu código de verificación es: ${verification_code}`,
+    });
 
     const token = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '7d' });
 
@@ -40,7 +58,7 @@ router.post('/register', async (req: Request, res: Response) => {
       secure: true,
       sameSite: 'none',
       maxAge: 7 * 24 * 60 * 60 * 1000,
-    });    
+    });
 
     res.status(201).json({ uid });
   } catch (error) {
@@ -79,7 +97,7 @@ router.post('/login', async (req: Request, res: Response) => {
       secure: true,
       sameSite: 'none',
       maxAge: 7 * 24 * 60 * 60 * 1000,
-    });    
+    });
 
     res.status(200).json({ uid: user.uid });
   } catch (error) {

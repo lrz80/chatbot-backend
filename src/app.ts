@@ -20,6 +20,8 @@ import generarPromptRouter from "./routes/generar-prompt";
 import previewRouter from "./routes/preview";
 import faqRouter from "./routes/faq";
 import intentsRouter from "./routes/intents";
+import verifyRoutes from './routes/verify';
+
 
 dotenv.config();
 
@@ -74,6 +76,7 @@ app.use("/api/generar-prompt", generarPromptRouter);
 app.use("/api/preview", previewRouter);
 app.use("/api/faq", faqRouter);
 app.use("/api/intents", intentsRouter);
+app.use('/api/verify', verifyRoutes);
 
 // ✅ Servidor
 app.listen(PORT, () => {
