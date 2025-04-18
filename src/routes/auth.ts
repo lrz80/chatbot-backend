@@ -38,22 +38,32 @@ router.post('/register', async (req: Request, res: Response) => {
     const password_hash = await bcrypt.hash(password, 10);
     const uid = uuidv4();
     const owner_name = `${nombre} ${apellido}`;
-    const verification_code = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // ✅ Crear token de verificación (JWT con uid)
+    const token_verificacion = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '10m' });
+    const verification_link = `${process.env.FRONTEND_URL}/auth/verify-email?token=${token_verificacion}`;
 
     await pool.query(
-      `INSERT INTO users (uid, email, password, role, owner_name, telefono, created_at, verificado, codigo_verificacion)
+      `INSERT INTO users (uid, email, password, role, owner_name, telefono, created_at, verificado, token_verificacion)
        VALUES ($1, $2, $3, $4, $5, $6, NOW(), false, $7)`,
-      [uid, email, password_hash, 'admin', owner_name, telefono, verification_code]
+      [uid, email, password_hash, 'admin', owner_name, telefono, token_verificacion]
     );
 
     await transporter.sendMail({
       from: process.env.EMAIL_FROM,
       to: email,
       subject: 'Verifica tu cuenta en AAMY',
-      text: `Tu código de verificación es: ${verification_code}`,
+      html: `
+        <h3>¡Bienvenido/a a AAMY!</h3>
+        <p>Haz clic en el siguiente botón o enlace para activar tu cuenta:</p>
+        <p><a href="${verification_link}" style="display:inline-block;padding:12px 20px;background:#6B46C1;color:white;border-radius:6px;text-decoration:none">Verificar cuenta</a></p>
+        <p>O copia y pega este link en tu navegador: <br /><code>${verification_link}</code></p>
+        <p>Este enlace expirará en 24 horas.</p>
+      `
     });
 
-    res.status(201).json({ uid });
+    // ❌ No enviar token ni permitir login aún
+    res.status(201).json({ success: true });
   } catch (error) {
     console.error('❌ Error en registro:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
@@ -119,35 +129,36 @@ router.post('/validate', async (req: Request, res: Response) => {
     res.status(401).json({ error: 'Token inválido' });
   }
 });
-// auth/verify
-router.post("/verify", async (req: Request, res: Response) => {
-  const { email, codigo } = req.body;
 
-  if (!email || !codigo) {
-    return res.status(400).json({ error: "Email y código requeridos" });
+router.get("/verify-email", async (req: Request, res: Response) => {
+  const token = req.query.token as string;
+
+  if (!token) {
+    return res.status(400).json({ error: "Token faltante" });
   }
 
   try {
-    const result = await pool.query(
-      "SELECT * FROM users WHERE email = $1 AND codigo_verificacion = $2",
-      [email, codigo]
-    );
+    const decoded = jwt.verify(token, JWT_SECRET) as { uid: string; email: string };
 
-    if (result.rows.length === 0) {
-      return res.status(401).json({ error: "Código inválido o expirado" });
-    }
+    const userRes = await pool.query("SELECT * FROM users WHERE uid = $1", [decoded.uid]);
+    const user = userRes.rows[0];
+
+    if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
+    if (user.verificado) return res.status(400).json({ error: "La cuenta ya está verificada" });
 
     await pool.query(
-      "UPDATE users SET verificado = true, codigo_verificacion = NULL WHERE email = $1",
-      [email]
+      "UPDATE users SET verificado = true, token_verificacion = NULL WHERE uid = $1",
+      [decoded.uid]
     );
 
-    return res.status(200).json({ success: true });
+    // ✅ Redireccionar al frontend
+    res.redirect(`${process.env.FRONTEND_URL}/auth/verified`);
   } catch (err) {
-    console.error("❌ Error en /verify:", err);
-    return res.status(500).json({ error: "Error interno del servidor" });
+    console.error("❌ Error al verificar email:", err);
+    return res.status(400).json({ error: "Token inválido o expirado" });
   }
 });
+
 
 
 export default router;
