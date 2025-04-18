@@ -47,17 +47,8 @@ router.post('/register', async (req: Request, res: Response) => {
     await transporter.sendMail({
       from: process.env.EMAIL_FROM,
       to: email,
-      subject: 'Código de verificación',
+      subject: 'Verifica tu cuenta en AAMY',
       text: `Tu código de verificación es: ${verification_code}`,
-    });
-
-    const token = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '7d' });
-
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: true,
-      sameSite: 'none',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
     res.status(201).json({ uid });
@@ -88,6 +79,10 @@ router.post('/login', async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Credenciales inválidas' });
     }
 
+    if (!user.verificado) {
+      return res.status(403).json({ error: "Tu cuenta no está verificada. Revisa tu correo." });
+    }
+    
     const token = jwt.sign({ uid: user.uid, email: user.email }, JWT_SECRET, {
       expiresIn: '7d',
     });
@@ -122,5 +117,35 @@ router.post('/validate', async (req: Request, res: Response) => {
     res.status(401).json({ error: 'Token inválido' });
   }
 });
+// auth/verify
+router.post("/verify", async (req: Request, res: Response) => {
+  const { email, codigo } = req.body;
+
+  if (!email || !codigo) {
+    return res.status(400).json({ error: "Email y código requeridos" });
+  }
+
+  try {
+    const result = await pool.query(
+      "SELECT * FROM users WHERE email = $1 AND codigo_verificacion = $2",
+      [email, codigo]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: "Código inválido o expirado" });
+    }
+
+    await pool.query(
+      "UPDATE users SET verificado = true, codigo_verificacion = NULL WHERE email = $1",
+      [email]
+    );
+
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error("❌ Error en /verify:", err);
+    return res.status(500).json({ error: "Error interno del servidor" });
+  }
+});
+
 
 export default router;
