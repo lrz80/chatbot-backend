@@ -12,7 +12,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
 // ✅ Transport para enviar emails
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: "mail.privateemail.com",
+  port: 465,
+  secure: true,
   auth: {
     user: process.env.EMAIL_FROM,
     pass: process.env.EMAIL_PASS,
