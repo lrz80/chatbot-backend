@@ -85,12 +85,10 @@ router.post('/', async (req: Request, res: Response) => {
 
     const tenantRes = await pool.query('SELECT * FROM tenants WHERE admin_uid = $1', [user.uid]);
     if (tenantRes.rows.length === 0) {
-      return res.status(404).json({ error: 'Negocio no encontrado para este usuario' });
+      return res.status(404).json({ error: 'Negocio no encontrado' });
     }
 
-    console.log("📥 Prompt recibido:", prompt);
-
-    const result = await pool.query(
+    await pool.query(
       `UPDATE tenants SET 
         name = $1,
         categoria = $2,
@@ -126,15 +124,89 @@ router.post('/', async (req: Request, res: Response) => {
       ]
     );
 
-    if (result.rowCount === 0) {
-      return res.status(404).json({ error: 'No se actualizó ningún negocio. Verifica el admin_uid.' });
-    }
-
     return res.status(200).json({ message: 'Perfil actualizado correctamente' });
   } catch (error) {
     console.error('❌ Error al actualizar perfil:', error);
     return res.status(500).json({ error: 'Error al guardar cambios' });
   }
 });
+
+// PUT: Actualizar perfil del negocio (igual que POST)
+router.put('/', async (req: Request, res: Response) => {
+  const token = req.cookies.token;
+  if (!token) return res.status(401).json({ error: 'Token requerido' });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+
+    const {
+      nombre_negocio,
+      categoria,
+      idioma,
+      direccion,
+      horario_atencion,
+      prompt,
+      bienvenida,
+      twilio_number,
+      twilio_sms_number,
+      twilio_voice_number,
+      informacion_negocio,
+      funciones_asistente,
+      info_clave,
+      limite_uso,
+    } = req.body;
+
+    const userRes = await pool.query('SELECT * FROM users WHERE uid = $1', [decoded.uid]);
+    const user = userRes.rows[0];
+    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    const tenantRes = await pool.query('SELECT * FROM tenants WHERE admin_uid = $1', [user.uid]);
+    if (tenantRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Negocio no encontrado' });
+    }
+
+    await pool.query(
+      `UPDATE tenants SET 
+        name = $1,
+        categoria = $2,
+        idioma = $3,
+        direccion = $4,
+        horario_atencion = $5,
+        prompt = $6,
+        bienvenida = $7,
+        twilio_number = $8,
+        twilio_sms_number = $9,
+        twilio_voice_number = $10,
+        informacion_negocio = $11,
+        funciones_asistente = $12,
+        info_clave = $13,
+        limite_uso = $14
+      WHERE admin_uid = $15`,
+      [
+        nombre_negocio,
+        categoria || '',
+        idioma || 'es',
+        direccion || '',
+        horario_atencion || '',
+        prompt || '',
+        bienvenida || '',
+        twilio_number || '',
+        twilio_sms_number || '',
+        twilio_voice_number || '',
+        informacion_negocio || '',
+        funciones_asistente || '',
+        info_clave || '',
+        limite_uso || 150,
+        user.uid,
+      ]
+    );
+
+    return res.status(200).json({ message: 'Perfil actualizado correctamente' });
+  } catch (error) {
+    console.error('❌ Error en PUT /api/settings:', error);
+    return res.status(500).json({ error: 'Error al guardar cambios' });
+  }
+});
+
 
 export default router;
