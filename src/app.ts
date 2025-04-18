@@ -21,6 +21,7 @@ import previewRouter from "./routes/preview";
 import faqRouter from "./routes/faq";
 import intentsRouter from "./routes/intents";
 import verifyRoutes from './routes/verify';
+import forgotPasswordRoute from "./routes/auth/forgot-password";
 
 
 dotenv.config();
@@ -77,6 +78,7 @@ app.use("/api/preview", previewRouter);
 app.use("/api/faq", faqRouter);
 app.use("/api/intents", intentsRouter);
 app.use('/api/verify', verifyRoutes);
+app.use(forgotPasswordRoute);
 
 // ✅ Servidor
 app.listen(PORT, () => {

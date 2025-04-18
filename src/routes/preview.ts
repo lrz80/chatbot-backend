@@ -1,3 +1,5 @@
+// src/routes/preview.ts
+
 import { Router, Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
