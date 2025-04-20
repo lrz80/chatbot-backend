@@ -45,7 +45,7 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // ✅ URL frontend de verificación
     const frontendUrl = process.env.FRONTEND_URL || 'https://www.aamy.ai';
-    const verification_link = `${frontendUrl}/auth/verify-email?token=${token_verificacion}`;
+    const verification_link = `${process.env.FRONTEND_URL}/auth/verified?token=${token_verificacion}`;
 
     console.log("🌐 Enlace de verificación:", verification_link);
 
