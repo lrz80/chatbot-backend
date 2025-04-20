@@ -41,8 +41,7 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // ✅ Crear token de verificación (JWT con uid)
     const token_verificacion = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '10m' });
-    const baseUrl = process.env.FRONTEND_URL || "https://www.aamy.ai";
-    const verification_link = `${baseUrl}/auth/verify-email?token=${token_verificacion}`;
+    const verification_link = `${process.env.BACKEND_URL}/auth/verify-email?token=${token_verificacion}`;
 
     await pool.query(
       `INSERT INTO users (uid, email, password, role, owner_name, telefono, created_at, verificado, token_verificacion)
