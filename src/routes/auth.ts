@@ -22,6 +22,7 @@ const transporter = nodemailer.createTransport({
 });
 
 // ✅ Registro
+// ✅ Registro corregido
 router.post('/register', async (req: Request, res: Response) => {
   const { nombre, apellido, email, telefono, password } = req.body;
 
@@ -39,9 +40,14 @@ router.post('/register', async (req: Request, res: Response) => {
     const uid = uuidv4();
     const owner_name = `${nombre} ${apellido}`;
 
-    // ✅ Crear token de verificación (JWT con uid)
+    // ✅ Token de verificación (expira en 10 minutos)
     const token_verificacion = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '10m' });
-    const verification_link = `${process.env.BACKEND_URL}/auth/verify-email?token=${token_verificacion}`;
+
+    // ✅ URL frontend de verificación
+    const frontendUrl = process.env.FRONTEND_URL || 'https://www.aamy.ai';
+    const verification_link = `${frontendUrl}/auth/verify-email?token=${token_verificacion}`;
+
+    console.log("🌐 Enlace de verificación:", verification_link);
 
     await pool.query(
       `INSERT INTO users (uid, email, password, role, owner_name, telefono, created_at, verificado, token_verificacion)
@@ -57,12 +63,11 @@ router.post('/register', async (req: Request, res: Response) => {
         <h3>¡Bienvenido/a a AAMY!</h3>
         <p>Haz clic en el siguiente botón o enlace para activar tu cuenta:</p>
         <p><a href="${verification_link}" style="display:inline-block;padding:12px 20px;background:#6B46C1;color:white;border-radius:6px;text-decoration:none">Verificar cuenta</a></p>
-        <p>O copia y pega este link en tu navegador: <br /><code>${verification_link}</code></p>
+        <p>O copia y pega este link en tu navegador:<br /><code>${verification_link}</code></p>
         <p>Este enlace expirará en <strong>10 minutos</strong>.</p>
       `
     });
 
-    // ❌ No enviar token ni permitir login aún
     res.status(201).json({ success: true });
   } catch (error) {
     console.error('❌ Error en registro:', error);
