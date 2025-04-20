@@ -154,7 +154,7 @@ router.get("/verify-email", async (req: Request, res: Response) => {
 
     // ✅ Redireccionar al frontend
     const baseUrl = process.env.FRONTEND_URL || "https://www.aamy.ai";
-    res.redirect(`${baseUrl}/auth/verified`);
+    res.redirect(`${baseUrl}/login`);
   } catch (err) {
     console.error("❌ Error al verificar email:", err);
     return res.status(400).json({ error: "Token inválido o expirado" });
