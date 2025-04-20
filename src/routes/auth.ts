@@ -74,7 +74,7 @@ router.post('/register', async (req: Request, res: Response) => {
   }
 });
 
-router.get("/auth/verify-email", async (req: Request, res: Response) => {
+router.get("/verify-email", async (req: Request, res: Response) => {
   const token = req.query.token as string;
 
   if (!token) {
@@ -88,18 +88,16 @@ router.get("/auth/verify-email", async (req: Request, res: Response) => {
     const user = userRes.rows[0];
 
     if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
-    if (user.verificado) return res.redirect(`${process.env.FRONTEND_URL}/login?verified=1`);
+    if (user.verificado) return res.status(400).json({ error: "La cuenta ya está verificada" });
 
-    // ✅ Actualiza correctamente usando el uid
     await pool.query(
       "UPDATE users SET verificado = true, token_verificacion = NULL WHERE uid = $1",
       [decoded.uid]
     );
 
-    console.log(`✅ Usuario ${decoded.email} verificado`);
-
-    // ✅ Redirige al login con mensaje opcional
-    return res.redirect(`${process.env.FRONTEND_URL}/login?verified=1`);
+    // ✅ Redireccionar al frontend
+    const baseUrl = process.env.FRONTEND_URL || "https://www.aamy.ai";
+    res.redirect(`${baseUrl}/login`);
   } catch (err) {
     console.error("❌ Error al verificar email:", err);
     return res.status(400).json({ error: "Token inválido o expirado" });
@@ -163,36 +161,6 @@ router.post('/validate', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('❌ Token inválido:', error);
     res.status(401).json({ error: 'Token inválido' });
-  }
-});
-
-router.get("/verify-email", async (req: Request, res: Response) => {
-  const token = req.query.token as string;
-
-  if (!token) {
-    return res.status(400).json({ error: "Token faltante" });
-  }
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { uid: string; email: string };
-
-    const userRes = await pool.query("SELECT * FROM users WHERE uid = $1", [decoded.uid]);
-    const user = userRes.rows[0];
-
-    if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
-    if (user.verificado) return res.status(400).json({ error: "La cuenta ya está verificada" });
-
-    await pool.query(
-      "UPDATE users SET verificado = true, token_verificacion = NULL WHERE uid = $1",
-      [decoded.uid]
-    );
-
-    // ✅ Redireccionar al frontend
-    const baseUrl = process.env.FRONTEND_URL || "https://www.aamy.ai";
-    res.redirect(`${baseUrl}/login`);
-  } catch (err) {
-    console.error("❌ Error al verificar email:", err);
-    return res.status(400).json({ error: "Token inválido o expirado" });
   }
 });
 
