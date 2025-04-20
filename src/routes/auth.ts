@@ -41,7 +41,8 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // ✅ Crear token de verificación (JWT con uid)
     const token_verificacion = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '10m' });
-    const verification_link = `${process.env.FRONTEND_URL}/auth/verify-email?token=${token_verificacion}`;
+    const baseUrl = process.env.FRONTEND_URL || "https://www.aamy.ai";
+    const verification_link = `${baseUrl}/auth/verify-email?token=${token_verificacion}`;
 
     await pool.query(
       `INSERT INTO users (uid, email, password, role, owner_name, telefono, created_at, verificado, token_verificacion)
@@ -58,7 +59,7 @@ router.post('/register', async (req: Request, res: Response) => {
         <p>Haz clic en el siguiente botón o enlace para activar tu cuenta:</p>
         <p><a href="${verification_link}" style="display:inline-block;padding:12px 20px;background:#6B46C1;color:white;border-radius:6px;text-decoration:none">Verificar cuenta</a></p>
         <p>O copia y pega este link en tu navegador: <br /><code>${verification_link}</code></p>
-        <p>Este enlace expirará en 24 horas.</p>
+        <p>Este enlace expirará en <strong>10 minutos</strong>.</p>
       `
     });
 
@@ -94,7 +95,7 @@ router.post('/login', async (req: Request, res: Response) => {
     if (!user.verificado) {
       return res.status(403).json({ error: "Tu cuenta no está verificada. Revisa tu correo." });
     }
-    
+
     const token = jwt.sign({ uid: user.uid, email: user.email }, JWT_SECRET, {
       expiresIn: '7d',
     });
@@ -152,13 +153,12 @@ router.get("/verify-email", async (req: Request, res: Response) => {
     );
 
     // ✅ Redireccionar al frontend
-    res.redirect(`${process.env.FRONTEND_URL}/auth/verified`);
+    const baseUrl = process.env.FRONTEND_URL || "https://www.aamy.ai";
+    res.redirect(`${baseUrl}/auth/verified`);
   } catch (err) {
     console.error("❌ Error al verificar email:", err);
     return res.status(400).json({ error: "Token inválido o expirado" });
   }
 });
-
-
 
 export default router;
