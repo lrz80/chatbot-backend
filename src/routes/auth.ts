@@ -21,7 +21,6 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// ✅ Registro
 // ✅ Registro corregido
 router.post('/register', async (req: Request, res: Response) => {
   const { nombre, apellido, email, telefono, password } = req.body;
@@ -72,6 +71,38 @@ router.post('/register', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('❌ Error en registro:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+router.get("/auth/verify-email", async (req: Request, res: Response) => {
+  const token = req.query.token as string;
+
+  if (!token) {
+    return res.status(400).json({ error: "Token faltante" });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { uid: string; email: string };
+
+    const userRes = await pool.query("SELECT * FROM users WHERE uid = $1", [decoded.uid]);
+    const user = userRes.rows[0];
+
+    if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
+    if (user.verificado) return res.redirect(`${process.env.FRONTEND_URL}/login?verified=1`);
+
+    // ✅ Actualiza correctamente usando el uid
+    await pool.query(
+      "UPDATE users SET verificado = true, token_verificacion = NULL WHERE uid = $1",
+      [decoded.uid]
+    );
+
+    console.log(`✅ Usuario ${decoded.email} verificado`);
+
+    // ✅ Redirige al login con mensaje opcional
+    return res.redirect(`${process.env.FRONTEND_URL}/login?verified=1`);
+  } catch (err) {
+    console.error("❌ Error al verificar email:", err);
+    return res.status(400).json({ error: "Token inválido o expirado" });
   }
 });
 
