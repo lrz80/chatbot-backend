@@ -33,7 +33,7 @@ router.post('/checkout', async (req, res) => {
       customer_email: user.email,
       line_items: [
         {
-          price: 'price_XXXXXXXXXXXXXX', // << REEMPLAZA este ID
+          price: 'price_1R8AcL05RmqANw5ePQ1CbtZ8', // << REEMPLAZA este ID
           quantity: 1,
         },
       ],
