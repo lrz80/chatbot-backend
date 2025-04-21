@@ -153,7 +153,7 @@ router.put('/', async (req: Request, res: Response) => {
       limite_uso,
     } = req.body;
 
-    // 🚫 Ignorar campos de Twilio aunque lleguen en el body
+    // 🚫 Ignorar campos protegidos de Twilio
     delete req.body.twilio_number;
     delete req.body.twilio_sms_number;
     delete req.body.twilio_voice_number;
@@ -179,7 +179,8 @@ router.put('/', async (req: Request, res: Response) => {
         informacion_negocio = $8,
         funciones_asistente = $9,
         info_clave = $10,
-        limite_uso = $11
+        limite_uso = $11,
+        onboarding_completado = true
       WHERE admin_uid = $12`,
       [
         nombre_negocio,
