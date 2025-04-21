@@ -22,7 +22,8 @@ import faqRouter from "./routes/faq";
 import intentsRouter from "./routes/intents";
 import verifyRoutes from './routes/verify';
 import forgotPasswordRoute from "./routes/auth/forgot-password";
-
+import checkoutRoute from './routes/stripe/checkout';
+import stripeWebhook from './routes/stripe/webhook';
 
 dotenv.config();
 
@@ -79,6 +80,8 @@ app.use("/api/faq", faqRouter);
 app.use("/api/intents", intentsRouter);
 app.use('/api/verify', verifyRoutes);
 app.use(forgotPasswordRoute);
+app.use('/api/stripe', checkoutRoute);
+app.use('/api/stripe', stripeWebhook);
 
 // ✅ Servidor
 app.listen(PORT, () => {
