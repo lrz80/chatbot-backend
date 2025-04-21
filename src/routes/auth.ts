@@ -43,8 +43,7 @@ router.post('/register', async (req: Request, res: Response) => {
     const token_verificacion = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '10m' });
 
     // ✅ URL frontend de verificación
-    const frontendUrl = process.env.FRONTEND_URL || 'https://www.aamy.ai';
-    const verification_link = `${process.env.FRONTEND_URL}/auth/verified?token=${token_verificacion}`;
+    const verification_link = `${process.env.BACKEND_URL}/auth/verify-email?token=${token_verificacion}`;
 
     console.log("🌐 Enlace de verificación:", verification_link);
 
@@ -97,7 +96,8 @@ router.get("/verify-email", async (req: Request, res: Response) => {
 
     // ✅ Redireccionar al frontend
     const baseUrl = process.env.FRONTEND_URL || "https://www.aamy.ai";
-    res.redirect(`${baseUrl}/login`);
+    res.redirect(`${process.env.FRONTEND_URL}/auth/verified`);
+
   } catch (err) {
     console.error("❌ Error al verificar email:", err);
     return res.status(400).json({ error: "Token inválido o expirado" });
