@@ -43,7 +43,7 @@ router.post('/register', async (req: Request, res: Response) => {
     const token_verificacion = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '10m' });
 
     // ✅ URL frontend de verificación
-    const verification_link = `${process.env.BACKEND_URL}/auth/verify-email?token=${token_verificacion}`;
+    const verification_link = `${process.env.FRONTEND_URL}/auth/verify-email?token=${token_verificacion}`;
 
     console.log("🌐 Enlace de verificación:", verification_link);
 
