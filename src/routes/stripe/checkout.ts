@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import pool from '../../lib/db';
 
 const router = express.Router();
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!)
 
 // POST /api/stripe/checkout
 router.post('/checkout', async (req, res) => {
@@ -26,26 +26,27 @@ router.post('/checkout', async (req, res) => {
       return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
-    // ⚠️ Reemplaza este ID con el tuyo real desde Stripe Dashboard
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
       mode: 'subscription',
       customer_email: user.email,
       line_items: [
         {
-          price: 'price_1R8AcL05RmqANw5ePQ1CbtZ8', // << REEMPLAZA este ID
+          price: 'price_1R8AcL05RmqANw5ePQ1CbtZ8', // ✅ tu price_id real
           quantity: 1,
         },
       ],
+      subscription_data: {
+        trial_period_days: 7, // ✅ prueba de 7 días
+      },
       success_url: 'https://www.aamy.ai/dashboard?success=1',
       cancel_url: 'https://www.aamy.ai/upgrade?canceled=1',
     });
 
     res.json({ url: session.url });
-
-  } catch (err) {
-    console.error('❌ Error en /checkout:', err);
-    res.status(500).json({ error: 'Error al iniciar el pago' });
+  } catch (error) {
+    console.error('❌ Error creando sesión de Stripe:', error);
+    res.status(500).json({ error: 'Error al crear la sesión de pago' });
   }
 });
 
