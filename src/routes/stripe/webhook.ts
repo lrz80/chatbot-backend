@@ -1,16 +1,24 @@
 import express from 'express';
 import Stripe from 'stripe';
 import pool from '../../lib/db';
+import { transporter } from '../../lib/mailer'; // si quieres enviar email al cancelar
 import bodyParser from 'body-parser';
-import { sendCancelationEmail, sendRenewalSuccessEmail } from '../../lib/mailer';
 
 const router = express.Router();
 
-// ⚠️ RAW BODY solo para Stripe
+// ⚠️ SOLO este endpoint usa raw body
 router.post('/webhook', bodyParser.raw({ type: 'application/json' }), async (req, res) => {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+    apiVersion: '2025-03-31.basil',
+  });
+
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
   const sig = req.headers['stripe-signature'];
+
+  if (!endpointSecret) {
+    console.error('❌ Falta STRIPE_WEBHOOK_SECRET en .env');
+    return res.status(500).json({ error: 'Configuración incompleta' });
+  }
 
   let event: Stripe.Event;
 
@@ -21,30 +29,28 @@ router.post('/webhook', bodyParser.raw({ type: 'application/json' }), async (req
     return res.status(400).send(`Webhook Error: ${(err as Error).message}`);
   }
 
-  // ✅ Activación inicial tras pago exitoso
+  // ✅ Activación inicial por checkout
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
     const email = session.customer_email;
 
-    console.log('✅ Pago exitoso recibido de:', email);
-
     try {
       const userResult = await pool.query('SELECT uid FROM users WHERE email = $1', [email]);
       const user = userResult.rows[0];
-      if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+      if (!user) return;
 
       const uid = user.uid;
       const vigencia = new Date();
       vigencia.setDate(vigencia.getDate() + 30);
 
-      const tenantResult = await pool.query('SELECT * FROM tenants WHERE uid = $1', [uid]);
+      const tenantCheck = await pool.query('SELECT * FROM tenants WHERE uid = $1', [uid]);
 
-      if (tenantResult.rows.length === 0) {
+      if (tenantCheck.rows.length === 0) {
         await pool.query(`
           INSERT INTO tenants (uid, membresia_activa, membresia_vigencia, used, plan)
           VALUES ($1, true, $2, 0, 'pro')
         `, [uid, vigencia]);
-        console.log('✅ Tenant creado con membresía activa para:', email);
       } else {
         await pool.query(`
           UPDATE tenants
@@ -52,14 +58,15 @@ router.post('/webhook', bodyParser.raw({ type: 'application/json' }), async (req
               membresia_vigencia = $2
           WHERE uid = $1
         `, [uid, vigencia]);
-        console.log('🎉 Membresía activada correctamente para:', email);
       }
-    } catch (err) {
-      console.error('❌ Error activando membresía:', err);
+
+      console.log('✅ Membresía activada para', email);
+    } catch (error) {
+      console.error('❌ Error activando membresía:', error);
     }
   }
 
-  // ✅ Renovación automática mensual
+  // 🔁 Renovación mensual automática
   if (event.type === 'invoice.payment_succeeded') {
     const invoice = event.data.object as Stripe.Invoice;
     let customerEmail = invoice.customer_email;
@@ -73,16 +80,14 @@ router.post('/webhook', bodyParser.raw({ type: 'application/json' }), async (req
       customerEmail = (invoice.customer as Stripe.Customer).email!;
     }
 
-    if (!customerEmail) return res.status(400).json({ error: 'Email no disponible' });
+    if (!customerEmail) return;
 
     try {
-      const userResult = await pool.query('SELECT uid, idioma FROM users WHERE email = $1', [customerEmail]);
+      const userResult = await pool.query('SELECT uid FROM users WHERE email = $1', [customerEmail]);
       const user = userResult.rows[0];
-      if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+      if (!user) return;
 
       const uid = user.uid;
-      const idioma = user.idioma || 'es';
-
       const nuevaVigencia = new Date();
       nuevaVigencia.setDate(nuevaVigencia.getDate() + 30);
 
@@ -93,14 +98,13 @@ router.post('/webhook', bodyParser.raw({ type: 'application/json' }), async (req
         WHERE uid = $1
       `, [uid, nuevaVigencia]);
 
-      await sendRenewalSuccessEmail(customerEmail, idioma);
-      console.log('🔁 Membresía renovada y correo enviado a:', customerEmail);
+      console.log('🔁 Membresía renovada para', customerEmail);
     } catch (error) {
       console.error('❌ Error renovando membresía:', error);
     }
   }
 
-  // ✅ Cancelación de suscripción
+  // ❌ Cancelación automática
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object as Stripe.Subscription;
     let customerEmail: string | null = null;
@@ -114,18 +118,17 @@ router.post('/webhook', bodyParser.raw({ type: 'application/json' }), async (req
         }
       }
     } catch (err) {
-      console.warn('⚠️ No se pudo obtener el email del cliente:', err);
+      console.warn('⚠️ No se pudo obtener email del cliente para cancelación');
     }
 
-    if (!customerEmail) return res.status(400).json({ error: 'Email no disponible' });
+    if (!customerEmail) return;
 
     try {
-      const userResult = await pool.query('SELECT uid, idioma FROM users WHERE email = $1', [customerEmail]);
+      const userResult = await pool.query('SELECT uid FROM users WHERE email = $1', [customerEmail]);
       const user = userResult.rows[0];
-      if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+      if (!user) return;
 
       const uid = user.uid;
-      const idioma = user.idioma || 'es';
 
       await pool.query(`
         UPDATE tenants
@@ -133,10 +136,24 @@ router.post('/webhook', bodyParser.raw({ type: 'application/json' }), async (req
         WHERE uid = $1
       `, [uid]);
 
-      await sendCancelationEmail(customerEmail, idioma);
-      console.log('🛑 Membresía cancelada y correo enviado a:', customerEmail);
-    } catch (error) {
-      console.error('❌ Error cancelando membresía:', error);
+      console.log('🛑 Membresía cancelada para', customerEmail);
+
+      // ✉️ Enviar email al cliente
+      await transporter.sendMail({
+        from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
+        to: customerEmail,
+        subject: 'Tu membresía ha sido cancelada',
+        html: `
+          <h3>Tu membresía en Amy AI ha sido cancelada</h3>
+          <p>Hola,</p>
+          <p>Hemos cancelado tu membresía en <strong>Amy AI</strong>. Ya no tendrás acceso a las funciones del asistente.</p>
+          <p>Si deseas reactivarla, puedes hacerlo desde tu <a href="https://www.aamy.ai/upgrade">panel de usuario</a>.</p>
+          <br />
+          <p>Gracias por haber sido parte de Amy AI 💜</p>
+        `
+      });
+    } catch (err) {
+      console.error('❌ Error desactivando membresía:', err);
     }
   }
 
