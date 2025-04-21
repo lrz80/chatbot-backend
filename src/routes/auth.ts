@@ -6,6 +6,8 @@ import bcrypt from 'bcryptjs';
 import pool from '../lib/db';
 import { v4 as uuidv4 } from 'uuid';
 import nodemailer from 'nodemailer';
+import { sendVerificationEmail } from '../lib/mailer';
+
 
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
@@ -53,18 +55,8 @@ router.post('/register', async (req: Request, res: Response) => {
       [uid, email, password_hash, 'admin', owner_name, telefono, token_verificacion]
     );
 
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM,
-      to: email,
-      subject: 'Verifica tu cuenta en AAMY',
-      html: `
-        <h3>¡Bienvenido/a a AAMY!</h3>
-        <p>Haz clic en el siguiente botón o enlace para activar tu cuenta:</p>
-        <p><a href="${verification_link}" style="display:inline-block;padding:12px 20px;background:#6B46C1;color:white;border-radius:6px;text-decoration:none">Verificar cuenta</a></p>
-        <p>O copia y pega este link en tu navegador:<br /><code>${verification_link}</code></p>
-        <p>Este enlace expirará en <strong>10 minutos</strong>.</p>
-      `
-    });
+    // ✅ Usar plantilla multilenguaje desde mailer.ts
+    await sendVerificationEmail(email, verification_link, 'es'); // o 'en'
 
     res.status(201).json({ success: true });
   } catch (error) {
