@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 
-const transporter = nodemailer.createTransport({
+export const transporter = nodemailer.createTransport({
   host: 'mail.privateemail.com',
   port: 465,
   secure: true,
