@@ -44,10 +44,12 @@ router.post('/', async (req, res) => {
       const tenantCheck = await pool.query('SELECT * FROM tenants WHERE admin_uid = $1', [uid]);
 
       if (tenantCheck.rows.length === 0) {
+        const tenantName = user.owner_name || 'Negocio sin nombre';
+      
         await pool.query(`
-          INSERT INTO tenants (admin_uid, membresia_activa, membresia_vigencia, used, plan)
-          VALUES ($1, true, $2, 0, 'pro')
-        `, [uid, vigencia]);
+          INSERT INTO tenants (admin_uid, name, membresia_activa, membresia_vigencia, used, plan)
+          VALUES ($1, $2, true, $3, 0, 'pro')
+        `, [uid, tenantName, vigencia]);
       } else {
         await pool.query(`
           UPDATE tenants
