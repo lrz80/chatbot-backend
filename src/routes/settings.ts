@@ -29,6 +29,7 @@ router.get('/', async (req: Request, res: Response) => {
       owner_name: user.owner_name,
       membresia_activa: tenant?.membresia_activa ?? false,
       membresia_vigencia: tenant?.membresia_vigencia ?? null,
+      onboarding_completado: tenant.onboarding_completado,
       name: tenant?.name || '',
       categoria: tenant?.categoria || '',
       idioma: tenant?.idioma || 'es',
