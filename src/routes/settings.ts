@@ -147,14 +147,16 @@ router.put('/', async (req: Request, res: Response) => {
       horario_atencion,
       prompt,
       bienvenida,
-      twilio_number,
-      twilio_sms_number,
-      twilio_voice_number,
       informacion_negocio,
       funciones_asistente,
       info_clave,
       limite_uso,
     } = req.body;
+
+    // 🚫 Ignorar campos de Twilio aunque lleguen en el body
+    delete req.body.twilio_number;
+    delete req.body.twilio_sms_number;
+    delete req.body.twilio_voice_number;
 
     const userRes = await pool.query('SELECT * FROM users WHERE uid = $1', [decoded.uid]);
     const user = userRes.rows[0];
@@ -174,14 +176,11 @@ router.put('/', async (req: Request, res: Response) => {
         horario_atencion = $5,
         prompt = $6,
         bienvenida = $7,
-        twilio_number = $8,
-        twilio_sms_number = $9,
-        twilio_voice_number = $10,
-        informacion_negocio = $11,
-        funciones_asistente = $12,
-        info_clave = $13,
-        limite_uso = $14
-      WHERE admin_uid = $15`,
+        informacion_negocio = $8,
+        funciones_asistente = $9,
+        info_clave = $10,
+        limite_uso = $11
+      WHERE admin_uid = $12`,
       [
         nombre_negocio,
         categoria || '',
@@ -190,9 +189,6 @@ router.put('/', async (req: Request, res: Response) => {
         horario_atencion || '',
         prompt || '',
         bienvenida || '',
-        twilio_number || '',
-        twilio_sms_number || '',
-        twilio_voice_number || '',
         informacion_negocio || '',
         funciones_asistente || '',
         info_clave || '',
@@ -207,6 +203,5 @@ router.put('/', async (req: Request, res: Response) => {
     return res.status(500).json({ error: 'Error al guardar cambios' });
   }
 });
-
 
 export default router;
