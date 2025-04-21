@@ -9,9 +9,21 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const db_1 = __importDefault(require("../lib/db"));
 const uuid_1 = require("uuid");
+const nodemailer_1 = __importDefault(require("nodemailer"));
+const mailer_1 = require("../lib/mailer");
 const router = (0, express_1.Router)();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
-// ✅ Registro
+// ✅ Transport para enviar emails
+const transporter = nodemailer_1.default.createTransport({
+    host: "mail.privateemail.com",
+    port: 465,
+    secure: true,
+    auth: {
+        user: process.env.EMAIL_FROM,
+        pass: process.env.EMAIL_PASS,
+    },
+});
+// ✅ Registro corregido
 router.post('/register', async (req, res) => {
     const { nombre, apellido, email, telefono, password } = req.body;
     if (!nombre || !apellido || !email || !telefono || !password) {
@@ -25,20 +37,43 @@ router.post('/register', async (req, res) => {
         const password_hash = await bcryptjs_1.default.hash(password, 10);
         const uid = (0, uuid_1.v4)();
         const owner_name = `${nombre} ${apellido}`;
-        await db_1.default.query(`INSERT INTO users (uid, email, password, role, owner_name, created_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())`, [uid, email, password_hash, 'admin', owner_name]);
-        const token = jsonwebtoken_1.default.sign({ uid, email }, JWT_SECRET, { expiresIn: '7d' });
-        res.cookie('token', token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax', // ⚠️ para cookies cross-domain
-            maxAge: 7 * 24 * 60 * 60 * 1000,
-        });
-        res.status(201).json({ uid });
+        // ✅ Token de verificación (expira en 10 minutos)
+        const token_verificacion = jsonwebtoken_1.default.sign({ uid, email }, JWT_SECRET, { expiresIn: '10m' });
+        // ✅ URL frontend de verificación
+        const verification_link = `${process.env.FRONTEND_URL}/auth/verify-email?token=${token_verificacion}`;
+        console.log("🌐 Enlace de verificación:", verification_link);
+        await db_1.default.query(`INSERT INTO users (uid, email, password, role, owner_name, telefono, created_at, verificado, token_verificacion)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), false, $7)`, [uid, email, password_hash, 'admin', owner_name, telefono, token_verificacion]);
+        // ✅ Usar plantilla multilenguaje desde mailer.ts
+        await (0, mailer_1.sendVerificationEmail)(email, verification_link, 'es'); // o 'en'
+        res.status(201).json({ success: true });
     }
     catch (error) {
         console.error('❌ Error en registro:', error);
         res.status(500).json({ error: 'Error interno del servidor' });
+    }
+});
+router.get("/verify-email", async (req, res) => {
+    const token = req.query.token;
+    if (!token) {
+        return res.status(400).json({ error: "Token faltante" });
+    }
+    try {
+        const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
+        const userRes = await db_1.default.query("SELECT * FROM users WHERE uid = $1", [decoded.uid]);
+        const user = userRes.rows[0];
+        if (!user)
+            return res.status(404).json({ error: "Usuario no encontrado" });
+        if (user.verificado)
+            return res.status(400).json({ error: "La cuenta ya está verificada" });
+        await db_1.default.query("UPDATE users SET verificado = true, token_verificacion = NULL WHERE uid = $1", [decoded.uid]);
+        // ✅ Redireccionar al frontend
+        const baseUrl = process.env.FRONTEND_URL || "https://www.aamy.ai";
+        res.redirect(`${process.env.FRONTEND_URL}/auth/verify-email?token=${token}`);
+    }
+    catch (err) {
+        console.error("❌ Error al verificar email:", err);
+        return res.status(400).json({ error: "Token inválido o expirado" });
     }
 });
 // ✅ Login
@@ -57,13 +92,16 @@ router.post('/login', async (req, res) => {
         if (!match) {
             return res.status(401).json({ error: 'Credenciales inválidas' });
         }
+        if (!user.verificado) {
+            return res.status(403).json({ error: "Tu cuenta no está verificada. Revisa tu correo." });
+        }
         const token = jsonwebtoken_1.default.sign({ uid: user.uid, email: user.email }, JWT_SECRET, {
             expiresIn: '7d',
         });
         res.cookie('token', token, {
             httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+            secure: true,
+            sameSite: 'none',
             maxAge: 7 * 24 * 60 * 60 * 1000,
         });
         res.status(200).json({ uid: user.uid });

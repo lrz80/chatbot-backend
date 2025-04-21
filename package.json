@@ -4,7 +4,7 @@
   "main": "dist/app.js",
   "type": "commonjs",
   "scripts": {
-    "dev": "ts-node-dev --respawn src/app.ts",
+    "dev": "ts-node -r tsconfig-paths/register src/index.ts",
     "build": "npx tsc",
     "start": "node dist/app.js"
   },
@@ -19,6 +19,8 @@
     "openai": "^4.95.0",
     "pg": "^8.11.1",
     "stripe": "^18.0.0",
+    "ts-node": "^10.9.2",
+    "tsconfig-paths": "^4.2.0",
     "twilio": "^5.5.2",
     "typescript": "^5.3.3",
     "uuid": "^9.0.1"

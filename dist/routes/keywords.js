@@ -3,26 +3,30 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-const express_1 = __importDefault(require("express"));
+// src/routes/keywords.ts
+const express_1 = require("express");
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const db_1 = __importDefault(require("../lib/db"));
-const router = express_1.default.Router();
+const router = (0, express_1.Router)();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 router.get('/', async (req, res) => {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-        res.status(401).json({ error: 'Token requerido' });
-        return;
-    }
+    const token = req.cookies.token;
+    if (!token)
+        return res.status(401).json({ error: 'Token requerido' });
     try {
         const decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
-        const result = await db_1.default.query(`SELECT word, count FROM keywords WHERE uid = $1 ORDER BY count DESC LIMIT 10`, [decoded.uid]);
-        res.status(200).json({
-            keywords: result.rows.map((row) => [row.word, row.count]),
-        });
+        const uid = decoded.uid;
+        // Busca el tenant por admin_uid
+        const tenantRes = await db_1.default.query('SELECT id FROM tenants WHERE admin_uid = $1', [uid]);
+        const tenant = tenantRes.rows[0];
+        if (!tenant)
+            return res.status(404).json({ error: 'Negocio no encontrado' });
+        const result = await db_1.default.query('SELECT palabra, cantidad FROM keywords WHERE tenant_id = $1 ORDER BY cantidad DESC LIMIT 10', [tenant.id]);
+        const keywords = result.rows.map((row) => [row.palabra, row.cantidad]);
+        res.json({ keywords });
     }
-    catch (error) {
-        console.error('❌ Error en /keywords:', error);
+    catch (err) {
+        console.error('❌ Error al obtener keywords:', err);
         res.status(500).json({ error: 'Error interno del servidor' });
     }
 });
