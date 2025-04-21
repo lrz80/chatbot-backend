@@ -2,7 +2,6 @@ import express from 'express';
 import Stripe from 'stripe';
 import pool from '../../lib/db';
 import { transporter } from '../../lib/mailer'; // si quieres enviar email al cancelar
-import bodyParser from 'body-parser';
 
 const router = express.Router();
 
