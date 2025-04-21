@@ -32,7 +32,7 @@ router.post('/checkout', async (req, res) => {
       customer_email: user.email,
       line_items: [
         {
-          price: 'price_1R8AcL05RmqANw5ePQ1CbtZ8', // ✅ tu price_id real
+          price: 'price_1R8C4K05RmqANw5eLQo1xPMU', // ✅ tu price_id real
           quantity: 1,
         },
       ],
