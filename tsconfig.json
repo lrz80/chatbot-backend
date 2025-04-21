@@ -20,6 +20,6 @@
     "alwaysStrict": true,
     "useUnknownInCatchVariables": true
   },
-  "include": ["src/**/*"],
+  "include": ["src", "types"],
   "exclude": ["node_modules"]
 }

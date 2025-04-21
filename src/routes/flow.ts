@@ -22,7 +22,11 @@ const router = express.Router();
 // ✅ GET /api/flows
 router.get("/api/flows", authenticateUser, async (req: Request, res: Response) => {
   try {
-    const { tenant_id } = req.user;
+    const tenant_id = req.user?.tenant_id;
+
+    if (!tenant_id) {
+    return res.status(401).json({ error: "Tenant no autenticado" });
+    }
 
     const result = await pool.query("SELECT data FROM flows WHERE tenant_id = $1", [tenant_id]);
 
@@ -36,7 +40,12 @@ router.get("/api/flows", authenticateUser, async (req: Request, res: Response) =
 // ✅ POST /api/flows
 router.post("/api/flows", authenticateUser, async (req: Request, res: Response) => {
   try {
-    const { tenant_id } = req.user;
+    const tenant_id = req.user?.tenant_id;
+
+    if (!tenant_id) {
+    return res.status(401).json({ error: "Tenant no autenticado" });
+    }
+
     const flows: Flow[] = req.body.flows;
 
     if (!Array.isArray(flows)) {
