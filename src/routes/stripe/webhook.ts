@@ -44,20 +44,28 @@ router.post('/', async (req, res) => {
       const tenantCheck = await pool.query('SELECT * FROM tenants WHERE admin_uid = $1', [uid]);
 
       if (tenantCheck.rows.length === 0) {
+        const userData = await pool.query('SELECT uid, owner_name FROM users WHERE email = $1', [email]);
+        const user = userData.rows[0];
+        if (!user) return;
+      
+        const uid = user.uid;
         const tenantName = user.owner_name || 'Negocio sin nombre';
+        const vigencia = new Date();
+        vigencia.setDate(vigencia.getDate() + 30);
       
         await pool.query(`
-          INSERT INTO tenants (admin_uid, name, membresia_activa, membresia_vigencia, used, plan)
-          VALUES ($1, $2, true, $3, 0, 'pro')
+          INSERT INTO tenants (
+            admin_uid,
+            name,
+            membresia_activa,
+            membresia_vigencia,
+            used,
+            plan
+          ) VALUES ($1, $2, true, $3, 0, 'pro')
         `, [uid, tenantName, vigencia]);
-      } else {
-        await pool.query(`
-          UPDATE tenants
-          SET membresia_activa = true,
-              membresia_vigencia = $2
-          WHERE admin_uid = $1
-        `, [uid, vigencia]);
-      }
+      
+        console.log('✅ Tenant creado con membresía activa para', email);
+      }      
 
       console.log('✅ Membresía activada para', email);
     } catch (error) {
