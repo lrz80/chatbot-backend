@@ -1,69 +1,31 @@
 import express from 'express';
 import Stripe from 'stripe';
 import pool from '../../lib/db';
-import { transporter } from '../../lib/mailer'; // si quieres enviar email al cancelar
+import { transporter } from '../../lib/mailer';
 
 const router = express.Router();
 
-// ⚠️ SOLO este endpoint usa raw body
 router.post('/', async (req, res) => {
-    const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-      apiVersion: '2025-03-31.basil',
-    });
-  
-    const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    const sig = req.headers['stripe-signature'];
-  
-    if (!endpointSecret) {
-      console.error('❌ Falta STRIPE_WEBHOOK_SECRET en .env');
-      return res.status(500).json({ error: 'Configuración incompleta' });
-    }
-  
-    let event: Stripe.Event;
-  
-    try {
-      event = stripe.webhooks.constructEvent(req.body, sig!, endpointSecret);
-    } catch (err) {
-      console.error('⚠️ Webhook error:', err);
-      return res.status(400).send(`Webhook Error: ${(err as Error).message}`);
-    }
-  
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object as Stripe.Checkout.Session;
-      const email = session.customer_email;
-  
-      try {
-        const userResult = await pool.query('SELECT uid FROM users WHERE email = $1', [email]);
-        const user = userResult.rows[0];
-        if (!user) return;
-  
-        const uid = user.uid;
-        const vigencia = new Date();
-        vigencia.setDate(vigencia.getDate() + 30);
-  
-        const tenantCheck = await pool.query('SELECT * FROM tenants WHERE uid = $1', [uid]);
-  
-        if (tenantCheck.rows.length === 0) {
-          await pool.query(
-            `INSERT INTO tenants (uid, membresia_activa, membresia_vigencia, used, plan)
-             VALUES ($1, true, $2, 0, 'pro')`,
-            [uid, vigencia]
-          );
-        } else {
-          await pool.query(
-            `UPDATE tenants
-             SET membresia_activa = true,
-                 membresia_vigencia = $2
-             WHERE uid = $1`,
-            [uid, vigencia]
-          );
-        }
-  
-        console.log('✅ Membresía activada para', email);
-      } catch (error) {
-        console.error('❌ Error activando membresía:', error);
-      }
-    }
+  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+    apiVersion: '2025-03-31.basil',
+  });
+
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  const sig = req.headers['stripe-signature'];
+
+  if (!endpointSecret) {
+    console.error('❌ Falta STRIPE_WEBHOOK_SECRET en .env');
+    return res.status(500).json({ error: 'Configuración incompleta' });
+  }
+
+  let event: Stripe.Event;
+
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig!, endpointSecret);
+  } catch (err) {
+    console.error('⚠️ Webhook error:', err);
+    return res.status(400).send(`Webhook Error: ${(err as Error).message}`);
+  }
 
   // ✅ Activación inicial por checkout
   if (event.type === 'checkout.session.completed') {
@@ -73,18 +35,17 @@ router.post('/', async (req, res) => {
     try {
       const userResult = await pool.query('SELECT uid FROM users WHERE email = $1', [email]);
       const user = userResult.rows[0];
-
       if (!user) return;
 
       const uid = user.uid;
       const vigencia = new Date();
       vigencia.setDate(vigencia.getDate() + 30);
 
-      const tenantCheck = await pool.query('SELECT * FROM tenants WHERE uid = $1', [uid]);
+      const tenantCheck = await pool.query('SELECT * FROM tenants WHERE admin_uid = $1', [uid]);
 
       if (tenantCheck.rows.length === 0) {
         await pool.query(`
-          INSERT INTO tenants (uid, membresia_activa, membresia_vigencia, used, plan)
+          INSERT INTO tenants (admin_uid, membresia_activa, membresia_vigencia, used, plan)
           VALUES ($1, true, $2, 0, 'pro')
         `, [uid, vigencia]);
       } else {
@@ -92,7 +53,7 @@ router.post('/', async (req, res) => {
           UPDATE tenants
           SET membresia_activa = true,
               membresia_vigencia = $2
-          WHERE uid = $1
+          WHERE admin_uid = $1
         `, [uid, vigencia]);
       }
 
@@ -131,7 +92,7 @@ router.post('/', async (req, res) => {
         UPDATE tenants
         SET membresia_activa = true,
             membresia_vigencia = $2
-        WHERE uid = $1
+        WHERE admin_uid = $1
       `, [uid, nuevaVigencia]);
 
       console.log('🔁 Membresía renovada para', customerEmail);
@@ -169,12 +130,11 @@ router.post('/', async (req, res) => {
       await pool.query(`
         UPDATE tenants
         SET membresia_activa = false
-        WHERE uid = $1
+        WHERE admin_uid = $1
       `, [uid]);
 
       console.log('🛑 Membresía cancelada para', customerEmail);
 
-      // ✉️ Enviar email al cliente
       await transporter.sendMail({
         from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
         to: customerEmail,
