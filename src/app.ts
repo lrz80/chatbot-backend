@@ -52,7 +52,11 @@ app.use(cors({
 }));
 
 // ✅ Webhook Stripe primero (usa body raw, no json)
-app.use('/api/stripe/webhook', bodyParser.raw({ type: 'application/json' }), stripeWebhook);
+app.use(
+  '/api/stripe/webhook',
+  bodyParser.raw({ type: 'application/json' }),
+  stripeWebhook
+);
 
 // ✅ Middlewares globales
 app.use(express.json()); // después del webhook para no interferir

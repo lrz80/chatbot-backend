@@ -7,7 +7,7 @@ import bodyParser from 'body-parser';
 const router = express.Router();
 
 // ⚠️ SOLO este endpoint usa raw body
-router.post('/webhook', bodyParser.raw({ type: 'application/json' }), async (req, res) => {
+router.post('/', async (req, res) => {
   const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
     apiVersion: '2025-03-31.basil',
   });
