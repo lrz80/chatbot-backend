@@ -43,10 +43,13 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     await pool.query(
-      `INSERT INTO tenants 
-        (name, slug, admin_uid, categoria, idioma, prompt, bienvenida, membresia_activa, membresia_vigencia, onboarding_completado)
-       VALUES 
-        ($1, $2, $3, $4, $5, $6, $7, true, NOW() + interval '30 days', true)`,
+      `INSERT INTO tenants (
+        name, slug, admin_uid, categoria, idioma, prompt, bienvenida, 
+        membresia_activa, membresia_vigencia, onboarding_completado, limite_uso, used
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7,
+        true, NOW() + interval '30 days', true, 150, 0
+      )`,
       [
         name,
         slug,
@@ -54,7 +57,7 @@ router.post('/', async (req: Request, res: Response) => {
         categoria,
         idioma,
         prompt,
-        `¡Hola! 👋 Soy tu asistente virtual. ¿En qué puedo ayudarte?`,
+        '¡Hola! 👋 Soy tu asistente virtual. ¿En qué puedo ayudarte?',
       ]
     );
 
