@@ -86,7 +86,7 @@ app.use('/api/intents', intentsRouter);
 app.use('/api/verify', verifyRoutes);
 app.use(forgotPasswordRoute);
 app.use('/api/stripe', checkoutRoute); // otras rutas de Stripe (no webhook)
-app.use(flowsRoutes);
+app.use('/api/flows', flowsRoutes);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
