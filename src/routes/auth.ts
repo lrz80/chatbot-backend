@@ -129,6 +129,7 @@ router.post('/login', async (req: Request, res: Response) => {
       httpOnly: true,
       secure: true,
       sameSite: 'none',
+      partitioned: true, // 👈 esto es lo único nuevo
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
