@@ -39,31 +39,33 @@ router.get("/api/flows", authenticateUser, async (req: Request, res: Response) =
 
 // ✅ POST /api/flows
 router.post("/api/flows", authenticateUser, async (req: Request, res: Response) => {
-  try {
-    const tenant_id = req.user?.tenant_id;
-
-    if (!tenant_id) {
-    return res.status(401).json({ error: "Tenant no autenticado" });
+    try {
+      const tenant_id = req.user?.tenant_id;
+  
+      if (!tenant_id) {
+        return res.status(401).json({ error: "Tenant no autenticado" });
+      }
+  
+      const flows: Flow[] = req.body.flows;
+  
+      if (!Array.isArray(flows)) {
+        return res.status(400).json({ error: "Formato de flujos inválido" });
+      }
+  
+      console.log("📥 Flujos recibidos:", JSON.stringify(flows, null, 2)); // 👈 opcional para debug
+  
+      await pool.query(
+        `INSERT INTO flows (tenant_id, data, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (tenant_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
+        [tenant_id, flows] // 👈 sin stringify
+      );
+  
+      res.json({ success: true });
+    } catch (err) {
+      console.error("❌ Error al guardar flujos:", err);
+      res.status(500).json({ error: "Error interno" });
     }
-
-    const flows: Flow[] = req.body.flows;
-
-    if (!Array.isArray(flows)) {
-      return res.status(400).json({ error: "Formato de flujos inválido" });
-    }
-
-    await pool.query(
-      `INSERT INTO flows (tenant_id, data, updated_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (tenant_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
-      [tenant_id, JSON.stringify(flows)]
-    );
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error("❌ Error al guardar flujos:", err);
-    res.status(500).json({ error: "Error interno" });
-  }
-});
+  });  
 
 export default router;
