@@ -43,6 +43,7 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
 // ✅ POST /api/flows
 router.post("/", authenticateUser, async (req: Request, res: Response) => {
     try {
+      console.log("🧠 Middleware req.user:", req.user);
       console.log("👤 Usuario autenticado:", req.user);
       console.log("🛬 Llamada al POST /api/flows");
       console.log("📥 Cuerpo recibido:", req.body);
