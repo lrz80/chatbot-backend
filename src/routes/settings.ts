@@ -107,7 +107,7 @@ router.post('/', async (req: Request, res: Response) => {
         funciones_asistente = $12,
         info_clave = $13,
         limite_uso = $14
-      WHERE admin_uid = $15`,
+      WHERE id = $15`,
       [
         nombre_negocio,
         categoria || '',
@@ -123,7 +123,7 @@ router.post('/', async (req: Request, res: Response) => {
         funciones_asistente || '',
         info_clave || '',
         limite_uso || 150,
-        user.uid,
+        user.tenant_id,
       ]
     );
 
@@ -184,7 +184,7 @@ router.put('/', async (req: Request, res: Response) => {
         info_clave = $10,
         limite_uso = $11,
         onboarding_completado = true
-      WHERE admin_uid = $12`,
+        WHERE id = $12`,
       [
         nombre_negocio,
         categoria || '',
@@ -197,7 +197,7 @@ router.put('/', async (req: Request, res: Response) => {
         funciones_asistente || '',
         info_clave || '',
         limite_uso || 150,
-        user.uid,
+        user.tenant_id,
       ]
     );
 
