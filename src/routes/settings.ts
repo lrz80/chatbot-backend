@@ -1,51 +1,51 @@
-import { Router, Request, Response } from 'express';
+import express from 'express';
+import { Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
+import { authenticateUser } from '../middleware/auth';
 
-const router: Router = Router();
+const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
-// GET: Obtener perfil del negocio
-router.get('/', async (req: Request, res: Response) => {
-  const token = req.cookies.token;
-
-  if (!token) {
-    return res.status(401).json({ error: 'Token requerido' });
-  }
-
+// ✅ GET: Perfil del negocio
+router.get('/', authenticateUser, async (req: any, res: Response) => {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    const uid = req.user?.uid;
+    const tenant_id = req.user?.tenant_id;
 
-    const userRes = await pool.query('SELECT * FROM users WHERE uid = $1', [decoded.uid]);
+    if (!tenant_id) {
+      return res.status(401).json({ error: 'Tenant no encontrado o no asignado' });
+    }
+
+    const userRes = await pool.query('SELECT * FROM users WHERE uid = $1', [uid]);
     const user = userRes.rows[0];
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    const tenantRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [user.tenant_id]);
+    const tenantRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
     const tenant = tenantRes.rows[0];
-
     if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
 
     return res.status(200).json({
       uid: user.uid,
       email: user.email,
       owner_name: user.owner_name,
-      membresia_activa: tenant?.membresia_activa ?? false,
-      membresia_vigencia: tenant?.membresia_vigencia ?? null,
+      membresia_activa: tenant.membresia_activa ?? false,
+      membresia_vigencia: tenant.membresia_vigencia ?? null,
       onboarding_completado: tenant.onboarding_completado,
-      name: tenant?.name || '',
-      categoria: tenant?.categoria || '',
-      idioma: tenant?.idioma || 'es',
-      prompt: tenant?.prompt || '',
-      bienvenida: tenant?.bienvenida || '',
-      direccion: tenant?.direccion || '',
-      horario_atencion: tenant?.horario_atencion || '',
-      twilio_number: tenant?.twilio_number || '',
-      twilio_sms_number: tenant?.twilio_sms_number || '',
-      twilio_voice_number: tenant?.twilio_voice_number || '',
-      informacion_negocio: tenant?.informacion_negocio || '',
-      funciones_asistente: tenant?.funciones_asistente || '',
-      info_clave: tenant?.info_clave || '',
-      limite_uso: tenant?.limite_uso || 150,
+      name: tenant.name || '',
+      categoria: tenant.categoria || '',
+      idioma: tenant.idioma || 'es',
+      prompt: tenant.prompt || '',
+      bienvenida: tenant.bienvenida || '',
+      direccion: tenant.direccion || '',
+      horario_atencion: tenant.horario_atencion || '',
+      twilio_number: tenant.twilio_number || '',
+      twilio_sms_number: tenant.twilio_sms_number || '',
+      twilio_voice_number: tenant.twilio_voice_number || '',
+      informacion_negocio: tenant.informacion_negocio || '',
+      funciones_asistente: tenant.funciones_asistente || '',
+      info_clave: tenant.info_clave || '',
+      limite_uso: tenant.limite_uso || 150,
     });
   } catch (error) {
     console.error('❌ Error en /api/settings:', error);
