@@ -121,9 +121,17 @@ router.post('/login', async (req: Request, res: Response) => {
       return res.status(403).json({ error: "Tu cuenta no está verificada. Revisa tu correo." });
     }
 
-    const token = jwt.sign({ uid: user.uid, email: user.email }, JWT_SECRET, {
-      expiresIn: '7d',
-    });
+    const token = jwt.sign(
+      {
+        uid: user.uid,
+        email: user.email,
+        tenant_id: user.tenant_id || user.uid, // 👈 usa el uid como tenant_id si no hay campo separado
+      },
+      JWT_SECRET,
+      {
+        expiresIn: '7d',
+      }
+    );
 
     res.cookie('token', token, {
       httpOnly: true,
