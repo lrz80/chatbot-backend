@@ -22,7 +22,7 @@ type Flow = {
 const router = express.Router();
 
 // ✅ GET /api/flows
-router.get("/api/flows", authenticateUser, async (req: Request, res: Response) => {
+router.get("/", authenticateUser, async (req: Request, res: Response) => {
   try {
     console.log("👤 Usuario autenticado:", req.user);
     const tenant_id = req.user?.tenant_id;
@@ -41,7 +41,7 @@ router.get("/api/flows", authenticateUser, async (req: Request, res: Response) =
 });
 
 // ✅ POST /api/flows
-router.post("/api/flows", authenticateUser, async (req: Request, res: Response) => {
+router.post("/", authenticateUser, async (req: Request, res: Response) => {
     try {
       console.log("👤 Usuario autenticado:", req.user);
       console.log("🛬 Llamada al POST /api/flows");
