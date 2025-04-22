@@ -140,6 +140,22 @@ router.post('/login', async (req: Request, res: Response) => {
   }
 });
 
+router.get('/debug-token', (req: Request, res: Response) => {
+  const token = req.cookies?.token;
+
+  if (!token) {
+    return res.status(401).json({ error: '❌ No hay token en las cookies' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret-key');
+    return res.status(200).json({ ok: true, decoded });
+  } catch (err) {
+    console.error('❌ Token inválido o expirado:', err);
+    return res.status(401).json({ error: '❌ Token inválido o expirado', details: err });
+  }
+});
+
 // ✅ Validar sesión
 router.post('/validate', async (req: Request, res: Response) => {
   const token = req.cookies?.token;
