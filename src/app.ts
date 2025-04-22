@@ -95,7 +95,7 @@ app.get('/', (req, res) => {
 
 // ✅ Ping para mantener Railway activo
 setInterval(() => {
-  fetch('https://chatbot-backend-production-8668.up.railway.app/')
+  fetch('https://api.aamy.ai/')
     .then(() => console.log('🔁 Ping enviado a backend'))
     .catch(() => console.warn('⚠️ Ping fallido'));
 }, 1000 * 30);
