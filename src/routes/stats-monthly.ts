@@ -1,27 +1,17 @@
-import { Router, Request, Response } from 'express';
-import jwt, { JwtPayload } from 'jsonwebtoken';
+import { Router, Response } from 'express';
 import pool from '../lib/db';
+import { authenticateUser } from '../middleware/auth';
 
 const router: Router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
-router.get('/', async (req: Request, res: Response) => {
-  const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
+// GET /api/stats/monthly
+router.get('/', authenticateUser, async (req: any, res: Response) => {
   const monthView = req.query.month === 'current' ? 'current' : 'year';
+  const tenant_id = req.user?.tenant_id;
 
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
+  if (!tenant_id) return res.status(401).json({ error: 'Tenant no autenticado' });
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-    const uid = decoded.uid;
-
-    // Obtener tenant_id desde la base de datos
-    const tenantRes = await pool.query('SELECT id FROM tenants WHERE admin_uid = $1', [uid]);
-    const tenant = tenantRes.rows[0];
-    if (!tenant) return res.status(404).json({ error: 'Negocio no encontrado' });
-
-    const tenant_id = tenant.id;
-
     const query =
       monthView === 'current'
         ? `
