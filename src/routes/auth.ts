@@ -40,24 +40,25 @@ router.post('/register', async (req: Request, res: Response) => {
     const password_hash = await bcrypt.hash(password, 10);
     const uid = uuidv4();
     const owner_name = `${nombre} ${apellido}`;
-
-    // ✅ Token de verificación (expira en 10 minutos)
     const token_verificacion = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '10m' });
-
-    // ✅ URL frontend de verificación
     const verification_link = `${process.env.FRONTEND_URL}/auth/verify-email?token=${token_verificacion}`;
 
     console.log("🌐 Enlace de verificación:", verification_link);
 
+    // ✅ Crear tenant antes del usuario
+    await pool.query(
+      `INSERT INTO tenants (id, created_at) VALUES ($1, NOW())`,
+      [uid]
+    );
+
+    // ✅ Crear usuario con tenant_id
     await pool.query(
       `INSERT INTO users (uid, tenant_id, email, password, role, owner_name, telefono, created_at, verificado, token_verificacion)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), false, $8)`,
       [uid, uid, email, password_hash, 'admin', owner_name, telefono, token_verificacion]
-    );    
+    );
 
-    // ✅ Usar plantilla multilenguaje desde mailer.ts
-    await sendVerificationEmail(email, verification_link, 'es'); // o 'en'
-
+    await sendVerificationEmail(email, verification_link, 'es');
     res.status(201).json({ success: true });
   } catch (error) {
     console.error('❌ Error en registro:', error);
