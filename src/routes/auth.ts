@@ -47,9 +47,9 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // ✅ Crear tenant antes del usuario
     await pool.query(
-      `INSERT INTO tenants (id, created_at) VALUES ($1, NOW())`,
-      [uid]
-    );
+      `INSERT INTO tenants (id, name, created_at) VALUES ($1, $2, NOW())`,
+      [uid, owner_name]
+    );    
 
     // ✅ Crear usuario con tenant_id
     await pool.query(
