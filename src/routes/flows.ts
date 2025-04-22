@@ -66,7 +66,7 @@ router.post("/", authenticateUser, async (req: Request, res: Response) => {
         `INSERT INTO flows (tenant_id, data, updated_at)
          VALUES ($1, $2, NOW())
          ON CONFLICT (tenant_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
-        [tenant_id, flows] // 👈 sin stringify
+         [tenant_id, JSON.stringify(flows)] // 👈 sin stringify
       );
   
       res.json({ success: true });
