@@ -1,3 +1,5 @@
+// 📁 src/routes/usage.ts
+
 import { Router, Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
@@ -15,9 +17,16 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
 
+    const userRes = await pool.query('SELECT tenant_id FROM users WHERE uid = $1', [decoded.uid]);
+    const user = userRes.rows[0];
+
+    if (!user?.tenant_id) {
+      return res.status(404).json({ error: 'Usuario sin tenant asociado' });
+    }
+
     const tenantRes = await pool.query(
-      'SELECT used, limite_uso, plan FROM tenants WHERE admin_uid = $1',
-      [decoded.uid]
+      'SELECT used, limite_uso, plan FROM tenants WHERE id = $1',
+      [user.tenant_id]
     );
 
     if (tenantRes.rows.length === 0) {

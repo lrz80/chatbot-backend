@@ -1,21 +1,18 @@
+// 📁 src/routes/intents.ts
+
 import { Router, Request, Response } from 'express';
-import jwt, { JwtPayload } from 'jsonwebtoken';
+import { authenticateUser } from '../middleware/auth';
 import pool from '../lib/db';
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
-// GET: Obtener intenciones
-router.get('/', async (req: Request, res: Response) => {
-  const token = req.cookies.token;
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
+// ✅ GET: Obtener intenciones
+router.get('/', authenticateUser, async (req: Request, res: Response) => {
+  const tenantId = (req as any).user?.tenant_id;
+
+  if (!tenantId) return res.status(401).json({ error: 'Tenant no autenticado' });
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-    const tenantRes = await pool.query('SELECT id FROM tenants WHERE admin_uid = $1', [decoded.uid]);
-    const tenantId = tenantRes.rows[0]?.id;
-    if (!tenantId) return res.status(404).json({ error: 'Negocio no encontrado' });
-
     const result = await pool.query(
       'SELECT nombre, ejemplos, respuesta FROM intents WHERE tenant_id = $1',
       [tenantId]
@@ -34,20 +31,15 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
-// POST: Guardar intenciones
-router.post('/', async (req: Request, res: Response) => {
-  const token = req.cookies.token;
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
+// ✅ POST: Guardar intenciones
+router.post('/', authenticateUser, async (req: Request, res: Response) => {
+  const tenantId = (req as any).user?.tenant_id;
+
+  if (!tenantId) return res.status(401).json({ error: 'Tenant no autenticado' });
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
     const { intents } = req.body;
 
-    const tenantRes = await pool.query('SELECT id FROM tenants WHERE admin_uid = $1', [decoded.uid]);
-    const tenantId = tenantRes.rows[0]?.id;
-    if (!tenantId) return res.status(404).json({ error: 'Negocio no encontrado' });
-
-    // Limpiar anteriores
     await pool.query('DELETE FROM intents WHERE tenant_id = $1', [tenantId]);
 
     for (const intent of intents) {

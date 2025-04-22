@@ -16,19 +16,15 @@ router.post("/", async (req: Request, res: Response) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    const tenant_id = decoded.tenant_id;
     const { descripcion, informacion, idioma } = req.body;
 
     if (!descripcion || !informacion || !idioma) {
       return res.status(400).json({ error: "Faltan campos requeridos" });
     }
 
-    // Opcional: Validar que el usuario exista
-    const userRes = await pool.query("SELECT * FROM users WHERE uid = $1", [decoded.uid]);
-    const user = userRes.rows[0];
-    if (!user) return res.status(404).json({ error: "Usuario no encontrado" });
-
-    // Opcional: Obtener tenant para validaciones futuras
-    const tenantRes = await pool.query("SELECT * FROM tenants WHERE admin_uid = $1", [user.uid]);
+    // Verifica que el tenant exista
+    const tenantRes = await pool.query("SELECT * FROM tenants WHERE id = $1", [tenant_id]);
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: "Negocio no encontrado" });
 

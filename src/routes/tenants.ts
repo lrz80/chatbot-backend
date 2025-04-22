@@ -7,7 +7,7 @@ import pool from '../lib/db';
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
-// ✅ Crear tenant (negocio)
+// ✅ Actualizar perfil del negocio
 router.post('/', async (req: Request, res: Response) => {
   const token = req.cookies?.token;
 
@@ -17,7 +17,14 @@ router.post('/', async (req: Request, res: Response) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-    const admin_uid = decoded.uid;
+    const uid = decoded.uid;
+
+    const userRes = await pool.query('SELECT tenant_id FROM users WHERE uid = $1', [uid]);
+    const user = userRes.rows[0];
+
+    if (!user?.tenant_id) {
+      return res.status(404).json({ error: 'Usuario sin tenant asociado' });
+    }
 
     const {
       name,
@@ -32,36 +39,22 @@ router.post('/', async (req: Request, res: Response) => {
 
     const slug = name.toLowerCase().replace(/\s+/g, '-');
 
-    // Verifica si el usuario ya tiene un tenant
-    const existing = await pool.query(
-      'SELECT * FROM tenants WHERE admin_uid = $1',
-      [admin_uid]
-    );
-
-    if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'El negocio ya existe' });
-    }
-
     await pool.query(
-      `INSERT INTO tenants (
-        name, slug, admin_uid, categoria, idioma, prompt, bienvenida, 
-        membresia_activa, membresia_vigencia, onboarding_completado, limite_uso, used
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7,
-        true, NOW() + interval '30 days', true, 150, 0
-      )`,
+      `UPDATE tenants
+       SET name = $1, slug = $2, categoria = $3, idioma = $4, prompt = $5, bienvenida = $6
+       WHERE id = $7`,
       [
         name,
         slug,
-        admin_uid,
         categoria,
         idioma,
         prompt,
         '¡Hola! 👋 Soy tu asistente virtual. ¿En qué puedo ayudarte?',
+        user.tenant_id,
       ]
     );
 
-    res.status(201).json({ success: true });
+    res.status(200).json({ success: true });
   } catch (error) {
     console.error('❌ Error en /api/tenants:', error);
     res.status(500).json({ error: 'Error interno del servidor' });

@@ -1,23 +1,27 @@
-// src/routes/preview.ts
-
 import { Router, Request, Response } from 'express';
-import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
 import OpenAI from 'openai';
+import { authenticateUser } from '../middleware/auth';
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-router.post('/', async (req: Request, res: Response) => {
-  const token = req.cookies.token;
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
+interface AuthenticatedRequest extends Request {
+  user?: {
+    uid: string;
+    tenant_id: string;
+    email?: string;
+  };
+}
 
+router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    const tenant_id = req.user?.tenant_id;
     const { message } = req.body;
 
-    const tenantRes = await pool.query('SELECT * FROM tenants WHERE admin_uid = $1', [decoded.uid]);
+    if (!tenant_id) return res.status(401).json({ error: 'Tenant no autenticado' });
+
+    const tenantRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: 'Negocio no encontrado' });
 
