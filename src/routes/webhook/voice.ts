@@ -34,6 +34,13 @@ router.post('/', async (req, res) => {
       [tenant.id, '[Inicio de llamada]', fromNumber]
     );
 
+    // 💾 Guardar interacción en tabla de estadísticas
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, created_at)
+      VALUES ($1, $2, NOW())`,
+      [tenant.id, 'voice']
+    );
+
     // 🎙️ Recolección de voz
     response.gather({
       input: ['speech'],

@@ -1,3 +1,5 @@
+// src/routes/webhook/sms.ts
+
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
@@ -26,6 +28,13 @@ router.post('/', async (req: Request, res: Response) => {
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'sms', $3)`,
       [tenant.id, userInput, fromNumber]
+    );
+    
+    // 💾 Guardar interacción en tabla de estadísticas
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, created_at)
+      VALUES ($1, $2, NOW())`,
+      [tenant.id, 'sms']
     );
 
     // 🔢 Incrementar uso real

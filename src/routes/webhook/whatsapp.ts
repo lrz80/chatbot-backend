@@ -54,6 +54,13 @@ router.post('/', async (req: Request, res: Response) => {
       [tenant.id, userInput, fromNumber]
     );
 
+    // 💾 Guardar interacción en tabla de estadísticas
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, created_at)
+      VALUES ($1, $2, NOW())`,
+      [tenant.id, 'whatsapp']
+    );
+
     // 💾 Guardar respuesta del bot
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
