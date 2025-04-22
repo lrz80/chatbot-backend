@@ -50,10 +50,10 @@ router.post('/register', async (req: Request, res: Response) => {
     console.log("🌐 Enlace de verificación:", verification_link);
 
     await pool.query(
-      `INSERT INTO users (uid, email, password, role, owner_name, telefono, created_at, verificado, token_verificacion)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW(), false, $7)`,
-      [uid, email, password_hash, 'admin', owner_name, telefono, token_verificacion]
-    );
+      `INSERT INTO users (uid, tenant_id, email, password, role, owner_name, telefono, created_at, verificado, token_verificacion)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), false, $8)`,
+      [uid, uid, email, password_hash, 'admin', owner_name, telefono, token_verificacion]
+    );    
 
     // ✅ Usar plantilla multilenguaje desde mailer.ts
     await sendVerificationEmail(email, verification_link, 'es'); // o 'en'
