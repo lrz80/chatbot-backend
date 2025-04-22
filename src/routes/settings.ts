@@ -20,12 +20,10 @@ router.get('/', async (req: Request, res: Response) => {
     const user = userRes.rows[0];
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    const tenantRes = await pool.query(
-      'SELECT * FROM tenants WHERE id = $1',
-      [user.tenant_id]
-    );
-    
+    const tenantRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [user.tenant_id]);
     const tenant = tenantRes.rows[0];
+
+    if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
 
     return res.status(200).json({
       uid: user.uid,
