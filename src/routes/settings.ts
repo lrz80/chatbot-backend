@@ -21,7 +21,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     const user = userRes.rows[0];
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    const tenantRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [user.tenant_id]);
+    const tenantRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
 
@@ -53,13 +53,13 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
   }
 });
 
-// POST: Actualizar perfil del negocio
-router.post('/', async (req: Request, res: Response) => {
-  const token = req.cookies.token;
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
-
+router.post('/', authenticateUser, async (req: any, res: Response) => {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    const tenant_id = req.user?.tenant_id;
+
+    if (!tenant_id) {
+      return res.status(401).json({ error: 'Tenant no autenticado' });
+    }
 
     const {
       nombre_negocio,
@@ -80,15 +80,6 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (!nombre_negocio) {
       return res.status(400).json({ error: 'El nombre del negocio es obligatorio' });
-    }
-
-    const userRes = await pool.query('SELECT * FROM users WHERE uid = $1', [decoded.uid]);
-    const user = userRes.rows[0];
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-
-    const tenantRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [user.tenant_id]);
-    if (tenantRes.rows.length === 0) {
-      return res.status(404).json({ error: 'Negocio no encontrado' });
     }
 
     await pool.query(
@@ -123,24 +114,24 @@ router.post('/', async (req: Request, res: Response) => {
         funciones_asistente || '',
         info_clave || '',
         limite_uso || 150,
-        user.tenant_id,
+        tenant_id, // 👈 directo del token
       ]
     );
 
-    return res.status(200).json({ message: 'Perfil actualizado correctamente' });
+    res.status(200).json({ success: true });
   } catch (error) {
-    console.error('❌ Error al actualizar perfil:', error);
-    return res.status(500).json({ error: 'Error al guardar cambios' });
+    console.error('❌ Error en POST /api/settings:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
-// PUT: Actualizar perfil del negocio (igual que POST)
-router.put('/', async (req: Request, res: Response) => {
-  const token = req.cookies.token;
-  if (!token) return res.status(401).json({ error: 'Token requerido' });
-
+router.put('/', authenticateUser, async (req: any, res: Response) => {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    const tenant_id = req.user?.tenant_id;
+
+    if (!tenant_id) {
+      return res.status(401).json({ error: 'Tenant no autenticado' });
+    }
 
     const {
       nombre_negocio,
@@ -161,15 +152,6 @@ router.put('/', async (req: Request, res: Response) => {
     delete req.body.twilio_sms_number;
     delete req.body.twilio_voice_number;
 
-    const userRes = await pool.query('SELECT * FROM users WHERE uid = $1', [decoded.uid]);
-    const user = userRes.rows[0];
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-
-    const tenantRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [user.tenant_id]);
-    if (tenantRes.rows.length === 0) {
-      return res.status(404).json({ error: 'Negocio no encontrado' });
-    }
-
     await pool.query(
       `UPDATE tenants SET 
         name = $1,
@@ -184,7 +166,7 @@ router.put('/', async (req: Request, res: Response) => {
         info_clave = $10,
         limite_uso = $11,
         onboarding_completado = true
-        WHERE id = $12`,
+      WHERE id = $12`,
       [
         nombre_negocio,
         categoria || '',
@@ -197,7 +179,7 @@ router.put('/', async (req: Request, res: Response) => {
         funciones_asistente || '',
         info_clave || '',
         limite_uso || 150,
-        user.tenant_id,
+        tenant_id,
       ]
     );
 
@@ -207,5 +189,4 @@ router.put('/', async (req: Request, res: Response) => {
     return res.status(500).json({ error: 'Error al guardar cambios' });
   }
 });
-
 export default router;
