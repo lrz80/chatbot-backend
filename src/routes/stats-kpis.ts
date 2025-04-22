@@ -12,18 +12,14 @@ router.get('/', async (req: Request, res: Response) => {
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-    const uid = decoded.uid;
-
-    // 🔍 Buscar tenant_id del usuario
-    const userRes = await pool.query('SELECT tenant_id FROM users WHERE uid = $1', [uid]);
-    const tenant_id = userRes.rows[0]?.tenant_id;
+    const tenant_id = decoded.tenant_id;
 
     if (!tenant_id) return res.status(404).json({ error: 'Tenant no encontrado' });
 
     const result = await pool.query(
       `SELECT COUNT(*)::int AS total,
               COUNT(DISTINCT phone) AS usuarios,
-              EXTRACT(HOUR FROM timestamp) AS hora_pico
+              EXTRACT(HOUR FROM created_at) AS hora_pico
        FROM interactions
        WHERE tenant_id = $1
        GROUP BY hora_pico

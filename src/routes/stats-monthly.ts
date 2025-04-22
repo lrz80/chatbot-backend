@@ -1,27 +1,32 @@
-import { Router, Response } from 'express';
+import { Router, Request, Response } from 'express';
+import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
-import { authenticateUser } from '../middleware/auth';
 
 const router: Router = Router();
+const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
-// GET /api/stats/monthly
-router.get('/', authenticateUser, async (req: any, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
+  const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
   const monthView = req.query.month === 'current' ? 'current' : 'year';
-  const tenant_id = req.user?.tenant_id;
 
-  if (!tenant_id) return res.status(401).json({ error: 'Tenant no autenticado' });
+  if (!token) return res.status(401).json({ error: 'Token requerido' });
 
   try {
+    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    const tenant_id = decoded.tenant_id;
+
+    if (!tenant_id) return res.status(401).json({ error: 'Tenant ID no encontrado' });
+
     const query =
       monthView === 'current'
         ? `
-        SELECT DATE(timestamp) as dia, COUNT(*)::int as count
+        SELECT DATE(created_at) as dia, COUNT(*)::int as count
         FROM interactions
-        WHERE tenant_id = $1 AND timestamp >= date_trunc('month', CURRENT_DATE)
+        WHERE tenant_id = $1 AND created_at >= date_trunc('month', CURRENT_DATE)
         GROUP BY dia ORDER BY dia;
       `
         : `
-        SELECT TO_CHAR(timestamp, 'YYYY-MM') as mes, COUNT(*)::int as count
+        SELECT TO_CHAR(created_at, 'YYYY-MM') as mes, COUNT(*)::int as count
         FROM interactions
         WHERE tenant_id = $1
         GROUP BY mes ORDER BY mes;
