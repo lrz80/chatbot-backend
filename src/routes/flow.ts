@@ -40,6 +40,9 @@ router.get("/api/flows", authenticateUser, async (req: Request, res: Response) =
 // ✅ POST /api/flows
 router.post("/api/flows", authenticateUser, async (req: Request, res: Response) => {
     try {
+      console.log("🛬 Llamada al POST /api/flows");
+      console.log("📥 Cuerpo recibido:", req.body);
+        
       const tenant_id = req.user?.tenant_id;
   
       if (!tenant_id) {
