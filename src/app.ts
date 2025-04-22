@@ -27,6 +27,7 @@ import verifyRoutes from './routes/verify';
 import forgotPasswordRoute from './routes/auth/forgot-password';
 import checkoutRoute from './routes/stripe/checkout';
 import stripeWebhook from './routes/stripe/webhook'; // 👈 Este debe ir ANTES del json
+import flowsRoutes from "./routes/flows";
 
 dotenv.config();
 
@@ -85,6 +86,7 @@ app.use('/api/intents', intentsRouter);
 app.use('/api/verify', verifyRoutes);
 app.use(forgotPasswordRoute);
 app.use('/api/stripe', checkoutRoute); // otras rutas de Stripe (no webhook)
+app.use(flowsRoutes);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
