@@ -29,6 +29,7 @@ import stripeWebhook from './routes/stripe/webhook'; // 👈 Este debe ir ANTES 
 import flowsRoutes from "./routes/flows";
 import statsKpisRouter from './routes/stats-kpis';
 import uploadLogoRoute from './routes/upload-logo';
+import campaignsRoutes from "./routes/campaigns";
 
 dotenv.config();
 
@@ -90,6 +91,7 @@ app.use('/api/flows', flowsRoutes);
 app.use('/api/stats', statsKpisRouter);
 app.use('/api/upload-logo', uploadLogoRoute);
 app.use('/uploads', express.static('uploads'));
+app.use("/api/campaigns", campaignsRoutes);
 
 
 // ✅ Ruta base
