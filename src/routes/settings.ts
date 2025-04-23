@@ -44,7 +44,9 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       funciones_asistente: tenant.funciones_asistente || '',
       info_clave: tenant.info_clave || '',
       limite_uso: tenant.limite_uso || 150,
-      logo_url: tenant.logo_url || ''
+      logo_url: tenant.logo_url || '',
+      plan: tenant.plan || '',
+      fecha_registro: tenant.fecha_registro || null,
     });
   } catch (error) {
     console.error('❌ Error en /api/settings:', error);
