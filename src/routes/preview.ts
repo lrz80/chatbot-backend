@@ -28,6 +28,7 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     if (!tenant) return res.status(404).json({ error: 'Negocio no encontrado' });
 
     const prompt = tenant.prompt || 'Eres un asistente útil y profesional.';
+    const bienvenida = tenant.bienvenida || '¡Hola! ¿En qué puedo ayudarte hoy?';
 
     // 🔄 Leer flujos si existen
     let flows: any[] = [];
@@ -35,12 +36,17 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
       const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant_id]);
       const raw = flowsRes.rows[0]?.data;
       flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      console.log("📥 Flujos recibidos:", flows);
+      console.log('📥 Flujos recibidos:', flows);
     } catch (e) {
       console.warn('⚠️ No se pudo obtener o parsear los flujos:', e);
     }
 
-    // 🔁 Ver si el mensaje coincide con un flujo guiado
+    // 🟢 Si es primer mensaje, responde con bienvenida
+    if (!message || message.trim().length < 2) {
+      return res.status(200).json({ response: bienvenida });
+    }
+
+    // 🔁 Ver si el mensaje coincide con un flujo guiado (primer nivel)
     const match = flows.flatMap((f: any) => f.opciones || []).find((opt: any) => {
       return opt.texto.toLowerCase().includes(message.toLowerCase());
     });
