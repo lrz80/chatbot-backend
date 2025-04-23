@@ -9,12 +9,10 @@ import { authenticateUser } from "../../middleware/auth";
 const router = express.Router();
 const upload = multer();
 
-
 router.post("/", authenticateUser, upload.none(), async (req, res) => {
   try {
     const { nombre, canal, contenido, fecha_envio, segmentos } = req.body;
     const { tenant_id } = req.user as { uid: string; tenant_id: string };
-
 
     if (!nombre || !canal || !contenido || !fecha_envio || !segmentos) {
       return res.status(400).json({ error: "Faltan campos obligatorios." });
@@ -22,9 +20,9 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
 
     const segmentosParsed = JSON.parse(segmentos);
 
-    // 🔍 Obtener números Twilio según canal
+    // 🔍 Obtener información del tenant
     const result = await pool.query(
-      "SELECT twilio_number, twilio_sms_number FROM tenants WHERE id = $1",
+      "SELECT twilio_number, twilio_sms_number, name FROM tenants WHERE id = $1",
       [tenant_id]
     );
 
@@ -32,7 +30,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
       return res.status(404).json({ error: "Tenant no encontrado." });
     }
 
-    const { twilio_number, twilio_sms_number } = result.rows[0];
+    const { twilio_number, twilio_sms_number, name: nombreNegocio } = result.rows[0];
 
     // 📲 Canal de envío
     switch (canal) {
@@ -53,19 +51,32 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
       }
 
       case "email": {
-        const result = await pool.query(
-          "SELECT name FROM tenants WHERE id = $1",
-          [tenant_id]
-        );
-        const nombreNegocio = result.rows[0]?.name || "Tu Negocio";
-      
-        await sendEmail(contenido, segmentosParsed, nombreNegocio);
+        await sendEmail(contenido, segmentosParsed, nombreNegocio || "Tu Negocio");
         break;
-      }      
+      }
 
       default:
         return res.status(400).json({ error: "Canal no válido." });
     }
+
+    // 🗃️ Guardar campaña en la base de datos
+    await pool.query(
+      `INSERT INTO campanas (
+        tenant_id, titulo, contenido, imagen_url, canal, destinatarios, programada_para, enviada, fecha_creacion
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, NOW()
+      )`,
+      [
+        tenant_id,
+        nombre,
+        contenido,
+        null, // imagen_url (aún no implementado)
+        canal,
+        JSON.stringify(segmentosParsed),
+        fecha_envio,
+        true
+      ]
+    );
 
     return res.status(200).json({ ok: true, message: "Campaña enviada correctamente." });
   } catch (error) {
