@@ -12,7 +12,6 @@ import promptRoutes from './routes/prompt';
 import voiceConfigRoutes from './routes/voiceConfig';
 import keywordsRoutes from './routes/keywords';
 import usageRoutes from './routes/usage';
-import statsRoutes from './routes/stats-kpis';
 import statsMonthlyRoutes from './routes/stats-monthly';
 import whatsappWebhook from './routes/webhook/whatsapp';
 import smsWebhook from './routes/webhook/sms';
@@ -28,6 +27,7 @@ import forgotPasswordRoute from './routes/auth/forgot-password';
 import checkoutRoute from './routes/stripe/checkout';
 import stripeWebhook from './routes/stripe/webhook'; // 👈 Este debe ir ANTES del json
 import flowsRoutes from "./routes/flows";
+import statsKpisRouter from './routes/stats-kpis';
 
 dotenv.config();
 
@@ -72,7 +72,6 @@ app.use('/api/prompt', promptRoutes);
 app.use('/api/voice-config', voiceConfigRoutes);
 app.use('/api/keywords', keywordsRoutes);
 app.use('/api/usage', usageRoutes);
-app.use('/api/stats', statsRoutes);
 app.use('/api/stats/monthly', statsMonthlyRoutes);
 app.use('/webhook/whatsapp', whatsappWebhook);
 app.use('/webhook/sms', smsWebhook);
@@ -87,6 +86,8 @@ app.use('/api/verify', verifyRoutes);
 app.use(forgotPasswordRoute);
 app.use('/api/stripe', checkoutRoute); // otras rutas de Stripe (no webhook)
 app.use('/api/flows', flowsRoutes);
+app.use('/api/stats', statsKpisRouter);
+
 
 // ✅ Ruta base
 app.get('/', (req, res) => {

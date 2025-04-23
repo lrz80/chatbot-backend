@@ -1,3 +1,5 @@
+// src/routes/stats-kpis.ts
+
 import { Router, Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
@@ -18,7 +20,7 @@ router.get('/', async (req: Request, res: Response) => {
 
     const result = await pool.query(
       `SELECT COUNT(*)::int AS total,
-              COUNT(DISTINCT phone) AS usuarios,
+              COUNT(DISTINCT phone) AS unicos,
               EXTRACT(HOUR FROM created_at) AS hora_pico
        FROM interactions
        WHERE tenant_id = $1
