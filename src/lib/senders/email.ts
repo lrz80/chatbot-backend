@@ -11,20 +11,22 @@ const transporter = nodemailer.createTransport({
 });
 
 /**
- * Envía correos masivos a contactos seleccionados.
+ * Envía correos personalizados por tenant.
  * @param contenido Contenido del mensaje
  * @param contactos Lista de objetos con { email: string }
+ * @param nombreNegocio Nombre visible del negocio (para el alias del correo)
  */
 export async function sendEmail(
   contenido: string,
-  contactos: { email: string }[]
+  contactos: { email: string }[],
+  nombreNegocio: string
 ) {
   for (const contacto of contactos) {
     if (!contacto.email) continue;
 
     try {
       await transporter.sendMail({
-        from: `"Aamy AI" <noreply@aamy.ai>`,
+        from: `"${nombreNegocio}" <noreply@aamy.ai>`, // 👈 se ve como si lo envió el negocio
         to: contacto.email,
         subject: "📣 Nueva campaña de tu negocio",
         html: `<p>${contenido}</p>`,

@@ -53,9 +53,15 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
       }
 
       case "email": {
-        await sendEmail(contenido, segmentosParsed);
+        const result = await pool.query(
+          "SELECT name FROM tenants WHERE id = $1",
+          [tenant_id]
+        );
+        const nombreNegocio = result.rows[0]?.name || "Tu Negocio";
+      
+        await sendEmail(contenido, segmentosParsed, nombreNegocio);
         break;
-      }
+      }      
 
       default:
         return res.status(400).json({ error: "Canal no válido." });
