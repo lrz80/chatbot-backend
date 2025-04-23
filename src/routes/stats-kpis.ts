@@ -30,11 +30,17 @@ router.get('/kpis', async (req: Request, res: Response) => {
       [tenant_id]
     );
 
-    const { total, usuarios, hora_pico } = result.rows[0] || {
+    console.log("📊 Resultados KPI:", result.rows);
+
+    const row = result.rows[0] || {
       total: 0,
       usuarios: 0,
       hora_pico: null,
     };
+
+    console.log("✅ Fila seleccionada:", row);
+
+    const { total, usuarios, hora_pico } = row;
 
     return res.status(200).json({ total, usuarios, hora_pico });
   } catch (error) {
