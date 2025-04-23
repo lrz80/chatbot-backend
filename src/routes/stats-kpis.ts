@@ -7,7 +7,7 @@ import pool from '../lib/db';
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
-router.get('/', async (req: Request, res: Response) => {
+router.get('/kpis', async (req: Request, res: Response) => {
   const token = req.cookies.token;
 
   if (!token) return res.status(401).json({ error: 'Token requerido' });
