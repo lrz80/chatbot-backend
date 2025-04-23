@@ -4,7 +4,7 @@ import pool from "../../lib/db";
 import { sendWhatsApp } from "../../lib/senders/whatsapp";
 import { sendSMS } from "../../lib/senders/sms";
 import { sendEmail } from "../../lib/senders/email";
-import { authenticateUser } from "@/middleware/auth";
+import { authenticateUser } from "../../middleware/auth";
 
 const router = express.Router();
 const upload = multer();

@@ -33,6 +33,7 @@ const webhook_1 = __importDefault(require("./routes/stripe/webhook")); // 👈 E
 const flows_1 = __importDefault(require("./routes/flows"));
 const stats_kpis_1 = __importDefault(require("./routes/stats-kpis"));
 const upload_logo_1 = __importDefault(require("./routes/upload-logo"));
+const campaigns_1 = __importDefault(require("./routes/campaigns"));
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3001;
@@ -84,6 +85,7 @@ app.use('/api/flows', flows_1.default);
 app.use('/api/stats', stats_kpis_1.default);
 app.use('/api/upload-logo', upload_logo_1.default);
 app.use('/uploads', express_1.default.static('uploads'));
+app.use("/api/campaigns", campaigns_1.default);
 // ✅ Ruta base
 app.get('/', (req, res) => {
     res.send('Backend corriendo 🟢');
