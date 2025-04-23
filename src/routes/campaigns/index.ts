@@ -1,18 +1,20 @@
 import express from "express";
 import multer from "multer";
-import pool from "@/lib/db";
-import { sendWhatsApp } from "@/lib/senders/whatsapp";
-import { sendSMS } from "@/lib/senders/sms";
-import { sendEmail } from "@/lib/senders/email";
-import authenticateUser from "@/middleware/auth";
+import pool from "../../lib/db";
+import { sendWhatsApp } from "../../lib/senders/whatsapp";
+import { sendSMS } from "../../lib/senders/sms";
+import { sendEmail } from "../../lib/senders/email";
+import { authenticateUser } from "@/middleware/auth";
 
 const router = express.Router();
-const upload = multer(); // para FormData
+const upload = multer();
+
 
 router.post("/", authenticateUser, upload.none(), async (req, res) => {
   try {
     const { nombre, canal, contenido, fecha_envio, segmentos } = req.body;
-    const { tenant_id } = req.user;
+    const { tenant_id } = req.user as { uid: string; tenant_id: string };
+
 
     if (!nombre || !canal || !contenido || !fecha_envio || !segmentos) {
       return res.status(400).json({ error: "Faltan campos obligatorios." });
@@ -20,9 +22,9 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
 
     const segmentosParsed = JSON.parse(segmentos);
 
-    // 🔍 Obtener número Twilio del tenant
+    // 🔍 Obtener números Twilio según canal
     const result = await pool.query(
-      "SELECT twilio_number FROM tenants WHERE id = $1",
+      "SELECT twilio_number, twilio_sms_number FROM tenants WHERE id = $1",
       [tenant_id]
     );
 
@@ -30,23 +32,31 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
       return res.status(404).json({ error: "Tenant no encontrado." });
     }
 
-    const tenantTwilioNumber = result.rows[0].twilio_number;
+    const { twilio_number, twilio_sms_number } = result.rows[0];
 
-    if (!tenantTwilioNumber) {
-      return res.status(400).json({ error: "Este tenant no tiene número de WhatsApp asignado." });
-    }
-
-    // Lógica por canal
+    // 📲 Canal de envío
     switch (canal) {
-      case "whatsapp":
-        await sendWhatsApp(contenido, segmentosParsed, `whatsapp:${tenantTwilioNumber}`);
+      case "whatsapp": {
+        if (!twilio_number) {
+          return res.status(400).json({ error: "Número de WhatsApp no asignado." });
+        }
+        await sendWhatsApp(contenido, segmentosParsed, `whatsapp:${twilio_number}`);
         break;
-      case "sms":
-        await sendSMS(contenido, segmentosParsed, tenantTwilioNumber); // usarás número sms aquí
+      }
+
+      case "sms": {
+        if (!twilio_sms_number) {
+          return res.status(400).json({ error: "Número SMS no asignado." });
+        }
+        await sendSMS(contenido, segmentosParsed, twilio_sms_number);
         break;
-      case "email":
+      }
+
+      case "email": {
         await sendEmail(contenido, segmentosParsed);
         break;
+      }
+
       default:
         return res.status(400).json({ error: "Canal no válido." });
     }
