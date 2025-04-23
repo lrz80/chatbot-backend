@@ -1,4 +1,4 @@
-// src/routes/webhook/whatsapp.ts
+// ✅ src/routes/webhook/whatsapp.ts
 
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
@@ -55,7 +55,10 @@ router.post('/', async (req: Request, res: Response) => {
       return res.sendStatus(404);
     }
 
-    const prompt = tenant.prompt || 'Eres un asistente útil para clientes en WhatsApp.';
+    const nombreNegocio = tenant.name || 'nuestro negocio';
+    const promptBase = tenant.prompt || 'Eres un asistente útil para clientes en WhatsApp.';
+    const saludo = `Soy Amy, bienvenido a ${nombreNegocio}.`;
+    const prompt = `${saludo}\n${promptBase}`;
 
     // 📥 Leer flujos si existen
     let flows: any[] = [];

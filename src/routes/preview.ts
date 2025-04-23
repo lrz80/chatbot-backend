@@ -1,4 +1,4 @@
-// src/routes/preview.ts
+// ✅ src/routes/preview.ts
 
 import { Router, Request, Response } from 'express';
 import pool from '../lib/db';
@@ -43,7 +43,10 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: 'Negocio no encontrado' });
 
-    const prompt = tenant.prompt || 'Eres un asistente útil y profesional.';
+    const nombreNegocio = tenant.name || 'nuestro negocio';
+    const promptNegocio = tenant.prompt || 'Eres un asistente útil y profesional.';
+    const saludoInicial = `Soy Amy, bienvenido a ${nombreNegocio}.`;
+    const prompt = `${saludoInicial}\n${promptNegocio}`;
 
     // 🧠 Buscar flujo guiado si existe
     let flows: any[] = [];
