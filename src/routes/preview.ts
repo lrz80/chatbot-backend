@@ -1,3 +1,5 @@
+// src/routes/preview.ts
+
 import { Router, Request, Response } from 'express';
 import pool from '../lib/db';
 import OpenAI from 'openai';
@@ -26,8 +28,28 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     if (!tenant) return res.status(404).json({ error: 'Negocio no encontrado' });
 
     const prompt = tenant.prompt || 'Eres un asistente útil y profesional.';
-    const bienvenida = tenant.bienvenida || '¡Hola! ¿En qué puedo ayudarte?';
 
+    // 🔄 Leer flujos si existen
+    let flows: any[] = [];
+    try {
+      const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant_id]);
+      const raw = flowsRes.rows[0]?.data;
+      flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      console.log("📥 Flujos recibidos:", flows);
+    } catch (e) {
+      console.warn('⚠️ No se pudo obtener o parsear los flujos:', e);
+    }
+
+    // 🔁 Ver si el mensaje coincide con un flujo guiado
+    const match = flows.flatMap((f: any) => f.opciones || []).find((opt: any) => {
+      return opt.texto.toLowerCase().includes(message.toLowerCase());
+    });
+
+    if (match?.respuesta) {
+      return res.status(200).json({ response: match.respuesta });
+    }
+
+    // ✨ OpenAI fallback
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
