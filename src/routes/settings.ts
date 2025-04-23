@@ -69,21 +69,22 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
       horario_atencion,
       prompt,
       bienvenida,
+      twilio_number,
+      twilio_sms_number,
+      twilio_voice_number,
       informacion_negocio,
       funciones_asistente,
       info_clave,
       limite_uso,
     } = req.body;
 
-    // 🚫 Ignorar campos protegidos
-    const camposProtegidos = ['twilio_number', 'twilio_sms_number', 'twilio_voice_number'];
-    camposProtegidos.forEach((campo) => {
-      if (campo in req.body) delete req.body[campo];
-    });
-
     if (!nombre_negocio) {
       return res.status(400).json({ error: 'El nombre del negocio es obligatorio' });
     }
+
+    // Obtener valores actuales del tenant para preservar lo que no venga en el body
+    const current = await pool.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
+    const existing = current.rows[0];
 
     await pool.query(
       `UPDATE tenants SET 
@@ -94,23 +95,29 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
         horario_atencion = $5,
         prompt = $6,
         bienvenida = $7,
-        informacion_negocio = $8,
-        funciones_asistente = $9,
-        info_clave = $10,
-        limite_uso = $11
-      WHERE id = $12`,
+        twilio_number = $8,
+        twilio_sms_number = $9,
+        twilio_voice_number = $10,
+        informacion_negocio = $11,
+        funciones_asistente = $12,
+        info_clave = $13,
+        limite_uso = $14
+      WHERE id = $15`,
       [
         nombre_negocio,
-        categoria || '',
-        idioma || 'es',
-        direccion || '',
-        horario_atencion || '',
-        prompt || '',
-        bienvenida || '',
-        informacion_negocio || '',
-        funciones_asistente || '',
-        info_clave || '',
-        limite_uso || 150,
+        categoria ?? existing.categoria,
+        idioma ?? existing.idioma,
+        direccion ?? existing.direccion,
+        horario_atencion ?? existing.horario_atencion,
+        prompt ?? existing.prompt,
+        bienvenida ?? existing.bienvenida,
+        existing.twilio_number,
+        existing.twilio_sms_number,
+        existing.twilio_voice_number,
+        informacion_negocio ?? existing.informacion_negocio,
+        funciones_asistente ?? existing.funciones_asistente,
+        info_clave ?? existing.info_clave,
+        limite_uso ?? existing.limite_uso,
         tenant_id,
       ]
     );
@@ -122,11 +129,9 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
   }
 });
 
-// ✅ src/routes/settings.ts (PUT actualizado)
 router.put('/', authenticateUser, async (req: any, res: Response) => {
   try {
     const tenant_id = req.user?.tenant_id;
-
     if (!tenant_id) {
       return res.status(401).json({ error: 'Tenant no autenticado' });
     }
@@ -145,11 +150,15 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
       limite_uso,
     } = req.body;
 
-    // 🚫 No se debe actualizar ningún campo protegido de Twilio
-    const camposProtegidos = ['twilio_number', 'twilio_sms_number', 'twilio_voice_number'];
-    camposProtegidos.forEach((campo) => {
-      if (campo in req.body) delete req.body[campo];
-    });
+    // 🚫 Eliminar campos protegidos de Twilio si se intentan enviar
+    delete req.body.twilio_number;
+    delete req.body.twilio_sms_number;
+    delete req.body.twilio_voice_number;
+
+    // 🧠 Obtener valores actuales
+    const existingRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
+    const current = existingRes.rows[0];
+    if (!current) return res.status(404).json({ error: 'Tenant no encontrado' });
 
     await pool.query(
       `UPDATE tenants SET 
@@ -167,17 +176,17 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         onboarding_completado = true
       WHERE id = $12`,
       [
-        nombre_negocio,
-        categoria || '',
-        idioma || 'es',
-        direccion || '',
-        horario_atencion || '',
-        prompt || '',
-        bienvenida || '',
-        informacion_negocio || '',
-        funciones_asistente || '',
-        info_clave || '',
-        limite_uso || 150,
+        nombre_negocio || current.name,
+        categoria || current.categoria,
+        idioma || current.idioma,
+        direccion || current.direccion,
+        horario_atencion || current.horario_atencion,
+        prompt || current.prompt,
+        bienvenida || current.bienvenida,
+        informacion_negocio || current.informacion_negocio,
+        funciones_asistente || current.funciones_asistente,
+        info_clave || current.info_clave,
+        limite_uso || current.limite_uso,
         tenant_id,
       ]
     );
