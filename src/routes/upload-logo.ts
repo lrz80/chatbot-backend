@@ -7,13 +7,13 @@ import pool from '../lib/db';
 
 const router = express.Router();
 
-// Crear carpeta /uploads si no existe
+// 📁 Crear carpeta /uploads si no existe
 const uploadsDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir);
 }
 
-// Configuración de Multer
+// 📸 Configuración de Multer
 const storage = multer.diskStorage({
   destination: function (_, __, cb) {
     cb(null, uploadsDir);
@@ -27,7 +27,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
-// ✅ Ruta para subir el logo
+// ✅ POST: Subir logo del negocio
 router.post('/', authenticateUser, upload.single('logo'), async (req: any, res) => {
   try {
     const tenant_id = req.user?.tenant_id;
@@ -35,7 +35,7 @@ router.post('/', authenticateUser, upload.single('logo'), async (req: any, res) 
 
     if (!req.file) return res.status(400).json({ error: 'No se subió archivo' });
 
-    const logo_url = `/uploads/${req.file.filename}`;
+    const logo_url = `${process.env.BASE_URL}/uploads/${req.file.filename}`;
 
     await pool.query('UPDATE tenants SET logo_url = $1 WHERE id = $2', [logo_url, tenant_id]);
 
