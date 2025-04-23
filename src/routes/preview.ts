@@ -16,19 +16,16 @@ interface AuthenticatedRequest extends Request {
   };
 }
 
-// 🔍 Función para buscar coincidencias dentro de flujos anidados
-function buscarEnFlujos(flows: any[], mensaje: string): string | null {
+// 🔍 Función recursiva para buscar coincidencias dentro de flujos anidados
+function buscarRespuestaEnFlujos(flows: any[], mensaje: string): string | null {
   for (const flow of flows) {
     for (const opcion of flow.opciones || []) {
-      if (opcion.texto?.toLowerCase().includes(mensaje.toLowerCase())) {
-        return opcion.respuesta || null;
+      if (opcion.texto?.toLowerCase().includes(mensaje.toLowerCase()) && opcion.respuesta) {
+        return opcion.respuesta;
       }
       if (opcion.submenu) {
-        for (const sub of opcion.submenu.opciones || []) {
-          if (sub.texto?.toLowerCase().includes(mensaje.toLowerCase())) {
-            return sub.respuesta || null;
-          }
-        }
+        const respuestaSub = buscarRespuestaEnFlujos([opcion.submenu], mensaje);
+        if (respuestaSub) return respuestaSub;
       }
     }
   }
@@ -54,11 +51,12 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
       const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant_id]);
       const raw = flowsRes.rows[0]?.data;
       flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      console.log("📥 Flujos recibidos:", flows);
     } catch (e) {
       console.warn('⚠️ No se pudo obtener o parsear los flujos:', e);
     }
 
-    const respuestaFlujo = buscarEnFlujos(flows, message);
+    const respuestaFlujo = buscarRespuestaEnFlujos(flows, message);
     if (respuestaFlujo) {
       return res.status(200).json({ response: respuestaFlujo });
     }
