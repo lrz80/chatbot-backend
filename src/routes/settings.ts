@@ -1,11 +1,9 @@
 import express from 'express';
 import { Request, Response } from 'express';
-import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
 import { authenticateUser } from '../middleware/auth';
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
 // ✅ GET: Perfil del negocio
 router.get('/', authenticateUser, async (req: any, res: Response) => {
@@ -17,7 +15,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       return res.status(401).json({ error: 'Tenant no encontrado o no asignado' });
     }
 
-    const userRes = await pool.query('SELECT * FROM users WHERE uid = $1', [uid]);
+    const userRes = await pool.query('SELECT uid, email, owner_name FROM users WHERE uid = $1', [uid]);
     const user = userRes.rows[0];
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
@@ -46,6 +44,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       funciones_asistente: tenant.funciones_asistente || '',
       info_clave: tenant.info_clave || '',
       limite_uso: tenant.limite_uso || 150,
+      logo_url: tenant.logo_url || ''
     });
   } catch (error) {
     console.error('❌ Error en /api/settings:', error);
@@ -73,13 +72,13 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
       funciones_asistente,
       info_clave,
       limite_uso,
+      logo_url,
     } = req.body;
 
     if (!nombre_negocio) {
       return res.status(400).json({ error: 'El nombre del negocio es obligatorio' });
     }
 
-    // ✅ Obtener valores actuales del tenant
     const current = await pool.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
     const existing = current.rows[0];
     if (!existing) return res.status(404).json({ error: 'Negocio no encontrado' });
@@ -99,8 +98,9 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
         informacion_negocio = $11,
         funciones_asistente = $12,
         info_clave = $13,
-        limite_uso = $14
-      WHERE id = $15`,
+        limite_uso = $14,
+        logo_url = $15
+      WHERE id = $16`,
       [
         nombre_negocio,
         categoria ?? existing.categoria,
@@ -116,6 +116,7 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
         funciones_asistente?.trim() !== "" ? funciones_asistente : existing.funciones_asistente,
         info_clave ?? existing.info_clave,
         limite_uso ?? existing.limite_uso,
+        logo_url ?? existing.logo_url,
         tenant_id,
       ]
     );
@@ -146,14 +147,13 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
       funciones_asistente,
       info_clave,
       limite_uso,
+      logo_url,
     } = req.body;
 
-    // 🚫 Eliminar campos protegidos de Twilio si se intentan enviar
     delete req.body.twilio_number;
     delete req.body.twilio_sms_number;
     delete req.body.twilio_voice_number;
 
-    // 🧠 Obtener valores actuales
     const existingRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
     const current = existingRes.rows[0];
     if (!current) return res.status(404).json({ error: 'Tenant no encontrado' });
@@ -171,8 +171,9 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         funciones_asistente = $9,
         info_clave = $10,
         limite_uso = $11,
+        logo_url = $12,
         onboarding_completado = true
-      WHERE id = $12`,
+      WHERE id = $13`,
       [
         nombre_negocio || current.name,
         categoria || current.categoria,
@@ -185,6 +186,7 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         funciones_asistente || current.funciones_asistente,
         info_clave || current.info_clave,
         limite_uso || current.limite_uso,
+        logo_url || current.logo_url,
         tenant_id,
       ]
     );
@@ -195,6 +197,5 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
     return res.status(500).json({ error: 'Error al guardar cambios' });
   }
 });
-
 
 export default router;
