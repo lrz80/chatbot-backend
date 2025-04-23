@@ -9,6 +9,20 @@ import { authenticateUser } from "../../middleware/auth";
 const router = express.Router();
 const upload = multer();
 
+router.get("/", authenticateUser, async (req, res) => {
+    try {
+      const { tenant_id } = req.user as { tenant_id: string };
+      const result = await pool.query(
+        "SELECT * FROM campanas WHERE tenant_id = $1 ORDER BY fecha_creacion DESC",
+        [tenant_id]
+      );
+      res.json(result.rows);
+    } catch (err) {
+      console.error("❌ Error al obtener campañas:", err);
+      res.status(500).json({ error: "Error al obtener campañas" });
+    }
+  });  
+
 router.post("/", authenticateUser, upload.none(), async (req, res) => {
   try {
     const { nombre, canal, contenido, fecha_envio, segmentos } = req.body;
