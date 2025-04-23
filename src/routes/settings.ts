@@ -69,14 +69,17 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
       horario_atencion,
       prompt,
       bienvenida,
-      twilio_number,
-      twilio_sms_number,
-      twilio_voice_number,
       informacion_negocio,
       funciones_asistente,
       info_clave,
       limite_uso,
     } = req.body;
+
+    // 🚫 Ignorar campos protegidos
+    const camposProtegidos = ['twilio_number', 'twilio_sms_number', 'twilio_voice_number'];
+    camposProtegidos.forEach((campo) => {
+      if (campo in req.body) delete req.body[campo];
+    });
 
     if (!nombre_negocio) {
       return res.status(400).json({ error: 'El nombre del negocio es obligatorio' });
@@ -91,14 +94,11 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
         horario_atencion = $5,
         prompt = $6,
         bienvenida = $7,
-        twilio_number = $8,
-        twilio_sms_number = $9,
-        twilio_voice_number = $10,
-        informacion_negocio = $11,
-        funciones_asistente = $12,
-        info_clave = $13,
-        limite_uso = $14
-      WHERE id = $15`,
+        informacion_negocio = $8,
+        funciones_asistente = $9,
+        info_clave = $10,
+        limite_uso = $11
+      WHERE id = $12`,
       [
         nombre_negocio,
         categoria || '',
@@ -107,14 +107,11 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
         horario_atencion || '',
         prompt || '',
         bienvenida || '',
-        twilio_number || '',
-        twilio_sms_number || '',
-        twilio_voice_number || '',
         informacion_negocio || '',
         funciones_asistente || '',
         info_clave || '',
         limite_uso || 150,
-        tenant_id, // 👈 directo del token
+        tenant_id,
       ]
     );
 
@@ -125,6 +122,7 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
   }
 });
 
+// ✅ src/routes/settings.ts (PUT actualizado)
 router.put('/', authenticateUser, async (req: any, res: Response) => {
   try {
     const tenant_id = req.user?.tenant_id;
@@ -147,10 +145,11 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
       limite_uso,
     } = req.body;
 
-    // 🚫 Ignorar campos protegidos de Twilio
-    delete req.body.twilio_number;
-    delete req.body.twilio_sms_number;
-    delete req.body.twilio_voice_number;
+    // 🚫 No se debe actualizar ningún campo protegido de Twilio
+    const camposProtegidos = ['twilio_number', 'twilio_sms_number', 'twilio_voice_number'];
+    camposProtegidos.forEach((campo) => {
+      if (campo in req.body) delete req.body[campo];
+    });
 
     await pool.query(
       `UPDATE tenants SET 
@@ -189,4 +188,5 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
     return res.status(500).json({ error: 'Error al guardar cambios' });
   }
 });
+
 export default router;
