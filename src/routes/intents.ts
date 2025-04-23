@@ -20,7 +20,7 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
 
     const intents = result.rows.map((i) => ({
       nombre: i.nombre,
-      ejemplos: i.ejemplos.split('||'),
+      ejemplos: i.ejemplos, // ya viene como array desde Postgres
       respuesta: i.respuesta,
     }));
 
@@ -43,9 +43,11 @@ router.post('/', authenticateUser, async (req: Request, res: Response) => {
     await pool.query('DELETE FROM intents WHERE tenant_id = $1', [tenantId]);
 
     for (const intent of intents) {
+      const ejemplosArray = Array.isArray(intent.ejemplos) ? intent.ejemplos : [];
+
       await pool.query(
         'INSERT INTO intents (tenant_id, nombre, ejemplos, respuesta) VALUES ($1, $2, $3, $4)',
-        [tenantId, intent.nombre, intent.ejemplos.join('||'), intent.respuesta]
+        [tenantId, intent.nombre, ejemplosArray, intent.respuesta]
       );
     }
 
