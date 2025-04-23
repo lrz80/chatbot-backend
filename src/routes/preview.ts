@@ -47,12 +47,27 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     }
 
     // 🔁 Ver si el mensaje coincide con un flujo guiado (primer nivel)
-    const match = flows.flatMap((f: any) => f.opciones || []).find((opt: any) => {
-      return opt.texto.toLowerCase().includes(message.toLowerCase());
-    });
-
-    if (match?.respuesta) {
-      return res.status(200).json({ response: match.respuesta });
+    function buscarEnFlujos(flows: any[], mensaje: string): string | null {
+      for (const flow of flows) {
+        for (const opcion of flow.opciones || []) {
+          if (opcion.texto.toLowerCase().includes(mensaje.toLowerCase())) {
+            return opcion.respuesta || null;
+          }
+          if (opcion.submenu) {
+            for (const sub of opcion.submenu.opciones || []) {
+              if (sub.texto.toLowerCase().includes(mensaje.toLowerCase())) {
+                return sub.respuesta || null;
+              }
+            }
+          }
+        }
+      }
+      return null;
+    }
+    
+    const respuestaFlujo = buscarEnFlujos(flows, message);
+    if (respuestaFlujo) {
+      return res.status(200).json({ response: respuestaFlujo });
     }
 
     // ✨ OpenAI fallback
