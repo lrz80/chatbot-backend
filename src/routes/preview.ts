@@ -16,6 +16,25 @@ interface AuthenticatedRequest extends Request {
   };
 }
 
+// 🔍 Función para buscar coincidencias dentro de flujos anidados
+function buscarEnFlujos(flows: any[], mensaje: string): string | null {
+  for (const flow of flows) {
+    for (const opcion of flow.opciones || []) {
+      if (opcion.texto?.toLowerCase().includes(mensaje.toLowerCase())) {
+        return opcion.respuesta || null;
+      }
+      if (opcion.submenu) {
+        for (const sub of opcion.submenu.opciones || []) {
+          if (sub.texto?.toLowerCase().includes(mensaje.toLowerCase())) {
+            return sub.respuesta || null;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const tenant_id = req.user?.tenant_id;
@@ -28,49 +47,23 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     if (!tenant) return res.status(404).json({ error: 'Negocio no encontrado' });
 
     const prompt = tenant.prompt || 'Eres un asistente útil y profesional.';
-    const bienvenida = tenant.bienvenida || '¡Hola! ¿En qué puedo ayudarte hoy?';
 
-    // 🔄 Leer flujos si existen
+    // 🧠 Buscar flujo guiado si existe
     let flows: any[] = [];
     try {
       const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant_id]);
       const raw = flowsRes.rows[0]?.data;
       flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      console.log('📥 Flujos recibidos:', flows);
     } catch (e) {
       console.warn('⚠️ No se pudo obtener o parsear los flujos:', e);
     }
 
-    // 🟢 Si es primer mensaje, responde con bienvenida
-    if (!message || message.trim().length < 2) {
-      return res.status(200).json({ response: bienvenida });
-    }
-
-    // 🔁 Ver si el mensaje coincide con un flujo guiado (primer nivel)
-    function buscarEnFlujos(flows: any[], mensaje: string): string | null {
-      for (const flow of flows) {
-        for (const opcion of flow.opciones || []) {
-          if (opcion.texto.toLowerCase().includes(mensaje.toLowerCase())) {
-            return opcion.respuesta || null;
-          }
-          if (opcion.submenu) {
-            for (const sub of opcion.submenu.opciones || []) {
-              if (sub.texto.toLowerCase().includes(mensaje.toLowerCase())) {
-                return sub.respuesta || null;
-              }
-            }
-          }
-        }
-      }
-      return null;
-    }
-    
     const respuestaFlujo = buscarEnFlujos(flows, message);
     if (respuestaFlujo) {
       return res.status(200).json({ response: respuestaFlujo });
     }
 
-    // ✨ OpenAI fallback
+    // 🤖 Si no hay coincidencia, usar OpenAI
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
