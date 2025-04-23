@@ -113,7 +113,7 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
         existing.twilio_sms_number,
         existing.twilio_voice_number,
         informacion_negocio ?? existing.informacion_negocio,
-        funciones_asistente ?? existing.funciones_asistente,
+        funciones_asistente?.trim() !== "" ? funciones_asistente : existing.funciones_asistente,
         info_clave ?? existing.info_clave,
         limite_uso ?? existing.limite_uso,
         tenant_id,
