@@ -28,6 +28,7 @@ import checkoutRoute from './routes/stripe/checkout';
 import stripeWebhook from './routes/stripe/webhook'; // 👈 Este debe ir ANTES del json
 import flowsRoutes from "./routes/flows";
 import statsKpisRouter from './routes/stats-kpis';
+import uploadLogoRoute from './routes/upload-logo';
 
 dotenv.config();
 
@@ -87,6 +88,8 @@ app.use(forgotPasswordRoute);
 app.use('/api/stripe', checkoutRoute); // otras rutas de Stripe (no webhook)
 app.use('/api/flows', flowsRoutes);
 app.use('/api/stats', statsKpisRouter);
+app.use('/api/upload-logo', uploadLogoRoute);
+app.use('/uploads', express.static('uploads'));
 
 
 // ✅ Ruta base
