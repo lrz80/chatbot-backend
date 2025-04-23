@@ -155,10 +155,26 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
     delete req.body.twilio_sms_number;
     delete req.body.twilio_voice_number;
 
-    // 🧠 Obtener valores actuales
+    // 🧠 Obtener valores actuales del tenant
     const existingRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
     const current = existingRes.rows[0];
     if (!current) return res.status(404).json({ error: 'Tenant no encontrado' });
+
+    // ✅ Mantener los valores actuales si no se envían en el body
+    const updatedValues = [
+      nombre_negocio ?? current.name,
+      categoria ?? current.categoria,
+      idioma ?? current.idioma,
+      direccion ?? current.direccion,
+      horario_atencion ?? current.horario_atencion,
+      prompt ?? current.prompt,
+      bienvenida ?? current.bienvenida,
+      informacion_negocio ?? current.informacion_negocio,
+      funciones_asistente ?? current.funciones_asistente,
+      info_clave ?? current.info_clave,
+      limite_uso ?? current.limite_uso,
+      tenant_id,
+    ];
 
     await pool.query(
       `UPDATE tenants SET 
@@ -175,20 +191,7 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         limite_uso = $11,
         onboarding_completado = true
       WHERE id = $12`,
-      [
-        nombre_negocio || current.name,
-        categoria || current.categoria,
-        idioma || current.idioma,
-        direccion || current.direccion,
-        horario_atencion || current.horario_atencion,
-        prompt || current.prompt,
-        bienvenida || current.bienvenida,
-        informacion_negocio || current.informacion_negocio,
-        funciones_asistente || current.funciones_asistente,
-        info_clave || current.info_clave,
-        limite_uso || current.limite_uso,
-        tenant_id,
-      ]
+      updatedValues
     );
 
     return res.status(200).json({ message: 'Perfil actualizado correctamente' });
