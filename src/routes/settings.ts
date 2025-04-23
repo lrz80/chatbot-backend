@@ -69,9 +69,6 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
       horario_atencion,
       prompt,
       bienvenida,
-      twilio_number,
-      twilio_sms_number,
-      twilio_voice_number,
       informacion_negocio,
       funciones_asistente,
       info_clave,
@@ -82,9 +79,10 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
       return res.status(400).json({ error: 'El nombre del negocio es obligatorio' });
     }
 
-    // Obtener valores actuales del tenant para preservar lo que no venga en el body
+    // ✅ Obtener valores actuales del tenant
     const current = await pool.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
     const existing = current.rows[0];
+    if (!existing) return res.status(404).json({ error: 'Negocio no encontrado' });
 
     await pool.query(
       `UPDATE tenants SET 
