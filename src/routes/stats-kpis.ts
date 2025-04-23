@@ -18,31 +18,33 @@ router.get('/kpis', async (req: Request, res: Response) => {
 
     if (!tenant_id) return res.status(404).json({ error: 'Tenant no encontrado' });
 
-    const result = await pool.query(
+    // 1. Total y únicos
+    const generalStats = await pool.query(
       `SELECT COUNT(*)::int AS total,
-              COUNT(DISTINCT phone) AS unicos,
-              EXTRACT(HOUR FROM created_at) AS hora_pico
-       FROM interactions
-       WHERE tenant_id = $1
-       GROUP BY hora_pico
-       ORDER BY COUNT(*) DESC
-       LIMIT 1`,
+              COUNT(DISTINCT phone)::int AS unicos
+      FROM interactions
+      WHERE tenant_id = $1`,
       [tenant_id]
     );
 
-    console.log("📊 Resultados KPI:", result.rows);
+    // 2. Hora pico
+    const horaPicoRes = await pool.query(
+      `SELECT EXTRACT(HOUR FROM created_at)::int AS hora,
+              COUNT(*) AS total
+      FROM interactions
+      WHERE tenant_id = $1
+      GROUP BY hora
+      ORDER BY total DESC
+      LIMIT 1`,
+      [tenant_id]
+    );
 
-    const row = result.rows[0] || {
-      total: 0,
-      usuarios: 0,
-      hora_pico: null,
-    };
+    const total = generalStats.rows[0]?.total || 0;
+    const unicos = generalStats.rows[0]?.unicos || 0;
+    const hora_pico = horaPicoRes.rows[0]?.hora || null;
 
-    console.log("✅ Fila seleccionada:", row);
+    return res.status(200).json({ total, unicos, hora_pico });
 
-    const { total, usuarios, hora_pico } = row;
-
-    return res.status(200).json({ total, usuarios, hora_pico });
   } catch (error) {
     console.error('❌ Error en /stats/kpis:', error);
     return res.status(500).json({ error: 'Error interno del servidor' });
