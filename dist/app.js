@@ -39,6 +39,7 @@ const delete_1 = __importDefault(require("./routes/contactos/delete"));
 const count_1 = __importDefault(require("./routes/contactos/count"));
 const voice_prompt_1 = __importDefault(require("./routes/voice-prompt"));
 const voice_1 = __importDefault(require("./routes/webhook/voice"));
+const test_1 = __importDefault(require("./routes/test"));
 console.log("🔁 Versión redeployada manualmente");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
@@ -96,6 +97,7 @@ app.use("/api/contactos", delete_1.default);
 app.use("/api/contactos/count", count_1.default);
 app.use("/api/voice-prompt", voice_prompt_1.default);
 app.use("/api/webhooks/voice", voice_1.default);
+app.use("/api/test", test_1.default);
 // ✅ Ruta base
 app.get('/', (req, res) => {
     res.send('Backend corriendo 🟢');

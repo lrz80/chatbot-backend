@@ -36,6 +36,7 @@ import deleteContactos from "./routes/contactos/delete";
 import countContactos from "./routes/contactos/count";
 import voicePromptRoute from "./routes/voice-prompt";
 import voiceWebhookRoute from "./routes/webhook/voice";
+import testRoute from "./routes/test";
 
 
 console.log("🔁 Versión redeployada manualmente");
@@ -105,6 +106,7 @@ app.use("/api/contactos", deleteContactos);
 app.use("/api/contactos/count", countContactos);
 app.use("/api/voice-prompt", voicePromptRoute);
 app.use("/api/webhooks/voice", voiceWebhookRoute);
+app.use("/api/test", testRoute);
 
 
 // ✅ Ruta base
