@@ -103,7 +103,7 @@ app.use("/api/contactos", uploadContactos);
 app.use("/api/contactos", deleteContactos);
 app.use("/api/contactos/count", countContactos);
 app.use("/api/voice-prompt", voicePromptRoute);
-app.use("/api/webhook/voice", voiceWebhookRoute);
+app.use("/api/webhooks/voice", voiceWebhookRoute);
 
 
 // ✅ Ruta base
