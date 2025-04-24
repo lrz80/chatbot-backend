@@ -37,6 +37,7 @@ import voicePromptRoute from "./routes/voice-prompt";
 import voiceWebhookRoute from "./routes/webhook/voice";
 
 
+console.log("🔁 Versión redeployada manualmente");
 
 dotenv.config();
 
