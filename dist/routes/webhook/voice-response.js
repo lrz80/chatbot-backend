@@ -7,7 +7,7 @@ const express_1 = require("express");
 const twilio_1 = require("twilio");
 const db_1 = __importDefault(require("../../lib/db"));
 const openai_1 = __importDefault(require("openai"));
-const incrementUsage_1 = require("../../lib/incrementUsage"); // ✅ importar función
+const incrementUsage_1 = require("../../lib/incrementUsage");
 const router = (0, express_1.Router)();
 const openai = new openai_1.default({
     apiKey: process.env.OPENAI_API_KEY,
@@ -23,8 +23,11 @@ router.post('/', async (req, res) => {
         const tenant = tenantRes.rows[0];
         if (!tenant)
             return res.sendStatus(404);
-        const prompt = tenant.prompt || 'Eres un asistente telefónico amigable y profesional.';
-        // 🔮 Generar respuesta con OpenAI
+        const configRes = await db_1.default.query('SELECT * FROM voice_configs WHERE tenant_id = $1', [tenant.id]);
+        const config = configRes.rows[0];
+        const prompt = config?.system_prompt || 'Eres un asistente telefónico amigable y profesional.';
+        const voiceLang = tenant.voice_language || 'es-ES';
+        const voiceName = config?.voice_name || 'alice';
         const completion = await openai.chat.completions.create({
             model: 'gpt-4',
             messages: [
@@ -33,20 +36,15 @@ router.post('/', async (req, res) => {
             ],
         });
         const respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
-        // 💾 Guardar mensaje del usuario (voz)
         await db_1.default.query(`INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voice', $3)`, [tenant.id, userInput, fromNumber]);
-        // 💾 Guardar respuesta del bot
         await db_1.default.query(`INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
        VALUES ($1, 'bot', $2, NOW(), 'voice')`, [tenant.id, respuesta]);
-        // 💾 Guardar interacción en tabla de estadísticas
         await db_1.default.query(`INSERT INTO interactions (tenant_id, canal, created_at)
-       VALUES ($1, $2, NOW())`, [tenant.id, 'voice']);
-        // 🔢 Incrementar uso real
-        await (0, incrementUsage_1.incrementarUsoPorNumero)(numero); // ✅ sumamos 1 solo si es canal real
-        // 🗣️ Responder por voz
+       VALUES ($1, 'voice', NOW())`, [tenant.id]);
+        await (0, incrementUsage_1.incrementarUsoPorNumero)(numero);
         const response = new twilio_1.twiml.VoiceResponse();
-        response.say({ voice: tenant.voice_name || 'alice', language: tenant.voice_language || 'es-ES' }, respuesta);
+        response.say({ voice: voiceName, language: voiceLang }, respuesta);
         response.pause({ length: 1 });
         response.hangup();
         res.type('text/xml');

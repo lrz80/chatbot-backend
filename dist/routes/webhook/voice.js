@@ -7,7 +7,6 @@ const express_1 = require("express");
 const twilio_1 = require("twilio");
 const db_1 = __importDefault(require("../../lib/db"));
 const router = (0, express_1.Router)();
-// Primer paso: saludo inicial y recopilación por voz
 router.post('/', async (req, res) => {
     const to = req.body.To || '';
     const from = req.body.From || '';
@@ -18,19 +17,17 @@ router.post('/', async (req, res) => {
         const tenant = tenantRes.rows[0];
         if (!tenant)
             return res.sendStatus(404);
+        const voiceConfigRes = await db_1.default.query('SELECT * FROM voice_configs WHERE tenant_id = $1', [tenant.id]);
+        const voiceConfig = voiceConfigRes.rows[0];
         const response = new twilio_1.twiml.VoiceResponse();
-        // 💬 Saludo inicial
-        response.say({ voice: 'alice', language: tenant.voice_language || 'es-ES' }, tenant.bienvenida || 'Hola, gracias por llamar. Por favor, dime en qué puedo ayudarte después del tono.');
-        // 💾 Registrar llamada entrante (sin texto aún)
+        response.say({ voice: 'alice', language: tenant.voice_language || 'es-ES' }, voiceConfig?.welcome_message || 'Hola, gracias por llamar. Por favor, dime en qué puedo ayudarte después del tono.');
         await db_1.default.query(`INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voice', $3)`, [tenant.id, '[Inicio de llamada]', fromNumber]);
-        // 💾 Guardar interacción en tabla de estadísticas
         await db_1.default.query(`INSERT INTO interactions (tenant_id, canal, created_at)
-      VALUES ($1, $2, NOW())`, [tenant.id, 'voice']);
-        // 🎙️ Recolección de voz
+       VALUES ($1, 'voice', NOW())`, [tenant.id]);
         response.gather({
             input: ['speech'],
-            action: '/webhook/voice-response',
+            action: 'https://api.aamy.ai/api/webhooks/voice-response',
             method: 'POST',
             language: tenant.voice_language || 'es-ES',
             speechTimeout: 'auto',
