@@ -84,7 +84,6 @@ app.use('/api/usage', usageRoutes);
 app.use('/api/stats/monthly', statsMonthlyRoutes);
 app.use('/webhook/whatsapp', whatsappWebhook);
 app.use('/webhook/sms', smsWebhook);
-app.use('/webhook/voice', voiceWebhook);
 app.use('/webhook/voice-response', voiceResponse);
 app.use('/api/messages', messagesRoutes);
 app.use('/api/generar-prompt', generarPromptRouter);
