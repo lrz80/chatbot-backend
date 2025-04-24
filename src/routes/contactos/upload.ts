@@ -8,6 +8,17 @@ import { Readable } from "stream";
 const router = express.Router();
 const upload = multer();
 
+function mapRow(row: Record<string, any>) {
+  const nombre =
+    row["nombre"] || `${row["First Name"] || ""} ${row["Last Name"] || ""}`.trim();
+
+  const email = row["email"] || row["Email"] || row["E-mail"];
+  const telefono = row["telefono"] || row["Phone"] || row["Teléfono"];
+  const segmento = row["segmento"] || row["Category"] || row["Label"] || "leads";
+
+  return { nombre, email, telefono, segmento };
+}
+
 router.post("/upload", authenticateUser, upload.single("file"), async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
 
@@ -18,7 +29,6 @@ router.post("/upload", authenticateUser, upload.single("file"), async (req, res)
   const contactos: { nombre?: string; email?: string; telefono?: string; segmento?: string }[] = [];
 
   try {
-    // Obtener cuántos contactos tiene el tenant actualmente
     const existing = await pool.query("SELECT COUNT(*) FROM contactos WHERE tenant_id = $1", [tenant_id]);
     const existentes = parseInt(existing.rows[0].count || "0", 10);
 
@@ -27,9 +37,9 @@ router.post("/upload", authenticateUser, upload.single("file"), async (req, res)
       stream
         .pipe(csvParser())
         .on("data", (row) => {
-          const { nombre, email, telefono, segmento } = row;
-          if (email || telefono) {
-            contactos.push({ nombre, email, telefono, segmento });
+          const contacto = mapRow(row);
+          if (contacto.email || contacto.telefono) {
+            contactos.push(contacto);
           }
         })
         .on("end", resolve)
@@ -40,7 +50,6 @@ router.post("/upload", authenticateUser, upload.single("file"), async (req, res)
       return res.status(400).json({ error: "Máximo 1500 contactos permitidos por tenant." });
     }
 
-    // Eliminar duplicados (teléfono o email ya existente)
     const existentesQuery = await pool.query(
       "SELECT telefono, email FROM contactos WHERE tenant_id = $1",
       [tenant_id]
