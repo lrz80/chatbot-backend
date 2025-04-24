@@ -34,6 +34,7 @@ import uploadContactos from "./routes/contactos/upload";
 import deleteContactos from "./routes/contactos/delete";
 import countContactos from "./routes/contactos/count";
 import voicePromptRoute from "./routes/voice-prompt";
+import voiceWebhookRoute from "./routes/webhook/voice";
 
 
 
@@ -102,6 +103,7 @@ app.use("/api/contactos", uploadContactos);
 app.use("/api/contactos", deleteContactos);
 app.use("/api/contactos/count", countContactos);
 app.use("/api/voice-prompt", voicePromptRoute);
+app.use("/api/webhook/voice", voiceWebhookRoute);
 
 
 // ✅ Ruta base
