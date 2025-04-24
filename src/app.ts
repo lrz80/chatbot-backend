@@ -33,7 +33,7 @@ import campaignsRoutes from "./routes/campaigns";
 import uploadContactos from "./routes/contactos/upload";
 import deleteContactos from "./routes/contactos/delete";
 import countContactos from "./routes/contactos/count";
-import promptVoiceRoute from "./routes/prompt-generator/voice";
+
 
 dotenv.config();
 
@@ -99,7 +99,7 @@ app.use("/api/campaigns", campaignsRoutes);
 app.use("/api/contactos", uploadContactos);
 app.use("/api/contactos", deleteContactos);
 app.use("/api/contactos/count", countContactos);
-app.use("/api/prompt-generator/voice", promptVoiceRoute);
+
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
