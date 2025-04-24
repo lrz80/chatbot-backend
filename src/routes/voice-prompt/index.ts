@@ -24,12 +24,12 @@ router.post("/", authenticateUser, async (req, res) => {
 
     // Guardar en la tabla voice_configs
     await pool.query(
-      `INSERT INTO voice_configs (tenant_id, idioma, categoria, prompt, bienvenida)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO voice_configs (tenant_id, idioma, categoria, system_prompt, welcome_message, canal)
+       VALUES ($1, $2, $3, $4, $5, 'voz')
        ON CONFLICT (tenant_id) DO UPDATE 
-       SET idioma = $2, categoria = $3, prompt = $4, bienvenida = $5, updated_at = NOW()`,
+       SET idioma = $2, categoria = $3, system_prompt = $4, welcome_message = $5, updated_at = NOW()`,
       [tenant_id, idioma, categoria, prompt, bienvenida]
-    );
+    );    
 
     res.json({ prompt, bienvenida });
   } catch (err) {
