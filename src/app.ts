@@ -30,6 +30,8 @@ import flowsRoutes from "./routes/flows";
 import statsKpisRouter from './routes/stats-kpis';
 import uploadLogoRoute from './routes/upload-logo';
 import campaignsRoutes from "./routes/campaigns";
+import uploadContactos from "./routes/contactos/upload";
+import deleteContactos from "./routes/contactos/delete";
 
 dotenv.config();
 
@@ -92,6 +94,8 @@ app.use('/api/stats', statsKpisRouter);
 app.use('/api/upload-logo', uploadLogoRoute);
 app.use('/uploads', express.static('uploads'));
 app.use("/api/campaigns", campaignsRoutes);
+app.use("/api/contactos", uploadContactos);
+app.use("/api/contactos", deleteContactos);
 
 
 // ✅ Ruta base
