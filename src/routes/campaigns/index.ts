@@ -99,4 +99,25 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
   }
 });
 
+router.delete("/:id", authenticateUser, async (req, res) => {
+    const { id } = req.params;
+    const { tenant_id } = req.user as { tenant_id: string };
+  
+    try {
+      const result = await pool.query(
+        "DELETE FROM campanas WHERE id = $1 AND tenant_id = $2 RETURNING *",
+        [id, tenant_id]
+      );
+  
+      if (result.rowCount === 0) {
+        return res.status(404).json({ error: "Campaña no encontrada o no autorizada." });
+      }
+  
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("❌ Error al eliminar campaña:", err);
+      res.status(500).json({ error: "Error al eliminar campaña" });
+    }
+  });  
+
 export default router;
