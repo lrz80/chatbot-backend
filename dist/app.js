@@ -1,4 +1,5 @@
 "use strict";
+// chatbot-backend/src/app.ts
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -38,6 +39,7 @@ const delete_1 = __importDefault(require("./routes/contactos/delete"));
 const count_1 = __importDefault(require("./routes/contactos/count"));
 const voice_prompt_1 = __importDefault(require("./routes/voice-prompt"));
 const voice_1 = __importDefault(require("./routes/webhook/voice"));
+console.log("🔁 Versión redeployada manualmente");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 3001;

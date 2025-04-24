@@ -1,3 +1,5 @@
+// chatbot-backend/src/app.ts
+
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -15,7 +17,6 @@ import usageRoutes from './routes/usage';
 import statsMonthlyRoutes from './routes/stats-monthly';
 import whatsappWebhook from './routes/webhook/whatsapp';
 import smsWebhook from './routes/webhook/sms';
-import voiceWebhook from './routes/webhook/voice';
 import voiceResponse from './routes/webhook/voice-response';
 import messagesRoutes from './routes/messages';
 import generarPromptRouter from './routes/generar-prompt';
