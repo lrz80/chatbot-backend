@@ -36,8 +36,8 @@ router.post("/upload", authenticateUser, upload.single("file"), async (req, res)
         .on("error", reject);
     });
 
-    if (contactos.length + existentes > 300) {
-      return res.status(400).json({ error: "Máximo 300 contactos permitidos por tenant." });
+    if (contactos.length + existentes > 1500) {
+      return res.status(400).json({ error: "Máximo 1500 contactos permitidos por tenant." });
     }
 
     // Eliminar duplicados (teléfono o email ya existente)
