@@ -16,11 +16,12 @@ interface AuthenticatedRequest extends Request {
   };
 }
 
-// 🔍 Función recursiva para buscar coincidencias dentro de flujos anidados
+// 🔍 Función recursiva para buscar coincidencias en flujos anidados
 function buscarRespuestaEnFlujos(flows: any[], mensaje: string): string | null {
+  const normalizado = mensaje.trim().toLowerCase();
   for (const flow of flows) {
     for (const opcion of flow.opciones || []) {
-      if (opcion.texto?.toLowerCase().includes(mensaje.toLowerCase()) && opcion.respuesta) {
+      if (opcion.texto?.trim().toLowerCase() === normalizado && opcion.respuesta) {
         return opcion.respuesta;
       }
       if (opcion.submenu) {
@@ -48,23 +49,41 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     const saludoInicial = `Soy Amy, bienvenido a ${nombreNegocio}.`;
     const prompt = `${saludoInicial}\n${promptNegocio}`;
 
-    // 🧠 Buscar flujo guiado si existe
+    const mensajeUsuario = message.trim().toLowerCase();
+
+    // 📋 Buscar en FAQs primero
+    let faqs: any[] = [];
+    try {
+      const faqsRes = await pool.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenant_id]);
+      faqs = faqsRes.rows || [];
+    } catch (e) {
+      console.warn('⚠️ No se pudieron cargar FAQs:', e);
+    }
+
+    for (const faq of faqs) {
+      if (mensajeUsuario.includes(faq.pregunta.trim().toLowerCase())) {
+        console.log("✅ Respuesta detectada desde FAQs");
+        return res.status(200).json({ response: faq.respuesta });
+      }
+    }
+
+    // 🧠 Buscar en Flows si no encontró en FAQs
     let flows: any[] = [];
     try {
       const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant_id]);
       const raw = flowsRes.rows[0]?.data;
       flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      console.log("📥 Flujos recibidos:", flows);
     } catch (e) {
-      console.warn('⚠️ No se pudo obtener o parsear los flujos:', e);
+      console.warn('⚠️ No se pudieron cargar Flows:', e);
     }
 
     const respuestaFlujo = buscarRespuestaEnFlujos(flows, message);
     if (respuestaFlujo) {
+      console.log("✅ Respuesta detectada desde Flows");
       return res.status(200).json({ response: respuestaFlujo });
     }
 
-    // 🤖 Si no hay coincidencia, usar OpenAI
+    // 🤖 Si no hay nada en FAQs ni Flows, usar OpenAI
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
@@ -73,7 +92,7 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
       ],
     });
 
-    const response = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
+    const response = completion.choices[0]?.message?.content || 'Lo siento, no entendí eso.';
     return res.status(200).json({ response });
   } catch (err) {
     console.error('❌ Error en preview:', err);
