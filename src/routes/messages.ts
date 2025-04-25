@@ -19,12 +19,12 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
 
     // Construcción dinámica de consulta
     const query = canal
-      ? `SELECT id, tenant_id, content, sender, canal, timestamp, from_number 
+      ? `SELECT id, tenant_id, content, sender, canal, timestamp, from_number, emotion 
          FROM messages 
          WHERE tenant_id = $1 AND canal = $2 
          ORDER BY timestamp DESC 
          LIMIT $3 OFFSET $4`
-      : `SELECT id, tenant_id, content, sender, canal, timestamp, from_number 
+      : `SELECT id, tenant_id, content, sender, canal, timestamp, from_number, emotion 
          FROM messages 
          WHERE tenant_id = $1 
          ORDER BY timestamp DESC 

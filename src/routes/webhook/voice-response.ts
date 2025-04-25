@@ -36,7 +36,7 @@ router.post('/', async (req, res) => {
     const voiceLang = config.idioma || 'es-ES';
     const voiceName = config.voice_name || 'alice';
 
-    // 🔮 OpenAI genera la respuesta
+    // 🔮 Generar respuesta con OpenAI
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
@@ -47,11 +47,27 @@ router.post('/', async (req, res) => {
 
     const respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
 
-    // 💾 Guardar mensaje del cliente
+    // 🔍 Detectar emoción
+    const emotionPrompt = `
+Actúa como un analista emocional. Clasifica la emoción dominante en este mensaje del cliente:
+"${userInput}"
+
+Elige solo una palabra: enfado, tristeza, neutral, satisfacción o entusiasmo.
+    `;
+    const emotionRes = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        { role: 'system', content: emotionPrompt },
+      ],
+    });
+
+    const emocion = emotionRes.choices[0].message?.content?.trim().toLowerCase() || 'neutral';
+
+    // 💾 Guardar mensaje del cliente con emoción
     await pool.query(
-      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
-       VALUES ($1, 'user', $2, NOW(), 'voice', $3)`,
-      [tenant.id, userInput, fromNumber]
+      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, emotion)
+       VALUES ($1, 'user', $2, NOW(), 'voice', $3, $4)`,
+      [tenant.id, userInput, fromNumber, emocion]
     );
 
     // 💾 Guardar respuesta del bot
@@ -68,7 +84,7 @@ router.post('/', async (req, res) => {
       [tenant.id]
     );
 
-    // 🔢 Contabilizar uso real
+    // 🔢 Sumar uso
     await incrementarUsoPorNumero(numero);
 
     // 🧠 Detectar intención de cierre
