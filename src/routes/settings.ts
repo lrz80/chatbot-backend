@@ -47,7 +47,6 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       logo_url: tenant.logo_url || '',
       plan: tenant.plan || '',
       fecha_registro: tenant.fecha_registro || null,
-      voice_name: tenant.voice_name || '',
     });
   } catch (error) {
     console.error('❌ Error en /api/settings:', error);
@@ -76,7 +75,6 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
       info_clave,
       limite_uso,
       logo_url,
-      voice_name,
     } = req.body;
 
     if (!nombre_negocio) {
@@ -104,8 +102,7 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
         info_clave = $13,
         limite_uso = $14,
         logo_url = $15,
-        voice_name = $16
-      WHERE id = $17`,
+      WHERE id = $16`,
       [
         nombre_negocio,
         categoria ?? existing.categoria,
@@ -122,7 +119,6 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
         info_clave ?? existing.info_clave,
         limite_uso ?? existing.limite_uso,
         logo_url ?? existing.logo_url,
-        voice_name ?? existing.voice_name,
         tenant_id,
       ]
     );
@@ -154,7 +150,6 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
       info_clave,
       limite_uso,
       logo_url,
-      voice_name,
     } = req.body;
 
     delete req.body.twilio_number;
@@ -179,9 +174,8 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         info_clave = $10,
         limite_uso = $11,
         logo_url = $12,
-        voice_name = $13,
         onboarding_completado = true
-      WHERE id = $14`,
+      WHERE id = $13`,
       [
         nombre_negocio || current.name,
         categoria || current.categoria,
@@ -195,7 +189,6 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         info_clave || current.info_clave,
         limite_uso || current.limite_uso,
         logo_url || current.logo_url,
-        voice_name || current.voice_name,
         tenant_id,
       ]
     );
