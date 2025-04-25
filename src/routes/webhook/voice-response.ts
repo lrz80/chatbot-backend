@@ -26,15 +26,17 @@ router.post('/', async (req, res) => {
     if (!tenant) return res.sendStatus(404);
 
     const configRes = await pool.query(
-      'SELECT * FROM voice_configs WHERE tenant_id = $1',
-      [tenant.id]
+      'SELECT * FROM voice_configs WHERE tenant_id = $1 AND canal = $2 LIMIT 1',
+      [tenant.id, 'voz']
     );
     const config = configRes.rows[0];
+    if (!config) return res.sendStatus(404);
 
-    const prompt = config?.system_prompt || 'Eres un asistente telefónico amigable y profesional.';
-    const voiceLang = tenant.voice_language || 'es-ES';
-    const voiceName = config?.voice_name || 'alice';
+    const prompt = config.system_prompt || 'Eres un asistente telefónico amigable y profesional.';
+    const voiceLang = config.idioma || 'es-ES';
+    const voiceName = config.voice_name || 'alice';
 
+    // 🔮 OpenAI genera la respuesta
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
@@ -45,30 +47,51 @@ router.post('/', async (req, res) => {
 
     const respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
 
+    // 💾 Guardar mensaje del cliente
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voice', $3)`,
       [tenant.id, userInput, fromNumber]
     );
 
+    // 💾 Guardar respuesta del bot
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
        VALUES ($1, 'bot', $2, NOW(), 'voice')`,
       [tenant.id, respuesta]
     );
 
+    // 💾 Registrar interacción
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, created_at)
        VALUES ($1, 'voice', NOW())`,
       [tenant.id]
     );
 
+    // 🔢 Contabilizar uso real
     await incrementarUsoPorNumero(numero);
+
+    // 🧠 Detectar intención de cierre
+    const finConversacion = /(gracias|eso es todo|nada más|bye|adiós)/i.test(userInput);
 
     const response = new twiml.VoiceResponse();
     response.say({ voice: voiceName, language: voiceLang }, respuesta);
-    response.pause({ length: 1 });
-    response.hangup();
+
+    if (!finConversacion) {
+      response.gather({
+        input: ['speech'],
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: voiceLang,
+        speechTimeout: 'auto',
+      });
+    } else {
+      response.say(
+        { voice: voiceName, language: voiceLang },
+        'Gracias por tu llamada. ¡Hasta luego!'
+      );
+      response.hangup();
+    }
 
     res.type('text/xml');
     res.send(response.toString());
