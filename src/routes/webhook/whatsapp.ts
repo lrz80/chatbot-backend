@@ -37,6 +37,39 @@ function buscarRespuestaDesdeFlows(flows: any[], mensajeUsuario: string): string
   return null;
 }
 
+// 🔎 Nueva función para detectar intención de venta
+async function detectarIntencion(mensaje: string) {
+  const prompt = `
+Analiza este mensaje de un cliente:
+
+"${mensaje}"
+
+Identifica:
+- Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).
+- Nivel de interés (de 1 a 5, siendo 5 "muy interesado en comprar").
+
+Responde solo en JSON. Ejemplo:
+{
+  "intencion": "preguntar precios",
+  "nivel_interes": 4
+}
+`;
+
+  const respuesta = await openai.chat.completions.create({
+    model: 'gpt-4-turbo',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.3,
+  });
+
+  const content = respuesta.choices[0]?.message?.content || '{}';
+  const data = JSON.parse(content);
+
+  return {
+    intencion: data.intencion || 'no_detectada',
+    nivel_interes: data.nivel_interes || 1,
+  };
+}
+
 router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
 
@@ -83,6 +116,23 @@ router.post('/', async (req: Request, res: Response) => {
         ],
       });
       respuesta = completion.choices[0]?.message?.content || 'Lo siento, no entendí eso.';
+    }
+
+    // 🧠 Inteligencia de ventas: analizar intención del mensaje
+    if (userInput) {
+      try {
+        const { intencion, nivel_interes } = await detectarIntencion(userInput);
+
+        await pool.query(
+          `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [tenant.id, fromNumber, 'whatsapp', userInput, intencion, nivel_interes]
+        );
+
+        console.log("✅ Intención detectada y guardada:", intencion, nivel_interes);
+      } catch (err) {
+        console.error("❌ Error analizando intención:", err);
+      }
     }
 
     // 💾 Guardar mensaje del usuario
