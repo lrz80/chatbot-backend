@@ -1,5 +1,3 @@
-// ✅ src/routes/webhook/whatsapp.ts
-
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import OpenAI from 'openai';
@@ -13,17 +11,14 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
-// 🧠 Función para buscar coincidencias en flujos y submenús
+// 🧠 Buscar en flujos
 function buscarRespuestaDesdeFlows(flows: any[], mensajeUsuario: string): string | null {
   const normalizado = mensajeUsuario.trim().toLowerCase();
-
   for (const flujo of flows) {
     for (const opcion of flujo.opciones || []) {
       if (opcion.texto?.trim().toLowerCase() === normalizado) {
-        if (opcion.respuesta) return opcion.respuesta;
-        if (opcion.submenu) return opcion.submenu.mensaje;
+        return opcion.respuesta || opcion.submenu?.mensaje || null;
       }
-
       if (opcion.submenu) {
         for (const sub of opcion.submenu.opciones || []) {
           if (sub.texto?.trim().toLowerCase() === normalizado) {
@@ -33,11 +28,10 @@ function buscarRespuestaDesdeFlows(flows: any[], mensajeUsuario: string): string
       }
     }
   }
-
   return null;
 }
 
-// 🔎 Nueva función para detectar intención de venta
+// 🔎 Detectar intención de compra
 async function detectarIntencion(mensaje: string) {
   const prompt = `
 Analiza este mensaje de un cliente:
@@ -54,7 +48,6 @@ Responde solo en JSON. Ejemplo:
   "nivel_interes": 4
 }
 `;
-
   const respuesta = await openai.chat.completions.create({
     model: 'gpt-4-turbo',
     messages: [{ role: 'user', content: prompt }],
@@ -82,7 +75,6 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const tenantRes = await pool.query('SELECT * FROM tenants WHERE twilio_number = $1', [numero]);
     const tenant = tenantRes.rows[0];
-
     if (!tenant) {
       console.warn('🔴 Negocio no encontrado para número:', numero);
       return res.sendStatus(404);
@@ -93,7 +85,7 @@ router.post('/', async (req: Request, res: Response) => {
     const saludo = `Soy Amy, bienvenido a ${nombreNegocio}.`;
     const prompt = `${saludo}\n${promptBase}`;
 
-    // 📥 Leer flujos si existen
+    // 📥 Leer flujos
     let flows: any[] = [];
     try {
       const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant.id]);
@@ -103,11 +95,36 @@ router.post('/', async (req: Request, res: Response) => {
       console.warn('⚠️ No se pudieron cargar los flujos:', e);
     }
 
-    // ✅ Intentar responder con flujos
-    let respuesta = buscarRespuestaDesdeFlows(flows, userInput);
+    // 📥 Leer FAQs
+    let faqs: any[] = [];
+    try {
+      const faqsRes = await pool.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenant.id]);
+      faqs = faqsRes.rows || [];
+    } catch (e) {
+      console.warn('⚠️ No se pudieron cargar las FAQs:', e);
+    }
 
-    // 🤖 Fallback con OpenAI si no hay coincidencia
+    // ✅ Buscar respuesta en FAQs primero
+    const mensajeUsuario = userInput.trim().toLowerCase();
+    let respuestaFAQ = null;
+    for (const faq of faqs) {
+      if (mensajeUsuario.includes(faq.pregunta.trim().toLowerCase())) {
+        respuestaFAQ = faq.respuesta;
+        break;
+      }
+    }
+
+    let respuesta = null;
+
+    if (respuestaFAQ) {
+      respuesta = respuestaFAQ;
+    } else {
+      // ✅ Luego buscar en Flows
+      respuesta = buscarRespuestaDesdeFlows(flows, userInput);
+    }
+
     if (!respuesta) {
+      // 🤖 Fallback a OpenAI si no encontró en FAQs ni Flows
       const completion = await openai.chat.completions.create({
         model: 'gpt-4',
         messages: [
@@ -118,17 +135,15 @@ router.post('/', async (req: Request, res: Response) => {
       respuesta = completion.choices[0]?.message?.content || 'Lo siento, no entendí eso.';
     }
 
-    // 🧠 Inteligencia de ventas: analizar intención del mensaje
+    // 🧠 Inteligencia de ventas
     if (userInput) {
       try {
         const { intencion, nivel_interes } = await detectarIntencion(userInput);
-
         await pool.query(
           `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
            VALUES ($1, $2, $3, $4, $5, $6)`,
           [tenant.id, fromNumber, 'whatsapp', userInput, intencion, nivel_interes]
         );
-
         console.log("✅ Intención detectada y guardada:", intencion, nivel_interes);
       } catch (err) {
         console.error("❌ Error analizando intención:", err);
@@ -156,10 +171,10 @@ router.post('/', async (req: Request, res: Response) => {
       [tenant.id, respuesta]
     );
 
-    // 🔢 Incrementar contador
+    // 🔢 Incrementar contador de uso
     await incrementarUsoPorNumero(numero);
 
-    // 📤 Enviar respuesta a WhatsApp
+    // 📤 Responder a WhatsApp
     const twiml = new MessagingResponse();
     twiml.message(respuesta);
     res.type('text/xml');

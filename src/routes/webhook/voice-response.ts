@@ -36,16 +36,38 @@ router.post('/', async (req, res) => {
     const voiceLang = config.idioma || 'es-ES';
     const voiceName = config.voice_name || 'alice';
 
-    // 🔮 Generar respuesta con OpenAI
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [
-        { role: 'system', content: prompt },
-        { role: 'user', content: userInput },
-      ],
-    });
+    // 📚 Leer FAQs
+    let respuestaFAQ = null;
+    try {
+      const faqsRes = await pool.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenant.id]);
+      const faqs = faqsRes.rows || [];
+      const mensajeUsuario = userInput.trim().toLowerCase();
 
-    const respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
+      for (const faq of faqs) {
+        if (mensajeUsuario.includes(faq.pregunta.trim().toLowerCase())) {
+          respuestaFAQ = faq.respuesta;
+          break;
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ No se pudieron cargar FAQs:', e);
+    }
+
+    let respuesta = null;
+
+    // 🔍 Usar respuesta FAQ si existe, si no usar OpenAI
+    if (respuestaFAQ) {
+      respuesta = respuestaFAQ;
+    } else {
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          { role: 'system', content: prompt },
+          { role: 'user', content: userInput },
+        ],
+      });
+      respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
+    }
 
     // 🔍 Detectar emoción
     const emotionPrompt = `
