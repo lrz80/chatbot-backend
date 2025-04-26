@@ -11,17 +11,26 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
+// 🧠 Función para normalizar texto (quita tildes, minúsculas, etc.)
+function normalizarTexto(texto: string): string {
+  return texto
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // elimina tildes
+    .trim();
+}
+
 // 🧠 Buscar en flujos
 function buscarRespuestaDesdeFlows(flows: any[], mensajeUsuario: string): string | null {
-  const normalizado = mensajeUsuario.trim().toLowerCase();
+  const normalizado = normalizarTexto(mensajeUsuario);
   for (const flujo of flows) {
     for (const opcion of flujo.opciones || []) {
-      if (opcion.texto?.trim().toLowerCase() === normalizado) {
+      if (normalizarTexto(opcion.texto || '') === normalizado) {
         return opcion.respuesta || opcion.submenu?.mensaje || null;
       }
       if (opcion.submenu) {
         for (const sub of opcion.submenu.opciones || []) {
-          if (sub.texto?.trim().toLowerCase() === normalizado) {
+          if (normalizarTexto(sub.texto || '') === normalizado) {
             return sub.respuesta || null;
           }
         }
@@ -109,11 +118,11 @@ router.post('/', async (req: Request, res: Response) => {
     console.log("📚 FAQs cargadas:", faqs);
 
     // ✅ Buscar respuesta en FAQs primero
-    const mensajeUsuario = userInput.trim().toLowerCase();
+    const mensajeUsuario = normalizarTexto(userInput);
     let respuestaFAQ = null;
     for (const faq of faqs) {
-      console.log("🔎 Comparando mensaje:", mensajeUsuario, "con FAQ:", faq.pregunta.trim().toLowerCase());
-      if (mensajeUsuario.includes(faq.pregunta.trim().toLowerCase())) {
+      console.log("🔎 Comparando mensaje:", mensajeUsuario, "con FAQ:", normalizarTexto(faq.pregunta));
+      if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
         respuestaFAQ = faq.respuesta;
         console.log("✅ Respuesta encontrada en FAQ:", respuestaFAQ);
         break;
@@ -127,7 +136,7 @@ router.post('/', async (req: Request, res: Response) => {
       console.log("📋 Respondiendo desde FAQs");
     } else {
       // ✅ Luego buscar en Flows
-      respuesta = buscarRespuestaDesdeFlows(flows, mensajeUsuario);
+      respuesta = buscarRespuestaDesdeFlows(flows, userInput);
       if (respuesta) {
         console.log("📋 Respondiendo desde Flows");
       }

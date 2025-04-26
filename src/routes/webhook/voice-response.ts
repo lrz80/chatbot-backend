@@ -5,10 +5,18 @@ import OpenAI from 'openai';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 
 const router = Router();
-
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
+
+// 🔍 Función para normalizar texto (sin tildes, minúsculas)
+function normalizarTexto(texto: string): string {
+  return texto
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
 
 router.post('/', async (req, res) => {
   const to = req.body.To || '';
@@ -36,16 +44,19 @@ router.post('/', async (req, res) => {
     const voiceLang = config.idioma || 'es-ES';
     const voiceName = config.voice_name || 'alice';
 
+    const mensajeUsuario = normalizarTexto(userInput);
+
     // 📚 Leer FAQs
     let respuestaFAQ = null;
     try {
       const faqsRes = await pool.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenant.id]);
       const faqs = faqsRes.rows || [];
-      const mensajeUsuario = userInput.trim().toLowerCase();
 
       for (const faq of faqs) {
-        if (mensajeUsuario.includes(faq.pregunta.trim().toLowerCase())) {
+        console.log("🔎 Comparando voz:", mensajeUsuario, "con FAQ:", normalizarTexto(faq.pregunta));
+        if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
           respuestaFAQ = faq.respuesta;
+          console.log("✅ Respuesta encontrada en FAQ (voz):", respuestaFAQ);
           break;
         }
       }
@@ -67,6 +78,7 @@ router.post('/', async (req, res) => {
         ],
       });
       respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
+      console.log("🤖 Respuesta de OpenAI (voz):", respuesta);
     }
 
     // 🔍 Detectar emoción

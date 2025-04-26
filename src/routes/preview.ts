@@ -16,12 +16,21 @@ interface AuthenticatedRequest extends Request {
   };
 }
 
+// 🔍 Función para normalizar texto (quita tildes, minúsculas, espacios)
+function normalizarTexto(texto: string): string {
+  return texto
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+}
+
 // 🔍 Función recursiva para buscar coincidencias en flujos anidados
 function buscarRespuestaEnFlujos(flows: any[], mensaje: string): string | null {
-  const normalizado = mensaje.trim().toLowerCase();
+  const normalizado = normalizarTexto(mensaje);
   for (const flow of flows) {
     for (const opcion of flow.opciones || []) {
-      if (opcion.texto?.trim().toLowerCase() === normalizado && opcion.respuesta) {
+      if (normalizarTexto(opcion.texto || '') === normalizado && opcion.respuesta) {
         return opcion.respuesta;
       }
       if (opcion.submenu) {
@@ -49,7 +58,7 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     const saludoInicial = `Soy Amy, bienvenido a ${nombreNegocio}.`;
     const prompt = `${saludoInicial}\n${promptNegocio}`;
 
-    const mensajeUsuario = message.trim().toLowerCase();
+    const mensajeUsuario = normalizarTexto(message);
 
     // 📋 Buscar en FAQs primero
     let faqs: any[] = [];
@@ -61,7 +70,8 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     }
 
     for (const faq of faqs) {
-      if (mensajeUsuario.includes(faq.pregunta.trim().toLowerCase())) {
+      console.log("🔎 Comparando mensaje:", mensajeUsuario, "con FAQ:", normalizarTexto(faq.pregunta));
+      if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
         console.log("✅ Respuesta detectada desde FAQs");
         return res.status(200).json({ response: faq.respuesta });
       }
@@ -84,6 +94,7 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     }
 
     // 🤖 Si no hay nada en FAQs ni Flows, usar OpenAI
+    console.log("🤖 Consultando a OpenAI...");
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
@@ -93,6 +104,8 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     });
 
     const response = completion.choices[0]?.message?.content || 'Lo siento, no entendí eso.';
+    console.log("🤖 Respuesta de OpenAI:", response);
+
     return res.status(200).json({ response });
   } catch (err) {
     console.error('❌ Error en preview:', err);
