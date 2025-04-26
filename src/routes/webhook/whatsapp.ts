@@ -104,12 +104,18 @@ router.post('/', async (req: Request, res: Response) => {
       console.warn('⚠️ No se pudieron cargar las FAQs:', e);
     }
 
+    // Logs para depurar
+    console.log("📝 Mensaje recibido:", userInput);
+    console.log("📚 FAQs cargadas:", faqs);
+
     // ✅ Buscar respuesta en FAQs primero
     const mensajeUsuario = userInput.trim().toLowerCase();
     let respuestaFAQ = null;
     for (const faq of faqs) {
+      console.log("🔎 Comparando mensaje:", mensajeUsuario, "con FAQ:", faq.pregunta.trim().toLowerCase());
       if (mensajeUsuario.includes(faq.pregunta.trim().toLowerCase())) {
         respuestaFAQ = faq.respuesta;
+        console.log("✅ Respuesta encontrada en FAQ:", respuestaFAQ);
         break;
       }
     }
@@ -118,13 +124,17 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (respuestaFAQ) {
       respuesta = respuestaFAQ;
+      console.log("📋 Respondiendo desde FAQs");
     } else {
       // ✅ Luego buscar en Flows
-      respuesta = buscarRespuestaDesdeFlows(flows, userInput);
+      respuesta = buscarRespuestaDesdeFlows(flows, mensajeUsuario);
+      if (respuesta) {
+        console.log("📋 Respondiendo desde Flows");
+      }
     }
 
     if (!respuesta) {
-      // 🤖 Fallback a OpenAI si no encontró en FAQs ni Flows
+      console.log("🤖 Consultando a OpenAI...");
       const completion = await openai.chat.completions.create({
         model: 'gpt-4',
         messages: [
@@ -133,6 +143,7 @@ router.post('/', async (req: Request, res: Response) => {
         ],
       });
       respuesta = completion.choices[0]?.message?.content || 'Lo siento, no entendí eso.';
+      console.log("🤖 Respuesta de OpenAI:", respuesta);
     }
 
     // 🧠 Inteligencia de ventas
