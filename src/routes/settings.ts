@@ -54,6 +54,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
   }
 });
 
+// ✅ POST: Guardar cambios iniciales del negocio
 router.post('/', authenticateUser, async (req: any, res: Response) => {
   try {
     const tenant_id = req.user?.tenant_id;
@@ -101,7 +102,7 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
         funciones_asistente = $12,
         info_clave = $13,
         limite_uso = $14,
-        logo_url = $15,
+        logo_url = $15
       WHERE id = $16`,
       [
         nombre_negocio,
@@ -115,7 +116,7 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
         existing.twilio_sms_number,
         existing.twilio_voice_number,
         informacion_negocio ?? existing.informacion_negocio,
-        funciones_asistente?.trim() !== "" ? funciones_asistente : existing.funciones_asistente,
+        funciones_asistente?.trim() !== '' ? funciones_asistente : existing.funciones_asistente,
         info_clave ?? existing.info_clave,
         limite_uso ?? existing.limite_uso,
         logo_url ?? existing.logo_url,
@@ -130,6 +131,7 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
   }
 });
 
+// ✅ PUT: Actualizar perfil de negocio
 router.put('/', authenticateUser, async (req: any, res: Response) => {
   try {
     const tenant_id = req.user?.tenant_id;
