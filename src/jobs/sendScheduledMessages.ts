@@ -1,13 +1,13 @@
 import pool from '../lib/db';
 import twilio from 'twilio';
 
-const client = twilio(
-  process.env.TWILIO_ACCOUNT_SID!,
-  process.env.TWILIO_AUTH_TOKEN!
-);
-
 // 📩 Enviar mensajes programados pendientes
 export async function sendScheduledMessages() {
+  const client = twilio(
+    process.env.TWILIO_ACCOUNT_SID!,
+    process.env.TWILIO_AUTH_TOKEN!
+  );
+
   let enviadosExitosamente = 0;
   try {
     const now = new Date();
