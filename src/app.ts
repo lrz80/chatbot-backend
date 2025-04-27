@@ -39,6 +39,7 @@ import voiceWebhookRoute from "./routes/webhook/voice";
 import testRoute from "./routes/test";
 import salesLeadsRouter from './routes/sales-intelligence/leads';
 import followUpSettingsRouter from './routes/follow-up-settings';
+import { sendScheduledMessages } from './jobs/sendScheduledMessages';
 
 
 console.log("🔁 Versión redeployada manualmente");
@@ -124,6 +125,10 @@ setInterval(() => {
     .then(() => console.log('🔁 Ping enviado a backend'))
     .catch(() => console.warn('⚠️ Ping fallido'));
 }, 1000 * 30);
+
+setInterval(() => {
+  sendScheduledMessages();
+}, 60000); // cada 60 segundos
 
 // ✅ Levantar servidor
 app.listen(PORT, () => {
