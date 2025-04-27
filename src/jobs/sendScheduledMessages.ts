@@ -1,15 +1,15 @@
 // 📁 src/jobs/sendScheduledMessages.ts
 
 import pool from '../lib/db';
-import twilio from 'twilio';
 
-// 📩 Enviar mensajes programados pendientes
 export async function sendScheduledMessages() {
+  const { default: twilio } = await import('twilio'); // ⬅️ dinámico
+
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
 
   if (!accountSid || !authToken) {
-    console.error('❌ No se pudo cargar TWILIO_ACCOUNT_SID o TWILIO_AUTH_TOKEN en producción.');
+    console.error('❌ TWILIO_ACCOUNT_SID o TWILIO_AUTH_TOKEN no definidos.');
     return;
   }
 
@@ -26,7 +26,7 @@ export async function sendScheduledMessages() {
     );
 
     if (mensajes.length === 0) {
-      console.log("📭 Job de Seguimiento: No había mensajes pendientes");
+      console.log("📭 No hay mensajes programados pendientes");
       return;
     }
 
@@ -57,14 +57,14 @@ export async function sendScheduledMessages() {
 
         enviadosExitosamente++;
       } catch (error) {
-        console.error(`❌ Error enviando mensaje a ${mensaje.contacto}:`, error);
+        console.error(`❌ Error enviando a ${mensaje.contacto}:`, error);
       }
     }
 
     if (enviadosExitosamente > 0) {
-      console.log(`📬 Job de Seguimiento: ${enviadosExitosamente} mensajes enviados exitosamente ✅`);
+      console.log(`📬 ${enviadosExitosamente} mensajes enviados correctamente ✅`);
     } else {
-      console.log("📭 Job de Seguimiento: Ningún mensaje pudo ser enviado");
+      console.log("📭 Ningún mensaje enviado");
     }
   } catch (error) {
     console.error('❌ Error general en sendScheduledMessages:', error);
