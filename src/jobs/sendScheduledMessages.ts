@@ -1,3 +1,5 @@
+// 📁 src/jobs/sendScheduledMessages.ts
+
 import pool from '../lib/db';
 import twilio from 'twilio';
 
@@ -9,17 +11,16 @@ export async function sendScheduledMessages() {
   );
 
   let enviadosExitosamente = 0;
+
   try {
     const now = new Date();
 
-    const result = await pool.query(
+    const { rows: mensajes } = await pool.query(
       `SELECT * FROM mensajes_programados
        WHERE enviado = false AND fecha_envio <= NOW()
        ORDER BY fecha_envio ASC
        LIMIT 20`
     );
-
-    const mensajes = result.rows;
 
     if (mensajes.length === 0) {
       console.log("📭 Job de Seguimiento: No había mensajes pendientes");
@@ -28,25 +29,24 @@ export async function sendScheduledMessages() {
 
     for (const mensaje of mensajes) {
       try {
-        const tenantRes = await pool.query(
+        const { rows: tenantRows } = await pool.query(
           'SELECT twilio_number FROM tenants WHERE id = $1',
           [mensaje.tenant_id]
         );
-        const tenant = tenantRes.rows[0];
+
+        const tenant = tenantRows[0];
 
         if (!tenant || !tenant.twilio_number) {
           console.warn('⚠️ No se encontró número de Twilio para tenant:', mensaje.tenant_id);
           continue;
         }
 
-        // Enviar mensaje
         await client.messages.create({
           from: `whatsapp:${tenant.twilio_number}`,
           to: `whatsapp:${mensaje.contacto}`,
           body: mensaje.contenido,
         });
 
-        // Marcar como enviado
         await pool.query(
           `UPDATE mensajes_programados SET enviado = true WHERE id = $1`,
           [mensaje.id]
