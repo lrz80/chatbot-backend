@@ -2,20 +2,15 @@
 
 import express from 'express';
 import { authenticateUser } from '../../middleware/auth';
-import { sendScheduledMessages } from '../../jobs/sendScheduledMessages';
 
 const router = express.Router();
 
-// 📥 Ejecutar manualmente el envío de mensajes programados
+// 🚫 Eliminado el job manual para que sólo trabaje el Worker
 router.post('/', authenticateUser, async (req, res) => {
-  try {
-    await sendScheduledMessages();
-    res.status(200).json({ success: true, message: 'Job ejecutado manualmente 🚀' });
-  } catch (error) {
-    console.error('❌ Error ejecutando job manual:', error);
-    res.status(500).json({ success: false, error: 'Error ejecutando el job' });
-  }
+  res.status(200).json({ 
+    success: false, 
+    message: 'El envío de mensajes programados ahora es automático mediante Worker.' 
+  });
 });
 
 export default router;
-
