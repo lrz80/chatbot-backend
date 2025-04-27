@@ -1,20 +1,13 @@
 // 📁 src/jobs/sendScheduledMessages.ts
 
 import pool from '../lib/db';
-import twilio from 'twilio';
+import client from '../lib/twilioClient'; // ✅ Importamos el cliente seguro
 
 // 📩 Enviar mensajes programados pendientes
 export async function sendScheduledMessages() {
-  const client = twilio(
-    process.env.TWILIO_ACCOUNT_SID!,
-    process.env.TWILIO_AUTH_TOKEN!
-  );
-
   let enviadosExitosamente = 0;
 
   try {
-    const now = new Date();
-
     const { rows: mensajes } = await pool.query(
       `SELECT * FROM mensajes_programados
        WHERE enviado = false AND fecha_envio <= NOW()
@@ -33,7 +26,6 @@ export async function sendScheduledMessages() {
           'SELECT twilio_number FROM tenants WHERE id = $1',
           [mensaje.tenant_id]
         );
-
         const tenant = tenantRows[0];
 
         if (!tenant || !tenant.twilio_number) {
