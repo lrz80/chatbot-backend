@@ -144,7 +144,7 @@ router.post('/', async (req: Request, res: Response) => {
       respuesta = completion.choices[0]?.message?.content || 'Lo siento, no entendí eso.';
     }
 
-    // 🧠 Inteligencia de ventas
+    // 🧠 Inteligencia de ventas y seguimiento
     if (userInput) {
       try {
         const { intencion, nivel_interes } = await detectarIntencion(userInput);
@@ -157,7 +157,7 @@ router.post('/', async (req: Request, res: Response) => {
 
         console.log("✅ Intención detectada y guardada:", intencion, nivel_interes);
 
-        // 📩 Programar seguimiento si es lead caliente
+        // 📩 Programar seguimiento si el lead es "caliente"
         if (nivel_interes >= 4) {
           const configRes = await pool.query(
             `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
