@@ -54,6 +54,7 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
         return res.status(401).json({ error: 'Token inválido' });
     }
 });
+// ✅ POST: Guardar cambios iniciales del negocio
 router.post('/', auth_1.authenticateUser, async (req, res) => {
     try {
         const tenant_id = req.user?.tenant_id;
@@ -96,7 +97,7 @@ router.post('/', auth_1.authenticateUser, async (req, res) => {
             existing.twilio_sms_number,
             existing.twilio_voice_number,
             informacion_negocio ?? existing.informacion_negocio,
-            funciones_asistente?.trim() !== "" ? funciones_asistente : existing.funciones_asistente,
+            funciones_asistente?.trim() !== '' ? funciones_asistente : existing.funciones_asistente,
             info_clave ?? existing.info_clave,
             limite_uso ?? existing.limite_uso,
             logo_url ?? existing.logo_url,
@@ -109,6 +110,7 @@ router.post('/', auth_1.authenticateUser, async (req, res) => {
         res.status(500).json({ error: 'Error interno del servidor' });
     }
 });
+// ✅ PUT: Actualizar perfil de negocio
 router.put('/', auth_1.authenticateUser, async (req, res) => {
     try {
         const tenant_id = req.user?.tenant_id;

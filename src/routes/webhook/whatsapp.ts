@@ -11,16 +11,16 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
-// 🧠 Función para normalizar texto (quita tildes, minúsculas, etc.)
+// 🧠 Normalizar texto
 function normalizarTexto(texto: string): string {
   return texto
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // elimina tildes
+    .replace(/[\u0300-\u036f]/g, '')
     .trim();
 }
 
-// 🧠 Buscar en flujos
+// 🧠 Buscar en Flows
 function buscarRespuestaDesdeFlows(flows: any[], mensajeUsuario: string): string | null {
   const normalizado = normalizarTexto(mensajeUsuario);
   for (const flujo of flows) {
@@ -94,7 +94,7 @@ router.post('/', async (req: Request, res: Response) => {
     const saludo = `Soy Amy, bienvenido a ${nombreNegocio}.`;
     const prompt = `${saludo}\n${promptBase}`;
 
-    // 📥 Leer flujos
+    // 📥 Leer Flows
     let flows: any[] = [];
     try {
       const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant.id]);
@@ -113,18 +113,13 @@ router.post('/', async (req: Request, res: Response) => {
       console.warn('⚠️ No se pudieron cargar las FAQs:', e);
     }
 
-    // Logs para depurar
     console.log("📝 Mensaje recibido:", userInput);
-    console.log("📚 FAQs cargadas:", faqs);
 
-    // ✅ Buscar respuesta en FAQs primero
     const mensajeUsuario = normalizarTexto(userInput);
     let respuestaFAQ = null;
     for (const faq of faqs) {
-      console.log("🔎 Comparando mensaje:", mensajeUsuario, "con FAQ:", normalizarTexto(faq.pregunta));
       if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
         respuestaFAQ = faq.respuesta;
-        console.log("✅ Respuesta encontrada en FAQ:", respuestaFAQ);
         break;
       }
     }
@@ -133,13 +128,8 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (respuestaFAQ) {
       respuesta = respuestaFAQ;
-      console.log("📋 Respondiendo desde FAQs");
     } else {
-      // ✅ Luego buscar en Flows
       respuesta = buscarRespuestaDesdeFlows(flows, userInput);
-      if (respuesta) {
-        console.log("📋 Respondiendo desde Flows");
-      }
     }
 
     if (!respuesta) {
@@ -152,21 +142,56 @@ router.post('/', async (req: Request, res: Response) => {
         ],
       });
       respuesta = completion.choices[0]?.message?.content || 'Lo siento, no entendí eso.';
-      console.log("🤖 Respuesta de OpenAI:", respuesta);
     }
 
     // 🧠 Inteligencia de ventas
     if (userInput) {
       try {
         const { intencion, nivel_interes } = await detectarIntencion(userInput);
+
         await pool.query(
           `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
            VALUES ($1, $2, $3, $4, $5, $6)`,
           [tenant.id, fromNumber, 'whatsapp', userInput, intencion, nivel_interes]
         );
+
         console.log("✅ Intención detectada y guardada:", intencion, nivel_interes);
+
+        // 📩 Programar seguimiento si es lead caliente
+        if (nivel_interes >= 4) {
+          const configRes = await pool.query(
+            `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
+            [tenant.id]
+          );
+          const config = configRes.rows[0];
+
+          if (config) {
+            let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
+            const intencionDetectada = intencion.toLowerCase();
+
+            if (intencionDetectada.includes('precio') && config.mensaje_precio) {
+              mensajeSeguimiento = config.mensaje_precio;
+            } else if (intencionDetectada.includes('agendar') && config.mensaje_agendar) {
+              mensajeSeguimiento = config.mensaje_agendar;
+            } else if (intencionDetectada.includes('ubicacion') && config.mensaje_ubicacion) {
+              mensajeSeguimiento = config.mensaje_ubicacion;
+            }
+
+            const fechaEnvio = new Date();
+            fechaEnvio.setMinutes(fechaEnvio.getMinutes() + (config.minutos_espera || 5));
+
+            await pool.query(
+              `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
+               VALUES ($1, $2, $3, $4, $5, false)`,
+              [tenant.id, 'whatsapp', fromNumber, mensajeSeguimiento, fechaEnvio]
+            );
+
+            console.log("📤 Mensaje de seguimiento programado:", mensajeSeguimiento);
+          }
+        }
+
       } catch (err) {
-        console.error("❌ Error analizando intención:", err);
+        console.error("❌ Error analizando intención o programando seguimiento:", err);
       }
     }
 
@@ -191,10 +216,10 @@ router.post('/', async (req: Request, res: Response) => {
       [tenant.id, respuesta]
     );
 
-    // 🔢 Incrementar contador de uso
+    // 🔢 Incrementar contador
     await incrementarUsoPorNumero(numero);
 
-    // 📤 Responder a WhatsApp
+    // 📤 Enviar respuesta a WhatsApp
     const twiml = new MessagingResponse();
     twiml.message(respuesta);
     res.type('text/xml');

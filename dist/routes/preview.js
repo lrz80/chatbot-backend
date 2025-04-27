@@ -10,11 +10,20 @@ const openai_1 = __importDefault(require("openai"));
 const auth_1 = require("../middleware/auth");
 const router = (0, express_1.Router)();
 const openai = new openai_1.default({ apiKey: process.env.OPENAI_API_KEY });
-// 🔍 Función recursiva para buscar coincidencias dentro de flujos anidados
+// 🔍 Función para normalizar texto (quita tildes, minúsculas, espacios)
+function normalizarTexto(texto) {
+    return texto
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim();
+}
+// 🔍 Función recursiva para buscar coincidencias en flujos anidados
 function buscarRespuestaEnFlujos(flows, mensaje) {
+    const normalizado = normalizarTexto(mensaje);
     for (const flow of flows) {
         for (const opcion of flow.opciones || []) {
-            if (opcion.texto?.toLowerCase().includes(mensaje.toLowerCase()) && opcion.respuesta) {
+            if (normalizarTexto(opcion.texto || '') === normalizado && opcion.respuesta) {
                 return opcion.respuesta;
             }
             if (opcion.submenu) {
@@ -40,22 +49,40 @@ router.post('/', auth_1.authenticateUser, async (req, res) => {
         const promptNegocio = tenant.prompt || 'Eres un asistente útil y profesional.';
         const saludoInicial = `Soy Amy, bienvenido a ${nombreNegocio}.`;
         const prompt = `${saludoInicial}\n${promptNegocio}`;
-        // 🧠 Buscar flujo guiado si existe
+        const mensajeUsuario = normalizarTexto(message);
+        // 📋 Buscar en FAQs primero
+        let faqs = [];
+        try {
+            const faqsRes = await db_1.default.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenant_id]);
+            faqs = faqsRes.rows || [];
+        }
+        catch (e) {
+            console.warn('⚠️ No se pudieron cargar FAQs:', e);
+        }
+        for (const faq of faqs) {
+            console.log("🔎 Comparando mensaje:", mensajeUsuario, "con FAQ:", normalizarTexto(faq.pregunta));
+            if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
+                console.log("✅ Respuesta detectada desde FAQs");
+                return res.status(200).json({ response: faq.respuesta });
+            }
+        }
+        // 🧠 Buscar en Flows si no encontró en FAQs
         let flows = [];
         try {
             const flowsRes = await db_1.default.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant_id]);
             const raw = flowsRes.rows[0]?.data;
             flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
-            console.log("📥 Flujos recibidos:", flows);
         }
         catch (e) {
-            console.warn('⚠️ No se pudo obtener o parsear los flujos:', e);
+            console.warn('⚠️ No se pudieron cargar Flows:', e);
         }
         const respuestaFlujo = buscarRespuestaEnFlujos(flows, message);
         if (respuestaFlujo) {
+            console.log("✅ Respuesta detectada desde Flows");
             return res.status(200).json({ response: respuestaFlujo });
         }
-        // 🤖 Si no hay coincidencia, usar OpenAI
+        // 🤖 Si no hay nada en FAQs ni Flows, usar OpenAI
+        console.log("🤖 Consultando a OpenAI...");
         const completion = await openai.chat.completions.create({
             model: 'gpt-4',
             messages: [
@@ -63,7 +90,8 @@ router.post('/', auth_1.authenticateUser, async (req, res) => {
                 { role: 'user', content: message },
             ],
         });
-        const response = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
+        const response = completion.choices[0]?.message?.content || 'Lo siento, no entendí eso.';
+        console.log("🤖 Respuesta de OpenAI:", response);
         return res.status(200).json({ response });
     }
     catch (err) {
