@@ -4,11 +4,12 @@ import pool from '../lib/db';
 import twilio from 'twilio';
 
 // 📩 Enviar mensajes programados pendientes
-export async function sendScheduledMessages() {
-  let enviadosExitosamente = 0;
-
-  const accountSid = process.env.TWILIO_ACCOUNT_SID!;
-  const authToken = process.env.TWILIO_AUTH_TOKEN!;
+export async function sendScheduledMessages(
+  accountSidManual?: string,
+  authTokenManual?: string
+) {
+  const accountSid = accountSidManual || process.env.TWILIO_ACCOUNT_SID!;
+  const authToken = authTokenManual || process.env.TWILIO_AUTH_TOKEN!;
 
   if (!accountSid || !authToken) {
     console.error('❌ No se pudo cargar TWILIO_ACCOUNT_SID o TWILIO_AUTH_TOKEN en producción.');
@@ -16,6 +17,8 @@ export async function sendScheduledMessages() {
   }
 
   const client = twilio(accountSid, authToken);
+
+  let enviadosExitosamente = 0;
 
   try {
     const { rows: mensajes } = await pool.query(
