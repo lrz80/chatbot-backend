@@ -1,15 +1,18 @@
 // 📁 src/jobs/sendScheduledMessages.ts
 
 import pool from '../lib/db';
+import twilio from 'twilio';
 
-export async function sendScheduledMessages() {
-  const { default: twilio } = await import('twilio'); // ⬅️ dinámico
-
-  const accountSid = process.env.TWILIO_ACCOUNT_SID;
-  const authToken = process.env.TWILIO_AUTH_TOKEN;
+// 📩 Enviar mensajes programados pendientes
+export async function sendScheduledMessages(
+  accountSidManual?: string,
+  authTokenManual?: string
+) {
+  const accountSid = accountSidManual || process.env.TWILIO_ACCOUNT_SID!;
+  const authToken = authTokenManual || process.env.TWILIO_AUTH_TOKEN!;
 
   if (!accountSid || !authToken) {
-    console.error('❌ TWILIO_ACCOUNT_SID o TWILIO_AUTH_TOKEN no definidos.');
+    console.error('❌ No se pudo cargar TWILIO_ACCOUNT_SID o TWILIO_AUTH_TOKEN en producción.');
     return;
   }
 
@@ -26,7 +29,7 @@ export async function sendScheduledMessages() {
     );
 
     if (mensajes.length === 0) {
-      console.log("📭 No hay mensajes programados pendientes");
+      console.log("📭 [Worker] No había mensajes pendientes para enviar.");
       return;
     }
 
@@ -40,7 +43,7 @@ export async function sendScheduledMessages() {
         const tenant = tenantRows[0];
 
         if (!tenant || !tenant.twilio_number) {
-          console.warn('⚠️ No se encontró número de Twilio para tenant:', mensaje.tenant_id);
+          console.warn('⚠️ [Worker] No se encontró número de Twilio para tenant:', mensaje.tenant_id);
           continue;
         }
 
@@ -57,16 +60,16 @@ export async function sendScheduledMessages() {
 
         enviadosExitosamente++;
       } catch (error) {
-        console.error(`❌ Error enviando a ${mensaje.contacto}:`, error);
+        console.error(`❌ [Worker] Error enviando mensaje a ${mensaje.contacto}:`, error);
       }
     }
 
     if (enviadosExitosamente > 0) {
-      console.log(`📬 ${enviadosExitosamente} mensajes enviados correctamente ✅`);
+      console.log(`📬 [Worker] ${enviadosExitosamente} mensajes enviados exitosamente ✅`);
     } else {
-      console.log("📭 Ningún mensaje enviado");
+      console.log("📭 [Worker] Ningún mensaje pudo ser enviado.");
     }
   } catch (error) {
-    console.error('❌ Error general en sendScheduledMessages:', error);
+    console.error('❌ [Worker] Error general en sendScheduledMessages:', error);
   }
 }
