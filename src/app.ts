@@ -37,7 +37,7 @@ import countContactos from "./routes/contactos/count";
 import voicePromptRoute from "./routes/voice-prompt";
 import voiceWebhookRoute from "./routes/webhook/voice";
 import testRoute from "./routes/test";
-import salesLeadsRouter from '@/routes/sales-intelligence/leads';
+import salesLeadsRouter from './routes/sales-intelligence/leads';
 import followUpSettingsRouter from './routes/follow-up-settings';
 
 
