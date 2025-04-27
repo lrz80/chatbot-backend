@@ -41,6 +41,7 @@ import salesLeadsRouter from './routes/sales-intelligence/leads';
 import followUpSettingsRouter from './routes/follow-up-settings';
 import { sendScheduledMessages } from './jobs/sendScheduledMessages';
 import sendScheduledNowRouter from './routes/jobs/send-scheduled-now';
+import sentMessagesRoute from './routes/follow-up/sentMessages';
 
 
 console.log("🔁 Versión redeployada manualmente");
@@ -114,6 +115,7 @@ app.use("/api/test", testRoute);
 app.use('/api/sales-intelligence/leads', salesLeadsRouter);
 app.use('/api/follow-up-settings', followUpSettingsRouter);
 app.use('/api/jobs/send-scheduled-now', sendScheduledNowRouter);
+app.use('/api/follow-up/sent-messages', sentMessagesRoute);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
