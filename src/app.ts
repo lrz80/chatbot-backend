@@ -40,6 +40,7 @@ import testRoute from "./routes/test";
 import salesLeadsRouter from './routes/sales-intelligence/leads';
 import followUpSettingsRouter from './routes/follow-up-settings';
 import { sendScheduledMessages } from './jobs/sendScheduledMessages';
+import sendScheduledNowRouter from './routes/jobs/send-scheduled-now';
 
 
 console.log("🔁 Versión redeployada manualmente");
@@ -112,7 +113,7 @@ app.use("/api/webhooks/voice", voiceWebhookRoute);
 app.use("/api/test", testRoute);
 app.use('/api/sales-intelligence/leads', salesLeadsRouter);
 app.use('/api/follow-up-settings', followUpSettingsRouter);
-
+app.use('/api/jobs/send-scheduled-now', sendScheduledNowRouter);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
