@@ -1,7 +1,7 @@
 // 📁 src/jobs/sendScheduledMessages.ts
 
 import pool from '../lib/db';
-import client from '../lib/twilioClient'; // ✅ Importamos el cliente seguro
+import { getTwilioClient } from '../lib/twilioClient'; // ✅ Importa la función
 
 // 📩 Enviar mensajes programados pendientes
 export async function sendScheduledMessages() {
@@ -32,6 +32,8 @@ export async function sendScheduledMessages() {
           console.warn('⚠️ No se encontró número de Twilio para tenant:', mensaje.tenant_id);
           continue;
         }
+
+        const client = getTwilioClient(); // ✅ Instanciamos solo aquí
 
         await client.messages.create({
           from: `whatsapp:${tenant.twilio_number}`,
