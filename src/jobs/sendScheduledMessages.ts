@@ -1,13 +1,15 @@
 // 📁 src/jobs/sendScheduledMessages.ts
 
 import pool from '../lib/db';
-import twilio from 'twilio';
 
 // 📩 Enviar mensajes programados pendientes
 export async function sendScheduledMessages(
   accountSidManual?: string,
   authTokenManual?: string
 ) {
+  // 🔄 Importar Twilio dinámicamente
+  const twilio = (await import('twilio')).default;
+
   const accountSid = accountSidManual || process.env.TWILIO_ACCOUNT_SID!;
   const authToken = authTokenManual || process.env.TWILIO_AUTH_TOKEN!;
 
