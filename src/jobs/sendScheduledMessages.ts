@@ -1,11 +1,21 @@
 // 📁 src/jobs/sendScheduledMessages.ts
 
 import pool from '../lib/db';
-import { getTwilioClient } from '../lib/twilioClient'; // ✅ Importa la función
+import twilio from 'twilio';
 
 // 📩 Enviar mensajes programados pendientes
 export async function sendScheduledMessages() {
   let enviadosExitosamente = 0;
+
+  const accountSid = process.env.TWILIO_ACCOUNT_SID!;
+  const authToken = process.env.TWILIO_AUTH_TOKEN!;
+
+  if (!accountSid || !authToken) {
+    console.error('❌ No se pudo cargar TWILIO_ACCOUNT_SID o TWILIO_AUTH_TOKEN en producción.');
+    return;
+  }
+
+  const client = twilio(accountSid, authToken);
 
   try {
     const { rows: mensajes } = await pool.query(
@@ -26,14 +36,13 @@ export async function sendScheduledMessages() {
           'SELECT twilio_number FROM tenants WHERE id = $1',
           [mensaje.tenant_id]
         );
+
         const tenant = tenantRows[0];
 
         if (!tenant || !tenant.twilio_number) {
           console.warn('⚠️ No se encontró número de Twilio para tenant:', mensaje.tenant_id);
           continue;
         }
-
-        const client = getTwilioClient(); // ✅ Instanciamos solo aquí
 
         await client.messages.create({
           from: `whatsapp:${tenant.twilio_number}`,
