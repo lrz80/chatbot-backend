@@ -1,7 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import pool from '../../lib/db';
-import { authenticateUser } from '../../middleware/auth';
+import jwt from 'jsonwebtoken';
 
 const router = express.Router();
 
@@ -45,18 +45,20 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
     const instagramBusinessAccount = igRes.data.instagram_business_account;
     const instagramId = instagramBusinessAccount?.id || null;
 
-    // 4. Obtener al usuario autenticado (puedes hacerlo con token JWT en cookies o session)
-    // Aquí ejemplo con token en cookies
+    // 4. Decodificar token de la cookie
     const token = req.cookies?.token;
 
     if (!token) return res.status(401).send("Unauthorized");
 
-    const userRes = await pool.query('SELECT tenant_id FROM users WHERE token = $1 LIMIT 1', [token]);
-    const tenantId = userRes.rows[0]?.tenant_id;
+    const decoded: any = jwt.verify(token, process.env.JWT_SECRET!);
 
-    if (!tenantId) return res.status(404).send("Tenant not found");
+    console.log('✅ TOKEN DECODIFICADO:', decoded);
 
-    // 5. Guardar los datos en DB
+    const tenantId = decoded.tenant_id;
+
+    if (!tenantId) return res.status(404).send("Tenant not found in token");
+
+    // 5. Guardar en tenants
     await pool.query(
       `UPDATE tenants SET 
         facebook_page_id = $1,
@@ -67,11 +69,11 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
       [pageId, pageName, pageAccessToken, instagramId, tenantId]
     );
 
-    console.log('✅ Datos guardados en tenants:', { pageId, pageName, instagramId });
+    console.log('✅ Datos de Facebook guardados en tenant:', tenantId);
 
     return res.redirect('https://www.aamy.ai/dashboard/meta-config?connected=success');
   } catch (err: any) {
-    console.error('❌ Error en oauth-callback:', err.response?.data || err.message || err);  
+    console.error('❌ Error en oauth-callback:', err.response?.data || err.message || err);
     return res.status(500).send("Error during OAuth callback.");
   }
 });
