@@ -10,6 +10,7 @@ const router = express.Router();
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
+const mensajeDefault = 'Lo siento, no tengo una respuesta para eso en este momento.';
 
 // Verificación de Webhook
 router.get('/api/facebook/webhook', (req, res) => {
@@ -51,7 +52,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
           // 1. Buscar el tenant por page_id
           const { rows } = await pool.query(
-            'SELECT facebook_access_token, facebook_mensaje_bienvenida, facebook_mensaje_fuera_horario, facebook_mensaje_default, prompt_meta, bienvenida_meta, faq, intents, horario_atencion FROM tenants WHERE facebook_page_id = $1 LIMIT 1',
+            'SELECT facebook_access_token, prompt_meta, bienvenida_meta, faq, intents, horario_atencion FROM tenants WHERE facebook_page_id = $1 LIMIT 1',
             [pageId]
           );
 
@@ -63,9 +64,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
           const tenant = rows[0];
 
           const accessToken = tenant.facebook_access_token;
-          const bienvenidaMeta = tenant.bienvenida_meta || tenant.facebook_mensaje_bienvenida || '¡Hola! Bienvenido.';
-          const mensajeDefault = tenant.facebook_mensaje_default || '¿Podrías darnos más detalles?';
-          const horarioAtencion = tenant.horario_atencion; // Si quieres manejar fuera de horario
+          const bienvenidaMeta = tenant.bienvenida_meta || '¡Hola! Bienvenido.';
           const faqList = tenant.faq || [];
           const intentsList = tenant.intents || [];
 
