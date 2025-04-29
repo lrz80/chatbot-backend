@@ -19,7 +19,13 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     const user = userRes.rows[0];
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    const tenantRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
+    const tenantRes = await pool.query(`
+      SELECT 
+        * 
+      FROM tenants 
+      WHERE id = $1
+      LIMIT 1
+    `, [tenant_id]);
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
 
@@ -47,9 +53,16 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       logo_url: tenant.logo_url || '',
       plan: tenant.plan || '',
       fecha_registro: tenant.fecha_registro || null,
+      
+      // 👇 Agregamos los nuevos campos de Facebook e Instagram
+      facebook_page_id: tenant.facebook_page_id || '',
+      facebook_page_name: tenant.facebook_page_name || '',
+      facebook_access_token: tenant.facebook_access_token || '',
+      instagram_page_id: tenant.instagram_page_id || '',
+      instagram_page_name: tenant.instagram_page_name || '',
     });
   } catch (error) {
-    console.error('❌ Error en /api/settings:', error);
+    console.error('❌ Error en GET /api/settings:', error);
     return res.status(401).json({ error: 'Token inválido' });
   }
 });
