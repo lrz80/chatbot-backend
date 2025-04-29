@@ -39,11 +39,14 @@ router.post("/", async (req: Request, res: Response) => {
         {
           role: "user",
           content: `Estoy creando un asistente virtual en ${idioma}. Su función principal es: ${descripcion}.
-          
-Aquí está la información clave del negocio que el asistente debe conocer:
+
+Información que el asistente debe conocer:
 ${informacion}
 
-Crea un prompt de sistema claro, en ${idioma}, que pueda usarse directamente para configurar al asistente.`,
+Redacta únicamente un texto claro y profesional (no JSON) que describa cómo debe comportarse el asistente. 
+No incluyas ningún mensaje de bienvenida ni estructura técnica. 
+Solo devuelve el texto plano que servirá como prompt de sistema.`,
+
         },
       ],
     });
