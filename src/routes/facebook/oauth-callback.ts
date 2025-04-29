@@ -75,7 +75,7 @@ router.get("/api/facebook/oauth-callback", async (req, res) => {
     console.log({ pageId, pageAccessToken, instagramId });
 
     // 5. Redirigir de vuelta al dashboard
-    return res.redirect("/dashboard/meta-config?connected=success");
+    return res.redirect("https://www.aamy.ai/dashboard/meta-config?connected=success");
   } catch (error) {
     console.error("❌ Error en OAuth Callback:", error);
     return res.status(500).send("Error during OAuth callback.");
