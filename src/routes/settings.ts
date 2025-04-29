@@ -165,8 +165,6 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
       info_clave,
       limite_uso,
       logo_url,
-      facebook_mensaje_fuera_horario,
-      facebook_mensaje_default,
       prompt_meta,
       bienvenida_meta,
     } = req.body;
@@ -189,12 +187,10 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         info_clave = $10,
         limite_uso = $11,
         logo_url = $12,
-        facebook_mensaje_fuera_horario = $13,
-        facebook_mensaje_default = $14,
-        prompt_meta = $15,
-        bienvenida_meta = $16,
+        prompt_meta = $13,
+        bienvenida_meta = $14,
         onboarding_completado = true
-      WHERE id = $18`,
+      WHERE id = $15`,
       [
         nombre_negocio || current.name,
         categoria || current.categoria,
@@ -208,8 +204,6 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         info_clave || current.info_clave,
         limite_uso || current.limite_uso,
         logo_url || current.logo_url,
-        facebook_mensaje_fuera_horario || current.facebook_mensaje_fuera_horario,
-        facebook_mensaje_default || current.facebook_mensaje_default,
         prompt_meta || current.prompt_meta,
         bienvenida_meta || current.bienvenida_meta,
         tenant_id,
