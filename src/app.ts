@@ -43,6 +43,7 @@ import { sendScheduledMessages } from './jobs/sendScheduledMessages';
 import sendScheduledNowRouter from './routes/jobs/send-scheduled-now';
 import sentMessagesRoute from './routes/follow-up/sentMessages';
 import facebookOauthCallback from './routes/facebook/oauth-callback';
+import facebookWebhook from './routes/facebook/webhook';
 
 
 console.log("🔁 Versión redeployada manualmente");
@@ -118,6 +119,7 @@ app.use('/api/follow-up-settings', followUpSettingsRouter);
 app.use('/api/jobs/send-scheduled-now', sendScheduledNowRouter);
 app.use('/api/follow-up/sent-messages', sentMessagesRoute);
 app.use(facebookOauthCallback);
+app.use(facebookWebhook);
 
 
 // ✅ Ruta base
