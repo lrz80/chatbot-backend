@@ -19,7 +19,13 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
         const user = userRes.rows[0];
         if (!user)
             return res.status(404).json({ error: 'Usuario no encontrado' });
-        const tenantRes = await db_1.default.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
+        const tenantRes = await db_1.default.query(`
+      SELECT 
+        * 
+      FROM tenants 
+      WHERE id = $1
+      LIMIT 1
+    `, [tenant_id]);
         const tenant = tenantRes.rows[0];
         if (!tenant)
             return res.status(404).json({ error: 'Tenant no encontrado' });
@@ -47,10 +53,16 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
             logo_url: tenant.logo_url || '',
             plan: tenant.plan || '',
             fecha_registro: tenant.fecha_registro || null,
+            // 👇 Agregamos los nuevos campos de Facebook e Instagram
+            facebook_page_id: tenant.facebook_page_id || '',
+            facebook_page_name: tenant.facebook_page_name || '',
+            facebook_access_token: tenant.facebook_access_token || '',
+            instagram_page_id: tenant.instagram_page_id || '',
+            instagram_page_name: tenant.instagram_page_name || '',
         });
     }
     catch (error) {
-        console.error('❌ Error en /api/settings:', error);
+        console.error('❌ Error en GET /api/settings:', error);
         return res.status(401).json({ error: 'Token inválido' });
     }
 });
@@ -117,10 +129,7 @@ router.put('/', auth_1.authenticateUser, async (req, res) => {
         if (!tenant_id) {
             return res.status(401).json({ error: 'Tenant no autenticado' });
         }
-        const { nombre_negocio, categoria, idioma, direccion, horario_atencion, prompt, bienvenida, informacion_negocio, funciones_asistente, info_clave, limite_uso, logo_url, } = req.body;
-        delete req.body.twilio_number;
-        delete req.body.twilio_sms_number;
-        delete req.body.twilio_voice_number;
+        const { nombre_negocio, categoria, idioma, direccion, horario_atencion, prompt, bienvenida, informacion_negocio, funciones_asistente, info_clave, limite_uso, logo_url, prompt_meta, bienvenida_meta, } = req.body;
         const existingRes = await db_1.default.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
         const current = existingRes.rows[0];
         if (!current)
@@ -138,8 +147,10 @@ router.put('/', auth_1.authenticateUser, async (req, res) => {
         info_clave = $10,
         limite_uso = $11,
         logo_url = $12,
+        prompt_meta = $13,
+        bienvenida_meta = $14,
         onboarding_completado = true
-      WHERE id = $13`, [
+      WHERE id = $15`, [
             nombre_negocio || current.name,
             categoria || current.categoria,
             idioma || current.idioma,
@@ -152,6 +163,8 @@ router.put('/', auth_1.authenticateUser, async (req, res) => {
             info_clave || current.info_clave,
             limite_uso || current.limite_uso,
             logo_url || current.logo_url,
+            prompt_meta || current.prompt_meta,
+            bienvenida_meta || current.bienvenida_meta,
             tenant_id,
         ]);
         return res.status(200).json({ message: 'Perfil actualizado correctamente' });

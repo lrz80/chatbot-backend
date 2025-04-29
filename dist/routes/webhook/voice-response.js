@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -6,12 +39,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const twilio_1 = require("twilio");
 const db_1 = __importDefault(require("../../lib/db"));
-const openai_1 = __importDefault(require("openai"));
 const incrementUsage_1 = require("../../lib/incrementUsage");
 const router = (0, express_1.Router)();
-const openai = new openai_1.default({
-    apiKey: process.env.OPENAI_API_KEY,
-});
 // 🔍 Función para normalizar texto (sin tildes, minúsculas)
 function normalizarTexto(texto) {
     return texto
@@ -45,10 +74,8 @@ router.post('/', async (req, res) => {
             const faqsRes = await db_1.default.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenant.id]);
             const faqs = faqsRes.rows || [];
             for (const faq of faqs) {
-                console.log("🔎 Comparando voz:", mensajeUsuario, "con FAQ:", normalizarTexto(faq.pregunta));
                 if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
                     respuestaFAQ = faq.respuesta;
-                    console.log("✅ Respuesta encontrada en FAQ (voz):", respuestaFAQ);
                     break;
                 }
             }
@@ -57,11 +84,13 @@ router.post('/', async (req, res) => {
             console.warn('⚠️ No se pudieron cargar FAQs:', e);
         }
         let respuesta = null;
-        // 🔍 Usar respuesta FAQ si existe, si no usar OpenAI
         if (respuestaFAQ) {
             respuesta = respuestaFAQ;
         }
         else {
+            // 🔑 Instanciar OpenAI solo si es necesario
+            const { default: OpenAI } = await Promise.resolve().then(() => __importStar(require('openai')));
+            const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
             const completion = await openai.chat.completions.create({
                 model: 'gpt-4',
                 messages: [
@@ -70,34 +99,37 @@ router.post('/', async (req, res) => {
                 ],
             });
             respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
-            console.log("🤖 Respuesta de OpenAI (voz):", respuesta);
         }
-        // 🔍 Detectar emoción
-        const emotionPrompt = `
+        // 🧠 Detectar emoción
+        let emocion = 'neutral';
+        try {
+            const { default: OpenAI } = await Promise.resolve().then(() => __importStar(require('openai')));
+            const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+            const emotionPrompt = `
 Actúa como un analista emocional. Clasifica la emoción dominante en este mensaje del cliente:
 "${userInput}"
 
 Elige solo una palabra: enfado, tristeza, neutral, satisfacción o entusiasmo.
-    `;
-        const emotionRes = await openai.chat.completions.create({
-            model: 'gpt-4',
-            messages: [
-                { role: 'system', content: emotionPrompt },
-            ],
-        });
-        const emocion = emotionRes.choices[0].message?.content?.trim().toLowerCase() || 'neutral';
-        // 💾 Guardar mensaje del cliente con emoción
+      `;
+            const emotionRes = await openai.chat.completions.create({
+                model: 'gpt-4',
+                messages: [
+                    { role: 'system', content: emotionPrompt },
+                ],
+            });
+            emocion = emotionRes.choices[0].message?.content?.trim().toLowerCase() || 'neutral';
+        }
+        catch (e) {
+            console.warn('⚠️ No se pudo analizar emoción:', e);
+        }
+        // 💾 Guardar mensaje y respuesta
         await db_1.default.query(`INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, emotion)
        VALUES ($1, 'user', $2, NOW(), 'voice', $3, $4)`, [tenant.id, userInput, fromNumber, emocion]);
-        // 💾 Guardar respuesta del bot
         await db_1.default.query(`INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
        VALUES ($1, 'bot', $2, NOW(), 'voice')`, [tenant.id, respuesta]);
-        // 💾 Registrar interacción
         await db_1.default.query(`INSERT INTO interactions (tenant_id, canal, created_at)
        VALUES ($1, 'voice', NOW())`, [tenant.id]);
-        // 🔢 Sumar uso
         await (0, incrementUsage_1.incrementarUsoPorNumero)(numero);
-        // 🧠 Detectar intención de cierre
         const finConversacion = /(gracias|eso es todo|nada más|bye|adiós)/i.test(userInput);
         const response = new twilio_1.twiml.VoiceResponse();
         response.say({ voice: voiceName, language: voiceLang }, respuesta);

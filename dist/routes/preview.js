@@ -1,15 +1,48 @@
 "use strict";
 // ✅ src/routes/preview.ts
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const db_1 = __importDefault(require("../lib/db"));
-const openai_1 = __importDefault(require("openai"));
 const auth_1 = require("../middleware/auth");
+const getPromptPorCanal_1 = require("../lib/getPromptPorCanal");
+const buscarRespuestaDesdeFlows_1 = require("../lib/buscarRespuestaDesdeFlows");
 const router = (0, express_1.Router)();
-const openai = new openai_1.default({ apiKey: process.env.OPENAI_API_KEY });
 // 🔍 Función para normalizar texto (quita tildes, minúsculas, espacios)
 function normalizarTexto(texto) {
     return texto
@@ -18,39 +51,21 @@ function normalizarTexto(texto) {
         .replace(/[\u0300-\u036f]/g, '')
         .trim();
 }
-// 🔍 Función recursiva para buscar coincidencias en flujos anidados
-function buscarRespuestaEnFlujos(flows, mensaje) {
-    const normalizado = normalizarTexto(mensaje);
-    for (const flow of flows) {
-        for (const opcion of flow.opciones || []) {
-            if (normalizarTexto(opcion.texto || '') === normalizado && opcion.respuesta) {
-                return opcion.respuesta;
-            }
-            if (opcion.submenu) {
-                const respuestaSub = buscarRespuestaEnFlujos([opcion.submenu], mensaje);
-                if (respuestaSub)
-                    return respuestaSub;
-            }
-        }
-    }
-    return null;
-}
 router.post('/', auth_1.authenticateUser, async (req, res) => {
     try {
         const tenant_id = req.user?.tenant_id;
         const { message } = req.body;
+        const canal = 'preview';
         if (!tenant_id)
             return res.status(401).json({ error: 'Tenant no autenticado' });
         const tenantRes = await db_1.default.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
         const tenant = tenantRes.rows[0];
         if (!tenant)
             return res.status(404).json({ error: 'Negocio no encontrado' });
-        const nombreNegocio = tenant.name || 'nuestro negocio';
-        const promptNegocio = tenant.prompt || 'Eres un asistente útil y profesional.';
-        const saludoInicial = `Soy Amy, bienvenido a ${nombreNegocio}.`;
-        const prompt = `${saludoInicial}\n${promptNegocio}`;
+        const prompt = (0, getPromptPorCanal_1.getPromptPorCanal)(canal, tenant);
+        const bienvenida = (0, getPromptPorCanal_1.getBienvenidaPorCanal)(canal, tenant);
         const mensajeUsuario = normalizarTexto(message);
-        // 📋 Buscar en FAQs primero
+        // 📋 Cargar FAQs
         let faqs = [];
         try {
             const faqsRes = await db_1.default.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenant_id]);
@@ -60,13 +75,11 @@ router.post('/', auth_1.authenticateUser, async (req, res) => {
             console.warn('⚠️ No se pudieron cargar FAQs:', e);
         }
         for (const faq of faqs) {
-            console.log("🔎 Comparando mensaje:", mensajeUsuario, "con FAQ:", normalizarTexto(faq.pregunta));
             if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
-                console.log("✅ Respuesta detectada desde FAQs");
                 return res.status(200).json({ response: faq.respuesta });
             }
         }
-        // 🧠 Buscar en Flows si no encontró en FAQs
+        // 📋 Cargar Flows
         let flows = [];
         try {
             const flowsRes = await db_1.default.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant_id]);
@@ -76,13 +89,13 @@ router.post('/', auth_1.authenticateUser, async (req, res) => {
         catch (e) {
             console.warn('⚠️ No se pudieron cargar Flows:', e);
         }
-        const respuestaFlujo = buscarRespuestaEnFlujos(flows, message);
+        const respuestaFlujo = (0, buscarRespuestaDesdeFlows_1.buscarRespuestaDesdeFlows)(flows, message);
         if (respuestaFlujo) {
-            console.log("✅ Respuesta detectada desde Flows");
             return res.status(200).json({ response: respuestaFlujo });
         }
-        // 🤖 Si no hay nada en FAQs ni Flows, usar OpenAI
-        console.log("🤖 Consultando a OpenAI...");
+        // 🧠 OpenAI fallback solo si no encontró en FAQs ni Flows
+        const { default: OpenAI } = await Promise.resolve().then(() => __importStar(require('openai')));
+        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
         const completion = await openai.chat.completions.create({
             model: 'gpt-4',
             messages: [
@@ -90,13 +103,12 @@ router.post('/', auth_1.authenticateUser, async (req, res) => {
                 { role: 'user', content: message },
             ],
         });
-        const response = completion.choices[0]?.message?.content || 'Lo siento, no entendí eso.';
-        console.log("🤖 Respuesta de OpenAI:", response);
-        return res.status(200).json({ response });
+        const respuestaIA = completion.choices[0]?.message?.content?.trim() || bienvenida || 'Lo siento, no entendí eso.';
+        return res.status(200).json({ response: respuestaIA });
     }
     catch (err) {
         console.error('❌ Error en preview:', err);
-        return res.status(500).json({ error: 'Error interno' });
+        return res.status(500).json({ error: 'Error interno del servidor' });
     }
 });
 exports.default = router;

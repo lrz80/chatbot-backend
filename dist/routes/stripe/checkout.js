@@ -8,7 +8,13 @@ const stripe_1 = __importDefault(require("stripe"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const db_1 = __importDefault(require("../../lib/db"));
 const router = express_1.default.Router();
-const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY);
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
+if (!STRIPE_SECRET_KEY) {
+    throw new Error('❌ STRIPE_SECRET_KEY no está definida en variables de entorno.');
+}
+const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY, {
+    apiVersion: '2025-03-31.basil',
+});
 // POST /api/stripe/checkout
 router.post('/checkout', async (req, res) => {
     const token = req.cookies.token;
@@ -35,7 +41,7 @@ router.post('/checkout', async (req, res) => {
                 },
             ],
             subscription_data: {
-                trial_period_days: 7, // ✅ prueba de 7 días
+                trial_period_days: 7,
             },
             success_url: 'https://www.aamy.ai/dashboard?success=1',
             cancel_url: 'https://www.aamy.ai/upgrade?canceled=1',

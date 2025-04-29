@@ -2,16 +2,10 @@
 import express from 'express';
 import axios from 'axios';
 import pool from '../../lib/db'; // Ajusta si tu conexión es diferente
-import OpenAI from 'openai'; // Si quieres usar OpenAI para procesar el prompt (opcional)
-import { getRespuestaCompleta } from '../../lib/getRespuestaCompleta';
-
+import { getRespuestaCompleta } from '../../lib/getRespuestaCompleta'; // Aquí ya OpenAI se usa de forma segura
 
 const router = express.Router();
 
-// Configura tu instancia de OpenAI si quieres respuestas inteligentes
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 const mensajeDefault = 'Lo siento, no tengo una respuesta para eso en este momento.';
 
 // Verificación de Webhook
@@ -65,7 +59,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
           const tenant = rows[0];
           const accessToken = tenant.facebook_access_token;
-          tenant.id = tenant.id || pageId; // asegúrate que tenga `tenant.id`
+          tenant.id = tenant.id || pageId; // asegurarse que tenga tenant.id
 
           const respuestaFinal = await getRespuestaCompleta({
             canal: 'facebook',

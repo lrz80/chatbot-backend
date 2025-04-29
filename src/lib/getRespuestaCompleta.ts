@@ -1,9 +1,7 @@
 import pool from './db';
-import OpenAI from 'openai';
 import { getPromptPorCanal, getBienvenidaPorCanal } from './getPromptPorCanal';
-import { normalizarTexto } from './normalizarTexto'; // si lo tienes separado
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+import { normalizarTexto } from './normalizarTexto';
+import OpenAI from 'openai';
 
 export async function getRespuestaCompleta({
   canal,
@@ -35,8 +33,12 @@ export async function getRespuestaCompleta({
     }
   }
 
-  // 3. OpenAI fallback
+  // 3. OpenAI fallback solo si no encontró FAQs ni Intents
   if (prompt) {
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY || '',
+    });
+
     const respuestaIA = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
@@ -45,6 +47,7 @@ export async function getRespuestaCompleta({
       ],
       max_tokens: 300,
     });
+
     return respuestaIA.choices[0]?.message.content?.trim() || mensajeDefault;
   }
 

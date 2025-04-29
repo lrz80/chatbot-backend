@@ -40,6 +40,13 @@ const count_1 = __importDefault(require("./routes/contactos/count"));
 const voice_prompt_1 = __importDefault(require("./routes/voice-prompt"));
 const voice_1 = __importDefault(require("./routes/webhook/voice"));
 const test_1 = __importDefault(require("./routes/test"));
+const leads_1 = __importDefault(require("./routes/sales-intelligence/leads"));
+const follow_up_settings_1 = __importDefault(require("./routes/follow-up-settings"));
+const sendScheduledMessages_1 = require("./jobs/sendScheduledMessages");
+const send_scheduled_now_1 = __importDefault(require("./routes/jobs/send-scheduled-now"));
+const sentMessages_1 = __importDefault(require("./routes/follow-up/sentMessages"));
+const oauth_callback_1 = __importDefault(require("./routes/facebook/oauth-callback"));
+const webhook_2 = __importDefault(require("./routes/facebook/webhook"));
 console.log("🔁 Versión redeployada manualmente");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
@@ -98,6 +105,12 @@ app.use("/api/contactos/count", count_1.default);
 app.use("/api/voice-prompt", voice_prompt_1.default);
 app.use("/api/webhooks/voice", voice_1.default);
 app.use("/api/test", test_1.default);
+app.use('/api/sales-intelligence/leads', leads_1.default);
+app.use('/api/follow-up-settings', follow_up_settings_1.default);
+app.use('/api/jobs/send-scheduled-now', send_scheduled_now_1.default);
+app.use('/api/follow-up/sent-messages', sentMessages_1.default);
+app.use(oauth_callback_1.default);
+app.use(webhook_2.default);
 // ✅ Ruta base
 app.get('/', (req, res) => {
     res.send('Backend corriendo 🟢');
@@ -108,6 +121,9 @@ setInterval(() => {
         .then(() => console.log('🔁 Ping enviado a backend'))
         .catch(() => console.warn('⚠️ Ping fallido'));
 }, 1000 * 30);
+setInterval(() => {
+    (0, sendScheduledMessages_1.sendScheduledMessages)();
+}, 60000); // cada 60 segundos
 // ✅ Levantar servidor
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);

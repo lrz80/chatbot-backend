@@ -1,14 +1,9 @@
 import { Router, Request, Response } from "express";
 import jwt, { JwtPayload } from "jsonwebtoken";
 import pool from "../lib/db";
-import OpenAI from "openai";
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
 
 router.post("/", async (req: Request, res: Response) => {
   const token = req.cookies.token;
@@ -28,7 +23,11 @@ router.post("/", async (req: Request, res: Response) => {
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: "Negocio no encontrado" });
 
-    // 🔮 Llamada a OpenAI para generar el prompt
+    // 🧠 Importar OpenAI dinámicamente
+    const { default: OpenAI } = await import("openai");
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
+
+    // 🔮 Generar prompt desde OpenAI
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
       messages: [
@@ -46,7 +45,6 @@ ${informacion}
 Redacta únicamente un texto claro y profesional (no JSON) que describa cómo debe comportarse el asistente. 
 No incluyas ningún mensaje de bienvenida ni estructura técnica. 
 Solo devuelve el texto plano que servirá como prompt de sistema.`,
-
         },
       ],
     });

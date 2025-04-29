@@ -2,13 +2,11 @@
 
 import { Router, Request, Response } from 'express';
 import pool from '../lib/db';
-import OpenAI from 'openai';
 import { authenticateUser } from '../middleware/auth';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../lib/getPromptPorCanal';
 import { buscarRespuestaDesdeFlows } from '../lib/buscarRespuestaDesdeFlows';
 
 const router = Router();
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 interface AuthenticatedRequest extends Request {
   user?: {
@@ -25,23 +23,6 @@ function normalizarTexto(texto: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim();
-}
-
-// 🔍 Función recursiva para buscar coincidencias en flujos anidados
-function buscarRespuestaEnFlujos(flows: any[], mensaje: string): string | null {
-  const normalizado = normalizarTexto(mensaje);
-  for (const flow of flows) {
-    for (const opcion of flow.opciones || []) {
-      if (normalizarTexto(opcion.texto || '') === normalizado && opcion.respuesta) {
-        return opcion.respuesta;
-      }
-      if (opcion.submenu) {
-        const respuestaSub = buscarRespuestaEnFlujos([opcion.submenu], mensaje);
-        if (respuestaSub) return respuestaSub;
-      }
-    }
-  }
-  return null;
 }
 
 router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Response) => {
@@ -90,7 +71,10 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
       return res.status(200).json({ response: respuestaFlujo });
     }
 
-    // 🧠 OpenAI fallback
+    // 🧠 OpenAI fallback solo si no encontró en FAQs ni Flows
+    const { default: OpenAI } = await import('openai');
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
@@ -99,7 +83,7 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
       ],
     });
 
-    const respuestaIA = completion.choices[0]?.message?.content?.trim() || 'Lo siento, no entendí eso.';
+    const respuestaIA = completion.choices[0]?.message?.content?.trim() || bienvenida || 'Lo siento, no entendí eso.';
     return res.status(200).json({ response: respuestaIA });
   } catch (err) {
     console.error('❌ Error en preview:', err);

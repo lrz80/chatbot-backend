@@ -1,13 +1,9 @@
 import { Router } from 'express';
 import { twiml } from 'twilio';
 import pool from '../../lib/db';
-import OpenAI from 'openai';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 
 const router = Router();
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
 
 // 🔍 Función para normalizar texto (sin tildes, minúsculas)
 function normalizarTexto(texto: string): string {
@@ -53,10 +49,8 @@ router.post('/', async (req, res) => {
       const faqs = faqsRes.rows || [];
 
       for (const faq of faqs) {
-        console.log("🔎 Comparando voz:", mensajeUsuario, "con FAQ:", normalizarTexto(faq.pregunta));
         if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
           respuestaFAQ = faq.respuesta;
-          console.log("✅ Respuesta encontrada en FAQ (voz):", respuestaFAQ);
           break;
         }
       }
@@ -66,10 +60,13 @@ router.post('/', async (req, res) => {
 
     let respuesta = null;
 
-    // 🔍 Usar respuesta FAQ si existe, si no usar OpenAI
     if (respuestaFAQ) {
       respuesta = respuestaFAQ;
     } else {
+      // 🔑 Instanciar OpenAI solo si es necesario
+      const { default: OpenAI } = await import('openai');
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
       const completion = await openai.chat.completions.create({
         model: 'gpt-4',
         messages: [
@@ -77,51 +74,56 @@ router.post('/', async (req, res) => {
           { role: 'user', content: userInput },
         ],
       });
+
       respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
-      console.log("🤖 Respuesta de OpenAI (voz):", respuesta);
     }
 
-    // 🔍 Detectar emoción
-    const emotionPrompt = `
+    // 🧠 Detectar emoción
+    let emocion = 'neutral';
+    try {
+      const { default: OpenAI } = await import('openai');
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+      const emotionPrompt = `
 Actúa como un analista emocional. Clasifica la emoción dominante en este mensaje del cliente:
 "${userInput}"
 
 Elige solo una palabra: enfado, tristeza, neutral, satisfacción o entusiasmo.
-    `;
-    const emotionRes = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [
-        { role: 'system', content: emotionPrompt },
-      ],
-    });
+      `;
 
-    const emocion = emotionRes.choices[0].message?.content?.trim().toLowerCase() || 'neutral';
+      const emotionRes = await openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          { role: 'system', content: emotionPrompt },
+        ],
+      });
 
-    // 💾 Guardar mensaje del cliente con emoción
+      emocion = emotionRes.choices[0].message?.content?.trim().toLowerCase() || 'neutral';
+    } catch (e) {
+      console.warn('⚠️ No se pudo analizar emoción:', e);
+    }
+
+    // 💾 Guardar mensaje y respuesta
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, emotion)
        VALUES ($1, 'user', $2, NOW(), 'voice', $3, $4)`,
       [tenant.id, userInput, fromNumber, emocion]
     );
 
-    // 💾 Guardar respuesta del bot
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
        VALUES ($1, 'bot', $2, NOW(), 'voice')`,
       [tenant.id, respuesta]
     );
 
-    // 💾 Registrar interacción
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, created_at)
        VALUES ($1, 'voice', NOW())`,
       [tenant.id]
     );
 
-    // 🔢 Sumar uso
     await incrementarUsoPorNumero(numero);
 
-    // 🧠 Detectar intención de cierre
     const finConversacion = /(gracias|eso es todo|nada más|bye|adiós)/i.test(userInput);
 
     const response = new twiml.VoiceResponse();

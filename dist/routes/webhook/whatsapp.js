@@ -8,20 +8,18 @@ const db_1 = __importDefault(require("../../lib/db"));
 const openai_1 = __importDefault(require("openai"));
 const twilio_1 = __importDefault(require("twilio"));
 const incrementUsage_1 = require("../../lib/incrementUsage");
+const getPromptPorCanal_1 = require("../../lib/getPromptPorCanal");
 const router = (0, express_1.Router)();
 const MessagingResponse = twilio_1.default.twiml.MessagingResponse;
-const openai = new openai_1.default({
-    apiKey: process.env.OPENAI_API_KEY,
-});
-// 🧠 Función para normalizar texto (quita tildes, minúsculas, etc.)
+// 🧠 Normalizar texto
 function normalizarTexto(texto) {
     return texto
         .toLowerCase()
         .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '') // elimina tildes
+        .replace(/[\u0300-\u036f]/g, '')
         .trim();
 }
-// 🧠 Buscar en flujos
+// 🧠 Buscar en Flows
 function buscarRespuestaDesdeFlows(flows, mensajeUsuario) {
     const normalizado = normalizarTexto(mensajeUsuario);
     for (const flujo of flows) {
@@ -42,6 +40,9 @@ function buscarRespuestaDesdeFlows(flows, mensajeUsuario) {
 }
 // 🔎 Detectar intención de compra
 async function detectarIntencion(mensaje) {
+    const openai = new openai_1.default({
+        apiKey: process.env.OPENAI_API_KEY || '',
+    });
     const prompt = `
 Analiza este mensaje de un cliente:
 
@@ -83,11 +84,10 @@ router.post('/', async (req, res) => {
             console.warn('🔴 Negocio no encontrado para número:', numero);
             return res.sendStatus(404);
         }
-        const nombreNegocio = tenant.name || 'nuestro negocio';
-        const promptBase = tenant.prompt || 'Eres un asistente útil para clientes en WhatsApp.';
-        const saludo = `Soy Amy, bienvenido a ${nombreNegocio}.`;
-        const prompt = `${saludo}\n${promptBase}`;
-        // 📥 Leer flujos
+        const saludo = `Soy Amy, bienvenido a ${tenant.name || 'nuestro negocio'}.`;
+        const promptBase = `${saludo}\n${(0, getPromptPorCanal_1.getPromptPorCanal)('whatsapp', tenant)}`;
+        const bienvenida = (0, getPromptPorCanal_1.getBienvenidaPorCanal)('whatsapp', tenant);
+        // 📥 Leer Flows
         let flows = [];
         try {
             const flowsRes = await db_1.default.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant.id]);
@@ -106,68 +106,76 @@ router.post('/', async (req, res) => {
         catch (e) {
             console.warn('⚠️ No se pudieron cargar las FAQs:', e);
         }
-        // Logs para depurar
         console.log("📝 Mensaje recibido:", userInput);
-        console.log("📚 FAQs cargadas:", faqs);
-        // ✅ Buscar respuesta en FAQs primero
         const mensajeUsuario = normalizarTexto(userInput);
-        let respuestaFAQ = null;
-        for (const faq of faqs) {
-            console.log("🔎 Comparando mensaje:", mensajeUsuario, "con FAQ:", normalizarTexto(faq.pregunta));
-            if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
-                respuestaFAQ = faq.respuesta;
-                console.log("✅ Respuesta encontrada en FAQ:", respuestaFAQ);
-                break;
-            }
-        }
         let respuesta = null;
+        const respuestaFAQ = faqs.find(faq => mensajeUsuario.includes(normalizarTexto(faq.pregunta)));
         if (respuestaFAQ) {
-            respuesta = respuestaFAQ;
-            console.log("📋 Respondiendo desde FAQs");
+            respuesta = respuestaFAQ.respuesta;
         }
         else {
-            // ✅ Luego buscar en Flows
             respuesta = buscarRespuestaDesdeFlows(flows, userInput);
-            if (respuesta) {
-                console.log("📋 Respondiendo desde Flows");
-            }
         }
         if (!respuesta) {
             console.log("🤖 Consultando a OpenAI...");
+            const openai = new openai_1.default({
+                apiKey: process.env.OPENAI_API_KEY || '',
+            });
             const completion = await openai.chat.completions.create({
                 model: 'gpt-4',
                 messages: [
-                    { role: 'system', content: prompt },
+                    { role: 'system', content: promptBase },
                     { role: 'user', content: userInput },
                 ],
             });
-            respuesta = completion.choices[0]?.message?.content || 'Lo siento, no entendí eso.';
-            console.log("🤖 Respuesta de OpenAI:", respuesta);
+            respuesta = completion.choices[0]?.message?.content || bienvenida || 'Lo siento, no entendí eso.';
         }
-        // 🧠 Inteligencia de ventas
+        // 🧠 Inteligencia de ventas y seguimiento
         if (userInput) {
             try {
                 const { intencion, nivel_interes } = await detectarIntencion(userInput);
                 await db_1.default.query(`INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
            VALUES ($1, $2, $3, $4, $5, $6)`, [tenant.id, fromNumber, 'whatsapp', userInput, intencion, nivel_interes]);
                 console.log("✅ Intención detectada y guardada:", intencion, nivel_interes);
+                if (nivel_interes >= 4) {
+                    const configRes = await db_1.default.query(`SELECT * FROM follow_up_settings WHERE tenant_id = $1`, [tenant.id]);
+                    const config = configRes.rows[0];
+                    if (config) {
+                        let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
+                        const intencionDetectada = intencion.toLowerCase();
+                        if (intencionDetectada.includes('precio') && config.mensaje_precio) {
+                            mensajeSeguimiento = config.mensaje_precio;
+                        }
+                        else if (intencionDetectada.includes('agendar') && config.mensaje_agendar) {
+                            mensajeSeguimiento = config.mensaje_agendar;
+                        }
+                        else if (intencionDetectada.includes('ubicacion') && config.mensaje_ubicacion) {
+                            mensajeSeguimiento = config.mensaje_ubicacion;
+                        }
+                        const fechaEnvio = new Date();
+                        fechaEnvio.setMinutes(fechaEnvio.getMinutes() + (config.minutos_espera || 5));
+                        await db_1.default.query(`INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
+               VALUES ($1, $2, $3, $4, $5, false)`, [tenant.id, 'whatsapp', fromNumber, mensajeSeguimiento, fechaEnvio]);
+                        console.log("📤 Mensaje de seguimiento programado:", mensajeSeguimiento);
+                    }
+                }
             }
             catch (err) {
-                console.error("❌ Error analizando intención:", err);
+                console.error("❌ Error analizando intención o programando seguimiento:", err);
             }
         }
         // 💾 Guardar mensaje del usuario
         await db_1.default.query(`INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'whatsapp', $3)`, [tenant.id, userInput, fromNumber]);
-        // 💾 Guardar interacción
-        await db_1.default.query(`INSERT INTO interactions (tenant_id, canal, created_at)
-       VALUES ($1, $2, NOW())`, [tenant.id, 'whatsapp']);
         // 💾 Guardar respuesta del bot
         await db_1.default.query(`INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
        VALUES ($1, 'bot', $2, NOW(), 'whatsapp')`, [tenant.id, respuesta]);
-        // 🔢 Incrementar contador de uso
+        // 💾 Guardar interacción
+        await db_1.default.query(`INSERT INTO interactions (tenant_id, canal, created_at)
+       VALUES ($1, 'whatsapp', NOW())`, [tenant.id]);
+        // 🔢 Incrementar contador
         await (0, incrementUsage_1.incrementarUsoPorNumero)(numero);
-        // 📤 Responder a WhatsApp
+        // 📤 Enviar respuesta a WhatsApp
         const twiml = new MessagingResponse();
         twiml.message(respuesta);
         res.type('text/xml');

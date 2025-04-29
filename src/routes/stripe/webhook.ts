@@ -5,11 +5,11 @@ import { transporter } from '../../lib/mailer';
 
 const router = express.Router();
 
-router.post('/', async (req, res) => {
-  const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-03-31.basil',
-  });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+  apiVersion: '2025-03-31.basil',
+});
 
+router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
   const sig = req.headers['stripe-signature'];
 
@@ -33,8 +33,8 @@ router.post('/', async (req, res) => {
     const email = session.customer_email;
 
     try {
-      const userResult = await pool.query('SELECT uid, owner_name FROM users WHERE email = $1', [email]);
-      const user = userResult.rows[0];
+      const userRes = await pool.query('SELECT uid, owner_name FROM users WHERE email = $1', [email]);
+      const user = userRes.rows[0];
       if (!user) return;
 
       const uid = user.uid;
@@ -47,12 +47,7 @@ router.post('/', async (req, res) => {
       if (tenantCheck.rows.length === 0) {
         await pool.query(`
           INSERT INTO tenants (
-            admin_uid,
-            name,
-            membresia_activa,
-            membresia_vigencia,
-            used,
-            plan
+            admin_uid, name, membresia_activa, membresia_vigencia, used, plan
           ) VALUES ($1, $2, true, $3, 0, 'pro')
         `, [uid, tenantName, vigencia]);
 
@@ -75,22 +70,13 @@ router.post('/', async (req, res) => {
   // 🔁 Renovación mensual automática
   if (event.type === 'invoice.payment_succeeded') {
     const invoice = event.data.object as Stripe.Invoice;
-    let customerEmail = invoice.customer_email;
-
-    if (
-      !customerEmail &&
-      invoice.customer &&
-      typeof invoice.customer === 'object' &&
-      'email' in invoice.customer
-    ) {
-      customerEmail = (invoice.customer as Stripe.Customer).email!;
-    }
+    const customerEmail = invoice.customer_email || null;
 
     if (!customerEmail) return;
 
     try {
-      const userResult = await pool.query('SELECT uid FROM users WHERE email = $1', [customerEmail]);
-      const user = userResult.rows[0];
+      const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [customerEmail]);
+      const user = userRes.rows[0];
       if (!user) return;
 
       const uid = user.uid;
@@ -113,6 +99,7 @@ router.post('/', async (req, res) => {
   // ❌ Cancelación automática
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object as Stripe.Subscription;
+
     let customerEmail: string | null = null;
 
     try {
@@ -130,8 +117,8 @@ router.post('/', async (req, res) => {
     if (!customerEmail) return;
 
     try {
-      const userResult = await pool.query('SELECT uid FROM users WHERE email = $1', [customerEmail]);
-      const user = userResult.rows[0];
+      const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [customerEmail]);
+      const user = userRes.rows[0];
       if (!user) return;
 
       const uid = user.uid;
