@@ -52,7 +52,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
           // 1. Buscar el tenant por page_id
           const { rows } = await pool.query(
-            'SELECT facebook_access_token, prompt_meta, bienvenida_meta, faq, intents, horario_atencion FROM tenants WHERE facebook_page_id = $1 LIMIT 1',
+            'SELECT facebook_access_token, prompt_meta, bienvenida_meta, horario_atencion FROM tenants WHERE facebook_page_id = $1 LIMIT 1',
             [pageId]
           );
 
@@ -62,11 +62,14 @@ router.post('/api/facebook/webhook', async (req, res) => {
           }
 
           const tenant = rows[0];
+          const faqsRes = await pool.query('SELECT * FROM faqs WHERE tenant_id = $1', [tenant.id]);
+          const intentsRes = await pool.query('SELECT * FROM intents WHERE tenant_id = $1', [tenant.id]);
 
           const accessToken = tenant.facebook_access_token;
           const bienvenidaMeta = tenant.bienvenida_meta || '¡Hola! Bienvenido.';
-          const faqList = tenant.faq || [];
-          const intentsList = tenant.intents || [];
+          const faqList = faqsRes.rows || [];
+          const intentsList = intentsRes.rows || [];
+
 
           let respuestaFinal = bienvenidaMeta;
 
