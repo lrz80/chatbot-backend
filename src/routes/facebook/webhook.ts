@@ -3,6 +3,8 @@ import express from 'express';
 import axios from 'axios';
 import pool from '../../lib/db'; // Ajusta si tu conexión es diferente
 import OpenAI from 'openai'; // Si quieres usar OpenAI para procesar el prompt (opcional)
+import { getRespuestaCompleta } from '../../lib/getRespuestaCompleta';
+
 
 const router = express.Router();
 
@@ -62,49 +64,14 @@ router.post('/api/facebook/webhook', async (req, res) => {
           }
 
           const tenant = rows[0];
-          const faqsRes = await pool.query('SELECT * FROM faqs WHERE tenant_id = $1', [tenant.id]);
-          const intentsRes = await pool.query('SELECT * FROM intents WHERE tenant_id = $1', [tenant.id]);
-
           const accessToken = tenant.facebook_access_token;
-          const bienvenidaMeta = tenant.bienvenida_meta || '¡Hola! Bienvenido.';
-          const faqList = faqsRes.rows || [];
-          const intentsList = intentsRes.rows || [];
+          tenant.id = tenant.id || pageId; // asegúrate que tenga `tenant.id`
 
-
-          let respuestaFinal = bienvenidaMeta;
-
-          // 2. Opcional: Detectar si está fuera de horario
-          // (Aquí podrías validar horarioAtencion para mandar fuera de horario)
-
-          // 3. Buscar coincidencias en FAQs o Intents
-          const lowerMessage = userMessage.toLowerCase();
-
-          const faqMatch = faqList.find((item: any) => lowerMessage.includes(item.pregunta.toLowerCase()));
-          if (faqMatch) {
-            respuestaFinal = faqMatch.respuesta;
-          }
-
-          const intentMatch = intentsList.find((intent: any) =>
-            intent.ejemplos.some((ejemplo: string) => lowerMessage.includes(ejemplo.toLowerCase()))
-          );
-          if (intentMatch) {
-            respuestaFinal = intentMatch.respuesta;
-          }
-
-          // 4. (Opcional) Si quieres que OpenAI lo responda si no encuentra coincidencias
-          if (!faqMatch && !intentMatch && tenant.prompt_meta) {
-            const openaiResponse = await openai.chat.completions.create({
-              model: 'gpt-4',
-              messages: [
-                { role: 'system', content: tenant.prompt_meta },
-                { role: 'user', content: userMessage },
-              ],
-              max_tokens: 300,
-            });
-
-            const aiText = openaiResponse.choices[0].message.content?.trim();
-            respuestaFinal = aiText || mensajeDefault;
-          }
+          const respuestaFinal = await getRespuestaCompleta({
+            canal: 'facebook',
+            tenant,
+            input: userMessage,
+          });
 
           // 5. Enviar respuesta
           await axios.post(

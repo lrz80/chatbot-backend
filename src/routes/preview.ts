@@ -4,6 +4,8 @@ import { Router, Request, Response } from 'express';
 import pool from '../lib/db';
 import OpenAI from 'openai';
 import { authenticateUser } from '../middleware/auth';
+import { getPromptPorCanal, getBienvenidaPorCanal } from '../lib/getPromptPorCanal';
+import { buscarRespuestaDesdeFlows } from '../lib/buscarRespuestaDesdeFlows';
 
 const router = Router();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
@@ -46,6 +48,7 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
   try {
     const tenant_id = req.user?.tenant_id;
     const { message } = req.body;
+    const canal = 'preview';
 
     if (!tenant_id) return res.status(401).json({ error: 'Tenant no autenticado' });
 
@@ -53,14 +56,11 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: 'Negocio no encontrado' });
 
-    const nombreNegocio = tenant.name || 'nuestro negocio';
-    const promptNegocio = tenant.prompt || 'Eres un asistente útil y profesional.';
-    const saludoInicial = `Soy Amy, bienvenido a ${nombreNegocio}.`;
-    const prompt = `${saludoInicial}\n${promptNegocio}`;
-
+    const prompt = getPromptPorCanal(canal, tenant);
+    const bienvenida = getBienvenidaPorCanal(canal, tenant);
     const mensajeUsuario = normalizarTexto(message);
 
-    // 📋 Buscar en FAQs primero
+    // 📋 Cargar FAQs
     let faqs: any[] = [];
     try {
       const faqsRes = await pool.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenant_id]);
@@ -70,14 +70,12 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     }
 
     for (const faq of faqs) {
-      console.log("🔎 Comparando mensaje:", mensajeUsuario, "con FAQ:", normalizarTexto(faq.pregunta));
       if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
-        console.log("✅ Respuesta detectada desde FAQs");
         return res.status(200).json({ response: faq.respuesta });
       }
     }
 
-    // 🧠 Buscar en Flows si no encontró en FAQs
+    // 📋 Cargar Flows
     let flows: any[] = [];
     try {
       const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant_id]);
@@ -87,14 +85,12 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
       console.warn('⚠️ No se pudieron cargar Flows:', e);
     }
 
-    const respuestaFlujo = buscarRespuestaEnFlujos(flows, message);
+    const respuestaFlujo = buscarRespuestaDesdeFlows(flows, message);
     if (respuestaFlujo) {
-      console.log("✅ Respuesta detectada desde Flows");
       return res.status(200).json({ response: respuestaFlujo });
     }
 
-    // 🤖 Si no hay nada en FAQs ni Flows, usar OpenAI
-    console.log("🤖 Consultando a OpenAI...");
+    // 🧠 OpenAI fallback
     const completion = await openai.chat.completions.create({
       model: 'gpt-4',
       messages: [
@@ -103,13 +99,11 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
       ],
     });
 
-    const response = completion.choices[0]?.message?.content || 'Lo siento, no entendí eso.';
-    console.log("🤖 Respuesta de OpenAI:", response);
-
-    return res.status(200).json({ response });
+    const respuestaIA = completion.choices[0]?.message?.content?.trim() || 'Lo siento, no entendí eso.';
+    return res.status(200).json({ response: respuestaIA });
   } catch (err) {
     console.error('❌ Error en preview:', err);
-    return res.status(500).json({ error: 'Error interno' });
+    return res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 

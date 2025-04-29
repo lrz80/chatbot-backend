@@ -3,6 +3,8 @@ import pool from '../../lib/db';
 import OpenAI from 'openai';
 import twilio from 'twilio';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
+import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
+
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -89,10 +91,9 @@ router.post('/', async (req: Request, res: Response) => {
       return res.sendStatus(404);
     }
 
-    const nombreNegocio = tenant.name || 'nuestro negocio';
-    const promptBase = tenant.prompt || 'Eres un asistente útil para clientes en WhatsApp.';
-    const saludo = `Soy Amy, bienvenido a ${nombreNegocio}.`;
-    const prompt = `${saludo}\n${promptBase}`;
+    const saludo = `Soy Amy, bienvenido a ${tenant.name || 'nuestro negocio'}.`;
+    const prompt = `${saludo}\n${getPromptPorCanal('whatsapp', tenant)}`;
+    const bienvenida = getBienvenidaPorCanal('whatsapp', tenant);
 
     // 📥 Leer Flows
     let flows: any[] = [];
