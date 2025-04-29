@@ -165,11 +165,12 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
       info_clave,
       limite_uso,
       logo_url,
+      facebook_mensaje_bienvenida,
+      facebook_mensaje_fuera_horario,
+      facebook_mensaje_default,
+      prompt_meta,
+      bienvenida_meta,
     } = req.body;
-
-    delete req.body.twilio_number;
-    delete req.body.twilio_sms_number;
-    delete req.body.twilio_voice_number;
 
     const existingRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
     const current = existingRes.rows[0];
@@ -189,8 +190,13 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         info_clave = $10,
         limite_uso = $11,
         logo_url = $12,
+        facebook_mensaje_bienvenida = $13,
+        facebook_mensaje_fuera_horario = $14,
+        facebook_mensaje_default = $15,
+        prompt_meta = $16,
+        bienvenida_meta = $17,
         onboarding_completado = true
-      WHERE id = $13`,
+      WHERE id = $18`,
       [
         nombre_negocio || current.name,
         categoria || current.categoria,
@@ -204,6 +210,11 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         info_clave || current.info_clave,
         limite_uso || current.limite_uso,
         logo_url || current.logo_url,
+        facebook_mensaje_bienvenida || current.facebook_mensaje_bienvenida,
+        facebook_mensaje_fuera_horario || current.facebook_mensaje_fuera_horario,
+        facebook_mensaje_default || current.facebook_mensaje_default,
+        prompt_meta || current.prompt_meta,
+        bienvenida_meta || current.bienvenida_meta,
         tenant_id,
       ]
     );
