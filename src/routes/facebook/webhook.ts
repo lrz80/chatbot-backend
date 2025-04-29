@@ -1,11 +1,17 @@
 // backend/src/routes/facebook/webhook.ts
 import express from 'express';
 import axios from 'axios';
-import pool from '../../lib/db'; // ⚡ Ajusta si tu conexión a DB es diferente
+import pool from '../../lib/db'; // Ajusta si tu conexión es diferente
+import OpenAI from 'openai'; // Si quieres usar OpenAI para procesar el prompt (opcional)
 
 const router = express.Router();
 
-// Ruta pública, Facebook validará este webhook
+// Configura tu instancia de OpenAI si quieres respuestas inteligentes
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Verificación de Webhook
 router.get('/api/facebook/webhook', (req, res) => {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || 'testtoken';
 
@@ -23,7 +29,7 @@ router.get('/api/facebook/webhook', (req, res) => {
   }
 });
 
-// Ruta para recibir mensajes entrantes
+// Mensajes entrantes
 router.post('/api/facebook/webhook', async (req, res) => {
   try {
     const body = req.body;
@@ -33,39 +39,80 @@ router.post('/api/facebook/webhook', async (req, res) => {
     }
 
     for (const entry of body.entry) {
-      const pageId = entry.id; // ID de la página que recibió el mensaje
+      const pageId = entry.id;
 
       for (const messagingEvent of entry.messaging) {
         const senderId = messagingEvent.sender.id;
 
         if (messagingEvent.message && !messagingEvent.message.is_echo) {
-          console.log('📩 Mensaje recibido:', messagingEvent.message.text);
+          const userMessage = messagingEvent.message.text || '';
 
-          // 1. Buscar el tenant basado en el pageId
+          console.log('📩 Mensaje recibido:', userMessage);
+
+          // 1. Buscar el tenant por page_id
           const { rows } = await pool.query(
-            'SELECT facebook_access_token, facebook_mensaje_bienvenida, facebook_mensaje_default FROM tenants WHERE facebook_page_id = $1 LIMIT 1',
+            'SELECT facebook_access_token, facebook_mensaje_bienvenida, facebook_mensaje_fuera_horario, facebook_mensaje_default, prompt_meta, bienvenida_meta, faq, intents, horario_atencion FROM tenants WHERE facebook_page_id = $1 LIMIT 1',
             [pageId]
           );
 
           if (rows.length === 0) {
             console.error('❌ No se encontró tenant para page_id:', pageId);
-            return;
+            continue;
           }
 
           const tenant = rows[0];
 
-          // 2. Preparar respuesta
-          const reply = tenant.facebook_mensaje_bienvenida || tenant.facebook_mensaje_default || "¡Hola! ¿Cómo podemos ayudarte?";
+          const accessToken = tenant.facebook_access_token;
+          const bienvenidaMeta = tenant.bienvenida_meta || tenant.facebook_mensaje_bienvenida || '¡Hola! Bienvenido.';
+          const mensajeDefault = tenant.facebook_mensaje_default || '¿Podrías darnos más detalles?';
+          const horarioAtencion = tenant.horario_atencion; // Si quieres manejar fuera de horario
+          const faqList = tenant.faq || [];
+          const intentsList = tenant.intents || [];
 
-          // 3. Responder al usuario
+          let respuestaFinal = bienvenidaMeta;
+
+          // 2. Opcional: Detectar si está fuera de horario
+          // (Aquí podrías validar horarioAtencion para mandar fuera de horario)
+
+          // 3. Buscar coincidencias en FAQs o Intents
+          const lowerMessage = userMessage.toLowerCase();
+
+          const faqMatch = faqList.find((item: any) => lowerMessage.includes(item.pregunta.toLowerCase()));
+          if (faqMatch) {
+            respuestaFinal = faqMatch.respuesta;
+          }
+
+          const intentMatch = intentsList.find((intent: any) =>
+            intent.ejemplos.some((ejemplo: string) => lowerMessage.includes(ejemplo.toLowerCase()))
+          );
+          if (intentMatch) {
+            respuestaFinal = intentMatch.respuesta;
+          }
+
+          // 4. (Opcional) Si quieres que OpenAI lo responda si no encuentra coincidencias
+          if (!faqMatch && !intentMatch && tenant.prompt_meta) {
+            const openaiResponse = await openai.chat.completions.create({
+              model: 'gpt-4',
+              messages: [
+                { role: 'system', content: tenant.prompt_meta },
+                { role: 'user', content: userMessage },
+              ],
+              max_tokens: 300,
+            });
+
+            const aiText = openaiResponse.choices[0].message.content?.trim();
+            respuestaFinal = aiText || mensajeDefault;
+          }
+
+          // 5. Enviar respuesta
           await axios.post(
             `https://graph.facebook.com/v19.0/me/messages`,
             {
               recipient: { id: senderId },
-              message: { text: reply },
+              message: { text: respuestaFinal },
             },
             {
-              params: { access_token: tenant.facebook_access_token },
+              params: { access_token: accessToken },
             }
           );
 
@@ -78,7 +125,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
   } catch (error: any) {
     console.error('❌ Error en webhook:', error.response?.data || error.message || error);
     res.sendStatus(500);
-  }  
+  }
 });
 
 export default router;
