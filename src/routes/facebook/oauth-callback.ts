@@ -37,15 +37,28 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
     const pageAccessToken = page.access_token;
     const pageName = page.name;
 
-    // 3. Obtener instagram_business_account
+    // 3. Obtener instagram_business_account de la página
     const igRes = await axios.get(`https://graph.facebook.com/v19.0/${pageId}?fields=instagram_business_account`, {
       params: { access_token: pageAccessToken },
     });
 
     const instagramBusinessAccount = igRes.data.instagram_business_account;
-    const instagramId = instagramBusinessAccount?.id || null;
+    const instagramBusinessAccountId = instagramBusinessAccount?.id || null;
 
-    // 4. Decodificar token de la cookie
+    // 4. Si existe, obtener el perfil real de Instagram
+    let instagramPageId = null;
+    let instagramPageUsername = null;
+
+    if (instagramBusinessAccountId) {
+      const igProfileRes = await axios.get(`https://graph.facebook.com/v19.0/${instagramBusinessAccountId}?fields=id,username`, {
+        params: { access_token: pageAccessToken },
+      });
+
+      instagramPageId = igProfileRes.data?.id || null;
+      instagramPageUsername = igProfileRes.data?.username || null;
+    }
+
+    // 5. Decodificar token JWT de cookies
     const token = req.cookies?.token;
 
     if (!token) return res.status(401).send("Unauthorized");
@@ -58,18 +71,28 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
 
     if (!tenantId) return res.status(404).send("Tenant not found in token");
 
-    // 5. Guardar en tenants
+    // 6. Guardar todo en la base de datos
     await pool.query(
       `UPDATE tenants SET 
         facebook_page_id = $1,
         facebook_page_name = $2,
         facebook_access_token = $3,
-        instagram_business_account_id = $4
-       WHERE id = $5`,
-      [pageId, pageName, pageAccessToken, instagramId, tenantId]
+        instagram_business_account_id = $4,
+        instagram_page_id = $5,
+        instagram_page_name = $6
+       WHERE id = $7`,
+      [
+        pageId,
+        pageName,
+        pageAccessToken,
+        instagramBusinessAccountId,
+        instagramPageId,
+        instagramPageUsername,
+        tenantId,
+      ]
     );
 
-    console.log('✅ Datos de Facebook guardados en tenant:', tenantId);
+    console.log('✅ Datos de Facebook e Instagram guardados exitosamente para tenant:', tenantId);
 
     return res.redirect('https://www.aamy.ai/dashboard/meta-config?connected=success');
   } catch (err: any) {
