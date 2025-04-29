@@ -44,11 +44,14 @@ import sendScheduledNowRouter from './routes/jobs/send-scheduled-now';
 import sentMessagesRoute from './routes/follow-up/sentMessages';
 import facebookOauthCallback from './routes/facebook/oauth-callback';
 import facebookWebhook from './routes/facebook/webhook';
+import * as path from 'path';
 
+dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
+
+console.log('🔐 STRIPE KEY desde ENV:', process.env.STRIPE_SECRET_KEY);
 
 console.log("🔁 Versión redeployada manualmente");
 
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;

@@ -5,25 +5,29 @@ import { transporter } from '../../lib/mailer';
 
 const router = express.Router();
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-03-31.basil',
-});
+let stripe: Stripe;
+let STRIPE_WEBHOOK_SECRET: string;
+
+function initStripe() {
+  if (!stripe) {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) throw new Error('❌ STRIPE_SECRET_KEY no está definida.');
+    STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET!;
+    if (!STRIPE_WEBHOOK_SECRET) throw new Error('❌ STRIPE_WEBHOOK_SECRET no está definida.');
+    stripe = new Stripe(key, { apiVersion: '2025-03-31.basil' });
+  }
+}
 
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
-  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  initStripe();
   const sig = req.headers['stripe-signature'];
-
-  if (!endpointSecret) {
-    console.error('❌ Falta STRIPE_WEBHOOK_SECRET en .env');
-    return res.status(500).json({ error: 'Configuración incompleta' });
-  }
 
   let event: Stripe.Event;
 
   try {
-    event = stripe.webhooks.constructEvent(req.body, sig!, endpointSecret);
+    event = stripe.webhooks.constructEvent(req.body, sig!, STRIPE_WEBHOOK_SECRET);
   } catch (err) {
-    console.error('⚠️ Webhook error:', err);
+    console.error('⚠️ Webhook signature error:', err);
     return res.status(400).send(`Webhook Error: ${(err as Error).message}`);
   }
 
@@ -31,6 +35,8 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
     const email = session.customer_email;
+
+    if (!email) return;
 
     try {
       const userRes = await pool.query('SELECT uid, owner_name FROM users WHERE email = $1', [email]);
@@ -46,11 +52,9 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
       if (tenantCheck.rows.length === 0) {
         await pool.query(`
-          INSERT INTO tenants (
-            admin_uid, name, membresia_activa, membresia_vigencia, used, plan
-          ) VALUES ($1, $2, true, $3, 0, 'pro')
+          INSERT INTO tenants (admin_uid, name, membresia_activa, membresia_vigencia, used, plan)
+          VALUES ($1, $2, true, $3, 0, 'pro')
         `, [uid, tenantName, vigencia]);
-
         console.log('✅ Tenant creado con membresía activa para', email);
       } else {
         await pool.query(`
@@ -59,7 +63,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
               membresia_vigencia = $2
           WHERE admin_uid = $1
         `, [uid, vigencia]);
-
         console.log('🔁 Membresía activada para', email);
       }
     } catch (error) {
@@ -67,11 +70,10 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     }
   }
 
-  // 🔁 Renovación mensual automática
+  // 🔁 Renovación automática
   if (event.type === 'invoice.payment_succeeded') {
     const invoice = event.data.object as Stripe.Invoice;
-    const customerEmail = invoice.customer_email || null;
-
+    const customerEmail = invoice.customer_email;
     if (!customerEmail) return;
 
     try {
@@ -79,7 +81,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       const user = userRes.rows[0];
       if (!user) return;
 
-      const uid = user.uid;
       const nuevaVigencia = new Date();
       nuevaVigencia.setDate(nuevaVigencia.getDate() + 30);
 
@@ -88,7 +89,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         SET membresia_activa = true,
             membresia_vigencia = $2
         WHERE admin_uid = $1
-      `, [uid, nuevaVigencia]);
+      `, [user.uid, nuevaVigencia]);
 
       console.log('🔁 Membresía renovada para', customerEmail);
     } catch (error) {
@@ -111,7 +112,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         }
       }
     } catch (err) {
-      console.warn('⚠️ No se pudo obtener email del cliente para cancelación');
+      console.warn('⚠️ No se pudo obtener email del cliente:', err);
     }
 
     if (!customerEmail) return;
@@ -121,13 +122,11 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       const user = userRes.rows[0];
       if (!user) return;
 
-      const uid = user.uid;
-
       await pool.query(`
         UPDATE tenants
         SET membresia_activa = false
         WHERE admin_uid = $1
-      `, [uid]);
+      `, [user.uid]);
 
       console.log('🛑 Membresía cancelada para', customerEmail);
 
@@ -145,7 +144,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         `
       });
     } catch (err) {
-      console.error('❌ Error desactivando membresía:', err);
+      console.error('❌ Error al cancelar membresía:', err);
     }
   }
 

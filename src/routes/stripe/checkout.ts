@@ -5,20 +5,20 @@ import pool from '../../lib/db';
 
 const router = express.Router();
 
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
-
-if (!STRIPE_SECRET_KEY) {
-  throw new Error('❌ STRIPE_SECRET_KEY no está definida en variables de entorno.');
-}
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2025-03-31.basil',
-});
-
 // POST /api/stripe/checkout
 router.post('/checkout', async (req, res) => {
-  const token = req.cookies.token;
+  const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 
+  if (!STRIPE_SECRET_KEY) {
+    console.error('❌ STRIPE_SECRET_KEY no está definida en variables de entorno.');
+    return res.status(500).json({ error: 'Configuración incompleta de Stripe' });
+  }
+
+  const stripe = new Stripe(STRIPE_SECRET_KEY, {
+    apiVersion: '2025-03-31.basil',
+  });
+
+  const token = req.cookies.token;
   if (!token) {
     return res.status(401).json({ error: 'No autorizado. Token requerido.' });
   }
@@ -27,7 +27,6 @@ router.post('/checkout', async (req, res) => {
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET!);
     const uid = decoded.uid;
 
-    // Obtener el correo del usuario
     const result = await pool.query('SELECT email FROM users WHERE uid = $1', [uid]);
     const user = result.rows[0];
 
@@ -41,7 +40,7 @@ router.post('/checkout', async (req, res) => {
       customer_email: user.email,
       line_items: [
         {
-          price: 'price_1R8C4K05RmqANw5eLQo1xPMU', // ✅ tu price_id real
+          price: 'price_1R8C4K05RmqANw5eLQo1xPMU',
           quantity: 1,
         },
       ],
