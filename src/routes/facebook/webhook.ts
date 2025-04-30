@@ -1,4 +1,3 @@
-// backend/src/routes/facebook/webhook.ts
 import express from 'express';
 import axios from 'axios';
 import pool from '../../lib/db';
@@ -57,7 +56,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
           }
 
           const tenant = tenantRes.rows[0];
-          const tenantId = tenant.id; // UUID válido
+          const tenantId = tenant.id;
           const accessToken = tenant.facebook_access_token;
 
           const respuestaFinal = await getRespuestaCompleta({
@@ -65,6 +64,27 @@ router.post('/api/facebook/webhook', async (req, res) => {
             tenant,
             input: userMessage,
           });
+
+          // 💾 Guardar mensaje del cliente
+          await pool.query(
+            `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
+             VALUES ($1, 'user', $2, NOW(), 'facebook', $3)`,
+            [tenantId, userMessage, senderId]
+          );
+
+          // 💾 Guardar respuesta del bot
+          await pool.query(
+            `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
+             VALUES ($1, 'bot', $2, NOW(), 'facebook')`,
+            [tenantId, respuestaFinal]
+          );
+
+          // 💾 Guardar interacción
+          await pool.query(
+            `INSERT INTO interactions (tenant_id, canal, created_at)
+             VALUES ($1, 'facebook', NOW())`,
+            [tenantId]
+          );
 
           // ✅ Enviar respuesta
           await axios.post(
@@ -78,7 +98,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
             }
           );
 
-          console.log('✅ Respuesta enviada al usuario');
+          console.log('✅ Respuesta enviada y guardada');
         }
       }
     }
