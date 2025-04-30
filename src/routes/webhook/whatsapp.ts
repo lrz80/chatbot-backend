@@ -1,3 +1,5 @@
+// backend/src/routes/webhook/whatsapp.ts
+
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import OpenAI from 'openai';
@@ -39,9 +41,7 @@ function buscarRespuestaDesdeFlows(flows: any[], mensajeUsuario: string): string
 
 // 🔎 Detectar intención de compra
 async function detectarIntencion(mensaje: string) {
-  const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY || '',
-  });
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
   const prompt = `
 Analiza este mensaje de un cliente:
@@ -83,8 +83,9 @@ router.post('/', async (req: Request, res: Response) => {
   const userInput = req.body.Body || '';
 
   try {
-    const tenantRes = await pool.query('SELECT * FROM tenants WHERE twilio_number = $1', [numero]);
+    const tenantRes = await pool.query('SELECT * FROM tenants WHERE twilio_number = $1 LIMIT 1', [numero]);
     const tenant = tenantRes.rows[0];
+
     if (!tenant) {
       console.warn('🔴 Negocio no encontrado para número:', numero);
       return res.sendStatus(404);
@@ -114,7 +115,6 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     console.log("📝 Mensaje recibido:", userInput);
-
     const mensajeUsuario = normalizarTexto(userInput);
     let respuesta = null;
 
@@ -127,10 +127,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (!respuesta) {
       console.log("🤖 Consultando a OpenAI...");
-
-      const openai = new OpenAI({
-        apiKey: process.env.OPENAI_API_KEY || '',
-      });
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
       const completion = await openai.chat.completions.create({
         model: 'gpt-4',
@@ -140,84 +137,73 @@ router.post('/', async (req: Request, res: Response) => {
         ],
       });
 
-      respuesta = completion.choices[0]?.message?.content || bienvenida || 'Lo siento, no entendí eso.';
+      respuesta = completion.choices[0]?.message?.content?.trim() || bienvenida || 'Lo siento, no entendí eso.';
     }
 
-    // 🧠 Inteligencia de ventas y seguimiento
-    if (userInput) {
-      try {
-        const { intencion, nivel_interes } = await detectarIntencion(userInput);
+    // 🧠 Inteligencia de ventas
+    try {
+      const { intencion, nivel_interes } = await detectarIntencion(userInput);
 
-        await pool.query(
-          `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [tenant.id, fromNumber, 'whatsapp', userInput, intencion, nivel_interes]
+      await pool.query(
+        `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
+         VALUES ($1, $2, 'whatsapp', $3, $4, $5)`,
+        [tenant.id, fromNumber, userInput, intencion, nivel_interes]
+      );
+
+      console.log("✅ Intención detectada y guardada:", intencion, nivel_interes);
+
+      // 📩 Seguimiento automático
+      if (nivel_interes >= 4) {
+        const configRes = await pool.query(
+          `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
+          [tenant.id]
         );
+        const config = configRes.rows[0];
 
-        console.log("✅ Intención detectada y guardada:", intencion, nivel_interes);
+        if (config) {
+          let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
+          const intencionLower = intencion.toLowerCase();
 
-        if (nivel_interes >= 4) {
-          const configRes = await pool.query(
-            `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
-            [tenant.id]
+          if (intencionLower.includes('precio') && config.mensaje_precio) mensajeSeguimiento = config.mensaje_precio;
+          else if (intencionLower.includes('agendar') && config.mensaje_agendar) mensajeSeguimiento = config.mensaje_agendar;
+          else if (intencionLower.includes('ubicacion') && config.mensaje_ubicacion) mensajeSeguimiento = config.mensaje_ubicacion;
+
+          const fechaEnvio = new Date();
+          fechaEnvio.setMinutes(fechaEnvio.getMinutes() + (config.minutos_espera || 5));
+
+          await pool.query(
+            `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
+             VALUES ($1, 'whatsapp', $2, $3, $4, false)`,
+            [tenant.id, fromNumber, mensajeSeguimiento, fechaEnvio]
           );
-          const config = configRes.rows[0];
 
-          if (config) {
-            let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
-            const intencionDetectada = intencion.toLowerCase();
-
-            if (intencionDetectada.includes('precio') && config.mensaje_precio) {
-              mensajeSeguimiento = config.mensaje_precio;
-            } else if (intencionDetectada.includes('agendar') && config.mensaje_agendar) {
-              mensajeSeguimiento = config.mensaje_agendar;
-            } else if (intencionDetectada.includes('ubicacion') && config.mensaje_ubicacion) {
-              mensajeSeguimiento = config.mensaje_ubicacion;
-            }
-
-            const fechaEnvio = new Date();
-            fechaEnvio.setMinutes(fechaEnvio.getMinutes() + (config.minutos_espera || 5));
-
-            await pool.query(
-              `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-               VALUES ($1, $2, $3, $4, $5, false)`,
-              [tenant.id, 'whatsapp', fromNumber, mensajeSeguimiento, fechaEnvio]
-            );
-
-            console.log("📤 Mensaje de seguimiento programado:", mensajeSeguimiento);
-          }
+          console.log("📤 Seguimiento programado:", mensajeSeguimiento);
         }
-
-      } catch (err) {
-        console.error("❌ Error analizando intención o programando seguimiento:", err);
       }
+    } catch (err) {
+      console.error("❌ Error en inteligencia de ventas:", err);
     }
 
-    // 💾 Guardar mensaje del usuario
+    // 💾 Guardar mensaje usuario y bot
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'whatsapp', $3)`,
       [tenant.id, userInput, fromNumber]
     );
-
-    // 💾 Guardar respuesta del bot
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
        VALUES ($1, 'bot', $2, NOW(), 'whatsapp')`,
       [tenant.id, respuesta]
     );
 
-    // 💾 Guardar interacción
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, created_at)
        VALUES ($1, 'whatsapp', NOW())`,
       [tenant.id]
     );
 
-    // 🔢 Incrementar contador
     await incrementarUsoPorNumero(numero);
 
-    // 📤 Enviar respuesta a WhatsApp
     const twiml = new MessagingResponse();
     twiml.message(respuesta);
     res.type('text/xml');

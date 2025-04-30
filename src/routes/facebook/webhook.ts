@@ -1,17 +1,14 @@
 // backend/src/routes/facebook/webhook.ts
 import express from 'express';
 import axios from 'axios';
-import pool from '../../lib/db'; // Ajusta si tu conexión es diferente
-import { getRespuestaCompleta } from '../../lib/getRespuestaCompleta'; // Aquí ya OpenAI se usa de forma segura
+import pool from '../../lib/db';
+import { getRespuestaCompleta } from '../../lib/getRespuestaCompleta';
 
 const router = express.Router();
 
-const mensajeDefault = 'Lo siento, no tengo una respuesta para eso en este momento.';
-
-// Verificación de Webhook
+// ✅ Verificación de Webhook
 router.get('/api/facebook/webhook', (req, res) => {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || 'testtoken';
-
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
@@ -19,14 +16,16 @@ router.get('/api/facebook/webhook', (req, res) => {
   if (mode && token) {
     if (mode === 'subscribe' && token === VERIFY_TOKEN) {
       console.log('✅ Webhook de Facebook verificado');
-      res.status(200).send(challenge);
+      return res.status(200).send(challenge);
     } else {
-      res.sendStatus(403);
+      return res.sendStatus(403);
     }
   }
+
+  res.sendStatus(400);
 });
 
-// Mensajes entrantes
+// ✅ Mensajes entrantes
 router.post('/api/facebook/webhook', async (req, res) => {
   try {
     const body = req.body;
@@ -46,20 +45,20 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
           console.log('📩 Mensaje recibido:', userMessage);
 
-          // 1. Buscar el tenant por page_id
-          const { rows } = await pool.query(
-            'SELECT facebook_access_token, prompt_meta, bienvenida_meta, horario_atencion FROM tenants WHERE facebook_page_id = $1 LIMIT 1',
+          // 🔍 Buscar tenant por Facebook Page ID
+          const tenantRes = await pool.query(
+            'SELECT * FROM tenants WHERE facebook_page_id = $1 LIMIT 1',
             [pageId]
           );
 
-          if (rows.length === 0) {
+          if (tenantRes.rows.length === 0) {
             console.error('❌ No se encontró tenant para page_id:', pageId);
             continue;
           }
 
-          const tenant = rows[0];
+          const tenant = tenantRes.rows[0];
+          const tenantId = tenant.id; // UUID válido
           const accessToken = tenant.facebook_access_token;
-          tenant.id = tenant.id || pageId; // asegurarse que tenga tenant.id
 
           const respuestaFinal = await getRespuestaCompleta({
             canal: 'facebook',
@@ -67,7 +66,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
             input: userMessage,
           });
 
-          // 5. Enviar respuesta
+          // ✅ Enviar respuesta
           await axios.post(
             `https://graph.facebook.com/v19.0/me/messages`,
             {
