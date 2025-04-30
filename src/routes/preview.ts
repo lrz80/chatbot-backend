@@ -29,7 +29,7 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
   try {
     const tenant_id = req.user?.tenant_id;
     const { message } = req.body;
-    const canal = 'preview-meta';
+    const canal = req.body.canal || 'preview-meta';
 
     if (!tenant_id) return res.status(401).json({ error: 'Tenant no autenticado' });
 
