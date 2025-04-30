@@ -2,36 +2,28 @@ import express from 'express';
 import axios from 'axios';
 import pool from '../../lib/db';
 import { getRespuestaCompleta } from '../../lib/getRespuestaCompleta';
+import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 
 const router = express.Router();
 
-// ✅ Verificación de Webhook
 router.get('/api/facebook/webhook', (req, res) => {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || 'testtoken';
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  if (mode && token) {
-    if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-      console.log('✅ Webhook de Facebook verificado');
-      return res.status(200).send(challenge);
-    } else {
-      return res.sendStatus(403);
-    }
+  if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
+    console.log('✅ Webhook de Meta verificado');
+    return res.status(200).send(challenge);
   }
 
-  res.sendStatus(400);
+  res.sendStatus(403);
 });
 
-// ✅ Mensajes entrantes
 router.post('/api/facebook/webhook', async (req, res) => {
   try {
     const body = req.body;
-
-    if (body.object !== 'page') {
-      return res.sendStatus(404);
-    }
+    if (body.object !== 'page') return res.sendStatus(404);
 
     for (const entry of body.entry) {
       const pageId = entry.id;
@@ -41,12 +33,10 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         if (messagingEvent.message && !messagingEvent.message.is_echo) {
           const userMessage = messagingEvent.message.text || '';
-
           console.log('📩 Mensaje recibido:', userMessage);
 
-          // 🔍 Buscar tenant por Facebook Page ID
           const tenantRes = await pool.query(
-            'SELECT * FROM tenants WHERE facebook_page_id = $1 LIMIT 1',
+            'SELECT * FROM tenants WHERE facebook_page_id = $1 OR instagram_page_id = $1 LIMIT 1',
             [pageId]
           );
 
@@ -57,38 +47,42 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
           const tenant = tenantRes.rows[0];
           const tenantId = tenant.id;
+          const canal = tenant.facebook_page_id === pageId ? 'facebook' : 'instagram';
           const accessToken = tenant.facebook_access_token;
 
           const respuestaFinal = await getRespuestaCompleta({
-            canal: 'facebook',
+            canal,
             tenant,
             input: userMessage,
           });
 
-          // 💾 Guardar mensaje del cliente
+          // Guardar mensaje del cliente
           await pool.query(
             `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
-             VALUES ($1, 'user', $2, NOW(), 'facebook', $3)`,
-            [tenantId, userMessage, senderId]
+             VALUES ($1, 'user', $2, NOW(), $3, $4)`,
+            [tenantId, userMessage, canal, senderId]
           );
 
-          // 💾 Guardar respuesta del bot
+          // Guardar mensaje del bot
           await pool.query(
             `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
-             VALUES ($1, 'bot', $2, NOW(), 'facebook')`,
-            [tenantId, respuestaFinal]
+             VALUES ($1, 'bot', $2, NOW(), $3)`,
+            [tenantId, respuestaFinal, canal]
           );
 
-          // 💾 Guardar interacción
+          // Registrar interacción
           await pool.query(
             `INSERT INTO interactions (tenant_id, canal, created_at)
-             VALUES ($1, 'facebook', NOW())`,
-            [tenantId]
+             VALUES ($1, $2, NOW())`,
+            [tenantId, canal]
           );
 
-          // ✅ Enviar respuesta
+          // Incrementar contador de uso
+          await incrementarUsoPorNumero(senderId);
+
+          // Enviar respuesta al usuario
           await axios.post(
-            `https://graph.facebook.com/v19.0/me/messages`,
+            'https://graph.facebook.com/v19.0/me/messages',
             {
               recipient: { id: senderId },
               message: { text: respuestaFinal },
@@ -98,14 +92,14 @@ router.post('/api/facebook/webhook', async (req, res) => {
             }
           );
 
-          console.log('✅ Respuesta enviada y guardada');
+          console.log(`✅ Respuesta enviada por ${canal}`);
         }
       }
     }
 
     res.status(200).send('EVENT_RECEIVED');
   } catch (error: any) {
-    console.error('❌ Error en webhook:', error.response?.data || error.message || error);
+    console.error('❌ Error en webhook Meta:', error.response?.data || error.message || error);
     res.sendStatus(500);
   }
 });
