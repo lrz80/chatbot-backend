@@ -189,8 +189,14 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         logo_url = $12,
         prompt_meta = $13,
         bienvenida_meta = $14,
+        facebook_page_id = $15,
+        facebook_page_name = $16,
+        facebook_access_token = $17,
+        instagram_page_id = $18,
+        instagram_page_name = $19,
+        instagram_business_account_id = $20,
         onboarding_completado = true
-      WHERE id = $15`,
+      WHERE id = $21`,
       [
         nombre_negocio || current.name,
         categoria || current.categoria,
@@ -206,9 +212,18 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         logo_url || current.logo_url,
         prompt_meta || current.prompt_meta,
         bienvenida_meta || current.bienvenida_meta,
+    
+        // 👇 estos deben venir en el body, aunque sean null
+        req.body.facebook_page_id ?? current.facebook_page_id,
+        req.body.facebook_page_name ?? current.facebook_page_name,
+        req.body.facebook_access_token ?? current.facebook_access_token,
+        req.body.instagram_page_id ?? current.instagram_page_id,
+        req.body.instagram_page_name ?? current.instagram_page_name,
+        req.body.instagram_business_account_id ?? current.instagram_business_account_id,
+    
         tenant_id,
       ]
-    );
+    );    
 
     return res.status(200).json({ message: 'Perfil actualizado correctamente' });
   } catch (error) {
