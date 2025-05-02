@@ -212,18 +212,18 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         logo_url || current.logo_url,
         prompt_meta || current.prompt_meta,
         bienvenida_meta || current.bienvenida_meta,
-    
-        // 👇 estos deben venir en el body, aunque sean null
-        req.body.facebook_page_id ?? current.facebook_page_id,
-        req.body.facebook_page_name ?? current.facebook_page_name,
-        req.body.facebook_access_token ?? current.facebook_access_token,
-        req.body.instagram_page_id ?? current.instagram_page_id,
-        req.body.instagram_page_name ?? current.instagram_page_name,
-        req.body.instagram_business_account_id ?? current.instagram_business_account_id,
-    
+
+        // ✅ Estos campos ahora aceptan null correctamente
+        typeof req.body.facebook_page_id !== 'undefined' ? req.body.facebook_page_id : current.facebook_page_id,
+        typeof req.body.facebook_page_name !== 'undefined' ? req.body.facebook_page_name : current.facebook_page_name,
+        typeof req.body.facebook_access_token !== 'undefined' ? req.body.facebook_access_token : current.facebook_access_token,
+        typeof req.body.instagram_page_id !== 'undefined' ? req.body.instagram_page_id : current.instagram_page_id,
+        typeof req.body.instagram_page_name !== 'undefined' ? req.body.instagram_page_name : current.instagram_page_name,
+        typeof req.body.instagram_business_account_id !== 'undefined' ? req.body.instagram_business_account_id : current.instagram_business_account_id,
+
         tenant_id,
       ]
-    );    
+    );
 
     return res.status(200).json({ message: 'Perfil actualizado correctamente' });
   } catch (error) {
