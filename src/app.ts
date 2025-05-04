@@ -45,6 +45,7 @@ import sentMessagesRoute from './routes/follow-up/sentMessages';
 import facebookOauthCallback from './routes/facebook/oauth-callback';
 import facebookWebhook from './routes/facebook/webhook';
 import * as path from 'path';
+import deleteAccountRoute from './routes/auth/delete';
 
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
 
@@ -123,6 +124,7 @@ app.use('/api/jobs/send-scheduled-now', sendScheduledNowRouter);
 app.use('/api/follow-up/sent-messages', sentMessagesRoute);
 app.use(facebookOauthCallback);
 app.use(facebookWebhook);
+app.use('/api/delete-account', deleteAccountRoute);
 
 
 // ✅ Ruta base
