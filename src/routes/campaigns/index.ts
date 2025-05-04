@@ -1,5 +1,7 @@
 import express from "express";
 import multer from "multer";
+import path from "path";
+import fs from "fs";
 import pool from "../../lib/db";
 import { sendWhatsApp } from "../../lib/senders/whatsapp";
 import { sendSMS } from "../../lib/senders/sms";
@@ -7,7 +9,20 @@ import { sendEmail } from "../../lib/senders/email";
 import { authenticateUser } from "../../middleware/auth";
 
 const router = express.Router();
-const upload = multer();
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, '../../../public/uploads');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueName = Date.now() + '-' + file.originalname;
+    cb(null, uniqueName);
+  },
+});
+
+const upload = multer({ storage });
 
 const CANAL_LIMITES: Record<string, number> = {
   whatsapp: 300,
@@ -46,7 +61,7 @@ router.get("/usage", authenticateUser, async (req, res) => {
   }
 });
 
-router.post("/", authenticateUser, upload.none(), async (req, res) => {
+router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => {
   try {
     const { nombre, canal, contenido, fecha_envio, segmentos } = req.body;
     const { tenant_id } = req.user as { uid: string; tenant_id: string };
@@ -57,7 +72,6 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
 
     const segmentosParsed = JSON.parse(segmentos);
 
-    // ✅ Verificar si excede el límite mensual por canal
     const usoActual = await pool.query(
       `SELECT SUM(cantidad) AS total FROM campaign_usage
        WHERE tenant_id = $1 AND canal = $2 AND fecha_envio >= date_trunc('month', CURRENT_DATE)`,
@@ -84,27 +98,22 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
 
     const { twilio_number, twilio_sms_number, name: nombreNegocio } = result.rows[0];
 
+    const imagen_url = req.file ? `/uploads/${req.file.filename}` : null;
+
     switch (canal) {
-      case "whatsapp": {
-        if (!twilio_number) {
-          return res.status(400).json({ error: "Número de WhatsApp no asignado." });
-        }
+      case "whatsapp":
+        if (!twilio_number) return res.status(400).json({ error: "Número de WhatsApp no asignado." });
         await sendWhatsApp(contenido, segmentosParsed, `whatsapp:${twilio_number}`);
         break;
-      }
 
-      case "sms": {
-        if (!twilio_sms_number) {
-          return res.status(400).json({ error: "Número SMS no asignado." });
-        }
+      case "sms":
+        if (!twilio_sms_number) return res.status(400).json({ error: "Número SMS no asignado." });
         await sendSMS(contenido, segmentosParsed, twilio_sms_number);
         break;
-      }
 
-      case "email": {
+      case "email":
         await sendEmail(contenido, segmentosParsed, nombreNegocio || "Tu Negocio");
         break;
-      }
 
       default:
         return res.status(400).json({ error: "Canal no válido." });
@@ -120,7 +129,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
         tenant_id,
         nombre,
         contenido,
-        null,
+        imagen_url,
         canal,
         JSON.stringify(segmentosParsed),
         fecha_envio,

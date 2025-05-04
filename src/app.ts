@@ -109,7 +109,7 @@ app.use('/api/stripe', checkoutRoute); // otras rutas de Stripe (no webhook)
 app.use('/api/flows', flowsRoutes);
 app.use('/api/stats', statsKpisRouter);
 app.use('/api/upload-logo', uploadLogoRoute);
-app.use('/uploads', express.static('uploads'));
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.use("/api/campaigns", campaignsRoutes);
 app.use("/api/contactos", uploadContactos);
 app.use("/api/contactos", deleteContactos);

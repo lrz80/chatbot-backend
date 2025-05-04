@@ -5,7 +5,7 @@ import { authenticateUser } from '../middleware/auth';
 
 const router = express.Router();
 
-// ✅ GET: Perfil del negocio
+// ✅ GET: Perfil del negocio + FAQs e Intents por canal
 router.get('/', authenticateUser, async (req: any, res: Response) => {
   try {
     const uid = req.user?.uid;
@@ -28,6 +28,19 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     `, [tenant_id]);
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
+
+    // ✅ Canal actual (viene por query string, por defecto 'whatsapp')
+    const canal = req.query.canal || 'whatsapp';
+
+    // ✅ Traer FAQs e Intents del canal específico
+    const faqsRes = await pool.query(
+      'SELECT id, pregunta, respuesta FROM faqs WHERE tenant_id = $1 AND canal = $2 ORDER BY id',
+      [tenant_id, canal]
+    );
+    const intentsRes = await pool.query(
+      'SELECT id, nombre, ejemplos, respuesta FROM intents WHERE tenant_id = $1 AND canal = $2 ORDER BY id',
+      [tenant_id, canal]
+    );
 
     return res.status(200).json({
       uid: user.uid,
@@ -53,13 +66,17 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       logo_url: tenant.logo_url || '',
       plan: tenant.plan || '',
       fecha_registro: tenant.fecha_registro || null,
-      
-      // 👇 Agregamos los nuevos campos de Facebook e Instagram
+
+      // Datos Meta
       facebook_page_id: tenant.facebook_page_id || '',
       facebook_page_name: tenant.facebook_page_name || '',
       facebook_access_token: tenant.facebook_access_token || '',
       instagram_page_id: tenant.instagram_page_id || '',
       instagram_page_name: tenant.instagram_page_name || '',
+
+      // ✅ Nuevos datos por canal
+      faq: faqsRes.rows,
+      intents: intentsRes.rows,
     });
   } catch (error) {
     console.error('❌ Error en GET /api/settings:', error);
@@ -67,7 +84,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
   }
 });
 
-// ✅ POST: Guardar cambios iniciales del negocio
+// ✅ POST: Guardar cambios iniciales del negocio + faqs/intents por canal
 router.post('/', authenticateUser, async (req: any, res: Response) => {
   try {
     const tenant_id = req.user?.tenant_id;
@@ -89,6 +106,9 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
       info_clave,
       limite_uso,
       logo_url,
+      faq = [],
+      intents = [],
+      canal = 'whatsapp'
     } = req.body;
 
     if (!nombre_negocio) {
@@ -99,6 +119,7 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
     const existing = current.rows[0];
     if (!existing) return res.status(404).json({ error: 'Negocio no encontrado' });
 
+    // ✅ Actualizar datos generales del negocio
     await pool.query(
       `UPDATE tenants SET 
         name = $1,
@@ -137,6 +158,24 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
       ]
     );
 
+    // ✅ Guardar FAQs por canal
+    await pool.query('DELETE FROM faqs WHERE tenant_id = $1 AND canal = $2', [tenant_id, canal]);
+    for (const item of faq) {
+      await pool.query(
+        'INSERT INTO faqs (tenant_id, pregunta, respuesta, canal) VALUES ($1, $2, $3, $4)',
+        [tenant_id, item.pregunta, item.respuesta, canal]
+      );
+    }
+
+    // ✅ Guardar Intents por canal
+    await pool.query('DELETE FROM intents WHERE tenant_id = $1 AND canal = $2', [tenant_id, canal]);
+    for (const item of intents) {
+      await pool.query(
+        'INSERT INTO intents (tenant_id, nombre, ejemplos, respuesta, canal) VALUES ($1, $2, $3, $4, $5)',
+        [tenant_id, item.nombre, item.ejemplos, item.respuesta, canal]
+      );
+    }
+
     res.status(200).json({ success: true });
   } catch (error) {
     console.error('❌ Error en POST /api/settings:', error);
@@ -144,7 +183,7 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
   }
 });
 
-// ✅ PUT: Actualizar perfil de negocio
+// ✅ PUT: Actualizar perfil de negocio + faqs e intents por canal
 router.put('/', authenticateUser, async (req: any, res: Response) => {
   try {
     const tenant_id = req.user?.tenant_id;
@@ -167,12 +206,22 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
       logo_url,
       prompt_meta,
       bienvenida_meta,
+      facebook_page_id,
+      facebook_page_name,
+      facebook_access_token,
+      instagram_page_id,
+      instagram_page_name,
+      instagram_business_account_id,
+      faq = [],
+      intents = [],
+      canal = 'whatsapp',
     } = req.body;
 
     const existingRes = await pool.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
     const current = existingRes.rows[0];
     if (!current) return res.status(404).json({ error: 'Tenant no encontrado' });
 
+    // ✅ Actualizar negocio
     await pool.query(
       `UPDATE tenants SET 
         name = $1,
@@ -213,17 +262,33 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         prompt_meta || current.prompt_meta,
         bienvenida_meta || current.bienvenida_meta,
 
-        // ✅ Estos campos ahora aceptan null correctamente
-        typeof req.body.facebook_page_id !== 'undefined' ? req.body.facebook_page_id : current.facebook_page_id,
-        typeof req.body.facebook_page_name !== 'undefined' ? req.body.facebook_page_name : current.facebook_page_name,
-        typeof req.body.facebook_access_token !== 'undefined' ? req.body.facebook_access_token : current.facebook_access_token,
-        typeof req.body.instagram_page_id !== 'undefined' ? req.body.instagram_page_id : current.instagram_page_id,
-        typeof req.body.instagram_page_name !== 'undefined' ? req.body.instagram_page_name : current.instagram_page_name,
-        typeof req.body.instagram_business_account_id !== 'undefined' ? req.body.instagram_business_account_id : current.instagram_business_account_id,
+        typeof facebook_page_id !== 'undefined' ? facebook_page_id : current.facebook_page_id,
+        typeof facebook_page_name !== 'undefined' ? facebook_page_name : current.facebook_page_name,
+        typeof facebook_access_token !== 'undefined' ? facebook_access_token : current.facebook_access_token,
+        typeof instagram_page_id !== 'undefined' ? instagram_page_id : current.instagram_page_id,
+        typeof instagram_page_name !== 'undefined' ? instagram_page_name : current.instagram_page_name,
+        typeof instagram_business_account_id !== 'undefined' ? instagram_business_account_id : current.instagram_business_account_id,
 
         tenant_id,
       ]
     );
+
+    // ✅ Reemplazar faqs e intents del canal actual
+    await pool.query('DELETE FROM faqs WHERE tenant_id = $1 AND canal = $2', [tenant_id, canal]);
+    for (const item of faq) {
+      await pool.query(
+        'INSERT INTO faqs (tenant_id, pregunta, respuesta, canal) VALUES ($1, $2, $3, $4)',
+        [tenant_id, item.pregunta, item.respuesta, canal]
+      );
+    }
+
+    await pool.query('DELETE FROM intents WHERE tenant_id = $1 AND canal = $2', [tenant_id, canal]);
+    for (const item of intents) {
+      await pool.query(
+        'INSERT INTO intents (tenant_id, nombre, ejemplos, respuesta, canal) VALUES ($1, $2, $3, $4, $5)',
+        [tenant_id, item.nombre, item.ejemplos, item.respuesta, canal]
+      );
+    }
 
     return res.status(200).json({ message: 'Perfil actualizado correctamente' });
   } catch (error) {
