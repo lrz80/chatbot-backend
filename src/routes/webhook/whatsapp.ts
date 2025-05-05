@@ -91,8 +91,7 @@ router.post('/', async (req: Request, res: Response) => {
       return res.sendStatus(404);
     }
 
-    const saludo = `Soy Amy, bienvenido a ${tenant.name || 'nuestro negocio'}.`;
-    const promptBase = `${saludo}\n${getPromptPorCanal('whatsapp', tenant)}`;
+    const promptBase = getPromptPorCanal('whatsapp', tenant);
     const bienvenida = getBienvenidaPorCanal('whatsapp', tenant);
 
     // 📥 Leer Flows

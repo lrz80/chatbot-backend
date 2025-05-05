@@ -4,6 +4,8 @@ import pool from '../../lib/db';
 import { getRespuestaCompleta } from '../../lib/getRespuestaCompleta';
 import { detectarIntencion } from '../../lib/detectarIntencion';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
+import { getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
+
 
 const router = express.Router();
 

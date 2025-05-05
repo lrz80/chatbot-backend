@@ -6,6 +6,7 @@ import { authenticateUser } from '../middleware/auth';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../lib/getPromptPorCanal';
 import { buscarRespuestaDesdeFlows } from '../lib/buscarRespuestaDesdeFlows';
 
+
 const router = Router();
 
 interface AuthenticatedRequest extends Request {

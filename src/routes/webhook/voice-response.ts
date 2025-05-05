@@ -1,5 +1,3 @@
-// src/routes/webhook/voice-response.ts
-
 import { Router } from 'express';
 import { twiml } from 'twilio';
 import pool from '../../lib/db';
@@ -14,6 +12,14 @@ function normalizarTexto(texto: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim();
+}
+
+// 🕒 Generar saludo por hora
+function obtenerSaludoHora(): string {
+  const hora = new Date().getHours();
+  if (hora < 12) return 'Buenos días';
+  if (hora < 18) return 'Buenas tardes';
+  return 'Buenas noches';
 }
 
 router.post('/', async (req, res) => {
@@ -38,7 +44,11 @@ router.post('/', async (req, res) => {
     const config = configRes.rows[0];
     if (!config) return res.sendStatus(404);
 
-    const prompt = config.system_prompt || 'Eres un asistente telefónico amigable y profesional.';
+    const saludoHora = obtenerSaludoHora();
+    const nombreNegocio = tenant.name || 'nuestro negocio';
+    const saludoInicial = `${saludoHora}, mi nombre es Amy, asistente de ${nombreNegocio}.`;
+
+    const prompt = `${saludoInicial}\n${config.system_prompt || 'Eres un asistente telefónico amigable y profesional.'}`;
     const voiceLang = config.idioma || 'es-ES';
     const voiceName = config.voice_name || 'alice';
 
@@ -120,16 +130,14 @@ router.post('/', async (req, res) => {
 
       const intencionRes = await openai.chat.completions.create({
         model: 'gpt-4',
-        messages: [
-          { role: 'system', content: intencionPrompt },
-        ],
+        messages: [{ role: 'system', content: intencionPrompt }],
       });
 
       const intencion = intencionRes.choices[0].message?.content?.toLowerCase().trim() || '';
 
       if (
-        ['comprar', 'compra', 'pagar', 'agendar', 'reservar', 'confirmar'].some(palabra =>
-          intencion.includes(palabra)
+        ['comprar', 'compra', 'pagar', 'agendar', 'reservar', 'confirmar'].some(p =>
+          intencion.includes(p)
         )
       ) {
         await pool.query(
@@ -158,9 +166,7 @@ Elige solo una palabra: enfado, tristeza, neutral, satisfacción o entusiasmo.
 
       const emotionRes = await openai.chat.completions.create({
         model: 'gpt-4',
-        messages: [
-          { role: 'system', content: emotionPrompt },
-        ],
+        messages: [{ role: 'system', content: emotionPrompt }],
       });
 
       emocion = emotionRes.choices[0].message?.content?.trim().toLowerCase() || 'neutral';
