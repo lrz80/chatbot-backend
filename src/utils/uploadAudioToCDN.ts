@@ -24,10 +24,11 @@ export async function guardarAudioEnCDN(buffer: Buffer, tenantId: string): Promi
       Key: filename,
       Body: buffer,
       ContentType: 'audio/mpeg',
-      ACL: 'public-read',
+      // ❌ NO USES ACL si el bucket no lo permite
     });
 
     await s3.send(command);
+
     return `${publicUrl}/${filename}`;
   } catch (error) {
     console.error('❌ Error al guardar audio en CDN:', error);
