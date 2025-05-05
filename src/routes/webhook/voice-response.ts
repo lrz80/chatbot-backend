@@ -1,20 +1,17 @@
+// ✅ src/routes/webhook/voice-response.ts
 import { Router } from 'express';
 import { twiml } from 'twilio';
+import axios from 'axios';
 import pool from '../../lib/db';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
+import { guardarAudioEnCDN } from '../../utils/guardarAudioEnCDN';
 
 const router = Router();
 
-// 🔍 Función para normalizar texto (sin tildes, minúsculas)
 function normalizarTexto(texto: string): string {
-  return texto
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim();
+  return texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 }
 
-// 🕒 Generar saludo por hora
 function obtenerSaludoHora(): string {
   const hora = new Date().getHours();
   if (hora < 12) return 'Buenos días';
@@ -30,10 +27,7 @@ router.post('/', async (req, res) => {
   const userInput = req.body.SpeechResult || 'No se recibió mensaje.';
 
   try {
-    const tenantRes = await pool.query(
-      'SELECT * FROM tenants WHERE twilio_voice_number = $1',
-      [numero]
-    );
+    const tenantRes = await pool.query('SELECT * FROM tenants WHERE twilio_voice_number = $1', [numero]);
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.sendStatus(404);
 
@@ -47,19 +41,27 @@ router.post('/', async (req, res) => {
     const saludoHora = obtenerSaludoHora();
     const nombreNegocio = tenant.name || 'nuestro negocio';
     const saludoInicial = `${saludoHora}, mi nombre es Amy, asistente de ${nombreNegocio}.`;
-    
-    const prompt = `${saludoInicial}\n${config.system_prompt || 'Eres un asistente telefónico amigable y profesional.'}`;
-    const voiceLang = config.idioma || 'es-ES';
-    const voiceName = config.voice_name || 'alice';
+
+    const mensajesPreviosRes = await pool.query(
+      `SELECT COUNT(*) FROM messages WHERE tenant_id = $1 AND from_number = $2 AND canal = 'voice'`,
+      [tenant.id, fromNumber]
+    );
+    const esPrimeraVez = parseInt(mensajesPreviosRes.rows[0].count, 10) === 0;
+
+    const prompt = esPrimeraVez
+      ? `${saludoInicial}\n${config.system_prompt || 'Eres un asistente telefónico amigable y profesional.'}`
+      : config.system_prompt || 'Eres un asistente telefónico amigable y profesional.';
+
+    const voiceId = config.voice_name || 'EXAVITQu4vr4xnSDxMaL';
 
     const mensajeUsuario = normalizarTexto(userInput);
 
-    // 📚 Leer FAQs
+    let respuesta = null;
     let respuestaFAQ = null;
+
     try {
       const faqsRes = await pool.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenant.id]);
       const faqs = faqsRes.rows || [];
-
       for (const faq of faqs) {
         if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
           respuestaFAQ = faq.respuesta;
@@ -70,12 +72,9 @@ router.post('/', async (req, res) => {
       console.warn('⚠️ No se pudieron cargar FAQs:', e);
     }
 
-    let respuesta = null;
-
     if (respuestaFAQ) {
       respuesta = respuestaFAQ;
     } else {
-      // 🔑 Instanciar OpenAI solo si es necesario
       const { default: OpenAI } = await import('openai');
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
@@ -89,6 +88,32 @@ router.post('/', async (req, res) => {
 
       respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
     }
+
+    const textoFinal = esPrimeraVez ? `${saludoInicial}. ${respuesta}` : respuesta;
+
+    // 🎧 Generar audio con ElevenLabs
+    const audioRes = await axios.post(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+      {
+        text: textoFinal,
+        model_id: 'eleven_monolingual_v1',
+        voice_settings: {
+          stability: 0.4,
+          similarity_boost: 0.8,
+        },
+      },
+      {
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY!,
+          'Content-Type': 'application/json',
+          Accept: 'audio/mpeg',
+        },
+        responseType: 'arraybuffer',
+      }
+    );
+
+    const audioBuffer = Buffer.from(audioRes.data);
+    const audioUrl = await guardarAudioEnCDN(audioBuffer); // 🔗 URL final en tu CDN
 
     // 🧠 Buscar nombre y segmento desde la tabla contactos si existe
     const contactoRes = await pool.query(
@@ -174,11 +199,11 @@ Elige solo una palabra: enfado, tristeza, neutral, satisfacción o entusiasmo.
       console.warn('⚠️ No se pudo analizar emoción:', e);
     }
 
-    // 💾 Guardar mensaje y respuesta
+    // Guardar mensaje y respuesta
     await pool.query(
-      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, emotion)
-       VALUES ($1, 'user', $2, NOW(), 'voice', $3, $4)`,
-      [tenant.id, userInput, fromNumber, emocion]
+      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
+       VALUES ($1, 'user', $2, NOW(), 'voice', $3)`,
+      [tenant.id, userInput, fromNumber]
     );
 
     await pool.query(
@@ -198,19 +223,19 @@ Elige solo una palabra: enfado, tristeza, neutral, satisfacción o entusiasmo.
     const finConversacion = /(gracias|eso es todo|nada más|bye|adiós)/i.test(userInput);
 
     const response = new twiml.VoiceResponse();
-    response.say({ voice: voiceName, language: voiceLang }, respuesta);
+    response.play(audioUrl); // ✅ Usamos solo URL pública, sin base64
 
     if (!finConversacion) {
       response.gather({
         input: ['speech'],
         action: '/webhook/voice-response',
         method: 'POST',
-        language: voiceLang,
+        language: config.idioma || 'es-ES',
         speechTimeout: 'auto',
       });
     } else {
       response.say(
-        { voice: voiceName, language: voiceLang },
+        { voice: 'Polly.Conchita', language: config.idioma || 'es-ES' },
         'Gracias por tu llamada. ¡Hasta luego!'
       );
       response.hangup();

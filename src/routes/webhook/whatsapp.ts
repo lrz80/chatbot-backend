@@ -92,7 +92,7 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     const promptBase = getPromptPorCanal('whatsapp', tenant);
-    const bienvenida = getBienvenidaPorCanal('whatsapp', tenant);
+    const canal = 'whatsapp';
 
     // 📥 Leer Flows
     let flows: any[] = [];

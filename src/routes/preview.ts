@@ -39,7 +39,6 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     if (!tenant) return res.status(404).json({ error: 'Negocio no encontrado' });
 
     const prompt = getPromptPorCanal(canal, tenant);
-    const bienvenida = getBienvenidaPorCanal(canal, tenant);
     const mensajeUsuario = normalizarTexto(message);
 
     // ✅ Mostrar saludo si es un saludo inicial
@@ -92,7 +91,7 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
       ],
     });
 
-    const respuestaIA = completion.choices[0]?.message?.content?.trim() || bienvenida || 'Lo siento, no entendí eso.';
+    const respuestaIA = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal(canal, tenant) || 'Lo siento, no entendí eso.';
     console.log("✅ Respuesta generada por OpenAI:", respuestaIA);  // 🔍 LOG PARA DEBUG
     return res.status(200).json({ response: respuestaIA });
 
