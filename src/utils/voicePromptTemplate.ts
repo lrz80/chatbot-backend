@@ -24,32 +24,29 @@ export async function PromptTemplate({
   let funciones = sanitize(funciones_asistente || "");
   let info = sanitize(info_clave || "");
 
-  // Si no se enviaron manualmente, buscar desde DB (solo como fallback)
   if (!funciones || !info) {
     try {
       const result = await pool.query(
-        "SELECT name, funciones_asistente, info_clave FROM tenants WHERE id = $1",
+        "SELECT funciones_asistente, info_clave FROM tenants WHERE id = $1",
         [tenant_id]
       );
-      const negocio = result.rows[0];
-
-      if (!funciones && negocio?.funciones_asistente)
-        funciones = sanitize(negocio.funciones_asistente);
-      if (!info && negocio?.info_clave)
-        info = sanitize(negocio.info_clave);
+      const data = result.rows[0];
+      if (!funciones && data?.funciones_asistente)
+        funciones = sanitize(data.funciones_asistente);
+      if (!info && data?.info_clave)
+        info = sanitize(data.info_clave);
     } catch (err) {
-      console.error("❌ Error al consultar tenant para voicePromptTemplate:", err);
+      console.error("❌ Error al consultar tenant para prompt:", err);
     }
   }
 
-  // Valores por defecto si siguen vacíos
-  if (!funciones) funciones = "Responder preguntas frecuentes del negocio.";
-  if (!info) info = "El negocio ofrece servicios profesionales en su rubro.";
+  if (!funciones) funciones = "Responder preguntas frecuentes.";
+  if (!info) info = "El negocio ofrece servicios profesionales.";
 
   const categoriasMap: Record<string, string> = {
-    beauty: idioma === "es-ES" ? "nuestro centro de belleza" : "beauty center",
-    fitness: idioma === "es-ES" ? "nuestro centro fitness" : "fitness center",
-    default: idioma === "es-ES" ? "nuestro negocio" : "business",
+    beauty: idioma === "es-ES" ? "nuestro centro de belleza" : "our beauty center",
+    fitness: idioma === "es-ES" ? "nuestro centro fitness" : "our fitness center",
+    default: idioma === "es-ES" ? "nuestro negocio" : "our business",
   };
 
   const categoriaTexto = categoriasMap[categoria] || categoriasMap["default"];
@@ -58,18 +55,13 @@ export async function PromptTemplate({
     bienvenida = `Hola, soy Amy. Bienvenido a ${categoriaTexto}. ¿En qué puedo ayudarte?`;
     return {
       bienvenida,
-      prompt: `Actúa como un asistente de voz profesional que responde en español. Tu rol es ayudar a los clientes de un negocio de categoría "${categoria}". 
-Debes ser directo, claro y amable. El asistente debe cumplir las siguientes funciones: ${funciones}.
-Información relevante del negocio: ${info}`,
+      prompt: `Eres un asistente de voz en español. Funciones: ${funciones}. Datos del negocio: ${info}. Responde claro y amable.`,
     };
   }
 
-  // Default a inglés
-  bienvenida = `Hi, I'm Amy. Welcome to our ${categoriaTexto}. How can I help you today?`;
+  bienvenida = `Hi, I'm Amy. Welcome to ${categoriaTexto}. How can I help you?`;
   return {
     bienvenida,
-    prompt: `Act as a professional voice assistant that responds in English. Your role is to help customers of a business in the "${categoria}" category.
-You must be clear, friendly, and helpful. The assistant's functions are: ${funciones}.
-Business information: ${info}`,
+    prompt: `You are a voice assistant in English. Tasks: ${funciones}. Business info: ${info}. Respond clearly and helpfully.`,
   };
 }

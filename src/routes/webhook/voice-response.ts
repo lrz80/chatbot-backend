@@ -156,15 +156,13 @@ router.post('/', async (req, res) => {
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
       const intencionPrompt = `
-    Analiza este mensaje de un cliente por llamada:
+      Mensaje del cliente:
+      "${userInput}"
 
-    "${userInput}"
+      ¿Tiene intención de comprar o agendar?
 
-    Identifica:
-    - Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).
-
-    Responde solo con la intención, como "comprar", "reservar", "cancelar", etc.
-    `;
+      Responde solo con una palabra: comprar, reservar, cancelar, preguntar, otro.
+      `;
 
       const intencionRes = await openai.chat.completions.create({
         model: 'gpt-4',
@@ -195,10 +193,12 @@ router.post('/', async (req, res) => {
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
       const emotionPrompt = `
-Actúa como un analista emocional. Clasifica la emoción dominante en este mensaje del cliente:
-"${userInput}"
+      Mensaje del cliente:
+      "${userInput}"
 
-Elige solo una palabra: enfado, tristeza, neutral, satisfacción o entusiasmo.
+      Detecta la emoción principal.
+
+      Responde solo con una palabra: enfado, tristeza, neutral, satisfacción, entusiasmo.
       `;
 
       const emotionRes = await openai.chat.completions.create({
