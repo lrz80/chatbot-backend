@@ -1,6 +1,10 @@
+// ✅ src/routes/webhook/voice.ts
+
 import { Router } from 'express';
 import { twiml } from 'twilio';
 import pool from '../../lib/db';
+import axios from 'axios';
+import { guardarAudioEnCDN } from '../../utils/uploadAudioToCDN';
 
 const router = Router();
 
@@ -23,15 +27,34 @@ router.post('/', async (req, res) => {
     const config = configRes.rows[0];
     if (!config) return res.sendStatus(404);
 
-    const response = new twiml.VoiceResponse();
+    const voiceId = config.voice_name || 'EXAVITQu4vr4xnSDxMaL';
+    const textoBienvenida = config.welcome_message || 'Hola, ¿en qué puedo ayudarte?';
 
-    response.say(
+    const audioRes = await axios.post(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
       {
-        voice: config.voice_name || 'alice',
-        language: config.idioma || 'es-ES',
+        text: textoBienvenida,
+        model_id: 'eleven_monolingual_v1',
+        voice_settings: {
+          stability: 0.4,
+          similarity_boost: 0.8,
+        },
       },
-      config.welcome_message || 'Hola, ¿en qué puedo ayudarte?'
+      {
+        headers: {
+          'xi-api-key': process.env.ELEVENLABS_API_KEY,
+          'Content-Type': 'application/json',
+          Accept: 'audio/mpeg',
+        },
+        responseType: 'arraybuffer',
+      }
     );
+    
+    const audioBuffer = Buffer.from(audioRes.data);
+    const audioUrl = await guardarAudioEnCDN(audioBuffer, tenant.id);    
+
+    const response = new twiml.VoiceResponse();
+    response.play(audioUrl);
 
     response.gather({
       input: ['speech'],

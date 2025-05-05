@@ -4,12 +4,12 @@ import { twiml } from 'twilio';
 import axios from 'axios';
 import pool from '../../lib/db';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
-import { guardarAudioEnCDN } from '../../utils/guardarAudioEnCDN';
+import { guardarAudioEnCDN } from '../../utils/uploadAudioToCDN';
 
 const router = Router();
 
 function normalizarTexto(texto: string): string {
-  return texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  return texto.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 }
 
 function obtenerSaludoHora(): string {
@@ -53,7 +53,6 @@ router.post('/', async (req, res) => {
       : config.system_prompt || 'Eres un asistente telefónico amigable y profesional.';
 
     const voiceId = config.voice_name || 'EXAVITQu4vr4xnSDxMaL';
-
     const mensajeUsuario = normalizarTexto(userInput);
 
     let respuesta = null;
@@ -91,7 +90,6 @@ router.post('/', async (req, res) => {
 
     const textoFinal = esPrimeraVez ? `${saludoInicial}. ${respuesta}` : respuesta;
 
-    // 🎧 Generar audio con ElevenLabs
     const audioRes = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
       {
@@ -113,9 +111,8 @@ router.post('/', async (req, res) => {
     );
 
     const audioBuffer = Buffer.from(audioRes.data);
-    const audioUrl = await guardarAudioEnCDN(audioBuffer); // 🔗 URL final en tu CDN
+    const audioUrl = await guardarAudioEnCDN(audioBuffer, tenant.id);
 
-    // 🧠 Buscar nombre y segmento desde la tabla contactos si existe
     const contactoRes = await pool.query(
       `SELECT nombre, segmento FROM contactos WHERE tenant_id = $1 AND telefono = $2 LIMIT 1`,
       [tenant.id, fromNumber]
@@ -137,7 +134,6 @@ router.post('/', async (req, res) => {
       [tenant.id, fromNumber, nombreFinal, segmentoInicial]
     );
 
-    // 🧠 Detectar intención para actualizar segmento si aplica
     try {
       const { default: OpenAI } = await import('openai');
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
@@ -176,7 +172,6 @@ router.post('/', async (req, res) => {
       console.warn("⚠️ No se pudo detectar intención de voz:", e);
     }
 
-    // 🧠 Detectar emoción
     let emocion = 'neutral';
     try {
       const { default: OpenAI } = await import('openai');
@@ -199,7 +194,6 @@ Elige solo una palabra: enfado, tristeza, neutral, satisfacción o entusiasmo.
       console.warn('⚠️ No se pudo analizar emoción:', e);
     }
 
-    // Guardar mensaje y respuesta
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voice', $3)`,
@@ -223,7 +217,7 @@ Elige solo una palabra: enfado, tristeza, neutral, satisfacción o entusiasmo.
     const finConversacion = /(gracias|eso es todo|nada más|bye|adiós)/i.test(userInput);
 
     const response = new twiml.VoiceResponse();
-    response.play(audioUrl); // ✅ Usamos solo URL pública, sin base64
+    response.play(audioUrl);
 
     if (!finConversacion) {
       response.gather({
