@@ -52,9 +52,10 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
 
     for (const faq of faqs) {
       if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
+        console.log('📌 Respondido desde FAQ:', faq.pregunta);
         return res.status(200).json({ response: faq.respuesta });
       }
-    }
+    }    
 
     // 📋 Cargar Flows
     let flows: any[] = [];
@@ -68,8 +69,9 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
 
     const respuestaFlujo = buscarRespuestaDesdeFlows(flows, message);
     if (respuestaFlujo) {
+      console.log('📌 Respondido desde Flow:', respuestaFlujo);
       return res.status(200).json({ response: respuestaFlujo });
-    }
+    }    
 
     // 🧠 OpenAI fallback solo si no encontró en FAQs ni Flows
     const { default: OpenAI } = await import('openai');
