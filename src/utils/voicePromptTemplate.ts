@@ -5,39 +5,46 @@ type PromptData = {
   idioma: string;
   categoria: string;
   tenant_id: string;
+  funciones_asistente?: string;
+  info_clave?: string;
 };
 
 function sanitize(text: string): string {
   return text.replace(/[\n\r]+/g, " ").trim();
 }
 
-export async function PromptTemplate({ idioma, categoria, tenant_id }: PromptData) {
+export async function PromptTemplate({
+  idioma,
+  categoria,
+  tenant_id,
+  funciones_asistente,
+  info_clave,
+}: PromptData) {
   let bienvenida = "";
-  let funciones = "";
-  let info = "";
+  let funciones = sanitize(funciones_asistente || "");
+  let info = sanitize(info_clave || "");
 
-  // 🧠 Consultar datos del negocio desde la base de datos
-  try {
-    const result = await pool.query(
-      "SELECT name, funciones_asistente, info_clave FROM tenants WHERE id = $1",
-      [tenant_id]
-    );
+  // Si no se enviaron manualmente, buscar desde DB (solo como fallback)
+  if (!funciones || !info) {
+    try {
+      const result = await pool.query(
+        "SELECT name, funciones_asistente, info_clave FROM tenants WHERE id = $1",
+        [tenant_id]
+      );
+      const negocio = result.rows[0];
 
-    const negocio = result.rows[0];
-
-    if (!negocio) {
-      console.warn(`⚠️ No se encontró tenant con ID: ${tenant_id}`);
-      funciones = "Responder preguntas frecuentes del negocio.";
-      info = "El negocio ofrece servicios profesionales en su rubro.";
-    } else {
-      funciones = sanitize(negocio.funciones_asistente || "Responder preguntas frecuentes del negocio.");
-      info = sanitize(negocio.info_clave || "El negocio ofrece servicios profesionales en su rubro.");
+      if (!funciones && negocio?.funciones_asistente)
+        funciones = sanitize(negocio.funciones_asistente);
+      if (!info && negocio?.info_clave)
+        info = sanitize(negocio.info_clave);
+    } catch (err) {
+      console.error("❌ Error al consultar tenant para voicePromptTemplate:", err);
     }
-  } catch (err) {
-    console.error("❌ Error al consultar tenant para voicePromptTemplate:", err);
-    funciones = "Responder preguntas frecuentes del negocio.";
-    info = "El negocio ofrece servicios profesionales en su rubro.";
   }
+
+  // Valores por defecto si siguen vacíos
+  if (!funciones) funciones = "Responder preguntas frecuentes del negocio.";
+  if (!info) info = "El negocio ofrece servicios profesionales en su rubro.";
 
   const categoriasMap: Record<string, string> = {
     beauty: idioma === "es-ES" ? "nuestro centro de belleza" : "beauty center",
