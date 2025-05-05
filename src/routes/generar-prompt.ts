@@ -37,7 +37,7 @@ router.post("/", async (req: Request, res: Response) => {
         },
         {
           role: "user",
-          content: `Estoy creando un asistente virtual en ${idioma}. Su función principal es: ${descripcion}.
+          content: `Estoy creando un asistente virtual en ${idioma}. Su nombre es Amy. Siempre debe presentarse como Amy y nunca decir que no se llama Amy. Su función principal es: ${descripcion}.
 
 Información que el asistente debe conocer:
 ${informacion}
