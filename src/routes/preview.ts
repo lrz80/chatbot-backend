@@ -42,6 +42,12 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     const bienvenida = getBienvenidaPorCanal(canal, tenant);
     const mensajeUsuario = normalizarTexto(message);
 
+    // ✅ Mostrar saludo si es un saludo inicial
+    if (['hola', 'buenas', 'hello', 'hi', 'hey'].includes(mensajeUsuario)) {
+      const saludo = getBienvenidaPorCanal(canal, tenant);
+      return res.status(200).json({ response: saludo });
+    }
+
     // 📋 Cargar FAQs
     let faqs: any[] = [];
     try {

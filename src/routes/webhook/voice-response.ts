@@ -47,7 +47,7 @@ router.post('/', async (req, res) => {
     const saludoHora = obtenerSaludoHora();
     const nombreNegocio = tenant.name || 'nuestro negocio';
     const saludoInicial = `${saludoHora}, mi nombre es Amy, asistente de ${nombreNegocio}.`;
-
+    
     const prompt = `${saludoInicial}\n${config.system_prompt || 'Eres un asistente telefónico amigable y profesional.'}`;
     const voiceLang = config.idioma || 'es-ES';
     const voiceName = config.voice_name || 'alice';

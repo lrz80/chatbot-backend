@@ -87,7 +87,17 @@ router.post('/api/facebook/webhook', async (req, res) => {
           );
 
           // 🤖 Obtener respuesta
-          const respuestaFinal = await getRespuestaCompleta({ canal, tenant, input: userMessage });
+          const mensajeNormalizado = userMessage
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .trim();
+
+          const esSaludo = ['hola', 'buenas', 'hello', 'hi', 'hey'].includes(mensajeNormalizado);
+
+          const respuestaFinal = esSaludo
+            ? getBienvenidaPorCanal(canal, tenant)
+            : await getRespuestaCompleta({ canal, tenant, input: userMessage });
 
           // 💬 Guardar mensaje del usuario
           await pool.query(

@@ -117,11 +117,16 @@ router.post('/', async (req: Request, res: Response) => {
     const mensajeUsuario = normalizarTexto(userInput);
     let respuesta = null;
 
-    const respuestaFAQ = faqs.find(faq => mensajeUsuario.includes(normalizarTexto(faq.pregunta)));
-    if (respuestaFAQ) {
-      respuesta = respuestaFAQ.respuesta;
+    // ✅ Mostrar saludo personalizado si es el primer mensaje tipo "hola", etc.
+    if (['hola', 'buenas', 'hello', 'hi', 'hey'].includes(mensajeUsuario)) {
+      respuesta = getBienvenidaPorCanal('whatsapp', tenant);
     } else {
-      respuesta = buscarRespuestaDesdeFlows(flows, userInput);
+      const respuestaFAQ = faqs.find(faq => mensajeUsuario.includes(normalizarTexto(faq.pregunta)));
+      if (respuestaFAQ) {
+        respuesta = respuestaFAQ.respuesta;
+      } else {
+        respuesta = buscarRespuestaDesdeFlows(flows, userInput);
+      }
     }
 
     if (!respuesta) {
@@ -136,7 +141,12 @@ router.post('/', async (req: Request, res: Response) => {
         ],
       });
 
-      respuesta = completion.choices[0]?.message?.content?.trim() || bienvenida || 'Lo siento, no entendí eso.';
+      respuesta = completion.choices[0]?.message?.content?.trim();
+
+      if (!respuesta) {
+        respuesta = getBienvenidaPorCanal('whatsapp', tenant);
+      }
+
     }
 
     // 🧠 Inteligencia de ventas
