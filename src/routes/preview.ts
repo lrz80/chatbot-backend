@@ -84,7 +84,9 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     });
 
     const respuestaIA = completion.choices[0]?.message?.content?.trim() || bienvenida || 'Lo siento, no entendí eso.';
+    console.log("✅ Respuesta generada por OpenAI:", respuestaIA);  // 🔍 LOG PARA DEBUG
     return res.status(200).json({ response: respuestaIA });
+
   } catch (err) {
     console.error('❌ Error en preview:', err);
     return res.status(500).json({ error: 'Error interno del servidor' });
