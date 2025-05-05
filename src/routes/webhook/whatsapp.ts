@@ -144,6 +144,22 @@ router.post('/', async (req: Request, res: Response) => {
     try {
       const { intencion, nivel_interes } = await detectarIntencion(userInput);
 
+      // 🎯 Si el cliente es un lead y la intención es fuerte, subirlo a "cliente"
+      const intencionLower = intencion.toLowerCase();
+
+      if (
+        ['comprar', 'compra', 'pagar', 'agendar', 'reservar', 'confirmar'].some(palabra =>
+          intencionLower.includes(palabra)
+        )
+      ) {
+        await pool.query(
+          `UPDATE clientes
+          SET segmento = 'cliente'
+          WHERE tenant_id = $1 AND contacto = $2 AND segmento = 'lead'`,
+          [tenant.id, fromNumber]
+        );
+      }
+
       await pool.query(
         `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
          VALUES ($1, $2, 'whatsapp', $3, $4, $5)`,
@@ -184,6 +200,29 @@ router.post('/', async (req: Request, res: Response) => {
       console.error("❌ Error en inteligencia de ventas:", err);
     }
 
+    // 🧠 Buscar datos del contacto previo si existe
+    const contactoRes = await pool.query(
+      `SELECT nombre, segmento FROM contactos WHERE tenant_id = $1 AND telefono = $2 LIMIT 1`,
+      [tenant.id, fromNumber]
+    );
+
+    const contactoPrevio = contactoRes.rows[0];
+
+    const nombreDetectado = contactoPrevio?.nombre || req.body.ProfileName || null;
+    const segmentoDetectado = contactoPrevio?.segmento || 'lead';
+
+    await pool.query(
+      `INSERT INTO clientes (tenant_id, canal, contacto, creado, nombre, segmento)
+      VALUES ($1, 'whatsapp', $2, NOW(), $3, $4)
+      ON CONFLICT (contacto) DO UPDATE SET
+        nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
+        segmento = CASE
+          WHEN clientes.segmento = 'lead' AND EXCLUDED.segmento = 'cliente' THEN 'cliente'
+          ELSE clientes.segmento
+        END`,
+      [tenant.id, fromNumber, nombreDetectado, segmentoDetectado]
+    );
+
     // 💾 Guardar mensaje usuario y bot
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
@@ -202,6 +241,7 @@ router.post('/', async (req: Request, res: Response) => {
       [tenant.id]
     );
 
+    // 🔢 Incrementar contador de uso
     await incrementarUsoPorNumero(numero);
 
     const twiml = new MessagingResponse();

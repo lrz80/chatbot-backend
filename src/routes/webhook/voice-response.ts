@@ -1,3 +1,5 @@
+// src/routes/webhook/voice-response.ts
+
 import { Router } from 'express';
 import { twiml } from 'twilio';
 import pool from '../../lib/db';
@@ -76,6 +78,69 @@ router.post('/', async (req, res) => {
       });
 
       respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
+    }
+
+    // 🧠 Buscar nombre y segmento desde la tabla contactos si existe
+    const contactoRes = await pool.query(
+      `SELECT nombre, segmento FROM contactos WHERE tenant_id = $1 AND telefono = $2 LIMIT 1`,
+      [tenant.id, fromNumber]
+    );
+
+    const contacto = contactoRes.rows[0];
+    const nombreFinal = contacto?.nombre || req.body.CallerName || null;
+    const segmentoInicial = contacto?.segmento || 'lead';
+
+    await pool.query(
+      `INSERT INTO clientes (tenant_id, canal, contacto, creado, nombre, segmento)
+      VALUES ($1, 'voz', $2, NOW(), $3, $4)
+      ON CONFLICT (contacto) DO UPDATE SET
+        nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
+        segmento = CASE
+          WHEN clientes.segmento = 'lead' AND EXCLUDED.segmento = 'cliente' THEN 'cliente'
+          ELSE clientes.segmento
+        END`,
+      [tenant.id, fromNumber, nombreFinal, segmentoInicial]
+    );
+
+    // 🧠 Detectar intención para actualizar segmento si aplica
+    try {
+      const { default: OpenAI } = await import('openai');
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+      const intencionPrompt = `
+    Analiza este mensaje de un cliente por llamada:
+
+    "${userInput}"
+
+    Identifica:
+    - Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).
+
+    Responde solo con la intención, como "comprar", "reservar", "cancelar", etc.
+    `;
+
+      const intencionRes = await openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          { role: 'system', content: intencionPrompt },
+        ],
+      });
+
+      const intencion = intencionRes.choices[0].message?.content?.toLowerCase().trim() || '';
+
+      if (
+        ['comprar', 'compra', 'pagar', 'agendar', 'reservar', 'confirmar'].some(palabra =>
+          intencion.includes(palabra)
+        )
+      ) {
+        await pool.query(
+          `UPDATE clientes
+          SET segmento = 'cliente'
+          WHERE tenant_id = $1 AND contacto = $2 AND segmento = 'lead'`,
+          [tenant.id, fromNumber]
+        );
+      }
+    } catch (e) {
+      console.warn("⚠️ No se pudo detectar intención de voz:", e);
     }
 
     // 🧠 Detectar emoción

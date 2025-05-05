@@ -43,7 +43,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
           const userMessage = messagingEvent.message.text || '';
           console.log('📩 Mensaje recibido:', userMessage);
 
-          // 🔍 Buscar tenant por page_id o instagram_page_id
+          // 🔍 Buscar tenant
           const { rows } = await pool.query(
             'SELECT * FROM tenants WHERE facebook_page_id = $1 OR instagram_page_id = $1 LIMIT 1',
             [pageId]
@@ -58,6 +58,31 @@ router.post('/api/facebook/webhook', async (req, res) => {
           const canal = tenant.instagram_page_id === pageId ? 'instagram' : 'facebook';
           const tenantId = tenant.id;
           const accessToken = tenant.facebook_access_token;
+
+          // 💾 Buscar en contactos previos (por si fue cargado manualmente)
+          const contactoRes = await pool.query(
+            `SELECT nombre, segmento FROM contactos WHERE tenant_id = $1 AND telefono = $2 LIMIT 1`,
+            [tenantId, senderId]
+          );
+          const contacto = contactoRes.rows[0];
+
+          const nombre =
+            messagingEvent.sender.name || contacto?.nombre || null;
+
+          const segmento =
+            contacto?.segmento || 'lead';
+
+          await pool.query(
+            `INSERT INTO clientes (tenant_id, canal, contacto, creado, nombre, segmento)
+            VALUES ($1, $2, $3, NOW(), $4, $5)
+            ON CONFLICT (contacto) DO UPDATE SET
+              nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
+              segmento = CASE
+                WHEN clientes.segmento = 'lead' AND EXCLUDED.segmento = 'cliente' THEN 'cliente'
+                ELSE clientes.segmento
+              END`,
+            [tenantId, canal, senderId, nombre, segmento]
+          );
 
           // 🤖 Obtener respuesta
           const respuestaFinal = await getRespuestaCompleta({ canal, tenant, input: userMessage });
@@ -96,6 +121,21 @@ router.post('/api/facebook/webhook', async (req, res) => {
               [tenantId, senderId, canal, userMessage, intencion, nivel_interes]
             );
 
+            // 🎯 Si es lead y la intención es fuerte, subir a "cliente"
+            const intentLower = intencion.toLowerCase();
+            if (
+              ['comprar', 'compra', 'pagar', 'agendar', 'reservar', 'confirmar'].some(palabra =>
+                intentLower.includes(palabra)
+              )
+            ) {
+              await pool.query(
+                `UPDATE clientes
+                 SET segmento = 'cliente'
+                 WHERE tenant_id = $1 AND contacto = $2 AND segmento = 'lead'`,
+                [tenantId, senderId]
+              );
+            }
+
             if (nivel_interes >= 4) {
               const configRes = await pool.query(
                 `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
@@ -105,7 +145,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
               if (config) {
                 let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
-                const intent = intencion.toLowerCase();
+                const intent = intentLower;
 
                 if (intent.includes('precio') && config.mensaje_precio) mensajeSeguimiento = config.mensaje_precio;
                 else if (intent.includes('agendar') && config.mensaje_agendar) mensajeSeguimiento = config.mensaje_agendar;
