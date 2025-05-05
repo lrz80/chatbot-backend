@@ -1,3 +1,5 @@
+// src/lib/getRespuestaCompleta.ts
+
 import pool from './db';
 import { getPromptPorCanal, getBienvenidaPorCanal } from './getPromptPorCanal';
 import { normalizarTexto } from './normalizarTexto';
@@ -48,7 +50,7 @@ export async function getRespuestaCompleta({
       max_tokens: 300,
     });
 
-    return respuestaIA.choices[0]?.message.content?.trim() || mensajeDefault;
+    return respuestaIA.choices[0]?.message.content?.trim() || bienvenida || mensajeDefault;
   }
 
   return bienvenida || mensajeDefault;
