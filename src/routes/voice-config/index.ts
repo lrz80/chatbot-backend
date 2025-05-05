@@ -1,3 +1,5 @@
+// src/routes/voice-config/index.ts
+
 import express from "express";
 import multer from "multer";
 import pool from "../../lib/db";
@@ -39,7 +41,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
       `INSERT INTO voice_configs (
         tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints, canal
       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT (tenant_id)
+      ON CONFLICT (tenant_id, idioma, canal)
       DO UPDATE SET 
         idioma = EXCLUDED.idioma,
         voice_name = EXCLUDED.voice_name,
