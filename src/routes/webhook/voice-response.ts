@@ -24,7 +24,7 @@ router.post('/', async (req, res) => {
   const from = req.body.From || '';
   const numero = to.replace('tel:', '');
   const fromNumber = from.replace('tel:', '');
-  const userInput = req.body.SpeechResult || 'No se recibió mensaje.';
+  const userInput = req.body.SpeechResult;
 
   try {
     const tenantRes = await pool.query('SELECT * FROM tenants WHERE twilio_voice_number = $1', [numero]);
@@ -42,6 +42,23 @@ router.post('/', async (req, res) => {
     const nombreNegocio = tenant.name || 'nuestro negocio';
     const saludoInicial = `${saludoHora}, mi nombre es Amy, asistente de ${nombreNegocio}.`;
 
+    const response = new twiml.VoiceResponse();
+
+    // 🟣 Si no hay SpeechResult, solo saludo y gather
+    if (!userInput) {
+      response.say({ voice: 'Polly.Conchita', language: config.idioma || 'es-ES' }, saludoInicial);
+      response.gather({
+        input: ['speech'],
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: config.idioma || 'es-ES',
+        speechTimeout: 'auto',
+      });
+
+      return res.type('text/xml').send(response.toString());
+    }
+
+    // 🟢 Aquí ya hay SpeechResult — procesamiento completo
     const mensajesPreviosRes = await pool.query(
       `SELECT COUNT(*) FROM messages WHERE tenant_id = $1 AND from_number = $2 AND canal = 'voice'`,
       [tenant.id, fromNumber]
@@ -216,7 +233,6 @@ Elige solo una palabra: enfado, tristeza, neutral, satisfacción o entusiasmo.
 
     const finConversacion = /(gracias|eso es todo|nada más|bye|adiós)/i.test(userInput);
 
-    const response = new twiml.VoiceResponse();
     response.play(audioUrl);
 
     if (!finConversacion) {
