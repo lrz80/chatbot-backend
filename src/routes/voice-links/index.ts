@@ -25,17 +25,17 @@ router.get("/", authenticateUser, async (req, res) => {
 // 📤 Agregar nuevo link útil
 router.post("/", authenticateUser, async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
-  const { intencion, mensaje, url } = req.body;
+  const { tipo, nombre, url } = req.body;
 
-  if (!intencion || !mensaje || !url) {
+  if (!tipo || !nombre || !url) {
     return res.status(400).json({ error: "Todos los campos son requeridos." });
   }
 
   try {
     await pool.query(
-      `INSERT INTO links_utiles (tenant_id, intencion, mensaje, url)
+      `INSERT INTO links_utiles (tenant_id, tipo, nombre, url)
        VALUES ($1, $2, $3, $4)`,
-      [tenant_id, intencion, mensaje, url]
+      [tenant_id, tipo, nombre, url]
     );
 
     const result = await pool.query(
