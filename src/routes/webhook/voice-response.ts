@@ -9,7 +9,7 @@ import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 const router = Router();
 
 function normalizarTexto(texto: string): string {
-  return texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  return texto.toLowerCase().normalize('NFD').replace(/\u0300-\u036f/g, '').trim();
 }
 
 function obtenerSaludoHora(): string {
@@ -17,6 +17,19 @@ function obtenerSaludoHora(): string {
   if (hora < 12) return 'Buenos días';
   if (hora < 18) return 'Buenas tardes';
   return 'Buenas noches';
+}
+
+async function enviarSMS(to: string, from: string, body: string) {
+  await axios.post(
+    `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Messages.json`,
+    new URLSearchParams({ To: to, From: from, Body: body }),
+    {
+      auth: {
+        username: process.env.TWILIO_ACCOUNT_SID!,
+        password: process.env.TWILIO_AUTH_TOKEN!,
+      },
+    }
+  );
 }
 
 router.post('/', async (req, res) => {
@@ -44,7 +57,6 @@ router.post('/', async (req, res) => {
 
     const response = new twiml.VoiceResponse();
 
-    // 🔹 Si no hay SpeechResult: saluda y espera input
     if (!userInput) {
       response.say({ voice: 'Polly.Conchita', language: config.idioma || 'es-ES' }, saludoInicial);
       response.gather({
@@ -57,7 +69,6 @@ router.post('/', async (req, res) => {
       return res.type('text/xml').send(response.toString());
     }
 
-    // 🧠 Generar respuesta con OpenAI
     const prompt = `${saludoInicial}\n${config.system_prompt || 'Eres un asistente telefónico amigable y profesional.'}`;
     const { default: OpenAI } = await import('openai');
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
@@ -73,7 +84,28 @@ router.post('/', async (req, res) => {
     const respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
     const textoFinal = `${respuesta}`;
 
-    // 🎙 Convertir respuesta a audio con ElevenLabs
+    // 🔍 Detección de intención
+    const intencionPrompt = `
+    Mensaje del cliente:
+    "${userInput}"
+    
+    ¿Tiene intención de comprar o agendar?
+    
+    Responde solo con una palabra: comprar, reservar, cancelar, preguntar, otro.
+    `;
+    const intencionRes = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [{ role: 'system', content: intencionPrompt }],
+    });
+
+    const intencion = intencionRes.choices[0].message?.content?.toLowerCase().trim() || '';
+
+    // ✉️ Enviar SMS si aplica
+    if (['comprar', 'reservar', 'agendar'].includes(intencion)) {
+      const smsTexto = 'Reserva aquí 👉 https://www.aamy.ai/book';
+      await enviarSMS(fromNumber, numero, smsTexto);
+    }
+
     const voiceId = config.voice_name || 'EXAVITQu4vr4xnSDxMaL';
     const audioRes = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
@@ -98,7 +130,6 @@ router.post('/', async (req, res) => {
     const audioBuffer = Buffer.from(audioRes.data);
     const audioUrl = await guardarAudioEnCDN(audioBuffer, tenant.id);
 
-    // 📝 Guardar mensajes e interacción
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voice', $3)`,
@@ -119,7 +150,6 @@ router.post('/', async (req, res) => {
 
     await incrementarUsoPorNumero(numero);
 
-    // 🔁 Mantener conversación si no es despedida
     const finConversacion = /(gracias|eso es todo|nada más|bye|adiós)/i.test(userInput);
     response.play(audioUrl);
 
