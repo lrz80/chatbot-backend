@@ -45,7 +45,6 @@ router.post('/', async (req, res) => {
 
     const response = new twiml.VoiceResponse();
 
-    // 🔹 Si no hay SpeechResult: saluda y espera input
     if (!userInput) {
       response.say({ voice: 'Polly.Conchita', language: config.idioma || 'es-ES' }, saludoInicial);
       response.gather({
@@ -58,7 +57,6 @@ router.post('/', async (req, res) => {
       return res.type('text/xml').send(response.toString());
     }
 
-    // 🧠 Generar respuesta con OpenAI
     const prompt = `${saludoInicial}\n${config.system_prompt || 'Eres un asistente telefónico amigable y profesional.'}`;
     const { default: OpenAI } = await import('openai');
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
@@ -74,17 +72,13 @@ router.post('/', async (req, res) => {
     const respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
     const textoFinal = `${respuesta}`;
 
-    // 🎙 Convertir respuesta a audio con ElevenLabs
     const voiceId = config.voice_name || 'EXAVITQu4vr4xnSDxMaL';
     const audioRes = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
       {
         text: textoFinal,
         model_id: 'eleven_monolingual_v1',
-        voice_settings: {
-          stability: 0.4,
-          similarity_boost: 0.8,
-        },
+        voice_settings: { stability: 0.4, similarity_boost: 0.8 },
       },
       {
         headers: {
@@ -99,7 +93,6 @@ router.post('/', async (req, res) => {
     const audioBuffer = Buffer.from(audioRes.data);
     const audioUrl = await guardarAudioEnCDN(audioBuffer, tenant.id);
 
-    // 📝 Guardar mensajes e interacción
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voice', $3)`,
@@ -120,25 +113,45 @@ router.post('/', async (req, res) => {
 
     await incrementarUsoPorNumero(numero);
 
-    // ✉️ Si detectamos intención de reservar o comprar → enviar SMS con link
-    const keywords = ['reservar', 'reserva', 'comprar', 'compra', 'cita'];
-    const debeEnviarLink = keywords.some(palabra => normalizarTexto(userInput).includes(palabra));
-    if (debeEnviarLink) {
-      try {
-        const client = twilio(process.env.TWILIO_SID!, process.env.TWILIO_AUTH_TOKEN!);
-        const link = tenant.link_reserva || 'https://www.aamy.ai/checkout';
+    // ✉️ Enviar link útil si detectamos intención
+    try {
+      const intencionPrompt = `
+        El cliente dijo: "${userInput}"
+        ¿Qué intención tiene? Responde solo con una palabra: reservar, comprar, soporte, web, otro.
+      `;
 
-        await client.messages.create({
-          from: numero,
-          to: fromNumber,
-          body: `📲 Aquí tienes el enlace para reservar tu clase: ${link}`,
-        });
-      } catch (err) {
-        console.error("⚠️ Error al enviar SMS:", err);
+      const intencionRes = await openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [{ role: 'system', content: intencionPrompt }],
+      });
+
+      const intencion = intencionRes.choices[0].message?.content?.toLowerCase().trim() || '';
+
+      if (['reservar', 'comprar', 'soporte', 'web'].includes(intencion)) {
+        const linkRes = await pool.query(
+          `SELECT url, nombre FROM links_utiles
+           WHERE tenant_id = $1 AND tipo = $2
+           ORDER BY created_at DESC LIMIT 1`,
+          [tenant.id, intencion]
+        );
+
+        const link = linkRes.rows[0]?.url;
+        const nombreLink = linkRes.rows[0]?.nombre;
+
+        if (link) {
+          const client = twilio(process.env.TWILIO_SID!, process.env.TWILIO_AUTH_TOKEN!);
+          await client.messages.create({
+            from: numero,
+            to: fromNumber,
+            body: `📎 ${nombreLink}: ${link}`,
+          });
+          console.log(`✅ SMS enviado con link de ${intencion}`);
+        }
       }
+    } catch (e) {
+      console.warn('⚠️ No se pudo detectar intención ni enviar link útil:', e);
     }
 
-    // 🔁 Mantener conversación si no es despedida
     const finConversacion = /(gracias|eso es todo|nada más|bye|adiós)/i.test(userInput);
     response.play(audioUrl);
 
