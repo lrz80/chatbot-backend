@@ -46,6 +46,7 @@ import facebookOauthCallback from './routes/facebook/oauth-callback';
 import facebookWebhook from './routes/facebook/webhook';
 import * as path from 'path';
 import deleteAccountRoute from './routes/auth/delete';
+import elevenlabsVoicesRoute from './routes/elevenlabs/voices';
 
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
 
@@ -125,6 +126,7 @@ app.use('/api/follow-up/sent-messages', sentMessagesRoute);
 app.use(facebookOauthCallback);
 app.use(facebookWebhook);
 app.use('/api/delete-account', deleteAccountRoute);
+app.use('/api/elevenlabs/voices', elevenlabsVoicesRoute);
 
 
 // ✅ Ruta base
