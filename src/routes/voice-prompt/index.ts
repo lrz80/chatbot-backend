@@ -1,4 +1,4 @@
-// src/routes/voice-prompt/index.ts
+// ✅ src/routes/voice-prompt/index.ts
 
 import express from "express";
 import { authenticateUser } from "../../middleware/auth";
@@ -10,6 +10,8 @@ const router = express.Router();
 router.post("/", authenticateUser, async (req, res) => {
   const { idioma, categoria, funciones_asistente, info_clave } = req.body;
   const tenant_id = req.user?.tenant_id;
+  const canal = "voz";
+  const voice_name = "alice";
 
   if (!idioma || !categoria) {
     return res.status(400).json({ error: "Faltan idioma o categoría." });
@@ -19,32 +21,45 @@ router.post("/", authenticateUser, async (req, res) => {
     return res.status(401).json({ error: "Tenant no autenticado." });
   }
 
+  if (!funciones_asistente?.trim() || !info_clave?.trim()) {
+    return res.status(400).json({ error: "Debes completar funciones e info clave." });
+  }
+
   try {
-    // 🧠 Generar prompt usando funciones e info clave si vienen del cliente
+    // 🧠 Generar prompt usando funciones e info clave
     const { prompt, bienvenida } = await PromptTemplate({
       idioma,
       categoria,
       tenant_id,
-      funciones_asistente: funciones_asistente || "",
-      info_clave: info_clave || "",
+      funciones_asistente,
+      info_clave,
     });
-
-    const voice_name = "alice";
 
     await pool.query(
       `INSERT INTO voice_configs (
         tenant_id, idioma, categoria, system_prompt, welcome_message, canal, voice_name, funciones_asistente, info_clave
-      ) VALUES ($1, $2, $3, $4, $5, 'voz', $6, $7, $8)
-      ON CONFLICT (tenant_id) DO UPDATE SET
-        idioma = $2,
-        categoria = $3,
-        system_prompt = $4,
-        welcome_message = $5,
-        voice_name = $6,
-        funciones_asistente = $7,
-        info_clave = $8,
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      ON CONFLICT (tenant_id, canal) DO UPDATE SET
+        idioma = EXCLUDED.idioma,
+        categoria = EXCLUDED.categoria,
+        system_prompt = EXCLUDED.system_prompt,
+        welcome_message = EXCLUDED.welcome_message,
+        voice_name = EXCLUDED.voice_name,
+        funciones_asistente = EXCLUDED.funciones_asistente,
+        info_clave = EXCLUDED.info_clave,
         updated_at = NOW()`,
-      [tenant_id, idioma, categoria, prompt, bienvenida, voice_name, funciones_asistente || '', info_clave || '']
+      [
+        tenant_id,
+        idioma,
+        categoria,
+        prompt,
+        bienvenida,
+        canal,
+        voice_name,
+        funciones_asistente,
+        info_clave,
+      ]
     );
 
     res.json({ prompt, bienvenida });

@@ -1,4 +1,3 @@
-// utils/voicePromptTemplate.ts
 import pool from "../lib/db";
 
 type PromptData = {
@@ -40,7 +39,7 @@ export async function PromptTemplate({
     }
   }
 
-  if (!funciones) funciones = "Responder preguntas frecuentes.";
+  if (!funciones) funciones = "Responder preguntas frecuentes sobre el negocio.";
   if (!info) info = "El negocio ofrece servicios profesionales.";
 
   const categoriasMap: Record<string, string> = {
@@ -51,17 +50,36 @@ export async function PromptTemplate({
 
   const categoriaTexto = categoriasMap[categoria] || categoriasMap["default"];
 
+  // 🗣️ Prompt y bienvenida personalizados
   if (idioma === "es-ES") {
     bienvenida = `Hola, soy Amy. Bienvenido a ${categoriaTexto}. ¿En qué puedo ayudarte?`;
+
     return {
       bienvenida,
-      prompt: `Eres un asistente de voz en español. Funciones: ${funciones}. Datos del negocio: ${info}. Responde claro y amable.`,
+      prompt: `
+Hablas como Amy, una asistente telefónica real, cálida y segura.
+Tu trabajo es ayudar al cliente como si fueras parte del equipo de ${categoriaTexto}.
+Responde siempre en español neutro, con frases breves y claras. No uses términos técnicos.
+Ayuda al cliente con lo siguiente: ${funciones}.
+Información clave que debes tener en cuenta: ${info}.
+No digas que eres un asistente virtual. Habla como una persona real del negocio.
+Si el cliente dice gracias o se despide, responde cordialmente y finaliza la conversación.
+      `.trim(),
     };
   }
 
   bienvenida = `Hi, I'm Amy. Welcome to ${categoriaTexto}. How can I help you?`;
+
   return {
     bienvenida,
-    prompt: `You are a voice assistant in English. Tasks: ${funciones}. Business info: ${info}. Respond clearly and helpfully.`,
+    prompt: `
+You speak as Amy, a natural, friendly and professional voice assistant.
+You help the caller just like a real staff member of ${categoriaTexto}.
+Always speak in short, natural sentences in clear English.
+Your role includes: ${funciones}.
+Important info to keep in mind: ${info}.
+Never say you're a virtual assistant. Speak like a real human.
+If the user says goodbye or thanks, end the call politely.
+    `.trim(),
   };
 }

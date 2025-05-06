@@ -39,25 +39,32 @@ router.post('/', async (req, res) => {
     const config = configRes.rows[0];
     if (!config) return res.sendStatus(404);
 
-    const saludoHora = obtenerSaludoHora();
+    const idioma = config.idioma || 'es-ES';
+    const voiceId = config.voice_name || 'EXAVITQu4vr4xnSDxMaL';
     const nombreNegocio = tenant.name || 'nuestro negocio';
+    const saludoHora = obtenerSaludoHora();
     const saludoInicial = `${saludoHora}, mi nombre es Amy, asistente de ${nombreNegocio}.`;
 
     const response = new twiml.VoiceResponse();
 
+    // Si es la primera vez (no hay SpeechResult)
     if (!userInput) {
-      response.say({ voice: 'Polly.Conchita', language: config.idioma || 'es-ES' }, saludoInicial);
+      response.say({ voice: 'Polly.Conchita', language: idioma }, saludoInicial);
       response.gather({
         input: ['speech'],
         action: '/webhook/voice-response',
         method: 'POST',
-        language: config.idioma || 'es-ES',
+        language: idioma,
         speechTimeout: 'auto',
       });
       return res.type('text/xml').send(response.toString());
     }
 
-    const prompt = `${saludoInicial}\n${config.system_prompt || 'Eres un asistente telefónico amigable y profesional.'}`;
+    // Prompt del asistente (sin incluir saludo)
+    const prompt = config.system_prompt || `
+Eres Amy, una asistente telefónica de voz cálida, clara y natural. Responde en frases cortas y con una actitud amigable. Nunca digas que eres un asistente virtual, responde como si fueras parte real del equipo de ${nombreNegocio}. Si el cliente da las gracias o quiere terminar, despídete cordialmente.
+    `.trim();
+
     const { default: OpenAI } = await import('openai');
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
@@ -70,20 +77,26 @@ router.post('/', async (req, res) => {
     });
 
     const respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
-    const textoFinal = `${respuesta}`;
 
-    const voiceId = config.voice_name || 'EXAVITQu4vr4xnSDxMaL';
+    // Añadir pausas naturales con SSML
+    const textoConPausas = respuesta
+      .replace(/\.\s*/g, '. <break time="400ms"/> ')
+      .replace(/,\s*/g, ', <break time="300ms"/> ');
+
+    const ssmlTexto = `<speak>${textoConPausas}</speak>`;
+
+    // Generar audio con ElevenLabs
     const audioRes = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
       {
-        text: textoFinal,
+        text: ssmlTexto,
         model_id: 'eleven_monolingual_v1',
         voice_settings: { stability: 0.4, similarity_boost: 0.8 },
       },
       {
         headers: {
           'xi-api-key': process.env.ELEVENLABS_API_KEY!,
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/ssml+xml',
           Accept: 'audio/mpeg',
         },
         responseType: 'arraybuffer',
@@ -93,6 +106,7 @@ router.post('/', async (req, res) => {
     const audioBuffer = Buffer.from(audioRes.data);
     const audioUrl = await guardarAudioEnCDN(audioBuffer, tenant.id);
 
+    // Guardar mensajes e interacción
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voice', $3)`,
@@ -113,11 +127,11 @@ router.post('/', async (req, res) => {
 
     await incrementarUsoPorNumero(numero);
 
-    // ✉️ Enviar link útil si detectamos intención
+    // Intento de detectar intención y enviar link útil
     try {
       const intencionPrompt = `
-        El cliente dijo: "${userInput}"
-        ¿Qué intención tiene? Responde solo con una palabra: reservar, comprar, soporte, web, otro.
+El cliente dijo: "${userInput}"
+¿Qué intención tiene? Responde solo con una palabra: reservar, comprar, soporte, web, otro.
       `;
 
       const intencionRes = await openai.chat.completions.create({
@@ -152,6 +166,7 @@ router.post('/', async (req, res) => {
       console.warn('⚠️ No se pudo detectar intención ni enviar link útil:', e);
     }
 
+    // Verificar si la conversación debe terminar
     const finConversacion = /(gracias|eso es todo|nada más|bye|adiós)/i.test(userInput);
     response.play(audioUrl);
 
@@ -160,12 +175,12 @@ router.post('/', async (req, res) => {
         input: ['speech'],
         action: '/webhook/voice-response',
         method: 'POST',
-        language: config.idioma || 'es-ES',
+        language: idioma,
         speechTimeout: 'auto',
       });
     } else {
       response.say(
-        { voice: 'Polly.Conchita', language: config.idioma || 'es-ES' },
+        { voice: 'Polly.Conchita', language: idioma },
         'Gracias por tu llamada. ¡Hasta luego!'
       );
       response.hangup();

@@ -1,5 +1,3 @@
-// ✅ src/routes/webhook/voice.ts
-
 import { Router } from 'express';
 import { twiml } from 'twilio';
 import pool from '../../lib/db';
@@ -21,19 +19,23 @@ router.post('/', async (req, res) => {
     if (!tenant) return res.sendStatus(404);
 
     const configRes = await pool.query(
-      'SELECT * FROM voice_configs WHERE tenant_id = $1 AND canal = $2 LIMIT 1',
+      'SELECT * FROM voice_configs WHERE tenant_id = $1 AND canal = $2 ORDER BY created_at DESC LIMIT 1',
       [tenant.id, 'voz']
     );
     const config = configRes.rows[0];
     if (!config) return res.sendStatus(404);
 
     const voiceId = config.voice_name || 'EXAVITQu4vr4xnSDxMaL';
+    const idioma = config.idioma || 'es-ES';
+
+    // ✅ Saludo con SSML (pausas naturales)
     const textoBienvenida = config.welcome_message || 'Hola, ¿en qué puedo ayudarte?';
+    const ssmlBienvenida = `<speak>${textoBienvenida.replace(/\.\s*/g, '. <break time="400ms"/> ')}</speak>`;
 
     const audioRes = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
       {
-        text: textoBienvenida,
+        text: ssmlBienvenida,
         model_id: 'eleven_monolingual_v1',
         voice_settings: {
           stability: 0.4,
@@ -43,29 +45,34 @@ router.post('/', async (req, res) => {
       {
         headers: {
           'xi-api-key': process.env.ELEVENLABS_API_KEY,
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/ssml+xml',
           Accept: 'audio/mpeg',
         },
         responseType: 'arraybuffer',
       }
     );
-    
+
     const audioBuffer = Buffer.from(audioRes.data);
-    const audioUrl = await guardarAudioEnCDN(audioBuffer, tenant.id);    
+    const audioUrl = await guardarAudioEnCDN(audioBuffer, tenant.id);
+
+    // ✅ (opcional) Guardar demo generado
+    await pool.query(
+      `UPDATE voice_configs SET audio_demo_url = $1, updated_at = NOW()
+       WHERE tenant_id = $2 AND canal = 'voz'`,
+      [audioUrl, tenant.id]
+    );
 
     const response = new twiml.VoiceResponse();
     response.play(audioUrl);
-
     response.gather({
       input: ['speech'],
       action: '/webhook/voice-response',
       method: 'POST',
-      language: config.idioma || 'es-ES',
+      language: idioma,
       speechTimeout: 'auto',
     });
 
-    res.type('text/xml');
-    res.send(response.toString());
+    res.type('text/xml').send(response.toString());
   } catch (err) {
     console.error('❌ Error en webhook de voz:', err);
     res.sendStatus(500);
