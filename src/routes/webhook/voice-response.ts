@@ -3,8 +3,8 @@ import { Router } from 'express';
 import { twiml } from 'twilio';
 import axios from 'axios';
 import pool from '../../lib/db';
-import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { guardarAudioEnCDN } from '../../utils/uploadAudioToCDN';
+import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 
 const router = Router();
 
@@ -41,8 +41,10 @@ router.post('/', async (req, res) => {
     const saludoHora = obtenerSaludoHora();
     const nombreNegocio = tenant.name || 'nuestro negocio';
     const saludoInicial = `${saludoHora}, mi nombre es Amy, asistente de ${nombreNegocio}.`;
+
     const response = new twiml.VoiceResponse();
 
+    // 🔹 Si no hay SpeechResult: saluda y espera input
     if (!userInput) {
       response.say({ voice: 'Polly.Conchita', language: config.idioma || 'es-ES' }, saludoInicial);
       response.gather({
@@ -55,60 +57,33 @@ router.post('/', async (req, res) => {
       return res.type('text/xml').send(response.toString());
     }
 
-    const mensajesPreviosRes = await pool.query(
-      `SELECT COUNT(*) FROM messages WHERE tenant_id = $1 AND from_number = $2 AND canal = 'voice'`,
-      [tenant.id, fromNumber]
-    );
-    const esPrimeraVez = parseInt(mensajesPreviosRes.rows[0].count, 10) === 0;
+    // 🧠 Generar respuesta con OpenAI
+    const prompt = `${saludoInicial}\n${config.system_prompt || 'Eres un asistente telefónico amigable y profesional.'}`;
+    const { default: OpenAI } = await import('openai');
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
-    const prompt = esPrimeraVez
-      ? `${saludoInicial}\n${config.system_prompt || 'Eres un asistente telef\u00f3nico amigable y profesional.'}`
-      : config.system_prompt || 'Eres un asistente telef\u00f3nico amigable y profesional.';
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4',
+      messages: [
+        { role: 'system', content: prompt },
+        { role: 'user', content: userInput },
+      ],
+    });
 
+    const respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
+    const textoFinal = `${respuesta}`;
+
+    // 🎙 Convertir respuesta a audio con ElevenLabs
     const voiceId = config.voice_name || 'EXAVITQu4vr4xnSDxMaL';
-    const mensajeUsuario = normalizarTexto(userInput);
-
-    let respuesta = null;
-    let respuestaFAQ = null;
-
-    try {
-      const faqsRes = await pool.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenant.id]);
-      const faqs = faqsRes.rows || [];
-      for (const faq of faqs) {
-        if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
-          respuestaFAQ = faq.respuesta;
-          break;
-        }
-      }
-    } catch (e) {
-      console.warn('⚠️ No se pudieron cargar FAQs:', e);
-    }
-
-    if (respuestaFAQ) {
-      respuesta = respuestaFAQ;
-    } else {
-      const { default: OpenAI } = await import('openai');
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4',
-        messages: [
-          { role: 'system', content: prompt },
-          { role: 'user', content: userInput },
-        ],
-      });
-
-      respuesta = completion.choices[0].message?.content || 'Lo siento, no entend\u00ed eso.';
-    }
-
-    const textoFinal = esPrimeraVez ? `${saludoInicial}. ${respuesta}` : respuesta;
-
     const audioRes = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
       {
         text: textoFinal,
         model_id: 'eleven_monolingual_v1',
-        voice_settings: { stability: 0.4, similarity_boost: 0.8 },
+        voice_settings: {
+          stability: 0.4,
+          similarity_boost: 0.8,
+        },
       },
       {
         headers: {
@@ -123,69 +98,7 @@ router.post('/', async (req, res) => {
     const audioBuffer = Buffer.from(audioRes.data);
     const audioUrl = await guardarAudioEnCDN(audioBuffer, tenant.id);
 
-    const contactoRes = await pool.query(
-      `SELECT nombre, segmento FROM contactos WHERE tenant_id = $1 AND telefono = $2 LIMIT 1`,
-      [tenant.id, fromNumber]
-    );
-
-    const contacto = contactoRes.rows[0];
-    const nombreFinal = contacto?.nombre || req.body.CallerName || null;
-    const segmentoInicial = contacto?.segmento || 'lead';
-
-    await pool.query(
-      `INSERT INTO clientes (tenant_id, canal, contacto, creado, nombre, segmento)
-       VALUES ($1, 'voz', $2, NOW(), $3, $4)
-       ON CONFLICT (contacto) DO UPDATE SET
-         nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
-         segmento = CASE
-           WHEN clientes.segmento = 'lead' AND EXCLUDED.segmento = 'cliente' THEN 'cliente'
-           ELSE clientes.segmento
-         END`,
-      [tenant.id, fromNumber, nombreFinal, segmentoInicial]
-    );
-
-    try {
-      const { default: OpenAI } = await import('openai');
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-
-      const intencionPrompt = `Mensaje del cliente:\n"${userInput}"\n\n¿Tiene intención de comprar o agendar?\n\nResponde solo con una palabra: comprar, reservar, cancelar, preguntar, otro.`;
-
-      const intencionRes = await openai.chat.completions.create({
-        model: 'gpt-4',
-        messages: [{ role: 'system', content: intencionPrompt }],
-      });
-
-      const intencion = intencionRes.choices[0].message?.content?.toLowerCase().trim() || '';
-
-      if (['comprar', 'compra', 'pagar', 'agendar', 'reservar', 'confirmar'].some(p => intencion.includes(p))) {
-        await pool.query(
-          `UPDATE clientes
-           SET segmento = 'cliente'
-           WHERE tenant_id = $1 AND contacto = $2 AND segmento = 'lead'`,
-          [tenant.id, fromNumber]
-        );
-      }
-    } catch (e) {
-      console.warn('⚠️ No se pudo detectar intención de voz:', e);
-    }
-
-    let emocion = 'neutral';
-    try {
-      const { default: OpenAI } = await import('openai');
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-
-      const emotionPrompt = `Mensaje del cliente:\n"${userInput}"\n\nDetecta la emoción principal.\n\nResponde solo con una palabra: enfado, tristeza, neutral, satisfacción, entusiasmo.`;
-
-      const emotionRes = await openai.chat.completions.create({
-        model: 'gpt-4',
-        messages: [{ role: 'system', content: emotionPrompt }],
-      });
-
-      emocion = emotionRes.choices[0].message?.content?.trim().toLowerCase() || 'neutral';
-    } catch (e) {
-      console.warn('⚠️ No se pudo analizar emoción:', e);
-    }
-
+    // 📝 Guardar mensajes e interacción
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voice', $3)`,
@@ -206,8 +119,8 @@ router.post('/', async (req, res) => {
 
     await incrementarUsoPorNumero(numero);
 
+    // 🔁 Mantener conversación si no es despedida
     const finConversacion = /(gracias|eso es todo|nada más|bye|adiós)/i.test(userInput);
-
     response.play(audioUrl);
 
     if (!finConversacion) {
@@ -226,8 +139,7 @@ router.post('/', async (req, res) => {
       response.hangup();
     }
 
-    res.type('text/xml');
-    res.send(response.toString());
+    res.type('text/xml').send(response.toString());
   } catch (err) {
     console.error('❌ Error en voice-response:', err);
     res.sendStatus(500);
