@@ -9,7 +9,7 @@ import { guardarAudioEnCDN } from '../../utils/uploadAudioToCDN';
 const router = Router();
 
 function normalizarTexto(texto: string): string {
-  return texto.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  return texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 }
 
 function obtenerSaludoHora(): string {
@@ -41,10 +41,8 @@ router.post('/', async (req, res) => {
     const saludoHora = obtenerSaludoHora();
     const nombreNegocio = tenant.name || 'nuestro negocio';
     const saludoInicial = `${saludoHora}, mi nombre es Amy, asistente de ${nombreNegocio}.`;
-
     const response = new twiml.VoiceResponse();
 
-    // 🟣 Si no hay SpeechResult, solo saludo y gather
     if (!userInput) {
       response.say({ voice: 'Polly.Conchita', language: config.idioma || 'es-ES' }, saludoInicial);
       response.gather({
@@ -54,11 +52,9 @@ router.post('/', async (req, res) => {
         language: config.idioma || 'es-ES',
         speechTimeout: 'auto',
       });
-
       return res.type('text/xml').send(response.toString());
     }
 
-    // 🟢 Aquí ya hay SpeechResult — procesamiento completo
     const mensajesPreviosRes = await pool.query(
       `SELECT COUNT(*) FROM messages WHERE tenant_id = $1 AND from_number = $2 AND canal = 'voice'`,
       [tenant.id, fromNumber]
@@ -66,8 +62,8 @@ router.post('/', async (req, res) => {
     const esPrimeraVez = parseInt(mensajesPreviosRes.rows[0].count, 10) === 0;
 
     const prompt = esPrimeraVez
-      ? `${saludoInicial}\n${config.system_prompt || 'Eres un asistente telefónico amigable y profesional.'}`
-      : config.system_prompt || 'Eres un asistente telefónico amigable y profesional.';
+      ? `${saludoInicial}\n${config.system_prompt || 'Eres un asistente telef\u00f3nico amigable y profesional.'}`
+      : config.system_prompt || 'Eres un asistente telef\u00f3nico amigable y profesional.';
 
     const voiceId = config.voice_name || 'EXAVITQu4vr4xnSDxMaL';
     const mensajeUsuario = normalizarTexto(userInput);
@@ -102,7 +98,7 @@ router.post('/', async (req, res) => {
         ],
       });
 
-      respuesta = completion.choices[0].message?.content || 'Lo siento, no entendí eso.';
+      respuesta = completion.choices[0].message?.content || 'Lo siento, no entend\u00ed eso.';
     }
 
     const textoFinal = esPrimeraVez ? `${saludoInicial}. ${respuesta}` : respuesta;
@@ -112,10 +108,7 @@ router.post('/', async (req, res) => {
       {
         text: textoFinal,
         model_id: 'eleven_monolingual_v1',
-        voice_settings: {
-          stability: 0.4,
-          similarity_boost: 0.8,
-        },
+        voice_settings: { stability: 0.4, similarity_boost: 0.8 },
       },
       {
         headers: {
@@ -141,13 +134,13 @@ router.post('/', async (req, res) => {
 
     await pool.query(
       `INSERT INTO clientes (tenant_id, canal, contacto, creado, nombre, segmento)
-      VALUES ($1, 'voz', $2, NOW(), $3, $4)
-      ON CONFLICT (contacto) DO UPDATE SET
-        nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
-        segmento = CASE
-          WHEN clientes.segmento = 'lead' AND EXCLUDED.segmento = 'cliente' THEN 'cliente'
-          ELSE clientes.segmento
-        END`,
+       VALUES ($1, 'voz', $2, NOW(), $3, $4)
+       ON CONFLICT (contacto) DO UPDATE SET
+         nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
+         segmento = CASE
+           WHEN clientes.segmento = 'lead' AND EXCLUDED.segmento = 'cliente' THEN 'cliente'
+           ELSE clientes.segmento
+         END`,
       [tenant.id, fromNumber, nombreFinal, segmentoInicial]
     );
 
@@ -155,14 +148,7 @@ router.post('/', async (req, res) => {
       const { default: OpenAI } = await import('openai');
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
-      const intencionPrompt = `
-      Mensaje del cliente:
-      "${userInput}"
-
-      ¿Tiene intención de comprar o agendar?
-
-      Responde solo con una palabra: comprar, reservar, cancelar, preguntar, otro.
-      `;
+      const intencionPrompt = `Mensaje del cliente:\n"${userInput}"\n\n¿Tiene intención de comprar o agendar?\n\nResponde solo con una palabra: comprar, reservar, cancelar, preguntar, otro.`;
 
       const intencionRes = await openai.chat.completions.create({
         model: 'gpt-4',
@@ -171,20 +157,16 @@ router.post('/', async (req, res) => {
 
       const intencion = intencionRes.choices[0].message?.content?.toLowerCase().trim() || '';
 
-      if (
-        ['comprar', 'compra', 'pagar', 'agendar', 'reservar', 'confirmar'].some(p =>
-          intencion.includes(p)
-        )
-      ) {
+      if (['comprar', 'compra', 'pagar', 'agendar', 'reservar', 'confirmar'].some(p => intencion.includes(p))) {
         await pool.query(
           `UPDATE clientes
-          SET segmento = 'cliente'
-          WHERE tenant_id = $1 AND contacto = $2 AND segmento = 'lead'`,
+           SET segmento = 'cliente'
+           WHERE tenant_id = $1 AND contacto = $2 AND segmento = 'lead'`,
           [tenant.id, fromNumber]
         );
       }
     } catch (e) {
-      console.warn("⚠️ No se pudo detectar intención de voz:", e);
+      console.warn('⚠️ No se pudo detectar intención de voz:', e);
     }
 
     let emocion = 'neutral';
@@ -192,14 +174,7 @@ router.post('/', async (req, res) => {
       const { default: OpenAI } = await import('openai');
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
-      const emotionPrompt = `
-      Mensaje del cliente:
-      "${userInput}"
-
-      Detecta la emoción principal.
-
-      Responde solo con una palabra: enfado, tristeza, neutral, satisfacción, entusiasmo.
-      `;
+      const emotionPrompt = `Mensaje del cliente:\n"${userInput}"\n\nDetecta la emoción principal.\n\nResponde solo con una palabra: enfado, tristeza, neutral, satisfacción, entusiasmo.`;
 
       const emotionRes = await openai.chat.completions.create({
         model: 'gpt-4',
