@@ -86,20 +86,25 @@ Eres Amy, una asistente telefónica de voz cálida, clara y natural. Responde en
     const ssmlTexto = `<speak>${textoConPausas}</speak>`;
 
     // Generar audio con ElevenLabs
+    const textoFinal = respuesta;
+
     const audioRes = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
       {
-        text: ssmlTexto,
-        model_id: 'eleven_monolingual_v1',
-        voice_settings: { stability: 0.4, similarity_boost: 0.8 },
+        text: textoFinal,
+        model_id: "eleven_monolingual_v1",
+        voice_settings: {
+          stability: 0.4,
+          similarity_boost: 0.8,
+        },
       },
       {
         headers: {
-          'xi-api-key': process.env.ELEVENLABS_API_KEY!,
-          'Content-Type': 'application/ssml+xml',
-          Accept: 'audio/mpeg',
+          "xi-api-key": process.env.ELEVENLABS_API_KEY!,
+          "Content-Type": "application/json", // 🔥 CORRECTO
+          Accept: "audio/mpeg",
         },
-        responseType: 'arraybuffer',
+        responseType: "arraybuffer",
       }
     );
 
