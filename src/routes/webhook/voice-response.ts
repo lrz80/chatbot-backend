@@ -83,30 +83,22 @@ Eres Amy, una asistente telefónica de voz cálida, clara y natural. Responde en
       .replace(/\.\s*/g, '. <break time="400ms"/> ')
       .replace(/,\s*/g, ', <break time="300ms"/> ');
 
+    // Generar audio con ElevenLabs usando SSML
     const ssmlTexto = `<speak>${textoConPausas}</speak>`;
-
-    // Generar audio con ElevenLabs
-    const textoFinal = respuesta;
 
     const audioRes = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-      {
-        text: textoFinal,
-        model_id: "eleven_monolingual_v1",
-        voice_settings: {
-          stability: 0.4,
-          similarity_boost: 0.8,
-        },
-      },
+      ssmlTexto,
       {
         headers: {
           "xi-api-key": process.env.ELEVENLABS_API_KEY!,
-          "Content-Type": "application/json", // 🔥 CORRECTO
+          "Content-Type": "application/ssml+xml", // ✅ obligatorio para SSML
           Accept: "audio/mpeg",
         },
         responseType: "arraybuffer",
       }
     );
+    
 
     const audioBuffer = Buffer.from(audioRes.data);
     const audioUrl = await guardarAudioEnCDN(audioBuffer, tenant.id);
