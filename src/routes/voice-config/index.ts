@@ -28,9 +28,20 @@ router.get("/", authenticateUser, async (req, res) => {
   }
 });
 
+// 📤 GUARDAR configuración de voz
 router.post("/", authenticateUser, upload.none(), async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
-  const { idioma, voice_name, system_prompt, welcome_message, voice_hints, canal = "voz", funciones_asistente, info_clave } = req.body;
+  const {
+    idioma,
+    voice_name,
+    system_prompt,
+    welcome_message,
+    voice_hints,
+    canal = "voz",
+    funciones_asistente,
+    info_clave,
+  } = req.body;
+
   if (!idioma || !voice_name || !tenant_id) {
     return res.status(400).json({ error: "Faltan campos requeridos." });
   }
@@ -40,17 +51,15 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
       `INSERT INTO voice_configs (
         tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints, canal, funciones_asistente, info_clave
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      ON CONFLICT (tenant_id)
+      ON CONFLICT (tenant_id, idioma, canal)
       DO UPDATE SET 
-        idioma = EXCLUDED.idioma,
         voice_name = EXCLUDED.voice_name,
         system_prompt = EXCLUDED.system_prompt,
         welcome_message = EXCLUDED.welcome_message,
         voice_hints = EXCLUDED.voice_hints,
-        canal = EXCLUDED.canal,
         funciones_asistente = EXCLUDED.funciones_asistente,
         info_clave = EXCLUDED.info_clave,
-        updated_at = now()`,
+        updated_at = NOW()`,
       [
         tenant_id,
         idioma,
@@ -62,7 +71,8 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
         funciones_asistente,
         info_clave,
       ]
-    )
+    );
+
     res.status(200).json({ ok: true });
   } catch (err) {
     console.error("❌ Error al guardar voice config:", err);
