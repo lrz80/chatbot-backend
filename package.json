@@ -24,6 +24,7 @@
     "nodemailer": "^6.10.1",
     "openai": "^4.95.0",
     "pg": "^8.11.1",
+    "socket.io": "^4.8.1",
     "stripe": "^18.0.0",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
