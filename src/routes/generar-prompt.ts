@@ -44,7 +44,7 @@ ${descripcion}
 Esta es la información clave que debe conocer:
 ${informacion}
 
-Redacta un único texto en lenguaje natural que describa cómo debe comportarse este asistente. No incluyas ningún mensaje de bienvenida, ni JSON, ni listas técnicas. Solo devuelve un texto plano profesional que servirá como prompt del sistema.`,
+Redacta un único texto en lenguaje natural que incluya sus funciones ${descripcion} y la informacion clave del negocio ${informacion} y que describa cómo debe comportarse este asistente. No incluyas ningún mensaje de bienvenida, ni JSON, ni listas técnicas. Solo devuelve un texto plano profesional que servirá como prompt del sistema.`,
         },
       ],
     });
