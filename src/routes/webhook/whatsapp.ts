@@ -65,6 +65,7 @@ function buscarRespuestaSimilitudFaqs(faqs: any[], mensaje: string): string | nu
 }
 
 router.post('/', async (req: Request, res: Response) => {
+  console.log("📩 Webhook recibido:", req.body);
   const to = req.body.To || '';
   const from = req.body.From || '';
   const numero = to.replace('whatsapp:', '').replace('tel:', '');
