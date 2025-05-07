@@ -87,18 +87,17 @@ Eres Amy, una asistente telefónica de voz cálida, clara y natural. Responde en
     const ssmlTexto = `<speak>${textoConPausas}</speak>`;
 
     const audioRes = await axios.post(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?model_id=eleven_monolingual_v1`, // ✅ model_id aquí
       ssmlTexto,
       {
         headers: {
           "xi-api-key": process.env.ELEVENLABS_API_KEY!,
-          "Content-Type": "application/ssml+xml", // ✅ obligatorio para SSML
+          "Content-Type": "application/ssml+xml",
           Accept: "audio/mpeg",
         },
         responseType: "arraybuffer",
       }
     );
-    
 
     const audioBuffer = Buffer.from(audioRes.data);
     const audioUrl = await guardarAudioEnCDN(audioBuffer, tenant.id);
