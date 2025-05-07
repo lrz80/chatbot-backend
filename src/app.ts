@@ -48,6 +48,11 @@ import * as path from 'path';
 import deleteAccountRoute from './routes/auth/delete';
 import elevenlabsVoicesRoute from './routes/elevenlabs/voices';
 import voiceLinksRouter from "./routes/voice-links";
+import interaccionesPorDia from './routes/stats/interacciones-por-dia';
+import usuariosPorDia from './routes/stats/usuarios-por-dia';
+import intencionesPorDia from './routes/stats/intenciones-por-dia';
+import horaPico from './routes/stats/hora-pico';
+import ventasStats from './routes/sales-intelligence/stats';
 
 
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -130,6 +135,11 @@ app.use(facebookWebhook);
 app.use('/api/delete-account', deleteAccountRoute);
 app.use('/api/elevenlabs/voices', elevenlabsVoicesRoute);
 app.use("/api/voice-links", voiceLinksRouter);
+app.use('/api/stats/interacciones-por-dia', interaccionesPorDia);
+app.use('/api/stats/usuarios-por-dia', usuariosPorDia);
+app.use('/api/stats/intenciones-por-dia', intencionesPorDia);
+app.use('/api/stats/hora-pico', horaPico);
+app.use('/api/sales-intelligence/stats', ventasStats);
 
 
 // ✅ Ruta base
