@@ -35,7 +35,7 @@ function buscarRespuestaDesdeFlows(flows: any[], mensajeUsuario: string): string
 
 async function detectarIntencion(mensaje: string) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-  const prompt = `Analiza este mensaje de un cliente:\n\n"${mensaje}"\n\nIdentifica:\n- Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).\n- Nivel de interés (de 1 a 5, siendo 5 "muy interesado en comprar").\n\nResponde solo en JSON. Ejemplo:\n{\n  "intencion": "preguntar precios",\n  "nivel_interes": 4\n}`;
+  const prompt = `Analiza este mensaje de un cliente:\n\n"${mensaje}"\n\nIdentifica:\n- Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).\n- Nivel de interés (de 1 a 5, siendo 5 \"muy interesado en comprar\").\n\nResponde solo en JSON. Ejemplo:\n{\n  "intencion": "preguntar precios",\n  "nivel_interes": 4\n}`;
 
   const respuesta = await openai.chat.completions.create({
     model: 'gpt-4-turbo',
@@ -56,9 +56,7 @@ function buscarRespuestaSimilitudFaqs(faqs: any[], mensaje: string): string | nu
   for (const faq of faqs) {
     const pregunta = normalizarTexto(faq.pregunta || '');
     const palabras = pregunta.split(' ').filter(Boolean);
-
-    // Considerar coincidencia si al menos 3 palabras coinciden
-    const coincidencias = palabras.filter(palabra => msg.includes(palabra));
+    const coincidencias = palabras.filter(p => msg.includes(p));
     if (coincidencias.length >= 3) return faq.respuesta;
   }
   return null;
@@ -66,6 +64,7 @@ function buscarRespuestaSimilitudFaqs(faqs: any[], mensaje: string): string | nu
 
 router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
+
   const to = req.body.To || '';
   const from = req.body.From || '';
   const numero = to.replace('whatsapp:', '').replace('tel:', '');
@@ -96,7 +95,7 @@ router.post('/', async (req: Request, res: Response) => {
     const mensajeUsuario = normalizarTexto(userInput);
     let respuesta = null;
 
-    if (['hola', 'buenas', 'hello', 'hi', 'hey'].includes(mensajeUsuario)) {
+    if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
       respuesta = getBienvenidaPorCanal('whatsapp', tenant);
     } else {
       respuesta = buscarRespuestaSimilitudFaqs(faqs, mensajeUsuario) || buscarRespuestaDesdeFlows(flows, mensajeUsuario);
@@ -114,11 +113,13 @@ router.post('/', async (req: Request, res: Response) => {
       respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant);
     }
 
+    console.log("🤖 Respuesta generada:", respuesta);
+
     try {
       const { intencion, nivel_interes } = await detectarIntencion(userInput);
       const intencionLower = intencion.toLowerCase();
 
-      if (['comprar', 'compra', 'pagar', 'agendar', 'reservar', 'confirmar'].some(p => intencionLower.includes(p))) {
+      if (["comprar", "compra", "pagar", "agendar", "reservar", "confirmar"].some(p => intencionLower.includes(p))) {
         await pool.query(
           `UPDATE clientes SET segmento = 'cliente' WHERE tenant_id = $1 AND contacto = $2 AND segmento = 'lead'`,
           [tenant.id, fromNumber]
@@ -198,6 +199,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     const twiml = new MessagingResponse();
     twiml.message(respuesta);
+    console.log("📤 Enviando a Twilio:", twiml.toString());
     res.type('text/xml');
     res.send(twiml.toString());
   } catch (error) {
