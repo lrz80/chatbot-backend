@@ -11,7 +11,7 @@ const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
 function normalizarTexto(texto: string): string {
-  return texto.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  return texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 }
 
 function buscarRespuestaDesdeFlows(flows: any[], mensajeUsuario: string): string | null {
@@ -54,10 +54,12 @@ async function detectarIntencion(mensaje: string) {
 function buscarRespuestaSimilitudFaqs(faqs: any[], mensaje: string): string | null {
   const msg = normalizarTexto(mensaje);
   for (const faq of faqs) {
-    const pregunta = normalizarTexto(faq.pregunta);
-    if (msg.includes(pregunta) || pregunta.includes(msg)) {
-      return faq.respuesta;
-    }
+    const pregunta = normalizarTexto(faq.pregunta || '');
+    const palabras = pregunta.split(' ').filter(Boolean);
+
+    // Considerar coincidencia si al menos 3 palabras coinciden
+    const coincidencias = palabras.filter(palabra => msg.includes(palabra));
+    if (coincidencias.length >= 3) return faq.respuesta;
   }
   return null;
 }
@@ -96,7 +98,7 @@ router.post('/', async (req: Request, res: Response) => {
     if (['hola', 'buenas', 'hello', 'hi', 'hey'].includes(mensajeUsuario)) {
       respuesta = getBienvenidaPorCanal('whatsapp', tenant);
     } else {
-      respuesta = buscarRespuestaSimilitudFaqs(faqs, mensajeUsuario) || buscarRespuestaDesdeFlows(flows, userInput);
+      respuesta = buscarRespuestaSimilitudFaqs(faqs, mensajeUsuario) || buscarRespuestaDesdeFlows(flows, mensajeUsuario);
     }
 
     if (!respuesta) {
