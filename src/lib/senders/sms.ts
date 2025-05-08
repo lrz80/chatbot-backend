@@ -1,33 +1,39 @@
 import twilio from "twilio";
+import pool from "../db";
 
-const accountSid = process.env.TWILIO_ACCOUNT_SID!;
-const authToken = process.env.TWILIO_AUTH_TOKEN!;
+const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
 
-const client = twilio(accountSid, authToken);
-
-/**
- * Envía un mensaje SMS a una lista de destinatarios usando el número SMS del tenant.
- * @param contenido Contenido del mensaje
- * @param contactos Lista de objetos con { telefono: string }
- * @param fromNumber Número SMS de Twilio del tenant (formato: +1XXX...)
- */
 export async function sendSMS(
-  contenido: string,
-  contactos: { telefono: string }[],
-  fromNumber: string
+  mensaje: string,
+  destinatarios: string[],
+  fromNumber: string,
+  tenantId: string,
+  campaignId: number
 ) {
-  for (const contacto of contactos) {
-    if (!contacto.telefono) continue;
-
+  for (const to of destinatarios) {
     try {
-      await client.messages.create({
-        body: contenido,
+      const message = await client.messages.create({
+        body: mensaje,
         from: fromNumber,
-        to: contacto.telefono,
+        to,
       });
-      console.log(`✅ SMS enviado a ${contacto.telefono}`);
-    } catch (err) {
-      console.error(`❌ Error enviando a ${contacto.telefono}:`, err);
+
+      await pool.query(
+        `INSERT INTO sms_status_logs (
+          tenant_id, campaign_id, message_sid, status, to_number, from_number, timestamp
+        ) VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+        [tenantId, campaignId, message.sid, message.status, to, fromNumber]
+      );
+    } catch (error: any) {
+      console.error("❌ Error enviando SMS:", error.message);
+
+      await pool.query(
+        `INSERT INTO sms_status_logs (
+          tenant_id, campaign_id, message_sid, status, to_number, from_number, error_code, error_message, timestamp
+        ) VALUES ($1, $2, null, 'failed', $3, $4, $5, $6, NOW())`,
+        [tenantId, campaignId, to, fromNumber, error.code || null, error.message]
+      );
     }
   }
 }
+

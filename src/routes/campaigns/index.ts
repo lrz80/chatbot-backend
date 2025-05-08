@@ -63,15 +63,16 @@ router.get("/usage", authenticateUser, async (req, res) => {
   }
 });
 
+// 📊 Obtener estado de entregas SMS por campaña
 router.get("/:id/sms-status", authenticateUser, async (req, res) => {
   const { id } = req.params;
   const { tenant_id } = req.user as { tenant_id: string };
 
   try {
     const result = await pool.query(
-      `SELECT to_number, status, error_code, error_message
+      `SELECT to_number, status, error_code, error_message, timestamp
        FROM sms_status_logs
-       WHERE tenant_id = $1 AND id = $2
+       WHERE tenant_id = $1 AND campaign_id = $2
        ORDER BY timestamp DESC`,
       [tenant_id, id]
     );
@@ -123,26 +124,13 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
     const { twilio_number, twilio_sms_number, name: nombreNegocio } = result.rows[0];
     const imagen_url = req.file ? `/uploads/${req.file.filename}` : null;
 
-    // Envío real
-    if (canal === "whatsapp") {
-      if (!twilio_number) return res.status(400).json({ error: "Número de WhatsApp no asignado." });
-      await sendWhatsApp(contenido, segmentosParsed, `whatsapp:${twilio_number}`);
-    } else if (canal === "sms") {
-      if (!twilio_sms_number) return res.status(400).json({ error: "Número SMS no asignado." });
-      await sendSMS(contenido, segmentosParsed, twilio_sms_number);
-    } else if (canal === "email") {
-      await sendEmail(contenido, segmentosParsed, nombreNegocio || "Tu negocio");
-    } else {
-      return res.status(400).json({ error: "Canal no válido." });
-    }
-
-    // Guardar campaña
-    await pool.query(
+    // Guardar campaña (primero)
+    const campaignResult = await pool.query(
       `INSERT INTO campanas (
         tenant_id, titulo, contenido, imagen_url, canal, destinatarios, programada_para, enviada, fecha_creacion
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, true, NOW()
-      )`,
+      ) RETURNING id`,
       [
         tenant_id,
         nombre,
@@ -153,6 +141,21 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
         fecha_envio,
       ]
     );
+
+    const campaignId = campaignResult.rows[0].id;
+
+    // Envío real
+    if (canal === "whatsapp") {
+      if (!twilio_number) return res.status(400).json({ error: "Número de WhatsApp no asignado." });
+      await sendWhatsApp(contenido, segmentosParsed, `whatsapp:${twilio_number}`);
+    } else if (canal === "sms") {
+      if (!twilio_sms_number) return res.status(400).json({ error: "Número SMS no asignado." });
+      await sendSMS(contenido, segmentosParsed, twilio_sms_number, tenant_id, campaignId);
+    } else if (canal === "email") {
+      await sendEmail(contenido, segmentosParsed, nombreNegocio || "Tu negocio");
+    } else {
+      return res.status(400).json({ error: "Canal no válido." });
+    }
 
     // Registrar uso
     await pool.query(
