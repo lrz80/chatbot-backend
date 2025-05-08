@@ -5,14 +5,20 @@ import pool from "../db";
 
 const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
 
-// 🔧 Función para normalizar número al formato internacional E.164
+// ✅ Función para normalizar número al formato E.164
 function normalizarNumero(numero: string): string {
-  const limpio = numero.replace(/\D/g, "");
-  if (limpio.length === 10) return `+1${limpio}`; // EE.UU.
-  if (limpio.length === 11 && limpio.startsWith("1")) return `+${limpio}`;
-  if (limpio.startsWith("00")) return `+${limpio.slice(2)}`; // Europa u otros que usan 00
-  if (limpio.startsWith("+" )) return limpio;
-  return `+${limpio}`; // fallback
+  const limpio = numero.trim();
+
+  // Ya viene en formato correcto
+  if (/^\+\d{10,15}$/.test(limpio)) return limpio;
+
+  const soloNumeros = limpio.replace(/\D/g, "");
+
+  if (soloNumeros.length === 10) return `+1${soloNumeros}`; // EE.UU.
+  if (soloNumeros.length === 11 && soloNumeros.startsWith("1")) return `+${soloNumeros}`;
+  if (soloNumeros.startsWith("00")) return `+${soloNumeros.slice(2)}`;
+  
+  return `+${soloNumeros}`; // fallback
 }
 
 export async function sendSMS(
@@ -24,6 +30,7 @@ export async function sendSMS(
 ) {
   for (const rawTo of destinatarios) {
     const to = normalizarNumero(rawTo);
+    console.log(`📤 Intentando enviar SMS a: ${to} desde ${fromNumber}`);
 
     try {
       const message = await client.messages.create({
