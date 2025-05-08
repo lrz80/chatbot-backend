@@ -163,13 +163,25 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
 
     if (canal === "whatsapp") {
       if (!twilio_number) return res.status(400).json({ error: "Número de WhatsApp no asignado." });
-      const contactos = segmentosParsed.map((tel: string) => ({ telefono: tel }));
+
+      // ✅ Filtrar y mapear números válidos antes de enviar
+      const contactos = segmentosParsed
+        .filter((tel: string) => /^\+?\d{10,15}$/.test(tel.trim()))
+        .map((tel: string) => ({ telefono: tel.trim() }));
+
+      if (contactos.length === 0) {
+        return res.status(400).json({ error: "No hay números válidos para enviar por WhatsApp." });
+      }
+
       await sendWhatsApp(contenido, contactos, `whatsapp:${twilio_number}`, tenant_id, campaignId);
+
     } else if (canal === "sms") {
       if (!twilio_sms_number) return res.status(400).json({ error: "Número SMS no asignado." });
       await sendSMS(contenido, twilio_sms_number, tenant_id, campaignId);
+
     } else if (canal === "email") {
       await sendEmail(contenido, segmentosParsed, nombreNegocio || "Tu negocio");
+
     } else {
       return res.status(400).json({ error: "Canal no válido." });
     }
