@@ -146,7 +146,7 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
       await sendWhatsApp(contenido, segmentosParsed, `whatsapp:${twilio_number}`);
     } else if (canal === "sms") {
       if (!twilio_sms_number) return res.status(400).json({ error: "Número SMS no asignado." });
-      await sendSMS(contenido, segmentosParsed, twilio_sms_number, tenant_id, campaignId);
+      await sendSMS(contenido, twilio_sms_number, tenant_id, campaignId);
     } else if (canal === "email") {
       await sendEmail(contenido, segmentosParsed, nombreNegocio || "Tu negocio");
     } else {
