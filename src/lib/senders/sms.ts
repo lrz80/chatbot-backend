@@ -29,6 +29,7 @@ export async function sendSMS(
   campaignId: number
 ) {
   for (const rawTo of destinatarios) {
+    console.log("🧾 Número crudo recibido:", rawTo);
     const to = normalizarNumero(rawTo);
     console.log(`📤 Intentando enviar SMS a: ${to} desde ${fromNumber}`);
 
