@@ -72,7 +72,7 @@ router.get("/:id/sms-status", authenticateUser, async (req, res) => {
     const result = await pool.query(
       `SELECT to_number, status, error_code, error_message, timestamp
        FROM sms_status_logs
-       WHERE tenant_id = $1 AND campaign_id = $2
+       WHERE tenant_id = $1 AND campaign_id = $2::int
        ORDER BY timestamp DESC`,
       [tenant_id, id]
     );
@@ -95,7 +95,6 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
 
     const segmentosParsed = JSON.parse(segmentos);
 
-    // Verificar límite mensual
     const usoActual = await pool.query(
       `SELECT SUM(cantidad) AS total FROM campaign_usage
        WHERE tenant_id = $1 AND canal = $2 AND fecha_envio >= date_trunc('month', CURRENT_DATE)`,
@@ -111,7 +110,6 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
       });
     }
 
-    // Obtener datos del tenant
     const result = await pool.query(
       "SELECT twilio_number, twilio_sms_number, name FROM tenants WHERE id = $1",
       [tenant_id]
@@ -124,7 +122,6 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
     const { twilio_number, twilio_sms_number, name: nombreNegocio } = result.rows[0];
     const imagen_url = req.file ? `/uploads/${req.file.filename}` : null;
 
-    // Guardar campaña (primero)
     const campaignResult = await pool.query(
       `INSERT INTO campanas (
         tenant_id, titulo, contenido, imagen_url, canal, destinatarios, programada_para, enviada, fecha_creacion
@@ -144,7 +141,6 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
 
     const campaignId = campaignResult.rows[0].id;
 
-    // Envío real
     if (canal === "whatsapp") {
       if (!twilio_number) return res.status(400).json({ error: "Número de WhatsApp no asignado." });
       await sendWhatsApp(contenido, segmentosParsed, `whatsapp:${twilio_number}`);
@@ -157,7 +153,6 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
       return res.status(400).json({ error: "Canal no válido." });
     }
 
-    // Registrar uso
     await pool.query(
       "INSERT INTO campaign_usage (tenant_id, canal, cantidad, fecha_envio) VALUES ($1, $2, $3, NOW())",
       [tenant_id, canal, segmentosParsed.length]

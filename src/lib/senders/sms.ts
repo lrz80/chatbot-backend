@@ -5,12 +5,14 @@ import pool from "../db";
 
 const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
 
-// 🔧 Función para normalizar número al formato internacional
+// 🔧 Función para normalizar número al formato internacional E.164
 function normalizarNumero(numero: string): string {
   const limpio = numero.replace(/\D/g, "");
-  if (limpio.length === 10) return `+1${limpio}`;
-  if (limpio.startsWith("1") && limpio.length === 11) return `+${limpio}`;
-  return `+${limpio}`;
+  if (limpio.length === 10) return `+1${limpio}`; // EE.UU.
+  if (limpio.length === 11 && limpio.startsWith("1")) return `+${limpio}`;
+  if (limpio.startsWith("00")) return `+${limpio.slice(2)}`; // Europa u otros que usan 00
+  if (limpio.startsWith("+" )) return limpio;
+  return `+${limpio}`; // fallback
 }
 
 export async function sendSMS(
