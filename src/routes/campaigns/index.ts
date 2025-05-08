@@ -113,7 +113,17 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
       return res.status(400).json({ error: "Faltan campos obligatorios." });
     }
 
-    const segmentosParsed = JSON.parse(segmentos);
+    let segmentosParsed: string[] = [];
+
+    try {
+      segmentosParsed = typeof segmentos === "string" ? JSON.parse(segmentos) : segmentos;
+      if (!Array.isArray(segmentosParsed)) {
+        return res.status(400).json({ error: "Segmentos no tienen formato de lista." });
+      }
+    } catch (err) {
+      console.error("❌ Error al parsear segmentos:", err);
+      return res.status(400).json({ error: "El formato de los segmentos no es válido." });
+    }
 
     const usoActual = await pool.query(
       `SELECT SUM(cantidad) AS total FROM campaign_usage
@@ -180,7 +190,11 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
       await sendSMS(contenido, twilio_sms_number, tenant_id, campaignId);
 
     } else if (canal === "email") {
-      await sendEmail(contenido, segmentosParsed, nombreNegocio || "Tu negocio");
+      await sendEmail(
+        contenido,
+        segmentosParsed.map((email: string) => ({ email })),
+        nombreNegocio || "Tu negocio"
+      );      
 
     } else {
       return res.status(400).json({ error: "Canal no válido." });
