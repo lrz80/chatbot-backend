@@ -71,7 +71,7 @@ router.get("/:id/sms-status", authenticateUser, async (req, res) => {
     const result = await pool.query(
       `SELECT to_number, status, error_code, error_message
        FROM sms_status_logs
-       WHERE tenant_id = $1 AND campaign_id = $2
+       WHERE tenant_id = $1 AND id = $2
        ORDER BY timestamp DESC`,
       [tenant_id, id]
     );
