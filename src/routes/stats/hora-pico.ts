@@ -1,3 +1,5 @@
+// src/routes/stats/hora-pico.ts
+
 import express from 'express';
 import { authenticateUser } from '../../middleware/auth';
 import pool from '../../lib/db';

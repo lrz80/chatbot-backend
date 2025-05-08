@@ -54,6 +54,7 @@ import intencionesPorDia from './routes/stats/intenciones-por-dia';
 import horaPico from './routes/stats/hora-pico';
 import ventasStats from './routes/sales-intelligence/stats';
 import mensajesNuevosRouter from "./routes/messages/nuevos";
+import smsStatusRouter from './routes/webhook/sms-status';
 
 
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -142,6 +143,7 @@ app.use('/api/stats/intenciones-por-dia', intencionesPorDia);
 app.use('/api/stats/hora-pico', horaPico);
 app.use('/api/sales-intelligence/stats', ventasStats);
 app.use("/api/messages/nuevos", mensajesNuevosRouter);
+app.use('/webhook/sms-status', smsStatusRouter);
 
 
 // ✅ Ruta base
