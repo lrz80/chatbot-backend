@@ -17,21 +17,39 @@ function normalizarNumero(numero: string): string {
   if (soloNumeros.length === 10) return `+1${soloNumeros}`; // EE.UU.
   if (soloNumeros.length === 11 && soloNumeros.startsWith("1")) return `+${soloNumeros}`;
   if (soloNumeros.startsWith("00")) return `+${soloNumeros.slice(2)}`;
-  
+
   return `+${soloNumeros}`; // fallback
 }
 
+// 📨 Función principal para enviar SMS a contactos válidos
 export async function sendSMS(
   mensaje: string,
-  destinatarios: string[],
   fromNumber: string,
   tenantId: string,
   campaignId: number
 ) {
+  // 🔍 Obtener y limpiar destinatarios desde la tabla contactos
+  const res = await pool.query(
+    "SELECT telefono FROM contactos WHERE tenant_id = $1 AND telefono IS NOT NULL AND TRIM(telefono) <> ''",
+    [tenantId]
+  );
+
+  const destinatarios: string[] = res.rows
+    .map((r) => r.telefono)
+    .filter((telefono) => typeof telefono === "string" && telefono.trim() !== "");
+
+  console.log("✅ Destinatarios válidos:", destinatarios);
+
   for (const rawTo of destinatarios) {
     console.log("🧾 Número crudo recibido:", rawTo);
+
     const to = normalizarNumero(rawTo);
     console.log(`📤 Intentando enviar SMS a: ${to} desde ${fromNumber}`);
+
+    if (!/^\+\d{10,15}$/.test(to)) {
+      console.warn("❌ Número malformado tras normalización, se omite:", to);
+      continue;
+    }
 
     try {
       const message = await client.messages.create({
