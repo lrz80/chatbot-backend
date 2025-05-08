@@ -83,6 +83,26 @@ router.get("/:id/sms-status", authenticateUser, async (req, res) => {
   }
 });
 
+// 📊 Obtener estado de entregas WhatsApp por campaña
+router.get("/:id/whatsapp-status", authenticateUser, async (req, res) => {
+  const { id } = req.params;
+  const { tenant_id } = req.user as { tenant_id: string };
+
+  try {
+    const result = await pool.query(
+      `SELECT to_number, status, error_code, error_message, timestamp
+       FROM whatsapp_status_logs
+       WHERE tenant_id = $1 AND campaign_id = $2::int
+       ORDER BY timestamp DESC`,
+      [tenant_id, id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("❌ Error al obtener logs WhatsApp:", err);
+    res.status(500).json({ error: "Error al obtener detalles de entrega." });
+  }
+});
+
 // 📤 Crear y enviar campaña
 router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => {
   try {
@@ -143,7 +163,8 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
 
     if (canal === "whatsapp") {
       if (!twilio_number) return res.status(400).json({ error: "Número de WhatsApp no asignado." });
-      await sendWhatsApp(contenido, segmentosParsed, `whatsapp:${twilio_number}`);
+      const contactos = segmentosParsed.map((tel: string) => ({ telefono: tel }));
+      await sendWhatsApp(contenido, contactos, `whatsapp:${twilio_number}`, tenant_id, campaignId);
     } else if (canal === "sms") {
       if (!twilio_sms_number) return res.status(400).json({ error: "Número SMS no asignado." });
       await sendSMS(contenido, twilio_sms_number, tenant_id, campaignId);
