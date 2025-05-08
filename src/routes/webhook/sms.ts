@@ -1,17 +1,24 @@
-// src/routes/webhook/sms.ts
-
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 
 const router = Router();
 
+// 🔧 Función para normalizar números al formato E.164
+function normalizarNumero(numero: string): string {
+  const limpio = numero.replace(/\D/g, '');
+  if (limpio.length === 10) return `+1${limpio}`; // EE.UU.
+  if (limpio.length > 10 && limpio.startsWith('1')) return `+${limpio}`;
+  return `+${limpio}`;
+}
+
 router.post('/', async (req: Request, res: Response) => {
   const from = req.body.From || '';
   const to = req.body.To || '';
   const userInput = req.body.Body || '';
-  const fromNumber = from.replace('tel:', '');
-  const toNumber = to.replace('tel:', '');
+
+  const fromNumber = normalizarNumero(from.replace('tel:', ''));
+  const toNumber = normalizarNumero(to.replace('tel:', ''));
 
   try {
     const tenantRes = await pool.query(
@@ -29,18 +36,18 @@ router.post('/', async (req: Request, res: Response) => {
        VALUES ($1, 'user', $2, NOW(), 'sms', $3)`,
       [tenant.id, userInput, fromNumber]
     );
-    
-    // 💾 Guardar interacción en tabla de estadísticas
+
+    // 📊 Guardar interacción en tabla de estadísticas
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, created_at)
-      VALUES ($1, $2, NOW())`,
-      [tenant.id, 'sms']
+       VALUES ($1, 'sms', NOW())`,
+      [tenant.id]
     );
 
-    // 🔢 Incrementar uso real
+    // 🔢 Incrementar uso
     await incrementarUsoPorNumero(toNumber);
 
-    // 📨 Respuesta básica
+    // 📩 Respuesta de confirmación a Twilio
     res.type('text/xml');
     res.send(`<Response><Message>Recibido por SMS ✅</Message></Response>`);
   } catch (err) {
