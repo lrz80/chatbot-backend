@@ -105,9 +105,9 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
 
     const campaignResult = await pool.query(
       `INSERT INTO campanas (
-        tenant_id, titulo, contenido, imagen_url, canal, destinatarios, programada_para, enviada, fecha_creacion, template_sid, template_vars
+        tenant_id, titulo, contenido, imagen_url, canal, destinatarios, programada_para, enviada, fecha_creacion
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, true, NOW(), $8, $9
+        $1, $2, $3, $4, $5, $6, $7, true, NOW()
       ) RETURNING id`,
       [
         tenant_id,
@@ -117,10 +117,8 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
         canal,
         JSON.stringify(segmentosParsed),
         fecha_envio,
-        template_sid || null,
-        template_vars || null,
       ]
-    );
+    );    
 
     const campaignId = campaignResult.rows[0].id;
 
