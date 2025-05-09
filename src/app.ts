@@ -31,9 +31,6 @@ import flowsRoutes from "./routes/flows";
 import statsKpisRouter from './routes/stats-kpis';
 import uploadLogoRoute from './routes/upload-logo';
 import campaignsRoutes from "./routes/campaigns";
-import uploadContactos from "./routes/contactos/upload";
-import deleteContactos from "./routes/contactos/delete";
-import countContactos from "./routes/contactos/count";
 import voicePromptRoute from "./routes/voice-prompt";
 import voiceWebhookRoute from "./routes/webhook/voice";
 import testRoute from "./routes/test";
@@ -55,6 +52,7 @@ import horaPico from './routes/stats/hora-pico';
 import ventasStats from './routes/sales-intelligence/stats';
 import mensajesNuevosRouter from "./routes/messages/nuevos";
 import smsStatusRouter from './routes/webhook/sms-status';
+import contactosRoutes from "./routes/contactos/index"; 
 
 
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -122,9 +120,6 @@ app.use('/api/stats', statsKpisRouter);
 app.use('/api/upload-logo', uploadLogoRoute);
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.use("/api/campaigns", campaignsRoutes);
-app.use("/api/contactos", uploadContactos);
-app.use("/api/contactos", deleteContactos);
-app.use("/api/contactos/count", countContactos);
 app.use("/api/voice-prompt", voicePromptRoute);
 app.use("/api/webhooks/voice", voiceWebhookRoute);
 app.use("/api/test", testRoute);
@@ -144,7 +139,7 @@ app.use('/api/stats/hora-pico', horaPico);
 app.use('/api/sales-intelligence/stats', ventasStats);
 app.use("/api/messages/nuevos", mensajesNuevosRouter);
 app.use('/webhook/sms-status', smsStatusRouter);
-
+app.use("/api/contactos", contactosRoutes);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
