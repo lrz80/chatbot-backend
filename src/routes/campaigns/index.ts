@@ -145,15 +145,23 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
         return res.status(400).json({ error: "No hay números válidos para enviar por WhatsApp." });
       }
 
-      const vars = campana.template_vars ? JSON.parse(campana.template_vars) : {};
+      let vars = {};
+      try {
+        vars = typeof campana.template_vars === "string"
+          ? JSON.parse(campana.template_vars)
+          : (campana.template_vars || {});
+      } catch {
+        console.warn("⚠️ template_vars mal formateado, usando objeto vacío.");
+      }
+
       await sendWhatsApp(
-        template_sid,
+        campana.template_sid,
         contactos,
         `whatsapp:${twilio_number}`,
         tenant_id,
         campaignId,
         vars
-      );      
+      );
 
     } else if (canal === "sms") {
       if (!twilio_sms_number) return res.status(400).json({ error: "Número SMS no asignado." });
