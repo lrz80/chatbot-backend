@@ -173,18 +173,33 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
       }
 
       await sendSMS(contenido, numerosSMS, twilio_sms_number, tenant_id, campaignId);
-
+      
     } else if (canal === "email") {
       const destinatarios = segmentosParsed
         .map((email: string) => email.trim())
         .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
         .map((email) => ({ email }));
 
+        const campanaResult = await pool.query(
+          "SELECT link_url FROM campanas WHERE id = $1 AND tenant_id = $2",
+          [campaignId, tenant_id]
+        );
+        const campana = campanaResult.rows[0];
+        
       if (destinatarios.length === 0) {
         return res.status(400).json({ error: "No hay correos válidos para enviar." });
       }
 
-      await sendEmail(contenido, destinatarios, nombreNegocio || "Tu negocio", tenant_id, campaignId);
+      await sendEmail(
+        contenido,
+        destinatarios,
+        nombreNegocio || "Tu negocio",
+        tenant_id,
+        campaignId,
+        imagen_url || undefined, // usa imagen si se cargó
+        campana.link_url || undefined // si usas un campo link_url en la tabla campanas
+      );
+      
     } else {
       return res.status(400).json({ error: "Canal no válido." });
     }
