@@ -183,10 +183,13 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
     if (canal === "whatsapp") {
       if (!twilio_number) return res.status(400).json({ error: "Número de WhatsApp no asignado." });
 
+      console.log("🧪 segmentosParsed:", segmentosParsed);
       const contactos = segmentosParsed
         .map((tel: string) => normalizarNumero(tel.trim()))
         .filter((tel) => /^\+\d{11,15}$/.test(tel))
         .map((tel) => ({ telefono: tel }));
+
+      console.log("✅ Contactos normalizados:", contactos);
 
       if (contactos.length === 0) {
         return res.status(400).json({ error: "No hay números válidos para enviar por WhatsApp." });
