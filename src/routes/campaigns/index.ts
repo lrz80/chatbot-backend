@@ -1,3 +1,5 @@
+// src/routes/campaigns/index.ts
+
 import express from "express";
 import multer from "multer";
 import path from "path";
@@ -190,6 +192,33 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
   } catch (error) {
     console.error("❌ Error al procesar campaña:", error);
     return res.status(500).json({ error: "Error interno al procesar la campaña." });
+  }
+});
+
+// 🗑️ Eliminar campaña
+router.delete("/:id", authenticateUser, async (req, res) => {
+  const { id } = req.params;
+  const campaignId = parseInt(id, 10);
+  const { tenant_id } = req.user as { tenant_id: string };
+
+  if (isNaN(campaignId)) {
+    return res.status(400).json({ error: "ID inválido." });
+  }
+
+  try {
+    const result = await pool.query(
+      "DELETE FROM campanas WHERE id = $1 AND tenant_id = $2 RETURNING *",
+      [campaignId, tenant_id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Campaña no encontrada o no autorizada." });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("❌ Error al eliminar campaña:", err);
+    res.status(500).json({ error: "Error al eliminar campaña." });
   }
 });
 
