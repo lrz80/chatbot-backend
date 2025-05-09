@@ -217,7 +217,7 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
         return res.status(400).json({ error: "No hay correos válidos para enviar." });
       }
 
-      await sendEmail(contenido, destinatarios, nombreNegocio || "Tu negocio");
+      await sendEmail(contenido, destinatarios, nombreNegocio || "Tu negocio", tenant_id, campaignId);
 
     } else {
       return res.status(400).json({ error: "Canal no válido." });
