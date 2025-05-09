@@ -143,6 +143,9 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
     const totalActual = parseInt(usoActual.rows[0]?.total || "0", 10);
     const totalNuevo = totalActual + segmentosParsed.length;
 
+    console.log("🛠 Canal recibido:", canal);
+    console.log("📨 Segmentos recibidos:", segmentosParsed);
+
     if (totalNuevo > CANAL_LIMITES[canal]) {
       return res.status(403).json({
         error: `Has alcanzado el límite mensual de ${CANAL_LIMITES[canal]} envíos para ${canal}.`,
@@ -180,7 +183,7 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
 
     const campaignId = campaignResult.rows[0].id;
 
-    if (canal === "whatsapp") {
+    if (canal.toLowerCase() === "whatsapp") {
       if (!twilio_number) return res.status(400).json({ error: "Número de WhatsApp no asignado." });
 
       console.log("🧪 segmentosParsed:", segmentosParsed);
