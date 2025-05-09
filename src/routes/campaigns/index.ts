@@ -201,6 +201,24 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
   }
 });
 
+// 📊 Obtener uso mensual por canal
+router.get("/usage", authenticateUser, async (req, res) => {
+  const { tenant_id } = req.user as { tenant_id: string };
+  try {
+    const result = await pool.query(
+      `SELECT canal, SUM(cantidad) as total
+       FROM campaign_usage
+       WHERE tenant_id = $1 AND fecha_envio >= date_trunc('month', CURRENT_DATE)
+       GROUP BY canal`,
+      [tenant_id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("❌ Error al obtener uso de campañas:", err);
+    res.status(500).json({ error: "Error al obtener uso de campañas" });
+  }
+});
+
 // 🗑️ Eliminar campaña
 router.delete("/:id", authenticateUser, async (req, res) => {
   const { id } = req.params;
