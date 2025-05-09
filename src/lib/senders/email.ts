@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import pool from "../db"; // 👈 necesario para guardar logs
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -11,29 +12,49 @@ const transporter = nodemailer.createTransport({
 });
 
 /**
- * Envía correos personalizados por tenant.
- * @param contenido Contenido del mensaje
+ * Envía correos personalizados por tenant y guarda logs por campaña.
+ * @param contenido Contenido del mensaje (HTML)
  * @param contactos Lista de objetos con { email: string }
- * @param nombreNegocio Nombre visible del negocio (para el alias del correo)
+ * @param nombreNegocio Nombre del remitente (alias)
+ * @param tenantId ID del tenant (para logs)
+ * @param campaignId ID de la campaña (para logs)
  */
 export async function sendEmail(
   contenido: string,
   contactos: { email: string }[],
-  nombreNegocio: string
+  nombreNegocio: string,
+  tenantId: string,
+  campaignId: number
 ) {
   for (const contacto of contactos) {
-    if (!contacto.email) continue;
+    const email = contacto.email?.trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) continue;
 
     try {
       await transporter.sendMail({
-        from: `"${nombreNegocio}" <noreply@aamy.ai>`, // 👈 se ve como si lo envió el negocio
-        to: contacto.email,
+        from: `"${nombreNegocio}" <noreply@aamy.ai>`,
+        to: email,
         subject: "📣 Nueva campaña de tu negocio",
         html: `<p>${contenido}</p>`,
       });
-      console.log(`✅ Email enviado a ${contacto.email}`);
-    } catch (err) {
-      console.error(`❌ Error enviando a ${contacto.email}:`, err);
+
+      await pool.query(
+        `INSERT INTO email_status_logs (
+          tenant_id, campaign_id, email, status, timestamp
+        ) VALUES ($1, $2, $3, 'sent', NOW())`,
+        [tenantId, campaignId, email]
+      );
+
+      console.log(`✅ Email enviado a ${email}`);
+    } catch (err: any) {
+      console.error(`❌ Error enviando a ${email}:`, err?.message || err);
+
+      await pool.query(
+        `INSERT INTO email_status_logs (
+          tenant_id, campaign_id, email, status, error_message, timestamp
+        ) VALUES ($1, $2, $3, 'failed', $4, NOW())`,
+        [tenantId, campaignId, email, err?.message || "Error desconocido"]
+      );
     }
   }
 }

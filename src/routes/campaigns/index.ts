@@ -30,6 +30,15 @@ const CANAL_LIMITES: Record<string, number> = {
   email: 1000,
 };
 
+// ✅ Función para normalizar números al formato internacional
+function normalizarNumero(numero: string): string {
+  const limpio = numero.replace(/\D/g, "");
+  if (limpio.length === 10) return `+1${limpio}`;
+  if (limpio.length === 11 && limpio.startsWith("1")) return `+${limpio}`;
+  if (numero.startsWith("+")) return numero;
+  return "";
+}
+
 // 📥 Obtener campañas del tenant
 router.get("/", authenticateUser, async (req, res) => {
   try {
@@ -174,10 +183,10 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
     if (canal === "whatsapp") {
       if (!twilio_number) return res.status(400).json({ error: "Número de WhatsApp no asignado." });
 
-      // ✅ Filtrar y mapear números válidos antes de enviar
       const contactos = segmentosParsed
-        .filter((tel: string) => /^\+?\d{10,15}$/.test(tel.trim()))
-        .map((tel: string) => ({ telefono: tel.trim() }));
+        .map((tel: string) => normalizarNumero(tel.trim()))
+        .filter((tel) => /^\+\d{11,15}$/.test(tel))
+        .map((tel) => ({ telefono: tel }));
 
       if (contactos.length === 0) {
         return res.status(400).json({ error: "No hay números válidos para enviar por WhatsApp." });
@@ -187,14 +196,28 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
 
     } else if (canal === "sms") {
       if (!twilio_sms_number) return res.status(400).json({ error: "Número SMS no asignado." });
-      await sendSMS(contenido, twilio_sms_number, tenant_id, campaignId);
+
+      const numerosSMS = segmentosParsed
+        .map((tel: string) => normalizarNumero(tel.trim()))
+        .filter((tel) => /^\+\d{11,15}$/.test(tel));
+
+      if (numerosSMS.length === 0) {
+        return res.status(400).json({ error: "No hay números válidos para enviar por SMS." });
+      }
+
+      await sendSMS(contenido, numerosSMS, twilio_sms_number, tenant_id, campaignId);
 
     } else if (canal === "email") {
-      await sendEmail(
-        contenido,
-        segmentosParsed.map((email: string) => ({ email })),
-        nombreNegocio || "Tu negocio"
-      );      
+      const destinatarios = segmentosParsed
+        .map((email: string) => email.trim())
+        .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+        .map((email) => ({ email }));
+
+      if (destinatarios.length === 0) {
+        return res.status(400).json({ error: "No hay correos válidos para enviar." });
+      }
+
+      await sendEmail(contenido, destinatarios, nombreNegocio || "Tu negocio");
 
     } else {
       return res.status(400).json({ error: "Canal no válido." });

@@ -1,11 +1,18 @@
-// src/lib/senders/whatsapp.ts
-
 import twilio from "twilio";
 import pool from "../db";
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID!;
 const authToken = process.env.TWILIO_AUTH_TOKEN!;
 const client = twilio(accountSid, authToken);
+
+// ✅ Función para normalizar número al formato internacional
+function normalizarNumero(numero: string): string {
+  const limpio = numero.replace(/\D/g, "");
+  if (limpio.length === 10) return `+1${limpio}`; // EE.UU.
+  if (limpio.length === 11 && limpio.startsWith("1")) return `+${limpio}`;
+  if (numero.startsWith("+")) return numero;
+  return ""; // inválido
+}
 
 /**
  * Envía un mensaje de WhatsApp a una lista de destinatarios usando el número Twilio del tenant.
@@ -28,10 +35,11 @@ export async function sendWhatsApp(
   }
 
   for (const contacto of contactos) {
-    const telefono = contacto?.telefono?.trim();
+    const telefonoRaw = contacto?.telefono?.trim();
+    const telefono = normalizarNumero(telefonoRaw || "");
 
-    if (!telefono || !/^\+?\d{10,15}$/.test(telefono)) {
-      console.warn(`⚠️ Número inválido o vacío: ${telefono}`);
+    if (!telefono) {
+      console.warn(`⚠️ Número inválido o no convertible: ${telefonoRaw}`);
       continue;
     }
 
