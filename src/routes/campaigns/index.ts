@@ -48,7 +48,31 @@ router.get("/", authenticateUser, async (req, res) => {
       "SELECT * FROM campanas WHERE tenant_id = $1 ORDER BY fecha_creacion DESC",
       [tenant_id]
     );
-    res.json(result.rows);
+    const campañasNormalizadas = result.rows.map((row) => ({
+      id: row.id,
+      titulo: row.titulo || row.nombre || "Sin nombre",
+      contenido: row.contenido || "",
+      canal: row.canal || "sms",
+      destinatarios: (() => {
+        try {
+          return typeof row.destinatarios === "string"
+            ? JSON.parse(row.destinatarios || "[]")
+            : Array.isArray(row.destinatarios)
+            ? row.destinatarios
+            : [];
+        } catch {
+          return [];
+        }
+      })(),
+      programada_para: row.programada_para || row.fecha_envio || null,
+      enviada: row.enviada ?? true,
+      fecha_creacion: row.fecha_creacion || new Date().toISOString(),
+      imagen_url: row.imagen_url || null,
+      link_url: row.link_url || "",
+    }));
+    
+    res.json(campañasNormalizadas);
+    
   } catch (err) {
     console.error("❌ Error al obtener campañas:", err);
     res.status(500).json({ error: "Error al obtener campañas" });
