@@ -12,7 +12,18 @@ const transporter = nodemailer.createTransport({
 });
 
 // 💌 Generador de HTML visual
-function generarHTMLCorreo(contenido: string, negocio: string, imagenUrl?: string, linkUrl?: string): string {
+function generarHTMLCorreo(
+  contenido: string,
+  negocio: string,
+  imagenUrl?: string,
+  linkUrl?: string,
+  logoUrl?: string,
+  email?: string,
+  tenantId?: string
+): string {
+  const contenidoSeguro = contenido.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const unsubscribeLink = `https://aamy.ai/unsubscribe?email=${encodeURIComponent(email || "")}&tenant=${tenantId || ""}`;
+
   return `
     <!DOCTYPE html>
     <html lang="es">
@@ -28,7 +39,11 @@ function generarHTMLCorreo(contenido: string, negocio: string, imagenUrl?: strin
             <table width="600" cellpadding="20" cellspacing="0" bgcolor="#ffffff" style="margin-top: 40px; border-radius: 8px;">
               <tr>
                 <td align="center">
-                  <img src="https://via.placeholder.com/150x50?text=${encodeURIComponent(negocio)}" alt="Logo del Negocio" style="max-width: 150px; margin-bottom: 20px;" />
+                  ${
+                    logoUrl
+                      ? `<img src="${logoUrl}" alt="Logo del negocio" style="max-width: 150px; margin-bottom: 20px;" />`
+                      : `<img src="https://via.placeholder.com/150x50?text=${encodeURIComponent(negocio)}" alt="Logo del negocio" style="max-width: 150px; margin-bottom: 20px;" />`
+                  }
                   <h2 style="color: #333333;">📣 ¡Oferta especial para ti!</h2>
 
                   ${
@@ -38,7 +53,7 @@ function generarHTMLCorreo(contenido: string, negocio: string, imagenUrl?: strin
                   }
 
                   <p style="color:#555555; font-size: 16px;">
-                    ${contenido}
+                    ${contenidoSeguro}
                   </p>
 
                   ${
@@ -48,7 +63,12 @@ function generarHTMLCorreo(contenido: string, negocio: string, imagenUrl?: strin
                   }
 
                   <hr style="margin: 40px 0; border: none; border-top: 1px solid #ddd;">
-                  <p style="font-size:12px; color:#999999;">Este mensaje fue enviado por ${negocio} • <a href="#" style="color:#999;">Cancelar suscripción</a></p>
+                  <p style="font-size:12px; color:#999999;">
+                    Este mensaje fue enviado por ${negocio} • 
+                    <a href="${unsubscribeLink}" style="color:#999;" target="_blank">
+                      Cancelar suscripción
+                    </a>
+                  </p>
                 </td>
               </tr>
             </table>
@@ -62,13 +82,6 @@ function generarHTMLCorreo(contenido: string, negocio: string, imagenUrl?: strin
 
 /**
  * Envía correos personalizados por tenant y guarda logs por campaña.
- * @param contenido Texto plano del mensaje (se inserta como HTML)
- * @param contactos Lista de objetos con { email: string }
- * @param nombreNegocio Nombre del remitente (alias)
- * @param tenantId ID del tenant (para logs)
- * @param campaignId ID de la campaña (para logs)
- * @param imagenUrl URL opcional de imagen a mostrar
- * @param linkUrl URL opcional para CTA
  */
 export async function sendEmail(
   contenido: string,
@@ -77,13 +90,14 @@ export async function sendEmail(
   tenantId: string,
   campaignId: number,
   imagenUrl?: string,
-  linkUrl?: string
+  linkUrl?: string,
+  logoUrl?: string
 ) {
-  const html = generarHTMLCorreo(contenido, nombreNegocio, imagenUrl, linkUrl);
-
   for (const contacto of contactos) {
     const email = contacto.email?.trim();
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) continue;
+
+    const html = generarHTMLCorreo(contenido, nombreNegocio, imagenUrl, linkUrl, logoUrl, email, tenantId);
 
     try {
       await transporter.sendMail({
@@ -91,6 +105,7 @@ export async function sendEmail(
         to: email,
         subject: "📣 Nueva campaña de tu negocio",
         html,
+        text: contenido, // Fallback texto plano
       });
 
       await pool.query(

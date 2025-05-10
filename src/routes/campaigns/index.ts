@@ -101,13 +101,14 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
     }
 
     const { twilio_number, twilio_sms_number, name: nombreNegocio } = result.rows[0];
-    const imagen_url = req.file ? `/uploads/${req.file.filename}` : null;
+    const imagen_url = req.file && canal === "email" ? `/uploads/${req.file.filename}` : null;
+    const link_url = canal === "email" ? req.body.link_url : null;
 
     const campaignResult = await pool.query(
       `INSERT INTO campanas (
-        tenant_id, titulo, contenido, imagen_url, canal, destinatarios, programada_para, enviada, fecha_creacion
+        tenant_id, titulo, contenido, imagen_url, canal, destinatarios, programada_para, enviada, fecha_creacion, link_url
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, true, NOW()
+        $1, $2, $3, $4, $5, $6, $7, true, NOW(), $8
       ) RETURNING id`,
       [
         tenant_id,
@@ -117,6 +118,7 @@ router.post("/", authenticateUser, upload.single("imagen"), async (req, res) => 
         canal,
         JSON.stringify(segmentosParsed),
         fecha_envio,
+        link_url,
       ]
     );    
 
