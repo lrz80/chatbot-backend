@@ -32,24 +32,30 @@ router.post('/', async (req: Request, res: Response) => {
 
     // Registrar el log
     await pool.query(
-      `INSERT INTO sms_status_logs (
-        tenant_id, message_sid, status, to_number, from_number,
-        error_code, error_message, campaign_id, timestamp
-      ) VALUES (
-        $1, $2, $3, $4, $5,
-        $6, $7, $8, NOW()
-      )`,
-      [
-        tenantId || null,
-        MessageSid || SmsSid,
-        status,
-        toNumber,
-        fromNumber,
-        ErrorCode || null,
-        ErrorMessage || null,
-        campaign_id || null // puede venir desde la función de envío
-      ]
-    );
+        `INSERT INTO sms_status_logs (
+          tenant_id, message_sid, status, to_number, from_number,
+          error_code, error_message, campaign_id, timestamp
+        ) VALUES (
+          $1, $2, $3, $4, $5,
+          $6, $7, $8, NOW()
+        )
+        ON CONFLICT (message_sid)
+        DO UPDATE SET
+          status = EXCLUDED.status,
+          error_code = EXCLUDED.error_code,
+          error_message = EXCLUDED.error_message,
+          timestamp = NOW()`,
+        [
+          tenantId || null,
+          MessageSid || SmsSid,
+          status,
+          toNumber,
+          fromNumber,
+          ErrorCode || null,
+          ErrorMessage || null,
+          campaign_id || null
+        ]
+      );      
 
     res.sendStatus(200);
   } catch (err) {

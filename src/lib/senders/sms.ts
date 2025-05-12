@@ -38,7 +38,8 @@ export async function sendSMS(
         body: mensaje,
         from: fromNumber,
         to,
-      });
+        statusCallback: `${process.env.API_BASE_URL}/api/webhook/sms-status`, // asegúrate de tener esta URL
+      });      
 
       await pool.query(
         `INSERT INTO sms_status_logs (
