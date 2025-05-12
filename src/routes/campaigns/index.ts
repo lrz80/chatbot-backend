@@ -305,4 +305,28 @@ router.delete("/:id", authenticateUser, async (req, res) => {
   }
 });
 
+// 📦 Ver entregas por número para una campaña SMS
+router.get("/:id/sms-status", authenticateUser, async (req, res) => {
+  const campaignId = parseInt(req.params.id, 10);
+  const { tenant_id } = req.user as { tenant_id: string };
+
+  if (isNaN(campaignId)) {
+    return res.status(400).json({ error: "ID inválido." });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT to_number AS telefono, status, error_code, error_message, timestamp
+       FROM sms_status_logs
+       WHERE tenant_id = $1 AND campaign_id = $2
+       ORDER BY timestamp DESC`,
+      [tenant_id, campaignId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error("❌ Error al consultar sms_status_logs:", err);
+    res.status(500).json({ error: "Error al cargar entregas." });
+  }
+});
+
 export default router;
