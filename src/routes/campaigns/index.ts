@@ -143,24 +143,44 @@ router.post(
         link_url = req.body.link_url || null;
       }
 
-      const campaignResult = await pool.query(
-        `INSERT INTO campanas (
-          tenant_id, titulo, contenido, imagen_url, archivo_adjunto_url, canal, destinatarios, programada_para, enviada, fecha_creacion, link_url
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, true, NOW(), $9
-        ) RETURNING id`,
-        [
-          tenant_id,
-          nombre,
-          contenido,
-          imagen_url,
-          archivo_adjunto_url,
-          canal,
-          JSON.stringify(segmentosParsed),
-          fecha_envio,
-          link_url,
-        ]
-      );
+      let campaignResult;
+      if (canal === "email") {
+        campaignResult = await pool.query(
+          `INSERT INTO campanas (
+            tenant_id, titulo, contenido, imagen_url, archivo_adjunto_url, canal, destinatarios, programada_para, enviada, fecha_creacion, link_url
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, true, NOW(), $9
+          ) RETURNING id`,
+          [
+            tenant_id,
+            nombre,
+            contenido,
+            imagen_url,
+            archivo_adjunto_url,
+            canal,
+            JSON.stringify(segmentosParsed),
+            fecha_envio,
+            link_url,
+          ]
+        );
+      } else {
+        campaignResult = await pool.query(
+          `INSERT INTO campanas (
+            tenant_id, titulo, contenido, canal, destinatarios, programada_para, enviada, fecha_creacion
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, true, NOW()
+          ) RETURNING id`,
+          [
+            tenant_id,
+            nombre,
+            contenido,
+            canal,
+            JSON.stringify(segmentosParsed),
+            fecha_envio,
+          ]
+        );
+      }
+      
       const campaignId = campaignResult.rows[0].id;
 
       if (canal.toLowerCase() === "whatsapp") {
