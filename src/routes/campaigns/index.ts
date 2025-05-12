@@ -96,7 +96,6 @@ router.post(
       }
 
       let segmentosParsed: string[] = [];
-
       try {
         segmentosParsed = typeof segmentos === "string" ? JSON.parse(segmentos) : segmentos;
         if (!Array.isArray(segmentosParsed)) {
@@ -112,7 +111,6 @@ router.post(
          WHERE tenant_id = $1 AND canal = $2 AND fecha_envio >= date_trunc('month', CURRENT_DATE)`,
         [tenant_id, canal]
       );
-
       const totalActual = parseInt(usoActual.rows[0]?.total || "0", 10);
       const totalNuevo = totalActual + segmentosParsed.length;
 
@@ -126,24 +124,24 @@ router.post(
         "SELECT twilio_number, twilio_sms_number, name FROM tenants WHERE id = $1",
         [tenant_id]
       );
-
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "Tenant no encontrado." });
       }
-
       const { twilio_number, twilio_sms_number, name: nombreNegocio } = result.rows[0];
 
-      const imagen_url =
-        req.files && "imagen" in req.files
-          ? `/uploads/${(req.files["imagen"] as Express.Multer.File[])[0].filename}`
-          : null;
+      let imagen_url = null;
+      let archivo_adjunto_url = null;
+      let link_url = null;
 
-      const archivo_adjunto_url =
-        req.files && "archivo_adjunto" in req.files
-          ? `/uploads/${(req.files["archivo_adjunto"] as Express.Multer.File[])[0].filename}`
-          : null;
-
-      const link_url = canal === "email" ? req.body.link_url : null;
+      if (canal === "email") {
+        if (req.files && "imagen" in req.files) {
+          imagen_url = `/uploads/${(req.files["imagen"] as Express.Multer.File[])[0].filename}`;
+        }
+        if (req.files && "archivo_adjunto" in req.files) {
+          archivo_adjunto_url = `/uploads/${(req.files["archivo_adjunto"] as Express.Multer.File[])[0].filename}`;
+        }
+        link_url = req.body.link_url || null;
+      }
 
       const campaignResult = await pool.query(
         `INSERT INTO campanas (
@@ -163,7 +161,6 @@ router.post(
           link_url,
         ]
       );
-
       const campaignId = campaignResult.rows[0].id;
 
       if (canal.toLowerCase() === "whatsapp") {
@@ -189,10 +186,9 @@ router.post(
 
         let vars = {};
         try {
-          vars =
-            typeof campana.template_vars === "string"
-              ? JSON.parse(campana.template_vars)
-              : campana.template_vars || {};
+          vars = typeof campana.template_vars === "string"
+            ? JSON.parse(campana.template_vars)
+            : campana.template_vars || {};
         } catch {
           console.warn("⚠️ template_vars mal formateado, usando objeto vacío.");
         }
@@ -205,6 +201,7 @@ router.post(
           campaignId,
           vars
         );
+
       } else if (canal === "sms") {
         if (!twilio_sms_number) return res.status(400).json({ error: "Número SMS no asignado." });
 
@@ -217,17 +214,12 @@ router.post(
         }
 
         await sendSMS(contenido, numerosSMS, twilio_sms_number, tenant_id, campaignId);
+
       } else if (canal === "email") {
         const destinatarios = segmentosParsed
           .map((email: string) => email.trim())
           .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
           .map((email) => ({ email }));
-
-        const campanaResult = await pool.query(
-          "SELECT link_url, archivo_adjunto_url FROM campanas WHERE id = $1 AND tenant_id = $2",
-          [campaignId, tenant_id]
-        );
-        const campana = campanaResult.rows[0];
 
         if (destinatarios.length === 0) {
           return res.status(400).json({ error: "No hay correos válidos para enviar." });
@@ -240,8 +232,8 @@ router.post(
           tenant_id,
           campaignId,
           imagen_url || undefined,
-          campana.link_url || undefined,
-          campana.archivo_adjunto_url || undefined // 🔗 listo para usar si decides implementarlo
+          link_url || undefined,
+          archivo_adjunto_url || undefined
         );
       } else {
         return res.status(400).json({ error: "Canal no válido." });
@@ -259,6 +251,7 @@ router.post(
     }
   }
 );
+
 
 // 📊 Obtener uso mensual por canal
 router.get("/usage", authenticateUser, async (req, res) => {
