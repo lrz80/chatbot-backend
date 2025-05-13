@@ -44,7 +44,7 @@ export async function sendSMS(
         body: mensaje,
         from: fromNumber,
         to,
-        statusCallback: `${callbackBaseUrl}/api/webhook/sms-status`
+        statusCallback: `${callbackBaseUrl}/api/webhook/sms-status?campaign_id=${campaignId}`,
       });
 
       await pool.query(
