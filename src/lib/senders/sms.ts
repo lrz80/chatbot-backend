@@ -9,7 +9,6 @@ function normalizarNumero(numero: string): string {
   if (/^\+\d{10,15}$/.test(limpio)) return limpio;
 
   const soloNumeros = limpio.replace(/\D/g, "");
-
   if (soloNumeros.length === 10) return `+1${soloNumeros}`;
   if (soloNumeros.length === 11 && soloNumeros.startsWith("1")) return `+${soloNumeros}`;
   if (soloNumeros.startsWith("00")) return `+${soloNumeros.slice(2)}`;
@@ -17,7 +16,14 @@ function normalizarNumero(numero: string): string {
   return `+${soloNumeros}`; // fallback
 }
 
-// 📨 Función para enviar SMS a una lista de destinatarios ya provistos
+const callbackBaseUrl = process.env.API_BASE_URL;
+
+if (!callbackBaseUrl) {
+  console.warn("⚠️ API_BASE_URL no está definida en el entorno.");
+} else {
+  console.log("📤 Usando callback URL:", `${callbackBaseUrl}/api/webhook/sms-status`);
+}
+
 export async function sendSMS(
   mensaje: string,
   destinatarios: string[],
@@ -38,15 +44,15 @@ export async function sendSMS(
         body: mensaje,
         from: fromNumber,
         to,
-        statusCallback: `${process.env.BASE_URL}/api/webhook/sms-status`
-      });      
+        statusCallback: `${callbackBaseUrl}/api/webhook/sms-status`
+      });
 
       await pool.query(
         `INSERT INTO sms_status_logs (
           tenant_id, campaign_id, message_sid, status, to_number, from_number, timestamp
         ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [tenantId, campaignId, message.sid, message.status, to, fromNumber, new Date().toISOString()]
-      );      
+      );
 
       console.log(`✅ SMS enviado a ${to} (SID: ${message.sid})`);
     } catch (error: any) {
@@ -65,7 +71,7 @@ export async function sendSMS(
           error.message || "Error desconocido",
           new Date().toISOString(),
         ]
-      );      
+      );
     }
   }
 }
