@@ -3,7 +3,7 @@ import pool from "../db";
 
 const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
 
-// ✅ Función para normalizar número al formato E.164
+// ✅ Normaliza al formato E.164
 function normalizarNumero(numero: string): string {
   const limpio = numero.trim();
   if (/^\+\d{10,15}$/.test(limpio)) return limpio;
@@ -61,10 +61,12 @@ export async function sendSMS(
       await pool.query(
         `INSERT INTO sms_status_logs (
           tenant_id, campaign_id, message_sid, status, to_number, from_number, error_code, error_message, timestamp
-        ) VALUES ($1, $2, null, 'failed', $3, $4, $5, $6, $7)`,
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
         [
           tenantId,
           campaignId,
+          null,
+          'failed',
           to,
           fromNumber,
           error.code || null,

@@ -1,5 +1,3 @@
-// src/routes/webhook/sms-status.ts
-
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 
@@ -15,8 +13,9 @@ router.post('/', async (req: Request, res: Response) => {
     ErrorCode,
     ErrorMessage,
     SmsStatus,
-    campaign_id
   } = req.body;
+
+  const campaign_id = req.query.campaign_id ? parseInt(req.query.campaign_id as string, 10) : null;
 
   const status = MessageStatus || SmsStatus;
   const toNumber = To?.replace('whatsapp:', '').replace('tel:', '');
@@ -52,6 +51,7 @@ router.post('/', async (req: Request, res: Response) => {
         status = EXCLUDED.status,
         error_code = EXCLUDED.error_code,
         error_message = EXCLUDED.error_message,
+        campaign_id = EXCLUDED.campaign_id,
         timestamp = NOW()`,
       [
         tenantId || null,
@@ -61,7 +61,7 @@ router.post('/', async (req: Request, res: Response) => {
         fromNumber,
         ErrorCode || null,
         ErrorMessage || null,
-        campaign_id || null,
+        campaign_id,
       ]
     );
 
