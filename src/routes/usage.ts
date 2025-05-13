@@ -24,15 +24,24 @@ router.get('/', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Usuario sin tenant asociado' });
     }
 
+    const tenantId = user.tenant_id;
+
+    // ✅ Insertar fila por defecto para SMS si no existe
+    await pool.query(`
+      INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
+      VALUES ($1, 'sms', date_trunc('month', CURRENT_DATE), 0, 500)
+      ON CONFLICT (tenant_id, canal, mes) DO NOTHING
+    `, [tenantId]);
+
     const usoRes = await pool.query(`
       SELECT canal, usados, limite
       FROM uso_mensual
       WHERE tenant_id = $1 AND mes = date_trunc('month', CURRENT_DATE)
-    `, [user.tenant_id]);
+    `, [tenantId]);
 
     return res.status(200).json({
-      usos: usoRes.rows, // array de objetos con canal, usados, limite
-      plan: "custom", // puedes extender esto si usas planes más adelante
+      usos: usoRes.rows,
+      plan: "custom",
     });
 
   } catch (error) {
