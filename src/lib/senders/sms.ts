@@ -44,9 +44,9 @@ export async function sendSMS(
       await pool.query(
         `INSERT INTO sms_status_logs (
           tenant_id, campaign_id, message_sid, status, to_number, from_number, timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-        [tenantId, campaignId, message.sid, message.status, to, fromNumber]
-      );
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [tenantId, campaignId, message.sid, message.status, to, fromNumber, new Date().toISOString()]
+      );      
 
       console.log(`✅ SMS enviado a ${to} (SID: ${message.sid})`);
     } catch (error: any) {
@@ -55,7 +55,7 @@ export async function sendSMS(
       await pool.query(
         `INSERT INTO sms_status_logs (
           tenant_id, campaign_id, message_sid, status, to_number, from_number, error_code, error_message, timestamp
-        ) VALUES ($1, $2, null, 'failed', $3, $4, $5, $6, NOW())`,
+        ) VALUES ($1, $2, null, 'failed', $3, $4, $5, $6, $7)`,
         [
           tenantId,
           campaignId,
@@ -63,8 +63,9 @@ export async function sendSMS(
           fromNumber,
           error.code || null,
           error.message || "Error desconocido",
+          new Date().toISOString(),
         ]
-      );
+      );      
     }
   }
 }
