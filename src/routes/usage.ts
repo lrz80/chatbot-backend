@@ -24,24 +24,17 @@ router.get('/', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Usuario sin tenant asociado' });
     }
 
-    const tenantRes = await pool.query(
-      'SELECT used, limite_uso, plan FROM tenants WHERE id = $1',
-      [user.tenant_id]
-    );
-
-    if (tenantRes.rows.length === 0) {
-      return res.status(200).json({ used: 0, limit: 0, porcentaje: 0, plan: "free" });
-    }
-
-    const { used, limite_uso, plan } = tenantRes.rows[0];
-    const porcentaje = limite_uso > 0 ? Math.round((used / limite_uso) * 100) : 0;
+    const usoRes = await pool.query(`
+      SELECT canal, usados, limite
+      FROM uso_mensual
+      WHERE tenant_id = $1 AND mes = date_trunc('month', CURRENT_DATE)
+    `, [user.tenant_id]);
 
     return res.status(200).json({
-      used: used || 0,
-      limit: limite_uso || 0,
-      porcentaje,
-      plan: plan || "free",
+      usos: usoRes.rows, // array de objetos con canal, usados, limite
+      plan: "custom", // puedes extender esto si usas planes más adelante
     });
+
   } catch (error) {
     console.error('❌ Error en /usage:', error);
     return res.status(500).json({ error: 'Error interno del servidor' });
@@ -49,4 +42,3 @@ router.get('/', async (req: Request, res: Response) => {
 });
 
 export default router;
-

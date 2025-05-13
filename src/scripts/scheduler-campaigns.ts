@@ -1,7 +1,10 @@
+// src/scripts/scheduler-campaigns.ts
+
 import pool from "../lib/db";
 import { sendSMS } from "../lib/senders/sms";
 import { sendWhatsApp } from "../lib/senders/whatsapp";
 import { sendEmail } from "../lib/senders/email";
+import { obtenerUsoActual } from "../lib/usoMensual";
 
 async function ejecutarCampañasProgramadas() {
   const ahora = new Date().toISOString();
@@ -20,8 +23,16 @@ async function ejecutarCampañasProgramadas() {
       const contactosParsed: string[] = JSON.parse(c.destinatarios || "[]");
       const tenantId = c.tenant_id;
       const campaignId = c.id;
+      const canal = c.canal;
 
-      if (c.canal === "sms") {
+      // ✅ Verificar límite mensual antes de enviar
+      const { usados, limite } = await obtenerUsoActual(tenantId, canal);
+      if (usados + contactosParsed.length > limite) {
+        console.warn(`⛔️ Límite mensual alcanzado para ${canal.toUpperCase()} en tenant ${tenantId}`);
+        continue;
+      }
+
+      if (canal === "sms") {
         const tenantRes = await pool.query(
           "SELECT twilio_sms_number FROM tenants WHERE id = $1",
           [tenantId]
@@ -35,7 +46,7 @@ async function ejecutarCampañasProgramadas() {
         await sendSMS(c.contenido, contactosParsed, from, tenantId, campaignId);
       }
 
-      if (c.canal === "whatsapp") {
+      if (canal === "whatsapp") {
         const tenantRes = await pool.query(
           "SELECT twilio_number FROM tenants WHERE id = $1",
           [tenantId]
@@ -60,7 +71,7 @@ async function ejecutarCampañasProgramadas() {
         await sendWhatsApp(template_sid, contactos, `whatsapp:${from}`, tenantId, campaignId, vars);
       }
 
-      if (c.canal === "email") {
+      if (canal === "email") {
         const tenantRes = await pool.query(
           "SELECT name FROM tenants WHERE id = $1",
           [tenantId]
@@ -70,6 +81,14 @@ async function ejecutarCampañasProgramadas() {
         const contactos = contactosParsed.map((email: string) => ({ email }));
         await sendEmail(c.contenido, contactos, nombreNegocio, tenantId, campaignId);
       }
+
+      // ✅ Actualizar uso mensual
+      await pool.query(`
+        INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
+        VALUES ($1, $2, date_trunc('month', CURRENT_DATE), $3, $4)
+        ON CONFLICT (tenant_id, canal, mes) DO UPDATE
+        SET usados = uso_mensual.usados + EXCLUDED.usados
+      `, [tenantId, canal, contactosParsed.length, canal === 'sms' ? 500 : 1000]);
 
       await pool.query("UPDATE campanas SET enviada = true WHERE id = $1", [campaignId]);
 
