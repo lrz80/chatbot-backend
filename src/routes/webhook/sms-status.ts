@@ -15,47 +15,55 @@ router.post('/', async (req: Request, res: Response) => {
     ErrorCode,
     ErrorMessage,
     SmsStatus,
-    campaign_id // ✅ opcionalmente recibido desde Twilio o sistema de envío
+    campaign_id
   } = req.body;
 
   const status = MessageStatus || SmsStatus;
   const toNumber = To?.replace('whatsapp:', '').replace('tel:', '');
   const fromNumber = From?.replace('whatsapp:', '').replace('tel:', '');
+  const messageSid = MessageSid || SmsSid;
+
+  console.log("📩 Webhook SMS recibido:", {
+    messageSid,
+    status,
+    toNumber,
+    fromNumber,
+    error: ErrorMessage || null,
+    campaign_id,
+  });
 
   try {
-    // Buscar tenant relacionado
     const tenantRes = await pool.query(
       'SELECT id FROM tenants WHERE twilio_sms_number = $1 LIMIT 1',
       [toNumber]
     );
     const tenantId = tenantRes.rows[0]?.id;
 
-    // Registrar el log
     await pool.query(
-        `INSERT INTO sms_status_logs (
-          tenant_id, message_sid, status, to_number, from_number,
-          error_code, error_message, campaign_id, timestamp
-        ) VALUES (
-          $1, $2, $3, $4, $5,
-          $6, $7, $8, NOW()
-        )
-        ON CONFLICT (message_sid)
-        DO UPDATE SET
-          status = EXCLUDED.status,
-          error_code = EXCLUDED.error_code,
-          error_message = EXCLUDED.error_message,
-          timestamp = NOW()`,
-        [
-          tenantId || null,
-          MessageSid || SmsSid,
-          status,
-          toNumber,
-          fromNumber,
-          ErrorCode || null,
-          ErrorMessage || null,
-          campaign_id || null
-        ]
-      );      
+      `INSERT INTO sms_status_logs (
+        tenant_id, message_sid, status, to_number, from_number,
+        error_code, error_message, campaign_id, timestamp
+      ) VALUES (
+        $1, $2, $3, $4, $5,
+        $6, $7, $8, NOW()
+      )
+      ON CONFLICT (message_sid)
+      DO UPDATE SET
+        status = EXCLUDED.status,
+        error_code = EXCLUDED.error_code,
+        error_message = EXCLUDED.error_message,
+        timestamp = NOW()`,
+      [
+        tenantId || null,
+        messageSid,
+        status,
+        toNumber,
+        fromNumber,
+        ErrorCode || null,
+        ErrorMessage || null,
+        campaign_id || null,
+      ]
+    );
 
     res.sendStatus(200);
   } catch (err) {
