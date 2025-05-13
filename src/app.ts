@@ -140,7 +140,7 @@ app.use('/api/flows', flowsRoutes);
 app.use('/api/stats', statsKpisRouter);
 app.use('/api/upload-logo', uploadLogoRoute);
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
-app.use("/api/campaigns", campaignsRoutes);
+// app.use("/api/campaigns", campaignsRoutes);
 app.use("/api/voice-prompt", voicePromptRoute);
 app.use("/api/webhooks/voice", voiceWebhookRoute);
 app.use("/api/test", testRoute);
