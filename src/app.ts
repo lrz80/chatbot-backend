@@ -53,6 +53,7 @@ import ventasStats from './routes/sales-intelligence/stats';
 import mensajesNuevosRouter from "./routes/messages/nuevos";
 import contactosRoutes from "./routes/contactos/index";
 import smsStatusWebhook from "./routes/webhook/sms-status"; 
+import checkoutCreditRoute from './routes/stripe/checkout-credit';
 
 
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -161,6 +162,7 @@ app.use('/api/sales-intelligence/stats', ventasStats);
 app.use("/api/messages/nuevos", mensajesNuevosRouter);
 app.use("/api/contactos", contactosRoutes);
 app.use("/api/webhook/sms-status", smsStatusWebhook);
+app.use('/api/stripe', checkoutCreditRoute);
 
 
 // ✅ Ruta base
