@@ -1,13 +1,10 @@
 // src/routes/campaigns/index.ts
 
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
 import pool from "../../lib/db";
-import { sendWhatsApp } from "../../lib/senders/whatsapp";
-import { sendSMS } from "../../lib/senders/sms";
-import { sendEmail } from "../../lib/senders/email";
 import { authenticateUser } from "../../middleware/auth";
 
 const router = express.Router();
@@ -23,6 +20,20 @@ const storage = multer.diskStorage({
     cb(null, uniqueName);
   },
 });
+
+// ⚠️ Middleware para manejar errores de multer
+function manejarErroresMulter(
+  err: any,
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  if (err instanceof multer.MulterError || err?.message?.includes("Unexpected field")) {
+    console.error("❌ Error Multer:", err.message);
+    return res.status(400).json({ error: "Error al subir archivo: " + err.message });
+  }
+  next(err);
+}
 
 const upload = multer({ storage });
 
@@ -41,7 +52,7 @@ function normalizarNumero(numero: string): string {
 }
 
 // 📥 Obtener campañas del tenant
-router.get("/", authenticateUser, async (req, res) => {
+router.get("/", authenticateUser, async (req: Request, res: Response) => {
   try {
     const { tenant_id } = req.user as { tenant_id: string };
     const result = await pool.query(
@@ -72,14 +83,12 @@ router.get("/", authenticateUser, async (req, res) => {
     }));
     
     res.json(campañasNormalizadas);
-    
   } catch (err) {
     console.error("❌ Error al obtener campañas:", err);
     res.status(500).json({ error: "Error al obtener campañas" });
   }
 });
 
-// 👇 REEMPLAZA solo el contenido de router.post("/", ...) por esto:
 router.post(
   "/",
   authenticateUser,
@@ -87,7 +96,8 @@ router.post(
     { name: "imagen", maxCount: 1 },
     { name: "archivo_adjunto", maxCount: 1 },
   ]),
-  async (req, res) => {
+  manejarErroresMulter,
+  async (req: Request, res: Response) => {
     try {
       const { nombre, canal, contenido, fecha_envio, segmentos } = req.body;
       const { tenant_id } = req.user as { uid: string; tenant_id: string };
@@ -128,18 +138,21 @@ router.post(
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "Tenant no encontrado." });
       }
-      const { name: nombreNegocio } = result.rows[0];
 
       let imagen_url = null;
       let archivo_adjunto_url = null;
       let link_url = null;
 
+      const files = req.files as {
+        [fieldname: string]: Express.Multer.File[];
+      };
+
       if (canal === "email") {
-        if (req.files && "imagen" in req.files) {
-          imagen_url = `/uploads/${(req.files["imagen"] as Express.Multer.File[])[0].filename}`;
+        if (files?.imagen?.length) {
+          imagen_url = `/uploads/${files.imagen[0].filename}`;
         }
-        if (req.files && "archivo_adjunto" in req.files) {
-          archivo_adjunto_url = `/uploads/${(req.files["archivo_adjunto"] as Express.Multer.File[])[0].filename}`;
+        if (files?.archivo_adjunto?.length) {
+          archivo_adjunto_url = `/uploads/${files.archivo_adjunto[0].filename}`;
         }
         link_url = req.body.link_url || null;
       }
@@ -200,7 +213,7 @@ router.post(
 );
 
 // 📊 Obtener uso mensual por canal
-router.get("/usage", authenticateUser, async (req, res) => {
+router.get("/usage", authenticateUser, async (req: Request, res: Response) => {
   const { tenant_id } = req.user as { tenant_id: string };
   try {
     const result = await pool.query(
@@ -218,7 +231,7 @@ router.get("/usage", authenticateUser, async (req, res) => {
 });
 
 // 🗑️ Eliminar campaña
-router.delete("/:id", authenticateUser, async (req, res) => {
+router.delete("/:id", authenticateUser, async (req: Request, res: Response) => {
   const { id } = req.params;
   const campaignId = parseInt(id, 10);
   const { tenant_id } = req.user as { tenant_id: string };
@@ -245,7 +258,7 @@ router.delete("/:id", authenticateUser, async (req, res) => {
 });
 
 // 📦 Ver entregas por número para una campaña SMS
-router.get("/:id/sms-status", authenticateUser, async (req, res) => {
+router.get("/:id/sms-status", authenticateUser, async (req: Request, res: Response) => {
   const campaignId = parseInt(req.params.id, 10);
   const { tenant_id } = req.user as { tenant_id: string };
 
