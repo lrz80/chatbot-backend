@@ -7,6 +7,7 @@ const router = express.Router();
 
 // ✅ GET: Perfil del negocio + FAQs e Intents por canal
 router.get('/', authenticateUser, async (req: any, res: Response) => {
+  console.log('🧪 Entró al endpoint /api/settings');
   try {
     const uid = req.user?.uid;
     const tenant_id = req.user?.tenant_id;
