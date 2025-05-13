@@ -73,11 +73,23 @@ const allowedOrigins = [
 
 // ✅ CORS middleware
 app.use(cors({
-  origin: (origin, callback) => {
+  origin: function (origin, callback) {
     if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, origin);
+      callback(null, true); // ✅ esto SIEMPRE envía Access-Control-Allow-Origin
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+}));
+
+// ✅ Respuesta explícita a OPTIONS
+app.options("*", cors({
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
     }
   },
   credentials: true,
