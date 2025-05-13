@@ -65,6 +65,18 @@ console.log("🔁 Versión redeployada manualmente");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// ✅ Fallback universal para CORS en cualquier ruta
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', 'https://www.aamy.ai');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200); // respuesta inmediata a preflight
+  }
+  next();
+});
+
 // ✅ Lista blanca de dominios
 const allowedOrigins = ['https://www.aamy.ai'];
 
@@ -166,18 +178,6 @@ setInterval(() => {
 setInterval(() => {
   sendScheduledMessages();
 }, 60000); // cada 60 segundos
-
-// ✅ Fallback universal para CORS en cualquier ruta
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', 'https://www.aamy.ai');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200); // respuesta inmediata a preflight
-  }
-  next();
-});
 
 // ✅ Levantar servidor
 app.listen(PORT, () => {
