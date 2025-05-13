@@ -27,7 +27,10 @@ async function ejecutarCampañasProgramadas() {
           [tenantId]
         );
         const from = tenantRes.rows[0]?.twilio_sms_number;
-        if (!from) continue;
+        if (!from) {
+          console.warn(`⚠️ No hay número Twilio SMS para tenant ${tenantId}`);
+          continue;
+        }
 
         await sendSMS(c.contenido, contactosParsed, from, tenantId, campaignId);
       }
@@ -78,4 +81,11 @@ async function ejecutarCampañasProgramadas() {
   }
 }
 
-ejecutarCampañasProgramadas().then(() => process.exit());
+// 🕒 Mantener corriendo para revisar cada minuto
+setInterval(() => {
+  ejecutarCampañasProgramadas();
+}, 60000);
+
+console.log("🕒 Scheduler de campañas corriendo cada minuto...");
+
+export { ejecutarCampañasProgramadas };
