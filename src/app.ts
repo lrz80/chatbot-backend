@@ -67,7 +67,7 @@ const PORT = process.env.PORT || 3001;
 
 // ✅ Lista blanca de dominios
 const allowedOrigins = [
-  'http://localhost:3000',
+  'https://api.aaymy.ai',
   'https://www.aamy.ai',
 ];
 
