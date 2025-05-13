@@ -79,6 +79,7 @@ router.get("/", authenticateUser, async (req, res) => {
   }
 });
 
+// 👇 REEMPLAZA solo el contenido de router.post("/", ...) por esto:
 router.post(
   "/",
   authenticateUser,
@@ -127,7 +128,7 @@ router.post(
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "Tenant no encontrado." });
       }
-      const { twilio_number, twilio_sms_number, name: nombreNegocio } = result.rows[0];
+      const { name: nombreNegocio } = result.rows[0];
 
       let imagen_url = null;
       let archivo_adjunto_url = null;
@@ -149,7 +150,7 @@ router.post(
           `INSERT INTO campanas (
             tenant_id, titulo, contenido, imagen_url, archivo_adjunto_url, canal, destinatarios, programada_para, enviada, fecha_creacion, link_url
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, true, NOW(), $9
+            $1, $2, $3, $4, $5, $6, $7, $8, false, NOW(), $9
           ) RETURNING id`,
           [
             tenant_id,
@@ -168,7 +169,7 @@ router.post(
           `INSERT INTO campanas (
             tenant_id, titulo, contenido, canal, destinatarios, programada_para, enviada, fecha_creacion
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, true, NOW()
+            $1, $2, $3, $4, $5, $6, false, NOW()
           ) RETURNING id`,
           [
             tenant_id,
@@ -180,98 +181,23 @@ router.post(
           ]
         );
       }
-      
-      const campaignId = campaignResult.rows[0].id;
-
-      if (canal.toLowerCase() === "whatsapp") {
-        if (!twilio_number) return res.status(400).json({ error: "Número de WhatsApp no asignado." });
-
-        const campanaRes = await pool.query(
-          `SELECT template_sid, template_vars FROM campanas WHERE id = $1 AND tenant_id = $2`,
-          [campaignId, tenant_id]
-        );
-        const campana = campanaRes.rows[0];
-        if (!campana || !campana.template_sid) {
-          return res.status(400).json({ error: "La campaña no tiene plantilla asignada." });
-        }
-
-        const contactos = segmentosParsed
-          .map((tel: string) => normalizarNumero(tel.trim()))
-          .filter((tel) => /^\+\d{11,15}$/.test(tel))
-          .map((tel) => ({ telefono: tel }));
-
-        if (contactos.length === 0) {
-          return res.status(400).json({ error: "No hay números válidos para enviar por WhatsApp." });
-        }
-
-        let vars = {};
-        try {
-          vars = typeof campana.template_vars === "string"
-            ? JSON.parse(campana.template_vars)
-            : campana.template_vars || {};
-        } catch {
-          console.warn("⚠️ template_vars mal formateado, usando objeto vacío.");
-        }
-
-        await sendWhatsApp(
-          campana.template_sid,
-          contactos,
-          `whatsapp:${twilio_number}`,
-          tenant_id,
-          campaignId,
-          vars
-        );
-
-      } else if (canal === "sms") {
-        if (!twilio_sms_number) return res.status(400).json({ error: "Número SMS no asignado." });
-
-        const numerosSMS = segmentosParsed
-          .map((tel: string) => normalizarNumero(tel.trim()))
-          .filter((tel) => /^\+\d{11,15}$/.test(tel));
-
-        if (numerosSMS.length === 0) {
-          return res.status(400).json({ error: "No hay números válidos para enviar por SMS." });
-        }
-
-        await sendSMS(contenido, numerosSMS, twilio_sms_number, tenant_id, campaignId);
-
-      } else if (canal === "email") {
-        const destinatarios = segmentosParsed
-          .map((email: string) => email.trim())
-          .filter((email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
-          .map((email) => ({ email }));
-
-        if (destinatarios.length === 0) {
-          return res.status(400).json({ error: "No hay correos válidos para enviar." });
-        }
-
-        await sendEmail(
-          contenido,
-          destinatarios,
-          nombreNegocio || "Tu negocio",
-          tenant_id,
-          campaignId,
-          imagen_url || undefined,
-          link_url || undefined,
-          archivo_adjunto_url || undefined
-        );
-      } else {
-        return res.status(400).json({ error: "Canal no válido." });
-      }
 
       await pool.query(
         "INSERT INTO campaign_usage (tenant_id, canal, cantidad, fecha_envio) VALUES ($1, $2, $3, NOW())",
         [tenant_id, canal, segmentosParsed.length]
       );
 
-      return res.status(200).json({ ok: true, message: "Campaña enviada correctamente." });
+      return res.status(200).json({
+        ok: true,
+        message: "✅ Campaña programada correctamente. Se enviará en el horario indicado.",
+        id: campaignResult.rows[0].id,
+      });
     } catch (error) {
-      console.error("❌ Error al procesar campaña:", error);
-      return res.status(500).json({ error: "Error interno al procesar la campaña." });
+      console.error("❌ Error al programar campaña:", error);
+      return res.status(500).json({ error: "Error interno al programar la campaña." });
     }
   }
 );
-
 
 // 📊 Obtener uso mensual por canal
 router.get("/usage", authenticateUser, async (req, res) => {
