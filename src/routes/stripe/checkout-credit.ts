@@ -5,10 +5,8 @@ import pool from '../../lib/db';
 
 const router = express.Router();
 
-// POST /api/stripe/checkout-credit
 router.post('/checkout-credit', async (req, res) => {
   const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
-
   if (!STRIPE_SECRET_KEY) {
     return res.status(500).json({ error: 'Stripe no configurado correctamente.' });
   }
@@ -32,7 +30,8 @@ router.post('/checkout-credit', async (req, res) => {
 
     const { canal, cantidad } = req.body;
 
-    if (!["sms", "email", "whatsapp"].includes(canal)) {
+    // ✅ Añadimos "contactos" como canal válido
+    if (!["sms", "email", "whatsapp", "contactos"].includes(canal)) {
       return res.status(400).json({ error: 'Canal inválido' });
     }
 
@@ -45,7 +44,14 @@ router.post('/checkout-credit', async (req, res) => {
     const precioUSD = precios[cantidad];
     if (!precioUSD) return res.status(400).json({ error: 'Cantidad no válida' });
 
-    const productName = `+${cantidad} créditos ${canal.toUpperCase()}`;
+    // ✅ Nombre dinámico
+    const productName =
+      canal === "contactos"
+        ? `+${cantidad} contactos adicionales`
+        : `+${cantidad} créditos ${canal.toUpperCase()}`;
+
+    const successParam = canal === "contactos" ? "contactos=ok" : "credito=ok";
+    const successURL = `https://www.aamy.ai/dashboard/campaigns/${canal}?${successParam}`;
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -58,7 +64,7 @@ router.post('/checkout-credit', async (req, res) => {
             product_data: {
               name: productName,
             },
-            unit_amount: precioUSD * 100, // en centavos
+            unit_amount: precioUSD * 100,
           },
           quantity: 1,
         },
@@ -68,8 +74,8 @@ router.post('/checkout-credit', async (req, res) => {
         canal,
         cantidad,
       },
-      success_url:'https://www.aamy.ai/dashboard/campaigns/sms?credito=ok',
-      cancel_url: 'https://www.aamy.ai/dashboard/campaigns/sms?canceled=1',
+      success_url: successURL,
+      cancel_url: `https://www.aamy.ai/dashboard/campaigns/${canal}?canceled=1`,
     });
 
     return res.json({ url: session.url });
