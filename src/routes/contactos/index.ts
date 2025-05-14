@@ -27,25 +27,43 @@ const upload = multer({ storage });
 // 📥 Subir archivo CSV de contactos
 router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
-
   if (!req.file) return res.status(400).json({ error: "Archivo no proporcionado." });
 
   try {
     const content = fs.readFileSync(req.file.path, "utf8");
-    const rows = content
+
+    const lines = content
       .split("\n")
-      .map((r) => r.trim())
-      .filter((r) => r && !r.toLowerCase().includes("nombre") && !r.startsWith("#"));
+      .map((l) => l.trim())
+      .filter((l) => l && !l.startsWith("#"));
+
+    if (lines.length < 2) return res.status(400).json({ error: "El archivo está vacío o mal formado." });
+
+    const headers = lines[0].toLowerCase().split(",").map((h) => h.trim());
+    const dataLines = lines.slice(1);
 
     let nuevos = 0;
 
-    for (const row of rows) {
-      const [nombreRaw, telefonoRaw, emailRaw, segmentoRaw] = row.split(",");
+    for (const line of dataLines) {
+      const cols = line.split(",").map((c) => c.trim());
 
-      const nombre = nombreRaw?.trim() || "Sin nombre";
-      const telefono = telefonoRaw?.trim() || "";
-      const email = emailRaw?.trim() || "";
-      const segmento = segmentoRaw?.trim().toLowerCase() || "cliente";
+      const nombre =
+        cols[headers.indexOf("nombre")] ||
+        cols[headers.indexOf("first name")] ||
+        "Sin nombre";
+
+      const telefono =
+        cols[headers.indexOf("telefono")] ||
+        cols[headers.indexOf("phone")] ||
+        "";
+
+      const email =
+        cols[headers.indexOf("email")] || "";
+
+      const segmento =
+        cols[headers.indexOf("segmento")]?.toLowerCase() || "cliente";
+
+      if (!telefono && !email) continue;
 
       const existe = await pool.query(
         "SELECT 1 FROM contactos WHERE tenant_id = $1 AND (telefono = $2 OR email = $3)",
@@ -124,17 +142,15 @@ router.post("/manual", authenticateUser, async (req, res) => {
   }
 
   try {
-    // Verificar duplicado
     const existe = await pool.query(
       "SELECT 1 FROM contactos WHERE tenant_id = $1 AND (telefono = $2 OR email = $3)",
       [tenant_id, telefono, email]
     );
-    
+
     if ((existe?.rowCount ?? 0) > 0) {
       return res.status(400).json({ error: "Ya existe un contacto con este teléfono o email." });
-    }    
+    }
 
-    // Verificar límite
     const limiteRes = await pool.query(
       "SELECT limite_contactos FROM tenants WHERE id = $1",
       [tenant_id]
@@ -151,7 +167,6 @@ router.post("/manual", authenticateUser, async (req, res) => {
       return res.status(403).json({ error: "Límite de contactos alcanzado." });
     }
 
-    // Insertar contacto
     const insert = await pool.query(
       `INSERT INTO contactos (tenant_id, nombre, telefono, email, segmento, fecha_creacion)
        VALUES ($1, $2, $3, $4, $5, NOW())
