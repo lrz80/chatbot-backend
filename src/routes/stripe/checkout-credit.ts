@@ -1,3 +1,5 @@
+// src/routes/stripe/checkout-credit.ts
+
 import express from 'express';
 import Stripe from 'stripe';
 import jwt from 'jsonwebtoken';
@@ -28,7 +30,7 @@ router.post('/checkout-credit', async (req, res) => {
     const user = result.rows[0];
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado.' });
 
-    const { canal, cantidad } = req.body;
+    const { canal, cantidad, redirectPath } = req.body;
 
     // ✅ Añadimos "contactos" como canal válido
     if (!["sms", "email", "whatsapp", "contactos"].includes(canal)) {
@@ -50,8 +52,12 @@ router.post('/checkout-credit', async (req, res) => {
         ? `+${cantidad} contactos adicionales`
         : `+${cantidad} créditos ${canal.toUpperCase()}`;
 
+    // ✅ Validar ruta personalizada o usar fallback
+    const redirect = typeof redirectPath === "string" && redirectPath.startsWith("/dashboard/campaigns/")
+      ? redirectPath
+      : `/dashboard/campaigns/${canal}`;
+
     const successParam = canal === "contactos" ? "contactos=ok" : "credito=ok";
-    const successURL = `https://www.aamy.ai/dashboard/campaigns/${canal}?${successParam}`;
 
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ['card'],
@@ -74,8 +80,8 @@ router.post('/checkout-credit', async (req, res) => {
         canal,
         cantidad,
       },
-      success_url: successURL,
-      cancel_url: `https://www.aamy.ai/dashboard/campaigns/${canal}?canceled=1`,
+      success_url: `https://www.aamy.ai${redirect}?${successParam}`,
+      cancel_url: `https://www.aamy.ai${redirect}?canceled=1`,
     });
 
     return res.json({ url: session.url });
