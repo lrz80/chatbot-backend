@@ -33,12 +33,12 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     return res.status(400).send(`Webhook Error: ${(err as Error).message}`);
   }
 
-  // ✅ Activación inicial por checkout
+  // ✅ Activación por checkout
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
     const email = session.customer_email;
 
-    // 📦 Créditos por canal (pago único)
+    // 📦 Créditos por canal
     if (
       session.mode === 'payment' &&
       session.metadata?.tenant_id &&
@@ -47,69 +47,42 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     ) {
       const { tenant_id, canal, cantidad } = session.metadata;
       const cantidadInt = parseInt(cantidad, 10);
-    
+
+      if (!["sms", "email", "whatsapp", "contactos"].includes(canal)) return;
+
       try {
-        if (canal === "contactos") {
-          // 👤 Sumar contactos directamente en la tabla tenants
-          await pool.query(`
-            UPDATE tenants
-            SET limite_contactos = COALESCE(limite_contactos, 500) + $1
-            WHERE id = $2
-          `, [cantidadInt, tenant_id]);
-    
-          console.log(`✅ Contactos agregados: +${cantidadInt} para tenant ${tenant_id}`);
-    
-          if (email) {
-            await transporter.sendMail({
-              from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
-              to: email,
-              subject: `Contactos adicionales activados`,
-              html: `
-                <h3>¡Contactos adicionales agregados!</h3>
-                <p>Hola,</p>
-                <p>Tu compra de <strong>${cantidadInt}</strong> contactos fue procesada exitosamente.</p>
-                <p>Ya puedes usar más contactos desde tu dashboard.</p>
-                <br />
-                <p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
-              `
-            });
-          }
-    
-        } else if (["sms", "email", "whatsapp"].includes(canal)) {
-          // 💬 Créditos de uso mensual
-          await pool.query(`
-            INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
-            VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 0, $3)
-            ON CONFLICT (tenant_id, canal, mes)
-            DO UPDATE SET limite = uso_mensual.limite + $3
-          `, [tenant_id, canal, cantidadInt]);
-    
-          console.log(`✅ Créditos agregados: +${cantidadInt} a ${canal.toUpperCase()} para tenant ${tenant_id}`);
-    
-          if (email) {
-            await transporter.sendMail({
-              from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
-              to: email,
-              subject: `Créditos ${canal.toUpperCase()} activados`,
-              html: `
-                <h3>¡Créditos ${canal.toUpperCase()} agregados!</h3>
-                <p>Hola,</p>
-                <p>Tu compra de <strong>${cantidadInt}</strong> créditos de <strong>${canal.toUpperCase()}</strong> fue procesada exitosamente.</p>
-                <p>Ya puedes usarlos desde tu dashboard.</p>
-                <br />
-                <p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
-              `
-            });
-          }
+        await pool.query(`
+          INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
+          VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 0, $3)
+          ON CONFLICT (tenant_id, canal, mes)
+          DO UPDATE SET limite = uso_mensual.limite + $3
+        `, [tenant_id, canal, cantidadInt]);
+
+        console.log(`✅ Créditos agregados: +${cantidadInt} a ${canal.toUpperCase()} para tenant ${tenant_id}`);
+
+        if (email) {
+          await transporter.sendMail({
+            from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
+            to: email,
+            subject: `Créditos ${canal.toUpperCase()} activados`,
+            html: `
+              <h3>¡Créditos de ${canal.toUpperCase()} agregados!</h3>
+              <p>Hola,</p>
+              <p>Tu compra de <strong>${cantidadInt}</strong> créditos de <strong>${canal.toUpperCase()}</strong> fue procesada exitosamente.</p>
+              <p>Ya puedes usarlos desde tu dashboard.</p>
+              <br />
+              <p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
+            `
+          });
         }
       } catch (error) {
-        console.error('❌ Error al agregar créditos o contactos comprados:', error);
+        console.error('❌ Error al agregar créditos comprados:', error);
       }
-    
-      return res.status(200).json({ received: true });
-    }    
 
-    // 🧾 Membresía por suscripción
+      return res.status(200).json({ received: true });
+    }
+
+    // 🧾 Membresía por suscripción (no contactos)
     if (email) {
       try {
         const userRes = await pool.query('SELECT uid, owner_name FROM users WHERE email = $1', [email]);
@@ -171,7 +144,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     }
   }
 
-  // ❌ Cancelación automática
+  // ❌ Cancelación de suscripción (incluye contactos)
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object as Stripe.Subscription;
 
@@ -192,27 +165,35 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     if (!customerEmail) return;
 
     try {
-      const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [customerEmail]);
+      const userRes = await pool.query('SELECT uid, tenant_id FROM users WHERE email = $1', [customerEmail]);
       const user = userRes.rows[0];
       if (!user) return;
 
+      // 🛑 Cancelar membresía general
       await pool.query(`
         UPDATE tenants
         SET membresia_activa = false
         WHERE admin_uid = $1
       `, [user.uid]);
 
-      console.log('🛑 Membresía cancelada para', customerEmail);
+      // 🔄 Resetear límite de contactos a 500
+      await pool.query(`
+        INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
+        VALUES ($1, 'contactos', date_trunc('month', CURRENT_DATE), 0, 500)
+        ON CONFLICT (tenant_id, canal, mes)
+        DO UPDATE SET limite = 500
+      `, [user.tenant_id]);
+
+      console.log('🛑 Suscripción cancelada y contactos reiniciados a 500 para', customerEmail);
 
       await transporter.sendMail({
         from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
         to: customerEmail,
-        subject: 'Tu membresía ha sido cancelada',
+        subject: 'Suscripción cancelada',
         html: `
-          <h3>Tu membresía en Amy AI ha sido cancelada</h3>
+          <h3>Tu suscripción ha sido cancelada</h3>
           <p>Hola,</p>
-          <p>Hemos cancelado tu membresía en <strong>Amy AI</strong>. Ya no tendrás acceso a las funciones del asistente.</p>
-          <p>Si deseas reactivarla, puedes hacerlo desde tu <a href="https://www.aamy.ai/upgrade">panel de usuario</a>.</p>
+          <p>Se ha cancelado tu suscripción en <strong>Amy AI</strong>. Tu límite de contactos ha sido reiniciado a 500.</p>
           <br />
           <p>Gracias por haber sido parte de Amy AI 💜</p>
         `

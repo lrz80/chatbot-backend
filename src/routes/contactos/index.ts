@@ -1,5 +1,3 @@
-// src/routes/contactos/index.ts
-
 import express from "express";
 import multer from "multer";
 import path from "path";
@@ -42,16 +40,19 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
     const headers = lines[0].toLowerCase().split(",").map((h) => h.replace(/"/g, "").trim());
     const dataLines = lines.slice(1);
 
-    // ✅ Obtener total y límite actual
-    const totalRes = await pool.query("SELECT COUNT(*)::int AS total FROM contactos WHERE tenant_id = $1", [tenant_id]);
-    const totalActuales = totalRes.rows[0].total;
+    // ✅ Obtener uso mensual actual de contactos
+    const usoRes = await pool.query(`
+      SELECT usados, limite
+      FROM uso_mensual
+      WHERE tenant_id = $1 AND canal = 'contactos' AND mes = date_trunc('month', CURRENT_DATE)
+    `, [tenant_id]);
 
-    const limiteRes = await pool.query("SELECT limite_contactos FROM tenants WHERE id = $1", [tenant_id]);
-    const limite = limiteRes.rows[0]?.limite_contactos ?? 500;
+    let usados = usoRes.rows[0]?.usados ?? 0;
+    let limite = usoRes.rows[0]?.limite ?? 500;
 
-    const disponibles = limite - totalActuales;
+    const disponibles = limite - usados;
     if (disponibles <= 0) {
-      return res.status(403).json({ error: "Ya has alcanzado tu límite de contactos." });
+      return res.status(403).json({ error: "Ya has alcanzado tu límite mensual de contactos." });
     }
 
     const acciones: Promise<void>[] = [];
@@ -98,7 +99,16 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
     }
 
     await Promise.all(acciones);
-    res.json({ ok: true, nuevos, mensaje: `Se procesaron hasta ${disponibles} contactos disponibles.` });
+
+    // ✅ Sumar los nuevos al conteo mensual
+    await pool.query(`
+      INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
+      VALUES ($1, 'contactos', date_trunc('month', CURRENT_DATE), $2, 500)
+      ON CONFLICT (tenant_id, canal, mes)
+      DO UPDATE SET usados = uso_mensual.usados + $2
+    `, [tenant_id, nuevos]);
+
+    res.json({ ok: true, nuevos, mensaje: `Se procesaron ${nuevos} contactos nuevos.` });
   } catch (err) {
     console.error("❌ Error al subir contactos:", err);
     res.status(500).json({ error: "Error al procesar archivo." });
