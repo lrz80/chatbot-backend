@@ -42,42 +42,63 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
     const headers = lines[0].toLowerCase().split(",").map((h) => h.replace(/"/g, "").trim());
     const dataLines = lines.slice(1);
 
-    let nuevos = 0;
+    // ✅ Obtener total y límite actual
+    const totalRes = await pool.query("SELECT COUNT(*)::int AS total FROM contactos WHERE tenant_id = $1", [tenant_id]);
+    const totalActuales = totalRes.rows[0].total;
 
-    for (const line of dataLines) {
-      const cols = line.split(",").map((c) => c.replace(/"/g, "").trim());
+    const limiteRes = await pool.query("SELECT limite_contactos FROM tenants WHERE id = $1", [tenant_id]);
+    const limite = limiteRes.rows[0]?.limite_contactos ?? 500;
 
-      const firstName = cols[headers.indexOf("nombre")] || cols[headers.indexOf("first name")] || "";
-      const lastName = cols[headers.indexOf("last name")] || "";
-      const nombre = `${firstName} ${lastName}`.trim() || "Sin nombre";
-
-      const telefono =
-        cols[headers.indexOf("telefono")] || cols[headers.indexOf("phone")] || "";
-
-      const email =
-        cols[headers.indexOf("email")] || "";
-
-      const segmento =
-        cols[headers.indexOf("segmento")]?.toLowerCase() || "cliente";
-
-      if (!telefono && !email) continue;
-
-      const existe = await pool.query(
-        "SELECT 1 FROM contactos WHERE tenant_id = $1 AND (telefono = $2 OR email = $3)",
-        [tenant_id, telefono, email]
-      );
-
-      if (existe.rowCount === 0) {
-        await pool.query(
-          `INSERT INTO contactos (tenant_id, nombre, telefono, email, segmento, fecha_creacion)
-           VALUES ($1, $2, $3, $4, $5, NOW())`,
-          [tenant_id, nombre, telefono, email, segmento]
-        );
-        nuevos++;
-      }
+    const disponibles = limite - totalActuales;
+    if (disponibles <= 0) {
+      return res.status(403).json({ error: "Ya has alcanzado tu límite de contactos." });
     }
 
-    res.json({ ok: true, nuevos });
+    const acciones: Promise<void>[] = [];
+    let nuevos = 0;
+
+    for (const line of dataLines.slice(0, disponibles)) {
+      acciones.push((async () => {
+        try {
+          const cols = line.split(",").map((c) => c.replace(/"/g, "").trim());
+
+          const firstName = cols[headers.indexOf("nombre")] || cols[headers.indexOf("first name")] || "";
+          const lastName = cols[headers.indexOf("last name")] || "";
+          const nombre = `${firstName} ${lastName}`.trim() || "Sin nombre";
+
+          const telefono = cols[headers.indexOf("telefono")] || cols[headers.indexOf("phone")] || "";
+          const email = cols[headers.indexOf("email")] || "";
+          const segmento = cols[headers.indexOf("segmento")]?.toLowerCase() || "cliente";
+
+          if (!telefono && !email) return;
+
+          const existe = await pool.query(
+            "SELECT id FROM contactos WHERE tenant_id = $1 AND (telefono = $2 OR email = $3)",
+            [tenant_id, telefono, email]
+          );
+
+          if ((existe?.rowCount ?? 0) > 0) {
+            const id = existe.rows[0].id;
+            await pool.query(
+              "UPDATE contactos SET nombre = $1, segmento = $2 WHERE id = $3",
+              [nombre, segmento, id]
+            );
+          } else {
+            await pool.query(
+              `INSERT INTO contactos (tenant_id, nombre, telefono, email, segmento, fecha_creacion)
+               VALUES ($1, $2, $3, $4, $5, NOW())`,
+              [tenant_id, nombre, telefono, email, segmento]
+            );
+            nuevos++;
+          }
+        } catch (err) {
+          console.warn("❌ Error procesando fila:", line, err);
+        }
+      })());
+    }
+
+    await Promise.all(acciones);
+    res.json({ ok: true, nuevos, mensaje: `Se procesaron hasta ${disponibles} contactos disponibles.` });
   } catch (err) {
     console.error("❌ Error al subir contactos:", err);
     res.status(500).json({ error: "Error al procesar archivo." });
