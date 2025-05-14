@@ -39,23 +39,20 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
 
     if (lines.length < 2) return res.status(400).json({ error: "El archivo está vacío o mal formado." });
 
-    const headers = lines[0].toLowerCase().split(",").map((h) => h.trim());
+    const headers = lines[0].toLowerCase().split(",").map((h) => h.replace(/"/g, "").trim());
     const dataLines = lines.slice(1);
 
     let nuevos = 0;
 
     for (const line of dataLines) {
-      const cols = line.split(",").map((c) => c.trim());
+      const cols = line.split(",").map((c) => c.replace(/"/g, "").trim());
 
-      const nombre =
-        cols[headers.indexOf("nombre")] ||
-        cols[headers.indexOf("first name")] ||
-        "Sin nombre";
+      const firstName = cols[headers.indexOf("nombre")] || cols[headers.indexOf("first name")] || "";
+      const lastName = cols[headers.indexOf("last name")] || "";
+      const nombre = `${firstName} ${lastName}`.trim() || "Sin nombre";
 
       const telefono =
-        cols[headers.indexOf("telefono")] ||
-        cols[headers.indexOf("phone")] ||
-        "";
+        cols[headers.indexOf("telefono")] || cols[headers.indexOf("phone")] || "";
 
       const email =
         cols[headers.indexOf("email")] || "";
@@ -129,55 +126,6 @@ router.get("/count", authenticateUser, async (req, res) => {
   } catch (err) {
     console.error("❌ Error al contar contactos:", err);
     res.status(500).json({ error: "Error al contar contactos." });
-  }
-});
-
-// ➕ Crear contacto manual
-router.post("/manual", authenticateUser, async (req, res) => {
-  const { tenant_id } = req.user as { tenant_id: string };
-  const { nombre, telefono, email, segmento } = req.body;
-
-  if (!telefono && !email) {
-    return res.status(400).json({ error: "Debe proporcionar teléfono o email." });
-  }
-
-  try {
-    const existe = await pool.query(
-      "SELECT 1 FROM contactos WHERE tenant_id = $1 AND (telefono = $2 OR email = $3)",
-      [tenant_id, telefono, email]
-    );
-
-    if ((existe?.rowCount ?? 0) > 0) {
-      return res.status(400).json({ error: "Ya existe un contacto con este teléfono o email." });
-    }
-
-    const limiteRes = await pool.query(
-      "SELECT limite_contactos FROM tenants WHERE id = $1",
-      [tenant_id]
-    );
-    const limite = limiteRes.rows[0]?.limite_contactos ?? 500;
-
-    const totalRes = await pool.query(
-      "SELECT COUNT(*)::int AS total FROM contactos WHERE tenant_id = $1",
-      [tenant_id]
-    );
-    const total = totalRes.rows[0].total;
-
-    if (total >= limite) {
-      return res.status(403).json({ error: "Límite de contactos alcanzado." });
-    }
-
-    const insert = await pool.query(
-      `INSERT INTO contactos (tenant_id, nombre, telefono, email, segmento, fecha_creacion)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       RETURNING nombre, telefono, email, segmento`,
-      [tenant_id, nombre || "Sin nombre", telefono, email, segmento || "cliente"]
-    );
-
-    res.status(201).json(insert.rows[0]);
-  } catch (err) {
-    console.error("❌ Error al crear contacto manual:", err);
-    res.status(500).json({ error: "Error interno al guardar contacto." });
   }
 });
 
