@@ -47,41 +47,67 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     ) {
       const { tenant_id, canal, cantidad } = session.metadata;
       const cantidadInt = parseInt(cantidad, 10);
-
-      if (!["sms", "email", "whatsapp"].includes(canal)) return;
-
+    
       try {
-        await pool.query(`
-          INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
-          VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 0, $3)
-          ON CONFLICT (tenant_id, canal, mes)
-          DO UPDATE SET limite = uso_mensual.limite + $3
-        `, [tenant_id, canal, cantidadInt]);
-
-        console.log(`✅ Créditos agregados: +${cantidadInt} a ${canal.toUpperCase()} para tenant ${tenant_id}`);
-
-        if (email) {
-          await transporter.sendMail({
-            from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
-            to: email,
-            subject: `Créditos ${canal.toUpperCase()} activados`,
-            html: `
-              <h3>¡Créditos ${canal.toUpperCase()} agregados!</h3>
-              <p>Hola,</p>
-              <p>Tu compra de <strong>${cantidadInt} créditos</strong> de <strong>${canal.toUpperCase()}</strong> fue procesada exitosamente.</p>
-              <p>Ya puedes usar tus créditos desde el dashboard.</p>
-              <br />
-              <p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
-            `
-          });
+        if (canal === "contactos") {
+          // 👤 Sumar contactos directamente en la tabla tenants
+          await pool.query(`
+            UPDATE tenants
+            SET limite_contactos = COALESCE(limite_contactos, 500) + $1
+            WHERE id = $2
+          `, [cantidadInt, tenant_id]);
+    
+          console.log(`✅ Contactos agregados: +${cantidadInt} para tenant ${tenant_id}`);
+    
+          if (email) {
+            await transporter.sendMail({
+              from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
+              to: email,
+              subject: `Contactos adicionales activados`,
+              html: `
+                <h3>¡Contactos adicionales agregados!</h3>
+                <p>Hola,</p>
+                <p>Tu compra de <strong>${cantidadInt}</strong> contactos fue procesada exitosamente.</p>
+                <p>Ya puedes usar más contactos desde tu dashboard.</p>
+                <br />
+                <p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
+              `
+            });
+          }
+    
+        } else if (["sms", "email", "whatsapp"].includes(canal)) {
+          // 💬 Créditos de uso mensual
+          await pool.query(`
+            INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
+            VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 0, $3)
+            ON CONFLICT (tenant_id, canal, mes)
+            DO UPDATE SET limite = uso_mensual.limite + $3
+          `, [tenant_id, canal, cantidadInt]);
+    
+          console.log(`✅ Créditos agregados: +${cantidadInt} a ${canal.toUpperCase()} para tenant ${tenant_id}`);
+    
+          if (email) {
+            await transporter.sendMail({
+              from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
+              to: email,
+              subject: `Créditos ${canal.toUpperCase()} activados`,
+              html: `
+                <h3>¡Créditos ${canal.toUpperCase()} agregados!</h3>
+                <p>Hola,</p>
+                <p>Tu compra de <strong>${cantidadInt}</strong> créditos de <strong>${canal.toUpperCase()}</strong> fue procesada exitosamente.</p>
+                <p>Ya puedes usarlos desde tu dashboard.</p>
+                <br />
+                <p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
+              `
+            });
+          }
         }
-
       } catch (error) {
-        console.error('❌ Error al agregar créditos comprados:', error);
+        console.error('❌ Error al agregar créditos o contactos comprados:', error);
       }
-
+    
       return res.status(200).json({ received: true });
-    }
+    }    
 
     // 🧾 Membresía por suscripción
     if (email) {
