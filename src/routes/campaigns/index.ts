@@ -6,7 +6,7 @@ import path from "path";
 import fs from "fs";
 import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
-import { sendEmailSendgrid, sendEmailWithTemplate } from "@/lib/senders/email-sendgrid";
+import { sendEmailSendgrid, sendEmailWithTemplate } from "../../lib/senders/email-sendgrid";
 
 const router = express.Router();
 
