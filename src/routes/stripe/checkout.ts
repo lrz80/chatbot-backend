@@ -1,3 +1,5 @@
+// src/routes/stripe/checkout.ts
+
 import express from 'express';
 import Stripe from 'stripe';
 import jwt from 'jsonwebtoken';

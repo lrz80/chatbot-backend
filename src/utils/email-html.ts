@@ -1,18 +1,6 @@
-import nodemailer from "nodemailer";
-import pool from "../db";
+// src/lib/utils/email-html.ts
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT),
-  secure: false,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
-
-// 💌 Generador de HTML visual
-function generarHTMLCorreo(
+export function generarHTMLCorreo(
   contenido: string,
   negocio: string,
   imagenUrl?: string,
@@ -78,53 +66,4 @@ function generarHTMLCorreo(
     </body>
     </html>
   `;
-}
-
-/**
- * Envía correos personalizados por tenant y guarda logs por campaña.
- */
-export async function sendEmail(
-  contenido: string,
-  contactos: { email: string }[],
-  nombreNegocio: string,
-  tenantId: string,
-  campaignId: number,
-  imagenUrl?: string,
-  linkUrl?: string,
-  logoUrl?: string
-) {
-  for (const contacto of contactos) {
-    const email = contacto.email?.trim();
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) continue;
-
-    const html = generarHTMLCorreo(contenido, nombreNegocio, imagenUrl, linkUrl, logoUrl, email, tenantId);
-
-    try {
-      await transporter.sendMail({
-        from: `"${nombreNegocio}" <noreply@aamy.ai>`,
-        to: email,
-        subject: "📣 Nueva campaña de tu negocio",
-        html,
-        text: contenido, // Fallback texto plano
-      });
-
-      await pool.query(
-        `INSERT INTO email_status_logs (
-          tenant_id, campaign_id, email, status, timestamp
-        ) VALUES ($1, $2, $3, 'sent', NOW())`,
-        [tenantId, campaignId, email]
-      );
-
-      console.log(`✅ Email enviado a ${email}`);
-    } catch (err: any) {
-      console.error(`❌ Error enviando a ${email}:`, err?.message || err);
-
-      await pool.query(
-        `INSERT INTO email_status_logs (
-          tenant_id, campaign_id, email, status, error_message, timestamp
-        ) VALUES ($1, $2, $3, 'failed', $4, NOW())`,
-        [tenantId, campaignId, email, err?.message || "Error desconocido"]
-      );
-    }
-  }
 }

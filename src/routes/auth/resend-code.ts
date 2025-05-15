@@ -1,16 +1,10 @@
+// src/routes/auth/resend-code.ts
+
 import express from "express";
 import pool from "../../lib/db";
-import nodemailer from "nodemailer";
+import { sendVerificationEmail } from "../../lib/senders/email-smtp";
 
 const router = express.Router();
-
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_FROM,
-    pass: process.env.EMAIL_PASS,
-  },
-});
 
 router.post("/auth/resend-code", async (req, res) => {
   const { email } = req.body;
@@ -31,12 +25,7 @@ router.post("/auth/resend-code", async (req, res) => {
       [newCode, email]
     );
 
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM,
-      to: email,
-      subject: "Nuevo código de verificación",
-      text: `Tu nuevo código de verificación es: ${newCode}`,
-    });
+    await sendVerificationEmail(email, newCode);
 
     return res.status(200).json({ success: true });
   } catch (err) {

@@ -1,3 +1,5 @@
+// src/lib/emailTemplates.ts
+
 export const emailTemplates = {
   verification: {
     es: (link: string) => ({
