@@ -1,3 +1,5 @@
+// src/routes/contactos/limite.ts
+
 import { Router, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import pool from "../../lib/db";
@@ -13,13 +15,19 @@ router.get("/", async (req: Request, res: Response) => {
     const userRes = await pool.query("SELECT tenant_id FROM users WHERE uid = $1", [decoded.uid]);
     const tenantId = userRes.rows[0]?.tenant_id;
 
-    const limiteRes = await pool.query("SELECT limite_contactos FROM tenants WHERE id = $1", [tenantId]);
-    const limite = limiteRes.rows[0]?.limite_contactos ?? 500;
+    if (!tenantId) return res.status(404).json({ error: "Tenant no encontrado" });
 
-    const countRes = await pool.query("SELECT COUNT(*) FROM contactos WHERE tenant_id = $1", [tenantId]);
-    const total = parseInt(countRes.rows[0]?.count || "0");
+    // 🔄 Leer uso mensual de contactos
+    const usoRes = await pool.query(`
+      SELECT usados, limite
+      FROM uso_mensual
+      WHERE tenant_id = $1 AND canal = 'contactos' AND mes = date_trunc('month', CURRENT_DATE)
+    `, [tenantId]);
 
-    res.json({ limite, total });
+    const usados = usoRes.rows[0]?.usados ?? 0;
+    const limite = usoRes.rows[0]?.limite ?? 500;
+
+    res.json({ limite, total: usados });
   } catch (err) {
     console.error("❌ Error en /contactos/limite:", err);
     res.status(500).json({ error: "Error interno" });
