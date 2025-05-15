@@ -197,7 +197,9 @@ router.post(
         );
         const contactos = contactosRes.rows || [];
 
-        if (template_sid) {
+        if (contactos.length === 0) {
+          console.warn(`⚠️ No hay contactos válidos para esta campaña.`);
+        } else if (template_sid) {
           const parsedVars = template_vars ? JSON.parse(template_vars) : {};
 
           const enrichedContactos = contactos.map((c) => ({
@@ -240,7 +242,5 @@ router.post(
     }
   }
 );
-
-// ... (resto de rutas sin cambios)
 
 export default router;
