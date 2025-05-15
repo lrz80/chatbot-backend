@@ -2,7 +2,7 @@
 
 import sgMail from "@sendgrid/mail";
 import pool from "../db";
-import { generarHTMLCorreo } from "@/utils/email-html";
+import { generarHTMLCorreo } from "../../utils/email-html";
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
 

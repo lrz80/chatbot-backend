@@ -3,7 +3,7 @@
 import { Router, Request, Response } from "express";
 import jwt, { JwtPayload } from "jsonwebtoken";
 import pool from "../lib/db";
-import { sendWelcomeEmail } from "@/lib/senders/email-smtp";
+import { sendWelcomeEmail } from "../lib/senders/email-smtp";
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
