@@ -10,6 +10,11 @@ import { sendEmailSendgrid, sendEmailWithTemplate } from "../../lib/senders/emai
 
 const router = express.Router();
 
+// Test route para confirmar si el router está funcionando
+router.get("/test", (req, res) => {
+  res.send("✅ Ruta de campañas activa");
+});
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const dir = path.join(__dirname, "../../../public/uploads");
