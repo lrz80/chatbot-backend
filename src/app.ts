@@ -68,6 +68,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use("/uploads", express.static(path.join(__dirname, "../public/uploads")));
+console.log("📂 Servidor estático montado en:", path.join(__dirname, "../public/uploads"));
 
 // ✅ Fallback universal para CORS en cualquier ruta
 app.use((req, res, next) => {
