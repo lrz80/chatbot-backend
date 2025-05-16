@@ -171,6 +171,7 @@ app.use('/api/stripe', checkoutCreditRoute);
 app.use('/api/contactos/limite', limiteContactosRoute);
 app.use("/api/sendgrid/templates", sendgridTemplates);
 app.use("/api/email-status", emailStatusRoute);
+app.use("/api/email-status/", emailStatusRoute);
 
 
 // ✅ Ruta base
