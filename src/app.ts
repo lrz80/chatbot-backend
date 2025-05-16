@@ -56,6 +56,8 @@ import smsStatusWebhook from "./routes/webhook/sms-status";
 import checkoutCreditRoute from './routes/stripe/checkout-credit';
 import limiteContactosRoute from './routes/contactos/limite';
 import sendgridTemplates from "./routes/sendgrid/templates";
+import emailStatusRoute from "./routes/email-status/index";
+
 
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
 
@@ -168,6 +170,7 @@ app.use("/api/webhook/sms-status", smsStatusWebhook);
 app.use('/api/stripe', checkoutCreditRoute);
 app.use('/api/contactos/limite', limiteContactosRoute);
 app.use("/api/sendgrid/templates", sendgridTemplates);
+app.use("/api/email-status", emailStatusRoute);
 
 
 // ✅ Ruta base
