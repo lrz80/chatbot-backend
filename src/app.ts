@@ -67,6 +67,8 @@ console.log("🔁 Versión redeployada manualmente");
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+app.use("/uploads", express.static(path.join(__dirname, "../public/uploads")));
+
 // ✅ Fallback universal para CORS en cualquier ruta
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', 'https://www.aamy.ai');
@@ -141,7 +143,6 @@ app.use('/api/stripe', checkoutRoute); // otras rutas de Stripe (no webhook)
 app.use('/api/flows', flowsRoutes);
 app.use('/api/stats', statsKpisRouter);
 app.use('/api/upload-logo', uploadLogoRoute);
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.use("/api/campaigns", campaignsRoutes);
 app.use("/api/voice-prompt", voicePromptRoute);
 app.use("/api/webhooks/voice", voiceWebhookRoute);

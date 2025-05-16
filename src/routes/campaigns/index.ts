@@ -43,43 +43,6 @@ const CANAL_LIMITES: Record<string, number> = {
   email: 1000,
 };
 
-router.get("/", authenticateUser, async (req: Request, res: Response) => {
-  try {
-    const { tenant_id } = req.user as { tenant_id: string };
-    const result = await pool.query(
-      "SELECT * FROM campanas WHERE tenant_id = $1 ORDER BY fecha_creacion DESC",
-      [tenant_id]
-    );
-    const campañasNormalizadas = result.rows.map((row) => ({
-      id: row.id,
-      titulo: row.titulo || row.nombre || "Sin nombre",
-      contenido: row.contenido || "",
-      canal: row.canal || "sms",
-      destinatarios: (() => {
-        try {
-          return typeof row.destinatarios === "string"
-            ? JSON.parse(row.destinatarios || "[]")
-            : Array.isArray(row.destinatarios)
-            ? row.destinatarios
-            : [];
-        } catch {
-          return [];
-        }
-      })(),
-      programada_para: row.programada_para || row.fecha_envio || null,
-      enviada: row.enviada ?? true,
-      fecha_creacion: row.fecha_creacion || new Date().toISOString(),
-      imagen_url: row.imagen_url || null,
-      link_url: row.link_url || "",
-    }));
-
-    res.json(campañasNormalizadas);
-  } catch (err) {
-    console.error("\u274C Error al obtener campañas:", err);
-    res.status(500).json({ error: "Error al obtener campañas" });
-  }
-});
-
 router.post(
   "/",
   authenticateUser,
@@ -90,7 +53,7 @@ router.post(
   manejarErroresMulter,
   async (req: Request, res: Response) => {
     try {
-      const { nombre, canal, contenido, fecha_envio, segmentos, template_sid, template_vars } = req.body;
+      const { nombre, asunto, canal, contenido, fecha_envio, segmentos, template_sid, template_vars } = req.body;
       const { tenant_id } = req.user as { uid: string; tenant_id: string };
 
       if (!nombre || !canal || !fecha_envio || !segmentos) {
@@ -150,9 +113,9 @@ router.post(
 
       const insertQuery = canal === "email"
         ? `INSERT INTO campanas (
-            tenant_id, titulo, contenido, imagen_url, archivo_adjunto_url, canal, destinatarios, programada_para, enviada, fecha_creacion, link_url, template_sid, template_vars
+            tenant_id, titulo, contenido, imagen_url, archivo_adjunto_url, canal, destinatarios, programada_para, enviada, fecha_creacion, link_url, template_sid, template_vars, asunto
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, false, NOW(), $9, $10, $11
+            $1, $2, $3, $4, $5, $6, $7, $8, false, NOW(), $9, $10, $11, $12
           ) RETURNING id`
         : `INSERT INTO campanas (
             tenant_id, titulo, contenido, canal, destinatarios, programada_para, enviada, fecha_creacion
@@ -173,6 +136,7 @@ router.post(
             link_url,
             template_sid || null,
             template_vars || null,
+            asunto || "📣 Nueva campaña de tu negocio"
           ]
         : [
             tenant_id,
@@ -197,9 +161,7 @@ router.post(
         );
         const contactos = contactosRes.rows || [];
 
-        if (contactos.length === 0) {
-          console.warn(`⚠️ No hay contactos válidos para esta campaña.`);
-        } else if (template_sid) {
+        if (template_sid) {
           const parsedVars = template_vars ? JSON.parse(template_vars) : {};
 
           const enrichedContactos = contactos.map((c) => ({
@@ -226,7 +188,8 @@ router.post(
             campaignResult.rows[0].id,
             imagen_url ? `${process.env.DOMAIN_URL}${imagen_url}` : undefined,
             link_url,
-            undefined
+            undefined,
+            asunto
           );
         }
       }

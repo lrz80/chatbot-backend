@@ -17,7 +17,8 @@ export async function sendEmailSendgrid(
   campaignId: number,
   imagenUrl?: string,
   linkUrl?: string,
-  logoUrl?: string
+  logoUrl?: string,
+  asunto?: string
 ) {
   const envíos: any[] = [];
 
@@ -41,7 +42,7 @@ export async function sendEmailSendgrid(
         name: nombreNegocio,
         email: "noreply@aamy.ai",
       },
-      subject: "📣 Nueva campaña de tu negocio",
+      subject: asunto || "📣 Nueva campaña de tu negocio",
       html,
     });
   }
