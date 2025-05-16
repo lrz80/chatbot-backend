@@ -10,11 +10,6 @@ import { sendEmailSendgrid, sendEmailWithTemplate } from "../../lib/senders/emai
 
 const router = express.Router();
 
-// Test route para confirmar si el router está funcionando
-router.get("/test", (req, res) => {
-  res.send("✅ Ruta de campañas activa");
-});
-
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const dir = path.join(__dirname, "../../../public/uploads");
@@ -35,7 +30,7 @@ function manejarErroresMulter(
   next: NextFunction
 ) {
   if (err instanceof multer.MulterError || err?.message?.includes("Unexpected field")) {
-    console.error("\u274C Error Multer:", err.message);
+    console.error("❌ Error Multer:", err.message);
     return res.status(400).json({ error: "Error al subir archivo: " + err.message });
   }
   next(err);
@@ -49,6 +44,47 @@ const CANAL_LIMITES: Record<string, number> = {
   email: 1000,
 };
 
+// ✅ GET /api/campaigns para obtener campañas
+router.get("/", authenticateUser, async (req: Request, res: Response) => {
+  try {
+    const { tenant_id } = req.user as { tenant_id: string };
+    const result = await pool.query(
+      "SELECT * FROM campanas WHERE tenant_id = $1 ORDER BY fecha_creacion DESC",
+      [tenant_id]
+    );
+
+    const campañasNormalizadas = result.rows.map((row) => ({
+      id: row.id,
+      titulo: row.titulo || row.nombre || "Sin nombre",
+      contenido: row.contenido || "",
+      canal: row.canal || "sms",
+      destinatarios: (() => {
+        try {
+          return typeof row.destinatarios === "string"
+            ? JSON.parse(row.destinatarios || "[]")
+            : Array.isArray(row.destinatarios)
+            ? row.destinatarios
+            : [];
+        } catch {
+          return [];
+        }
+      })(),
+      programada_para: row.programada_para || row.fecha_envio || null,
+      enviada: row.enviada ?? true,
+      fecha_creacion: row.fecha_creacion || new Date().toISOString(),
+      imagen_url: row.imagen_url || null,
+      link_url: row.link_url || "",
+      asunto: row.asunto || "",
+    }));
+
+    res.json(campañasNormalizadas);
+  } catch (err) {
+    console.error("❌ Error al obtener campañas:", err);
+    res.status(500).json({ error: "Error al obtener campañas" });
+  }
+});
+
+// ✅ POST /api/campaigns para crear campañas
 router.post(
   "/",
   authenticateUser,
@@ -73,7 +109,7 @@ router.post(
           return res.status(400).json({ error: "Segmentos no tienen formato de lista." });
         }
       } catch (err) {
-        console.error("\u274C Error al parsear segmentos:", err);
+        console.error("❌ Error al parsear segmentos:", err);
         return res.status(400).json({ error: "El formato de los segmentos no es válido." });
       }
 
@@ -206,7 +242,7 @@ router.post(
         id: campaignResult.rows[0].id,
       });
     } catch (error) {
-      console.error("\u274C Error al programar campaña:", error);
+      console.error("❌ Error al programar campaña:", error);
       return res.status(500).json({ error: "Error interno al programar la campaña." });
     }
   }
