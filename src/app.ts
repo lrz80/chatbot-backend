@@ -172,6 +172,7 @@ app.use('/api/contactos/limite', limiteContactosRoute);
 app.use("/api/sendgrid/templates", sendgridTemplates);
 app.use("/api/email-status", emailStatusRoute);
 app.use("/api/email-status/", emailStatusRoute);
+app.use("/api/sendgrid/templates", sendgridTemplates);
 
 
 // ✅ Ruta base
