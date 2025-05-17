@@ -248,4 +248,56 @@ router.post(
   }
 );
 
+// ✅ DELETE /api/campaigns/:id para eliminar una campaña completa
+router.delete("/:id", authenticateUser, async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { tenant_id } = req.user as { tenant_id: string };
+
+  try {
+    // 1. Buscar campaña por ID y tenant
+    const result = await pool.query(
+      "SELECT * FROM campanas WHERE id = $1 AND tenant_id = $2",
+      [id, tenant_id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Campaña no encontrada o no pertenece a tu cuenta." });
+    }
+
+    const campaña = result.rows[0];
+
+    // 2. Eliminar archivos del sistema si existen
+    const eliminarArchivo = (relativePath: string | null) => {
+      if (!relativePath) return;
+      const fullPath = path.join(__dirname, "../../../public", relativePath);
+      if (fs.existsSync(fullPath)) {
+        fs.unlinkSync(fullPath);
+        console.log("🗑 Archivo eliminado:", fullPath);
+      }
+    };
+
+    eliminarArchivo(campaña.imagen_url);
+    eliminarArchivo(campaña.archivo_adjunto_url);
+
+    // 3. Eliminar la campaña
+    await pool.query("DELETE FROM campanas WHERE id = $1 AND tenant_id = $2", [id, tenant_id]);
+
+    // 4. Eliminar registro de uso
+    await pool.query(
+      "DELETE FROM campaign_usage WHERE tenant_id = $1 AND fecha_envio = $2 AND canal = $3",
+      [tenant_id, campaña.programada_para, campaña.canal]
+    );
+
+    // 5. Respuesta con ID
+    return res.status(200).json({
+      success: true,
+      id: campaña.id,
+      message: "✅ Campaña eliminada correctamente.",
+    });
+  } catch (error) {
+    console.error("❌ Error al eliminar campaña:", error);
+    return res.status(500).json({ error: "Error al eliminar campaña." });
+  }
+});
+
 export default router;
