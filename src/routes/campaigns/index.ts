@@ -258,7 +258,18 @@ router.post(
         ok: true,
         message: "✅ Campaña programada correctamente. Se enviará en el horario indicado.",
         id: campaignResult.rows[0].id,
+        nombre,
+        canal,
+        contenido,
+        imagen_url,
+        archivo_adjunto_url,
+        programada_para: fecha_envio,
+        asunto,
+        link_url,
+        enviada: false,
+        fecha_creacion: new Date().toISOString()
       });
+      
     } catch (error) {
       console.error("❌ Error al programar campaña:", error);
       return res.status(500).json({ error: "Error interno al programar la campaña." });
