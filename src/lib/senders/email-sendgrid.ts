@@ -49,6 +49,7 @@ export async function sendEmailSendgrid(
   }
 
   try {
+    console.log("📤 Asunto final del email:", asunto);
     await sgMail.send(envíos, true);
     console.log(`✅ Emails enviados correctamente (${envíos.length})`);
 
