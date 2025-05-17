@@ -1,3 +1,5 @@
+// src/routes/email-status/index.ts
+
 import { Router } from "express";
 import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
@@ -9,16 +11,20 @@ router.get("/", authenticateUser, async (req, res) => {
   const { campaign_id } = req.query;
 
   try {
-    const query = `
-      SELECT email, status, error_message, timestamp
-      FROM email_status_logs
-      WHERE tenant_id = $1
-      ${campaign_id ? "AND campaign_id = $2" : ""}
-      ORDER BY timestamp DESC
-      LIMIT 100
-    `;
+    let query = `
+  SELECT email, status, error_message, timestamp
+  FROM email_status_logs
+  WHERE tenant_id = $1
+`;
+const params: any[] = [tenant_id];
 
-    const params = campaign_id ? [tenant_id, campaign_id] : [tenant_id];
+if (campaign_id) {
+  query += " AND campaign_id = $2";
+  params.push(Number(campaign_id));
+}
+
+query += " ORDER BY timestamp DESC LIMIT 100";
+
     const result = await pool.query(query, params);
 
     res.json(result.rows);
