@@ -96,9 +96,10 @@ router.post(
   manejarErroresMulter,
   async (req: Request, res: Response) => {
     try {
-      const { nombre, asunto, canal, contenido, fecha_envio, segmentos, template_sid, template_vars } = req.body;
+      const { nombre, canal, contenido, fecha_envio, segmentos, template_sid, template_vars } = req.body;
       const { tenant_id } = req.user as { uid: string; tenant_id: string };
-      
+      const asunto = req.body.asunto || req.body["asunto"] || "📣 Nueva campaña de tu negocio";
+
       console.log("🧾 req.body completo:", req.body);
       console.log("📩 Asunto recibido:", asunto);
 
