@@ -98,7 +98,8 @@ router.post(
     try {
       const { nombre, asunto, canal, contenido, fecha_envio, segmentos, template_sid, template_vars } = req.body;
       const { tenant_id } = req.user as { uid: string; tenant_id: string };
-
+      
+      console.log("🧾 req.body completo:", req.body);
       console.log("📩 Asunto recibido:", asunto);
 
       if (!nombre || !canal || !fecha_envio || !segmentos) {
