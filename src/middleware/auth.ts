@@ -17,6 +17,11 @@ export const authenticateUser = async (
   res: Response,
   next: NextFunction
 ) => {
+
+  console.log("🔐 [AUTH] Ruta solicitada:", req.method, req.originalUrl);
+  console.log("🔐 [AUTH] Cookie recibida:", req.cookies?.token ? "✅ Sí" : "❌ No");
+  console.log("🔐 [AUTH] Header Authorization:", req.headers.authorization || "❌ No header");
+
   const token = req.cookies?.token || req.headers.authorization?.split(" ")[1];
 
   if (!token) {
