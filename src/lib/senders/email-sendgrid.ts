@@ -20,6 +20,8 @@ export async function sendEmailSendgrid(
   logoUrl?: string,
   asunto?: string
 ) {
+  console.log("📤 Asunto dentro de sendEmailSendgrid:", asunto);
+  
   const envíos: any[] = [];
 
   for (const contacto of contactos) {

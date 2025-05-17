@@ -133,41 +133,39 @@ router.post(
       }
 
       const result = await pool.query(
-        "SELECT twilio_number, twilio_sms_number, name FROM tenants WHERE id = $1",
+        "SELECT twilio_number, twilio_sms_number, name, logo_url FROM tenants WHERE id = $1",
         [tenant_id]
       );
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "Tenant no encontrado." });
       }
-
+      
       let imagen_url = null;
       let archivo_adjunto_url = null;
       let link_url = null;
+      let logo_url: string | undefined = result.rows[0].logo_url || undefined;
 
       const files = req.files as {
         [fieldname: string]: Express.Multer.File[];
       };
 
       if (canal === "email") {
-        // ✅ Imagen principal
         if (files?.imagen?.[0]) {
           const file = files.imagen[0];
           const buffer = fs.readFileSync(file.path);
           const filename = `email-assets/${tenant_id}/${Date.now()}-${file.originalname}`;
           imagen_url = await subirArchivoAR2(filename, buffer, file.mimetype);
-          fs.unlinkSync(file.path); // 🧹 eliminar archivo temporal
+          fs.unlinkSync(file.path);
         }
-      
-        // ✅ Archivo adjunto
+
         if (files?.archivo_adjunto?.[0]) {
           const file = files.archivo_adjunto[0];
           const buffer = fs.readFileSync(file.path);
           const filename = `email-attachments/${tenant_id}/${Date.now()}-${file.originalname}`;
           archivo_adjunto_url = await subirArchivoAR2(filename, buffer, file.mimetype);
-          fs.unlinkSync(file.path); // 🧹 eliminar archivo temporal
+          fs.unlinkSync(file.path);
         }
-      
-        // ✅ Link opcional
+
         link_url = req.body.link_url || null;
       }
 
@@ -248,7 +246,7 @@ router.post(
             campaignResult.rows[0].id,
             imagen_url ? `${process.env.DOMAIN_URL}${imagen_url}` : undefined,
             link_url,
-            undefined,
+            logo_url,
             asunto
           );
         }
@@ -269,7 +267,6 @@ router.post(
         enviada: false,
         fecha_creacion: new Date().toISOString()
       });
-      
     } catch (error) {
       console.error("❌ Error al programar campaña:", error);
       return res.status(500).json({ error: "Error interno al programar la campaña." });
@@ -278,12 +275,11 @@ router.post(
 );
 
 // ✅ DELETE /api/campaigns/:id para eliminar una campaña completa
-router.delete("/:id", authenticateUser, async (req: Request, res: Response) => {
+router.delete(":id", authenticateUser, async (req: Request, res: Response) => {
   const { id } = req.params;
   const { tenant_id } = req.user as { tenant_id: string };
 
   try {
-    // 1. Buscar campaña por ID y tenant
     const result = await pool.query(
       "SELECT * FROM campanas WHERE id = $1 AND tenant_id = $2",
       [id, tenant_id]
@@ -295,7 +291,6 @@ router.delete("/:id", authenticateUser, async (req: Request, res: Response) => {
 
     const campaña = result.rows[0];
 
-    // 2. Eliminar archivos del sistema si existen
     const eliminarArchivo = (relativePath: string | null) => {
       if (!relativePath) return;
       const fullPath = path.join(__dirname, "../../../public", relativePath);
@@ -308,16 +303,13 @@ router.delete("/:id", authenticateUser, async (req: Request, res: Response) => {
     eliminarArchivo(campaña.imagen_url);
     eliminarArchivo(campaña.archivo_adjunto_url);
 
-    // 3. Eliminar la campaña
     await pool.query("DELETE FROM campanas WHERE id = $1 AND tenant_id = $2", [id, tenant_id]);
 
-    // 4. Eliminar registro de uso
     await pool.query(
       "DELETE FROM campaign_usage WHERE tenant_id = $1 AND fecha_envio = $2 AND canal = $3",
       [tenant_id, campaña.programada_para, campaña.canal]
     );
 
-    // 5. Respuesta con ID
     return res.status(200).json({
       success: true,
       id: campaña.id,
