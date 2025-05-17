@@ -7,6 +7,7 @@ import fs from "fs";
 import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
 import { sendEmailSendgrid, sendEmailWithTemplate } from "../../lib/senders/email-sendgrid";
+import { subirArchivoAR2 } from "../../lib/r2/subirArchivoAR2";
 
 const router = express.Router();
 
@@ -144,12 +145,25 @@ router.post(
       };
 
       if (canal === "email") {
-        if (files?.imagen?.length) {
-          imagen_url = `/uploads/${files.imagen[0].filename}`;
+        // ✅ Imagen principal
+        if (files?.imagen?.[0]) {
+          const file = files.imagen[0];
+          const buffer = fs.readFileSync(file.path);
+          const filename = `email-assets/${tenant_id}/${Date.now()}-${file.originalname}`;
+          imagen_url = await subirArchivoAR2(filename, buffer, file.mimetype);
+          fs.unlinkSync(file.path); // 🧹 eliminar archivo temporal
         }
-        if (files?.archivo_adjunto?.length) {
-          archivo_adjunto_url = `/uploads/${files.archivo_adjunto[0].filename}`;
+      
+        // ✅ Archivo adjunto
+        if (files?.archivo_adjunto?.[0]) {
+          const file = files.archivo_adjunto[0];
+          const buffer = fs.readFileSync(file.path);
+          const filename = `email-attachments/${tenant_id}/${Date.now()}-${file.originalname}`;
+          archivo_adjunto_url = await subirArchivoAR2(filename, buffer, file.mimetype);
+          fs.unlinkSync(file.path); // 🧹 eliminar archivo temporal
         }
+      
+        // ✅ Link opcional
         link_url = req.body.link_url || null;
       }
 

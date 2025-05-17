@@ -60,13 +60,17 @@ export async function sendEmailSendgrid(
     );
     await Promise.all(inserts);
   } catch (error: any) {
-    console.error("❌ Error al enviar por SendGrid:", error?.response?.body || error.message);
+    const errorBody = error?.response?.body;
+    const msg =
+      errorBody?.errors?.[0]?.message || error?.message || "Error desconocido";
+
+    console.error("❌ Error al enviar por SendGrid:", msg);
 
     const inserts = envíos.map((e) =>
       pool.query(
         `INSERT INTO email_status_logs (tenant_id, campaign_id, email, status, error_message, timestamp)
          VALUES ($1, $2, $3, 'failed', $4, NOW())`,
-        [tenantId, campaignId, e.to, error?.message || "Error desconocido"]
+        [tenantId, campaignId, e.to, msg]
       )
     );
     await Promise.all(inserts);
@@ -115,13 +119,17 @@ export async function sendEmailWithTemplate(
     );
     await Promise.all(inserts);
   } catch (error: any) {
-    console.error("❌ Error en plantilla SendGrid:", error?.response?.body || error.message);
+    const errorBody = error?.response?.body;
+    const msg =
+      errorBody?.errors?.[0]?.message || error?.message || "Error desconocido";
+
+    console.error("❌ Error en plantilla SendGrid:", msg);
 
     const inserts = envíos.map((e) =>
       pool.query(
         `INSERT INTO email_status_logs (tenant_id, campaign_id, email, status, error_message, timestamp)
          VALUES ($1, $2, $3, 'failed', $4, NOW())`,
-        [tenantId, campaignId, e.to.email, error?.message || "Error desconocido"]
+        [tenantId, campaignId, e.to.email, msg]
       )
     );
     await Promise.all(inserts);
