@@ -11,7 +11,7 @@ sgMail.setApiKey(process.env.SENDGRID_API_KEY!);
  */
 export async function sendEmailSendgrid(
   contenido: string,
-  contactos: { email: string }[],
+  contactos: { email: string; nombre?: string }[],
   nombreNegocio: string,
   tenantId: string,
   campaignId: number,
@@ -33,7 +33,8 @@ export async function sendEmailSendgrid(
       linkUrl,
       logoUrl,
       email,
-      tenantId
+      tenantId,
+      contacto.nombre || ""
     );
 
     envíos.push({
@@ -81,7 +82,7 @@ export async function sendEmailSendgrid(
  * Envío con plantilla dinámica de SendGrid
  */
 export async function sendEmailWithTemplate(
-  contactos: { email: string; vars?: Record<string, any> }[],
+  contactos: { email: string; nombre?: string; vars?: Record<string, any> }[],
   templateId: string,
   nombreNegocio: string,
   tenantId: string,
@@ -93,6 +94,11 @@ export async function sendEmailWithTemplate(
     const email = contacto.email?.trim();
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) continue;
 
+    const vars = {
+      nombre: contacto.nombre || "amigo/a", // ✅ default de cortesía
+      ...(contacto.vars || {}), // incluye cualquier otro campo personalizado
+    };
+
     envíos.push({
       to: {
         email,
@@ -102,7 +108,7 @@ export async function sendEmailWithTemplate(
         email: "noreply@aamy.ai",
       },
       templateId,
-      dynamicTemplateData: contacto.vars || {},
+      dynamicTemplateData: vars,
     });
   }
 
@@ -135,3 +141,4 @@ export async function sendEmailWithTemplate(
     await Promise.all(inserts);
   }
 }
+

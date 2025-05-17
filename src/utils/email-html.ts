@@ -7,10 +7,12 @@ export function generarHTMLCorreo(
   linkUrl?: string,
   logoUrl?: string,
   email?: string,
-  tenantId?: string
+  tenantId?: string,
+  nombreContacto?: string // ✅ nuevo
 ): string {
   const contenidoSeguro = contenido.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const unsubscribeLink = `https://aamy.ai/unsubscribe?email=${encodeURIComponent(email || "")}&tenant=${tenantId || ""}`;
+  const saludo = nombreContacto ? `¡Hola <strong>${nombreContacto}</strong>!<br/><br/>` : "";
 
   return `
     <!DOCTYPE html>
@@ -41,7 +43,7 @@ export function generarHTMLCorreo(
                   }
 
                   <p style="color:#555555; font-size: 16px;">
-                    ${contenidoSeguro}
+                    ${saludo}${contenidoSeguro}
                   </p>
 
                   ${
