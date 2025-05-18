@@ -171,11 +171,14 @@ router.post(
 
       const insertQuery = canal === "email"
         ? `INSERT INTO campanas (
-            tenant_id, titulo, contenido, imagen_url, archivo_adjunto_url, canal, destinatarios, programada_para, enviada, fecha_creacion, link_url, template_sid, template_vars, asunto
+            tenant_id, titulo, contenido, imagen_url, archivo_adjunto_url,
+            canal, destinatarios, programada_para, enviada, fecha_creacion,
+            link_url, template_sid, template_vars, asunto
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, false, NOW(), $9, $10, $11, $12, $13
+            $1, $2, $3, $4, $5,
+            $6, $7, $8, false, NOW(),
+            $9, $10, $11, $12
           ) RETURNING id`
-
         : `INSERT INTO campanas (
             tenant_id, titulo, contenido, canal, destinatarios, programada_para, enviada, fecha_creacion
           ) VALUES (
@@ -184,18 +187,18 @@ router.post(
 
       const insertValues = canal === "email"
         ? [
-            tenant_id,             // $1
-            nombre,                // $2
-            contenido,             // $3
-            imagen_url,            // $4
-            archivo_adjunto_url,   // $5
-            canal,                 // $6
-            JSON.stringify(segmentosParsed), // $7
-            fecha_envio,           // $8
-            link_url,              // $9
-            template_sid || null,  // $10
-            template_vars || null, // $11
-            asunto || "📣 Nueva campaña de tu negocio" // $12
+            tenant_id,
+            nombre,
+            contenido,
+            imagen_url,
+            archivo_adjunto_url,
+            canal,
+            JSON.stringify(segmentosParsed),
+            fecha_envio,
+            link_url,
+            template_sid || null,
+            template_vars || null,
+            asunto || "📣 Nueva campaña de tu negocio",
           ]
         : [
             tenant_id,
@@ -203,7 +206,7 @@ router.post(
             contenido,
             canal,
             JSON.stringify(segmentosParsed),
-            fecha_envio
+            fecha_envio,
           ];
 
       const campaignResult = await pool.query(insertQuery, insertValues);
