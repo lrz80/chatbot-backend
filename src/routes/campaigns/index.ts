@@ -275,7 +275,7 @@ router.post(
 );
 
 // ✅ DELETE /api/campaigns/:id para eliminar una campaña completa
-router.delete(":id", authenticateUser, async (req: Request, res: Response) => {
+router.delete("/:id", authenticateUser, async (req: Request, res: Response) => {
   const { id } = req.params;
   const { tenant_id } = req.user as { tenant_id: string };
 
