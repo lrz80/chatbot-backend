@@ -1,5 +1,3 @@
-// src/routes/stripe/checkout-credit.ts
-
 import express from 'express';
 import Stripe from 'stripe';
 import jwt from 'jsonwebtoken';
@@ -32,27 +30,28 @@ router.post('/checkout-credit', async (req, res) => {
 
     const { canal, cantidad, redirectPath } = req.body;
 
-    // ✅ Añadimos "contactos" como canal válido
+    // ✅ Validar canal permitido
     if (!["sms", "email", "whatsapp", "contactos"].includes(canal)) {
       return res.status(400).json({ error: 'Canal inválido' });
     }
 
-    const precios: Record<number, number> = {
-      500: 10,
-      1000: 18,
-      2000: 34,
+    // ✅ Precios dinámicos por canal
+    const preciosPorCanal: Record<string, Record<number, number>> = {
+      contactos: { 500: 15, 1000: 20, 2000: 30 },
+      email:     { 500: 15, 1000: 20, 2000: 30 },
+      sms:       { 500: 15, 1000: 20, 2000: 30 },
+      whatsapp:  { 500: 15, 1000: 20, 2000: 30 },
     };
 
-    const precioUSD = precios[cantidad];
+    const precioUSD = preciosPorCanal[canal]?.[cantidad];
     if (!precioUSD) return res.status(400).json({ error: 'Cantidad no válida' });
 
-    // ✅ Nombre dinámico
+    // ✅ Nombre descriptivo del producto
     const productName =
       canal === "contactos"
         ? `+${cantidad} contactos adicionales`
         : `+${cantidad} créditos ${canal.toUpperCase()}`;
 
-    // ✅ Validar ruta personalizada o usar fallback
     const redirect = typeof redirectPath === "string" && redirectPath.startsWith("/dashboard/campaigns/")
       ? redirectPath
       : `/dashboard/campaigns/${canal}`;
