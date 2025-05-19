@@ -85,7 +85,8 @@ async function ejecutarCampañasProgramadas() {
           c.imagen_url || undefined,
           c.link_url || undefined,
           logoUrl,
-          c.asunto || "📣 Nueva campaña de tu negocio"
+          c.asunto || "📣 Nueva campaña de tu negocio",
+          c.titulo_visual || "" // 👈 ahora se incluye correctamente
         );
       }      
 
