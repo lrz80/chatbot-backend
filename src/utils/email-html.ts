@@ -9,7 +9,8 @@ export function generarHTMLCorreo(
   email?: string,
   tenantId?: string,
   nombreContacto?: string,
-  asunto?: string // 👈 nuevo argumento
+  asunto?: string, // 👈 nuevo argumento
+  tituloVisual?: string
 ): string {
   const contenidoSeguro = contenido.replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const unsubscribeLink = `https://aamy.ai/unsubscribe?email=${encodeURIComponent(email || "")}&tenant=${tenantId || ""}`;
@@ -35,7 +36,7 @@ export function generarHTMLCorreo(
                       ? `<img src="${logoUrl}" alt="Logo del negocio" style="max-width: 150px; margin-bottom: 20px;" />`
                       : `<img src="https://via.placeholder.com/150x50?text=${encodeURIComponent(negocio)}" alt="Logo del negocio" style="max-width: 150px; margin-bottom: 20px;" />`
                   }
-                  <h2 style="color: #333333;">📣 ${asunto || "¡Oferta especial para ti!"}</h2>
+                  <h2 style="color: #333333;">📣 ${tituloVisual || "¡Oferta especial para ti!"}</h2>
 
                   ${
                     imagenUrl

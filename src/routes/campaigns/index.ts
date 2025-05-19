@@ -1,5 +1,3 @@
-// src/routes/campaigns/index.ts
-
 import express, { Request, Response, NextFunction } from "express";
 import multer from "multer";
 import path from "path";
@@ -45,7 +43,7 @@ const CANAL_LIMITES: Record<string, number> = {
   email: 1000,
 };
 
-// ✅ GET /api/campaigns para obtener campañas
+// ✅ GET campañas
 router.get("/", authenticateUser, async (req: Request, res: Response) => {
   try {
     const { tenant_id } = req.user as { tenant_id: string };
@@ -76,6 +74,7 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
       imagen_url: row.imagen_url || null,
       link_url: row.link_url || "",
       asunto: row.asunto || "",
+      titulo_visual: row.titulo_visual || "",
     }));
 
     res.json(campañasNormalizadas);
@@ -85,7 +84,7 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
   }
 });
 
-// ✅ POST /api/campaigns para crear campañas
+// ✅ POST campañas
 router.post(
   "/",
   authenticateUser,
@@ -98,10 +97,10 @@ router.post(
     try {
       const { nombre, canal, contenido, fecha_envio, segmentos, template_sid, template_vars } = req.body;
       const { tenant_id } = req.user as { uid: string; tenant_id: string };
-      const asunto = req.body.asunto || req.body["asunto"] || "📣 Nueva campaña de tu negocio";
+      const asunto = req.body.asunto || "📣 Nueva campaña de tu negocio";
+      const tituloVisual = req.body.titulo_visual || "";
 
       console.log("🧾 req.body completo:", req.body);
-      console.log("📩 Asunto recibido:", asunto);
 
       if (!nombre || !canal || !fecha_envio || !segmentos) {
         return res.status(400).json({ error: "Faltan campos obligatorios." });
@@ -139,7 +138,7 @@ router.post(
       if (result.rowCount === 0) {
         return res.status(404).json({ error: "Tenant no encontrado." });
       }
-      
+
       let imagen_url = null;
       let archivo_adjunto_url = null;
       let link_url = null;
@@ -173,11 +172,11 @@ router.post(
         ? `INSERT INTO campanas (
             tenant_id, titulo, contenido, imagen_url, archivo_adjunto_url,
             canal, destinatarios, programada_para, enviada, fecha_creacion,
-            link_url, template_sid, template_vars, asunto
+            link_url, template_sid, template_vars, asunto, titulo_visual
           ) VALUES (
             $1, $2, $3, $4, $5,
             $6, $7, $8, false, NOW(),
-            $9, $10, $11, $12
+            $9, $10, $11, $12, $13
           ) RETURNING id`
         : `INSERT INTO campanas (
             tenant_id, titulo, contenido, canal, destinatarios,
@@ -200,7 +199,8 @@ router.post(
             link_url,
             template_sid || null,
             template_vars || null,
-            asunto || "📣 Nueva campaña de tu negocio"
+            asunto,
+            tituloVisual,
           ]
         : [
             tenant_id,
@@ -253,7 +253,8 @@ router.post(
             imagen_url ? `${process.env.DOMAIN_URL}${imagen_url}` : undefined,
             link_url,
             logo_url,
-            asunto
+            asunto,
+            tituloVisual // 👈 nuevo argumento
           );
         }
       }
@@ -269,9 +270,10 @@ router.post(
         archivo_adjunto_url,
         programada_para: fecha_envio,
         asunto,
+        titulo_visual: tituloVisual,
         link_url,
         enviada: false,
-        fecha_creacion: new Date().toISOString()
+        fecha_creacion: new Date().toISOString(),
       });
     } catch (error) {
       console.error("❌ Error al programar campaña:", error);
@@ -280,7 +282,7 @@ router.post(
   }
 );
 
-// ✅ DELETE /api/campaigns/:id para eliminar una campaña completa
+// ✅ DELETE campaña
 router.delete("/:id", authenticateUser, async (req: Request, res: Response) => {
   const { id } = req.params;
   const { tenant_id } = req.user as { tenant_id: string };

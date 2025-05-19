@@ -18,8 +18,9 @@ export async function sendEmailSendgrid(
   imagenUrl?: string,
   linkUrl?: string,
   logoUrl?: string,
-  asunto?: string
-) {
+  asunto?: string,
+  tituloVisual?: string // 👉 nuevo argumento agregado
+){
   console.log("📤 Asunto dentro de sendEmailSendgrid:", asunto);
 
   const envíos: any[] = [];
@@ -37,7 +38,8 @@ export async function sendEmailSendgrid(
       email,
       tenantId,
       contacto.nombre || "",
-      asunto
+      asunto,
+      tituloVisual
     );
 
     envíos.push({
