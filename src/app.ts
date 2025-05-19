@@ -57,6 +57,7 @@ import checkoutCreditRoute from './routes/stripe/checkout-credit';
 import limiteContactosRoute from './routes/contactos/limite';
 import sendgridTemplates from "./routes/sendgrid/templates";
 import emailStatusRoute from "./routes/email-status/index";
+import previewEmailRouter from "./routes/preview-email";
 
 
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -172,6 +173,7 @@ app.use('/api/contactos/limite', limiteContactosRoute);
 app.use("/api/sendgrid/templates", sendgridTemplates);
 app.use("/api/email-status", emailStatusRoute);
 app.use("/api/sendgrid/templates", sendgridTemplates);
+app.use("/api/preview-email", previewEmailRouter);
 
 
 // ✅ Ruta base
