@@ -72,7 +72,16 @@ async function ejecutarCampañasProgramadas() {
         const nombreNegocio = tenantRes.rows[0]?.name || "Tu negocio";
         const logoUrl = tenantRes.rows[0]?.logo_url;
 
-        const contactos = contactosParsed.map((email: string) => ({ email }));
+        const contactosRes = await pool.query(
+          `SELECT email, nombre FROM contactos
+           WHERE tenant_id = $1 AND email = ANY($2)`,
+          [tenantId, contactosParsed]
+        );
+        
+        const contactos = contactosRes.rows.map((c: any) => ({
+          email: c.email,
+          nombre: c.nombre || "amigo/a",
+        }));        
 
         await sendEmailSendgrid(
           c.contenido,
