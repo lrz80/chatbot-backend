@@ -1,5 +1,3 @@
-// src/lib/senders/email-sendgrid.ts
-
 import sgMail from "@sendgrid/mail";
 import pool from "../db";
 import { generarHTMLCorreo } from "../../utils/email-html";
@@ -19,12 +17,10 @@ export async function sendEmailSendgrid(
   linkUrl?: string,
   logoUrl?: string,
   asunto?: string,
-  tituloVisual?: string,
-  archivoAdjuntoUrl?: string // 👈 nuevo argumento
-){
+  tituloVisual?: string
+) {
   console.log("📤 Asunto dentro de sendEmailSendgrid:", asunto);
   console.log("🎯 Título visual:", tituloVisual);
-  console.log("📎 Adjunto:", archivoAdjuntoUrl);
 
   const envíos: any[] = [];
 
@@ -45,7 +41,7 @@ export async function sendEmailSendgrid(
       tituloVisual
     );
 
-    const msg: any = {
+    const msg = {
       to: email,
       from: {
         name: nombreNegocio,
@@ -54,25 +50,6 @@ export async function sendEmailSendgrid(
       subject: asunto || "📣 Nueva campaña de tu negocio",
       html,
     };
-
-    // ✅ Adjuntar archivo si existe
-    if (archivoAdjuntoUrl) {
-      try {
-        const response = await fetch(archivoAdjuntoUrl);
-        const buffer = await response.arrayBuffer();
-
-        msg.attachments = [
-          {
-            content: Buffer.from(buffer).toString("base64"),
-            filename: archivoAdjuntoUrl.split("/").pop() || "archivo.pdf",
-            type: "application/octet-stream",
-            disposition: "attachment",
-          },
-        ];
-      } catch (error) {
-        console.warn(`⚠️ No se pudo adjuntar archivo: ${archivoAdjuntoUrl}`, error);
-      }
-    }
 
     envíos.push(msg);
   }
@@ -125,8 +102,8 @@ export async function sendEmailWithTemplate(
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) continue;
 
     const vars = {
-      nombre: contacto.nombre || "amigo/a", // ✅ default de cortesía
-      ...(contacto.vars || {}), // incluye cualquier otro campo personalizado
+      nombre: contacto.nombre || "amigo/a",
+      ...(contacto.vars || {}),
     };
 
     envíos.push({
@@ -171,4 +148,3 @@ export async function sendEmailWithTemplate(
     await Promise.all(inserts);
   }
 }
-

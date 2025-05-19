@@ -90,7 +90,6 @@ router.post(
   authenticateUser,
   upload.fields([
     { name: "imagen", maxCount: 1 },
-    { name: "archivo_adjunto", maxCount: 1 },
   ]),
   manejarErroresMulter,
   async (req: Request, res: Response) => {
@@ -157,27 +156,20 @@ router.post(
           fs.unlinkSync(file.path);
         }
 
-        if (files?.archivo_adjunto?.[0]) {
-          const file = files.archivo_adjunto[0];
-          const buffer = fs.readFileSync(file.path);
-          const filename = `email-attachments/${tenant_id}/${Date.now()}-${file.originalname}`;
-          archivo_adjunto_url = await subirArchivoAR2(filename, buffer, file.mimetype);
-          fs.unlinkSync(file.path);
-        }
-
         link_url = req.body.link_url || null;
       }
 
       const insertQuery = canal === "email"
         ? `INSERT INTO campanas (
-            tenant_id, titulo, contenido, imagen_url, archivo_adjunto_url,
+            tenant_id, titulo, contenido, imagen_url,
             canal, destinatarios, programada_para, enviada, fecha_creacion,
             link_url, template_sid, template_vars, asunto, titulo_visual
           ) VALUES (
-            $1, $2, $3, $4, $5,
-            $6, $7, $8, false, NOW(),
-            $9, $10, $11, $12, $13
+            $1, $2, $3, $4,
+            $5, $6, $7, false, NOW(),
+            $8, $9, $10, $11, $12
           ) RETURNING id`
+
         : `INSERT INTO campanas (
             tenant_id, titulo, contenido, canal, destinatarios,
             programada_para, enviada, fecha_creacion
@@ -192,7 +184,6 @@ router.post(
             nombre,
             contenido,
             imagen_url,
-            archivo_adjunto_url,
             canal,
             JSON.stringify(segmentosParsed),
             fecha_envio,
@@ -267,7 +258,6 @@ router.post(
         canal,
         contenido,
         imagen_url,
-        archivo_adjunto_url,
         programada_para: fecha_envio,
         asunto,
         titulo_visual: tituloVisual,
@@ -309,7 +299,6 @@ router.delete("/:id", authenticateUser, async (req: Request, res: Response) => {
     };
 
     eliminarArchivo(campaña.imagen_url);
-    eliminarArchivo(campaña.archivo_adjunto_url);
 
     await pool.query("DELETE FROM campanas WHERE id = $1 AND tenant_id = $2", [id, tenant_id]);
 

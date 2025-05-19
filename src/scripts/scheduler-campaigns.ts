@@ -1,5 +1,3 @@
-// src/scripts/scheduler-campaigns.ts
-
 import pool from "../lib/db";
 import { sendSMS } from "../lib/senders/sms";
 import { sendWhatsApp } from "../lib/senders/whatsapp";
@@ -73,9 +71,9 @@ async function ejecutarCampañasProgramadas() {
         );
         const nombreNegocio = tenantRes.rows[0]?.name || "Tu negocio";
         const logoUrl = tenantRes.rows[0]?.logo_url;
-      
+
         const contactos = contactosParsed.map((email: string) => ({ email }));
-      
+
         await sendEmailSendgrid(
           c.contenido,
           contactos,
@@ -86,10 +84,9 @@ async function ejecutarCampañasProgramadas() {
           c.link_url || undefined,
           logoUrl,
           c.asunto || "📣 Nueva campaña de tu negocio",
-          c.titulo_visual || "",
-          c.archivo_adjunto_url || undefined // 👈 Nuevo argumento
-        );        
-      }      
+          c.titulo_visual || "" // ✅ se conserva título visual
+        );
+      }
 
       await pool.query(
         `INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
