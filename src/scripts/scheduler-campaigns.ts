@@ -68,14 +68,26 @@ async function ejecutarCampañasProgramadas() {
 
       if (canal === "email") {
         const tenantRes = await pool.query(
-          "SELECT name FROM tenants WHERE id = $1",
+          "SELECT name, logo_url FROM tenants WHERE id = $1",
           [tenantId]
         );
         const nombreNegocio = tenantRes.rows[0]?.name || "Tu negocio";
-
+        const logoUrl = tenantRes.rows[0]?.logo_url;
+      
         const contactos = contactosParsed.map((email: string) => ({ email }));
-        await sendEmailSendgrid(c.contenido, contactos, nombreNegocio, tenantId, campaignId);
-      }
+      
+        await sendEmailSendgrid(
+          c.contenido,
+          contactos,
+          nombreNegocio,
+          tenantId,
+          campaignId,
+          c.imagen_url || undefined,
+          c.link_url || undefined,
+          logoUrl,
+          c.asunto || "📣 Nueva campaña de tu negocio"
+        );
+      }      
 
       await pool.query(
         `INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
