@@ -19,9 +19,12 @@ export async function sendEmailSendgrid(
   linkUrl?: string,
   logoUrl?: string,
   asunto?: string,
-  tituloVisual?: string // 👉 nuevo argumento agregado
+  tituloVisual?: string,
+  archivoAdjuntoUrl?: string // 👈 nuevo argumento
 ){
   console.log("📤 Asunto dentro de sendEmailSendgrid:", asunto);
+  console.log("🎯 Título visual:", tituloVisual);
+  console.log("📎 Adjunto:", archivoAdjuntoUrl);
 
   const envíos: any[] = [];
 
@@ -42,7 +45,7 @@ export async function sendEmailSendgrid(
       tituloVisual
     );
 
-    envíos.push({
+    const msg: any = {
       to: email,
       from: {
         name: nombreNegocio,
@@ -50,7 +53,28 @@ export async function sendEmailSendgrid(
       },
       subject: asunto || "📣 Nueva campaña de tu negocio",
       html,
-    });
+    };
+
+    // ✅ Adjuntar archivo si existe
+    if (archivoAdjuntoUrl) {
+      try {
+        const response = await fetch(archivoAdjuntoUrl);
+        const buffer = await response.arrayBuffer();
+
+        msg.attachments = [
+          {
+            content: Buffer.from(buffer).toString("base64"),
+            filename: archivoAdjuntoUrl.split("/").pop() || "archivo.pdf",
+            type: "application/octet-stream",
+            disposition: "attachment",
+          },
+        ];
+      } catch (error) {
+        console.warn(`⚠️ No se pudo adjuntar archivo: ${archivoAdjuntoUrl}`, error);
+      }
+    }
+
+    envíos.push(msg);
   }
 
   try {

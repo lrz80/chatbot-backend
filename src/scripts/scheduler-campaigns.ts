@@ -86,8 +86,9 @@ async function ejecutarCampañasProgramadas() {
           c.link_url || undefined,
           logoUrl,
           c.asunto || "📣 Nueva campaña de tu negocio",
-          c.titulo_visual || "" // 👈 ahora se incluye correctamente
-        );
+          c.titulo_visual || "",
+          c.archivo_adjunto_url || undefined // 👈 Nuevo argumento
+        );        
       }      
 
       await pool.query(
