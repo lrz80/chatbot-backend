@@ -21,7 +21,7 @@ export async function sendEmailSendgrid(
   asunto?: string
 ) {
   console.log("📤 Asunto dentro de sendEmailSendgrid:", asunto);
-  
+
   const envíos: any[] = [];
 
   for (const contacto of contactos) {
@@ -36,7 +36,8 @@ export async function sendEmailSendgrid(
       logoUrl,
       email,
       tenantId,
-      contacto.nombre || ""
+      contacto.nombre || "",
+      asunto
     );
 
     envíos.push({
