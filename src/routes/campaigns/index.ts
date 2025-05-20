@@ -318,4 +318,31 @@ router.delete("/:id", authenticateUser, async (req: Request, res: Response) => {
   }
 });
 
+// 🔽 Agrega esto al final del archivo de rutas de campañas
+
+router.get("/:id/sms-status", authenticateUser, async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { tenant_id } = req.user as { tenant_id: string };
+
+  try {
+    const result = await pool.query(
+      `SELECT 
+         message_sid,
+         to_number AS telefono,
+         status,
+         error_message,
+         timestamp
+       FROM sms_status_logs
+       WHERE campaign_id = $1 AND tenant_id = $2
+       ORDER BY timestamp DESC`,
+      [id, tenant_id]
+    );
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error("❌ Error al cargar estado de SMS:", error);
+    res.status(500).json({ error: "Error al obtener estado de SMS" });
+  }
+});
+
 export default router;
