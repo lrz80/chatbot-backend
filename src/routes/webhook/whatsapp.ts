@@ -78,8 +78,10 @@ router.post('/', async (req: Request, res: Response) => {
     if (!tenant) return res.sendStatus(404);
 
     const idioma = await detectarIdioma(userInput);
-    const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
+    console.log("🌍 Idioma detectado:", idioma);
 
+    const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
+    console.log("📜 Prompt enviado:", promptBase);
     let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idioma);
 
     const canal = 'whatsapp';
