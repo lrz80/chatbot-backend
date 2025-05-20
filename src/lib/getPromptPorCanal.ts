@@ -1,13 +1,13 @@
 export function getPromptPorCanal(canal: string, tenant: any, idioma: string = 'es'): string {
   const nombre = tenant.name || "nuestro negocio";
+  const funciones = tenant.funciones_asistente || '';
+  const info = tenant.info_clave || '';
 
-  // Si el tenant ya tiene un prompt personalizado Y el idioma coincide, úsalo
   if (canal === 'facebook' || canal === 'instagram' || canal === 'preview-meta') {
-    return tenant.prompt_meta || generarPromptPorIdioma(nombre, idioma);
+    return tenant.prompt_meta || generarPromptPorIdioma(nombre, idioma, funciones, info);
   }
 
-  // Si el idioma del cliente no coincide con el idioma del prompt guardado, generamos uno nuevo
-  return generarPromptPorIdioma(nombre, idioma);
+  return tenant.prompt || generarPromptPorIdioma(nombre, idioma, funciones, info);
 }
 
 export function getBienvenidaPorCanal(canal: string, tenant: any, idioma: string = 'es'): string {
@@ -20,15 +20,18 @@ export function getBienvenidaPorCanal(canal: string, tenant: any, idioma: string
   return generarBienvenidaPorIdioma(nombre, idioma);
 }
 
-function generarPromptPorIdioma(nombre: string, idioma: string): string {
-  const prompts: Record<string, string> = {
-    es: `Eres Amy, una asistente AI amigable de ${nombre}. Responde en español de forma clara y útil.`,
-    en: `You are Amy, a friendly AI assistant for ${nombre}. Reply in English clearly and helpfully.`,
-    pt: `Você é a Amy, uma assistente de IA simpática do ${nombre}. Responda em português de forma clara e útil.`,
-    fr: `Vous êtes Amy, une assistante IA sympathique de ${nombre}. Répondez en français clairement et utilement.`,
+function generarPromptPorIdioma(nombre: string, idioma: string, funciones: string = '', info: string = ''): string {
+  const instrucciones: Record<string, string> = {
+    es: `Eres Amy, la asistente AI de ${nombre}. Tu tarea es ayudar a los clientes con lo siguiente:\n\n${funciones || 'Información general sobre los servicios ofrecidos.'}\n\nInformación clave del negocio:\n${info || 'No se proporcionó información adicional.'}\n\nResponde siempre de forma clara, útil y amigable, en español.`,
+
+    en: `You are Amy, the AI assistant for ${nombre}. Your task is to help customers with:\n\n${funciones || 'General information about the services offered.'}\n\nKey business info:\n${info || 'No additional info provided.'}\n\nAlways reply clearly, helpfully, and in English.`,
+
+    pt: `Você é Amy, a assistente de IA de ${nombre}. Sua tarefa é ajudar os clientes com:\n\n${funciones || 'Informações gerais sobre os serviços oferecidos.'}\n\nInformações chave do negócio:\n${info || 'Nenhuma informação adicional fornecida.'}\n\nSempre responda de forma clara, útil e amigável, em português.`,
+
+    fr: `Vous êtes Amy, l'assistante IA de ${nombre}. Votre tâche est d'aider les clients avec :\n\n${funciones || 'Informations générales sur les services offerts.'}\n\nInformations clés de l'entreprise :\n${info || 'Aucune information supplémentaire fournie.'}\n\nRépondez toujours de manière claire, utile et sympathique, en français.`,
   };
 
-  return prompts[idioma] || prompts.es;
+  return instrucciones[idioma] || instrucciones['es'];
 }
 
 function generarBienvenidaPorIdioma(nombre: string, idioma: string): string {
