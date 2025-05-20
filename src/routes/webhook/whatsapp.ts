@@ -7,6 +7,7 @@ import twilio from 'twilio';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { detectarIdioma } from '../../lib/detectarIdioma';
+import { traducirMensaje } from '../../lib/traducirMensaje';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -146,20 +147,38 @@ router.post('/', async (req: Request, res: Response) => {
         const config = configRes.rows[0];
 
         if (config) {
-          let mensajeSeguimiento = config.mensaje_general || "\u00a1Hola! \u00bfTe gustaría que te ayudáramos a avanzar?";
-          if (intencionLower.includes('precio') && config.mensaje_precio) mensajeSeguimiento = config.mensaje_precio;
-          else if (intencionLower.includes('agendar') && config.mensaje_agendar) mensajeSeguimiento = config.mensaje_agendar;
-          else if (intencionLower.includes('ubicacion') && config.mensaje_ubicacion) mensajeSeguimiento = config.mensaje_ubicacion;
-
+          // 🟡 Paso 1: seleccionar mensaje base según intención
+          let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
+          if (intencionLower.includes("precio") && config.mensaje_precio) {
+            mensajeSeguimiento = config.mensaje_precio;
+          } else if ((intencionLower.includes("agendar") || intencionLower.includes("reservar")) && config.mensaje_agendar) {
+            mensajeSeguimiento = config.mensaje_agendar;
+          } else if ((intencionLower.includes("ubicacion") || intencionLower.includes("location")) && config.mensaje_ubicacion) {
+            mensajeSeguimiento = config.mensaje_ubicacion;
+          }
+        
+          // 🟢 Paso 2: traducir si el idioma del mensaje no coincide con el del cliente
+          try {
+            const idiomaMensaje = await detectarIdioma(mensajeSeguimiento);
+            if (idiomaMensaje !== idioma) {
+              console.log(`🌍 Traduciendo seguimiento de '${idiomaMensaje}' a '${idioma}'`);
+              mensajeSeguimiento = await traducirMensaje(mensajeSeguimiento, idioma);
+            }
+          } catch (err) {
+            console.warn("⚠️ No se pudo detectar idioma del mensaje de seguimiento");
+          }
+        
+          // 🕒 Paso 3: programar el mensaje
           const fechaEnvio = new Date();
           fechaEnvio.setMinutes(fechaEnvio.getMinutes() + (config.minutos_espera || 5));
-
+        
           await pool.query(
             `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
              VALUES ($1, 'whatsapp', $2, $3, $4, false)`,
             [tenant.id, fromNumber, mensajeSeguimiento, fechaEnvio]
           );
         }
+        
       }
     } catch (err) {
       console.error("\u274c Error en inteligencia de ventas:", err);
