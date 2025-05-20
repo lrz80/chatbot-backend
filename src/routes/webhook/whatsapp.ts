@@ -6,12 +6,13 @@ import OpenAI from 'openai';
 import twilio from 'twilio';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
+import { detectarIdioma } from '../../lib/detectarIdioma';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
 function normalizarTexto(texto: string): string {
-  return texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  return texto.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 }
 
 function buscarRespuestaDesdeFlows(flows: any[], mensajeUsuario: string): string | null {
@@ -63,7 +64,7 @@ function buscarRespuestaSimilitudFaqs(faqs: any[], mensaje: string): string | nu
 }
 
 router.post('/', async (req: Request, res: Response) => {
-  console.log("📩 Webhook recibido:", req.body);
+  console.log("\ud83d\udce9 Webhook recibido:", req.body);
 
   const to = req.body.To || '';
   const from = req.body.From || '';
@@ -76,7 +77,11 @@ router.post('/', async (req: Request, res: Response) => {
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.sendStatus(404);
 
-    const promptBase = getPromptPorCanal('whatsapp', tenant);
+    const idioma = await detectarIdioma(userInput);
+    const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
+
+    let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idioma);
+
     const canal = 'whatsapp';
 
     let flows: any[] = [];
@@ -93,10 +98,9 @@ router.post('/', async (req: Request, res: Response) => {
     } catch {}
 
     const mensajeUsuario = normalizarTexto(userInput);
-    let respuesta = null;
 
     if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
-      respuesta = getBienvenidaPorCanal('whatsapp', tenant);
+      respuesta = getBienvenidaPorCanal('whatsapp', tenant, idioma);
     } else {
       respuesta = buscarRespuestaSimilitudFaqs(faqs, mensajeUsuario) || buscarRespuestaDesdeFlows(flows, mensajeUsuario);
     }
@@ -110,10 +114,10 @@ router.post('/', async (req: Request, res: Response) => {
           { role: 'user', content: userInput },
         ],
       });
-      respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant);
+      respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
     }
 
-    console.log("🤖 Respuesta generada:", respuesta);
+    console.log("\ud83e\udd16 Respuesta generada:", respuesta);
 
     try {
       const { intencion, nivel_interes } = await detectarIntencion(userInput);
@@ -140,7 +144,7 @@ router.post('/', async (req: Request, res: Response) => {
         const config = configRes.rows[0];
 
         if (config) {
-          let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
+          let mensajeSeguimiento = config.mensaje_general || "\u00a1Hola! \u00bfTe gustaría que te ayudáramos a avanzar?";
           if (intencionLower.includes('precio') && config.mensaje_precio) mensajeSeguimiento = config.mensaje_precio;
           else if (intencionLower.includes('agendar') && config.mensaje_agendar) mensajeSeguimiento = config.mensaje_agendar;
           else if (intencionLower.includes('ubicacion') && config.mensaje_ubicacion) mensajeSeguimiento = config.mensaje_ubicacion;
@@ -156,7 +160,7 @@ router.post('/', async (req: Request, res: Response) => {
         }
       }
     } catch (err) {
-      console.error("❌ Error en inteligencia de ventas:", err);
+      console.error("\u274c Error en inteligencia de ventas:", err);
     }
 
     const contactoRes = await pool.query(
@@ -198,12 +202,21 @@ router.post('/', async (req: Request, res: Response) => {
     await incrementarUsoPorNumero(numero);
 
     const twiml = new MessagingResponse();
-    twiml.message(respuesta);
-    console.log("📤 Enviando a Twilio:", twiml.toString());
+    const chunkSize = 1200;
+    if (respuesta.length > chunkSize) {
+      for (let i = 0; i < respuesta.length; i += chunkSize) {
+        const chunk = respuesta.slice(i, i + chunkSize);
+        twiml.message(chunk);
+      }
+    } else {
+      twiml.message(respuesta);
+    }
+
+    console.log("\ud83d\udce4 Enviando a Twilio:", twiml.toString());
     res.type('text/xml');
     res.send(twiml.toString());
   } catch (error) {
-    console.error('❌ Error en webhook WhatsApp:', error);
+    console.error('\u274c Error en webhook WhatsApp:', error);
     res.sendStatus(500);
   }
 });
