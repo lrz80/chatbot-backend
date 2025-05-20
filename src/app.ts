@@ -133,7 +133,6 @@ app.use("/api/voice-config", voiceConfigRoutes);
 app.use('/api/keywords', keywordsRoutes);
 app.use('/api/usage', usageRoutes);
 app.use('/api/stats/monthly', statsMonthlyRoutes);
-app.use('/webhook/whatsapp', whatsappWebhook);
 app.use('/webhook/sms', smsWebhook);
 app.use('/webhook/voice-response', voiceResponse);
 app.use('/api/messages', messagesRoutes);
@@ -174,7 +173,7 @@ app.use("/api/sendgrid/templates", sendgridTemplates);
 app.use("/api/email-status", emailStatusRoute);
 app.use("/api/sendgrid/templates", sendgridTemplates);
 app.use("/api/preview-email", previewEmailRouter);
-
+app.use("/api/webhook/whatsapp", whatsappWebhook);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
