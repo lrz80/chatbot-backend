@@ -21,6 +21,12 @@ export async function enviarMensajesProgramados() {
 
     for (const mensaje of mensajes) {
       try {
+        // 🛡️ Marcamos como enviado primero para evitar duplicados si el proceso se repite
+        await pool.query(
+          `UPDATE mensajes_programados SET enviado = true WHERE id = $1`,
+          [mensaje.id]
+        );
+
         // 🧠 Buscar el último mensaje del usuario para detectar su idioma
         const ultimoMsg = await pool.query(
           `SELECT content FROM messages
@@ -30,20 +36,15 @@ export async function enviarMensajesProgramados() {
         );
 
         const mensajeCliente = ultimoMsg.rows[0]?.content || mensaje.contenido;
-
         const idioma = await detectarIdioma(mensajeCliente);
         const contenidoTraducido = await traducirTexto(mensaje.contenido, idioma);
 
         await enviarWhatsApp(mensaje.contacto, contenidoTraducido, mensaje.tenant_id);
 
-        await pool.query(
-          `UPDATE mensajes_programados SET enviado = true WHERE id = $1`,
-          [mensaje.id]
-        );
-
         console.log("✅ Seguimiento enviado a:", mensaje.contacto, "| Idioma:", idioma);
       } catch (err) {
         console.error("❌ Error al enviar seguimiento:", err);
+        // Opcional: podrías revertir enviado = false si falló
       }
     }
 
