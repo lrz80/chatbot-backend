@@ -1,3 +1,5 @@
+// src/senders/whatsapp.ts
+
 import twilio from "twilio";
 import pool from "../db";
 
@@ -67,3 +69,58 @@ export async function sendWhatsApp(
     }
   }
 }
+
+/**
+ * Envía un mensaje de WhatsApp de sesión (sin plantilla)
+ */
+export async function enviarWhatsApp(
+  telefono: string,
+  mensaje: string,
+  tenantId: string
+) {
+  const fromNumber = await obtenerNumeroDeTenant(tenantId); // 👈 obtiene el número de envío real
+  const numero = normalizarNumero(telefono);
+  if (!numero || !fromNumber) {
+    console.warn("❌ Número inválido o tenant sin número asignado");
+    return;
+  }
+
+  const to = `whatsapp:${numero}`;
+
+  try {
+    const msg = await client.messages.create({
+      from: `whatsapp:${fromNumber}`,
+      to,
+      body: mensaje,
+    });
+
+    console.log(`✅ Mensaje enviado a ${to}`);
+
+    await pool.query(
+      `INSERT INTO whatsapp_status_logs (
+        tenant_id, message_sid, status, to_number, from_number, timestamp
+      ) VALUES ($1, $2, $3, $4, $5, NOW())`,
+      [tenantId, msg.sid, msg.status, numero, fromNumber]
+    );
+  } catch (err: any) {
+    console.error(`❌ Error enviando a ${to}: ${err.message}`);
+    await pool.query(
+      `INSERT INTO whatsapp_status_logs (
+        tenant_id, message_sid, status, to_number, from_number, error_code, error_message, timestamp
+      ) VALUES ($1, null, 'failed', $2, $3, $4, $5, NOW())`,
+      [tenantId, numero, fromNumber, err.code || null, err.message || "Error desconocido"]
+    );
+  }
+}
+
+/**
+ * Busca el número de WhatsApp asignado al tenant
+ */
+async function obtenerNumeroDeTenant(tenantId: string): Promise<string | null> {
+  const result = await pool.query(
+    "SELECT twilio_number FROM tenants WHERE id = $1 LIMIT 1",
+    [tenantId]
+  );
+  return result.rows[0]?.twilio_number || null;
+}
+

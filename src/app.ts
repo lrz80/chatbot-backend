@@ -58,6 +58,7 @@ import limiteContactosRoute from './routes/contactos/limite';
 import sendgridTemplates from "./routes/sendgrid/templates";
 import emailStatusRoute from "./routes/email-status/index";
 import previewEmailRouter from "./routes/preview-email";
+import { enviarMensajesProgramados } from "./scripts/scheduler-followup";
 
 
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -190,6 +191,10 @@ setInterval(() => {
 setInterval(() => {
   sendScheduledMessages();
 }, 60000); // cada 60 segundos
+
+setInterval(() => {
+  enviarMensajesProgramados();
+}, 60000);
 
 // ✅ Levantar servidor
 app.listen(PORT, () => {
