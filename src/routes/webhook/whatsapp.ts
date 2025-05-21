@@ -8,6 +8,7 @@ import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
+import { buscarRespuestaSimilitudFaqsTraducido, buscarRespuestaDesdeFlowsTraducido } from '../../lib/respuestasTraducidas';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -105,7 +106,8 @@ router.post('/', async (req: Request, res: Response) => {
     if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
       respuesta = getBienvenidaPorCanal('whatsapp', tenant, idioma);
     } else {
-      respuesta = buscarRespuestaSimilitudFaqs(faqs, mensajeUsuario) || buscarRespuestaDesdeFlows(flows, mensajeUsuario);
+      respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeUsuario, idioma)
+          || await buscarRespuestaDesdeFlowsTraducido(flows, mensajeUsuario, idioma);
     }
 
     if (!respuesta) {
@@ -120,6 +122,13 @@ router.post('/', async (req: Request, res: Response) => {
       respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
     }
 
+    if (respuesta) {
+      const idiomaRespuesta = await detectarIdioma(respuesta);
+      if (idiomaRespuesta !== idioma) {
+        respuesta = await traducirMensaje(respuesta, idioma);
+      }
+    }
+    
     console.log("\ud83e\udd16 Respuesta generada:", respuesta);
 
     try {
