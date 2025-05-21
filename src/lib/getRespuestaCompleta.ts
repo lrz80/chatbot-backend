@@ -12,7 +12,7 @@ export async function getRespuestaCompleta({
   canal: string;
   tenant: any;
   input: string;
-  idioma?: string; // ✅ agregado aquí
+  idioma?: string;
 }): Promise<string> {
   const mensajeDefault = idioma === 'en'
     ? 'Sorry, I don’t have an answer for that at the moment.'
@@ -22,23 +22,21 @@ export async function getRespuestaCompleta({
   const bienvenida = getBienvenidaPorCanal(canal, tenant);
   const mensaje = normalizarTexto(input);
 
-  // 1. FAQs
+  // 1. FAQs (sin columna idioma)
   const faqsRes = await pool.query(
-    'SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1 AND (idioma = $2 OR idioma IS NULL)',
-    [tenant.id, idioma]
+    'SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1',
+    [tenant.id]
   );
-  
   const faqs = faqsRes.rows || [];
   for (const faq of faqs) {
     if (mensaje.includes(normalizarTexto(faq.pregunta))) return faq.respuesta;
   }
 
-  // 2. Intents
+  // 2. Intents (sin columna idioma)
   const intentsRes = await pool.query(
-    'SELECT * FROM intents WHERE tenant_id = $1 AND (idioma = $2 OR idioma IS NULL)',
-    [tenant.id, idioma]
+    'SELECT * FROM intents WHERE tenant_id = $1',
+    [tenant.id]
   );
-  
   const intents = intentsRes.rows || [];
   for (const intent of intents) {
     if ((intent.ejemplos || []).some((ej: string) => mensaje.includes(normalizarTexto(ej)))) {
@@ -46,7 +44,7 @@ export async function getRespuestaCompleta({
     }
   }
 
-  // 3. OpenAI fallback solo si no encontró FAQs ni Intents
+  // 3. OpenAI fallback
   if (prompt) {
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY || '',
