@@ -1,6 +1,7 @@
 import pool from './db';
 import { getPromptPorCanal, getBienvenidaPorCanal } from './getPromptPorCanal';
 import { normalizarTexto } from './normalizarTexto';
+import { traducirTexto } from './traducirTexto'; // Asegúrate de tener esta función
 import OpenAI from 'openai';
 
 export async function getRespuestaCompleta({
@@ -18,11 +19,20 @@ export async function getRespuestaCompleta({
     ? 'Sorry, I don’t have an answer for that at the moment.'
     : 'Lo siento, no tengo una respuesta para eso en este momento.';
 
-  const prompt = getPromptPorCanal(canal, tenant);
+  let prompt = getPromptPorCanal(canal, tenant);
   const bienvenida = getBienvenidaPorCanal(canal, tenant);
   const mensaje = normalizarTexto(input);
 
-  // 1. FAQs (sin columna idioma)
+  // 🔁 Traducir el prompt si el idioma detectado no es español
+  if (idioma !== 'es') {
+    try {
+      prompt = await traducirTexto(prompt, idioma);
+    } catch (err) {
+      console.warn('⚠️ No se pudo traducir el prompt:', err);
+    }
+  }
+
+  // 1. FAQs (no filtradas por idioma)
   const faqsRes = await pool.query(
     'SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1',
     [tenant.id]
@@ -32,7 +42,7 @@ export async function getRespuestaCompleta({
     if (mensaje.includes(normalizarTexto(faq.pregunta))) return faq.respuesta;
   }
 
-  // 2. Intents (sin columna idioma)
+  // 2. Intents (no filtrados por idioma)
   const intentsRes = await pool.query(
     'SELECT * FROM intents WHERE tenant_id = $1',
     [tenant.id]
@@ -44,7 +54,7 @@ export async function getRespuestaCompleta({
     }
   }
 
-  // 3. OpenAI fallback
+  // 3. Fallback con OpenAI
   if (prompt) {
     const openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY || '',
