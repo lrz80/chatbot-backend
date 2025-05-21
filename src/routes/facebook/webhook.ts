@@ -1,3 +1,5 @@
+// src/routes/facebook/webhook.ts
+
 import express from 'express';
 import axios from 'axios';
 import pool from '../../lib/db';
@@ -5,6 +7,7 @@ import { getRespuestaCompleta } from '../../lib/getRespuestaCompleta';
 import { detectarIntencion } from '../../lib/detectarIntencion';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
+import { detectarIdioma } from '../../lib/detectarIdioma'; // asegúrate de tener esta función
 
 const router = express.Router();
 
@@ -61,6 +64,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         if (messagingEvent.message && !messagingEvent.message.is_echo) {
           const userMessage = messagingEvent.message.text || '';
+          const idiomaDetectado = await detectarIdioma(userMessage);
           console.log('📩 Mensaje recibido:', userMessage);
 
           const { rows } = await pool.query(
@@ -112,8 +116,13 @@ router.post('/api/facebook/webhook', async (req, res) => {
           // 📥 Cargar Flows
           let flows: any[] = [];
           try {
-            const resFlows = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenantId]);
+            const resFlows = await pool.query(
+              'SELECT data FROM flows WHERE tenant_id = $1 AND (idioma = $2 OR idioma IS NULL)',
+              [tenantId, idiomaDetectado]
+            );
+            
             const raw = resFlows.rows[0]?.data;
+
             flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
           } catch (e) {
             console.warn('⚠️ No se pudieron cargar Flows:', e);
@@ -131,7 +140,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
           }
 
           if (!respuestaFinal) {
-            respuestaFinal = await getRespuestaCompleta({ canal, tenant, input: userMessage });
+            respuestaFinal = await getRespuestaCompleta({ canal, tenant, input: userMessage, idioma: idiomaDetectado });
           }
 
           await pool.query(
