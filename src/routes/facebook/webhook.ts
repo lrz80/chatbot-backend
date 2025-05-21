@@ -117,9 +117,9 @@ router.post('/api/facebook/webhook', async (req, res) => {
           let flows: any[] = [];
           try {
             const resFlows = await pool.query(
-              'SELECT data FROM flows WHERE tenant_id = $1 AND (idioma = $2 OR idioma IS NULL)',
-              [tenantId, idiomaDetectado]
-            );
+              'SELECT data FROM flows WHERE tenant_id = $1',
+              [tenantId]
+            );            
             
             const raw = resFlows.rows[0]?.data;
 
