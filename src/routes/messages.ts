@@ -44,7 +44,7 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
 
     const mensajesRes = await pool.query(query, values);
 
-    res.status(200).json(mensajesRes.rows);
+    res.status(200).json({ mensajes: mensajesRes.rows });
   } catch (error) {
     console.error("❌ Error al obtener historial:", error);
     res.status(500).json({ error: "Error al obtener mensajes" });
