@@ -34,7 +34,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
   console.log("🌐 Webhook Meta recibido:", JSON.stringify(req.body, null, 2));
   try {
     const body = req.body;
-    if (body.object !== 'page') return res.sendStatus(404);
+    if (body.object !== 'page' && body.object !== 'instagram') return res.sendStatus(404);
 
     // ✅ Responder inmediatamente a Meta
     res.sendStatus(200);
