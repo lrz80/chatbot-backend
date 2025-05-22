@@ -8,6 +8,7 @@ import { detectarIntencion } from '../../lib/detectarIntencion';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { detectarIdioma } from '../../lib/detectarIdioma'; // asegúrate de tener esta función
+import { traducirTexto } from '../../lib/traducirTexto';
 
 const router = express.Router();
 
@@ -133,10 +134,17 @@ router.post('/api/facebook/webhook', async (req, res) => {
           } else {
             const faqMatch = faqs.find(faq => mensajeNormalizado.includes(normalizarTexto(faq.pregunta)));
             if (faqMatch) {
-              respuestaFinal = faqMatch.respuesta;
+              respuestaFinal = idiomaDetectado === 'es'
+                ? faqMatch.respuesta
+                : await traducirTexto(faqMatch.respuesta, idiomaDetectado);
             } else {
-              respuestaFinal = buscarRespuestaDesdeFlows(flows, userMessage);
-            }
+              const respuestaFlow = buscarRespuestaDesdeFlows(flows, userMessage);
+              respuestaFinal = respuestaFlow
+                ? (idiomaDetectado === 'es'
+                    ? respuestaFlow
+                    : await traducirTexto(respuestaFlow, idiomaDetectado))
+                : null;
+            }            
           }
 
           if (!respuestaFinal) {
