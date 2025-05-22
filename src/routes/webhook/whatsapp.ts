@@ -9,6 +9,7 @@ import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPor
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { buscarRespuestaSimilitudFaqsTraducido, buscarRespuestaDesdeFlowsTraducido } from '../../lib/respuestasTraducidas';
+import { enviarWhatsApp } from '../../lib/senders/whatsapp';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -236,6 +237,10 @@ async function procesarMensajeWhatsApp(body: any) {
      VALUES ($1, 'bot', $2, NOW(), $3)`,
     [tenant.id, respuesta, canal]
   );
+
+  // 📤 Enviar respuesta real por WhatsApp (post-procesamiento)
+  await enviarWhatsApp(fromNumber, respuesta, tenant.id);
+  console.log("📬 Respuesta enviada manualmente vía Twilio:", respuesta);
 
   await pool.query(
     `INSERT INTO interactions (tenant_id, canal, created_at)
