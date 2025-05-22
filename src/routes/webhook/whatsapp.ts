@@ -68,12 +68,6 @@ function buscarRespuestaSimilitudFaqs(faqs: any[], mensaje: string): string | nu
 router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
 
-  // ✅ 1. Enviar respuesta INMEDIATA a Twilio (evita error 11200)
-  const safeTwiml = new MessagingResponse(); // sin .message()
-  res.type('text/xml').send(safeTwiml.toString());
-
-
-  // ✅ 2. Ejecutar lógica asincrónica sin depender de la respuesta
   try {
     const to = req.body.To || '';
     const from = req.body.From || '';
@@ -83,7 +77,11 @@ router.post('/', async (req: Request, res: Response) => {
 
     const tenantRes = await pool.query('SELECT * FROM tenants WHERE twilio_number = $1 LIMIT 1', [numero]);
     const tenant = tenantRes.rows[0];
-    if (!tenant) return;
+    if (!tenant) {
+      const twiml = new MessagingResponse();
+      res.type('text/xml').send(twiml.toString());
+      return;
+    }
 
     const idioma = await detectarIdioma(userInput);
     const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
@@ -229,12 +227,18 @@ router.post('/', async (req: Request, res: Response) => {
 
     await incrementarUsoPorNumero(numero);
 
-    // ⚠️ Aquí NO respondas otra vez a Twilio
+    // ✅ Enviar respuesta real al cliente por Twilio
+    const twiml = new MessagingResponse();
+    twiml.message(respuesta);
+    res.type('text/xml').send(twiml.toString());
+
     console.log("✅ Respuesta lista para enviar (Twilio ya recibió respuesta):", respuesta);
 
   } catch (error) {
     console.error("❌ Error en webhook WhatsApp:", error);
-    // ⚠️ NO respondas nada aquí. Twilio ya recibió respuesta arriba
+
+    const fallback = new MessagingResponse();
+    res.type('text/xml').send(fallback.toString());
   }
 });
 
