@@ -63,22 +63,22 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       informacion_negocio: tenant.informacion_negocio || '',
       funciones_asistente: tenant.funciones_asistente || '',
       info_clave: tenant.info_clave || '',
-      limite_uso: tenant.limite_uso || 150,
       logo_url: tenant.logo_url || '',
       plan: tenant.plan || '',
       fecha_registro: tenant.fecha_registro || null,
-
+    
       // Datos Meta
       facebook_page_id: tenant.facebook_page_id || '',
       facebook_page_name: tenant.facebook_page_name || '',
       facebook_access_token: tenant.facebook_access_token || '',
       instagram_page_id: tenant.instagram_page_id || '',
       instagram_page_name: tenant.instagram_page_name || '',
-
+    
       // ✅ Nuevos datos por canal
       faq: faqsRes.rows,
       intents: intentsRes.rows,
     });
+    
   } catch (error) {
     console.error('❌ Error en GET /api/settings:', error);
     return res.status(401).json({ error: 'Token inválido' });
@@ -105,7 +105,6 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
       informacion_negocio,
       funciones_asistente,
       info_clave,
-      limite_uso,
       logo_url,
       faq = [],
       intents = [],
@@ -136,9 +135,8 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
         informacion_negocio = $11,
         funciones_asistente = $12,
         info_clave = $13,
-        limite_uso = $14,
-        logo_url = $15
-      WHERE id = $16`,
+        logo_url = $14
+      WHERE id = $15`,
       [
         nombre_negocio,
         categoria ?? existing.categoria,
@@ -153,7 +151,6 @@ router.post('/', authenticateUser, async (req: any, res: Response) => {
         informacion_negocio ?? existing.informacion_negocio,
         funciones_asistente?.trim() !== '' ? funciones_asistente : existing.funciones_asistente,
         info_clave ?? existing.info_clave,
-        limite_uso ?? existing.limite_uso,
         logo_url ?? existing.logo_url,
         tenant_id,
       ]
@@ -235,18 +232,17 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         informacion_negocio = $8,
         funciones_asistente = $9,
         info_clave = $10,
-        limite_uso = $11,
-        logo_url = $12,
-        prompt_meta = $13,
-        bienvenida_meta = $14,
-        facebook_page_id = $15,
-        facebook_page_name = $16,
-        facebook_access_token = $17,
-        instagram_page_id = $18,
-        instagram_page_name = $19,
-        instagram_business_account_id = $20,
+        logo_url = $11,
+        prompt_meta = $12,
+        bienvenida_meta = $13,
+        facebook_page_id = $14,
+        facebook_page_name = $15,
+        facebook_access_token = $16,
+        instagram_page_id = $17,
+        instagram_page_name = $18,
+        instagram_business_account_id = $19,
         onboarding_completado = true
-      WHERE id = $21`,
+      WHERE id = $20`,
       [
         nombre_negocio || current.name,
         categoria || current.categoria,
@@ -258,22 +254,19 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         informacion_negocio || current.informacion_negocio,
         funciones_asistente || current.funciones_asistente,
         info_clave || current.info_clave,
-        limite_uso || current.limite_uso,
         logo_url || current.logo_url,
         prompt_meta || current.prompt_meta,
         bienvenida_meta || current.bienvenida_meta,
-
         typeof facebook_page_id !== 'undefined' ? facebook_page_id : current.facebook_page_id,
         typeof facebook_page_name !== 'undefined' ? facebook_page_name : current.facebook_page_name,
         typeof facebook_access_token !== 'undefined' ? facebook_access_token : current.facebook_access_token,
         typeof instagram_page_id !== 'undefined' ? instagram_page_id : current.instagram_page_id,
         typeof instagram_page_name !== 'undefined' ? instagram_page_name : current.instagram_page_name,
         typeof instagram_business_account_id !== 'undefined' ? instagram_business_account_id : current.instagram_business_account_id,
-
         tenant_id,
       ]
     );
-
+    
     // ✅ Reemplazar faqs e intents del canal actual
     await pool.query('DELETE FROM faqs WHERE tenant_id = $1 AND canal = $2', [tenant_id, canal]);
     for (const item of faq) {
