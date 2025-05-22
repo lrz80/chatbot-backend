@@ -72,7 +72,6 @@ router.post('/', async (req: Request, res: Response) => {
   // 🟢 Responder de inmediato a Twilio
   const twiml = new MessagingResponse();
   res.type('text/xml').send(new MessagingResponse().toString());
-  res.type('text/xml').send(twiml.toString());
 
   console.log("📤 Respuesta rápida enviada a Twilio");
 
