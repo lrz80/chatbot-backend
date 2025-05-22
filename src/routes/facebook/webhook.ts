@@ -7,7 +7,6 @@ import { getRespuestaCompleta } from '../../lib/getRespuestaCompleta';
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { buscarRespuestaSimilitudFaqsTraducido, buscarRespuestaDesdeFlowsTraducido } from '../../lib/respuestasTraducidas';
-import { getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { detectarIntencion } from '../../lib/detectarIntencion';
 
@@ -61,7 +60,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
           if (rows.length === 0) continue;
 
           const tenant = rows[0];
-          const canal = tenant.instagram_page_id === pageId ? 'instagram' : 'facebook';
+          const isInstagram = tenant.instagram_page_id && tenant.instagram_page_id === senderId;
+          const canal = isInstagram ? 'instagram' : 'facebook';
           const tenantId = tenant.id;
           const accessToken = tenant.facebook_access_token;
 
