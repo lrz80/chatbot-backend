@@ -31,6 +31,7 @@ router.get('/api/facebook/webhook', (req, res) => {
 });
 
 router.post('/api/facebook/webhook', async (req, res) => {
+  console.log("🌐 Webhook Meta recibido:", JSON.stringify(req.body, null, 2));
   try {
     const body = req.body;
     if (body.object !== 'page') return res.sendStatus(404);
@@ -42,6 +43,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
       const pageId = entry.id;
 
       for (const messagingEvent of entry.messaging) {
+        console.log("📬 Evento recibido:", JSON.stringify(messagingEvent, null, 2));
         const senderId = messagingEvent.sender.id;
         console.log("📨 Sender ID recibido:", senderId, "| Página ID:", pageId);
 
