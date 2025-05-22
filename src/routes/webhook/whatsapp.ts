@@ -66,28 +66,31 @@ function buscarRespuestaSimilitudFaqs(faqs: any[], mensaje: string): string | nu
 }
 
 router.post('/', async (req: Request, res: Response) => {
-  console.log("\ud83d\udce9 Webhook recibido:", req.body);
+  console.log("📩 Webhook recibido:", req.body);
 
-  const to = req.body.To || '';
-  const from = req.body.From || '';
-  const numero = to.replace('whatsapp:', '').replace('tel:', '');
-  const fromNumber = from.replace('whatsapp:', '').replace('tel:', '');
-  const userInput = req.body.Body || '';
+  // ✅ 1. Enviar respuesta INMEDIATA a Twilio (evita error 11200)
+  const safeTwiml = new MessagingResponse();
+  safeTwiml.message("...");
+  res.type('text/xml').send(safeTwiml.toString());
 
+  // ✅ 2. Ejecutar lógica asincrónica sin depender de la respuesta
   try {
+    const to = req.body.To || '';
+    const from = req.body.From || '';
+    const numero = to.replace('whatsapp:', '').replace('tel:', '');
+    const fromNumber = from.replace('whatsapp:', '').replace('tel:', '');
+    const userInput = req.body.Body || '';
+
     const tenantRes = await pool.query('SELECT * FROM tenants WHERE twilio_number = $1 LIMIT 1', [numero]);
     const tenant = tenantRes.rows[0];
-    if (!tenant) return res.sendStatus(404);
+    if (!tenant) return;
 
     const idioma = await detectarIdioma(userInput);
-    console.log("🌍 Idioma detectado:", idioma);
-
     const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
-    console.log("📜 Prompt enviado:", promptBase);
     let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idioma);
-
     const canal = 'whatsapp';
 
+    // Flows y FAQs
     let flows: any[] = [];
     try {
       const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant.id]);
@@ -107,7 +110,7 @@ router.post('/', async (req: Request, res: Response) => {
       respuesta = getBienvenidaPorCanal('whatsapp', tenant, idioma);
     } else {
       respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeUsuario, idioma)
-          || await buscarRespuestaDesdeFlowsTraducido(flows, mensajeUsuario, idioma);
+        || await buscarRespuestaDesdeFlowsTraducido(flows, mensajeUsuario, idioma);
     }
 
     if (!respuesta) {
@@ -128,9 +131,8 @@ router.post('/', async (req: Request, res: Response) => {
         respuesta = await traducirMensaje(respuesta, idioma);
       }
     }
-    
-    console.log("\ud83e\udd16 Respuesta generada:", respuesta);
 
+    // 🧠 Inteligencia de ventas
     try {
       const { intencion, nivel_interes } = await detectarIntencion(userInput);
       const intencionLower = intencion.toLowerCase();
@@ -144,8 +146,8 @@ router.post('/', async (req: Request, res: Response) => {
 
       await pool.query(
         `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
-         VALUES ($1, $2, 'whatsapp', $3, $4, $5)`,
-        [tenant.id, fromNumber, userInput, intencion, nivel_interes]
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [tenant.id, fromNumber, canal, userInput, intencion, nivel_interes]
       );
 
       if (nivel_interes >= 4) {
@@ -156,7 +158,6 @@ router.post('/', async (req: Request, res: Response) => {
         const config = configRes.rows[0];
 
         if (config) {
-          // 🟡 Paso 1: seleccionar mensaje base según intención
           let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
           if (intencionLower.includes("precio") && config.mensaje_precio) {
             mensajeSeguimiento = config.mensaje_precio;
@@ -165,34 +166,29 @@ router.post('/', async (req: Request, res: Response) => {
           } else if ((intencionLower.includes("ubicacion") || intencionLower.includes("location")) && config.mensaje_ubicacion) {
             mensajeSeguimiento = config.mensaje_ubicacion;
           }
-        
-          // 🟢 Paso 2: traducir si el idioma del mensaje no coincide con el del cliente
+
           try {
             const idiomaMensaje = await detectarIdioma(mensajeSeguimiento);
             if (idiomaMensaje !== idioma) {
-              console.log(`🌍 Traduciendo seguimiento de '${idiomaMensaje}' a '${idioma}'`);
               mensajeSeguimiento = await traducirMensaje(mensajeSeguimiento, idioma);
             }
-          } catch (err) {
-            console.warn("⚠️ No se pudo detectar idioma del mensaje de seguimiento");
-          }
-        
-          // 🕒 Paso 3: programar el mensaje
+          } catch {}
+
           const fechaEnvio = new Date();
           fechaEnvio.setMinutes(fechaEnvio.getMinutes() + (config.minutos_espera || 5));
-        
+
           await pool.query(
             `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-             VALUES ($1, 'whatsapp', $2, $3, $4, false)`,
-            [tenant.id, fromNumber, mensajeSeguimiento, fechaEnvio]
+             VALUES ($1, $2, $3, $4, $5, false)`,
+            [tenant.id, canal, fromNumber, mensajeSeguimiento, fechaEnvio]
           );
         }
-        
       }
     } catch (err) {
-      console.error("\u274c Error en inteligencia de ventas:", err);
+      console.error("⚠️ Error en inteligencia de ventas:", err);
     }
 
+    // Guardar cliente y mensajes
     const contactoRes = await pool.query(
       `SELECT nombre, segmento FROM contactos WHERE tenant_id = $1 AND telefono = $2 LIMIT 1`,
       [tenant.id, fromNumber]
@@ -203,51 +199,42 @@ router.post('/', async (req: Request, res: Response) => {
 
     await pool.query(
       `INSERT INTO clientes (tenant_id, canal, contacto, creado, nombre, segmento)
-      VALUES ($1, 'whatsapp', $2, NOW(), $3, $4)
-      ON CONFLICT (contacto) DO UPDATE SET
-        nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
-        segmento = CASE
-          WHEN clientes.segmento = 'lead' AND EXCLUDED.segmento = 'cliente' THEN 'cliente'
-          ELSE clientes.segmento
-        END`,
-      [tenant.id, fromNumber, nombreDetectado, segmentoDetectado]
+       VALUES ($1, $2, $3, NOW(), $4, $5)
+       ON CONFLICT (contacto) DO UPDATE SET
+         nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
+         segmento = CASE
+           WHEN clientes.segmento = 'lead' AND EXCLUDED.segmento = 'cliente' THEN 'cliente'
+           ELSE clientes.segmento
+         END`,
+      [tenant.id, canal, fromNumber, nombreDetectado, segmentoDetectado]
     );
 
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
-       VALUES ($1, 'user', $2, NOW(), 'whatsapp', $3)`,
-      [tenant.id, userInput, fromNumber]
+       VALUES ($1, 'user', $2, NOW(), $3, $4)`,
+      [tenant.id, userInput, canal, fromNumber]
     );
+
     await pool.query(
       `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
-       VALUES ($1, 'bot', $2, NOW(), 'whatsapp')`,
-      [tenant.id, respuesta]
+       VALUES ($1, 'bot', $2, NOW(), $3)`,
+      [tenant.id, respuesta, canal]
     );
+
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, created_at)
-       VALUES ($1, 'whatsapp', NOW())`,
-      [tenant.id]
+       VALUES ($1, $2, NOW())`,
+      [tenant.id, canal]
     );
 
     await incrementarUsoPorNumero(numero);
 
-    const twiml = new MessagingResponse();
-    const chunkSize = 1200;
-    if (respuesta.length > chunkSize) {
-      for (let i = 0; i < respuesta.length; i += chunkSize) {
-        const chunk = respuesta.slice(i, i + chunkSize);
-        twiml.message(chunk);
-      }
-    } else {
-      twiml.message(respuesta);
-    }
+    // ⚠️ Aquí NO respondas otra vez a Twilio
+    console.log("✅ Respuesta lista para enviar (Twilio ya recibió respuesta):", respuesta);
 
-    console.log("\ud83d\udce4 Enviando a Twilio:", twiml.toString());
-    res.type('text/xml');
-    res.send(twiml.toString());
   } catch (error) {
-    console.error('\u274c Error en webhook WhatsApp:', error);
-    res.sendStatus(500);
+    console.error("❌ Error en webhook WhatsApp:", error);
+    // ⚠️ NO respondas nada aquí. Twilio ya recibió respuesta arriba
   }
 });
 
