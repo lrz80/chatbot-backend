@@ -175,9 +175,17 @@ router.post('/', async (req: Request, res: Response) => {
           const fechaEnvio = new Date();
           fechaEnvio.setMinutes(fechaEnvio.getMinutes() + (config.minutos_espera || 5));
 
+          // 1. Eliminar seguimientos pendientes anteriores para este cliente
+          await pool.query(
+            `DELETE FROM mensajes_programados
+            WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+            [tenant.id, canal, fromNumber]
+          );
+
+          // 2. Insertar un nuevo seguimiento actualizado
           await pool.query(
             `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-             VALUES ($1, $2, $3, $4, $5, false)`,
+            VALUES ($1, $2, $3, $4, $5, false)`,
             [tenant.id, canal, fromNumber, mensajeSeguimiento, fechaEnvio]
           );
         }
