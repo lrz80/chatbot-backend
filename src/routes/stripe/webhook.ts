@@ -23,7 +23,6 @@ function initStripe() {
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
   initStripe();
   const sig = req.headers['stripe-signature'];
-
   let event: Stripe.Event;
 
   try {
@@ -33,12 +32,11 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     return res.status(400).send(`Webhook Error: ${(err as Error).message}`);
   }
 
-  // ✅ Activación por checkout
+  // ✅ Créditos individuales por canal
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
     const email = session.customer_email;
 
-    // 📦 Créditos por canal
     if (
       session.mode === 'payment' &&
       session.metadata?.tenant_id &&
@@ -47,7 +45,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     ) {
       const { tenant_id, canal, cantidad } = session.metadata;
       const cantidadInt = parseInt(cantidad, 10);
-
       if (!["sms", "email", "whatsapp", "contactos"].includes(canal)) return;
 
       try {
@@ -67,7 +64,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             subject: `Créditos ${canal.toUpperCase()} activados`,
             html: `
               <h3>¡Créditos de ${canal.toUpperCase()} agregados!</h3>
-              <p>Hola,</p>
               <p>Tu compra de <strong>${cantidadInt}</strong> créditos de <strong>${canal.toUpperCase()}</strong> fue procesada exitosamente.</p>
               <p>Ya puedes usarlos desde tu dashboard.</p>
               <br />
@@ -82,35 +78,31 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       return res.status(200).json({ received: true });
     }
 
-    // 🧾 Membresía por suscripción (no contactos)
+    // 🧾 Activación de membresía por suscripción
     if (email) {
       try {
-        const userRes = await pool.query('SELECT uid, owner_name FROM users WHERE email = $1', [email]);
+        const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [email]);
         const user = userRes.rows[0];
         if (!user) return;
 
-        const uid = user.uid;
-        const tenantName = user.owner_name || 'Negocio sin nombre';
+        const tenantRes = await pool.query('SELECT id FROM tenants WHERE id = $1', [user.uid]);
+        if (tenantRes.rows.length === 0) {
+          console.warn('⚠️ Tenant no encontrado con ID:', user.uid);
+          return res.status(200).json({ received: true });
+        }
+
         const vigencia = new Date();
         vigencia.setDate(vigencia.getDate() + 30);
 
-        const tenantCheck = await pool.query('SELECT * FROM tenants WHERE admin_uid = $1', [uid]);
+        await pool.query(`
+          UPDATE tenants
+          SET membresia_activa = true,
+              membresia_vigencia = $2,
+              plan = 'pro'
+          WHERE id = $1
+        `, [user.uid, vigencia]);
 
-        if (tenantCheck.rows.length === 0) {
-          await pool.query(`
-            INSERT INTO tenants (admin_uid, name, membresia_activa, membresia_vigencia, used, plan)
-            VALUES ($1, $2, true, $3, 0, 'pro')
-          `, [uid, tenantName, vigencia]);
-          console.log('✅ Tenant creado con membresía activa para', email);
-        } else {
-          await pool.query(`
-            UPDATE tenants
-            SET membresia_activa = true,
-                membresia_vigencia = $2
-            WHERE admin_uid = $1
-          `, [uid, vigencia]);
-          console.log('🔁 Membresía activada para', email);
-        }
+        console.log('🔁 Membresía activada para', email);
       } catch (error) {
         console.error('❌ Error activando membresía:', error);
       }
@@ -135,7 +127,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         UPDATE tenants
         SET membresia_activa = true,
             membresia_vigencia = $2
-        WHERE admin_uid = $1
+        WHERE id = $1
       `, [user.uid, nuevaVigencia]);
 
       console.log('🔁 Membresía renovada para', customerEmail);
@@ -144,7 +136,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     }
   }
 
-  // ❌ Cancelación de suscripción (incluye contactos)
+  // ❌ Cancelación de suscripción
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object as Stripe.Subscription;
 
@@ -169,14 +161,14 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       const user = userRes.rows[0];
       if (!user) return;
 
-      // 🛑 Cancelar membresía general
+      // Cancelar membresía
       await pool.query(`
         UPDATE tenants
         SET membresia_activa = false
-        WHERE admin_uid = $1
+        WHERE id = $1
       `, [user.uid]);
 
-      // 🔄 Resetear límite de contactos a 500
+      // Resetear contactos a 500
       await pool.query(`
         INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
         VALUES ($1, 'contactos', date_trunc('month', CURRENT_DATE), 0, 500)
@@ -184,7 +176,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         DO UPDATE SET limite = 500
       `, [user.tenant_id]);
 
-      console.log('🛑 Suscripción cancelada y contactos reiniciados a 500 para', customerEmail);
+      console.log('🛑 Suscripción cancelada y contactos reiniciados para', customerEmail);
 
       await transporter.sendMail({
         from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
@@ -192,8 +184,8 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         subject: 'Suscripción cancelada',
         html: `
           <h3>Tu suscripción ha sido cancelada</h3>
-          <p>Hola,</p>
-          <p>Se ha cancelado tu suscripción en <strong>Amy AI</strong>. Tu límite de contactos ha sido reiniciado a 500.</p>
+          <p>Se ha cancelado tu suscripción en <strong>Amy AI</strong>.</p>
+          <p>Tu límite de contactos ha sido reiniciado a 500.</p>
           <br />
           <p>Gracias por haber sido parte de Amy AI 💜</p>
         `
