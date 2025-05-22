@@ -17,7 +17,6 @@ export async function sendScheduledMessages(
   }
 
   const client = twilio(accountSid, authToken);
-
   let enviadosExitosamente = 0;
 
   try {
@@ -35,13 +34,24 @@ export async function sendScheduledMessages(
 
     for (const mensaje of mensajes) {
       try {
+        // ✅ Solo enviar si canal es WhatsApp
+        if (mensaje.canal !== 'whatsapp') {
+          console.warn(`❌ Canal no compatible para seguimiento automático: ${mensaje.canal}`);
+          continue;
+        }
+
+        // ✅ Validar número internacional
+        if (!mensaje.contacto || !mensaje.contacto.startsWith('+')) {
+          console.warn(`❌ Número inválido para Twilio: ${mensaje.contacto}`);
+          continue;
+        }
+
         const { rows: tenantRows } = await pool.query(
           'SELECT twilio_number FROM tenants WHERE id = $1',
           [mensaje.tenant_id]
         );
 
         const tenant = tenantRows[0];
-
         if (!tenant || !tenant.twilio_number) {
           console.warn('[Worker] ⚠️ No se encontró número de Twilio para tenant:', mensaje.tenant_id);
           continue;
@@ -49,20 +59,17 @@ export async function sendScheduledMessages(
 
         console.log(`[Worker] ➡️ Enviando mensaje a ${mensaje.contacto}...`);
 
-        // Enviar mensaje de WhatsApp
         await client.messages.create({
           from: `whatsapp:${tenant.twilio_number}`,
           to: `whatsapp:${mensaje.contacto}`,
           body: mensaje.contenido,
         });
 
-        // Marcar como enviado en la tabla mensajes_programados
         await pool.query(
           `UPDATE mensajes_programados SET enviado = true WHERE id = $1`,
           [mensaje.id]
         );
 
-        // También guardar en tabla de historial messages
         await pool.query(
           `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
            VALUES ($1, 'bot', $2, NOW(), 'whatsapp', $3)`,
