@@ -27,7 +27,7 @@
     "openai": "^4.95.0",
     "pg": "^8.11.1",
     "socket.io": "^4.8.1",
-    "stripe": "^18.0.0",
+    "stripe": "^11.18.0",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "twilio": "^5.5.2",

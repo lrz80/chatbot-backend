@@ -16,7 +16,7 @@ function initStripe() {
     if (!key) throw new Error('❌ STRIPE_SECRET_KEY no está definida.');
     STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET!;
     if (!STRIPE_WEBHOOK_SECRET) throw new Error('❌ STRIPE_WEBHOOK_SECRET no está definida.');
-    stripe = new Stripe(key, { apiVersion: '2025-03-31.basil' });
+    stripe = new Stripe(key, { apiVersion: '2022-11-15' }); // más segura
   }
 }
 
@@ -79,28 +79,18 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     }
 
     // 🧾 Activación de membresía por suscripción
-    if (email) {
+    if (email && session.subscription) {
       try {
         const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [email]);
         const user = userRes.rows[0];
         if (!user) return;
 
-        const tenantRes = await pool.query('SELECT id FROM tenants WHERE id = $1', [user.uid]);
-        if (tenantRes.rows.length === 0) {
-          console.warn('⚠️ Tenant no encontrado con ID:', user.uid);
-          return res.status(200).json({ received: true });
-        }
-
         const subscriptionId = session.subscription as string;
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
 
-        let vigencia = new Date();
-
-        if (subscription.status === "trialing" && subscription.trial_end) {
-          vigencia = new Date(subscription.trial_end * 1000); // Stripe entrega UNIX timestamp (segundos)
-        } else {
-          vigencia.setDate(vigencia.getDate() + 30);
-        }
+        const vigencia = subscription.current_period_end
+          ? new Date(subscription.current_period_end * 1000)
+          : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // fallback
 
         await pool.query(`
           UPDATE tenants
@@ -111,8 +101,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         `, [user.uid, vigencia]);
 
         console.log(`🔁 Membresía activada para ${email}, vigencia hasta ${vigencia.toISOString()}`);
-
-        console.log('🔁 Membresía activada para', email);
       } catch (error) {
         console.error('❌ Error activando membresía:', error);
       }
@@ -124,27 +112,36 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     const invoice = event.data.object as Stripe.Invoice;
     const customerEmail = invoice.customer_email;
     if (!customerEmail) return;
-
+  
+    const subscriptionId = typeof invoice.subscription === 'string' ? invoice.subscription : null;
+    if (!subscriptionId) {
+      console.warn('⚠️ Subscription ID no encontrado en invoice.');
+      return res.status(200).json({ received: true });
+    }
+  
     try {
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+  
+      const nuevaVigencia = subscription.current_period_end
+        ? new Date(subscription.current_period_end * 1000)
+        : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // fallback
+  
       const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [customerEmail]);
       const user = userRes.rows[0];
       if (!user) return;
-
-      const nuevaVigencia = new Date();
-      nuevaVigencia.setDate(nuevaVigencia.getDate() + 30);
-
+  
       await pool.query(`
         UPDATE tenants
         SET membresia_activa = true,
             membresia_vigencia = $2
         WHERE id = $1
       `, [user.uid, nuevaVigencia]);
-
+  
       console.log('🔁 Membresía renovada para', customerEmail);
     } catch (error) {
       console.error('❌ Error renovando membresía:', error);
     }
-  }
+  }  
 
   // ❌ Cancelación de suscripción
   if (event.type === 'customer.subscription.deleted') {
@@ -171,14 +168,12 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       const user = userRes.rows[0];
       if (!user) return;
 
-      // Cancelar membresía
       await pool.query(`
         UPDATE tenants
         SET membresia_activa = false
         WHERE id = $1
       `, [user.uid]);
 
-      // Resetear contactos a 500
       await pool.query(`
         INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
         VALUES ($1, 'contactos', date_trunc('month', CURRENT_DATE), 0, 500)

@@ -68,16 +68,14 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     try {
       const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant_id]);
       const raw = flowsRes.rows[0]?.data;
+
+      // 🛡️ Protección contra datos mal formateados
       flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (!Array.isArray(flows)) flows = [];
     } catch (e) {
+      flows = [];
       console.warn('⚠️ No se pudieron cargar Flows:', e);
     }
-
-    const respuestaFlujo = buscarRespuestaDesdeFlows(flows, message);
-    if (respuestaFlujo) {
-      console.log('📌 Respondido desde Flow:', respuestaFlujo);
-      return res.status(200).json({ response: respuestaFlujo });
-    }    
 
     // 🧠 OpenAI fallback solo si no encontró en FAQs ni Flows
     const { default: OpenAI } = await import('openai');

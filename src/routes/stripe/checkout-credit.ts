@@ -1,3 +1,5 @@
+// src/routes/stripe/checkout-credit.ts
+
 import express from 'express';
 import Stripe from 'stripe';
 import jwt from 'jsonwebtoken';
@@ -7,35 +9,46 @@ const router = express.Router();
 
 router.post('/checkout-credit', async (req, res) => {
   const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
-  if (!STRIPE_SECRET_KEY) {
-    return res.status(500).json({ error: 'Stripe no configurado correctamente.' });
+  const JWT_SECRET = process.env.JWT_SECRET;
+  if (!STRIPE_SECRET_KEY || !JWT_SECRET) {
+    return res.status(500).json({ error: 'Stripe o JWT no configurados correctamente.' });
   }
 
   const stripe = new Stripe(STRIPE_SECRET_KEY, {
-    apiVersion: '2025-03-31.basil',
+    apiVersion: '2022-11-15',
   });
 
   const token = req.cookies.token;
   if (!token) {
-    return res.status(401).json({ error: 'Token requerido.' });
+    return res.status(401).json({ error: 'Token no proporcionado.' });
   }
 
   try {
-    const decoded: any = jwt.verify(token, process.env.JWT_SECRET!);
+    const decoded = jwt.verify(token, JWT_SECRET) as { uid: string };
     const uid = decoded.uid;
 
-    const result = await pool.query('SELECT email, tenant_id FROM users WHERE uid = $1', [uid]);
+    const result = await pool.query(
+      'SELECT email, tenant_id FROM users WHERE uid = $1',
+      [uid]
+    );
     const user = result.rows[0];
-    if (!user) return res.status(404).json({ error: 'Usuario no encontrado.' });
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado.' });
+    }
 
     const { canal, cantidad, redirectPath } = req.body;
 
-    // ✅ Validar canal permitido
-    if (!["sms", "email", "whatsapp", "contactos"].includes(canal)) {
-      return res.status(400).json({ error: 'Canal inválido' });
+    const canalesPermitidos = ["sms", "email", "whatsapp", "contactos"];
+    const cantidadesPermitidas = [500, 1000, 2000];
+
+    if (!canalesPermitidos.includes(canal)) {
+      return res.status(400).json({ error: 'Canal inválido.' });
     }
 
-    // ✅ Precios dinámicos por canal
+    if (!cantidadesPermitidas.includes(Number(cantidad))) {
+      return res.status(400).json({ error: 'Cantidad inválida.' });
+    }
+
     const preciosPorCanal: Record<string, Record<number, number>> = {
       contactos: { 500: 15, 1000: 20, 2000: 30 },
       email:     { 500: 15, 1000: 20, 2000: 30 },
@@ -44,9 +57,10 @@ router.post('/checkout-credit', async (req, res) => {
     };
 
     const precioUSD = preciosPorCanal[canal]?.[cantidad];
-    if (!precioUSD) return res.status(400).json({ error: 'Cantidad no válida' });
+    if (!precioUSD) {
+      return res.status(400).json({ error: 'Precio no encontrado para la combinación solicitada.' });
+    }
 
-    // ✅ Nombre descriptivo del producto
     const productName =
       canal === "contactos"
         ? `+${cantidad} contactos adicionales`
@@ -66,10 +80,8 @@ router.post('/checkout-credit', async (req, res) => {
         {
           price_data: {
             currency: 'usd',
-            product_data: {
-              name: productName,
-            },
-            unit_amount: precioUSD * 100,
+            product_data: { name: productName },
+            unit_amount: precioUSD * 100, // Stripe acepta centavos
           },
           quantity: 1,
         },
@@ -85,8 +97,8 @@ router.post('/checkout-credit', async (req, res) => {
 
     return res.json({ url: session.url });
   } catch (err) {
-    console.error('❌ Error en checkout-credit:', err);
-    return res.status(500).json({ error: 'Error interno al crear sesión de pago' });
+    console.error('❌ Error en checkout-credit:', (err as Error).message || err);
+    return res.status(500).json({ error: 'Error interno al crear sesión de pago.' });
   }
 });
 

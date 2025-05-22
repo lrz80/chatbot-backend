@@ -1,4 +1,6 @@
 export function buscarRespuestaDesdeFlows(flows: any[], mensajeUsuario: string): string | null {
+  if (!Array.isArray(flows)) return null; // 🛡️ Protección contra null, undefined o tipo incorrecto
+
   const normalizarTexto = (texto: string): string =>
     texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 
