@@ -1,21 +1,8 @@
 import pool from './db';
 import { getPromptPorCanal, getBienvenidaPorCanal } from './getPromptPorCanal';
 import { normalizarTexto } from './normalizarTexto';
-import { traducirTexto } from './traducirTexto';
+import { traducirTexto } from './traducirTexto'; // Asegúrate de tener esta función
 import OpenAI from 'openai';
-
-function preservarLinks(texto: string): { textoSinLinks: string; links: string[] } {
-  const links: string[] = [];
-  const textoSinLinks = texto.replace(/https?:\/\/\S+/g, (match) => {
-    links.push(match);
-    return `{{LINK_${links.length - 1}}}`;
-  });
-  return { textoSinLinks, links };
-}
-
-function restaurarLinks(texto: string, links: string[]): string {
-  return texto.replace(/{{LINK_(\d+)}}/g, (_, index) => links[Number(index)] || '');
-}
 
 export async function getRespuestaCompleta({
   canal,
@@ -36,18 +23,16 @@ export async function getRespuestaCompleta({
   const bienvenida = getBienvenidaPorCanal(canal, tenant);
   const mensaje = normalizarTexto(input);
 
-  // 🌐 Traducir el prompt si el idioma no es español
+  // 🔁 Traducir el prompt si el idioma detectado no es español
   if (idioma !== 'es') {
     try {
-      const { textoSinLinks, links } = preservarLinks(prompt);
-      const textoTraducido = await traducirTexto(textoSinLinks, idioma);
-      prompt = restaurarLinks(textoTraducido, links);
+      prompt = await traducirTexto(prompt, idioma);
     } catch (err) {
       console.warn('⚠️ No se pudo traducir el prompt:', err);
     }
   }
 
-  // 1. FAQs
+  // 1. FAQs (no filtradas por idioma)
   const faqsRes = await pool.query(
     'SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1',
     [tenant.id]
@@ -57,7 +42,7 @@ export async function getRespuestaCompleta({
     if (mensaje.includes(normalizarTexto(faq.pregunta))) return faq.respuesta;
   }
 
-  // 2. Intents
+  // 2. Intents (no filtrados por idioma)
   const intentsRes = await pool.query(
     'SELECT * FROM intents WHERE tenant_id = $1',
     [tenant.id]
