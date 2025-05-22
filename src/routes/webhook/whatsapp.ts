@@ -69,9 +69,9 @@ router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
 
   // ✅ 1. Enviar respuesta INMEDIATA a Twilio (evita error 11200)
-  const safeTwiml = new MessagingResponse();
-  safeTwiml.message("...");
+  const safeTwiml = new MessagingResponse(); // sin .message()
   res.type('text/xml').send(safeTwiml.toString());
+
 
   // ✅ 2. Ejecutar lógica asincrónica sin depender de la respuesta
   try {
