@@ -36,25 +36,20 @@ router.post('/api/facebook/webhook', async (req, res) => {
     const body = req.body;
     if (body.object !== 'page') return res.sendStatus(404);
 
+    // ✅ Responder inmediatamente a Meta
+    res.sendStatus(200);
+
     for (const entry of body.entry) {
       const pageId = entry.id;
+
       for (const messagingEvent of entry.messaging) {
         const senderId = messagingEvent.sender.id;
 
-        const messageId = messagingEvent.message?.mid;
-        if (!messageId) continue;
-
-        // ❌ Si ya procesaste este message_id, ignora
-        const existingMsg = await pool.query(
-          `SELECT 1 FROM messages WHERE message_id = $1 LIMIT 1`,
-          [messageId]
-        );
-        if (existingMsg.rows.length > 0) {
-          console.log('⏭️ Mensaje duplicado ignorado:', messageId);
-          continue;
-        }
-
+        // 👇 Solo procesar si es un mensaje real (no echo)
         if (messagingEvent.message && !messagingEvent.message.is_echo) {
+          const messageId = messagingEvent.message?.mid;
+          if (!messageId) continue;
+
           const userMessage = messagingEvent.message.text || '';
           const idioma = await detectarIdioma(userMessage);
           console.log('📩 Mensaje recibido:', userMessage, '| 🌍 Idioma detectado:', idioma);
@@ -70,7 +65,17 @@ router.post('/api/facebook/webhook', async (req, res) => {
           const tenantId = tenant.id;
           const accessToken = tenant.facebook_access_token;
 
-          // 📥 Cargar FAQs y Flows
+          // ✅ Verificar duplicado antes de continuar
+          const existingMsg = await pool.query(
+            `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
+            [tenantId, messageId]
+          );
+          if (existingMsg.rows.length > 0) {
+            console.log('⏭️ Mensaje duplicado ignorado:', messageId);
+            continue;
+          }
+
+          // FAQs y Flows
           let faqs: any[] = [];
           let flows: any[] = [];
 
@@ -85,7 +90,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
             flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
           } catch {}
 
-          // 🧠 Buscar respuesta
+          // Generar respuesta
           let respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, userMessage, idioma)
             || await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma)
             || await getRespuestaCompleta({ canal, tenant, input: userMessage, idioma });
@@ -95,7 +100,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
             respuesta = await traducirMensaje(respuesta, idioma);
           }
 
-          // 🧠 Analizar intención
+          // Analizar intención
           try {
             const { intencion, nivel_interes } = await detectarIntencion(userMessage);
             const intencionLower = intencion.toLowerCase();
@@ -140,12 +145,12 @@ router.post('/api/facebook/webhook', async (req, res) => {
             console.warn('⚠️ No se pudo analizar intención:', e);
           }
 
-          // 💾 Guardar en BD
+          // Guardar mensajes e interacciones
           await pool.query(
             `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
              VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
             [tenantId, userMessage, canal, senderId, messageId]
-          );          
+          );
           await pool.query(
             `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
              VALUES ($1, 'bot', $2, NOW(), $3)`,
@@ -159,7 +164,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
           await incrementarUsoPorNumero(tenant.twilio_number);
 
-          // 📤 Enviar respuesta
+          // Enviar respuesta
           await axios.post(
             `https://graph.facebook.com/v19.0/me/messages`,
             {
@@ -173,11 +178,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
         }
       }
     }
-
-    res.status(200).send('EVENT_RECEIVED');
   } catch (error: any) {
     console.error('❌ Error en webhook:', error.response?.data || error.message || error);
-    res.sendStatus(500);
   }
 });
 
