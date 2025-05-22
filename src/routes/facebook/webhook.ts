@@ -41,6 +41,19 @@ router.post('/api/facebook/webhook', async (req, res) => {
       for (const messagingEvent of entry.messaging) {
         const senderId = messagingEvent.sender.id;
 
+        const messageId = messagingEvent.message?.mid;
+        if (!messageId) continue;
+
+        // ❌ Si ya procesaste este message_id, ignora
+        const existingMsg = await pool.query(
+          `SELECT 1 FROM messages WHERE message_id = $1 LIMIT 1`,
+          [messageId]
+        );
+        if (existingMsg.rows.length > 0) {
+          console.log('⏭️ Mensaje duplicado ignorado:', messageId);
+          continue;
+        }
+
         if (messagingEvent.message && !messagingEvent.message.is_echo) {
           const userMessage = messagingEvent.message.text || '';
           const idioma = await detectarIdioma(userMessage);
@@ -129,10 +142,10 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
           // 💾 Guardar en BD
           await pool.query(
-            `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
-             VALUES ($1, 'user', $2, NOW(), $3, $4)`,
-            [tenantId, userMessage, canal, senderId]
-          );
+            `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
+             VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
+            [tenantId, userMessage, canal, senderId, messageId]
+          );          
           await pool.query(
             `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
              VALUES ($1, 'bot', $2, NOW(), $3)`,
