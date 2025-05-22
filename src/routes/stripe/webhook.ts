@@ -91,8 +91,16 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           return res.status(200).json({ received: true });
         }
 
-        const vigencia = new Date();
-        vigencia.setDate(vigencia.getDate() + 30);
+        const subscriptionId = session.subscription as string;
+        const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+
+        let vigencia = new Date();
+
+        if (subscription.status === "trialing" && subscription.trial_end) {
+          vigencia = new Date(subscription.trial_end * 1000); // Stripe entrega UNIX timestamp (segundos)
+        } else {
+          vigencia.setDate(vigencia.getDate() + 30);
+        }
 
         await pool.query(`
           UPDATE tenants
@@ -101,6 +109,8 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
               plan = 'pro'
           WHERE id = $1
         `, [user.uid, vigencia]);
+
+        console.log(`🔁 Membresía activada para ${email}, vigencia hasta ${vigencia.toISOString()}`);
 
         console.log('🔁 Membresía activada para', email);
       } catch (error) {
