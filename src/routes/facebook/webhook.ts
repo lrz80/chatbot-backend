@@ -43,6 +43,11 @@ router.post('/api/facebook/webhook', async (req, res) => {
       const pageId = entry.id;
 
       for (const messagingEvent of entry.messaging) {
+        // 👇 Solo procesar si es un mensaje real (no echo, no read, no delivery)
+        if (!messagingEvent.message || messagingEvent.message.is_echo || !messagingEvent.message.text) {
+          console.log('⏭️ Evento ignorado (echo, read o sin texto)');
+          continue;
+        }
         console.log("📬 Evento recibido:", JSON.stringify(messagingEvent, null, 2));
         const senderId = messagingEvent.sender.id;
         console.log("📨 Sender ID recibido:", senderId, "| Página ID:", pageId);
