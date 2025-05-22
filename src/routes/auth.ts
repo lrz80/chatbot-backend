@@ -58,8 +58,16 @@ router.post('/register', async (req: Request, res: Response) => {
       [uid, uid, email, password_hash, 'admin', owner_name, telefono, token_verificacion]
     );
 
-    await sendVerificationEmail(email, verification_link, 'es');
+    try {
+      await sendVerificationEmail(email, verification_link, 'es');
+      console.log("📧 Correo de verificación enviado");
+    } catch (emailError) {
+      console.error("❌ Fallo al enviar el correo de verificación:", emailError);
+      // Aquí puedes notificar internamente o registrar el fallo si es necesario
+    }
+    
     res.status(201).json({ success: true });
+    
   } catch (error) {
     console.error('❌ Error en registro:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
