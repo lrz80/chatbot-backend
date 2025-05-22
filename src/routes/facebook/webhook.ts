@@ -96,8 +96,11 @@ router.post('/api/facebook/webhook', async (req, res) => {
             const resFlows = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenantId]);
             const raw = resFlows.rows[0]?.data;
             flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
-          } catch {}
-
+            if (!Array.isArray(flows)) flows = []; // 🛡️ protección extra
+          } catch {
+            flows = []; // fallback seguro
+          }
+          
           // Generar respuesta
           let respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, userMessage, idioma)
             || await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma)
