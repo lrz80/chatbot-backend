@@ -159,9 +159,9 @@ router.post('/api/facebook/webhook', async (req, res) => {
           // Guardar mensajes e interacciones
           await pool.query(
             `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
-             VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
-            [tenantId, userMessage, canal, senderId, messageId]
-          );
+             VALUES ($1, 'bot', $2, NOW(), $3, $4, $5)`,
+            [tenantId, respuesta, canal, senderId, `bot-${messageId}`] // identificador único
+          );          
           await pool.query(
             `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
              VALUES ($1, 'bot', $2, NOW(), $3)`,
