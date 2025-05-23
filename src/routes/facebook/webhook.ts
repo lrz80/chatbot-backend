@@ -1,7 +1,6 @@
 // ✅ src/routes/facebook/webhook.ts
 
 import express from 'express';
-import axios from 'axios';
 import pool from '../../lib/db';
 import { getRespuestaCompleta } from '../../lib/getRespuestaCompleta';
 import { detectarIdioma } from '../../lib/detectarIdioma';
@@ -9,6 +8,7 @@ import { traducirMensaje } from '../../lib/traducirMensaje';
 import { buscarRespuestaSimilitudFaqsTraducido, buscarRespuestaDesdeFlowsTraducido } from '../../lib/respuestasTraducidas';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { detectarIntencion } from '../../lib/detectarIntencion';
+import { enviarMensajePorPartes } from '../../lib/enviarMensajePorPartes';
 
 const router = express.Router();
 
@@ -183,38 +183,20 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
           // ✅ Si no existe por contenido, insertamos
           if (yaExisteContenidoReciente.rows.length === 0) {
-            await pool.query(
-              `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
-               VALUES ($1, 'bot', $2, NOW(), $3, $4, $5)
-               ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-              [tenantId, respuesta, canal, senderId, botMessageId]
-            );            
-
-            function dividirMensaje(mensaje: string, maxChars = 950): string[] {
-              const partes: string[] = [];
-              for (let i = 0; i < mensaje.length; i += maxChars) {
-                partes.push(mensaje.slice(i, i + maxChars));
-              }
-              return partes;
+            try {
+              await enviarMensajePorPartes({
+                respuesta,
+                senderId,
+                tenantId,
+                canal,
+                messageId,
+                accessToken,
+              });
+            } catch (err) {
+              console.error('❌ Error enviando mensaje por partes:', err);
             }
-            
-            const partes = dividirMensaje(respuesta);
-            for (const parte of partes) {
-              await axios.post(
-                `https://graph.facebook.com/v19.0/me/messages`,
-                {
-                  recipient: { id: senderId },
-                  message: { text: parte },
-                },
-                { params: { access_token: accessToken } }
-              );
-            }
-            
-            console.log(`✅ Respuesta enviada al usuario (${canal})`);
-          } else {
-            console.log('⏭️ Mensaje duplicado (contenido reciente)');
           }
-
+                 
           // ✅ 4. Registrar la interacción general
           await pool.query(
             `INSERT INTO interactions (tenant_id, canal, created_at)
@@ -226,7 +208,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
           await incrementarUsoPorNumero(tenant.twilio_number);
         }
       }
-    }
+    }  
   } catch (error: any) {
     console.error('❌ Error en webhook:', error.response?.data || error.message || error);
   }
