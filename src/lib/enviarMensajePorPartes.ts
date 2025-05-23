@@ -21,52 +21,32 @@ export async function enviarMensajePorPartes({
   const partes: string[] = [];
   const limiteCaracteres = 950;
 
-  // 🔢 Paso 1: Solo numerar líneas con contenido, ignorando introducciones
-  const lineas = respuesta.split('\n');
-  let contador = 1;
-  const numeradas: string[] = [];
-  let enBloque = false;
-
-  for (let i = 0; i < lineas.length; i++) {
-    const texto = lineas[i].trim();
-    if (texto === '') {
-      numeradas.push('');
-      enBloque = false;
-      continue;
-    }
-    const esIntroduccion = /^[¡!¿]?[\w\s,.'"]+[:：]/.test(texto) || texto.length < 30;
-    if (esIntroduccion && !enBloque) {
-      numeradas.push(texto);
-      continue;
-    }
-    numeradas.push(`${contador++}. ${texto.replace(/^\d+\.\s*/, '')}`);
-    enBloque = true;
-  }
-
-  // 📦 Paso 2: Fragmentar evitando dividir puntos enumerados
-  const bloques = numeradas.join('\n').split(/(?=\n\d+\.\s)/g);
+  // Fragmentar sin alterar la numeración ni la estructura original
+  const bloques = respuesta.split(/(?=\n{2,})/); // Detecta saltos dobles de línea para mantener bloques
   let parteActual = '';
 
   for (let i = 0; i < bloques.length; i++) {
-    const bloque = bloques[i].trim();
-    if ((parteActual + '\n' + bloque).length <= limiteCaracteres) {
-      parteActual += (parteActual ? '\n' : '') + bloque;
+    const bloque = bloques[i];
+
+    if ((parteActual + bloque).length <= limiteCaracteres) {
+      parteActual += bloque;
     } else {
       if (parteActual.trim()) partes.push(parteActual.trim());
+
       if (bloque.length <= limiteCaracteres) {
         parteActual = bloque;
       } else {
-        const subLineas = bloque.split('\n');
+        const lineas = bloque.split('\n');
         let subParte = '';
-        for (const linea of subLineas) {
+        for (const linea of lineas) {
           if ((subParte + '\n' + linea).length <= limiteCaracteres) {
             subParte += (subParte ? '\n' : '') + linea;
           } else {
-            partes.push(subParte);
+            if (subParte.trim()) partes.push(subParte.trim());
             subParte = linea;
           }
         }
-        if (subParte) partes.push(subParte);
+        if (subParte.trim()) partes.push(subParte.trim());
         parteActual = '';
       }
     }
@@ -74,7 +54,6 @@ export async function enviarMensajePorPartes({
 
   if (parteActual.trim()) partes.push(parteActual.trim());
 
-  // 📤 Enviar y registrar cada fragmento
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
     const messageFragmentId = `bot-${messageId}-${i}`;
