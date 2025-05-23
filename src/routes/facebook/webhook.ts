@@ -164,9 +164,10 @@ router.post('/api/facebook/webhook', async (req, res) => {
           if (existeUsuario.rows.length === 0) {
             await pool.query(
               `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
-              VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
+               VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
+               ON CONFLICT (tenant_id, message_id) DO NOTHING`,
               [tenantId, userMessage, canal, senderId, messageId]
-            );
+            );            
           }
 
           const botMessageId = `bot-${messageId}`;
@@ -184,9 +185,10 @@ router.post('/api/facebook/webhook', async (req, res) => {
           if (yaExisteContenidoReciente.rows.length === 0) {
             await pool.query(
               `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
-              VALUES ($1, 'bot', $2, NOW(), $3, $4, $5)`,
+               VALUES ($1, 'bot', $2, NOW(), $3, $4, $5)
+               ON CONFLICT (tenant_id, message_id) DO NOTHING`,
               [tenantId, respuesta, canal, senderId, botMessageId]
-            );
+            );            
 
             if (respuesta.length > 950) {
               respuesta = respuesta.slice(0, 950) + '...';
