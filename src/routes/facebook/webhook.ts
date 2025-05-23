@@ -162,28 +162,38 @@ router.post('/api/facebook/webhook', async (req, res) => {
              VALUES ($1, 'bot', $2, NOW(), $3, $4, $5)`,
             [tenantId, respuesta, canal, senderId, `bot-${messageId}`] // identificador único
           ); 
-          // ✅ Solo guardar el mensaje del bot si no existe uno igual en los últimos 2s         
+          // ✅ 1. Guardar el mensaje del usuario (cliente)
+          await pool.query(
+            `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
+            VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
+            [tenantId, userMessage, canal, senderId, messageId]
+          );
+
+          // ✅ 2. Verificar si ya existe el mismo mensaje del bot en los últimos 2 segundos
           const existeBot = await pool.query(
             `SELECT 1 FROM messages 
-             WHERE tenant_id = $1 AND sender = 'bot' AND canal = $2 AND content = $3 AND timestamp >= NOW() - INTERVAL '2 seconds'
-             LIMIT 1`,
+            WHERE tenant_id = $1 AND sender = 'bot' AND canal = $2 AND content = $3 AND timestamp >= NOW() - INTERVAL '2 seconds'
+            LIMIT 1`,
             [tenantId, canal, respuesta]
           );
-          
+
+          // ✅ 3. Solo guardar la respuesta del bot si no está duplicada
           if (existeBot.rows.length === 0) {
             await pool.query(
-              `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
-               VALUES ($1, 'bot', $2, NOW(), $3)`,
-              [tenantId, respuesta, canal]
+              `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'bot', $2, NOW(), $3, $4, $5)`,
+              [tenantId, respuesta, canal, senderId, `bot-${messageId}`]
             );
           }
-          
+
+          // ✅ 4. Registrar la interacción general
           await pool.query(
             `INSERT INTO interactions (tenant_id, canal, created_at)
-             VALUES ($1, $2, NOW())`,
+            VALUES ($1, $2, NOW())`,
             [tenantId, canal]
           );
 
+          // ✅ 5. Sumar uso
           await incrementarUsoPorNumero(tenant.twilio_number);
 
           // Enviar respuesta
