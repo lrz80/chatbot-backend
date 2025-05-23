@@ -24,13 +24,19 @@ export async function enviarMensajePorPartes({
   let temp = respuesta;
   const limiteCaracteres = 950;
 
-  while (temp.length > 0) {
-    let corte = temp.slice(0, limiteCaracteres);
-    const saltoLinea = corte.lastIndexOf("\n");
-    if (saltoLinea > 600) corte = corte.slice(0, saltoLinea);
-    partes.push(corte);
-    temp = temp.slice(corte.length).trimStart();
+  const bloques = respuesta.split(/\n{2,}/);
+
+  let parteActual = '';
+  for (let i = 0; i < bloques.length; i++) {
+    const bloque = bloques[i].trim();
+    if ((parteActual + '\n\n' + bloque).length <= limiteCaracteres) {
+      parteActual += (parteActual ? '\n\n' : '') + bloque;
+    } else {
+      partes.push(parteActual);
+      parteActual = bloque;
+    }
   }
+  if (parteActual) partes.push(parteActual);
 
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
