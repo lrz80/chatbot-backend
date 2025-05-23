@@ -21,32 +21,33 @@ export async function enviarMensajePorPartes({
   const partes: string[] = [];
   const limiteCaracteres = 950;
 
-  // Fragmentar sin alterar la numeración ni la estructura original
-  const bloques = respuesta.split(/(?=\n{2,})/); // Detecta saltos dobles de línea para mantener bloques
+  // 📦 Paso 1: Fragmentar por párrafos dobles
+  const bloques = respuesta.split(/\n{2,}/); 
   let parteActual = '';
 
-  for (let i = 0; i < bloques.length; i++) {
-    const bloque = bloques[i];
+  for (const bloque of bloques) {
+    const texto = bloque.trim();
 
-    if ((parteActual + bloque).length <= limiteCaracteres) {
-      parteActual += bloque;
+    if ((parteActual + '\n\n' + texto).length <= limiteCaracteres) {
+      parteActual += (parteActual ? '\n\n' : '') + texto;
     } else {
       if (parteActual.trim()) partes.push(parteActual.trim());
 
-      if (bloque.length <= limiteCaracteres) {
-        parteActual = bloque;
+      if (texto.length <= limiteCaracteres) {
+        parteActual = texto;
       } else {
-        const lineas = bloque.split('\n');
+        // Fragmentar por líneas si un bloque es demasiado largo
+        const subLineas = texto.split('\n');
         let subParte = '';
-        for (const linea of lineas) {
+        for (const linea of subLineas) {
           if ((subParte + '\n' + linea).length <= limiteCaracteres) {
             subParte += (subParte ? '\n' : '') + linea;
           } else {
-            if (subParte.trim()) partes.push(subParte.trim());
+            partes.push(subParte.trim());
             subParte = linea;
           }
         }
-        if (subParte.trim()) partes.push(subParte.trim());
+        if (subParte) partes.push(subParte.trim());
         parteActual = '';
       }
     }
@@ -54,6 +55,7 @@ export async function enviarMensajePorPartes({
 
   if (parteActual.trim()) partes.push(parteActual.trim());
 
+  // 📤 Paso 2: Enviar y registrar cada fragmento
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
     const messageFragmentId = `bot-${messageId}-${i}`;
@@ -79,7 +81,7 @@ export async function enviarMensajePorPartes({
           },
           { params: { access_token: accessToken } }
         );
-        await new Promise((r) => setTimeout(r, 300));
+        await new Promise((r) => setTimeout(r, 300)); // ⏱ evita rate limit
       } catch (err: any) {
         console.error('❌ Error enviando fragmento:', err.response?.data || err.message || err);
       }
