@@ -31,7 +31,7 @@ export async function enviarMensajePorPartes({
     if ((parteActual + '\n\n' + bloque).length <= limiteCaracteres) {
       parteActual += (parteActual ? '\n\n' : '') + bloque;
     } else {
-      if (parteActual) partes.push(parteActual);
+      if (parteActual.trim()) partes.push(parteActual.trim());
       if (bloque.length <= limiteCaracteres) {
         parteActual = bloque;
       } else {
@@ -54,7 +54,7 @@ export async function enviarMensajePorPartes({
     }
   }
 
-  if (parteActual) partes.push(parteActual);
+  if (parteActual.trim()) partes.push(parteActual.trim());
 
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
