@@ -156,12 +156,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
             console.warn('⚠️ No se pudo analizar intención:', e);
           }
 
-          // Guardar mensajes e interacciones
-          await pool.query(
-            `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
-             VALUES ($1, 'bot', $2, NOW(), $3, $4, $5)`,
-            [tenantId, respuesta, canal, senderId, `bot-${messageId}`] // identificador único
-          ); 
           // ✅ 1. Guardar el mensaje del usuario (cliente)
           await pool.query(
             `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
