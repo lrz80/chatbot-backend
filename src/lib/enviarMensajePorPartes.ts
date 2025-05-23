@@ -21,18 +21,18 @@ export async function enviarMensajePorPartes({
   const partes: string[] = [];
   const limiteCaracteres = 950;
 
-  // Renumerar puntos si aplica
+  // Renumerar solo líneas que empiezan con número o son no vacías
   let contador = 1;
-  const renumerada = respuesta.replace(/^(\d+\.)?\s*(.*?)(?=\n|$)/gm, (_match, _p1, texto) => {
-    const linea = texto.trim();
-    if (/^\d+\./.test(linea)) {
-      return `${contador++}. ${linea.replace(/^\d+\.\s*/, '')}`;
-    } else if (linea) {
-      return `${contador++}. ${linea}`;
+  const renumerada = respuesta.split('\n').map((line) => {
+    const trimmed = line.trim();
+    if (/^\d+\.\s+/.test(trimmed)) {
+      return `${contador++}. ${trimmed.replace(/^\d+\.\s+/, '')}`;
+    } else if (trimmed.length > 0) {
+      return `${contador++}. ${trimmed}`;
     } else {
       return '';
     }
-  });
+  }).join('\n');
 
   // Fragmentar sin cortar a la mitad, intentando mantener párrafos
   const bloques = renumerada.split(/\n{2,}/);
