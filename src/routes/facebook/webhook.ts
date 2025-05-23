@@ -169,21 +169,25 @@ router.post('/api/facebook/webhook', async (req, res) => {
             );
           }
 
-          // ✅ Verificar si ya existe mensaje con ese bot-message-id exacto
           const botMessageId = `bot-${messageId}`;
-          const yaExiste = await pool.query(
-            `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
-            [tenantId, botMessageId]
+
+          // ✅ Verificar si ya existe mensaje con contenido igual en los últimos 5 segundos
+          const yaExisteContenidoReciente = await pool.query(
+            `SELECT 1 FROM messages 
+            WHERE tenant_id = $1 AND sender = 'bot' AND canal = $2 AND content = $3 
+            AND timestamp >= NOW() - INTERVAL '5 seconds'
+            LIMIT 1`,
+            [tenantId, canal, respuesta]
           );
 
-          if (yaExiste.rows.length === 0) {
+          // ✅ Si no existe por contenido, insertamos
+          if (yaExisteContenidoReciente.rows.length === 0) {
             await pool.query(
               `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
               VALUES ($1, 'bot', $2, NOW(), $3, $4, $5)`,
               [tenantId, respuesta, canal, senderId, botMessageId]
             );
 
-            // Enviar solo si aún no fue enviado
             await axios.post(
               `https://graph.facebook.com/v19.0/me/messages`,
               {
@@ -195,7 +199,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
             console.log(`✅ Respuesta enviada al usuario (${canal})`);
           } else {
-            console.log('⏭️ Mensaje del bot ya fue enviado y guardado previamente.');
+            console.log('⏭️ Mensaje duplicado (contenido reciente)');
           }
 
           // ✅ 4. Registrar la interacción general
@@ -207,18 +211,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
           // ✅ 5. Sumar uso
           await incrementarUsoPorNumero(tenant.twilio_number);
-
-          // Enviar respuesta
-          await axios.post(
-            `https://graph.facebook.com/v19.0/me/messages`,
-            {
-              recipient: { id: senderId },
-              message: { text: respuesta },
-            },
-            { params: { access_token: accessToken } }
-          );
-
-          console.log(`✅ Respuesta enviada al usuario (${canal})`);
         }
       }
     }
