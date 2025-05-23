@@ -21,18 +21,30 @@ export async function enviarMensajePorPartes({
   const partes: string[] = [];
   const limiteCaracteres = 950;
 
-  // Renumerar solo líneas que empiezan con número o son no vacías
+  // 🔢 Paso 1: Solo numerar líneas con contenido, ignorando introducciones
   const lineas = respuesta.split('\n');
   let contador = 1;
   const renumerada = lineas
     .map((line) => {
       const texto = line.trim();
-      if (texto.length === 0) return '';
-      return `${contador++}. ${texto.replace(/^\d+\.\s*/, '')}`;
+      if (texto === '') return '';
+
+      const esIntroduccion = /^[¡!¿]?[\w\s,.'"]+[:：]/.test(texto) || texto.length < 30;
+      if (esIntroduccion) return texto;
+
+      if (/^\d+\.\s/.test(texto)) {
+        return `${contador++}. ${texto.replace(/^\d+\.\s*/, '')}`;
+      }
+
+      if (/^\*\*/.test(texto)) {
+        return `${contador++}. ${texto}`;
+      }
+
+      return texto;
     })
     .join('\n');
 
-  // Fragmentar sin cortar a la mitad, intentando mantener párrafos
+  // 📦 Paso 2: Fragmentar sin cortar oraciones, manteniendo párrafos completos
   const bloques = renumerada.split(/\n{2,}/);
   let parteActual = '';
 
@@ -64,6 +76,7 @@ export async function enviarMensajePorPartes({
 
   if (parteActual.trim()) partes.push(parteActual.trim());
 
+  // 📤 Enviar y registrar cada fragmento
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
     const messageFragmentId = `bot-${messageId}-${i}`;
