@@ -18,44 +18,37 @@ export async function enviarMensajePorPartes({
   respuesta,
   accessToken,
 }: EnvioMensajeParams) {
-  const partes: string[] = [];
   const limiteCaracteres = 950;
+  const partes: string[] = [];
 
-  // 📦 Paso 1: Fragmentar por párrafos dobles
-  const bloques = respuesta.split(/\n{2,}/); 
-  let parteActual = '';
+  // 1️⃣ Numerar solo líneas con contenido
+  const lineas = respuesta.split('\n');
+  let contador = 1;
+  const lineasNumeradas = lineas.map((linea) => {
+    const texto = linea.trim();
+    if (!texto) return '';
+    return `${contador++}. ${texto.replace(/^\d+\.\s*/, '')}`;
+  });
 
-  for (const bloque of bloques) {
-    const texto = bloque.trim();
-
-    if ((parteActual + '\n\n' + texto).length <= limiteCaracteres) {
-      parteActual += (parteActual ? '\n\n' : '') + texto;
-    } else {
-      if (parteActual.trim()) partes.push(parteActual.trim());
-
-      if (texto.length <= limiteCaracteres) {
-        parteActual = texto;
+  // 2️⃣ Agrupar líneas sin cortar
+  let bloqueActual = '';
+  for (const linea of lineasNumeradas) {
+    const tentativa = (bloqueActual ? bloqueActual + '\n' : '') + linea;
+    if (tentativa.length > limiteCaracteres) {
+      if (bloqueActual) {
+        partes.push(bloqueActual.trim());
+        bloqueActual = linea;
       } else {
-        // Fragmentar por líneas si un bloque es demasiado largo
-        const subLineas = texto.split('\n');
-        let subParte = '';
-        for (const linea of subLineas) {
-          if ((subParte + '\n' + linea).length <= limiteCaracteres) {
-            subParte += (subParte ? '\n' : '') + linea;
-          } else {
-            partes.push(subParte.trim());
-            subParte = linea;
-          }
-        }
-        if (subParte) partes.push(subParte.trim());
-        parteActual = '';
+        partes.push(linea.slice(0, limiteCaracteres));
+        bloqueActual = linea.slice(limiteCaracteres);
       }
+    } else {
+      bloqueActual = tentativa;
     }
   }
+  if (bloqueActual.trim()) partes.push(bloqueActual.trim());
 
-  if (parteActual.trim()) partes.push(parteActual.trim());
-
-  // 📤 Paso 2: Enviar y registrar cada fragmento
+  // 3️⃣ Enviar cada parte solo si no fue enviada
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
     const messageFragmentId = `bot-${messageId}-${i}`;
@@ -73,15 +66,33 @@ export async function enviarMensajePorPartes({
       );
 
       try {
-        await axios.post(
-          `https://graph.facebook.com/v19.0/me/messages`,
-          {
-            recipient: { id: senderId },
-            message: { text: parte },
-          },
-          { params: { access_token: accessToken } }
-        );
-        await new Promise((r) => setTimeout(r, 300)); // ⏱ evita rate limit
+        if (canal === 'facebook' || canal === 'instagram') {
+          await axios.post(
+            `https://graph.facebook.com/v19.0/me/messages`,
+            {
+              recipient: { id: senderId },
+              message: { text: parte },
+            },
+            { params: { access_token: accessToken } }
+          );
+        } else if (canal === 'whatsapp') {
+          await axios.post(
+            `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Messages.json`,
+            new URLSearchParams({
+              To: `whatsapp:${senderId}`,
+              From: `whatsapp:${process.env.TWILIO_NUMBER}`,
+              Body: parte,
+            }),
+            {
+              auth: {
+                username: process.env.TWILIO_ACCOUNT_SID!,
+                password: process.env.TWILIO_AUTH_TOKEN!,
+              },
+            }
+          );
+        }
+
+        await new Promise((r) => setTimeout(r, 300)); // Espera para evitar rate limit
       } catch (err: any) {
         console.error('❌ Error enviando fragmento:', err.response?.data || err.message || err);
       }
