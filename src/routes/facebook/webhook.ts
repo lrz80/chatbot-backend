@@ -190,19 +190,26 @@ router.post('/api/facebook/webhook', async (req, res) => {
               [tenantId, respuesta, canal, senderId, botMessageId]
             );            
 
-            if (respuesta.length > 950) {
-              respuesta = respuesta.slice(0, 950) + '...';
+            function dividirMensaje(mensaje: string, maxChars = 950): string[] {
+              const partes: string[] = [];
+              for (let i = 0; i < mensaje.length; i += maxChars) {
+                partes.push(mensaje.slice(i, i + maxChars));
+              }
+              return partes;
             }
             
-            await axios.post(
-              `https://graph.facebook.com/v19.0/me/messages`,
-              {
-                recipient: { id: senderId },
-                message: { text: respuesta },
-              },
-              { params: { access_token: accessToken } }
-            );
-
+            const partes = dividirMensaje(respuesta);
+            for (const parte of partes) {
+              await axios.post(
+                `https://graph.facebook.com/v19.0/me/messages`,
+                {
+                  recipient: { id: senderId },
+                  message: { text: parte },
+                },
+                { params: { access_token: accessToken } }
+              );
+            }
+            
             console.log(`✅ Respuesta enviada al usuario (${canal})`);
           } else {
             console.log('⏭️ Mensaje duplicado (contenido reciente)');
