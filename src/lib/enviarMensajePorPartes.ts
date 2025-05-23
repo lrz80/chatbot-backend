@@ -1,5 +1,3 @@
-// ✅ utils/enviarMensajePorPartes.ts
-
 import axios from 'axios';
 import pool from '../lib/db';
 
@@ -8,7 +6,7 @@ interface EnvioMensajeParams {
   canal: 'facebook' | 'instagram' | 'whatsapp';
   senderId: string;
   messageId: string;
-  respuesta: string; // ← CAMBIO aquí
+  respuesta: string;
   accessToken: string;
 }
 
@@ -21,21 +19,41 @@ export async function enviarMensajePorPartes({
   accessToken,
 }: EnvioMensajeParams) {
   const partes: string[] = [];
-  let temp = respuesta;
   const limiteCaracteres = 950;
 
-  const bloques = respuesta.split(/\n{2,}/);
-
+  // Fragmentar sin cortar a la mitad, intentando mantener párrafos
+  const bloques = respuesta.split(/\n{2,}/); // divide por doble salto de línea
   let parteActual = '';
+
   for (let i = 0; i < bloques.length; i++) {
     const bloque = bloques[i].trim();
+
     if ((parteActual + '\n\n' + bloque).length <= limiteCaracteres) {
       parteActual += (parteActual ? '\n\n' : '') + bloque;
     } else {
-      partes.push(parteActual);
-      parteActual = bloque;
+      if (parteActual) partes.push(parteActual);
+      if (bloque.length <= limiteCaracteres) {
+        parteActual = bloque;
+      } else {
+        // Si un solo bloque ya excede el límite, fragmentamos por líneas
+        const subLineas = bloque.split('\n');
+        let subParte = '';
+        for (const linea of subLineas) {
+          if ((subParte + '\n' + linea).length <= limiteCaracteres) {
+            subParte += (subParte ? '\n' : '') + linea;
+          } else {
+            partes.push(subParte);
+            subParte = linea;
+          }
+        }
+        if (subParte) {
+          partes.push(subParte);
+        }
+        parteActual = '';
+      }
     }
   }
+
   if (parteActual) partes.push(parteActual);
 
   for (let i = 0; i < partes.length; i++) {
