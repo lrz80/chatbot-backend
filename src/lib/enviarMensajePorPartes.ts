@@ -22,17 +22,15 @@ export async function enviarMensajePorPartes({
   const limiteCaracteres = 950;
 
   // Renumerar solo líneas que empiezan con número o son no vacías
+  const lineas = respuesta.split('\n');
   let contador = 1;
-  const renumerada = respuesta.split('\n').map((line) => {
-    const trimmed = line.trim();
-    if (/^\d+\.\s+/.test(trimmed)) {
-      return `${contador++}. ${trimmed.replace(/^\d+\.\s+/, '')}`;
-    } else if (trimmed.length > 0) {
-      return `${contador++}. ${trimmed}`;
-    } else {
-      return '';
-    }
-  }).join('\n');
+  const renumerada = lineas
+    .map((line) => {
+      const texto = line.trim();
+      if (texto.length === 0) return '';
+      return `${contador++}. ${texto.replace(/^\d+\.\s*/, '')}`;
+    })
+    .join('\n');
 
   // Fragmentar sin cortar a la mitad, intentando mantener párrafos
   const bloques = renumerada.split(/\n{2,}/);
