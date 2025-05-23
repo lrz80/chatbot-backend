@@ -188,6 +188,10 @@ router.post('/api/facebook/webhook', async (req, res) => {
               [tenantId, respuesta, canal, senderId, botMessageId]
             );
 
+            if (respuesta.length > 950) {
+              respuesta = respuesta.slice(0, 950) + '...';
+            }
+            
             await axios.post(
               `https://graph.facebook.com/v19.0/me/messages`,
               {
