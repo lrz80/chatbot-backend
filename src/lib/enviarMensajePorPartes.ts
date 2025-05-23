@@ -24,35 +24,33 @@ export async function enviarMensajePorPartes({
   // 🔢 Paso 1: Solo numerar líneas con contenido, ignorando introducciones
   const lineas = respuesta.split('\n');
   let contador = 1;
-  const renumerada = lineas
-    .map((line) => {
-      const texto = line.trim();
-      if (texto === '') return '';
+  const numeradas: string[] = [];
+  let enBloque = false;
 
-      const esIntroduccion = /^[¡!¿]?[\w\s,.'"]+[:：]/.test(texto) || texto.length < 30;
-      if (esIntroduccion) return texto;
+  for (let i = 0; i < lineas.length; i++) {
+    const texto = lineas[i].trim();
+    if (texto === '') {
+      numeradas.push('');
+      enBloque = false;
+      continue;
+    }
+    const esIntroduccion = /^[¡!¿]?[\w\s,.'"]+[:：]/.test(texto) || texto.length < 30;
+    if (esIntroduccion && !enBloque) {
+      numeradas.push(texto);
+      continue;
+    }
+    numeradas.push(`${contador++}. ${texto.replace(/^\d+\.\s*/, '')}`);
+    enBloque = true;
+  }
 
-      if (/^\d+\.\s/.test(texto)) {
-        return `${contador++}. ${texto.replace(/^\d+\.\s*/, '')}`;
-      }
-
-      if (/^\*\*/.test(texto)) {
-        return `${contador++}. ${texto}`;
-      }
-
-      return texto;
-    })
-    .join('\n');
-
-  // 📦 Paso 2: Fragmentar sin cortar oraciones, manteniendo párrafos completos
-  const bloques = renumerada.split(/\n{2,}/);
+  // 📦 Paso 2: Fragmentar evitando dividir puntos enumerados
+  const bloques = numeradas.join('\n').split(/(?=\n\d+\.\s)/g);
   let parteActual = '';
 
   for (let i = 0; i < bloques.length; i++) {
     const bloque = bloques[i].trim();
-
-    if ((parteActual + '\n\n' + bloque).length <= limiteCaracteres) {
-      parteActual += (parteActual ? '\n\n' : '') + bloque;
+    if ((parteActual + '\n' + bloque).length <= limiteCaracteres) {
+      parteActual += (parteActual ? '\n' : '') + bloque;
     } else {
       if (parteActual.trim()) partes.push(parteActual.trim());
       if (bloque.length <= limiteCaracteres) {
