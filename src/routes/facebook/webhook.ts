@@ -161,12 +161,23 @@ router.post('/api/facebook/webhook', async (req, res) => {
             `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
              VALUES ($1, 'bot', $2, NOW(), $3, $4, $5)`,
             [tenantId, respuesta, canal, senderId, `bot-${messageId}`] // identificador único
-          );          
-          await pool.query(
-            `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
-             VALUES ($1, 'bot', $2, NOW(), $3)`,
-            [tenantId, respuesta, canal]
+          ); 
+          // ✅ Solo guardar el mensaje del bot si no existe uno igual en los últimos 2s         
+          const existeBot = await pool.query(
+            `SELECT 1 FROM messages 
+             WHERE tenant_id = $1 AND sender = 'bot' AND canal = $2 AND content = $3 AND timestamp >= NOW() - INTERVAL '2 seconds'
+             LIMIT 1`,
+            [tenantId, canal, respuesta]
           );
+          
+          if (existeBot.rows.length === 0) {
+            await pool.query(
+              `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
+               VALUES ($1, 'bot', $2, NOW(), $3)`,
+              [tenantId, respuesta, canal]
+            );
+          }
+          
           await pool.query(
             `INSERT INTO interactions (tenant_id, canal, created_at)
              VALUES ($1, $2, NOW())`,
