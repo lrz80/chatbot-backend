@@ -156,12 +156,18 @@ router.post('/api/facebook/webhook', async (req, res) => {
             console.warn('⚠️ No se pudo analizar intención:', e);
           }
 
-          // ✅ 1. Guardar el mensaje del usuario (cliente)
-          await pool.query(
-            `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
-            VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
-            [tenantId, userMessage, canal, senderId, messageId]
+          // ✅ Verificar si ya existe mensaje del usuario
+          const existeUsuario = await pool.query(
+            `SELECT 1 FROM messages WHERE tenant_id = $1 AND sender = 'user' AND message_id = $2 LIMIT 1`,
+            [tenantId, messageId]
           );
+          if (existeUsuario.rows.length === 0) {
+            await pool.query(
+              `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
+              [tenantId, userMessage, canal, senderId, messageId]
+            );
+          }
 
           // ✅ 2. Verificar si ya existe el mismo mensaje del bot en los últimos 2 segundos
           const existeBot = await pool.query(
