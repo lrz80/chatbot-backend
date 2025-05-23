@@ -21,8 +21,21 @@ export async function enviarMensajePorPartes({
   const partes: string[] = [];
   const limiteCaracteres = 950;
 
+  // Renumerar puntos si aplica
+  let contador = 1;
+  const renumerada = respuesta.replace(/^(\d+\.)?\s*(.*?)(?=\n|$)/gm, (_match, _p1, texto) => {
+    const linea = texto.trim();
+    if (/^\d+\./.test(linea)) {
+      return `${contador++}. ${linea.replace(/^\d+\.\s*/, '')}`;
+    } else if (linea) {
+      return `${contador++}. ${linea}`;
+    } else {
+      return '';
+    }
+  });
+
   // Fragmentar sin cortar a la mitad, intentando mantener párrafos
-  const bloques = respuesta.split(/\n{2,}/); // divide por doble salto de línea
+  const bloques = renumerada.split(/\n{2,}/);
   let parteActual = '';
 
   for (let i = 0; i < bloques.length; i++) {
@@ -35,7 +48,6 @@ export async function enviarMensajePorPartes({
       if (bloque.length <= limiteCaracteres) {
         parteActual = bloque;
       } else {
-        // Si un solo bloque ya excede el límite, fragmentamos por líneas
         const subLineas = bloque.split('\n');
         let subParte = '';
         for (const linea of subLineas) {
@@ -46,9 +58,7 @@ export async function enviarMensajePorPartes({
             subParte = linea;
           }
         }
-        if (subParte) {
-          partes.push(subParte);
-        }
+        if (subParte) partes.push(subParte);
         parteActual = '';
       }
     }
