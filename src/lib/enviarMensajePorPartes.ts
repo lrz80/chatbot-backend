@@ -21,29 +21,32 @@ export async function enviarMensajePorPartes({
   const limiteCaracteres = 950;
   const partes: string[] = [];
 
-  let texto = respuesta.trim();
+  // 🔹 Separar por párrafos naturales (saltos dobles)
+  const bloques = respuesta.split(/\n{2,}/).map(b => b.trim()).filter(b => b);
 
-  while (texto.length > 0) {
-    if (texto.length <= limiteCaracteres) {
-      partes.push(texto);
-      break;
+  for (const bloque of bloques) {
+    if (bloque.length <= limiteCaracteres) {
+      partes.push(bloque);
+    } else {
+      // Si un bloque es demasiado largo, dividirlo por líneas individuales
+      const lineas = bloque.split('\n').map(l => l.trim()).filter(l => l);
+      let parteActual = '';
+
+      for (const linea of lineas) {
+        const tentativa = parteActual ? `${parteActual}\n${linea}` : linea;
+        if (tentativa.length > limiteCaracteres) {
+          if (parteActual) partes.push(parteActual);
+          parteActual = linea;
+        } else {
+          parteActual = tentativa;
+        }
+      }
+
+      if (parteActual) partes.push(parteActual);
     }
-
-    // Intentar cortar en el último salto de línea antes del límite
-    let corte = texto.lastIndexOf('\n', limiteCaracteres);
-    if (corte === -1) {
-      // Si no hay salto de línea, intenta cortar en el último espacio
-      corte = texto.lastIndexOf(' ', limiteCaracteres);
-      if (corte === -1) corte = limiteCaracteres; // Si tampoco hay espacio, corta en el límite
-    }
-
-    const parte = texto.slice(0, corte).trim();
-    partes.push(parte);
-
-    texto = texto.slice(corte).trim();
   }
 
-  // Enviar cada parte
+  // 🔸 Enviar y guardar cada parte
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
     const messageFragmentId = `bot-${messageId}-${i}`;
@@ -87,7 +90,7 @@ export async function enviarMensajePorPartes({
           );
         }
 
-        await new Promise((r) => setTimeout(r, 300));
+        await new Promise((r) => setTimeout(r, 300)); // Evitar bloqueos
       } catch (err: any) {
         console.error('❌ Error enviando fragmento:', err.response?.data || err.message || err);
       }
