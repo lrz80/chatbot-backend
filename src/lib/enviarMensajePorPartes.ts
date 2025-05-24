@@ -29,18 +29,14 @@ export async function enviarMensajePorPartes({
       break;
     }
 
-    // 1️⃣ Intentar cortar en el último salto doble antes del límite
-    let corte = texto.lastIndexOf('\n\n', limiteCaracteres);
-    if (corte === -1) {
-      // 2️⃣ Si no hay salto doble, intentar en el último salto simple
-      corte = texto.lastIndexOf('\n', limiteCaracteres);
-      if (corte === -1) {
-        // 3️⃣ Si tampoco, intentar en el último espacio
-        corte = texto.lastIndexOf(' ', limiteCaracteres);
-        if (corte === -1) {
-          // 4️⃣ Si no hay, cortar en el límite exacto
-          corte = limiteCaracteres;
-        }
+    // Intentar cortar por salto de línea natural
+    let corte = texto.lastIndexOf('\n', limiteCaracteres);
+    if (corte === -1 || corte < limiteCaracteres * 0.5) {
+      // Si no hay salto de línea o está muy cerca del inicio, cortar por espacio
+      corte = texto.lastIndexOf(' ', limiteCaracteres);
+      if (corte === -1 || corte < limiteCaracteres * 0.5) {
+        // Si tampoco hay espacio, cortar en el límite exacto
+        corte = limiteCaracteres;
       }
     }
 
@@ -49,7 +45,7 @@ export async function enviarMensajePorPartes({
     texto = texto.slice(corte).trim();
   }
 
-  // 🔸 Enviar y guardar cada parte
+  // 🔸 Guardar y enviar cada parte
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
     const messageFragmentId = `bot-${messageId}-${i}`;
@@ -93,7 +89,7 @@ export async function enviarMensajePorPartes({
           );
         }
 
-        await new Promise((r) => setTimeout(r, 300));
+        await new Promise((r) => setTimeout(r, 300)); // Pausa para evitar bloqueos
       } catch (err: any) {
         console.error('❌ Error enviando fragmento:', err.response?.data || err.message || err);
       }
