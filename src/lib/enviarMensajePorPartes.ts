@@ -22,24 +22,13 @@ export async function enviarMensajePorPartes({
   const partes: string[] = [];
 
   // 🔹 Separar por líneas y limpiar espacios
-  const lineas = respuesta.split('\n').map(linea => linea.trim());
-
-  // 🔸 Mantener la primera línea sin numerar
-  const primeraLinea = lineas.shift() || '';
-
-  let contador = 1;
-  const lineasEnumeradas: string[] = [primeraLinea];
-
-  for (const linea of lineas) {
-    if (linea) {
-      lineasEnumeradas.push(`${contador++}. ${linea.replace(/^\d+\.\s*/, '')}`);
-    }
-  }
+  const lineas = respuesta.split('\n').map(linea => linea.trim()).filter(linea => linea !== '');
 
   // 🔹 Agrupar en bloques sin cortar líneas
   let bloqueActual = '';
-  for (const linea of lineasEnumeradas) {
-    if ((bloqueActual + '\n' + linea).trim().length > limiteCaracteres) {
+  for (const linea of lineas) {
+    const tentativa = bloqueActual ? `${bloqueActual}\n${linea}` : linea;
+    if (tentativa.length > limiteCaracteres) {
       if (bloqueActual) {
         partes.push(bloqueActual.trim());
         bloqueActual = linea;
@@ -49,10 +38,9 @@ export async function enviarMensajePorPartes({
         bloqueActual = '';
       }
     } else {
-      bloqueActual = bloqueActual ? `${bloqueActual}\n${linea}` : linea;
+      bloqueActual = tentativa;
     }
   }
-  
   if (bloqueActual.trim()) partes.push(bloqueActual.trim());
 
   // 🔸 Guardar en DB y enviar según canal
@@ -99,7 +87,7 @@ export async function enviarMensajePorPartes({
           );
         }
 
-        await new Promise((r) => setTimeout(r, 300));
+        await new Promise((r) => setTimeout(r, 300)); // Evitar rate limit
       } catch (err: any) {
         console.error('❌ Error enviando fragmento:', err.response?.data || err.message || err);
       }
