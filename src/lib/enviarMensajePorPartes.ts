@@ -1,3 +1,5 @@
+// src/lib/enviarMensajePorPartes.ts
+
 import axios from 'axios';
 import pool from '../lib/db';
 import OpenAI from 'openai';
@@ -15,19 +17,63 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-async function generarResumenInteligente(texto: string, limite: number): Promise<string> {
+async function obtenerInformacionTenant(tenantId: string, canal: string) {
   try {
-    const prompt = `Eres un asistente virtual para un negocio. Resume el siguiente contenido en menos de ${limite} caracteres, manteniendo la información clave para el cliente:\n\n${texto}`;
+    const result = await pool.query(
+      `SELECT nombre, telefono, horario, website, descripcion, servicios, prompt, prompt_meta FROM tenants WHERE id = $1 LIMIT 1`,
+      [tenantId]
+    );
+    const tenant = result.rows[0];
+    if (!tenant) return null;
+
+    // Seleccionar prompt por canal
+    let promptCanal = canal === 'whatsapp' ? tenant.prompt : tenant.prompt_meta;
+
+    return {
+      nombre: tenant.nombre || "Nuestro negocio",
+      telefono: tenant.telefono || "No disponible",
+      horario: tenant.horario || "No disponible",
+      website: tenant.website || "",
+      descripcion: tenant.descripcion || "",
+      servicios: tenant.servicios || "",
+      promptCanal: promptCanal || "",
+    };
+  } catch (error) {
+    console.error("❌ Error obteniendo información del tenant:", error);
+    return null;
+  }
+}
+
+async function generarResumenInteligente(texto: string, limite: number, canal: string, tenantInfo: any): Promise<string> {
+  try {
+    let promptBase = `Eres un asistente virtual para ${tenantInfo.nombre}. `;
+    promptBase += `Información del negocio:\n`;
+    promptBase += `📞 Teléfono: ${tenantInfo.telefono}\n`;
+    promptBase += `🕒 Horario: ${tenantInfo.horario}\n`;
+    if (tenantInfo.website) promptBase += `🌐 Website: ${tenantInfo.website}\n`;
+    if (tenantInfo.servicios) promptBase += `💼 Servicios: ${tenantInfo.servicios}\n`;
+    if (tenantInfo.descripcion) promptBase += `📝 Descripción: ${tenantInfo.descripcion}\n`;
+    if (tenantInfo.promptCanal) promptBase += `🤖 Prompt del canal:\n${tenantInfo.promptCanal}\n`;
+
+    promptBase += `\nResumen solicitado:\n${texto}`;
+
+    const prompt = `Resume el siguiente contenido en menos de ${limite} caracteres para enviarlo por ${canal}. Mantén la información clave, usa un tono profesional pero directo:\n\n${promptBase}`;
+
     const completion = await openai.chat.completions.create({
       messages: [{ role: 'user', content: prompt }],
       model: 'gpt-3.5-turbo', // Usa gpt-4 si tienes acceso
       max_tokens: Math.floor(limite / 4), // Aproximadamente 4 caracteres por token
     });
-    const resumen = completion.choices[0]?.message?.content?.trim();
-    return resumen || "Lamentablemente no puedo generar un resumen en este momento.";
+
+    let resumen = completion.choices[0]?.message?.content?.trim() || "Lamentablemente no puedo generar un resumen en este momento.";
+
+    if (resumen.length > limite) {
+      resumen = resumen.slice(0, limite - 3) + '...';
+    }
+    return resumen;
   } catch (error) {
     console.error("❌ Error generando resumen:", error);
-    return "Lamentablemente no puedo generar un resumen en este momento.";
+    return texto.length > limite ? texto.slice(0, limite - 3) + '...' : texto;
   }
 }
 
@@ -43,15 +89,19 @@ export async function enviarMensajePorPartes({
   const limiteWhatsApp = 4096;
   const limite = canal === 'whatsapp' ? limiteWhatsApp : limiteFacebook;
 
+  let tenantInfo = await obtenerInformacionTenant(tenantId, canal);
+  if (!tenantInfo) {
+    tenantInfo = { nombre: "Nuestro negocio", telefono: "No disponible", horario: "No disponible", website: "", descripcion: "", servicios: "", promptCanal: "" };
+  }
+
   let textoAEnviar = respuesta.trim();
 
   if (textoAEnviar.length > limite) {
     console.log(`El mensaje excede el límite de ${limite} caracteres. Generando resumen real...`);
-    textoAEnviar = await generarResumenInteligente(respuesta, limite);
+    textoAEnviar = await generarResumenInteligente(respuesta, limite, canal, tenantInfo);
   }
 
   const messageFragmentId = `bot-${messageId}`;
-
   const yaExiste = await pool.query(
     `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
     [tenantId, messageFragmentId]
