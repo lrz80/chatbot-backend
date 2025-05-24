@@ -1,3 +1,5 @@
+// src/routes/facebook/webhook.ts
+
 import express from 'express';
 import pool from '../../lib/db';
 import { detectarIdioma } from '../../lib/detectarIdioma';
@@ -62,7 +64,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const canal = isInstagram ? 'instagram' : 'facebook';
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
-        const usarOpenAI = tenant.usar_openai; // Asegúrate de tener este campo
 
         const existingMsg = await pool.query(
           `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
@@ -72,12 +73,10 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         let faqs = [];
         let flows = [];
-
         try {
           const resFaqs = await pool.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenantId]);
           faqs = resFaqs.rows || [];
         } catch {}
-
         try {
           const resFlows = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenantId]);
           const raw = resFlows.rows[0]?.data;
@@ -88,55 +87,47 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const { intencion, nivel_interes } = await detectarIntencion(userMessage);
         const intencionLower = intencion?.toLowerCase() || '';
 
-        let respuesta: string;
+        let respuesta: string | null = null;
 
-        if (["finalizar conversacion", "finalizar", "cerrar", "terminar"].some(p => intencionLower.includes(p))) {
+        // 🚦 Detectar intención de finalizar conversación
+        if (["finalizar", "cerrar", "terminar", "gracias", "eso es todo", "no necesito más"].some(p => intencionLower.includes(p))) {
           respuesta = "¡Gracias por contactarnos! Si necesitas más información, no dudes en escribirnos. ¡Hasta pronto!";
         } else {
-          respuesta = (await buscarRespuestaSimilitudFaqsTraducido(faqs, userMessage, idioma) ?? '') ||
-                      (await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma) ?? '');
+          respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, userMessage, idioma)
+            ?? await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma);
 
-          if (!respuesta && usarOpenAI) {
+          if (!respuesta) {
             const promptMeta = tenant.prompt_meta?.trim() ?? "Información del negocio no disponible.";
-            const prompt = `Eres un asistente virtual para un negocio local. Responde en ${idioma} al cliente que preguntó: "${userMessage}". Usa esta información del negocio:\n\n${promptMeta}`;
+            const prompt = `Eres un asistente virtual para un negocio local. Un cliente preguntó: "${userMessage}". Responde de manera clara, breve y útil usando esta información del negocio:\n\n${promptMeta}`;
             try {
               const completion = await openai.chat.completions.create({
                 messages: [{ role: 'user', content: prompt }],
                 model: 'gpt-3.5-turbo',
                 max_tokens: 500,
               });
-              respuesta = (completion.choices[0]?.message?.content?.trim() ?? promptMeta) || "Lo siento, no tengo información disponible.";
+              respuesta = completion.choices[0]?.message?.content?.trim() ?? promptMeta;
             } catch (error) {
-              console.error('❌ Error al generar respuesta con OpenAI:', error);
+              console.error('❌ Error con OpenAI:', error);
               respuesta = promptMeta;
             }
           }
-
-          respuesta = respuesta || "Lo siento, no tengo información disponible.";
         }
 
-        // Traducir respuesta si es necesario
+        // 🔒 Aseguramos que siempre sea string
+        respuesta = respuesta ?? "Lo siento, no tengo información disponible.";
+
+        // 🌐 Traducir si es necesario
         const idiomaFinal = await detectarIdioma(respuesta);
         if (idiomaFinal !== idioma) {
           respuesta = await traducirMensaje(respuesta, idioma);
         }
 
-        try {
-          if (["comprar", "compra", "pagar", "agendar", "reservar", "confirmar"].some(p => intencionLower.includes(p))) {
-            await pool.query(
-              `UPDATE clientes SET segmento = 'cliente' WHERE tenant_id = $1 AND contacto = $2 AND segmento = 'lead'`,
-              [tenantId, senderId]
-            );
-          }
-
-          await pool.query(
-            `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
-             VALUES ($1, $2, $3, $4, $5, $6)`,
-            [tenantId, senderId, canal, userMessage, intencion, nivel_interes]
-          );
-        } catch (e) {
-          console.warn('⚠️ Error al analizar intención:', e);
-        }
+        // 📝 Guardar mensajes e interacciones
+        await pool.query(
+          `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [tenantId, senderId, canal, userMessage, intencion, nivel_interes]
+        );
 
         const existeUsuario = await pool.query(
           `SELECT 1 FROM messages WHERE tenant_id = $1 AND sender = 'user' AND message_id = $2 LIMIT 1`,
@@ -158,7 +149,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
           LIMIT 1`,
           [tenantId, canal, respuesta]
         );
-
         if (yaExisteContenidoReciente.rows.length === 0) {
           try {
             await enviarMensajePorPartes({
@@ -170,16 +160,11 @@ router.post('/api/facebook/webhook', async (req, res) => {
               accessToken,
             });
           } catch (err) {
-            console.error('❌ Error enviando mensaje por partes:', err);
+            console.error('❌ Error al enviar mensaje por partes:', err);
           }
         }
 
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, created_at)
-           VALUES ($1, $2, NOW())`,
-          [tenantId, canal]
-        );
-
+        await pool.query(`INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`, [tenantId, canal]);
         await incrementarUsoPorNumero(tenant.twilio_number);
       }
     }
