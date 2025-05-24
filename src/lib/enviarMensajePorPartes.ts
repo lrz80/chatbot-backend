@@ -1,5 +1,6 @@
 import axios from 'axios';
 import pool from '../lib/db';
+import { Configuration, OpenAIApi } from 'openai';
 
 interface EnvioMensajeParams {
   tenantId: string;
@@ -8,6 +9,26 @@ interface EnvioMensajeParams {
   messageId: string;
   respuesta: string;
   accessToken: string;
+}
+
+const openai = new OpenAIApi(new Configuration({
+  apiKey: process.env.OPENAI_API_KEY,
+}));
+
+async function generarResumen(texto: string, limite: number): Promise<string> {
+  try {
+    const prompt = `Resume este contenido en menos de ${limite} caracteres: ${texto}`;
+    const completion = await openai.createChatCompletion({
+      model: 'gpt-3.5-turbo', // Puedes usar gpt-4 si tienes acceso
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: Math.floor(limite / 4), // Ajusta según promedio de 4 caracteres por token
+    });
+    const resumen = completion.data.choices[0]?.message?.content?.trim();
+    return resumen || "Resumen no disponible.";
+  } catch (error) {
+    console.error("❌ Error generando resumen:", error);
+    return "Resumen no disponible.";
+  }
 }
 
 export async function enviarMensajePorPartes({
@@ -19,16 +40,14 @@ export async function enviarMensajePorPartes({
   accessToken,
 }: EnvioMensajeParams) {
   const limiteFacebook = 980;
-  const limiteWhatsApp = 4096; // Twilio permite ~4096
+  const limiteWhatsApp = 4096;
   const limite = canal === 'whatsapp' ? limiteWhatsApp : limiteFacebook;
-
-  const resumen = "Amy es tu asistente virtual que te ayudará con atención, ventas y marketing. Por favor, indícame sobre qué área necesitas información (por ejemplo: atención al cliente, marketing, seguimiento, etc.) para darte los detalles específicos.";
 
   let textoAEnviar = respuesta.trim();
 
   if (textoAEnviar.length > limite) {
-    console.log(`El mensaje excede el límite permitido (${limite}). Enviando resumen.`);
-    textoAEnviar = resumen;
+    console.log(`El mensaje excede el límite de ${limite}. Generando resumen automático...`);
+    textoAEnviar = await generarResumen(respuesta, limite);
   }
 
   const messageFragmentId = `bot-${messageId}`;
