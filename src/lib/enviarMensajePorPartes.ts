@@ -21,19 +21,26 @@ export async function enviarMensajePorPartes({
   const limiteCaracteres = 950;
   const partes: string[] = [];
 
-  // 1️⃣ Numerar solo líneas con contenido
-  const lineas = respuesta.split('\n');
-  let contador = 1;
-  const lineasNumeradas = lineas.map((linea) => {
-    const texto = linea.trim();
-    if (!texto) return '';
-    return `${contador++}. ${texto.replace(/^\d+\.\s*/, '')}`;
-  });
+  // 🔹 Separar por líneas y limpiar espacios
+  const lineas = respuesta.split('\n').map(linea => linea.trim());
 
-  // 2️⃣ Agrupar líneas sin cortar
+  // 🔸 Mantener la primera línea sin numerar
+  const primeraLinea = lineas.shift() || '';
+
+  let contador = 1;
+  const lineasEnumeradas: string[] = [primeraLinea];
+
+  for (const linea of lineas) {
+    if (linea) {
+      lineasEnumeradas.push(`${contador++}. ${linea.replace(/^\d+\.\s*/, '')}`);
+    }
+  }
+
+  // 🔹 Agrupar en bloques sin cortar líneas
   let bloqueActual = '';
-  for (const linea of lineasNumeradas) {
-    const tentativa = (bloqueActual ? bloqueActual + '\n' : '') + linea;
+  for (const linea of lineasEnumeradas) {
+    const tentativa = bloqueActual ? `${bloqueActual}\n${linea}` : linea;
+
     if (tentativa.length > limiteCaracteres) {
       if (bloqueActual) {
         partes.push(bloqueActual.trim());
@@ -48,7 +55,7 @@ export async function enviarMensajePorPartes({
   }
   if (bloqueActual.trim()) partes.push(bloqueActual.trim());
 
-  // 3️⃣ Enviar cada parte solo si no fue enviada
+  // 🔸 Guardar en DB y enviar según canal
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
     const messageFragmentId = `bot-${messageId}-${i}`;
@@ -92,7 +99,7 @@ export async function enviarMensajePorPartes({
           );
         }
 
-        await new Promise((r) => setTimeout(r, 300)); // Espera para evitar rate limit
+        await new Promise((r) => setTimeout(r, 300));
       } catch (err: any) {
         console.error('❌ Error enviando fragmento:', err.response?.data || err.message || err);
       }
