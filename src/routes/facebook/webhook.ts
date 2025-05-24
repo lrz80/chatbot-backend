@@ -82,28 +82,26 @@ router.post('/api/facebook/webhook', async (req, res) => {
           if (!Array.isArray(flows)) flows = [];
         } catch {}
 
-        // 🔥 Detectar intención
         const { intencion, nivel_interes } = await detectarIntencion(userMessage);
         const intencionLower = intencion?.toLowerCase() || '';
+        const userMsgLower = userMessage.toLowerCase();
 
         let respuesta;
-        if (["solicitar información general", "información general", "toda la información"].some(p => intencionLower.includes(p))) {
-          // 🔥 Si es solicitud general, enviar mensaje pidiendo detalles
+        // ✅ Verificar intención O contenido del mensaje para identificar solicitud de información general
+        if (["solicitar información general", "información general", "toda la información"].some(p => intencionLower.includes(p))
+          || userMsgLower.includes("información") || userMsgLower.includes("info") || userMsgLower.includes("toda la información")) {
           respuesta = "Claro, ¿qué información específica necesitas? Por ejemplo: servicios, horarios, contacto, promociones...";
         } else {
-          // 🔥 Generar respuesta: FAQs > Flows > prompt_meta
           respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, userMessage, idioma)
             || await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma)
             || (tenant.prompt_meta?.trim() || "Lo siento, no tengo información disponible.");
         }
 
-        // Traducir respuesta si es necesario
         const idiomaFinal = await detectarIdioma(respuesta);
         if (idiomaFinal !== idioma) {
           respuesta = await traducirMensaje(respuesta, idioma);
         }
 
-        // 📈 Analizar intención de compra y seguimiento
         try {
           if (["comprar", "compra", "pagar", "agendar", "reservar", "confirmar"].some(p => intencionLower.includes(p))) {
             await pool.query(
@@ -145,7 +143,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
           console.warn('⚠️ Error al analizar intención:', e);
         }
 
-        // Registrar mensaje del usuario
         const existeUsuario = await pool.query(
           `SELECT 1 FROM messages WHERE tenant_id = $1 AND sender = 'user' AND message_id = $2 LIMIT 1`,
           [tenantId, messageId]
