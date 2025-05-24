@@ -21,29 +21,47 @@ export async function enviarMensajePorPartes({
   const limiteCaracteres = 950;
   const partes: string[] = [];
 
-  // 🔹 Separar por líneas y limpiar espacios
-  const lineas = respuesta.split('\n').map(linea => linea.trim()).filter(linea => linea !== '');
+  // 🔹 Dividir solo por saltos dobles (\n\n) para evitar cortar puntos
+  const bloques = respuesta.split(/\n{2,}/).map(b => b.trim()).filter(b => b);
 
-  // 🔹 Agrupar en bloques sin cortar líneas
   let bloqueActual = '';
-  for (const linea of lineas) {
-    const tentativa = bloqueActual ? `${bloqueActual}\n${linea}` : linea;
+  for (const bloque of bloques) {
+    const tentativa = bloqueActual ? `${bloqueActual}\n\n${bloque}` : bloque;
+
     if (tentativa.length > limiteCaracteres) {
       if (bloqueActual) {
         partes.push(bloqueActual.trim());
-        bloqueActual = linea;
+        bloqueActual = bloque;
       } else {
-        // La línea sola excede el límite (raro pero posible)
-        partes.push(linea.trim());
-        bloqueActual = '';
+        // Si un solo bloque es demasiado largo, envíalo completo o parte mejor
+        if (bloque.length <= limiteCaracteres) {
+          partes.push(bloque);
+          bloqueActual = '';
+        } else {
+          // Dividir el bloque en líneas si excede el límite
+          const subLineas = bloque.split('\n').map(l => l.trim()).filter(l => l);
+          let subParte = '';
+          for (const linea of subLineas) {
+            const subTentativa = subParte ? `${subParte}\n${linea}` : linea;
+            if (subTentativa.length > limiteCaracteres) {
+              partes.push(subParte);
+              subParte = linea;
+            } else {
+              subParte = subTentativa;
+            }
+          }
+          if (subParte) partes.push(subParte);
+          bloqueActual = '';
+        }
       }
     } else {
       bloqueActual = tentativa;
     }
   }
-  if (bloqueActual.trim()) partes.push(bloqueActual.trim());
 
-  // 🔸 Guardar en DB y enviar según canal
+  if (bloqueActual) partes.push(bloqueActual.trim());
+
+  // 🔸 Guardar y enviar
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
     const messageFragmentId = `bot-${messageId}-${i}`;
@@ -87,7 +105,7 @@ export async function enviarMensajePorPartes({
           );
         }
 
-        await new Promise((r) => setTimeout(r, 300)); // Evitar rate limit
+        await new Promise((r) => setTimeout(r, 300));
       } catch (err: any) {
         console.error('❌ Error enviando fragmento:', err.response?.data || err.message || err);
       }
