@@ -18,28 +18,17 @@ export async function enviarMensajePorPartes({
   respuesta,
   accessToken,
 }: EnvioMensajeParams) {
-  const limiteCaracteres = 950;  // Puedes aumentar si WhatsApp/Facebook permiten más
+  const limiteCaracteres = 950; // Puedes aumentarlo para Facebook/Instagram si lo permiten
   const partes: string[] = [];
 
   let texto = respuesta.trim();
 
   while (texto.length > 0) {
-    if (texto.length <= limiteCaracteres) {
-      partes.push(texto);
-      break;
-    }
-
-    // Cortar solo por el límite, pero evitando romper palabras
-    let corte = texto.lastIndexOf(' ', limiteCaracteres);
-    if (corte === -1 || corte < limiteCaracteres * 0.5) {
-      corte = limiteCaracteres; // Si no hay espacio o está muy cerca del inicio, corta en el límite
-    }
-
+    let corte = Math.min(limiteCaracteres, texto.length);
     partes.push(texto.slice(0, corte).trim());
     texto = texto.slice(corte).trim();
   }
 
-  // Enviar cada parte
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
     const messageFragmentId = `bot-${messageId}-${i}`;
@@ -83,7 +72,7 @@ export async function enviarMensajePorPartes({
           );
         }
 
-        await new Promise((r) => setTimeout(r, 300));  // Pausa para evitar bloqueos
+        await new Promise((r) => setTimeout(r, 300)); // Pausa
       } catch (err: any) {
         console.error('❌ Error enviando fragmento:', err.response?.data || err.message || err);
       }
