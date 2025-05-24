@@ -21,7 +21,6 @@ export async function enviarMensajePorPartes({
   const limiteCaracteres = 950;
   const partes: string[] = [];
 
-  // 🔥 Dividir solo por el límite de caracteres, respetando palabras completas
   let texto = respuesta.trim();
 
   while (texto.length > 0) {
@@ -30,9 +29,13 @@ export async function enviarMensajePorPartes({
       break;
     }
 
-    // Cortar en el último espacio antes del límite
-    let corte = texto.lastIndexOf(' ', limiteCaracteres);
-    if (corte === -1) corte = limiteCaracteres; // Si no hay espacio, corta en el límite
+    // Intentar cortar en el último salto de línea antes del límite
+    let corte = texto.lastIndexOf('\n', limiteCaracteres);
+    if (corte === -1) {
+      // Si no hay salto de línea, intenta cortar en el último espacio
+      corte = texto.lastIndexOf(' ', limiteCaracteres);
+      if (corte === -1) corte = limiteCaracteres; // Si tampoco hay espacio, corta en el límite
+    }
 
     const parte = texto.slice(0, corte).trim();
     partes.push(parte);
@@ -40,7 +43,7 @@ export async function enviarMensajePorPartes({
     texto = texto.slice(corte).trim();
   }
 
-  // 🔸 Guardar y enviar cada parte
+  // Enviar cada parte
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
     const messageFragmentId = `bot-${messageId}-${i}`;
