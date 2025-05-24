@@ -21,47 +21,26 @@ export async function enviarMensajePorPartes({
   const limiteCaracteres = 950;
   const partes: string[] = [];
 
-  // 🔹 Dividir solo por saltos dobles (\n\n) para evitar cortar puntos
-  const bloques = respuesta.split(/\n{2,}/).map(b => b.trim()).filter(b => b);
+  // 🔥 Dividir solo por el límite de caracteres, respetando palabras completas
+  let texto = respuesta.trim();
 
-  let bloqueActual = '';
-  for (const bloque of bloques) {
-    const tentativa = bloqueActual ? `${bloqueActual}\n\n${bloque}` : bloque;
-
-    if (tentativa.length > limiteCaracteres) {
-      if (bloqueActual) {
-        partes.push(bloqueActual.trim());
-        bloqueActual = bloque;
-      } else {
-        // Si un solo bloque es demasiado largo, envíalo completo o parte mejor
-        if (bloque.length <= limiteCaracteres) {
-          partes.push(bloque);
-          bloqueActual = '';
-        } else {
-          // Dividir el bloque en líneas si excede el límite
-          const subLineas = bloque.split('\n').map(l => l.trim()).filter(l => l);
-          let subParte = '';
-          for (const linea of subLineas) {
-            const subTentativa = subParte ? `${subParte}\n${linea}` : linea;
-            if (subTentativa.length > limiteCaracteres) {
-              partes.push(subParte);
-              subParte = linea;
-            } else {
-              subParte = subTentativa;
-            }
-          }
-          if (subParte) partes.push(subParte);
-          bloqueActual = '';
-        }
-      }
-    } else {
-      bloqueActual = tentativa;
+  while (texto.length > 0) {
+    if (texto.length <= limiteCaracteres) {
+      partes.push(texto);
+      break;
     }
+
+    // Cortar en el último espacio antes del límite
+    let corte = texto.lastIndexOf(' ', limiteCaracteres);
+    if (corte === -1) corte = limiteCaracteres; // Si no hay espacio, corta en el límite
+
+    const parte = texto.slice(0, corte).trim();
+    partes.push(parte);
+
+    texto = texto.slice(corte).trim();
   }
 
-  if (bloqueActual) partes.push(bloqueActual.trim());
-
-  // 🔸 Guardar y enviar
+  // 🔸 Guardar y enviar cada parte
   for (let i = 0; i < partes.length; i++) {
     const parte = partes[i];
     const messageFragmentId = `bot-${messageId}-${i}`;
