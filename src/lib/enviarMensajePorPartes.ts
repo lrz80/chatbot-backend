@@ -39,20 +39,20 @@ export async function enviarMensajePorPartes({
   // 🔹 Agrupar en bloques sin cortar líneas
   let bloqueActual = '';
   for (const linea of lineasEnumeradas) {
-    const tentativa = bloqueActual ? `${bloqueActual}\n${linea}` : linea;
-
-    if (tentativa.length > limiteCaracteres) {
+    if ((bloqueActual + '\n' + linea).trim().length > limiteCaracteres) {
       if (bloqueActual) {
         partes.push(bloqueActual.trim());
         bloqueActual = linea;
       } else {
-        partes.push(linea.slice(0, limiteCaracteres));
-        bloqueActual = linea.slice(limiteCaracteres);
+        // La línea sola excede el límite (raro pero posible)
+        partes.push(linea.trim());
+        bloqueActual = '';
       }
     } else {
-      bloqueActual = tentativa;
+      bloqueActual = bloqueActual ? `${bloqueActual}\n${linea}` : linea;
     }
   }
+  
   if (bloqueActual.trim()) partes.push(bloqueActual.trim());
 
   // 🔸 Guardar en DB y enviar según canal
