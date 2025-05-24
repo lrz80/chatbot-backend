@@ -62,6 +62,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const canal = isInstagram ? 'instagram' : 'facebook';
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
+        const usarOpenAI = tenant.usar_openai; // Asegúrate de tener este campo
 
         const existingMsg = await pool.query(
           `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
@@ -87,28 +88,32 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const { intencion, nivel_interes } = await detectarIntencion(userMessage);
         const intencionLower = intencion?.toLowerCase() || '';
 
-        let respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, userMessage, idioma)
-          || await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma);
+        let respuesta: string;
 
-        // 🚀 Si no hay respuesta en FAQs/Flows, usar OpenAI para generar una respuesta a partir del prompt_meta
-        if (!respuesta) {
-          const promptMeta = tenant.prompt_meta?.trim() ?? "Información del negocio no disponible.";
-          const prompt = `Eres un asistente virtual para un negocio local. Un cliente te preguntó: "${userMessage}". Responde de manera clara, breve y útil usando esta información del negocio:\n\n${promptMeta}`;
-          try {
-            const completion = await openai.chat.completions.create({
-              messages: [{ role: 'user', content: prompt }],
-              model: 'gpt-3.5-turbo',
-              max_tokens: 500,
-            });
-            respuesta = (completion.choices[0]?.message?.content?.trim() ?? promptMeta) || "Lo siento, no tengo información disponible.";
-          } catch (error) {
-            console.error('❌ Error al generar respuesta con OpenAI:', error);
-            respuesta = promptMeta; // Fallback seguro
+        if (["finalizar conversacion", "finalizar", "cerrar", "terminar"].some(p => intencionLower.includes(p))) {
+          respuesta = "¡Gracias por contactarnos! Si necesitas más información, no dudes en escribirnos. ¡Hasta pronto!";
+        } else {
+          respuesta = (await buscarRespuestaSimilitudFaqsTraducido(faqs, userMessage, idioma) ?? '') ||
+                      (await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma) ?? '');
+
+          if (!respuesta && usarOpenAI) {
+            const promptMeta = tenant.prompt_meta?.trim() ?? "Información del negocio no disponible.";
+            const prompt = `Eres un asistente virtual para un negocio local. Responde en ${idioma} al cliente que preguntó: "${userMessage}". Usa esta información del negocio:\n\n${promptMeta}`;
+            try {
+              const completion = await openai.chat.completions.create({
+                messages: [{ role: 'user', content: prompt }],
+                model: 'gpt-3.5-turbo',
+                max_tokens: 500,
+              });
+              respuesta = (completion.choices[0]?.message?.content?.trim() ?? promptMeta) || "Lo siento, no tengo información disponible.";
+            } catch (error) {
+              console.error('❌ Error al generar respuesta con OpenAI:', error);
+              respuesta = promptMeta;
+            }
           }
-        }
 
-        // 📌 Asegurar que respuesta es siempre string para TypeScript
-        respuesta = respuesta || "Lo siento, no tengo información disponible.";
+          respuesta = respuesta || "Lo siento, no tengo información disponible.";
+        }
 
         // Traducir respuesta si es necesario
         const idiomaFinal = await detectarIdioma(respuesta);
