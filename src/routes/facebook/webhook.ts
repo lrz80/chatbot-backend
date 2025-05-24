@@ -6,7 +6,9 @@ import { buscarRespuestaSimilitudFaqsTraducido, buscarRespuestaDesdeFlowsTraduci
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { detectarIntencion } from '../../lib/detectarIntencion';
 import { enviarMensajePorPartes } from '../../lib/enviarMensajePorPartes';
+import OpenAI from 'openai';
 
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const router = express.Router();
 
 router.get('/api/facebook/webhook', (req, res) => {
@@ -84,19 +86,31 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         const { intencion, nivel_interes } = await detectarIntencion(userMessage);
         const intencionLower = intencion?.toLowerCase() || '';
-        const userMsgLower = userMessage.toLowerCase();
 
-        let respuesta;
-        // ✅ Verificar intención O contenido del mensaje para identificar solicitud de información general
-        if (["solicitar información general", "información general", "toda la información"].some(p => intencionLower.includes(p))
-          || userMsgLower.includes("información") || userMsgLower.includes("info") || userMsgLower.includes("toda la información")) {
-          respuesta = "Claro, ¿qué información específica necesitas? Por ejemplo: servicios, horarios, contacto, promociones...";
-        } else {
-          respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, userMessage, idioma)
-            || await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma)
-            || (tenant.prompt_meta?.trim() || "Lo siento, no tengo información disponible.");
+        let respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, userMessage, idioma)
+          || await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma);
+
+        // 🚀 Si no hay respuesta en FAQs/Flows, usar OpenAI para generar una respuesta a partir del prompt_meta
+        if (!respuesta) {
+          const promptMeta = tenant.prompt_meta?.trim() ?? "Información del negocio no disponible.";
+          const prompt = `Eres un asistente virtual para un negocio local. Un cliente te preguntó: "${userMessage}". Responde de manera clara, breve y útil usando esta información del negocio:\n\n${promptMeta}`;
+          try {
+            const completion = await openai.chat.completions.create({
+              messages: [{ role: 'user', content: prompt }],
+              model: 'gpt-3.5-turbo',
+              max_tokens: 500,
+            });
+            respuesta = (completion.choices[0]?.message?.content?.trim() ?? promptMeta) || "Lo siento, no tengo información disponible.";
+          } catch (error) {
+            console.error('❌ Error al generar respuesta con OpenAI:', error);
+            respuesta = promptMeta; // Fallback seguro
+          }
         }
 
+        // 📌 Asegurar que respuesta es siempre string para TypeScript
+        respuesta = respuesta || "Lo siento, no tengo información disponible.";
+
+        // Traducir respuesta si es necesario
         const idiomaFinal = await detectarIdioma(respuesta);
         if (idiomaFinal !== idioma) {
           respuesta = await traducirMensaje(respuesta, idioma);
@@ -115,30 +129,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
              VALUES ($1, $2, $3, $4, $5, $6)`,
             [tenantId, senderId, canal, userMessage, intencion, nivel_interes]
           );
-
-          if (nivel_interes >= 4) {
-            const configRes = await pool.query(`SELECT * FROM follow_up_settings WHERE tenant_id = $1`, [tenantId]);
-            const config = configRes.rows[0];
-
-            if (config) {
-              let mensajeSeguimiento = config.mensaje_general || '¿Te gustaría que te ayudáramos a avanzar?';
-              if (intencionLower.includes('precio') && config.mensaje_precio) mensajeSeguimiento = config.mensaje_precio;
-              else if (intencionLower.includes('agendar') && config.mensaje_agendar) mensajeSeguimiento = config.mensaje_agendar;
-              else if (intencionLower.includes('ubicacion') && config.mensaje_ubicacion) mensajeSeguimiento = config.mensaje_ubicacion;
-
-              const idiomaMsj = await detectarIdioma(mensajeSeguimiento);
-              if (idiomaMsj !== idioma) mensajeSeguimiento = await traducirMensaje(mensajeSeguimiento, idioma);
-
-              const fechaEnvio = new Date();
-              fechaEnvio.setMinutes(fechaEnvio.getMinutes() + (config.minutos_espera || 5));
-
-              await pool.query(
-                `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-                 VALUES ($1, $2, $3, $4, $5, false)`,
-                [tenantId, canal, senderId, mensajeSeguimiento, fechaEnvio]
-              );
-            }
-          }
         } catch (e) {
           console.warn('⚠️ Error al analizar intención:', e);
         }
