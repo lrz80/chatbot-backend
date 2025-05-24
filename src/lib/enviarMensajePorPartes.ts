@@ -1,5 +1,6 @@
 import axios from 'axios';
 import pool from '../lib/db';
+import OpenAI from 'openai';
 
 interface EnvioMensajeParams {
   tenantId: string;
@@ -8,6 +9,26 @@ interface EnvioMensajeParams {
   messageId: string;
   respuesta: string;
   accessToken: string;
+}
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+async function generarResumenInteligente(texto: string, limite: number): Promise<string> {
+  try {
+    const prompt = `Eres un asistente virtual para un negocio. Resume el siguiente contenido en menos de ${limite} caracteres, manteniendo la información clave para el cliente:\n\n${texto}`;
+    const completion = await openai.chat.completions.create({
+      messages: [{ role: 'user', content: prompt }],
+      model: 'gpt-3.5-turbo', // Usa gpt-4 si tienes acceso
+      max_tokens: Math.floor(limite / 4), // Aproximadamente 4 caracteres por token
+    });
+    const resumen = completion.choices[0]?.message?.content?.trim();
+    return resumen || "Lamentablemente no puedo generar un resumen en este momento.";
+  } catch (error) {
+    console.error("❌ Error generando resumen:", error);
+    return "Lamentablemente no puedo generar un resumen en este momento.";
+  }
 }
 
 export async function enviarMensajePorPartes({
@@ -24,12 +45,9 @@ export async function enviarMensajePorPartes({
 
   let textoAEnviar = respuesta.trim();
 
-  // Resumen adaptable para cualquier negocio si excede el límite
-  const resumenGenerico = "Para ofrecerte la información adecuada, por favor indícame sobre qué tema específico necesitas detalles: por ejemplo, servicios, promociones, horarios, configuración o asistencia. Así puedo ayudarte mejor.";
-
   if (textoAEnviar.length > limite) {
-    console.log(`El mensaje excede el límite de ${limite} caracteres. Enviando resumen.`);
-    textoAEnviar = resumenGenerico;
+    console.log(`El mensaje excede el límite de ${limite} caracteres. Generando resumen real...`);
+    textoAEnviar = await generarResumenInteligente(respuesta, limite);
   }
 
   const messageFragmentId = `bot-${messageId}`;
