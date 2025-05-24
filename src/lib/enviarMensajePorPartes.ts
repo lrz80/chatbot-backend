@@ -7,6 +7,7 @@ interface EnvioMensajeParams {
   senderId: string;
   messageId: string;
   accessToken: string;
+  respuesta: string; // Añadimos esta propiedad para recibir el mensaje procesado
 }
 
 export async function enviarMensajePorPartes({
@@ -15,29 +16,13 @@ export async function enviarMensajePorPartes({
   senderId,
   messageId,
   accessToken,
+  respuesta,
 }: EnvioMensajeParams) {
   const limiteFacebook = 980;
   const limiteWhatsApp = 4096;
   const limite = canal === 'whatsapp' ? limiteWhatsApp : limiteFacebook;
 
-  // 🔍 Extraer directamente el contenido del prompt configurado
-  const result = await pool.query(
-    `SELECT prompt, prompt_meta FROM tenants WHERE id = $1 LIMIT 1`,
-    [tenantId]
-  );
-  const tenant = result.rows[0];
-  if (!tenant) {
-    console.error("❌ No se encontró el tenant.");
-    return;
-  }
-
-  const prompt = canal === 'whatsapp' ? tenant.prompt : tenant.prompt_meta;
-  if (!prompt || prompt.trim() === "") {
-    console.error(`❌ El prompt del canal ${canal} está vacío o no configurado.`);
-    return;
-  }
-
-  let textoAEnviar = prompt.trim();
+  let textoAEnviar = respuesta.trim();
   if (textoAEnviar.length > limite) {
     textoAEnviar = textoAEnviar.slice(0, limite - 3) + "...";
   }

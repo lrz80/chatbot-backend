@@ -40,7 +40,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
       for (const messagingEvent of entry.messaging) {
         if (!messagingEvent.message || messagingEvent.message.is_echo || !messagingEvent.message.text) {
-          console.log('⏭️ Evento ignorado (echo, read o sin texto)');
+          console.log('⏭️ Evento ignorado');
           continue;
         }
 
@@ -82,18 +82,16 @@ router.post('/api/facebook/webhook', async (req, res) => {
           if (!Array.isArray(flows)) flows = [];
         } catch {}
 
-        // Generar respuesta usando FAQs, Flows y como fallback prompt_meta
+        // 🔥 Generar respuesta: FAQs > Flows > prompt_meta
         let respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, userMessage, idioma)
           || await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma)
-          || (tenant.prompt_meta?.trim() || "Lo siento, no tengo información disponible en este momento.");
+          || (tenant.prompt_meta?.trim() || "Lo siento, no tengo información disponible.");
 
-        // Traducir si es necesario
         const idiomaFinal = await detectarIdioma(respuesta);
         if (idiomaFinal !== idioma) {
           respuesta = await traducirMensaje(respuesta, idioma);
         }
 
-        // Analizar intención de compra
         try {
           const { intencion, nivel_interes } = await detectarIntencion(userMessage);
           const intencionLower = intencion.toLowerCase();
@@ -138,7 +136,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
           console.warn('⚠️ Error al analizar intención:', e);
         }
 
-        // Registrar mensaje del usuario
         const existeUsuario = await pool.query(
           `SELECT 1 FROM messages WHERE tenant_id = $1 AND sender = 'user' AND message_id = $2 LIMIT 1`,
           [tenantId, messageId]
@@ -163,9 +160,10 @@ router.post('/api/facebook/webhook', async (req, res) => {
         if (yaExisteContenidoReciente.rows.length === 0) {
           try {
             await enviarMensajePorPartes({
+              respuesta,
+              senderId,
               tenantId,
               canal,
-              senderId,
               messageId,
               accessToken,
             });
