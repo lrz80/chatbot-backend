@@ -1,6 +1,6 @@
 import axios from 'axios';
 import pool from '../lib/db';
-import { Configuration, OpenAIApi } from 'openai';
+import OpenAI from 'openai';
 
 interface EnvioMensajeParams {
   tenantId: string;
@@ -11,19 +11,20 @@ interface EnvioMensajeParams {
   accessToken: string;
 }
 
-const openai = new OpenAIApi(new Configuration({
+// 🔑 Configuración de OpenAI
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-}));
+});
 
 async function generarResumen(texto: string, limite: number): Promise<string> {
   try {
     const prompt = `Resume este contenido en menos de ${limite} caracteres: ${texto}`;
-    const completion = await openai.createChatCompletion({
-      model: 'gpt-3.5-turbo', // Puedes usar gpt-4 si tienes acceso
+    const completion = await openai.chat.completions.create({
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: Math.floor(limite / 4), // Ajusta según promedio de 4 caracteres por token
+      model: 'gpt-3.5-turbo', // O 'gpt-4' si tienes acceso
+      max_tokens: Math.floor(limite / 4), // Aproximadamente 4 caracteres por token
     });
-    const resumen = completion.data.choices[0]?.message?.content?.trim();
+    const resumen = completion.choices[0]?.message?.content?.trim();
     return resumen || "Resumen no disponible.";
   } catch (error) {
     console.error("❌ Error generando resumen:", error);
@@ -40,7 +41,7 @@ export async function enviarMensajePorPartes({
   accessToken,
 }: EnvioMensajeParams) {
   const limiteFacebook = 980;
-  const limiteWhatsApp = 4096;
+  const limiteWhatsApp = 4096; // Twilio permite ~4096 caracteres
   const limite = canal === 'whatsapp' ? limiteWhatsApp : limiteFacebook;
 
   let textoAEnviar = respuesta.trim();
