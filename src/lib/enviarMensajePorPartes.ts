@@ -6,7 +6,6 @@ interface EnvioMensajeParams {
   canal: 'facebook' | 'instagram' | 'whatsapp';
   senderId: string;
   messageId: string;
-  respuesta: string; // Este campo ya no será necesario
   accessToken: string;
 }
 
@@ -21,24 +20,23 @@ export async function enviarMensajePorPartes({
   const limiteWhatsApp = 4096;
   const limite = canal === 'whatsapp' ? limiteWhatsApp : limiteFacebook;
 
-  // 🔍 Obtener el prompt del negocio por canal
+  // 🔍 Extraer directamente el contenido del prompt configurado
   const result = await pool.query(
     `SELECT prompt, prompt_meta FROM tenants WHERE id = $1 LIMIT 1`,
     [tenantId]
   );
   const tenant = result.rows[0];
   if (!tenant) {
-    console.error("❌ No se encontró el tenant para el ID proporcionado.");
+    console.error("❌ No se encontró el tenant.");
     return;
   }
 
   const prompt = canal === 'whatsapp' ? tenant.prompt : tenant.prompt_meta;
-  if (!prompt) {
-    console.error(`❌ No se encontró prompt configurado para el canal ${canal}.`);
+  if (!prompt || prompt.trim() === "") {
+    console.error(`❌ El prompt del canal ${canal} está vacío o no configurado.`);
     return;
   }
 
-  // 🔎 Ajustar el mensaje al límite permitido
   let textoAEnviar = prompt.trim();
   if (textoAEnviar.length > limite) {
     textoAEnviar = textoAEnviar.slice(0, limite - 3) + "...";
@@ -90,5 +88,5 @@ export async function enviarMensajePorPartes({
     }
   }
 
-  console.log(`✅ Respuesta enviada (${canal}): ${textoAEnviar.length} caracteres`);
+  console.log(`✅ Mensaje enviado por ${canal}: ${textoAEnviar.length} caracteres`);
 }
