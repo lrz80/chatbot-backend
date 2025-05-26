@@ -200,7 +200,6 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
       informacion_negocio,
       funciones_asistente,
       info_clave,
-      limite_uso,
       logo_url,
       prompt_meta,
       bienvenida_meta,
@@ -210,6 +209,8 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
       instagram_page_id,
       instagram_page_name,
       instagram_business_account_id,
+      email_negocio, // 🆕 Nuevo campo
+      telefono_negocio, // 🆕 Nuevo campo
       faq = [],
       intents = [],
       canal = 'whatsapp',
@@ -219,7 +220,6 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
     const current = existingRes.rows[0];
     if (!current) return res.status(404).json({ error: 'Tenant no encontrado' });
 
-    // ✅ Actualizar negocio
     await pool.query(
       `UPDATE tenants SET 
         name = $1,
@@ -241,8 +241,10 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         instagram_page_id = $17,
         instagram_page_name = $18,
         instagram_business_account_id = $19,
+        email_negocio = $20, -- 🆕 Nuevo campo
+        telefono_negocio = $21, -- 🆕 Nuevo campo
         onboarding_completado = true
-      WHERE id = $20`,
+      WHERE id = $22`,
       [
         nombre_negocio || current.name,
         categoria || current.categoria,
@@ -263,6 +265,8 @@ router.put('/', authenticateUser, async (req: any, res: Response) => {
         typeof instagram_page_id !== 'undefined' ? instagram_page_id : current.instagram_page_id,
         typeof instagram_page_name !== 'undefined' ? instagram_page_name : current.instagram_page_name,
         typeof instagram_business_account_id !== 'undefined' ? instagram_business_account_id : current.instagram_business_account_id,
+        email_negocio || current.email_negocio, // 🆕 Nuevo campo
+        telefono_negocio || current.telefono_negocio, // 🆕 Nuevo campo
         tenant_id,
       ]
     );

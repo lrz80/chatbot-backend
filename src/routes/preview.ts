@@ -62,19 +62,26 @@ router.post('/', authenticateUser, async (req: AuthenticatedRequest, res: Respon
     let respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, message, idioma)
       ?? await buscarRespuestaDesdeFlowsTraducido(flows, message, idioma);
 
-    if (!respuesta) {
-      const { default: OpenAI } = await import('openai');
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+      if (!respuesta) {
+        const { default: OpenAI } = await import('openai');
+        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+      
+        // 📝 Personalización con el nombre del negocio (tenant.name)
+        const contacto = tenant.email || 'nuestro equipo';
+        let promptFinal = prompt.trim() !== '' 
+          ? prompt 
+          : `Eres un asistente virtual de ${tenant.name}. Si el cliente pregunta por precios u otros detalles y no tienes información, indícale amablemente que contacte directamente a ${contacto}. No inventes datos.`;
 
-      const completion = await openai.chat.completions.create({
-        model: 'gpt-4',
-        messages: [
-          { role: 'system', content: prompt },
-          { role: 'user', content: message },
-        ],
-      });
-      respuesta = completion.choices[0]?.message?.content?.trim() ?? bienvenida ?? 'Lo siento, no entendí eso.';
-    }
+        const completion = await openai.chat.completions.create({
+          model: 'gpt-4',
+          messages: [
+            { role: 'system', content: promptFinal },
+            { role: 'user', content: message },
+          ],
+        });
+      
+        respuesta = completion.choices[0]?.message?.content?.trim() ?? bienvenida ?? 'Lo siento, no entendí eso.';
+      }      
 
     const idiomaFinal = await detectarIdioma(respuesta);
     if (idiomaFinal !== idioma) {
