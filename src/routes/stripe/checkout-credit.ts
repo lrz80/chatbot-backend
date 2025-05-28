@@ -34,8 +34,8 @@ router.post('/checkout-credit', async (req, res) => {
 
     const { canal, cantidad, redirectPath } = req.body;
 
-    // ✅ Incluimos meta y cantidades
-    const canalesPermitidos = ["sms", "email", "whatsapp", "contactos", "tokens_openai", "voz", "meta"];
+    // ✅ Incluimos followup y cantidades permitidas
+    const canalesPermitidos = ["sms", "email", "whatsapp", "contactos", "tokens_openai", "voz", "meta", "followup"];
     const cantidadesPermitidas = [500, 1000, 2000, 50000, 100000, 200000]; // Incluye tokens
 
     if (!canalesPermitidos.includes(canal)) {
@@ -53,7 +53,8 @@ router.post('/checkout-credit', async (req, res) => {
       whatsapp:  { 500: 15, 1000: 20, 2000: 30 },
       tokens_openai: { 50000: 10, 100000: 18, 200000: 32 },
       voz: { 500: 20, 1000: 35, 2000: 60 },
-      meta: { 500: 15, 1000: 20, 2000: 30 },  // 💎 Precios sugeridos para Meta
+      meta: { 500: 15, 1000: 20, 2000: 30 },  // Meta precios
+      followup: { 500: 15, 1000: 20, 2000: 30 },  // 💎 Precios sugeridos para seguimiento leads
     };
 
     const precioUSD = preciosPorCanal[canal]?.[cantidad];
@@ -70,6 +71,8 @@ router.post('/checkout-credit', async (req, res) => {
         ? `+${cantidad} minutos de VOZ`
         : canal === "meta"
         ? `+${cantidad} créditos Meta (FB & IG)`
+        : canal === "followup"
+        ? `+${cantidad} seguimientos de leads`
         : `+${cantidad} créditos ${canal.toUpperCase()}`;
 
     const redirect = typeof redirectPath === "string" && redirectPath.startsWith("/dashboard/")
