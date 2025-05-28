@@ -83,7 +83,7 @@ Eres Amy, una asistente telefónica de voz cálida, clara y natural. Responde en
       await pool.query(
         `UPDATE uso_mensual
         SET usados = usados + $1
-        WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
+        WHERE tenant_id = $2 AND canal = 'voz' AND mes = date_trunc('month', CURRENT_DATE)`,
         [tokensConsumidos, tenant.id]
       );
     }
