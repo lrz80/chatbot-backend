@@ -34,8 +34,8 @@ router.post('/checkout-credit', async (req, res) => {
 
     const { canal, cantidad, redirectPath } = req.body;
 
-    // ✅ Incluimos nuevos canales permitidos y cantidades
-    const canalesPermitidos = ["sms", "email", "whatsapp", "contactos", "tokens_openai", "voz"];
+    // ✅ Incluimos meta y cantidades
+    const canalesPermitidos = ["sms", "email", "whatsapp", "contactos", "tokens_openai", "voz", "meta"];
     const cantidadesPermitidas = [500, 1000, 2000, 50000, 100000, 200000]; // Incluye tokens
 
     if (!canalesPermitidos.includes(canal)) {
@@ -46,14 +46,14 @@ router.post('/checkout-credit', async (req, res) => {
       return res.status(400).json({ error: 'Cantidad inválida.' });
     }
 
-    // ✅ Definimos precios por canal y cantidad
     const preciosPorCanal: Record<string, Record<number, number>> = {
       contactos: { 500: 15, 1000: 20, 2000: 30 },
       email:     { 500: 15, 1000: 20, 2000: 30 },
       sms:       { 500: 15, 1000: 20, 2000: 30 },
       whatsapp:  { 500: 15, 1000: 20, 2000: 30 },
-      tokens_openai: { 50000: 10, 100000: 18, 200000: 32 }, // Sugerido
-      voz: { 500: 20, 1000: 35, 2000: 60 }, // VOZ precios sugeridos por minutos
+      tokens_openai: { 50000: 10, 100000: 18, 200000: 32 },
+      voz: { 500: 20, 1000: 35, 2000: 60 },
+      meta: { 500: 15, 1000: 20, 2000: 30 },  // 💎 Precios sugeridos para Meta
     };
 
     const precioUSD = preciosPorCanal[canal]?.[cantidad];
@@ -68,9 +68,11 @@ router.post('/checkout-credit', async (req, res) => {
         ? `+${cantidad.toLocaleString()} tokens OpenAI`
         : canal === "voz"
         ? `+${cantidad} minutos de VOZ`
+        : canal === "meta"
+        ? `+${cantidad} créditos Meta (FB & IG)`
         : `+${cantidad} créditos ${canal.toUpperCase()}`;
 
-    const redirect = typeof redirectPath === "string" && redirectPath.startsWith("/dashboard/campaigns/")
+    const redirect = typeof redirectPath === "string" && redirectPath.startsWith("/dashboard/")
       ? redirectPath
       : `/dashboard/campaigns/${canal}`;
 
