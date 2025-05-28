@@ -7,16 +7,17 @@ import pool from '../lib/db';
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
+// 💎 Actualizamos los límites y tokens según lo acordado
 const CANALES = [
-  { canal: 'whatsapp', limite: 1000 },
-  { canal: 'voz', limite: 500 }, // en minutos
-  { canal: 'meta', limite: 1000 },
-  { canal: 'sms', limite: 500 },
-  { canal: 'email', limite: 2000 },
-  { canal: 'tokens_openai', limite: 500000 }, // tokens GPT
-  { canal: 'almacenamiento', limite: 5120 }, // MB = 5 GB
-  { canal: 'contactos', limite: 500 }, // únicos/mes
-  { canal: 'followup', limite: 1000 }  // 💎 Seguimiento de leads
+  { canal: 'whatsapp', limite: 500 },              // 500 mensajes
+  { canal: 'meta', limite: 500 },                  // 500 mensajes (Facebook e Instagram)
+  { canal: 'followup', limite: 500 },              // 500 mensajes de seguimiento de leads
+  { canal: 'voz', limite: 50000 },                 // 50,000 tokens GPT-4 (ajustado)
+  { canal: 'sms', limite: 500 },                   // 500 mensajes SMS
+  { canal: 'email', limite: 2000 },                // 2,000 emails
+  { canal: 'tokens_openai', limite: 500000 },      // Tokens adicionales (GPT-3.5)
+  { canal: 'almacenamiento', limite: 5120 },       // 5 GB de almacenamiento (en MB)
+  { canal: 'contactos', limite: 500 }              // 500 contactos únicos/mes
 ];
 
 router.get('/', async (req: Request, res: Response) => {
