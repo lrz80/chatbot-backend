@@ -106,6 +106,17 @@ router.post('/api/facebook/webhook', async (req, res) => {
                 max_tokens: 500,
               });
               respuesta = completion.choices[0]?.message?.content?.trim() ?? promptMeta;
+
+              const tokensConsumidos = completion.usage?.total_tokens || 0;
+              if (tokensConsumidos > 0) {
+                await pool.query(
+                  `UPDATE uso_mensual
+                  SET usados = usados + $1
+                  WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
+                  [tokensConsumidos, tenantId]
+                );
+              }
+
             } catch (error) {
               console.error('❌ Error con OpenAI:', error);
               respuesta = promptMeta;

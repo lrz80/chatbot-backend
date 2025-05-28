@@ -135,6 +135,16 @@ async function procesarMensajeWhatsApp(body: any) {
       ],
     });
     respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
+
+    const tokensConsumidos = completion.usage?.total_tokens || 0;
+    if (tokensConsumidos > 0) {
+      await pool.query(
+        `UPDATE uso_mensual
+        SET usados = usados + $1
+        WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
+        [tokensConsumidos, tenant.id]
+      );
+    }
   }
 
   if (respuesta) {
