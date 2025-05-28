@@ -7,17 +7,16 @@ import pool from '../lib/db';
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
-// 💎 Actualizamos los límites y tokens según lo acordado
 const CANALES = [
-  { canal: 'whatsapp', limite: 500 },              // 500 mensajes
-  { canal: 'meta', limite: 500 },                  // 500 mensajes (Facebook e Instagram)
-  { canal: 'followup', limite: 500 },              // 500 mensajes de seguimiento de leads
-  { canal: 'voz', limite: 50000 },                 // 50,000 tokens GPT-4 (ajustado)
-  { canal: 'sms', limite: 500 },                   // 500 mensajes SMS
-  { canal: 'email', limite: 2000 },                // 2,000 emails
-  { canal: 'tokens_openai', limite: 500000 },      // Tokens adicionales (GPT-3.5)
-  { canal: 'almacenamiento', limite: 5120 },       // 5 GB de almacenamiento (en MB)
-  { canal: 'contactos', limite: 500 }              // 500 contactos únicos/mes
+  { canal: 'whatsapp', limite: 500 },
+  { canal: 'meta', limite: 500 },
+  { canal: 'followup', limite: 500 },
+  { canal: 'voz', limite: 50000 }, // 🔥 50,000 tokens GPT-4
+  { canal: 'sms', limite: 500 },
+  { canal: 'email', limite: 2000 },
+  { canal: 'tokens_openai', limite: 500000 },
+  { canal: 'almacenamiento', limite: 5120 },
+  { canal: 'contactos', limite: 500 },
 ];
 
 router.get('/', async (req: Request, res: Response) => {
@@ -39,16 +38,15 @@ router.get('/', async (req: Request, res: Response) => {
     const tenantId = user.tenant_id;
     const mesActual = new Date().toISOString().substring(0, 7) + '-01';
 
-    // Insertar filas por defecto para todos los canales
     for (const { canal, limite } of CANALES) {
       await pool.query(`
         INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
         VALUES ($1, $2, $3, 0, $4)
-        ON CONFLICT (tenant_id, canal, mes) DO NOTHING
+        ON CONFLICT (tenant_id, canal, mes) 
+        DO UPDATE SET limite = EXCLUDED.limite
       `, [tenantId, canal, mesActual, limite]);
     }
 
-    // Obtener los registros para este tenant y mes
     const usoRes = await pool.query(`
       SELECT canal, usados, limite
       FROM uso_mensual
