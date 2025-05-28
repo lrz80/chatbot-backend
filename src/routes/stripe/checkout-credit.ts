@@ -52,7 +52,7 @@ router.post('/checkout-credit', async (req, res) => {
       sms:       { 500: 15, 1000: 20, 2000: 30 },
       whatsapp:  { 500: 15, 1000: 20, 2000: 30 },
       tokens_openai: { 50000: 10, 100000: 18, 200000: 32 },
-      voz: { 500: 20, 1000: 35, 2000: 60 },
+      voz: { 50000: 20, 100000: 35, 200000: 60 },
       meta: { 500: 15, 1000: 20, 2000: 30 },  // Meta precios
       followup: { 500: 15, 1000: 20, 2000: 30 },  // 💎 Precios sugeridos para seguimiento leads
     };
@@ -68,7 +68,7 @@ router.post('/checkout-credit', async (req, res) => {
         : canal === "tokens_openai"
         ? `+${cantidad.toLocaleString()} tokens OpenAI`
         : canal === "voz"
-        ? `+${cantidad} minutos de VOZ`
+        ? `+${cantidad.toLocaleString()} tokens de VOZ`
         : canal === "meta"
         ? `+${cantidad} créditos Meta (FB & IG)`
         : canal === "followup"
