@@ -1,5 +1,3 @@
-// src/routes/stripe/checkout-credit.ts
-
 import express from 'express';
 import Stripe from 'stripe';
 import jwt from 'jsonwebtoken';
@@ -14,9 +12,7 @@ router.post('/checkout-credit', async (req, res) => {
     return res.status(500).json({ error: 'Stripe o JWT no configurados correctamente.' });
   }
 
-  const stripe = new Stripe(STRIPE_SECRET_KEY, {
-    apiVersion: '2022-11-15',
-  });
+  const stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: '2022-11-15' });
 
   const token = req.cookies.token;
   if (!token) {
@@ -38,8 +34,9 @@ router.post('/checkout-credit', async (req, res) => {
 
     const { canal, cantidad, redirectPath } = req.body;
 
-    const canalesPermitidos = ["sms", "email", "whatsapp", "contactos"];
-    const cantidadesPermitidas = [500, 1000, 2000];
+    // ✅ Incluimos nuevos canales permitidos y cantidades
+    const canalesPermitidos = ["sms", "email", "whatsapp", "contactos", "tokens_openai", "voz"];
+    const cantidadesPermitidas = [500, 1000, 2000, 50000, 100000, 200000]; // Incluye tokens
 
     if (!canalesPermitidos.includes(canal)) {
       return res.status(400).json({ error: 'Canal inválido.' });
@@ -49,11 +46,14 @@ router.post('/checkout-credit', async (req, res) => {
       return res.status(400).json({ error: 'Cantidad inválida.' });
     }
 
+    // ✅ Definimos precios por canal y cantidad
     const preciosPorCanal: Record<string, Record<number, number>> = {
       contactos: { 500: 15, 1000: 20, 2000: 30 },
       email:     { 500: 15, 1000: 20, 2000: 30 },
       sms:       { 500: 15, 1000: 20, 2000: 30 },
       whatsapp:  { 500: 15, 1000: 20, 2000: 30 },
+      tokens_openai: { 50000: 10, 100000: 18, 200000: 32 }, // Sugerido
+      voz: { 500: 20, 1000: 35, 2000: 60 }, // VOZ precios sugeridos por minutos
     };
 
     const precioUSD = preciosPorCanal[canal]?.[cantidad];
@@ -64,6 +64,10 @@ router.post('/checkout-credit', async (req, res) => {
     const productName =
       canal === "contactos"
         ? `+${cantidad} contactos adicionales`
+        : canal === "tokens_openai"
+        ? `+${cantidad.toLocaleString()} tokens OpenAI`
+        : canal === "voz"
+        ? `+${cantidad} minutos de VOZ`
         : `+${cantidad} créditos ${canal.toUpperCase()}`;
 
     const redirect = typeof redirectPath === "string" && redirectPath.startsWith("/dashboard/campaigns/")
@@ -81,7 +85,7 @@ router.post('/checkout-credit', async (req, res) => {
           price_data: {
             currency: 'usd',
             product_data: { name: productName },
-            unit_amount: precioUSD * 100, // Stripe acepta centavos
+            unit_amount: precioUSD * 100, // Stripe usa centavos
           },
           quantity: 1,
         },
