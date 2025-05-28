@@ -15,7 +15,8 @@ const CANALES = [
   { canal: 'email', limite: 2000 },
   { canal: 'tokens_openai', limite: 500000 }, // tokens GPT
   { canal: 'almacenamiento', limite: 5120 }, // MB = 5 GB
-  { canal: 'contactos', limite: 500 } // únicos/mes
+  { canal: 'contactos', limite: 500 }, // únicos/mes
+  { canal: 'followup', limite: 1000 }  // 💎 Seguimiento de leads
 ];
 
 router.get('/', async (req: Request, res: Response) => {
