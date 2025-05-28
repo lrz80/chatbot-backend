@@ -137,6 +137,8 @@ async function procesarMensajeWhatsApp(body: any) {
     respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
 
     const tokensConsumidos = completion.usage?.total_tokens || 0;
+    console.log(`🔎 Tokens generados: ${tokensConsumidos}`);
+
     if (tokensConsumidos > 0) {
       await pool.query(
         `UPDATE uso_mensual
