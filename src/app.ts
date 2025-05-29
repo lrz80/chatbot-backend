@@ -59,7 +59,9 @@ import emailStatusRoute from "./routes/email-status/index";
 import previewEmailRouter from "./routes/preview-email";
 
 
-dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
+}
 
 console.log('🔐 STRIPE KEY desde ENV:', process.env.STRIPE_SECRET_KEY);
 
