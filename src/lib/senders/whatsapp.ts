@@ -1,7 +1,10 @@
-// src/senders/whatsapp.ts
+// src/lib/senders/whatsapp.ts
 
 import twilio from "twilio";
 import pool from "../db";
+
+console.log("🔐 TWILIO_ACCOUNT_SID:", process.env.TWILIO_ACCOUNT_SID);
+console.log("🔐 TWILIO_AUTH_TOKEN:", process.env.TWILIO_AUTH_TOKEN);
 
 const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
 
