@@ -62,6 +62,7 @@ import previewEmailRouter from "./routes/preview-email";
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
 }
+console.log("🔐 DATABASE_URL en arranque:", process.env.DATABASE_URL);
 
 console.log('🔐 STRIPE KEY desde ENV:', process.env.STRIPE_SECRET_KEY);
 
