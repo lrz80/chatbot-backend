@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "ts-node -r tsconfig-paths/register src/index.ts",
     "build": "npx tsc",
-    "start": "node dist/app.js"
+    "start": "node dist/app.js",
+    "scheduler:campaigns": "ts-node src/scripts/scheduler-campaigns.ts",
+    "scheduler:followup": "ts-node src/scripts/scheduler-followup.ts",
+    "scheduler:notificaciones": "ts-node src/scripts/scheduler-notificaciones.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.812.0",
