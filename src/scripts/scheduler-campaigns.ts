@@ -114,11 +114,4 @@ async function ejecutarCampañasProgramadas() {
   }
 }
 
-setInterval(() => {
-  ejecutarCampañasProgramadas();
-}, 60000);
-
-
-console.log("🕒 Scheduler de campañas corriendo cada minuto...");
-
 export { ejecutarCampañasProgramadas };
