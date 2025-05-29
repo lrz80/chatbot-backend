@@ -36,7 +36,6 @@ import voiceWebhookRoute from "./routes/webhook/voice";
 import testRoute from "./routes/test";
 import salesLeadsRouter from './routes/sales-intelligence/leads';
 import followUpSettingsRouter from './routes/follow-up-settings';
-import { sendScheduledMessages } from './jobs/sendScheduledMessages';
 import sendScheduledNowRouter from './routes/jobs/send-scheduled-now';
 import sentMessagesRoute from './routes/follow-up/sentMessages';
 import facebookOauthCallback from './routes/facebook/oauth-callback';
@@ -58,7 +57,6 @@ import limiteContactosRoute from './routes/contactos/limite';
 import sendgridTemplates from "./routes/sendgrid/templates";
 import emailStatusRoute from "./routes/email-status/index";
 import previewEmailRouter from "./routes/preview-email";
-import { enviarMensajesProgramados } from "./scripts/scheduler-followup";
 
 
 dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -187,14 +185,6 @@ setInterval(() => {
     .then(() => console.log('🔁 Ping enviado a backend'))
     .catch(() => console.warn('⚠️ Ping fallido'));
 }, 1000 * 30);
-
-setInterval(() => {
-  sendScheduledMessages();
-}, 60000); // cada 60 segundos
-
-setInterval(() => {
-  enviarMensajesProgramados();
-}, 60000);
 
 // ✅ Levantar servidor
 app.listen(PORT, () => {
