@@ -8,6 +8,9 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const db_1 = __importDefault(require("../lib/db"));
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
 const authenticateUser = async (req, res, next) => {
+    console.log("🔐 [AUTH] Ruta solicitada:", req.method, req.originalUrl);
+    console.log("🔐 [AUTH] Cookie recibida:", req.cookies?.token ? "✅ Sí" : "❌ No");
+    console.log("🔐 [AUTH] Header Authorization:", req.headers.authorization || "❌ No header");
     const token = req.cookies?.token || req.headers.authorization?.split(" ")[1];
     if (!token) {
         console.warn("⚠️ Token no encontrado en cookies ni headers");

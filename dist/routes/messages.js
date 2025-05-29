@@ -42,7 +42,7 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
             ? [tenant_id, canal, limit, offset]
             : [tenant_id, limit, offset];
         const mensajesRes = await db_1.default.query(query, values);
-        res.status(200).json(mensajesRes.rows);
+        res.status(200).json({ mensajes: mensajesRes.rows });
     }
     catch (error) {
         console.error("❌ Error al obtener historial:", error);

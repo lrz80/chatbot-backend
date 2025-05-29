@@ -1,4 +1,5 @@
 "use strict";
+// src/routes/stripe/webhook.ts
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -18,7 +19,7 @@ function initStripe() {
         STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
         if (!STRIPE_WEBHOOK_SECRET)
             throw new Error('❌ STRIPE_WEBHOOK_SECRET no está definida.');
-        stripe = new stripe_1.default(key, { apiVersion: '2025-03-31.basil' });
+        stripe = new stripe_1.default(key, { apiVersion: '2022-11-15' }); // más segura
     }
 }
 router.post('/', express_1.default.raw({ type: 'application/json' }), async (req, res) => {
@@ -32,61 +33,97 @@ router.post('/', express_1.default.raw({ type: 'application/json' }), async (req
         console.error('⚠️ Webhook signature error:', err);
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
-    // ✅ Activación inicial por checkout
+    // ✅ Créditos individuales por canal
     if (event.type === 'checkout.session.completed') {
         const session = event.data.object;
         const email = session.customer_email;
-        if (!email)
-            return;
-        try {
-            const userRes = await db_1.default.query('SELECT uid, owner_name FROM users WHERE email = $1', [email]);
-            const user = userRes.rows[0];
-            if (!user)
+        if (session.mode === 'payment' &&
+            session.metadata?.tenant_id &&
+            session.metadata?.canal &&
+            session.metadata?.cantidad) {
+            const { tenant_id, canal, cantidad } = session.metadata;
+            const cantidadInt = parseInt(cantidad, 10);
+            if (!["sms", "email", "whatsapp", "contactos"].includes(canal))
                 return;
-            const uid = user.uid;
-            const tenantName = user.owner_name || 'Negocio sin nombre';
-            const vigencia = new Date();
-            vigencia.setDate(vigencia.getDate() + 30);
-            const tenantCheck = await db_1.default.query('SELECT * FROM tenants WHERE admin_uid = $1', [uid]);
-            if (tenantCheck.rows.length === 0) {
+            try {
                 await db_1.default.query(`
-          INSERT INTO tenants (admin_uid, name, membresia_activa, membresia_vigencia, used, plan)
-          VALUES ($1, $2, true, $3, 0, 'pro')
-        `, [uid, tenantName, vigencia]);
-                console.log('✅ Tenant creado con membresía activa para', email);
+          INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
+          VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 0, $3)
+          ON CONFLICT (tenant_id, canal, mes)
+          DO UPDATE SET limite = uso_mensual.limite + $3
+        `, [tenant_id, canal, cantidadInt]);
+                console.log(`✅ Créditos agregados: +${cantidadInt} a ${canal.toUpperCase()} para tenant ${tenant_id}`);
+                if (email) {
+                    await mailer_1.transporter.sendMail({
+                        from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
+                        to: email,
+                        subject: `Créditos ${canal.toUpperCase()} activados`,
+                        html: `
+              <h3>¡Créditos de ${canal.toUpperCase()} agregados!</h3>
+              <p>Tu compra de <strong>${cantidadInt}</strong> créditos de <strong>${canal.toUpperCase()}</strong> fue procesada exitosamente.</p>
+              <p>Ya puedes usarlos desde tu dashboard.</p>
+              <br />
+              <p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
+            `
+                    });
+                }
             }
-            else {
+            catch (error) {
+                console.error('❌ Error al agregar créditos comprados:', error);
+            }
+            return res.status(200).json({ received: true });
+        }
+        // 🧾 Activación de membresía por suscripción
+        if (email && session.subscription) {
+            try {
+                const userRes = await db_1.default.query('SELECT uid FROM users WHERE email = $1', [email]);
+                const user = userRes.rows[0];
+                if (!user)
+                    return;
+                const subscriptionId = session.subscription;
+                const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+                const vigencia = subscription.current_period_end
+                    ? new Date(subscription.current_period_end * 1000)
+                    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // fallback
                 await db_1.default.query(`
           UPDATE tenants
           SET membresia_activa = true,
-              membresia_vigencia = $2
-          WHERE admin_uid = $1
-        `, [uid, vigencia]);
-                console.log('🔁 Membresía activada para', email);
+              membresia_vigencia = $2,
+              plan = 'pro'
+          WHERE id = $1
+        `, [user.uid, vigencia]);
+                console.log(`🔁 Membresía activada para ${email}, vigencia hasta ${vigencia.toISOString()}`);
+            }
+            catch (error) {
+                console.error('❌ Error activando membresía:', error);
             }
         }
-        catch (error) {
-            console.error('❌ Error activando membresía:', error);
-        }
     }
-    // 🔁 Renovación automática
+    // 🔁 Renovación automática de membresía
     if (event.type === 'invoice.payment_succeeded') {
         const invoice = event.data.object;
         const customerEmail = invoice.customer_email;
         if (!customerEmail)
             return;
+        const subscriptionId = typeof invoice.subscription === 'string' ? invoice.subscription : null;
+        if (!subscriptionId) {
+            console.warn('⚠️ Subscription ID no encontrado en invoice.');
+            return res.status(200).json({ received: true });
+        }
         try {
+            const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+            const nuevaVigencia = subscription.current_period_end
+                ? new Date(subscription.current_period_end * 1000)
+                : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // fallback
             const userRes = await db_1.default.query('SELECT uid FROM users WHERE email = $1', [customerEmail]);
             const user = userRes.rows[0];
             if (!user)
                 return;
-            const nuevaVigencia = new Date();
-            nuevaVigencia.setDate(nuevaVigencia.getDate() + 30);
             await db_1.default.query(`
         UPDATE tenants
         SET membresia_activa = true,
             membresia_vigencia = $2
-        WHERE admin_uid = $1
+        WHERE id = $1
       `, [user.uid, nuevaVigencia]);
             console.log('🔁 Membresía renovada para', customerEmail);
         }
@@ -94,7 +131,7 @@ router.post('/', express_1.default.raw({ type: 'application/json' }), async (req
             console.error('❌ Error renovando membresía:', error);
         }
     }
-    // ❌ Cancelación automática
+    // ❌ Cancelación de suscripción
     if (event.type === 'customer.subscription.deleted') {
         const subscription = event.data.object;
         let customerEmail = null;
@@ -113,25 +150,30 @@ router.post('/', express_1.default.raw({ type: 'application/json' }), async (req
         if (!customerEmail)
             return;
         try {
-            const userRes = await db_1.default.query('SELECT uid FROM users WHERE email = $1', [customerEmail]);
+            const userRes = await db_1.default.query('SELECT uid, tenant_id FROM users WHERE email = $1', [customerEmail]);
             const user = userRes.rows[0];
             if (!user)
                 return;
             await db_1.default.query(`
         UPDATE tenants
         SET membresia_activa = false
-        WHERE admin_uid = $1
+        WHERE id = $1
       `, [user.uid]);
-            console.log('🛑 Membresía cancelada para', customerEmail);
+            await db_1.default.query(`
+        INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
+        VALUES ($1, 'contactos', date_trunc('month', CURRENT_DATE), 0, 500)
+        ON CONFLICT (tenant_id, canal, mes)
+        DO UPDATE SET limite = 500
+      `, [user.tenant_id]);
+            console.log('🛑 Suscripción cancelada y contactos reiniciados para', customerEmail);
             await mailer_1.transporter.sendMail({
                 from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
                 to: customerEmail,
-                subject: 'Tu membresía ha sido cancelada',
+                subject: 'Suscripción cancelada',
                 html: `
-          <h3>Tu membresía en Amy AI ha sido cancelada</h3>
-          <p>Hola,</p>
-          <p>Hemos cancelado tu membresía en <strong>Amy AI</strong>. Ya no tendrás acceso a las funciones del asistente.</p>
-          <p>Si deseas reactivarla, puedes hacerlo desde tu <a href="https://www.aamy.ai/upgrade">panel de usuario</a>.</p>
+          <h3>Tu suscripción ha sido cancelada</h3>
+          <p>Se ha cancelado tu suscripción en <strong>Amy AI</strong>.</p>
+          <p>Tu límite de contactos ha sido reiniciado a 500.</p>
           <br />
           <p>Gracias por haber sido parte de Amy AI 💜</p>
         `

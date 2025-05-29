@@ -1,4 +1,5 @@
 "use strict";
+// src/routes/stripe/checkout.ts
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -16,7 +17,7 @@ router.post('/checkout', async (req, res) => {
         return res.status(500).json({ error: 'Configuración incompleta de Stripe' });
     }
     const stripe = new stripe_1.default(STRIPE_SECRET_KEY, {
-        apiVersion: '2025-03-31.basil',
+        apiVersion: '2022-11-15',
     });
     const token = req.cookies.token;
     if (!token) {

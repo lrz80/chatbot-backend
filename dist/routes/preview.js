@@ -1,5 +1,4 @@
 "use strict";
-// ✅ src/routes/preview.ts
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -41,31 +40,30 @@ const express_1 = require("express");
 const db_1 = __importDefault(require("../lib/db"));
 const auth_1 = require("../middleware/auth");
 const getPromptPorCanal_1 = require("../lib/getPromptPorCanal");
-const buscarRespuestaDesdeFlows_1 = require("../lib/buscarRespuestaDesdeFlows");
+const detectarIdioma_1 = require("../lib/detectarIdioma");
+const traducirMensaje_1 = require("../lib/traducirMensaje");
+const respuestasTraducidas_1 = require("../lib/respuestasTraducidas");
 const router = (0, express_1.Router)();
-// 🔍 Función para normalizar texto (quita tildes, minúsculas, espacios)
 function normalizarTexto(texto) {
-    return texto
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .trim();
+    return texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
 }
 router.post('/', auth_1.authenticateUser, async (req, res) => {
     try {
         const tenant_id = req.user?.tenant_id;
-        const { message } = req.body;
-        const canal = 'preview';
+        const { message, canal = 'preview-meta' } = req.body;
         if (!tenant_id)
             return res.status(401).json({ error: 'Tenant no autenticado' });
         const tenantRes = await db_1.default.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
         const tenant = tenantRes.rows[0];
         if (!tenant)
             return res.status(404).json({ error: 'Negocio no encontrado' });
-        const prompt = (0, getPromptPorCanal_1.getPromptPorCanal)(canal, tenant);
-        const bienvenida = (0, getPromptPorCanal_1.getBienvenidaPorCanal)(canal, tenant);
+        const idioma = await (0, detectarIdioma_1.detectarIdioma)(message);
+        const prompt = await (0, getPromptPorCanal_1.getPromptPorCanal)(canal, tenant, idioma);
+        const bienvenida = await (0, getPromptPorCanal_1.getBienvenidaPorCanal)(canal, tenant, idioma);
         const mensajeUsuario = normalizarTexto(message);
-        // 📋 Cargar FAQs
+        if (['hola', 'buenas', 'hello', 'hi', 'hey'].includes(mensajeUsuario)) {
+            return res.status(200).json({ response: bienvenida });
+        }
         let faqs = [];
         try {
             const faqsRes = await db_1.default.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenant_id]);
@@ -74,41 +72,46 @@ router.post('/', auth_1.authenticateUser, async (req, res) => {
         catch (e) {
             console.warn('⚠️ No se pudieron cargar FAQs:', e);
         }
-        for (const faq of faqs) {
-            if (mensajeUsuario.includes(normalizarTexto(faq.pregunta))) {
-                return res.status(200).json({ response: faq.respuesta });
-            }
-        }
-        // 📋 Cargar Flows
         let flows = [];
         try {
             const flowsRes = await db_1.default.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant_id]);
             const raw = flowsRes.rows[0]?.data;
             flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            if (!Array.isArray(flows))
+                flows = [];
         }
         catch (e) {
+            flows = [];
             console.warn('⚠️ No se pudieron cargar Flows:', e);
         }
-        const respuestaFlujo = (0, buscarRespuestaDesdeFlows_1.buscarRespuestaDesdeFlows)(flows, message);
-        if (respuestaFlujo) {
-            return res.status(200).json({ response: respuestaFlujo });
+        let respuesta = await (0, respuestasTraducidas_1.buscarRespuestaSimilitudFaqsTraducido)(faqs, message, idioma)
+            ?? await (0, respuestasTraducidas_1.buscarRespuestaDesdeFlowsTraducido)(flows, message, idioma);
+        if (!respuesta) {
+            const { default: OpenAI } = await Promise.resolve().then(() => __importStar(require('openai')));
+            const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+            // 📝 Personalización con el nombre del negocio (tenant.name)
+            const contacto = tenant.email || 'nuestro equipo';
+            let promptFinal = prompt.trim() !== ''
+                ? prompt
+                : `Eres un asistente virtual de ${tenant.name}. Si el cliente pregunta por precios u otros detalles y no tienes información, indícale amablemente que contacte directamente a ${contacto}. No inventes datos.`;
+            const completion = await openai.chat.completions.create({
+                model: "gpt-3.5-turbo",
+                messages: [
+                    { role: 'system', content: promptFinal },
+                    { role: 'user', content: message },
+                ],
+            });
+            respuesta = completion.choices[0]?.message?.content?.trim() ?? bienvenida ?? 'Lo siento, no entendí eso.';
         }
-        // 🧠 OpenAI fallback solo si no encontró en FAQs ni Flows
-        const { default: OpenAI } = await Promise.resolve().then(() => __importStar(require('openai')));
-        const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-        const completion = await openai.chat.completions.create({
-            model: 'gpt-4',
-            messages: [
-                { role: 'system', content: prompt },
-                { role: 'user', content: message },
-            ],
-        });
-        const respuestaIA = completion.choices[0]?.message?.content?.trim() || bienvenida || 'Lo siento, no entendí eso.';
-        return res.status(200).json({ response: respuestaIA });
+        const idiomaFinal = await (0, detectarIdioma_1.detectarIdioma)(respuesta);
+        if (idiomaFinal !== idioma) {
+            respuesta = await (0, traducirMensaje_1.traducirMensaje)(respuesta, idioma);
+        }
+        res.status(200).json({ response: respuesta });
     }
     catch (err) {
         console.error('❌ Error en preview:', err);
-        return res.status(500).json({ error: 'Error interno del servidor' });
+        res.status(500).json({ error: 'Error interno del servidor' });
     }
 });
 exports.default = router;

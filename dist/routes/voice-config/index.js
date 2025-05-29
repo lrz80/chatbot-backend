@@ -24,26 +24,45 @@ router.get("/", auth_1.authenticateUser, async (req, res) => {
         res.status(500).json({ error: "Error al obtener configuración." });
     }
 });
+// 📤 GUARDAR configuración de voz
 router.post("/", auth_1.authenticateUser, upload.none(), async (req, res) => {
     const { tenant_id } = req.user;
-    const { idioma, voice_name, system_prompt, welcome_message, voice_hints, canal = "voz" } = req.body;
+    const { idioma, voice_name, system_prompt, welcome_message, voice_hints, canal = "voz", funciones_asistente, info_clave, audio_demo_url // opcional, si lo usas
+     } = req.body;
     if (!idioma || !voice_name || !tenant_id) {
         return res.status(400).json({ error: "Faltan campos requeridos." });
     }
+    if (!system_prompt?.trim() || !welcome_message?.trim()) {
+        return res.status(400).json({ error: "Prompt o mensaje de bienvenida vacío." });
+    }
     try {
         await db_1.default.query(`INSERT INTO voice_configs (
-        tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints, canal
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT (tenant_id)
+        tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints,
+        canal, funciones_asistente, info_clave, audio_demo_url
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      ON CONFLICT (tenant_id, idioma, canal)
       DO UPDATE SET 
-        idioma = EXCLUDED.idioma,
         voice_name = EXCLUDED.voice_name,
         system_prompt = EXCLUDED.system_prompt,
         welcome_message = EXCLUDED.welcome_message,
         voice_hints = EXCLUDED.voice_hints,
-        canal = EXCLUDED.canal,
-        updated_at = now()`, [tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints, canal]);
-        res.status(200).json({ ok: true });
+        funciones_asistente = EXCLUDED.funciones_asistente,
+        info_clave = EXCLUDED.info_clave,
+        audio_demo_url = EXCLUDED.audio_demo_url,
+        updated_at = NOW()`, [
+            tenant_id,
+            idioma,
+            voice_name,
+            system_prompt,
+            welcome_message,
+            voice_hints,
+            canal,
+            funciones_asistente,
+            info_clave,
+            audio_demo_url || null,
+        ]);
+        res.status(200).json({ ok: true, message: "Configuración de voz guardada correctamente." });
     }
     catch (err) {
         console.error("❌ Error al guardar voice config:", err);

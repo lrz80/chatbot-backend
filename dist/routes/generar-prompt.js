@@ -1,4 +1,5 @@
 "use strict";
+// src/routes/generar-prompt.ts
 var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
@@ -52,39 +53,36 @@ router.post("/", async (req, res) => {
         if (!descripcion || !informacion || !idioma) {
             return res.status(400).json({ error: "Faltan campos requeridos" });
         }
-        // Verifica que el tenant exista
         const tenantRes = await db_1.default.query("SELECT * FROM tenants WHERE id = $1", [tenant_id]);
         const tenant = tenantRes.rows[0];
         if (!tenant)
             return res.status(404).json({ error: "Negocio no encontrado" });
-        // 🧠 Importar OpenAI dinámicamente
         const { default: OpenAI } = await Promise.resolve().then(() => __importStar(require("openai")));
         const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
-        // 🔮 Generar prompt desde OpenAI
         const completion = await openai.chat.completions.create({
             model: "gpt-4",
             messages: [
                 {
                     role: "system",
-                    content: `Actúa como un generador de instrucciones para asistentes virtuales.`,
+                    content: `Eres un generador experto de instrucciones para asistentes.`,
                 },
                 {
                     role: "user",
-                    content: `Estoy creando un asistente virtual en ${idioma}. Su función principal es: ${descripcion}.
+                    content: `Estoy creando un asistente en ${idioma}. Su nombre es Amy y nunca debe decir que no se llama Amy. Amy debe hablar como si fuera parte del equipo del negocio "${tenant.name}". Nunca debe responder en nombre de otro asistente o empresa.
 
-Información que el asistente debe conocer:
+Estas son sus funciones:
+${descripcion}
+
+Esta es la información clave que debe conocer:
 ${informacion}
 
-Redacta únicamente un texto claro y profesional (no JSON) que describa cómo debe comportarse el asistente. 
-No incluyas ningún mensaje de bienvenida ni estructura técnica. 
-Solo devuelve el texto plano que servirá como prompt de sistema.`,
+Redacta un único texto en lenguaje natural que incluya toda la informacion (no olvides nada) clave del negocio ${informacion} y que describa cómo debe comportarse este asistente. No incluyas ningún mensaje de bienvenida, ni JSON, ni listas técnicas. Solo devuelve un texto plano profesional que servirá como prompt del sistema.`,
                 },
             ],
         });
-        const prompt = completion.choices[0]?.message?.content || null;
-        if (!prompt) {
+        const prompt = completion.choices[0]?.message?.content?.trim();
+        if (!prompt)
             return res.status(500).json({ error: "No se pudo generar el prompt" });
-        }
         res.status(200).json({ prompt });
     }
     catch (err) {

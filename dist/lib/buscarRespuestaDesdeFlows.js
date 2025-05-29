@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buscarRespuestaDesdeFlows = buscarRespuestaDesdeFlows;
 function buscarRespuestaDesdeFlows(flows, mensajeUsuario) {
+    if (!Array.isArray(flows))
+        return null; // 🛡️ Protección contra null, undefined o tipo incorrecto
     const normalizarTexto = (texto) => texto.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
     const normalizado = normalizarTexto(mensajeUsuario);
     for (const flujo of flows) {

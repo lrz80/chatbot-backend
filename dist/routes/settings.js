@@ -7,8 +7,9 @@ const express_1 = __importDefault(require("express"));
 const db_1 = __importDefault(require("../lib/db"));
 const auth_1 = require("../middleware/auth");
 const router = express_1.default.Router();
-// ✅ GET: Perfil del negocio
+// ✅ GET: Perfil del negocio + FAQs e Intents por canal
 router.get('/', auth_1.authenticateUser, async (req, res) => {
+    console.log('🧪 Entró al endpoint /api/settings');
     try {
         const uid = req.user?.uid;
         const tenant_id = req.user?.tenant_id;
@@ -29,6 +30,11 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
         const tenant = tenantRes.rows[0];
         if (!tenant)
             return res.status(404).json({ error: 'Tenant no encontrado' });
+        // ✅ Canal actual (viene por query string, por defecto 'whatsapp')
+        const canal = req.query.canal || 'whatsapp';
+        // ✅ Traer FAQs e Intents del canal específico
+        const faqsRes = await db_1.default.query('SELECT id, pregunta, respuesta FROM faqs WHERE tenant_id = $1 AND canal = $2 ORDER BY id', [tenant_id, canal]);
+        const intentsRes = await db_1.default.query('SELECT id, nombre, ejemplos, respuesta FROM intents WHERE tenant_id = $1 AND canal = $2 ORDER BY id', [tenant_id, canal]);
         return res.status(200).json({
             uid: user.uid,
             email: user.email,
@@ -40,7 +46,7 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
             categoria: tenant.categoria || '',
             idioma: tenant.idioma || 'es',
             prompt: tenant.prompt || '',
-            bienvenida: tenant.bienvenida || '',
+            bienvenida: tenant.mensaje_bienvenida || '',
             direccion: tenant.direccion || '',
             horario_atencion: tenant.horario_atencion || '',
             twilio_number: tenant.twilio_number || '',
@@ -49,16 +55,18 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
             informacion_negocio: tenant.informacion_negocio || '',
             funciones_asistente: tenant.funciones_asistente || '',
             info_clave: tenant.info_clave || '',
-            limite_uso: tenant.limite_uso || 150,
             logo_url: tenant.logo_url || '',
             plan: tenant.plan || '',
             fecha_registro: tenant.fecha_registro || null,
-            // 👇 Agregamos los nuevos campos de Facebook e Instagram
+            // Datos Meta
             facebook_page_id: tenant.facebook_page_id || '',
             facebook_page_name: tenant.facebook_page_name || '',
             facebook_access_token: tenant.facebook_access_token || '',
             instagram_page_id: tenant.instagram_page_id || '',
             instagram_page_name: tenant.instagram_page_name || '',
+            // ✅ Nuevos datos por canal
+            faq: faqsRes.rows,
+            intents: intentsRes.rows,
         });
     }
     catch (error) {
@@ -66,14 +74,14 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
         return res.status(401).json({ error: 'Token inválido' });
     }
 });
-// ✅ POST: Guardar cambios iniciales del negocio
+// ✅ POST: Guardar cambios iniciales del negocio + faqs/intents por canal
 router.post('/', auth_1.authenticateUser, async (req, res) => {
     try {
         const tenant_id = req.user?.tenant_id;
         if (!tenant_id) {
             return res.status(401).json({ error: 'Tenant no autenticado' });
         }
-        const { nombre_negocio, categoria, idioma, direccion, horario_atencion, prompt, bienvenida, informacion_negocio, funciones_asistente, info_clave, limite_uso, logo_url, } = req.body;
+        const { nombre_negocio, categoria, idioma, direccion, horario_atencion, prompt, bienvenida, informacion_negocio, funciones_asistente, info_clave, logo_url, faq = [], intents = [], canal = 'whatsapp' } = req.body;
         if (!nombre_negocio) {
             return res.status(400).json({ error: 'El nombre del negocio es obligatorio' });
         }
@@ -81,6 +89,7 @@ router.post('/', auth_1.authenticateUser, async (req, res) => {
         const existing = current.rows[0];
         if (!existing)
             return res.status(404).json({ error: 'Negocio no encontrado' });
+        // ✅ Actualizar datos generales del negocio
         await db_1.default.query(`UPDATE tenants SET 
         name = $1,
         categoria = $2,
@@ -88,33 +97,41 @@ router.post('/', auth_1.authenticateUser, async (req, res) => {
         direccion = $4,
         horario_atencion = $5,
         prompt = $6,
-        bienvenida = $7,
+        mensaje_bienvenida = $7,
         twilio_number = $8,
         twilio_sms_number = $9,
         twilio_voice_number = $10,
         informacion_negocio = $11,
         funciones_asistente = $12,
         info_clave = $13,
-        limite_uso = $14,
-        logo_url = $15
-      WHERE id = $16`, [
+        logo_url = $14
+      WHERE id = $15`, [
             nombre_negocio,
             categoria ?? existing.categoria,
             idioma ?? existing.idioma,
             direccion ?? existing.direccion,
             horario_atencion ?? existing.horario_atencion,
             prompt ?? existing.prompt,
-            bienvenida ?? existing.bienvenida,
+            bienvenida ?? existing.mensaje_bienvenida,
             existing.twilio_number,
             existing.twilio_sms_number,
             existing.twilio_voice_number,
             informacion_negocio ?? existing.informacion_negocio,
             funciones_asistente?.trim() !== '' ? funciones_asistente : existing.funciones_asistente,
             info_clave ?? existing.info_clave,
-            limite_uso ?? existing.limite_uso,
             logo_url ?? existing.logo_url,
             tenant_id,
         ]);
+        // ✅ Guardar FAQs por canal
+        await db_1.default.query('DELETE FROM faqs WHERE tenant_id = $1 AND canal = $2', [tenant_id, canal]);
+        for (const item of faq) {
+            await db_1.default.query('INSERT INTO faqs (tenant_id, pregunta, respuesta, canal) VALUES ($1, $2, $3, $4)', [tenant_id, item.pregunta, item.respuesta, canal]);
+        }
+        // ✅ Guardar Intents por canal
+        await db_1.default.query('DELETE FROM intents WHERE tenant_id = $1 AND canal = $2', [tenant_id, canal]);
+        for (const item of intents) {
+            await db_1.default.query('INSERT INTO intents (tenant_id, nombre, ejemplos, respuesta, canal) VALUES ($1, $2, $3, $4, $5)', [tenant_id, item.nombre, item.ejemplos, item.respuesta, canal]);
+        }
         res.status(200).json({ success: true });
     }
     catch (error) {
@@ -122,14 +139,16 @@ router.post('/', auth_1.authenticateUser, async (req, res) => {
         res.status(500).json({ error: 'Error interno del servidor' });
     }
 });
-// ✅ PUT: Actualizar perfil de negocio
+// ✅ PUT: Actualizar perfil de negocio + faqs e intents por canal
 router.put('/', auth_1.authenticateUser, async (req, res) => {
     try {
         const tenant_id = req.user?.tenant_id;
         if (!tenant_id) {
             return res.status(401).json({ error: 'Tenant no autenticado' });
         }
-        const { nombre_negocio, categoria, idioma, direccion, horario_atencion, prompt, bienvenida, informacion_negocio, funciones_asistente, info_clave, limite_uso, logo_url, prompt_meta, bienvenida_meta, } = req.body;
+        const { nombre_negocio, categoria, idioma, direccion, horario_atencion, prompt, bienvenida, informacion_negocio, funciones_asistente, info_clave, logo_url, prompt_meta, bienvenida_meta, facebook_page_id, facebook_page_name, facebook_access_token, instagram_page_id, instagram_page_name, instagram_business_account_id, email_negocio, // 🆕 Nuevo campo
+        telefono_negocio, // 🆕 Nuevo campo
+        faq = [], intents = [], canal = 'whatsapp', } = req.body;
         const existingRes = await db_1.default.query('SELECT * FROM tenants WHERE id = $1', [tenant_id]);
         const current = existingRes.rows[0];
         if (!current)
@@ -141,32 +160,55 @@ router.put('/', auth_1.authenticateUser, async (req, res) => {
         direccion = $4,
         horario_atencion = $5,
         prompt = $6,
-        bienvenida = $7,
+        mensaje_bienvenida = $7,
         informacion_negocio = $8,
         funciones_asistente = $9,
         info_clave = $10,
-        limite_uso = $11,
-        logo_url = $12,
-        prompt_meta = $13,
-        bienvenida_meta = $14,
+        logo_url = $11,
+        prompt_meta = $12,
+        bienvenida_meta = $13,
+        facebook_page_id = $14,
+        facebook_page_name = $15,
+        facebook_access_token = $16,
+        instagram_page_id = $17,
+        instagram_page_name = $18,
+        instagram_business_account_id = $19,
+        email_negocio = $20, -- 🆕 Nuevo campo
+        telefono_negocio = $21, -- 🆕 Nuevo campo
         onboarding_completado = true
-      WHERE id = $15`, [
+      WHERE id = $22`, [
             nombre_negocio || current.name,
             categoria || current.categoria,
             idioma || current.idioma,
             direccion || current.direccion,
             horario_atencion || current.horario_atencion,
             prompt || current.prompt,
-            bienvenida || current.bienvenida,
+            bienvenida || current.mensaje_bienvenida,
             informacion_negocio || current.informacion_negocio,
             funciones_asistente || current.funciones_asistente,
             info_clave || current.info_clave,
-            limite_uso || current.limite_uso,
             logo_url || current.logo_url,
             prompt_meta || current.prompt_meta,
             bienvenida_meta || current.bienvenida_meta,
+            typeof facebook_page_id !== 'undefined' ? facebook_page_id : current.facebook_page_id,
+            typeof facebook_page_name !== 'undefined' ? facebook_page_name : current.facebook_page_name,
+            typeof facebook_access_token !== 'undefined' ? facebook_access_token : current.facebook_access_token,
+            typeof instagram_page_id !== 'undefined' ? instagram_page_id : current.instagram_page_id,
+            typeof instagram_page_name !== 'undefined' ? instagram_page_name : current.instagram_page_name,
+            typeof instagram_business_account_id !== 'undefined' ? instagram_business_account_id : current.instagram_business_account_id,
+            email_negocio || current.email_negocio, // 🆕 Nuevo campo
+            telefono_negocio || current.telefono_negocio, // 🆕 Nuevo campo
             tenant_id,
         ]);
+        // ✅ Reemplazar faqs e intents del canal actual
+        await db_1.default.query('DELETE FROM faqs WHERE tenant_id = $1 AND canal = $2', [tenant_id, canal]);
+        for (const item of faq) {
+            await db_1.default.query('INSERT INTO faqs (tenant_id, pregunta, respuesta, canal) VALUES ($1, $2, $3, $4)', [tenant_id, item.pregunta, item.respuesta, canal]);
+        }
+        await db_1.default.query('DELETE FROM intents WHERE tenant_id = $1 AND canal = $2', [tenant_id, canal]);
+        for (const item of intents) {
+            await db_1.default.query('INSERT INTO intents (tenant_id, nombre, ejemplos, respuesta, canal) VALUES ($1, $2, $3, $4, $5)', [tenant_id, item.nombre, item.ejemplos, item.respuesta, canal]);
+        }
         return res.status(200).json({ message: 'Perfil actualizado correctamente' });
     }
     catch (error) {

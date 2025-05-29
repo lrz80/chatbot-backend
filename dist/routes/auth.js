@@ -41,11 +41,19 @@ router.post('/register', async (req, res) => {
         const verification_link = `${process.env.FRONTEND_URL}/auth/verify-email?token=${token_verificacion}`;
         console.log("🌐 Enlace de verificación:", verification_link);
         // ✅ Crear tenant antes del usuario
-        await db_1.default.query(`INSERT INTO tenants (id, name, created_at) VALUES ($1, $2, NOW())`, [uid, owner_name]);
+        await db_1.default.query(`INSERT INTO tenants (id, name, created_at, membresia_activa, membresia_vigencia)
+       VALUES ($1, $2, NOW(), false, NULL)`, [uid, owner_name]);
         // ✅ Crear usuario con tenant_id
         await db_1.default.query(`INSERT INTO users (uid, tenant_id, email, password, role, owner_name, telefono, created_at, verificado, token_verificacion)
        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), false, $8)`, [uid, uid, email, password_hash, 'admin', owner_name, telefono, token_verificacion]);
-        await (0, mailer_1.sendVerificationEmail)(email, verification_link, 'es');
+        try {
+            await (0, mailer_1.sendVerificationEmail)(email, verification_link, 'es');
+            console.log("📧 Correo de verificación enviado");
+        }
+        catch (emailError) {
+            console.error("❌ Fallo al enviar el correo de verificación:", emailError);
+            // Aquí puedes notificar internamente o registrar el fallo si es necesario
+        }
         res.status(201).json({ success: true });
     }
     catch (error) {

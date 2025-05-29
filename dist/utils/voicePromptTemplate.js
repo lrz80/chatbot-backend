@@ -4,55 +4,64 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.PromptTemplate = PromptTemplate;
-// utils/voicePromptTemplate.ts
 const db_1 = __importDefault(require("../lib/db"));
 function sanitize(text) {
     return text.replace(/[\n\r]+/g, " ").trim();
 }
-async function PromptTemplate({ idioma, categoria, tenant_id }) {
+async function PromptTemplate({ idioma, categoria, tenant_id, funciones_asistente, info_clave, }) {
     let bienvenida = "";
-    let funciones = "";
-    let info = "";
-    // 🧠 Consultar datos del negocio desde la base de datos
-    try {
-        const result = await db_1.default.query("SELECT name, funciones_asistente, info_clave FROM tenants WHERE id = $1", [tenant_id]);
-        const negocio = result.rows[0];
-        if (!negocio) {
-            console.warn(`⚠️ No se encontró tenant con ID: ${tenant_id}`);
-            funciones = "Responder preguntas frecuentes del negocio.";
-            info = "El negocio ofrece servicios profesionales en su rubro.";
+    let funciones = sanitize(funciones_asistente || "");
+    let info = sanitize(info_clave || "");
+    if (!funciones || !info) {
+        try {
+            const result = await db_1.default.query("SELECT funciones_asistente, info_clave FROM tenants WHERE id = $1", [tenant_id]);
+            const data = result.rows[0];
+            if (!funciones && data?.funciones_asistente)
+                funciones = sanitize(data.funciones_asistente);
+            if (!info && data?.info_clave)
+                info = sanitize(data.info_clave);
         }
-        else {
-            funciones = sanitize(negocio.funciones_asistente || "Responder preguntas frecuentes del negocio.");
-            info = sanitize(negocio.info_clave || "El negocio ofrece servicios profesionales en su rubro.");
+        catch (err) {
+            console.error("❌ Error al consultar tenant para prompt:", err);
         }
     }
-    catch (err) {
-        console.error("❌ Error al consultar tenant para voicePromptTemplate:", err);
-        funciones = "Responder preguntas frecuentes del negocio.";
-        info = "El negocio ofrece servicios profesionales en su rubro.";
-    }
+    if (!funciones)
+        funciones = "Responder preguntas frecuentes sobre el negocio.";
+    if (!info)
+        info = "El negocio ofrece servicios profesionales.";
     const categoriasMap = {
-        beauty: idioma === "es-ES" ? "nuestro centro de belleza" : "beauty center",
-        fitness: idioma === "es-ES" ? "nuestro centro fitness" : "fitness center",
-        default: idioma === "es-ES" ? "nuestro negocio" : "business",
+        beauty: idioma === "es-ES" ? "nuestro centro de belleza" : "our beauty center",
+        fitness: idioma === "es-ES" ? "nuestro centro fitness" : "our fitness center",
+        default: idioma === "es-ES" ? "nuestro negocio" : "our business",
     };
     const categoriaTexto = categoriasMap[categoria] || categoriasMap["default"];
+    // 🗣️ Prompt y bienvenida personalizados
     if (idioma === "es-ES") {
         bienvenida = `Hola, soy Amy. Bienvenido a ${categoriaTexto}. ¿En qué puedo ayudarte?`;
         return {
             bienvenida,
-            prompt: `Actúa como un asistente de voz profesional que responde en español. Tu rol es ayudar a los clientes de un negocio de categoría "${categoria}". 
-Debes ser directo, claro y amable. El asistente debe cumplir las siguientes funciones: ${funciones}.
-Información relevante del negocio: ${info}`,
+            prompt: `
+Hablas como Amy, una asistente telefónica real, cálida y segura.
+Tu trabajo es ayudar al cliente como si fueras parte del equipo de ${categoriaTexto}.
+Responde siempre en español neutro, con frases breves y claras. No uses términos técnicos.
+Ayuda al cliente con lo siguiente: ${funciones}.
+Información clave que debes tener en cuenta: ${info}.
+No digas que eres un asistente virtual. Habla como una persona real del negocio.
+Si el cliente dice gracias o se despide, responde cordialmente y finaliza la conversación.
+      `.trim(),
         };
     }
-    // Default a inglés
-    bienvenida = `Hi, I'm Amy. Welcome to our ${categoriaTexto}. How can I help you today?`;
+    bienvenida = `Hi, I'm Amy. Welcome to ${categoriaTexto}. How can I help you?`;
     return {
         bienvenida,
-        prompt: `Act as a professional voice assistant that responds in English. Your role is to help customers of a business in the "${categoria}" category.
-You must be clear, friendly, and helpful. The assistant's functions are: ${funciones}.
-Business information: ${info}`,
+        prompt: `
+You speak as Amy, a natural, friendly and professional voice assistant.
+You help the caller just like a real staff member of ${categoriaTexto}.
+Always speak in short, natural sentences in clear English.
+Your role includes: ${funciones}.
+Important info to keep in mind: ${info}.
+Never say you're a virtual assistant. Speak like a real human.
+If the user says goodbye or thanks, end the call politely.
+    `.trim(),
     };
 }
