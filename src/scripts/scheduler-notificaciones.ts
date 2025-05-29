@@ -73,7 +73,7 @@ async function verificarNotificaciones() {
 // 🕒 Ejecutar cada hora (puedes ajustar el intervalo)
 setInterval(() => {
   verificarNotificaciones();
-}, 60 * 60 * 1000);
+}, 60 * 1000);
 
 console.log("⏰ Scheduler de notificaciones corriendo...");
 
