@@ -1,3 +1,11 @@
+import dotenv from 'dotenv';
+import path from 'path';
+
+// 🔒 Solo carga .env.local si NO está en producción
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config({ path: path.resolve(__dirname, '../../.env.local') });
+}
+
 import pool from "../lib/db";
 import { sendSMS } from "../lib/senders/sms";
 import { sendWhatsApp } from "../lib/senders/whatsapp";
@@ -77,11 +85,11 @@ async function ejecutarCampañasProgramadas() {
            WHERE tenant_id = $1 AND email = ANY($2)`,
           [tenantId, contactosParsed]
         );
-        
+
         const contactos = contactosRes.rows.map((c: any) => ({
           email: c.email,
           nombre: c.nombre || "amigo/a",
-        }));        
+        }));
 
         await sendEmailSendgrid(
           c.contenido,
@@ -93,7 +101,7 @@ async function ejecutarCampañasProgramadas() {
           c.link_url || undefined,
           logoUrl,
           c.asunto || "📣 Nueva campaña de tu negocio",
-          c.titulo_visual || "" // ✅ se conserva título visual
+          c.titulo_visual || ""
         );
       }
 
@@ -114,4 +122,8 @@ async function ejecutarCampañasProgramadas() {
   }
 }
 
-export { ejecutarCampañasProgramadas };
+setInterval(() => {
+  ejecutarCampañasProgramadas();
+}, 60 * 1000); // 1 minuto
+
+console.log("🕒 Scheduler de campañas corriendo cada 5 minutos...");
