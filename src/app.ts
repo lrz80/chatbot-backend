@@ -30,7 +30,7 @@ import stripeWebhook from './routes/stripe/webhook'; // 👈 Este debe ir ANTES 
 import flowsRoutes from "./routes/flows";
 import statsKpisRouter from './routes/stats-kpis';
 import uploadLogoRoute from './routes/upload-logo';
-import campaignsRoutes from "./routes/campaigns";
+// import campaignsRoutes from "./routes/campaigns";
 import voicePromptRoute from "./routes/voice-prompt";
 import voiceWebhookRoute from "./routes/webhook/voice";
 import testRoute from "./routes/test";
@@ -148,7 +148,7 @@ app.use('/api/stripe', checkoutRoute); // otras rutas de Stripe (no webhook)
 app.use('/api/flows', flowsRoutes);
 app.use('/api/stats', statsKpisRouter);
 app.use('/api/upload-logo', uploadLogoRoute);
-app.use("/api/campaigns", campaignsRoutes);
+// app.use("/api/campaigns", campaignsRoutes);
 app.use("/api/voice-prompt", voicePromptRoute);
 app.use("/api/webhooks/voice", voiceWebhookRoute);
 app.use("/api/test", testRoute);
