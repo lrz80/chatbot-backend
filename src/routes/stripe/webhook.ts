@@ -124,41 +124,61 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   // 🔁 Renovación automática de membresía
   if (event.type === 'invoice.payment_succeeded') {
     const invoice = event.data.object as Stripe.Invoice;
-    const customerEmail = invoice.customer_email;
-    if (!customerEmail) return;
-  
+    let customerEmail = invoice.customer_email;
+
+    // 🔍 Si no viene el email, intenta obtenerlo con customerId
+    if (!customerEmail) {
+      const customerId = invoice.customer;
+      if (typeof customerId === 'string') {
+        try {
+          const customer = await stripe.customers.retrieve(customerId);
+          if (typeof customer !== 'string' && 'email' in customer && customer.email) {
+            customerEmail = customer.email;
+            console.log('📧 Email recuperado del customerId:', customerEmail);
+          }
+        } catch (err) {
+          console.warn('⚠️ No se pudo obtener email del cliente:', err);
+        }
+      }
+    }
+
+    if (!customerEmail) {
+      console.warn('⚠️ No se pudo obtener email del invoice ni del customerId.');
+      return res.status(200).json({ received: true });
+    }
+
     const subscriptionId = typeof invoice.subscription === 'string' ? invoice.subscription : null;
     if (!subscriptionId) {
       console.warn('⚠️ Subscription ID no encontrado en invoice.');
       return res.status(200).json({ received: true });
     }
-  
+
     try {
       console.log('📄 Invoice recibido:', JSON.stringify(invoice, null, 2));
       const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-  
+
       const nuevaVigencia = subscription.current_period_end
         ? new Date(subscription.current_period_end * 1000)
         : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // fallback
-  
+
       const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [customerEmail]);
       const user = userRes.rows[0];
       if (!user) return;
-  
+
       await pool.query(`
         UPDATE tenants
         SET membresia_activa = true,
             membresia_vigencia = $2,
-            membresia_inicio = COALESCE(membresia_inicio, NOW()),  -- ✅ Solo si está NULL
+            membresia_inicio = COALESCE(membresia_inicio, NOW()),
             plan = 'pro'
         WHERE id = $1
       `, [user.uid, nuevaVigencia]);
-  
+
       console.log('🔁 Membresía renovada para', customerEmail);
     } catch (error) {
       console.error('❌ Error renovando membresía:', error);
     }
-  }  
+}
 
   // ❌ Cancelación de suscripción
   if (event.type === 'customer.subscription.deleted') {
