@@ -126,4 +126,4 @@ setInterval(() => {
   ejecutarCampañasProgramadas();
 }, 60 * 1000); // 1 minuto
 
-console.log("🕒 Scheduler de campañas corriendo cada 5 minutos...");
+console.log("🕒 Scheduler de campañas corriendo cada 1 minuto...");

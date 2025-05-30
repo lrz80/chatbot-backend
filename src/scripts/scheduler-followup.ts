@@ -66,3 +66,10 @@ async function enviarMensajesProgramados() {
     console.error("❌ Error general en enviarMensajesProgramados:", err);
   }
 }
+
+// 🕒 Scheduler corriendo cada minuto (puedes aumentar si deseas)
+setInterval(() => {
+  enviarMensajesProgramados();
+}, 60 * 1000);
+
+console.log("⏰ Scheduler de follow-up corriendo cada minuto...");
