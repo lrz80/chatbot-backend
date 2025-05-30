@@ -45,7 +45,8 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     ) {
       const { tenant_id, canal, cantidad } = session.metadata;
       const cantidadInt = parseInt(cantidad, 10);
-      if (!["sms", "email", "whatsapp", "contactos"].includes(canal)) return;
+      const canalesPermitidos = ["sms", "email", "whatsapp", "contactos", "tokens_openai", "voz", "meta", "followup"];
+      if (!canalesPermitidos.includes(canal)) return;
 
       try {
         await pool.query(`
@@ -58,19 +59,31 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         console.log(`✅ Créditos agregados: +${cantidadInt} a ${canal.toUpperCase()} para tenant ${tenant_id}`);
 
         if (email) {
+          // 🔍 Obtenemos el nombre del tenant para personalizar el saludo
+          const tenantNameRes = await pool.query(
+            `SELECT name FROM tenants WHERE id = $1`,
+            [tenant_id]
+          );
+          const tenantName = tenantNameRes.rows[0]?.name || "Usuario";
+        
           await transporter.sendMail({
             from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
             to: email,
             subject: `Créditos ${canal.toUpperCase()} activados`,
             html: `
-              <h3>¡Créditos de ${canal.toUpperCase()} agregados!</h3>
-              <p>Tu compra de <strong>${cantidadInt}</strong> créditos de <strong>${canal.toUpperCase()}</strong> fue procesada exitosamente.</p>
-              <p>Ya puedes usarlos desde tu dashboard.</p>
-              <br />
-              <p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
+              <div style="text-align: center;">
+                <img src="https://aamy.ai/avatar-amy.png" alt="Amy AI Avatar" style="width: 100px; height: 100px; border-radius: 50%;" />
+                <h3>Hola ${tenantName} 👋</h3>
+                <p>¡Créditos de <strong>${canal.toUpperCase()}</strong> agregados!</p>
+                <p>Tu compra de <strong>${cantidadInt}</strong> créditos de <strong>${canal.toUpperCase()}</strong> fue procesada exitosamente.</p>
+                <p>Ya puedes usarlos desde tu dashboard.</p>
+                <br />
+                <p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
+              </div>
             `
           });
         }
+        
       } catch (error) {
         console.error('❌ Error al agregar créditos comprados:', error);
       }
@@ -92,14 +105,15 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           ? new Date(subscription.current_period_end * 1000)
           : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // fallback
 
-        await pool.query(`
-          UPDATE tenants
-          SET membresia_activa = true,
-              membresia_vigencia = $2,
-              plan = 'pro'
-          WHERE id = $1
-        `, [user.uid, vigencia]);
-
+          await pool.query(`
+            UPDATE tenants
+            SET membresia_activa = true,
+                membresia_vigencia = $2,
+                membresia_inicio = COALESCE(membresia_inicio, NOW()),  -- ✅ Solo si está NULL
+                plan = 'pro'
+            WHERE id = $1
+          `, [user.uid, vigencia]);
+          
         console.log(`🔁 Membresía activada para ${email}, vigencia hasta ${vigencia.toISOString()}`);
       } catch (error) {
         console.error('❌ Error activando membresía:', error);
@@ -133,7 +147,9 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       await pool.query(`
         UPDATE tenants
         SET membresia_activa = true,
-            membresia_vigencia = $2
+            membresia_vigencia = $2,
+            membresia_inicio = COALESCE(membresia_inicio, NOW()),  -- ✅ Solo si está NULL
+            plan = 'pro'
         WHERE id = $1
       `, [user.uid, nuevaVigencia]);
   
@@ -188,13 +204,17 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         to: customerEmail,
         subject: 'Suscripción cancelada',
         html: `
-          <h3>Tu suscripción ha sido cancelada</h3>
-          <p>Se ha cancelado tu suscripción en <strong>Amy AI</strong>.</p>
-          <p>Tu límite de contactos ha sido reiniciado a 500.</p>
-          <br />
-          <p>Gracias por haber sido parte de Amy AI 💜</p>
+          <div style="text-align: center;">
+            <img src="https://aamy.ai/avatar-amy.png" alt="Amy AI Avatar" style="width: 100px; height: 100px; border-radius: 50%;" />
+            <h3>Hola ${user.tenant_id ? (await pool.query('SELECT name FROM tenants WHERE id = $1', [user.tenant_id])).rows[0]?.name || 'Usuario' : 'Usuario'} 👋</h3>
+            <p>Tu suscripción ha sido cancelada en <strong>Amy AI</strong>.</p>
+            <p>Tu límite de contactos ha sido reiniciado a 500.</p>
+            <br />
+            <p>Gracias por haber sido parte de <strong>Amy AI</strong> 💜</p>
+          </div>
         `
       });
+      
     } catch (err) {
       console.error('❌ Error al cancelar membresía:', err);
     }

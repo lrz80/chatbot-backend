@@ -10,10 +10,10 @@ const CANALES = [
   { canal: 'whatsapp', limite: 500 },
   { canal: 'meta', limite: 500 },
   { canal: 'followup', limite: 500 },
-  { canal: 'voz', limite: 50000 }, // 🔥 50,000 tokens GPT-4
+  { canal: 'voz', limite: 50000 },
   { canal: 'sms', limite: 500 },
   { canal: 'email', limite: 2000 },
-  { canal: 'tokens_openai', limite: null }, // 📝 Solo para métricas, no bloquea
+  { canal: 'tokens_openai', limite: null },
   { canal: 'almacenamiento', limite: 5120 },
   { canal: 'contactos', limite: 500 },
 ];
@@ -29,7 +29,21 @@ router.get('/', async (req: Request, res: Response) => {
     if (!user?.tenant_id) return res.status(404).json({ error: 'Usuario sin tenant asociado' });
 
     const tenantId = user.tenant_id;
-    const mesActual = new Date().toISOString().substring(0, 7) + '-01';
+
+    // 🔎 Obtener fecha de inicio de membresía del tenant
+    const tenantRes = await pool.query('SELECT membresia_inicio FROM tenants WHERE id = $1', [tenantId]);
+    const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
+    if (!membresiaInicio) return res.status(400).json({ error: 'Tenant sin fecha de membresía' });
+
+    const inicio = new Date(membresiaInicio);
+    const hoy = new Date();
+
+    // 🔍 Obtenemos todos los registros de uso dentro del ciclo de membresía
+    const usoRes = await pool.query(`
+      SELECT canal, usados, limite
+      FROM uso_mensual
+      WHERE tenant_id = $1 AND mes >= $2
+    `, [tenantId, inicio.toISOString().substring(0, 10)]); // YYYY-MM-DD
 
     // 📝 Preparamos inserción o actualización del límite por canal
     for (const { canal, limite } of CANALES) {
@@ -38,15 +52,8 @@ router.get('/', async (req: Request, res: Response) => {
         VALUES ($1, $2, $3, 0, $4)
         ON CONFLICT (tenant_id, canal, mes)
         DO UPDATE SET limite = EXCLUDED.limite
-      `, [tenantId, canal, mesActual, limite]);
+      `, [tenantId, inicio.toISOString().substring(0, 10), limite]);
     }
-
-    // 🔍 Obtenemos todos los registros de uso
-    const usoRes = await pool.query(`
-      SELECT canal, usados, limite
-      FROM uso_mensual
-      WHERE tenant_id = $1 AND mes = $2
-    `, [tenantId, mesActual]);
 
     // 📨 Calculamos notificación para cada canal
     const usos = usoRes.rows.map((row: any) => {
@@ -57,12 +64,12 @@ router.get('/', async (req: Request, res: Response) => {
             ? 'limite'
             : 'aviso'
           : null
-        : null; // tokens_openai nunca bloquea
+        : null;
 
       return {
         ...row,
         porcentaje,
-        notificar, // Puede ser 'aviso', 'limite' o null
+        notificar,
       };
     });
 
