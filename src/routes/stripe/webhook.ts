@@ -134,6 +134,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     }
   
     try {
+      console.log('📄 Invoice recibido:', JSON.stringify(invoice, null, 2));
       const subscription = await stripe.subscriptions.retrieve(subscriptionId);
   
       const nuevaVigencia = subscription.current_period_end

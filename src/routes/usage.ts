@@ -52,7 +52,7 @@ router.get('/', async (req: Request, res: Response) => {
         VALUES ($1, $2, $3, 0, $4)
         ON CONFLICT (tenant_id, canal, mes)
         DO UPDATE SET limite = EXCLUDED.limite
-      `, [tenantId, inicio.toISOString().substring(0, 10), limite]);
+      `, [tenantId, canal, inicio.toISOString().substring(0, 10), limite]);
     }
 
     // 📨 Calculamos notificación para cada canal
