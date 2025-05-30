@@ -3,7 +3,7 @@ import { sendEmailSendgrid } from '../lib/senders/email-sendgrid';
 import { sendSMS } from '../lib/senders/sms';
 
 async function verificarNotificaciones() {
-  console.log("🚨 Verificando límites de uso...");
+  console.log(`🚨 [${new Date().toISOString()}] Ejecutando verificación de notificaciones...`);
 
   const mesActual = new Date().toISOString().substring(0, 7) + '-01';
   const canales = ['whatsapp', 'meta', 'followup', 'voz', 'sms', 'email'];
@@ -79,8 +79,8 @@ Aamy.ai`;
 
 // 🕒 Ejecutar cada hora (puedes ajustar el intervalo)
 setInterval(() => {
-  verificarNotificaciones();
-}, 60 * 60 * 1000);  // Ahora cada hora (3600000 ms)
+    verificarNotificaciones();
+  }, 5 * 60 * 1000);  // Cada 5 minutos (300000 ms)  
 
 console.log("⏰ Scheduler de notificaciones corriendo...");
 
