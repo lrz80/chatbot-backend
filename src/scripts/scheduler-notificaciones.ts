@@ -21,17 +21,24 @@ async function verificarNotificaciones() {
 
     for (const tenant of tenants) {
       const porcentaje = (tenant.usados / tenant.limite) * 100;
+
+      // 🔎 Enviar notificación solo si el porcentaje es 80% o más
+      if (porcentaje < 80) {
+        console.log(`🔕 ${tenant.tenant_name} tiene un consumo bajo (${porcentaje.toFixed(1)}%), no se enviará notificación.`);
+        continue;
+      }
+
       const asunto = `🚨 Alerta: Uso en ${canal.toUpperCase()} (${porcentaje.toFixed(1)}%)`;
       const mensajeTexto = `
-        Hola ${tenant.tenant_name},
+Hola ${tenant.tenant_name},
 
-        Has usado ${tenant.usados} de ${tenant.limite} en ${canal.toUpperCase()} este mes.
-        ${porcentaje >= 100 ? '🚫 Has superado tu límite mensual.' : '⚠️ Estás alcanzando tu límite mensual.'}
+Has usado ${tenant.usados} de ${tenant.limite} en ${canal.toUpperCase()} este mes.
+${porcentaje >= 100 ? '🚫 Has superado tu límite mensual.' : '⚠️ Estás alcanzando tu límite mensual (80%+).'}
 
-        Te recomendamos aumentar el límite para evitar interrupciones.
+Te recomendamos aumentar el límite para evitar interrupciones.
 
-        Atentamente,
-        Aamy.ai`;
+Atentamente,
+Aamy.ai`;
 
       // 📧 Correos: email_negocio + user_email
       const correos = [tenant.email_negocio, tenant.user_email].filter((e) => typeof e === 'string');
@@ -40,27 +47,27 @@ async function verificarNotificaciones() {
         await sendEmailSendgrid(
           mensajeTexto,
           contactos,
-          'Aamy.ai',                      // ✅ Nombre remitente
-          String(tenant.tenant_id),       // ✅ Convertimos a string
-          0,                              // 📨 No es campaña, pero usamos 0 como placeholder
-          undefined,                      // imagenUrl
-          undefined,                      // linkUrl
-          'https://aamy.ai/avatar-amy.png', // ✅ Logo Aamy.ai
-          asunto,                         // ✅ Asunto
-          asunto                          // ✅ Título visual
+          'Aamy.ai',
+          String(tenant.tenant_id),
+          0,
+          undefined,
+          undefined,
+          'https://aamy.ai/avatar-amy.png',
+          asunto,
+          asunto
         );
         console.log(`📧 Emails enviados a: ${correos.join(', ')}`);
       }
 
-      // 📲 SMS: telefono_negocio + user_phone (sin logo)
+      // 📲 SMS: telefono_negocio + user_phone
       const telefonos = [tenant.telefono_negocio, tenant.user_phone].filter((t) => typeof t === 'string');
       for (const telefono of telefonos) {
         await sendSMS(
           mensajeTexto,
           [telefono],
           telefono,
-          String(tenant.tenant_id),      // ✅ Convertimos a string
-          0                              // 📨 Placeholder para campaignId
+          String(tenant.tenant_id),
+          0
         );
         console.log(`📲 SMS enviado a: ${telefono}`);
       }
@@ -73,7 +80,7 @@ async function verificarNotificaciones() {
 // 🕒 Ejecutar cada hora (puedes ajustar el intervalo)
 setInterval(() => {
   verificarNotificaciones();
-}, 60 * 1000);
+}, 60 * 60 * 1000);  // Ahora cada hora (3600000 ms)
 
 console.log("⏰ Scheduler de notificaciones corriendo...");
 
