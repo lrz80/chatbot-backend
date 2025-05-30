@@ -5,6 +5,14 @@ import { sendSMS } from '../lib/senders/sms';
 async function verificarNotificaciones() {
   console.log("🚨 Verificando límites de uso...");
 
+  // 🔥 Verificar y actualizar membresía_activa en función de la vigencia
+  await pool.query(`
+    UPDATE tenants
+    SET membresia_activa = false
+    WHERE membresia_vigencia < NOW() AND membresia_activa = true
+  `);
+  console.log("🔄 Membresías vencidas actualizadas.");
+
   const canales = ['whatsapp', 'meta', 'followup', 'voz', 'sms', 'email'];
 
   for (const canal of canales) {
