@@ -30,33 +30,40 @@ router.get('/', async (req: Request, res: Response) => {
 
     const tenantId = user.tenant_id;
 
-    // 🔎 Obtener fecha de inicio de membresía del tenant
+    // 🔎 Obtenemos la fecha de inicio de membresía
     const tenantRes = await pool.query('SELECT membresia_inicio FROM tenants WHERE id = $1', [tenantId]);
-    const membresiaInicio = tenantRes.rows[0]?.membresia_inicio || new Date();
+    const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
+    if (!membresiaInicio) return res.status(400).json({ error: 'El tenant no tiene membresía activa' });
+
     const inicio = new Date(membresiaInicio);
+    const fin = new Date(inicio);
+    fin.setMonth(inicio.getMonth() + 1);
 
-    // 🔍 Obtener usos actuales por canal
+    // 🔍 Obtener uso real en el rango personalizado
     const usoRes = await pool.query(`
-      SELECT canal, usados FROM uso_mensual WHERE tenant_id = $1 AND mes >= $2
-    `, [tenantId, inicio.toISOString().substring(0,10)]);
+      SELECT canal, SUM(usados) as usados, MAX(limite) as limite
+      FROM uso_mensual
+      WHERE tenant_id = $1 AND mes >= $2 AND mes < $3
+      GROUP BY canal
+    `, [tenantId, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]);
 
-    // 🔍 Obtener créditos comprados válidos (no vencidos)
+    // 🔍 Obtener créditos extra válidos y no vencidos
     const creditosRes = await pool.query(`
-      SELECT canal, SUM(cantidad) as total FROM creditos_comprados
+      SELECT canal, COALESCE(SUM(cantidad), 0) as total
+      FROM creditos_comprados
       WHERE tenant_id = $1 AND fecha_vencimiento >= NOW()
       GROUP BY canal
     `, [tenantId]);
 
     const creditosMap = new Map(creditosRes.rows.map((row: any) => [row.canal, parseInt(row.total)]));
-    const usosMap = new Map(usoRes.rows.map((row: any) => [row.canal, parseInt(row.usados)]));
+    const usosMap = new Map(usoRes.rows.map((row: any) => [row.canal, { usados: parseInt(row.usados), limite: parseInt(row.limite) }]));
 
-    // 📝 Construir respuesta por canal
-    const usos = CANALES.map(({ canal, limite }) => {
-      const baseLimite = limite ?? 0;
-      const usados = usosMap.get(canal) ?? 0;
+    const usos = CANALES.map(({ canal, limite: limiteBase }) => {
+      const { usados = 0, limite = limiteBase ?? 0 } = usosMap.get(canal) ?? {};
       const creditosExtras = creditosMap.get(canal) ?? 0;
-      const totalLimite = baseLimite + creditosExtras;
-      const porcentaje = totalLimite ? (usados / totalLimite) * 100 : 0;
+      const totalLimite = (limiteBase ?? 0) + creditosExtras;
+
+      const porcentaje = totalLimite > 0 ? (usados / totalLimite) * 100 : 0;
 
       let notificar = null;
       if (totalLimite) {
@@ -73,10 +80,7 @@ router.get('/', async (req: Request, res: Response) => {
       };
     });
 
-    return res.status(200).json({
-      usos,
-      plan: 'custom',
-    });
+    return res.status(200).json({ usos, plan: 'custom' });
 
   } catch (error) {
     console.error('❌ Error en /usage:', error);
