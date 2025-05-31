@@ -11,7 +11,7 @@ export const transporter = nodemailer.createTransport({
   },  
 });
 
-const from = `"Amy AI" <${process.env.SMTP_FROM}>`; // Usamos el from correcto (noreply@aamy.ai)
+const from = `"Aamy AI" <${process.env.SMTP_FROM || 'noreply@aamy.ai'}>`;
 
 // ✅ 1. Verificación de cuenta (no necesita tenantName)
 export const sendVerificationEmail = async (
