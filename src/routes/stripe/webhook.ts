@@ -115,6 +115,16 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           `, [user.uid, vigencia]);
           
         console.log(`🔁 Membresía activada para ${email}, vigencia hasta ${vigencia.toISOString()}`);
+
+        // 🔄 Reset uso mensual a 0 al activar nueva membresía
+        await pool.query(`
+          UPDATE uso_mensual
+          SET usados = 0
+          WHERE tenant_id = $1
+        `, [user.uid]);
+
+        console.log(`🔄 Uso mensual reseteado a 0 para ${email}`);
+
       } catch (error) {
         console.error('❌ Error activando membresía:', error);
       }
@@ -175,6 +185,16 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       `, [user.uid, nuevaVigencia]);
 
       console.log('🔁 Membresía renovada para', customerEmail);
+      
+      // 🔄 Reseteo de uso mensual a 0 para todos los canales
+      await pool.query(`
+        UPDATE uso_mensual
+        SET usados = 0
+        WHERE tenant_id = $1
+      `, [user.uid]);
+
+      console.log('🔄 Uso mensual reseteado a 0 para', customerEmail);
+
     } catch (error) {
       console.error('❌ Error renovando membresía:', error);
     }
