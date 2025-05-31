@@ -83,9 +83,15 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const fin = new Date(inicio);
         fin.setMonth(inicio.getMonth() + 1);
         await pool.query(
-          `UPDATE uso_mensual SET usados = usados + 1 WHERE tenant_id = $1 AND canal = 'meta' AND mes >= $2 AND mes < $3`,
+          `UPDATE uso_mensual
+           SET usados = (
+             SELECT COUNT(*) FROM messages
+             WHERE tenant_id = $1 AND sender = 'user' AND canal = 'meta'
+             AND timestamp >= $2 AND timestamp < $3
+           )
+           WHERE tenant_id = $1 AND canal = 'meta' AND mes >= $2 AND mes < $3`,
           [tenantId, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
-        );
+        );        
 
         // 🌟 Generar respuesta
         let respuesta: string | null = null;
