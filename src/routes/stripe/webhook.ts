@@ -62,14 +62,17 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       if (!canalesPermitidos.includes(canal)) return;
 
       try {
-        await pool.query(`
-          INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
-          VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 0, $3)
-          ON CONFLICT (tenant_id, canal, mes)
-          DO UPDATE SET limite = uso_mensual.limite + $3
-        `, [tenant_id, canal, cantidadInt]);
+        // Calcular fecha de compra y vencimiento
+        const fechaCompra = new Date();
+        const fechaVencimiento = new Date(fechaCompra);
+        fechaVencimiento.setDate(fechaVencimiento.getDate() + 30); // 30 días de validez
 
-        console.log(`✅ Créditos agregados: +${cantidadInt} a ${canal.toUpperCase()} para tenant ${tenant_id}`);
+        await pool.query(`
+          INSERT INTO creditos_comprados (tenant_id, canal, cantidad, fecha_compra, fecha_vencimiento)
+          VALUES ($1, $2, $3, $4, $5)
+        `, [tenant_id, canal, cantidadInt, fechaCompra.toISOString(), fechaVencimiento.toISOString()]);
+
+        console.log(`✅ Créditos registrados: +${cantidadInt} a ${canal.toUpperCase()} para tenant ${tenant_id} (válidos hasta ${fechaVencimiento.toISOString()})`);
 
         if (email) {
           // 🔍 Obtenemos el nombre del tenant para personalizar el saludo

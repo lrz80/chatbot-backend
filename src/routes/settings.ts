@@ -7,7 +7,7 @@ import { authenticateUser } from '../middleware/auth';
 
 const router = express.Router();
 
-// ✅ GET: Perfil del negocio + FAQs e Intents por canal
+// ✅ GET: Perfil del negocio + FAQs e Intents por canal + Límite por canal (base + créditos extra)
 router.get('/', authenticateUser, async (req: any, res: Response) => {
   console.log('🧪 Entró al endpoint /api/settings');
   try {
@@ -22,20 +22,12 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     const user = userRes.rows[0];
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    const tenantRes = await pool.query(`
-      SELECT 
-        * 
-      FROM tenants 
-      WHERE id = $1
-      LIMIT 1
-    `, [tenant_id]);
+    const tenantRes = await pool.query(`SELECT * FROM tenants WHERE id = $1 LIMIT 1`, [tenant_id]);
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
 
-    // ✅ Canal actual (viene por query string, por defecto 'whatsapp')
     const canal = req.query.canal || 'whatsapp';
 
-    // ✅ Traer FAQs e Intents del canal específico
     const faqsRes = await pool.query(
       'SELECT id, pregunta, respuesta FROM faqs WHERE tenant_id = $1 AND canal = $2 ORDER BY id',
       [tenant_id, canal]
@@ -45,11 +37,38 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       [tenant_id, canal]
     );
 
+    // 🚀 Traer todos los canales para mostrar sus límites (base + extras)
+    const canales = ['contactos', 'whatsapp', 'sms', 'email', 'voz', 'meta', 'followup', 'tokens_openai'];
+    const limites: any = {};
+
+    for (const c of canales) {
+      const baseRes = await pool.query(
+        `SELECT limite, usados FROM uso_mensual WHERE tenant_id = $1 AND canal = $2 AND mes = date_trunc('month', CURRENT_DATE)`,
+        [tenant_id, c]
+      );
+      const base = baseRes.rows[0] || { limite: 0, usados: 0 };
+
+      const extraRes = await pool.query(
+        `SELECT COALESCE(SUM(cantidad), 0) AS extras
+         FROM creditos_comprados
+         WHERE tenant_id = $1 AND canal = $2 AND fecha_vencimiento > NOW()`,
+        [tenant_id, c]
+      );
+      const extras = parseInt(extraRes.rows[0]?.extras || 0, 10);
+
+      limites[c] = {
+        limite_base: base.limite,
+        usados: base.usados,
+        creditos_extras: extras,
+        total_disponible: base.limite + extras - base.usados,
+      };
+    }
+
     return res.status(200).json({
       uid: user.uid,
       email: user.email,
       owner_name: user.owner_name,
-      tenant_id, // 👈 Agregar esto
+      tenant_id,
       membresia_activa: tenant.membresia_activa ?? false,
       membresia_vigencia: tenant.membresia_vigencia ?? null,
       onboarding_completado: tenant.onboarding_completado,
@@ -69,19 +88,17 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       logo_url: tenant.logo_url || '',
       plan: tenant.plan || '',
       fecha_registro: tenant.fecha_registro || null,
-    
-      // Datos Meta
       facebook_page_id: tenant.facebook_page_id || '',
       facebook_page_name: tenant.facebook_page_name || '',
       facebook_access_token: tenant.facebook_access_token || '',
       instagram_page_id: tenant.instagram_page_id || '',
       instagram_page_name: tenant.instagram_page_name || '',
-    
-      // ✅ Nuevos datos por canal
       faq: faqsRes.rows,
       intents: intentsRes.rows,
+
+      // 🚀 Incluimos límites por canal
+      limites,
     });
-    
   } catch (error) {
     console.error('❌ Error en GET /api/settings:', error);
     return res.status(401).json({ error: 'Token inválido' });

@@ -1,3 +1,4 @@
+// src/routes/usage.ts
 import { Router, Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
@@ -5,7 +6,6 @@ import pool from '../lib/db';
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
-// ✅ Definimos los canales con límites para mostrar en la interfaz
 const CANALES = [
   { canal: 'whatsapp', limite: 500 },
   { canal: 'meta', limite: 500 },
@@ -32,50 +32,50 @@ router.get('/', async (req: Request, res: Response) => {
 
     // 🔎 Obtener fecha de inicio de membresía del tenant
     const tenantRes = await pool.query('SELECT membresia_inicio FROM tenants WHERE id = $1', [tenantId]);
-    const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
-    if (!membresiaInicio) return res.status(400).json({ error: 'Tenant sin fecha de membresía' });
-
+    const membresiaInicio = tenantRes.rows[0]?.membresia_inicio || new Date();
     const inicio = new Date(membresiaInicio);
-    const hoy = new Date();
 
-    // 🔍 Obtenemos todos los registros de uso dentro del ciclo de membresía
+    // 🔍 Obtener usos actuales por canal
     const usoRes = await pool.query(`
-      SELECT canal, usados, limite
-      FROM uso_mensual
-      WHERE tenant_id = $1 AND mes >= $2
-    `, [tenantId, inicio.toISOString().substring(0, 10)]); // YYYY-MM-DD
+      SELECT canal, usados FROM uso_mensual WHERE tenant_id = $1 AND mes >= $2
+    `, [tenantId, inicio.toISOString().substring(0,10)]);
 
-    // 📝 Preparamos inserción o actualización del límite por canal
-    for (const { canal, limite } of CANALES) {
-      await pool.query(`
-        INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
-        VALUES ($1, $2, $3, 0, $4)
-        ON CONFLICT (tenant_id, canal, mes)
-        DO UPDATE SET limite = EXCLUDED.limite
-      `, [tenantId, canal, inicio.toISOString().substring(0, 10), limite]);
-    }
+    // 🔍 Obtener créditos comprados válidos (no vencidos)
+    const creditosRes = await pool.query(`
+      SELECT canal, SUM(cantidad) as total FROM creditos_comprados
+      WHERE tenant_id = $1 AND fecha_vencimiento >= NOW()
+      GROUP BY canal
+    `, [tenantId]);
 
-    // 📨 Calculamos notificación para cada canal
-    const usos = usoRes.rows.map((row: any) => {
-      const porcentaje = row.limite ? (row.usados / row.limite) * 100 : 0;
-      const notificar = row.limite
-        ? porcentaje >= 80
-          ? porcentaje >= 100
-            ? 'limite'
-            : 'aviso'
-          : null
-        : null;
+    const creditosMap = new Map(creditosRes.rows.map((row: any) => [row.canal, parseInt(row.total)]));
+    const usosMap = new Map(usoRes.rows.map((row: any) => [row.canal, parseInt(row.usados)]));
+
+    // 📝 Construir respuesta por canal
+    const usos = CANALES.map(({ canal, limite }) => {
+      const baseLimite = limite ?? 0;
+      const usados = usosMap.get(canal) ?? 0;
+      const creditosExtras = creditosMap.get(canal) ?? 0;
+      const totalLimite = baseLimite + creditosExtras;
+      const porcentaje = totalLimite ? (usados / totalLimite) * 100 : 0;
+
+      let notificar = null;
+      if (totalLimite) {
+        if (porcentaje >= 100) notificar = 'limite';
+        else if (porcentaje >= 80) notificar = 'aviso';
+      }
 
       return {
-        ...row,
+        canal,
+        usados,
+        limite: totalLimite,
         porcentaje,
-        notificar,
+        notificar
       };
     });
 
     return res.status(200).json({
       usos,
-      plan: "custom",
+      plan: 'custom',
     });
 
   } catch (error) {
