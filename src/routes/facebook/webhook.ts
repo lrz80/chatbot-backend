@@ -17,7 +17,6 @@ router.get('/api/facebook/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-
   if (mode && token) {
     if (mode === 'subscribe' && token === VERIFY_TOKEN) {
       console.log('✅ Webhook de Facebook verificado');
@@ -26,7 +25,6 @@ router.get('/api/facebook/webhook', (req, res) => {
       return res.sendStatus(403);
     }
   }
-
   res.sendStatus(400);
 });
 
@@ -40,7 +38,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
     for (const entry of body.entry) {
       const pageId = entry.id;
-
       for (const messagingEvent of entry.messaging) {
         if (!messagingEvent.message || messagingEvent.message.is_echo || !messagingEvent.message.text) {
           console.log('⏭️ Evento ignorado');
@@ -64,15 +61,27 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
 
-        // 🛡️ PREVIENE DUPLICADOS: solo procesa si el mensaje no existe
-        const existingMsg = await pool.query(
-          `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
-          [tenantId, messageId]
+        // 🛡️ Previene duplicados: inserta y solo suma si es nuevo
+        const insertRes = await pool.query(
+          `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
+           VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
+           ON CONFLICT (tenant_id, message_id) DO NOTHING
+           RETURNING *`,
+          [tenantId, userMessage, canal, senderId, messageId]
         );
-        if (existingMsg.rows.length > 0) {
-          console.log("⏭️ Mensaje duplicado detectado, no se cuenta ni procesa.");
-          continue;
-        }
+        
+        if ((insertRes?.rowCount ?? 0) > 0) {
+          // ✅ Incrementar uso solo si se insertó nuevo
+          const inicio = new Date(tenant.membresia_inicio);
+          const fin = new Date(inicio);
+          fin.setMonth(inicio.getMonth() + 1);
+          await pool.query(
+            `UPDATE uso_mensual
+             SET usados = usados + 1
+             WHERE tenant_id = $1 AND canal = 'meta' AND mes >= $2 AND mes < $3`,
+            [tenantId, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
+          );
+        }        
 
         let faqs = [];
         let flows = [];
@@ -108,48 +117,27 @@ router.post('/api/facebook/webhook', async (req, res) => {
                 max_tokens: 500,
               });
               respuesta = completion.choices[0]?.message?.content?.trim() ?? promptMeta;
-
               const tokensConsumidos = completion.usage?.total_tokens || 0;
               if (tokensConsumidos > 0) {
                 await pool.query(
                   `UPDATE uso_mensual
-                  SET usados = usados + $1
-                  WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
+                   SET usados = usados + $1
+                   WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
                   [tokensConsumidos, tenantId]
                 );
               }
-
             } catch (error) {
-              console.error('❌ Error con OpenAI:', error);
+              console.error('❌ Error OpenAI:', error);
               respuesta = promptMeta;
             }
           }
         }
 
         respuesta = respuesta ?? "Lo siento, no tengo información disponible.";
-
         const idiomaFinal = await detectarIdioma(respuesta);
         if (idiomaFinal !== idioma) {
           respuesta = await traducirMensaje(respuesta, idioma);
         }
-
-        // 📝 Inserta mensaje (primero) y solo si es nuevo suma el uso
-        await pool.query(
-          `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
-           VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
-          [tenantId, userMessage, canal, senderId, messageId]
-        );
-
-        // ✅ SUMA USO una sola vez
-        const inicio = new Date(tenant.membresia_inicio);
-        const fin = new Date(inicio);
-        fin.setMonth(inicio.getMonth() + 1);
-        await pool.query(
-          `UPDATE uso_mensual
-           SET usados = usados + 1
-           WHERE tenant_id = $1 AND canal = 'meta' AND mes >= $2 AND mes < $3`,
-          [tenantId, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
-        );
 
         await pool.query(
           `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
@@ -157,26 +145,20 @@ router.post('/api/facebook/webhook', async (req, res) => {
           [tenantId, senderId, canal, userMessage, intencion, nivel_interes]
         );
 
-        const yaExisteContenidoReciente = await pool.query(
-          `SELECT 1 FROM messages 
-           WHERE tenant_id = $1 AND sender = 'bot' AND canal = $2 AND content = $3 
-           AND timestamp >= NOW() - INTERVAL '5 seconds'
-           LIMIT 1`,
+        const yaExisteRespuesta = await pool.query(
+          `SELECT 1 FROM messages WHERE tenant_id = $1 AND sender = 'bot' AND canal = $2 AND content = $3 
+           AND timestamp >= NOW() - INTERVAL '5 seconds' LIMIT 1`,
           [tenantId, canal, respuesta]
         );
-        if (yaExisteContenidoReciente.rows.length === 0) {
-          try {
-            await enviarMensajePorPartes({
-              respuesta,
-              senderId,
-              tenantId,
-              canal,
-              messageId,
-              accessToken,
-            });
-          } catch (err) {
-            console.error('❌ Error al enviar mensaje por partes:', err);
-          }
+        if (yaExisteRespuesta.rows.length === 0) {
+          await enviarMensajePorPartes({
+            respuesta,
+            senderId,
+            tenantId,
+            canal,
+            messageId,
+            accessToken,
+          });
         }
 
         await pool.query(`INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`, [tenantId, canal]);
