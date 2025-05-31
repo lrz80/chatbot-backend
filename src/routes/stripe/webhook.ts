@@ -20,6 +20,19 @@ function initStripe() {
   }
 }
 
+// 🚀 Helper para reiniciar límites y uso mensual de todos los canales
+const resetearCanales = async (tenantId: string) => {
+  const canales = ['contactos', 'whatsapp', 'sms', 'email', 'voz', 'meta', 'followup', 'tokens_openai'];
+  for (const canal of canales) {
+    await pool.query(`
+      INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
+      VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 0, 500)
+      ON CONFLICT (tenant_id, canal, mes)
+      DO UPDATE SET usados = 0, limite = 500
+    `, [tenantId, canal]);
+  }
+};
+
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
   initStripe();
   const sig = req.headers['stripe-signature'];
@@ -117,14 +130,8 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           
         console.log(`🔁 Membresía activada para ${email}, vigencia hasta ${vigencia.toISOString()}`);
 
-        // 🔄 Reset uso mensual a 0 al activar nueva membresía
-        await pool.query(`
-          UPDATE uso_mensual
-          SET usados = 0
-          WHERE tenant_id = $1
-        `, [user.uid]);
-
-        console.log(`🔄 Uso mensual reseteado a 0 para ${email}`);
+        await resetearCanales(user.uid);  // 🚀 Reset completo
+        console.log(`🔄 Límites y uso mensual reiniciados para todos los canales de ${email}`);
 
       } catch (error) {
         console.error('❌ Error activando membresía:', error);
@@ -187,14 +194,8 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
       console.log('🔁 Membresía renovada para', customerEmail);
       
-      // 🔄 Reseteo de uso mensual a 0 para todos los canales
-      await pool.query(`
-        UPDATE uso_mensual
-        SET usados = 0
-        WHERE tenant_id = $1
-      `, [user.uid]);
-
-      console.log('🔄 Uso mensual reseteado a 0 para', customerEmail);
+      await resetearCanales(user.uid);  // 🚀 Reset completo
+      console.log(`🔄 Límites y uso mensual reiniciados para todos los canales de ${customerEmail}`);
 
     } catch (error) {
       console.error('❌ Error renovando membresía:', error);

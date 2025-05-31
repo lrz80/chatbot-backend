@@ -5,6 +5,19 @@ import pool from '../../lib/db';
 const router = express.Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2022-11-15' });
 
+// 🚀 Helper para reiniciar límites y uso mensual de todos los canales
+const resetearCanales = async (tenantId: string) => {
+  const canales = ['contactos', 'whatsapp', 'sms', 'email', 'voz', 'meta', 'followup', 'tokens_openai'];
+  for (const canal of canales) {
+    await pool.query(`
+      INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
+      VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 0, 500)
+      ON CONFLICT (tenant_id, canal, mes)
+      DO UPDATE SET usados = 0, limite = 500
+    `, [tenantId, canal]);
+  }
+};
+
 router.post('/', async (req, res) => {
   try {
     const token = req.cookies.token;
@@ -38,12 +51,9 @@ router.post('/', async (req, res) => {
       WHERE id = $1
     `, [tenantId]);
 
-    await pool.query(`
-      INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
-      VALUES ($1, 'contactos', date_trunc('month', CURRENT_DATE), 0, 500)
-      ON CONFLICT (tenant_id, canal, mes)
-      DO UPDATE SET limite = 500
-    `, [tenantId]);
+    // 🔄 Resetear TODOS los canales a 0 y límite 500
+    await resetearCanales(tenantId);
+    console.log(`🔄 Límites y uso mensual reiniciados para todos los canales del tenant ${tenantId}`);
 
     return res.json({ success: true, message: 'Membresía cancelada exitosamente' });
   } catch (error) {
