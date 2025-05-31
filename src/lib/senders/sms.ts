@@ -24,13 +24,18 @@ if (!callbackBaseUrl) {
   console.log("📤 Usando callback URL:", `${callbackBaseUrl}/api/webhook/sms-status`);
 }
 
+const defaultAamyFromNumber = '+14455451224';
+
 export async function sendSMS(
   mensaje: string,
   destinatarios: string[],
-  fromNumber: string,
+  fromNumber: string, // Mantén este argumento para compatibilidad
   tenantId: string,
   campaignId: number
 ) {
+  // Usa el número de Aamy AI solo si el tenant es AAMYAI
+  const realFromNumber = tenantId === 'AAMYAI' ? defaultAamyFromNumber : fromNumber;
+
   for (const rawTo of destinatarios) {
     const to = normalizarNumero(rawTo);
 
@@ -39,10 +44,15 @@ export async function sendSMS(
       continue;
     }
 
+    if (to === realFromNumber) {
+      console.warn(`⚠️ El número de destino y origen son iguales: ${to}`);
+      continue;
+    }
+
     try {
       const message = await client.messages.create({
         body: mensaje,
-        from: fromNumber,
+        from: realFromNumber,
         to,
         statusCallback: `${callbackBaseUrl}/api/webhook/sms-status?campaign_id=${campaignId}`,
       });
@@ -51,7 +61,7 @@ export async function sendSMS(
         `INSERT INTO sms_status_logs (
           tenant_id, campaign_id, message_sid, status, to_number, from_number, timestamp
         ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [tenantId, campaignId, message.sid, message.status, to, fromNumber, new Date().toISOString()]
+        [tenantId, campaignId, message.sid, message.status, to, realFromNumber, new Date().toISOString()]
       );
 
       console.log(`✅ SMS enviado a ${to} (SID: ${message.sid})`);
@@ -68,7 +78,7 @@ export async function sendSMS(
           null,
           'failed',
           to,
-          fromNumber,
+          realFromNumber,
           error.code || null,
           error.message || "Error desconocido",
           new Date().toISOString(),
