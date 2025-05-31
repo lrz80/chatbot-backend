@@ -1,3 +1,5 @@
+// src/routes/settings.ts
+
 import express from 'express';
 import { Request, Response } from 'express';
 import pool from '../lib/db';
@@ -47,6 +49,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       uid: user.uid,
       email: user.email,
       owner_name: user.owner_name,
+      tenant_id, // 👈 Agregar esto
       membresia_activa: tenant.membresia_activa ?? false,
       membresia_vigencia: tenant.membresia_vigencia ?? null,
       onboarding_completado: tenant.onboarding_completado,
