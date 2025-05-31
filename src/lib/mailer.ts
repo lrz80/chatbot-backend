@@ -3,17 +3,17 @@ import { emailTemplates } from './emailTemplates'; // asegúrate que la ruta sea
 
 export const transporter = nodemailer.createTransport({
   host: 'mail.privateemail.com',
-  port: 465,
-  secure: true,
+  port: 587,
+  secure: false,
   auth: {
-    user: process.env.EMAIL_FROM,
-    pass: process.env.EMAIL_PASS,
-  },
+    user: process.env.SMTP_USER, // ✅ Usamos el usuario SMTP real
+    pass: process.env.SMTP_PASS, // ✅ La contraseña SMTP
+  },  
 });
 
-const from = `"Amy AI" <${process.env.EMAIL_FROM}>`;
+const from = `"Amy AI" <${process.env.SMTP_FROM}>`; // Usamos el from correcto (noreply@aamy.ai)
 
-// ✅ 1. Verificación de cuenta
+// ✅ 1. Verificación de cuenta (no necesita tenantName)
 export const sendVerificationEmail = async (
   to: string,
   verificationLink: string,
@@ -28,12 +28,13 @@ export const sendVerificationEmail = async (
   });
 };
 
-// ✅ 2. Cancelación de membresía
+// ✅ 2. Cancelación de membresía (ahora recibe tenantName)
 export const sendCancelationEmail = async (
   to: string,
+  tenantName: string,
   lang: 'es' | 'en' = 'es'
 ) => {
-  const template = emailTemplates.cancelation[lang]();
+  const template = emailTemplates.cancelation[lang](tenantName);
   await transporter.sendMail({
     from,
     to,
@@ -42,12 +43,13 @@ export const sendCancelationEmail = async (
   });
 };
 
-// ✅ 3. Renovación automática exitosa
+// ✅ 3. Renovación automática exitosa (ahora recibe tenantName)
 export const sendRenewalSuccessEmail = async (
   to: string,
+  tenantName: string,
   lang: 'es' | 'en' = 'es'
 ) => {
-  const template = emailTemplates.renewal[lang]();
+  const template = emailTemplates.renewal[lang](tenantName);
   await transporter.sendMail({
     from,
     to,
