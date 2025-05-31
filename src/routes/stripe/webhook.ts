@@ -109,10 +109,11 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             UPDATE tenants
             SET membresia_activa = true,
                 membresia_vigencia = $2,
-                membresia_inicio = COALESCE(membresia_inicio, NOW()),  -- ✅ Solo si está NULL
-                plan = 'pro'
+                membresia_inicio = COALESCE(membresia_inicio, NOW()),
+                plan = 'pro',
+                subscription_id = $3  -- 👈 Guardar aquí el subscriptionId
             WHERE id = $1
-          `, [user.uid, vigencia]);
+          `, [user.uid, vigencia, subscriptionId]);          
           
         console.log(`🔁 Membresía activada para ${email}, vigencia hasta ${vigencia.toISOString()}`);
 
