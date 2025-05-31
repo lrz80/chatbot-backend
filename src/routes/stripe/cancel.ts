@@ -13,7 +13,6 @@ router.post('/', async (req, res) => {
     const { tenantId } = req.body;
     if (!tenantId) return res.status(400).json({ error: 'Falta tenantId' });
 
-    // Obtener subscriptionId asociado al tenant
     const subscriptionResult = await pool.query(
       `SELECT subscription_id FROM tenants WHERE id = $1`,
       [tenantId]
@@ -21,11 +20,18 @@ router.post('/', async (req, res) => {
     const subscriptionId = subscriptionResult.rows[0]?.subscription_id;
     if (!subscriptionId) return res.status(404).json({ error: 'No se encontró la suscripción' });
 
-    // Cancelar suscripción en Stripe
-    await stripe.subscriptions.del(subscriptionId);
-    console.log(`🛑 Suscripción cancelada en Stripe: ${subscriptionId}`);
+    try {
+      await stripe.subscriptions.del(subscriptionId);
+      console.log(`🛑 Suscripción cancelada en Stripe: ${subscriptionId}`);
+    } catch (error: any) {
+      if (error?.raw?.code === 'resource_missing') {
+        console.warn(`⚠️ Suscripción ya estaba cancelada en Stripe: ${subscriptionId}`);
+      } else {
+        console.error('❌ Error cancelando en Stripe:', error);
+        return res.status(500).json({ error: 'Error cancelando en Stripe' });
+      }
+    }
 
-    // Actualizar base de datos
     await pool.query(`
       UPDATE tenants
       SET membresia_activa = false, membresia_cancel_date = NOW()
@@ -39,10 +45,10 @@ router.post('/', async (req, res) => {
       DO UPDATE SET limite = 500
     `, [tenantId]);
 
-    res.json({ success: true, message: 'Membresía cancelada exitosamente' });
+    return res.json({ success: true, message: 'Membresía cancelada exitosamente' });
   } catch (error) {
     console.error('❌ Error al cancelar membresía:', error);
-    res.status(500).json({ error: 'Error al cancelar membresía' });
+    return res.status(500).json({ error: 'Error al cancelar membresía' });
   }
 });
 
