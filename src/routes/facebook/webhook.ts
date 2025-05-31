@@ -5,7 +5,6 @@ import pool from '../../lib/db';
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { buscarRespuestaSimilitudFaqsTraducido, buscarRespuestaDesdeFlowsTraducido } from '../../lib/respuestasTraducidas';
-import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { detectarIntencion } from '../../lib/detectarIntencion';
 import { enviarMensajePorPartes } from '../../lib/enviarMensajePorPartes';
 import OpenAI from 'openai';
@@ -186,7 +185,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         await pool.query(
           `UPDATE uso_mensual
           SET usados = usados + 1
-          WHERE tenant_id = $1 AND canal = 'whatsapp' AND mes >= $2 AND mes < $3`,
+          WHERE tenant_id = $1 AND canal = 'meta' AND mes >= $2 AND mes < $3`,
           [tenant.id, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
         );
       }

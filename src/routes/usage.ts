@@ -33,16 +33,13 @@ router.get('/', async (req: Request, res: Response) => {
     // 🔎 Obtenemos la fecha de inicio de membresía
     const tenantRes = await pool.query('SELECT membresia_inicio FROM tenants WHERE id = $1', [tenantId]);
     const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
-    if (!membresiaInicio) return res.status(400).json({ error: 'El tenant no tiene membresía activa' });
-
     const inicio = new Date(membresiaInicio);
     const fin = new Date(inicio);
     fin.setMonth(inicio.getMonth() + 1);
 
-    // 🔍 Obtener uso real en el rango personalizado
     const usoRes = await pool.query(`
-      SELECT canal, SUM(usados) as usados, MAX(limite) as limite
-      FROM uso_mensual
+      SELECT canal, SUM(usados) as usados 
+      FROM uso_mensual 
       WHERE tenant_id = $1 AND mes >= $2 AND mes < $3
       GROUP BY canal
     `, [tenantId, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]);
