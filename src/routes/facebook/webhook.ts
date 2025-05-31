@@ -88,7 +88,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         let respuesta: string | null = null;
 
-        // 🚦 Detectar intención de finalizar conversación
         if (["finalizar", "cerrar", "terminar", "gracias", "eso es todo", "no necesito más"].some(p => intencionLower.includes(p))) {
           respuesta = "¡Gracias por contactarnos! Si necesitas más información, no dudes en escribirnos. ¡Hasta pronto!";
         } else {
@@ -123,16 +122,13 @@ router.post('/api/facebook/webhook', async (req, res) => {
           }
         }
 
-        // 🔒 Aseguramos que siempre sea string
         respuesta = respuesta ?? "Lo siento, no tengo información disponible.";
 
-        // 🌐 Traducir si es necesario
         const idiomaFinal = await detectarIdioma(respuesta);
         if (idiomaFinal !== idioma) {
           respuesta = await traducirMensaje(respuesta, idioma);
         }
 
-        // 📝 Guardar mensajes e interacciones
         await pool.query(
           `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
            VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -149,6 +145,17 @@ router.post('/api/facebook/webhook', async (req, res) => {
              VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
             [tenantId, userMessage, canal, senderId, messageId]
+          );
+
+          // ✅ Incrementar el uso solo por el mensaje recibido del cliente
+          const inicio = new Date(tenant.membresia_inicio);
+          const fin = new Date(inicio);
+          fin.setMonth(inicio.getMonth() + 1);
+          await pool.query(
+            `UPDATE uso_mensual
+            SET usados = usados + 1
+            WHERE tenant_id = $1 AND canal = 'meta' AND mes >= $2 AND mes < $3`,
+            [tenantId, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
           );
         }
 
@@ -174,20 +181,9 @@ router.post('/api/facebook/webhook', async (req, res) => {
           }
         }
 
-        // 📝 Guardar interacción y actualizar uso del canal
         await pool.query(`INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`, [tenantId, canal]);
 
-        // 🟢 Incrementar uso del canal (facebook o instagram)
-        const inicio = new Date(tenant.membresia_inicio);
-        const fin = new Date(inicio);
-        fin.setMonth(inicio.getMonth() + 1);
-
-        await pool.query(
-          `UPDATE uso_mensual
-          SET usados = usados + 1
-          WHERE tenant_id = $1 AND canal = 'meta' AND mes >= $2 AND mes < $3`,
-          [tenant.id, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
-        );
+        // ❌ Eliminado el incremento duplicado que estaba generando suma doble/triple
       }
     }
   } catch (error: any) {
