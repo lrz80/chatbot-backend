@@ -259,5 +259,13 @@ async function procesarMensajeWhatsApp(body: any) {
     [tenant.id, canal]
   );
 
+  // ✅ Incrementar el uso de WhatsApp (esto estaba faltando)
+  await pool.query(
+    `UPDATE uso_mensual
+     SET usados = usados + 1
+     WHERE tenant_id = $1 AND canal = 'whatsapp' AND mes = date_trunc('month', CURRENT_DATE)`,
+    [tenant.id]
+  );
+
   await incrementarUsoPorNumero(numero);
 }
