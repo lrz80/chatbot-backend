@@ -4,7 +4,6 @@ import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import OpenAI from 'openai';
 import twilio from 'twilio';
-import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
@@ -16,25 +15,6 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 
 function normalizarTexto(texto: string): string {
   return texto.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
-}
-
-function buscarRespuestaDesdeFlows(flows: any[], mensajeUsuario: string): string | null {
-  const normalizado = normalizarTexto(mensajeUsuario);
-  for (const flujo of flows) {
-    for (const opcion of flujo.opciones || []) {
-      if (normalizarTexto(opcion.texto || '') === normalizado) {
-        return opcion.respuesta || opcion.submenu?.mensaje || null;
-      }
-      if (opcion.submenu) {
-        for (const sub of opcion.submenu.opciones || []) {
-          if (normalizarTexto(sub.texto || '') === normalizado) {
-            return sub.respuesta || null;
-          }
-        }
-      }
-    }
-  }
-  return null;
 }
 
 async function detectarIntencion(mensaje: string) {
@@ -53,17 +33,6 @@ async function detectarIntencion(mensaje: string) {
     intencion: data.intencion || 'no_detectada',
     nivel_interes: data.nivel_interes || 1,
   };
-}
-
-function buscarRespuestaSimilitudFaqs(faqs: any[], mensaje: string): string | null {
-  const msg = normalizarTexto(mensaje);
-  for (const faq of faqs) {
-    const pregunta = normalizarTexto(faq.pregunta || '');
-    const palabras = pregunta.split(' ').filter(Boolean);
-    const coincidencias = palabras.filter(p => msg.includes(p));
-    if (coincidencias.length >= 3) return faq.respuesta;
-  }
-  return null;
 }
 
 router.post('/', async (req: Request, res: Response) => {
@@ -243,6 +212,18 @@ async function procesarMensajeWhatsApp(body: any) {
     [tenant.id, userInput, canal, fromNumber]
   );
 
+  // ✅ Incrementar el uso de WhatsApp (esto estaba faltando)
+  const inicio = new Date(tenant.membresia_inicio);
+  const fin = new Date(inicio);
+  fin.setMonth(inicio.getMonth() + 1);
+
+  await pool.query(
+    `UPDATE uso_mensual
+    SET usados = usados + 1
+    WHERE tenant_id = $1 AND canal = 'whatsapp' AND mes >= $2 AND mes < $3`,
+    [tenant.id, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
+  );
+
   await pool.query(
     `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
      VALUES ($1, 'bot', $2, NOW(), $3)`,
@@ -259,17 +240,4 @@ async function procesarMensajeWhatsApp(body: any) {
     [tenant.id, canal]
   );
 
-  // ✅ Incrementar el uso de WhatsApp (esto estaba faltando)
-  const inicio = new Date(tenant.membresia_inicio);
-  const fin = new Date(inicio);
-  fin.setMonth(inicio.getMonth() + 1);
-
-  await pool.query(
-    `UPDATE uso_mensual
-    SET usados = usados + 1
-    WHERE tenant_id = $1 AND canal = 'whatsapp' AND mes >= $2 AND mes < $3`,
-    [tenant.id, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
-  );
-
-  await incrementarUsoPorNumero(numero);
 }
