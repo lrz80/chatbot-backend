@@ -260,11 +260,15 @@ async function procesarMensajeWhatsApp(body: any) {
   );
 
   // ✅ Incrementar el uso de WhatsApp (esto estaba faltando)
+  const inicio = new Date(tenant.membresia_inicio);
+  const fin = new Date(inicio);
+  fin.setMonth(inicio.getMonth() + 1);
+
   await pool.query(
     `UPDATE uso_mensual
-     SET usados = usados + 1
-     WHERE tenant_id = $1 AND canal = 'whatsapp' AND mes = date_trunc('month', CURRENT_DATE)`,
-    [tenant.id]
+    SET usados = usados + 1
+    WHERE tenant_id = $1 AND canal = 'whatsapp' AND mes >= $2 AND mes < $3`,
+    [tenant.id, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
   );
 
   await incrementarUsoPorNumero(numero);

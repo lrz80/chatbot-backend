@@ -179,11 +179,15 @@ router.post('/api/facebook/webhook', async (req, res) => {
         await pool.query(`INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`, [tenantId, canal]);
 
         // 🟢 Incrementar uso del canal (facebook o instagram)
+        const inicio = new Date(tenant.membresia_inicio);
+        const fin = new Date(inicio);
+        fin.setMonth(inicio.getMonth() + 1);
+
         await pool.query(
           `UPDATE uso_mensual
           SET usados = usados + 1
-          WHERE tenant_id = $1 AND canal = $2 AND mes = date_trunc('month', CURRENT_DATE)`,
-          [tenantId, canal]
+          WHERE tenant_id = $1 AND canal = 'whatsapp' AND mes >= $2 AND mes < $3`,
+          [tenant.id, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
         );
       }
     }
