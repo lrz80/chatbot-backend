@@ -19,7 +19,7 @@ function normalizarTexto(texto: string): string {
 
 async function detectarIntencion(mensaje: string) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-  const prompt = `Analiza este mensaje de un cliente:\n\n"${mensaje}"\n\nIdentifica:\n- Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).\n- Nivel de interés (de 1 a 5, siendo 5 "muy interesado en comprar").\n\nResponde solo en JSON. Ejemplo:\n{\n  "intencion": "preguntar precios",\n  "nivel_interes": 4\n}`;
+  const prompt = `Analiza este mensaje de un cliente:\n\n"${mensaje}"\n\nIdentifica:\n- Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).\n- Nivel de interés (de 1 a 5, siendo 5 \"muy interesado en comprar\").\n\nResponde solo en JSON. Ejemplo:\n{\n  "intencion": "preguntar precios",\n  "nivel_interes": 4\n}`;
 
   const respuesta = await openai.chat.completions.create({
     model: 'gpt-3.5-turbo',  // 🔥 Cambiado a 3.5-turbo por costos
@@ -28,16 +28,11 @@ async function detectarIntencion(mensaje: string) {
   });
 
   const content = respuesta.choices[0]?.message?.content || '{}';
-  try {
-    const data = JSON.parse(content);
-    const intencion = data.intencion || 'no_detectada';
-    const nivel_interes = data.nivel_interes || 1;
-    console.log(`🔎 Intención detectada: ${intencion}, Nivel de interés: ${nivel_interes}`);
-    return { intencion, nivel_interes };
-  } catch (error) {
-    console.error('❌ Error analizando intención:', error, 'Respuesta recibida:', content);
-    return { intencion: 'error', nivel_interes: 1 };
-  }
+  const data = JSON.parse(content);
+  return {
+    intencion: data.intencion || 'no_detectada',
+    nivel_interes: data.nivel_interes || 1,
+  };
 }
 
 router.post('/', async (req: Request, res: Response) => {
@@ -184,17 +179,72 @@ async function procesarMensajeWhatsApp(body: any) {
   try {
     const { intencion, nivel_interes } = await detectarIntencion(userInput);
     const intencionLower = intencion.toLowerCase();
+  
+    console.log(`🔎 Intención detectada: ${intencion}, Nivel de interés: ${nivel_interes}`);
+  
+    // 🔥 Actualiza el segmento a cliente si aplica
     if (["comprar", "compra", "pagar", "agendar", "reservar", "confirmar"].some(p => intencionLower.includes(p))) {
-      await pool.query(`UPDATE clientes SET segmento = 'cliente' WHERE tenant_id = $1 AND contacto = $2 AND segmento = 'lead'`, [tenant.id, fromNumber]);
+      await pool.query(
+        `UPDATE clientes SET segmento = 'cliente' WHERE tenant_id = $1 AND contacto = $2 AND segmento = 'lead'`,
+        [tenant.id, fromNumber]
+      );
     }
-    await pool.query(`INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes) VALUES ($1, $2, $3, $4, $5, $6)`, [tenant.id, fromNumber, canal, userInput, intencion, nivel_interes]);
+  
+    // 🔥 Registra en sales_intelligence
+    await pool.query(
+      `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [tenant.id, fromNumber, canal, userInput, intencion, nivel_interes]
+    );
+  
+    // 🚀 Si nivel_interes >= 4, programa seguimiento (follow-up)
+    if (nivel_interes >= 4) {
+      const configRes = await pool.query(
+        `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
+        [tenant.id]
+      );
+      const config = configRes.rows[0];
+  
+      if (config) {
+        let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
+  
+        // Personaliza según la intención detectada
+        if (intencionLower.includes("precio") && config.mensaje_precio) {
+          mensajeSeguimiento = config.mensaje_precio;
+        } else if ((intencionLower.includes("agendar") || intencionLower.includes("reservar")) && config.mensaje_agendar) {
+          mensajeSeguimiento = config.mensaje_agendar;
+        } else if ((intencionLower.includes("ubicacion") || intencionLower.includes("location")) && config.mensaje_ubicacion) {
+          mensajeSeguimiento = config.mensaje_ubicacion;
+        }
+  
+        try {
+          const idiomaMensaje = await detectarIdioma(mensajeSeguimiento);
+          if (idiomaMensaje !== idioma) {
+            mensajeSeguimiento = await traducirMensaje(mensajeSeguimiento, idioma);
+          }
+        } catch {}
+  
+        const fechaEnvio = new Date();
+        fechaEnvio.setMinutes(fechaEnvio.getMinutes() + (config.minutos_espera || 5));
+  
+        // 🔄 Elimina mensajes pendientes duplicados para evitar spam
+        await pool.query(
+          `DELETE FROM mensajes_programados
+           WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+          [tenant.id, canal, fromNumber]
+        );
+  
+        // 📨 Inserta nuevo mensaje programado
+        await pool.query(
+          `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
+           VALUES ($1, $2, $3, $4, $5, false)`,
+          [tenant.id, canal, fromNumber, mensajeSeguimiento, fechaEnvio]
+        );
+  
+        console.log(`✅ Mensaje de seguimiento programado para ${fromNumber} con contenido: "${mensajeSeguimiento}" para enviarse el ${fechaEnvio}`);
+      }
+    }
   } catch (err) {
-    console.error("⚠️ Error en inteligencia de ventas:", err);
-  }
-
-  const contactoRes = await pool.query(`SELECT nombre, segmento FROM contactos WHERE tenant_id = $1 AND telefono = $2 LIMIT 1`, [tenant.id, fromNumber]);
-  const contactoPrevio = contactoRes.rows[0];
-  const nombreDetectado = contactoPrevio?.nombre || body.ProfileName || null;
-  const segmentoDetectado = contactoPrevio?.segmento || 'lead';
-  await pool.query(`INSERT INTO clientes (tenant_id, canal, contacto, creado, nombre, segmento) VALUES ($1, $2, $3, NOW(), $4, $5) ON CONFLICT (contacto) DO UPDATE SET nombre = COALESCE(EXCLUDED.nombre, clientes.nombre), segmento = CASE WHEN clientes.segmento = 'lead' AND EXCLUDED.segmento = 'cliente' THEN 'cliente' ELSE clientes.segmento END`, [tenant.id, canal, fromNumber, nombreDetectado, segmentoDetectado]);
-}
+    console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
+  }  
+}  
