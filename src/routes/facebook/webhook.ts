@@ -59,8 +59,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         if (rows.length === 0) continue;
 
         const tenant = rows[0];
-        const isInstagram = tenant.instagram_page_id && tenant.instagram_page_id === senderId;
-        const canal = isInstagram ? 'instagram' : 'facebook';
+        const canal = 'meta'; // 🔥 Forzamos canal 'meta'
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
 
@@ -108,9 +107,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
               const tokensConsumidos = completion.usage?.total_tokens || 0;
               if (tokensConsumidos > 0) {
                 await pool.query(
-                  `UPDATE uso_mensual
-                  SET usados = usados + $1
-                  WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
+                  `UPDATE uso_mensual SET usados = usados + $1
+                   WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
                   [tokensConsumidos, tenantId]
                 );
               }
@@ -142,10 +140,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
         );
 
         const yaExisteContenidoReciente = await pool.query(
-          `SELECT 1 FROM messages 
-           WHERE tenant_id = $1 AND sender = 'bot' AND canal = $2 AND content = $3 
-           AND timestamp >= NOW() - INTERVAL '5 seconds'
-           LIMIT 1`,
+          `SELECT 1 FROM messages WHERE tenant_id = $1 AND sender = 'bot' AND canal = $2 AND content = $3 
+           AND timestamp >= NOW() - INTERVAL '5 seconds' LIMIT 1`,
           [tenantId, canal, respuesta]
         );
         if (yaExisteContenidoReciente.rows.length === 0) {
@@ -165,26 +161,23 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         await pool.query(`INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`, [tenantId, canal]);
 
-        // 🔥 Contabilizamos correctamente los mensajes del mes por canal meta (facebook e instagram)
         const inicio = new Date(tenant.membresia_inicio);
         const fin = new Date(inicio);
         fin.setMonth(inicio.getMonth() + 1);
 
         const { rows: conteo } = await pool.query(
           `SELECT COUNT(*) FROM messages
-           WHERE tenant_id = $1 AND sender = 'user'
-           AND (canal = 'facebook' OR canal = 'instagram')
+           WHERE tenant_id = $1 AND sender = 'user' AND canal = 'meta'
            AND timestamp >= $2 AND timestamp < $3`,
           [tenantId, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
         );
-
         const totalUsados = parseInt(conteo[0]?.count) || 0;
 
         await pool.query(
           `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-           VALUES ($1, 'meta', date_trunc('month', CURRENT_DATE), $2)
-           ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = $2`,
-          [tenantId, totalUsados]
+           VALUES ($1, 'meta', date_trunc('month', $2), $3)
+           ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = $3`,
+          [tenantId, inicio, totalUsados]
         );
       }
     }

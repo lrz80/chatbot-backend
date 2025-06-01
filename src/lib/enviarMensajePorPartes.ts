@@ -3,7 +3,7 @@ import pool from '../lib/db';
 
 interface EnvioMensajeParams {
   tenantId: string;
-  canal: 'facebook' | 'instagram' | 'whatsapp';
+  canal: 'facebook' | 'instagram' | 'whatsapp' | 'meta'; // 🎉 Se agrega 'meta'
   senderId: string;
   messageId: string;
   accessToken: string;
@@ -41,7 +41,7 @@ export async function enviarMensajePorPartes({
     );
 
     try {
-      if (canal === 'facebook' || canal === 'instagram') {
+      if (canal === 'facebook' || canal === 'instagram' || canal === 'meta') { // 🔥 Acepta 'meta'
         await axios.post(
           `https://graph.facebook.com/v19.0/me/messages`,
           {
