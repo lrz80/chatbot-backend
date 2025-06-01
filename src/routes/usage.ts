@@ -8,7 +8,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
 const CANALES = [
   { canal: 'whatsapp', limite: 500 },
-  { canal: 'meta', limite: 500 }, // Se incluye meta correctamente
+  { canal: 'meta', limite: 500 }, // Incluye meta correctamente
   { canal: 'followup', limite: 500 },
   { canal: 'voz', limite: 50000 },
   { canal: 'sms', limite: 500 },
@@ -30,18 +30,13 @@ router.get('/', async (req: Request, res: Response) => {
 
     const tenantId = user.tenant_id;
 
-    // 🔎 Obtenemos la fecha exacta del inicio de membresía
-    const tenantRes = await pool.query('SELECT membresia_inicio FROM tenants WHERE id = $1', [tenantId]);
-    const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
-    const mesInicio = new Date(membresiaInicio).toISOString().substring(0, 10); // YYYY-MM-DD
-
-    // 🔍 Obtenemos usos mensuales exactos para ese tenant y mes de membresía
+    // 🔥 Cambiamos la consulta para usar el mes actual, no membresia_inicio
     const usoRes = await pool.query(`
       SELECT canal, SUM(usados) as usados
       FROM uso_mensual
-      WHERE tenant_id = $1 AND mes = $2
+      WHERE tenant_id = $1 AND mes = date_trunc('month', CURRENT_DATE)
       GROUP BY canal
-    `, [tenantId, mesInicio]);
+    `, [tenantId]);
 
     // 🔍 Obtener créditos extra válidos (no vencidos)
     const creditosRes = await pool.query(`
