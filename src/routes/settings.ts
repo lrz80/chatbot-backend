@@ -37,7 +37,6 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       [tenant_id, canal]
     );
 
-    // 🚀 Traer todos los canales para mostrar sus límites (base + extras)
     const canales = ['contactos', 'whatsapp', 'sms', 'email', 'voz', 'meta', 'followup', 'tokens_openai'];
     const limites: any = {};
 
@@ -66,6 +65,19 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
 
     const es_trial = tenant.plan === 'pro' && tenant.subscription_id?.startsWith('trial_');
 
+    // 🎯 Lógica para construir el estado de membresía dinámico
+    let estado_membresia_texto = '🔴 Inactiva';
+    if (tenant.membresia_activa) {
+      if (es_trial || tenant.es_trial) {
+        estado_membresia_texto = '🟡 Activa - Período de Prueba';
+      } else {
+        const fechaVigencia = tenant.membresia_vigencia
+          ? new Date(tenant.membresia_vigencia).toLocaleDateString()
+          : '';
+        estado_membresia_texto = `✅ Activa - Plan Pro hasta ${fechaVigencia}`;
+      }
+    }
+
     return res.status(200).json({
       uid: user.uid,
       email: user.email,
@@ -73,7 +85,8 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       tenant_id,
       membresia_activa: tenant.membresia_activa ?? false,
       membresia_vigencia: tenant.membresia_vigencia ?? null,
-      es_trial: tenant.es_trial ?? false,  // 👈 Agregado para indicar si está en trial
+      es_trial: (es_trial || tenant.es_trial) ?? false,
+      estado_membresia_texto,  // ✅ Nuevo campo dinámico
       onboarding_completado: tenant.onboarding_completado,
       name: tenant.name || '',
       categoria: tenant.categoria || '',
