@@ -127,10 +127,10 @@ async function procesarMensajeWhatsApp(body: any) {
   fin.setMonth(inicio.getMonth() + 1);
   await pool.query(
     `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-     VALUES ($1, 'whatsapp', $2, 1)
+     VALUES ($1, 'whatsapp', $2::date, 1)
      ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
     [tenant.id, inicio.toISOString().substring(0,10)]
-  );
+  );  
 
   // Insertar mensaje bot (esto no suma a uso)
   await pool.query(
