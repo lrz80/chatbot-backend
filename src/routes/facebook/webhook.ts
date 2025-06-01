@@ -161,23 +161,24 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         await pool.query(`INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`, [tenantId, canal]);
 
+        // 🔄 Calcula total de mensajes 'meta' y actualiza uso_mensual
         const inicio = new Date(tenant.membresia_inicio);
         const fin = new Date(inicio);
         fin.setMonth(inicio.getMonth() + 1);
 
         const { rows: conteo } = await pool.query(
           `SELECT COUNT(*) FROM messages
-           WHERE tenant_id = $1 AND sender = 'user' AND canal = 'meta'
-           AND timestamp >= $2 AND timestamp < $3`,
-          [tenantId, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
+           WHERE tenant_id = $1 AND sender = 'user' AND canal = $2
+           AND timestamp >= $3 AND timestamp < $4`,
+          [tenantId, canal, inicio.toISOString(), fin.toISOString()]
         );
         const totalUsados = parseInt(conteo[0]?.count) || 0;
 
         await pool.query(
           `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-           VALUES ($1, 'meta', date_trunc('month', $2), $3)
-           ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = $3`,
-          [tenantId, inicio, totalUsados]
+           VALUES ($1, $2, date_trunc('month', $3), $4)
+           ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = $4`,
+          [tenantId, canal, inicio, totalUsados]
         );
       }
     }

@@ -8,7 +8,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
 const CANALES = [
   { canal: 'whatsapp', limite: 500 },
-  { canal: 'meta', limite: 500 },
+  { canal: 'meta', limite: 500 }, // Se incluye meta correctamente
   { canal: 'followup', limite: 500 },
   { canal: 'voz', limite: 50000 },
   { canal: 'sms', limite: 500 },
@@ -30,21 +30,20 @@ router.get('/', async (req: Request, res: Response) => {
 
     const tenantId = user.tenant_id;
 
-    // 🔎 Obtenemos la fecha de inicio de membresía
+    // 🔎 Obtenemos la fecha exacta del inicio de membresía
     const tenantRes = await pool.query('SELECT membresia_inicio FROM tenants WHERE id = $1', [tenantId]);
     const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
-    const inicio = new Date(membresiaInicio);
-    const fin = new Date(inicio);
-    fin.setMonth(inicio.getMonth() + 1);
+    const mesInicio = new Date(membresiaInicio).toISOString().substring(0, 10); // YYYY-MM-DD
 
+    // 🔍 Obtenemos usos mensuales exactos para ese tenant y mes de membresía
     const usoRes = await pool.query(`
-      SELECT canal, SUM(usados) as usados 
-      FROM uso_mensual 
-      WHERE tenant_id = $1 AND mes >= $2 AND mes < $3
+      SELECT canal, SUM(usados) as usados
+      FROM uso_mensual
+      WHERE tenant_id = $1 AND mes = $2
       GROUP BY canal
-    `, [tenantId, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]);
+    `, [tenantId, mesInicio]);
 
-    // 🔍 Obtener créditos extra válidos y no vencidos
+    // 🔍 Obtener créditos extra válidos (no vencidos)
     const creditosRes = await pool.query(`
       SELECT canal, COALESCE(SUM(cantidad), 0) as total
       FROM creditos_comprados
@@ -53,10 +52,10 @@ router.get('/', async (req: Request, res: Response) => {
     `, [tenantId]);
 
     const creditosMap = new Map(creditosRes.rows.map((row: any) => [row.canal, parseInt(row.total)]));
-    const usosMap = new Map(usoRes.rows.map((row: any) => [row.canal, { usados: parseInt(row.usados), limite: parseInt(row.limite) }]));
+    const usosMap = new Map(usoRes.rows.map((row: any) => [row.canal, parseInt(row.usados)]));
 
     const usos = CANALES.map(({ canal, limite: limiteBase }) => {
-      const { usados = 0, limite = limiteBase ?? 0 } = usosMap.get(canal) ?? {};
+      const usados = usosMap.get(canal) ?? 0;
       const creditosExtras = creditosMap.get(canal) ?? 0;
       const totalLimite = (limiteBase ?? 0) + creditosExtras;
 
