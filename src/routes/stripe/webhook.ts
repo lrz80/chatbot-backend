@@ -16,11 +16,10 @@ function initStripe() {
     if (!key) throw new Error('❌ STRIPE_SECRET_KEY no está definida.');
     STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET!;
     if (!STRIPE_WEBHOOK_SECRET) throw new Error('❌ STRIPE_WEBHOOK_SECRET no está definida.');
-    stripe = new Stripe(key, { apiVersion: '2022-11-15' }); // más segura
+    stripe = new Stripe(key, { apiVersion: '2022-11-15' });
   }
 }
 
-// 🚀 Helper para reiniciar límites y uso mensual de todos los canales
 const resetearCanales = async (tenantId: string) => {
   const canales = ['contactos', 'whatsapp', 'sms', 'email', 'voz', 'meta', 'followup', 'tokens_openai'];
   for (const canal of canales) {
@@ -31,6 +30,12 @@ const resetearCanales = async (tenantId: string) => {
       DO UPDATE SET usados = 0, limite = 500
     `, [tenantId, canal]);
   }
+};
+
+// 🔍 Helper para obtener tenant_id por subscription_id
+const getTenantIdBySubscriptionId = async (subscriptionId: string): Promise<string | null> => {
+  const res = await pool.query('SELECT id FROM tenants WHERE subscription_id = $1 LIMIT 1', [subscriptionId]);
+  return res.rows[0]?.id || null;
 };
 
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
@@ -45,7 +50,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     return res.status(400).send(`Webhook Error: ${(err as Error).message}`);
   }
 
-  // ✅ Créditos individuales por canal
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
     const email = session.customer_email;
@@ -62,26 +66,20 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       if (!canalesPermitidos.includes(canal)) return;
 
       try {
-        // Calcular fecha de compra y vencimiento
         const fechaCompra = new Date();
         const fechaVencimiento = new Date(fechaCompra);
-        fechaVencimiento.setDate(fechaVencimiento.getDate() + 30); // 30 días de validez
+        fechaVencimiento.setDate(fechaVencimiento.getDate() + 30);
 
         await pool.query(`
           INSERT INTO creditos_comprados (tenant_id, canal, cantidad, fecha_compra, fecha_vencimiento)
           VALUES ($1, $2, $3, $4, $5)
         `, [tenant_id, canal, cantidadInt, fechaCompra.toISOString(), fechaVencimiento.toISOString()]);
 
-        console.log(`✅ Créditos registrados: +${cantidadInt} a ${canal.toUpperCase()} para tenant ${tenant_id} (válidos hasta ${fechaVencimiento.toISOString()})`);
+        console.log(`✅ Créditos registrados: +${cantidadInt} a ${canal.toUpperCase()} para tenant ${tenant_id}`);
 
         if (email) {
-          // 🔍 Obtenemos el nombre del tenant para personalizar el saludo
-          const tenantNameRes = await pool.query(
-            `SELECT name FROM tenants WHERE id = $1`,
-            [tenant_id]
-          );
+          const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [tenant_id]);
           const tenantName = tenantNameRes.rows[0]?.name || "Usuario";
-        
           await transporter.sendMail({
             from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
             to: email,
@@ -91,23 +89,19 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
                 <img src="https://aamy.ai/avatar-amy.png" alt="Amy AI Avatar" style="width: 100px; height: 100px; border-radius: 50%;" />
                 <h3>Hola ${tenantName} 👋</h3>
                 <p>¡Créditos de <strong>${canal.toUpperCase()}</strong> agregados!</p>
-                <p>Tu compra de <strong>${cantidadInt}</strong> créditos de <strong>${canal.toUpperCase()}</strong> fue procesada exitosamente.</p>
-                <p>Ya puedes usarlos desde tu dashboard.</p>
+                <p>Tu compra de <strong>${cantidadInt}</strong> créditos fue procesada exitosamente.</p>
                 <br />
                 <p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
               </div>
             `
           });
         }
-        
       } catch (error) {
         console.error('❌ Error al agregar créditos comprados:', error);
       }
-
       return res.status(200).json({ received: true });
     }
 
-    // 🧾 Activación de membresía por suscripción
     if (email && session.subscription) {
       try {
         const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [email]);
@@ -119,28 +113,34 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
         const vigencia = subscription.current_period_end
           ? new Date(subscription.current_period_end * 1000)
-          : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // fallback
+          : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+        const esTrial = subscription.trial_end && subscription.trial_end * 1000 > Date.now();
 
-          const esTrial = subscription.trial_end && subscription.trial_end * 1000 > Date.now();
-          await pool.query(`
-            UPDATE tenants
-            SET membresia_activa = true,
-                membresia_vigencia = $2,
-                membresia_inicio = NOW(),
-                plan = 'pro',
-                subscription_id = $3,
-                es_trial = $4  -- 👈 Guardar si está en trial (true/false)
-            WHERE id = $1
-          `, [user.uid, vigencia, subscriptionId, esTrial]);
-  
+        await pool.query(`
+          UPDATE tenants
+          SET membresia_activa = true,
+              membresia_vigencia = $2,
+              membresia_inicio = NOW(),
+              plan = 'pro',
+              subscription_id = $3,
+              es_trial = $4
+          WHERE id = $1
+        `, [user.uid, vigencia, subscriptionId, esTrial]);
+
         console.log(`🔁 Membresía activada para ${email}, vigencia hasta ${vigencia.toISOString()}`);
-
-        await resetearCanales(user.uid);  // 🚀 Reset completo
-        console.log(`🔄 Límites y uso mensual reiniciados para todos los canales de ${email}`);
-
+        await resetearCanales(user.uid);
       } catch (error) {
         console.error('❌ Error activando membresía:', error);
       }
+    }
+  }
+
+  if (event.type === 'customer.subscription.updated') {
+    const subscription = event.data.object as Stripe.Subscription;
+    const tenant_id = await getTenantIdBySubscriptionId(subscription.id);
+    if (tenant_id && subscription.status === 'active' && subscription.trial_end && subscription.trial_end * 1000 < Date.now()) {
+      const fechaInicio = new Date(subscription.current_period_start * 1000);
+      await pool.query('UPDATE tenants SET membresia_inicio = $1 WHERE id = $2', [fechaInicio, tenant_id]);
     }
   }
 
