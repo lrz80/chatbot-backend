@@ -64,6 +64,8 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       };
     }
 
+    const es_trial = tenant.plan === 'pro' && tenant.subscription_id?.startsWith('trial_');
+
     return res.status(200).json({
       uid: user.uid,
       email: user.email,
@@ -98,7 +100,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       intents: intentsRes.rows,
       limites,
     });
-    
+
   } catch (error) {
     console.error('❌ Error en GET /api/settings:', error);
     return res.status(401).json({ error: 'Token inválido' });
