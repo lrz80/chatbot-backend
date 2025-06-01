@@ -63,13 +63,15 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       };
     }
 
-    const es_trial = tenant.plan === 'pro' && tenant.subscription_id?.startsWith('trial_');
+    const es_trial = tenant.subscription_id?.startsWith('trial_') || tenant.es_trial;
 
-    // 🎯 Lógica para construir el estado de membresía dinámico
     let estado_membresia_texto = '🔴 Inactiva';
     if (tenant.membresia_activa) {
-      if (es_trial || tenant.es_trial) {
-        estado_membresia_texto = '🟡 Activa - Período de Prueba';
+      if (es_trial) {
+        const fechaVigencia = tenant.membresia_vigencia
+          ? new Date(tenant.membresia_vigencia).toLocaleDateString()
+          : '';
+        estado_membresia_texto = `🟡 Activa - Período de Prueba hasta ${fechaVigencia}`;
       } else {
         const fechaVigencia = tenant.membresia_vigencia
           ? new Date(tenant.membresia_vigencia).toLocaleDateString()
