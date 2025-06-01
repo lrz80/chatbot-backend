@@ -59,7 +59,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         if (rows.length === 0) continue;
 
         const tenant = rows[0];
-        const canal = 'meta'; // 🔥 Forzamos canal 'meta'
+        const canal = 'meta'; // 🔥 Puedes cambiar a 'facebook' o 'instagram' si quieres distinguir
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
 
@@ -161,25 +161,20 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         await pool.query(`INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`, [tenantId, canal]);
 
-        // 🔄 Calcula total de mensajes 'meta' y actualiza uso_mensual
-        const inicio = new Date(tenant.membresia_inicio);
-        const fin = new Date(inicio);
-        fin.setMonth(inicio.getMonth() + 1);
+        // ✅ Actualizar uso_mensual (nuevo)
+        console.log(`🔄 Intentando actualizar uso_mensual para tenant ${tenantId}, canal ${canal}`);
+        try {
+          await pool.query(
+            `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+             VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 1)
+             ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
+            [tenantId, canal]
+          );
+          console.log(`✅ uso_mensual actualizado correctamente para tenant ${tenantId}, canal ${canal}`);
+        } catch (error) {
+          console.error(`❌ Error al actualizar uso_mensual para tenant ${tenantId}, canal ${canal}:`, error);
+        }
 
-        const { rows: conteo } = await pool.query(
-          `SELECT COUNT(*) FROM messages
-           WHERE tenant_id = $1 AND sender = 'user' AND canal = $2
-           AND timestamp >= $3 AND timestamp < $4`,
-          [tenantId, canal, inicio.toISOString(), fin.toISOString()]
-        );
-        const totalUsados = parseInt(conteo[0]?.count) || 0;
-
-        await pool.query(
-          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-           VALUES ($1, $2, date_trunc('month', $3), $4)
-           ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = $4`,
-          [tenantId, canal, inicio, totalUsados]
-        );
       }
     }
   } catch (error: any) {
