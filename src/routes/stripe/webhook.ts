@@ -242,7 +242,9 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         SET membresia_activa = false,
             plan = NULL
         WHERE id = $1
-      `, [user.uid]);      
+      `, [user.uid]);
+      
+      console.log('🛑 Cancelando plan para', customerEmail, 'con UID', user.uid);
 
       await pool.query(`
         INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
