@@ -22,17 +22,22 @@ async function detectarIntencion(mensaje: string) {
   const prompt = `Analiza este mensaje de un cliente:\n\n"${mensaje}"\n\nIdentifica:\n- Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).\n- Nivel de interés (de 1 a 5, siendo 5 "muy interesado en comprar").\n\nResponde solo en JSON. Ejemplo:\n{\n  "intencion": "preguntar precios",\n  "nivel_interes": 4\n}`;
 
   const respuesta = await openai.chat.completions.create({
-    model: 'gpt-4-turbo',
+    model: 'gpt-3.5-turbo',  // 🔥 Cambiado a 3.5-turbo por costos
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.3,
   });
 
   const content = respuesta.choices[0]?.message?.content || '{}';
-  const data = JSON.parse(content);
-  return {
-    intencion: data.intencion || 'no_detectada',
-    nivel_interes: data.nivel_interes || 1,
-  };
+  try {
+    const data = JSON.parse(content);
+    const intencion = data.intencion || 'no_detectada';
+    const nivel_interes = data.nivel_interes || 1;
+    console.log(`🔎 Intención detectada: ${intencion}, Nivel de interés: ${nivel_interes}`);
+    return { intencion, nivel_interes };
+  } catch (error) {
+    console.error('❌ Error analizando intención:', error, 'Respuesta recibida:', content);
+    return { intencion: 'error', nivel_interes: 1 };
+  }
 }
 
 router.post('/', async (req: Request, res: Response) => {
