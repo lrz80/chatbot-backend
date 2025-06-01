@@ -127,9 +127,9 @@ async function procesarMensajeWhatsApp(body: any) {
   fin.setMonth(inicio.getMonth() + 1);
   await pool.query(
     `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-     VALUES ($1, $2, date_trunc('month', $3::timestamp), $4)
+     VALUES ($1, $2, $3::date, $4)
      ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = $4`,
-    [tenant.id, 'meta', inicio.toISOString()]
+    [tenant.id, 'meta', inicio.toISOString().substring(0, 10)]
   );  
 
   // Insertar mensaje bot (esto no suma a uso)
