@@ -35,22 +35,26 @@ router.get('/', async (req: Request, res: Response) => {
     const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
     if (!membresiaInicio) return res.status(400).json({ error: 'Membresía no configurada' });
 
-    // 🔥 Calculamos el inicio del ciclo de membresía actual
+    // 🔥 Calculamos el inicio del ciclo para followup y mantenemos lo demás igual
     const ahora = new Date();
     const inicio = new Date(membresiaInicio);
-    const diffInMonths = Math.floor((ahora.getTime() - inicio.getTime()) / (30 * 24 * 60 * 60 * 1000));
-    const cicloActual = new Date(inicio);
-    cicloActual.setMonth(inicio.getMonth() + diffInMonths);
+    const diffInMonths = Math.floor((ahora.getFullYear() - inicio.getFullYear()) * 12 + (ahora.getMonth() - inicio.getMonth()));
+    const cicloInicio = new Date(inicio);
+    cicloInicio.setMonth(inicio.getMonth() + diffInMonths);
+    const cicloMesFollowup = cicloInicio.toISOString().substring(0, 10);
 
-    console.log(`🔄 Inicio del ciclo de membresía actual: ${cicloActual.toISOString().substring(0,10)}`);
+    console.log(`🔄 Ciclo mensual followup: ${cicloMesFollowup}`);
 
-    // 🔍 Obtenemos usos acumulados para el ciclo actual
+    // 🔍 Obtenemos usos acumulados del ciclo actual, usando cicloMesFollowup para followup
     const usoRes = await pool.query(`
       SELECT canal, SUM(usados) as usados
       FROM uso_mensual
-      WHERE tenant_id = $1 AND mes = $2
+      WHERE tenant_id = $1 AND (
+        (canal = 'followup' AND mes = $2) OR
+        (canal != 'followup' AND mes = date_trunc('month', CURRENT_DATE))
+      )
       GROUP BY canal
-    `, [tenantId, cicloActual.toISOString().substring(0,10)]);
+    `, [tenantId, cicloMesFollowup]);
 
     // 🔍 Obtener créditos extra válidos (no vencidos)
     const creditosRes = await pool.query(`

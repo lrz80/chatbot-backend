@@ -58,6 +58,35 @@ async function enviarMensajesProgramados() {
         // 📤 Enviar mensaje
         await enviarWhatsApp(mensaje.contacto, contenidoTraducido, mensaje.tenant_id);
         console.log(`✅ Mensaje enviado a ${mensaje.contacto} (idioma: ${idioma})`);
+
+        // 🔄 Incrementar uso mensual de followup
+        const { rows: tenantRows } = await pool.query(
+          `SELECT membresia_inicio FROM tenants WHERE id = $1`,
+          [mensaje.tenant_id]
+        );
+        const membresiaInicio = tenantRows[0]?.membresia_inicio;
+        if (!membresiaInicio) {
+          console.warn(`❌ No se encontró membresia_inicio para tenant ${mensaje.tenant_id}`);
+          continue;
+        }
+
+        const inicio = new Date(membresiaInicio);
+        const ahoraFecha = new Date();
+        const diffInMonths = Math.floor(
+          (ahoraFecha.getFullYear() - inicio.getFullYear()) * 12 + (ahoraFecha.getMonth() - inicio.getMonth())
+        );
+        const cicloInicio = new Date(inicio);
+        cicloInicio.setMonth(inicio.getMonth() + diffInMonths);
+        const cicloMes = cicloInicio.toISOString().split('T')[0];
+
+        await pool.query(
+          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+           VALUES ($1, 'followup', $2, 1)
+           ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
+          [mensaje.tenant_id, cicloMes]
+        );
+        console.log(`🔄 Uso mensual followup incrementado para tenant ${mensaje.tenant_id}, ciclo ${cicloMes}`);
+
       } catch (error) {
         console.error(`❌ Error enviando mensaje a ${mensaje.contacto}:`, error);
       }
@@ -67,7 +96,7 @@ async function enviarMensajesProgramados() {
   }
 }
 
-// 🕒 Scheduler corriendo cada minuto (puedes aumentar si deseas)
+// 🕒 Scheduler corriendo cada minuto
 setInterval(() => {
   enviarMensajesProgramados();
 }, 60 * 1000);
