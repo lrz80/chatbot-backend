@@ -124,8 +124,33 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           WHERE id = $1
         `, [user.uid, vigencia, new Date(subscription.start_date * 1000), planValue, subscriptionId, esTrial]);
 
-
         await resetearCanales(user.uid);
+
+        // 🔥 Enviar correo de membresía activada
+        const invoices = await stripe.invoices.list({
+          subscription: subscriptionId,
+          limit: 1,
+        });
+        const invoice = invoices.data[0];
+        const invoiceUrl = invoice?.hosted_invoice_url || 'No disponible';
+
+        await transporter.sendMail({
+          from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
+          to: email,
+          subject: 'Tu suscripción está activa',
+          html: `
+            <div style="text-align: center;">
+              <img src="https://aamy.ai/avatar-amy.png" alt="Amy AI Avatar" style="width: 100px; height: 100px; border-radius: 50%;" />
+              <h3>Hola 👋</h3>
+              <p>¡Gracias por activar tu suscripción en <strong>Amy AI</strong>!</p>
+              <p><strong>Plan:</strong> ${planValue.toUpperCase()}</p>
+              <p><strong>Vigencia hasta:</strong> ${vigencia.toLocaleDateString()}</p>
+              ${invoice ? `<p><a href="${invoiceUrl}">Ver factura de la suscripción</a></p>` : '<p>No se pudo obtener el invoice</p>'}
+              <br><p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
+            </div>
+          `
+        });
+
       } catch (error) {
         console.error('❌ Error activando membresía:', error);
       }
@@ -154,7 +179,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     const invoice = event.data.object as Stripe.Invoice;
     let customerEmail = invoice.customer_email;
 
-    // 🔍 Si no viene el email, intenta obtenerlo con customerId
     if (!customerEmail) {
       const customerId = invoice.customer;
       if (typeof customerId === 'string') {
@@ -184,7 +208,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     try {
       console.log('📄 Invoice recibido:', JSON.stringify(invoice, null, 2));
       const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-
       const nuevaVigencia = subscription.current_period_end
         ? new Date(subscription.current_period_end * 1000)
         : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // fallback
@@ -203,9 +226,26 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       `, [user.uid, nuevaVigencia]);
 
       console.log('🔁 Membresía renovada para', customerEmail);
-      
-      await resetearCanales(user.uid);  // 🚀 Reset completo
-      console.log(`🔄 Límites y uso mensual reiniciados para todos los canales de ${customerEmail}`);
+      await resetearCanales(user.uid);
+
+      // 🔥 Enviar correo con avatar-amy y link al invoice
+      const invoiceUrl = invoice.hosted_invoice_url || 'No disponible';
+
+      await transporter.sendMail({
+        from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
+        to: customerEmail,
+        subject: 'Tu renovación de membresía fue exitosa',
+        html: `
+          <div style="text-align: center;">
+            <img src="https://aamy.ai/avatar-amy.png" alt="Amy AI Avatar" style="width: 100px; height: 100px; border-radius: 50%;" />
+            <h3>Hola 👋</h3>
+            <p>¡Tu membresía ha sido renovada correctamente!</p>
+            <p><strong>Vigencia hasta:</strong> ${nuevaVigencia.toLocaleDateString()}</p>
+            <p><a href="${invoiceUrl}">Ver factura de la renovación</a></p>
+            <br><p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
+          </div>
+        `
+      });
 
     } catch (error) {
       console.error('❌ Error renovando membresía:', error);
