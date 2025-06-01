@@ -71,6 +71,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       tenant_id,
       membresia_activa: tenant.membresia_activa ?? false,
       membresia_vigencia: tenant.membresia_vigencia ?? null,
+      es_trial: tenant.es_trial ?? false,  // 👈 Agregado para indicar si está en trial
       onboarding_completado: tenant.onboarding_completado,
       name: tenant.name || '',
       categoria: tenant.categoria || '',
@@ -95,10 +96,9 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       instagram_page_name: tenant.instagram_page_name || '',
       faq: faqsRes.rows,
       intents: intentsRes.rows,
-
-      // 🚀 Incluimos límites por canal
       limites,
     });
+    
   } catch (error) {
     console.error('❌ Error en GET /api/settings:', error);
     return res.status(401).json({ error: 'Token inválido' });

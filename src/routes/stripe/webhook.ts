@@ -121,16 +121,18 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           ? new Date(subscription.current_period_end * 1000)
           : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // fallback
 
+          const esTrial = subscription.trial_end && subscription.trial_end * 1000 > Date.now();
           await pool.query(`
             UPDATE tenants
             SET membresia_activa = true,
                 membresia_vigencia = $2,
                 membresia_inicio = NOW(),
                 plan = 'pro',
-                subscription_id = $3  -- 👈 Guardar aquí el subscriptionId
+                subscription_id = $3,
+                es_trial = $4  -- 👈 Guardar si está en trial (true/false)
             WHERE id = $1
-          `, [user.uid, vigencia, subscriptionId]);          
-          
+          `, [user.uid, vigencia, subscriptionId, esTrial]);
+  
         console.log(`🔁 Membresía activada para ${email}, vigencia hasta ${vigencia.toISOString()}`);
 
         await resetearCanales(user.uid);  // 🚀 Reset completo
