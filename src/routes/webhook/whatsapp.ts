@@ -144,13 +144,22 @@ async function procesarMensajeWhatsApp(body: any) {
   // 📅 Asegura que la fecha se trunque a YYYY-MM-DD
   const cicloMes = cicloInicio.toISOString().split('T')[0];
 
-  // 🔄 Inserta/actualiza uso_mensual con ciclo de membresía
-  await pool.query(
-    `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-    VALUES ($1, $2, $3, 1)
-    ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
-    [tenant.id, canal, cicloMes]
-  );
+  // 📝 Log detallado antes de la inserción
+  console.log(`🔄 Intentando insertar/actualizar uso_mensual para tenant: ${tenant.id}, canal: ${canal}, cicloMes: ${cicloMes}`);
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+      VALUES ($1, $2, $3, 1)
+      ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1
+      RETURNING *`,
+      [tenant.id, canal, cicloMes]
+    );
+
+    console.log(`✅ Registro actualizado/insertado en uso_mensual:`, result.rows[0]);
+  } catch (error) {
+    console.error(`❌ Error al actualizar uso_mensual para tenant ${tenant.id}, canal ${canal}:`, error);
+  }
 
   // Insertar mensaje bot (esto no suma a uso)
   await pool.query(
