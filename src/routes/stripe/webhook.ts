@@ -32,7 +32,6 @@ const resetearCanales = async (tenantId: string) => {
   }
 };
 
-// 🔍 Helper para obtener tenant_id por subscription_id
 const getTenantIdBySubscriptionId = async (subscriptionId: string): Promise<string | null> => {
   const res = await pool.query('SELECT id FROM tenants WHERE subscription_id = $1 LIMIT 1', [subscriptionId]);
   return res.rows[0]?.id || null;
@@ -75,8 +74,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           VALUES ($1, $2, $3, $4, $5)
         `, [tenant_id, canal, cantidadInt, fechaCompra.toISOString(), fechaVencimiento.toISOString()]);
 
-        console.log(`✅ Créditos registrados: +${cantidadInt} a ${canal.toUpperCase()} para tenant ${tenant_id}`);
-
         if (email) {
           const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [tenant_id]);
           const tenantName = tenantNameRes.rows[0]?.name || "Usuario";
@@ -111,23 +108,20 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         const subscriptionId = session.subscription as string;
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
 
-        const vigencia = subscription.current_period_end
-          ? new Date(subscription.current_period_end * 1000)
-          : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-        const esTrial = subscription.trial_end && subscription.trial_end * 1000 > Date.now();
+        const vigencia = new Date(subscription.current_period_end * 1000);
+        const esTrial = subscription.status === 'trialing';
 
         await pool.query(`
           UPDATE tenants
           SET membresia_activa = true,
               membresia_vigencia = $2,
-              membresia_inicio = NOW(),
+              membresia_inicio = $3,
               plan = 'pro',
-              subscription_id = $3,
-              es_trial = $4
+              subscription_id = $4,
+              es_trial = $5
           WHERE id = $1
-        `, [user.uid, vigencia, subscriptionId, esTrial]);
+        `, [user.uid, vigencia, new Date(subscription.start_date * 1000), subscriptionId, esTrial]);
 
-        console.log(`🔁 Membresía activada para ${email}, vigencia hasta ${vigencia.toISOString()}`);
         await resetearCanales(user.uid);
       } catch (error) {
         console.error('❌ Error activando membresía:', error);
@@ -138,9 +132,14 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   if (event.type === 'customer.subscription.updated') {
     const subscription = event.data.object as Stripe.Subscription;
     const tenant_id = await getTenantIdBySubscriptionId(subscription.id);
-    if (tenant_id && subscription.status === 'active' && subscription.trial_end && subscription.trial_end * 1000 < Date.now()) {
-      const fechaInicio = new Date(subscription.current_period_start * 1000);
-      await pool.query('UPDATE tenants SET membresia_inicio = $1 WHERE id = $2', [fechaInicio, tenant_id]);
+    if (tenant_id) {
+      const esTrial = subscription.status === 'trialing';
+      await pool.query(`
+        UPDATE tenants
+        SET es_trial = $1,
+            membresia_inicio = CASE WHEN $1 = false THEN $2 ELSE membresia_inicio END
+        WHERE id = $3
+      `, [esTrial, new Date(subscription.current_period_start * 1000), tenant_id]);
     }
   }
 
