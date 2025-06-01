@@ -9,16 +9,36 @@ router.get('/', authenticateUser, async (req: any, res) => {
   const tenant_id = req.user?.tenant_id;
 
   try {
+    // Obtenemos configuración de seguimiento
     const result = await pool.query(
       `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
       [tenant_id]
     );
 
+    // Obtenemos membresia_activa del tenant
+    const tenantResult = await pool.query(
+      `SELECT membresia_activa FROM tenants WHERE id = $1`,
+      [tenant_id]
+    );
+
+    const membresiaActiva = tenantResult.rows[0]?.membresia_activa ?? false;
+
     if (result.rows.length === 0) {
-      return res.json(null); // No hay configuración todavía
+      return res.json({
+        minutos_espera: null,
+        mensaje_precio: '',
+        mensaje_agendar: '',
+        mensaje_ubicacion: '',
+        mensaje_general: '',
+        membresia_activa: membresiaActiva,  // 🔥 Aquí se incluye
+      });
     }
 
-    res.json(result.rows[0]);
+    res.json({
+      ...result.rows[0],
+      membresia_activa: membresiaActiva,  // 🔥 Aquí también
+    });
+
   } catch (error) {
     console.error('❌ Error obteniendo follow_up_settings:', error);
     res.status(500).json({ error: 'Error al obtener configuración' });
