@@ -122,14 +122,34 @@ async function procesarMensajeWhatsApp(body: any) {
   );
 
   // ✅ Incrementar solo una vez por mensaje recibido
-  const inicio = new Date(tenant.membresia_inicio);
-  const fin = new Date(inicio);
-  fin.setMonth(inicio.getMonth() + 1);
+  // 🔍 Obtiene membresia_inicio
+  const { rows: rowsTenant } = await pool.query(
+    `SELECT membresia_inicio FROM tenants WHERE id = $1`, [tenant.id]
+  );
+  const membresiaInicio = rowsTenant[0]?.membresia_inicio;
+  if (!membresiaInicio) {
+    console.error('❌ No se encontró membresia_inicio para el tenant:', tenant.id);
+    return; // O maneja el error de forma adecuada
+  }
+
+  // 🔥 Calcula el ciclo de membresía actual
+  const inicio = new Date(membresiaInicio);
+  const ahora = new Date();
+  const diffInMonths = Math.floor(
+    (ahora.getFullYear() - inicio.getFullYear()) * 12 + (ahora.getMonth() - inicio.getMonth())
+  );
+  const cicloInicio = new Date(inicio);
+  cicloInicio.setMonth(inicio.getMonth() + diffInMonths);
+
+  // 📅 Asegura que la fecha se trunque a YYYY-MM-DD
+  const cicloMes = cicloInicio.toISOString().split('T')[0];
+
+  // 🔄 Inserta/actualiza uso_mensual con ciclo de membresía
   await pool.query(
     `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-     VALUES ($1, 'whatsapp', $2, 1)
-     ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
-    [tenant.id, inicio.toISOString().substring(0,10)]
+    VALUES ($1, $2, $3, 1)
+    ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
+    [tenant.id, canal, cicloMes]
   );
 
   // Insertar mensaje bot (esto no suma a uso)
