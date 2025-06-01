@@ -165,22 +165,26 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         await pool.query(`INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`, [tenantId, canal]);
 
+        // 🔥 Contabilizamos correctamente los mensajes del mes por canal meta (facebook e instagram)
         const inicio = new Date(tenant.membresia_inicio);
         const fin = new Date(inicio);
         fin.setMonth(inicio.getMonth() + 1);
 
-        // 🔥 SUMA USO con conteo real desde 'messages'
-        await pool.query(
-          `UPDATE uso_mensual
-           SET usados = (
-             SELECT COUNT(*) FROM messages
-             WHERE tenant_id = $1
-             AND sender = 'user'
-             AND (canal = 'facebook' OR canal = 'instagram')
-             AND timestamp >= $2 AND timestamp < $3
-           )
-           WHERE tenant_id = $1 AND canal = 'meta' AND mes >= $2 AND mes < $3`,
+        const { rows: conteo } = await pool.query(
+          `SELECT COUNT(*) FROM messages
+           WHERE tenant_id = $1 AND sender = 'user'
+           AND (canal = 'facebook' OR canal = 'instagram')
+           AND timestamp >= $2 AND timestamp < $3`,
           [tenantId, inicio.toISOString().substring(0,10), fin.toISOString().substring(0,10)]
+        );
+
+        const totalUsados = parseInt(conteo[0]?.count) || 0;
+
+        await pool.query(
+          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+           VALUES ($1, 'meta', date_trunc('month', CURRENT_DATE), $2)
+           ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = $2`,
+          [tenantId, totalUsados]
         );
       }
     }
