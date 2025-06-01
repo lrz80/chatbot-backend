@@ -111,16 +111,19 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         const vigencia = new Date(subscription.current_period_end * 1000);
         const esTrial = subscription.status === 'trialing';
 
+        const planValue = esTrial ? 'trial' : 'pro';
+
         await pool.query(`
           UPDATE tenants
           SET membresia_activa = true,
               membresia_vigencia = $2,
               membresia_inicio = $3,
-              plan = 'pro',
-              subscription_id = $4,
-              es_trial = $5
+              plan = $4,
+              subscription_id = $5,
+              es_trial = $6
           WHERE id = $1
-        `, [user.uid, vigencia, new Date(subscription.start_date * 1000), subscriptionId, esTrial]);
+        `, [user.uid, vigencia, new Date(subscription.start_date * 1000), planValue, subscriptionId, esTrial]);
+
 
         await resetearCanales(user.uid);
       } catch (error) {
@@ -134,12 +137,15 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     const tenant_id = await getTenantIdBySubscriptionId(subscription.id);
     if (tenant_id) {
       const esTrial = subscription.status === 'trialing';
+      const planValue = esTrial ? 'trial' : 'pro';
+
       await pool.query(`
         UPDATE tenants
         SET es_trial = $1,
-            membresia_inicio = CASE WHEN $1 = false THEN $2 ELSE membresia_inicio END
-        WHERE id = $3
-      `, [esTrial, new Date(subscription.current_period_start * 1000), tenant_id]);
+            plan = $2,
+            membresia_inicio = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END
+        WHERE id = $4
+      `, [esTrial, planValue, new Date(subscription.current_period_start * 1000), tenant_id]);
     }
   }
 
@@ -233,9 +239,10 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
       await pool.query(`
         UPDATE tenants
-        SET membresia_activa = false
+        SET membresia_activa = false,
+            plan = NULL
         WHERE id = $1
-      `, [user.uid]);
+      `, [user.uid]);      
 
       await pool.query(`
         INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
