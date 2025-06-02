@@ -81,11 +81,24 @@ Te recomendamos aumentar el límite para evitar interrupciones.
 Atentamente,
 Aamy.ai`;
 
-      const correos = [tenant.email_negocio, tenant.user_email].filter(e => typeof e === 'string');
-      if (correos.length > 0) {
-        const contactos = correos.map(email => ({ email, nombre: tenant.tenant_name }));
-        await sendEmailSendgrid(mensajeTexto, contactos, 'Aamy.ai', String(tenant.tenant_id), 0, undefined, undefined, 'https://aamy.ai/avatar-amy.png', asunto, asunto);
-        console.log(`📧 Emails enviados a: ${correos.join(', ')}`);
+      const correo = tenant.user_email;
+      if (typeof correo === 'string') {
+      const contactos = [{ email: correo, nombre: tenant.tenant_name }];
+      await sendEmailSendgrid(
+          mensajeTexto,
+          contactos,
+          'Aamy.ai',
+          String(tenant.tenant_id),
+          0,
+          undefined,
+          undefined,
+          'https://aamy.ai/avatar-amy.png',
+          asunto,
+          asunto
+      );
+      console.log(`📧 Email enviado a: ${correo}`);
+      } else {
+      console.warn(`❌ No se encontró user_email válido para ${tenant.tenant_name}`);
       }
 
       const telefonos = [tenant.telefono_negocio, tenant.user_phone].filter(t => typeof t === 'string');
