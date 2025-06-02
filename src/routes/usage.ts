@@ -47,11 +47,19 @@ router.get('/', async (req: Request, res: Response) => {
 
     // 🔍 Obtenemos usos acumulados del ciclo actual, usando cicloMesFollowup para followup
     const usoRes = await pool.query(`
-      SELECT canal, SUM(usados) as usados
+      SELECT 
+        CASE 
+          WHEN canal IN ('facebook', 'instagram') THEN 'meta'
+          ELSE canal
+        END as canal,
+        SUM(usados) as usados
       FROM uso_mensual
       WHERE tenant_id = $1 AND mes = $2
-      GROUP BY canal
-    `, [tenantId, cicloMesFollowup]);
+      GROUP BY CASE 
+          WHEN canal IN ('facebook', 'instagram') THEN 'meta'
+          ELSE canal
+        END
+    `, [tenantId, cicloMesFollowup]);    
 
     // 🔍 Obtener créditos extra válidos (no vencidos)
     const creditosRes = await pool.query(`

@@ -1,5 +1,3 @@
-// 📁 src/routes/messages.ts
-
 import { Router, Request, Response } from 'express';
 import { authenticateUser } from '../middleware/auth';
 import pool from '../lib/db';
@@ -11,36 +9,34 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
     const tenant_id = (req as any).user?.tenant_id;
     if (!tenant_id) return res.status(401).json({ error: 'Tenant no autenticado' });
 
-    // Parámetros de query
     const canal = req.query.canal?.toString() || "";
     const limit = parseInt(req.query.limit as string) || 10;
     const page = parseInt(req.query.page as string) || 1;
     const offset = (page - 1) * limit;
 
-    // Construcción dinámica de consulta
-    const query = canal
-      ? `SELECT 
-           m.id, m.tenant_id, m.content, m.sender, m.canal, m.timestamp, m.from_number, m.emotion,
-           s.intencion, s.nivel_interes
-         FROM messages m
-         LEFT JOIN sales_intelligence s
-           ON m.from_number = s.contacto AND m.content = s.mensaje
-         WHERE m.tenant_id = $1 AND m.canal = $2
-         ORDER BY m.timestamp DESC
-         LIMIT $3 OFFSET $4`
-      : `SELECT 
-           m.id, m.tenant_id, m.content, m.sender, m.canal, m.timestamp, m.from_number, m.emotion,
-           s.intencion, s.nivel_interes
-         FROM messages m
-         LEFT JOIN sales_intelligence s
-           ON m.from_number = s.contacto AND m.content = s.mensaje
-         WHERE m.tenant_id = $1
-         ORDER BY m.timestamp DESC
-         LIMIT $2 OFFSET $3`;
+    let query = `
+      SELECT 
+        m.id, m.tenant_id, m.content, m.sender, m.canal, m.timestamp, m.from_number, m.emotion,
+        s.intencion, s.nivel_interes
+      FROM messages m
+      LEFT JOIN sales_intelligence s
+        ON m.from_number = s.contacto AND m.content = s.mensaje
+      WHERE m.tenant_id = $1
+    `;
 
-    const values = canal
-      ? [tenant_id, canal, limit, offset]
-      : [tenant_id, limit, offset];
+    const values: any[] = [tenant_id];
+
+    if (canal) {
+      // 🎯 Asegurarse de incluir todos los canales relevantes (whatsapp, facebook, instagram, voice)
+      query += ` AND m.canal = $2`;
+      values.push(canal);
+    }
+
+    query += `
+      ORDER BY m.timestamp DESC
+      LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+    `;
+    values.push(limit, offset);
 
     const mensajesRes = await pool.query(query, values);
 
