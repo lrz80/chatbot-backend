@@ -1,6 +1,6 @@
 import pool from '../lib/db';
 import { sendEmailSendgrid } from '../lib/senders/email-sendgrid';
-import { sendSMS } from '../lib/senders/sms';
+import { sendSMSNotificacion } from '../lib/senders/smsNotificacion'; // 🔥 Importa la nueva función
 
 async function verificarNotificaciones() {
   console.log("🚨 Verificando límites de uso...");
@@ -90,8 +90,8 @@ Aamy.ai`;
 
       const telefonos = [tenant.telefono_negocio, tenant.user_phone].filter(t => typeof t === 'string');
       for (const telefono of telefonos) {
-        await sendSMS(mensajeTexto, [telefono], '+14455451224', 'sistema', 0, true); // 🔥 Forzar número fijo
-        console.log(`📲 SMS enviado a: ${telefono}`);
+        await sendSMSNotificacion(mensajeTexto, [telefono]); // 🔥 Usa la nueva función
+        console.log(`📲 SMS notificación enviado a: ${telefono}`);
       }
 
       const notificacionField = porcentaje >= 100 ? 'notificado_100' : 'notificado_80';

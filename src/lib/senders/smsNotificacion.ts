@@ -23,12 +23,12 @@ if (!callbackBaseUrl) {
   console.log("📤 Usando callback URL:", `${callbackBaseUrl}/api/webhook/sms-status`);
 }
 
-export async function sendSMS(
+// 🔥 Número fijo para notificaciones Aamy AI
+const fromNumber = '+14455451224';
+
+export async function sendSMSNotificacion(
   mensaje: string,
-  destinatarios: string[],
-  fromNumber: string,
-  tenantId: string,
-  campaignId: number
+  destinatarios: string[]
 ) {
   for (const rawTo of destinatarios) {
     const to = normalizarNumero(rawTo);
@@ -48,36 +48,12 @@ export async function sendSMS(
         body: mensaje,
         from: fromNumber,
         to,
-        statusCallback: `${callbackBaseUrl}/api/webhook/sms-status?campaign_id=${campaignId}`,
+        statusCallback: `${callbackBaseUrl}/api/webhook/sms-status?campaign_id=0`,
       });
 
-      await pool.query(
-        `INSERT INTO sms_status_logs (
-          tenant_id, campaign_id, message_sid, status, to_number, from_number, timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [tenantId, campaignId, message.sid, message.status, to, fromNumber, new Date().toISOString()]
-      );
-
-      console.log(`✅ SMS enviado a ${to} (SID: ${message.sid})`);
+      console.log(`✅ SMS de notificación enviado a ${to} (SID: ${message.sid})`);
     } catch (error: any) {
-      console.error(`❌ Error enviando SMS a ${to}:`, error.message);
-
-      await pool.query(
-        `INSERT INTO sms_status_logs (
-          tenant_id, campaign_id, message_sid, status, to_number, from_number, error_code, error_message, timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [
-          tenantId,
-          campaignId,
-          null,
-          'failed',
-          to,
-          fromNumber,
-          error.code || null,
-          error.message || "Error desconocido",
-          new Date().toISOString(),
-        ]
-      );
+      console.error(`❌ Error enviando SMS de notificación a ${to}:`, error.message);
     }
   }
 }
