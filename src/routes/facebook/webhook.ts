@@ -59,7 +59,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         if (rows.length === 0) continue;
 
         const tenant = rows[0];
-        const canal = 'meta'; // 🔥 Puedes cambiar a 'facebook' o 'instagram' si quieres distinguir
+        const canal = 'meta';
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
 
@@ -95,27 +95,33 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
           if (!respuesta) {
             const promptMeta = tenant.prompt_meta?.trim() ?? "Información del negocio no disponible.";
-            const prompt = `Eres un asistente virtual para un negocio local. Un cliente preguntó: "${userMessage}". Responde de manera clara, breve y útil usando esta información del negocio:\n\n${promptMeta}`;
-            try {
-              const completion = await openai.chat.completions.create({
-                messages: [{ role: 'user', content: prompt }],
-                model: 'gpt-3.5-turbo',
-                max_tokens: 500,
-              });
-              respuesta = completion.choices[0]?.message?.content?.trim() ?? promptMeta;
+            const mensajeBienvenida = tenant.bienvenida_meta?.trim() ?? "Hola, soy Amy, ¿en qué puedo ayudarte hoy?";
 
-              const tokensConsumidos = completion.usage?.total_tokens || 0;
-              if (tokensConsumidos > 0) {
-                await pool.query(
-                  `UPDATE uso_mensual SET usados = usados + $1
-                   WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
-                  [tokensConsumidos, tenantId]
-                );
+            if (["hola", "buenos días", "buenas tardes", "buenas noches", "saludos"].some(p => userMessage.toLowerCase().includes(p))) {
+              respuesta = mensajeBienvenida;
+            } else {
+              const prompt = `Eres un asistente virtual para un negocio local. Un cliente preguntó: "${userMessage}". Responde de manera clara, breve y útil usando esta información del negocio:\n\n${promptMeta}`;
+              try {
+                const completion = await openai.chat.completions.create({
+                  messages: [{ role: 'user', content: prompt }],
+                  model: 'gpt-3.5-turbo',
+                  max_tokens: 500,
+                });
+                respuesta = completion.choices[0]?.message?.content?.trim() ?? promptMeta;
+
+                const tokensConsumidos = completion.usage?.total_tokens || 0;
+                if (tokensConsumidos > 0) {
+                  await pool.query(
+                    `UPDATE uso_mensual SET usados = usados + $1
+                     WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
+                    [tokensConsumidos, tenantId]
+                  );
+                }
+
+              } catch (error) {
+                console.error('❌ Error con OpenAI:', error);
+                respuesta = promptMeta;
               }
-
-            } catch (error) {
-              console.error('❌ Error con OpenAI:', error);
-              respuesta = promptMeta;
             }
           }
         }
@@ -161,7 +167,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         await pool.query(`INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`, [tenantId, canal]);
 
-        // ✅ Actualizar uso_mensual (nuevo)
         console.log(`🔄 Intentando actualizar uso_mensual para tenant ${tenantId}, canal ${canal}`);
         try {
           await pool.query(
