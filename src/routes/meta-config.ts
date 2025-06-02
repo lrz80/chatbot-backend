@@ -64,6 +64,8 @@ router.put('/', async (req: Request, res: Response) => {
       tenantId, funciones_asistente, info_clave, prompt, bienvenida, idioma
     ]);
 
+    console.log('📝 Datos recibidos en PUT /api/meta-config:', req.body);
+
     return res.status(200).json({ message: 'Configuración Meta guardada correctamente' });
   } catch (err) {
     console.error('❌ Error en PUT /api/meta-config:', err);
