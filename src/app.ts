@@ -58,6 +58,7 @@ import sendgridTemplates from "./routes/sendgrid/templates";
 import emailStatusRoute from "./routes/email-status/index";
 import previewEmailRouter from "./routes/preview-email";
 import stripeCancelRouter from './routes/stripe/cancel';
+import resetNotificaciones from './routes/creditos/reset-notificaciones';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -177,6 +178,7 @@ app.use("/api/sendgrid/templates", sendgridTemplates);
 app.use("/api/preview-email", previewEmailRouter);
 app.use("/api/webhook/whatsapp", whatsappWebhook);
 app.use('/api/stripe/cancel', stripeCancelRouter);
+app.use('/api/creditos', resetNotificaciones);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
