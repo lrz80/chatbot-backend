@@ -60,6 +60,7 @@ import previewEmailRouter from "./routes/preview-email";
 import stripeCancelRouter from './routes/stripe/cancel';
 import resetNotificaciones from './routes/creditos/reset-notificaciones';
 import renewMembership from './routes/tenants/renew-membership';
+import metaConfigRoutes from './routes/meta-config';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -181,6 +182,7 @@ app.use("/api/webhook/whatsapp", whatsappWebhook);
 app.use('/api/stripe/cancel', stripeCancelRouter);
 app.use('/api/creditos', resetNotificaciones);
 app.use('/api/tenants', renewMembership);
+app.use('/api/meta-config', metaConfigRoutes);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
