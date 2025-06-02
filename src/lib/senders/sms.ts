@@ -3,21 +3,17 @@ import pool from "../db";
 
 const client = twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
 
-// ✅ Normaliza al formato E.164
 function normalizarNumero(numero: string): string {
   const limpio = numero.trim();
   if (/^\+\d{10,15}$/.test(limpio)) return limpio;
-
   const soloNumeros = limpio.replace(/\D/g, "");
   if (soloNumeros.length === 10) return `+1${soloNumeros}`;
   if (soloNumeros.length === 11 && soloNumeros.startsWith("1")) return `+${soloNumeros}`;
   if (soloNumeros.startsWith("00")) return `+${soloNumeros.slice(2)}`;
-
-  return `+${soloNumeros}`; // fallback
+  return `+${soloNumeros}`;
 }
 
 const callbackBaseUrl = process.env.API_BASE_URL;
-
 if (!callbackBaseUrl) {
   console.warn("⚠️ API_BASE_URL no está definida en el entorno.");
 } else {
@@ -29,12 +25,12 @@ const defaultAamyFromNumber = '+14455451224';
 export async function sendSMS(
   mensaje: string,
   destinatarios: string[],
-  fromNumber: string, // Mantén este argumento para compatibilidad
+  fromNumber: string,
   tenantId: string,
-  campaignId: number
+  campaignId: number,
+  forzarAamy: boolean = false // 🔥 Nuevo parámetro opcional
 ) {
-  // Usa el número de Aamy AI solo si el tenant es AAMYAI
-  const realFromNumber = tenantId === 'AAMYAI' ? defaultAamyFromNumber : fromNumber;
+  const realFromNumber = forzarAamy ? defaultAamyFromNumber : fromNumber;
 
   for (const rawTo of destinatarios) {
     const to = normalizarNumero(rawTo);

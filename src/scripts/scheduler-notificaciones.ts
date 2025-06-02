@@ -5,7 +5,6 @@ import { sendSMS } from '../lib/senders/sms';
 async function verificarNotificaciones() {
   console.log("🚨 Verificando límites de uso...");
 
-  // 🔥 Verificar y actualizar membresía_activa
   await pool.query(`
     UPDATE tenants
     SET membresia_activa = false
@@ -34,7 +33,6 @@ async function verificarNotificaciones() {
         continue;
       }
 
-      // 🔎 Calcular usados y límite desde membresía_inicio
       const usadosQuery = await pool.query(`
         SELECT COALESCE(SUM(usados), 0) as total_usados, MAX(limite) as limite,
                bool_or(notificado_80) as notificado_80, bool_or(notificado_100) as notificado_100
@@ -47,7 +45,6 @@ async function verificarNotificaciones() {
       const notificado_80 = usadosQuery.rows[0]?.notificado_80;
       const notificado_100 = usadosQuery.rows[0]?.notificado_100;
 
-      // 🔥 Sumar créditos adicionales activos
       const creditosQuery = await pool.query(`
         SELECT COALESCE(SUM(cantidad), 0) AS creditos
         FROM creditos_comprados
@@ -93,11 +90,10 @@ Aamy.ai`;
 
       const telefonos = [tenant.telefono_negocio, tenant.user_phone].filter(t => typeof t === 'string');
       for (const telefono of telefonos) {
-        await sendSMS(mensajeTexto, [telefono], telefono, String(tenant.tenant_id), 0);
+        await sendSMS(mensajeTexto, [telefono], '+14455451224', 'sistema', 0, true); // 🔥 Forzar número fijo
         console.log(`📲 SMS enviado a: ${telefono}`);
       }
 
-      // 🔄 Marcar como notificado
       const notificacionField = porcentaje >= 100 ? 'notificado_100' : 'notificado_80';
       await pool.query(`
         UPDATE uso_mensual
@@ -110,7 +106,6 @@ Aamy.ai`;
   console.log("✅ Verificación de notificaciones completada.");
 }
 
-// 🕒 Ejecutar cada 5 minutos
 setInterval(() => {
   verificarNotificaciones();
 }, 5 * 60 * 1000);
