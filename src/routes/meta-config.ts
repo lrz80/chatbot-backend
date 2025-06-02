@@ -1,3 +1,4 @@
+// src/routes/meta-config.ts
 import { Router, Request, Response } from 'express';
 import pool from '../lib/db';
 import jwt, { JwtPayload } from 'jsonwebtoken';
@@ -40,29 +41,29 @@ router.put('/', async (req: Request, res: Response) => {
     if (!tenantId) return res.status(404).json({ error: 'Usuario sin tenant asociado' });
 
     const {
-      funciones_asistente,
-      info_clave,
-      prompt,
-      bienvenida,
-      idioma
-    } = req.body;
-
-    await pool.query(`
-      INSERT INTO meta_configs (
-        tenant_id, funciones_asistente, info_clave, prompt, bienvenida, idioma, created_at, updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
-      ON CONFLICT (tenant_id)
-      DO UPDATE SET
-        funciones_asistente = EXCLUDED.funciones_asistente,
-        info_clave = EXCLUDED.info_clave,
-        prompt = EXCLUDED.prompt,
-        bienvenida = EXCLUDED.bienvenida,
-        idioma = EXCLUDED.idioma,
-        updated_at = NOW()
-    `, [
-      tenantId, funciones_asistente, info_clave, prompt, bienvenida, idioma
-    ]);
+        funciones_asistente,
+        info_clave,
+        prompt_meta,
+        bienvenida_meta,
+        idioma
+      } = req.body;
+      
+      await pool.query(`
+        INSERT INTO meta_configs (
+          tenant_id, funciones_asistente, info_clave, prompt_meta, bienvenida_meta, idioma, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+        ON CONFLICT (tenant_id)
+        DO UPDATE SET
+          funciones_asistente = EXCLUDED.funciones_asistente,
+          info_clave = EXCLUDED.info_clave,
+          prompt_meta = EXCLUDED.prompt_meta,
+          bienvenida_meta = EXCLUDED.bienvenida_meta,
+          idioma = EXCLUDED.idioma,
+          updated_at = NOW()
+      `, [
+        tenantId, funciones_asistente, info_clave, prompt_meta, bienvenida_meta, idioma
+      ]);      
 
     console.log('📝 Datos recibidos en PUT /api/meta-config:', req.body);
 
