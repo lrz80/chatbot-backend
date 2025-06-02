@@ -52,14 +52,20 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const userMessage = messagingEvent.message.text;
 
         const idioma = await detectarIdioma(userMessage);
+
+        // 📢 Unir tenants + meta-configs
         const { rows } = await pool.query(
-          'SELECT * FROM tenants WHERE facebook_page_id = $1 OR instagram_page_id = $1 LIMIT 1',
+          `SELECT t.*, m.prompt_meta, m.bienvenida_meta 
+           FROM tenants t
+           LEFT JOIN meta_configs m ON t.id = m.tenant_id
+           WHERE t.facebook_page_id = $1 OR t.instagram_page_id = $1 LIMIT 1`,
           [pageId]
         );
         if (rows.length === 0) continue;
 
         const tenant = rows[0];
-        const canal = 'meta';
+        const isInstagram = tenant.instagram_page_id && tenant.instagram_page_id === senderId;
+        const canal = isInstagram ? 'instagram' : 'facebook';
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
 
@@ -94,10 +100,11 @@ router.post('/api/facebook/webhook', async (req, res) => {
             ?? await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma);
 
           if (!respuesta) {
-            const promptMeta = tenant.prompt_meta?.trim() ?? "";
+            const promptMeta = tenant.prompt_meta?.trim() ?? "Información del negocio no disponible.";
             const mensajeBienvenida = tenant.bienvenida_meta?.trim() ?? "Hola, soy Amy, ¿en qué puedo ayudarte hoy?";
 
-            if (["hola", "buenos días", "buenas tardes", "buenas noches", "saludos"].some(p => userMessage.toLowerCase().includes(p))) {
+            // 🎯 Saludo simple detectado
+            if (["hola", "hello", "buenos días", "buenas tardes", "buenas noches", "saludos"].some(p => userMessage.toLowerCase().includes(p))) {
               respuesta = mensajeBienvenida;
             } else {
               const prompt = `Eres un asistente virtual para un negocio local. Un cliente preguntó: "${userMessage}". Responde de manera clara, breve y útil usando esta información del negocio:\n\n${promptMeta}`;
@@ -138,13 +145,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
           [tenantId, senderId, canal, userMessage, intencion, nivel_interes]
         );
 
-        await pool.query(
-          `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
-           VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-          [tenantId, userMessage, canal, senderId, messageId]
-        );
-
         const yaExisteContenidoReciente = await pool.query(
           `SELECT 1 FROM messages WHERE tenant_id = $1 AND sender = 'bot' AND canal = $2 AND content = $3 
            AND timestamp >= NOW() - INTERVAL '5 seconds' LIMIT 1`,
@@ -167,19 +167,12 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         await pool.query(`INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`, [tenantId, canal]);
 
-        console.log(`🔄 Intentando actualizar uso_mensual para tenant ${tenantId}, canal ${canal}`);
-        try {
-          await pool.query(
-            `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-             VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 1)
-             ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
-            [tenantId, canal]
-          );
-          console.log(`✅ uso_mensual actualizado correctamente para tenant ${tenantId}, canal ${canal}`);
-        } catch (error) {
-          console.error(`❌ Error al actualizar uso_mensual para tenant ${tenantId}, canal ${canal}:`, error);
-        }
-
+        await pool.query(
+          `UPDATE uso_mensual
+           SET usados = usados + 1
+           WHERE tenant_id = $1 AND canal = 'meta' AND mes = date_trunc('month', CURRENT_DATE)`,
+          [tenantId]
+        );
       }
     }
   } catch (error: any) {
