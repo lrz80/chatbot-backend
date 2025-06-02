@@ -170,8 +170,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
         await pool.query(
           `UPDATE uso_mensual
            SET usados = usados + 1
-           WHERE tenant_id = $1 AND canal = 'meta' AND mes = date_trunc('month', CURRENT_DATE)`,
-          [tenantId]
+           WHERE tenant_id = $1 AND canal = $2 AND mes = date_trunc('month', CURRENT_DATE)`,
+          [tenantId, canal]
         );
       }
     }
