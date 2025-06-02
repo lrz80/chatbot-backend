@@ -118,8 +118,8 @@ async function procesarMensajeWhatsApp(body: any) {
   await pool.query(
     `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
      VALUES ($1, 'user', $2, NOW(), $3, $4)`,
-    [tenant.id, userInput, canal, fromNumber]
-  );
+    [tenant.id, userInput, canal, fromNumber || "anónimo"]
+  );  
 
   // ✅ Incrementar solo una vez por mensaje recibido
   // 🔍 Obtiene membresia_inicio

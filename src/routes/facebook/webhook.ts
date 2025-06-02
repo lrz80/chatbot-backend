@@ -145,6 +145,14 @@ router.post('/api/facebook/webhook', async (req, res) => {
           [tenantId, senderId, canal, userMessage, intencion, nivel_interes]
         );
 
+        // 📝 Guardar mensaje del usuario
+        await pool.query(
+          `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
+          VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
+          ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+          [tenantId, userMessage, canal, senderId || 'anónimo', messageId]
+        );
+
         const yaExisteContenidoReciente = await pool.query(
           `SELECT 1 FROM messages WHERE tenant_id = $1 AND sender = 'bot' AND canal = $2 AND content = $3 
            AND timestamp >= NOW() - INTERVAL '5 seconds' LIMIT 1`,
