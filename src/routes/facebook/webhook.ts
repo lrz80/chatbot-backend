@@ -94,7 +94,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
             ?? await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma);
 
           if (!respuesta) {
-            const promptMeta = tenant.prompt_meta?.trim() ?? "Información del negocio no disponible.";
+            const promptMeta = tenant.prompt_meta?.trim() ?? "";
             const mensajeBienvenida = tenant.bienvenida_meta?.trim() ?? "Hola, soy Amy, ¿en qué puedo ayudarte hoy?";
 
             if (["hola", "buenos días", "buenas tardes", "buenas noches", "saludos"].some(p => userMessage.toLowerCase().includes(p))) {
@@ -107,7 +107,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
                   model: 'gpt-3.5-turbo',
                   max_tokens: 500,
                 });
-                respuesta = completion.choices[0]?.message?.content?.trim() ?? promptMeta;
+                respuesta = completion.choices[0]?.message?.content?.trim() ?? "Lo siento, no tengo información disponible en este momento. ¿En qué más puedo ayudarte?";
 
                 const tokensConsumidos = completion.usage?.total_tokens || 0;
                 if (tokensConsumidos > 0) {
@@ -120,7 +120,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
               } catch (error) {
                 console.error('❌ Error con OpenAI:', error);
-                respuesta = promptMeta;
+                respuesta = "Lo siento, no tengo información disponible en este momento. ¿En qué más puedo ayudarte?";
               }
             }
           }
