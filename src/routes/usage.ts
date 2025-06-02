@@ -49,10 +49,7 @@ router.get('/', async (req: Request, res: Response) => {
     const usoRes = await pool.query(`
       SELECT canal, SUM(usados) as usados
       FROM uso_mensual
-      WHERE tenant_id = $1 AND (
-        (canal = 'followup' AND mes = $2) OR
-        (canal != 'followup' AND mes = date_trunc('month', CURRENT_DATE))
-      )
+      WHERE tenant_id = $1 AND mes = $2
       GROUP BY canal
     `, [tenantId, cicloMesFollowup]);
 
