@@ -1,4 +1,3 @@
-// src/routes/meta-config.ts
 import { Router, Request, Response } from 'express';
 import pool from '../lib/db';
 import jwt, { JwtPayload } from 'jsonwebtoken';
@@ -18,7 +17,10 @@ router.get('/', async (req: Request, res: Response) => {
     if (!tenantId) return res.status(404).json({ error: 'Usuario sin tenant asociado' });
 
     const configRes = await pool.query('SELECT * FROM meta_configs WHERE tenant_id = $1 LIMIT 1', [tenantId]);
-    if (configRes.rows.length === 0) return res.status(200).json({}); // Retorna vacío si no hay configuración
+    if (configRes.rows.length === 0) {
+      return res.status(200).json({}); // Retorna vacío si no hay configuración
+    }
+
     return res.status(200).json(configRes.rows[0]);
   } catch (err) {
     console.error('❌ Error en GET /api/meta-config:', err);
@@ -37,11 +39,19 @@ router.put('/', async (req: Request, res: Response) => {
     const tenantId = userRes.rows[0]?.tenant_id;
     if (!tenantId) return res.status(404).json({ error: 'Usuario sin tenant asociado' });
 
-    const { funciones_asistente, info_clave, prompt, bienvenida, idioma } = req.body;
+    const {
+      funciones_asistente,
+      info_clave,
+      prompt,
+      bienvenida,
+      idioma
+    } = req.body;
 
     await pool.query(`
-      INSERT INTO meta_configs (tenant_id, funciones_asistente, info_clave, prompt, bienvenida, idioma, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      INSERT INTO meta_configs (
+        tenant_id, funciones_asistente, info_clave, prompt, bienvenida, idioma, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
       ON CONFLICT (tenant_id)
       DO UPDATE SET
         funciones_asistente = EXCLUDED.funciones_asistente,
@@ -50,7 +60,9 @@ router.put('/', async (req: Request, res: Response) => {
         bienvenida = EXCLUDED.bienvenida,
         idioma = EXCLUDED.idioma,
         updated_at = NOW()
-    `, [tenantId, funciones_asistente, info_clave, prompt, bienvenida, idioma]);
+    `, [
+      tenantId, funciones_asistente, info_clave, prompt, bienvenida, idioma
+    ]);
 
     return res.status(200).json({ message: 'Configuración Meta guardada correctamente' });
   } catch (err) {
