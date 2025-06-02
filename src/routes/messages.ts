@@ -20,21 +20,24 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
         s.intencion, s.nivel_interes
       FROM messages m
       LEFT JOIN sales_intelligence s
-        ON m.from_number = s.contacto AND m.content = s.mensaje
+        ON m.tenant_id = s.tenant_id AND m.from_number = s.contacto AND m.content = s.mensaje
       WHERE m.tenant_id = $1
     `;
 
     const values: any[] = [tenant_id];
 
     if (canal) {
-      // 🎯 Asegurarse de incluir todos los canales relevantes (whatsapp, facebook, instagram, voice)
       query += ` AND m.canal = $2`;
       values.push(canal);
     }
 
+    // Ajuste para contar bien los placeholders si se usa canal o no
+    const limitPlaceholder = `$${values.length + 1}`;
+    const offsetPlaceholder = `$${values.length + 2}`;
+
     query += `
       ORDER BY m.timestamp DESC
-      LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+      LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}
     `;
     values.push(limit, offset);
 
