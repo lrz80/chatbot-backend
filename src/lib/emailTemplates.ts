@@ -85,4 +85,33 @@ export const emailTemplates = {
       `
     }),
   },
+    // ✅ Nueva plantilla subscriptionActivated
+  subscriptionActivated: {
+    es: (tenantName: string) => ({
+      subject: '¡Tu suscripción en Amy AI está activa!',
+      html: `
+        <div style="text-align: center;">
+          <img src="https://aamy.ai/avatar-amy.png" alt="Amy AI Avatar" style="width: 100px; height: 100px; border-radius: 50%;" />
+          <h3>Hola ${tenantName} 👋</h3>
+          <p>¡Gracias por activar tu suscripción en <strong>Amy AI</strong>!</p>
+          <p>Tu plan está activo y listo para usar.</p>
+          <p>Accede a tu panel: <a href="https://www.aamy.ai/dashboard">aamy.ai/dashboard</a></p>
+          <p>Gracias por confiar en nosotros 💜</p>
+        </div>
+      `,
+    }),
+    en: (tenantName: string) => ({
+      subject: 'Your subscription at Amy AI is active!',
+      html: `
+        <div style="text-align: center;">
+          <img src="https://aamy.ai/avatar-amy.png" alt="Amy AI Avatar" style="width: 100px; height: 100px; border-radius: 50%;" />
+          <h3>Hello ${tenantName} 👋</h3>
+          <p>Thanks for activating your subscription at <strong>Amy AI</strong>!</p>
+          <p>Your plan is now active and ready to use.</p>
+          <p>Access your dashboard: <a href="https://www.aamy.ai/dashboard">aamy.ai/dashboard</a></p>
+          <p>Thank you for trusting us 💜</p>
+        </div>
+      `,
+    }),
+  },
 };

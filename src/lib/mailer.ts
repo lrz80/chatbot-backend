@@ -57,3 +57,24 @@ export const sendRenewalSuccessEmail = async (
     html: template.html,
   });
 };
+
+// ✅ 4. Activación de membresía (compra o inicio de trial)
+export const sendSubscriptionActivatedEmail = async (
+  to: string,
+  tenantName: string,
+  lang: 'es' | 'en' = 'es'
+) => {
+  const template = emailTemplates.subscriptionActivated?.[lang]?.(tenantName);
+
+  if (!template) {
+    console.error('❌ Error: La plantilla subscriptionActivated no está definida.');
+    return;
+  }
+
+  await transporter.sendMail({
+    from,
+    to,
+    subject: template.subject,
+    html: template.html,
+  });
+};

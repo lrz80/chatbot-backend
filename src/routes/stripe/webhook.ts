@@ -4,6 +4,9 @@ import express from 'express';
 import Stripe from 'stripe';
 import pool from '../../lib/db';
 import { transporter } from '../../lib/mailer';
+import { sendSubscriptionActivatedEmail } from '../../lib/mailer';
+import { sendRenewalSuccessEmail } from '../../lib/mailer';
+import { sendCancelationEmail } from '../../lib/mailer';
 
 const router = express.Router();
 
@@ -104,15 +107,13 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [email]);
         const user = userRes.rows[0];
         if (!user) return;
-
+    
         const subscriptionId = session.subscription as string;
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-
         const vigencia = new Date(subscription.current_period_end * 1000);
         const esTrial = subscription.status === 'trialing';
-
         const planValue = esTrial ? 'trial' : 'pro';
-
+    
         await pool.query(`
           UPDATE tenants
           SET membresia_activa = true,
@@ -123,62 +124,54 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
               es_trial = $6
           WHERE id = $1
         `, [user.uid, vigencia, new Date(subscription.start_date * 1000), planValue, subscriptionId, esTrial]);
-
+    
         await resetearCanales(user.uid);
-
-        // 🔥 Enviar correo de membresía activada
-        const invoices = await stripe.invoices.list({
-          subscription: subscriptionId,
-          limit: 1,
-        });
-        const invoice = invoices.data[0];
-        const invoiceUrl = invoice?.hosted_invoice_url || 'No disponible';
-
-        await transporter.sendMail({
-          from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
-          to: email,
-          subject: 'Tu suscripción está activa',
-          html: `
-            <div style="text-align: center;">
-              <img src="https://aamy.ai/avatar-amy.png" alt="Amy AI Avatar" style="width: 100px; height: 100px; border-radius: 50%;" />
-              <h3>Hola 👋</h3>
-              <p>¡Gracias por activar tu suscripción en <strong>Amy AI</strong>!</p>
-              <p><strong>Plan:</strong> ${planValue.toUpperCase()}</p>
-              <p><strong>Vigencia hasta:</strong> ${vigencia.toLocaleDateString()}</p>
-              ${invoice ? `<p><a href="${invoiceUrl}">Ver factura de la suscripción</a></p>` : '<p>No se pudo obtener el invoice</p>'}
-              <br><p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
-            </div>
-          `
-        });
-
+    
+        // 📩 Enviar email personalizado
+        const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [user.uid]);
+        const tenantName = tenantNameRes.rows[0]?.name || "Usuario";
+    
+        await sendSubscriptionActivatedEmail(email, tenantName);
+        
       } catch (error) {
         console.error('❌ Error activando membresía:', error);
       }
     }
+    
   }
 
   if (event.type === 'customer.subscription.updated') {
     const subscription = event.data.object as Stripe.Subscription;
     const tenant_id = await getTenantIdBySubscriptionId(subscription.id);
+  
     if (tenant_id) {
       const esTrial = subscription.status === 'trialing';
       const planValue = esTrial ? 'trial' : 'pro';
-
+  
       await pool.query(`
         UPDATE tenants
         SET es_trial = $1,
             plan = $2,
-            membresia_inicio = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END
-        WHERE id = $4
-      `, [esTrial, planValue, new Date(subscription.current_period_start * 1000), tenant_id]);
+            membresia_inicio = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END,
+            membresia_vigencia = $4
+        WHERE id = $5
+      `, [
+        esTrial,
+        planValue,
+        new Date(subscription.current_period_start * 1000),  // solo si sale del trial
+        new Date(subscription.current_period_end * 1000),    // actualizar vigencia
+        tenant_id,
+      ]);
+  
+      console.log(`🔄 Subscripción actualizada para tenant ${tenant_id}: plan=${planValue}, es_trial=${esTrial}`);
     }
-  }
+  }  
 
   // 🔁 Renovación automática de membresía
   if (event.type === 'invoice.payment_succeeded') {
     const invoice = event.data.object as Stripe.Invoice;
     let customerEmail = invoice.customer_email;
-
+  
     if (!customerEmail) {
       const customerId = invoice.customer;
       if (typeof customerId === 'string') {
@@ -193,29 +186,29 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         }
       }
     }
-
+  
     if (!customerEmail) {
       console.warn('⚠️ No se pudo obtener email del invoice ni del customerId.');
       return res.status(200).json({ received: true });
     }
-
+  
     const subscriptionId = typeof invoice.subscription === 'string' ? invoice.subscription : null;
     if (!subscriptionId) {
       console.warn('⚠️ Subscription ID no encontrado en invoice.');
       return res.status(200).json({ received: true });
     }
-
+  
     try {
       console.log('📄 Invoice recibido:', JSON.stringify(invoice, null, 2));
       const subscription = await stripe.subscriptions.retrieve(subscriptionId);
       const nuevaVigencia = subscription.current_period_end
         ? new Date(subscription.current_period_end * 1000)
         : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // fallback
-
-      const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [customerEmail]);
+  
+      const userRes = await pool.query('SELECT uid, tenant_id FROM users WHERE email = $1', [customerEmail]);
       const user = userRes.rows[0];
       if (!user) return;
-
+  
       await pool.query(`
         UPDATE tenants
         SET membresia_activa = true,
@@ -224,40 +217,30 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             plan = 'pro'
         WHERE id = $1
       `, [user.uid, nuevaVigencia]);
-
+  
       console.log('🔁 Membresía renovada para', customerEmail);
       await resetearCanales(user.uid);
-
-      // 🔥 Enviar correo con avatar-amy y link al invoice
-      const invoiceUrl = invoice.hosted_invoice_url || 'No disponible';
-
-      await transporter.sendMail({
-        from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
-        to: customerEmail,
-        subject: 'Tu renovación de membresía fue exitosa',
-        html: `
-          <div style="text-align: center;">
-            <img src="https://aamy.ai/avatar-amy.png" alt="Amy AI Avatar" style="width: 100px; height: 100px; border-radius: 50%;" />
-            <h3>Hola 👋</h3>
-            <p>¡Tu membresía ha sido renovada correctamente!</p>
-            <p><strong>Vigencia hasta:</strong> ${nuevaVigencia.toLocaleDateString()}</p>
-            <p><a href="${invoiceUrl}">Ver factura de la renovación</a></p>
-            <br><p>Gracias por confiar en <strong>Amy AI</strong> 💜</p>
-          </div>
-        `
-      });
-
+  
+      // 📩 Obtener tenantName para el email
+      const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [user.uid]);
+      const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
+  
+      // 📩 Enviar correo usando función del mailer
+      await sendRenewalSuccessEmail(customerEmail, tenantName);
+  
+      console.log('📧 Correo de renovación enviado');
+  
     } catch (error) {
       console.error('❌ Error renovando membresía:', error);
     }
-}
+  }  
 
   // ❌ Cancelación de suscripción
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object as Stripe.Subscription;
-
+  
     let customerEmail: string | null = null;
-
+  
     try {
       const customerId = subscription.customer;
       if (typeof customerId === 'string') {
@@ -269,53 +252,49 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     } catch (err) {
       console.warn('⚠️ No se pudo obtener email del cliente:', err);
     }
-
-    if (!customerEmail) return;
-
+  
+    if (!customerEmail) {
+      console.warn('⚠️ No se pudo obtener email del cliente para enviar la cancelación.');
+      return;
+    }
+  
     try {
       const userRes = await pool.query('SELECT uid, tenant_id FROM users WHERE email = $1', [customerEmail]);
       const user = userRes.rows[0];
       if (!user) return;
-
+  
       await pool.query(`
         UPDATE tenants
         SET membresia_activa = false,
             plan = NULL
         WHERE id = $1
       `, [user.uid]);
-      
+  
       console.log('🛑 Cancelando plan para', customerEmail, 'con UID', user.uid);
-
+  
       await pool.query(`
         INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
         VALUES ($1, 'contactos', date_trunc('month', CURRENT_DATE), 0, 500)
         ON CONFLICT (tenant_id, canal, mes)
         DO UPDATE SET limite = 500
       `, [user.tenant_id]);
-
+  
       console.log('🛑 Suscripción cancelada y contactos reiniciados para', customerEmail);
-
-      await transporter.sendMail({
-        from: `"Amy AI" <${process.env.EMAIL_FROM}>`,
-        to: customerEmail,
-        subject: 'Suscripción cancelada',
-        html: `
-          <div style="text-align: center;">
-            <img src="https://aamy.ai/avatar-amy.png" alt="Amy AI Avatar" style="width: 100px; height: 100px; border-radius: 50%;" />
-            <h3>Hola ${user.tenant_id ? (await pool.query('SELECT name FROM tenants WHERE id = $1', [user.tenant_id])).rows[0]?.name || 'Usuario' : 'Usuario'} 👋</h3>
-            <p>Tu suscripción ha sido cancelada en <strong>Amy AI</strong>.</p>
-            <p>Tu límite de contactos ha sido reiniciado a 500.</p>
-            <br />
-            <p>Gracias por haber sido parte de <strong>Amy AI</strong> 💜</p>
-          </div>
-        `
-      });
-      
+  
+      // 📩 Obtener tenantName para el email
+      const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [user.tenant_id]);
+      const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
+  
+      // 📩 Enviar correo usando función del mailer
+      await sendCancelationEmail(customerEmail, tenantName);
+  
+      console.log('📧 Correo de cancelación enviado');
+  
     } catch (err) {
       console.error('❌ Error al cancelar membresía:', err);
     }
   }
-
+  
   res.status(200).json({ received: true });
 });
 
