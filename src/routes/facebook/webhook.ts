@@ -176,11 +176,11 @@ router.post('/api/facebook/webhook', async (req, res) => {
         await pool.query(`INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`, [tenantId, canal]);
 
         await pool.query(
-          `UPDATE uso_mensual
-           SET usados = usados + 1
-           WHERE tenant_id = $1 AND canal = $2 AND mes = date_trunc('month', CURRENT_DATE)`,
+          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+           VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 1)
+           ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
           [tenantId, canal]
-        );
+        );        
       }
     }
   } catch (error: any) {
