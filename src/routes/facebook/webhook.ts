@@ -177,11 +177,10 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         await pool.query(
           `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-           VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 1)
+           VALUES ($1, $2, date_trunc('month', NOW() AT TIME ZONE 'America/New_York'), 1)
            ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
           [tenantId, canal]
-        );
-                
+        );        
       }
     }
   } catch (error: any) {
