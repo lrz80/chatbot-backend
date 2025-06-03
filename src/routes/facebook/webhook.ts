@@ -180,7 +180,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
            VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 1)
            ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
           [tenantId, canal]
-        );        
+        );
+                
       }
     }
   } catch (error: any) {
