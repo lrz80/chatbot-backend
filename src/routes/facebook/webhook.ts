@@ -64,7 +64,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         if (rows.length === 0) continue;
 
         const tenant = rows[0];
-        const isInstagram = tenant.instagram_page_id && tenant.instagram_page_id === senderId;
+        const isInstagram = tenant.instagram_page_id && tenant.instagram_page_id === pageId;
         const canal = isInstagram ? 'instagram' : 'facebook';
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
