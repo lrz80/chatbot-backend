@@ -18,29 +18,27 @@ router.get('/kpis', async (req: Request, res: Response) => {
 
     const canalFilter = canal ? `AND canal = '${canal}'` : '';
 
-    // Totales y usuarios únicos
+    // 👁 Solo mensajes visibles (user o bot)
     const generalStats = await pool.query(
       `SELECT COUNT(*)::int AS total,
               COUNT(DISTINCT from_number)::int AS unicos
        FROM messages
-       WHERE tenant_id = $1 ${canalFilter}`,
+       WHERE tenant_id = $1 AND sender IN ('user', 'bot') ${canalFilter}`,
       [tenant_id]
     );
 
-    // Hora pico
     const horaPicoRes = await pool.query(
       `SELECT EXTRACT(HOUR FROM timestamp)::int AS hora,
               COUNT(*) AS total
        FROM messages
        WHERE tenant_id = $1 AND sender = 'user' ${canalFilter}
-       AND timestamp >= NOW() - INTERVAL '7 days'
+         AND timestamp >= NOW() - INTERVAL '7 days'
        GROUP BY hora
        ORDER BY total DESC
        LIMIT 1`,
       [tenant_id]
     );
 
-    // Intenciones de venta (desde tabla sales_intelligence)
     const ventasRes = await pool.query(
       `SELECT COUNT(*)::int AS intenciones
        FROM sales_intelligence
