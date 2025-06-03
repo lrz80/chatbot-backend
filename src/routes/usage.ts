@@ -35,17 +35,9 @@ router.get('/', async (req: Request, res: Response) => {
     const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
     if (!membresiaInicio) return res.status(400).json({ error: 'Membresía no configurada' });
 
-    // 🔥 Calculamos el inicio del ciclo para followup y mantenemos lo demás igual
-    const ahora = new Date();
-    const inicio = new Date(membresiaInicio);
-    const diffInMonths = Math.floor((ahora.getFullYear() - inicio.getFullYear()) * 12 + (ahora.getMonth() - inicio.getMonth()));
-    const cicloInicio = new Date(inicio);
-    cicloInicio.setMonth(inicio.getMonth() + diffInMonths);
-    const cicloMesFollowup = cicloInicio.toISOString().substring(0, 7) + '-01'; // primer día del mes
+    console.log(`🔄 Usando membresia_inicio como ciclo: ${membresiaInicio}`);
 
-    console.log(`🔄 Ciclo mensual followup: ${cicloMesFollowup}`);
-
-    // 🔍 Obtenemos usos acumulados del ciclo actual, usando cicloMesFollowup para followup
+    // 🔍 Obtenemos usos acumulados del ciclo actual usando membresia_inicio como referencia
     const usoRes = await pool.query(`
       SELECT 
         CASE 
@@ -54,12 +46,12 @@ router.get('/', async (req: Request, res: Response) => {
         END as canal,
         SUM(usados) as usados
       FROM uso_mensual
-      WHERE tenant_id = $1 AND date_trunc('month', mes) = date_trunc('month', CURRENT_DATE)
+      WHERE tenant_id = $1 AND mes = $2
       GROUP BY CASE 
           WHEN canal IN ('facebook', 'instagram') THEN 'meta'
           ELSE canal
         END
-    `, [tenantId]);    
+    `, [tenantId, membresiaInicio]);
 
     // 🔍 Obtener créditos extra válidos (no vencidos)
     const creditosRes = await pool.query(`
