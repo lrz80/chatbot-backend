@@ -41,7 +41,7 @@ router.get('/', async (req: Request, res: Response) => {
     const diffInMonths = Math.floor((ahora.getFullYear() - inicio.getFullYear()) * 12 + (ahora.getMonth() - inicio.getMonth()));
     const cicloInicio = new Date(inicio);
     cicloInicio.setMonth(inicio.getMonth() + diffInMonths);
-    const cicloMesFollowup = cicloInicio.toISOString().substring(0, 10);
+    const cicloMesFollowup = cicloInicio.toISOString().substring(0, 7) + '-01'; // primer día del mes
 
     console.log(`🔄 Ciclo mensual followup: ${cicloMesFollowup}`);
 
@@ -54,12 +54,12 @@ router.get('/', async (req: Request, res: Response) => {
         END as canal,
         SUM(usados) as usados
       FROM uso_mensual
-      WHERE tenant_id = $1 AND mes = $2
+      WHERE tenant_id = $1 AND date_trunc('month', mes) = date_trunc('month', CURRENT_DATE)
       GROUP BY CASE 
           WHEN canal IN ('facebook', 'instagram') THEN 'meta'
           ELSE canal
         END
-    `, [tenantId, cicloMesFollowup]);    
+    `, [tenantId]);    
 
     // 🔍 Obtener créditos extra válidos (no vencidos)
     const creditosRes = await pool.query(`
