@@ -1,5 +1,3 @@
-// ✅ backend/src/lib/detectarIntencion.ts
-
 import OpenAI from 'openai';
 
 export async function detectarIntencion(mensaje: string) {
@@ -8,18 +6,32 @@ export async function detectarIntencion(mensaje: string) {
   });
 
   const prompt = `
-Analiza este mensaje de un cliente:
+Eres un sistema que analiza mensajes de clientes para clasificar su intención y nivel de interés.
 
+Analiza el siguiente mensaje:
 "${mensaje}"
 
-Identifica:
-- Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).
-- Nivel de interés (de 1 a 5, siendo 5 "muy interesado en comprar").
+Clasifica según estas intenciones posibles:
+- "comprar"
+- "pagar"
+- "precio"
+- "reservar"
+- "cancelar"
+- "saludo"
+- "duda"
+- "no_interesado"
 
-Responde solo en JSON. Ejemplo:
+Y estos niveles de interés:
+- 1: Bajo (curioso, sin intención clara)
+- 2: Medio (interesado pero no decidido)
+- 3: Alto (quiere comprar o reservar pronto)
+
+⚠️ Si el mensaje contiene una negación como "no quiero pagar" o "no me interesa", la intención debe ser "no_interesado".
+
+Responde solo en JSON con este formato exacto:
 {
-  "intencion": "preguntar precios",
-  "nivel_interes": 4
+  "intencion": "una de las opciones anteriores",
+  "nivel_interes": 1 | 2 | 3
 }
 `;
 
@@ -30,14 +42,21 @@ Responde solo en JSON. Ejemplo:
   });
 
   let content = completion.choices[0]?.message?.content || '{}';
-
-  // ✅ Limpiar formato markdown si viene con ```
   content = content.replace(/```json|```/g, '').trim();
 
-  const data = JSON.parse(content);
+  let data: { intencion: string; nivel_interes: number } = { intencion: 'no_detectada', nivel_interes: 1 };
 
-  return {
-    intencion: data.intencion || 'no_detectada',
-    nivel_interes: data.nivel_interes || 1,
-  };
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed.intencion && parsed.nivel_interes) {
+      data = {
+        intencion: parsed.intencion,
+        nivel_interes: Math.min(3, Math.max(1, parseInt(parsed.nivel_interes))),
+      };
+    }
+  } catch (error) {
+    console.error('❌ Error parseando intención:', error);
+  }
+
+  return data;
 }
