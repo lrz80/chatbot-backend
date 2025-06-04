@@ -117,14 +117,14 @@ router.post('/api/facebook/webhook', async (req, res) => {
                 userMessage.toLowerCase().includes(p)
               );
             
-              const dudaGenericaDetectada = ["quiero más información", "quisiera saber más", "más detalles", "me interesa"].some(p =>
+              const dudaGenericaDetectada = ["quiero más información", "i want more information", "me interesa", "más detalles", "información"].some(p =>
                 userMessage.toLowerCase().includes(p)
               );
             
               if (saludoDetectado) {
                 respuesta = mensajeBienvenida;
               } else if (dudaGenericaDetectada) {
-                respuesta = "Claro, ¿qué información específica necesitas? Puedo ayudarte con precios, servicios, horarios u otros detalles.";
+                respuesta = "¡Claro! ¿Qué información específica te interesa? Puedo ayudarte con precios, servicios, horarios u otros detalles.";
               } else {
                 const prompt = `Eres Amy, asistente del negocio "${tenant.nombre}". El cliente dijo: "${userMessage}". Responde de forma clara, útil y breve usando esta información:\n\n${promptMeta}`;
                 try {
@@ -149,7 +149,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
                   respuesta = "Lo siento, no tengo información disponible en este momento.";
                 }
               }
-            }            
+            }                        
         }
 
         respuesta = respuesta ?? "Lo siento, no tengo información disponible.";
