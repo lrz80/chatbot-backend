@@ -75,6 +75,16 @@ router.post('/api/facebook/webhook', async (req, res) => {
         );
         if (existingMsg.rows.length > 0) continue;
 
+        // ✅ SOLO AHORA sumamos 1
+        const tenantRes = await pool.query('SELECT membresia_inicio FROM tenants WHERE id = $1', [tenantId]);
+        const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
+
+        await pool.query(`
+          INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+          VALUES ($1, $2, $3, 1)
+          ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1
+        `, [tenantId, canal, membresiaInicio]);
+
         let faqs = [];
         let flows = [];
         try {
@@ -176,14 +186,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         await pool.query(`INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`, [tenantId, canal]);
 
-        const tenantRes = await pool.query('SELECT membresia_inicio FROM tenants WHERE id = $1', [tenantId]);
-        const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
-
-        await pool.query(`
-          INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-          VALUES ($1, $2, $3, 1)
-          ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1
-        `, [tenantId, canal, membresiaInicio]);
       }
     }
   } catch (error: any) {
