@@ -26,6 +26,8 @@ Y estos niveles de interés:
 - 2: Medio (interesado pero no decidido)
 - 3: Alto (quiere comprar o reservar pronto)
 
+Si el mensaje es un saludo como "hola", "buenas", "hello", "saludos", etc., la intención debe ser "saludo" y el nivel_interes debe ser 1.
+
 ⚠️ Si el mensaje contiene una negación como "no quiero pagar" o "no me interesa", la intención debe ser "no_interesado".
 
 Responde solo en JSON con este formato exacto:
@@ -44,18 +46,29 @@ Responde solo en JSON con este formato exacto:
   let content = completion.choices[0]?.message?.content || '{}';
   content = content.replace(/```json|```/g, '').trim();
 
-  let data: { intencion: string; nivel_interes: number } = { intencion: 'no_detectada', nivel_interes: 1 };
+  let data: { intencion: string; nivel_interes: number } = {
+    intencion: 'no_detectada',
+    nivel_interes: 1,
+  };
 
   try {
     const parsed = JSON.parse(content);
     if (parsed.intencion && parsed.nivel_interes) {
       data = {
-        intencion: parsed.intencion,
+        intencion: parsed.intencion.toLowerCase(),
         nivel_interes: Math.min(3, Math.max(1, parseInt(parsed.nivel_interes))),
       };
     }
   } catch (error) {
     console.error('❌ Error parseando intención:', error);
+  }
+
+  // ✅ Refuerzo manual para saludos
+  const saludos = ['hola', 'hello', 'buenos días', 'buenas tardes', 'buenas noches', 'saludos'];
+  const msgLower = mensaje.toLowerCase();
+  if (saludos.some(s => msgLower.includes(s))) {
+    data.intencion = 'saludo';
+    data.nivel_interes = 1;
   }
 
   return data;

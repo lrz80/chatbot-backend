@@ -21,13 +21,14 @@ router.get('/', authenticateUser, async (req: any, res) => {
       FROM messages
       WHERE tenant_id = $1
         AND sender = 'user'
+        AND canal IN ('whatsapp', 'facebook', 'instagram', 'voz')
         AND timestamp >= NOW() - INTERVAL '7 days'
       GROUP BY hora
       ORDER BY cantidad DESC
       LIMIT 1;
       `,
       [tenant_id]
-    );
+    );    
 
     if (result.rows.length > 0) {
       res.status(200).json({
