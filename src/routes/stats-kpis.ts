@@ -31,13 +31,15 @@ router.get('/kpis', async (req: Request, res: Response) => {
       `SELECT EXTRACT(HOUR FROM timestamp)::int AS hora,
               COUNT(*) AS total
        FROM messages
-       WHERE tenant_id = $1 AND sender = 'user' ${canalFilter}
+       WHERE tenant_id = $1
+         AND sender = 'user'
+         AND canal IN ('whatsapp', 'facebook', 'instagram', 'voz')
          AND timestamp >= NOW() - INTERVAL '7 days'
        GROUP BY hora
        ORDER BY total DESC
        LIMIT 1`,
       [tenant_id]
-    );
+    );    
 
     const ventasRes = await pool.query(
       `SELECT COUNT(*)::int AS intenciones
