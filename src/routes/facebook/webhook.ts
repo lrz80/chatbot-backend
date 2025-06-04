@@ -140,10 +140,11 @@ router.post('/api/facebook/webhook', async (req, res) => {
         }
 
         await pool.query(
-          `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [tenantId, senderId, canal, userMessage, intencion, nivel_interes]
-        );
+          `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, fecha)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+          [tenantId, senderId, canal, userMessage, intencion, nivel_interes, messageId]
+        );        
 
         // 📝 Guardar mensaje del usuario
         await pool.query(

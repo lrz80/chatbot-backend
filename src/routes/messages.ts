@@ -20,7 +20,7 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
         s.intencion, s.nivel_interes
       FROM messages m
       LEFT JOIN sales_intelligence s
-        ON m.tenant_id = s.tenant_id AND m.from_number = s.contacto AND m.content = s.mensaje
+        ON m.tenant_id = s.tenant_id AND m.message_id = s.message_id
       WHERE m.tenant_id = $1
     `;
 
