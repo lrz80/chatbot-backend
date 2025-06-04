@@ -109,38 +109,47 @@ router.post('/api/facebook/webhook', async (req, res) => {
           respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, userMessage, idioma)
             ?? await buscarRespuestaDesdeFlowsTraducido(flows, userMessage, idioma);
 
-          if (!respuesta) {
-            const promptMeta = tenant.prompt_meta?.trim() ?? "Información del negocio no disponible.";
-            const mensajeBienvenida = tenant.bienvenida_meta?.trim() ?? "Hola, soy Amy, ¿en qué puedo ayudarte hoy?";
-
-            // 🎯 Saludo simple detectado
-            if (["hola", "hello", "buenos días", "buenas tardes", "buenas noches", "saludos"].some(p => userMessage.toLowerCase().includes(p))) {
-              respuesta = mensajeBienvenida;
-            } else {
-              const prompt = `Eres un asistente virtual para un negocio local. Un cliente preguntó: "${userMessage}". Responde de manera clara, breve y útil usando esta información del negocio:\n\n${promptMeta}`;
-              try {
-                const completion = await openai.chat.completions.create({
-                  messages: [{ role: 'user', content: prompt }],
-                  model: 'gpt-3.5-turbo',
-                  max_tokens: 500,
-                });
-                respuesta = completion.choices[0]?.message?.content?.trim() ?? "Lo siento, no tengo información disponible en este momento. ¿En qué más puedo ayudarte?";
-
-                const tokensConsumidos = completion.usage?.total_tokens || 0;
-                if (tokensConsumidos > 0) {
-                  await pool.query(
-                    `UPDATE uso_mensual SET usados = usados + $1
-                     WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
-                    [tokensConsumidos, tenantId]
-                  );
+            if (!respuesta) {
+              const mensajeBienvenida = tenant.bienvenida_meta?.trim() || "Hola, soy Amy, ¿en qué puedo ayudarte hoy?";
+              const promptMeta = tenant.prompt_meta?.trim() || "Información del negocio no disponible.";
+            
+              const saludoDetectado = ["hola", "hello", "buenos días", "buenas tardes", "buenas noches", "saludos"].some(p =>
+                userMessage.toLowerCase().includes(p)
+              );
+            
+              const dudaGenericaDetectada = ["quiero más información", "quisiera saber más", "más detalles", "me interesa"].some(p =>
+                userMessage.toLowerCase().includes(p)
+              );
+            
+              if (saludoDetectado) {
+                respuesta = mensajeBienvenida;
+              } else if (dudaGenericaDetectada) {
+                respuesta = "Claro, ¿qué información específica necesitas? Puedo ayudarte con precios, servicios, horarios u otros detalles.";
+              } else {
+                const prompt = `Eres Amy, asistente del negocio "${tenant.nombre}". El cliente dijo: "${userMessage}". Responde de forma clara, útil y breve usando esta información:\n\n${promptMeta}`;
+                try {
+                  const completion = await openai.chat.completions.create({
+                    model: 'gpt-3.5-turbo',
+                    messages: [{ role: 'user', content: prompt }],
+                    max_tokens: 400,
+                  });
+            
+                  respuesta = completion.choices[0]?.message?.content?.trim() || "Lo siento, no tengo información disponible.";
+                  const tokensConsumidos = completion.usage?.total_tokens || 0;
+            
+                  if (tokensConsumidos > 0) {
+                    await pool.query(
+                      `UPDATE uso_mensual SET usados = usados + $1
+                       WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
+                      [tokensConsumidos, tenantId]
+                    );
+                  }
+                } catch (err) {
+                  console.error('❌ Error con OpenAI:', err);
+                  respuesta = "Lo siento, no tengo información disponible en este momento.";
                 }
-
-              } catch (error) {
-                console.error('❌ Error con OpenAI:', error);
-                respuesta = "Lo siento, no tengo información disponible en este momento. ¿En qué más puedo ayudarte?";
               }
-            }
-          }
+            }            
         }
 
         respuesta = respuesta ?? "Lo siento, no tengo información disponible.";
