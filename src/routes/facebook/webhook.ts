@@ -149,12 +149,17 @@ router.post('/api/facebook/webhook', async (req, res) => {
           respuesta = await traducirMensaje(respuesta, idioma);
         }
 
-        await pool.query(
-          `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, fecha)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-          [tenantId, senderId, canal, userMessage, intencion, nivel_interes, messageId]
-        );        
+        // 💡 Solo guardar si la intención es realmente de venta
+        const intencionesValidas = ['comprar', 'pagar', 'precio', 'reservar'];
+
+        if (intencionesValidas.includes(intencion) && nivel_interes >= 2) {
+          await pool.query(
+            `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, fecha)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+            ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+            [tenantId, senderId, canal, userMessage, intencion, nivel_interes, messageId]
+          );
+        }
 
         // 📝 Guardar mensaje del usuario
         await pool.query(
