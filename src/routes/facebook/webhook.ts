@@ -126,11 +126,50 @@ router.post('/api/facebook/webhook', async (req, res) => {
               } else if (dudaGenericaDetectada) {
                 respuesta = "¡Claro! ¿Qué información específica te interesa? Puedo ayudarte con precios, servicios, horarios u otros detalles.";
               } else {
-                const prompt = `Eres Amy, asistente del negocio "${tenant.nombre}". El cliente dijo: "${userMessage}". Responde de forma clara, útil y breve usando esta información:\n\n${promptMeta}`;
+                // 🎯 Lógica de traducción para que el prompt se adapte al idioma del cliente
+                const idiomaCliente = await detectarIdioma(userMessage);
+                let promptMetaAdaptado = promptMeta;
+                let promptGenerado = '';
+
+                if (idiomaCliente !== 'es') {
+                  try {
+                    promptMetaAdaptado = await traducirMensaje(promptMeta, idiomaCliente);
+
+                    promptGenerado = `You are Amy, a helpful virtual assistant for the local business "${tenant.nombre}". A customer asked: "${userMessage}". Respond clearly, briefly, and helpfully using the following information:\n\n${promptMetaAdaptado}`;
+                  } catch (err) {
+                    console.error('❌ Error traduciendo prompt_meta:', err);
+                    promptGenerado = `You are Amy, a virtual assistant. A customer asked: "${userMessage}". Reply concisely.`;
+                  }
+                } else {
+                  promptGenerado = `Eres Amy, una asistente virtual para el negocio local "${tenant.nombre}". Un cliente preguntó: "${userMessage}". Responde de forma clara, breve y útil usando esta información:\n\n${promptMeta}`;
+                }
+
                 try {
                   const completion = await openai.chat.completions.create({
                     model: 'gpt-3.5-turbo',
-                    messages: [{ role: 'user', content: prompt }],
+                    messages: [{ role: 'user', content: promptGenerado }],
+                    max_tokens: 400,
+                  });
+
+                  respuesta = completion.choices[0]?.message?.content?.trim() || "Lo siento, no tengo información disponible.";
+                  const tokensConsumidos = completion.usage?.total_tokens || 0;
+
+                  if (tokensConsumidos > 0) {
+                    await pool.query(
+                      `UPDATE uso_mensual SET usados = usados + $1
+                      WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
+                      [tokensConsumidos, tenantId]
+                    );
+                  }
+                } catch (err) {
+                  console.error('❌ Error con OpenAI:', err);
+                  respuesta = "Lo siento, no tengo información disponible en este momento.";
+                }
+
+                try {
+                  const completion = await openai.chat.completions.create({
+                    model: 'gpt-3.5-turbo',
+                    messages: [{ role: 'user', content: promptGenerado }],
                     max_tokens: 400,
                   });
             
