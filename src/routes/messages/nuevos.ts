@@ -15,41 +15,41 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
     const canal = req.query.canal?.toString() || "";
     const lastId = req.query.lastId?.toString();
 
-    // 🛡️ Validar que lastId sea un UUID válido o null
     if (lastId && !validateUuid(lastId)) {
       return res.status(400).json({ error: 'ID inválido (UUID esperado)' });
     }
 
-    const query = canal
-      ? `SELECT 
-           m.id, m.tenant_id, m.content, m.sender, m.canal, m.timestamp, m.from_number, m.emotion,
-           s.intencion, s.nivel_interes
-         FROM messages m
-         LEFT JOIN sales_intelligence s
-           ON m.from_number = s.contacto AND m.content = s.mensaje
-         WHERE m.tenant_id = $1 AND m.canal = $2 ${lastId ? 'AND m.id > $3' : ''}
-         ORDER BY m.id ASC
-         LIMIT 20`
-      : `SELECT 
-           m.id, m.tenant_id, m.content, m.sender, m.canal, m.timestamp, m.from_number, m.emotion,
-           s.intencion, s.nivel_interes
-         FROM messages m
-         LEFT JOIN sales_intelligence s
-           ON m.from_number = s.contacto AND m.content = s.mensaje
-         WHERE m.tenant_id = $1 ${lastId ? 'AND m.id > $2' : ''}
-         ORDER BY m.id ASC
-         LIMIT 20`;
+    let query = `
+      SELECT 
+        m.id, m.tenant_id, m.content, m.sender, m.canal, m.timestamp, m.from_number, m.emotion,
+        s.intencion, s.nivel_interes
+      FROM messages m
+      LEFT JOIN sales_intelligence s
+        ON m.from_number = s.contacto AND m.content = s.mensaje
+      WHERE m.tenant_id = $1
+    `;
 
-    const values = canal
-      ? lastId ? [tenant_id, canal, lastId] : [tenant_id, canal]
-      : lastId ? [tenant_id, lastId] : [tenant_id];
+    const values: any[] = [tenant_id];
+    let paramIndex = 2;
+
+    if (canal) {
+      query += ` AND m.canal = $${paramIndex++}`;
+      values.push(canal);
+    }
+
+    if (lastId) {
+      query += ` AND m.id > $${paramIndex++}`;
+      values.push(lastId);
+    }
+
+    query += ` ORDER BY m.id ASC LIMIT 20`;
 
     const mensajesRes = await pool.query(query, values);
 
-    res.status(200).json({ mensajes: mensajesRes.rows });
+    return res.status(200).json({ mensajes: mensajesRes.rows });
   } catch (error) {
     console.error("❌ Error al obtener mensajes nuevos:", error);
-    res.status(500).json({ error: "Error al obtener nuevos mensajes" });
+    return res.status(500).json({ error: "Error al obtener nuevos mensajes" });
   }
 });
 
