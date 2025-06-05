@@ -77,6 +77,34 @@ router.put('/', async (req: Request, res: Response) => {
 
     console.log('📝 Datos recibidos en PUT /api/meta-config:', req.body);
 
+// POST: desconectar cuentas de Facebook e Instagram
+router.post('/disconnect', async (req: Request, res: Response) => {
+    const token = req.cookies.token;
+    if (!token) return res.status(401).json({ error: 'Token requerido' });
+  
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+      const userRes = await pool.query('SELECT tenant_id FROM users WHERE uid = $1', [decoded.uid]);
+      const tenantId = userRes.rows[0]?.tenant_id;
+      if (!tenantId) return res.status(404).json({ error: 'Usuario sin tenant asociado' });
+  
+      await pool.query(`
+        UPDATE tenants SET 
+          facebook_page_id = NULL, 
+          facebook_page_name = NULL, 
+          instagram_page_id = NULL, 
+          instagram_page_name = NULL,
+          facebook_access_token = NULL
+        WHERE id = $1
+      `, [tenantId]);
+  
+      return res.status(200).json({ message: 'Cuentas desconectadas correctamente' });
+    } catch (err) {
+      console.error('❌ Error en POST /api/meta-config/disconnect:', err);
+      return res.status(500).json({ error: 'Error interno del servidor' });
+    }
+  });
+  
     return res.status(200).json({ message: 'Configuración Meta guardada correctamente' });
   } catch (err) {
     console.error('❌ Error en PUT /api/meta-config:', err);
