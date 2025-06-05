@@ -11,9 +11,9 @@ router.get('/', authenticateUser, async (req: any, res) => {
 
   try {
     const totalRes = await pool.query(
-      `SELECT COUNT(*) FROM sales_intelligence WHERE tenant_id = $1`,
+      `SELECT COUNT(*) FROM sales_intelligence WHERE tenant_id = $1 AND intencion IS NOT NULL AND intencion != 'saludo'`,
       [tenant_id]
-    );
+    );    
 
     const calientesRes = await pool.query(
       `SELECT COUNT(*) FROM sales_intelligence WHERE tenant_id = $1 AND nivel_interes >= 4`,
