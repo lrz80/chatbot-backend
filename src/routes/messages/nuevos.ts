@@ -21,7 +21,7 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
 
     let query = `
       SELECT 
-        m.id, m.tenant_id, m.content, m.sender, m.canal, m.timestamp, m.from_number, m.emotion,
+        m.id, m.tenant_id, m.content, m.role, m.canal, m.timestamp, m.from_number, m.emotion,
         s.intencion, s.nivel_interes
       FROM messages m
       LEFT JOIN sales_intelligence s
