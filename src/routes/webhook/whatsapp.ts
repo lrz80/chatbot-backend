@@ -174,9 +174,11 @@ async function procesarMensajeWhatsApp(body: any) {
   console.log("📬 Respuesta enviada vía Twilio:", respuesta);
 
   await pool.query(
-    `INSERT INTO interactions (tenant_id, canal, created_at) VALUES ($1, $2, NOW())`,
-    [tenant.id, canal]
-  );
+    `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT DO NOTHING`,
+    [tenant.id, canal, messageId]
+  );  
 
   try {
     const { intencion, nivel_interes } = await detectarIntencion(userInput);
