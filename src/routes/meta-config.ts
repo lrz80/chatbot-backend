@@ -76,6 +76,13 @@ router.put('/', async (req: Request, res: Response) => {
       ]);      
 
     console.log('📝 Datos recibidos en PUT /api/meta-config:', req.body);
+  
+    return res.status(200).json({ message: 'Configuración Meta guardada correctamente' });
+  } catch (err) {
+    console.error('❌ Error en PUT /api/meta-config:', err);
+    return res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
 
 // POST: desconectar cuentas de Facebook e Instagram
 router.post('/disconnect', async (req: Request, res: Response) => {
@@ -105,11 +112,4 @@ router.post('/disconnect', async (req: Request, res: Response) => {
     }
   });
   
-    return res.status(200).json({ message: 'Configuración Meta guardada correctamente' });
-  } catch (err) {
-    console.error('❌ Error en PUT /api/meta-config:', err);
-    return res.status(500).json({ error: 'Error interno del servidor' });
-  }
-});
-
 export default router;
