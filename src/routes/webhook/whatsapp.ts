@@ -115,11 +115,13 @@ async function procesarMensajeWhatsApp(body: any) {
     }
   }
 
+  const messageId = body.MessageSid || body.SmsMessageSid || null;
+
   await pool.query(
-    `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
-     VALUES ($1, 'user', $2, NOW(), $3, $4)`,
-    [tenant.id, userInput, canal, fromNumber || "anónimo"]
-  );  
+    `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
+    VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
+    [tenant.id, userInput, canal, fromNumber || "anónimo", messageId]
+  );
 
   // ✅ Incrementar solo una vez por mensaje recibido
   // 🔍 Obtiene membresia_inicio
@@ -163,10 +165,10 @@ async function procesarMensajeWhatsApp(body: any) {
 
   // Insertar mensaje bot (esto no suma a uso)
   await pool.query(
-    `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
-     VALUES ($1, 'bot', $2, NOW(), $3)`,
-    [tenant.id, respuesta, canal]
-  );
+    `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, message_id)
+     VALUES ($1, 'bot', $2, NOW(), $3, $4)`,
+    [tenant.id, respuesta, canal, messageId]
+  );  
 
   await enviarWhatsApp(fromNumber, respuesta, tenant.id);
   console.log("📬 Respuesta enviada vía Twilio:", respuesta);
