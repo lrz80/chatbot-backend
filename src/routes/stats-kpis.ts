@@ -1,3 +1,4 @@
+// src/routes/stats/kpis.ts
 import { Router, Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
@@ -18,9 +19,9 @@ router.get('/kpis', async (req: Request, res: Response) => {
 
     const canalFilter = canal ? `AND canal = '${canal}'` : '';
 
-    // 👁 Solo mensajes visibles (user o bot)
+    // 🧠 Mensajes únicos por message_id (evita duplicados por canal)
     const generalStats = await pool.query(
-      `SELECT COUNT(*)::int AS total,
+      `SELECT COUNT(DISTINCT message_id)::int AS total,
               COUNT(DISTINCT from_number)::int AS unicos
        FROM messages
        WHERE tenant_id = $1 AND sender IN ('user', 'bot') ${canalFilter}`,
@@ -29,7 +30,7 @@ router.get('/kpis', async (req: Request, res: Response) => {
 
     const horaPicoRes = await pool.query(
       `SELECT EXTRACT(HOUR FROM timestamp)::int AS hora,
-              COUNT(*) AS total
+              COUNT(DISTINCT message_id) AS total
        FROM messages
        WHERE tenant_id = $1
          AND sender = 'user'
@@ -42,7 +43,7 @@ router.get('/kpis', async (req: Request, res: Response) => {
     );    
 
     const ventasRes = await pool.query(
-      `SELECT COUNT(*)::int AS intenciones
+      `SELECT COUNT(DISTINCT message_id)::int AS intenciones
        FROM sales_intelligence
        WHERE tenant_id = $1 ${canalFilter}
          AND LOWER(intencion) IN ('comprar', 'pagar', 'precio', 'reservar', 'agendar', 'confirmar', 'suscribirme')
