@@ -20,14 +20,18 @@ function normalizarTexto(texto: string): string {
 async function detectarIntencion(mensaje: string) {
   const texto = mensaje.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
 
-  const saludos = ["hola", "hello", "buenas", "hi", "hey", "buen dia", "buenos dias", "buenas tardes", "buenas noches"];
+  const saludos = [
+    "hola", "hello", "buenas", "hi", "hey", "buen dia", "buenos dias", "buenas tardes", "buenas noches"
+  ];
+
   if (saludos.includes(texto)) {
     return {
       intencion: "saludar",
-      nivel_interes: 1,
+      nivel_interes: 1
     };
   }
 
+  // Solo si no fue saludo, llamamos a OpenAI
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
   const prompt = `Analiza este mensaje de un cliente:\n\n"${mensaje}"\n\nIdentifica:\n- Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).\n- Nivel de interés (de 1 a 5, siendo 5 "muy interesado en comprar").\n\nResponde solo en JSON. Ejemplo:\n{\n  "intencion": "preguntar precios",\n  "nivel_interes": 4\n}`;
 
@@ -42,7 +46,7 @@ async function detectarIntencion(mensaje: string) {
 
   return {
     intencion: data.intencion || 'no_detectada',
-    nivel_interes: data.nivel_interes || 1,
+    nivel_interes: data.nivel_interes || 1
   };
 }
 
@@ -207,10 +211,10 @@ async function procesarMensajeWhatsApp(body: any) {
   
     // 🔥 Registra en sales_intelligence
     await pool.query(
-      `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [tenant.id, fromNumber, canal, userInput, intencion, nivel_interes]
-    );
+      `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [tenant.id, fromNumber, canal, userInput, intencion, nivel_interes, messageId]
+    );    
   
     // 🚀 Si nivel_interes >= 4, programa seguimiento (follow-up)
     if (nivel_interes >= 4) {
