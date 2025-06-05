@@ -1,3 +1,4 @@
+// src/routes/messages.ts
 import { Router, Request, Response } from 'express';
 import { authenticateUser } from '../middleware/auth';
 import pool from '../lib/db';
@@ -9,14 +10,15 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
     const tenant_id = (req as any).user?.tenant_id;
     if (!tenant_id) return res.status(401).json({ error: 'Tenant no autenticado' });
 
-    const canal = req.query.canal?.toString() || "";
+    const canal = req.query.canal?.toString();
     const limit = parseInt(req.query.limit as string) || 10;
     const page = parseInt(req.query.page as string) || 1;
     const offset = (page - 1) * limit;
 
+    const values: any[] = [tenant_id];
     let query = `
-      SELECT 
-        m.id, m.tenant_id, m.content, m.sender, m.canal, m.timestamp, m.from_number, m.emotion,
+      SELECT DISTINCT ON (m.message_id)
+        m.id, m.message_id, m.tenant_id, m.content, m.sender, m.canal, m.timestamp, m.from_number, m.emotion,
         s.intencion, s.nivel_interes
       FROM messages m
       LEFT JOIN sales_intelligence s
@@ -24,20 +26,14 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
       WHERE m.tenant_id = $1
     `;
 
-    const values: any[] = [tenant_id];
-
     if (canal) {
       query += ` AND m.canal = $2`;
       values.push(canal);
     }
 
-    // Ajuste para contar bien los placeholders si se usa canal o no
-    const limitPlaceholder = `$${values.length + 1}`;
-    const offsetPlaceholder = `$${values.length + 2}`;
-
     query += `
-      ORDER BY m.timestamp DESC
-      LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}
+      ORDER BY m.message_id, m.timestamp DESC
+      LIMIT $${values.length + 1} OFFSET $${values.length + 2}
     `;
     values.push(limit, offset);
 
