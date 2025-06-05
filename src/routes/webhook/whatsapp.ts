@@ -198,8 +198,16 @@ async function procesarMensajeWhatsApp(body: any) {
   try {
     const { intencion, nivel_interes } = await detectarIntencion(userInput);
     const intencionLower = intencion.toLowerCase();
+    const textoNormalizado = userInput.trim().toLowerCase();
   
     console.log(`🔎 Intención detectada: ${intencion}, Nivel de interés: ${nivel_interes}`);
+  
+    // 🛑 No registrar si es saludo
+    const saludos = ["hola", "buenas", "buenos días", "buenas tardes", "buenas noches", "hello", "hi", "hey"];
+    if (saludos.includes(textoNormalizado)) {
+      console.log("⚠️ Mensaje ignorado por ser saludo.");
+      return; // Sale del bloque sin guardar nada
+    }
   
     // 🔥 Actualiza el segmento a cliente si aplica
     if (["comprar", "compra", "pagar", "agendar", "reservar", "confirmar"].some(p => intencionLower.includes(p))) {
@@ -216,7 +224,7 @@ async function procesarMensajeWhatsApp(body: any) {
       [tenant.id, fromNumber, canal, userInput, intencion, nivel_interes, messageId]
     );    
   
-    // 🚀 Si nivel_interes >= 4, programa seguimiento (follow-up)
+    // 🚀 Si nivel_interes >= 4, programa seguimiento
     if (nivel_interes >= 4) {
       const configRes = await pool.query(
         `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
@@ -227,7 +235,7 @@ async function procesarMensajeWhatsApp(body: any) {
       if (config) {
         let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
   
-        // Personaliza según la intención detectada
+        // Personaliza según intención
         if (intencionLower.includes("precio") && config.mensaje_precio) {
           mensajeSeguimiento = config.mensaje_precio;
         } else if ((intencionLower.includes("agendar") || intencionLower.includes("reservar")) && config.mensaje_agendar) {
@@ -246,21 +254,21 @@ async function procesarMensajeWhatsApp(body: any) {
         const fechaEnvio = new Date();
         fechaEnvio.setMinutes(fechaEnvio.getMinutes() + (config.minutos_espera || 5));
   
-        // 🔄 Elimina mensajes pendientes duplicados para evitar spam
+        // Elimina duplicados
         await pool.query(
           `DELETE FROM mensajes_programados
            WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
           [tenant.id, canal, fromNumber]
         );
   
-        // 📨 Inserta nuevo mensaje programado
+        // Inserta nuevo mensaje programado
         await pool.query(
           `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
            VALUES ($1, $2, $3, $4, $5, false)`,
           [tenant.id, canal, fromNumber, mensajeSeguimiento, fechaEnvio]
         );
   
-        console.log(`✅ Mensaje de seguimiento programado para ${fromNumber} con contenido: "${mensajeSeguimiento}" para enviarse el ${fechaEnvio}`);
+        console.log(`✅ Seguimiento programado para ${fromNumber} con: "${mensajeSeguimiento}"`);
       }
     }
   } catch (err) {
