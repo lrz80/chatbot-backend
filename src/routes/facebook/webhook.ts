@@ -218,12 +218,14 @@ router.post('/api/facebook/webhook', async (req, res) => {
         );        
 
         const yaExisteContenidoReciente = await pool.query(
-          `SELECT 1 FROM messages WHERE tenant_id = $1 AND role = 'bot' AND canal = $2 AND content = $3 
+          `SELECT 1 FROM messages WHERE tenant_id = $1 AND role = 'assistant' AND canal = $2 AND content = $3 
            AND timestamp >= NOW() - INTERVAL '5 seconds' LIMIT 1`,
           [tenantId, canal, respuesta]
-        );
+        );        
         if (yaExisteContenidoReciente.rows.length === 0) {
           try {
+            console.log('📤 Enviando mensaje a Facebook...', { respuesta, canal, senderId });
+          
             await enviarMensajePorPartes({
               respuesta,
               senderId,
@@ -232,9 +234,12 @@ router.post('/api/facebook/webhook', async (req, res) => {
               messageId,
               accessToken,
             });
-          } catch (err) {
-            console.error('❌ Error al enviar mensaje por partes:', err);
+          
+            console.log('✅ Mensaje enviado correctamente.');
+          } catch (err: any) {
+            console.error('❌ Error al enviar mensaje por partes:', err?.response?.data || err.message || err);
           }
+          
         }
 
         await pool.query(
