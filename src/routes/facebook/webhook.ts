@@ -211,14 +211,14 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         // 📝 Guardar mensaje del usuario
         await pool.query(
-          `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
-          VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-          ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+           VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
+           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
           [tenantId, userMessage, canal, senderId || 'anónimo', messageId]
-        );
+        );        
 
         const yaExisteContenidoReciente = await pool.query(
-          `SELECT 1 FROM messages WHERE tenant_id = $1 AND sender = 'bot' AND canal = $2 AND content = $3 
+          `SELECT 1 FROM messages WHERE tenant_id = $1 AND role = 'bot' AND canal = $2 AND content = $3 
            AND timestamp >= NOW() - INTERVAL '5 seconds' LIMIT 1`,
           [tenantId, canal, respuesta]
         );
@@ -237,6 +237,13 @@ router.post('/api/facebook/webhook', async (req, res) => {
           }
         }
 
+        await pool.query(
+          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+           VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+          [tenantId, respuesta, canal, senderId || 'anónimo', `${messageId}-bot`]
+        );
+        
         await pool.query(
           `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
            VALUES ($1, $2, $3, NOW())
