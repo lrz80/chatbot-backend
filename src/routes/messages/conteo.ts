@@ -5,22 +5,23 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT canal, COUNT(DISTINCT message_id) as total
+      SELECT LOWER(TRIM(canal)) AS canal, COUNT(DISTINCT message_id) AS total
       FROM messages
       GROUP BY canal
     `);
 
-    // Normaliza y estructura la respuesta
     const conteo: Record<string, number> = {
-        whatsapp: 0,
-        facebook: 0,
-        instagram: 0,
-        voice: 0,
-      };      
+      whatsapp: 0,
+      facebook: 0,
+      instagram: 0,
+      voz: 0, // Usamos "voz" si en la base de datos se guarda así
+    };
 
     for (const row of rows) {
-      const canal = (row.canal || '').toLowerCase().trim();
-      if (conteo[canal] !== undefined) {
+      const canal = row.canal;
+      if (canal === 'voice') {
+        conteo.voz = parseInt(row.total);
+      } else if (conteo.hasOwnProperty(canal)) {
         conteo[canal] = parseInt(row.total);
       }
     }
@@ -33,3 +34,4 @@ router.get('/', async (req, res) => {
 });
 
 export default router;
+

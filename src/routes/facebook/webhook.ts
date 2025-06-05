@@ -237,12 +237,12 @@ router.post('/api/facebook/webhook', async (req, res) => {
           }
         }
 
-        await pool.query(`
-          INSERT INTO interactions (tenant_id, canal, created_at, message_id)
-          VALUES ($1, $2, NOW(), $3)
-          ON CONFLICT DO NOTHING
-        `, [tenantId, canal, messageId]);        
-
+        await pool.query(
+          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT DO NOTHING`,
+          [tenant.id, canal, messageId]
+        );     
       }
     }
   } catch (error: any) {
