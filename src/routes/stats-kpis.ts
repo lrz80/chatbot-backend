@@ -24,7 +24,7 @@ router.get('/kpis', async (req: Request, res: Response) => {
       `SELECT COUNT(DISTINCT message_id)::int AS total,
               COUNT(DISTINCT from_number)::int AS unicos
        FROM messages
-       WHERE tenant_id = $1 AND sender IN ('user', 'bot') ${canalFilter}`,
+       WHERE tenant_id = $1 AND role IN ('user', 'bot') ${canalFilter}`,
       [tenant_id]
     );
 
@@ -33,7 +33,7 @@ router.get('/kpis', async (req: Request, res: Response) => {
               COUNT(DISTINCT message_id) AS total
        FROM messages
        WHERE tenant_id = $1
-         AND sender = 'user'
+         AND role = 'user'
          AND canal IN ('whatsapp', 'facebook', 'instagram', 'voz')
          AND timestamp >= NOW() - INTERVAL '7 days'
        GROUP BY hora

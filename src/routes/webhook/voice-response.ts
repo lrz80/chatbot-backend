@@ -114,14 +114,14 @@ Eres Amy, una asistente telefónica de voz cálida, clara y natural. Responde en
 
     // Guardar mensajes e interacción
     await pool.query(
-      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voice', $3)
        ON CONFLICT DO NOTHING`,
       [tenant.id, userInput, fromNumber || 'anónimo'] // Aseguramos que siempre haya from_number
     );    
 
     await pool.query(
-      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
        VALUES ($1, 'bot', $2, NOW(), 'voice', $3)
        ON CONFLICT DO NOTHING`,
       [tenant.id, respuesta, numero || 'sistema'] // Puedes guardar el número del bot o "sistema"

@@ -46,7 +46,7 @@ async function enviarMensajesProgramados() {
         // 🧠 Detectar idioma (opcional)
         const ultimoMsg = await pool.query(
           `SELECT content FROM messages
-           WHERE tenant_id = $1 AND canal = 'whatsapp' AND sender = 'user' AND from_number = $2
+           WHERE tenant_id = $1 AND canal = 'whatsapp' AND role = 'user' AND from_number = $2
            ORDER BY timestamp DESC LIMIT 1`,
           [mensaje.tenant_id, mensaje.contacto]
         );

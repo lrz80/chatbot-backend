@@ -18,7 +18,7 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
     const values: any[] = [tenant_id];
     let query = `
       SELECT DISTINCT ON (m.message_id)
-        m.id, m.message_id, m.tenant_id, m.content, m.sender, m.canal, m.timestamp, m.from_number, m.emotion,
+        m.id, m.message_id, m.tenant_id, m.content, m.role, m.canal, m.timestamp, m.from_number, m.emotion,
         s.intencion, s.nivel_interes
       FROM messages m
       LEFT JOIN sales_intelligence s

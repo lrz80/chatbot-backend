@@ -133,7 +133,7 @@ async function procesarMensajeWhatsApp(body: any) {
   const messageId = body.MessageSid || body.SmsMessageSid || null;
 
   await pool.query(
-    `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number, message_id)
+    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
     VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
     [tenant.id, userInput, canal, fromNumber || "anónimo", messageId]
   );
@@ -180,7 +180,7 @@ async function procesarMensajeWhatsApp(body: any) {
 
   // Insertar mensaje bot (esto no suma a uso)
   await pool.query(
-    `INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
+    `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
      VALUES ($1, 'bot', $2, NOW(), $3)`,
     [tenant.id, respuesta, canal]
   );  
