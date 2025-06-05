@@ -45,9 +45,8 @@ router.get('/kpis', async (req: Request, res: Response) => {
       `SELECT COUNT(*)::int AS intenciones
        FROM sales_intelligence
        WHERE tenant_id = $1 ${canalFilter}
-         AND LOWER(intencion) IN ('comprar', 'pagar', 'precio', 'reservar', 'agendar')
-         AND nivel_interes >= 2
-         AND nivel_interes IN ('1', '2')`,
+         AND LOWER(intencion) IN ('comprar', 'pagar', 'precio', 'reservar', 'agendar', 'confirmar', 'suscribirme')
+         AND nivel_interes >= 2`,
       [tenant_id]
     );    
 
