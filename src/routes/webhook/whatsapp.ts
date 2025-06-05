@@ -18,17 +18,28 @@ function normalizarTexto(texto: string): string {
 }
 
 async function detectarIntencion(mensaje: string) {
+  const texto = mensaje.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+
+  const saludos = ["hola", "hello", "buenas", "hi", "hey", "buen dia", "buenos dias", "buenas tardes", "buenas noches"];
+  if (saludos.includes(texto)) {
+    return {
+      intencion: "saludar",
+      nivel_interes: 1,
+    };
+  }
+
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-  const prompt = `Analiza este mensaje de un cliente:\n\n"${mensaje}"\n\nIdentifica:\n- Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).\n- Nivel de interés (de 1 a 5, siendo 5 \"muy interesado en comprar\").\n\nResponde solo en JSON. Ejemplo:\n{\n  "intencion": "preguntar precios",\n  "nivel_interes": 4\n}`;
+  const prompt = `Analiza este mensaje de un cliente:\n\n"${mensaje}"\n\nIdentifica:\n- Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).\n- Nivel de interés (de 1 a 5, siendo 5 "muy interesado en comprar").\n\nResponde solo en JSON. Ejemplo:\n{\n  "intencion": "preguntar precios",\n  "nivel_interes": 4\n}`;
 
   const respuesta = await openai.chat.completions.create({
-    model: 'gpt-3.5-turbo',  // 🔥 Cambiado a 3.5-turbo por costos
+    model: 'gpt-3.5-turbo',
     messages: [{ role: 'user', content: prompt }],
     temperature: 0.3,
   });
 
   const content = respuesta.choices[0]?.message?.content || '{}';
   const data = JSON.parse(content);
+
   return {
     intencion: data.intencion || 'no_detectada',
     nivel_interes: data.nivel_interes || 1,
