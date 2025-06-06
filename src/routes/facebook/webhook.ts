@@ -43,9 +43,15 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
       for (const messagingEvent of entry.messaging) {
         if (!messagingEvent.message || messagingEvent.message.is_echo || !messagingEvent.message.text) {
+          // 🛑 Si es Instagram y el bot se está "autoescuchando"
+          if (body.object === 'instagram' && messagingEvent.sender.id === entry.id) {
+            console.log('⏭️ Echo de Instagram detectado, ignorado.');
+            continue;
+          }
+        
           console.log('⏭️ Evento ignorado');
           continue;
-        }
+        }        
 
         const senderId = messagingEvent.sender.id;
         const messageId = messagingEvent.message.mid;
