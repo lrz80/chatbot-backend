@@ -181,7 +181,7 @@ async function procesarMensajeWhatsApp(body: any) {
   // Insertar mensaje bot (esto no suma a uso)
   await pool.query(
     `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
-     VALUES ($1, 'bot', $2, NOW(), $3)`,
+     VALUES ($1, 'assistant', $2, NOW(), $3)`,
     [tenant.id, respuesta, canal]
   );  
 
