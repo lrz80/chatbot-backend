@@ -17,14 +17,17 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
 
     const values: any[] = [tenant_id];
     let query = `
-      SELECT DISTINCT ON (m.message_id)
-        m.id, m.message_id, m.tenant_id, m.content, m.role, m.canal, m.timestamp, m.from_number, m.emotion,
-        s.intencion, s.nivel_interes
-      FROM messages m
-      LEFT JOIN sales_intelligence s
-        ON m.tenant_id = s.tenant_id AND m.message_id = s.message_id
-      WHERE m.tenant_id = $1
-    `;
+    SELECT DISTINCT ON (m.message_id)
+      m.id, m.message_id, m.tenant_id, m.content, m.role, m.canal, m.timestamp, m.from_number, m.emotion,
+      s.intencion, s.nivel_interes,
+      c.nombre AS nombre_cliente
+    FROM messages m
+    LEFT JOIN sales_intelligence s
+      ON m.tenant_id = s.tenant_id AND m.message_id = s.message_id
+    LEFT JOIN clientes c
+      ON m.tenant_id = c.tenant_id AND m.from_number = c.contacto
+    WHERE m.tenant_id = $1
+  `;
 
     if (canal) {
       query += ` AND m.canal = $2`;
