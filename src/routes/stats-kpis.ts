@@ -24,7 +24,7 @@ router.get('/kpis', async (req: Request, res: Response) => {
       `SELECT COUNT(DISTINCT message_id)::int AS total,
               COUNT(DISTINCT from_number)::int AS unicos
        FROM messages
-       WHERE tenant_id = $1 AND role IN ('user', 'bot') ${canalFilter}`,
+       WHERE tenant_id = $1 AND role IN ('user', 'assistant') ${canalFilter}`,
       [tenant_id]
     );
 
