@@ -7,6 +7,7 @@ router.get('/', async (req, res) => {
     const { rows } = await pool.query(`
       SELECT LOWER(TRIM(canal)) AS canal, COUNT(DISTINCT message_id) AS total
       FROM messages
+      WHERE role = 'user'
       GROUP BY canal
     `);
 
