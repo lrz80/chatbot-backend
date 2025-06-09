@@ -18,7 +18,7 @@ router.get('/', authenticateUser, async (req: any, res) => {
         COUNT(*) AS count
       FROM messages
       WHERE tenant_id = $1
-        AND sender = 'user'
+        AND role = 'user'
         AND timestamp >= NOW() - INTERVAL '7 days'
       GROUP BY dia
       ORDER BY dia ASC;
