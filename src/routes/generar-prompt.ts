@@ -24,6 +24,10 @@ router.post("/", async (req: Request, res: Response) => {
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: "Negocio no encontrado" });
 
+    if (!tenant.membresia_activa) {
+      return res.status(403).json({ error: "Membresía inactiva. Actívala para generar prompts." });
+    }    
+
     const { default: OpenAI } = await import("openai");
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
 

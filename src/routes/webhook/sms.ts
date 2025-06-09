@@ -28,11 +28,16 @@ router.post('/', async (req: Request, res: Response) => {
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.sendStatus(404);
 
+    if (!tenant.membresia_activa) {
+      console.log(`🚫 SMS bloqueado: membresía inactiva para ${tenant.name}`);
+      return res.type('text/xml').send(`<Response><Message>Tu membresía está inactiva. Por favor actívala para continuar.</Message></Response>`);
+    }    
+
     console.log(`📩 SMS recibido de ${fromNumber} para tenant ${tenant.name}`);
 
     // 💾 Guardar mensaje del usuario
     await pool.query(
-      `INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'sms', $3)`,
       [tenant.id, userInput, fromNumber]
     );

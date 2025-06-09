@@ -99,6 +99,18 @@ router.post(
       const asunto = req.body.asunto || "📣 Nueva campaña de tu negocio";
       const tituloVisual = req.body.titulo_visual || "";
 
+      // 🛡️ Verifica que la membresía esté activa
+      const estado = await pool.query(
+        `SELECT membresia_activa FROM tenants WHERE id = $1`,
+        [tenant_id]
+      );
+
+      if (!estado.rows[0]?.membresia_activa) {
+        return res.status(403).json({
+          error: "Tu membresía está inactiva. No puedes programar campañas hasta reactivarla.",
+        });
+      }
+
       console.log("🧾 req.body completo:", req.body);
 
       if (!nombre || !canal || !fecha_envio || !segmentos) {

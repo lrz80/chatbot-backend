@@ -78,6 +78,12 @@ async function procesarMensajeWhatsApp(body: any) {
   const tenant = tenantRes.rows[0];
   if (!tenant) return;
 
+  // 🚫 No responder si la membresía está inactiva
+  if (!tenant.membresia_activa) {
+    console.log(`⛔ Membresía inactiva para tenant ${tenant.nombre || tenant.id}. No se responderá.`);
+    return;
+  }
+
   const idioma = await detectarIdioma(userInput);
   const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
   let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idioma);

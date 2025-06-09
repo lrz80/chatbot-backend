@@ -32,6 +32,18 @@ router.post('/', async (req, res) => {
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.sendStatus(404);
 
+    // 🚫 Evitar responder si la membresía está inactiva
+    if (!tenant.membresia_activa) {
+      console.log(`⛔ Llamada bloqueada para ${tenant.name}, membresía inactiva.`);
+      const response = new twiml.VoiceResponse();
+      response.say(
+        { voice: 'Polly.Conchita', language: 'es-ES' },
+        'Tu membresía está inactiva. Por favor actualízala para volver a utilizar este servicio. ¡Gracias!'
+      );
+      response.hangup();
+      return res.type('text/xml').send(response.toString());
+    }
+
     const configRes = await pool.query(
       'SELECT * FROM voice_configs WHERE tenant_id = $1 AND canal = $2 LIMIT 1',
       [tenant.id, 'voz']

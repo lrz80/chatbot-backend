@@ -26,6 +26,14 @@ router.post("/", authenticateUser, async (req, res) => {
   }
 
   try {
+    const { rows } = await pool.query(
+      `SELECT membresia_activa FROM tenants WHERE id = $1`,
+      [tenant_id]
+    );
+  
+    if (!rows[0]?.membresia_activa) {
+      return res.status(403).json({ error: "Tu membresía está inactiva. Actívala para continuar." });
+    }
     // 🧠 Generar prompt usando funciones e info clave
     const { prompt, bienvenida } = await PromptTemplate({
       idioma,
