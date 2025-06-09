@@ -21,18 +21,21 @@ router.get('/', async (req: Request, res: Response) => {
       const config = configRes.rows[0] || {};
   
       const tenantRes = await pool.query(`
-        SELECT facebook_page_id, facebook_page_name, instagram_page_id, instagram_page_name
+        SELECT facebook_page_id, facebook_page_name, instagram_page_id, instagram_page_name, membresia_activa
         FROM tenants WHERE id = $1 LIMIT 1
       `, [tenantId]);
+      
       const tenant = tenantRes.rows[0] || {};
-  
+      
       return res.status(200).json({
         ...config,
         facebook_page_id: tenant.facebook_page_id,
         facebook_page_name: tenant.facebook_page_name,
         instagram_page_id: tenant.instagram_page_id,
         instagram_page_name: tenant.instagram_page_name,
+        membresia_activa: tenant.membresia_activa, // ✅ AÑADIDO
       });
+      
     } catch (err) {
       console.error('❌ Error en GET /api/meta-config:', err);
       return res.status(500).json({ error: 'Error interno del servidor' });
