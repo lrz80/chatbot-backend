@@ -75,6 +75,12 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
 
+        // ⛔ Bloquear si la membresía está inactiva
+        if (!tenant.membresia_activa) {
+          console.log(`🚫 Tenant ${tenantId} con membresía inactiva. No se responderá.`);
+          continue;
+        }
+
         const existingMsg = await pool.query(
           `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
           [tenantId, messageId]
