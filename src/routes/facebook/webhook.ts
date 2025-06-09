@@ -75,12 +75,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
 
-        // ⛔ Bloquear si la membresía está inactiva
-        if (!tenant.membresia_activa) {
-          console.log(`🚫 Tenant ${tenantId} con membresía inactiva. No se responderá.`);
-          continue;
-        }
-
         const existingMsg = await pool.query(
           `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
           [tenantId, messageId]
@@ -260,13 +254,20 @@ router.post('/api/facebook/webhook', async (req, res) => {
            ON CONFLICT (tenant_id, message_id) DO NOTHING`,
           [tenantId, respuesta, canal, senderId || 'anónimo', `${messageId}-bot`]
         );
+
+        // Si está inactiva, no respondemos pero ya se guardó todo
+        if (!tenant.membresia_activa) {
+          console.log(`🚫 Tenant ${tenantId} con membresía inactiva. Solo se registró el mensaje.`);
+          continue;
+        }
         
         await pool.query(
           `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
            VALUES ($1, $2, $3, NOW())
            ON CONFLICT DO NOTHING`,
           [tenant.id, canal, messageId]
-        );     
+        );
+
       }
     }
   } catch (error: any) {
