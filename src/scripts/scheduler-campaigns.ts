@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import express from 'express';
 
 // 🔒 Solo carga .env.local si NO está en producción
 if (process.env.NODE_ENV !== 'production') {
@@ -127,3 +128,13 @@ setInterval(() => {
 }, 60 * 1000); // 1 minuto
 
 console.log("🕒 Scheduler de campañas corriendo cada 1 minuto...");
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+app.get('/', (_req, res) => {
+  res.send('🟢 Campaign scheduler is running...');
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 Scheduler activo en http://localhost:${PORT}`);
+});

@@ -2,6 +2,7 @@ import pool from "../lib/db";
 import { detectarIdioma } from "../lib/detectarIdioma";
 import { traducirTexto } from "../lib/traducirTexto";
 import { enviarWhatsApp } from "../lib/senders/whatsapp";
+import express from 'express';
 
 // 🕒 Scheduler de mensajes programados para follow-up
 async function enviarMensajesProgramados() {
@@ -102,3 +103,14 @@ setInterval(() => {
 }, 60 * 1000);
 
 console.log("⏰ Scheduler de follow-up corriendo cada minuto...");
+
+const app = express();
+const PORT = process.env.PORT || 3003;
+
+app.get('/', (_req, res) => {
+  res.send('🟢 Follow-up scheduler is running...');
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 Follow-up scheduler activo en http://localhost:${PORT}`);
+});

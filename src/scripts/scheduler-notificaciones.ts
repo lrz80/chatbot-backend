@@ -1,6 +1,7 @@
 import pool from '../lib/db';
 import { sendEmailSendgrid } from '../lib/senders/email-sendgrid';
 import { sendSMSNotificacion } from '../lib/senders/smsNotificacion'; // 🔥 Importa la nueva función
+import express from 'express';
 
 async function verificarNotificaciones() {
   console.log("🚨 Verificando límites de uso...");
@@ -126,3 +127,14 @@ setInterval(() => {
 console.log("⏰ Scheduler de notificaciones corriendo...");
 
 export { verificarNotificaciones };
+
+const app = express();
+const PORT = process.env.PORT || 3002;
+
+app.get('/', (_req, res) => {
+  res.send('🟢 Verificador de notificaciones activo');
+});
+
+app.listen(PORT, () => {
+  console.log(`🚀 Verificador corriendo en http://localhost:${PORT}`);
+});
