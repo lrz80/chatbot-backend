@@ -223,6 +223,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
           [tenantId, userMessage, canal, senderId || 'anónimo', messageId]
         );        
 
+        console.log(`🔎 Valor de membresia_activa para ${tenantId}:`, tenant.membresia_activa);
+
         const estaActiva = tenant.membresia_activa === true || tenant.membresia_activa === 'true' || tenant.membresia_activa === 1;
 
         if (!estaActiva) {
