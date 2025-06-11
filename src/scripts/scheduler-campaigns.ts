@@ -107,13 +107,13 @@ async function ejecutarCampañasProgramadas() {
       }
 
       await pool.query(
-        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
-         VALUES ($1, $2, date_trunc('month', CURRENT_DATE), $3, $4)
+        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+         VALUES ($1, $2, date_trunc('month', CURRENT_DATE), $3)
          ON CONFLICT (tenant_id, canal, mes) DO UPDATE
          SET usados = uso_mensual.usados + EXCLUDED.usados`,
-        [tenantId, canal, contactosParsed.length, canal === "sms" ? 500 : 1000]
+        [tenantId, canal, contactosParsed.length]
       );
-
+      
       await pool.query("UPDATE campanas SET enviada = true WHERE id = $1", [campaignId]);
 
       console.log(`✅ Campaña #${campaignId} enviada`);
