@@ -223,6 +223,15 @@ router.post('/api/facebook/webhook', async (req, res) => {
           [tenantId, userMessage, canal, senderId || 'anónimo', messageId]
         );        
 
+        console.log(`🔍 Tenant ${tenantId} membresía_activa:`, tenant.membresia_activa, typeof tenant.membresia_activa);
+
+        const estaActiva = tenant.membresia_activa === true || tenant.membresia_activa === 'true' || tenant.membresia_activa === 1;
+
+        if (!estaActiva) {
+          console.log(`🚫 Tenant ${tenantId} con membresía inactiva. Solo se registró el mensaje.`);
+          continue;
+        }
+
         const yaExisteContenidoReciente = await pool.query(
           `SELECT 1 FROM messages WHERE tenant_id = $1 AND role = 'assistant' AND canal = $2 AND content = $3 
            AND timestamp >= NOW() - INTERVAL '5 seconds' LIMIT 1`,
