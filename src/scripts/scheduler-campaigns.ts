@@ -112,16 +112,33 @@ async function ejecutarCampañasProgramadas() {
         enviados = contactos.length;
       }
 
-      // ✅ Solo guarda si hubo envíos reales
-      if (enviados > 0) {
-        await pool.query(
-          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-           VALUES ($1, $2, date_trunc('month', NOW() AT TIME ZONE 'America/New_York'), $3)
-           ON CONFLICT (tenant_id, canal, mes) DO UPDATE
-           SET usados = uso_mensual.usados + EXCLUDED.usados`,
-          [tenantId, canal, enviados]
-        );
+      // 🔍 Obtiene membresia_inicio
+      const { rows: rowsTenant } = await pool.query(
+        `SELECT membresia_inicio FROM tenants WHERE id = $1`, [tenantId]
+      );
+      const membresiaInicio = rowsTenant[0]?.membresia_inicio;
+      if (!membresiaInicio) {
+        console.error('❌ No se encontró membresia_inicio para el tenant:', tenantId);
+        continue;
       }
+
+      // 🔄 Calcula ciclo mensual
+      const inicio = new Date(membresiaInicio);
+      const ahora = new Date();
+      const diffInMonths = Math.floor(
+        (ahora.getFullYear() - inicio.getFullYear()) * 12 + (ahora.getMonth() - inicio.getMonth())
+      );
+      const cicloInicio = new Date(inicio);
+      cicloInicio.setMonth(inicio.getMonth() + diffInMonths);
+      const cicloMes = cicloInicio.toISOString().split('T')[0]; // YYYY-MM-DD
+
+      await pool.query(
+        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (tenant_id, canal, mes) DO UPDATE
+        SET usados = uso_mensual.usados + EXCLUDED.usados`,
+        [tenantId, canal, cicloMes, enviados]
+      );
 
       await pool.query("UPDATE campanas SET enviada = true WHERE id = $1", [campaignId]);
       console.log(`✅ Campaña #${campaignId} enviada (${canal} → ${enviados} contactos)`);
