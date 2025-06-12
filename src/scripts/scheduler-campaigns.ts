@@ -108,7 +108,7 @@ async function ejecutarCampañasProgramadas() {
 
       await pool.query(
         `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-         VALUES ($1, $2, date_trunc('month', CURRENT_DATE), $3)
+         VALUES ($1, $2, date_trunc('month', CURRENT_DATE AT TIME ZONE 'America/New_York'), $3)
          ON CONFLICT (tenant_id, canal, mes) DO UPDATE
          SET usados = uso_mensual.usados + EXCLUDED.usados`,
         [tenantId, canal, contactosParsed.length]
