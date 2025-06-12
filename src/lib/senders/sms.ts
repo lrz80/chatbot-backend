@@ -29,7 +29,9 @@ export async function sendSMS(
   fromNumber: string,
   tenantId: string,
   campaignId: number
-) {
+): Promise<number> {
+  let enviados = 0;
+
   for (const rawTo of destinatarios) {
     const to = normalizarNumero(rawTo);
 
@@ -59,6 +61,7 @@ export async function sendSMS(
       );
 
       console.log(`✅ SMS enviado a ${to} (SID: ${message.sid})`);
+      enviados++;
     } catch (error: any) {
       console.error(`❌ Error enviando SMS a ${to}:`, error.message);
 
@@ -80,4 +83,6 @@ export async function sendSMS(
       );
     }
   }
+
+  return enviados;
 }

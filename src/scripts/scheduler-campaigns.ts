@@ -2,7 +2,6 @@ import dotenv from 'dotenv';
 import path from 'path';
 import express from 'express';
 
-// 🔒 Solo carga .env.local si NO está en producción
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../../.env.local') });
 }
@@ -39,6 +38,8 @@ async function ejecutarCampañasProgramadas() {
         continue;
       }
 
+      let enviados = 0;
+
       if (canal === "sms") {
         const tenantRes = await pool.query(
           "SELECT twilio_sms_number FROM tenants WHERE id = $1",
@@ -50,7 +51,8 @@ async function ejecutarCampañasProgramadas() {
           continue;
         }
 
-        await sendSMS(c.contenido, contactosParsed, from, tenantId, campaignId);
+        // ✅ Solo se contabilizan los SMS válidos enviados
+        enviados = await sendSMS(c.contenido, contactosParsed, from, tenantId, campaignId);
       }
 
       if (canal === "whatsapp") {
@@ -71,6 +73,8 @@ async function ejecutarCampañasProgramadas() {
 
         const contactos = contactosParsed.map((tel: string) => ({ telefono: tel }));
         await sendWhatsApp(template_sid, contactos, `whatsapp:${from}`, tenantId, campaignId, vars);
+
+        enviados = contactos.length;
       }
 
       if (canal === "email") {
@@ -104,19 +108,24 @@ async function ejecutarCampañasProgramadas() {
           c.asunto || "📣 Nueva campaña de tu negocio",
           c.titulo_visual || ""
         );
+
+        enviados = contactos.length;
       }
 
-      await pool.query(
-        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-         VALUES ($1, $2, date_trunc('month', NOW() AT TIME ZONE 'America/New_York'), $3)
-         ON CONFLICT (tenant_id, canal, mes) DO UPDATE
-         SET usados = uso_mensual.usados + EXCLUDED.usados`,
-        [tenantId, canal, contactosParsed.length]
-      );
-      
-      await pool.query("UPDATE campanas SET enviada = true WHERE id = $1", [campaignId]);
+      // ✅ Solo guarda si hubo envíos reales
+      if (enviados > 0) {
+        await pool.query(
+          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+           VALUES ($1, $2, date_trunc('month', NOW() AT TIME ZONE 'America/New_York'), $3)
+           ON CONFLICT (tenant_id, canal, mes) DO UPDATE
+           SET usados = uso_mensual.usados + EXCLUDED.usados`,
+          [tenantId, canal, enviados]
+        );
+      }
 
-      console.log(`✅ Campaña #${campaignId} enviada`);
+      await pool.query("UPDATE campanas SET enviada = true WHERE id = $1", [campaignId]);
+      console.log(`✅ Campaña #${campaignId} enviada (${canal} → ${enviados} contactos)`);
+
     } catch (err) {
       console.error(`❌ Error procesando campaña #${c.id}:`, err);
     }
@@ -125,7 +134,7 @@ async function ejecutarCampañasProgramadas() {
 
 setInterval(() => {
   ejecutarCampañasProgramadas();
-}, 60 * 1000); // 1 minuto
+}, 60 * 1000);
 
 console.log("🕒 Scheduler de campañas corriendo cada 1 minuto...");
 const app = express();
