@@ -1,0 +1,27 @@
+import express from 'express';
+import pool from '../../lib/db';
+import { authenticateUser } from '../../middleware/auth'; // si usas auth
+
+const router = express.Router();
+
+router.get('/', authenticateUser, async (req, res) => {
+  const tenantId = req.user?.tenant_id;
+  const canal = req.query.canal?.toString() || 'whatsapp';
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, pregunta, respuesta_sugerida
+       FROM faq_sugeridas
+       WHERE tenant_id = $1 AND canal = $2 AND procesada = true
+       ORDER BY ultima_fecha DESC`,
+      [tenantId, canal]
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error('❌ Error cargando FAQ sugeridas:', err);
+    res.status(500).json({ error: 'Error al cargar sugerencias' });
+  }
+});
+
+export default router;

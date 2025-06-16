@@ -62,6 +62,8 @@ import resetNotificaciones from './routes/creditos/reset-notificaciones';
 import renewMembership from './routes/tenants/renew-membership';
 import metaConfigRoutes from './routes/meta-config';
 import mensajeConteoRouter from './routes/messages/conteo'; // ✅ nuevo
+import faqsSugeridas from './routes/faqs/sugeridas';
+import faqsAprobar from './routes/faqs/aprobar';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -185,6 +187,8 @@ app.use('/api/creditos', resetNotificaciones);
 app.use('/api/tenants', renewMembership);
 app.use('/api/meta-config', metaConfigRoutes);
 app.use('/api/messages/conteo', mensajeConteoRouter); // ✅ activamos ruta
+app.use('/api/faqs/sugeridas', faqsSugeridas);
+app.use('/api/faqs/aprobar', faqsAprobar);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {

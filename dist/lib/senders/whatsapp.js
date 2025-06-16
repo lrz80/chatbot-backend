@@ -1,5 +1,5 @@
 "use strict";
-// src/senders/whatsapp.ts
+// src/lib/senders/whatsapp.ts
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -8,6 +8,8 @@ exports.sendWhatsApp = sendWhatsApp;
 exports.enviarWhatsApp = enviarWhatsApp;
 const twilio_1 = __importDefault(require("twilio"));
 const db_1 = __importDefault(require("../db"));
+console.log("🔐 TWILIO_ACCOUNT_SID:", process.env.TWILIO_ACCOUNT_SID);
+console.log("🔐 TWILIO_AUTH_TOKEN:", process.env.TWILIO_AUTH_TOKEN);
 const client = (0, twilio_1.default)(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 // Función para normalizar número al formato internacional
 function normalizarNumero(numero) {

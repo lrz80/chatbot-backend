@@ -18,7 +18,7 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
       FROM (
         SELECT unnest(string_to_array(content, ' ')) AS word
         FROM messages
-        WHERE tenant_id = $1 AND sender = 'user'
+        WHERE tenant_id = $1 AND role = 'user'
       ) AS palabras
       WHERE LENGTH(word) > 2
       GROUP BY palabra

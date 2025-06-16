@@ -3,9 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sendSMS = sendSMS;
+exports.sendSMSNotificacion = sendSMSNotificacion;
 const twilio_1 = __importDefault(require("twilio"));
-const db_1 = __importDefault(require("../db"));
 const client = (0, twilio_1.default)(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
 // ✅ Normaliza al formato E.164
 function normalizarNumero(numero) {
@@ -28,8 +27,9 @@ if (!callbackBaseUrl) {
 else {
     console.log("📤 Usando callback URL:", `${callbackBaseUrl}/api/webhook/sms-status`);
 }
-async function sendSMS(mensaje, destinatarios, fromNumber, tenantId, campaignId) {
-    let enviados = 0;
+// 🔥 Número fijo para notificaciones Aamy AI
+const fromNumber = '+14455451224';
+async function sendSMSNotificacion(mensaje, destinatarios) {
     for (const rawTo of destinatarios) {
         const to = normalizarNumero(rawTo);
         if (!/^\+\d{10,15}$/.test(to)) {
@@ -45,30 +45,12 @@ async function sendSMS(mensaje, destinatarios, fromNumber, tenantId, campaignId)
                 body: mensaje,
                 from: fromNumber,
                 to,
-                statusCallback: `${callbackBaseUrl}/api/webhook/sms-status?campaign_id=${campaignId}`,
+                statusCallback: `${callbackBaseUrl}/api/webhook/sms-status?campaign_id=0`,
             });
-            await db_1.default.query(`INSERT INTO sms_status_logs (
-          tenant_id, campaign_id, message_sid, status, to_number, from_number, timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [tenantId, campaignId, message.sid, message.status, to, fromNumber, new Date().toISOString()]);
-            console.log(`✅ SMS enviado a ${to} (SID: ${message.sid})`);
-            enviados++;
+            console.log(`✅ SMS de notificación enviado a ${to} (SID: ${message.sid})`);
         }
         catch (error) {
-            console.error(`❌ Error enviando SMS a ${to}:`, error.message);
-            await db_1.default.query(`INSERT INTO sms_status_logs (
-          tenant_id, campaign_id, message_sid, status, to_number, from_number, error_code, error_message, timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, [
-                tenantId,
-                campaignId,
-                null,
-                'failed',
-                to,
-                fromNumber,
-                error.code || null,
-                error.message || "Error desconocido",
-                new Date().toISOString(),
-            ]);
+            console.error(`❌ Error enviando SMS de notificación a ${to}:`, error.message);
         }
     }
-    return enviados;
 }

@@ -1,9 +1,9 @@
 "use strict";
-// 📁 src/routes/messages.ts
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+// src/routes/messages.ts
 const express_1 = require("express");
 const auth_1 = require("../middleware/auth");
 const db_1 = __importDefault(require("../lib/db"));
@@ -13,34 +13,32 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
         const tenant_id = req.user?.tenant_id;
         if (!tenant_id)
             return res.status(401).json({ error: 'Tenant no autenticado' });
-        // Parámetros de query
-        const canal = req.query.canal?.toString() || "";
+        const canal = req.query.canal?.toString();
         const limit = parseInt(req.query.limit) || 10;
         const page = parseInt(req.query.page) || 1;
         const offset = (page - 1) * limit;
-        // Construcción dinámica de consulta
-        const query = canal
-            ? `SELECT 
-           m.id, m.tenant_id, m.content, m.sender, m.canal, m.timestamp, m.from_number, m.emotion,
-           s.intencion, s.nivel_interes
-         FROM messages m
-         LEFT JOIN sales_intelligence s
-           ON m.from_number = s.contacto AND m.content = s.mensaje
-         WHERE m.tenant_id = $1 AND m.canal = $2
-         ORDER BY m.timestamp DESC
-         LIMIT $3 OFFSET $4`
-            : `SELECT 
-           m.id, m.tenant_id, m.content, m.sender, m.canal, m.timestamp, m.from_number, m.emotion,
-           s.intencion, s.nivel_interes
-         FROM messages m
-         LEFT JOIN sales_intelligence s
-           ON m.from_number = s.contacto AND m.content = s.mensaje
-         WHERE m.tenant_id = $1
-         ORDER BY m.timestamp DESC
-         LIMIT $2 OFFSET $3`;
-        const values = canal
-            ? [tenant_id, canal, limit, offset]
-            : [tenant_id, limit, offset];
+        const values = [tenant_id];
+        let query = `
+    SELECT DISTINCT ON (m.message_id)
+      m.id, m.message_id, m.tenant_id, m.content, m.role, m.canal, m.timestamp, m.from_number, m.emotion,
+      s.intencion, s.nivel_interes,
+      c.nombre AS nombre_cliente
+    FROM messages m
+    LEFT JOIN sales_intelligence s
+      ON m.tenant_id = s.tenant_id AND m.message_id = s.message_id
+    LEFT JOIN clientes c
+      ON m.tenant_id = c.tenant_id AND m.from_number = c.contacto
+    WHERE m.tenant_id = $1
+  `;
+        if (canal) {
+            query += ` AND m.canal = $2`;
+            values.push(canal);
+        }
+        query += `
+      ORDER BY m.message_id, m.timestamp DESC
+      LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+    `;
+        values.push(limit, offset);
         const mensajesRes = await db_1.default.query(query, values);
         res.status(200).json({ mensajes: mensajesRes.rows });
     }

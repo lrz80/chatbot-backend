@@ -120,6 +120,35 @@ async function procesarMensajeWhatsApp(body: any) {
       ],
     });
     respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
+
+      // 🧠 Registro de pregunta no resuelta
+      try {
+        const preguntaNormalizada = normalizarTexto(userInput);
+        const existe = await pool.query(
+          `SELECT id FROM faq_sugeridas WHERE tenant_id = $1 AND pregunta = $2`,
+          [tenant.id, preguntaNormalizada]
+        );
+
+        if (existe.rows.length > 0) {
+          await pool.query(
+            `UPDATE faq_sugeridas 
+            SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
+            WHERE id = $1`,
+            [existe.rows[0].id]
+          );
+        } else {
+          await pool.query(
+            `INSERT INTO faq_sugeridas (tenant_id, pregunta, idioma)
+            VALUES ($1, $2, $3)`,
+            [tenant.id, preguntaNormalizada, idioma]
+          );
+        }
+
+        console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
+      } catch (err) {
+        console.error("⚠️ Error al registrar pregunta no resuelta:", err);
+      }
+
     const tokensConsumidos = completion.usage?.total_tokens || 0;
     if (tokensConsumidos > 0) {
       await pool.query(

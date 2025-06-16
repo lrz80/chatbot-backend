@@ -20,6 +20,8 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
       FROM sales_intelligence
       WHERE tenant_id = $1
         AND fecha >= NOW() - INTERVAL '7 days'
+        AND LOWER(intencion) IN ('comprar', 'pagar', 'precio', 'reservar', 'agendar')
+        AND nivel_interes >= 2
       GROUP BY dia
       ORDER BY dia ASC;
       `, [tenant_id]);

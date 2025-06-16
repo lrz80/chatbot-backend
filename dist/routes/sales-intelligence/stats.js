@@ -11,7 +11,7 @@ const router = express_1.default.Router();
 router.get('/', auth_1.authenticateUser, async (req, res) => {
     const tenant_id = req.user?.tenant_id;
     try {
-        const totalRes = await db_1.default.query(`SELECT COUNT(*) FROM sales_intelligence WHERE tenant_id = $1`, [tenant_id]);
+        const totalRes = await db_1.default.query(`SELECT COUNT(*) FROM sales_intelligence WHERE tenant_id = $1 AND intencion IS NOT NULL AND intencion != 'saludo'`, [tenant_id]);
         const calientesRes = await db_1.default.query(`SELECT COUNT(*) FROM sales_intelligence WHERE tenant_id = $1 AND nivel_interes >= 4`, [tenant_id]);
         res.json({
             total_intenciones: parseInt(totalRes.rows[0].count),

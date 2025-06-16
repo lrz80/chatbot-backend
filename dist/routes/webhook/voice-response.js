@@ -67,6 +67,14 @@ router.post('/', async (req, res) => {
         const tenant = tenantRes.rows[0];
         if (!tenant)
             return res.sendStatus(404);
+        // 🚫 Evitar responder si la membresía está inactiva
+        if (!tenant.membresia_activa) {
+            console.log(`⛔ Llamada bloqueada para ${tenant.name}, membresía inactiva.`);
+            const response = new twilio_1.twiml.VoiceResponse();
+            response.say({ voice: 'Polly.Conchita', language: 'es-ES' }, 'Tu membresía está inactiva. Por favor actualízala para volver a utilizar este servicio. ¡Gracias!');
+            response.hangup();
+            return res.type('text/xml').send(response.toString());
+        }
         const configRes = await db_1.default.query('SELECT * FROM voice_configs WHERE tenant_id = $1 AND canal = $2 LIMIT 1', [tenant.id, 'voz']);
         const config = configRes.rows[0];
         if (!config)
@@ -127,10 +135,14 @@ Eres Amy, una asistente telefónica de voz cálida, clara y natural. Responde en
         const audioBuffer = Buffer.from(audioRes.data);
         const audioUrl = await (0, uploadAudioToCDN_1.guardarAudioEnCDN)(audioBuffer, tenant.id);
         // Guardar mensajes e interacción
-        await db_1.default.query(`INSERT INTO messages (tenant_id, sender, content, timestamp, canal, from_number)
-       VALUES ($1, 'user', $2, NOW(), 'voice', $3)`, [tenant.id, userInput, fromNumber]);
-        await db_1.default.query(`INSERT INTO messages (tenant_id, sender, content, timestamp, canal)
-       VALUES ($1, 'bot', $2, NOW(), 'voice')`, [tenant.id, respuesta]);
+        await db_1.default.query(`INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+       VALUES ($1, 'user', $2, NOW(), 'voice', $3)
+       ON CONFLICT DO NOTHING`, [tenant.id, userInput, fromNumber || 'anónimo'] // Aseguramos que siempre haya from_number
+        );
+        await db_1.default.query(`INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+       VALUES ($1, 'bot', $2, NOW(), 'voice', $3)
+       ON CONFLICT DO NOTHING`, [tenant.id, respuesta, numero || 'sistema'] // Puedes guardar el número del bot o "sistema"
+        );
         await db_1.default.query(`INSERT INTO interactions (tenant_id, canal, created_at)
        VALUES ($1, 'voice', NOW())`, [tenant.id]);
         await (0, incrementUsage_1.incrementarUsoPorNumero)(numero);

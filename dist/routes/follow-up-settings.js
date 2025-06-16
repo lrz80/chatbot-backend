@@ -11,11 +11,25 @@ const router = express_1.default.Router();
 router.get('/', auth_1.authenticateUser, async (req, res) => {
     const tenant_id = req.user?.tenant_id;
     try {
+        // Obtenemos configuración de seguimiento
         const result = await db_1.default.query(`SELECT * FROM follow_up_settings WHERE tenant_id = $1`, [tenant_id]);
+        // Obtenemos membresia_activa del tenant
+        const tenantResult = await db_1.default.query(`SELECT membresia_activa FROM tenants WHERE id = $1`, [tenant_id]);
+        const membresiaActiva = tenantResult.rows[0]?.membresia_activa ?? false;
         if (result.rows.length === 0) {
-            return res.json(null); // No hay configuración todavía
+            return res.json({
+                minutos_espera: null,
+                mensaje_precio: '',
+                mensaje_agendar: '',
+                mensaje_ubicacion: '',
+                mensaje_general: '',
+                membresia_activa: membresiaActiva, // 🔥 Aquí se incluye
+            });
         }
-        res.json(result.rows[0]);
+        res.json({
+            ...result.rows[0],
+            membresia_activa: membresiaActiva, // 🔥 Aquí también
+        });
     }
     catch (error) {
         console.error('❌ Error obteniendo follow_up_settings:', error);

@@ -93,7 +93,15 @@ const limite_1 = __importDefault(require("./routes/contactos/limite"));
 const templates_1 = __importDefault(require("./routes/sendgrid/templates"));
 const index_2 = __importDefault(require("./routes/email-status/index"));
 const preview_email_1 = __importDefault(require("./routes/preview-email"));
-dotenv_1.default.config({ path: path.resolve(__dirname, '../.env.local') });
+const cancel_1 = __importDefault(require("./routes/stripe/cancel"));
+const reset_notificaciones_1 = __importDefault(require("./routes/creditos/reset-notificaciones"));
+const renew_membership_1 = __importDefault(require("./routes/tenants/renew-membership"));
+const meta_config_1 = __importDefault(require("./routes/meta-config"));
+const conteo_1 = __importDefault(require("./routes/messages/conteo")); // ✅ nuevo
+if (process.env.NODE_ENV !== 'production') {
+    dotenv_1.default.config({ path: path.resolve(__dirname, '../.env.local') });
+}
+console.log("🔐 DATABASE_URL en arranque:", process.env.DATABASE_URL);
 console.log('🔐 STRIPE KEY desde ENV:', process.env.STRIPE_SECRET_KEY);
 console.log("🔁 Versión redeployada manualmente");
 const app = (0, express_1.default)();
@@ -193,6 +201,11 @@ app.use("/api/email-status", index_2.default);
 app.use("/api/sendgrid/templates", templates_1.default);
 app.use("/api/preview-email", preview_email_1.default);
 app.use("/api/webhook/whatsapp", whatsapp_1.default);
+app.use('/api/stripe/cancel', cancel_1.default);
+app.use('/api/creditos', reset_notificaciones_1.default);
+app.use('/api/tenants', renew_membership_1.default);
+app.use('/api/meta-config', meta_config_1.default);
+app.use('/api/messages/conteo', conteo_1.default); // ✅ activamos ruta
 // ✅ Ruta base
 app.get('/', (req, res) => {
     res.send('Backend corriendo 🟢');
@@ -207,5 +220,3 @@ setInterval(() => {
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
 });
-// 🕒 Importa y activa el scheduler de campañas
-require("./scripts/scheduler-campaigns");

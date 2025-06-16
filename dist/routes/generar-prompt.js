@@ -57,6 +57,9 @@ router.post("/", async (req, res) => {
         const tenant = tenantRes.rows[0];
         if (!tenant)
             return res.status(404).json({ error: "Negocio no encontrado" });
+        if (!tenant.membresia_activa) {
+            return res.status(403).json({ error: "Membresía inactiva. Actívala para generar prompts." });
+        }
         const { default: OpenAI } = await Promise.resolve().then(() => __importStar(require("openai")));
         const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
         const completion = await openai.chat.completions.create({

@@ -20,7 +20,8 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
         COUNT(*) AS cantidad
       FROM messages
       WHERE tenant_id = $1
-        AND sender = 'user'
+        AND role = 'user'
+        AND canal IN ('whatsapp', 'facebook', 'instagram', 'voz')
         AND timestamp >= NOW() - INTERVAL '7 days'
       GROUP BY hora
       ORDER BY cantidad DESC

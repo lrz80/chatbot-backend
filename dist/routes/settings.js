@@ -1,4 +1,5 @@
 "use strict";
+// src/routes/settings.ts
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -7,7 +8,7 @@ const express_1 = __importDefault(require("express"));
 const db_1 = __importDefault(require("../lib/db"));
 const auth_1 = require("../middleware/auth");
 const router = express_1.default.Router();
-// ✅ GET: Perfil del negocio + FAQs e Intents por canal
+// ✅ GET: Perfil del negocio + FAQs e Intents por canal + Límite por canal (base + créditos extra)
 router.get('/', auth_1.authenticateUser, async (req, res) => {
     console.log('🧪 Entró al endpoint /api/settings');
     try {
@@ -20,27 +21,54 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
         const user = userRes.rows[0];
         if (!user)
             return res.status(404).json({ error: 'Usuario no encontrado' });
-        const tenantRes = await db_1.default.query(`
-      SELECT 
-        * 
-      FROM tenants 
-      WHERE id = $1
-      LIMIT 1
-    `, [tenant_id]);
+        const tenantRes = await db_1.default.query(`SELECT * FROM tenants WHERE id = $1 LIMIT 1`, [tenant_id]);
         const tenant = tenantRes.rows[0];
         if (!tenant)
             return res.status(404).json({ error: 'Tenant no encontrado' });
-        // ✅ Canal actual (viene por query string, por defecto 'whatsapp')
         const canal = req.query.canal || 'whatsapp';
-        // ✅ Traer FAQs e Intents del canal específico
         const faqsRes = await db_1.default.query('SELECT id, pregunta, respuesta FROM faqs WHERE tenant_id = $1 AND canal = $2 ORDER BY id', [tenant_id, canal]);
         const intentsRes = await db_1.default.query('SELECT id, nombre, ejemplos, respuesta FROM intents WHERE tenant_id = $1 AND canal = $2 ORDER BY id', [tenant_id, canal]);
+        const canales = ['contactos', 'whatsapp', 'sms', 'email', 'voz', 'meta', 'followup', 'tokens_openai'];
+        const limites = {};
+        for (const c of canales) {
+            const baseRes = await db_1.default.query(`SELECT limite, usados FROM uso_mensual WHERE tenant_id = $1 AND canal = $2 AND mes = date_trunc('month', CURRENT_DATE)`, [tenant_id, c]);
+            const base = baseRes.rows[0] || { limite: 0, usados: 0 };
+            const extraRes = await db_1.default.query(`SELECT COALESCE(SUM(cantidad), 0) AS extras
+         FROM creditos_comprados
+         WHERE tenant_id = $1 AND canal = $2 AND fecha_vencimiento > NOW()`, [tenant_id, c]);
+            const extras = parseInt(extraRes.rows[0]?.extras || 0, 10);
+            limites[c] = {
+                limite_base: base.limite,
+                usados: base.usados,
+                creditos_extras: extras,
+                total_disponible: base.limite + extras - base.usados,
+            };
+        }
+        const es_trial = tenant.subscription_id?.startsWith('trial_') || tenant.es_trial;
+        let estado_membresia_texto = '🔴 Inactiva';
+        if (tenant.membresia_activa) {
+            if (es_trial) {
+                const fechaVigencia = tenant.membresia_vigencia
+                    ? new Date(tenant.membresia_vigencia).toLocaleDateString()
+                    : '';
+                estado_membresia_texto = `🟡 Activa - Período de Prueba hasta ${fechaVigencia}`;
+            }
+            else {
+                const fechaVigencia = tenant.membresia_vigencia
+                    ? new Date(tenant.membresia_vigencia).toLocaleDateString()
+                    : '';
+                estado_membresia_texto = `✅ Activa - Plan Pro hasta ${fechaVigencia}`;
+            }
+        }
         return res.status(200).json({
             uid: user.uid,
             email: user.email,
             owner_name: user.owner_name,
+            tenant_id,
             membresia_activa: tenant.membresia_activa ?? false,
             membresia_vigencia: tenant.membresia_vigencia ?? null,
+            es_trial: (es_trial || tenant.es_trial) ?? false,
+            estado_membresia_texto, // ✅ Nuevo campo dinámico
             onboarding_completado: tenant.onboarding_completado,
             name: tenant.name || '',
             categoria: tenant.categoria || '',
@@ -58,15 +86,14 @@ router.get('/', auth_1.authenticateUser, async (req, res) => {
             logo_url: tenant.logo_url || '',
             plan: tenant.plan || '',
             fecha_registro: tenant.fecha_registro || null,
-            // Datos Meta
             facebook_page_id: tenant.facebook_page_id || '',
             facebook_page_name: tenant.facebook_page_name || '',
             facebook_access_token: tenant.facebook_access_token || '',
             instagram_page_id: tenant.instagram_page_id || '',
             instagram_page_name: tenant.instagram_page_name || '',
-            // ✅ Nuevos datos por canal
             faq: faqsRes.rows,
             intents: intentsRes.rows,
+            limites,
         });
     }
     catch (error) {

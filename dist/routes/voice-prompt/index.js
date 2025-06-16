@@ -24,6 +24,10 @@ router.post("/", auth_1.authenticateUser, async (req, res) => {
         return res.status(400).json({ error: "Debes completar funciones e info clave." });
     }
     try {
+        const { rows } = await db_1.default.query(`SELECT membresia_activa FROM tenants WHERE id = $1`, [tenant_id]);
+        if (!rows[0]?.membresia_activa) {
+            return res.status(403).json({ error: "Tu membresía está inactiva. Actívala para continuar." });
+        }
         // 🧠 Generar prompt usando funciones e info clave
         const { prompt, bienvenida } = await (0, voicePromptTemplate_1.PromptTemplate)({
             idioma,
