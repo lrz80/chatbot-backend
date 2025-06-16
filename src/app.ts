@@ -64,6 +64,7 @@ import metaConfigRoutes from './routes/meta-config';
 import mensajeConteoRouter from './routes/messages/conteo'; // ✅ nuevo
 import faqsSugeridas from './routes/faqs/sugeridas';
 import faqsAprobar from './routes/faqs/aprobar';
+import faqsRechazar from './routes/faqs/rechazar';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -189,6 +190,7 @@ app.use('/api/meta-config', metaConfigRoutes);
 app.use('/api/messages/conteo', mensajeConteoRouter); // ✅ activamos ruta
 app.use('/api/faqs/sugeridas', faqsSugeridas);
 app.use('/api/faqs/aprobar', faqsAprobar);
+app.use('/api/faqs/rechazar', faqsRechazar);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
