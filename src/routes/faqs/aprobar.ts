@@ -19,10 +19,12 @@ router.post('/', authenticateUser, async (req, res) => {
     const faq = rows[0];
     if (!faq) return res.status(404).json({ error: 'FAQ no encontrada' });
 
+    const respuestaFinal = req.body.respuesta_editada || faq.respuesta_sugerida;
+
     await pool.query(
       `INSERT INTO faqs (tenant_id, pregunta, respuesta, canal)
-       VALUES ($1, $2, $3, $4)`,
-      [tenantId, faq.pregunta, faq.respuesta_sugerida, faq.canal]
+      VALUES ($1, $2, $3, $4)`,
+      [tenantId, faq.pregunta, respuestaFinal, faq.canal]
     );
 
     // Marcar sugerencia como aceptada
