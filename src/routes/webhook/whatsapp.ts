@@ -141,7 +141,7 @@ async function procesarMensajeWhatsApp(body: any) {
           await pool.query(
             `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha)
              VALUES ($1, $2, $3, $4, $5, false, NOW())`,
-            [tenant.id, canal, preguntaNormalizada, respuestaGenerada, idioma]
+            [tenant.id, canal, preguntaNormalizada, respuesta, idioma]
           );          
         }
 
