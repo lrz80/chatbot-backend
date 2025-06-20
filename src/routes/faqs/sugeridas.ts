@@ -13,10 +13,13 @@ router.get('/', authenticateUser, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT id, pregunta, respuesta_sugerida
        FROM faq_sugeridas
-       WHERE tenant_id = $1 AND canal = $2 AND procesada = false AND respuesta_sugerida IS NOT NULL
+       WHERE tenant_id = $1
+         AND canal = $2
+         AND procesada = false
+         AND respuesta_sugerida IS NOT NULL
        ORDER BY ultima_fecha DESC`,
       [tenantId, canal]
-    );
+    );    
 
     res.json(rows);
   } catch (err) {
