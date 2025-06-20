@@ -120,6 +120,7 @@ async function procesarMensajeWhatsApp(body: any) {
       ],
     });
     respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
+    const respuestaGenerada = completion.choices[0]?.message?.content?.trim() || '';
 
       // 🧠 Registro de pregunta no resuelta
       try {
@@ -138,10 +139,10 @@ async function procesarMensajeWhatsApp(body: any) {
           );
         } else {
           await pool.query(
-            `INSERT INTO faq_sugeridas (tenant_id, pregunta, idioma)
-            VALUES ($1, $2, $3)`,
-            [tenant.id, preguntaNormalizada, idioma]
-          );
+            `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha)
+             VALUES ($1, $2, $3, $4, $5, false, NOW())`,
+            [tenant.id, canal, preguntaNormalizada, respuestaGenerada, idioma]
+          );          
         }
 
         console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
