@@ -65,6 +65,7 @@ import mensajeConteoRouter from './routes/messages/conteo'; // ✅ nuevo
 import faqsSugeridas from './routes/faqs/sugeridas';
 import faqsAprobar from './routes/faqs/aprobar';
 import faqsRechazar from './routes/faqs/rechazar';
+import eliminarFaqRoute from './routes/faqs/eliminar';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -191,6 +192,7 @@ app.use('/api/messages/conteo', mensajeConteoRouter); // ✅ activamos ruta
 app.use('/api/faqs/sugeridas', faqsSugeridas);
 app.use('/api/faqs/aprobar', faqsAprobar);
 app.use('/api/faqs/rechazar', faqsRechazar);
+app.use(eliminarFaqRoute);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
