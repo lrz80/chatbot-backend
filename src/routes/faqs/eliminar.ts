@@ -18,9 +18,10 @@ router.post("/api/faqs/eliminar", authenticateUser, async (req, res) => {
   const { id } = req.body;
   const { tenant_id } = (req as RequestConTenant).user;
 
-  if (!id) {
-    return res.status(400).json({ error: "ID requerido" });
-  }
+  if (!id || isNaN(id)) {
+    console.log("❌ ID inválido recibido:", id);
+    return res.status(400).json({ error: "ID inválido" });
+  }  
 
   try {
     const result = await pool.query(
