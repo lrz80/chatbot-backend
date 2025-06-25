@@ -192,7 +192,7 @@ app.use('/api/messages/conteo', mensajeConteoRouter); // ✅ activamos ruta
 app.use('/api/faqs/sugeridas', faqsSugeridas);
 app.use('/api/faqs/aprobar', faqsAprobar);
 app.use('/api/faqs/rechazar', faqsRechazar);
-app.use(eliminarFaqRoute);
+app.use("/api/faqs/eliminar", eliminarFaqRoute);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
