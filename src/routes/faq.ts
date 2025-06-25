@@ -1,3 +1,4 @@
+// src/routes/faq.ts
 import { Router, Request, Response } from 'express';
 import pool from '../lib/db';
 import { authenticateUser } from '../middleware/auth';
@@ -11,7 +12,7 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
     if (!tenantId) return res.status(404).json({ error: 'Negocio no encontrado' });
 
     const faqRes = await pool.query(
-      'SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1',
+      'SELECT id, pregunta, respuesta FROM faqs WHERE tenant_id = $1',
       [tenantId]
     );
 
