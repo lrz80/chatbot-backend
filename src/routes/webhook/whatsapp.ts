@@ -9,6 +9,7 @@ import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { buscarRespuestaSimilitudFaqsTraducido, buscarRespuestaDesdeFlowsTraducido } from '../../lib/respuestasTraducidas';
 import { enviarWhatsApp } from '../../lib/senders/whatsapp';
+import stringSimilarity from "string-similarity";
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -123,31 +124,40 @@ async function procesarMensajeWhatsApp(body: any) {
     const respuestaGenerada = completion.choices[0]?.message?.content?.trim() || '';
 
       // 🧠 Registro de pregunta no resuelta
-      try {
-        const preguntaNormalizada = normalizarTexto(userInput);
-        const existe = await pool.query(
-          `SELECT id FROM faq_sugeridas WHERE tenant_id = $1 AND pregunta = $2`,
-          [tenant.id, preguntaNormalizada]
+      const preguntaNormalizada = normalizarTexto(userInput);
+
+      // 🔍 Obtener preguntas ya sugeridas por el tenant en este canal
+      const { rows: sugeridasExistentes } = await pool.query(
+        `SELECT id, pregunta FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2`,
+        [tenant.id, canal]
+      );
+
+      // ✅ Verificar si ya existe algo muy similar (evita duplicados)
+      const yaExiste = sugeridasExistentes.find((faq) => {
+        const similitud = stringSimilarity.compareTwoStrings(
+          normalizarTexto(faq.pregunta),
+          preguntaNormalizada
         );
+        return similitud > 0.8;
+      });
 
-        if (existe.rows.length > 0) {
-          await pool.query(
-            `UPDATE faq_sugeridas 
-            SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
-            WHERE id = $1`,
-            [existe.rows[0].id]
-          );
-        } else {
-          await pool.query(
-            `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha)
-             VALUES ($1, $2, $3, $4, $5, false, NOW())`,
-            [tenant.id, canal, preguntaNormalizada, respuesta, idioma]
-          );          
-        }
-
+      if (yaExiste) {
+        // Si ya existe una parecida, solo aumenta contador y actualiza fecha
+        await pool.query(
+          `UPDATE faq_sugeridas 
+          SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
+          WHERE id = $1`,
+          [yaExiste.id]
+        );
+        console.log(`⚠️ Pregunta similar ya registrada como sugerida (ID: ${yaExiste.id})`);
+      } else {
+        // Si no existe ninguna similar, la insertamos
+        await pool.query(
+          `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha)
+          VALUES ($1, $2, $3, $4, $5, false, NOW())`,
+          [tenant.id, canal, preguntaNormalizada, respuesta, idioma]
+        );
         console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
-      } catch (err) {
-        console.error("⚠️ Error al registrar pregunta no resuelta:", err);
       }
 
     const tokensConsumidos = completion.usage?.total_tokens || 0;
@@ -286,7 +296,7 @@ async function procesarMensajeWhatsApp(body: any) {
             mensajeSeguimiento = await traducirMensaje(mensajeSeguimiento, idioma);
           }
         } catch {}
-  
+
         const fechaEnvio = new Date();
         fechaEnvio.setMinutes(fechaEnvio.getMinutes() + (config.minutos_espera || 5));
   
