@@ -125,8 +125,19 @@ async function procesarMensajeWhatsApp(body: any) {
     respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
     const respuestaGenerada = respuesta;
   
+    function limpiarRespuesta(texto: string): string {
+      return texto
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '') // quita acentos
+        .replace(/[^\w\s]/g, '') // quita signos de puntuación
+        .replace(/\s+/g, ' ') // espacios dobles
+        .replace(/(hola|claro|esperamos verte pronto|hay algo mas en lo que pueda ayudarte|te podemos ayudar|es facil acceder|spinzone indoor cycling)/gi, '') // quita frases comunes
+        .trim();
+    }
+    
     const preguntaNormalizada = normalizarTexto(userInput);
-    const respuestaNormalizada = normalizarTexto(respuestaGenerada);
+    const respuestaNormalizada = limpiarRespuesta(respuestaGenerada);
   
     const { rows: sugeridasExistentes } = await pool.query(
       `SELECT id, pregunta, respuesta_sugerida FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2`,
@@ -140,9 +151,9 @@ async function procesarMensajeWhatsApp(body: any) {
       );
   
       const respuestaSimilitud = stringSimilarity.compareTwoStrings(
-        normalizarTexto(faq.respuesta_sugerida || ''),
+        limpiarRespuesta(faq.respuesta_sugerida || ''),
         respuestaNormalizada
-      );
+      );      
   
       return (
         preguntaSimilitud > 0.75 ||
