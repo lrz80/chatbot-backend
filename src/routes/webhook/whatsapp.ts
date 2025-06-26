@@ -125,27 +125,33 @@ async function procesarMensajeWhatsApp(body: any) {
     respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
     const respuestaGenerada = respuesta;
   
-    // 🧠 Registro de pregunta no resuelta
     const preguntaNormalizada = normalizarTexto(userInput);
+    const respuestaNormalizada = normalizarTexto(respuestaGenerada);
   
-    // 🔍 Obtener preguntas ya sugeridas por el tenant en este canal
     const { rows: sugeridasExistentes } = await pool.query(
-      `SELECT id, pregunta FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2`,
+      `SELECT id, pregunta, respuesta_sugerida FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2`,
       [tenant.id, canal]
     );
   
-    // ✅ Verificar si ya existe algo muy similar (evita duplicados)
     const yaExiste = sugeridasExistentes.find((faq) => {
-      const similitud = stringSimilarity.compareTwoStrings(
+      const preguntaSimilitud = stringSimilarity.compareTwoStrings(
         normalizarTexto(faq.pregunta),
         preguntaNormalizada
       );
-      console.log(`🔍 Comparando "${preguntaNormalizada}" vs "${faq.pregunta}" → Similitud:`, similitud);
-      return similitud > 0.75 || normalizarTexto(faq.pregunta).includes(preguntaNormalizada);
+  
+      const respuestaSimilitud = stringSimilarity.compareTwoStrings(
+        normalizarTexto(faq.respuesta_sugerida || ''),
+        respuestaNormalizada
+      );
+  
+      return (
+        preguntaSimilitud > 0.75 ||
+        respuestaSimilitud > 0.92 || // Comparamos respuesta también
+        normalizarTexto(faq.pregunta).includes(preguntaNormalizada)
+      );
     });
   
     if (yaExiste) {
-      // Si ya existe una parecida, solo aumenta contador y actualiza fecha
       await pool.query(
         `UPDATE faq_sugeridas 
          SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
@@ -154,7 +160,6 @@ async function procesarMensajeWhatsApp(body: any) {
       );
       console.log(`⚠️ Pregunta similar ya registrada como sugerida (ID: ${yaExiste.id})`);
     } else {
-      // Si no existe ninguna similar, la insertamos
       await pool.query(
         `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha)
          VALUES ($1, $2, $3, $4, $5, false, NOW())`,
