@@ -132,9 +132,12 @@ async function procesarMensajeWhatsApp(body: any) {
         .replace(/[\u0300-\u036f]/g, '') // quita acentos
         .replace(/[^\w\s]/g, '') // quita signos de puntuación
         .replace(/\s+/g, ' ') // espacios dobles
-        .replace(/(hola|claro|esperamos verte pronto|hay algo mas en lo que pueda ayudarte|te podemos ayudar|es facil acceder|spinzone indoor cycling)/gi, '') // quita frases comunes
+        .replace(
+          /\b(hola|claro|gracias|esperamos verte pronto|hay algo mas en lo que pueda ayudarte|te podemos ayudar|es facil acceder|spinzone indoor cycling|estamos ubicados|la direccion es|la ubicacion es|estamos en|ubicados en|ubicacion|direccion del local)\b/gi,
+          ''
+        ) // elimina frases comunes
         .trim();
-    }
+    }    
     
     const preguntaNormalizada = normalizarTexto(userInput);
     const respuestaNormalizada = limpiarRespuesta(respuestaGenerada);
@@ -160,7 +163,7 @@ async function procesarMensajeWhatsApp(body: any) {
     
       return (
         preguntaSimilitud > 0.75 ||
-        respuestaSimilitud > 0.92 ||
+        respuestaSimilitud > 0.9 ||
         preguntaNormalizadaExistente.includes(preguntaNormalizada) ||
         preguntaNormalizada.includes(preguntaNormalizadaExistente)
       );
