@@ -145,22 +145,26 @@ async function procesarMensajeWhatsApp(body: any) {
     );
   
     const yaExiste = sugeridasExistentes.find((faq) => {
+      const preguntaNormalizadaExistente = normalizarTexto(faq.pregunta);
+      const respuestaNormalizadaExistente = limpiarRespuesta(faq.respuesta_sugerida || '');
+    
       const preguntaSimilitud = stringSimilarity.compareTwoStrings(
-        normalizarTexto(faq.pregunta),
+        preguntaNormalizadaExistente,
         preguntaNormalizada
       );
-  
+    
       const respuestaSimilitud = stringSimilarity.compareTwoStrings(
-        limpiarRespuesta(faq.respuesta_sugerida || ''),
+        respuestaNormalizadaExistente,
         respuestaNormalizada
-      );      
-  
+      );
+    
       return (
         preguntaSimilitud > 0.75 ||
-        respuestaSimilitud > 0.92 || // Comparamos respuesta también
-        normalizarTexto(faq.pregunta).includes(preguntaNormalizada)
+        respuestaSimilitud > 0.92 ||
+        preguntaNormalizadaExistente.includes(preguntaNormalizada) ||
+        preguntaNormalizada.includes(preguntaNormalizadaExistente)
       );
-    });
+    });    
   
     if (yaExiste) {
       await pool.query(
