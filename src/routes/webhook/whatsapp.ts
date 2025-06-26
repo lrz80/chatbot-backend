@@ -113,6 +113,7 @@ async function procesarMensajeWhatsApp(body: any) {
 
   if (!respuesta) {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+  
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [
@@ -120,45 +121,47 @@ async function procesarMensajeWhatsApp(body: any) {
         { role: 'user', content: userInput },
       ],
     });
+  
     respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
-    const respuestaGenerada = completion.choices[0]?.message?.content?.trim() || '';
-
-      // 🧠 Registro de pregunta no resuelta
-      const preguntaNormalizada = normalizarTexto(userInput);
-
-      // 🔍 Obtener preguntas ya sugeridas por el tenant en este canal
-      const { rows: sugeridasExistentes } = await pool.query(
-        `SELECT id, pregunta FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2`,
-        [tenant.id, canal]
+    const respuestaGenerada = respuesta;
+  
+    // 🧠 Registro de pregunta no resuelta
+    const preguntaNormalizada = normalizarTexto(userInput);
+  
+    // 🔍 Obtener preguntas ya sugeridas por el tenant en este canal
+    const { rows: sugeridasExistentes } = await pool.query(
+      `SELECT id, pregunta FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2`,
+      [tenant.id, canal]
+    );
+  
+    // ✅ Verificar si ya existe algo muy similar (evita duplicados)
+    const yaExiste = sugeridasExistentes.find((faq) => {
+      const similitud = stringSimilarity.compareTwoStrings(
+        normalizarTexto(faq.pregunta),
+        preguntaNormalizada
       );
-
-      // ✅ Verificar si ya existe algo muy similar (evita duplicados)
-      const yaExiste = sugeridasExistentes.find((faq) => {
-        const similitud = stringSimilarity.compareTwoStrings(
-          normalizarTexto(faq.pregunta),
-          preguntaNormalizada
-        );
-        return similitud > 0.8;
-      });
-
-      if (yaExiste) {
-        // Si ya existe una parecida, solo aumenta contador y actualiza fecha
-        await pool.query(
-          `UPDATE faq_sugeridas 
-          SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
-          WHERE id = $1`,
-          [yaExiste.id]
-        );
-        console.log(`⚠️ Pregunta similar ya registrada como sugerida (ID: ${yaExiste.id})`);
-      } else {
-        // Si no existe ninguna similar, la insertamos
-        await pool.query(
-          `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha)
-          VALUES ($1, $2, $3, $4, $5, false, NOW())`,
-          [tenant.id, canal, preguntaNormalizada, respuesta, idioma]
-        );
-        console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
-      }
+      console.log(`🔍 Comparando "${preguntaNormalizada}" vs "${faq.pregunta}" → Similitud:`, similitud);
+      return similitud > 0.75 || normalizarTexto(faq.pregunta).includes(preguntaNormalizada);
+    });
+  
+    if (yaExiste) {
+      // Si ya existe una parecida, solo aumenta contador y actualiza fecha
+      await pool.query(
+        `UPDATE faq_sugeridas 
+         SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
+         WHERE id = $1`,
+        [yaExiste.id]
+      );
+      console.log(`⚠️ Pregunta similar ya registrada como sugerida (ID: ${yaExiste.id})`);
+    } else {
+      // Si no existe ninguna similar, la insertamos
+      await pool.query(
+        `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha)
+         VALUES ($1, $2, $3, $4, $5, false, NOW())`,
+        [tenant.id, canal, preguntaNormalizada, respuestaGenerada, idioma]
+      );
+      console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
+    }  
 
     const tokensConsumidos = completion.usage?.total_tokens || 0;
     if (tokensConsumidos > 0) {
