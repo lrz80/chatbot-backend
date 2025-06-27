@@ -33,6 +33,7 @@ router.post("/", async (req: Request, res: Response) => {
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
+      temperature: 0.4, // 🧠 menor creatividad para que no invente
       messages: [
         {
           role: "system",
@@ -48,7 +49,9 @@ ${descripcion}
 Esta es la información clave que debe conocer:
 ${informacion}
 
-Redacta un único texto en lenguaje natural que incluya toda la informacion (no olvides nada) clave del negocio ${informacion} y que describa cómo debe comportarse este asistente. No incluyas ningún mensaje de bienvenida, ni JSON, ni listas técnicas. Solo devuelve un texto plano profesional que servirá como prompt del sistema.`,
+🔒 IMPORTANTE: El asistente solo debe responder con la información que se le ha proporcionado. Si la pregunta del cliente no se encuentra en esta información, debe decir educadamente: "Lo siento, no tengo esa información disponible en este momento".
+
+Redacta un único texto en lenguaje natural que combine toda la información (sin omitir nada) y describa cómo debe comportarse este asistente. No incluyas mensaje de bienvenida, JSON, ni listas técnicas. Solo devuelve un texto plano profesional que servirá como prompt del sistema.`,
         },
       ],
     });
