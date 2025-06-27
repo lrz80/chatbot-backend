@@ -125,49 +125,53 @@ async function procesarMensajeWhatsApp(body: any) {
     respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
     const respuestaGenerada = respuesta;
   
+    // ⚙️ Limpia frases y adornos comunes
     function limpiarRespuesta(texto: string): string {
       return texto
         .toLowerCase()
         .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '') // quita acentos
-        .replace(/[^\w\s]/g, '') // quita signos de puntuación
-        .replace(/\s+/g, ' ') // espacios dobles
+        .replace(/[\u0300-\u036f]/g, '') // quitar acentos
+        .replace(/[^\w\s]/g, '') // quitar signos de puntuación
+        .replace(/\s+/g, ' ') // unifica espacios
         .replace(
-          /\b(hola|claro|gracias|esperamos verte pronto|hay algo mas en lo que pueda ayudarte|te podemos ayudar|es facil acceder|spinzone indoor cycling|estamos ubicados|la direccion es|la ubicacion es|estamos en|ubicados en|ubicacion|direccion del local)\b/gi,
+          /\b(hola|claro|gracias|esperamos verte pronto|hay algo mas en lo que pueda ayudarte|te podemos ayudar|es facil acceder|spinzone indoor cycling|estamos ubicados|la direccion es|la ubicacion es|estamos en|ubicados en|ubicacion|direccion del local|no dudes en preguntar|si necesitas mas informacion)\b/gi,
           ''
-        ) // elimina frases comunes
+        )
         .trim();
-    }    
-    
+    }
+
+    // 🔄 Normaliza la pregunta
     const preguntaNormalizada = normalizarTexto(userInput);
     const respuestaNormalizada = limpiarRespuesta(respuestaGenerada);
-  
+
+    // 📥 Buscar FAQs sugeridas existentes
     const { rows: sugeridasExistentes } = await pool.query(
       `SELECT id, pregunta, respuesta_sugerida FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2`,
       [tenant.id, canal]
     );
-  
+
+    // ❌ Evita guardar si ya existe por similitud
     const yaExiste = sugeridasExistentes.find((faq) => {
       const preguntaNormalizadaExistente = normalizarTexto(faq.pregunta);
       const respuestaNormalizadaExistente = limpiarRespuesta(faq.respuesta_sugerida || '');
-    
+
       const preguntaSimilitud = stringSimilarity.compareTwoStrings(
         preguntaNormalizadaExistente,
         preguntaNormalizada
       );
-    
+
       const respuestaSimilitud = stringSimilarity.compareTwoStrings(
         respuestaNormalizadaExistente,
         respuestaNormalizada
       );
-    
+
       return (
         preguntaSimilitud > 0.75 ||
         respuestaSimilitud > 0.9 ||
         preguntaNormalizadaExistente.includes(preguntaNormalizada) ||
         preguntaNormalizada.includes(preguntaNormalizadaExistente)
       );
-    });    
+    });
   
     if (yaExiste) {
       await pool.query(
