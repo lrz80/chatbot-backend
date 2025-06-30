@@ -161,7 +161,7 @@ async function procesarMensajeWhatsApp(body: any) {
       const respuestaSimilitud = stringSimilarity.compareTwoStrings(
         respuestaNormalizadaExistente,
         respuestaNormalizada
-      );    
+      );
     
       console.log("🔍 PREGUNTA:", preguntaNormalizadaExistente, "|", preguntaNormalizada);
       console.log("🔍 RESPUESTA:", respuestaNormalizadaExistente, "|", respuestaNormalizada);
@@ -169,8 +169,11 @@ async function procesarMensajeWhatsApp(body: any) {
       console.log("✅ Similitud respuesta:", respuestaSimilitud);
     
       return (
-        preguntaSimilitud > 0.6 || // antes era 0.75
-        respuestaSimilitud > 0.7 || // antes era 0.85
+        // Si la pregunta es muy similar
+        preguntaSimilitud > 0.6 ||
+        // Si la respuesta es muy similar, aunque la pregunta no lo sea
+        respuestaSimilitud > 0.7 ||
+        // Si una incluye a la otra (versión más flexible)
         preguntaNormalizadaExistente.includes(preguntaNormalizada) ||
         preguntaNormalizada.includes(preguntaNormalizadaExistente) ||
         respuestaNormalizadaExistente.includes(respuestaNormalizada)
