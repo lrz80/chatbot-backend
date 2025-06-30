@@ -169,14 +169,13 @@ async function procesarMensajeWhatsApp(body: any) {
       console.log("✅ Similitud respuesta:", respuestaSimilitud);
     
       return (
-        // Si la pregunta es muy similar
-        preguntaSimilitud > 0.6 ||
-        // Si la respuesta es muy similar, aunque la pregunta no lo sea
+        // Si la respuesta ya es muy similar, consideramos que ya existe, sin importar mucho la pregunta
         respuestaSimilitud > 0.7 ||
-        // Si una incluye a la otra (versión más flexible)
+        // Si la pregunta es razonablemente parecida y respuesta algo parecida
+        (preguntaSimilitud > 0.5 && respuestaSimilitud > 0.6) ||
+        // Si una pregunta incluye a la otra
         preguntaNormalizadaExistente.includes(preguntaNormalizada) ||
-        preguntaNormalizada.includes(preguntaNormalizadaExistente) ||
-        respuestaNormalizadaExistente.includes(respuestaNormalizada)
+        preguntaNormalizada.includes(preguntaNormalizadaExistente)
       );
     });
     
