@@ -169,8 +169,8 @@ async function procesarMensajeWhatsApp(body: any) {
       console.log("✅ Similitud respuesta:", respuestaSimilitud);
     
       return (
-        preguntaSimilitud > 0.75 ||
-        respuestaSimilitud > 0.85 ||
+        preguntaSimilitud > 0.6 ||
+        respuestaSimilitud > 0.7 ||
         preguntaNormalizadaExistente.includes(preguntaNormalizada) ||
         preguntaNormalizada.includes(preguntaNormalizadaExistente) ||
         respuestaNormalizadaExistente.includes(respuestaNormalizada)
