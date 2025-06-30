@@ -151,7 +151,7 @@ async function procesarMensajeWhatsApp(body: any) {
     
     const yaExiste = sugeridasExistentes.find((faq) => {
       const preguntaNormalizadaExistente = normalizarTexto(faq.pregunta);
-      const respuestaNormalizadaExistente = limpiarRespuesta(limpiarHtml(faq.respuesta_sugerida || ''));
+      const respuestaNormalizadaExistente = limpiarRespuesta(faq.respuesta_sugerida || '');
     
       const preguntaSimilitud = stringSimilarity.compareTwoStrings(
         preguntaNormalizadaExistente,
@@ -161,7 +161,7 @@ async function procesarMensajeWhatsApp(body: any) {
       const respuestaSimilitud = stringSimilarity.compareTwoStrings(
         respuestaNormalizadaExistente,
         respuestaNormalizada
-      );
+      );    
     
       console.log("🔍 PREGUNTA:", preguntaNormalizadaExistente, "|", preguntaNormalizada);
       console.log("🔍 RESPUESTA:", respuestaNormalizadaExistente, "|", respuestaNormalizada);
@@ -169,8 +169,8 @@ async function procesarMensajeWhatsApp(body: any) {
       console.log("✅ Similitud respuesta:", respuestaSimilitud);
     
       return (
-        preguntaSimilitud > 0.6 ||
-        respuestaSimilitud > 0.7 ||
+        preguntaSimilitud > 0.6 || // antes era 0.75
+        respuestaSimilitud > 0.7 || // antes era 0.85
         preguntaNormalizadaExistente.includes(preguntaNormalizada) ||
         preguntaNormalizada.includes(preguntaNormalizadaExistente) ||
         respuestaNormalizadaExistente.includes(respuestaNormalizada)
