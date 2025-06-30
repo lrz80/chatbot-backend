@@ -136,9 +136,9 @@ async function procesarMensajeWhatsApp(body: any) {
         .replace(/[\u0300-\u036f]/g, '') // quitar acentos
         .replace(/[^\w\s]/g, '') // quitar signos de puntuación
         .replace(/\s+/g, ' ') // quitar espacios dobles
-        .replace(/(hola|claro|esperamos verte pronto|hay algo mas en lo que pueda ayudarte|te podemos ayudar|es facil acceder|spinzone indoor cycling)/gi, '') // frases comunes
+        .replace(/(hola|claro|esperamos verte pronto|hay algo mas en lo que pueda ayudarte|te podemos ayudar|es facil acceder|spinzone indoor cycling|la direccion es|la ubicacion es|esta ubicado en|te espero|esperamos que|nos puedas visitar)/gi, '') // frases comunes repetidas
         .trim();
-    }
+    }    
     
     const preguntaNormalizada = normalizarTexto(userInput);
     const respuestaGeneradaLimpia = limpiarHtml(respuestaGenerada);
@@ -169,12 +169,11 @@ async function procesarMensajeWhatsApp(body: any) {
       console.log("✅ Similitud respuesta:", respuestaSimilitud);
     
       return (
-        preguntaSimilitud > 0.75 ||
-        respuestaSimilitud > 0.85 ||
-        preguntaNormalizadaExistente.includes(preguntaNormalizada) ||
-        preguntaNormalizada.includes(preguntaNormalizadaExistente) ||
-        respuestaNormalizadaExistente.includes(respuestaNormalizada)
+        preguntaSimilitud > 0.8 ||
+        respuestaSimilitud > 0.9 ||
+        respuestaNormalizada === respuestaNormalizadaExistente
       );
+      
     });    
   
     if (yaExiste) {
@@ -189,7 +188,7 @@ async function procesarMensajeWhatsApp(body: any) {
       await pool.query(
         `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha)
          VALUES ($1, $2, $3, $4, $5, false, NOW())`,
-        [tenant.id, canal, preguntaNormalizada, respuestaGenerada, idioma]
+        [tenant.id, canal, userInput, respuestaGenerada, idioma]
       );
       console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
     }  
