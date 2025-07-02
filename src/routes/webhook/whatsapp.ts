@@ -9,14 +9,15 @@ import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { buscarRespuestaSimilitudFaqsTraducido, buscarRespuestaDesdeFlowsTraducido } from '../../lib/respuestasTraducidas';
 import { enviarWhatsApp } from '../../lib/senders/whatsapp';
-import stringSimilarity from "string-similarity";
+import { limpiarRespuesta } from '../../lib/faq/similaridadFaq';
+import {
+  yaExisteComoFaqSugerida,
+  yaExisteComoFaqAprobada,
+  normalizarTexto
+} from '../../lib/faq/similaridadFaq';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
-
-function normalizarTexto(texto: string): string {
-  return texto.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
-}
 
 async function detectarIntencion(mensaje: string) {
   const texto = mensaje.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
@@ -125,76 +126,54 @@ async function procesarMensajeWhatsApp(body: any) {
     respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
     const respuestaGenerada = respuesta;
   
-    function limpiarHtml(texto: string): string {
-      return texto.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim();
-    }
-    
-    function limpiarRespuesta(texto: string): string {
-      return texto
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '') // quitar acentos
-        .replace(/[^\w\s]/g, '') // quitar signos de puntuación
-        .replace(/\s+/g, ' ') // quitar espacios dobles
-        .replace(/(hola|claro|esperamos verte pronto|hay algo mas en lo que pueda ayudarte|te podemos ayudar|es facil acceder|spinzone indoor cycling)/gi, '') // frases comunes
-        .trim();
-    }
-    
+    const respuestaGeneradaLimpia = respuesta;
     const preguntaNormalizada = normalizarTexto(userInput);
-    const respuestaGeneradaLimpia = limpiarHtml(respuestaGenerada);
     const respuestaNormalizada = limpiarRespuesta(respuestaGeneradaLimpia);
-    
-    const { rows: sugeridasExistentes } = await pool.query(
-      `SELECT id, pregunta, respuesta_sugerida FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2`,
-      [tenant.id, canal]
+
+    let sugeridasExistentes: any[] = [];
+    try {
+      const sugeridasRes = await pool.query(
+        'SELECT id, pregunta, respuesta_sugerida FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2',
+        [tenant.id, canal]
+      );
+      sugeridasExistentes = sugeridasRes.rows || [];
+    } catch (error) {
+      console.error('⚠️ Error consultando FAQ sugeridas:', error);
+    }
+
+    // Evita duplicados en FAQs sugeridas o aprobadas
+    const yaExisteSugerida = yaExisteComoFaqSugerida(
+      userInput,
+      respuestaGenerada,
+      sugeridasExistentes
     );
-    
-    const yaExiste = sugeridasExistentes.find((faq) => {
-      const preguntaNormalizadaExistente = normalizarTexto(faq.pregunta);
-      const respuestaNormalizadaExistente = limpiarRespuesta(faq.respuesta_sugerida || '');
-    
-      const preguntaSimilitud = stringSimilarity.compareTwoStrings(
-        preguntaNormalizadaExistente,
-        preguntaNormalizada
-      );
-    
-      const respuestaSimilitud = stringSimilarity.compareTwoStrings(
-        respuestaNormalizadaExistente,
-        respuestaNormalizada
-      );
-    
-      console.log("🔍 PREGUNTA:", preguntaNormalizadaExistente, "|", preguntaNormalizada);
-      console.log("🔍 RESPUESTA:", respuestaNormalizadaExistente, "|", respuestaNormalizada);
-      console.log("✅ Similitud pregunta:", preguntaSimilitud);
-      console.log("✅ Similitud respuesta:", respuestaSimilitud);
-    
-      return (
-        // Si la respuesta ya es muy similar, consideramos que ya existe, sin importar mucho la pregunta
-        respuestaSimilitud > 0.7 ||
-        // Si la pregunta es razonablemente parecida y respuesta algo parecida
-        (preguntaSimilitud > 0.5 && respuestaSimilitud > 0.6) ||
-        // Si una pregunta incluye a la otra
-        preguntaNormalizadaExistente.includes(preguntaNormalizada) ||
-        preguntaNormalizada.includes(preguntaNormalizadaExistente)
-      );
-    });
-    
-    if (yaExiste) {
-      await pool.query(
-        `UPDATE faq_sugeridas 
-         SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
-         WHERE id = $1`,
-        [yaExiste.id]
-      );
-      console.log(`⚠️ Pregunta similar ya registrada como sugerida (ID: ${yaExiste.id})`);
+
+    const yaExisteAprobada = yaExisteComoFaqAprobada(
+      userInput,
+      respuestaGenerada,
+      faqs
+    );
+
+    if (yaExisteSugerida || yaExisteAprobada) {
+      if (yaExisteSugerida) {
+        await pool.query(
+          `UPDATE faq_sugeridas 
+          SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
+          WHERE id = $1`,
+          [yaExisteSugerida.id]
+        );
+        console.log(`⚠️ Pregunta similar ya sugerida (ID: ${yaExisteSugerida.id})`);
+      } else {
+        console.log(`⚠️ Pregunta ya registrada como FAQ oficial.`);
+      }
     } else {
       await pool.query(
         `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha)
-         VALUES ($1, $2, $3, $4, $5, false, NOW())`,
-        [tenant.id, canal, preguntaNormalizada, respuestaGenerada, idioma]
+        VALUES ($1, $2, $3, $4, $5, false, NOW())`,
+        [tenant.id, canal, preguntaNormalizada, respuestaNormalizada, idioma]
       );
       console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
-    }    
+    }
 
     const tokensConsumidos = completion.usage?.total_tokens || 0;
     if (tokensConsumidos > 0) {
