@@ -15,42 +15,10 @@ import {
   yaExisteComoFaqAprobada,
   normalizarTexto
 } from '../../lib/faq/similaridadFaq';
+import { detectarIntencion } from '../../lib/detectarIntencion';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
-
-async function detectarIntencion(mensaje: string) {
-  const texto = mensaje.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
-
-  const saludos = [
-    "hola", "hello", "buenas", "hi", "hey", "buen dia", "buenos dias", "buenas tardes", "buenas noches"
-  ];
-
-  if (saludos.includes(texto)) {
-    return {
-      intencion: "saludar",
-      nivel_interes: 1
-    };
-  }
-
-  // Solo si no fue saludo, llamamos a OpenAI
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-  const prompt = `Analiza este mensaje de un cliente:\n\n"${mensaje}"\n\nIdentifica:\n- Intención de compra (por ejemplo: pedir precios, reservar cita, ubicación, cancelar, etc.).\n- Nivel de interés (de 1 a 5, siendo 5 "muy interesado en comprar").\n\nResponde solo en JSON. Ejemplo:\n{\n  "intencion": "preguntar precios",\n  "nivel_interes": 4\n}`;
-
-  const respuesta = await openai.chat.completions.create({
-    model: 'gpt-3.5-turbo',
-    messages: [{ role: 'user', content: prompt }],
-    temperature: 0.3,
-  });
-
-  const content = respuesta.choices[0]?.message?.content || '{}';
-  const data = JSON.parse(content);
-
-  return {
-    intencion: data.intencion || 'no_detectada',
-    nivel_interes: data.nivel_interes || 1
-  };
-}
 
 router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
@@ -167,13 +135,28 @@ async function procesarMensajeWhatsApp(body: any) {
         console.log(`⚠️ Pregunta ya registrada como FAQ oficial.`);
       }
     } else {
+      // 🧠 Detectar intención para evitar duplicados semánticos
+      const { intencion } = await detectarIntencion(preguntaNormalizada);
+      const { rows: sugeridasExistentes } = await pool.query(
+        `SELECT intencion FROM faq_sugeridas 
+         WHERE tenant_id = $1 AND canal = $2 AND procesada = false`,
+        [tenant.id, canal]
+      );
+    
+      const yaExisteIntencion = sugeridasExistentes.some(faq => faq.intencion === intencion);
+      if (yaExisteIntencion) {
+        console.log(`⚠️ Ya existe una FAQ sugerida con la intención "${intencion}" para este canal y tenant. No se guardará.`);
+        return;
+      }
+    
+      // ✅ Insertar la sugerencia con intención incluida
       await pool.query(
-        `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha)
-        VALUES ($1, $2, $3, $4, $5, false, NOW())`,
-        [tenant.id, canal, preguntaNormalizada, respuestaNormalizada, idioma]
+        `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
+         VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
+        [tenant.id, canal, preguntaNormalizada, respuestaNormalizada, idioma, intencion]
       );
       console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
-    }
+    }    
 
     const tokensConsumidos = completion.usage?.total_tokens || 0;
     if (tokensConsumidos > 0) {
