@@ -1,3 +1,4 @@
+// src/lib/detectarIntencion.ts
 import OpenAI from 'openai';
 
 export async function detectarIntencion(mensaje: string) {
@@ -5,6 +6,57 @@ export async function detectarIntencion(mensaje: string) {
     apiKey: process.env.OPENAI_API_KEY || '',
   });
 
+  const texto = mensaje.toLowerCase();
+
+  // 🧠 Refuerzos manuales por palabra clave
+  const reglas = [
+    {
+      intencion: 'saludo',
+      nivel_interes: 1,
+      keywords: ['hola', 'hello', 'buenos días', 'buenas tardes', 'buenas noches', 'saludos'],
+    },
+    {
+      intencion: 'ubicacion',
+      nivel_interes: 2,
+      keywords: ['ubicación', 'ubicacion', 'donde están', 'dónde están', 'donde queda', 'dirección', 'direccion', 'cómo llegar', 'como llegar', 'ubicados', 'localización', 'localizacion'],
+    },
+    {
+      intencion: 'precio',
+      nivel_interes: 2,
+      keywords: ['cuánto cuesta', 'cuanto cuesta', 'precio', 'precios', 'vale', 'tarifa', 'coste', 'cuesta', 'cobran'],
+    },
+    {
+      intencion: 'horario',
+      nivel_interes: 2,
+      keywords: ['horario', 'horarios', 'a qué hora', 'a que hora', 'abren', 'cierran', 'hora de apertura', 'hora de cierre', 'disponibilidad'],
+    },
+    {
+      intencion: 'reservar',
+      nivel_interes: 3,
+      keywords: ['reservar', 'reserva', 'quiero agendar', 'quiero apartar', 'hacer una cita', 'quiero una clase'],
+    },
+    {
+      intencion: 'cancelar',
+      nivel_interes: 2,
+      keywords: ['cancelar', 'anular', 'ya no quiero', 'me arrepentí', 'cancela mi'],
+    },
+    {
+      intencion: 'no_interesado',
+      nivel_interes: 1,
+      keywords: ['no me interesa', 'no quiero', 'no gracias', 'ya no', 'no estoy interesado'],
+    }
+  ];
+
+  for (const regla of reglas) {
+    if (regla.keywords.some(k => texto.includes(k))) {
+      return {
+        intencion: regla.intencion,
+        nivel_interes: regla.nivel_interes,
+      };
+    }
+  }
+
+  // Si no se detectó manualmente, usa OpenAI
   const prompt = `
 Eres un sistema que analiza mensajes de clientes para clasificar su intención y nivel de interés.
 
@@ -61,14 +113,6 @@ Responde solo en JSON con este formato exacto:
     }
   } catch (error) {
     console.error('❌ Error parseando intención:', error);
-  }
-
-  // ✅ Refuerzo manual para saludos
-  const saludos = ['hola', 'hello', 'buenos días', 'buenas tardes', 'buenas noches', 'saludos'];
-  const msgLower = mensaje.toLowerCase();
-  if (saludos.some(s => msgLower.includes(s))) {
-    data.intencion = 'saludo';
-    data.nivel_interes = 1;
   }
 
   return data;
