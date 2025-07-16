@@ -80,83 +80,113 @@ async function procesarMensajeWhatsApp(body: any) {
       || await buscarRespuestaDesdeFlowsTraducido(flows, mensajeUsuario, idioma);
   }
 
-  if (!respuesta) {
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-  
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [
-        { role: 'system', content: promptBase },
-        { role: 'user', content: userInput },
-      ],
-    });
-  
-    respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
-    const respuestaGenerada = respuesta;
-  
-    const respuestaGeneradaLimpia = respuesta;
-    const preguntaNormalizada = normalizarTexto(userInput);
-    const respuestaNormalizada = limpiarRespuesta(respuestaGeneradaLimpia);
+  // Fallback: buscar respuesta por intención si no hubo respuesta previa
+if (!respuesta) {
+  const { intencion } = await detectarIntencion(userInput);
 
-    let sugeridasExistentes: any[] = [];
-    try {
-      const sugeridasRes = await pool.query(
-        'SELECT id, pregunta, respuesta_sugerida FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2',
-        [tenant.id, canal]
+  const { rows: respuestaPorIntencion } = await pool.query(
+    `SELECT respuesta FROM faqs 
+     WHERE tenant_id = $1 AND canal = $2 AND intencion = $3 LIMIT 1`,
+    [tenant.id, canal, intencion]
+  );
+
+  if (respuestaPorIntencion.length > 0) {
+    respuesta = respuestaPorIntencion[0].respuesta;
+  }
+}
+
+// 🧠 Si no hay respuesta aún, generar con OpenAI y registrar como FAQ sugerida
+if (!respuesta) {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+  const completion = await openai.chat.completions.create({
+    model: "gpt-3.5-turbo",
+    messages: [
+      { role: 'system', content: promptBase },
+      { role: 'user', content: userInput },
+    ],
+  });
+
+  respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
+  const respuestaGenerada = respuesta;
+
+  const respuestaGeneradaLimpia = respuesta;
+  const preguntaNormalizada = normalizarTexto(userInput);
+  const respuestaNormalizada = limpiarRespuesta(respuestaGeneradaLimpia);
+
+  let sugeridasExistentes: any[] = [];
+  try {
+    const sugeridasRes = await pool.query(
+      'SELECT id, pregunta, respuesta_sugerida FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2',
+      [tenant.id, canal]
+    );
+    sugeridasExistentes = sugeridasRes.rows || [];
+  } catch (error) {
+    console.error('⚠️ Error consultando FAQ sugeridas:', error);
+  }
+
+  // Verificación de duplicados
+  const yaExisteSugerida = yaExisteComoFaqSugerida(
+    userInput,
+    respuestaGenerada,
+    sugeridasExistentes
+  );
+
+  const yaExisteAprobada = yaExisteComoFaqAprobada(
+    userInput,
+    respuestaGenerada,
+    faqs
+  );
+
+  if (yaExisteSugerida || yaExisteAprobada) {
+    if (yaExisteSugerida) {
+      await pool.query(
+        `UPDATE faq_sugeridas 
+         SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
+         WHERE id = $1`,
+        [yaExisteSugerida.id]
       );
-      sugeridasExistentes = sugeridasRes.rows || [];
-    } catch (error) {
-      console.error('⚠️ Error consultando FAQ sugeridas:', error);
+      console.log(`⚠️ Pregunta similar ya sugerida (ID: ${yaExisteSugerida.id})`);
+    } else {
+      console.log(`⚠️ Pregunta ya registrada como FAQ oficial.`);
+    }
+  } else {
+    // 🧠 Detectar intención para evitar duplicados semánticos
+    const { intencion } = await detectarIntencion(preguntaNormalizada);
+
+    const { rows: sugeridasConIntencion } = await pool.query(
+      `SELECT intencion FROM faq_sugeridas 
+       WHERE tenant_id = $1 AND canal = $2 AND procesada = false`,
+      [tenant.id, canal]
+    );
+
+    const { rows: faqsOficiales } = await pool.query(
+      `SELECT intencion FROM faqs 
+       WHERE tenant_id = $1 AND canal = $2`,
+      [tenant.id, canal]
+    );
+
+    const yaExisteIntencionOficial = faqsOficiales.some(faq => faq.intencion === intencion);
+    if (yaExisteIntencionOficial) {
+      console.log(`⚠️ Ya existe una FAQ oficial con la intención "${intencion}" para este canal y tenant. No se guardará.`);
+      return;
     }
 
-    // Evita duplicados en FAQs sugeridas o aprobadas
-    const yaExisteSugerida = yaExisteComoFaqSugerida(
-      userInput,
-      respuestaGenerada,
-      sugeridasExistentes
+    const yaExisteIntencion = sugeridasConIntencion.some(faq => faq.intencion === intencion);
+    if (yaExisteIntencion) {
+      console.log(`⚠️ Ya existe una FAQ sugerida con la intención "${intencion}" para este canal y tenant. No se guardará.`);
+      return;
+    }
+
+    // ✅ Insertar la sugerencia
+    await pool.query(
+      `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
+       VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
+      [tenant.id, canal, preguntaNormalizada, respuestaNormalizada, idioma, intencion]
     );
 
-    const yaExisteAprobada = yaExisteComoFaqAprobada(
-      userInput,
-      respuestaGenerada,
-      faqs
-    );
-
-    if (yaExisteSugerida || yaExisteAprobada) {
-      if (yaExisteSugerida) {
-        await pool.query(
-          `UPDATE faq_sugeridas 
-          SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
-          WHERE id = $1`,
-          [yaExisteSugerida.id]
-        );
-        console.log(`⚠️ Pregunta similar ya sugerida (ID: ${yaExisteSugerida.id})`);
-      } else {
-        console.log(`⚠️ Pregunta ya registrada como FAQ oficial.`);
-      }
-    } else {
-      // 🧠 Detectar intención para evitar duplicados semánticos
-      const { intencion } = await detectarIntencion(preguntaNormalizada);
-      const { rows: sugeridasExistentes } = await pool.query(
-        `SELECT intencion FROM faq_sugeridas 
-         WHERE tenant_id = $1 AND canal = $2 AND procesada = false`,
-        [tenant.id, canal]
-      );
-    
-      const yaExisteIntencion = sugeridasExistentes.some(faq => faq.intencion === intencion);
-      if (yaExisteIntencion) {
-        console.log(`⚠️ Ya existe una FAQ sugerida con la intención "${intencion}" para este canal y tenant. No se guardará.`);
-        return;
-      }
-    
-      // ✅ Insertar la sugerencia con intención incluida
-      await pool.query(
-        `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
-         VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
-        [tenant.id, canal, preguntaNormalizada, respuestaNormalizada, idioma, intencion]
-      );
-      console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
-    }    
+    console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
+  }
 
     const tokensConsumidos = completion.usage?.total_tokens || 0;
     if (tokensConsumidos > 0) {

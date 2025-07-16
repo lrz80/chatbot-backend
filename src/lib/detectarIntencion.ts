@@ -68,6 +68,7 @@ Clasifica según estas intenciones posibles:
 - "pagar"
 - "precio"
 - "reservar"
+- "ubicacion"
 - "cancelar"
 - "saludo"
 - "duda"
