@@ -1,7 +1,7 @@
 // src/routes/faq.ts
 import { Router, Request, Response } from 'express';
-import pool from '../lib/db';
-import { authenticateUser } from '../middleware/auth';
+import pool from '../../lib/db';
+import { authenticateUser } from '../../middleware/auth';
 
 const router = Router();
 
