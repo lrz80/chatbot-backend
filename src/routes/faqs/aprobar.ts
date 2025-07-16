@@ -6,7 +6,7 @@ const router = express.Router();
 
 router.post('/', authenticateUser, async (req, res) => {
   const tenantId = req.user?.tenant_id;
-  const { id } = req.body;
+  const { id, respuesta_editada } = req.body;
 
   try {
     const { rows } = await pool.query(
@@ -19,15 +19,27 @@ router.post('/', authenticateUser, async (req, res) => {
     const faq = rows[0];
     if (!faq) return res.status(404).json({ error: 'FAQ no encontrada' });
 
-    const respuestaFinal = req.body.respuesta_editada || faq.respuesta_sugerida;
+    const intencion = faq.pregunta.toLowerCase().trim();
+    const respuestaFinal = respuesta_editada || faq.respuesta_sugerida;
 
-    await pool.query(
-      `INSERT INTO faqs (tenant_id, pregunta, respuesta, canal)
-      VALUES ($1, $2, $3, $4)`,
-      [tenantId, faq.pregunta, respuestaFinal, faq.canal]
+    // Validar que no exista ya una FAQ con esa intención
+    const { rows: existentes } = await pool.query(
+      `SELECT 1 FROM faqs WHERE tenant_id = $1 AND canal = $2 AND intencion = $3 LIMIT 1`,
+      [tenantId, faq.canal, intencion]
     );
 
-    // Marcar sugerencia como aceptada
+    if (existentes.length > 0) {
+      return res.status(409).json({ error: 'Ya existe una FAQ con esa intención para este canal' });
+    }
+
+    // Insertar FAQ aprobada
+    await pool.query(
+      `INSERT INTO faqs (tenant_id, pregunta, respuesta, canal, intencion)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [tenantId, faq.pregunta, respuestaFinal, faq.canal, intencion]
+    );
+
+    // Eliminar sugerencia aceptada
     await pool.query(
       `DELETE FROM faq_sugeridas WHERE id = $1`,
       [id]

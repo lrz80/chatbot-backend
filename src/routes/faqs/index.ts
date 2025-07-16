@@ -45,10 +45,12 @@ router.post('/', authenticateUser, async (req: Request, res: Response) => {
     await pool.query('DELETE FROM faqs WHERE tenant_id = $1', [tenantId]);
 
     for (const item of faqsFiltradas) {
-      await pool.query(
-        'INSERT INTO faqs (tenant_id, pregunta, respuesta) VALUES ($1, $2, $3)',
-        [tenantId, item.pregunta.trim(), item.respuesta.trim()]
-      );
+      const intencion = item.intencion?.trim() || item.pregunta.trim().toLowerCase();
+
+    await pool.query(
+      'INSERT INTO faqs (tenant_id, pregunta, respuesta, intencion, canal) VALUES ($1, $2, $3, $4, $5)',
+      [tenantId, item.pregunta.trim(), item.respuesta.trim(), intencion, item.canal || 'whatsapp']
+    );
     }
 
     return res.status(200).json({ message: 'FAQs actualizadas' });
