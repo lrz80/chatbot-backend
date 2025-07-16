@@ -1,3 +1,5 @@
+// src/lib/getPromptPorCanal.ts
+
 export function getPromptPorCanal(canal: string, tenant: any, idioma: string = 'es'): string {
   const nombre = tenant.name || "nuestro negocio";
   const funciones = tenant.funciones_asistente || '';
@@ -86,6 +88,8 @@ Informations clés de l'entreprise:\n${info || 'Aucune information supplémentai
 
 Répondez toujours de manière claire, utile et persuasive, en français.`
   };
+
+  console.log("🧠 Prompt generado:\n", instrucciones[idioma] || instrucciones['es']);
 
   return instrucciones[idioma] || instrucciones['es'];
 }
