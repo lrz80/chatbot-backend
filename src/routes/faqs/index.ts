@@ -1,4 +1,4 @@
-// src/routes/faq.ts
+// src/routes/faqs/index.ts
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import { authenticateUser } from '../../middleware/auth';
