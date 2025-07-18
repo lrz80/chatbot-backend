@@ -19,6 +19,14 @@ export function getBienvenidaPorCanal(canal: string, tenant: any, idioma: string
 }
 
 function generarPromptPorIdioma(nombre: string, idioma: string, funciones: string = '', info: string = ''): string {
+  // 🔧 Forzar saltos si vienen como texto plano
+  if (!info.includes('\n')) {
+    info = info.replace(/- /g, '\n- ').replace(/• /g, '\n• ').replace(/\. /g, '.\n');
+  }
+  if (!funciones.includes('\n')) {
+    funciones = funciones.replace(/- /g, '\n- ').replace(/• /g, '\n• ').replace(/\. /g, '.\n');
+  }
+
   const instrucciones: Record<string, string> = {
     es: `Eres Amy, la asistente AI de ${nombre}. Además de responder preguntas, eres una vendedora profesional entrenada para aumentar las ventas y generar interés en nuestros servicios. Tu tarea es:
 
@@ -94,14 +102,6 @@ Répondez toujours de manière claire, utile et persuasive, en français.`
   };
 
   console.log("🧠 Prompt generado:\n", instrucciones[idioma] || instrucciones['es']);
-
-  // Intenta detectar si info o funciones vienen aplastados en una sola línea, y forzar saltos de línea
-if (!info.includes('\n')) {
-  info = info.replace(/- /g, '\n- ').replace(/• /g, '\n• ').replace(/\. /g, '.\n');
-}
-if (!funciones.includes('\n')) {
-  funciones = funciones.replace(/- /g, '\n- ').replace(/• /g, '\n• ').replace(/\. /g, '.\n');
-}
 
   return instrucciones[idioma] || instrucciones['es'];
 }
