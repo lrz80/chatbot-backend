@@ -95,6 +95,14 @@ Répondez toujours de manière claire, utile et persuasive, en français.`
 
   console.log("🧠 Prompt generado:\n", instrucciones[idioma] || instrucciones['es']);
 
+  // Intenta detectar si info o funciones vienen aplastados en una sola línea, y forzar saltos de línea
+if (!info.includes('\n')) {
+  info = info.replace(/- /g, '\n- ').replace(/• /g, '\n• ').replace(/\. /g, '.\n');
+}
+if (!funciones.includes('\n')) {
+  funciones = funciones.replace(/- /g, '\n- ').replace(/• /g, '\n• ').replace(/\. /g, '.\n');
+}
+
   return instrucciones[idioma] || instrucciones['es'];
 }
 
