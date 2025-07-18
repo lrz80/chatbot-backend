@@ -19,13 +19,25 @@ export function getBienvenidaPorCanal(canal: string, tenant: any, idioma: string
 }
 
 function generarPromptPorIdioma(nombre: string, idioma: string, funciones: string = '', info: string = ''): string {
-  // 🔧 Forzar saltos si vienen como texto plano
-  if (!info.includes('\n')) {
-    info = info.replace(/- /g, '\n- ').replace(/• /g, '\n• ').replace(/\. /g, '.\n');
-  }
-  if (!funciones.includes('\n')) {
-    funciones = funciones.replace(/- /g, '\n- ').replace(/• /g, '\n• ').replace(/\. /g, '.\n');
-  }
+  // Limpieza y reforzado de formato
+funciones = funciones.replace(/\\n/g, '\n').replace(/\r/g, '').trim();
+info = info.replace(/\\n/g, '\n').replace(/\r/g, '').trim();
+
+// 🔧 Agrega saltos si las líneas son muy largas o parecen bloque
+const normalizarTexto = (txt: string): string => {
+  return txt
+    .split('\n')
+    .map(line => {
+      if (line.length > 120 && !line.includes(':')) {
+        return line.replace(/\. /g, '.\n');
+      }
+      return line;
+    })
+    .join('\n');
+};
+
+funciones = normalizarTexto(funciones);
+info = normalizarTexto(info);
 
   const instrucciones: Record<string, string> = {
     es: `Eres Amy, la asistente AI de ${nombre}. Además de responder preguntas, eres una vendedora profesional entrenada para aumentar las ventas y generar interés en nuestros servicios. Tu tarea es:
