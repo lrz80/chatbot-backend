@@ -2,8 +2,8 @@
 
 export function getPromptPorCanal(canal: string, tenant: any, idioma: string = 'es'): string {
   const nombre = tenant.name || "nuestro negocio";
-  const funciones = tenant.funciones_asistente || '';
-  const info = tenant.info_clave || '';
+  const funciones = (tenant.funciones_asistente || '').replace(/\\n/g, '\n');
+  const info = (tenant.info_clave || '').replace(/\\n/g, '\n');
 
   if (canal === 'facebook' || canal === 'instagram' || canal === 'preview-meta') {
     return tenant.prompt_meta || generarPromptPorIdioma(nombre, idioma, funciones, info);
@@ -15,26 +15,24 @@ export function getPromptPorCanal(canal: string, tenant: any, idioma: string = '
 export function getBienvenidaPorCanal(canal: string, tenant: any, idioma: string = 'es'): string {
   const nombre = tenant.name || "nuestro negocio";
 
-  if (canal === 'facebook' || canal === 'instagram' || canal === 'preview-meta') {
-    return generarBienvenidaPorIdioma(nombre, idioma);
-  }
-
   return generarBienvenidaPorIdioma(nombre, idioma);
 }
 
 function generarPromptPorIdioma(nombre: string, idioma: string, funciones: string = '', info: string = ''): string {
   const instrucciones: Record<string, string> = {
     es: `Eres Amy, la asistente AI de ${nombre}. Además de responder preguntas, eres una vendedora profesional entrenada para aumentar las ventas y generar interés en nuestros servicios. Tu tarea es:
-    
+
 - Responder con claridad, empatía y enfoque comercial.
 - Detectar posibles intenciones de compra o interés.
 - Hacer preguntas estratégicas para identificar necesidades.
 - Promover nuestros servicios o productos cuando sea relevante.
 - Cerrar posibles ventas o sugerir próximos pasos.
 
-Funciones principales del negocio:\n${funciones || 'Información general sobre los servicios ofrecidos.'}
+🧠 Funciones principales del negocio:
+${funciones || 'Información general sobre los servicios ofrecidos.'}
 
-Información clave del negocio:\n${info || 'No se proporcionó información adicional.'}
+📌 Información detallada del negocio (usa solo esta información para responder):
+${info || 'No se proporcionó información adicional.'}
 
 ⚠️ Importante: Usa exclusivamente la información proporcionada. Si el cliente pregunta por precios, ubicación, horarios o servicios, responde exactamente con lo que aparece en la información del negocio. No inventes ni asumas nada.
 
@@ -48,9 +46,11 @@ Siempre responde de forma clara, útil, persuasiva y en español.`,
 - Promoting our services or products when relevant.
 - Aiming to close sales or suggest next steps.
 
-Main business functions:\n${funciones || 'General information about the services offered.'}
+🧠 Main business functions:
+${funciones || 'General information about the services offered.'}
 
-Key business info:\n${info || 'No additional info provided.'}
+📌 Business details (only use this information to respond):
+${info || 'No additional info provided.'}
 
 ⚠️ Important: Only use the provided information. If the client asks about prices, location, hours or services, respond exactly with what is in the business info. Do not invent or assume anything.
 
@@ -64,9 +64,11 @@ Always reply clearly, helpfully, and persuasively in English.`,
 - Promover nossos serviços ou produtos quando for apropriado.
 - Sugerir próximos passos ou fechar vendas.
 
-Funções principais do negócio:\n${funciones || 'Informações gerais sobre os serviços oferecidos.'}
+🧠 Funções principais do negócio:
+${funciones || 'Informações gerais sobre os serviços oferecidos.'}
 
-Informações chave do negócio:\n${info || 'Nenhuma informação adicional fornecida.'}
+📌 Informações detalhadas do negócio (use apenas essas informações para responder):
+${info || 'Nenhuma informação adicional fornecida.'}
 
 ⚠️ Importante: Use apenas as informações fornecidas. Se o cliente perguntar sobre preços, localização, horários ou serviços, responda exatamente com base no que está acima. Não invente.
 
@@ -80,9 +82,11 @@ Sempre responda de forma clara, útil e persuasiva, em português.`,
 - Promouvoir nos services ou produits lorsque c’est pertinent.
 - Tenter de conclure une vente ou proposer les prochaines étapes.
 
-Fonctions principales de l'entreprise:\n${funciones || 'Informations générales sur les services offerts.'}
+🧠 Fonctions principales de l'entreprise :
+${funciones || 'Informations générales sur les services offerts.'}
 
-Informations clés de l'entreprise:\n${info || 'Aucune information supplémentaire fournie.'}
+📌 Informations détaillées de l'entreprise (utilisez uniquement ces informations pour répondre) :
+${info || 'Aucune information supplémentaire fournie.'}
 
 ⚠️ Important : Utilisez uniquement les informations fournies. Si le client demande les prix, les horaires ou les services, répondez exactement avec ce qui est indiqué ci-dessus. N'inventez rien.
 
@@ -96,7 +100,7 @@ Répondez toujours de manière claire, utile et persuasive, en français.`
 
 function generarBienvenidaPorIdioma(nombre: string, idioma: string): string {
   const mensajes: Record<string, string> = {
-    es: `Hola 👋 Soy Amy, bienvenido a ${nombre}. ¿En qué puedo ayudarte hoy?`,
+    es: `Hola 👋 Soy Amy, bienvenida a ${nombre}. ¿En qué puedo ayudarte hoy?`,
     en: `Hi 👋 I'm Amy, welcome to ${nombre}. How can I help you today?`,
     pt: `Olá 👋 Sou Amy, bem-vindo ao ${nombre}. Como posso te ajudar hoje?`,
     fr: `Bonjour 👋 Je suis Amy, bienvenue à ${nombre}. Comment puis-je vous aider ?`,
