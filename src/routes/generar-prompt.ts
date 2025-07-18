@@ -26,14 +26,22 @@ router.post("/", async (req: Request, res: Response) => {
 
     if (!tenant.membresia_activa) {
       return res.status(403).json({ error: "Membresía inactiva. Actívala para generar prompts." });
-    }    
+    }
 
     const { default: OpenAI } = await import("openai");
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
 
+    const nombreNegocio = tenant.name || "nuestro negocio";
+    const funciones = descripcion.replace(/\\n/g, '\n').replace(/\r/g, '').trim();
+    const info = informacion.replace(/\\n/g, '\n').replace(/\r/g, '').trim();
+
+    console.log("📤 Enviando a OpenAI:");
+    console.log("Funciones:", funciones);
+    console.log("Información:", info);
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
-      temperature: 0.4, // 🧠 menor creatividad para que no invente
+      temperature: 0.4,
       messages: [
         {
           role: "system",
@@ -41,13 +49,13 @@ router.post("/", async (req: Request, res: Response) => {
         },
         {
           role: "user",
-          content: `Estoy creando un asistente en ${idioma}. Su nombre es Amy y nunca debe decir que no se llama Amy. Amy debe hablar como si fuera parte del equipo del negocio "${tenant.name}". Nunca debe responder en nombre de otro asistente o empresa.
+          content: `Estoy creando un asistente en ${idioma}. Su nombre es Amy y nunca debe decir que no se llama Amy. Amy debe hablar como si fuera parte del equipo del negocio "${nombreNegocio}". Nunca debe responder en nombre de otro asistente o empresa.
 
 Estas son sus funciones:
-${descripcion}
+${funciones}
 
 Esta es la información clave que debe conocer:
-${informacion}
+${info}
 
 🔒 IMPORTANTE: El asistente solo debe responder con la información que se le ha proporcionado. Si la pregunta del cliente no se encuentra en esta información, debe decir educadamente: "Lo siento, no tengo esa información disponible en este momento".
 

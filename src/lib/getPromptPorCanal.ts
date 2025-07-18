@@ -26,14 +26,10 @@ info = info.replace(/\\n/g, '\n').replace(/\r/g, '').trim();
 // 🔧 Agrega saltos si las líneas son muy largas o parecen bloque
 const normalizarTexto = (txt: string): string => {
   return txt
-    .split('\n')
-    .map(line => {
-      if (line.length > 120 && !line.includes(':')) {
-        return line.replace(/\. /g, '.\n');
-      }
-      return line;
-    })
-    .join('\n');
+    .replace(/([^\n])[-•]\s?/g, '$1\n- ') // fuerza formato de lista
+    .replace(/\. (?=[^\n])/g, '.\n') // salto luego de punto si no hay uno
+    .replace(/\n{2,}/g, '\n') // evita saltos dobles
+    .trim();
 };
 
 funciones = normalizarTexto(funciones);
