@@ -59,7 +59,8 @@ ${info}
 
 🔒 IMPORTANTE: El asistente solo debe responder con la información que se le ha proporcionado. Si la pregunta del cliente no se encuentra en esta información, debe decir educadamente: "Lo siento, no tengo esa información disponible en este momento".
 
-Redacta un único texto en lenguaje natural que combine toda la información (sin omitir nada) y describa cómo debe comportarse este asistente. No incluyas mensaje de bienvenida, JSON, ni listas técnicas. Solo devuelve un texto plano profesional que servirá como prompt del sistema.`,
+Redacta un único texto en lenguaje natural que combine toda la información y describa cómo debe comportarse este asistente. Es importante que incluyas explícitamente todos los detalles, precios, nombres de planes, enlaces o beneficios tal como fueron proporcionados, sin resumir ni agrupar por categorías. No incluyas mensaje de bienvenida, JSON, ni listas técnicas. Solo devuelve un texto plano profesional que servirá como prompt del sistema.`,
+
         },
       ],
     });
