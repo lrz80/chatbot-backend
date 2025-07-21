@@ -109,8 +109,7 @@ if (faqPorIntencion.length > 0) {
   } else {
     console.log(`✅ No se traduce. Respuesta ya en idioma ${idiomaCliente}`);
   }
-}
-else {
+}else {
     // Paso 3: Buscar por similitud en FAQs sin intención definida
     respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeUsuario, idioma)
       || await buscarRespuestaDesdeFlowsTraducido(flows, mensajeUsuario, idioma);
