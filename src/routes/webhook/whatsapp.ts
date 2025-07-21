@@ -199,12 +199,16 @@ if (!respuesta) {
   }
 
   if (respuesta) {
-    const idiomaRespuesta = await detectarIdioma(respuesta);
-    if (idiomaRespuesta !== idioma) {
-      console.log(`🌐 Traduciendo respuesta desde ${idiomaRespuesta} a ${idioma}`);
-      respuesta = await traducirMensaje(respuesta, idioma);
-    } else {
-      console.log(`✅ No se traduce. Respuesta ya en idioma ${idioma}`);
+    try {
+      const idiomaRespuesta = await detectarIdioma(respuesta);
+      if (idiomaRespuesta !== idioma) {
+        console.log(`🌐 Traduciendo respuesta desde ${idiomaRespuesta} a ${idioma}`);
+        respuesta = await traducirMensaje(respuesta, idioma);
+      } else {
+        console.log(`✅ No se traduce. Respuesta ya en idioma ${idioma}`);
+      }
+    } catch (err) {
+      console.warn("⚠️ Error detectando o traduciendo idioma:", err);
     }
   }  
 
