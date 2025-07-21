@@ -99,6 +99,15 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
     respuesta = respuestaDesdeFaq;
     console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencion}"`);
     console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
+  
+    // 🟢 Traducir si es necesario
+    const idiomaRespuesta = await detectarIdioma(respuesta);
+    if (idiomaRespuesta !== idioma) {
+      console.log(`🌐 Traduciendo respuesta desde ${idiomaRespuesta} a ${idioma}`);
+      respuesta = await traducirMensaje(respuesta, idioma);
+    } else {
+      console.log(`✅ No se traduce. Respuesta ya en idioma ${idioma}`);
+    }
   }else {
     // Paso 3: Buscar por similitud en FAQs sin intención definida
     respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeUsuario, idioma)
@@ -205,20 +214,6 @@ if (!respuestaDesdeFaq && !respuesta) {
         `UPDATE uso_mensual SET usados = usados + $1 WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
         [tokensConsumidos, tenant.id]
       );
-    }
-  }
-
-  if (respuesta) {
-    try {
-      const idiomaRespuesta = await detectarIdioma(respuesta);
-      if (idiomaRespuesta !== idioma) {
-        console.log(`🌐 Traduciendo respuesta desde ${idiomaRespuesta} a ${idioma}`);
-        respuesta = await traducirMensaje(respuesta, idioma);
-      } else {
-        console.log(`✅ No se traduce. Respuesta ya en idioma ${idioma}`);
-      }
-    } catch (err) {
-      console.warn("⚠️ Error detectando o traduciendo idioma:", err);
     }
   }  
 
