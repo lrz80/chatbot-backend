@@ -94,21 +94,23 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
   );  
 
   respuestaDesdeFaq = null;
-  if (faqPorIntencion.length > 0) {
-    respuestaDesdeFaq = faqPorIntencion[0].respuesta;
-    respuesta = respuestaDesdeFaq;
-    console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencion}"`);
-    console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
-  
-    // 🟢 Traducir si es necesario
-    const idiomaRespuesta = await detectarIdioma(respuesta);
-    if (idiomaRespuesta !== idioma) {
-      console.log(`🌐 Traduciendo respuesta desde ${idiomaRespuesta} a ${idioma}`);
-      respuesta = await traducirMensaje(respuesta, idioma);
-    } else {
-      console.log(`✅ No se traduce. Respuesta ya en idioma ${idioma}`);
-    }
-  }else {
+
+if (faqPorIntencion.length > 0) {
+  respuestaDesdeFaq = faqPorIntencion[0].respuesta;
+  respuesta = respuestaDesdeFaq;
+  console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencion}"`);
+  console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
+
+  // Si la respuesta de la FAQ no está en el idioma del cliente, traducirla
+  const idiomaRespuesta = await detectarIdioma(respuesta);
+  if (idiomaRespuesta !== idiomaCliente) {
+    console.log(`🌐 Traduciendo respuesta desde ${idiomaRespuesta} a ${idiomaCliente}`);
+    respuesta = await traducirMensaje(respuesta, idiomaCliente);
+  } else {
+    console.log(`✅ No se traduce. Respuesta ya en idioma ${idiomaCliente}`);
+  }
+}
+else {
     // Paso 3: Buscar por similitud en FAQs sin intención definida
     respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeUsuario, idioma)
       || await buscarRespuestaDesdeFlowsTraducido(flows, mensajeUsuario, idioma);
