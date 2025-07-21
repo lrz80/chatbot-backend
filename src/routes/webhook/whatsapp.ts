@@ -76,8 +76,13 @@ async function procesarMensajeWhatsApp(body: any) {
 if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
   respuesta = getBienvenidaPorCanal('whatsapp', tenant, idioma);
 } else {
-  // Paso 1: Detectar intención desde el principio
-  const { intencion } = await detectarIntencion(userInput);
+  // Paso 1: Detectar idioma y traducir para evaluar intención
+  const idiomaCliente = await detectarIdioma(userInput);
+  const textoParaIntencion = idiomaCliente !== 'es'
+    ? await traducirMensaje(userInput, 'es')
+    : userInput;
+
+  const { intencion } = await detectarIntencion(textoParaIntencion);
 
   // Paso 2: Buscar primero una FAQ oficial por intención exacta y canal
   const { rows: faqPorIntencion } = await pool.query(
@@ -86,10 +91,13 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
     [tenant.id, canal, intencion]
   );
 
+  let respuestaDesdeFaq = null;
   if (faqPorIntencion.length > 0) {
-    respuesta = faqPorIntencion[0].respuesta;
+    respuestaDesdeFaq = faqPorIntencion[0].respuesta;
+    respuesta = respuestaDesdeFaq;
     console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencion}"`);
-  } else {
+    console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
+  }else {
     // Paso 3: Buscar por similitud en FAQs sin intención definida
     respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeUsuario, idioma)
       || await buscarRespuestaDesdeFlowsTraducido(flows, mensajeUsuario, idioma);
