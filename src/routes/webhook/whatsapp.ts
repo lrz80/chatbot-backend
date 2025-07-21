@@ -73,6 +73,7 @@ async function procesarMensajeWhatsApp(body: any) {
   } catch {}
 
   const mensajeUsuario = normalizarTexto(userInput);
+  let respuestaDesdeFaq: string | null = null;
 if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
   respuesta = getBienvenidaPorCanal('whatsapp', tenant, idioma);
 } else {
@@ -106,7 +107,7 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
 }
 
 // 🧠 Si no hay respuesta aún, generar con OpenAI y registrar como FAQ sugerida
-if (!respuesta) {
+if (!respuestaDesdeFaq && !respuesta) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
   const completion = await openai.chat.completions.create({
