@@ -189,7 +189,6 @@ if (!respuestaDesdeFaq && !respuesta) {
     const yaExisteIntencionOficial = faqsOficiales.some(faq => faq.intencion === intencion);
     if (yaExisteIntencionOficial) {
       console.log(`⚠️ Ya existe una FAQ oficial con la intención "${intencion}" para este canal y tenant. No se guardará.`);
-      return;
     }
 
     const yaExisteIntencion = sugeridasConIntencion.some(faq => faq.intencion === intencion);
