@@ -78,18 +78,19 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
 } else {
   // Paso 1: Detectar idioma y traducir para evaluar intención
   const idiomaCliente = await detectarIdioma(userInput);
-  const textoParaIntencion = idiomaCliente !== 'es'
+  const textoTraducido = idiomaCliente !== 'es'
     ? await traducirMensaje(userInput, 'es')
     : userInput;
 
-  const { intencion } = await detectarIntencion(textoParaIntencion);
+  const { intencion: intencionDetectada } = await detectarIntencion(textoTraducido);
+  const intencion = intencionDetectada.trim().toLowerCase();
 
   // Paso 2: Buscar primero una FAQ oficial por intención exacta y canal
   const { rows: faqPorIntencion } = await pool.query(
     `SELECT respuesta FROM faqs 
-     WHERE tenant_id = $1 AND canal = $2 AND intencion = $3 LIMIT 1`,
+     WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3) LIMIT 1`,
     [tenant.id, canal, intencion]
-  );
+  );  
 
   let respuestaDesdeFaq = null;
   if (faqPorIntencion.length > 0) {
