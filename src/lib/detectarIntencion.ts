@@ -6,44 +6,46 @@ export async function detectarIntencion(mensaje: string) {
     apiKey: process.env.OPENAI_API_KEY || '',
   });
 
-  const texto = mensaje.toLowerCase();
+  const texto = mensaje.toLowerCase()
+    .normalize('NFD') // Quita tildes
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
 
-  // 🧠 Refuerzos manuales por palabra clave
   const reglas = [
     {
       intencion: 'saludo',
       nivel_interes: 1,
-      keywords: ['hola', 'hello', 'buenos días', 'buenas tardes', 'buenas noches', 'saludos'],
+      keywords: ['hola', 'hello', 'hi', 'buenos dias', 'buenas tardes', 'buenas noches', 'saludos', 'hey'],
     },
     {
       intencion: 'ubicacion',
       nivel_interes: 2,
-      keywords: ['ubicación', 'ubicacion', 'donde están', 'dónde están', 'donde queda', 'dirección', 'direccion', 'cómo llegar', 'como llegar', 'ubicados', 'localización', 'localizacion'],
+      keywords: ['ubicacion', 'donde estan', 'donde queda', 'direccion', 'como llegar', 'ubicados', 'localizacion', 'location', 'address', 'where are you', 'how to get'],
     },
     {
       intencion: 'precio',
       nivel_interes: 2,
-      keywords: ['cuánto cuesta', 'cuanto cuesta', 'precio', 'precios', 'vale', 'tarifa', 'coste', 'cuesta', 'cobran'],
+      keywords: ['cuanto cuesta', 'precio', 'precios', 'vale', 'tarifa', 'coste', 'cuesta', 'cobran', 'cost', 'price', 'how much'],
     },
     {
       intencion: 'horario',
       nivel_interes: 2,
-      keywords: ['horario', 'horarios', 'a qué hora', 'a que hora', 'abren', 'cierran', 'hora de apertura', 'hora de cierre', 'disponibilidad'],
+      keywords: ['horario', 'horarios', 'a que hora', 'hora de apertura', 'hora de cierre', 'disponibilidad', 'schedule', 'time', 'what time', 'class time', 'what are the schedules'],
     },
     {
       intencion: 'reservar',
       nivel_interes: 3,
-      keywords: ['reservar', 'reserva', 'quiero agendar', 'quiero apartar', 'hacer una cita', 'quiero una clase'],
+      keywords: ['reservar', 'reserva', 'quiero agendar', 'quiero apartar', 'hacer una cita', 'quiero una clase', 'agendar', 'book', 'appointment', 'book a class', 'i want to book'],
     },
     {
       intencion: 'cancelar',
       nivel_interes: 2,
-      keywords: ['cancelar', 'anular', 'ya no quiero', 'me arrepentí', 'cancela mi'],
+      keywords: ['cancelar', 'anular', 'ya no quiero', 'me arrepenti', 'cancela mi', 'cancel'],
     },
     {
       intencion: 'no_interesado',
       nivel_interes: 1,
-      keywords: ['no me interesa', 'no quiero', 'no gracias', 'ya no', 'no estoy interesado'],
+      keywords: ['no me interesa', 'no quiero', 'no gracias', 'ya no', 'no estoy interesado', 'not interested', 'i dont want', 'i am not interested'],
     }
   ];
 
@@ -56,14 +58,14 @@ export async function detectarIntencion(mensaje: string) {
     }
   }
 
-  // Si no se detectó manualmente, usa OpenAI
+  // 🧠 Fallback con OpenAI en multilenguaje
   const prompt = `
-Eres un sistema que analiza mensajes de clientes para clasificar su intención y nivel de interés.
+You are a system that classifies customer messages into intent and interest level.
 
-Analiza el siguiente mensaje:
+Analyze this message:
 "${mensaje}"
 
-Clasifica según estas intenciones posibles:
+Classify based on these possible intents:
 - "comprar"
 - "pagar"
 - "precio"
@@ -74,18 +76,16 @@ Clasifica según estas intenciones posibles:
 - "duda"
 - "no_interesado"
 
-Y estos niveles de interés:
-- 1: Bajo (curioso, sin intención clara)
-- 2: Medio (interesado pero no decidido)
-- 3: Alto (quiere comprar o reservar pronto)
+And these levels of interest:
+- 1: Low (curious, not ready)
+- 2: Medium (interested, but not urgent)
+- 3: High (wants to book or pay now)
 
-Si el mensaje es un saludo como "hola", "buenas", "hello", "saludos", etc., la intención debe ser "saludo" y el nivel_interes debe ser 1.
+If the message contains any negative expressions like "I don't want", "no quiero", or "not interested", set intent to "no_interesado".
 
-⚠️ Si el mensaje contiene una negación como "no quiero pagar" o "no me interesa", la intención debe ser "no_interesado".
-
-Responde solo en JSON con este formato exacto:
+Respond **only** in JSON in the following format:
 {
-  "intencion": "una de las opciones anteriores",
+  "intencion": "one of the above",
   "nivel_interes": 1 | 2 | 3
 }
 `;
