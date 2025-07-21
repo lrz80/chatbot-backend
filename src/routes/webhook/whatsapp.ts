@@ -93,7 +93,7 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
     [tenant.id, canal, intencion]
   );  
 
-  let respuestaDesdeFaq = null;
+  respuestaDesdeFaq = null;
   if (faqPorIntencion.length > 0) {
     respuestaDesdeFaq = faqPorIntencion[0].respuesta;
     respuesta = respuestaDesdeFaq;
