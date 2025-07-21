@@ -12,7 +12,7 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
     if (!tenantId) return res.status(404).json({ error: 'Negocio no encontrado' });
 
     const faqRes = await pool.query(
-      'SELECT id, pregunta, respuesta FROM faqs WHERE tenant_id = $1',
+      'SELECT id, pregunta, respuesta, intencion, canal FROM faqs WHERE tenant_id = $1',
       [tenantId]
     );
 
