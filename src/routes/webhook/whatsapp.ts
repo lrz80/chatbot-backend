@@ -112,8 +112,13 @@ if (faqPorIntencion.length > 0) {
   }
 }else {
     // Paso 3: Buscar por similitud en FAQs sin intención definida
-    respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeUsuario, idioma)
-      || await buscarRespuestaDesdeFlowsTraducido(flows, mensajeUsuario, idioma);
+    const mensajeTraducido = idiomaCliente !== 'es'
+  ? await traducirMensaje(mensajeUsuario, 'es')
+  : mensajeUsuario;
+
+respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeTraducido, idiomaCliente)
+      || await buscarRespuestaDesdeFlowsTraducido(flows, mensajeTraducido, idiomaCliente);
+
   }
 }
 
