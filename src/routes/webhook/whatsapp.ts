@@ -85,6 +85,7 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
 
   const { intencion: intencionDetectada } = await detectarIntencion(textoTraducido);
   const intencion = intencionDetectada.trim().toLowerCase();
+  console.log(`🧠 Intención detectada (procesada): "${intencion}"`);
 
   // Paso 2: Buscar primero una FAQ oficial por intención exacta y canal
   const { rows: faqPorIntencion } = await pool.query(
@@ -173,7 +174,12 @@ if (!respuestaDesdeFaq && !respuesta) {
     }
   } else {
     // 🧠 Detectar intención para evitar duplicados semánticos
-    const { intencion } = await detectarIntencion(preguntaNormalizada);
+    const textoTraducidoParaGuardar = idioma !== 'es'
+    ? await traducirMensaje(userInput, 'es')
+    : userInput;
+
+    const { intencion: intencionDetectadaParaGuardar } = await detectarIntencion(textoTraducidoParaGuardar);
+    const intencion = intencionDetectadaParaGuardar.trim().toLowerCase();
 
     const { rows: sugeridasConIntencion } = await pool.query(
       `SELECT intencion FROM faq_sugeridas 
