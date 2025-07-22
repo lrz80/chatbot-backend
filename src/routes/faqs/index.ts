@@ -5,6 +5,12 @@ import { authenticateUser } from '../../middleware/auth';
 
 const router = Router();
 
+// 🔠 Función para capitalizar la primera letra de una oración
+function capitalizar(texto: string): string {
+  if (!texto) return '';
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
+
 // ✅ GET: Obtener FAQs
 router.get('/', authenticateUser, async (req: Request, res: Response) => {
   try {
@@ -42,15 +48,24 @@ router.post('/', authenticateUser, async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'No se recibieron FAQs válidas' });
     }
 
+    // 🧹 Eliminar FAQs previas del tenant
     await pool.query('DELETE FROM faqs WHERE tenant_id = $1', [tenantId]);
 
+    // 💾 Insertar cada nueva FAQ
     for (const item of faqsFiltradas) {
-      const intencion = item.intencion?.trim() || item.pregunta.trim().toLowerCase();
+      const preguntaOriginal = capitalizar(item.pregunta.toString().trim());
+      const respuesta = item.respuesta.toString().trim();
+      const intencion = item.intencion?.toString().trim().toLowerCase();
 
-    await pool.query(
-      'INSERT INTO faqs (tenant_id, pregunta, respuesta, intencion, canal) VALUES ($1, $2, $3, $4, $5)',
-      [tenantId, item.pregunta.trim(), item.respuesta.trim(), intencion, item.canal || 'whatsapp']
-    );
+      if (!intencion) {
+        console.warn(`⚠️ Pregunta "${preguntaOriginal}" no tiene intención definida. Saltando.`);
+        continue; // ⚠️ No guardar FAQ sin intención válida
+      }
+
+      await pool.query(
+        'INSERT INTO faqs (tenant_id, pregunta, respuesta, intencion, canal) VALUES ($1, $2, $3, $4, $5)',
+        [tenantId, preguntaOriginal, respuesta, intencion, item.canal || 'whatsapp']
+      );
     }
 
     return res.status(200).json({ message: 'FAQs actualizadas' });
