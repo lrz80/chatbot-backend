@@ -206,8 +206,16 @@ if (!respuestaDesdeFaq && !respuesta) {
     const yaExisteIntencion = sugeridasConIntencion.some(faq => faq.intencion === intencion);
     if (yaExisteIntencion) {
       console.log(`⚠️ Ya existe una FAQ sugerida con la intención "${intencion}" para este canal y tenant. No se guardará.`);
-      return;
-    }
+    } else {
+      // ✅ Insertar la sugerencia
+      await pool.query(
+        `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
+         VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
+        [tenant.id, canal, preguntaNormalizada, respuestaNormalizada, idioma, intencion]
+      );
+    
+      console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
+    }    
 
     // ✅ Insertar la sugerencia
     await pool.query(
