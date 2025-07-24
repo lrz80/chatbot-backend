@@ -227,6 +227,7 @@ if (!respuestaDesdeFaq && !respuesta) {
     const yaExisteIntencionOficial = faqsOficiales.some(faq => faq.intencion === intencion);
     if (yaExisteIntencionOficial) {
       console.log(`⚠️ Ya existe una FAQ oficial con la intención "${intencion}" para este canal y tenant. No se guardará.`);
+      return;
     }
 
     const yaExisteIntencion = sugeridasConIntencion.some(faq => faq.intencion === intencion);
@@ -242,15 +243,6 @@ if (!respuestaDesdeFaq && !respuesta) {
     
       console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
     }    
-
-    // ✅ Insertar la sugerencia
-    await pool.query(
-      `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
-       VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
-      [tenant.id, canal, preguntaNormalizada, respuestaNormalizada, idioma, intencion]
-    );
-
-    console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
   }
 
     const tokensConsumidos = completion.usage?.total_tokens || 0;
