@@ -96,21 +96,47 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
 
   respuestaDesdeFaq = null;
 
-if (faqPorIntencion.length > 0) {
-  respuestaDesdeFaq = faqPorIntencion[0].respuesta;
-  respuesta = respuestaDesdeFaq;
-  console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencion}"`);
-  console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
-
-  // Si la respuesta de la FAQ no está en el idioma del cliente, traducirla
-  const idiomaRespuesta = await detectarIdioma(respuesta);
-  if (idiomaRespuesta !== idiomaCliente) {
-    console.log(`🌐 Traduciendo respuesta desde ${idiomaRespuesta} a ${idiomaCliente}`);
-    respuesta = await traducirMensaje(respuesta, idiomaCliente);
-  } else {
-    console.log(`✅ No se traduce. Respuesta ya en idioma ${idiomaCliente}`);
-  }
-}else {
+  if (faqPorIntencion.length > 0) {
+    respuestaDesdeFaq = faqPorIntencion[0].respuesta;
+    respuesta = respuestaDesdeFaq;
+    console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencion}"`);
+    console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
+  
+    // Si la respuesta de la FAQ no está en el idioma del cliente, traducirla
+    const idiomaRespuesta = await detectarIdioma(respuesta);
+    if (idiomaRespuesta !== idiomaCliente) {
+      console.log(`🌐 Traduciendo respuesta desde ${idiomaRespuesta} a ${idiomaCliente}`);
+      respuesta = await traducirMensaje(respuesta, idiomaCliente);
+    } else {
+      console.log(`✅ No se traduce. Respuesta ya en idioma ${idiomaCliente}`);
+    }
+  
+    const messageId = body.MessageSid || body.SmsMessageSid || null;
+  
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+       VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
+      [tenant.id, userInput, canal, fromNumber || "anónimo", messageId]
+    );
+  
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
+       VALUES ($1, 'assistant', $2, NOW(), $3)`,
+      [tenant.id, respuesta, canal]
+    );  
+  
+    await enviarWhatsApp(fromNumber, respuesta, tenant.id);
+    console.log("📬 Respuesta enviada vía Twilio (desde FAQ oficial):", respuesta);
+  
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT DO NOTHING`,
+      [tenant.id, canal, messageId]
+    );
+  
+    return; // 🛑 Detiene ejecución: ya respondió con la FAQ oficial
+  }else {
     // Paso 3: Buscar por similitud en FAQs sin intención definida
     const mensajeTraducido = idiomaCliente !== 'es'
   ? await traducirMensaje(mensajeUsuario, 'es')
