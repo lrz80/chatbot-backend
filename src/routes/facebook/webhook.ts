@@ -160,32 +160,33 @@ router.post('/api/facebook/webhook', async (req, res) => {
                   respuesta = completion.choices[0]?.message?.content?.trim() || "Lo siento, no tengo información disponible.";
                   const tokensConsumidos = completion.usage?.total_tokens || 0;
 
+                  // 🔄 Verificar si ya existe como FAQ oficial
+                  const existeOficial = await pool.query(
+                    `SELECT 1 FROM faqs WHERE tenant_id = $1 AND canal = $2 AND intencion = $3 LIMIT 1`,
+                    [tenantId, canal, intencionLower]
+                  );
+                  const yaExisteFaq = existeOficial.rows.length > 0;
+
+                  // 🔄 Verificar si ya existe como sugerida
+                  const existeSugerida = await pool.query(
+                    `SELECT 1 FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2 AND intencion = $3 LIMIT 1`,
+                    [tenantId, canal, intencionLower]
+                  );
+                  const yaExisteSugerida = existeSugerida.rows.length > 0;
+
+                  // 💾 Insertar si no existe
+                  if (!yaExisteFaq && !yaExisteSugerida && intencionLower && respuesta && respuesta.length >= 5) {
+                    await pool.query(
+                      `INSERT INTO faq_sugeridas (tenant_id, canal, intencion, pregunta, respuesta_sugerida, fuente, created_at)
+                      VALUES ($1, $2, $3, $4, $5, 'meta', NOW())`,
+                      [tenantId, canal, intencionLower, userMessage, respuesta]
+                    );
+                  }
+
                   if (tokensConsumidos > 0) {
                     await pool.query(
                       `UPDATE uso_mensual SET usados = usados + $1
                       WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
-                      [tokensConsumidos, tenantId]
-                    );
-                  }
-                } catch (err) {
-                  console.error('❌ Error con OpenAI:', err);
-                  respuesta = "Lo siento, no tengo información disponible en este momento.";
-                }
-
-                try {
-                  const completion = await openai.chat.completions.create({
-                    model: 'gpt-3.5-turbo',
-                    messages: [{ role: 'user', content: promptGenerado }],
-                    max_tokens: 400,
-                  });
-            
-                  respuesta = completion.choices[0]?.message?.content?.trim() || "Lo siento, no tengo información disponible.";
-                  const tokensConsumidos = completion.usage?.total_tokens || 0;
-            
-                  if (tokensConsumidos > 0) {
-                    await pool.query(
-                      `UPDATE uso_mensual SET usados = usados + $1
-                       WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
                       [tokensConsumidos, tenantId]
                     );
                   }
