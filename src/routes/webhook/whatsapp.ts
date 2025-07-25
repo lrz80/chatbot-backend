@@ -171,7 +171,7 @@ if (!respuestaDesdeFaq && !respuesta) {
 
   const respuestaGeneradaLimpia = respuesta;
   const preguntaNormalizada = normalizarTexto(userInput);
-  const respuestaNormalizada = limpiarRespuesta(respuestaGeneradaLimpia);
+  const respuestaNormalizada = respuestaGeneradaLimpia.trim();
 
   let sugeridasExistentes: any[] = [];
   try {
