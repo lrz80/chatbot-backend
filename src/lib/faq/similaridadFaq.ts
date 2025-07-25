@@ -21,8 +21,8 @@ export function limpiarRespuesta(texto: string): string {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '') // elimina acentos
-    .replace(/[^\w\s]/g, '')         // signos
-    .replace(/\s+/g, ' ')
+    .replace(/[^\w\s\n]/g, '')       // signos, pero conserva saltos de línea
+    .replace(/[ \t]+/g, ' ')         // reemplaza múltiples espacios/tabs, pero no \n
     .replace(
       /\b(hola|claro|esperamos verte pronto|espero que te sea útil|puedo ayudarte|te puedo ayudar|no dudes en preguntar|spinzone indoor cycling|aamy ai)\b/gi,
       ''
