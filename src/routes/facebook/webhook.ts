@@ -31,12 +31,11 @@ router.get('/api/facebook/webhook', (req, res) => {
 });
 
 router.post('/api/facebook/webhook', async (req, res) => {
+  res.sendStatus(200);
   console.log("🌐 Webhook Meta recibido:", JSON.stringify(req.body, null, 2));
   try {
     const body = req.body;
     if (body.object !== 'page' && body.object !== 'instagram') return res.sendStatus(404);
-
-    res.sendStatus(200);
 
     for (const entry of body.entry) {
       const pageId = entry.id;
