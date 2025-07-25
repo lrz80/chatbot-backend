@@ -148,6 +148,12 @@ respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeTraducido, 
   }
 }
 
+// 🔒 Protección adicional: si ya respondió con FAQ oficial, no continuar
+if (respuestaDesdeFaq) {
+  console.log("🔒 Ya se respondió con una FAQ oficial. Se cancela generación de sugerida.");
+  return;
+}
+
 // 🧠 Si no hay respuesta aún, generar con OpenAI y registrar como FAQ sugerida
 if (!respuestaDesdeFaq && !respuesta) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });

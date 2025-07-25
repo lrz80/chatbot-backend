@@ -1,6 +1,7 @@
 import express from 'express';
 import pool from '../../lib/db';
 import { authenticateUser } from '../../middleware/auth';
+import { detectarIntencion } from '../../lib/detectarIntencion';
 
 const router = express.Router();
 
@@ -19,13 +20,14 @@ router.post('/', authenticateUser, async (req, res) => {
     const faq = rows[0];
     if (!faq) return res.status(404).json({ error: 'FAQ no encontrada' });
 
-    const intencion = faq.pregunta.toLowerCase().trim();
+    const { intencion } = await detectarIntencion(faq.pregunta);
+    const intencionFinal = intencion.trim().toLowerCase();
     const respuestaFinal = respuesta_editada || faq.respuesta_sugerida;
 
     // Validar que no exista ya una FAQ con esa intención
     const { rows: existentes } = await pool.query(
       `SELECT 1 FROM faqs WHERE tenant_id = $1 AND canal = $2 AND intencion = $3 LIMIT 1`,
-      [tenantId, faq.canal, intencion]
+      [tenantId, faq.canal, intencionFinal]
     );
 
     if (existentes.length > 0) {
@@ -36,7 +38,7 @@ router.post('/', authenticateUser, async (req, res) => {
     await pool.query(
       `INSERT INTO faqs (tenant_id, pregunta, respuesta, canal, intencion)
        VALUES ($1, $2, $3, $4, $5)`,
-      [tenantId, faq.pregunta, respuestaFinal, faq.canal, intencion]
+      [tenantId, faq.pregunta, respuestaFinal, faq.canal, intencionFinal]
     );
 
     // Eliminar sugerencia aceptada
