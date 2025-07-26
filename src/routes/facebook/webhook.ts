@@ -30,6 +30,8 @@ router.get('/api/facebook/webhook', (req, res) => {
   res.sendStatus(400);
 });
 
+const mensajesProcesados = new Set<string>();
+
 router.post('/api/facebook/webhook', async (req, res) => {
   res.sendStatus(200);
   console.log("🌐 Webhook Meta recibido:", JSON.stringify(req.body, null, 2));
@@ -55,6 +57,14 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const senderId = messagingEvent.sender.id;
         const messageId = messagingEvent.message.mid;
         const userMessage = messagingEvent.message.text;
+
+        if (mensajesProcesados.has(messageId)) {
+          console.log('⚠️ Mensaje duplicado ignorado por Set en memoria:', messageId);
+          continue;
+        }
+        mensajesProcesados.add(messageId);
+        setTimeout(() => mensajesProcesados.delete(messageId), 60000); // ⏱️ Bórralo después de 60s
+        
 
         const idioma = await detectarIdioma(userMessage);
 
