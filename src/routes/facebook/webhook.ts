@@ -104,7 +104,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         let flows = [];
         try {
           const resFaqs = await pool.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenantId]);
-          faqs = resFaqs.rows || [];
+          faqs = (resFaqs.rows || []).filter(f => f.canal === canal);
         } catch {}
         try {
           const resFlows = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenantId]);

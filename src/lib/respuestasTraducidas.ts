@@ -1,5 +1,3 @@
-// src/lib/respuestasTraducidas.ts
-
 import { traducirTexto } from './traducirTexto';
 
 function normalizarTexto(texto: string): string {
