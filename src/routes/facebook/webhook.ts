@@ -186,10 +186,10 @@ router.post('/api/facebook/webhook', async (req, res) => {
                   // 💾 Insertar si no existe
                   if (!yaExisteFaq && !yaExisteSugerida && intencionLower && respuesta && respuesta.length >= 5) {
                     await pool.query(
-                      `INSERT INTO faq_sugeridas (tenant_id, canal, intencion, pregunta, respuesta_sugerida, created_at)
-                       VALUES ($1, $2, $3, $4, $5, NOW())`,
-                      [tenantId, canal, intencionLower, userMessage, respuesta]
-                    );                                    
+                      `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
+                       VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
+                      [tenantId, canal, userMessage, respuesta, idioma, intencionLower]
+                    );                                                    
                   }
 
                   if (tokensConsumidos > 0) {
