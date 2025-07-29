@@ -17,10 +17,22 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
     const tenantId = (req as any).user?.tenant_id;
     if (!tenantId) return res.status(404).json({ error: 'Negocio no encontrado' });
 
-    const faqRes = await pool.query(
-      'SELECT id, pregunta, respuesta, intencion, canal FROM faqs WHERE tenant_id = $1',
-      [tenantId]
-    );
+    let canalQuery = req.query.canal;
+    let canales: string[] = [];
+
+    if (canalQuery === 'meta') {
+      canales = ['meta', 'facebook', 'instagram']; // unificamos
+    } else if (canalQuery) {
+      canales = [canalQuery.toString()];
+    } else {
+      canales = ['whatsapp']; // por defecto
+    }
+
+const faqRes = await pool.query(
+  'SELECT id, pregunta, respuesta, intencion, canal FROM faqs WHERE tenant_id = $1 AND canal = ANY($2)',
+  [tenantId, canales]
+);
+
 
     return res.status(200).json(faqRes.rows);
   } catch (err) {
