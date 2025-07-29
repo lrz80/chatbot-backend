@@ -12,6 +12,12 @@ router.get('/', authenticateUser, async (req, res) => {
     ? canalQuery.map(c => c.toString())
     : [canalQuery?.toString() || 'whatsapp'];
 
+  // ✅ Convertir 'meta' en ['facebook', 'instagram']
+  if (canales.includes('meta')) {
+    canales.splice(canales.indexOf('meta'), 1);
+    canales.push('facebook', 'instagram');
+  }
+
   try {
     const { rows } = await pool.query(
       `SELECT id, pregunta, respuesta_sugerida

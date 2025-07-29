@@ -62,10 +62,13 @@ router.post('/', authenticateUser, async (req: Request, res: Response) => {
         continue; // ⚠️ No guardar FAQ sin intención válida
       }
 
+      const canal = (item.canal === 'facebook' || item.canal === 'instagram') ? 'meta' : (item.canal || 'whatsapp');
+
       await pool.query(
         'INSERT INTO faqs (tenant_id, pregunta, respuesta, intencion, canal) VALUES ($1, $2, $3, $4, $5)',
-        [tenantId, preguntaOriginal, respuesta, intencion, item.canal || 'whatsapp']
+        [tenantId, preguntaOriginal, respuesta, intencion, canal]
       );
+
     }
 
     return res.status(200).json({ message: 'FAQs actualizadas' });

@@ -24,22 +24,27 @@ router.post('/', authenticateUser, async (req, res) => {
     const intencionFinal = intencion.trim().toLowerCase();
     const respuestaFinal = respuesta_editada || faq.respuesta_sugerida;
 
+    // ✅ Expandir canal "meta" como ["facebook", "instagram"]
+    const canalesComparar = faq.canal === 'meta' ? ['facebook', 'instagram'] : [faq.canal];
+
     // Validar que no exista ya una FAQ con esa intención
     const { rows: existentes } = await pool.query(
-      `SELECT 1 FROM faqs WHERE tenant_id = $1 AND canal = $2 AND intencion = $3 LIMIT 1`,
-      [tenantId, faq.canal, intencionFinal]
-    );
+      `SELECT 1 FROM faqs WHERE tenant_id = $1 AND canal = ANY($2) AND intencion = $3 LIMIT 1`,
+      [tenantId, canalesComparar, intencionFinal]
+    );    
 
     if (existentes.length > 0) {
       return res.status(409).json({ error: 'Ya existe una FAQ con esa intención para este canal' });
     }
 
+    const canalFinal = (faq.canal === 'facebook' || faq.canal === 'instagram') ? 'meta' : faq.canal;
+
     // Insertar FAQ aprobada
     await pool.query(
       `INSERT INTO faqs (tenant_id, pregunta, respuesta, canal, intencion)
        VALUES ($1, $2, $3, $4, $5)`,
-      [tenantId, faq.pregunta, respuestaFinal, faq.canal, intencionFinal]
-    );
+      [tenantId, faq.pregunta, respuestaFinal, canalFinal, intencionFinal]
+    );    
 
     // Eliminar sugerencia aceptada
     await pool.query(
