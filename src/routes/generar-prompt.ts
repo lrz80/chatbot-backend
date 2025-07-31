@@ -53,9 +53,11 @@ router.post("/", async (req: Request, res: Response) => {
           Esta es la información clave que debe conocer:
           ${info}
 
-          🔒 IMPORTANTE: El asistente solo debe responder con la información que se le ha proporcionado. Si la pregunta del cliente no se encuentra en esta información, debe decir educadamente: "Lo siento, no tengo esa información disponible en este momento".
+          🔒 IMPORTANTE: El asistente solo debe responder con la información que se le ha proporcionado. Si encuentras información relacionada con la pregunta del cliente (por ejemplo, precios, horarios, políticas o ubicación), debes usarla exactamente como aparece en el contenido anterior. No resumas, no agrupes ni modifiques frases. Usa el texto literalmente para responder de forma clara y útil.
 
-          🧠 Redacta un único texto en lenguaje natural que combine toda la información EXACTAMENTE como fue proporcionada. NO resumas, no reescribas, no modifiques frases ni omitas nada. Usa literalmente el contenido tal como fue proporcionado. Incluye todos los datos, incluso si parecen redundantes. No agrupes ideas ni transformes el contenido.
+          Si la pregunta del cliente no se encuentra en esta información, responde educadamente: "Lo siento, no tengo esa información disponible en este momento."
+
+          🧠 Redacta un único texto en lenguaje natural que combine toda la información EXACTAMENTE como fue proporcionada. NO reescribas, no omitas nada, no transformes el contenido. Incluye todos los datos, incluso si parecen redundantes.
 
           Este texto servirá como prompt del sistema. No incluyas mensaje de bienvenida, JSON, listas técnicas ni instrucciones adicionales. Solo devuelve un texto plano profesional, listo para usarse.`,
 
