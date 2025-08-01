@@ -9,7 +9,6 @@ import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { buscarRespuestaSimilitudFaqsTraducido, buscarRespuestaDesdeFlowsTraducido } from '../../lib/respuestasTraducidas';
 import { enviarWhatsApp } from '../../lib/senders/whatsapp';
-import { limpiarRespuesta } from '../../lib/faq/similaridadFaq';
 import {
   yaExisteComoFaqSugerida,
   yaExisteComoFaqAprobada,
