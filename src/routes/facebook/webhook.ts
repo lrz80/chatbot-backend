@@ -83,6 +83,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const canal = isInstagram ? 'instagram' : 'facebook';
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
+        const canalNormalizado = (canal === 'facebook' || canal === 'instagram') ? 'meta' : canal;
+
 
         const existingMsg = await pool.query(
           `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
@@ -103,7 +105,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         let faqs = [];
         let flows = [];
         try {
-          const resFaqs = await pool.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenantId]);
+          const resFaqs = await pool.query('SELECT pregunta, respuesta, canal, intencion FROM faqs WHERE tenant_id = $1', [tenantId]);
           faqs = (resFaqs.rows || []).filter(f => {
             if (f.canal === 'meta') return true;
             return f.canal === canal;
@@ -176,14 +178,14 @@ router.post('/api/facebook/webhook', async (req, res) => {
                   // 🔄 Verificar si ya existe como FAQ oficial
                   const existeOficial = await pool.query(
                     `SELECT 1 FROM faqs WHERE tenant_id = $1 AND canal = $2 AND intencion = $3 LIMIT 1`,
-                    [tenantId, canal, intencionLower]
+                    [tenantId, canalNormalizado, intencionLower]
                   );
                   const yaExisteFaq = existeOficial.rows.length > 0;
 
                   // 🔄 Verificar si ya existe como sugerida
                   const existeSugerida = await pool.query(
                     `SELECT 1 FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2 AND intencion = $3 LIMIT 1`,
-                    [tenantId, canal, intencionLower]
+                    [tenantId, canalNormalizado, intencionLower]
                   );
                   const yaExisteSugerida = existeSugerida.rows.length > 0;
 
@@ -192,8 +194,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
                     await pool.query(
                       `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
                        VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
-                      [tenantId, canal, userMessage, respuesta, idioma, intencionLower]
-                    );                                                    
+                      [tenantId, canalNormalizado, userMessage, respuesta, idioma, intencionLower]
+                    );                                                                
                   }
 
                   if (tokensConsumidos > 0) {
