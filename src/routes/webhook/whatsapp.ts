@@ -67,9 +67,15 @@ async function procesarMensajeWhatsApp(body: any) {
 
   let faqs: any[] = [];
   try {
-    const faqsRes = await pool.query('SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1', [tenant.id]);
+    const faqsRes = await pool.query(
+      'SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1 AND canal = $2',
+      [tenant.id, canal]
+    );    
     faqs = faqsRes.rows || [];
-  } catch {}
+  } catch (err) {
+    console.error("❌ Error cargando FAQs:", err);
+    faqs = [];
+  }  
 
   const mensajeUsuario = normalizarTexto(userInput);
   let respuestaDesdeFaq: string | null = null;

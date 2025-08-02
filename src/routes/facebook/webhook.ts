@@ -105,11 +105,12 @@ router.post('/api/facebook/webhook', async (req, res) => {
         let faqs = [];
         let flows = [];
         try {
-          const resFaqs = await pool.query('SELECT pregunta, respuesta, canal, intencion FROM faqs WHERE tenant_id = $1', [tenantId]);
-          faqs = (resFaqs.rows || []).filter(f => {
-            if (f.canal === 'meta') return true;
-            return f.canal === canal;
-          });
+          const canalNormalizado = canal === 'facebook' || canal === 'instagram' ? 'meta' : canal;
+          const resFaqs = await pool.query(
+            'SELECT pregunta, respuesta, canal, intencion FROM faqs WHERE tenant_id = $1 AND canal = $2',
+            [tenantId, canalNormalizado]
+          );
+          faqs = resFaqs.rows || [];
           
         } catch {}
         try {
