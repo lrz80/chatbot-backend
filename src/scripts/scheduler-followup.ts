@@ -2,9 +2,8 @@ import pool from "../lib/db";
 import { detectarIdioma } from "../lib/detectarIdioma";
 import { traducirTexto } from "../lib/traducirTexto";
 import { enviarWhatsApp } from "../lib/senders/whatsapp";
-import express from 'express';
 
-// 🕒 Scheduler de mensajes programados para follow-up
+// 🕒 Scheduler de mensajes programados
 async function enviarMensajesProgramados() {
   const ahora = new Date().toISOString();
 
@@ -26,25 +25,16 @@ async function enviarMensajesProgramados() {
 
     for (const mensaje of mensajes) {
       try {
-        // 🛡️ Marcar como enviado primero
         await pool.query(
           `UPDATE mensajes_programados SET enviado = true WHERE id = $1`,
           [mensaje.id]
         );
 
-        // ❌ Validar canal
-        if (mensaje.canal !== 'whatsapp') {
-          console.warn(`❌ Canal no compatible: ${mensaje.canal}`);
+        if (mensaje.canal !== 'whatsapp' || !mensaje.contacto.startsWith('+')) {
+          console.warn(`❌ Canal inválido o número no válido: ${mensaje.contacto}`);
           continue;
         }
 
-        // ❌ Validar formato internacional del número
-        if (!mensaje.contacto.startsWith('+')) {
-          console.warn(`❌ Número inválido: ${mensaje.contacto}`);
-          continue;
-        }
-
-        // 🧠 Detectar idioma (opcional)
         const ultimoMsg = await pool.query(
           `SELECT content FROM messages
            WHERE tenant_id = $1 AND canal = 'whatsapp' AND role = 'user' AND from_number = $2
@@ -56,29 +46,21 @@ async function enviarMensajesProgramados() {
         const idioma = await detectarIdioma(mensajeCliente);
         const contenidoTraducido = await traducirTexto(mensaje.contenido, idioma);
 
-        // 📤 Enviar mensaje
         await enviarWhatsApp(mensaje.contacto, contenidoTraducido, mensaje.tenant_id);
         console.log(`✅ Mensaje enviado a ${mensaje.contacto} (idioma: ${idioma})`);
 
-        // 🔄 Incrementar uso mensual de followup
         const { rows: tenantRows } = await pool.query(
           `SELECT membresia_inicio FROM tenants WHERE id = $1`,
           [mensaje.tenant_id]
         );
         const membresiaInicio = tenantRows[0]?.membresia_inicio;
-        if (!membresiaInicio) {
-          console.warn(`❌ No se encontró membresia_inicio para tenant ${mensaje.tenant_id}`);
-          continue;
-        }
+        if (!membresiaInicio) continue;
 
         const inicio = new Date(membresiaInicio);
         const ahoraFecha = new Date();
-        const diffInMonths = Math.floor(
-          (ahoraFecha.getFullYear() - inicio.getFullYear()) * 12 + (ahoraFecha.getMonth() - inicio.getMonth())
-        );
-        const cicloInicio = new Date(inicio);
-        cicloInicio.setMonth(inicio.getMonth() + diffInMonths);
-        const cicloMes = cicloInicio.toISOString().split('T')[0];
+        const diffInMonths = (ahoraFecha.getFullYear() - inicio.getFullYear()) * 12 + (ahoraFecha.getMonth() - inicio.getMonth());
+        inicio.setMonth(inicio.getMonth() + diffInMonths);
+        const cicloMes = inicio.toISOString().split('T')[0];
 
         await pool.query(
           `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
@@ -86,31 +68,19 @@ async function enviarMensajesProgramados() {
            ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
           [mensaje.tenant_id, cicloMes]
         );
-        console.log(`🔄 Uso mensual followup incrementado para tenant ${mensaje.tenant_id}, ciclo ${cicloMes}`);
 
+        console.log(`🔄 Uso mensual followup incrementado para ${mensaje.tenant_id}`);
       } catch (error) {
-        console.error(`❌ Error enviando mensaje a ${mensaje.contacto}:`, error);
+        console.error(`❌ Error con mensaje a ${mensaje.contacto}:`, error);
       }
     }
   } catch (err) {
-    console.error("❌ Error general en enviarMensajesProgramados:", err);
+    console.error("❌ Error general:", err);
   }
 }
 
-// 🕒 Scheduler corriendo cada minuto
-setInterval(() => {
-  enviarMensajesProgramados();
-}, 60 * 1000);
-
-console.log("⏰ Scheduler de follow-up corriendo cada minuto...");
-
-const app = express();
-const PORT = process.env.PORT || 3003;
-
-app.get('/', (_req, res) => {
-  res.send('🟢 Follow-up scheduler is running...');
-});
-
-app.listen(PORT, () => {
-  console.log(`🚀 Follow-up scheduler activo en http://localhost:${PORT}`);
-});
+// 🚀 Ejecutar directamente al correr el script
+(async () => {
+  await enviarMensajesProgramados();
+  process.exit();
+})();
