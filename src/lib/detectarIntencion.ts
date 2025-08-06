@@ -49,6 +49,28 @@ export async function detectarIntencion(mensaje: string) {
     }
   ];
 
+  // 🔍 Nueva detección específica para mensajes tipo "interesado en clases"
+  const compraKeywords = [
+    // Inglés
+    'looking for', 'interested in', 'want to know', 'i want classes',
+    'classes for', 'class for my', 'my wife is looking', 'seeking classes',
+    'i am looking for', 'i need classes', 'looking to enroll', 'do you offer classes',
+  
+    // Español
+    'busco clases', 'estoy buscando clases', 'quiero clases',
+    'mi esposa quiere clases', 'mi esposa busca clases',
+    'interesado en clases', 'clases disponibles', 'ofrecen clases',
+    'dan clases', 'tienen clases', 'necesito clases', 'como inscribirme',
+    'deseo clases', 'como registrarse', 'informacion de clases'
+  ];  
+
+  if (compraKeywords.some(k => texto.includes(k))) {
+    return {
+      intencion: 'interes_clases',
+      nivel_interes: 3,
+    };
+  }
+
   for (const regla of reglas) {
     if (regla.keywords.some(k => texto.includes(k))) {
       return {
@@ -75,12 +97,14 @@ Classify based on these possible intents:
 - "saludo"
 - "duda"
 - "no_interesado"
+- "interes_clases"
 
 And these levels of interest:
 - 1: Low (curious, not ready)
 - 2: Medium (interested, but not urgent)
 - 3: High (wants to book or pay now)
 
+If the message includes interest in classes (e.g., "looking for classes", "busco clases", "quiero clases"), use intent "interes_clases" and level 3.
 If the message contains any negative expressions like "I don't want", "no quiero", or "not interested", set intent to "no_interesado".
 
 Respond **only** in JSON in the following format:
