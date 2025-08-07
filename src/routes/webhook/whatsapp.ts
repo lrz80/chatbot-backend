@@ -27,7 +27,7 @@ router.post('/', async (req: Request, res: Response) => {
 
   setTimeout(async () => {
     try {
-      await procesarMensajeWhatsApp(req.body);
+      await procesarMensajeWhatsApp(req.body, res);
     } catch (error) {
       console.error("❌ Error procesando mensaje:", error);
     }
@@ -36,7 +36,7 @@ router.post('/', async (req: Request, res: Response) => {
 
 export default router;
 
-async function procesarMensajeWhatsApp(body: any) {
+async function procesarMensajeWhatsApp(body: any, res: Response) {
   const to = body.To || '';
   const from = body.From || '';
   const numero = to.replace('whatsapp:', '').replace('tel:', '');
@@ -120,7 +120,10 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
 
   if (intencion === 'pedir_info' && Array.isArray(flows) && flows.length > 0) {
     const pregunta = flows[0]?.pregunta || '¿Cómo puedo ayudarte?';
-    const opciones = flows.map((f, i) => `${i + 1}️⃣ ${f.opcion}`).join('\n');
+    const opciones = flows[0]?.opciones?.map((op: any, i: number) => {
+      const texto = op.texto || `Opción ${i + 1}`;
+      return `${i + 1}️⃣ ${texto}`;
+    }).join('\n');    
   
     const menuDesdeFlujos = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
   
@@ -141,6 +144,75 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
   
     return;
   }  
+
+  // 🧠 Flujos guiados (si mensaje es "quiero info", "más información", etc.)
+const mensajeLower = mensajeUsuario.toLowerCase();
+const keywordsInfo = [
+  'quiero informacion',
+  'más información',
+  'mas informacion',
+  'info',
+  'necesito informacion',
+  'deseo informacion',
+  'quiero saber',
+  'me puedes decir',
+  'quiero saber mas',
+  'i want info',
+  'i want information',
+  'more info',
+  'more information',
+  'tell me more'
+];
+
+if (keywordsInfo.some(k => mensajeLower.includes(k))) {
+  const flowsRes = await pool.query(
+    `SELECT * FROM flows WHERE tenant_id = $1 AND canal = 'whatsapp' ORDER BY orden ASC LIMIT 1`,
+    [tenant.id]
+  );
+
+  const flow = flowsRes.rows[0];
+
+  if (flow?.opciones?.length > 0) {
+    const opciones = flow.opciones.map((op: any, i: number) => {
+      const texto = op.texto || `Opción ${i + 1}`;
+      return `${i + 1}️⃣ ${texto}`;
+    }).join('\n');
+
+    const pregunta = flow.mensaje || '¿Cómo puedo ayudarte?';
+
+    const menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+
+    await enviarWhatsApp(fromNumber, menu, tenant.id);
+
+    console.log("📬 Menú personalizado enviado desde Flujos Guiados Interactivos.");
+    return res.sendStatus(200);
+  }
+}
+
+// ✅ Detectar si eligió una opción del menú (responde con "1", "2", etc.)
+if (/^[1-9]$/.test(mensajeUsuario)) {
+  const flowsRes = await pool.query(
+    `SELECT * FROM flows WHERE tenant_id = $1 AND canal = 'whatsapp' ORDER BY orden ASC LIMIT 1`,
+    [tenant.id]
+  );
+
+  const flow = flowsRes.rows[0];
+  const opcionIndex = parseInt(mensajeUsuario) - 1;
+  const seleccionada = flow?.opciones?.[opcionIndex];
+
+  if (seleccionada?.respuesta) {
+    await enviarWhatsApp(fromNumber, seleccionada.respuesta, tenant.id);
+
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
+       VALUES ($1, 'assistant', $2, NOW(), $3)`,
+      [tenant.id, seleccionada.respuesta, canal]
+    );
+
+    console.log("📬 Respuesta enviada desde flujo:", seleccionada.respuesta);
+    return res.sendStatus(200);
+  }
+}
 
   // Paso 2: Buscar primero una FAQ oficial por intención exacta y canal
   const { rows: faqPorIntencion } = await pool.query(
