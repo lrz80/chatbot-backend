@@ -78,6 +78,32 @@ async function procesarMensajeWhatsApp(body: any) {
   }  
 
   const mensajeUsuario = normalizarTexto(userInput);
+  // 🎯 Manejo de respuestas al menú interactivo
+  if (/^[1-9]$/.test(mensajeUsuario) && Array.isArray(flows) && flows.length > 0) {
+    const opcionIndex = parseInt(mensajeUsuario) - 1;
+    const flujoSeleccionado = flows[opcionIndex];
+  
+    if (flujoSeleccionado && flujoSeleccionado.respuesta) {
+      const respuestaMenu = flujoSeleccionado.respuesta;
+  
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+         VALUES ($1, 'user', $2, NOW(), $3, $4)`,
+        [tenant.id, userInput, canal, fromNumber]
+      );
+  
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
+         VALUES ($1, 'assistant', $2, NOW(), $3)`,
+        [tenant.id, respuestaMenu, canal]
+      );
+  
+      await enviarWhatsApp(fromNumber, respuestaMenu, tenant.id);
+      console.log("📬 Respuesta enviada desde opción seleccionada del menú:", respuestaMenu);
+      return;
+    }
+  }  
+
   let respuestaDesdeFaq: string | null = null;
 if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
   respuesta = getBienvenidaPorCanal('whatsapp', tenant, idioma);
@@ -91,6 +117,31 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
   const { intencion: intencionDetectada } = await detectarIntencion(textoTraducido);
   const intencion = intencionDetectada.trim().toLowerCase();
   console.log(`🧠 Intención detectada (procesada): "${intencion}"`);
+
+  // 📦 Si el usuario pide información general, mostrar menú genérico
+  if (intencion === 'pedir_info' && Array.isArray(flows) && flows.length > 0) {
+    const pregunta = flows[0]?.pregunta || '¿Cómo puedo ayudarte?';
+    const opciones = flows.map((f, i) => `${i + 1}️⃣ ${f.opcion}`).join('\n');
+  
+    const menuDesdeFlujos = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+  
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+       VALUES ($1, 'user', $2, NOW(), $3, $4)`,
+      [tenant.id, userInput, canal, fromNumber]
+    );
+  
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
+       VALUES ($1, 'assistant', $2, NOW(), $3)`,
+      [tenant.id, menuDesdeFlujos, canal]
+    );
+  
+    await enviarWhatsApp(fromNumber, menuDesdeFlujos, tenant.id);
+    console.log("📬 Menú personalizado enviado desde Flujos Guiados Interactivos.");
+  
+    return;
+  }  
 
   // Paso 2: Buscar primero una FAQ oficial por intención exacta y canal
   const { rows: faqPorIntencion } = await pool.query(

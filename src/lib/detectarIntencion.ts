@@ -46,7 +46,16 @@ export async function detectarIntencion(mensaje: string) {
       intencion: 'no_interesado',
       nivel_interes: 1,
       keywords: ['no me interesa', 'no quiero', 'no gracias', 'ya no', 'no estoy interesado', 'not interested', 'i dont want', 'i am not interested'],
-    }
+    },
+    {
+      intencion: 'pedir_info',
+      nivel_interes: 2,
+      keywords: [
+        'mas informacion', 'quiero informacion', 'necesito saber mas', 'quiero saber mas',
+        'quisiera saber mas', 'puedes decirme mas', 'quiero detalles', 'me puedes explicar',
+        'en que consiste', 'info', 'más info', 'more info', 'i want information', 'i need more info'
+      ]
+    }    
   ];
 
   // 🔍 Nueva detección específica para mensajes tipo "interesado en clases"
