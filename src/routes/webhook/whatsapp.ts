@@ -62,7 +62,8 @@ async function procesarMensajeWhatsApp(body: any, res: Response) {
   try {
     const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant.id]);
     const raw = flowsRes.rows[0]?.data;
-    flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    flows = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : [];
+
   } catch {}
 
   let faqs: any[] = [];
@@ -78,31 +79,6 @@ async function procesarMensajeWhatsApp(body: any, res: Response) {
   }  
 
   const mensajeUsuario = normalizarTexto(userInput);
-  // 🎯 Manejo de respuestas al menú interactivo
-  if (/^[1-9]$/.test(mensajeUsuario) && Array.isArray(flows) && flows.length > 0) {
-    const opcionIndex = parseInt(mensajeUsuario) - 1;
-    const flujoSeleccionado = flows[opcionIndex];
-  
-    if (flujoSeleccionado && flujoSeleccionado.respuesta) {
-      const respuestaMenu = flujoSeleccionado.respuesta;
-  
-      await pool.query(
-        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-         VALUES ($1, 'user', $2, NOW(), $3, $4)`,
-        [tenant.id, userInput, canal, fromNumber]
-      );
-  
-      await pool.query(
-        `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
-         VALUES ($1, 'assistant', $2, NOW(), $3)`,
-        [tenant.id, respuestaMenu, canal]
-      );
-  
-      await enviarWhatsApp(fromNumber, respuestaMenu, tenant.id);
-      console.log("📬 Respuesta enviada desde opción seleccionada del menú:", respuestaMenu);
-      return;
-    }
-  }  
 
   let respuestaDesdeFaq: string | null = null;
 if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
@@ -118,30 +94,17 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
   const intencion = intencionDetectada.trim().toLowerCase();
   console.log(`🧠 Intención detectada (procesada): "${intencion}"`);
 
-  if (intencion === 'pedir_info' && Array.isArray(flows) && flows.length > 0) {
-    const pregunta = flows[0]?.pregunta || '¿Cómo puedo ayudarte?';
-    const opciones = flows[0]?.opciones?.map((op: any, i: number) => {
-      const texto = op.texto || `Opción ${i + 1}`;
-      return `${i + 1}️⃣ ${texto}`;
-    }).join('\n');    
+  if (!flows[0]) return;
+
+  if (intencion === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
+    const pregunta = flows[0].pregunta || '¿Cómo puedo ayudarte?';
+    const opciones = flows[0].opciones.map((op: any, i: number) =>
+      `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
   
-    const menuDesdeFlujos = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+    const menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
   
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-       VALUES ($1, 'user', $2, NOW(), $3, $4)`,
-      [tenant.id, userInput, canal, fromNumber]
-    );
-  
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
-       VALUES ($1, 'assistant', $2, NOW(), $3)`,
-      [tenant.id, menuDesdeFlujos, canal]
-    );
-  
-    await enviarWhatsApp(fromNumber, menuDesdeFlujos, tenant.id);
-    console.log("📬 Menú personalizado enviado desde Flujos Guiados Interactivos.");
-  
+    await enviarWhatsApp(fromNumber, menu, tenant.id);
+    console.log("📬 Menú enviado desde Flujos Guiados Interactivos.");
     return;
   }  
 
@@ -165,12 +128,7 @@ const keywordsInfo = [
 ];
 
 if (keywordsInfo.some(k => mensajeLower.includes(k))) {
-  const flowsRes = await pool.query(
-    `SELECT * FROM flows WHERE tenant_id = $1 AND canal = 'whatsapp' ORDER BY orden ASC LIMIT 1`,
-    [tenant.id]
-  );
-
-  const flow = flowsRes.rows[0];
+  const flow = flows[0];
 
   if (flow?.opciones?.length > 0) {
     const opciones = flow.opciones.map((op: any, i: number) => {
@@ -178,7 +136,7 @@ if (keywordsInfo.some(k => mensajeLower.includes(k))) {
       return `${i + 1}️⃣ ${texto}`;
     }).join('\n');
 
-    const pregunta = flow.mensaje || '¿Cómo puedo ayudarte?';
+    const pregunta = flow.pregunta || '¿Cómo puedo ayudarte?';
 
     const menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
 
@@ -190,27 +148,21 @@ if (keywordsInfo.some(k => mensajeLower.includes(k))) {
 }
 
 // ✅ Detectar si eligió una opción del menú (responde con "1", "2", etc.)
-if (/^[1-9]$/.test(mensajeUsuario)) {
-  const flowsRes = await pool.query(
-    `SELECT * FROM flows WHERE tenant_id = $1 AND canal = 'whatsapp' ORDER BY orden ASC LIMIT 1`,
-    [tenant.id]
-  );
-
-  const flow = flowsRes.rows[0];
+if (/^[1-9]$/.test(mensajeUsuario) && flows[0]?.opciones?.length) {
   const opcionIndex = parseInt(mensajeUsuario) - 1;
-  const seleccionada = flow?.opciones?.[opcionIndex];
+  const opcionSeleccionada = flows[0].opciones[opcionIndex];
 
-  if (seleccionada?.respuesta) {
-    await enviarWhatsApp(fromNumber, seleccionada.respuesta, tenant.id);
+  if (opcionSeleccionada?.respuesta) {
+    await enviarWhatsApp(fromNumber, opcionSeleccionada.respuesta, tenant.id);
 
     await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
        VALUES ($1, 'assistant', $2, NOW(), $3)`,
-      [tenant.id, seleccionada.respuesta, canal]
+      [tenant.id, opcionSeleccionada.respuesta, canal]
     );
 
-    console.log("📬 Respuesta enviada desde flujo:", seleccionada.respuesta);
-    return res.sendStatus(200);
+    console.log("📬 Respuesta enviada desde opción seleccionada del menú");
+    return;
   }
 }
 
