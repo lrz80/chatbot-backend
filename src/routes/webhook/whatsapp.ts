@@ -94,10 +94,8 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
   const intencion = intencionDetectada.trim().toLowerCase();
   console.log(`🧠 Intención detectada (procesada): "${intencion}"`);
 
-  if (!flows[0]) return;
-
   if (intencion === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
-    const pregunta = flows[0].pregunta || '¿Cómo puedo ayudarte?';
+    const pregunta = flows[0]?.pregunta || flows[0]?.mensaje || '¿Cómo puedo ayudarte?';
     const opciones = flows[0].opciones.map((op: any, i: number) =>
       `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
   
@@ -107,6 +105,21 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
     console.log("📬 Menú enviado desde Flujos Guiados Interactivos.");
     return;
   }  
+
+  const nrm = (t: string) =>
+    (t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+  
+  const nUser = nrm(mensajeUsuario);
+  
+  // ✅ Detector robusto para “pedir info”, cubre “inf”, “mas info”, etc.
+  const esPedirInfo =
+    /\bmas\s*info\b/.test(nUser) ||         // "mas info" / "más info" (ya normalizado)
+    /\binfo\b/.test(nUser) ||               // contiene "info"
+    /\binf\b/.test(nUser) ||                // SOLO "inf"
+    /\bquiero\s+mas\b/.test(nUser) ||       // "quiero mas ..."
+    nUser.endsWith(' inf') ||               // termina en " inf"
+    nUser.includes('quiero informacion') ||
+    nUser.includes('mas informacion');
 
   // 🧠 Flujos guiados (si mensaje es "quiero info", "más información", etc.)
 const mensajeLower = mensajeUsuario.toLowerCase();
@@ -124,24 +137,19 @@ const keywordsInfo = [
   'i want information',
   'more info',
   'more information',
-  'tell me more'
+  'tell me more',
+  'inf'
 ];
 
-if (keywordsInfo.some(k => mensajeLower.includes(k))) {
+if (esPedirInfo || keywordsInfo.some(k => nUser.includes(nrm(k)))) {
   const flow = flows[0];
-
   if (flow?.opciones?.length > 0) {
-    const opciones = flow.opciones.map((op: any, i: number) => {
-      const texto = op.texto || `Opción ${i + 1}`;
-      return `${i + 1}️⃣ ${texto}`;
-    }).join('\n');
-
-    const pregunta = flow.pregunta || '¿Cómo puedo ayudarte?';
+    const pregunta = flow.pregunta || flow.mensaje || '¿Cómo puedo ayudarte?'; // 👈 soporta mensaje
+    const opciones = flow.opciones.map((op: any, i: number) =>
+      `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
 
     const menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
-
     await enviarWhatsApp(fromNumber, menu, tenant.id);
-
     console.log("📬 Menú personalizado enviado desde Flujos Guiados Interactivos.");
     return res.sendStatus(200);
   }
