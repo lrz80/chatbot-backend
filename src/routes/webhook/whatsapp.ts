@@ -19,6 +19,14 @@ import { detectarIntencion } from '../../lib/detectarIntencion';
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
+const enviarWhatsAppSeguro = async (to: string, text: string, tenantId: string) => {
+  const MAX = 1500; // margen
+  for (let i = 0; i < text.length; i += MAX) {
+    await enviarWhatsApp(to, text.slice(i, i + MAX), tenantId);
+  }
+};
+
+
 router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
 
@@ -80,12 +88,19 @@ async function procesarMensajeWhatsApp(body: any) {
 
   const mensajeUsuario = normalizarTexto(userInput);
 
+  // Detectar idioma del cliente
+  let idiomaCliente = 'es'; // idioma por defecto
+  try {
+    idiomaCliente = await detectarIdioma(mensajeUsuario);
+  } catch (err) {
+    console.warn("⚠️ No se pudo detectar idioma del cliente, usando 'es'", err);
+  }
+
   let respuestaDesdeFaq: string | null = null;
-if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
-  respuesta = getBienvenidaPorCanal('whatsapp', tenant, idioma);
-} else {
+  if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
+    respuesta = getBienvenidaPorCanal('whatsapp', tenant, idioma);
+  } else {
   // Paso 1: Detectar idioma y traducir para evaluar intención
-  const idiomaCliente = await detectarIdioma(userInput);
   const textoTraducido = idiomaCliente !== 'es'
     ? await traducirMensaje(userInput, 'es')
     : userInput;
@@ -101,7 +116,7 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
   
     const menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
   
-    await enviarWhatsApp(fromNumber, menu, tenant.id);
+    await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
     console.log("📬 Menú enviado desde Flujos Guiados Interactivos.");
     return;
   }  
@@ -110,6 +125,12 @@ if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
     (t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
   
   const nUser = nrm(mensajeUsuario);
+
+  const saludoCorto = ["hola","buenas","hello","hi","hey"];
+  // Solo considerar saludo si el mensaje ENTERO es un saludo corto
+  if (saludoCorto.includes(mensajeUsuario)) {
+    respuesta = getBienvenidaPorCanal('whatsapp', tenant, idioma);
+  }
   
   // ✅ Detector robusto para “pedir info”, cubre “inf”, “mas info”, etc.
   const esPedirInfo =
@@ -143,16 +164,27 @@ const keywordsInfo = [
 
 if (esPedirInfo || keywordsInfo.some(k => nUser.includes(nrm(k)))) {
   const flow = flows[0];
-  if (flow?.opciones?.length > 0) {
-    const pregunta = flow.pregunta || flow.mensaje || '¿Cómo puedo ayudarte?'; // 👈 soporta mensaje
-    const opciones = flow.opciones.map((op: any, i: number) =>
-      `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
+if (flow?.opciones?.length > 0) {
+  const pregunta = flow.pregunta || flow.mensaje || '¿Cómo puedo ayudarte?';
+  const opciones = flow.opciones
+    .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
+    .join('\n');
 
-    const menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
-    await enviarWhatsApp(fromNumber, menu, tenant.id);
-    console.log("📬 Menú personalizado enviado desde Flujos Guiados Interactivos.");
-    return;
+  let menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+
+  // 🌐 Si el usuario no está en español, traducimos TODO el menú
+  if (idiomaCliente && idiomaCliente !== 'es') {
+    try {
+      menu = await traducirMensaje(menu, idiomaCliente);
+    } catch (e) {
+      console.warn('No se pudo traducir el menú, se enviará en ES:', e);
     }
+  }
+
+  await enviarWhatsApp(fromNumber, menu, tenant.id);
+  console.log("📬 Menú personalizado enviado desde Flujos Guiados Interactivos.");
+  return;
+  }
 }
 
 // ✅ Detectar si eligió una opción del menú (responde con "1", "2", etc.)
@@ -161,12 +193,24 @@ if (/^[1-9]$/.test(mensajeUsuario) && flows[0]?.opciones?.length) {
   const opcionSeleccionada = flows[0].opciones[opcionIndex];
 
   if (opcionSeleccionada?.respuesta) {
-    await enviarWhatsApp(fromNumber, opcionSeleccionada.respuesta, tenant.id);
+    let out = opcionSeleccionada.respuesta;
+
+    // 🌐 Respeta el idioma del cliente
+    try {
+      const idiomaOut = await detectarIdioma(out);
+      if (idiomaOut !== idiomaCliente) {
+        out = await traducirMensaje(out, idiomaCliente);
+      }
+    } catch (e) {
+      console.warn('No se pudo traducir la respuesta de la opción:', e);
+    }
+
+    await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
 
     await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
        VALUES ($1, 'assistant', $2, NOW(), $3)`,
-      [tenant.id, opcionSeleccionada.respuesta, canal]
+      [tenant.id, out, canal]
     );
 
     console.log("📬 Respuesta enviada desde opción seleccionada del menú");
@@ -212,7 +256,7 @@ if (/^[1-9]$/.test(mensajeUsuario) && flows[0]?.opciones?.length) {
       [tenant.id, respuesta, canal]
     );  
   
-    await enviarWhatsApp(fromNumber, respuesta, tenant.id);
+    await enviarWhatsAppSeguro(fromNumber, respuesta, tenant.id);
     console.log("📬 Respuesta enviada vía Twilio (desde FAQ oficial):", respuesta);
   
     await pool.query(
@@ -252,6 +296,19 @@ if (!respuestaDesdeFaq && !respuesta) {
       { role: 'user', content: userInput },
     ],
   });
+
+  respuesta = completion.choices[0]?.message?.content?.trim()
+           || getBienvenidaPorCanal('whatsapp', tenant, idioma);
+
+  // 🌐 Asegurar idioma del cliente
+  try {
+    const idiomaRespuesta = await detectarIdioma(respuesta);
+    if (idiomaRespuesta !== idiomaCliente) {
+      respuesta = await traducirMensaje(respuesta, idiomaCliente);
+    }
+  } catch (e) {
+    console.warn('No se pudo traducir la respuesta de OpenAI:', e);
+  }
 
   respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
   const respuestaGenerada = respuesta;
@@ -410,7 +467,7 @@ if (!respuestaDesdeFaq && !respuesta) {
     [tenant.id, respuesta, canal]
   );  
 
-  await enviarWhatsApp(fromNumber, respuesta, tenant.id);
+  await enviarWhatsAppSeguro(fromNumber, respuesta, tenant.id);
   console.log("📬 Respuesta enviada vía Twilio:", respuesta);
 
   await pool.query(
