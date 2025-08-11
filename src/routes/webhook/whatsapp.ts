@@ -188,33 +188,63 @@ if (flow?.opciones?.length > 0) {
 }
 
 // ✅ Detectar si eligió una opción del menú (responde con "1", "2", etc.)
-if (/^[1-9]$/.test(mensajeUsuario) && flows[0]?.opciones?.length) {
-  const opcionIndex = parseInt(mensajeUsuario) - 1;
-  const opcionSeleccionada = flows[0].opciones[opcionIndex];
+if (/^[1-9]$/.test(mensajeUsuario) && Array.isArray(flows[0]?.opciones) && flows[0].opciones.length) {
+  const opcionIndex = parseInt(mensajeUsuario, 10) - 1;
+  const opcionesNivel1 = flows[0].opciones;
 
-  if (opcionSeleccionada?.respuesta) {
-    let out = opcionSeleccionada.respuesta;
+  // índice fuera de rango → ignorar
+  if (opcionIndex < 0 || opcionIndex >= opcionesNivel1.length) {
+    console.log("⚠️ Opción fuera de rango, se continúa con el flujo normal.");
+  } else {
+    const opcionSeleccionada = opcionesNivel1[opcionIndex];
 
-    // 🌐 Respeta el idioma del cliente
-    try {
-      const idiomaOut = await detectarIdioma(out);
-      if (idiomaOut !== idiomaCliente) {
-        out = await traducirMensaje(out, idiomaCliente);
+    // 1) Caso respuesta directa
+    if (opcionSeleccionada?.respuesta) {
+      let out = opcionSeleccionada.respuesta;
+      try {
+        const idiomaOut = await detectarIdioma(out);
+        if (idiomaOut !== idiomaCliente) {
+          out = await traducirMensaje(out, idiomaCliente);
+        }
+      } catch (e) {
+        console.warn('No se pudo traducir la respuesta de la opción:', e);
       }
-    } catch (e) {
-      console.warn('No se pudo traducir la respuesta de la opción:', e);
+
+      await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
+         VALUES ($1, 'assistant', $2, NOW(), $3)`,
+        [tenant.id, out, canal]
+      );
+      console.log("📬 Respuesta enviada desde opción seleccionada del menú");
+      return;
     }
 
-    await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
+    // 2) Caso SUBMENÚ: construir y enviar submenú
+    if (opcionSeleccionada?.submenu?.opciones?.length) {
+      const titulo = opcionSeleccionada.submenu.mensaje || 'Elige una opción:';
+      const opcionesSub = opcionSeleccionada.submenu.opciones
+        .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
+        .join('\n');
 
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
-       VALUES ($1, 'assistant', $2, NOW(), $3)`,
-      [tenant.id, out, canal]
-    );
+      let menuSub = `💡 ${titulo}\n${opcionesSub}\n\n` +
+                    `👉 Responde con el *texto* de la opción (ej: "Facial").`;
 
-    console.log("📬 Respuesta enviada desde opción seleccionada del menú");
-    return;
+      try {
+        if (idiomaCliente && idiomaCliente !== 'es') {
+          menuSub = await traducirMensaje(menuSub, idiomaCliente);
+        }
+      } catch (e) {
+        console.warn('No se pudo traducir el submenú, se enviará en ES:', e);
+      }
+
+      await enviarWhatsAppSeguro(fromNumber, menuSub, tenant.id);
+      console.log("📬 Submenú enviado.");
+      return;
+    }
+
+    // 3) Si no hay respuesta ni submenú, continúa al flujo normal/FAQ
+    console.log("ℹ️ Opción sin respuesta ni submenú; continúa el flujo.");
   }
 }
 
