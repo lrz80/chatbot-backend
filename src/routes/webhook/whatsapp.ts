@@ -192,7 +192,6 @@ if (/^[1-9]$/.test(mensajeUsuario) && Array.isArray(flows[0]?.opciones) && flows
   const opcionIndex = parseInt(mensajeUsuario, 10) - 1;
   const opcionesNivel1 = flows[0].opciones;
 
-  // índice fuera de rango → ignorar
   if (opcionIndex < 0 || opcionIndex >= opcionesNivel1.length) {
     console.log("⚠️ Opción fuera de rango, se continúa con el flujo normal.");
   } else {
@@ -203,7 +202,8 @@ if (/^[1-9]$/.test(mensajeUsuario) && Array.isArray(flows[0]?.opciones) && flows
       let out = opcionSeleccionada.respuesta;
       try {
         const idiomaOut = await detectarIdioma(out);
-        if (idiomaOut !== idiomaCliente) {
+        // 🚫 Si detectarIdioma devuelve 'zxx' o vacío, NO intentes traducir
+        if (idiomaOut && idiomaOut !== 'zxx' && idiomaOut !== idiomaCliente) {
           out = await traducirMensaje(out, idiomaCliente);
         }
       } catch (e) {
@@ -220,31 +220,32 @@ if (/^[1-9]$/.test(mensajeUsuario) && Array.isArray(flows[0]?.opciones) && flows
       return;
     }
 
-    // 2) Caso SUBMENÚ: construir y enviar submenú
+    // 2) Caso SUBMENÚ (sin respuesta directa)
     if (opcionSeleccionada?.submenu?.opciones?.length) {
       const titulo = opcionSeleccionada.submenu.mensaje || 'Elige una opción:';
-      const opcionesSub = opcionSeleccionada.submenu.opciones
+      const opcionesSm = opcionSeleccionada.submenu.opciones
         .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
         .join('\n');
 
-      let menuSub = `💡 ${titulo}\n${opcionesSub}\n\n` +
-                    `👉 Responde con el *texto* de la opción (ej: "Facial").`;
+      let menuSm = `💡 ${titulo}\n${opcionesSm}\n\nResponde con el número de la opción que deseas.`;
 
+      // 🌐 Respeta idioma del cliente (evita 'zxx')
       try {
-        if (idiomaCliente && idiomaCliente !== 'es') {
-          menuSub = await traducirMensaje(menuSub, idiomaCliente);
+        const idMenu = await detectarIdioma(menuSm);
+        if (idMenu && idMenu !== 'zxx' && idMenu !== idiomaCliente) {
+          menuSm = await traducirMensaje(menuSm, idiomaCliente);
         }
       } catch (e) {
-        console.warn('No se pudo traducir el submenú, se enviará en ES:', e);
+        console.warn('No se pudo traducir el submenú:', e);
       }
 
-      await enviarWhatsAppSeguro(fromNumber, menuSub, tenant.id);
+      await enviarWhatsAppSeguro(fromNumber, menuSm, tenant.id);
       console.log("📬 Submenú enviado.");
       return;
     }
 
-    // 3) Si no hay respuesta ni submenú, continúa al flujo normal/FAQ
-    console.log("ℹ️ Opción sin respuesta ni submenú; continúa el flujo.");
+    // 3) Si no hay respuesta ni submenú, continúa flujo normal (caerá a FAQs/IA)
+    console.log("ℹ️ Opción sin respuesta ni submenú. Continuando con flujo general.");
   }
 }
 
