@@ -259,7 +259,28 @@ if (
     console.log("ℹ️ Opción sin respuesta ni submenú. Continuando con flujo general.");
   } else {
     console.log("⚠️ Selección no válida o no hay opciones cargadas.");
-  }
+    // Reenviar el menú y salir
+    if (flows[0]?.opciones?.length) {
+      const pregunta = flows[0].pregunta || flows[0].mensaje || '¿Cómo puedo ayudarte?';
+      const opciones = flows[0].opciones
+        .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
+        .join('\n');
+  
+      let menu = `⚠️ Opción no válida. Intenta de nuevo.\n\n💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+  
+      try {
+        // usa el idioma detectado previamente
+        if (idiomaDestino !== 'es') {
+          menu = await traducirMensaje(menu, idiomaDestino);
+        }
+      } catch (e) {
+        console.warn('No se pudo traducir el menú (opción inválida), se enviará en ES:', e);
+      }
+  
+      await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
+    }
+    return; // 👉 evita caer a FAQs/IA y mandar respuesta genérica
+  }  
 }
 
   // Paso 2: Buscar primero una FAQ oficial por intención exacta y canal
