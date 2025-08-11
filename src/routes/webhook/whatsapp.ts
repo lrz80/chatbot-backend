@@ -256,7 +256,27 @@ if (
       return;
     }
 
-    console.log("ℹ️ Opción sin respuesta ni submenú. Continuando con flujo general.");
+        // ⚠️ Opción válida pero sin contenido: reenvía el menú y sal
+        if (flows[0]?.opciones?.length) {
+          const pregunta = flows[0].pregunta || flows[0].mensaje || '¿Cómo puedo ayudarte?';
+          const opciones = flows[0].opciones
+            .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
+            .join('\n');
+    
+          let menu = `⚠️ Esa opción aún no tiene contenido. Elige otra.\n\n💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+    
+          try {
+            if (idiomaDestino !== 'es') {
+              menu = await traducirMensaje(menu, idiomaDestino);
+            }
+          } catch (e) {
+            console.warn('No se pudo traducir el menú (opción sin contenido), se enviará en ES:', e);
+          }
+    
+          await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
+        }
+        return; // 👈 evita caer a FAQs/IA
+    
   } else {
     console.log("⚠️ Selección no válida o no hay opciones cargadas.");
     // Reenviar el menú y salir
