@@ -27,7 +27,7 @@ router.post('/', async (req: Request, res: Response) => {
 
   setTimeout(async () => {
     try {
-      await procesarMensajeWhatsApp(req.body, res);
+      await procesarMensajeWhatsApp(req.body);
     } catch (error) {
       console.error("❌ Error procesando mensaje:", error);
     }
@@ -36,7 +36,7 @@ router.post('/', async (req: Request, res: Response) => {
 
 export default router;
 
-async function procesarMensajeWhatsApp(body: any, res: Response) {
+async function procesarMensajeWhatsApp(body: any) {
   const to = body.To || '';
   const from = body.From || '';
   const numero = to.replace('whatsapp:', '').replace('tel:', '');
@@ -151,8 +151,8 @@ if (esPedirInfo || keywordsInfo.some(k => nUser.includes(nrm(k)))) {
     const menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
     await enviarWhatsApp(fromNumber, menu, tenant.id);
     console.log("📬 Menú personalizado enviado desde Flujos Guiados Interactivos.");
-    return res.sendStatus(200);
-  }
+    return;
+    }
 }
 
 // ✅ Detectar si eligió una opción del menú (responde con "1", "2", etc.)
