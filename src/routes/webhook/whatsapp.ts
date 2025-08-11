@@ -187,22 +187,30 @@ if (flow?.opciones?.length > 0) {
   }
 }
 
-// ✅ Detectar si eligió una opción del menú (responde con "1", "2", etc.)
-if (/^[1-9]$/.test(mensajeUsuario) && Array.isArray(flows[0]?.opciones) && flows[0].opciones.length) {
-  const opcionIndex = parseInt(mensajeUsuario, 10) - 1;
+// ✅ Selección numérica robusta (1,2,3...) desde el Body crudo
+const rawBody = (body.Body ?? '').toString();
+const digitOnly = rawBody.replace(/[^\p{N}]/gu, '').trim(); // deja solo dígitos (Unicode-safe)
+
+console.log('🔢 Selección recibida:',
+  { rawBody, digitOnly, len: digitOnly.length, charCodes: [...rawBody].map(c => c.charCodeAt(0)) }
+);
+
+if (
+  digitOnly.length === 1 &&
+  Array.isArray(flows[0]?.opciones) &&
+  flows[0].opciones.length
+) {
+  const n = Number(digitOnly);
   const opcionesNivel1 = flows[0].opciones;
 
-  if (opcionIndex < 0 || opcionIndex >= opcionesNivel1.length) {
-    console.log("⚠️ Opción fuera de rango, se continúa con el flujo normal.");
-  } else {
-    const opcionSeleccionada = opcionesNivel1[opcionIndex];
+  if (Number.isInteger(n) && n >= 1 && n <= opcionesNivel1.length) {
+    const opcionSeleccionada = opcionesNivel1[n - 1];
 
-    // 1) Caso respuesta directa
+    // 1) Respuesta directa
     if (opcionSeleccionada?.respuesta) {
       let out = opcionSeleccionada.respuesta;
       try {
         const idiomaOut = await detectarIdioma(out);
-        // 🚫 Si detectarIdioma devuelve 'zxx' o vacío, NO intentes traducir
         if (idiomaOut && idiomaOut !== 'zxx' && idiomaOut !== idiomaCliente) {
           out = await traducirMensaje(out, idiomaCliente);
         }
@@ -220,7 +228,7 @@ if (/^[1-9]$/.test(mensajeUsuario) && Array.isArray(flows[0]?.opciones) && flows
       return;
     }
 
-    // 2) Caso SUBMENÚ (sin respuesta directa)
+    // 2) Submenú
     if (opcionSeleccionada?.submenu?.opciones?.length) {
       const titulo = opcionSeleccionada.submenu.mensaje || 'Elige una opción:';
       const opcionesSm = opcionSeleccionada.submenu.opciones
@@ -228,8 +236,6 @@ if (/^[1-9]$/.test(mensajeUsuario) && Array.isArray(flows[0]?.opciones) && flows
         .join('\n');
 
       let menuSm = `💡 ${titulo}\n${opcionesSm}\n\nResponde con el número de la opción que deseas.`;
-
-      // 🌐 Respeta idioma del cliente (evita 'zxx')
       try {
         const idMenu = await detectarIdioma(menuSm);
         if (idMenu && idMenu !== 'zxx' && idMenu !== idiomaCliente) {
@@ -244,8 +250,9 @@ if (/^[1-9]$/.test(mensajeUsuario) && Array.isArray(flows[0]?.opciones) && flows
       return;
     }
 
-    // 3) Si no hay respuesta ni submenú, continúa flujo normal (caerá a FAQs/IA)
     console.log("ℹ️ Opción sin respuesta ni submenú. Continuando con flujo general.");
+  } else {
+    console.log("⚠️ Selección no válida o no hay opciones cargadas.");
   }
 }
 
