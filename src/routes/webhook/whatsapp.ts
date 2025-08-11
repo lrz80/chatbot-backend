@@ -88,20 +88,26 @@ async function procesarMensajeWhatsApp(body: any) {
 
   const mensajeUsuario = normalizarTexto(userInput);
 
+  // ¿mandó solo un número? entonces no intentamos detectar idioma
+  const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
+
   // Detectar idioma del cliente
-  let idiomaCliente = 'es'; // idioma por defecto
+  let idiomaCliente: string | null = null;
   try {
-    idiomaCliente = await detectarIdioma(mensajeUsuario);
-  } catch (err) {
-    console.warn("⚠️ No se pudo detectar idioma del cliente, usando 'es'", err);
-  }
+    idiomaCliente = isNumericOnly ? null : await detectarIdioma(userInput);
+  } catch {}
+
+  const idiomaDestino: string =
+  idiomaCliente && idiomaCliente !== 'zxx'
+    ? idiomaCliente
+    : (tenant?.idioma || 'es');
 
   let respuestaDesdeFaq: string | null = null;
   if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
     respuesta = getBienvenidaPorCanal('whatsapp', tenant, idioma);
   } else {
   // Paso 1: Detectar idioma y traducir para evaluar intención
-  const textoTraducido = idiomaCliente !== 'es'
+  const textoTraducido = idiomaDestino !== 'es'
     ? await traducirMensaje(userInput, 'es')
     : userInput;
 
@@ -173,15 +179,15 @@ if (flow?.opciones?.length > 0) {
   let menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
 
   // 🌐 Si el usuario no está en español, traducimos TODO el menú
-  if (idiomaCliente && idiomaCliente !== 'es') {
+  if (idiomaDestino !== 'es') {
     try {
-      menu = await traducirMensaje(menu, idiomaCliente);
+      menu = await traducirMensaje(menu, idiomaDestino);
     } catch (e) {
       console.warn('No se pudo traducir el menú, se enviará en ES:', e);
     }
   }
 
-  await enviarWhatsApp(fromNumber, menu, tenant.id);
+  await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
   console.log("📬 Menú personalizado enviado desde Flujos Guiados Interactivos.");
   return;
   }
@@ -211,8 +217,8 @@ if (
       let out = opcionSeleccionada.respuesta;
       try {
         const idiomaOut = await detectarIdioma(out);
-        if (idiomaOut && idiomaOut !== 'zxx' && idiomaOut !== idiomaCliente) {
-          out = await traducirMensaje(out, idiomaCliente);
+        if (idiomaOut && idiomaOut !== 'zxx' && idiomaOut !== idiomaDestino) {
+          out = await traducirMensaje(out, idiomaDestino);
         }
       } catch (e) {
         console.warn('No se pudo traducir la respuesta de la opción:', e);
@@ -238,8 +244,8 @@ if (
       let menuSm = `💡 ${titulo}\n${opcionesSm}\n\nResponde con el número de la opción que deseas.`;
       try {
         const idMenu = await detectarIdioma(menuSm);
-        if (idMenu && idMenu !== 'zxx' && idMenu !== idiomaCliente) {
-          menuSm = await traducirMensaje(menuSm, idiomaCliente);
+        if (idMenu && idMenu !== 'zxx' && idMenu !== idiomaDestino) {
+          menuSm = await traducirMensaje(menuSm, idiomaDestino);
         }
       } catch (e) {
         console.warn('No se pudo traducir el submenú:', e);
@@ -273,11 +279,11 @@ if (
   
     // Si la respuesta de la FAQ no está en el idioma del cliente, traducirla
     const idiomaRespuesta = await detectarIdioma(respuesta);
-    if (idiomaRespuesta !== idiomaCliente) {
-      console.log(`🌐 Traduciendo respuesta desde ${idiomaRespuesta} a ${idiomaCliente}`);
-      respuesta = await traducirMensaje(respuesta, idiomaCliente);
+    if (idiomaRespuesta && idiomaRespuesta !== 'zxx' && idiomaRespuesta !== idiomaDestino) {
+      console.log(`🌐 Traduciendo respuesta desde ${idiomaRespuesta} a ${idiomaDestino}`);
+      respuesta = await traducirMensaje(respuesta, idiomaDestino);
     } else {
-      console.log(`✅ No se traduce. Respuesta ya en idioma ${idiomaCliente}`);
+      console.log(`✅ No se traduce. Respuesta ya en idioma ${idiomaDestino}`);
     }
   
     const messageId = body.MessageSid || body.SmsMessageSid || null;
@@ -307,13 +313,12 @@ if (
     return; // 🛑 Detiene ejecución: ya respondió con la FAQ oficial
   }else {
     // Paso 3: Buscar por similitud en FAQs sin intención definida
-    const mensajeTraducido = idiomaCliente !== 'es'
-  ? await traducirMensaje(mensajeUsuario, 'es')
-  : mensajeUsuario;
+    const mensajeTraducido = idiomaDestino !== 'es'
+      ? await traducirMensaje(mensajeUsuario, 'es')
+      : mensajeUsuario;
 
-respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeTraducido, idiomaCliente)
-      || await buscarRespuestaDesdeFlowsTraducido(flows, mensajeTraducido, idiomaCliente);
-
+    respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeTraducido, idiomaDestino)
+    || await buscarRespuestaDesdeFlowsTraducido(flows, mensajeTraducido, idiomaDestino);
   }
 }
 
@@ -341,9 +346,11 @@ if (!respuestaDesdeFaq && !respuesta) {
   // 🌐 Asegurar idioma del cliente
   try {
     const idiomaRespuesta = await detectarIdioma(respuesta);
-    if (idiomaRespuesta !== idiomaCliente) {
-      respuesta = await traducirMensaje(respuesta, idiomaCliente);
-    }
+  if (idiomaRespuesta && idiomaRespuesta !== 'zxx' &&
+      idiomaRespuesta !== idiomaDestino) {
+    respuesta = await traducirMensaje(respuesta, idiomaDestino);
+  }
+
   } catch (e) {
     console.warn('No se pudo traducir la respuesta de OpenAI:', e);
   }
