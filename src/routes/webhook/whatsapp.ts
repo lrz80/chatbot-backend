@@ -26,14 +26,40 @@ const enviarWhatsAppSeguro = async (to: string, text: string, tenantId: string) 
   }
 };
 
+// Normalizadores
 const normLang = (code?: string | null) => {
   if (!code) return null;
-  // normaliza a 'es', 'en', etc. si te llega 'es-ES'
   const base = code.toString().split(/[-_]/)[0].toLowerCase();
-  // si OpenAI/tu detector devuelve 'zxx' o algo raro, lo tratamos como null
-  if (base === 'zxx') return null;
-  return base;
+  return base === 'zxx' ? null : base; // zxx = sin lenguaje
 };
+const normalizeLang = (code?: string | null): 'es' | 'en' =>
+  (code || '').toLowerCase().startsWith('en') ? 'en' : 'es';
+
+// Acceso a DB para idioma del contacto
+async function getIdiomaClienteDB(tenantId: string, contacto: string, fallback: 'es'|'en'): Promise<'es'|'en'> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT idioma FROM clientes WHERE tenant_id = $1 AND contacto = $2 LIMIT 1`,
+      [tenantId, contacto]
+    );
+    if (rows[0]?.idioma) return normalizeLang(rows[0].idioma);
+  } catch {}
+  return fallback;
+}
+
+async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma: 'es'|'en') {
+  try {
+    await pool.query(
+      `INSERT INTO clientes (tenant_id, contacto, idioma)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (tenant_id, contacto)
+       DO UPDATE SET idioma = EXCLUDED.idioma`,
+      [tenantId, contacto, idioma]
+    );
+  } catch (e) {
+    console.warn('No se pudo guardar idioma del cliente:', e);
+  }
+}
 
 router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
@@ -96,51 +122,36 @@ async function procesarMensajeWhatsApp(body: any) {
 
   const mensajeUsuario = normalizarTexto(userInput);
 
+  // ¿solo número?
   const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
 
-// 1) Si NO es numérico, detecta y guarda idioma del cliente
-let idiomaDetectado: string | null = null;
-if (!isNumericOnly) {
-  try {
-    idiomaDetectado = normLang(await detectarIdioma(userInput));
-  } catch {}
-  if (!idiomaDetectado) idiomaDetectado = normLang(tenant?.idioma) || 'es';
+  // idioma base del tenant → fallback
+  const tenantBase: 'es'|'en' = normalizeLang(tenant?.idioma || 'es');
 
-  // guarda idiomaDetectado para este contacto
-  try {
-    await pool.query(
-      `INSERT INTO clientes (tenant_id, contacto, idioma)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (tenant_id, contacto)
-       DO UPDATE SET idioma = EXCLUDED.idioma`,
-      [tenant.id, fromNumber, idiomaDetectado]
-    );
-  } catch {}
-}
+  let idiomaDestino: 'es'|'en';
 
-// 2) Si es numérico, recupera el último idioma guardado del cliente
-if (isNumericOnly && !idiomaDetectado) {
-  try {
-    const { rows } = await pool.query(
-      `SELECT idioma FROM clientes WHERE tenant_id = $1 AND contacto = $2 LIMIT 1`,
-      [tenant.id, fromNumber]
-    );
-    idiomaDetectado = normLang(rows[0]?.idioma) || normLang(tenant?.idioma) || 'es';
-  } catch {
-    idiomaDetectado = normLang(tenant?.idioma) || 'es';
+  if (isNumericOnly) {
+    // Si solo envió un número, usamos lo último guardado en DB (o tenantBase)
+    idiomaDestino = await getIdiomaClienteDB(tenant.id, fromNumber, tenantBase);
+    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (solo número)`);
+  } else {
+    // Detectamos por el texto y persistimos en DB
+    let detectado: string | null = null;
+    try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
+    const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
+
+    // Guarda/actualiza en DB para siguientes mensajes numéricos
+    await upsertIdiomaClienteDB(tenant.id, fromNumber, normalizado);
+
+    idiomaDestino = normalizado;
+    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
-}
 
-// 3) idiomaDestino final (base: 'en', 'es', etc.)
-const idiomaDestino = normLang(idiomaDetectado) || 'es';
-
-
-  console.log('🌍 idiomaDestino=', idiomaDestino, 'fuente=', isNumericOnly ? 'ultimoTextoUsuario' : 'userInput');
 
   let respuestaDesdeFaq: string | null = null;
   if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
-    respuesta = getBienvenidaPorCanal('whatsapp', tenant, idioma);
-  } else {
+    respuesta = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino); // antes: idioma
+  }else {
   // Paso 1: Detectar idioma y traducir para evaluar intención
   const textoTraducido = idiomaDestino !== 'es'
     ? await traducirMensaje(userInput, 'es')
@@ -155,7 +166,11 @@ const idiomaDestino = normLang(idiomaDetectado) || 'es';
     const opciones = flows[0].opciones.map((op: any, i: number) =>
       `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
   
-    const menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+    let menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+  
+    if (idiomaDestino !== 'es') {
+      try { menu = await traducirMensaje(menu, idiomaDestino); } catch {}
+    }
   
     await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
     console.log("📬 Menú enviado desde Flujos Guiados Interactivos.");
@@ -170,7 +185,7 @@ const idiomaDestino = normLang(idiomaDetectado) || 'es';
   const saludoCorto = ["hola","buenas","hello","hi","hey"];
   // Solo considerar saludo si el mensaje ENTERO es un saludo corto
   if (saludoCorto.includes(mensajeUsuario)) {
-    respuesta = getBienvenidaPorCanal('whatsapp', tenant, idioma);
+    respuesta = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
   }
   
   // ✅ Detector robusto para “pedir info”, cubre “inf”, “mas info”, etc.
@@ -646,7 +661,7 @@ if (!respuestaDesdeFaq && !respuesta) {
         try {
           const idiomaMensaje = await detectarIdioma(mensajeSeguimiento);
           if (idiomaMensaje !== idioma) {
-            mensajeSeguimiento = await traducirMensaje(mensajeSeguimiento, idioma);
+            mensajeSeguimiento = await traducirMensaje(mensajeSeguimiento, idiomaDestino);
           }
         } catch {}
 
