@@ -91,7 +91,7 @@ async function procesarMensajeWhatsApp(body: any) {
   // ¿mandó solo un número?
   const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
 
-  // 1) Recupera el último mensaje de usuario para este número (por si ahora solo mandó un dígito)
+  // 1) toma el último texto del usuario (por si ahora solo mandó un dígito)
   let ultimoTextoUsuario: string | null = null;
   try {
     const { rows } = await pool.query(
@@ -108,18 +108,18 @@ async function procesarMensajeWhatsApp(body: any) {
     ultimoTextoUsuario = rows[0]?.content || null;
   } catch { /* noop */ }
 
-  // 2) Detecta idioma base:
-  //    - si el mensaje actual es numérico → detecta desde el último texto del usuario
-  //    - si NO es numérico → detecta desde este userInput
+  // 2) detecta idioma base desde el texto más reciente no numérico
   let idiomaBase: string | null = null;
   try {
     const fuente = isNumericOnly ? (ultimoTextoUsuario || '') : userInput;
     idiomaBase = fuente ? await detectarIdioma(fuente) : null;
   } catch { /* noop */ }
 
-  // 3) Fija el idioma de salida (destino)
+  // 3) fija idioma destino
   const idiomaDestino: string =
     (idiomaBase && idiomaBase !== 'zxx') ? idiomaBase : (tenant?.idioma || 'es');
+
+  console.log('🌍 idiomaDestino=', idiomaDestino, 'fuente=', isNumericOnly ? 'ultimoTextoUsuario' : 'userInput');
 
   let respuestaDesdeFaq: string | null = null;
   if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
@@ -168,68 +168,67 @@ async function procesarMensajeWhatsApp(body: any) {
     nUser.includes('mas informacion');
 
   // 🧠 Flujos guiados (si mensaje es "quiero info", "más información", etc.)
-const mensajeLower = mensajeUsuario.toLowerCase();
-const keywordsInfo = [
-  'quiero informacion',
-  'más información',
-  'mas informacion',
-  'info',
-  'necesito informacion',
-  'deseo informacion',
-  'quiero saber',
-  'me puedes decir',
-  'quiero saber mas',
-  'i want info',
-  'i want information',
-  'more info',
-  'more information',
-  'tell me more',
-  'inf'
-];
+  const keywordsInfo = [
+    'quiero informacion',
+    'más información',
+    'mas informacion',
+    'info',
+    'necesito informacion',
+    'deseo informacion',
+    'quiero saber',
+    'me puedes decir',
+    'quiero saber mas',
+    'i want info',
+    'i want information',
+    'more info',
+    'more information',
+    'tell me more',
+    'inf'
+  ];
 
-if (esPedirInfo || keywordsInfo.some(k => nUser.includes(nrm(k)))) {
-  const flow = flows[0];
-if (flow?.opciones?.length > 0) {
-  const pregunta = flow.pregunta || flow.mensaje || '¿Cómo puedo ayudarte?';
-  const opciones = flow.opciones
-    .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
-    .join('\n');
+  if (esPedirInfo || keywordsInfo.some(k => nUser.includes(nrm(k)))) {
+    const flow = flows[0];
+  if (flow?.opciones?.length > 0) {
+    const pregunta = flow.pregunta || flow.mensaje || '¿Cómo puedo ayudarte?';
+    const opciones = flow.opciones
+      .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
+      .join('\n');
 
-  let menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+    let menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
 
-  // 🌐 Si el usuario no está en español, traducimos TODO el menú
-  if (idiomaDestino !== 'es') {
-    try {
-      menu = await traducirMensaje(menu, idiomaDestino);
-    } catch (e) {
-      console.warn('No se pudo traducir el menú, se enviará en ES:', e);
+    // 🌐 Si el usuario no está en español, traducimos TODO el menú
+    if (idiomaDestino !== 'es') {
+      try {
+        menu = await traducirMensaje(menu, idiomaDestino);
+      } catch (e) {
+        console.warn('No se pudo traducir el menú, se enviará en ES:', e);
+      }
+    }
+
+    await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
+    console.log("📬 Menú personalizado enviado desde Flujos Guiados Interactivos.");
+    return;
     }
   }
 
-  await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
-  console.log("📬 Menú personalizado enviado desde Flujos Guiados Interactivos.");
-  return;
-  }
-}
+  // ✅ Selección numérica robusta (1,2,3...) desde el Body crudo
+  const rawBody = (body.Body ?? '').toString();
+  const digitOnly = rawBody.replace(/[^\p{N}]/gu, '').trim(); // deja solo dígitos (Unicode-safe)
 
-// ✅ Selección numérica robusta (1,2,3...) desde el Body crudo
-const rawBody = (body.Body ?? '').toString();
-const digitOnly = rawBody.replace(/[^\p{N}]/gu, '').trim(); // deja solo dígitos (Unicode-safe)
+  console.log('🔢 Selección recibida:',
+    { rawBody, digitOnly, len: digitOnly.length, charCodes: [...rawBody].map(c => c.charCodeAt(0)) }
+  );
 
-console.log('🔢 Selección recibida:',
-  { rawBody, digitOnly, len: digitOnly.length, charCodes: [...rawBody].map(c => c.charCodeAt(0)) }
-);
+  if (
+    digitOnly.length === 1 &&
+    Array.isArray(flows[0]?.opciones) &&
+    flows[0].opciones.length
+  ) {
+    const n = Number(digitOnly);
+    const opcionesNivel1 = flows[0].opciones;
 
-if (
-  digitOnly.length === 1 &&
-  Array.isArray(flows[0]?.opciones) &&
-  flows[0].opciones.length
-) {
-  const n = Number(digitOnly);
-  const opcionesNivel1 = flows[0].opciones;
-
-  if (Number.isInteger(n) && n >= 1 && n <= opcionesNivel1.length) {
-    const opcionSeleccionada = opcionesNivel1[n - 1];
+    if (Number.isInteger(n) && n >= 1 && n <= opcionesNivel1.length) {
+      const opcionSeleccionada = opcionesNivel1[n - 1];
 
     // 1) Respuesta directa
     if (opcionSeleccionada?.respuesta) {
@@ -296,30 +295,30 @@ if (
         }
         return; // 👈 evita caer a FAQs/IA
     
-  } else {
-    console.log("⚠️ Selección no válida o no hay opciones cargadas.");
-    // Reenviar el menú y salir
-    if (flows[0]?.opciones?.length) {
-      const pregunta = flows[0].pregunta || flows[0].mensaje || '¿Cómo puedo ayudarte?';
-      const opciones = flows[0].opciones
-        .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
-        .join('\n');
-  
-      let menu = `⚠️ Opción no válida. Intenta de nuevo.\n\n💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
-  
-      try {
-        // usa el idioma detectado previamente
-        if (idiomaDestino !== 'es') {
-          menu = await traducirMensaje(menu, idiomaDestino);
+      } else {
+        console.log("⚠️ Selección no válida o no hay opciones cargadas.");
+      
+        if (flows[0]?.opciones?.length) {
+          const pregunta = flows[0].pregunta || flows[0].mensaje || '¿Cómo puedo ayudarte?';
+          const opciones = flows[0].opciones
+            .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
+            .join('\n');
+      
+          let menu = `⚠️ Opción no válida. Inténtalo de nuevo.\n\n💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+      
+          try {
+            if (idiomaDestino !== 'es') {
+              menu = await traducirMensaje(menu, idiomaDestino);
+            }
+          } catch (e) {
+            console.warn('No se pudo traducir el menú (opción inválida). Se envía en ES:', e);
+          }
+      
+          console.log('📤 Reenviando menú (idiomaDestino):', idiomaDestino);
+          await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
         }
-      } catch (e) {
-        console.warn('No se pudo traducir el menú (opción inválida), se enviará en ES:', e);
-      }
-  
-      await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
-    }
-    return; // 👉 evita caer a FAQs/IA y mandar respuesta genérica
-  }  
+        return; // evita caer a FAQs/IA
+      }      
 }
 
   // Paso 2: Buscar primero una FAQ oficial por intención exacta y canal
