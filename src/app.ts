@@ -70,9 +70,9 @@ import eliminarFaqRoute from './routes/faqs/eliminar';
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
 }
-console.log("🔐 DATABASE_URL en arranque:", process.env.DATABASE_URL);
+console.log("🔐 DATABASE_URL en arranque: cargada correctamente");
 
-console.log('🔐 STRIPE KEY desde ENV:', process.env.STRIPE_SECRET_KEY);
+console.log("🔐 STRIPE KEY desde ENV: cargada correctamente");
 
 console.log("🔁 Versión redeployada manualmente");
 
