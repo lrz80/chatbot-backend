@@ -88,19 +88,38 @@ async function procesarMensajeWhatsApp(body: any) {
 
   const mensajeUsuario = normalizarTexto(userInput);
 
-  // ¿mandó solo un número? entonces no intentamos detectar idioma
+  // ¿mandó solo un número?
   const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
 
-  // Detectar idioma del cliente
-  let idiomaCliente: string | null = null;
+  // 1) Recupera el último mensaje de usuario para este número (por si ahora solo mandó un dígito)
+  let ultimoTextoUsuario: string | null = null;
   try {
-    idiomaCliente = isNumericOnly ? null : await detectarIdioma(userInput);
-  } catch {}
+    const { rows } = await pool.query(
+      `SELECT content
+        FROM messages
+        WHERE tenant_id = $1
+          AND canal = $2
+          AND role = 'user'
+          AND from_number = $3
+        ORDER BY timestamp DESC
+        LIMIT 1`,
+      [tenant.id, canal, fromNumber]
+    );
+    ultimoTextoUsuario = rows[0]?.content || null;
+  } catch { /* noop */ }
 
+  // 2) Detecta idioma base:
+  //    - si el mensaje actual es numérico → detecta desde el último texto del usuario
+  //    - si NO es numérico → detecta desde este userInput
+  let idiomaBase: string | null = null;
+  try {
+    const fuente = isNumericOnly ? (ultimoTextoUsuario || '') : userInput;
+    idiomaBase = fuente ? await detectarIdioma(fuente) : null;
+  } catch { /* noop */ }
+
+  // 3) Fija el idioma de salida (destino)
   const idiomaDestino: string =
-  idiomaCliente && idiomaCliente !== 'zxx'
-    ? idiomaCliente
-    : (tenant?.idioma || 'es');
+    (idiomaBase && idiomaBase !== 'zxx') ? idiomaBase : (tenant?.idioma || 'es');
 
   let respuestaDesdeFaq: string | null = null;
   if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
