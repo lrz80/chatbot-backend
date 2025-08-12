@@ -26,9 +26,13 @@ const enviarWhatsAppSeguro = async (to: string, text: string, tenantId: string) 
   }
 };
 
-const normLang = (l?: string | null) => {
-  if (!l || l === 'zxx') return null;
-  return l.split?.('-')[0] || null; // "es-ES" -> "es"
+const normLang = (code?: string | null) => {
+  if (!code) return null;
+  // normaliza a 'es', 'en', etc. si te llega 'es-ES'
+  const base = code.toString().split(/[-_]/)[0].toLowerCase();
+  // si OpenAI/tu detector devuelve 'zxx' o algo raro, lo tratamos como null
+  if (base === 'zxx') return null;
+  return base;
 };
 
 router.post('/', async (req: Request, res: Response) => {
