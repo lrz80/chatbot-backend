@@ -415,6 +415,13 @@ if (respuestaDesdeFaq) {
   return;
 }
 
+// ⛔ No generes sugeridas si el mensaje NO tiene letras (p.ej. "8") o es muy corto
+const hasLetters = /\p{L}/u.test(userInput);
+if (!hasLetters || normalizarTexto(userInput).length < 4) {
+  console.log('🧯 No se genera sugerida (sin letras o texto muy corto).');
+  return;
+}
+
 // 🧠 Si no hay respuesta aún, generar con OpenAI y registrar como FAQ sugerida
 if (!respuestaDesdeFaq && !respuesta) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
