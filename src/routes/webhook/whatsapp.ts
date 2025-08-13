@@ -283,6 +283,27 @@ async function procesarMensajeWhatsApp(body: any) {
       return;
     }
 
+    // 1.5) Submenú "terminal": solo mensaje sin opciones
+    if (opcionSeleccionada?.submenu && !opcionSeleccionada?.submenu?.opciones?.length) {
+      let out = opcionSeleccionada.submenu.mensaje || '';
+      if (out) {
+        try {
+          const langOut = await detectarIdioma(out);
+          if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+            out = await traducirMensaje(out, idiomaDestino);
+          }
+        } catch {}
+        await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
+        await pool.query(
+          `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
+          VALUES ($1, 'assistant', $2, NOW(), $3)`,
+          [tenant.id, out, canal]
+        );
+        console.log("📬 Mensaje enviado desde submenú terminal.");
+        return;
+      }
+    }
+
     // 2) Submenú
     if (opcionSeleccionada?.submenu?.opciones?.length) {
       const titulo = opcionSeleccionada.submenu.mensaje || 'Elige una opción:';
