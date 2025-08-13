@@ -171,6 +171,8 @@ async function procesarMensajeWhatsApp(body: any) {
               out = await traducirMensaje(out, idiomaDestino);
             }
           } catch {}
+          // 📌 Agregar recordatorio al final
+          out += "\n\n💡 ¿Quieres ver otra opción del menú? Responde con el número correspondiente.";
           await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
           await pool.query(
             `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
@@ -377,6 +379,8 @@ async function procesarMensajeWhatsApp(body: any) {
           out = await traducirMensaje(out, idiomaDestino);
         }
       } catch (e) {
+        // 📌 Agregar recordatorio al final
+        out += "\n\n💡 ¿Quieres ver otra opción del menú? Responde con el número correspondiente.";
         console.warn('No se pudo traducir la respuesta de la opción:', e);
       }
 
