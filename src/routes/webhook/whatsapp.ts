@@ -152,7 +152,94 @@ async function procesarMensajeWhatsApp(body: any) {
   if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
     respuesta = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino); // antes: idioma
   }else {
-  // Paso 1: Detectar idioma y traducir para evaluar intención
+    // 🛑 Atajo: si el usuario mandó SOLO un número, resolver flujos YA y salir
+    if (isNumericOnly && Array.isArray(flows[0]?.opciones) && flows[0].opciones.length) {
+      const rawBodyNum = (body.Body ?? '').toString();
+      const digitOnlyNum = rawBodyNum.replace(/[^\p{N}]/gu, '').trim();
+      const n = Number(digitOnlyNum);
+      const opcionesNivel1 = flows[0].opciones;
+  
+      if (Number.isInteger(n) && n >= 1 && n <= opcionesNivel1.length) {
+        const opcionSeleccionada = opcionesNivel1[n - 1];
+  
+        // 1) Respuesta directa
+        if (opcionSeleccionada?.respuesta) {
+          let out = opcionSeleccionada.respuesta;
+          try {
+            const idiomaOut = await detectarIdioma(out);
+            if (idiomaOut && idiomaOut !== 'zxx' && idiomaOut !== idiomaDestino) {
+              out = await traducirMensaje(out, idiomaDestino);
+            }
+          } catch {}
+          await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
+          await pool.query(
+            `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
+             VALUES ($1, 'assistant', $2, NOW(), $3)`,
+            [tenant.id, out, canal]
+          );
+          console.log("📬 Respuesta enviada desde opción seleccionada del menú (atajo numérico)");
+          return;
+        }
+  
+        // 1.5) Submenú terminal (solo mensaje)
+        if (opcionSeleccionada?.submenu && !opcionSeleccionada?.submenu?.opciones?.length) {
+          let out = opcionSeleccionada.submenu.mensaje || '';
+          if (out) {
+            try {
+              const langOut = await detectarIdioma(out);
+              if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+                out = await traducirMensaje(out, idiomaDestino);
+              }
+            } catch {}
+            await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
+               VALUES ($1, 'assistant', $2, NOW(), $3)`,
+              [tenant.id, out, canal]
+            );
+            console.log("📬 Mensaje enviado desde submenú terminal (atajo numérico).");
+            return;
+          }
+        }
+  
+        // 2) Submenú con opciones
+        if (opcionSeleccionada?.submenu?.opciones?.length) {
+          const titulo = opcionSeleccionada.submenu.mensaje || 'Elige una opción:';
+          const opcionesSm = opcionSeleccionada.submenu.opciones
+            .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
+            .join('\n');
+  
+          let menuSm = `💡 ${titulo}\n${opcionesSm}\n\nResponde con el número de la opción que deseas.`;
+          try {
+            const idMenu = await detectarIdioma(menuSm);
+            if (idMenu && idMenu !== 'zxx' && idMenu !== idiomaDestino) {
+              menuSm = await traducirMensaje(menuSm, idiomaDestino);
+            }
+          } catch {}
+          await enviarWhatsAppSeguro(fromNumber, menuSm, tenant.id);
+          console.log("📬 Submenú enviado (atajo numérico).");
+          return;
+        }
+  
+        // Opción válida pero sin contenido → reenvía menú
+        const pregunta = flows[0].pregunta || flows[0].mensaje || '¿Cómo puedo ayudarte?';
+        const opciones = flows[0].opciones.map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
+        let menu = `⚠️ Esa opción aún no tiene contenido. Elige otra.\n\n💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+        try { if (idiomaDestino !== 'es') menu = await traducirMensaje(menu, idiomaDestino); } catch {}
+        await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
+        return;
+      } else {
+        // Número fuera de rango → menú
+        const pregunta = flows[0].pregunta || flows[0].mensaje || '¿Cómo puedo ayudarte?';
+        const opciones = flows[0].opciones.map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
+        let menu = `⚠️ Opción no válida. Intenta de nuevo.\n\n💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+        try { if (idiomaDestino !== 'es') menu = await traducirMensaje(menu, idiomaDestino); } catch {}
+        await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
+        return;
+      }
+    }
+  
+    // Paso 1: Detectar idioma y traducir para evaluar intención
   const textoTraducido = idiomaDestino !== 'es'
     ? await traducirMensaje(userInput, 'es')
     : userInput;
@@ -161,7 +248,7 @@ async function procesarMensajeWhatsApp(body: any) {
   const intencion = intencionDetectada.trim().toLowerCase();
   console.log(`🧠 Intención detectada (procesada): "${intencion}"`);
 
-  if (intencion === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
+  if (!isNumericOnly && intencion === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
     const pregunta = flows[0]?.pregunta || flows[0]?.mensaje || '¿Cómo puedo ayudarte?';
     const opciones = flows[0].opciones.map((op: any, i: number) =>
       `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
@@ -219,28 +306,48 @@ async function procesarMensajeWhatsApp(body: any) {
 
   if (esPedirInfo || keywordsInfo.some(k => nUser.includes(nrm(k)))) {
     const flow = flows[0];
-  if (flow?.opciones?.length > 0) {
-    const pregunta = flow.pregunta || flow.mensaje || '¿Cómo puedo ayudarte?';
-    const opciones = flow.opciones
-      .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
-      .join('\n');
-
-    let menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
-
-    // 🌐 Si el usuario no está en español, traducimos TODO el menú
-    if (idiomaDestino !== 'es') {
-      try {
-        menu = await traducirMensaje(menu, idiomaDestino);
-      } catch (e) {
-        console.warn('No se pudo traducir el menú, se enviará en ES:', e);
+    if (flow?.opciones?.length > 0) {
+  
+      // 🛑 Verificar estado antes de enviar menú
+      const { rows: estadoRows } = await pool.query(
+        `SELECT estado FROM clientes WHERE tenant_id = $1 AND contacto = $2 LIMIT 1`,
+        [tenant.id, fromNumber]
+      );
+      const estadoActual = estadoRows[0]?.estado || null;
+  
+      if (estadoActual === 'menu_enviado') {
+        console.log("⚠️ Menú ya enviado, no se reenviará.");
+        return;
       }
+  
+      const pregunta = flow.pregunta || flow.mensaje || '¿Cómo puedo ayudarte?';
+      const opciones = flow.opciones
+        .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
+        .join('\n');
+  
+      let menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
+  
+      if (idiomaDestino !== 'es') {
+        try {
+          menu = await traducirMensaje(menu, idiomaDestino);
+        } catch (e) {
+          console.warn('No se pudo traducir el menú, se enviará en ES:', e);
+        }
+      }
+  
+      await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
+  
+      // 🔹 Guardar estado para no reenviar hasta que responda
+      await pool.query(
+        `UPDATE clientes SET estado = 'menu_enviado'
+         WHERE tenant_id = $1 AND contacto = $2`,
+        [tenant.id, fromNumber]
+      );
+  
+      console.log("📬 Menú personalizado enviado desde Flujos Guiados Interactivos.");
+      return;
     }
-
-    await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
-    console.log("📬 Menú personalizado enviado desde Flujos Guiados Interactivos.");
-    return;
-    }
-  }
+  }  
 
   // ✅ Selección numérica robusta (1,2,3...) desde el Body crudo
   const rawBody = (body.Body ?? '').toString();
@@ -280,6 +387,15 @@ async function procesarMensajeWhatsApp(body: any) {
         [tenant.id, out, canal]
       );
       console.log("📬 Respuesta enviada desde opción seleccionada del menú");
+
+      // 🔹 Resetear estado para permitir mostrar menú en el futuro
+      await pool.query(
+        `UPDATE clientes SET estado = 'fuera_menu'
+         WHERE tenant_id = $1 AND contacto = $2`,
+        [tenant.id, fromNumber]
+      );
+
+      console.log("🔄 Estado de conversación reseteado a 'fuera_menu'");
       return;
     }
 
