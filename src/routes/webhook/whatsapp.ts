@@ -556,6 +556,13 @@ if (respuestaDesdeFaq) {
   return;
 }
 
+// ⛔ Ignorar saludos y frases cortas de cortesía
+const ignorarFAQ = ["hola", "buenas", "hello", "hi", "hey", "gracias", "thanks", "thank you","buenos", "perfecto", "listo", "ok", "vale", "listo"];
+if (ignorarFAQ.includes(normalizarTexto(userInput))) {
+  console.log("⚠️ Mensaje ignorado para FAQ sugerida por ser saludo/cortesía.");
+  return;
+}
+
 // ⛔ No generes sugeridas si el mensaje NO tiene letras (p.ej. "8") o es muy corto
 const hasLetters = /\p{L}/u.test(userInput);
 if (!hasLetters || normalizarTexto(userInput).length < 4) {
