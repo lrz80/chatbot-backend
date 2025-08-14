@@ -25,7 +25,7 @@ async function generarFaqsSugeridas() {
     const canal = normalizarCanal(p.canal || 'meta');
 
     // Detectar intención (si tu función devuelve objeto, ajusta esta línea)
-    const det = await detectarIntencion(p.pregunta);
+    const det = await detectarIntencion(p.pregunta, tenantId);
     const intencion = typeof det === 'string' ? det : det?.intencion || null;
 
     if (intencion) {

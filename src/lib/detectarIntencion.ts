@@ -21,7 +21,7 @@ function hasWord(text: string, word: string) {
   return new RegExp(`\\b${w}\\b`, 'i').test(text);
 }
 
-export async function detectarIntencion(mensaje: string): Promise<Intento> {
+export async function detectarIntencion(mensaje: string, tenantId: string): Promise<Intento> {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
   // Normalización

@@ -122,31 +122,40 @@ async function procesarMensajeWhatsApp(body: any) {
 
   const mensajeUsuario = normalizarTexto(userInput);
 
-  // ¿solo número?
+  // 1️⃣ Detectar si es solo número
   const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
 
-  // idioma base del tenant → fallback
+  // 2️⃣ Calcular idiomaDestino
   const tenantBase: 'es'|'en' = normalizeLang(tenant?.idioma || 'es');
-
   let idiomaDestino: 'es'|'en';
 
   if (isNumericOnly) {
-    // Si solo envió un número, usamos lo último guardado en DB (o tenantBase)
     idiomaDestino = await getIdiomaClienteDB(tenant.id, fromNumber, tenantBase);
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (solo número)`);
   } else {
-    // Detectamos por el texto y persistimos en DB
     let detectado: string | null = null;
     try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
     const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
-
-    // Guarda/actualiza en DB para siguientes mensajes numéricos
     await upsertIdiomaClienteDB(tenant.id, fromNumber, normalizado);
-
     idiomaDestino = normalizado;
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
+  // 3️⃣ Detectar intención
+  const { intencion: intencionDetectada } = await detectarIntencion(mensajeUsuario, tenant.id);
+  const intencionLower = intencionDetectada?.trim().toLowerCase() || "";
+  console.log(`🧠 Intención detectada al inicio para tenant ${tenant.id}: "${intencionLower}"`);
+
+  // 4️⃣ Si es saludo o agradecimiento → responder y salir
+  if (["saludo", "agradecimiento"].includes(intencionLower)) {
+    const respuestaRapida =
+      intencionLower === "agradecimiento"
+        ? "¡De nada! 💬 ¿Quieres ver otra opción del menú?"
+        : await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+
+    await enviarWhatsAppSeguro(fromNumber, respuestaRapida, tenant.id);
+    return;
+  }
 
   let respuestaDesdeFaq: string | null = null;
   if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
@@ -246,7 +255,7 @@ async function procesarMensajeWhatsApp(body: any) {
     ? await traducirMensaje(userInput, 'es')
     : userInput;
 
-  const { intencion: intencionDetectada } = await detectarIntencion(textoTraducido);
+  const { intencion: intencionDetectada } = await detectarIntencion(textoTraducido, tenant.id);
   const intencion = intencionDetectada.trim().toLowerCase();
   console.log(`🧠 Intención detectada (procesada): "${intencion}"`);
 
@@ -556,13 +565,6 @@ if (respuestaDesdeFaq) {
   return;
 }
 
-// ⛔ Ignorar saludos y frases cortas de cortesía
-const ignorarFAQ = ["hola", "buenas", "hello", "hi", "hey", "gracias", "thanks", "thank you","buenos", "perfecto", "listo", "ok", "vale", "listo"];
-if (ignorarFAQ.includes(normalizarTexto(userInput))) {
-  console.log("⚠️ Mensaje ignorado para FAQ sugerida por ser saludo/cortesía.");
-  return;
-}
-
 // ⛔ No generes sugeridas si el mensaje NO tiene letras (p.ej. "8") o es muy corto
 const hasLetters = /\p{L}/u.test(userInput);
 if (!hasLetters || normalizarTexto(userInput).length < 4) {
@@ -646,7 +648,7 @@ if (!respuestaDesdeFaq && !respuesta) {
     ? await traducirMensaje(userInput, 'es')
     : userInput;
 
-    const { intencion: intencionDetectadaParaGuardar } = await detectarIntencion(textoTraducidoParaGuardar);
+    const { intencion: intencionDetectadaParaGuardar } = await detectarIntencion(textoTraducidoParaGuardar, tenant.id);
     const intencionFinal = intencionDetectadaParaGuardar.trim().toLowerCase();
 
     const { rows: sugeridasConIntencion } = await pool.query(
@@ -765,7 +767,7 @@ if (!respuestaDesdeFaq && !respuesta) {
   );  
 
   try {
-    const { intencion, nivel_interes } = await detectarIntencion(userInput);
+    const { intencion, nivel_interes } = await detectarIntencion(userInput, tenant.id);
     const intencionLower = intencion.toLowerCase();
     const textoNormalizado = userInput.trim().toLowerCase();
   
