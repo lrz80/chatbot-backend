@@ -272,7 +272,7 @@ async function procesarMensajeWhatsApp(body: any) {
   const { intencion: intencionProcesada } = await detectarIntencion(textoTraducido, tenant.id, 'whatsapp');
   const intencion = intencionProcesada.trim().toLowerCase();
   console.log(`🧠 Intención detectada (procesada): "${intencionProc}"`);
-  
+
   if (!isNumericOnly && intencionProc === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
     const pregunta = flows[0]?.pregunta || flows[0]?.mensaje || '¿Cómo puedo ayudarte?';
     const opciones = flows[0].opciones.map((op: any, i: number) =>
@@ -559,7 +559,108 @@ async function procesarMensajeWhatsApp(body: any) {
       [tenant.id, canal, messageId]
     );
   
-    return; // 🛑 Detiene ejecución: ya respondió con la FAQ oficial
+    // 📌 Registrar inteligencia y programar follow-ups ANTES de salir
+  try {
+    // 1) Recalcular intención con nivel_interes
+    const { intencion: intenFaq, nivel_interes: nivelFaq } =
+      await detectarIntencion(userInput, tenant.id, 'whatsapp');
+    const intenFaqLower = (intenFaq || '').trim().toLowerCase();
+
+    // 2) Actualizar segmento / última interacción
+    const intencionesCliente = [
+      "comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"
+    ];
+    if (intencionesCliente.some(p => intenFaqLower.includes(p))) {
+      await pool.query(
+        `UPDATE clientes
+            SET segmento = 'cliente',
+                ultima_interaccion = NOW()
+          WHERE tenant_id = $1
+            AND contacto = $2
+            AND (segmento = 'lead' OR segmento IS NULL)`,
+        [tenant.id, fromNumber]
+      );
+    } else {
+      await pool.query(
+        `UPDATE clientes
+            SET ultima_interaccion = NOW()
+          WHERE tenant_id = $1
+            AND contacto = $2`,
+        [tenant.id, fromNumber]
+      );
+    }
+
+    // 3) Registrar evento en sales_intelligence (evita duplicado por message_id)
+    await pool.query(
+      `INSERT INTO sales_intelligence
+         (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+       ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
+      [tenant.id, fromNumber, canal, userInput, intenFaqLower, nivelFaq, messageId]
+    );
+
+    // 4) Programar follow-ups si interés alto o intención caliente
+    const intencionesFollowUp = ["interes_clases","reservar","precio","comprar"];
+    if (nivelFaq >= 3 || intencionesFollowUp.includes(intenFaqLower)) {
+      const configRes = await pool.query(
+        `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
+        [tenant.id]
+      );
+      const config = configRes.rows[0];
+      if (config) {
+        const msg15 = config?.mensaje_general
+          ?? (idiomaDestino === 'en'
+                ? "Do you want help choosing a time for your free class?"
+                : "¿Te ayudo a elegir un horario para tu clase gratis?");
+
+        const msg24 = (
+          (intenFaqLower.includes('reservar') && config?.mensaje_agendar) ? config.mensaje_agendar :
+          (intenFaqLower.includes('precio')   && config?.mensaje_precio)  ? config.mensaje_precio  :
+          (intenFaqLower.includes('ubicacion')|| intenFaqLower.includes('location')) && config?.mensaje_ubicacion ? config.mensaje_ubicacion :
+          (config?.mensaje_general ?? (idiomaDestino === 'en'
+            ? "Spots are still available for your trial class this week. Shall I reserve one for you?"
+            : "Aún quedan cupos para tu clase de prueba esta semana. ¿Te reservo uno?"))
+        );
+
+        const traducirSiHaceFalta = async (texto: string) => {
+          try {
+            const idMsg = await detectarIdioma(texto);
+            if (idMsg && idMsg !== 'zxx' && idMsg !== idiomaDestino) {
+              return await traducirMensaje(texto, idiomaDestino);
+            }
+          } catch {}
+          return texto;
+        };
+
+        const contenido15 = await traducirSiHaceFalta(msg15);
+        const contenido24 = await traducirSiHaceFalta(msg24);
+
+        // ⏱️ 15 minutos y 24 horas (1440 min)
+        const fecha15 = new Date();
+        fecha15.setMinutes(fecha15.getMinutes() + (config?.minutos_espera ?? 15));
+        await pool.query(
+          `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
+           VALUES ($1, $2, $3, $4, $5, false)`,
+          [tenant.id, canal, fromNumber, contenido15, fecha15]
+        );
+
+        const fecha24 = new Date();
+        fecha24.setMinutes(fecha24.getMinutes() + 1440);
+        await pool.query(
+          `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
+           VALUES ($1, $2, $3, $4, $5, false)`,
+          [tenant.id, canal, fromNumber, contenido24, fecha24]
+        );
+
+        console.log(`📅 Follow-ups programados (15m y 24h) para ${fromNumber} (${idiomaDestino})`);
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ No se pudo registrar/schedule tras FAQ oficial:', e);
+  }
+
+  return; // 🛑 Salimos ya con seguimiento programado
+
   }else {
     // Paso 3: Buscar por similitud en FAQs sin intención definida
     const mensajeTraducido = idiomaDestino !== 'es'
