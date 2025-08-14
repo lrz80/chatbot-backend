@@ -20,7 +20,7 @@ router.post('/', authenticateUser, async (req, res) => {
     const faq = rows[0];
     if (!faq) return res.status(404).json({ error: 'FAQ no encontrada' });
 
-    const { intencion } = await detectarIntencion(faq.pregunta);
+    const { intencion } = await detectarIntencion(faq.pregunta, faq.tenant_id);
     const intencionFinal = intencion.trim().toLowerCase();
     const respuestaFinal = respuesta_editada || faq.respuesta_sugerida;
 
