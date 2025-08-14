@@ -84,14 +84,21 @@ async function procesarMensajeWhatsApp(body: any) {
   const numero = to.replace('whatsapp:', '').replace('tel:', '');
   const fromNumber = from.replace('whatsapp:', '').replace('tel:', '');
   const userInput = body.Body || '';
+  const messageId = body.MessageSid || body.SmsMessageSid || null;
 
   const tenantRes = await pool.query('SELECT * FROM tenants WHERE twilio_number = $1 LIMIT 1', [numero]);
   const tenant = tenantRes.rows[0];
   if (!tenant) return;
 
+  await pool.query(
+    `DELETE FROM mensajes_programados
+     WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+    [tenant.id, 'whatsapp', fromNumber]
+  );  
+
   // 🚫 No responder si la membresía está inactiva
   if (!tenant.membresia_activa) {
-    console.log(`⛔ Membresía inactiva para tenant ${tenant.nombre || tenant.id}. No se responderá.`);
+    console.log(`⛔ Membresía inactiva para tenant ${tenant.name || tenant.id}. No se responderá.`);
     return;
   }
 
@@ -184,9 +191,9 @@ async function procesarMensajeWhatsApp(body: any) {
           out += "\n\n💡 ¿Quieres ver otra opción del menú? Responde con el número correspondiente.";
           await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
           await pool.query(
-            `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
-             VALUES ($1, 'assistant', $2, NOW(), $3)`,
-            [tenant.id, out, canal]
+            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+            VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
+            [tenant.id, out, canal, fromNumber || 'anónimo']
           );
           console.log("📬 Respuesta enviada desde opción seleccionada del menú (atajo numérico)");
           return;
@@ -204,9 +211,9 @@ async function procesarMensajeWhatsApp(body: any) {
             } catch {}
             await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
             await pool.query(
-              `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
-               VALUES ($1, 'assistant', $2, NOW(), $3)`,
-              [tenant.id, out, canal]
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+               VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
+               [tenant.id, out, canal, fromNumber || 'anónimo']
             );
             console.log("📬 Mensaje enviado desde submenú terminal (atajo numérico).");
             return;
@@ -523,8 +530,6 @@ async function procesarMensajeWhatsApp(body: any) {
       console.log(`✅ No se traduce. Respuesta ya en idioma ${idiomaDestino}`);
     }
   
-    const messageId = body.MessageSid || body.SmsMessageSid || null;
-  
     await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
        VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
@@ -532,10 +537,10 @@ async function procesarMensajeWhatsApp(body: any) {
     );
   
     await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
-       VALUES ($1, 'assistant', $2, NOW(), $3)`,
-      [tenant.id, respuesta, canal]
-    );  
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+       VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
+       [tenant.id, respuesta, canal, fromNumber || 'anónimo']
+    );
   
     await enviarWhatsAppSeguro(fromNumber, respuesta, tenant.id);
     console.log("📬 Respuesta enviada vía Twilio (desde FAQ oficial):", respuesta);
@@ -701,8 +706,6 @@ if (!respuestaDesdeFaq && !respuesta) {
     }
   }  
 
-  const messageId = body.MessageSid || body.SmsMessageSid || null;
-
   await pool.query(
     `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
     VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
@@ -751,9 +754,9 @@ if (!respuestaDesdeFaq && !respuesta) {
 
   // Insertar mensaje bot (esto no suma a uso)
   await pool.query(
-    `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
-     VALUES ($1, 'assistant', $2, NOW(), $3)`,
-    [tenant.id, respuesta, canal]
+    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+    VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
+    [tenant.id, respuesta, canal, fromNumber || 'anónimo']
   );  
 
   await enviarWhatsAppSeguro(fromNumber, respuesta, tenant.id);
@@ -780,23 +783,44 @@ if (!respuestaDesdeFaq && !respuesta) {
       return; // Sale del bloque sin guardar nada
     }
   
-    // 🔥 Actualiza el segmento a cliente si aplica
-    if (["comprar", "compra", "pagar", "agendar", "reservar", "confirmar"].some(p => intencionLower.includes(p))) {
+    // 🔥 Actualiza el segmento y fecha de último contacto si es intención de alto valor
+    const intencionesCliente = [
+      "comprar", "compra", "pagar", "agendar", "reservar", "confirmar",
+      "interes_clases", "precio"
+    ];
+    if (intencionesCliente.some(p => intencionLower.includes(p))) {
       await pool.query(
-        `UPDATE clientes SET segmento = 'cliente' WHERE tenant_id = $1 AND contacto = $2 AND segmento = 'lead'`,
+        `UPDATE clientes
+            SET segmento = 'cliente',
+                ultima_interaccion = NOW()
+          WHERE tenant_id = $1
+            AND contacto = $2
+            AND (segmento = 'lead' OR segmento IS NULL)`,
+        [tenant.id, fromNumber]
+      );
+    } else {
+      // Aunque no sea intención caliente, actualizamos fecha de último contacto
+      await pool.query(
+        `UPDATE clientes
+            SET ultima_interaccion = NOW()
+          WHERE tenant_id = $1
+            AND contacto = $2`,
         [tenant.id, fromNumber]
       );
     }
-  
-    // 🔥 Registra en sales_intelligence
+
+    // 🔥 Registrar en sales_intelligence evitando duplicados
     await pool.query(
-      `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      `INSERT INTO sales_intelligence
+        (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+      ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
       [tenant.id, fromNumber, canal, userInput, intencion, nivel_interes, messageId]
-    );    
-  
-    // 🚀 Si nivel_interes >= 4, programa seguimiento
-    if (nivel_interes >= 4) {
+    );
+
+    // 🚀 Si interés alto o intención caliente, programa seguimiento
+    const intencionesFollowUp = ["interes_clases", "reservar", "precio", "comprar"];
+    if (nivel_interes >= 3 || intencionesFollowUp.includes(intencionLower)) {
       const configRes = await pool.query(
         `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
         [tenant.id]
@@ -817,32 +841,69 @@ if (!respuestaDesdeFaq && !respuesta) {
   
         try {
           const idiomaMensaje = await detectarIdioma(mensajeSeguimiento);
-          if (idiomaMensaje !== idioma) {
+          if (idiomaMensaje && idiomaMensaje !== 'zxx' && idiomaMensaje !== idiomaDestino) {
             mensajeSeguimiento = await traducirMensaje(mensajeSeguimiento, idiomaDestino);
           }
         } catch {}
-
-        const fechaEnvio = new Date();
-        fechaEnvio.setMinutes(fechaEnvio.getMinutes() + (config.minutos_espera || 5));
   
-        // Elimina duplicados
+        // Elimina duplicados pendientes para este contacto/canal
         await pool.query(
           `DELETE FROM mensajes_programados
-           WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
           [tenant.id, canal, fromNumber]
         );
-  
-        // Inserta nuevo mensaje programado
-        await pool.query(
-          `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-           VALUES ($1, $2, $3, $4, $5, false)`,
-          [tenant.id, canal, fromNumber, mensajeSeguimiento, fechaEnvio]
+
+        // Define mensajes (usa config si existe; si no, defaults bilingües)
+        const mensajes: Array<{ contenido: string; minutos: number }> = [];
+
+        const msg15 = config?.mensaje_general
+          ?? (idiomaDestino === 'en'
+              ? "Do you want help choosing a time for your free class?"
+              : "¿Te ayudo a elegir un horario para tu clase gratis?");
+
+        const msg24 = (
+          (intencionLower.includes('reservar') && config?.mensaje_agendar) ? config.mensaje_agendar :
+          (intencionLower.includes('precio')   && config?.mensaje_precio)  ? config.mensaje_precio  :
+          (intencionLower.includes('ubicacion')&& config?.mensaje_ubicacion)? config.mensaje_ubicacion :
+          (config?.mensaje_general ?? (idiomaDestino === 'en'
+              ? "Spots are still available for your trial class this week. Shall I reserve one for you?"
+              : "Aún quedan cupos para tu clase de prueba esta semana. ¿Te reservo uno?"))
         );
-  
-        console.log(`✅ Seguimiento programado para ${fromNumber} con: "${mensajeSeguimiento}"`);
-      }
-    }
-  } catch (err) {
-    console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
-  }  
-}  
+
+        async function traducirSiHaceFalta(texto: string) {
+          try {
+            const idMsg = await detectarIdioma(texto);
+            if (idMsg && idMsg !== 'zxx' && idMsg !== idiomaDestino) {
+              return await traducirMensaje(texto, idiomaDestino);
+            }
+          } catch {}
+          return texto;
+        }
+
+        // Normaliza idiomas
+        const contenido15 = await traducirSiHaceFalta(msg15);
+        const contenido24 = await traducirSiHaceFalta(msg24);
+
+        // Ventanas: 15 minutos y 22 horas
+        mensajes.push({ contenido: contenido15, minutos: config?.minutos_espera ?? 15 });
+        mensajes.push({ contenido: contenido24, minutos: 1320 });
+
+        for (const m of mensajes) {
+          const fechaEnvio = new Date();
+          fechaEnvio.setMinutes(fechaEnvio.getMinutes() + m.minutos);
+
+          await pool.query(
+            `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
+            VALUES ($1, $2, $3, $4, $5, false)`,
+            [tenant.id, canal, fromNumber, m.contenido, fechaEnvio]
+          );
+        }
+
+        console.log(`📅 Follow-ups programados (15m y 22h) para ${fromNumber} (${idiomaDestino})`);
+
+              }
+            }
+          } catch (err) {
+            console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
+          }  
+        }  
