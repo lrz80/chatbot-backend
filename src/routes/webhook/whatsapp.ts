@@ -158,6 +158,8 @@ async function procesarMensajeWhatsApp(body: any) {
   const intencionLower = intencionDetectada?.trim().toLowerCase() || "";
   console.log(`🧠 Intención detectada al inicio para tenant ${tenant.id}: "${intencionLower}"`);
 
+  let intencionProc = intencionLower; // se actualizará tras traducir (si aplica)
+
   // 4️⃣ Si es saludo o agradecimiento → responder y salir
   if (["saludo", "agradecimiento"].includes(intencionLower)) {
     const respuestaRapida =
@@ -269,10 +271,8 @@ async function procesarMensajeWhatsApp(body: any) {
 
   const { intencion: intencionProcesada } = await detectarIntencion(textoTraducido, tenant.id, 'whatsapp');
   const intencion = intencionProcesada.trim().toLowerCase();
-  console.log(`🧠 Intención detectada (procesada): "${intencion}"`);
-
-  let intencionProc = intencionLower; // se actualizará tras traducir (si aplica)
-
+  console.log(`🧠 Intención detectada (procesada): "${intencionProc}"`);
+  
   if (!isNumericOnly && intencionProc === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
     const pregunta = flows[0]?.pregunta || flows[0]?.mensaje || '¿Cómo puedo ayudarte?';
     const opciones = flows[0].opciones.map((op: any, i: number) =>
