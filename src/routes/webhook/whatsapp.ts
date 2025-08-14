@@ -90,12 +90,6 @@ async function procesarMensajeWhatsApp(body: any) {
   const tenant = tenantRes.rows[0];
   if (!tenant) return;
 
-  await pool.query(
-    `DELETE FROM mensajes_programados
-     WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
-    [tenant.id, 'whatsapp', fromNumber]
-  );  
-
   // 🚫 No responder si la membresía está inactiva
   if (!tenant.membresia_activa) {
     console.log(`⛔ Membresía inactiva para tenant ${tenant.name || tenant.id}. No se responderá.`);
@@ -273,11 +267,13 @@ async function procesarMensajeWhatsApp(body: any) {
     ? await traducirMensaje(userInput, 'es')
     : userInput;
 
-  const { intencion: intencionDetectada } = await detectarIntencion(textoTraducido, tenant.id, 'whatsapp');
-  const intencion = intencionDetectada.trim().toLowerCase();
+  const { intencion: intencionProcesada } = await detectarIntencion(textoTraducido, tenant.id, 'whatsapp');
+  const intencion = intencionProcesada.trim().toLowerCase();
   console.log(`🧠 Intención detectada (procesada): "${intencion}"`);
 
-  if (!isNumericOnly && intencion === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
+  let intencionProc = intencionLower; // se actualizará tras traducir (si aplica)
+
+  if (!isNumericOnly && intencionProc === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
     const pregunta = flows[0]?.pregunta || flows[0]?.mensaje || '¿Cómo puedo ayudarte?';
     const opciones = flows[0].opciones.map((op: any, i: number) =>
       `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
@@ -601,7 +597,7 @@ if (!respuestaDesdeFaq && !respuesta) {
   });
 
   respuesta = completion.choices[0]?.message?.content?.trim()
-           || getBienvenidaPorCanal('whatsapp', tenant, idioma);
+          || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
 
   // 🌐 Asegurar idioma del cliente
   try {
@@ -615,7 +611,7 @@ if (!respuestaDesdeFaq && !respuesta) {
     console.warn('No se pudo traducir la respuesta de OpenAI:', e);
   }
 
-  respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idioma);
+  respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
   const respuestaGenerada = respuesta;
 
   const respuestaGeneradaLimpia = respuesta;
@@ -857,13 +853,6 @@ if (!respuestaDesdeFaq && !respuesta) {
           }
         } catch {}
   
-        // Elimina duplicados pendientes para este contacto/canal
-        await pool.query(
-          `DELETE FROM mensajes_programados
-          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
-          [tenant.id, canal, fromNumber]
-        );
-
         // Define mensajes (usa config si existe; si no, defaults bilingües)
         const mensajes: Array<{ contenido: string; minutos: number }> = [];
 
