@@ -1,5 +1,6 @@
 // src/lib/detectarIntencion.ts
 import OpenAI from 'openai';
+import pool from './db'; // 👈 Para cargar info del tenant
 
 type Intento = { intencion: string; nivel_interes: number };
 
@@ -24,6 +25,27 @@ function hasWord(text: string, word: string) {
 export async function detectarIntencion(mensaje: string, tenantId: string): Promise<Intento> {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
+  // 📌 Cargar info del tenant para contextualizar
+  let tenantInfo = '';
+  try {
+    const res = await pool.query(
+      `SELECT nombre, categoria, funciones_asistente, info_clave 
+       FROM tenants WHERE id = $1 LIMIT 1`,
+      [tenantId]
+    );
+    if (res.rows.length > 0) {
+      const t = res.rows[0];
+      tenantInfo = `
+Negocio: ${t.nombre || ''}
+Categoría: ${t.categoria || ''}
+Funciones del asistente: ${t.funciones_asistente || ''}
+Información clave: ${t.info_clave || ''}
+      `.trim();
+    }
+  } catch (e) {
+    console.error('❌ Error cargando tenant info en detectarIntencion:', e);
+  }
+
   // Normalización
   const original = (mensaje || '').trim();
   let texto = norm(original);
@@ -32,7 +54,6 @@ export async function detectarIntencion(mensaje: string, tenantId: string): Prom
   const textoCore = norm(stripLeadingGreeting(original)) || texto;
 
   // 2) Reglas rápidas (prioridades)
-  // 2.1 Pedir información (prioritaria)
   const pedirInfoPhrases = [
     'mas informacion', 'más informacion', 'quiero informacion', 'necesito saber mas',
     'quiero saber mas', 'quisiera saber mas', 'puedes decirme mas', 'quiero detalles',
@@ -49,13 +70,10 @@ export async function detectarIntencion(mensaje: string, tenantId: string): Prom
     return { intencion: 'pedir_info', nivel_interes: 2 };
   }
 
-  // 2.2 Interés en clases (tu regla especial)
   const compraKeywords = [
-    // Inglés
     'looking for', 'interested in', 'want to know', 'i want classes',
     'classes for', 'class for my', 'seeking classes', 'i am looking for',
     'i need classes', 'looking to enroll', 'do you offer classes',
-    // Español
     'busco clases', 'estoy buscando clases', 'quiero clases',
     'mi esposa quiere clases', 'mi esposa busca clases',
     'interesado en clases', 'clases disponibles', 'ofrecen clases',
@@ -66,7 +84,6 @@ export async function detectarIntencion(mensaje: string, tenantId: string): Prom
     return { intencion: 'interes_clases', nivel_interes: 3 };
   }
 
-  // 2.3 Otras intenciones con keywords
   const reglas = [
     {
       intencion: 'ubicacion', nivel_interes: 2,
@@ -98,7 +115,6 @@ export async function detectarIntencion(mensaje: string, tenantId: string): Prom
       words: [],
       phrases: ['no me interesa','no quiero','no gracias','ya no','not interested','i dont want','i am not interested']
     },
-    // 👇 Saludo queda al final (menor prioridad)
     {
       intencion: 'saludo', nivel_interes: 1,
       words: ['hola','hello','hi','saludos','hey'],
@@ -112,12 +128,17 @@ export async function detectarIntencion(mensaje: string, tenantId: string): Prom
     if (hitWord || hitPhrase) return { intencion: r.intencion, nivel_interes: r.nivel_interes };
   }
 
-  // 3) Fallback LLM (multilenguaje)
+  // 3) Fallback LLM con contexto multitenant
   const prompt = `
-You classify customer messages into intent and interest.
-Message: "${original}"
+Eres un clasificador de mensajes de clientes para un asistente de IA.  
+Debes clasificar considerando el contexto del negocio.
 
-Intents:
+Contexto del tenant:
+${tenantInfo}
+
+Mensaje del cliente: "${original}"
+
+Posibles intenciones:
 - "comprar"
 - "pagar"
 - "precio"
@@ -130,17 +151,17 @@ Intents:
 - "interes_clases"
 - "pedir_info"
 
-Rules:
-- If greeting + request (e.g., "Hello, I want more information"), DO NOT return "saludo"; prefer "pedir_info".
-- If message shows interest in classes, return "interes_clases" (level 3).
-- If negative expressions like "no quiero" / "not interested", return "no_interesado".
+Reglas:
+- Si hay saludo + petición, no devuelvas "saludo"; prioriza la intención real.
+- Si el mensaje muestra interés en clases, devuelve "interes_clases" (nivel 3).
+- Si hay frases negativas como "no quiero", devuelve "no_interesado".
 
-Interest levels:
-1 = low, 2 = medium, 3 = high.
+Nivel de interés:
+1 = bajo, 2 = medio, 3 = alto.
 
-Return ONLY JSON:
+Devuelve SOLO JSON:
 {"intencion":"...","nivel_interes":1|2|3}
-`.trim();
+  `.trim();
 
   try {
     const completion = await openai.chat.completions.create({
@@ -155,7 +176,6 @@ Return ONLY JSON:
 
     const parsed = JSON.parse(content) as Intento;
     if (parsed?.intencion) {
-      // post-corrección: si el modelo devolviera "saludo" pero el texto pide info, corrige.
       if (parsed.intencion === 'saludo' && pedirInfo) {
         return { intencion: 'pedir_info', nivel_interes: Math.max(2, parsed.nivel_interes || 2) };
       }
