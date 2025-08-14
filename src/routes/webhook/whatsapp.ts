@@ -584,11 +584,11 @@ async function procesarMensajeWhatsApp(body: any) {
     // 3) Registrar evento en sales_intelligence (evita duplicado por message_id)
     await pool.query(
       `INSERT INTO sales_intelligence
-         (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+         (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
       [tenant.id, fromNumber, canal, userInput, intenFaqLower, nivelFaq, messageId]
-    );
+    );    
 
     // 4) Programar follow-ups si interés alto o intención caliente
     const intencionesFollowUp = ["interes_clases","reservar","precio","comprar"];
@@ -898,15 +898,15 @@ if (!respuestaDesdeFaq && !respuesta) {
       );
       
     } 
-    
+
     // 🔥 Registrar en sales_intelligence evitando duplicados
     await pool.query(
       `INSERT INTO sales_intelligence
-        (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+        (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
       [tenant.id, fromNumber, canal, userInput, intencion, nivel_interes, messageId]
-    );
+    );    
 
     // 🚀 Si interés alto o intención caliente, programa seguimiento
     const intencionesFollowUp = ["interes_clases", "reservar", "precio", "comprar"];
