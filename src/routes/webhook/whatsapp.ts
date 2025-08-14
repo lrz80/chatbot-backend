@@ -142,7 +142,7 @@ async function procesarMensajeWhatsApp(body: any) {
   }
 
   // 3️⃣ Detectar intención
-  const { intencion: intencionDetectada } = await detectarIntencion(mensajeUsuario, tenant.id);
+  const { intencion: intencionDetectada } = await detectarIntencion(mensajeUsuario, tenant.id, 'whatsapp');
   const intencionLower = intencionDetectada?.trim().toLowerCase() || "";
   console.log(`🧠 Intención detectada al inicio para tenant ${tenant.id}: "${intencionLower}"`);
 
@@ -255,7 +255,7 @@ async function procesarMensajeWhatsApp(body: any) {
     ? await traducirMensaje(userInput, 'es')
     : userInput;
 
-  const { intencion: intencionDetectada } = await detectarIntencion(textoTraducido, tenant.id);
+  const { intencion: intencionDetectada } = await detectarIntencion(textoTraducido, tenant.id, 'whatsapp');
   const intencion = intencionDetectada.trim().toLowerCase();
   console.log(`🧠 Intención detectada (procesada): "${intencion}"`);
 
@@ -648,7 +648,7 @@ if (!respuestaDesdeFaq && !respuesta) {
     ? await traducirMensaje(userInput, 'es')
     : userInput;
 
-    const { intencion: intencionDetectadaParaGuardar } = await detectarIntencion(textoTraducidoParaGuardar, tenant.id);
+    const { intencion: intencionDetectadaParaGuardar } = await detectarIntencion(textoTraducidoParaGuardar, tenant.id, 'whatsapp');
     const intencionFinal = intencionDetectadaParaGuardar.trim().toLowerCase();
 
     const { rows: sugeridasConIntencion } = await pool.query(
@@ -767,7 +767,7 @@ if (!respuestaDesdeFaq && !respuesta) {
   );  
 
   try {
-    const { intencion, nivel_interes } = await detectarIntencion(userInput, tenant.id);
+    const { intencion, nivel_interes } = await detectarIntencion(userInput, tenant.id, 'whatsapp');
     const intencionLower = intencion.toLowerCase();
     const textoNormalizado = userInput.trim().toLowerCase();
   

@@ -1,36 +1,42 @@
 // src/lib/detectarIntencion.ts
 import OpenAI from 'openai';
-import pool from './db'; // 👈 Para cargar info del tenant
+import pool from './db';
 
 type Intento = { intencion: string; nivel_interes: number };
+type Canal = 'whatsapp' | 'facebook' | 'instagram' | 'voz' | 'preview';
 
 const stripDiacritics = (s: string) =>
   s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-const norm = (s: string) =>
-  stripDiacritics(s.toLowerCase().trim());
+const norm = (s: string) => stripDiacritics((s || '').toLowerCase().trim());
 
 /** Quita saludos SOLO si están al principio y deja el resto del mensaje */
 function stripLeadingGreeting(t: string) {
   const re = /^(hola|hello|hi|hey|buenos dias|buenas tardes|buenas noches)[\s,!.:-]*\b/i;
-  return t.replace(re, '').trim();
+  return (t || '').replace(re, '').trim();
 }
 
 /** Coincidencia por palabra (para términos de 1 palabra); para frases usa includes(). */
 function hasWord(text: string, word: string) {
-  const w = stripDiacritics(word.toLowerCase());
-  return new RegExp(`\\b${w}\\b`, 'i').test(text);
+  const w = stripDiacritics((word || '').toLowerCase());
+  return new RegExp(`\\b${w}\\b`, 'i').test(text || '');
 }
 
-export async function detectarIntencion(mensaje: string, tenantId: string): Promise<Intento> {
+export async function detectarIntencion(
+  mensaje: string,
+  tenantId: string,
+  canal: Canal = 'whatsapp'
+): Promise<Intento> {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
-  // 📌 Cargar info del tenant para contextualizar
+  // 📌 Cargar info del tenant para contextualizar (multitenant)
   let tenantInfo = '';
   try {
     const res = await pool.query(
-      `SELECT nombre, categoria, funciones_asistente, info_clave 
-       FROM tenants WHERE id = $1 LIMIT 1`,
+      `SELECT name AS nombre, categoria, funciones_asistente, info_clave
+       FROM tenants
+       WHERE id = $1
+       LIMIT 1`,
       [tenantId]
     );
     if (res.rows.length > 0) {
@@ -40,20 +46,32 @@ Negocio: ${t.nombre || ''}
 Categoría: ${t.categoria || ''}
 Funciones del asistente: ${t.funciones_asistente || ''}
 Información clave: ${t.info_clave || ''}
+Canal: ${canal}
       `.trim();
+    } else {
+      tenantInfo = `Canal: ${canal}`; // fallback mínimo
     }
   } catch (e) {
     console.error('❌ Error cargando tenant info en detectarIntencion:', e);
+    tenantInfo = `Canal: ${canal}`;
   }
 
   // Normalización
   const original = (mensaje || '').trim();
-  let texto = norm(original);
-
-  // 1) Quitar saludo al INICIO y analizar el resto
+  const texto = norm(original);
   const textoCore = norm(stripLeadingGreeting(original)) || texto;
 
-  // 2) Reglas rápidas (prioridades)
+  // Heurísticas específicas por canal (multicanal)
+  const canalHints: Record<Canal, string[]> = {
+    whatsapp: ['whatsapp', 'wasap', 'wpp'],
+    facebook: ['facebook', 'fb', 'messenger', 'inbox'],
+    instagram: ['instagram', 'ig', 'insta', 'dm'],
+    voz: ['llamar', 'llamada', 'call', 'phone', 'marcar'],
+    preview: ['preview', 'demo', 'prueba']
+  };
+  const mencionaCanal = canalHints[canal].some(k => textoCore.includes(norm(k)));
+
+  // 1) Intención: pedir información general
   const pedirInfoPhrases = [
     'mas informacion', 'más informacion', 'quiero informacion', 'necesito saber mas',
     'quiero saber mas', 'quisiera saber mas', 'puedes decirme mas', 'quiero detalles',
@@ -61,39 +79,37 @@ Información clave: ${t.info_clave || ''}
     'more information', 'i want information', 'i need more info', 'information please'
   ];
   const pedirInfoWords = ['info', 'informacion', 'information'];
-
   const pedirInfo =
     pedirInfoPhrases.some(p => textoCore.includes(norm(p))) ||
     pedirInfoWords.some(w => hasWord(textoCore, w));
 
-  if (pedirInfo) {
-    return { intencion: 'pedir_info', nivel_interes: 2 };
-  }
+  if (pedirInfo) return { intencion: 'pedir_info', nivel_interes: 2 };
 
-  const compraKeywords = [
-    'looking for', 'interested in', 'want to know', 'i want classes',
-    'classes for', 'class for my', 'seeking classes', 'i am looking for',
-    'i need classes', 'looking to enroll', 'do you offer classes',
-    'busco clases', 'estoy buscando clases', 'quiero clases',
-    'mi esposa quiere clases', 'mi esposa busca clases',
-    'interesado en clases', 'clases disponibles', 'ofrecen clases',
-    'dan clases', 'tienen clases', 'necesito clases', 'como inscribirme',
-    'deseo clases', 'como registrarse', 'informacion de clases'
+  // 2) Intención fuerte: interés en clases / prueba gratuita
+  const interesClasesPhrases = [
+    'i want classes', 'classes for', 'class for my', 'seeking classes',
+    'i am looking for', 'i need classes', 'looking to enroll',
+    'do you offer classes', 'quiero clases', 'busco clases', 'estoy buscando clases',
+    'interesado en clases', 'clases disponibles', 'ofrecen clases', 'dan clases',
+    'necesito clases', 'como inscribirme', 'como registrarse', 'informacion de clases',
+    'clase gratis', 'primera clase gratis', 'free class', 'first class free',
+    'trial class', 'clase de prueba', 'prueba gratuita'
   ];
-  if (compraKeywords.some(k => textoCore.includes(norm(k)))) {
+  if (interesClasesPhrases.some(k => textoCore.includes(norm(k)))) {
     return { intencion: 'interes_clases', nivel_interes: 3 };
   }
 
+  // 3) Reglas rápidas
   const reglas = [
     {
       intencion: 'ubicacion', nivel_interes: 2,
-      words: ['ubicacion','direccion','localizacion','location','address'],
+      words: ['ubicacion','dirección','direccion','localizacion','location','address'],
       phrases: ['donde estan','donde queda','como llegar','where are you','how to get']
     },
     {
       intencion: 'precio', nivel_interes: 2,
-      words: ['precio','precios','cost','price'],
-      phrases: ['cuanto cuesta','how much','tarifa','vale','cuesta','cobran']
+      words: ['precio','precios','cost','price','membresia','membresía','membership'],
+      phrases: ['cuanto cuesta','how much','tarifa','vale','cuesta','cobran','precio de la clase']
     },
     {
       intencion: 'horario', nivel_interes: 2,
@@ -102,13 +118,13 @@ Información clave: ${t.info_clave || ''}
     },
     {
       intencion: 'reservar', nivel_interes: 3,
-      words: ['reservar','reserva','agendar','book','appointment'],
-      phrases: ['quiero agendar','quiero apartar','hacer una cita','book a class','i want to book']
+      words: ['reservar','reserva','agendar','book','appointment','inscribir','registrar'],
+      phrases: ['quiero agendar','quiero apartar','hacer una cita','book a class','i want to book','agendar clase']
     },
     {
       intencion: 'cancelar', nivel_interes: 2,
       words: ['cancelar','cancel'],
-      phrases: ['anular','cancela mi','ya no quiero','me arrepenti']
+      phrases: ['anular','cancela mi','ya no quiero','me arrepenti','me arrepentí']
     },
     {
       intencion: 'no_interesado', nivel_interes: 1,
@@ -128,17 +144,27 @@ Información clave: ${t.info_clave || ''}
     if (hitWord || hitPhrase) return { intencion: r.intencion, nivel_interes: r.nivel_interes };
   }
 
-  // 3) Fallback LLM con contexto multitenant
-  const prompt = `
-Eres un clasificador de mensajes de clientes para un asistente de IA.  
-Debes clasificar considerando el contexto del negocio.
+  // 4) Señal de canal voz → intención "reservar" o "pedir_info" según contenido
+  if (canal === 'voz' || mencionaCanal) {
+    // Si pregunta por disponibilidad / horario, subir intención
+    if (['horario','reservar','agendar','book','cita','call'].some(w => textoCore.includes(norm(w)))) {
+      return { intencion: 'reservar', nivel_interes: 3 };
+    }
+    // Si es genérico
+    if (pedirInfo) return { intencion: 'pedir_info', nivel_interes: 2 };
+  }
 
-Contexto del tenant:
+  // 5) Fallback LLM con contexto multitenant + multicanal
+  const prompt = `
+Eres un clasificador de mensajes de clientes para un asistente de IA.
+Debes clasificar considerando el contexto del negocio y el canal.
+
+Contexto:
 ${tenantInfo}
 
 Mensaje del cliente: "${original}"
 
-Posibles intenciones:
+Posibles intenciones (elige una):
 - "comprar"
 - "pagar"
 - "precio"
@@ -153,8 +179,9 @@ Posibles intenciones:
 
 Reglas:
 - Si hay saludo + petición, no devuelvas "saludo"; prioriza la intención real.
-- Si el mensaje muestra interés en clases, devuelve "interes_clases" (nivel 3).
+- Si el mensaje muestra interés en clases o prueba gratuita, devuelve "interes_clases" (nivel 3).
 - Si hay frases negativas como "no quiero", devuelve "no_interesado".
+- Si el mensaje sugiere agendar/booking, devuelve "reservar" (nivel 3).
 
 Nivel de interés:
 1 = bajo, 2 = medio, 3 = alto.
@@ -176,6 +203,7 @@ Devuelve SOLO JSON:
 
     const parsed = JSON.parse(content) as Intento;
     if (parsed?.intencion) {
+      // Priorizar pedir_info sobre saludo si ambas aparecen
       if (parsed.intencion === 'saludo' && pedirInfo) {
         return { intencion: 'pedir_info', nivel_interes: Math.max(2, parsed.nivel_interes || 2) };
       }
