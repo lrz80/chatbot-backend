@@ -107,6 +107,17 @@ async function procesarMensajeWhatsApp(body: any) {
   let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idioma);
   const canal = 'whatsapp';
 
+  // 🧹 Cancela cualquier follow-up pendiente para este contacto al recibir nuevo mensaje
+  try {
+      await pool.query(
+        `DELETE FROM mensajes_programados
+          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+        [tenant.id, canal, fromNumber]
+      );
+    } catch (e) {
+      console.warn('No se pudieron limpiar follow-ups pendientes:', e);
+    }
+
   let flows: any[] = [];
   try {
     const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant.id]);
