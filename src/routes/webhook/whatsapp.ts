@@ -573,22 +573,13 @@ async function procesarMensajeWhatsApp(body: any) {
     if (intencionesCliente.some(p => intenFaqLower.includes(p))) {
       await pool.query(
         `UPDATE clientes
-            SET segmento = 'cliente',
-                ultima_interaccion = NOW()
+            SET segmento = 'cliente'
           WHERE tenant_id = $1
             AND contacto = $2
             AND (segmento = 'lead' OR segmento IS NULL)`,
         [tenant.id, fromNumber]
-      );
-    } else {
-      await pool.query(
-        `UPDATE clientes
-            SET ultima_interaccion = NOW()
-          WHERE tenant_id = $1
-            AND contacto = $2`,
-        [tenant.id, fromNumber]
-      );
-    }
+      );      
+    } 
 
     // 3) Registrar evento en sales_intelligence (evita duplicado por message_id)
     await pool.query(
@@ -899,24 +890,15 @@ if (!respuestaDesdeFaq && !respuesta) {
     if (intencionesCliente.some(p => intencionLower.includes(p))) {
       await pool.query(
         `UPDATE clientes
-            SET segmento = 'cliente',
-                ultima_interaccion = NOW()
+            SET segmento = 'cliente'
           WHERE tenant_id = $1
             AND contacto = $2
             AND (segmento = 'lead' OR segmento IS NULL)`,
         [tenant.id, fromNumber]
       );
-    } else {
-      // Aunque no sea intención caliente, actualizamos fecha de último contacto
-      await pool.query(
-        `UPDATE clientes
-            SET ultima_interaccion = NOW()
-          WHERE tenant_id = $1
-            AND contacto = $2`,
-        [tenant.id, fromNumber]
-      );
-    }
-
+      
+    } 
+    
     // 🔥 Registrar en sales_intelligence evitando duplicados
     await pool.query(
       `INSERT INTO sales_intelligence
