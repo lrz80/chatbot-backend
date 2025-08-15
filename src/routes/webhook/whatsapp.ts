@@ -35,15 +35,12 @@ const normLang = (code?: string | null) => {
 const normalizeLang = (code?: string | null): 'es' | 'en' =>
   (code || '').toLowerCase().startsWith('en') ? 'en' : 'es';
 
-function getConfigDelayMinutes(cfg: any, fallbackMin = 10) {
-  // Prioriza horas_espera (1..23). Si no hay, usa minutos_espera (>0). Si no, fallback.
-  const h = Number(cfg?.horas_espera);
-  if (Number.isFinite(h) && h >= 1 && h <= 23) return h * 60;
-
-  const m = Number(cfg?.minutos_espera);
-  if (Number.isFinite(m) && m > 0) return m;
-
-  return fallbackMin;
+function getConfigDelayMinutes(cfg: any, defaultHours = 1) {
+  // Solo horas, 1..23. Si no hay horas válidas, usar defaultHours.
+  const raw = cfg?.horas_espera ?? cfg?.hours ?? cfg?.hours_delay ?? null;
+  const h = Number(raw);
+  const valid = Number.isFinite(h) && h >= 1 && h <= 23;
+  return (valid ? h : defaultHours) * 60;
 }
 
 // Acceso a DB para idioma del contacto
