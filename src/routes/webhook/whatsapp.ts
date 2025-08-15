@@ -35,6 +35,17 @@ const normLang = (code?: string | null) => {
 const normalizeLang = (code?: string | null): 'es' | 'en' =>
   (code || '').toLowerCase().startsWith('en') ? 'en' : 'es';
 
+function getConfigDelayMinutes(cfg: any, fallbackMin = 10) {
+  // Prioriza horas_espera (1..23). Si no hay, usa minutos_espera (>0). Si no, fallback.
+  const h = Number(cfg?.horas_espera);
+  if (Number.isFinite(h) && h >= 1 && h <= 23) return h * 60;
+
+  const m = Number(cfg?.minutos_espera);
+  if (Number.isFinite(m) && m > 0) return m;
+
+  return fallbackMin;
+}
+
 // Acceso a DB para idioma del contacto
 async function getIdiomaClienteDB(tenantId: string, contacto: string, fallback: 'es'|'en'): Promise<'es'|'en'> {
   try {
@@ -159,6 +170,7 @@ async function procesarMensajeWhatsApp(body: any) {
   console.log(`🧠 Intención detectada al inicio para tenant ${tenant.id}: "${intencionLower}"`);
 
   let intencionProc = intencionLower; // se actualizará tras traducir (si aplica)
+  let intencionParaFaq = intencionLower; // esta será la que usemos para consultar FAQ
 
   // 4️⃣ Si es saludo o agradecimiento → responder y salir
   if (["saludo", "agradecimiento"].includes(intencionLower)) {
@@ -265,15 +277,17 @@ async function procesarMensajeWhatsApp(body: any) {
     }
   
     // Paso 1: Detectar idioma y traducir para evaluar intención
-  const textoTraducido = idiomaDestino !== 'es'
-    ? await traducirMensaje(userInput, 'es')
-    : userInput;
+    const textoTraducido = idiomaDestino !== 'es'
+      ? await traducirMensaje(userInput, 'es')
+      : userInput;
 
-  const { intencion: intencionProcesada } = await detectarIntencion(textoTraducido, tenant.id, 'whatsapp');
-  const intencion = intencionProcesada.trim().toLowerCase();
-  console.log(`🧠 Intención detectada (procesada): "${intencionProc}"`);
-
-  if (!isNumericOnly && intencionProc === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
+    const { intencion: intencionProcesada } = await detectarIntencion(textoTraducido, tenant.id, 'whatsapp');
+    intencionProc = (intencionProcesada || '').trim().toLowerCase();
+    intencionParaFaq = intencionProc; // <- la que usaremos luego en el SELECT de FAQs
+    console.log(`🧠 Intención detectada (procesada): "${intencionProc}"`);
+    
+    if (!isNumericOnly && intencionProc === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
+    
     const pregunta = flows[0]?.pregunta || flows[0]?.mensaje || '¿Cómo puedo ayudarte?';
     const opciones = flows[0].opciones.map((op: any, i: number) =>
       `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
@@ -517,7 +531,7 @@ async function procesarMensajeWhatsApp(body: any) {
   const { rows: faqPorIntencion } = await pool.query(
     `SELECT respuesta FROM faqs 
      WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3) LIMIT 1`,
-    [tenant.id, canal, intencion]
+    [tenant.id, canal, intencionParaFaq]
   );  
 
   respuestaDesdeFaq = null;
@@ -525,7 +539,7 @@ async function procesarMensajeWhatsApp(body: any) {
   if (faqPorIntencion.length > 0) {
     respuestaDesdeFaq = faqPorIntencion[0].respuesta;
     respuesta = respuestaDesdeFaq;
-    console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencion}"`);
+    console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencionParaFaq}"`);
     console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
   
     // Si la respuesta de la FAQ no está en el idioma del cliente, traducirla
@@ -590,7 +604,7 @@ async function procesarMensajeWhatsApp(body: any) {
       [tenant.id, fromNumber, canal, userInput, intenFaqLower, nivelFaq, messageId]
     );    
 
-    // 4) Programar follow-ups si interés alto o intención caliente
+    // 4) Programar follow-up único (configurable por tenant)
     const intencionesFollowUp = ["interes_clases","reservar","precio","comprar"];
     if (nivelFaq >= 3 || intencionesFollowUp.includes(intenFaqLower)) {
       const configRes = await pool.query(
@@ -599,19 +613,21 @@ async function procesarMensajeWhatsApp(body: any) {
       );
       const config = configRes.rows[0];
       if (config) {
-        const msg15 = config?.mensaje_general
-          ?? (idiomaDestino === 'en'
-                ? "Do you want help choosing a time for your free class?"
-                : "¿Te ayudo a elegir un horario para tu clase gratis?");
+        // Limpia pendientes de este contacto para evitar duplicados
+        await pool.query(
+          `DELETE FROM mensajes_programados
+            WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+          [tenant.id, canal, fromNumber]
+        );
 
-        const msg24 = (
+        // Elegir mensaje según intención
+        const baseMsg =
           (intenFaqLower.includes('reservar') && config?.mensaje_agendar) ? config.mensaje_agendar :
           (intenFaqLower.includes('precio')   && config?.mensaje_precio)  ? config.mensaje_precio  :
-          (intenFaqLower.includes('ubicacion')|| intenFaqLower.includes('location')) && config?.mensaje_ubicacion ? config.mensaje_ubicacion :
+          ((intenFaqLower.includes('ubicacion') || intenFaqLower.includes('location')) && config?.mensaje_ubicacion) ? config.mensaje_ubicacion :
           (config?.mensaje_general ?? (idiomaDestino === 'en'
-            ? "Spots are still available for your trial class this week. Shall I reserve one for you?"
-            : "Aún quedan cupos para tu clase de prueba esta semana. ¿Te reservo uno?"))
-        );
+            ? "Do you want help choosing a time for your free class?"
+            : "¿Te ayudo a elegir un horario para tu clase gratis?"));
 
         const traducirSiHaceFalta = async (texto: string) => {
           try {
@@ -623,29 +639,24 @@ async function procesarMensajeWhatsApp(body: any) {
           return texto;
         };
 
-        const contenido15 = await traducirSiHaceFalta(msg15);
-        const contenido24 = await traducirSiHaceFalta(msg24);
+        const contenido = await traducirSiHaceFalta(baseMsg);
 
-        // ⏱️ 15 minutos y 24 horas (1440 min)
-        const fecha15 = new Date();
-        fecha15.setMinutes(fecha15.getMinutes() + (config?.minutos_espera ?? 15));
+        // Delay desde configuración (horas_espera o minutos_espera). Fallback 10 min
+        const delayMin = getConfigDelayMinutes(config, 10);
+
+        const fechaEnvio = new Date();
+        fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
+
         await pool.query(
           `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-           VALUES ($1, $2, $3, $4, $5, false)`,
-          [tenant.id, canal, fromNumber, contenido15, fecha15]
+          VALUES ($1, $2, $3, $4, $5, false)`,
+          [tenant.id, canal, fromNumber, contenido, fechaEnvio]
         );
 
-        const fecha24 = new Date();
-        fecha24.setMinutes(fecha24.getMinutes() + 1440);
-        await pool.query(
-          `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-           VALUES ($1, $2, $3, $4, $5, false)`,
-          [tenant.id, canal, fromNumber, contenido24, fecha24]
-        );
-
-        console.log(`📅 Follow-ups programados (15m y 24h) para ${fromNumber} (${idiomaDestino})`);
+        console.log(`📅 Follow-up programado: ${Math.round(delayMin/60)}h para ${fromNumber} (${idiomaDestino})`);
       }
     }
+
   } catch (e) {
     console.warn('⚠️ No se pudo registrar/schedule tras FAQ oficial:', e);
   }
@@ -908,7 +919,7 @@ if (!respuestaDesdeFaq && !respuesta) {
       [tenant.id, fromNumber, canal, userInput, intencion, nivel_interes, messageId]
     );    
 
-    // 🚀 Si interés alto o intención caliente, programa seguimiento
+    // 🚀 Si interés alto o intención caliente, programa seguimiento (único, por horas_espera/minutos_espera)
     const intencionesFollowUp = ["interes_clases", "reservar", "precio", "comprar"];
     if (nivel_interes >= 3 || intencionesFollowUp.includes(intencionLower)) {
       const configRes = await pool.query(
@@ -916,11 +927,9 @@ if (!respuestaDesdeFaq && !respuesta) {
         [tenant.id]
       );
       const config = configRes.rows[0];
-  
+
       if (config) {
         let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
-  
-        // Personaliza según intención
         if (intencionLower.includes("precio") && config.mensaje_precio) {
           mensajeSeguimiento = config.mensaje_precio;
         } else if ((intencionLower.includes("agendar") || intencionLower.includes("reservar")) && config.mensaje_agendar) {
@@ -928,65 +937,38 @@ if (!respuestaDesdeFaq && !respuesta) {
         } else if ((intencionLower.includes("ubicacion") || intencionLower.includes("location")) && config.mensaje_ubicacion) {
           mensajeSeguimiento = config.mensaje_ubicacion;
         }
-  
+
         try {
           const idiomaMensaje = await detectarIdioma(mensajeSeguimiento);
           if (idiomaMensaje && idiomaMensaje !== 'zxx' && idiomaMensaje !== idiomaDestino) {
             mensajeSeguimiento = await traducirMensaje(mensajeSeguimiento, idiomaDestino);
           }
         } catch {}
-  
-        // Define mensajes (usa config si existe; si no, defaults bilingües)
-        const mensajes: Array<{ contenido: string; minutos: number }> = [];
 
-        const msg15 = config?.mensaje_general
-          ?? (idiomaDestino === 'en'
-              ? "Do you want help choosing a time for your free class?"
-              : "¿Te ayudo a elegir un horario para tu clase gratis?");
-
-        const msg24 = (
-          (intencionLower.includes('reservar') && config?.mensaje_agendar) ? config.mensaje_agendar :
-          (intencionLower.includes('precio')   && config?.mensaje_precio)  ? config.mensaje_precio  :
-          (intencionLower.includes('ubicacion')&& config?.mensaje_ubicacion)? config.mensaje_ubicacion :
-          (config?.mensaje_general ?? (idiomaDestino === 'en'
-              ? "Spots are still available for your trial class this week. Shall I reserve one for you?"
-              : "Aún quedan cupos para tu clase de prueba esta semana. ¿Te reservo uno?"))
+        // Elimina pendientes para este contacto/canal
+        await pool.query(
+          `DELETE FROM mensajes_programados
+          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+          [tenant.id, canal, fromNumber]
         );
 
-        async function traducirSiHaceFalta(texto: string) {
-          try {
-            const idMsg = await detectarIdioma(texto);
-            if (idMsg && idMsg !== 'zxx' && idMsg !== idiomaDestino) {
-              return await traducirMensaje(texto, idiomaDestino);
-            }
-          } catch {}
-          return texto;
-        }
+        // Delay configurado
+        const delayMin = getConfigDelayMinutes(config, 10);
 
-        // Normaliza idiomas
-        const contenido15 = await traducirSiHaceFalta(msg15);
-        const contenido24 = await traducirSiHaceFalta(msg24);
+        const fechaEnvio = new Date();
+        fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
 
-        // Ventanas: 15 minutos y 22 horas
-        mensajes.push({ contenido: contenido15, minutos: config?.minutos_espera ?? 15 });
-        mensajes.push({ contenido: contenido24, minutos: 1320 });
+        await pool.query(
+          `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
+          VALUES ($1, $2, $3, $4, $5, false)`,
+          [tenant.id, canal, fromNumber, mensajeSeguimiento, fechaEnvio]
+        );
 
-        for (const m of mensajes) {
-          const fechaEnvio = new Date();
-          fechaEnvio.setMinutes(fechaEnvio.getMinutes() + m.minutos);
+        console.log(`📅 Follow-up programado: ${Math.round(delayMin/60)}h para ${fromNumber} (${idiomaDestino})`);
+      }
+    }
 
-          await pool.query(
-            `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-            VALUES ($1, $2, $3, $4, $5, false)`,
-            [tenant.id, canal, fromNumber, m.contenido, fechaEnvio]
-          );
-        }
-
-        console.log(`📅 Follow-ups programados (15m y 22h) para ${fromNumber} (${idiomaDestino})`);
-
-              }
-            }
-          } catch (err) {
-            console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
-          }  
-        }  
+    } catch (err) {
+      console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
+    }  
+  }  
