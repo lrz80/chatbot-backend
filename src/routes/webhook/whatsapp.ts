@@ -19,6 +19,10 @@ import { detectarIntencion } from '../../lib/detectarIntencion';
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
+const INTENTS_DIRECT = new Set([
+  'interes_clases','precio','horario','ubicacion','reservar','comprar','confirmar'
+]);
+
 const enviarWhatsAppSeguro = async (to: string, text: string, tenantId: string) => {
   const MAX = 1500; // margen
   for (let i = 0; i < text.length; i += MAX) {
@@ -35,7 +39,7 @@ const normLang = (code?: string | null) => {
 const normalizeLang = (code?: string | null): 'es' | 'en' =>
   (code || '').toLowerCase().startsWith('en') ? 'en' : 'es';
 
-function getConfigDelayMinutes(cfg: any, fallbackMin = 10) {
+function getConfigDelayMinutes(cfg: any, fallbackMin = 60) {
   const m = Number(cfg?.minutos_espera);
   if (Number.isFinite(m) && m > 0) return m;
   return fallbackMin;
@@ -178,7 +182,6 @@ async function procesarMensajeWhatsApp(body: any) {
     return;
   }
 
-  let respuestaDesdeFaq: string | null = null;
   if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
     respuesta = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino); // antes: idioma
   }else {
@@ -522,100 +525,94 @@ async function procesarMensajeWhatsApp(body: any) {
       }      
 }
 
-  // Paso 2: Buscar primero una FAQ oficial por intención exacta y canal
+  // Paso 2: FAQ por intención SOLO si es una intención segura
+let respuestaDesdeFaq: string | null = null;
+
+if (INTENTS_DIRECT.has(intencionParaFaq)) {
   const { rows: faqPorIntencion } = await pool.query(
     `SELECT respuesta FROM faqs 
      WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3) LIMIT 1`,
     [tenant.id, canal, intencionParaFaq]
-  );  
-
-  respuestaDesdeFaq = null;
-
+  );
   if (faqPorIntencion.length > 0) {
     respuestaDesdeFaq = faqPorIntencion[0].respuesta;
-    respuesta = respuestaDesdeFaq;
-    console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencionParaFaq}"`);
-    console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
-  
-    // Si la respuesta de la FAQ no está en el idioma del cliente, traducirla
-    const idiomaRespuesta = await detectarIdioma(respuesta);
-    if (idiomaRespuesta && idiomaRespuesta !== 'zxx' && idiomaRespuesta !== idiomaDestino) {
-      console.log(`🌐 Traduciendo respuesta desde ${idiomaRespuesta} a ${idiomaDestino}`);
-      respuesta = await traducirMensaje(respuesta, idiomaDestino);
-    } else {
-      console.log(`✅ No se traduce. Respuesta ya en idioma ${idiomaDestino}`);
-    }
-  
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
-      [tenant.id, userInput, canal, fromNumber || "anónimo", messageId]
-    );
-  
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-       VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
-       [tenant.id, respuesta, canal, fromNumber || 'anónimo']
-    );
-  
-    await enviarWhatsAppSeguro(fromNumber, respuesta, tenant.id);
-    console.log("📬 Respuesta enviada vía Twilio (desde FAQ oficial):", respuesta);
-  
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-  
-    // 📌 Registrar inteligencia y programar follow-ups ANTES de salir
+  }
+}
+
+if (respuestaDesdeFaq) {
+  // Traducir si hace falta
+  let out = respuestaDesdeFaq;
+  const idiomaRespuesta = await detectarIdioma(out);
+  if (idiomaRespuesta && idiomaRespuesta !== 'zxx' && idiomaRespuesta !== idiomaDestino) {
+    out = await traducirMensaje(out, idiomaDestino);
+  }
+  respuesta = out;
+
+  console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencionParaFaq}"`);
+  console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
+
+  await pool.query(
+    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+     VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
+    [tenant.id, userInput, canal, fromNumber || "anónimo", messageId]
+  );
+  await pool.query(
+    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+     VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
+    [tenant.id, respuesta, canal, fromNumber || 'anónimo']
+  );
+
+  await enviarWhatsAppSeguro(fromNumber, respuesta, tenant.id);
+  console.log("📬 Respuesta enviada vía Twilio (desde FAQ oficial):", respuesta);
+
+  await pool.query(
+    `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT DO NOTHING`,
+    [tenant.id, canal, messageId]
+  );
+
+  // Inteligencia + follow-up (único, configurable)
   try {
-    // 1) Recalcular intención con nivel_interes
     const { intencion: intenFaq, nivel_interes: nivelFaq } =
       await detectarIntencion(userInput, tenant.id, 'whatsapp');
     const intenFaqLower = (intenFaq || '').trim().toLowerCase();
 
-    // 2) Actualizar segmento / última interacción
     const intencionesCliente = [
       "comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"
     ];
     if (intencionesCliente.some(p => intenFaqLower.includes(p))) {
       await pool.query(
         `UPDATE clientes
-            SET segmento = 'cliente'
-          WHERE tenant_id = $1
-            AND contacto = $2
-            AND (segmento = 'lead' OR segmento IS NULL)`,
+           SET segmento = 'cliente'
+         WHERE tenant_id = $1 AND contacto = $2
+           AND (segmento = 'lead' OR segmento IS NULL)`,
         [tenant.id, fromNumber]
-      );      
-    } 
+      );
+    }
 
-    // 3) Registrar evento en sales_intelligence (evita duplicado por message_id)
     await pool.query(
       `INSERT INTO sales_intelligence
          (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
       [tenant.id, fromNumber, canal, userInput, intenFaqLower, nivelFaq, messageId]
-    );    
+    );
 
-    // 4) Programar follow-up único (configurable por tenant)
-    const intencionesFollowUp = ["interes_clases","reservar","precio","comprar", "horario"];
+    const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
     if (nivelFaq >= 3 || intencionesFollowUp.includes(intenFaqLower)) {
-      const configRes = await pool.query(
+      const { rows } = await pool.query(
         `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
         [tenant.id]
       );
-      const config = configRes.rows[0];
+      const config = rows[0];
       if (config) {
-        // Limpia pendientes de este contacto para evitar duplicados
         await pool.query(
           `DELETE FROM mensajes_programados
-            WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+           WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
           [tenant.id, canal, fromNumber]
         );
 
-        // Elegir mensaje según intención
         const baseMsg =
           (intenFaqLower.includes('reservar') && config?.mensaje_agendar) ? config.mensaje_agendar :
           (intenFaqLower.includes('precio')   && config?.mensaje_precio)  ? config.mensaje_precio  :
@@ -624,49 +621,45 @@ async function procesarMensajeWhatsApp(body: any) {
             ? "Do you want help choosing a time for your free class?"
             : "¿Te ayudo a elegir un horario para tu clase gratis?"));
 
-        const traducirSiHaceFalta = async (texto: string) => {
-          try {
-            const idMsg = await detectarIdioma(texto);
-            if (idMsg && idMsg !== 'zxx' && idMsg !== idiomaDestino) {
-              return await traducirMensaje(texto, idiomaDestino);
-            }
-          } catch {}
-          return texto;
-        };
+        let contenido = baseMsg;
+        try {
+          const idMsg = await detectarIdioma(contenido);
+          if (idMsg && idMsg !== 'zxx' && idMsg !== idiomaDestino) {
+            contenido = await traducirMensaje(contenido, idiomaDestino);
+          }
+        } catch {}
 
-        const contenido = await traducirSiHaceFalta(baseMsg);
-
-        // Delay desde configuración minutos_espera. Fallback 60 min
-        const delayMin = getConfigDelayMinutes(config);
+        // 🟢 Fallback = 60 min
+        const delayMin = getConfigDelayMinutes(config, 60);
 
         const fechaEnvio = new Date();
         fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
 
         await pool.query(
           `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-          VALUES ($1, $2, $3, $4, $5, false)`,
+           VALUES ($1, $2, $3, $4, $5, false)`,
           [tenant.id, canal, fromNumber, contenido, fechaEnvio]
         );
 
         console.log(`📅 Follow-up programado en ${delayMin} min (~${(delayMin/60).toFixed(1)} h) para ${fromNumber} (${idiomaDestino})`);
       }
     }
-
   } catch (e) {
     console.warn('⚠️ No se pudo registrar/schedule tras FAQ oficial:', e);
   }
 
-  return; // 🛑 Salimos ya con seguimiento programado
+  return; // salir aquí si hubo FAQ directa
+}
 
-  }else {
-    // Paso 3: Buscar por similitud en FAQs sin intención definida
-    const mensajeTraducido = idiomaDestino !== 'es'
-      ? await traducirMensaje(mensajeUsuario, 'es')
-      : mensajeUsuario;
+// Si NO hubo FAQ directa → similaridad
+{
+  const mensajeTraducido = (idiomaDestino !== 'es')
+    ? await traducirMensaje(mensajeUsuario, 'es')
+    : mensajeUsuario;
 
-    respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeTraducido, idiomaDestino)
-    || await buscarRespuestaDesdeFlowsTraducido(flows, mensajeTraducido, idiomaDestino);
-  }
+  respuesta =
+    await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeTraducido, idiomaDestino) ||
+    await buscarRespuestaDesdeFlowsTraducido(flows, mensajeTraducido, idiomaDestino);
 }
 
 // 🔒 Protección adicional: si ya respondió con FAQ oficial, no continuar
@@ -948,7 +941,7 @@ if (!respuestaDesdeFaq && !respuesta) {
         );
 
         // Delay configurado
-        const delayMin = getConfigDelayMinutes(config, 10);
+        const delayMin = getConfigDelayMinutes(config, 60);
 
         const fechaEnvio = new Date();
         fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
@@ -966,4 +959,5 @@ if (!respuestaDesdeFaq && !respuesta) {
     } catch (err) {
       console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
     }  
-  }  
+  } 
+} 
