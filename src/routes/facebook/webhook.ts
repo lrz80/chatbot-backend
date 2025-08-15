@@ -120,7 +120,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
           if (!Array.isArray(flows)) flows = [];
         } catch {}
 
-        const { intencion, nivel_interes } = await detectarIntencion(userMessage, tenant.id);
+        const { intencion, nivel_interes } = await detectarIntencion(userMessage, tenant.id, 'facebook');
         const intencionLower = intencion?.toLowerCase() || '';
 
         let respuesta: string | null = null;

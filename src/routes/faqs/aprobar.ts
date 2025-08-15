@@ -2,11 +2,12 @@ import express from 'express';
 import pool from '../../lib/db';
 import { authenticateUser } from '../../middleware/auth';
 import { detectarIntencion } from '../../lib/detectarIntencion';
+import { intencionSegura } from '../../utils/intent'; // 🆕 IMPORT
 
 const router = express.Router();
 
 router.post('/', authenticateUser, async (req, res) => {
-  const tenantId = req.user?.tenant_id as string; // 🔹 Forzamos a string porque authenticateUser garantiza que exista
+  const tenantId = req.user?.tenant_id as string;
   if (!tenantId) {
     return res.status(401).json({ error: 'Tenant no encontrado' });
   }
@@ -24,22 +25,26 @@ router.post('/', authenticateUser, async (req, res) => {
     const faq = rows[0];
     if (!faq) return res.status(404).json({ error: 'FAQ no encontrada' });
 
+    // Detecta intención base con tu modelo
     const { intencion } = await detectarIntencion(faq.pregunta, tenantId);
-    const intencionFinal = intencion.trim().toLowerCase();
+
+    // 🆕 Especializa la intención si es genérica (duda/consulta/pregunta)
+    const intencionFinal = intencionSegura(intencion?.trim().toLowerCase() || '', faq.pregunta);
+
     const respuestaFinal = respuesta_editada || faq.respuesta_sugerida;
 
-    // ✅ Expandir canal "meta" como ["facebook", "instagram"]
+    // Para comparar, expande "meta" a ambos canales físicos
     const canalesComparar =
       faq.canal === 'meta' ? ['facebook', 'instagram'] : [faq.canal];
 
-    // Validar que no exista ya una FAQ con esa intención
+    // Evitar duplicado exacto de intención en esos canales
     const { rows: existentes } = await pool.query(
       `SELECT 1 
-       FROM faqs 
-       WHERE tenant_id = $1 
-         AND canal = ANY($2) 
-         AND intencion = $3 
-       LIMIT 1`,
+         FROM faqs 
+        WHERE tenant_id = $1 
+          AND canal = ANY($2) 
+          AND intencion = $3 
+        LIMIT 1`,
       [tenantId, canalesComparar, intencionFinal]
     );
 
@@ -49,22 +54,22 @@ router.post('/', authenticateUser, async (req, res) => {
         .json({ error: 'Ya existe una FAQ con esa intención para este canal' });
     }
 
+    // Guardamos canónicamente "meta" en lugar de fb/ig
     const canalFinal =
       faq.canal === 'facebook' || faq.canal === 'instagram'
         ? 'meta'
         : faq.canal;
 
-    // Insertar FAQ aprobada
     await pool.query(
       `INSERT INTO faqs (tenant_id, pregunta, respuesta, canal, intencion)
        VALUES ($1, $2, $3, $4, $5)`,
       [tenantId, faq.pregunta, respuestaFinal, canalFinal, intencionFinal]
     );
 
-    // Eliminar sugerencia aceptada
     await pool.query(`DELETE FROM faq_sugeridas WHERE id = $1`, [id]);
 
-    res.json({ success: true });
+    // 🆕 Devuelve la intención final (útil para UI)
+    res.json({ success: true, intencion: intencionFinal });
   } catch (err) {
     console.error('❌ Error aprobando FAQ:', err);
     res.status(500).json({ error: 'Error al aprobar sugerencia' });
