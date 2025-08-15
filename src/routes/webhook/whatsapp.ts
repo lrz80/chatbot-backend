@@ -35,12 +35,10 @@ const normLang = (code?: string | null) => {
 const normalizeLang = (code?: string | null): 'es' | 'en' =>
   (code || '').toLowerCase().startsWith('en') ? 'en' : 'es';
 
-function getConfigDelayMinutes(cfg: any, defaultHours = 1) {
-  // Solo horas, 1..23. Si no hay horas válidas, usar defaultHours.
-  const raw = cfg?.horas_espera ?? cfg?.hours ?? cfg?.hours_delay ?? null;
-  const h = Number(raw);
-  const valid = Number.isFinite(h) && h >= 1 && h <= 23;
-  return (valid ? h : defaultHours) * 60;
+function getConfigDelayMinutes(cfg: any, fallbackMin = 10) {
+  const m = Number(cfg?.minutos_espera);
+  if (Number.isFinite(m) && m > 0) return m;
+  return fallbackMin;
 }
 
 // Acceso a DB para idioma del contacto
@@ -602,7 +600,7 @@ async function procesarMensajeWhatsApp(body: any) {
     );    
 
     // 4) Programar follow-up único (configurable por tenant)
-    const intencionesFollowUp = ["interes_clases","reservar","precio","comprar"];
+    const intencionesFollowUp = ["interes_clases","reservar","precio","comprar", "horario"];
     if (nivelFaq >= 3 || intencionesFollowUp.includes(intenFaqLower)) {
       const configRes = await pool.query(
         `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
@@ -638,8 +636,8 @@ async function procesarMensajeWhatsApp(body: any) {
 
         const contenido = await traducirSiHaceFalta(baseMsg);
 
-        // Delay desde configuración (horas_espera o minutos_espera). Fallback 10 min
-        const delayMin = getConfigDelayMinutes(config, 10);
+        // Delay desde configuración minutos_espera. Fallback 60 min
+        const delayMin = getConfigDelayMinutes(config);
 
         const fechaEnvio = new Date();
         fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
@@ -650,7 +648,7 @@ async function procesarMensajeWhatsApp(body: any) {
           [tenant.id, canal, fromNumber, contenido, fechaEnvio]
         );
 
-        console.log(`📅 Follow-up programado: ${Math.round(delayMin/60)}h para ${fromNumber} (${idiomaDestino})`);
+        console.log(`📅 Follow-up programado en ${delayMin} min (~${(delayMin/60).toFixed(1)} h) para ${fromNumber} (${idiomaDestino})`);
       }
     }
 
@@ -917,7 +915,7 @@ if (!respuestaDesdeFaq && !respuesta) {
     );    
 
     // 🚀 Si interés alto o intención caliente, programa seguimiento (único, por horas_espera/minutos_espera)
-    const intencionesFollowUp = ["interes_clases", "reservar", "precio", "comprar"];
+    const intencionesFollowUp = ["interes_clases", "reservar", "precio", "comprar", "horario"];
     if (nivel_interes >= 3 || intencionesFollowUp.includes(intencionLower)) {
       const configRes = await pool.query(
         `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
@@ -961,7 +959,7 @@ if (!respuestaDesdeFaq && !respuesta) {
           [tenant.id, canal, fromNumber, mensajeSeguimiento, fechaEnvio]
         );
 
-        console.log(`📅 Follow-up programado: ${Math.round(delayMin/60)}h para ${fromNumber} (${idiomaDestino})`);
+        console.log(`📅 Follow-up programado en ${delayMin} min (~${(delayMin/60).toFixed(1)} h) para ${fromNumber} (${idiomaDestino})`);
       }
     }
 
