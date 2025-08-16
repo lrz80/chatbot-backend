@@ -540,8 +540,8 @@ async function procesarMensajeWhatsApp(body: any) {
       }      
 }
 
-  // 🔎 Ajuste de intención por palabra clave (online/virtual)
-  if (/\b(online|en\s*linea|virtual)\b/i.test(mensajeUsuario)) {
+  // 🔎 Ajuste de intención por palabra clave (online/virtual/virtuales/virtualidad)
+  if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(mensajeUsuario)) {
     intencionParaFaq = 'clases_online';
   }
 
