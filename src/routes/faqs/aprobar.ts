@@ -2,7 +2,7 @@ import express from 'express';
 import pool from '../../lib/db';
 import { authenticateUser } from '../../middleware/auth';
 import { detectarIntencion } from '../../lib/detectarIntencion';
-import { intencionSegura } from '../../utils/intent'; // 🆕 IMPORT
+import { buildDudaSlug } from '../../lib/intentSlug';
 
 const router = express.Router();
 
@@ -25,11 +25,12 @@ router.post('/', authenticateUser, async (req, res) => {
     const faq = rows[0];
     if (!faq) return res.status(404).json({ error: 'FAQ no encontrada' });
 
-    // Detecta intención base con tu modelo
+    // [REPLACE] Si es "duda", conviértela en sub-slug ANTES de guardar la FAQ oficial
     const { intencion } = await detectarIntencion(faq.pregunta, tenantId);
-
-    // 🆕 Especializa la intención si es genérica (duda/consulta/pregunta)
-    const intencionFinal = intencionSegura(intencion?.trim().toLowerCase() || '', faq.pregunta);
+    let intencionFinal = intencion.trim().toLowerCase();
+    if (intencionFinal === 'duda') {
+      intencionFinal = buildDudaSlug(faq.pregunta);
+    }
 
     const respuestaFinal = respuesta_editada || faq.respuesta_sugerida;
 

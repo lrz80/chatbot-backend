@@ -4,6 +4,7 @@ import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import OpenAI from 'openai';
 import twilio from 'twilio';
+import { buildDudaSlug, isDirectIntent } from '../../lib/intentSlug';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
@@ -20,7 +21,8 @@ const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
 const INTENTS_DIRECT = new Set([
-  'interes_clases','precio','horario','ubicacion','reservar','comprar','confirmar', 'clases_online'
+  'interes_clases','precio','horario','ubicacion','reservar','comprar','confirmar',
+  'clases_online' // 👈 añade esto
 ]);
 
 // Intenciones que deben ser únicas por tenant/canal
@@ -288,7 +290,15 @@ async function procesarMensajeWhatsApp(body: any) {
     intencionProc = (intencionProcesada || '').trim().toLowerCase();
     intencionParaFaq = intencionProc; // <- la que usaremos luego en el SELECT de FAQs
     console.log(`🧠 Intención detectada (procesada): "${intencionProc}"`);
-    
+
+    // [ADD] Si la intención es "duda", refinamos a un sub-slug tipo "duda__duracion_clase"
+    if (intencionProc === 'duda') {
+      const refined = buildDudaSlug(userInput);
+      console.log(`🎯 Refino duda → ${refined}`);
+      intencionProc = refined;
+      intencionParaFaq = refined; // este es el que usas para consultar FAQ
+    }
+
     if (!isNumericOnly && intencionProc === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
     
     const pregunta = flows[0]?.pregunta || flows[0]?.mensaje || '¿Cómo puedo ayudarte?';
@@ -535,10 +545,10 @@ async function procesarMensajeWhatsApp(body: any) {
     intencionParaFaq = 'clases_online';
   }
 
-  // Paso 2: FAQ por intención SOLO si es una intención segura
+  // [REPLACE] Usa isDirectIntent para incluir duda__*
   let respuestaDesdeFaq: string | null = null;
 
-  if (INTENTS_DIRECT.has(intencionParaFaq)) {
+  if (isDirectIntent(intencionParaFaq, INTENTS_DIRECT)) {
     const { rows: faqPorIntencion } = await pool.query(
       `SELECT respuesta FROM faqs 
       WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3) LIMIT 1`,
@@ -761,8 +771,14 @@ if (!respuestaDesdeFaq && !respuesta) {
     ? await traducirMensaje(userInput, 'es')
     : userInput;
 
-    const { intencion: intencionDetectadaParaGuardar } = await detectarIntencion(textoTraducidoParaGuardar, tenant.id, 'whatsapp');
-    const intencionFinal = intencionDetectadaParaGuardar.trim().toLowerCase();
+    // [REPLACE] Normaliza "duda" a sub-slug antes de guardar la sugerida
+    const { intencion: intencionDetectadaParaGuardar } =
+    await detectarIntencion(textoTraducidoParaGuardar, tenant.id, 'whatsapp');
+
+    let intencionFinal = intencionDetectadaParaGuardar.trim().toLowerCase();
+    if (intencionFinal === 'duda') {
+    intencionFinal = buildDudaSlug(userInput); // usa el texto REAL del usuario
+    }
 
     const { rows: sugeridasConIntencion } = await pool.query(
     `SELECT intencion FROM faq_sugeridas 
