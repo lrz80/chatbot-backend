@@ -4,7 +4,7 @@ import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import OpenAI from 'openai';
 import twilio from 'twilio';
-import { buildDudaSlug, isDirectIntent } from '../../lib/intentSlug';
+import { buildDudaSlug, isDirectIntent, normalizeIntentAlias } from '../../lib/intentSlug';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
@@ -301,6 +301,10 @@ async function procesarMensajeWhatsApp(body: any) {
       intencionProc = refined;
       intencionParaFaq = refined; // este es el que usas para consultar FAQ
     }
+
+    // 🔹 Canonicaliza alias (virtuales → online, etc.)
+    intencionProc = normalizeIntentAlias(intencionProc);
+    intencionParaFaq = normalizeIntentAlias(intencionParaFaq);
 
     // 🔎 Overrides por palabras clave
     const priceRegex = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
@@ -787,8 +791,9 @@ if (!respuestaDesdeFaq && !respuesta) {
 
     let intencionFinal = intencionDetectadaParaGuardar.trim().toLowerCase();
     if (intencionFinal === 'duda') {
-    intencionFinal = buildDudaSlug(userInput); // usa el texto REAL del usuario
+      intencionFinal = buildDudaSlug(userInput);
     }
+    intencionFinal = normalizeIntentAlias(intencionFinal); // 👈 CANONICALIZA AQUÍ
 
     const { rows: sugeridasConIntencion } = await pool.query(
     `SELECT intencion FROM faq_sugeridas 

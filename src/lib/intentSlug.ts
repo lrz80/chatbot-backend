@@ -28,6 +28,19 @@ export function topKeywords(text: string, k = 3): string {
     .join('_');
 }
 
+// Canonicaliza alias de intenciones a un único slug
+export function normalizeIntentAlias(intent: string): string {
+  const map: Record<string, string> = {
+    // alias históricos o sinónimos → canónico
+    'clases_virtuales': 'clases_online',
+    'duda__clases_virtuales': 'duda__clases_online',
+    // si quieres cubrir otros posibles
+    'clase_virtual': 'clases_online',
+    'clase_online': 'clases_online',
+  };
+  return map[intent] ?? intent;
+}
+
 // Convierte "duda" genérica en sub-intención específica
 export function buildDudaSlug(userText: string): string {
   const t = normalizeTxt(userText);
