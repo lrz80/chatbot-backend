@@ -178,8 +178,11 @@ async function procesarMensajeWhatsApp(body: any) {
   let intencionProc = intencionLower; // se actualizará tras traducir (si aplica)
   let intencionParaFaq = intencionLower; // esta será la que usemos para consultar FAQ
 
-  // 4️⃣ Si es saludo o agradecimiento → responder y salir
-  if (["saludo", "agradecimiento"].includes(intencionLower)) {
+  // 4️⃣ Si es saludo/agradecimiento, solo sal si el mensaje es SOLO eso
+  const greetingOnly = /^\s*(hola|buenas(?:\s+(tardes|noches|dias))?|hello|hi|hey)\s*$/i.test(userInput.trim());
+  const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
+
+  if ((intencionLower === "saludo" && greetingOnly) || (intencionLower === "agradecimiento" && thanksOnly)) {
     const respuestaRapida =
       intencionLower === "agradecimiento"
         ? "¡De nada! 💬 ¿Quieres ver otra opción del menú?"
@@ -297,6 +300,18 @@ async function procesarMensajeWhatsApp(body: any) {
       console.log(`🎯 Refino duda → ${refined}`);
       intencionProc = refined;
       intencionParaFaq = refined; // este es el que usas para consultar FAQ
+    }
+
+    // 🔎 Overrides por palabras clave
+    const priceRegex = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
+    if (priceRegex.test(userInput)) {
+      intencionProc = 'precio';
+      intencionParaFaq = 'precio';
+      console.log('🎯 Override a intención precio por keyword');
+    } else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userInput)) {
+      intencionProc = 'clases_online';
+      intencionParaFaq = 'clases_online';
+      console.log('🎯 Override a intención clases_online por keyword');
     }
 
     if (!isNumericOnly && intencionProc === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
@@ -539,11 +554,6 @@ async function procesarMensajeWhatsApp(body: any) {
         return;
       }      
 }
-
-  // 🔎 Ajuste de intención por palabra clave (online/virtual/virtuales/virtualidad)
-  if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(mensajeUsuario)) {
-    intencionParaFaq = 'clases_online';
-  }
 
   // [REPLACE] Usa isDirectIntent para incluir duda__*
   let respuestaDesdeFaq: string | null = null;
