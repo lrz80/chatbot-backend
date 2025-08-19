@@ -597,12 +597,30 @@ if (intencionParaFaq === 'interes_clases' && esPreguntaRecomendacion(userInput))
 
   // Evita duplicados exactos (misma pregunta no procesada)
   await pool.query(
-    `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
-     SELECT $1, $2, $3, $4, $5, false, NOW(), $6
-     WHERE NOT EXISTS (
-       SELECT 1 FROM faq_sugeridas
-       WHERE tenant_id = $1 AND canal = $2 AND pregunta = $3 AND procesada = false
-     )`,
+    `
+    INSERT INTO faq_sugeridas
+      (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
+    SELECT *
+    FROM (
+      SELECT
+        $1::uuid  AS tenant_id,           -- ⚠️ usa ::text si no es uuid
+        $2::text  AS canal,
+        $3::text  AS pregunta,
+        $4::text  AS respuesta_sugerida,
+        $5::text  AS idioma,
+        false     AS procesada,
+        NOW()     AS ultima_fecha,
+        $6::text  AS intencion
+    ) AS vals
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM faq_sugeridas f
+      WHERE f.tenant_id = vals.tenant_id
+        AND f.canal     = vals.canal
+        AND f.pregunta  = vals.pregunta
+        AND f.procesada = false
+    );
+    `,
     [tenant.id, canal, preguntaNormalizada, '', idiomaDestino, intencionFinal]
   );
 
