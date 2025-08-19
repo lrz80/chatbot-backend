@@ -16,6 +16,8 @@ import {
   normalizarTexto
 } from '../../lib/faq/similaridadFaq';
 import { detectarIntencion } from '../../lib/detectarIntencion';
+import { runBeginnerRecoInterceptor } from '../../lib/recoPrincipiantes/interceptor';
+
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -46,35 +48,6 @@ const normLang = (code?: string | null) => {
 const normalizeLang = (code?: string | null): 'es' | 'en' =>
   (code || '').toLowerCase().startsWith('en') ? 'en' : 'es';
 
-// --- Helpers de recomendación para principiantes ---
-const stripDiacritics = (s: string) =>
-  s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-
-const norm = (s: string) => stripDiacritics(s.toLowerCase().trim());
-
-function stripLeadingGreeting(t: string) {
-  const re = /^(hola|hello|hi|hey|buenos dias|buenas tardes|buenas noches)[\s,!.:-]*\b/i;
-  return t.replace(re, '').trim();
-}
-
-/** Detecta preguntas tipo "¿cuál recomiendas?" en ES/EN */
-function esPreguntaRecomendacion(raw: string) {
-  const t = norm(stripLeadingGreeting(raw));
-  // ES
-  const es =
-    /\bcual(es)?\b.*\brecom/i.test(t) ||
-    /\bque\b.*\brecom/i.test(t) ||
-    /\brecomendaci(o|ó)n\b/.test(t) ||
-    /\bpara empezar\b/.test(t) ||
-    /\bprincipiante(s)?\b/.test(t);
-  // EN
-  const en =
-    /\bwhich\b.*\brecommend/i.test(t) ||
-    /\bwhat\b.*\brecommend/i.test(t) ||
-    /\brecommendation\b/.test(t) ||
-    /\bbeginner\b.*\brecommend/i.test(t);
-  return es || en;
-}
 
 function getConfigDelayMinutes(cfg: any, fallbackMin = 60) {
   const m = Number(cfg?.minutos_espera);
@@ -589,114 +562,23 @@ async function procesarMensajeWhatsApp(body: any) {
       }      
 }
 
-// 🔎 Interceptar preguntas de RECOMENDACIÓN para principiantes
-if (intencionParaFaq === 'interes_clases' && esPreguntaRecomendacion(userInput)) {
-  // 1) Registrar como FAQ sugerida (multitenant/multicanal)
-  const preguntaNormalizada = normalizarTexto(userInput);
-  const intencionFinal = 'duda__recomendacion_principiantes';
+// 🔎 Interceptor canal-agnóstico (recomendación principiantes)
+const interceptado = await runBeginnerRecoInterceptor({
+  tenantId: tenant.id,
+  canal: 'whatsapp',
+  fromNumber,
+  userInput,
+  idiomaDestino,
+  intencionParaFaq,
+  promptBase,
+  enviarFn: enviarWhatsAppSeguro, // tu sender chunker
+});
 
-  // Evita duplicados exactos (misma pregunta no procesada)
-  await pool.query(
-    `
-    INSERT INTO faq_sugeridas
-      (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
-    SELECT *
-    FROM (
-      SELECT
-        $1::uuid  AS tenant_id,           -- ⚠️ usa ::text si no es uuid
-        $2::text  AS canal,
-        $3::text  AS pregunta,
-        $4::text  AS respuesta_sugerida,
-        $5::text  AS idioma,
-        false     AS procesada,
-        NOW()     AS ultima_fecha,
-        $6::text  AS intencion
-    ) AS vals
-    WHERE NOT EXISTS (
-      SELECT 1
-      FROM faq_sugeridas f
-      WHERE f.tenant_id = vals.tenant_id
-        AND f.canal     = vals.canal
-        AND f.pregunta  = vals.pregunta
-        AND f.procesada = false
-    );
-    `,
-    [tenant.id, canal, preguntaNormalizada, '', idiomaDestino, intencionFinal]
-  );
-
-  // 2) Mensaje útil y breve + (si existe) FAQ oficial interes_clases como complemento
-  let intro =
-    (idiomaDestino === 'en')
-      ? `Great question! For first-timers we usually suggest starting with a lower-intensity or “Level 1 / Beginner” class to learn form and pacing comfortably.`
-      : `¡Excelente pregunta! Si es tu primera vez, solemos recomendar comenzar con una clase de menor intensidad o “Nivel 1 / Principiantes” para aprender técnica y ritmo con comodidad.`;
-
-  let complemento = '';
-  try {
-    const { rows: faqRows } = await pool.query(
-      `SELECT respuesta FROM faqs
-       WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = 'interes_clases'
-       LIMIT 1`,
-      [tenant.id, canal]
-    );
-    if (faqRows[0]?.respuesta) {
-      let respFaq = faqRows[0].respuesta;
-      try {
-        const lang = await detectarIdioma(respFaq);
-        if (lang && lang !== 'zxx' && lang !== idiomaDestino) {
-          respFaq = await traducirMensaje(respFaq, idiomaDestino);
-        }
-      } catch {}
-      complemento = `\n\n${respFaq}`;
-    }
-  } catch (e) {
-    console.warn('No se pudo obtener FAQ interes_clases para complemento:', e);
-  }
-
-  const msg = `${intro}${complemento || (
-    (idiomaDestino === 'en')
-      ? `\n\nYou can also book your free first class; tell me your current fitness level and I’ll point you to the best fit.`
-      : `\n\nTambién puedes agendar tu primera clase gratis; cuéntame tu nivel actual y te indico la mejor opción.`
-  )}`;
-
-  await enviarWhatsAppSeguro(fromNumber, msg, tenant.id);
-
-  // (Opcional) follow-up como ya haces
-  try {
-    const { rows } = await pool.query(`SELECT * FROM follow_up_settings WHERE tenant_id = $1`, [tenant.id]);
-    const cfg = rows[0];
-    if (cfg) {
-      // limpiar pendientes
-      await pool.query(
-        `DELETE FROM mensajes_programados
-         WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
-        [tenant.id, canal, fromNumber]
-      );
-      const delayMin = getConfigDelayMinutes(cfg, 60);
-      const fechaEnvio = new Date(); fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
-      let contenido = cfg.mensaje_general || (
-        idiomaDestino === 'en'
-          ? 'Would you like help choosing a time for your first (free) class?'
-          : '¿Te ayudo a elegir un horario para tu primera clase (gratis)?'
-      );
-      try {
-        const l = await detectarIdioma(contenido);
-        if (l && l !== 'zxx' && l !== idiomaDestino) {
-          contenido = await traducirMensaje(contenido, idiomaDestino);
-        }
-      } catch {}
-      await pool.query(
-        `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-         VALUES ($1, $2, $3, $4, $5, false)`,
-        [tenant.id, canal, fromNumber, contenido, fechaEnvio]
-      );
-      console.log(`📅 Follow-up programado (recomendación principiantes) en ${delayMin} min.`);
-    }
-  } catch (e) {
-    console.warn('No se pudo programar follow-up (recomendación):', e);
-  }
-
-  // ❗ Importante: salimos aquí para NO caer en la FAQ genérica
-  return;
+if (interceptado) {
+  // ya respondió + registró sugerida + (opcional) follow-up se maneja afuera si quieres
+  // Si quieres mantener tu follow-up actual aquí, puedes dejarlo después de este if.
+  console.log('✅ Interceptor principiantes respondió en WhatsApp.');
+  return; // evita FAQ genérica
 }
 
   // [REPLACE] Usa isDirectIntent para incluir duda__*
