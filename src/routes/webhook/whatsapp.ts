@@ -17,7 +17,7 @@ import {
 } from '../../lib/faq/similaridadFaq';
 import { detectarIntencion } from '../../lib/detectarIntencion';
 import { runBeginnerRecoInterceptor } from '../../lib/recoPrincipiantes/interceptor';
-
+import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -581,17 +581,26 @@ if (interceptado) {
   return; // evita FAQ genérica
 }
 
-  // [REPLACE] Usa isDirectIntent para incluir duda__*
+  // [REPLACE] lookup robusto
   let respuestaDesdeFaq: string | null = null;
 
   if (isDirectIntent(intencionParaFaq, INTENTS_DIRECT)) {
-    const { rows: faqPorIntencion } = await pool.query(
-      `SELECT respuesta FROM faqs 
-      WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3) LIMIT 1`,
-      [tenant.id, canal, intencionParaFaq]
-    );
-    if (faqPorIntencion.length > 0) {
-      respuestaDesdeFaq = faqPorIntencion[0].respuesta;
+    if (intencionParaFaq === 'precio') {
+      // 🔎 Usa helper robusto para precios (alias + sub-slugs)
+      respuestaDesdeFaq = await fetchFaqPrecio(tenant.id, canal);
+      if (respuestaDesdeFaq) {
+        console.log('📚 FAQ precio (robusta) encontrada.');
+      }
+    } else {
+      // Camino normal para otras intenciones directas
+      const { rows: faqPorIntencion } = await pool.query(
+        `SELECT respuesta FROM faqs 
+        WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3) LIMIT 1`,
+        [tenant.id, canal, intencionParaFaq]
+      );
+      if (faqPorIntencion.length > 0) {
+        respuestaDesdeFaq = faqPorIntencion[0].respuesta;
+      }
     }
   }
 
