@@ -11,7 +11,6 @@ export type TipoClase = {
   descripcion?: string;
 };
 
-// ---------- Utils de parsing ----------
 const norm = (s: string) =>
   (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
@@ -25,47 +24,58 @@ function dedupeByTipo(items: TipoClase[]): TipoClase[] {
   return Array.from(map.values());
 }
 
-// Intenta encontrar bloques JSON o YAML en texto
+// -------------------- helpers de introspección de schema (evitan errores en logs)
+async function tableExists(table: string, schema = 'public'): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT to_regclass($1) IS NOT NULL AS exists`,
+    [`${schema}.${table}`]
+  );
+  return !!rows[0]?.exists;
+}
+
+async function columnExists(table: string, column: string, schema = 'public'): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM information_schema.columns
+       WHERE table_schema = $1 AND table_name = $2 AND column_name = $3
+     ) AS exists`,
+    [schema, table, column]
+  );
+  return !!rows[0]?.exists;
+}
+
+// -------------------- parsing estructurado / heurístico desde texto
 function extractStructuredBlocks(text: string): any[] {
   const out: any[] = [];
   if (!text) return out;
 
-  // --- JSON entre ```json ... ``` ---
-  const jsonFence = /```json\s*([\s\S]*?)```/gi;
   let m: RegExpExecArray | null;
+
+  // ```json ... ```
+  const jsonFence = /```json\s*([\s\S]*?)```/gi;
   while ((m = jsonFence.exec(text)) !== null) {
-    try {
-      const obj = JSON.parse(m[1]);
-      out.push(obj);
-    } catch {}
+    try { out.push(JSON.parse(m[1])); } catch {}
   }
 
-  // --- JSON crudo { ... } sospechoso ---
-  const jsonLoose = /(\{[\s\S]{20,}\})/g; // heurístico
+  // JSON suelto { ... }
+  const jsonLoose = /(\{[\s\S]{20,}\})/g;
   while ((m = jsonLoose.exec(text)) !== null) {
-    try {
-      const obj = JSON.parse(m[1]);
-      out.push(obj);
-    } catch {}
+    try { out.push(JSON.parse(m[1])); } catch {}
   }
 
-  // --- YAML en ```yaml ... ``` (simple) ---
-  // No parseamos YAML con lib; intentamos una conversión mínima a JSON si detectamos listas
+  // ```yaml ... ``` (conversión mínima a objetos)
   const yamlFence = /```yaml\s*([\s\S]*?)```/gi;
   while ((m = yamlFence.exec(text)) !== null) {
     const yaml = m[1];
-    // Heurística: items de lista con "- tipo:" que podemos convertir rápido
     if (/-\s*tipo\s*:/i.test(yaml)) {
       const lines = yaml.split('\n');
       const items: any[] = [];
       let cur: any = null;
       for (const line of lines) {
         const l = line.trim();
-        if (l.startsWith('-')) {
-          if (cur) items.push(cur);
-          cur = {};
-          continue;
-        }
+        if (!l) continue;
+        if (l.startsWith('-')) { if (cur) items.push(cur); cur = {}; continue; }
         const kv = l.match(/^([a-zA-Z_]+)\s*:\s*(.+)$/);
         if (kv && cur) {
           const k = kv[1].toLowerCase();
@@ -80,11 +90,9 @@ function extractStructuredBlocks(text: string): any[] {
       if (items.length) out.push(items);
     }
   }
-
   return out;
 }
 
-// Normaliza objetos diversos a TipoClase[]
 function normalizeAnyToTipos(input: any): TipoClase[] {
   if (!input) return [];
   const arr = Array.isArray(input) ? input : [input];
@@ -93,31 +101,30 @@ function normalizeAnyToTipos(input: any): TipoClase[] {
   for (const raw of arr) {
     if (!raw || typeof raw !== 'object') continue;
 
-    // Soportar estructuras tipo { clases: [...] }
     const list = Array.isArray(raw) ? raw
-      : Array.isArray(raw.clases) ? raw.clases
-      : Array.isArray(raw.tipos) ? raw.tipos
-      : Array.isArray(raw.class_types) ? raw.class_types
+      : Array.isArray((raw as any).clases) ? (raw as any).clases
+      : Array.isArray((raw as any).tipos) ? (raw as any).tipos
+      : Array.isArray((raw as any).class_types) ? (raw as any).class_types
       : [raw];
 
     for (const r of list) {
       if (!r || typeof r !== 'object') continue;
-      const tipo = String(r.tipo ?? r.category ?? r.nombre_tipo ?? '').trim();
+      const tipo = String((r as any).tipo ?? (r as any).category ?? (r as any).nombre_tipo ?? '').trim();
       if (!tipo) continue;
 
-      const nombre = r.nombre ?? r.name ?? '';
-      const nivel  = r.nivel ?? r.level ?? '';
+      const nombre = (r as any).nombre ?? (r as any).name ?? '';
+      const nivel  = (r as any).nivel  ?? (r as any).level ?? '';
       const beginner =
-        r.beginner === true ||
+        (r as any).beginner === true ||
         /beginner|intro|nivel\s*1|b(á|a)sico/i.test(`${nivel} ${nombre}` || '');
-      const intensidadRaw = String(r.intensidad ?? r.intensity ?? '').toLowerCase();
+      const intensidadRaw = String((r as any).intensidad ?? (r as any).intensity ?? '').toLowerCase();
       const intensidad: 'baja'|'media'|'alta'|undefined =
         intensidadRaw.includes('baja') || intensidadRaw.includes('low') ? 'baja' :
         intensidadRaw.includes('media') || intensidadRaw.includes('mid') ? 'media' :
         intensidadRaw.includes('alta') || intensidadRaw.includes('high') ? 'alta' : undefined;
 
-      const duracion = Number(r.duracion_min ?? r.duracion ?? r.duration_min ?? r.duration);
-      const descripcion = r.descripcion ?? r.description ?? '';
+      const duracion = Number((r as any).duracion_min ?? (r as any).duracion ?? (r as any).duration_min ?? (r as any).duration);
+      const descripcion = (r as any).descripcion ?? (r as any).description ?? '';
 
       result.push({
         tipo,
@@ -134,146 +141,168 @@ function normalizeAnyToTipos(input: any): TipoClase[] {
   return result;
 }
 
-// Heurístico simple desde texto libre (si no hay bloque estructurado)
 function extractHeuristicTiposFromText(text: string): TipoClase[] {
-  const t = norm(text);
+  if (!text) return [];
   const tipos: TipoClase[] = [];
 
   const hasCycling = /cycling|spinning|indoor\s*cycling/i.test(text);
   const hasFunc = /(funcional|functional|strength\s*training|full\s*body)/i.test(text);
 
+  const beginnerish = /principiantes|beginner|intro|nivel\s*1/i.test(text);
+
+  const durationMatch = text.match(/(\d{2})\s*min/i);
+  const dur = durationMatch ? Number(durationMatch[1]) : undefined;
+
+  const low  = /baja|low/i.test(text);
+  const mid  = /media|mid/i.test(text);
+  const high = /alta|high/i.test(text);
+  const intensidad = low ? 'baja' : mid ? 'media' : high ? 'alta' : undefined;
+
   if (hasCycling) {
     tipos.push({
       tipo: 'cycling',
-      nombre: /principiantes|beginner|intro|nivel\s*1/i.test(text)
-        ? 'Cycling Principiantes'
-        : 'Cycling',
-      beginner: /principiantes|beginner|intro|nivel\s*1/i.test(text) || undefined,
-      intensidad:
-        /baja|low/i.test(text) ? 'baja' :
-        /media|mid/i.test(text) ? 'media' :
-        /alta|high/i.test(text) ? 'alta' : undefined,
-      duracion_min: /(\d{2})\s*min/i.test(text) ? Number((text.match(/(\d{2})\s*min/i) as RegExpMatchArray)[1]) : undefined,
-      descripcion: undefined
+      nombre: beginnerish ? 'Cycling Principiantes' : 'Cycling',
+      beginner: beginnerish || undefined,
+      intensidad,
+      duracion_min: dur,
     });
   }
-
   if (hasFunc) {
     tipos.push({
       tipo: 'funcional',
-      nombre: /principiantes|beginner|intro|nivel\s*1/i.test(text)
-        ? 'Funcional Básico'
-        : 'Funcional',
-      beginner: /principiantes|beginner|intro|nivel\s*1/i.test(text) || undefined,
-      intensidad:
-        /baja|low/i.test(text) ? 'baja' :
-        /media|mid/i.test(text) ? 'media' :
-        /alta|high/i.test(text) ? 'alta' : undefined,
-      duracion_min: /(\d{2})\s*min/i.test(text) ? Number((text.match(/(\d{2})\s*min/i) as RegExpMatchArray)[1]) : undefined,
-      descripcion: undefined
+      nombre: beginnerish ? 'Funcional Básico' : 'Funcional',
+      beginner: beginnerish || undefined,
+      intensidad,
+      duracion_min: dur,
     });
   }
-
   return tipos;
 }
 
-// ---------- Carga desde DB (múltiples fuentes) ----------
-export async function loadTiposClases(tenantId: string): Promise<TipoClase[]> {
-  // 1) JSON directo en tenants.tipos_clases
-  try {
+// -------------------- API principal
+export async function loadTiposClases(
+  tenantId: string,
+  opts?: { promptBase?: string; assistantInfo?: string }
+): Promise<{ tipos: TipoClase[]; fuente: string }> {
+  // A) PRIMERO: intentar con lo que YA tienes en memoria (sin tocar DB)
+  {
+    const blobs = [opts?.promptBase, opts?.assistantInfo].filter(Boolean) as string[];
+    for (const blob of blobs) {
+      // 1) bloques estructurados
+      const blocks = extractStructuredBlocks(blob);
+      for (const b of blocks) {
+        const tipos = dedupeByTipo(normalizeAnyToTipos(b));
+        if (tipos.length) return { tipos, fuente: 'promptBase(structured)' };
+      }
+      // 2) heurístico
+      const heur = extractHeuristicTiposFromText(blob);
+      if (heur.length) return { tipos: dedupeByTipo(heur), fuente: 'promptBase(heuristic)' };
+    }
+  }
+
+  // B) Si no hubo suerte, vamos a la DB pero SOLO si existen las fuentes
+
+  // tenants.tipos_clases
+  if (await columnExists('tenants', 'tipos_clases')) {
     const { rows } = await pool.query(
       `SELECT tipos_clases FROM tenants WHERE id = $1 LIMIT 1`, [tenantId]
     );
     const raw = rows[0]?.tipos_clases;
     if (raw) {
-      const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      if (Array.isArray(data) && data.length) return dedupeByTipo(normalizeAnyToTipos(data));
+      try {
+        const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        const tipos = dedupeByTipo(normalizeAnyToTipos(data));
+        if (tipos.length) return { tipos, fuente: 'tenants.tipos_clases' };
+      } catch {}
     }
-  } catch (e) { /* opcional log */ }
+  }
 
-  // 2) settings(key='tipos_clases')
-  try {
+  // settings('tipos_clases')
+  if (await tableExists('settings')) {
     const { rows } = await pool.query(
       `SELECT value FROM settings WHERE tenant_id = $1 AND key = 'tipos_clases' LIMIT 1`, [tenantId]
     );
     const raw = rows[0]?.value;
     if (raw) {
-      const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      if (Array.isArray(data) && data.length) return dedupeByTipo(normalizeAnyToTipos(data));
+      try {
+        const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        const tipos = dedupeByTipo(normalizeAnyToTipos(data));
+        if (tipos.length) return { tipos, fuente: 'settings.tipos_clases' };
+      } catch {}
     }
-  } catch (e) { /* opcional log */ }
+  }
 
-  // 3) Tablas relacionales
-  try {
+  // class_types
+  if (await tableExists('class_types')) {
     const { rows } = await pool.query(
       `SELECT tipo, nombre, nivel, beginner, intensidad, duracion_min, descripcion
        FROM class_types WHERE tenant_id = $1`, [tenantId]
     );
-    if (rows?.length) return dedupeByTipo(rows as TipoClase[]);
-  } catch (e) {}
+    if (rows?.length) return { tipos: dedupeByTipo(rows as TipoClase[]), fuente: 'class_types' };
+  }
 
-  try {
+  // clases
+  if (await tableExists('clases')) {
     const { rows } = await pool.query(
       `SELECT tipo, nombre, nivel, beginner, intensidad, duracion_min, descripcion
        FROM clases WHERE tenant_id = $1`, [tenantId]
     );
-    if (rows?.length) return dedupeByTipo(rows as TipoClase[]);
-  } catch (e) {}
+    if (rows?.length) return { tipos: dedupeByTipo(rows as TipoClase[]), fuente: 'clases' };
+  }
 
-  // 4) ⬇️ NUEVO: leer texto desde tenants.prompt y tenants.info_asistente
-  let promptText = '';
-  let infoText = '';
+  // tenants.prompt / tenants.info_asistente (solo si existen columnas)
+  {
+    const hasPrompt = await columnExists('tenants','prompt');
+    const hasInfo   = await columnExists('tenants','info_asistente');
+    if (hasPrompt || hasInfo) {
+      const cols = [hasPrompt ? 'prompt' : null, hasInfo ? 'info_asistente' : null]
+        .filter(Boolean)
+        .join(', ');
+      const { rows } = await pool.query(
+        `SELECT ${cols} FROM tenants WHERE id = $1 LIMIT 1`, [tenantId]
+      );
+      const textParts: string[] = [];
+      if (hasPrompt && rows[0]?.prompt) textParts.push(rows[0].prompt);
+      if (hasInfo && rows[0]?.info_asistente) textParts.push(rows[0].info_asistente);
 
-  try {
-    const { rows } = await pool.query(
-      // ⚠️ Ajusta nombres si en tu schema se llaman distinto
-      `SELECT prompt, info_asistente
-         FROM tenants
-        WHERE id = $1
-        LIMIT 1`,
-      [tenantId]
-    );
-    promptText = rows[0]?.prompt || '';
-    // Si tu columna se llama 'informacion_asistente' o similar, cámbiala arriba
-    infoText   = rows[0]?.info_asistente || '';
-  } catch (e) { /* opcional log */ }
-
-  // 4.1 Intentar bloques estructurados en prompt / info
-  for (const blob of [promptText, infoText]) {
-    if (!blob) continue;
-    const blocks = extractStructuredBlocks(blob);
-    for (const b of blocks) {
-      const tipos = normalizeAnyToTipos(b);
-      if (tipos.length) return dedupeByTipo(tipos);
+      for (const blob of textParts) {
+        const blocks = extractStructuredBlocks(blob);
+        for (const b of blocks) {
+          const tipos = dedupeByTipo(normalizeAnyToTipos(b));
+          if (tipos.length) return { tipos, fuente: 'tenants.prompt/info(structured)' };
+        }
+        const heur = extractHeuristicTiposFromText(blob);
+        if (heur.length) return { tipos: dedupeByTipo(heur), fuente: 'tenants.prompt/info(heuristic)' };
+      }
     }
   }
 
-  // 4.2 Heurístico por palabras clave si no hay bloques
-  const heurFromPrompt = promptText ? extractHeuristicTiposFromText(promptText) : [];
-  const heurFromInfo   = infoText ? extractHeuristicTiposFromText(infoText) : [];
-  const merged = dedupeByTipo([...heurFromPrompt, ...heurFromInfo]);
-  if (merged.length) return merged;
-
-  // 5) (Opcional) settings con otra key
-  try {
+  // settings con otras keys informativas
+  if (await tableExists('settings')) {
     const { rows } = await pool.query(
-      `SELECT value FROM settings WHERE tenant_id = $1 AND key IN ('assistant_info','informacion_asistente') LIMIT 1`, [tenantId]
+      `SELECT value FROM settings
+        WHERE tenant_id = $1
+          AND key IN ('assistant_info','informacion_asistente')
+        LIMIT 1`,
+      [tenantId]
     );
     const raw = rows[0]?.value;
-    if (typeof raw === 'string') {
-      const blocks = extractStructuredBlocks(raw);
-      for (const b of blocks) {
-        const tipos = normalizeAnyToTipos(b);
-        if (tipos.length) return dedupeByTipo(tipos);
+    if (raw) {
+      if (typeof raw === 'string') {
+        const blocks = extractStructuredBlocks(raw);
+        for (const b of blocks) {
+          const tipos = dedupeByTipo(normalizeAnyToTipos(b));
+          if (tipos.length) return { tipos, fuente: 'settings.assistant_info(structured)' };
+        }
+        const heur = extractHeuristicTiposFromText(raw);
+        if (heur.length) return { tipos: dedupeByTipo(heur), fuente: 'settings.assistant_info(heuristic)' };
+      } else {
+        const tipos = dedupeByTipo(normalizeAnyToTipos(raw));
+        if (tipos.length) return { tipos, fuente: 'settings.assistant_info(json)' };
       }
-      const heur = extractHeuristicTiposFromText(raw);
-      if (heur.length) return dedupeByTipo(heur);
-    } else if (raw) {
-      const tipos = normalizeAnyToTipos(raw);
-      if (tipos.length) return dedupeByTipo(tipos);
     }
-  } catch (e) {}
+  }
 
-  // Sin datos
-  return [];
+  // Nada encontrado
+  return { tipos: [], fuente: 'vacio' };
 }
