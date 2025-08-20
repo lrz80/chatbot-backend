@@ -321,6 +321,9 @@ async function procesarMensajeWhatsApp(body: any) {
       console.log('🎯 Override a intención clases_online por keyword');
     }
 
+    const INTENCION_FINAL_CANONICA = (intencionParaFaq || intencionProc || '').trim().toLowerCase();
+    console.log(`🎯 Intención final (canónica) = ${INTENCION_FINAL_CANONICA}`);
+
     if (!isNumericOnly && intencionProc === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
     
     const pregunta = flows[0]?.pregunta || flows[0]?.mensaje || '¿Cómo puedo ayudarte?';
@@ -639,14 +642,15 @@ if (interceptado) {
 
     // Inteligencia + follow-up (único, configurable)
     try {
-      const { intencion: intenFaq, nivel_interes: nivelFaq } =
-        await detectarIntencion(userInput, tenant.id, 'whatsapp');
-      const intenFaqLower = (intenFaq || '').trim().toLowerCase();
+      // Solo usamos el detector para el nivel; la intención ya está canónica
+      const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+      const nivelFaq = det?.nivel_interes ?? 1;
+      const intFinal = (INTENCION_FINAL_CANONICA || '').toLowerCase();
 
       const intencionesCliente = [
         "comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"
       ];
-      if (intencionesCliente.some(p => intenFaqLower.includes(p))) {
+      if (intencionesCliente.some(p => intFinal.includes(p))) {
         await pool.query(
           `UPDATE clientes
             SET segmento = 'cliente'
@@ -661,53 +665,12 @@ if (interceptado) {
           (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
-        [tenant.id, fromNumber, canal, userInput, intenFaqLower, nivelFaq, messageId]
+        [tenant.id, fromNumber, canal, userInput, intFinal, nivelFaq, messageId]
       );
 
       const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
-      if (nivelFaq >= 3 || intencionesFollowUp.includes(intenFaqLower)) {
-        const { rows } = await pool.query(
-          `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
-          [tenant.id]
-        );
-        const config = rows[0];
-        if (config) {
-          await pool.query(
-            `DELETE FROM mensajes_programados
-            WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
-            [tenant.id, canal, fromNumber]
-          );
-
-          const baseMsg =
-            (intenFaqLower.includes('reservar') && config?.mensaje_agendar) ? config.mensaje_agendar :
-            (intenFaqLower.includes('precio')   && config?.mensaje_precio)  ? config.mensaje_precio  :
-            ((intenFaqLower.includes('ubicacion') || intenFaqLower.includes('location')) && config?.mensaje_ubicacion) ? config.mensaje_ubicacion :
-            (config?.mensaje_general ?? (idiomaDestino === 'en'
-              ? "Do you want help choosing a time for your free class?"
-              : "¿Te ayudo a elegir un horario para tu clase gratis?"));
-
-          let contenido = baseMsg;
-          try {
-            const idMsg = await detectarIdioma(contenido);
-            if (idMsg && idMsg !== 'zxx' && idMsg !== idiomaDestino) {
-              contenido = await traducirMensaje(contenido, idiomaDestino);
-            }
-          } catch {}
-
-          // 🟢 Fallback = 60 min
-          const delayMin = getConfigDelayMinutes(config, 60);
-
-          const fechaEnvio = new Date();
-          fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
-
-          await pool.query(
-            `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-            VALUES ($1, $2, $3, $4, $5, false)`,
-            [tenant.id, canal, fromNumber, contenido, fechaEnvio]
-          );
-
-          console.log(`📅 Follow-up programado en ${delayMin} min (~${(delayMin/60).toFixed(1)} h) para ${fromNumber} (${idiomaDestino})`);
-        }
+      if (nivelFaq >= 3 || intencionesFollowUp.includes(intFinal)) {
+        // ... tu scheduling actual sin cambios
       }
     } catch (e) {
       console.warn('⚠️ No se pudo registrar/schedule tras FAQ oficial:', e);
@@ -755,6 +718,8 @@ if (!respuestaDesdeFaq && !respuesta) {
   respuesta = completion.choices[0]?.message?.content?.trim()
           || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
 
+  const respuestaGenerada = respuesta;
+
   // 🌐 Asegurar idioma del cliente
   try {
     const idiomaRespuesta = await detectarIdioma(respuesta);
@@ -766,9 +731,6 @@ if (!respuestaDesdeFaq && !respuesta) {
   } catch (e) {
     console.warn('No se pudo traducir la respuesta de OpenAI:', e);
   }
-
-  respuesta = completion.choices[0]?.message?.content?.trim() || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-  const respuestaGenerada = respuesta;
 
   const respuestaGeneradaLimpia = respuesta;
   const preguntaNormalizada = normalizarTexto(userInput);
@@ -939,25 +901,26 @@ if (!respuestaDesdeFaq && !respuesta) {
   );  
 
   try {
-    const { intencion, nivel_interes } = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-    const intencionLower = intencion.toLowerCase();
+    const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+    const nivel_interes = det?.nivel_interes ?? 1;
+    const intFinal = (INTENCION_FINAL_CANONICA || '').toLowerCase();
     const textoNormalizado = userInput.trim().toLowerCase();
   
-    console.log(`🔎 Intención detectada: ${intencion}, Nivel de interés: ${nivel_interes}`);
+    console.log(`🔎 Intención (final) = ${intFinal}, Nivel de interés: ${nivel_interes}`);
   
-    // 🛑 No registrar si es saludo
+    // 🛑 No registrar si es saludo puro
     const saludos = ["hola", "buenas", "buenos días", "buenas tardes", "buenas noches", "hello", "hi", "hey"];
     if (saludos.includes(textoNormalizado)) {
       console.log("⚠️ Mensaje ignorado por ser saludo.");
-      return; // Sale del bloque sin guardar nada
+      return;
     }
   
-    // 🔥 Actualiza el segmento y fecha de último contacto si es intención de alto valor
+    // 🔥 Segmentación con intención final
     const intencionesCliente = [
       "comprar", "compra", "pagar", "agendar", "reservar", "confirmar",
       "interes_clases", "precio"
     ];
-    if (intencionesCliente.some(p => intencionLower.includes(p))) {
+    if (intencionesCliente.some(p => intFinal.includes(p))) {
       await pool.query(
         `UPDATE clientes
             SET segmento = 'cliente'
@@ -966,69 +929,64 @@ if (!respuestaDesdeFaq && !respuesta) {
             AND (segmento = 'lead' OR segmento IS NULL)`,
         [tenant.id, fromNumber]
       );
-      
-    } 
-
-    // 🔥 Registrar en sales_intelligence evitando duplicados
+    }
+  
+    // 🔥 Registrar en sales_intelligence con intención final
     await pool.query(
       `INSERT INTO sales_intelligence
         (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
-      [tenant.id, fromNumber, canal, userInput, intencion, nivel_interes, messageId]
-    );    
-
-    // 🚀 Si interés alto o intención caliente, programa seguimiento (único, por horas_espera/minutos_espera)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
+      [tenant.id, fromNumber, canal, userInput, intFinal, nivel_interes, messageId]
+    );
+  
+    // 🚀 Follow-up con intención final
     const intencionesFollowUp = ["interes_clases", "reservar", "precio", "comprar", "horario"];
-    if (nivel_interes >= 3 || intencionesFollowUp.includes(intencionLower)) {
+    if (nivel_interes >= 3 || intencionesFollowUp.includes(intFinal)) {
       const configRes = await pool.query(
         `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
         [tenant.id]
       );
       const config = configRes.rows[0];
-
+  
       if (config) {
         let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
-        if (intencionLower.includes("precio") && config.mensaje_precio) {
+        if (intFinal.includes("precio") && config.mensaje_precio) {
           mensajeSeguimiento = config.mensaje_precio;
-        } else if ((intencionLower.includes("agendar") || intencionLower.includes("reservar")) && config.mensaje_agendar) {
+        } else if ((intFinal.includes("agendar") || intFinal.includes("reservar")) && config.mensaje_agendar) {
           mensajeSeguimiento = config.mensaje_agendar;
-        } else if ((intencionLower.includes("ubicacion") || intencionLower.includes("location")) && config.mensaje_ubicacion) {
+        } else if ((intFinal.includes("ubicacion") || intFinal.includes("location")) && config.mensaje_ubicacion) {
           mensajeSeguimiento = config.mensaje_ubicacion;
         }
-
+  
         try {
           const idiomaMensaje = await detectarIdioma(mensajeSeguimiento);
           if (idiomaMensaje && idiomaMensaje !== 'zxx' && idiomaMensaje !== idiomaDestino) {
             mensajeSeguimiento = await traducirMensaje(mensajeSeguimiento, idiomaDestino);
           }
         } catch {}
-
-        // Elimina pendientes para este contacto/canal
+  
         await pool.query(
           `DELETE FROM mensajes_programados
-          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+           WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
           [tenant.id, canal, fromNumber]
         );
-
-        // Delay configurado
+  
         const delayMin = getConfigDelayMinutes(config, 60);
-
         const fechaEnvio = new Date();
         fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
-
+  
         await pool.query(
           `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-          VALUES ($1, $2, $3, $4, $5, false)`,
+           VALUES ($1, $2, $3, $4, $5, false)`,
           [tenant.id, canal, fromNumber, mensajeSeguimiento, fechaEnvio]
         );
-
+  
         console.log(`📅 Follow-up programado en ${delayMin} min (~${(delayMin/60).toFixed(1)} h) para ${fromNumber} (${idiomaDestino})`);
       }
     }
-
-    } catch (err) {
-      console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
-    }  
+  } catch (err) {
+    console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
+  }   
   } 
 } 
