@@ -75,14 +75,25 @@ async function ejecutarCampañasProgramadas() {
       const campaignId = Number(c.id);
       const canal = c.canal as string;
 
+      // ⛳️ CLAIM: tomar la campaña si aún está pendiente
+      const claimed = await pool.query(
+        `UPDATE campanas
+           SET enviada = true
+         WHERE id = $1 AND enviada = false
+         RETURNING id`,
+        [campaignId]
+      );
+      if (claimed.rowCount === 0) {
+        console.warn(`↪️ Campaña #${campaignId} ya tomada/enviada. Saltando.`);
+        continue;
+      }
+
       // 🔐 Límite dinámico por canal
       const cap = await getCapacidadCanal(tenantId, canal);
 
       if (cap.restante <= 0) {
         console.warn(`⛔️ Límite mensual alcanzado para ${canal.toUpperCase()} en tenant ${tenantId} (limite=${cap.limite}, usados=${cap.usados})`);
-        // Marcamos enviada=false para reintentar cuando haya créditos nuevos
-        // (si prefieres marcar como "pausada", agrega un estado adicional en la tabla)
-        continue;
+        continue; // ya quedó "enviada=true" por el claim; si prefieres reintentar, aquí podrías revertir a false
       }
 
       // ⚡️ Variante PARCIAL: cortar a lo disponible
@@ -111,8 +122,6 @@ async function ejecutarCampañasProgramadas() {
           console.warn(`⚠️ No hay número Twilio SMS para tenant ${tenantId}`);
           continue;
         }
-
-        // ✅ Solo se contabilizan los SMS válidos enviados
         enviados = await sendSMS(c.contenido, destinatarios, from, tenantId, campaignId);
       }
 
@@ -140,7 +149,6 @@ async function ejecutarCampañasProgramadas() {
 
         const contactos = destinatarios.map((tel: string) => ({ telefono: tel }));
         await sendWhatsApp(template_sid, contactos, `whatsapp:${from}`, tenantId, campaignId, vars);
-
         enviados = contactos.length;
       }
 
@@ -152,7 +160,6 @@ async function ejecutarCampañasProgramadas() {
         const nombreNegocio = tenantRes.rows[0]?.name || "Tu negocio";
         const logoUrl = tenantRes.rows[0]?.logo_url;
 
-        // En este flujo asumimos que `destinatarios` son emails concretos
         const contactosRes = await pool.query(
           `SELECT email, nombre FROM contactos
            WHERE tenant_id = $1 AND email = ANY($2)`,
@@ -185,9 +192,10 @@ async function ejecutarCampañasProgramadas() {
         enviados = contactos.length;
       }
 
-      // Si no se envió nada, no registres uso ni marques enviada
       if (!enviados || enviados <= 0) {
         console.warn(`⚠️ Campaña #${campaignId}: 0 enviados tras intentar despacho.`);
+        // Si prefieres reintentar esta campaña en una próxima corrida:
+        // await pool.query("UPDATE campanas SET enviada = false WHERE id = $1", [campaignId]);
         continue;
       }
 
@@ -225,14 +233,13 @@ async function ejecutarCampañasProgramadas() {
         console.error('❌ No se encontró membresia_inicio para el tenant:', tenantId);
       }
 
-      // Marcar como enviada: ya se procesó (parcial o total)
-      await pool.query("UPDATE campanas SET enviada = true WHERE id = $1", [campaignId]);
-
       const detalleParcial = saltados > 0 ? ` | enviados ${enviados}, saltados ${saltados}` : ` | enviados ${enviados}`;
       console.log(`✅ Campaña #${campaignId} procesada (${canal}${detalleParcial})`);
 
     } catch (err) {
       console.error(`❌ Error procesando campaña #${c.id}:`, err);
+      // Si quieres reintentar esta campaña en una siguiente corrida al fallar:
+      // await pool.query("UPDATE campanas SET enviada = false WHERE id = $1", [Number(c.id)]);
     }
   }
 }
