@@ -1,3 +1,4 @@
+// src/routes/campaigns/index.ts
 import express, { Request, Response, NextFunction } from "express";
 import multer from "multer";
 import path from "path";
@@ -9,6 +10,7 @@ import { subirArchivoAR2 } from "../../lib/r2/subirArchivoAR2";
 
 const router = express.Router();
 
+/** ============ Multer (subidas) ============ */
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const dir = path.join(__dirname, "../../../public/uploads");
@@ -37,13 +39,54 @@ function manejarErroresMulter(
 
 const upload = multer({ storage });
 
+/** ============ Límite base por canal (se suma a créditos vigentes) ============ */
 const CANAL_LIMITES: Record<string, number> = {
   whatsapp: 300,
   sms: 500,
   email: 1000,
 };
 
-// ✅ GET campañas
+/** ============ Helpers de límite dinámico ============ */
+/**
+ * Devuelve usados (mes actual), límite (base + extras vigentes) y restante.
+ * Los extras se leen de creditos_comprados por canal y cuentan hasta la MISMA hora/min/seg del vencimiento.
+ */
+async function getCapacidadCanal(tenantId: string, canal: string) {
+  const base = CANAL_LIMITES[canal] ?? 0;
+
+  // usados del mes en campaign_usage
+  const { rows: urows } = await pool.query(
+    `
+    SELECT COALESCE(SUM(cantidad),0)::int AS usados
+    FROM campaign_usage
+    WHERE tenant_id = $1
+      AND canal = $2
+      AND fecha_envio >= date_trunc('month', CURRENT_DATE)
+    `,
+    [tenantId, canal]
+  );
+  const usados = urows[0]?.usados ?? 0;
+
+  // créditos vigentes
+  const { rows: crows } = await pool.query(
+    `
+    SELECT COALESCE(SUM(cantidad),0)::int AS extra_vigente
+    FROM creditos_comprados
+    WHERE tenant_id = $1
+      AND canal = $2
+      AND NOW() <= fecha_vencimiento
+    `,
+    [tenantId, canal]
+  );
+  const extraVigente = crows[0]?.extra_vigente ?? 0;
+
+  const limite = base + extraVigente;
+  const restante = Math.max(limite - usados, 0);
+
+  return { base, extraVigente, usados, limite, restante };
+}
+
+/** ============ GET campañas ============ */
 router.get("/", authenticateUser, async (req: Request, res: Response) => {
   try {
     const { tenant_id } = req.user as { tenant_id: string };
@@ -84,13 +127,11 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
   }
 });
 
-// ✅ POST campañas
+/** ============ POST campañas ============ */
 router.post(
   "/",
   authenticateUser,
-  upload.fields([
-    { name: "imagen", maxCount: 1 },
-  ]),
+  upload.fields([{ name: "imagen", maxCount: 1 }]),
   manejarErroresMulter,
   async (req: Request, res: Response) => {
     try {
@@ -99,27 +140,27 @@ router.post(
       const asunto = req.body.asunto || "📣 Nueva campaña de tu negocio";
       const tituloVisual = req.body.titulo_visual || "";
 
-      // 🛡️ Verifica que la membresía esté activa
+      // 🛡️ Verifica membresía
       const estado = await pool.query(
-        `SELECT membresia_activa FROM tenants WHERE id = $1`,
+        `SELECT membresia_activa, name, logo_url FROM tenants WHERE id = $1`,
         [tenant_id]
       );
-
-      if (!estado.rows[0]?.membresia_activa) {
+      const tenantRow = estado.rows[0];
+      if (!tenantRow?.membresia_activa) {
         return res.status(403).json({
           error: "Tu membresía está inactiva. No puedes programar campañas hasta reactivarla.",
         });
       }
 
-      console.log("🧾 req.body completo:", req.body);
-
       if (!nombre || !canal || !fecha_envio || !segmentos) {
         return res.status(400).json({ error: "Faltan campos obligatorios." });
       }
 
-      let segmentosParsed: string[] = [];
+      // Parse segmentos desde string o array
+      let segmentosParsed: any[] = [];
       try {
-        segmentosParsed = typeof segmentos === "string" ? JSON.parse(segmentos) : segmentos;
+        segmentosParsed =
+          typeof segmentos === "string" ? JSON.parse(segmentos) : Array.isArray(segmentos) ? segmentos : [];
         if (!Array.isArray(segmentosParsed)) {
           return res.status(400).json({ error: "Segmentos no tienen formato de lista." });
         }
@@ -128,36 +169,27 @@ router.post(
         return res.status(400).json({ error: "El formato de los segmentos no es válido." });
       }
 
-      const usoActual = await pool.query(
-        `SELECT SUM(cantidad) AS total FROM campaign_usage
-         WHERE tenant_id = $1 AND canal = $2 AND fecha_envio >= date_trunc('month', CURRENT_DATE)`,
-        [tenant_id, canal]
-      );
-      const totalActual = parseInt(usoActual.rows[0]?.total || "0", 10);
-      const totalNuevo = totalActual + segmentosParsed.length;
+      // 🔐 Límite dinámico por canal
+      const cap = await getCapacidadCanal(tenant_id, canal);
+      const solicitados = segmentosParsed.length;
 
-      if (totalNuevo > CANAL_LIMITES[canal]) {
+      if (cap.limite <= 0) {
         return res.status(403).json({
-          error: `Has alcanzado el límite mensual de ${CANAL_LIMITES[canal]} envíos para ${canal}.`,
+          error: `No tienes cupo para ${canal} este mes. Compra créditos para continuar.`,
+        });
+      }
+      if (solicitados > cap.restante) {
+        return res.status(403).json({
+          error: `Tu cupo disponible es ${cap.restante} ${canal === "email" ? "emails" : "envíos"} este mes (límite ${cap.limite}, usados ${cap.usados}). Reduce la lista o compra más créditos.`,
         });
       }
 
-      const result = await pool.query(
-        "SELECT twilio_number, twilio_sms_number, name, logo_url FROM tenants WHERE id = $1",
-        [tenant_id]
-      );
-      if (result.rowCount === 0) {
-        return res.status(404).json({ error: "Tenant no encontrado." });
-      }
+      // ========= Manejo de assets (email) =========
+      let imagen_url: string | null = null;
+      let link_url: string | null = null;
+      let logo_url: string | undefined = tenantRow.logo_url || undefined;
 
-      let imagen_url = null;
-      let archivo_adjunto_url = null;
-      let link_url = null;
-      let logo_url: string | undefined = result.rows[0].logo_url || undefined;
-
-      const files = req.files as {
-        [fieldname: string]: Express.Multer.File[];
-      };
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] };
 
       if (canal === "email") {
         if (files?.imagen?.[0]) {
@@ -167,61 +199,59 @@ router.post(
           imagen_url = await subirArchivoAR2(filename, buffer, file.mimetype);
           fs.unlinkSync(file.path);
         }
-
         link_url = req.body.link_url || null;
       }
 
-      const insertQuery = canal === "email"
-        ? `INSERT INTO campanas (
-            tenant_id, titulo, contenido, imagen_url,
-            canal, destinatarios, programada_para, enviada, fecha_creacion,
-            link_url, template_sid, template_vars, asunto, titulo_visual
-          ) VALUES (
-            $1, $2, $3, $4,
-            $5, $6, $7, false, NOW(),
-            $8, $9, $10, $11, $12
-          ) RETURNING id`
+      // ========= Insert campaña =========
+      const insertQuery =
+        canal === "email"
+          ? `INSERT INTO campanas (
+               tenant_id, titulo, contenido, imagen_url,
+               canal, destinatarios, programada_para, enviada, fecha_creacion,
+               link_url, template_sid, template_vars, asunto, titulo_visual
+             ) VALUES (
+               $1, $2, $3, $4,
+               $5, $6, $7, false, NOW(),
+               $8, $9, $10, $11, $12
+             ) RETURNING id`
+          : `INSERT INTO campanas (
+               tenant_id, titulo, contenido, canal, destinatarios,
+               programada_para, enviada, fecha_creacion
+             ) VALUES (
+               $1, $2, $3, $4, $5,
+               $6, false, NOW()
+             ) RETURNING id`;
 
-        : `INSERT INTO campanas (
-            tenant_id, titulo, contenido, canal, destinatarios,
-            programada_para, enviada, fecha_creacion
-          ) VALUES (
-            $1, $2, $3, $4, $5,
-            $6, false, NOW()
-          ) RETURNING id`;
-
-      const insertValues = canal === "email"
-        ? [
-            tenant_id,
-            nombre,
-            contenido,
-            imagen_url,
-            canal,
-            JSON.stringify(segmentosParsed),
-            fecha_envio,
-            link_url,
-            template_sid || null,
-            template_vars || null,
-            asunto,
-            tituloVisual,
-          ]
-        : [
-            tenant_id,
-            nombre,
-            contenido,
-            canal,
-            JSON.stringify(segmentosParsed),
-            fecha_envio
-          ];
+      const insertValues =
+        canal === "email"
+          ? [
+              tenant_id,
+              nombre,
+              contenido,
+              imagen_url,
+              canal,
+              JSON.stringify(segmentosParsed),
+              fecha_envio,
+              link_url,
+              template_sid || null,
+              template_vars || null,
+              asunto,
+              tituloVisual,
+            ]
+          : [tenant_id, nombre, contenido, canal, JSON.stringify(segmentosParsed), fecha_envio];
 
       const campaignResult = await pool.query(insertQuery, insertValues);
+      const campaignId = campaignResult.rows[0].id;
 
+      // ========= Registrar uso del mes =========
       await pool.query(
         "INSERT INTO campaign_usage (tenant_id, canal, cantidad, fecha_envio) VALUES ($1, $2, $3, NOW())",
-        [tenant_id, canal, segmentosParsed.length]
+        [tenant_id, canal, solicitados]
       );
 
+      // ========= Envío inmediato para email (si aplica) =========
       if (canal === "email") {
+        // `segmentosParsed` son etiquetas de segmentación → obtener emails
         const contactosRes = await pool.query(
           `SELECT email, nombre FROM contactos WHERE tenant_id = $1 AND segmento = ANY($2)`,
           [tenant_id, segmentosParsed]
@@ -230,7 +260,6 @@ router.post(
 
         if (template_sid) {
           const parsedVars = template_vars ? JSON.parse(template_vars) : {};
-
           const enrichedContactos = contactos.map((c) => ({
             email: c.email,
             vars: {
@@ -238,26 +267,25 @@ router.post(
               ...parsedVars,
             },
           }));
-
           await sendEmailWithTemplate(
             enrichedContactos,
             template_sid,
-            result.rows[0].name,
+            tenantRow.name,
             tenant_id,
-            campaignResult.rows[0].id
+            campaignId
           );
         } else {
           await sendEmailSendgrid(
             contenido,
             contactos,
-            result.rows[0].name,
+            tenantRow.name,
             tenant_id,
-            campaignResult.rows[0].id,
+            campaignId,
             imagen_url ? `${process.env.DOMAIN_URL}${imagen_url}` : undefined,
-            link_url,
+            link_url || undefined,
             logo_url,
             asunto,
-            tituloVisual // 👈 nuevo argumento
+            tituloVisual
           );
         }
       }
@@ -265,7 +293,7 @@ router.post(
       return res.status(200).json({
         ok: true,
         message: "✅ Campaña programada correctamente. Se enviará en el horario indicado.",
-        id: campaignResult.rows[0].id,
+        id: campaignId,
         nombre,
         canal,
         contenido,
@@ -276,6 +304,9 @@ router.post(
         link_url,
         enviada: false,
         fecha_creacion: new Date().toISOString(),
+        limite_mes: cap.limite,
+        usados_mes: cap.usados + solicitados,
+        restante_mes: cap.limite - (cap.usados + solicitados),
       });
     } catch (error) {
       console.error("❌ Error al programar campaña:", error);
@@ -284,7 +315,7 @@ router.post(
   }
 );
 
-// ✅ DELETE campaña
+/** ============ DELETE campaña ============ */
 router.delete("/:id", authenticateUser, async (req: Request, res: Response) => {
   const { id } = req.params;
   const { tenant_id } = req.user as { tenant_id: string };
@@ -330,8 +361,7 @@ router.delete("/:id", authenticateUser, async (req: Request, res: Response) => {
   }
 });
 
-// 🔽 Agrega esto al final del archivo de rutas de campañas
-
+/** ============ Estado de SMS por campaña ============ */
 router.get("/:id/sms-status", authenticateUser, async (req: Request, res: Response) => {
   const { id } = req.params;
   const { tenant_id } = req.user as { tenant_id: string };
