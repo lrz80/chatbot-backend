@@ -1,114 +1,157 @@
+// src/routes/contactos/index.ts
 import express from "express";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
 import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
 
 const router = express.Router();
 
-// ✅ Configuración de subida de archivos CSV
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(__dirname, "../../../uploads");
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueName = Date.now() + "-" + file.originalname;
-    cb(null, uniqueName);
-  },
+/**
+ * Storage en memoria (evita IO en disco y simplifica).
+ * Si prefieres en disco, puedes volver a diskStorage sin tocar la lógica de cupo.
+ */
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
 });
 
-const upload = multer({ storage });
+// ----------------- Helpers de capacidad dinámica -----------------
+async function getCapacidadContactos(tenantId: string) {
+  // Usados reales (almacenados)
+  const { rows: r1 } = await pool.query(
+    "SELECT COUNT(*)::int AS total FROM contactos WHERE tenant_id = $1",
+    [tenantId]
+  );
+  const total = r1[0]?.total ?? 0;
 
-// 📥 Subir archivo CSV de contactos
+  // Extras vigentes: válidos hasta la MISMA hora/minuto/segundo de la compra
+  const { rows: r2 } = await pool.query(
+    `
+    SELECT COALESCE(SUM(cantidad),0)::int AS extra_vigente
+    FROM creditos_comprados
+    WHERE tenant_id = $1
+      AND canal = 'contactos'
+      AND NOW() <= fecha_vencimiento
+    `,
+    [tenantId]
+  );
+  const extraVigente = r2[0]?.extra_vigente ?? 0;
+
+  const limite = 500 + extraVigente;
+  const restante = Math.max(limite - total, 0);
+  return { total, limite, restante };
+}
+
+// Utilidad para leer columnas flexibles
+function pick(headers: string[], cols: string[], keys: string[]) {
+  for (const k of keys) {
+    const idx = headers.indexOf(k);
+    if (idx >= 0) return (cols[idx] ?? "").replace(/"/g, "").trim();
+  }
+  return "";
+}
+
+const PHONE_RE = /^\+?\d{10,15}$/;
+
+// 📥 Subir archivo CSV de contactos (con cupo dinámico)
 router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
   if (!req.file) return res.status(400).json({ error: "Archivo no proporcionado." });
 
   try {
-    const content = fs.readFileSync(req.file.path, "utf8");
+    // Lee CSV desde memoria
+    const content = req.file.buffer.toString("utf8");
 
     const lines = content
-      .split("\n")
+      .split(/\r?\n/)
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith("#"));
 
-    if (lines.length < 2) return res.status(400).json({ error: "El archivo está vacío o mal formado." });
+    if (lines.length < 2) {
+      return res.status(400).json({ error: "El archivo está vacío o mal formado." });
+    }
 
-    const headers = lines[0].toLowerCase().split(",").map((h) => h.replace(/"/g, "").trim());
+    const rawHeaders = lines[0]
+      .split(",")
+      .map((h) => h.replace(/"/g, "").trim().toLowerCase());
     const dataLines = lines.slice(1);
 
-    // ✅ Obtener uso mensual actual de contactos
-    const usoRes = await pool.query(`
-      SELECT usados, limite
-      FROM uso_mensual
-      WHERE tenant_id = $1 AND canal = 'contactos' AND mes = date_trunc('month', CURRENT_DATE)
-    `, [tenant_id]);
-
-    let usados = usoRes.rows[0]?.usados ?? 0;
-    let limite = usoRes.rows[0]?.limite ?? 500;
-
-    const disponibles = limite - usados;
-    if (disponibles <= 0) {
-      return res.status(403).json({ error: "Ya has alcanzado tu límite mensual de contactos." });
+    // 🔐 Capacidad dinámica
+    const { total, limite, restante } = await getCapacidadContactos(tenant_id);
+    if (restante <= 0) {
+      return res.status(403).json({
+        error: `Ya has alcanzado tu límite de contactos (${limite}).`,
+      });
     }
 
-    const acciones: Promise<void>[] = [];
     let nuevos = 0;
 
-    for (const line of dataLines.slice(0, disponibles)) {
-      acciones.push((async () => {
-        try {
-          const cols = line.split(",").map((c) => c.replace(/"/g, "").trim());
+    // Procesa sólo hasta el cupo disponible
+    const porProcesar = dataLines.slice(0, restante);
 
-          const firstName = cols[headers.indexOf("nombre")] || cols[headers.indexOf("first name")] || "";
-          const lastName = cols[headers.indexOf("last name")] || "";
-          const nombre = `${firstName} ${lastName}`.trim() || "Sin nombre";
+    for (const line of porProcesar) {
+      const cols = line.split(",").map((c) => c.trim());
 
-          const telefono = cols[headers.indexOf("telefono")] || cols[headers.indexOf("phone")] || "";
-          const email = cols[headers.indexOf("email")] || "";
-          const segmento = cols[headers.indexOf("segmento")]?.toLowerCase() || "cliente";
+      const firstName = pick(rawHeaders, cols, ["nombre", "first name", "firstname", "name"]);
+      const lastName = pick(rawHeaders, cols, ["last name", "lastname", "apellido"]);
+      const nombre = `${firstName} ${lastName}`.trim() || "Sin nombre";
 
-          if (!telefono && !email) return;
+      const telefono = pick(rawHeaders, cols, ["telefono", "phone", "tel"]);
+      const email = pick(rawHeaders, cols, ["email", "correo"]);
+      const segmento = (pick(rawHeaders, cols, ["segmento", "segment"]) || "cliente").toLowerCase();
 
-          const existe = await pool.query(
-            "SELECT id FROM contactos WHERE tenant_id = $1 AND (telefono = $2 OR email = $3)",
-            [tenant_id, telefono, email]
-          );
+      // Reglas mínimas: al menos 1 identificador y teléfono válido si viene
+      if (!telefono && !email) continue;
+      if (telefono && !PHONE_RE.test(telefono)) continue;
 
-          if ((existe?.rowCount ?? 0) > 0) {
-            const id = existe.rows[0].id;
-            await pool.query(
-              "UPDATE contactos SET nombre = $1, segmento = $2 WHERE id = $3",
-              [nombre, segmento, id]
-            );
-          } else {
-            await pool.query(
-              `INSERT INTO contactos (tenant_id, nombre, telefono, email, segmento, fecha_creacion)
-               VALUES ($1, $2, $3, $4, $5, NOW())`,
-              [tenant_id, nombre, telefono, email, segmento]
-            );
-            nuevos++;
-          }
-        } catch (err) {
-          console.warn("❌ Error procesando fila:", line, err);
-        }
-      })());
+      // Evitar duplicados por (telefono) o (email)
+      const existe = await pool.query(
+        `SELECT id FROM contactos
+         WHERE tenant_id = $1
+           AND ( ($2 <> '' AND telefono = $2) OR ($3 <> '' AND email = $3) )`,
+        [tenant_id, telefono, email]
+      );
+      
+      if ((existe.rows?.length ?? 0) > 0) {
+        const id = existe.rows[0].id;
+        await pool.query(
+          "UPDATE contactos SET nombre = $1, segmento = $2 WHERE id = $3",
+          [nombre, segmento, id]
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO contactos (tenant_id, nombre, telefono, email, segmento, fecha_creacion)
+           VALUES ($1, $2, $3, $4, $5, NOW())`,
+          [tenant_id, nombre, telefono, email, segmento]
+        );
+        nuevos++;
+      }      
     }
 
-    await Promise.all(acciones);
-
-    // ✅ Sumar los nuevos al conteo mensual
-    await pool.query(`
+    // (Opcional) Mantener un registro en uso_mensual (informativo)
+    // ⚠️ Importante: usar el límite REAL del mes, no hardcode 500
+    await pool.query(
+      `
       INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
-      VALUES ($1, 'contactos', date_trunc('month', CURRENT_DATE), $2, 500)
+      VALUES ($1, 'contactos', date_trunc('month', CURRENT_DATE), $2, $3)
       ON CONFLICT (tenant_id, canal, mes)
-      DO UPDATE SET usados = uso_mensual.usados + $2
-    `, [tenant_id, nuevos]);
+      DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados,
+                    limite = EXCLUDED.limite
+      `,
+      [tenant_id, nuevos, limite]
+    );
 
-    res.json({ ok: true, nuevos, mensaje: `Se procesaron ${nuevos} contactos nuevos.` });
+    // Recalcular para responder valores frescos
+    const post = await getCapacidadContactos(tenant_id);
+
+    res.json({
+      ok: true,
+      nuevos,
+      total_ahora: post.total,
+      limite: post.limite,
+      restante: post.restante,
+      mensaje: `Se procesaron ${nuevos} contactos nuevos.`,
+    });
   } catch (err) {
     console.error("❌ Error al subir contactos:", err);
     res.status(500).json({ error: "Error al procesar archivo." });
