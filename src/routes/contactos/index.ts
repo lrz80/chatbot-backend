@@ -51,6 +51,53 @@ function pick(headers: string[], cols: string[], keys: string[]) {
   return "";
 }
 
+/** ==== NUEVO: helpers para detectar columna de segmento y mapear valores ==== */
+// Orden de búsqueda de columna de segmento (multi-tenant, tolerante)
+const SEGMENT_COLUMN_CANDIDATES = ["segmento", "segment", "lead status", "status", "tipo"];
+
+function pickSegmentColumn(headers: string[]) {
+  // headers vienen ya en minúsculas
+  for (const c of SEGMENT_COLUMN_CANDIDATES) {
+    const i = headers.indexOf(c);
+    if (i >= 0) return i;
+  }
+  return -1; // no hay columna reconocible
+}
+
+function mapToSegment(raw: string) {
+  const s = (raw || "").trim().toLowerCase();
+  const map: Record<string, "cliente" | "leads" | "otros"> = {
+    // leads
+    "lead": "leads",
+    "leads": "leads",
+    "prospect": "leads",
+    "prospecto": "leads",
+    "potential": "leads",
+    "mql": "leads",
+    "sql": "leads",
+    // cliente
+    "cliente": "cliente",
+    "client": "cliente",
+    "customer": "cliente",
+    "member": "cliente",
+    "miembro": "cliente",
+    "activo": "cliente",
+    // otros
+    "otro": "otros",
+    "otros": "otros",
+    "other": "otros",
+    "none": "otros",
+    "na": "otros",
+    "n/a": "otros",
+    "desconocido": "otros",
+    // vacío → cliente
+    "": "cliente",
+  };
+  // Si ya viene exactamente uno de los 3, respétalo; si no, mapea o cae en 'cliente'
+  if (s === "cliente" || s === "leads" || s === "otros") return s as any;
+  return map[s] ?? "cliente";
+}
+
 const PHONE_RE = /^\+?\d{10,15}$/;
 
 // 📥 Subir archivo CSV de contactos (con cupo dinámico)
@@ -84,6 +131,14 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
       });
     }
 
+    // NUEVO: detectar columna de segmento y leer 'segmento_default' opcional del request
+    const idxSegmento = pickSegmentColumn(rawHeaders);
+    const reqDefault = ((req.body as any)?.segmento_default || "").toString().toLowerCase();
+    const segmentoDefault =
+      reqDefault === "cliente" || reqDefault === "leads" || reqDefault === "otros"
+        ? (reqDefault as "cliente" | "leads" | "otros")
+        : ("cliente" as const);
+
     let nuevos = 0;
 
     // Procesa sólo hasta el cupo disponible
@@ -98,7 +153,10 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
 
       const telefono = pick(rawHeaders, cols, ["telefono", "phone", "tel"]);
       const email = pick(rawHeaders, cols, ["email", "correo"]);
-      const segmento = (pick(rawHeaders, cols, ["segmento", "segment"]) || "cliente").toLowerCase();
+
+      // NUEVO: lee valor crudo de la columna detectada y mapea; si no hay, usa segmento_default
+      const rawSeg = idxSegmento >= 0 ? (cols[idxSegmento] ?? "") : "";
+      const segmento = rawSeg ? mapToSegment(rawSeg) : segmentoDefault;
 
       // Reglas mínimas: al menos 1 identificador y teléfono válido si viene
       if (!telefono && !email) continue;
@@ -111,7 +169,7 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
            AND ( ($2 <> '' AND telefono = $2) OR ($3 <> '' AND email = $3) )`,
         [tenant_id, telefono, email]
       );
-      
+
       if ((existe.rows?.length ?? 0) > 0) {
         const id = existe.rows[0].id;
         await pool.query(
@@ -125,7 +183,7 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
           [tenant_id, nombre, telefono, email, segmento]
         );
         nuevos++;
-      }      
+      }
     }
 
     // (Opcional) Mantener un registro en uso_mensual (informativo)
@@ -196,7 +254,7 @@ router.get("/count", authenticateUser, async (req, res) => {
       "SELECT COUNT(*)::int AS total FROM contactos WHERE tenant_id = $1",
       [tenant_id]
     );
-    res.json({ total: result.rows[0].total });
+  res.json({ total: result.rows[0].total });
   } catch (err) {
     console.error("❌ Error al contar contactos:", err);
     res.status(500).json({ error: "Error al contar contactos." });
