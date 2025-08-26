@@ -3,9 +3,6 @@ import pool from '../../lib/db';
 
 const router = Router();
 
-// ⚠️ Recuerda tener habilitado en tu app principal:
-// app.use(express.urlencoded({ extended: false })); // Twilio manda x-www-form-urlencoded
-
 function stripProto(v?: string | null) {
   return (v || '')
     .replace(/^whatsapp:/i, '')

@@ -130,8 +130,8 @@ app.use(
 );
 
 // ✅ Middlewares globales
-app.use(express.json()); // después del webhook para no interferir
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json());                      // ✅ JSON normal
+app.use(express.urlencoded({ extended: false })); // ✅ Twilio (x-www-form-urlencoded)
 app.use(cookieParser());
 
 // ✅ Rutas
@@ -181,7 +181,6 @@ app.use('/api/stripe', checkoutCreditRoute);
 app.use('/api/contactos/limite', limiteContactosRoute);
 app.use("/api/sendgrid/templates", sendgridTemplates);
 app.use("/api/email-status", emailStatusRoute);
-app.use("/api/sendgrid/templates", sendgridTemplates);
 app.use("/api/preview-email", previewEmailRouter);
 app.use("/api/webhook/whatsapp", whatsappWebhook);
 app.use('/api/stripe/cancel', stripeCancelRouter);
