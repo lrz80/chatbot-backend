@@ -23,17 +23,19 @@ const router = express.Router();
 // ✅ GET /api/flows
 router.get("/", authenticateUser, async (req: Request, res: Response) => {
   try {
-    // Si TS se queja de req.user, usa (req as any).user
     const tenant_id = (req as any).user?.tenant_id;
     if (!tenant_id) return res.status(401).json({ error: "Tenant no autenticado" });
 
-    const result = await pool.query("SELECT data FROM flows WHERE tenant_id = $1 LIMIT 1", [tenant_id]);
-    const raw = result.rows[0]?.data;
+    const canal = (req.query.canal as string) || 'whatsapp';
 
-    // Soporta jsonb (objeto/array) o texto JSON
+    const result = await pool.query(
+      "SELECT data FROM flows WHERE tenant_id = $1 AND canal = $2 LIMIT 1",
+      [tenant_id, canal]
+    );
+
+    const raw = result.rows[0]?.data;
     const parsed = raw ? (typeof raw === "string" ? JSON.parse(raw) : raw) : [];
 
-    // Normaliza clave 'pregunta' por si quedó guardado como 'mensaje'
     const data = Array.isArray(parsed)
       ? parsed.map((f: any) => ({
           pregunta: f?.pregunta ?? f?.mensaje ?? "",
@@ -42,20 +44,20 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
       : [];
 
     res.set("Cache-Control", "no-store");
-    return res.status(200).json({ data });
+    return res.status(200).json(data);
   } catch (err) {
     console.error("❌ Error al obtener flujos:", err);
     return res.status(500).json({ error: "Error interno" });
   }
 });
 
-// ✅ POST /api/flows
-router.post("/", authenticateUser, async (req: Request, res: Response) => {
+router.put("/", authenticateUser, async (req: Request, res: Response) => {
   try {
     const tenant_id = (req as any).user?.tenant_id;
     if (!tenant_id) return res.status(401).json({ error: "Tenant no autenticado" });
 
-    // Soporta: body = { flows: [...] } | { data: [...] } | [ ... ]
+    const canal = (req.query.canal as string) || 'whatsapp';
+
     const incoming = Array.isArray(req.body)
       ? req.body
       : (req.body?.flows ?? req.body?.data);
@@ -64,13 +66,11 @@ router.post("/", authenticateUser, async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Formato de flujos inválido" });
     }
 
-    // Normaliza cada flujo a { pregunta, opciones }
     const normalized: Flow[] = incoming.map((f: any) => ({
       pregunta: (f?.pregunta ?? f?.mensaje ?? "").toString().trim(),
       opciones: Array.isArray(f?.opciones) ? f.opciones : []
     }));
 
-    // Valida contenido (pregunta y al menos una opción válida)
     const flowsValidos = normalized.filter((flow) =>
       flow.pregunta &&
       flow.opciones.some((op: FlowOption) =>
@@ -84,10 +84,11 @@ router.post("/", authenticateUser, async (req: Request, res: Response) => {
     }
 
     await pool.query(
-      `INSERT INTO flows (tenant_id, data, updated_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (tenant_id) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
-      [tenant_id, JSON.stringify(flowsValidos)]
+      `INSERT INTO flows (tenant_id, canal, data, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (tenant_id, canal)
+       DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
+      [tenant_id, canal, JSON.stringify(flowsValidos)]
     );
 
     return res.status(200).json({ success: true, data: flowsValidos });
