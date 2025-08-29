@@ -245,12 +245,19 @@ router.post('/api/facebook/webhook', async (req, res) => {
           faqs = resFaqs.rows || [];
         } catch {}
 
+        const canal = 'meta';
+
         try {
-          const resFlows = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenantId]);
+          const resFlows = await pool.query(
+            'SELECT data FROM flows WHERE tenant_id = $1 AND canal = $2 LIMIT 1',
+            [tenantId, canal] // canal puede ser 'whatsapp' | 'meta' | 'facebook' | 'instagram'
+          );
           const raw = resFlows.rows[0]?.data;
           flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
           if (!Array.isArray(flows)) flows = [];
-        } catch {}
+        } catch (error) {
+          flows = [];
+        }        
 
         if (mensajesProcesados.has(messageId)) {
           console.log('⚠️ Mensaje duplicado ignorado por Set en memoria:', messageId);
