@@ -27,8 +27,8 @@ router.get('/', authenticateUser, async (req, res) => {
          AND procesada = false
          AND respuesta_sugerida IS NOT NULL
        ORDER BY ultima_fecha DESC`,
-      [tenantId, canales]
-    );
+       [tenantId, `{${canales.join(',')}}`] // ✅ Corrección aquí
+      );
 
     res.json(rows);
   } catch (err) {

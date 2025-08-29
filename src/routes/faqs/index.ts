@@ -30,7 +30,7 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
 
 const faqRes = await pool.query(
   'SELECT id, pregunta, respuesta, intencion, canal FROM faqs WHERE tenant_id = $1 AND canal = ANY($2)',
-  [tenantId, canales]
+  [tenantId, `{${canales.join(',')}}`]
 );
 
 
