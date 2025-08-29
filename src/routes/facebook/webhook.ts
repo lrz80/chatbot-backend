@@ -154,7 +154,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const canalEnvio: 'facebook' | 'instagram' = isInstagram ? 'instagram' : 'facebook';
 
         // Canal lógico para contenido (FAQs/Flows compartidos)
-        const canalContenido = 'meta';
+        const canalContenido = canalEnvio; // 'facebook' o 'instagram'
 
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
