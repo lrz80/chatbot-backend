@@ -25,6 +25,7 @@ const transporter = nodemailer.createTransport({
 
 // ✅ Registro corregido
 router.post('/register', async (req: Request, res: Response) => {
+  return res.status(403).json({ error: 'El registro está deshabilitado temporalmente' });
   const { nombre, apellido, email, telefono, password } = req.body;
 
   if (!nombre || !apellido || !email || !telefono || !password) {
