@@ -8,15 +8,10 @@ const router = express.Router();
 router.get('/', authenticateUser, async (req, res) => {
   const tenantId = req.user?.tenant_id;
   const canalQuery = req.query.canal;
+
   const canales = Array.isArray(canalQuery)
     ? canalQuery.map(c => c.toString())
     : [canalQuery?.toString() || 'whatsapp'];
-
-  // ✅ Convertir 'meta' en ['facebook', 'instagram']
-  if (canales.includes('meta')) {
-    canales.splice(canales.indexOf('meta'), 1);
-    canales.push('facebook', 'instagram');
-  }
 
   try {
     const { rows } = await pool.query(
@@ -27,8 +22,8 @@ router.get('/', authenticateUser, async (req, res) => {
          AND procesada = false
          AND respuesta_sugerida IS NOT NULL
        ORDER BY ultima_fecha DESC`,
-       [tenantId, canales]
-      );
+      [tenantId, canales]
+    );
 
     res.json(rows);
   } catch (err) {
