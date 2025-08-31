@@ -9,13 +9,19 @@ router.get('/', authenticateUser, async (req, res) => {
   const tenantId = req.user?.tenant_id;
   const canalQuery = req.query.canal;
 
-  const canales = Array.isArray(canalQuery)
+  let canales = Array.isArray(canalQuery)
     ? canalQuery.map(c => c.toString())
     : [canalQuery?.toString() || 'whatsapp'];
 
+  // 🔁 Si es 'meta', convertirlo en ['facebook', 'instagram']
+  if (canales.includes('meta')) {
+    canales = canales.filter(c => c !== 'meta');
+    canales.push('facebook', 'instagram');
+  }
+
   try {
     const { rows } = await pool.query(
-      `SELECT id, pregunta, respuesta_sugerida
+      `SELECT id, pregunta, respuesta_sugerida, canal
        FROM faq_sugeridas
        WHERE tenant_id = $1
          AND canal = ANY($2)
