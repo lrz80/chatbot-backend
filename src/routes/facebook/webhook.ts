@@ -897,7 +897,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         }
         // === fin Paso 2 ===
 
-        const { intencion, nivel_interes } = await detectarIntencion(userMessage, tenant.id, 'facebook');
+        const { intencion, nivel_interes } = await detectarIntencion(userMessage, tenant.id, canalEnvio);
         const intencionLower = intencion?.toLowerCase() || '';
 
         let respuesta: string | null = null;
@@ -1054,35 +1054,40 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
                       // Enforce unicidad para INTENT_UNIQUE
                       if (INTENT_UNIQUE.has(intencionFinal)) {
-                        // ¿ya existe oficial?
-                        const { rows: faqsOficiales } = await pool.query(
-                          `SELECT 1 FROM faqs WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3) LIMIT 1`,
-                          [tenantId, canalContenido, intencionFinal]
-                        );
-                        if (faqsOficiales.length > 0) {
-                          console.log(`⚠️ Ya existe FAQ oficial con intención "${intencionFinal}". No se guarda sugerida.`);
-                        } else {
-                          // ¿ya existe sugerida con misma intención sin procesar?
-                          const { rows: sugConInt } = await pool.query(
-                            `SELECT 1 FROM faq_sugeridas
-                              WHERE tenant_id = $1 AND canal = $2 AND procesada = false
+                          // ✅ Chequear oficial en TODO el grupo Meta
+                          const { rows: faqsOficiales } = await pool.query(
+                            `SELECT 1
+                                FROM faqs
+                              WHERE tenant_id = $1
+                                AND canal = ANY($2::text[])
                                 AND LOWER(intencion) = LOWER($3)
                               LIMIT 1`,
-                            [tenantId, canalContenido, intencionFinal]
+                            [tenantId, ['meta','facebook','instagram'], intencionFinal]
                           );
-                          if (sugConInt.length > 0) {
-                            console.log(`⚠️ Ya existe FAQ sugerida con intención "${intencionFinal}". No se guarda duplicado.`);
+                          if (faqsOficiales.length > 0) {
+                            console.log(`⛔ Skip sugerida: ya hay FAQ oficial para "${intencionFinal}".`);
                           } else {
-                            await pool.query(
-                              `INSERT INTO faq_sugeridas
-                                (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
-                              VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
-                              [tenantId, canalContenido, preguntaNormalizada, respuestaNormalizada, idioma, intencionFinal]
+                            // ¿ya existe sugerida con misma intención sin procesar?
+                            const { rows: sugConInt } = await pool.query(
+                              `SELECT 1 FROM faq_sugeridas
+                                WHERE tenant_id = $1 AND canal = $2 AND procesada = false
+                                  AND LOWER(intencion) = LOWER($3)
+                                LIMIT 1`,
+                              [tenantId, canalContenido, intencionFinal]
                             );
-                            console.log(`📝 Sugerida creada (única) intención="${intencionFinal}"`);
+                            if (sugConInt.length > 0) {
+                              console.log(`⚠️ Ya existe FAQ sugerida con intención "${intencionFinal}". No se guarda duplicado.`);
+                            } else {
+                              await pool.query(
+                                `INSERT INTO faq_sugeridas
+                                  (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
+                                VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
+                                [tenantId, canalContenido, preguntaNormalizada, respuestaNormalizada, idioma, intencionFinal]
+                              );
+                              console.log(`📝 Sugerida creada (única) intención="${intencionFinal}"`);
+                            }
                           }
-                        }
-                      } else {
+                        } else {
                         // Intenciones no-únicas (p.ej. múltiples dudas refinadas)
                         await pool.query(
                           `INSERT INTO faq_sugeridas
