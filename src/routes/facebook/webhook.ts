@@ -424,18 +424,9 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         // 🧠 Flujos guiados (si mensaje es “quiero info”, “más información”, etc.)
         if (esPedirInfo || keywordsInfo.some(k => nUser.includes(nrm(k)))) {
-        const flow = flows[0];
-        if (flow?.opciones?.length > 0) {
-          // 🛑 Verificar estado antes de enviar menú
-          const { rows: estadoRows } = await pool.query(
-            `SELECT estado FROM clientes WHERE tenant_id = $1 AND contacto = $2 LIMIT 1`,
-            [tenantId, senderId]
-          );
-          const estadoActual = estadoRows[0]?.estado || null;
-
-          if (estadoActual === 'menu_enviado') {
-            console.log("⚠️ Menú ya enviado, no se reenviará.");
-          } else {
+          const flow = flows[0];
+          if (flow?.opciones?.length > 0) {
+            // 🔁 Reenviar siempre el menú cuando el usuario lo pide explícitamente
             const pregunta = flow.pregunta || flow.mensaje || '¿Cómo puedo ayudarte?';
             const opciones = flow.opciones
               .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
@@ -450,19 +441,16 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
             await sendMeta(menu);
 
-            // Guarda estado para no reenviar menú hasta que el usuario responda con número
+            // Mantener estado (idempotente) por si luego el usuario responde con número
             await pool.query(
               `UPDATE clientes SET estado = 'menu_enviado'
               WHERE tenant_id = $1 AND contacto = $2`,
               [tenantId, senderId]
             );
 
-            console.log("📬 Menú personalizado enviado en Meta.");
+            console.log("📬 Menú (re)enviado por petición de info.");
+            continue; // ⛔ cortar el flujo aquí
           }
-
-          // Cortar el flujo aquí: no pasar a similitud/LLM
-          continue;
-        }
         }
 
         // 🛑 Atajo: si el usuario mandó SOLO un número, resolver flujos YA y salir
