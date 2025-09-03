@@ -14,13 +14,14 @@ type FaqIn = {
 };
 
 const CANAL_GROUPS: Record<string, string[]> = {
-  meta: ["meta", "facebook", "instagram"],
-  whatsapp: ["whatsapp"],
-  facebook: ["facebook"],
-  instagram: ["instagram"],
-  voz: ["voz"],
-};
-
+    // Ecosistema Meta UNIFICADO
+    meta: ["meta", "facebook", "instagram"],
+    facebook: ["meta", "facebook", "instagram"],
+    instagram: ["meta", "facebook", "instagram"],
+    // Canales independientes
+    whatsapp: ["whatsapp"],
+    voz: ["voz"],
+  };
 function normalizeCanales(raw: any): string[] {
   const c = (raw as string)?.toLowerCase();
   if (!c) return ["whatsapp"];
