@@ -73,6 +73,23 @@ async function upsertIdiomaClienteDB(
   }
 }
 
+async function getFaqByIntent(
+  tenantId: string,
+  intent: string
+): Promise<{ pregunta: string; respuesta: string } | null> {
+  const { rows } = await pool.query(
+    `SELECT pregunta, respuesta
+       FROM faqs
+      WHERE tenant_id = $1
+        AND canal = ANY($2::text[])
+        AND LOWER(intencion) = LOWER($3)
+      ORDER BY id DESC
+      LIMIT 1`,
+    [tenantId, ['meta','facebook','instagram'], intent]
+  );
+  return rows[0] || null;
+}
+
 // Calcula el ciclo mensual vigente a partir de membresia_inicio
 function cicloMesDesdeMembresia(membresiaInicioISO: string): string {
   const inicio = new Date(membresiaInicioISO);
@@ -153,8 +170,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
         // Canal real para envío/registro/uso
         const canalEnvio: 'facebook' | 'instagram' = isInstagram ? 'instagram' : 'facebook';
 
-        // Canal lógico para contenido (FAQs/Flows compartidos)
-        const canalContenido = canalEnvio; // 'facebook' o 'instagram'
+        // Unificamos contenidos (FAQs/Flows) bajo 'meta'
+        const canalContenido: 'meta' = 'meta';
 
         const tenantId = tenant.id;
         const accessToken = tenant.facebook_access_token;
@@ -239,8 +256,11 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         try {
           const resFaqs = await pool.query(
-            'SELECT pregunta, respuesta FROM faqs WHERE tenant_id = $1 AND canal = $2',
-            [tenantId, canalContenido] // 'meta'
+            `SELECT pregunta, respuesta
+                FROM faqs
+              WHERE tenant_id = $1
+                AND canal = ANY($2::text[])`,
+            [tenantId, ['meta','facebook','instagram']]
           );
           faqs = resFaqs.rows || [];
         } catch {}
@@ -528,10 +548,13 @@ router.post('/api/facebook/webhook', async (req, res) => {
                   respuestaDesdeFaq = await fetchFaqPrecio(tenantId, canalContenido); // 'meta'
                 } else {
                   const { rows: faqPorIntencion } = await pool.query(
-                    `SELECT respuesta FROM faqs
-                    WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3)
-                    LIMIT 1`,
-                    [tenantId, canalContenido, intencionParaFaq]
+                    `SELECT respuesta
+                      FROM faqs
+                      WHERE tenant_id = $1
+                        AND canal = ANY($2::text[])
+                        AND LOWER(intencion) = LOWER($3)
+                      LIMIT 1`,
+                    [tenantId, ['meta','facebook','instagram'], intencionParaFaq]
                   );
                   respuestaDesdeFaq = faqPorIntencion[0]?.respuesta || null;
                 }
@@ -725,6 +748,47 @@ router.post('/api/facebook/webhook', async (req, res) => {
           }
         } catch { /* si falla, usamos rawPrompt */ }
 
+        // 💡 Intent-first: si hay intención directa, responde con la FAQ OFICIAL y corta.
+        if (isDirectIntent(intencionParaFaq, INTENTS_DIRECT)) {
+          const oficial = await getFaqByIntent(tenantId, intencionParaFaq);
+          if (oficial?.respuesta) {
+            let out = oficial.respuesta;
+            try {
+              const langOut = await detectarIdioma(out);
+              if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+                out = await traducirMensaje(out, idiomaDestino);
+              }
+            } catch {}
+
+            // Guarda el mensaje del usuario
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
+              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
+            );
+
+            // Envía y guarda respuesta
+            await sendMeta(out);
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+            );
+
+            await pool.query(
+              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+              VALUES ($1, $2, $3, NOW())
+              ON CONFLICT DO NOTHING`,
+              [tenantId, canalEnvio, messageId]
+            );
+
+            console.log('🎯 FAQ oficial enviada por intención:', intencionParaFaq);
+            continue; // ⛔ no pases al interceptor ni al resto
+          }
+        }
+
         // 3) Ejecutar interceptor
         const interceptado = await runBeginnerRecoInterceptor({
           tenantId,
@@ -779,10 +843,13 @@ router.post('/api/facebook/webhook', async (req, res) => {
               respuestaDesdeFaq = await fetchFaqPrecio(tenantId, canalContenido); // 'meta'
             } else {
               const { rows: r } = await pool.query(
-                `SELECT respuesta FROM faqs
-                WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3)
-                LIMIT 1`,
-                [tenantId, canalContenido, intentFAQ]
+                `SELECT respuesta
+                    FROM faqs
+                  WHERE tenant_id = $1
+                    AND canal = ANY($2::text[])
+                    AND LOWER(intencion) = LOWER($3)
+                  LIMIT 1`,
+                [tenantId, ['meta','facebook','instagram'], intentFAQ]
               );
               respuestaDesdeFaq = r[0]?.respuesta || null;
             }
