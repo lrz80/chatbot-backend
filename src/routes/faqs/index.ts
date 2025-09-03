@@ -2,6 +2,7 @@
 import { Router, Request, Response } from "express";
 import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
+import stringSimilarity from "string-similarity";
 
 const router = Router();
 
@@ -34,6 +35,75 @@ function capitalizar(texto: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// === Helpers para deduplicar por intención / similitud ===
+const normalize = (s: string) =>
+    s
+      ?.toString()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim() || "";
+  
+  // Aliases simples para inferir intención cuando venga vacía
+  const INTENT_ALIASES: Record<string, string[]> = {
+    interes_clases: [
+      "reservar clase",
+      "probar clase",
+      "clase de prueba",
+      "primera clase",
+      "free class",
+      "trial class",
+      "test class",
+    ],
+  };
+  
+  function inferirIntencion(pregunta: string): string | null {
+    const q = normalize(pregunta);
+    for (const [intent, terms] of Object.entries(INTENT_ALIASES)) {
+      if (terms.some((t) => q.includes(normalize(t)))) return intent;
+    }
+    return null;
+  }
+  
+  const UMBRAL_SIMILITUD = 0.82; // baja a 0.80 si hace falta
+  const esSimilar = (a: string, b: string) =>
+    stringSimilarity.compareTwoStrings(normalize(a), normalize(b)) >= UMBRAL_SIMILITUD;
+  
+  // Dedupe por intención priorizando: con intención > sin intención; más larga = más completa
+  function dedupeFaqs(faqs: FaqIn[]): FaqIn[] {
+    const byIntent = new Map<string, FaqIn>(); // clave por intención
+    const sinIntent: FaqIn[] = [];
+  
+    for (const f of faqs) {
+      const intent = f.intencion || inferirIntencion(f.pregunta) || null;
+      if (intent) {
+        const prev = byIntent.get(intent);
+        if (!prev) {
+          byIntent.set(intent, f);
+        } else {
+          // decide cuál quedarte (elige la respuesta más larga)
+          const mejor =
+            (prev.respuesta?.length || 0) >= (f.respuesta?.length || 0) ? prev : f;
+          byIntent.set(intent, mejor);
+        }
+      } else {
+        sinIntent.push(f);
+      }
+    }
+  
+    // Elimina duplicados sin intención por similitud contra los ya elegidos
+    const elegidas = Array.from(byIntent.values());
+    const finales: FaqIn[] = [...elegidas];
+  
+    for (const f of sinIntent) {
+      const dupPorSimilitud = finales.some((g) => esSimilar(f.pregunta, g.pregunta));
+      if (!dupPorSimilitud) finales.push(f);
+    }
+    return finales;
+  }
+
 // ✅ GET /api/faqs
 router.get("/", authenticateUser, async (req: Request, res: Response) => {
   try {
@@ -51,8 +121,11 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
       [tenant_id, canales]
     );
 
+    // 🔹 Dedup por intención/similitud ANTES de responder
+    const filtradas = dedupeFaqs(rows as FaqIn[]);
+
     res.set("Cache-Control", "no-store");
-    return res.status(200).json(rows);
+    return res.status(200).json(filtradas);
   } catch (err) {
     console.error("❌ Error GET /faqs:", err);
     return res.status(500).json({ error: "Error interno" });
@@ -80,14 +153,20 @@ router.post("/", authenticateUser, async (req: Request, res: Response) => {
 
     const incoming: FaqIn[] = Array.isArray(req.body?.faqs) ? req.body.faqs : [];
 
-    const preparados = incoming
-      .map((f) => ({
-        pregunta: capitalizar(f.pregunta || ""),
-        respuesta: (f.respuesta || "").toString().trim(),
-        intencion: f.intencion ? String(f.intencion).trim().toLowerCase() : null, // ← opcional
-        canal: canalDestino,
-      }))
-      .filter((f) => f.pregunta && f.respuesta);
+    // 🔹 Normaliza, infiere intención si falta, y deduplica el payload entrante
+    const preparados = dedupeFaqs(
+        incoming
+         .map((f) => ({
+          pregunta: capitalizar(f.pregunta || ""),
+          respuesta: (f.respuesta || "").toString().trim(),
+          intencion:
+            (f.intencion ? String(f.intencion).trim().toLowerCase() : null) ||
+            inferirIntencion(f.pregunta || "") ||
+            null,
+          canal: canalDestino,
+         }))
+        .filter((f) => f.pregunta && f.respuesta)
+      );
 
     if (preparados.length === 0) {
       return res.status(400).json({ error: "No se recibieron FAQs válidas" });
