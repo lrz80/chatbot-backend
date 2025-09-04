@@ -83,44 +83,23 @@ const PORT = process.env.PORT || 3001;
 app.use("/uploads", express.static(path.join(__dirname, "../public/uploads")));
 console.log("📂 Servidor estático montado en:", path.join(__dirname, "../public/uploads"));
 
-// ✅ Fallback universal para CORS en cualquier ruta
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', 'https://www.aamy.ai');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200); // respuesta inmediata a preflight
-  }
-  next();
-});
+const allowedOrigins = ['https://www.aamy.ai', 'https://aamy.ai']; // añade apex si lo usas
 
-// ✅ Lista blanca de dominios
-const allowedOrigins = ['https://www.aamy.ai'];
-
-// ✅ CORS middleware
 app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true); // ✅ esto SIEMPRE envía Access-Control-Allow-Origin
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
+  origin: (origin, cb) => (!origin || allowedOrigins.includes(origin)) ? cb(null, true) : cb(new Error('Not allowed by CORS')),
   credentials: true,
+  methods: ['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept','Origin'],
+  optionsSuccessStatus: 204,
 }));
 
-// ✅ Respuesta explícita a OPTIONS
-app.options("*", cors({
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error("Not allowed by CORS"));
-    }
-  },
+app.options('*', cors({
+  origin: (origin, cb) => (!origin || allowedOrigins.includes(origin)) ? cb(null, true) : cb(new Error('Not allowed by CORS')),
   credentials: true,
+  methods: ['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept','Origin'],
 }));
+
 
 // ✅ Webhook Stripe primero (usa body raw, no json)
 app.use(
