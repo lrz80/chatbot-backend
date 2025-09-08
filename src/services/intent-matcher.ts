@@ -63,21 +63,21 @@ export async function buscarRespuestaPorIntencion(opts: {
   
     // Traemos activas ordenadas por prioridad asc
     const { rows } = await pool.query<IntencionRow>(
-      `SELECT id,
-              canal,
-              nombre,
-              COALESCE(ejemplos, ARRAY[]::text[]) AS ejemplos, -- 👈 fuerza array aunque venga null
-              respuesta,
-              idioma,
-              prioridad,
-              activo
-         FROM intenciones
-        WHERE tenant_id = $1
-          AND canal = ANY($2)
-          AND activo = TRUE
-        ORDER BY prioridad ASC, id ASC`,
-      [tenant_id, canales]
-    );
+        `SELECT id,
+                canal,
+                nombre,
+                COALESCE(ejemplos::text, '{}') AS ejemplos,  -- 👈 siempre string
+                respuesta,
+                idioma,
+                prioridad,
+                activo
+           FROM intenciones
+          WHERE tenant_id = $1
+            AND canal = ANY($2)
+            AND activo = TRUE
+          ORDER BY prioridad ASC, id ASC`,
+        [tenant_id, canales]
+      );
   
     const msg = normalize(mensajeUsuario);
     let best:
