@@ -16,6 +16,7 @@ import {
   yaExisteComoFaqAprobada,
   normalizarTexto
 } from '../../lib/faq/similaridadFaq';
+import { buscarRespuestaPorIntencion } from '../../services/intent-matcher';
 
 // Helpers de idioma (consistentes con WhatsApp)
 const normLang = (code?: string | null) => {
@@ -701,6 +702,91 @@ router.post('/api/facebook/webhook', async (req, res) => {
             await sendMeta(menu);
             continue;
           }
+        }
+
+        // === Entrenamiento por Intención (tabla intenciones) ===
+        try {
+          // Detecta idioma del mensaje del usuario (normalizado a 'es' | 'en')
+          const idiomaDet: 'es' | 'en' = normalizeLang(normLang(idioma) || tenantBase);
+
+          // Para el match de patrones, convenimos comparar en ES (como en FAQs)
+          const textoParaMatch = (idiomaDet === 'es')
+            ? userMessage
+            : await traducirMensaje(userMessage, 'es');
+
+          const respIntent = await buscarRespuestaPorIntencion({
+            tenant_id: tenantId,
+            canal: 'meta',               // unifica ['meta','facebook','instagram']
+            mensajeUsuario: textoParaMatch,
+            idiomaDetectado: idiomaDet,  // por si alguna intención define idioma explícito
+          });
+
+          if (respIntent) {
+            // Asegura idioma final al cliente
+            let out = respIntent.respuesta;
+            try {
+              const langOut = await detectarIdioma(out);
+              if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+                out = await traducirMensaje(out, idiomaDestino);
+              }
+            } catch {}
+
+            // Guarda 'user' (una vez)
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
+              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
+            );
+
+            // Envía y guarda 'assistant'
+            await sendMeta(out);
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+            );
+
+            // Registra interacción
+            await pool.query(
+              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+              VALUES ($1, $2, $3, NOW())
+              ON CONFLICT DO NOTHING`,
+              [tenantId, canalEnvio, messageId]
+            );
+
+            // (Opcional) segmentación + follow-up, usando el detector actual
+            try {
+              const det = await detectarIntencion(userMessage, tenantId, canalEnvio);
+              const nivel = det?.nivel_interes ?? 1;
+
+              let intFinal = (respIntent.intent || '').toLowerCase();
+              if (intFinal === 'duda') intFinal = buildDudaSlug(userMessage);
+              intFinal = normalizeIntentAlias(intFinal);
+
+              // Segmentación como en WhatsApp
+              const intencionesCliente = ["comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"];
+              if (intencionesCliente.some(p => intFinal.includes(p))) {
+                await pool.query(
+                  `UPDATE clientes
+                    SET segmento = 'cliente'
+                  WHERE tenant_id = $1 AND contacto = $2
+                    AND (segmento = 'lead' OR segmento IS NULL)`,
+                  [tenantId, senderId]
+                );
+              }
+
+              await scheduleFollowUp(intFinal, nivel);
+            } catch (e) {
+              console.warn('⚠️ No se pudo evaluar/programar follow-up post-intención:', e);
+            }
+
+            // 🔚 Corta aquí: ya respondió por intención (no pases a interceptor/FAQ/LLM)
+            continue;
+          }
+        } catch (e) {
+          console.warn('⚠️ Intent matcher falló o no encontró coincidencia:', e);
         }
 
         // === Interceptor de principiantes (como WhatsApp) ===
