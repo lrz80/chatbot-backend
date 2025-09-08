@@ -18,6 +18,7 @@ import {
 import { detectarIntencion } from '../../lib/detectarIntencion';
 import { runBeginnerRecoInterceptor } from '../../lib/recoPrincipiantes/interceptor';
 import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
+import { buscarRespuestaPorIntencion } from "../../services/intent-matcher";
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -563,6 +564,63 @@ async function procesarMensajeWhatsApp(body: any) {
         }
         return;
       }      
+}
+
+// ─── INTENCIONES (matcher) — RESPONDE ANTES DE FAQs/IA ───────────────────────
+try {
+  // Comparamos en ES (igual que FAQs). Si el cliente no habla ES, traducimos su mensaje a ES.
+  const textoParaMatch = (idiomaDestino !== 'es')
+    ? await traducirMensaje(userInput, 'es').catch(() => userInput)
+    : userInput;
+
+  console.log('[INTENTS] match input=', textoParaMatch);
+
+  const respIntent = await buscarRespuestaPorIntencion({
+    tenant_id: tenant.id,
+    canal: 'whatsapp',              // este webhook es WhatsApp
+    mensajeUsuario: textoParaMatch,
+    idiomaDetectado: idiomaDestino, // 'es' | 'en'
+    umbral: Number(process.env.INTENT_MATCH_THRESHOLD ?? 0.55),
+    filtrarPorIdioma: true
+  });
+
+  console.log('[INTENTS] result=', respIntent);
+  
+  if (respIntent?.respuesta) {
+    // Asegura que la salida esté en el idioma del cliente
+    let out = respIntent.respuesta;
+    try {
+      const langOut = await detectarIdioma(out);
+      if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+        out = await traducirMensaje(out, idiomaDestino);
+      }
+    } catch {}
+
+    await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
+
+    // Logs básicos (mismo estilo que ya usas)
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+       VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
+      [tenant.id, userInput, canal, fromNumber || "anónimo", messageId]
+    );
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+       VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
+      [tenant.id, out, canal, fromNumber || 'anónimo']
+    );
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT DO NOTHING`,
+      [tenant.id, canal, messageId]
+    );
+
+    console.log(`✅ Respondido por INTENCIÓN: "${respIntent.intent}" score=${respIntent.score}`);
+    return; // ¡Importante! Ya respondimos, salimos aquí.
+  }
+} catch (e) {
+  console.warn('⚠️ Matcher de intenciones no coincidió o falló:', e);
 }
 
 // 🔎 Interceptor canal-agnóstico (recomendación principiantes)
