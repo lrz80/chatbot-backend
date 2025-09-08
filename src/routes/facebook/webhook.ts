@@ -789,6 +789,142 @@ router.post('/api/facebook/webhook', async (req, res) => {
           console.warn('⚠️ Intent matcher falló o no encontró coincidencia:', e);
         }
 
+        // === ATajo directo de intención: PRECIO (solo Meta/Facebook/IG) ===
+        try {
+          const txt = (userMessage || '').toLowerCase();
+          const priceRegex = /\b(precio|precios|costo|costos|cu[eé]sta[n]?|tarifa[s]?|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/;
+
+          if (priceRegex.test(txt)) {
+            // nombres sin modificar DB (cubre 'precio' o 'precios')
+            const nombres = ['precio', 'precios'];
+
+            const { rows } = await pool.query(
+              `SELECT respuesta
+                FROM intenciones
+                WHERE tenant_id = $1
+                  AND canal = ANY($2::text[])
+                  AND activo = TRUE
+                  AND LOWER(nombre) = ANY($3::text[])
+                ORDER BY prioridad ASC, id ASC
+                LIMIT 1`,
+              [tenantId, ['meta','facebook','instagram'], nombres]
+            );
+
+            const resp = rows[0]?.respuesta;
+            if (resp) {
+              // asegurar idioma del cliente
+              let out = resp;
+              try {
+                const langOut = await detectarIdioma(out);
+                if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+                  out = await traducirMensaje(out, idiomaDestino);
+                }
+              } catch {}
+
+              // guarda user (una sola vez)
+              await pool.query(
+                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+                VALUES ($1,'user',$2,NOW(),$3,$4,$5)
+                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+                [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
+              );
+
+              // envía y guarda assistant
+              await sendMeta(out);
+              await pool.query(
+                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+                VALUES ($1,'assistant',$2,NOW(),$3,$4,$5)
+                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+                [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+              );
+
+              await pool.query(
+                `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+                VALUES ($1,$2,$3,NOW())
+                ON CONFLICT DO NOTHING`,
+                [tenantId, canalEnvio, messageId]
+              );
+
+              console.log('🎯 Enviado por INTENCIÓN (atajo precio)');
+              continue; // ⛔ no sigas a interceptor/FAQ/LLM
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ Atajo precio falló:', e);
+        }
+
+        // === ATAJOS DIRECTOS DE INTENCIÓN (Meta: FB/IG) ===
+        function quickIntentOf(txtRaw: string) {
+          const txt = (txtRaw || '').toLowerCase();
+          const m = [
+            { name: 'precio', aliases: ['precio','precios'], rx: /\b(precio|precios|costo|costos|cu[eé]sta[n]?|tarifa[s]?|mensualidad|membres[ií]a|price|prices|cost|fee|fees|price\s*list)\b/ },
+            { name: 'reservar', aliases: ['reservar','reserva','agendar','agenda','booking','book'], rx: /\b(reserv[ae]r|reserva|agendar|agenda|booking|book)\b/ },
+            { name: 'horario', aliases: ['horario','horarios'], rx: /\b(horario[s]?|schedule|times?)\b/ },
+            { name: 'ubicacion', aliases: ['ubicacion','ubicación','direccion','dirección','address','location'], rx: /\b(ubicaci[oó]n|direcci[oó]n|address|location|d[oó]nde)\b/ },
+            { name: 'clases_online', aliases: ['clases_online','online','virtual'], rx: /\b(online|en\s*linea|en\s*l[ií]nea|virtual(?:es|idad)?)\b/ },
+          ];
+          for (const it of m) if (it.rx.test(txt)) return it;
+          return null;
+        }
+
+        try {
+          const quick = quickIntentOf(userMessage);
+          if (quick) {
+            const { rows } = await pool.query(
+              `SELECT respuesta
+                FROM intenciones
+                WHERE tenant_id = $1
+                  AND canal = ANY($2::text[])
+                  AND activo = TRUE
+                  AND LOWER(nombre) = ANY($3::text[])
+                ORDER BY prioridad ASC, id ASC
+                LIMIT 1`,
+              [tenantId, ['meta','facebook','instagram'], quick.aliases.map(s => s.toLowerCase())]
+            );
+
+            const resp = rows[0]?.respuesta;
+            if (resp) {
+              // Asegura idioma del cliente
+              let out = resp;
+              try {
+                const langOut = await detectarIdioma(out);
+                if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+                  out = await traducirMensaje(out, idiomaDestino);
+                }
+              } catch {}
+
+              // Guarda user una sola vez
+              await pool.query(
+                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+                VALUES ($1,'user',$2,NOW(),$3,$4,$5)
+                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+                [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
+              );
+
+              // Envía y guarda assistant
+              await sendMeta(out);
+              await pool.query(
+                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+                VALUES ($1,'assistant',$2,NOW(),$3,$4,$5)
+                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+                [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+              );
+
+              await pool.query(
+                `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+                VALUES ($1,$2,$3,NOW())
+                ON CONFLICT DO NOTHING`,
+                [tenantId, canalEnvio, messageId]
+              );
+
+              console.log(`🎯 Enviado por INTENCIÓN (atajo ${quick.name})`);
+              continue; // ⛔ no sigas a interceptor/FAQ/LLM
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ Atajos de intención fallaron:', e);
+        }
+
         // === Interceptor de principiantes (como WhatsApp) ===
 
         // 1) Intención canónica para usar en FAQ y en el interceptor

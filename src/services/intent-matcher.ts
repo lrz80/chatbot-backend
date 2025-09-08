@@ -2,6 +2,21 @@
 import pool from "../lib/db";
 import { normalize, bestPatternScore } from "../utils/text-match";
 
+// Sinónimos por intención (no toca DB)
+const HINTS: Record<string, string[]> = {
+    precio: [
+      'precio','precios','cuanto cuesta','cuánto cuesta',
+      'costos','tarifas','price','prices','price list','fee','fees','cost'
+    ],
+    reservar: ['reservar','reserva','agendar','agenda','booking','book'],
+    horario:  ['horario','horarios','schedule','time','times'],
+    ubicacion: [
+      'ubicacion','ubicación','direccion','dirección',
+      'address','location','donde estan','dónde estan','como llegar','cómo llegar'
+    ],
+    clases_online: ['online','en linea','en línea','virtual','clase virtual','clases online'],
+  };  
+
 type IntencionRow = {
   id: number;
   canal: string;
@@ -130,7 +145,7 @@ export async function buscarRespuestaPorIntencion(opts: {
             activo
        FROM intenciones
       WHERE tenant_id = $1
-        AND canal = ANY($2)
+        AND canal = ANY($2::text[])
         AND activo = TRUE
       ORDER BY prioridad ASC, id ASC`,
     [tenant_id, canales]
@@ -154,40 +169,59 @@ export async function buscarRespuestaPorIntencion(opts: {
     }
 
     const ejemplosArr = toArray(row.ejemplos)
-      .map((e) => normalize(e))
-      .map((e) => quickCorrections(e))
-      .map((e) => squashRepeats(e));
+    .map((e) => normalize(e))
+    .map((e) => quickCorrections(e))
+    .map((e) => squashRepeats(e));
 
-    // 1) match “normal” con tu scorer
-    let match = bestPatternScore(msgSquashed, ejemplosArr, umbral);
+    // ➕ Añade HINTS de la intención (sin tocar DB)
+    const nombreCanon = String(row.nombre || '').toLowerCase();
+    const hintsArr = (HINTS[nombreCanon] || [])
+        .map((e) => normalize(e))
+        .map((e) => quickCorrections(e))
+        .map((e) => squashRepeats(e));
 
-    // 2) fallback fuzzy con 1 error (rápido)
-    if (!match) {
-      const f1 = fuzzyIncludes(msgSquashed, ejemplosArr, 1);
-      if (f1.ok) {
-        match = { pattern: f1.hit!, score: Math.max(umbral, 0.6) };
-      }
+    // 🔄 Unifica y quita duplicados
+    const patrones = Array.from(new Set([...ejemplosArr, ...hintsArr]));
+
+    // 0) contain rápido (boost)
+    let match: { pattern: string; score: number } | null = null;
+    for (const p of patrones) {
+        if (p && msgSquashed.includes(p)) {
+        match = { pattern: p, score: Math.max(umbral, 0.9) };
+        break;
+        }
     }
-    // 3) fallback fuzzy con 2 errores (opcional y más permisivo)
+
+    // 1) scorer normal
     if (!match) {
-      const f2 = fuzzyIncludes(msgSquashed, ejemplosArr, 2);
-      if (f2.ok) {
-        match = { pattern: f2.hit!, score: Math.max(umbral, 0.55) };
-      }
+        match = bestPatternScore(msgSquashed, patrones, umbral);
+    }
+
+    // 2) fuzzy 1 error
+    if (!match) {
+        const f1 = fuzzyIncludes(msgSquashed, patrones, 1);
+        if (f1.ok) match = { pattern: f1.hit!, score: Math.max(umbral, 0.6) };
+    }
+
+    // 3) fuzzy 2 errores
+    if (!match) {
+        const f2 = fuzzyIncludes(msgSquashed, patrones, 2);
+        if (f2.ok) match = { pattern: f2.hit!, score: Math.max(umbral, 0.55) };
     }
 
     if (match) {
-      console.log(
+        console.log(
         "[INTENTS] candidato=",
         row.nombre,
         "score=",
         match.score,
         "patron=",
-        match.pattern
-      );
-      if (!best || match.score > best.score) {
+        match.pattern,
+        hintsArr.includes(match.pattern) ? "(via HINTS)" : "(via ejemplos)"
+        );
+        if (!best || match.score > best.score) {
         best = { row, score: match.score, matchedPattern: match.pattern };
-      }
+        }
     }
   }
 
