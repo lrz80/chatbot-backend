@@ -97,46 +97,48 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
   }
 });
 
-/** ✅ POST: Guardar/actualizar en bloque con UPSERT (sin borrar todo)
- *  Body:
- *  {
- *    canal?: 'whatsapp'|'facebook'|'instagram'|'meta'|'voz', // default 'whatsapp'
- *    intents: [{ nombre, ejemplos, respuesta, prioridad?, activo?, idioma? }, ...]
- *  }
- */
+// ✅ POST: Guardar/actualizar (UPSERT) respetando canal
 router.post('/', authenticateUser, async (req: Request, res: Response) => {
   const tenantId = (req as any).user?.tenant_id;
   if (!tenantId) return res.status(401).json({ error: 'Tenant no autenticado' });
 
-  const canal = (req.body?.canal as string) || 'whatsapp';
-const rawIntents: unknown[] = Array.isArray(req.body?.intents) ? req.body.intents : [];
+  const intents = Array.isArray(req.body?.intents) ? req.body.intents : [];
+  const canalGlobal = (req.body?.canal as string) || (req.query?.canal as string) || ''; // ✅ usa body o query
+  const ref = (req.headers['referer'] as string) || '';                                  // ✅ referer
 
-// Normaliza primero (y tipa el resultado)
-const normalizados: NormalizedIntent[] = (rawIntents as any[]).map(
-  (i: any): NormalizedIntent => ({
-    nombre: (i?.nombre || '').toString().trim(),
-    ejemplos: toEjemplosArray(i?.ejemplos), // siempre array
-    respuesta: (i?.respuesta || '').toString().trim(),
-    prioridad: Number(i?.prioridad ?? 100),
-    activo: typeof i?.activo === 'boolean' ? i.activo : true,
-    idioma: i?.idioma ?? null
-  })
-);
+  const validos = intents.filter((i: any) =>
+    i?.nombre?.trim() && Array.isArray(i?.ejemplos) && i.ejemplos.length > 0 && i?.respuesta?.trim()
+  );
+  if (validos.length === 0) return res.status(400).json({ error: 'No se recibieron intenciones válidas' });
 
-// Validación con tipo inferido
-const validos: NormalizedIntent[] = normalizados.filter(
-  (i: NormalizedIntent) => i.nombre && i.ejemplos.length > 0 && i.respuesta
-);
+  const ALLOWED = new Set(['whatsapp','facebook','instagram','meta','voz']);
+  const resolveCanal = (it: any) => {
+    let c = (it?.canal || canalGlobal || '').toLowerCase();
 
-if (validos.length === 0) {
-  return res.status(400).json({ error: 'No se recibieron intenciones válidas' });
-}
+    // 🔎 inferir por referer si no vino
+    if (!c) {
+      if (ref.includes('/dashboard/meta-config')) c = 'meta';
+      else c = 'whatsapp'; // fallback
+    }
+    // Unificar FB/IG bajo meta si tu contenido es único para Meta
+    if (c === 'facebook' || c === 'instagram') c = 'meta';
+    if (!ALLOWED.has(c)) c = 'whatsapp';
+    return c;
+  };
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     for (const it of validos) {
+      const canal = resolveCanal(it);  // 🔐 aquí se decide
+      const nombre = it.nombre.trim();
+      const ejemplos: string[] = it.ejemplos;
+      const respuesta = it.respuesta.trim();
+      const prioridad = Number(it.prioridad ?? 100);
+      const activo = typeof it.activo === 'boolean' ? it.activo : true;
+      const idioma = it.idioma ?? null;
+
       await client.query(
         `INSERT INTO intenciones (tenant_id, canal, nombre, ejemplos, respuesta, idioma, activo, prioridad)
               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
@@ -148,7 +150,7 @@ if (validos.length === 0) {
              activo    = EXCLUDED.activo,
              prioridad = EXCLUDED.prioridad,
              updated_at = NOW()`,
-        [tenantId, canal, it.nombre, it.ejemplos, it.respuesta, it.idioma, it.activo, it.prioridad]
+        [tenantId, canal, nombre, ejemplos, respuesta, idioma, activo, prioridad]
       );
     }
 
