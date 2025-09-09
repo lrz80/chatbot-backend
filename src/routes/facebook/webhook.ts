@@ -138,16 +138,19 @@ router.post('/api/facebook/webhook', async (req, res) => {
       const pageId = entry.id;
 
       for (const messagingEvent of entry.messaging) {
-        if (!messagingEvent.message || messagingEvent.message.is_echo || !messagingEvent.message.text) {
-          // 🛑 Si es Instagram y el bot se está "autoescuchando"
-          if (body.object === 'instagram' && messagingEvent.sender.id === entry.id) {
-            console.log('⏭️ Echo de Instagram detectado, ignorado.');
-            continue;
-          }
-  
-          console.log('⏭️ Evento ignorado');
+        // ✅ SOLO ignorar echos reales. Sin comparar sender.id con entry.id.
+        if (!messagingEvent.message) {
+          console.log('⏭️ Evento sin "message", ignorado.');
           continue;
-        }        
+        }
+        if (messagingEvent.message.is_echo === true) {
+          console.log('⏭️ Echo Meta detectado, ignorado. mid=%s', messagingEvent.message.mid);
+          continue;
+        }
+        if (!messagingEvent.message.text) {
+          console.log('⏭️ Mensaje sin texto, ignorado.');
+          continue;
+        }
 
         const senderId = messagingEvent.sender.id;
         const messageId = messagingEvent.message.mid;
