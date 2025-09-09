@@ -218,6 +218,9 @@ try {
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
+  // después de calcular idiomaDestino...
+  let INTENCION_FINAL_CANONICA = '';
+
   // 3️⃣ Detectar intención
   const { intencion: intencionDetectada } = await detectarIntencion(mensajeUsuario, tenant.id, 'whatsapp');
   const intencionLower = intencionDetectada?.trim().toLowerCase() || "";
@@ -278,7 +281,7 @@ try {
       console.log('🎯 Override a intención clases_online por keyword');
     }
 
-    const INTENCION_FINAL_CANONICA = (intencionParaFaq || intencionProc || '').trim().toLowerCase();
+    INTENCION_FINAL_CANONICA = (intencionParaFaq || intencionProc || '').trim().toLowerCase();
     console.log(`🎯 Intención final (canónica) = ${INTENCION_FINAL_CANONICA}`);
 
     if (!isNumericOnly && intencionProc === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
@@ -418,10 +421,12 @@ try {
 
       await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
       await pool.query(
-        `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
-         VALUES ($1, 'assistant', $2, NOW(), $3)`,
-        [tenant.id, out, canal]
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+         VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+         ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+        [tenant.id, out, canal, fromNumber || 'anónimo', `${messageId}-bot`]
       );
+      
       console.log("📬 Respuesta enviada desde opción seleccionada del menú");
 
       // 🔹 Resetear estado para permitir mostrar menú en el futuro
@@ -447,10 +452,11 @@ try {
         } catch {}
         await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
         await pool.query(
-          `INSERT INTO messages (tenant_id, role, content, timestamp, canal)
-          VALUES ($1, 'assistant', $2, NOW(), $3)`,
-          [tenant.id, out, canal]
-        );
+          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+           VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+          [tenant.id, out, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+        );        
         console.log("📬 Mensaje enviado desde submenú terminal.");
         return;
       }
@@ -552,19 +558,16 @@ try {
       }
     } catch {}
 
+    // envia y registra assistant (usa un id distinto para no chocar)
     await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
 
-    // Logs básicos (mismo estilo que ya usas)
     await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
-      [tenant.id, userInput, canal, fromNumber || "anónimo", messageId]
+      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
     );
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-       VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
-      [tenant.id, out, canal, fromNumber || 'anónimo']
-    );
+
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
        VALUES ($1, $2, $3, NOW())
@@ -633,25 +636,14 @@ if (interceptado) {
     console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencionParaFaq}"`);
     console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
 
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-      VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
-      [tenant.id, userInput, canal, fromNumber || "anónimo", messageId]
-    );
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-      VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
-      [tenant.id, respuesta, canal, fromNumber || 'anónimo']
-    );
-
     await enviarWhatsAppSeguro(fromNumber, respuesta, tenant.id);
     console.log("📬 Respuesta enviada vía Twilio (desde FAQ oficial):", respuesta);
 
     await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, respuesta, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
     );
 
     // Inteligencia + follow-up (único, configurable)
@@ -690,6 +682,13 @@ if (interceptado) {
       console.warn('⚠️ No se pudo registrar/schedule tras FAQ oficial:', e);
     }
 
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT DO NOTHING`,
+      [tenant.id, canal, messageId]
+    );
+    
     return; // salir aquí si hubo FAQ directa
   }
 
@@ -845,17 +844,21 @@ if (!respuestaDesdeFaq && !respuesta) {
     const tokensConsumidos = completion.usage?.total_tokens || 0;
     if (tokensConsumidos > 0) {
       await pool.query(
-        `UPDATE uso_mensual SET usados = usados + $1 WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
-        [tokensConsumidos, tenant.id]
+        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+         VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+         ON CONFLICT (tenant_id, canal, mes)
+         DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+        [tenant.id, tokensConsumidos]
       );
-    }
+    }    
   }  
 
   // Insertar mensaje bot (esto no suma a uso)
   await pool.query(
-    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-    VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
-    [tenant.id, respuesta, canal, fromNumber || 'anónimo']
+    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+     VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+     ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+    [tenant.id, respuesta, canal, fromNumber || 'anónimo', `${messageId}-bot`]
   );  
 
   await enviarWhatsAppSeguro(fromNumber, respuesta, tenant.id);
