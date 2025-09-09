@@ -18,6 +18,12 @@ import {
 } from '../../lib/faq/similaridadFaq';
 import { buscarRespuestaPorIntencion } from '../../services/intent-matcher';
 
+// Umbral del intent-matcher controlado por ENV (clamp 0.30–0.95)
+const INTENT_THRESHOLD = Math.min(
+  0.95,
+  Math.max(0.30, Number(process.env.INTENT_MATCH_THRESHOLD ?? 0.55))
+);
+
 // Helpers de idioma (consistentes con WhatsApp)
 const normLang = (code?: string | null) => {
   if (!code) return null;
@@ -717,12 +723,13 @@ router.post('/api/facebook/webhook', async (req, res) => {
             ? userMessage
             : await traducirMensaje(userMessage, 'es');
 
-          const respIntent = await buscarRespuestaPorIntencion({
-            tenant_id: tenantId,
-            canal: 'meta',               // unifica ['meta','facebook','instagram']
-            mensajeUsuario: textoParaMatch,
-            idiomaDetectado: idiomaDet,  // por si alguna intención define idioma explícito
-          });
+            const respIntent = await buscarRespuestaPorIntencion({
+              tenant_id: tenantId,
+              canal: 'meta',
+              mensajeUsuario: textoParaMatch,
+              idiomaDetectado: idiomaDet,
+              umbral: INTENT_THRESHOLD, // 👈 usa ENV
+            });            
 
           if (respIntent) {
             // Asegura idioma final al cliente
@@ -785,8 +792,25 @@ router.post('/api/facebook/webhook', async (req, res) => {
               console.warn('⚠️ No se pudo evaluar/programar follow-up post-intención:', e);
             }
 
+            console.log('🎯 Intent matcher HIT', {
+              tenantId,
+              canal: canalEnvio,
+              intent: respIntent.intent,
+              score: respIntent.score,
+              pattern: respIntent.matchedPattern,
+              th: INTENT_THRESHOLD
+            });
+            
             // 🔚 Corta aquí: ya respondió por intención (no pases a interceptor/FAQ/LLM)
             continue;
+
+          } else {
+            console.log('🪫 Intent matcher: no match', {
+              tenantId,
+              canal: canalEnvio,
+              th: INTENT_THRESHOLD,
+              text: userMessage.slice(0, 160),
+            });
           }
         } catch (e) {
           console.warn('⚠️ Intent matcher falló o no encontró coincidencia:', e);
