@@ -20,6 +20,11 @@ import { runBeginnerRecoInterceptor } from '../../lib/recoPrincipiantes/intercep
 import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
 import { buscarRespuestaPorIntencion } from "../../services/intent-matcher";
 
+const INTENT_THRESHOLD = Math.min(
+  0.95,
+  Math.max(0.30, Number(process.env.INTENT_MATCH_THRESHOLD ?? 0.55))
+);
+
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
@@ -117,6 +122,42 @@ async function procesarMensajeWhatsApp(body: any) {
     return;
   }
 
+  // 2.a) Guardar el mensaje del usuario una sola vez (idempotente)
+try {
+  await pool.query(
+    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+     VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
+     ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+    [tenant.id, userInput, 'whatsapp', fromNumber || 'anónimo', messageId]
+  );
+} catch (e) {
+  console.warn('No se pudo registrar mensaje user:', e);
+}
+
+// 2.b) Incrementar uso mensual (antes de cualquier return)
+try {
+  const { rows: rowsTenant } = await pool.query(
+    `SELECT membresia_inicio FROM tenants WHERE id = $1`, [tenant.id]
+  );
+  const membresiaInicio = rowsTenant[0]?.membresia_inicio;
+  if (membresiaInicio) {
+    const inicio = new Date(membresiaInicio);
+    const ahora = new Date();
+    const diffInMonths = Math.floor((ahora.getFullYear() - inicio.getFullYear()) * 12 + (ahora.getMonth() - inicio.getMonth()));
+    const cicloInicio = new Date(inicio); cicloInicio.setMonth(inicio.getMonth() + diffInMonths);
+    const cicloMes = cicloInicio.toISOString().split('T')[0];
+
+    await pool.query(
+      `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+       VALUES ($1, $2, $3, 1)
+       ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
+      [tenant.id, 'whatsapp', cicloMes]
+    );
+  }
+} catch (e) {
+  console.error('❌ Error incrementando uso_mensual:', e);
+}
+
   const idioma = await detectarIdioma(userInput);
   const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
   let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idioma);
@@ -135,7 +176,10 @@ async function procesarMensajeWhatsApp(body: any) {
 
   let flows: any[] = [];
   try {
-    const flowsRes = await pool.query('SELECT data FROM flows WHERE tenant_id = $1', [tenant.id]);
+    const flowsRes = await pool.query(
+      'SELECT data FROM flows WHERE tenant_id = $1 AND canal = $2 LIMIT 1',
+      [tenant.id, 'whatsapp']
+    );    
     const raw = flowsRes.rows[0]?.data;
     flows = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : [];
 
@@ -199,94 +243,6 @@ async function procesarMensajeWhatsApp(body: any) {
   if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
     respuesta = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino); // antes: idioma
   }else {
-    // 🛑 Atajo: si el usuario mandó SOLO un número, resolver flujos YA y salir
-    if (isNumericOnly && Array.isArray(flows[0]?.opciones) && flows[0].opciones.length) {
-      const rawBodyNum = (body.Body ?? '').toString();
-      const digitOnlyNum = rawBodyNum.replace(/[^\p{N}]/gu, '').trim();
-      const n = Number(digitOnlyNum);
-      const opcionesNivel1 = flows[0].opciones;
-  
-      if (Number.isInteger(n) && n >= 1 && n <= opcionesNivel1.length) {
-        const opcionSeleccionada = opcionesNivel1[n - 1];
-  
-        // 1) Respuesta directa
-        if (opcionSeleccionada?.respuesta) {
-          let out = opcionSeleccionada.respuesta;
-          try {
-            const idiomaOut = await detectarIdioma(out);
-            if (idiomaOut && idiomaOut !== 'zxx' && idiomaOut !== idiomaDestino) {
-              out = await traducirMensaje(out, idiomaDestino);
-            }
-          } catch {}
-          // 📌 Agregar recordatorio al final
-          out += "\n\n💡 ¿Quieres ver otra opción del menú? Responde con el número correspondiente.";
-          await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
-          await pool.query(
-            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-            VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
-            [tenant.id, out, canal, fromNumber || 'anónimo']
-          );
-          console.log("📬 Respuesta enviada desde opción seleccionada del menú (atajo numérico)");
-          return;
-        }
-  
-        // 1.5) Submenú terminal (solo mensaje)
-        if (opcionSeleccionada?.submenu && !opcionSeleccionada?.submenu?.opciones?.length) {
-          let out = opcionSeleccionada.submenu.mensaje || '';
-          if (out) {
-            try {
-              const langOut = await detectarIdioma(out);
-              if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-                out = await traducirMensaje(out, idiomaDestino);
-              }
-            } catch {}
-            await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
-            await pool.query(
-              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-               VALUES ($1, 'assistant', $2, NOW(), $3, $4)`,
-               [tenant.id, out, canal, fromNumber || 'anónimo']
-            );
-            console.log("📬 Mensaje enviado desde submenú terminal (atajo numérico).");
-            return;
-          }
-        }
-  
-        // 2) Submenú con opciones
-        if (opcionSeleccionada?.submenu?.opciones?.length) {
-          const titulo = opcionSeleccionada.submenu.mensaje || 'Elige una opción:';
-          const opcionesSm = opcionSeleccionada.submenu.opciones
-            .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
-            .join('\n');
-  
-          let menuSm = `💡 ${titulo}\n${opcionesSm}\n\nResponde con el número de la opción que deseas.`;
-          try {
-            const idMenu = await detectarIdioma(menuSm);
-            if (idMenu && idMenu !== 'zxx' && idMenu !== idiomaDestino) {
-              menuSm = await traducirMensaje(menuSm, idiomaDestino);
-            }
-          } catch {}
-          await enviarWhatsAppSeguro(fromNumber, menuSm, tenant.id);
-          console.log("📬 Submenú enviado (atajo numérico).");
-          return;
-        }
-  
-        // Opción válida pero sin contenido → reenvía menú
-        const pregunta = flows[0].pregunta || flows[0].mensaje || '¿Cómo puedo ayudarte?';
-        const opciones = flows[0].opciones.map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
-        let menu = `⚠️ Esa opción aún no tiene contenido. Elige otra.\n\n💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
-        try { if (idiomaDestino !== 'es') menu = await traducirMensaje(menu, idiomaDestino); } catch {}
-        await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
-        return;
-      } else {
-        // Número fuera de rango → menú
-        const pregunta = flows[0].pregunta || flows[0].mensaje || '¿Cómo puedo ayudarte?';
-        const opciones = flows[0].opciones.map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
-        let menu = `⚠️ Opción no válida. Intenta de nuevo.\n\n💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
-        try { if (idiomaDestino !== 'es') menu = await traducirMensaje(menu, idiomaDestino); } catch {}
-        await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
-        return;
-      }
-    }
   
     // Paso 1: Detectar idioma y traducir para evaluar intención
     const textoTraducido = idiomaDestino !== 'es'
@@ -580,12 +536,12 @@ try {
     canal: 'whatsapp',              // este webhook es WhatsApp
     mensajeUsuario: textoParaMatch,
     idiomaDetectado: idiomaDestino, // 'es' | 'en'
-    umbral: Number(process.env.INTENT_MATCH_THRESHOLD ?? 0.55),
+    umbral: INTENT_THRESHOLD,
     filtrarPorIdioma: true
   });
 
   console.log('[INTENTS] result=', respIntent);
-  
+
   if (respIntent?.respuesta) {
     // Asegura que la salida esté en el idioma del cliente
     let out = respIntent.respuesta;
@@ -894,52 +850,6 @@ if (!respuestaDesdeFaq && !respuesta) {
       );
     }
   }  
-
-  await pool.query(
-    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-    VALUES ($1, 'user', $2, NOW(), $3, $4, $5)`,
-    [tenant.id, userInput, canal, fromNumber || "anónimo", messageId]
-  );
-
-  // ✅ Incrementar solo una vez por mensaje recibido
-  // 🔍 Obtiene membresia_inicio
-  const { rows: rowsTenant } = await pool.query(
-    `SELECT membresia_inicio FROM tenants WHERE id = $1`, [tenant.id]
-  );
-  const membresiaInicio = rowsTenant[0]?.membresia_inicio;
-  if (!membresiaInicio) {
-    console.error('❌ No se encontró membresia_inicio para el tenant:', tenant.id);
-    return; // O maneja el error de forma adecuada
-  }
-
-  // 🔥 Calcula el ciclo de membresía actual
-  const inicio = new Date(membresiaInicio);
-  const ahora = new Date();
-  const diffInMonths = Math.floor(
-    (ahora.getFullYear() - inicio.getFullYear()) * 12 + (ahora.getMonth() - inicio.getMonth())
-  );
-  const cicloInicio = new Date(inicio);
-  cicloInicio.setMonth(inicio.getMonth() + diffInMonths);
-
-  // 📅 Asegura que la fecha se trunque a YYYY-MM-DD
-  const cicloMes = cicloInicio.toISOString().split('T')[0];
-
-  // 📝 Log detallado antes de la inserción
-  console.log(`🔄 Intentando insertar/actualizar uso_mensual para tenant: ${tenant.id}, canal: ${canal}, cicloMes: ${cicloMes}`);
-
-  try {
-    const result = await pool.query(
-      `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-      VALUES ($1, $2, $3, 1)
-      ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1
-      RETURNING *`,
-      [tenant.id, canal, cicloMes]
-    );
-
-    console.log(`✅ Registro actualizado/insertado en uso_mensual:`, result.rows[0]);
-  } catch (error) {
-    console.error(`❌ Error al actualizar uso_mensual para tenant ${tenant.id}, canal ${canal}:`, error);
-  }
 
   // Insertar mensaje bot (esto no suma a uso)
   await pool.query(
