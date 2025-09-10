@@ -38,13 +38,6 @@ const INTENT_UNIQUE = new Set([
   'precio','horario','ubicacion','reservar','comprar','confirmar','interes_clases','clases_online'
 ]);
 
-const enviarWhatsAppSeguro = async (to: string, text: string, tenantId: string) => {
-  const MAX = 1500; // margen
-  for (let i = 0; i < text.length; i += MAX) {
-    await enviarWhatsApp(to, text.slice(i, i + MAX), tenantId);
-  }
-};
-
 // Normalizadores
 const normLang = (code?: string | null) => {
   if (!code) return null;
@@ -239,7 +232,7 @@ try {
         ? "¡De nada! 💬 ¿Quieres ver otra opción del menú?"
         : await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
 
-    await enviarWhatsAppSeguro(fromNumber, respuestaRapida, tenant.id);
+    await enviarWhatsApp(fromNumber, respuestaRapida, tenant.id);
     return;
   }
 
@@ -296,7 +289,7 @@ try {
       try { menu = await traducirMensaje(menu, idiomaDestino); } catch {}
     }
   
-    await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
+    await enviarWhatsApp(fromNumber, menu, tenant.id);
     console.log("📬 Menú enviado desde Flujos Guiados Interactivos.");
     return;
   }  
@@ -372,7 +365,7 @@ try {
         }
       }
   
-      await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
+      await enviarWhatsApp(fromNumber, menu, tenant.id);
   
       // 🔹 Guardar estado para no reenviar hasta que responda
       await pool.query(
@@ -419,7 +412,7 @@ try {
         console.warn('No se pudo traducir la respuesta de la opción:', e);
       }
 
-      await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
+      await enviarWhatsApp(fromNumber, out, tenant.id);
       await pool.query(
         `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
          VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
@@ -450,7 +443,7 @@ try {
             out = await traducirMensaje(out, idiomaDestino);
           }
         } catch {}
-        await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
+        await enviarWhatsApp(fromNumber, out, tenant.id);
         await pool.query(
           `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
            VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
@@ -479,7 +472,7 @@ try {
         console.warn('No se pudo traducir el submenú:', e);
       }
 
-      await enviarWhatsAppSeguro(fromNumber, menuSm, tenant.id);
+      await enviarWhatsApp(fromNumber, menuSm, tenant.id);
       console.log("📬 Submenú enviado.");
       return;
     }
@@ -501,7 +494,7 @@ try {
             console.warn('No se pudo traducir el menú (opción sin contenido), se enviará en ES:', e);
           }
     
-          await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
+          await enviarWhatsApp(fromNumber, menu, tenant.id);
         }
         return; // 👈 evita caer a FAQs/IA
     
@@ -522,7 +515,7 @@ try {
             }
           } catch {}
         
-          await enviarWhatsAppSeguro(fromNumber, menu, tenant.id);
+          await enviarWhatsApp(fromNumber, menu, tenant.id);
         }
         return;
       }      
@@ -559,7 +552,7 @@ try {
     } catch {}
 
     // envia y registra assistant (usa un id distinto para no chocar)
-    await enviarWhatsAppSeguro(fromNumber, out, tenant.id);
+    await enviarWhatsApp(fromNumber, out, tenant.id);
 
     await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
@@ -591,7 +584,7 @@ const interceptado = await runBeginnerRecoInterceptor({
   idiomaDestino,
   intencionParaFaq,
   promptBase,
-  enviarFn: enviarWhatsAppSeguro, // tu sender chunker
+  enviarFn: enviarWhatsApp, // tu sender chunker
 });
 
 if (interceptado) {
@@ -636,7 +629,7 @@ if (interceptado) {
     console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencionParaFaq}"`);
     console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
 
-    await enviarWhatsAppSeguro(fromNumber, respuesta, tenant.id);
+    await enviarWhatsApp(fromNumber, respuesta, tenant.id);
     console.log("📬 Respuesta enviada vía Twilio (desde FAQ oficial):", respuesta);
 
     await pool.query(
@@ -861,7 +854,7 @@ if (!respuestaDesdeFaq && !respuesta) {
     [tenant.id, respuesta, canal, fromNumber || 'anónimo', `${messageId}-bot`]
   );  
 
-  await enviarWhatsAppSeguro(fromNumber, respuesta, tenant.id);
+  await enviarWhatsApp(fromNumber, respuesta, tenant.id);
   console.log("📬 Respuesta enviada vía Twilio:", respuesta);
 
   await pool.query(
