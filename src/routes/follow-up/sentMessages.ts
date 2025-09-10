@@ -1,5 +1,4 @@
 // src/routes/follow-up/sentMessages.ts
-
 import express from 'express';
 import { authenticateUser } from '../../middleware/auth';
 import pool from '../../lib/db';
@@ -34,10 +33,10 @@ router.get('/', authenticateUser, async (req, res) => {
     else if (status === 'pending') where.push('enviado = false');
     // status = "all" => sin filtro
 
-    // Filtro de canal
-    if (channel && typeof channel === 'string') {
-      params.push(channel);
-      where.push(`canal = $${params.length}`);
+    // Filtro de canal (case-insensitive)
+    if (channel && typeof channel === 'string' && channel.trim() !== '') {
+      params.push(channel.trim());
+      where.push(`LOWER(canal) = LOWER($${params.length})`);
     }
 
     // Búsqueda simple
@@ -54,17 +53,22 @@ router.get('/', authenticateUser, async (req, res) => {
     const { rows: countRows } = await pool.query(countSql, params);
     const total = countRows[0]?.total ?? 0;
 
-    // Orden:
-    //  - enviados: por sent_at (si no hubiera, cae a fecha_envio), luego id DESC
-    //  - pendientes: por fecha_envio DESC (más próximos primero), luego id DESC
-    const orderSql = `
-      ORDER BY
-        CASE
-          WHEN enviado THEN COALESCE(sent_at, fecha_envio)
-          ELSE fecha_envio
-        END DESC,
-        id DESC
-    `;
+    // Orden por estado
+    let orderSql = '';
+    if (status === 'pending') {
+      // próximos primero
+      orderSql = `ORDER BY fecha_envio ASC, id ASC`;
+    } else if (status === 'sent') {
+      // lo último enviado primero
+      orderSql = `ORDER BY COALESCE(sent_at, fecha_envio) DESC, id DESC`;
+    } else {
+      // mezcla razonable cuando se piden todos
+      orderSql = `
+        ORDER BY
+          CASE WHEN enviado THEN COALESCE(sent_at, fecha_envio) ELSE fecha_envio END DESC,
+          id DESC
+      `;
+    }
 
     params.push(limit, offset);
     const selectSql = `
