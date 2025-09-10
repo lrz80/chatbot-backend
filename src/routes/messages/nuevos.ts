@@ -1,24 +1,39 @@
-// 📁 src/routes/messages-nuevos.ts
+// src/routes/messages-nuevos.ts
 import { Router, Request, Response } from 'express';
-import { authenticateUser } from '../../middleware/auth'; 
-import pool from '../../lib/db';                   
+import { authenticateUser } from '../../middleware/auth';
+import pool from '../../lib/db';
+import { validate as isUuid } from 'uuid';
 
 const router = Router();
-
-const normalize = (s?: string) => (s || '').trim().toLowerCase();
+const norm = (s?: string) => (s || '').trim().toLowerCase();
 
 router.get('/', authenticateUser, async (req: Request, res: Response) => {
   try {
     const tenantId = (req as any).user?.tenant_id;
     if (!tenantId) return res.status(401).json({ error: 'Tenant no autenticado' });
 
-    const canal = normalize(req.query.canal as string);
-    const lastId = Number(req.query.lastId ?? 0);     // 👈 numérico
-    if (!Number.isFinite(lastId) || lastId < 0) {
-      return res.status(400).json({ error: 'lastId inválido' });
+    const canal = norm(req.query.canal as string);
+    const lastIdRaw = (req.query.lastId as string) || '';
+
+    // 🔑 Resolver umbral de ID (numérico) aunque nos manden un UUID
+    let idThreshold = 0;
+    if (lastIdRaw) {
+      if (/^\d+$/.test(lastIdRaw)) {
+        idThreshold = parseInt(lastIdRaw, 10);
+      } else if (isUuid(lastIdRaw)) {
+        const r = await pool.query(
+          `SELECT COALESCE(MAX(id), 0) AS id
+           FROM messages
+           WHERE tenant_id = $1 AND message_id = $2`,
+          [tenantId, lastIdRaw]
+        );
+        idThreshold = Number(r.rows?.[0]?.id || 0);
+      } else {
+        return res.status(400).json({ error: 'lastId inválido' });
+      }
     }
 
-    const params: any[] = [tenantId, lastId];
+    const params: any[] = [tenantId, idThreshold];
     let canalSQL = '';
     if (canal) {
       canalSQL = 'AND LOWER(m.canal) = $3';
@@ -28,8 +43,8 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
     const sql = `
       SELECT
         m.id,
-        m.tenant_id,
         m.message_id,
+        m.tenant_id,
         m.content,
         m.role,
         m.canal,
@@ -37,9 +52,10 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
         m.from_number,
         m.emotion,
         si.intencion,
-        si.nivel_interes
+        si.nivel_interes,
+        cli.nombre AS nombre_cliente
       FROM messages m
-      -- toma la última fila de sales_intelligence por message_id
+      -- última fila de sales_intelligence por message_id
       LEFT JOIN LATERAL (
         SELECT s.intencion, s.nivel_interes
         FROM sales_intelligence s
@@ -48,11 +64,20 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
         ORDER BY s.id DESC
         LIMIT 1
       ) si ON true
+      -- nombre del cliente (último registro)
+      LEFT JOIN LATERAL (
+        SELECT c.nombre
+        FROM clientes c
+        WHERE c.tenant_id = m.tenant_id
+          AND c.contacto = m.from_number
+        ORDER BY c.id DESC
+        LIMIT 1
+      ) cli ON true
       WHERE m.tenant_id = $1
         AND m.id > $2
         ${canalSQL}
       ORDER BY m.id ASC
-      LIMIT 500;      -- puedes bajar a 100/200 si quieres
+      LIMIT 500;
     `;
 
     const { rows } = await pool.query(sql, params);
