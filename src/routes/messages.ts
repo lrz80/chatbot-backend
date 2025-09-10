@@ -91,22 +91,22 @@ router.get('/conteo', authenticateUser, async (req: Request, res: Response) => {
 
     const { rows } = await pool.query(
       `
-      SELECT LOWER(canal) AS canal, COUNT(*)::int AS total
-      FROM messages
-      WHERE tenant_id = $1
-      GROUP BY LOWER(canal)
+      SELECT LOWER(TRIM(m.canal)) AS canal,
+             -- usa COUNT(*) si quieres contar mensajes del cliente,
+             -- o COUNT(DISTINCT m.message_id) si prefieres contar "conversaciones"
+             COUNT(*)::int AS total
+      FROM messages m
+      WHERE m.tenant_id = $1
+        AND LOWER(COALESCE(m.role,'')) = 'user'   -- 👈 solo cliente
+      GROUP BY 1
       `,
       [tenantId]
     );
 
-    const out: Record<string, number> = {
-      whatsapp: 0,
-      facebook: 0,
-      instagram: 0,
-      voice: 0,
-    };
+    const out: Record<string, number> = { whatsapp: 0, facebook: 0, instagram: 0, voice: 0 };
     for (const r of rows) {
-      if (out[r.canal] !== undefined) out[r.canal] = r.total;
+      const key = r.canal === 'voz' ? 'voice' : r.canal; // tolera 'voz'
+      if (out[key] !== undefined) out[key] = r.total;
     }
     res.json(out);
   } catch (error) {
