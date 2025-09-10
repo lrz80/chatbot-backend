@@ -562,7 +562,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
                   let out = respuestaDesdeFaq;
                   try {
                     const langOut = await detectarIdioma(out);
-                    if (langOut && langOut !== 'zxx' && langOut !== idioma) {
+                    if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
                       out = await traducirMensaje(out, idiomaDestino);
                     }
                   } catch {}
@@ -873,6 +873,27 @@ router.post('/api/facebook/webhook', async (req, res) => {
               );
 
               console.log('🎯 Enviado por INTENCIÓN (atajo precio)');
+
+              // Segmentar posible cliente (igual que en WhatsApp)
+              try {
+                await pool.query(
+                  `UPDATE clientes
+                    SET segmento = 'cliente'
+                  WHERE tenant_id = $1 AND contacto = $2
+                    AND (segmento = 'lead' OR segmento IS NULL)`,
+                  [tenantId, senderId]
+                );
+              } catch {}
+
+              try {
+                // Nivel alto por intención de precio; si puedes, mide con el detector
+                const det = await detectarIntencion(userMessage, tenantId, canalEnvio);
+                const nivel = det?.nivel_interes ?? 3;
+                await scheduleFollowUp('precio', nivel);
+              } catch (e) {
+                console.warn('⚠️ No se pudo programar follow-up tras atajo precio:', e);
+              }
+
               continue; // ⛔ no sigas a interceptor/FAQ/LLM
             }
           }
@@ -945,6 +966,34 @@ router.post('/api/facebook/webhook', async (req, res) => {
               );
 
               console.log(`🎯 Enviado por INTENCIÓN (atajo ${quick.name})`);
+
+              // Segmentar si aplica
+              try {
+                const intFinal = (quick.name || '').toLowerCase();
+                const intencionesCliente = ["comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"];
+                if (intencionesCliente.some(p => intFinal.includes(p))) {
+                  await pool.query(
+                    `UPDATE clientes
+                      SET segmento = 'cliente'
+                    WHERE tenant_id = $1 AND contacto = $2
+                      AND (segmento = 'lead' OR segmento IS NULL)`,
+                    [tenantId, senderId]
+                  );
+                }
+              } catch {}
+
+              try {
+                const det = await detectarIntencion(userMessage, tenantId, canalEnvio);
+                const nivel = det?.nivel_interes ?? 2;
+                // normaliza alias por las dudas
+                let intFinal = (quick.name || '').toLowerCase();
+                if (intFinal === 'duda') intFinal = buildDudaSlug(userMessage);
+                intFinal = normalizeIntentAlias(intFinal);
+                await scheduleFollowUp(intFinal, nivel);
+              } catch (e) {
+                console.warn('⚠️ No se pudo programar follow-up en atajo rápido:', e);
+              }
+
               continue; // ⛔ no sigas a interceptor/FAQ/LLM
             }
           }
@@ -1340,10 +1389,12 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
                   if (tokensConsumidos > 0) {
                     await pool.query(
-                      `UPDATE uso_mensual SET usados = usados + $1
-                      WHERE tenant_id = $2 AND canal = 'tokens_openai' AND mes = date_trunc('month', CURRENT_DATE)`,
-                      [tokensConsumidos, tenantId]
-                    );
+                      `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+                       VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE)::date, $2)
+                       ON CONFLICT (tenant_id, canal, mes)
+                       DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+                      [tenantId, tokensConsumidos]
+                    );                    
                   }
                 } catch (err) {
                   console.error('❌ Error con OpenAI:', err);
@@ -1362,7 +1413,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         // 💡 Solo guardar si la intención es realmente de venta
         const intencionesValidas = ['comprar', 'pagar', 'precio', 'reservar'];
 
-        if (intencionesValidas.includes(intencion) && nivel_interes >= 2) {
+        if (intencionesValidas.includes(intencionLower) && (nivel_interes ?? 0) >= 2) {
           await pool.query(
             `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, fecha)
             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
