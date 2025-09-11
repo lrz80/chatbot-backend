@@ -163,6 +163,7 @@ try {
           WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
         [tenant.id, canal, fromNumber]
       );
+      console.log('🧽 Follow-ups pendientes limpiados (WA):', { tenantId: tenant.id, fromNumber });
     } catch (e) {
       console.warn('No se pudieron limpiar follow-ups pendientes:', e);
     }
@@ -210,6 +211,75 @@ try {
     idiomaDestino = normalizado;
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
+
+  // ⏲️ Programador de follow-up (WhatsApp)
+  const scheduleFollowUp = async (intFinal: string, nivel: number) => {
+    try {
+      const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
+      const condition = (nivel >= 3) || intencionesFollowUp.includes((intFinal || '').toLowerCase());
+      console.log('⏩ followup gate (WA)', { intFinal, nivel, condition });
+      if (!condition) return;
+
+      // Config tenant
+      const { rows: cfgRows } = await pool.query(
+        `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
+        [tenant.id]
+      );
+      const cfg = cfgRows[0];
+      if (!cfg) {
+        console.log('⚠️ Sin follow_up_settings; no se programa follow-up.');
+        return;
+      }
+
+      // Selección del mensaje por intención
+      let msg = cfg.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
+      const low = (intFinal || '').toLowerCase();
+      if (low.includes("precio") && cfg.mensaje_precio) {
+        msg = cfg.mensaje_precio;
+      } else if ((low.includes("agendar") || low.includes("reservar")) && cfg.mensaje_agendar) {
+        msg = cfg.mensaje_agendar;
+      } else if ((low.includes("ubicacion") || low.includes("location")) && cfg.mensaje_ubicacion) {
+        msg = cfg.mensaje_ubicacion;
+      }
+
+      // Asegura idioma del cliente
+      try {
+        const lang = await detectarIdioma(msg);
+        if (lang && lang !== 'zxx' && lang !== idiomaDestino) {
+          msg = await traducirMensaje(msg, idiomaDestino);
+        }
+      } catch {}
+
+      // Evita duplicados: borra pendientes no enviados
+      await pool.query(
+        `DELETE FROM mensajes_programados
+          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+        [tenant.id, 'whatsapp', fromNumber]
+      );
+
+      const delayMin = getConfigDelayMinutes(cfg, 60);
+      const fechaEnvio = new Date();
+      fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
+
+      const { rows } = await pool.query(
+        `INSERT INTO mensajes_programados
+          (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
+        VALUES ($1, $2, $3, $4, $5, false)
+        RETURNING id`,
+        [tenant.id, 'whatsapp', fromNumber, msg, fechaEnvio]
+      );
+
+      console.log('📅 Follow-up programado (WA)', {
+        id: rows[0]?.id,
+        tenantId: tenant.id,
+        contacto: fromNumber,
+        delayMin,
+        fechaEnvio: fechaEnvio.toISOString(),
+      });
+    } catch (e) {
+      console.warn('⚠️ No se pudo programar follow-up (WA):', e);
+    }
+  };
 
   // después de calcular idiomaDestino...
   let INTENCION_FINAL_CANONICA = '';
@@ -569,6 +639,20 @@ try {
     );
 
     console.log(`✅ Respondido por INTENCIÓN: "${respIntent.intent}" score=${respIntent.score}`);
+
+    try {
+      let intFinal = (respIntent.intent || '').toLowerCase().trim();
+      if (intFinal === 'duda') intFinal = buildDudaSlug(userInput);
+      intFinal = normalizeIntentAlias(intFinal);
+    
+      const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+      const nivel = det?.nivel_interes ?? 1;
+    
+      await scheduleFollowUp(intFinal, nivel);
+    } catch (e) {
+      console.warn('⚠️ No se pudo programar follow-up post-intent (WA):', e);
+    }
+    
     return; // ¡Importante! Ya respondimos, salimos aquí.
   }
 } catch (e) {
@@ -591,6 +675,19 @@ if (interceptado) {
   // ya respondió + registró sugerida + (opcional) follow-up se maneja afuera si quieres
   // Si quieres mantener tu follow-up actual aquí, puedes dejarlo después de este if.
   console.log('✅ Interceptor principiantes respondió en WhatsApp.');
+
+  try {
+    let intFinal = (intencionParaFaq || '').toLowerCase().trim();
+    if (!intFinal) {
+      const detTmp = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+      intFinal = normalizeIntentAlias((detTmp?.intencion || '').toLowerCase());
+    }
+    const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+    const nivel = det?.nivel_interes ?? 1;
+    await scheduleFollowUp(intFinal, nivel);
+  } catch (e) {
+    console.warn('⚠️ No se pudo programar follow-up tras interceptor (WA):', e);
+  }  
   return; // evita FAQ genérica
 }
 
@@ -669,8 +766,8 @@ if (interceptado) {
 
       const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
       if (nivelFaq >= 3 || intencionesFollowUp.includes(intFinal)) {
-        // ... tu scheduling actual sin cambios
-      }
+        await scheduleFollowUp(intFinal, nivelFaq);
+      }      
     } catch (e) {
       console.warn('⚠️ No se pudo registrar/schedule tras FAQ oficial:', e);
     }
@@ -905,50 +1002,10 @@ if (!respuestaDesdeFaq && !respuesta) {
     );
   
     // 🚀 Follow-up con intención final
-    const intencionesFollowUp = ["interes_clases", "reservar", "precio", "comprar", "horario"];
-    if (nivel_interes >= 3 || intencionesFollowUp.includes(intFinal)) {
-      const configRes = await pool.query(
-        `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
-        [tenant.id]
-      );
-      const config = configRes.rows[0];
-  
-      if (config) {
-        let mensajeSeguimiento = config.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
-        if (intFinal.includes("precio") && config.mensaje_precio) {
-          mensajeSeguimiento = config.mensaje_precio;
-        } else if ((intFinal.includes("agendar") || intFinal.includes("reservar")) && config.mensaje_agendar) {
-          mensajeSeguimiento = config.mensaje_agendar;
-        } else if ((intFinal.includes("ubicacion") || intFinal.includes("location")) && config.mensaje_ubicacion) {
-          mensajeSeguimiento = config.mensaje_ubicacion;
-        }
-  
-        try {
-          const idiomaMensaje = await detectarIdioma(mensajeSeguimiento);
-          if (idiomaMensaje && idiomaMensaje !== 'zxx' && idiomaMensaje !== idiomaDestino) {
-            mensajeSeguimiento = await traducirMensaje(mensajeSeguimiento, idiomaDestino);
-          }
-        } catch {}
-  
-        await pool.query(
-          `DELETE FROM mensajes_programados
-           WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
-          [tenant.id, canal, fromNumber]
-        );
-  
-        const delayMin = getConfigDelayMinutes(config, 60);
-        const fechaEnvio = new Date();
-        fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
-  
-        await pool.query(
-          `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-           VALUES ($1, $2, $3, $4, $5, false)`,
-          [tenant.id, canal, fromNumber, mensajeSeguimiento, fechaEnvio]
-        );
-  
-        console.log(`📅 Follow-up programado en ${delayMin} min (~${(delayMin/60).toFixed(1)} h) para ${fromNumber} (${idiomaDestino})`);
-      }
+    if (nivel_interes >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
+      await scheduleFollowUp(intFinal, nivel_interes);
     }
+    
   } catch (err) {
     console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
   }   
