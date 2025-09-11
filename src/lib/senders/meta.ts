@@ -8,14 +8,25 @@ type CanalMeta = "instagram" | "facebook";
  * Obtiene el Page Access Token (y opcionalmente page_id) del tenant.
  * Ajusta los nombres de columnas a lo que tengas en tu tabla tenants.
  */
+// Lee token/ids desde tenants o meta_configs (FB o IG)
 async function obtenerCredsMeta(
     tenantId: string
   ): Promise<{ token: string; page_id?: string } | null> {
     const { rows } = await pool.query(
       `
       SELECT
-        COALESCE(t.facebook_access_token, mc.page_access_token) AS token,
-        COALESCE(t.facebook_page_id,   mc.page_id)             AS page_id
+        COALESCE(
+          t.facebook_access_token,
+          t.instagram_access_token,
+          mc.page_access_token,
+          mc.ig_access_token
+        ) AS token,
+        COALESCE(
+          t.facebook_page_id,
+          t.instagram_ig_id,
+          mc.page_id,
+          mc.ig_id
+        ) AS page_id
       FROM tenants t
       LEFT JOIN meta_configs mc ON mc.tenant_id = t.id
       WHERE t.id = $1
@@ -23,7 +34,6 @@ async function obtenerCredsMeta(
       `,
       [tenantId]
     );
-  
     const token = rows[0]?.token;
     if (!token) return null;
     return { token, page_id: rows[0]?.page_id || undefined };
