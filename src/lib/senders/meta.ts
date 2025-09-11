@@ -8,17 +8,26 @@ type CanalMeta = "instagram" | "facebook";
  * Obtiene el Page Access Token (y opcionalmente page_id) del tenant.
  * Ajusta los nombres de columnas a lo que tengas en tu tabla tenants.
  */
-async function obtenerCredsMeta(tenantId: string): Promise<{ token: string, page_id?: string } | null> {
-  const { rows } = await pool.query(
-    `SELECT meta_page_token, meta_page_id
-     FROM tenants
-     WHERE id = $1 LIMIT 1`,
-    [tenantId]
-  );
-  const token = rows[0]?.meta_page_token;
-  if (!token) return null;
-  return { token, page_id: rows[0]?.meta_page_id || undefined };
-}
+async function obtenerCredsMeta(
+    tenantId: string
+  ): Promise<{ token: string; page_id?: string } | null> {
+    const { rows } = await pool.query(
+      `
+      SELECT
+        COALESCE(t.facebook_access_token, mc.page_access_token) AS token,
+        COALESCE(t.facebook_page_id,   mc.page_id)             AS page_id
+      FROM tenants t
+      LEFT JOIN meta_configs mc ON mc.tenant_id = t.id
+      WHERE t.id = $1
+      LIMIT 1
+      `,
+      [tenantId]
+    );
+  
+    const token = rows[0]?.token;
+    if (!token) return null;
+    return { token, page_id: rows[0]?.page_id || undefined };
+  }  
 
 export async function enviarMeta(
   canal: CanalMeta,                 // "instagram" | "facebook"
@@ -28,9 +37,9 @@ export async function enviarMeta(
 ) {
   const creds = await obtenerCredsMeta(tenantId);
   if (!creds?.token) {
-    console.warn(`[META] ❌ Tenant ${tenantId} sin meta_page_token`);
+    console.warn(`[META] ❌ Tenant ${tenantId} sin facebook_access_token`);
     return;
-  }
+  }  
 
   try {
     const url = `https://graph.facebook.com/v18.0/me/messages`;
