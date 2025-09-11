@@ -198,31 +198,57 @@ router.post('/api/facebook/webhook', async (req, res) => {
           });
         };
 
-        // 🧹 Cancela cualquier follow-up pendiente para este contacto al recibir nuevo mensaje
-        try {
-          await pool.query(
-            `DELETE FROM mensajes_programados
-              WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
-            [tenantId, canalEnvio, senderId]
-          );
-        } catch (e) {
-          console.warn('No se pudieron limpiar follow-ups pendientes:', e);
-        }
+        /// dedupe por mid (deja esto igual)
+if (mensajesProcesados.has(messageId)) {
+  console.log('⚠️ Mensaje duplicado ignorado por Set en memoria:', messageId);
+  continue;
+}
+mensajesProcesados.add(messageId);
+setTimeout(() => mensajesProcesados.delete(messageId), 60000);
+
+// ... calcular idiomaDestino ...
+
+// Si ya procesamos este mid en DB, salir
+const existingMsg = await pool.query(
+  `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
+  [tenantId, messageId]
+);
+if (existingMsg.rows.length > 0) continue;
+
+// 🧹 AHORA sí: borra pendientes del contacto (esto ya no se come el recién insertado)
+try {
+  await pool.query(
+    `DELETE FROM mensajes_programados
+      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+    [tenantId, canalEnvio, senderId]
+  );
+  console.log('🧽 Follow-ups pendientes limpiados para', { tenantId, canalEnvio, senderId });
+} catch (e) {
+  console.warn('No se pudieron limpiar follow-ups pendientes:', e);
+}
+
 
         // Programa follow-up según intención final y nivel de interés
         const scheduleFollowUp = async (intFinal: string, nivel: number) => {
           try {
-            // Condición de disparo (idéntica a WhatsApp)
+            // 🔐 Gate de disparo
             const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
-            if (!(nivel >= 3 || intencionesFollowUp.includes((intFinal || '').toLowerCase()))) return;
+            const condition = (nivel >= 3) || intencionesFollowUp.includes((intFinal || '').toLowerCase());
+            console.log('⏩ followup gate', { intFinal, nivel, condition });
+            if (!condition) return;
 
+            // Cargar configuración
             const { rows: cfgRows } = await pool.query(
               `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
               [tenantId]
             );
             const cfg = cfgRows[0];
-            if (!cfg) return;
+            if (!cfg) {
+              console.log('⛔ followup: no hay follow_up_settings para tenant', tenantId);
+              return;
+            }
 
+            // Elegir mensaje según intención
             let msg = cfg.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
             if (intFinal.includes("precio") && cfg.mensaje_precio) {
               msg = cfg.mensaje_precio;
@@ -232,6 +258,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
               msg = cfg.mensaje_ubicacion;
             }
 
+            // Asegurar idioma del cliente
             try {
               const lang = await detectarIdioma(msg);
               if (lang && lang !== 'zxx' && lang !== idiomaDestino) {
@@ -239,17 +266,28 @@ router.post('/api/facebook/webhook', async (req, res) => {
               }
             } catch {}
 
+            // ⏱️ Calcular delay y fecha
             const delayMin = getConfigDelayMinutes(cfg, 60);
             const fechaEnvio = new Date();
             fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
 
-            await pool.query(
-              `INSERT INTO mensajes_programados (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-              VALUES ($1, $2, $3, $4, $5, false)`,
+            // Guardar en mensajes_programados y loguear el id
+            const ins = await pool.query(
+              `INSERT INTO mensajes_programados
+                (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
+              VALUES ($1, $2, $3, $4, $5, false)
+              RETURNING id`,
               [tenantId, canalEnvio, senderId, msg, fechaEnvio]
             );
 
-            console.log(`📅 Follow-up programado en ${delayMin} min para ${senderId} (${canalEnvio})`);
+            console.log('📅 Follow-up programado', {
+              id: ins.rows[0]?.id,
+              tenantId,
+              canal: canalEnvio,
+              contacto: senderId,
+              delayMin,
+              fechaEnvio: fechaEnvio.toISOString()
+            });
           } catch (e) {
             console.warn('⚠️ No se pudo programar follow-up:', e);
           }
@@ -288,13 +326,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
         } catch (error) {
           flows = [];
         }        
-
-        if (mensajesProcesados.has(messageId)) {
-          console.log('⚠️ Mensaje duplicado ignorado por Set en memoria:', messageId);
-          continue;
-        }
-        mensajesProcesados.add(messageId);
-        setTimeout(() => mensajesProcesados.delete(messageId), 60000); // ⏱️ Bórralo después de 60s
         
         // Detectado del mensaje actual (puede ser útil puntualmente)
         const idioma = await detectarIdioma(userMessage);
@@ -316,12 +347,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
           idiomaDestino = normalizado;
           console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userMessage`);
         }
-
-        const existingMsg = await pool.query(
-          `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
-          [tenantId, messageId]
-        );
-        if (existingMsg.rows.length > 0) continue;
 
         // ✅ Incremento de uso con ciclo vigente y canal real
         const tenantRes = await pool.query(
@@ -774,6 +799,12 @@ router.post('/api/facebook/webhook', async (req, res) => {
               let intFinal = (respIntent.intent || '').toLowerCase();
               if (intFinal === 'duda') intFinal = buildDudaSlug(userMessage);
               intFinal = normalizeIntentAlias(intFinal);
+
+              const priceRegex = /\b(precio|precios|costo|costos|cu[eé]sta[n]?|tarifa[s]?|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
+              if (priceRegex.test(userMessage)) {
+                intFinal = 'precio';
+              }
+
 
               // Segmentación como en WhatsApp
               const intencionesCliente = ["comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"];
