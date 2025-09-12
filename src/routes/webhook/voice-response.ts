@@ -7,41 +7,35 @@ import Twilio from 'twilio';
 
 const router = Router();
 
-// locale para Twilio
 const toTwilioLocale = (code?: string) => {
   const c = (code || '').toLowerCase();
-  if (c.startsWith('es')) return 'es-ES' as const;
   if (c.startsWith('en')) return 'en-US' as const;
   if (c.startsWith('pt')) return 'pt-BR' as const;
   return 'es-ES' as const;
 };
 
-// Regex de URL robusto (http, https, www, dominios simples)
-const URL_REGEX =
-  /(https?:\/\/[^\s)<>"']+|www\.[^\s)<>"']+|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[^\s)<>"']*)?)/gi;
+const sanitizeForSay = (s: string) =>
+  (s || '')
+    .replace(/[<>&]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1500);
 
-// quita caracteres inválidos para XML, emojis, etiquetas, y recorta
-const sanitizeForSay = (s: string) => {
-  const withoutBadXml = (s || '').replace(/[^\t\n\r\u0020-\uD7FF\uE000-\uFFFD]/g, ' ');
-  const noTags = withoutBadXml.replace(/[<>&]/g, ' ');
-  const noEmoji = noTags.replace(/[\u{1F000}-\u{1FAFF}\u{1F300}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{2600}-\u{27BF}]/gu, ' ');
-  const compact = noEmoji.replace(/\s+/g, ' ').trim().slice(0, 1500);
-  return compact || '...';
+// Heurística: ¿pidió que lo mandemos por SMS?
+const askedForSms = (t: string) =>
+  /\b(sms|mensaje|texto|textea|mand(a|e|alo)|env(i|í)a(lo)?|p[aá]same|p[aá]salo)\b/i.test(t) &&
+  /\b(link|enlace|liga|url|p[aá]gina|web|reserva|pagar|comprar|soporte)\b/i.test(t);
+
+// Mapea palabras a un tipo por defecto
+const guessType = (t: string): 'reservar'|'comprar'|'soporte'|'web' => {
+  const s = t.toLowerCase();
+  if (/(reserv|agend|cita|turno)/.test(s)) return 'reservar';
+  if (/(compr|pag|checkout|pago)/.test(s)) return 'comprar';
+  if (/(soporte|ayuda|reclamo|ticket)/.test(s)) return 'soporte';
+  if (/(web|sitio|p[aá]gina|home)/.test(s)) return 'web';
+  // prioridad por negocio: reservar > comprar > web > soporte
+  return 'reservar';
 };
-
-const wantsSms = (t: string) =>
-  /\b(sms|texto|mensaje de texto|mand(a|e|alo).*(sms|texto)|send.*(text|sms))\b/i.test(t);
-
-const normIntent = (t: string) => {
-  const s = (t || '').toLowerCase();
-  if (/(reservar|reserva|agendar|agenda|cita|book|booking)/.test(s)) return 'reservar';
-  if (/(comprar|pagar|buy|purchase|checkout)/.test(s)) return 'comprar';
-  if (/(soporte|ayuda|support|help)/.test(s)) return 'soporte';
-  if (/(web|sitio|site|website|pagina)/.test(s)) return 'web';
-  return 'otro';
-};
-
-const GATHER_ACTION_PATH = '/webhook/voice-response';
 
 router.post('/', async (req: Request, res: Response) => {
   const to = (req.body.To || '').toString();
@@ -77,13 +71,11 @@ router.post('/', async (req: Request, res: Response) => {
     if (!cfg) return res.sendStatus(404);
 
     const locale = toTwilioLocale(cfg.idioma || 'es-ES');
-    const voiceName: any = locale.startsWith('es') ? 'Polly.Conchita'
-                      : locale.startsWith('en') ? 'Polly.Joanna'
-                      : 'alice';
+    const voiceName: any = 'alice';
 
     const vr = new twiml.VoiceResponse();
 
-    // primera vuelta: sin SpeechResult → saludo + gather
+    // Primer turno: sin SpeechResult -> saludo + gather
     if (!userInput) {
       const initial = sanitizeForSay(
         `Hola, soy Amy de ${tenant.name || 'nuestro negocio'}. ¿En qué puedo ayudarte?`
@@ -91,20 +83,19 @@ router.post('/', async (req: Request, res: Response) => {
       vr.say({ language: locale as any, voice: voiceName }, initial);
       vr.gather({
         input: ['speech'] as any,
-        action: GATHER_ACTION_PATH,
+        action: '/webhook/voice-response',
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
-        timeout: 6,
-        actionOnEmptyResult: true
       });
       return res.type('text/xml').send(vr.toString());
     }
 
-    // --- OpenAI para respuesta breve ---
-    let respuesta = locale.startsWith('es')
-      ? 'Disculpa, no entendí eso.'
-      : "Sorry, I didn’t catch that.";
+    // --- OpenAI para respuesta corta ---
+    let respuesta =
+      locale.startsWith('es')
+        ? 'Disculpa, no entendí eso.'
+        : "Sorry, I didn’t catch that.";
 
     try {
       const { default: OpenAI } = await import('openai');
@@ -117,9 +108,7 @@ router.post('/', async (req: Request, res: Response) => {
             role: 'system',
             content:
               (cfg.system_prompt as string)?.trim() ||
-              `Eres Amy, una asistente telefónica amable y concisa del negocio ${tenant.name || ''}.
-               Nunca pronuncies URLs ni códigos largos. Si necesitas compartir un enlace, di:
-               "Te lo envío por SMS", y NO leas el link. Responde siempre en frases cortas y naturales.`
+              `Eres Amy, asistente telefónica amable y concisa del negocio ${tenant.name || ''}.`
           },
           { role: 'user', content: userInput }
         ],
@@ -141,58 +130,25 @@ router.post('/', async (req: Request, res: Response) => {
       console.warn('⚠️ OpenAI falló, usando fallback:', e);
     }
 
-    // --- Post-proceso: NO leer enlaces; si hay URL o el usuario pide SMS → enviamos SMS ---
-    const modelUrls = Array.from(new Set((respuesta.match(URL_REGEX) || []).map(u => u.trim())));
-    const askedSms = wantsSms(userInput);
-    let smsSent = false;
+    // 1) ¿Hay etiqueta [[SMS:tipo]] en la respuesta?
+    const tagMatch = respuesta.match(/\[\[SMS:(reservar|comprar|soporte|web)\]\]/i);
+    let smsType: 'reservar'|'comprar'|'soporte'|'web' | null = tagMatch
+      ? (tagMatch[1].toLowerCase() as any)
+      : null;
 
-    // si el usuario pidió SMS pero no capturamos URL, intenta buscar por intención en links_utiles
-    let smsLinks: { url: string; nombre?: string }[] = modelUrls.map(url => ({ url }));
-
-    if ((askedSms || modelUrls.length > 0) && smsLinks.length === 0) {
-      const intent = normIntent(userInput);
-      if (['reservar', 'comprar', 'soporte', 'web'].includes(intent)) {
-        const { rows } = await pool.query(
-          `SELECT url, nombre
-           FROM links_utiles
-           WHERE tenant_id = $1 AND tipo = $2
-           ORDER BY created_at DESC
-           LIMIT 1`,
-          [tenant.id, intent]
-        );
-        if (rows[0]?.url) smsLinks.push({ url: rows[0].url, nombre: rows[0].nombre });
-      }
+    // 2) Si no hay etiqueta, ¿el usuario pidió SMS explícitamente?
+    if (!smsType && askedForSms(userInput)) {
+      smsType = guessType(userInput);
     }
 
-    if (smsLinks.length > 0) {
-      try {
-        const smsFrom = tenant.twilio_sms_number || tenant.twilio_voice_number || numero;
-        const client = Twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
-
-        const body =
-          (locale.startsWith('es')
-            ? `Aquí tienes el enlace: ${smsLinks.map(l => l.nombre ? `${l.nombre}: ${l.url}` : l.url).join(' | ')}`
-            : `Here is the link: ${smsLinks.map(l => l.nombre ? `${l.nombre}: ${l.url}` : l.url).join(' | ')}`);
-
-        await client.messages.create({ from: smsFrom, to: fromNumber, body });
-        smsSent = true;
-      } catch (e) {
-        console.warn('⚠️ Envío SMS falló:', e);
-      }
-
-      // elimina URLs del habla y avisa
-      if (smsSent) {
-        respuesta = respuesta.replace(URL_REGEX, '').replace(/\s{2,}/g, ' ').trim();
-        respuesta += locale.startsWith('es')
-          ? ' Te acabo de enviar el enlace por SMS.'
-          : ' I just texted you the link.';
-      }
+    // Limpia etiqueta del texto antes de decirlo
+    if (tagMatch) {
+      respuesta = respuesta.replace(tagMatch[0], '').trim();
     }
 
-    // sanitiza antes de hablar
     const speakOut = sanitizeForSay(respuesta);
 
-    // persistencia
+    // Persistir conversación
     await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voz', $3)`,
@@ -208,9 +164,52 @@ router.post('/', async (req: Request, res: Response) => {
        VALUES ($1, 'voz', NOW())`,
       [tenant.id]
     );
+
     await incrementarUsoPorNumero(numero);
 
-    // ¿cerramos?
+    // Envío de SMS si corresponde
+    if (smsType) {
+      try {
+        const linkRes = await pool.query(
+          `SELECT url, nombre
+             FROM links_utiles
+            WHERE tenant_id = $1 AND tipo = $2
+            ORDER BY created_at DESC
+            LIMIT 1`,
+          [tenant.id, smsType]
+        );
+
+        const url = linkRes.rows[0]?.url;
+        const nombre = linkRes.rows[0]?.nombre || smsType;
+
+        if (url) {
+          // usa número SMS si existe; si no, el mismo número de voz (si es SMS-capable)
+          const smsFrom =
+            tenant.twilio_sms_number ||
+            tenant.twilio_voice_number ||
+            numero;
+
+          const client = Twilio(
+            process.env.TWILIO_ACCOUNT_SID!,
+            process.env.TWILIO_AUTH_TOKEN!
+          );
+
+          await client.messages.create({
+            from: smsFrom,
+            to: fromNumber,
+            body: `📎 ${nombre}: ${url}`,
+          });
+
+          console.log(`✅ SMS enviado (${smsType}) a ${fromNumber} desde ${smsFrom}`);
+        } else {
+          console.warn(`⚠️ No hay link guardado para tipo=${smsType}`);
+        }
+      } catch (e) {
+        console.warn('⚠️ Error enviando SMS con link útil:', e);
+      }
+    }
+
+    // ¿Terminamos?
     const fin = /(gracias|eso es todo|nada más|nada mas|bye|ad[ií]os)/i.test(userInput);
 
     vr.say({ language: locale as any, voice: voiceName }, speakOut);
@@ -218,17 +217,17 @@ router.post('/', async (req: Request, res: Response) => {
     if (!fin) {
       vr.gather({
         input: ['speech'] as any,
-        action: GATHER_ACTION_PATH,
+        action: '/webhook/voice-response',
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
-        timeout: 6,
-        actionOnEmptyResult: true
       });
     } else {
       vr.say(
         { language: locale as any, voice: voiceName },
-        locale.startsWith('es') ? 'Gracias por tu llamada. ¡Hasta luego!' : 'Thanks for calling. Goodbye!'
+        locale.startsWith('es')
+          ? 'Gracias por tu llamada. ¡Hasta luego!'
+          : 'Thanks for calling. Goodbye!'
       );
       vr.hangup();
     }
