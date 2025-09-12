@@ -9,90 +9,52 @@ type CanalMeta = "instagram" | "facebook";
  * Para IG se usa el *Instagram Business Account ID* como path: /{IG_BIZ_ID}/messages
  * El token es el *Facebook Page Access Token* (sirve para FB e IG).
  */
-async function obtenerCredsMeta(
-  tenantId: string,
-  canal: CanalMeta
-): Promise<{ token: string; endpointId: string; pageId?: string } | null> {
-  try {
+// Credenciales: usa las columnas reales que tienes en tenants
+async function obtenerCredsMeta(tenantId: string): Promise<{
+    token: string,
+    page_id?: string,
+    ig_biz_id?: string
+  } | null> {
     const { rows } = await pool.query(
-      `
-      SELECT
-        facebook_access_token,
-        facebook_page_id,
-        instagram_page_id,
-        instagram_business_account_id
-      FROM tenants
-      WHERE id = $1
-      LIMIT 1
-      `,
+      `SELECT 
+         facebook_access_token    AS token,
+         facebook_page_id         AS page_id,
+         instagram_business_account_id AS ig_biz_id
+       FROM tenants
+       WHERE id = $1
+       LIMIT 1`,
       [tenantId]
     );
-
-    const r = rows[0] || {};
-    // El token a usar (page access token). Válido para FB y también para IG Messaging.
-    const token =
-      r.facebook_access_token ||
-      process.env.FACEBOOK_PAGE_TOKEN ||
-      process.env.META_PAGE_TOKEN ||
-      null;
-
-    if (!token) {
-      console.warn(`[META] ❌ No hay facebook_access_token (ni ENV) para tenant=${tenantId}`);
-      return null;
-    }
-
-    if (canal === "facebook") {
-      // Para Messenger usamos /me/messages con el page access token.
-      const pageId = r.facebook_page_id || process.env.FACEBOOK_PAGE_ID;
-      return { token, endpointId: "me", pageId };
-    } else {
-      // Para Instagram usamos /{IG_BUSINESS_ACCOUNT_ID}/messages
-      const igBizId =
-        r.instagram_business_account_id ||
-        r.instagram_page_id || // fallback por si tu schema usa este
-        process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID ||
-        process.env.INSTAGRAM_PAGE_ID ||
-        null;
-
-      if (!igBizId) {
-        console.warn(
-          `[META] ❌ Falta instagram_business_account_id (o fallback) para tenant=${tenantId}`
-        );
-        return null;
-      }
-      return { token, endpointId: igBizId };
-    }
-  } catch (e) {
-    console.error(`[META] ❌ Error leyendo credenciales Meta:`, e);
-    return null;
+    const token = rows[0]?.token;
+    if (!token) return null;
+    return { token, page_id: rows[0]?.page_id, ig_biz_id: rows[0]?.ig_biz_id };
   }
-}  
-
-export async function enviarMeta(
-    canal: CanalMeta,            // "instagram" | "facebook"
-    toPsid: string,              // PSID (FB) o IGSID (IG) del destinatario
+  
+  export async function enviarMeta(
+    canal: "instagram" | "facebook",
+    toPsid: string,
     mensaje: string,
     tenantId: string
   ) {
-    const creds = await obtenerCredsMeta(tenantId, canal);
-    if (!creds?.token) return;
+    const creds = await obtenerCredsMeta(tenantId);
+    if (!creds?.token) {
+      console.warn(`[META] ❌ Tenant ${tenantId} sin facebook_access_token`);
+      return;
+    }
   
     try {
-      const url =
-        canal === "instagram"
-          ? `https://graph.facebook.com/v18.0/${creds.endpointId}/messages`
-          : `https://graph.facebook.com/v18.0/me/messages`;
+      const url = `https://graph.facebook.com/v18.0/me/messages`;
   
-      // Para IG, el cuerpo no requiere page_id; para FB usamos /me/messages.
       const payload =
         canal === "instagram"
           ? {
-              recipient: { id: toPsid },       // IGSID
+              messaging_product: "instagram",   // 👈 OBLIGATORIO en IG
+              recipient: { id: toPsid },
               message: { text: mensaje },
             }
           : {
-              messaging_type: "RESPONSE",
-              recipient: { id: toPsid },       // PSID
+              messaging_type: "RESPONSE",       // 👈 Solo para Messenger
+              recipient: { id: toPsid },
               message: { text: mensaje },
             };
   
@@ -109,7 +71,7 @@ export async function enviarMeta(
         err?.response?.data || err?.message || err
       );
     }
-  }
+  }  
 
 /** Envío seguro con particionado por límite de caracteres por canal */
 export async function enviarMetaSeguro(
