@@ -5,69 +5,111 @@ import pool from "../db";
 type CanalMeta = "instagram" | "facebook";
 
 /**
- * Obtiene el Page Access Token (y opcionalmente page_id) del tenant.
- * Ajusta los nombres de columnas a lo que tengas en tu tabla tenants.
+ * Lee credenciales desde tenants y decide el endpoint correcto según el canal.
+ * Para IG se usa el *Instagram Business Account ID* como path: /{IG_BIZ_ID}/messages
+ * El token es el *Facebook Page Access Token* (sirve para FB e IG).
  */
-// Lee token/ids desde tenants o meta_configs (FB o IG)
 async function obtenerCredsMeta(
-    tenantId: string
-  ): Promise<{ token: string; page_id?: string } | null> {
+  tenantId: string,
+  canal: CanalMeta
+): Promise<{ token: string; endpointId: string; pageId?: string } | null> {
+  try {
     const { rows } = await pool.query(
       `
       SELECT
-        COALESCE(
-          t.facebook_access_token,
-          t.instagram_access_token,
-          mc.page_access_token,
-          mc.ig_access_token
-        ) AS token,
-        COALESCE(
-          t.facebook_page_id,
-          t.instagram_ig_id,
-          mc.page_id,
-          mc.ig_id
-        ) AS page_id
-      FROM tenants t
-      LEFT JOIN meta_configs mc ON mc.tenant_id = t.id
-      WHERE t.id = $1
+        facebook_access_token,
+        facebook_page_id,
+        instagram_page_id,
+        instagram_business_account_id
+      FROM tenants
+      WHERE id = $1
       LIMIT 1
       `,
       [tenantId]
     );
-    const token = rows[0]?.token;
-    if (!token) return null;
-    return { token, page_id: rows[0]?.page_id || undefined };
-  }  
+
+    const r = rows[0] || {};
+    // El token a usar (page access token). Válido para FB y también para IG Messaging.
+    const token =
+      r.facebook_access_token ||
+      process.env.FACEBOOK_PAGE_TOKEN ||
+      process.env.META_PAGE_TOKEN ||
+      null;
+
+    if (!token) {
+      console.warn(`[META] ❌ No hay facebook_access_token (ni ENV) para tenant=${tenantId}`);
+      return null;
+    }
+
+    if (canal === "facebook") {
+      // Para Messenger usamos /me/messages con el page access token.
+      const pageId = r.facebook_page_id || process.env.FACEBOOK_PAGE_ID;
+      return { token, endpointId: "me", pageId };
+    } else {
+      // Para Instagram usamos /{IG_BUSINESS_ACCOUNT_ID}/messages
+      const igBizId =
+        r.instagram_business_account_id ||
+        r.instagram_page_id || // fallback por si tu schema usa este
+        process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID ||
+        process.env.INSTAGRAM_PAGE_ID ||
+        null;
+
+      if (!igBizId) {
+        console.warn(
+          `[META] ❌ Falta instagram_business_account_id (o fallback) para tenant=${tenantId}`
+        );
+        return null;
+      }
+      return { token, endpointId: igBizId };
+    }
+  } catch (e) {
+    console.error(`[META] ❌ Error leyendo credenciales Meta:`, e);
+    return null;
+  }
+}  
 
 export async function enviarMeta(
-  canal: CanalMeta,                 // "instagram" | "facebook"
-  toPsid: string,                   // PSID del destinatario (sender.id)
-  mensaje: string,
-  tenantId: string
-) {
-  const creds = await obtenerCredsMeta(tenantId);
-  if (!creds?.token) {
-    console.warn(`[META] ❌ Tenant ${tenantId} sin facebook_access_token`);
-    return;
-  }  
-
-  try {
-    const url = `https://graph.facebook.com/v18.0/me/messages`;
-    const payload = {
-      messaging_type: "RESPONSE",
-      recipient: { id: toPsid },
-      message: { text: mensaje },
-    };
-
-    const { data } = await axios.post(url, payload, {
-      params: { access_token: creds.token }
-    });
-
-    console.log(`[META] ✅ Enviado a ${canal} psid=${toPsid} message_id=${data?.message_id || "?"}`);
-  } catch (err: any) {
-    console.error(`[META] ❌ Error enviando a ${canal} psid=${toPsid}:`, err?.response?.data || err?.message || err);
+    canal: CanalMeta,            // "instagram" | "facebook"
+    toPsid: string,              // PSID (FB) o IGSID (IG) del destinatario
+    mensaje: string,
+    tenantId: string
+  ) {
+    const creds = await obtenerCredsMeta(tenantId, canal);
+    if (!creds?.token) return;
+  
+    try {
+      const url =
+        canal === "instagram"
+          ? `https://graph.facebook.com/v18.0/${creds.endpointId}/messages`
+          : `https://graph.facebook.com/v18.0/me/messages`;
+  
+      // Para IG, el cuerpo no requiere page_id; para FB usamos /me/messages.
+      const payload =
+        canal === "instagram"
+          ? {
+              recipient: { id: toPsid },       // IGSID
+              message: { text: mensaje },
+            }
+          : {
+              messaging_type: "RESPONSE",
+              recipient: { id: toPsid },       // PSID
+              message: { text: mensaje },
+            };
+  
+      const { data } = await axios.post(url, payload, {
+        params: { access_token: creds.token },
+      });
+  
+      console.log(
+        `[META] ✅ Enviado a ${canal} id=${toPsid} message_id=${data?.message_id || "?"}`
+      );
+    } catch (err: any) {
+      console.error(
+        `[META] ❌ Error enviando a ${canal} id=${toPsid}:`,
+        err?.response?.data || err?.message || err
+      );
+    }
   }
-}
 
 /** Envío seguro con particionado por límite de caracteres por canal */
 export async function enviarMetaSeguro(
