@@ -8,7 +8,7 @@ import { guardarAudioEnCDN } from '../../utils/uploadAudioToCDN';
 
 const router = Router();
 
-// Helper: obtiene la última voice_config del tenant (canal 'voz')
+// Helper
 async function getVoiceConfig(tenantId: string) {
   const { rows } = await pool.query(
     `SELECT * FROM voice_configs
@@ -89,11 +89,22 @@ router.post('/', async (req: Request, res: Response) => {
              SET audio_demo_url = $1, updated_at = NOW()
            WHERE tenant_id = $2 AND canal = 'voz' AND idioma = $3`,
           [audioUrl, tenant.id, idioma]
-        );
+        );        
       } catch (e: any) {
-        console.warn('⚠️ ElevenLabs TTS falló, uso fallback <Say>:', e?.response?.data || e?.message);
+        let status = e?.response?.status;
+        let headers = e?.response?.headers;
+        let body = '';
+        try {
+          const raw = e?.response?.data;
+          body = Buffer.isBuffer(raw) ? raw.toString('utf8') : JSON.stringify(raw);
+        } catch {}
+        console.warn('⚠️ ElevenLabs TTS falló, uso fallback <Say>:', {
+          status,
+          requestId: headers?.['x-request-id'] || headers?.['x-requestid'],
+          body
+        });
         audioUrl = null;
-      }
+      }      
     }
 
     // --- TwiML ---
@@ -101,32 +112,30 @@ router.post('/', async (req: Request, res: Response) => {
 
     // Recolecta speech o DTMF; pasa el idioma correcto
     const gather = vr.gather({
-      input: ['speech', 'dtmf'] as any,     // TS: castea para evitar el error de tipos
+      input: ['speech', 'dtmf'],           // array
       numDigits: 1,
-      action: '/webhook/voice/gather',      // ajusta si usas un prefijo (/api, etc.)
+      action: '/webhook/voice/gather',
       method: 'POST',
-      language: toTwilioLocale(idioma) as any, // TS: castea para SayLanguage/GatherLanguage
+      language: toTwilioLocale(cfg.idioma || 'es-ES') as any,
       speechTimeout: 'auto',
-      ...(hints ? { hints } : {})
+      ...(cfg.voice_hints ? { hints: cfg.voice_hints } : {})
     });
-
+    
     if (audioUrl) {
       gather.play(audioUrl);
     } else {
-      // Fallback TTS nativo de Twilio
       gather.say(
-        { language: toTwilioLocale(idioma) as any, voice: 'alice' },
-        welcome
+        { language: toTwilioLocale(cfg.idioma || 'es-ES') as any, voice: 'alice' },
+        cfg.welcome_message || 'Hola, ¿en qué puedo ayudarte?'
       );
     }
-
-    // Si el usuario no responde, despedimos cortésmente
+    
     vr.say(
-      { language: toTwilioLocale(idioma) as any, voice: 'alice' },
-      idioma.startsWith('es')
-        ? 'No escuché nada. ¡Hasta luego!'
+      { language: toTwilioLocale(cfg.idioma || 'es-ES') as any, voice: 'alice' },
+      (cfg.idioma || 'es-ES').startsWith('es')
+        ? "No escuché nada. ¡Hasta luego!"
         : "I didn't hear anything. Goodbye!"
-    );
+    );    
 
     res.type('text/xml').send(vr.toString());
   } catch (err) {

@@ -40,7 +40,7 @@ router.post('/', async (req: Request, res: Response) => {
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.sendStatus(404);
 
-    // 🚫 Evitar responder si la membresía está inactiva
+    // 🛑 Evitar responder si la membresía está inactiva
     if (!tenant.membresia_activa) {
       const vr = new twiml.VoiceResponse();
       vr.say(
@@ -51,7 +51,7 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type('text/xml').send(vr.toString());
     }
 
-    // Config de voz (usar canal 'voz' y la más reciente)
+    // 📥 Config de voz (usar canal 'voz' y la más reciente)
     const configRes = await pool.query(
       `SELECT * FROM voice_configs
        WHERE tenant_id = $1 AND canal = 'voz'
@@ -66,8 +66,7 @@ router.post('/', async (req: Request, res: Response) => {
     const locale = toTwilioLocale(idioma);
     const voiceId = (cfg.voice_name as string) || 'EXAVITQu4vr4xnSDxMaL'; // fallback ElevenLabs
     const nombreNegocio = tenant.name || 'nuestro negocio';
-    const saludoHora = obtenerSaludoHora();
-    const saludoInicial = `${saludoHora}, mi nombre es Amy, asistente de ${nombreNegocio}.`;
+    const saludoInicial = `${obtenerSaludoHora()}, mi nombre es Amy, asistente de ${nombreNegocio}.`;
 
     const vr = new twiml.VoiceResponse();
 
@@ -76,7 +75,7 @@ router.post('/', async (req: Request, res: Response) => {
       vr.say({ voice: 'Polly.Conchita', language: locale as any }, saludoInicial);
       vr.gather({
         input: ['speech'] as any,
-        action: '/webhook/voice-response',
+        action: '/webhook/voice-response', // 👈 asegúrate de apuntar aquí desde voice.ts también
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
@@ -84,7 +83,7 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type('text/xml').send(vr.toString());
     }
 
-    // Prompt del asistente
+    // 🤖 Prompt del asistente
     const prompt =
       (cfg.system_prompt as string)?.trim() ||
       `Eres Amy, una asistente telefónica de voz cálida, clara y natural. Responde en frases cortas y con una actitud amigable. Nunca digas que eres un asistente virtual, responde como si fueras parte real del equipo de ${nombreNegocio}. Si el cliente da las gracias o quiere terminar, despídete cordialmente.`.trim();
@@ -96,7 +95,7 @@ router.post('/', async (req: Request, res: Response) => {
     let respuesta = 'Lo siento, no entendí eso.';
     try {
       const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini', // más rápido y económico que 'gpt-4'
+        model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: prompt },
           { role: 'user', content: userInput },
@@ -105,7 +104,7 @@ router.post('/', async (req: Request, res: Response) => {
 
       respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
 
-      // Uso mensual (UPSERT seguro)
+      // Uso mensual (UPSERT seguro) → canal 'voz'
       const tokens = completion.usage?.total_tokens || 0;
       if (tokens > 0) {
         await pool.query(
@@ -120,7 +119,7 @@ router.post('/', async (req: Request, res: Response) => {
       console.warn('⚠️ OpenAI falló, uso fallback de respuesta:', e);
     }
 
-    // Añadir pausas naturales con SSML y sintetizar con ElevenLabs (SSML)
+    // 🔊 SSML + ElevenLabs (mejor soporte multi-idioma)
     const ssml = `<speak>${
       respuesta
         .replace(/\.\s*/g, '. <break time="400ms"/> ')
@@ -130,7 +129,8 @@ router.post('/', async (req: Request, res: Response) => {
     let audioUrl: string | null = null;
     try {
       const audioRes = await axios.post(
-        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?model_id=eleven_monolingual_v1`,
+        // 👇 usa modelo multilingüe
+        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?model_id=eleven_multilingual_v2`,
         ssml,
         {
           headers: {
@@ -143,11 +143,23 @@ router.post('/', async (req: Request, res: Response) => {
       );
       const audioBuffer = Buffer.from(audioRes.data);
       audioUrl = await guardarAudioEnCDN(audioBuffer, tenant.id); // debe servir audio/mpeg por HTTPS público
-    } catch (e) {
-      console.warn('⚠️ ElevenLabs TTS falló, uso <Say>:', e);
+    } catch (e: any) {
+      // Logs útiles (no <Buffer ...>)
+      let status = e?.response?.status;
+      let headers = e?.response?.headers;
+      let body = '';
+      try {
+        const raw = e?.response?.data;
+        body = Buffer.isBuffer(raw) ? raw.toString('utf8') : JSON.stringify(raw);
+      } catch {}
+      console.warn('⚠️ ElevenLabs TTS falló, uso <Say>:', {
+        status,
+        requestId: headers?.['x-request-id'] || headers?.['x-requestid'],
+        body
+      });
     }
 
-    // Guardar conversación
+    // 🗃 Guardar conversación
     await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voz', $3)`,
@@ -166,14 +178,17 @@ router.post('/', async (req: Request, res: Response) => {
 
     await incrementarUsoPorNumero(numero);
 
-    // Intento de detectar intención y enviar SMS con link útil
+    // 🔗 Detectar intención y mandar SMS con link útil (si aplica)
     try {
-      const intentPrompt = `El cliente dijo: "${userInput}". ¿Qué intención tiene? Responde solo con una palabra entre: reservar, comprar, soporte, web, otro.`;
+      const intentPrompt =
+        `El cliente dijo: "${userInput}". ¿Qué intención tiene? ` +
+        `Responde solo con una palabra entre: reservar, comprar, soporte, web, otro.`;
       const intentRes = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [{ role: 'system', content: intentPrompt }],
       });
-      const intencion = intentRes.choices[0].message?.content?.toLowerCase().trim() || '';
+      const intencion =
+        intentRes.choices[0].message?.content?.toLowerCase().trim() || '';
 
       if (['reservar', 'comprar', 'soporte', 'web'].includes(intencion)) {
         const linkRes = await pool.query(
@@ -187,7 +202,7 @@ router.post('/', async (req: Request, res: Response) => {
         const nombreLink = linkRes.rows[0]?.nombre;
 
         if (link) {
-          const smsFrom = tenant.twilio_sms_number || numero; // asegúrate que tenga capacidad SMS
+          const smsFrom = tenant.twilio_sms_number || numero; // asegúrate que sea un número SMS-capable (E.164)
           const client = Twilio(
             process.env.TWILIO_ACCOUNT_SID!,
             process.env.TWILIO_AUTH_TOKEN!
@@ -204,7 +219,7 @@ router.post('/', async (req: Request, res: Response) => {
       console.warn('⚠️ No se pudo detectar intención o enviar SMS:', e);
     }
 
-    // ¿Terminamos?
+    // 🧾 ¿Terminamos?
     const finConversacion = /(gracias|eso es todo|nada más|nada mas|bye|ad[ií]os)/i.test(userInput);
 
     if (audioUrl) {
