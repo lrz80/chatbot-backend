@@ -1,41 +1,38 @@
+// src/routes/webhook/voice.ts
 import { Router, Request, Response } from 'express';
 import { twiml } from 'twilio';
 import pool from '../../lib/db';
 
 const router = Router();
 
-// --- helpers ---
+// Normaliza 'es'/'en' → códigos que Twilio acepta
 const toTwilioLocale = (code?: string) => {
   const c = (code || '').toLowerCase();
-  if (c.startsWith('es-mx')) return 'es-MX' as const;
-  if (c.startsWith('es'))    return 'es-ES' as const;
-  if (c.startsWith('en-gb')) return 'en-GB' as const;
-  if (c.startsWith('en'))    return 'en-US' as const;
+  if (c.startsWith('es')) return 'es-ES' as const;
+  if (c.startsWith('en')) return 'en-US' as const;
+  if (c.startsWith('pt')) return 'pt-BR' as const;
   return 'es-ES' as const;
 };
 
-const DEFAULT_VOICE_BY_LOCALE: Record<string, string> = {
-  'es-ES': 'Polly.Lucia',
-  'es-MX': 'Polly.Mia',
-  'en-US': 'Polly.Joanna',
-  'en-GB': 'Polly.Amy',
-};
-
-function pickTwilioVoice(voiceName?: string, idioma?: string) {
-  const v = (voiceName || '').trim();
-  const loc = toTwilioLocale(idioma);
-  if (v) return v.startsWith('Polly.') ? v : `Polly.${v}`;
-  return DEFAULT_VOICE_BY_LOCALE[loc] || 'Polly.Lucia';
-}
-
-// quita emojis, < > &, comprime espacios y limita longitud
-function sanitizeSayText(s: string, max = 3000) {
-  return (s || '')
-    .replace(/[<>&]/g, ' ')
-    .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '') // emojis/surrogates
-    .replace(/\s+/g, ' ')
+// ⚠️ Twilio <Say> NO acepta '<', '>', '&' sin escapar y a veces SSML.
+// Sanitizamos para evitar 13520 + 12200.
+const sanitizeForSay = (s: string) =>
+  (s || '')
+    .replace(/[<>&]/g, ' ')         // evita romper el XML
+    .replace(/\s+/g, ' ')           // limpia espacios raros
     .trim()
-    .slice(0, max);
+    .slice(0, 1500);                // límite prudente
+
+// Helper: última voice_config del tenant (canal 'voz')
+async function getVoiceConfig(tenantId: string) {
+  const { rows } = await pool.query(
+    `SELECT * FROM voice_configs
+     WHERE tenant_id = $1 AND canal = 'voz'
+     ORDER BY updated_at DESC, created_at DESC
+     LIMIT 1`,
+    [tenantId]
+  );
+  return rows[0] || null;
 }
 
 router.post('/', async (req: Request, res: Response) => {
@@ -51,49 +48,46 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (!tenant.membresia_activa) {
       const vr = new twiml.VoiceResponse();
-      vr.say({ voice: 'Polly.Conchita' as any }, 'Tu membresía está inactiva. Por favor actualízala para continuar. ¡Gracias!');
+      vr.say(
+        { voice: 'alice', language: 'es-ES' as any },
+        'Tu membresía está inactiva. Por favor actualízala para continuar. ¡Gracias!'
+      );
       vr.hangup();
       return res.type('text/xml').send(vr.toString());
     }
 
-    const { rows } = await pool.query(
-      `SELECT * FROM voice_configs
-       WHERE tenant_id = $1 AND canal = 'voz'
-       ORDER BY updated_at DESC, created_at DESC
-       LIMIT 1`,
-      [tenant.id]
-    );
-    const cfg = rows[0];
+    const cfg = await getVoiceConfig(tenant.id);
     if (!cfg) return res.sendStatus(404);
 
-    const idioma = (cfg.idioma || 'es-ES') as string;
-    const locale = toTwilioLocale(idioma);
-    const twilioVoice = pickTwilioVoice(cfg.voice_name, idioma);
-    const rawWelcome = (cfg.welcome_message || 'Hola, ¿en qué puedo ayudarte?').trim();
-    const welcome = sanitizeSayText(rawWelcome);
+    const locale = toTwilioLocale(cfg.idioma || 'es-ES');
+    const welcomeRaw = cfg.welcome_message || 'Hola, ¿en qué puedo ayudarte?';
+    const welcome = sanitizeForSay(welcomeRaw);
 
-    // URL absoluta para el action
-    const base = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, '') || '';
-    const actionUrl = `${base}/webhook/voice-response`;
+    // Si quieres forzar Polly (si está activado en tu cuenta):
+    // const voiceName: any = 'Polly.Conchita';
+    // Si no, usa 'alice' (más universal y estable)
+    const voiceName: any = 'alice';
 
     const vr = new twiml.VoiceResponse();
 
     const gather = vr.gather({
-      input: ['speech'] as ('speech' | 'dtmf')[],
-      action: actionUrl,
+      input: ['speech'] as any,
+      action: '/webhook/voice-response',
       method: 'POST',
-      language: locale as any,           // ← solo para ASR
+      language: locale as any,
       speechTimeout: 'auto',
-      ...(cfg.voice_hints ? { hints: String(cfg.voice_hints) } : {}),
+      ...(cfg.voice_hints ? { hints: String(cfg.voice_hints) } : {})
     });
 
-    // ⚠️ NO pasamos language cuando usamos Polly.*
-    gather.say({ voice: twilioVoice as any }, welcome);
+    // Mensaje de bienvenida
+    gather.say({ language: locale as any, voice: voiceName }, welcome);
 
-    // Mensaje de “no te oí”
+    // Si el usuario no responde, despedimos cortésmente
     vr.say(
-      { voice: twilioVoice as any },
-      locale.startsWith('es') ? 'No escuché nada. ¡Hasta luego!' : "I didn't hear anything. Goodbye!"
+      { language: locale as any, voice: voiceName },
+      locale.startsWith('es')
+        ? 'No escuché nada. ¡Hasta luego!'
+        : "I didn't hear anything. Goodbye!"
     );
 
     res.type('text/xml').send(vr.toString());

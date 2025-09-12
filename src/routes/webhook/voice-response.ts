@@ -1,3 +1,4 @@
+// src/routes/webhook/voice-response.ts
 import { Router, Request, Response } from 'express';
 import { twiml } from 'twilio';
 import pool from '../../lib/db';
@@ -6,102 +7,87 @@ import Twilio from 'twilio';
 
 const router = Router();
 
-// helpers
 const toTwilioLocale = (code?: string) => {
   const c = (code || '').toLowerCase();
-  if (c.startsWith('es-mx')) return 'es-MX' as const;
-  if (c.startsWith('es'))    return 'es-ES' as const;
-  if (c.startsWith('en-gb')) return 'en-GB' as const;
-  if (c.startsWith('en'))    return 'en-US' as const;
+  if (c.startsWith('es')) return 'es-ES' as const;
+  if (c.startsWith('en')) return 'en-US' as const;
+  if (c.startsWith('pt')) return 'pt-BR' as const;
   return 'es-ES' as const;
 };
-const DEFAULT_VOICE_BY_LOCALE: Record<string, string> = {
-  'es-ES': 'Polly.Lucia',
-  'es-MX': 'Polly.Mia',
-  'en-US': 'Polly.Joanna',
-  'en-GB': 'Polly.Amy',
-};
-function pickTwilioVoice(voiceName?: string, idioma?: string) {
-  const v = (voiceName || '').trim();
-  const loc = toTwilioLocale(idioma);
-  if (v) return v.startsWith('Polly.') ? v : `Polly.${v}`;
-  return DEFAULT_VOICE_BY_LOCALE[loc] || 'Polly.Lucia';
-}
-function sanitizeSayText(s: string, max = 3000) {
-  return (s || '')
+
+const sanitizeForSay = (s: string) =>
+  (s || '')
     .replace(/[<>&]/g, ' ')
-    .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, max);
-}
+    .slice(0, 1500);
 
 router.post('/', async (req: Request, res: Response) => {
   const to = (req.body.To || '').toString();
   const from = (req.body.From || '').toString();
   const numero = to.replace(/^tel:/, '');
   const fromNumber = from.replace(/^tel:/, '');
-  const userInput = (req.body.SpeechResult || '').toString().trim();
+  const userInputRaw = (req.body.SpeechResult || '').toString();
+  const userInput = userInputRaw.trim();
 
   try {
-    const tenantRes = await pool.query(
+    const tRes = await pool.query(
       'SELECT * FROM tenants WHERE twilio_voice_number = $1 LIMIT 1',
       [numero]
     );
-    const tenant = tenantRes.rows[0];
+    const tenant = tRes.rows[0];
     if (!tenant) return res.sendStatus(404);
 
     if (!tenant.membresia_activa) {
       const vr = new twiml.VoiceResponse();
-      vr.say({ voice: 'Polly.Conchita' as any }, 'Tu membresía está inactiva. Por favor actualízala para continuar. ¡Gracias!');
+      vr.say(
+        { voice: 'alice', language: 'es-ES' as any },
+        'Tu membresía está inactiva. Por favor actualízala para continuar. ¡Gracias!'
+      );
       vr.hangup();
       return res.type('text/xml').send(vr.toString());
     }
 
-    const { rows } = await pool.query(
+    const cfgRes = await pool.query(
       `SELECT * FROM voice_configs
        WHERE tenant_id = $1 AND canal = 'voz'
        ORDER BY updated_at DESC, created_at DESC
        LIMIT 1`,
       [tenant.id]
     );
-    const cfg = rows[0];
+    const cfg = cfgRes.rows[0];
     if (!cfg) return res.sendStatus(404);
 
-    const idioma = (cfg.idioma || 'es-ES') as string;
-    const locale = toTwilioLocale(idioma);
-    const twilioVoice = pickTwilioVoice(cfg.voice_name, idioma);
+    const locale = toTwilioLocale(cfg.idioma || 'es-ES');
+    const voiceName: any = 'alice';
 
-    // Primera vuelta: si no hubo voz
     const vr = new twiml.VoiceResponse();
+
+    // Primera vuelta: Twilio nos llamó sin SpeechResult (silencio o arranque)
     if (!userInput) {
-      vr.say({ voice: twilioVoice as any },
-        locale.startsWith('es') ? '¿En qué puedo ayudarte?' : 'How can I help you?'
+      const initial = sanitizeForSay(
+        `Hola, soy Amy de ${tenant.name || 'nuestro negocio'}. ¿En qué puedo ayudarte?`
       );
-
-      const base = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, '') || '';
-      const actionUrl = `${base}/webhook/voice-response`;
-
+      vr.say({ language: locale as any, voice: voiceName }, initial);
       vr.gather({
-        input: ['speech'] as ('speech' | 'dtmf')[],
-        action: actionUrl,
+        input: ['speech'] as any,
+        action: '/webhook/voice-response',
         method: 'POST',
-        language: locale as any,   // solo ASR
+        language: locale as any,
         speechTimeout: 'auto',
-        ...(cfg.voice_hints ? { hints: String(cfg.voice_hints) } : {}),
       });
       return res.type('text/xml').send(vr.toString());
     }
 
-    // OpenAI para respuesta corta
-    const { default: OpenAI } = await import('openai');
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-
+    // --- OpenAI para generar respuesta corta y natural ---
     let respuesta = locale.startsWith('es')
-      ? 'Lo siento, no entendí eso.'
-      : "Sorry, I didn't catch that.";
+      ? 'Disculpa, no entendí eso.'
+      : "Sorry, I didn’t catch that.";
 
     try {
+      const { default: OpenAI } = await import('openai');
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
       const completion = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
@@ -109,15 +95,15 @@ router.post('/', async (req: Request, res: Response) => {
             role: 'system',
             content:
               (cfg.system_prompt as string)?.trim() ||
-              (locale.startsWith('es')
-                ? 'Eres una asistente telefónica amable y clara. Responde corto, cálido y directo.'
-                : 'You are a friendly and clear phone assistant. Reply briefly, warmly, and directly.'),
+              `Eres Amy, una asistente telefónica amable y concisa del negocio ${tenant.name || ''}. Responde breve y natural.`
           },
-          { role: 'user', content: userInput },
+          { role: 'user', content: userInput }
         ],
       });
 
-      respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
+      respuesta =
+        completion.choices[0]?.message?.content?.trim() ||
+        respuesta;
 
       const tokens = completion.usage?.total_tokens || 0;
       if (tokens > 0) {
@@ -130,10 +116,13 @@ router.post('/', async (req: Request, res: Response) => {
         );
       }
     } catch (e) {
-      console.warn('⚠️ OpenAI falló; usando fallback genérico:', e);
+      console.warn('⚠️ OpenAI falló, usando fallback:', e);
     }
 
-    // Guardar conversación
+    // Sanitiza la salida antes de hablar
+    const speakOut = sanitizeForSay(respuesta);
+
+    // Persistimos conversación
     await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voz', $3)`,
@@ -152,28 +141,66 @@ router.post('/', async (req: Request, res: Response) => {
 
     await incrementarUsoPorNumero(numero);
 
-    // Decidir si seguimos
+    // (Opcional) Detecta intención y envía SMS con link útil
+    try {
+      const { default: OpenAI } = await import('openai');
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+      const intentPrompt = `El cliente dijo: "${userInput}". Responde solo una palabra: reservar, comprar, soporte, web, otro.`;
+      const intentRes = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'system', content: intentPrompt }]
+      });
+      const intent =
+        intentRes.choices[0].message?.content?.toLowerCase().trim() || '';
+
+      if (['reservar', 'comprar', 'soporte', 'web'].includes(intent)) {
+        const linkRes = await pool.query(
+          `SELECT url, nombre FROM links_utiles
+           WHERE tenant_id = $1 AND tipo = $2
+           ORDER BY created_at DESC
+           LIMIT 1`,
+          [tenant.id, intent]
+        );
+        const url = linkRes.rows[0]?.url;
+        const nombre = linkRes.rows[0]?.nombre;
+        if (url) {
+          const smsFrom = tenant.twilio_sms_number || numero;
+          const client = Twilio(
+            process.env.TWILIO_ACCOUNT_SID!,
+            process.env.TWILIO_AUTH_TOKEN!
+          );
+          await client.messages.create({
+            from: smsFrom,
+            to: fromNumber,
+            body: `📎 ${nombre || 'Enlace'}: ${url}`
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Intent/SMS opcional falló:', e);
+    }
+
+    // ¿Cerramos conversación?
     const fin = /(gracias|eso es todo|nada más|nada mas|bye|ad[ií]os)/i.test(userInput);
 
-    // ⛑️ Sanear y decir
-    const safe = sanitizeSayText(respuesta);
-    vr.say({ voice: twilioVoice as any }, safe);
+    // Hablar
+    vr.say({ language: locale as any, voice: voiceName }, speakOut);
 
     if (!fin) {
-      const base = process.env.PUBLIC_BASE_URL?.replace(/\/+$/, '') || '';
-      const actionUrl = `${base}/webhook/voice-response`;
-
       vr.gather({
-        input: ['speech'] as ('speech' | 'dtmf')[],
-        action: actionUrl,
+        input: ['speech'] as any,
+        action: '/webhook/voice-response',
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
-        ...(cfg.voice_hints ? { hints: String(cfg.voice_hints) } : {}),
       });
     } else {
-      vr.say({ voice: twilioVoice as any },
-        locale.startsWith('es') ? 'Gracias por tu llamada. ¡Hasta luego!' : 'Thanks for calling. Goodbye!'
+      vr.say(
+        { language: locale as any, voice: voiceName },
+        locale.startsWith('es')
+          ? 'Gracias por tu llamada. ¡Hasta luego!'
+          : 'Thanks for calling. Goodbye!'
       );
       vr.hangup();
     }
