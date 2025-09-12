@@ -1,79 +1,86 @@
 // ✅ src/routes/voice-prompt/index.ts
-
 import express from "express";
+import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
 import { PromptTemplate } from "../../utils/voicePromptTemplate";
-import pool from "../../lib/db";
 
 const router = express.Router();
 
+const normLocale = (l?: string) => {
+  const v = (l || "es-ES").toLowerCase();
+  if (v.startsWith("en")) return "en-US";
+  if (v.startsWith("pt")) return "pt-BR";
+  return "es-ES";
+};
+
 router.post("/", authenticateUser, async (req, res) => {
-  const { idioma, categoria, funciones_asistente, info_clave } = req.body;
-  const tenant_id = req.user?.tenant_id;
-  const canal = "voz";
-  const voice_name = "alice";
+  const tenant_id = (req.user as any)?.tenant_id as string | undefined;
 
-  if (!idioma || !categoria) {
-    return res.status(400).json({ error: "Faltan idioma o categoría." });
-  }
+  const {
+    idioma,
+    // "categoria" puede venir del front, pero si tu tabla no tiene esa columna, no se persiste
+    categoria,
+    funciones_asistente,
+    info_clave,
+  } = req.body || {};
 
-  if (!tenant_id) {
-    return res.status(401).json({ error: "Tenant no autenticado." });
-  }
-
+  if (!tenant_id) return res.status(401).json({ error: "Tenant no autenticado." });
+  if (!idioma) return res.status(400).json({ error: "Falta idioma." });
   if (!funciones_asistente?.trim() || !info_clave?.trim()) {
     return res.status(400).json({ error: "Debes completar funciones e info clave." });
   }
 
   try {
+    // Membresía
     const { rows } = await pool.query(
-      `SELECT membresia_activa FROM tenants WHERE id = $1`,
+      `SELECT name, membresia_activa FROM tenants WHERE id = $1 LIMIT 1`,
       [tenant_id]
     );
-  
-    if (!rows[0]?.membresia_activa) {
+    if (!rows[0]) return res.status(404).json({ error: "Tenant no encontrado." });
+    if (!rows[0].membresia_activa) {
       return res.status(403).json({ error: "Tu membresía está inactiva. Actívala para continuar." });
     }
-    // 🧠 Generar prompt usando funciones e info clave
+
+    // Generar prompt + bienvenida (multi-tenant, con reglas de SMS para links)
     const { prompt, bienvenida } = await PromptTemplate({
-      idioma,
-      categoria,
+      idioma: normLocale(idioma),
+      categoria: categoria || "default",
       tenant_id,
       funciones_asistente,
       info_clave,
     });
 
+    // Guardar/actualizar voice_config (sin columna 'categoria' si no existe)
     await pool.query(
       `INSERT INTO voice_configs (
-        tenant_id, idioma, categoria, system_prompt, welcome_message, canal, voice_name, funciones_asistente, info_clave
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-      ON CONFLICT (tenant_id, canal) DO UPDATE SET
-        idioma = EXCLUDED.idioma,
-        categoria = EXCLUDED.categoria,
-        system_prompt = EXCLUDED.system_prompt,
-        welcome_message = EXCLUDED.welcome_message,
-        voice_name = EXCLUDED.voice_name,
-        funciones_asistente = EXCLUDED.funciones_asistente,
-        info_clave = EXCLUDED.info_clave,
-        updated_at = NOW()`,
+         tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints,
+         canal, funciones_asistente, info_clave
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, 'voz', $7, $8)
+       ON CONFLICT (tenant_id, idioma, canal) DO UPDATE SET
+         voice_name = EXCLUDED.voice_name,
+         system_prompt = EXCLUDED.system_prompt,
+         welcome_message = EXCLUDED.welcome_message,
+         voice_hints = EXCLUDED.voice_hints,
+         funciones_asistente = EXCLUDED.funciones_asistente,
+         info_clave = EXCLUDED.info_clave,
+         updated_at = NOW()`,
       [
         tenant_id,
-        idioma,
-        categoria,
+        normLocale(idioma),
+        "alice",                 // voz de Twilio por defecto
         prompt,
         bienvenida,
-        canal,
-        voice_name,
+        null,                    // voice_hints opcional (null si no hay)
         funciones_asistente,
         info_clave,
       ]
     );
 
-    res.json({ prompt, bienvenida });
+    return res.json({ prompt, bienvenida });
   } catch (err) {
-    console.error("❌ Error generando o guardando el prompt de voz:", err);
-    res.status(500).json({ error: "Error generando el prompt." });
+    console.error("❌ Error generando/guardando prompt de voz:", err);
+    return res.status(500).json({ error: "Error generando el prompt." });
   }
 });
 

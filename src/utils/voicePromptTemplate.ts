@@ -1,15 +1,16 @@
+// ✅ utils/voicePromptTemplate.ts
 import pool from "../lib/db";
 
 type PromptData = {
-  idioma: string;
-  categoria: string;
+  idioma: string;            // ej: "es-ES" | "en-US"
+  categoria: string;         // opcional para el texto de contexto
   tenant_id: string;
   funciones_asistente?: string;
   info_clave?: string;
 };
 
 function sanitize(text: string): string {
-  return text.replace(/[\n\r]+/g, " ").trim();
+  return (text || "").replace(/[\n\r]+/g, " ").trim();
 }
 
 export async function PromptTemplate({
@@ -19,67 +20,99 @@ export async function PromptTemplate({
   funciones_asistente,
   info_clave,
 }: PromptData) {
-  let bienvenida = "";
+  // 1) Cargar datos del tenant si faltan funciones/info + obtener nombre de marca
   let funciones = sanitize(funciones_asistente || "");
   let info = sanitize(info_clave || "");
+  let brand = "tu negocio";
 
-  if (!funciones || !info) {
-    try {
-      const result = await pool.query(
-        "SELECT funciones_asistente, info_clave FROM tenants WHERE id = $1",
-        [tenant_id]
-      );
-      const data = result.rows[0];
-      if (!funciones && data?.funciones_asistente)
-        funciones = sanitize(data.funciones_asistente);
-      if (!info && data?.info_clave)
-        info = sanitize(data.info_clave);
-    } catch (err) {
-      console.error("❌ Error al consultar tenant para prompt:", err);
-    }
+  try {
+    const result = await pool.query(
+      "SELECT name, funciones_asistente, info_clave FROM tenants WHERE id = $1 LIMIT 1",
+      [tenant_id]
+    );
+    const row = result.rows?.[0];
+    if (row?.name) brand = row.name;
+    if (!funciones && row?.funciones_asistente) funciones = sanitize(row.funciones_asistente);
+    if (!info && row?.info_clave) info = sanitize(row.info_clave);
+  } catch (err) {
+    console.error("❌ Error consultando tenant para prompt:", err);
   }
 
-  if (!funciones) funciones = "Responder preguntas frecuentes sobre el negocio.";
-  if (!info) info = "El negocio ofrece servicios profesionales.";
+  if (!funciones) funciones = "Atender llamadas, responder preguntas frecuentes y orientar al cliente.";
+  if (!info) info = "Ofrecemos servicios profesionales con atención cordial.";
 
-  const categoriasMap: Record<string, string> = {
-    beauty: idioma === "es-ES" ? "nuestro centro de belleza" : "our beauty center",
-    fitness: idioma === "es-ES" ? "nuestro centro fitness" : "our fitness center",
-    default: idioma === "es-ES" ? "nuestro negocio" : "our business",
+  // 2) Texto por categoría (opcional, sólo para color)
+  const catMap: Record<string, { es: string; en: string }> = {
+    beauty: { es: "nuestro centro de belleza", en: "our beauty center" },
+    fitness: { es: "nuestro centro fitness", en: "our fitness center" },
+    default: { es: "nuestro negocio", en: "our business" },
   };
+  const catTexts = catMap[categoria] || catMap.default;
 
-  const categoriaTexto = categoriasMap[categoria] || categoriasMap["default"];
+  // 3) Idioma y plantillas
+  const isEn = (idioma || "").toLowerCase().startsWith("en");
 
-  // 🗣️ Prompt y bienvenida personalizados
-  if (idioma === "es-ES") {
-    bienvenida = `Hola, soy Amy. Bienvenido a ${categoriaTexto}. ¿En qué puedo ayudarte?`;
+  if (!isEn) {
+    // Español
+    const bienvenida = `Hola, soy Amy del equipo de ${brand}. ¿En qué puedo ayudarte hoy?`;
 
-    return {
-      bienvenida,
-      prompt: `
-Hablas como Amy, una asistente telefónica real, cálida y segura.
-Tu trabajo es ayudar al cliente como si fueras parte del equipo de ${categoriaTexto}.
-Responde siempre en español neutro, con frases breves y claras. No uses términos técnicos.
-Ayuda al cliente con lo siguiente: ${funciones}.
-Información clave que debes tener en cuenta: ${info}.
-No digas que eres un asistente virtual. Habla como una persona real del negocio.
-Si el cliente dice gracias o se despide, responde cordialmente y finaliza la conversación.
-      `.trim(),
-    };
+    const prompt = `
+Eres Amy, una asistente telefónica real, cálida y natural del negocio ${brand}.
+Contexto del negocio: ${info}
+Tu objetivo principal: ${funciones}
+
+REGLAS IMPORTANTES (OBLIGATORIAS):
+1) **Nunca pronuncies enlaces/URLs, códigos o números largos** (no digas "www", "http" o "https").  
+   Si hace falta compartir un enlace, di: **"Te lo envío por SMS ahora"** y continúa. El sistema enviará el SMS.
+2) **Respuestas cortas (1–2 frases), claras y conversacionales**. Evita sonar robótico.
+3) Habla siempre como parte real del equipo (no digas que eres asistente virtual o IA).
+4) **Si el cliente cambia de idioma**, síguelo sin anunciarlo.
+5) Evita leer textos largos; **resume** lo esencial.
+6) Si no estás segura, ofrece opciones: tomar datos, enviar info por SMS o derivar a un humano.
+7) Para intenciones como **reservar / comprar / soporte / web**, **menciona que enviarás el enlace por SMS** (no lo leas).
+8) No pidas datos sensibles innecesarios. Pide sólo lo mínimo (nombre, teléfono si hace falta, etc.).
+9) Mantén un tono profesional y cercano; **no repitas** la misma información en turnos seguidos.
+
+ESTILO:
+- Frases naturales de 8–18 palabras.
+- Evita muletillas y relleno.
+- Guía al cliente de forma amable y directa.
+
+Si el cliente agradece o quiere terminar, despídete con cortesía.
+(Referencia de contexto: ${catTexts.es})
+    `.trim();
+
+    return { bienvenida, prompt };
   }
 
-  bienvenida = `Hi, I'm Amy. Welcome to ${categoriaTexto}. How can I help you?`;
+  // Inglés
+  const bienvenida = `Hi, this is Amy from ${brand}. How can I help you today?`;
 
-  return {
-    bienvenida,
-    prompt: `
-You speak as Amy, a natural, friendly and professional voice assistant.
-You help the caller just like a real staff member of ${categoriaTexto}.
-Always speak in short, natural sentences in clear English.
-Your role includes: ${funciones}.
-Important info to keep in mind: ${info}.
-Never say you're a virtual assistant. Speak like a real human.
-If the user says goodbye or thanks, end the call politely.
-    `.trim(),
-  };
+  const prompt = `
+You are Amy, a warm, natural phone assistant for ${brand}.
+Business context: ${info}
+Primary goal: ${funciones}
+
+HARD RULES:
+1) **Never read URLs/links, codes, or long numbers aloud** (do not say "www", "http", or "https").  
+   If a link is needed, say: **"I'll text it to you now"** and continue. The system will send the SMS.
+2) **Keep answers short (1–2 sentences), clear, and conversational.**
+3) Speak as a real team member (never say you are an AI or a bot).
+4) **If the caller switches language**, follow without announcing it.
+5) Avoid long readings; **summarize** the essentials.
+6) When unsure, offer alternatives: collect details, text info via SMS, or hand off to a human.
+7) For intents like **booking / buy / support / web**, **say you'll text the link** (do not read it).
+8) Do not ask for unnecessary sensitive data. Only what’s essential.
+9) Keep a friendly professional tone and **avoid repeating** the same info across turns.
+
+STYLE:
+- Natural 8–18 word sentences.
+- No filler or awkward phrasing.
+- Gently guide the caller.
+
+If they thank you or want to end, close politely.
+(Context reference: ${catTexts.en})
+  `.trim();
+
+  return { bienvenida, prompt };
 }
