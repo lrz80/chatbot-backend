@@ -5,83 +5,78 @@ import { authenticateUser } from "../../middleware/auth";
 
 const router = express.Router();
 
-// 📥 Listar links útiles (opcional ?tipo=reservar|comprar|soporte|web)
+// 📥 Obtener links útiles (por tenant)
 router.get("/", authenticateUser, async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
-  const { tipo } = req.query as { tipo?: string };
 
   try {
-    const params: any[] = [tenant_id];
-    let sql = `
-      SELECT id, tipo, nombre, url, created_at
-      FROM links_utiles
-      WHERE tenant_id = $1
-    `;
-    if (tipo) {
-      sql += ` AND tipo = $2`;
-      params.push(String(tipo).trim().toLowerCase());
-    }
-    sql += ` ORDER BY created_at DESC NULLS LAST, id DESC`;
-
-    const { rows } = await pool.query(sql, params);
-    res.json(rows);
+    const { rows } = await pool.query(
+      `SELECT id, tipo, nombre, url, tenant_id, created_at
+         FROM links_utiles
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC NULLS LAST, id DESC`,
+      [tenant_id]
+    );
+    console.log(`[voice-links] GET tenant=${tenant_id} -> ${rows.length} link(s)`);
+    return res.json(rows);
   } catch (err) {
     console.error("❌ Error al obtener links útiles:", err);
-    res.status(500).json({ error: "Error al obtener links útiles." });
+    return res.status(500).json({ error: "Error al obtener links útiles." });
   }
 });
 
-// 📤 Crear link útil
+// 📤 Agregar nuevo link útil
 router.post("/", authenticateUser, async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
-  let { tipo, nombre, url } = req.body as { tipo?: string; nombre?: string; url?: string };
+  const { tipo, nombre, url } = req.body;
 
   if (!tipo || !nombre || !url) {
     return res.status(400).json({ error: "Todos los campos son requeridos." });
   }
 
-  tipo = tipo.trim().toLowerCase();
-  nombre = nombre.trim();
-  url = url.trim();
-
   try {
     await pool.query(
       `INSERT INTO links_utiles (tenant_id, tipo, nombre, url, created_at)
        VALUES ($1, $2, $3, $4, NOW())`,
-      [tenant_id, tipo, nombre, url]
+      [tenant_id, tipo.trim(), nombre.trim(), url.trim()]
     );
 
     const { rows } = await pool.query(
-      `SELECT id, tipo, nombre, url, created_at
-       FROM links_utiles
-       WHERE tenant_id = $1
-       ORDER BY created_at DESC NULLS LAST, id DESC`,
+      `SELECT id, tipo, nombre, url, tenant_id, created_at
+         FROM links_utiles
+        WHERE tenant_id = $1
+        ORDER BY created_at DESC NULLS LAST, id DESC`,
       [tenant_id]
     );
 
-    res.json(rows);
+    console.log(`[voice-links] POST tenant=${tenant_id} -> total=${rows.length}`);
+    return res.json(rows);
   } catch (err) {
     console.error("❌ Error al guardar link útil:", err);
-    res.status(500).json({ error: "Error al guardar link útil." });
+    return res.status(500).json({ error: "Error al guardar link útil." });
   }
 });
 
 // 🗑️ Eliminar link útil
 router.delete("/:id", authenticateUser, async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
-  const id = Number(req.params.id);
-  if (!Number.isFinite(id)) return res.status(400).json({ error: "ID inválido." });
+  const linkId = Number(req.params.id);
+
+  if (!Number.isFinite(linkId)) {
+    return res.status(400).json({ error: "ID inválido." });
+  }
 
   try {
-    await pool.query(
+    const r = await pool.query(
       `DELETE FROM links_utiles
-       WHERE id = $1 AND tenant_id = $2`,
-      [id, tenant_id]
+        WHERE id = $1 AND tenant_id = $2`,
+      [linkId, tenant_id]
     );
-    res.status(204).end();
+    console.log(`[voice-links] DELETE tenant=${tenant_id} id=${linkId} rowCount=${r.rowCount}`);
+    return res.status(200).json({ ok: true });
   } catch (err) {
     console.error("❌ Error al eliminar link útil:", err);
-    res.status(500).json({ error: "Error al eliminar link." });
+    return res.status(500).json({ error: "Error al eliminar link." });
   }
 });
 
