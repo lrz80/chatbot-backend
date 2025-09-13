@@ -141,16 +141,22 @@ router.post('/', async (req: Request, res: Response) => {
 
       respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
 
-      const tokens = completion.usage?.total_tokens || 0;
-      if (tokens > 0) {
+      // ✅ Guardado robusto de tokens (funciona aunque OpenAI no mande total_tokens)
+      const usage = (completion as any).usage || {};
+      const totalTokens =
+        usage.total_tokens ??
+        ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0)) ?? 0;
+
+      if (totalTokens > 0) {
         await pool.query(
           `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-           VALUES ($1, 'voz', date_trunc('month', CURRENT_DATE), $2)
-           ON CONFLICT (tenant_id, canal, mes)
-           DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-          [tenant.id, tokens]
+          VALUES ($1, 'voz', date_trunc('month', CURRENT_DATE), $2)
+          ON CONFLICT (tenant_id, canal, mes)
+          DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+          [tenant.id, totalTokens]
         );
       }
+
     } catch (e) {
       console.warn('⚠️ OpenAI falló, usando fallback:', e);
     }
@@ -199,7 +205,6 @@ router.post('/', async (req: Request, res: Response) => {
     // ——— Si hay que mandar SMS, buscamos link y lo enviamos ———
     if (smsType) {
       try {
-        // Buscar por tipo (case-insensitive) + sinónimos
         const synonyms: Record<LinkType, string[]> = {
           reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
           comprar: ['comprar', 'pagar', 'checkout', 'payment', 'pay'],
@@ -207,66 +212,83 @@ router.post('/', async (req: Request, res: Response) => {
           web: ['web', 'sitio', 'pagina', 'página', 'home', 'website'],
         };
 
-        const likeAny = synonyms[smsType]
-          .map((w) => `%${w}%`)
-          .slice(0, 6); // limita por seguridad
+        const syns = synonyms[smsType];
+        const likeAny = syns.map((w) => `%${w}%`);
 
-        const { rows: links } = await pool.query(
-          `
+        // placeholders con offsets correctos
+        const base = 3;
+        const inPlaceholders = syns.map((_, i) => `lower($${base + i})`).join(', ');
+        const likeBase = base + syns.length;
+        const likeClauses = likeAny
+          .map((_, i) => `lower(tipo) LIKE lower($${likeBase + i})`)
+          .join(' OR ');
+
+        const sql = `
           SELECT id, tipo, nombre, url
           FROM links_utiles
           WHERE tenant_id = $1
             AND (
               lower(tipo) = lower($2)
-              OR lower(tipo) IN (${synonyms[smsType].map((_, i) => `lower($${i + 3})`).join(', ')})
-              OR ${likeAny.map((_, i) => `lower(tipo) LIKE lower($${i + 3})`).join(' OR ')}
+              OR lower(tipo) IN (${inPlaceholders})
+              OR ${likeClauses}
             )
           ORDER BY created_at DESC
           LIMIT 1
-        `,
-          [tenant.id, smsType, ...synonyms[smsType], ...likeAny]
-        );
+        `;
+
+        const params = [tenant.id, smsType, ...syns, ...likeAny];
+        const { rows: links } = await pool.query(sql, params);
 
         let chosen = links[0];
 
-        // Fallback: último link del tenant
         if (!chosen) {
           const { rows: fallback } = await pool.query(
             `SELECT id, tipo, nombre, url
-             FROM links_utiles
-             WHERE tenant_id = $1
-             ORDER BY created_at DESC
-             LIMIT 1`,
+            FROM links_utiles
+            WHERE tenant_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1`,
             [tenant.id]
           );
           chosen = fallback[0];
-          console.log('[VOICE/SMS] No hubo match por tipo; usando fallback más reciente:', chosen);
+          console.log('[VOICE/SMS] Fallback link más reciente:', chosen);
         } else {
           console.log('[VOICE/SMS] Link por tipo encontrado:', chosen);
         }
 
         if (chosen?.url) {
-          const smsFrom: string =
-            tenant.twilio_sms_number || tenant.twilio_voice_number || numero;
+          // ✅ valida que el número "from" sea SMS-capable (E.164 y configurado como SMS)
+          const smsFrom: string | undefined =
+            tenant.twilio_sms_number && /^\+\d{7,15}$/.test(tenant.twilio_sms_number)
+              ? tenant.twilio_sms_number
+              : undefined;
 
-          console.log(
-            `[VOICE/SMS] Enviando SMS desde ${smsFrom} a ${fromNumber} → ${chosen.nombre}: ${chosen.url}`
-          );
+          if (!smsFrom) {
+            console.warn('[VOICE/SMS] No hay twilio_sms_number válido configurado para este tenant.');
+            respuesta += locale.startsWith('es')
+              ? ' No hay un número SMS configurado para enviar el enlace.'
+              : ' There is no SMS-capable number configured to send the link.';
+          } else {
+            console.log(`[VOICE/SMS] Enviando SMS desde ${smsFrom} a ${fromNumber} → ${chosen.nombre}: ${chosen.url}`);
 
-          const client = Twilio(
-            process.env.TWILIO_ACCOUNT_SID!,
-            process.env.TWILIO_AUTH_TOKEN!
-          );
-          await client.messages.create({
-            from: smsFrom,
-            to: fromNumber,
-            body: `📎 ${chosen.nombre || 'Enlace'}: ${chosen.url}`,
-          });
+            const client = Twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
+            await client.messages.create({
+              from: smsFrom,
+              to: fromNumber,
+              body: `📎 ${chosen.nombre || 'Enlace'}: ${chosen.url}`,
+            });
 
-          // Añade una línea en la respuesta hablada para confirmarlo (sin leer la URL)
-          respuesta += locale.startsWith('es')
-            ? ' Te lo acabo de enviar por SMS.'
-            : ' I just texted it to you.';
+            // guarda evidencia del SMS enviado (opcional pero útil para auditoría/front)
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+              VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
+              [tenant.id, `SMS enviado con link: ${chosen.nombre} → ${chosen.url}`, smsFrom]
+            );
+
+            respuesta += locale.startsWith('es')
+              ? ' Te lo acabo de enviar por SMS.'
+              : ' I just texted it to you.';
+          }
         } else {
           console.warn('[VOICE/SMS] No hay links_utiles guardados para este tenant.');
           respuesta += locale.startsWith('es')
