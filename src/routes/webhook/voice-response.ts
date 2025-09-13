@@ -1,4 +1,4 @@
-// src/routes/webhook/voice-response.ts
+// ✅ src/routes/webhook/voice-response.ts
 import { Router, Request, Response } from 'express';
 import { twiml } from 'twilio';
 import pool from '../../lib/db';
@@ -9,6 +9,7 @@ const router = Router();
 
 const toTwilioLocale = (code?: string) => {
   const c = (code || '').toLowerCase();
+  if (c.startsWith('es')) return 'es-ES' as const;
   if (c.startsWith('en')) return 'en-US' as const;
   if (c.startsWith('pt')) return 'pt-BR' as const;
   return 'es-ES' as const;
@@ -21,28 +22,50 @@ const sanitizeForSay = (s: string) =>
     .trim()
     .slice(0, 1500);
 
-// Heurística: ¿pidió que lo mandemos por SMS?
-const askedForSms = (t: string) =>
-  /\b(sms|mensaje|texto|textea|mand(a|e|alo)|env(i|í)a(lo)?|p[aá]same|p[aá]salo)\b/i.test(t) &&
-  /\b(link|enlace|liga|url|p[aá]gina|web|reserva|pagar|comprar|soporte)\b/i.test(t);
+// ———————————————————————————
+//  Detección de SMS (usuario / asistente) + tipo de link
+// ———————————————————————————
+const askedForSms = (t: string) => {
+  const s = (t || '').toLowerCase();
+  return (
+    /(\bsms\b|\bmensaje\b|\btexto\b|\bmand(a|e|alo)\b|\benv[ií]a(lo)?\b|\bp[aá]same\b|\bp[aá]salo\b|\btext\b|\btext me\b|\bmessage me\b)/i.test(
+      s
+    ) &&
+    /link|enlace|liga|url|p[aá]gina|web|reserv|agend|cita|turno|compr|pag|pago|checkout|soporte|support/i.test(s)
+  );
+};
 
-// Mapea palabras a un tipo por defecto
-const guessType = (t: string): 'reservar'|'comprar'|'soporte'|'web' => {
-  const s = t.toLowerCase();
-  if (/(reserv|agend|cita|turno)/.test(s)) return 'reservar';
-  if (/(compr|pag|checkout|pago)/.test(s)) return 'comprar';
-  if (/(soporte|ayuda|reclamo|ticket)/.test(s)) return 'soporte';
-  if (/(web|sitio|p[aá]gina|home)/.test(s)) return 'web';
-  // prioridad por negocio: reservar > comprar > web > soporte
+const didAssistantPromiseSms = (t: string) =>
+  /\b(te lo (?:env[ií]o|enviar[eé]) por sms|te lo mando por sms|te lo envío por mensaje|te lo mando por mensaje|i'?ll text it to you|i'?ll send it by text)\b/i.test(
+    t || ''
+  );
+
+type LinkType = 'reservar' | 'comprar' | 'soporte' | 'web';
+
+// heurística: decide tipo por palabras clave (usa mezcla de input usuario y respuesta asistente)
+const guessType = (t: string): LinkType => {
+  const s = (t || '').toLowerCase();
+  if (/(reserv|agend|cita|turno|booking|appointment)/.test(s)) return 'reservar';
+  if (/(compr|pag|pago|checkout|buy|pay|payment)/.test(s)) return 'comprar';
+  if (/(soporte|support|ticket|help|ayuda|reclamo)/.test(s)) return 'soporte';
+  if (/(web|sitio|p[aá]gina|home|website)/.test(s)) return 'web';
+  // fallback razonable
   return 'reservar';
 };
 
+// Normaliza un texto corto para logs
+const short = (s: string, n = 120) => (s.length > n ? s.slice(0, n) + '…' : s);
+
+// ———————————————————————————
+//  Handler
+// ———————————————————————————
 router.post('/', async (req: Request, res: Response) => {
   const to = (req.body.To || '').toString();
   const from = (req.body.From || '').toString();
   const numero = to.replace(/^tel:/, '');
   const fromNumber = from.replace(/^tel:/, '');
-  const userInput = (req.body.SpeechResult || '').toString().trim();
+  const userInputRaw = (req.body.SpeechResult || '').toString();
+  const userInput = userInputRaw.trim();
 
   try {
     const tRes = await pool.query(
@@ -54,12 +77,15 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (!tenant.membresia_activa) {
       const vr = new twiml.VoiceResponse();
-      vr.say({ voice: 'alice', language: 'es-ES' as any },
-        'Tu membresía está inactiva. Por favor actualízala para continuar. ¡Gracias!');
+      vr.say(
+        { voice: 'alice', language: 'es-ES' as any },
+        'Tu membresía está inactiva. Por favor actualízala para continuar. ¡Gracias!'
+      );
       vr.hangup();
       return res.type('text/xml').send(vr.toString());
     }
 
+    // Voice config más reciente
     const cfgRes = await pool.query(
       `SELECT * FROM voice_configs
        WHERE tenant_id = $1 AND canal = 'voz'
@@ -75,7 +101,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     const vr = new twiml.VoiceResponse();
 
-    // Primer turno: sin SpeechResult -> saludo + gather
+    // Primera vuelta: sin SpeechResult → saludo + gather
     if (!userInput) {
       const initial = sanitizeForSay(
         `Hola, soy Amy de ${tenant.name || 'nuestro negocio'}. ¿En qué puedo ayudarte?`
@@ -83,7 +109,7 @@ router.post('/', async (req: Request, res: Response) => {
       vr.say({ language: locale as any, voice: voiceName }, initial);
       vr.gather({
         input: ['speech'] as any,
-        action: '/webhook/voice-response',
+        action: '/webhook/voice-response', // ajusta a /api/... si tu backend cuelga de /api
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
@@ -91,11 +117,9 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type('text/xml').send(vr.toString());
     }
 
-    // --- OpenAI para respuesta corta ---
+    // ——— OpenAI: respuesta breve y natural ———
     let respuesta =
-      locale.startsWith('es')
-        ? 'Disculpa, no entendí eso.'
-        : "Sorry, I didn’t catch that.";
+      locale.startsWith('es') ? 'Disculpa, no entendí eso.' : "Sorry, I didn’t catch that.";
 
     try {
       const { default: OpenAI } = await import('openai');
@@ -108,9 +132,10 @@ router.post('/', async (req: Request, res: Response) => {
             role: 'system',
             content:
               (cfg.system_prompt as string)?.trim() ||
-              `Eres Amy, asistente telefónica amable y concisa del negocio ${tenant.name || ''}.`
+              `Eres Amy, una asistente telefónica amable y concisa del negocio ${tenant.name ||
+                ''}. Responde breve y natural. Recuerda: nunca leas enlaces; si hace falta, di "te lo envío por SMS".`,
           },
-          { role: 'user', content: userInput }
+          { role: 'user', content: userInput },
         ],
       });
 
@@ -130,25 +155,29 @@ router.post('/', async (req: Request, res: Response) => {
       console.warn('⚠️ OpenAI falló, usando fallback:', e);
     }
 
-    // 1) ¿Hay etiqueta [[SMS:tipo]] en la respuesta?
+    // ——— Decidir si hay que ENVIAR SMS con link útil ———
+    // 1) etiqueta [[SMS:tipo]]
     const tagMatch = respuesta.match(/\[\[SMS:(reservar|comprar|soporte|web)\]\]/i);
-    let smsType: 'reservar'|'comprar'|'soporte'|'web' | null = tagMatch
-      ? (tagMatch[1].toLowerCase() as any)
+    let smsType: LinkType | null = tagMatch
+      ? (tagMatch[1].toLowerCase() as LinkType)
       : null;
 
-    // 2) Si no hay etiqueta, ¿el usuario pidió SMS explícitamente?
+    // 2) usuario lo pidió
     if (!smsType && askedForSms(userInput)) {
       smsType = guessType(userInput);
+      console.log('[VOICE/SMS] Usuario solicitó SMS → tipo inferido =', smsType);
     }
 
-    // Limpia etiqueta del texto antes de decirlo
-    if (tagMatch) {
-      respuesta = respuesta.replace(tagMatch[0], '').trim();
+    // 3) el asistente lo prometió
+    if (!smsType && didAssistantPromiseSms(respuesta)) {
+      smsType = guessType(`${userInput} ${respuesta}`);
+      console.log('[VOICE/SMS] Asistente prometió SMS → tipo inferido =', smsType);
     }
 
-    const speakOut = sanitizeForSay(respuesta);
+    // limpiar etiqueta del habla
+    if (tagMatch) respuesta = respuesta.replace(tagMatch[0], '').trim();
 
-    // Persistir conversación
+    // ——— Guardar conversación ———
     await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
        VALUES ($1, 'user', $2, NOW(), 'voz', $3)`,
@@ -167,51 +196,102 @@ router.post('/', async (req: Request, res: Response) => {
 
     await incrementarUsoPorNumero(numero);
 
-    // Envío de SMS si corresponde
+    // ——— Si hay que mandar SMS, buscamos link y lo enviamos ———
     if (smsType) {
       try {
-        const linkRes = await pool.query(
-          `SELECT url, nombre
-             FROM links_utiles
-            WHERE tenant_id = $1 AND tipo = $2
-            ORDER BY created_at DESC
-            LIMIT 1`,
-          [tenant.id, smsType]
+        // Buscar por tipo (case-insensitive) + sinónimos
+        const synonyms: Record<LinkType, string[]> = {
+          reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
+          comprar: ['comprar', 'pagar', 'checkout', 'payment', 'pay'],
+          soporte: ['soporte', 'support', 'ticket', 'ayuda'],
+          web: ['web', 'sitio', 'pagina', 'página', 'home', 'website'],
+        };
+
+        const likeAny = synonyms[smsType]
+          .map((w) => `%${w}%`)
+          .slice(0, 6); // limita por seguridad
+
+        const { rows: links } = await pool.query(
+          `
+          SELECT id, tipo, nombre, url
+          FROM links_utiles
+          WHERE tenant_id = $1
+            AND (
+              lower(tipo) = lower($2)
+              OR lower(tipo) IN (${synonyms[smsType].map((_, i) => `lower($${i + 3})`).join(', ')})
+              OR ${likeAny.map((_, i) => `lower(tipo) LIKE lower($${i + 3})`).join(' OR ')}
+            )
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+          [tenant.id, smsType, ...synonyms[smsType], ...likeAny]
         );
 
-        const url = linkRes.rows[0]?.url;
-        const nombre = linkRes.rows[0]?.nombre || smsType;
+        let chosen = links[0];
 
-        if (url) {
-          // usa número SMS si existe; si no, el mismo número de voz (si es SMS-capable)
-          const smsFrom =
-            tenant.twilio_sms_number ||
-            tenant.twilio_voice_number ||
-            numero;
+        // Fallback: último link del tenant
+        if (!chosen) {
+          const { rows: fallback } = await pool.query(
+            `SELECT id, tipo, nombre, url
+             FROM links_utiles
+             WHERE tenant_id = $1
+             ORDER BY created_at DESC
+             LIMIT 1`,
+            [tenant.id]
+          );
+          chosen = fallback[0];
+          console.log('[VOICE/SMS] No hubo match por tipo; usando fallback más reciente:', chosen);
+        } else {
+          console.log('[VOICE/SMS] Link por tipo encontrado:', chosen);
+        }
+
+        if (chosen?.url) {
+          const smsFrom: string =
+            tenant.twilio_sms_number || tenant.twilio_voice_number || numero;
+
+          console.log(
+            `[VOICE/SMS] Enviando SMS desde ${smsFrom} a ${fromNumber} → ${chosen.nombre}: ${chosen.url}`
+          );
 
           const client = Twilio(
             process.env.TWILIO_ACCOUNT_SID!,
             process.env.TWILIO_AUTH_TOKEN!
           );
-
           await client.messages.create({
             from: smsFrom,
             to: fromNumber,
-            body: `📎 ${nombre}: ${url}`,
+            body: `📎 ${chosen.nombre || 'Enlace'}: ${chosen.url}`,
           });
 
-          console.log(`✅ SMS enviado (${smsType}) a ${fromNumber} desde ${smsFrom}`);
+          // Añade una línea en la respuesta hablada para confirmarlo (sin leer la URL)
+          respuesta += locale.startsWith('es')
+            ? ' Te lo acabo de enviar por SMS.'
+            : ' I just texted it to you.';
         } else {
-          console.warn(`⚠️ No hay link guardado para tipo=${smsType}`);
+          console.warn('[VOICE/SMS] No hay links_utiles guardados para este tenant.');
+          respuesta += locale.startsWith('es')
+            ? ' No encontré un enlace registrado aún.'
+            : " I couldn't find a saved link yet.";
         }
-      } catch (e) {
-        console.warn('⚠️ Error enviando SMS con link útil:', e);
+      } catch (e: any) {
+        console.error('[VOICE/SMS] Error enviando SMS:', e?.code, e?.message, e?.moreInfo || e);
+        respuesta += locale.startsWith('es')
+          ? ' Hubo un problema al enviar el SMS.'
+          : ' There was a problem sending the text.';
       }
+    } else {
+      console.log(
+        '[VOICE/SMS] No se detectó condición para enviar SMS.',
+        'userInput=', short(userInput),
+        'respuesta=', short(respuesta)
+      );
     }
 
-    // ¿Terminamos?
+    // ——— ¿Terminamos? ———
     const fin = /(gracias|eso es todo|nada más|nada mas|bye|ad[ií]os)/i.test(userInput);
 
+    // Hablar (sanitiza para evitar 13520)
+    const speakOut = sanitizeForSay(respuesta);
     vr.say({ language: locale as any, voice: voiceName }, speakOut);
 
     if (!fin) {

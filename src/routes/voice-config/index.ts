@@ -1,5 +1,4 @@
-//src/routes/voice-config/index.ts
-
+// src/routes/voice-config/index.ts
 import express from "express";
 import multer from "multer";
 import pool from "../../lib/db";
@@ -8,26 +7,55 @@ import { authenticateUser } from "../../middleware/auth";
 const router = express.Router();
 const upload = multer();
 
+/** Convierte cualquier valor a string “limpio” para DB/UI */
+const toText = (v: any) => {
+  if (v == null) return "";
+  if (typeof v === "object") return "";     // evita {}
+  const s = String(v).trim();
+  return s === "{}" ? "" : s;               // evita "{}" como texto
+};
+
+/** Normaliza campos que puedan venir como {} / [] desde la DB */
+const normRowForUI = (row: any = {}) => {
+  const norm = (v: any) => {
+    if (v == null) return "";
+    if (typeof v === "object") return "";   // json/jsonb -> ""
+    const s = String(v).trim();
+    return s === "{}" ? "" : s;
+  };
+  return {
+    ...row,
+    funciones_asistente: norm(row.funciones_asistente),
+    info_clave:           norm(row.info_clave),
+    voice_hints:          norm(row.voice_hints),
+  };
+};
+
 // 📥 OBTENER configuración de voz
 router.get("/", authenticateUser, async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
-  const { idioma = "es-ES", canal = "voice" } = req.query; // <- voice
+  const { idioma = "es-ES", canal = "voz" } = req.query; // ✅ usa "voz"
 
   try {
-    const result = await pool.query(
-      `SELECT * FROM voice_configs
-       WHERE tenant_id = $1 AND idioma = $2 AND canal = $3
-       ORDER BY updated_at DESC, created_at DESC
-       LIMIT 1`,
+    const { rows } = await pool.query(
+      `SELECT *
+         FROM voice_configs
+        WHERE tenant_id = $1
+          AND idioma    = $2
+          AND canal     = $3
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT 1`,
       [tenant_id, String(idioma), String(canal)]
     );
-    res.json(result.rows[0] || {});
+
+    return res.json(normRowForUI(rows[0]));
   } catch (err) {
     console.error("❌ Error al obtener configuración de voz:", err);
     res.status(500).json({ error: "Error al obtener configuración." });
   }
 });
 
+// 📤 GUARDAR configuración de voz
 router.post("/", authenticateUser, upload.none(), async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
   let {
@@ -36,49 +64,49 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
     system_prompt,
     welcome_message,
     voice_hints,
-    canal = "voice",                    // <- voice
+    canal = "voz",                 // ✅ usa "voz"
     funciones_asistente,
     info_clave,
     audio_demo_url
   } = req.body;
 
-  if (!idioma || !voice_name || !tenant_id) {
+  // Normaliza a texto
+  idioma              = toText(idioma);
+  voice_name          = toText(voice_name);
+  system_prompt       = toText(system_prompt);
+  welcome_message     = toText(welcome_message);
+  voice_hints         = toText(voice_hints);
+  canal               = toText(canal) || "voz";
+  funciones_asistente = toText(funciones_asistente);
+  info_clave          = toText(info_clave);
+
+  if (!tenant_id) {
+    return res.status(401).json({ error: "Tenant no autenticado." });
+  }
+  if (!idioma || !voice_name) {
     return res.status(400).json({ error: "Faltan campos requeridos." });
   }
-  if (!system_prompt?.trim() || !welcome_message?.trim()) {
+  if (!system_prompt || !welcome_message) {
     return res.status(400).json({ error: "Prompt o mensaje de bienvenida vacío." });
   }
-
-  // Normaliza JSONs
-  const toJson = (v: any, fallback: any) => {
-    if (v == null || v === "") return fallback;
-    if (typeof v === "string") {
-      try { return JSON.parse(v); } catch { return fallback; }
-    }
-    return v;
-  };
-
-  voice_hints = toJson(voice_hints, []);
-  funciones_asistente = toJson(funciones_asistente, {});
-  info_clave = toJson(info_clave, {});
 
   try {
     await pool.query(
       `INSERT INTO voice_configs (
-        tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints,
-        canal, funciones_asistente, info_clave, audio_demo_url, created_at, updated_at
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, NOW(), NOW())
-      ON CONFLICT (tenant_id, idioma, canal)
-      DO UPDATE SET
-        voice_name = EXCLUDED.voice_name,
-        system_prompt = EXCLUDED.system_prompt,
-        welcome_message = EXCLUDED.welcome_message,
-        voice_hints = EXCLUDED.voice_hints,
-        funciones_asistente = EXCLUDED.funciones_asistente,
-        info_clave = EXCLUDED.info_clave,
-        audio_demo_url = EXCLUDED.audio_demo_url,
-        updated_at = NOW()`,
+         tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints,
+         canal, funciones_asistente, info_clave, audio_demo_url, created_at, updated_at
+       )
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, NOW(), NOW())
+       ON CONFLICT (tenant_id, idioma, canal)
+       DO UPDATE SET
+         voice_name          = EXCLUDED.voice_name,
+         system_prompt       = EXCLUDED.system_prompt,
+         welcome_message     = EXCLUDED.welcome_message,
+         voice_hints         = EXCLUDED.voice_hints,
+         funciones_asistente = EXCLUDED.funciones_asistente,
+         info_clave          = EXCLUDED.info_clave,
+         audio_demo_url      = EXCLUDED.audio_demo_url,
+         updated_at          = NOW()`,
       [
         tenant_id,
         idioma,
