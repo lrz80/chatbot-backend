@@ -7,6 +7,21 @@ import Twilio from 'twilio';
 
 const router = Router();
 
+function formatTimesForLocale(text: string, locale: 'es-ES' | 'en-US') {
+  // match HH:MM (24h o 12h)
+  return text.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, (_, hhStr, mm) => {
+    const hh = parseInt(hhStr, 10);
+    if (locale === 'en-US') {
+      const ampm = hh >= 12 ? 'pm' : 'am';
+      const h12 = hh % 12 === 0 ? 12 : hh % 12;
+      return `${h12}:${mm} ${ampm}`;
+    } else {
+      // español: 24h claras (evita “meridiano”)
+      return `${hh.toString().padStart(2, '0')}:${mm}`;
+    }
+  });
+}
+
 const toTwilioLocale = (code?: string) => {
   const c = (code || '').toLowerCase();
   if (c.startsWith('es')) return 'es-ES' as const;
@@ -17,7 +32,13 @@ const toTwilioLocale = (code?: string) => {
 
 const sanitizeForSay = (s: string) =>
   (s || '')
+    // quita markdown básico y asteriscos
+    .replace(/[*_`~^>#-]+/g, ' ')
+    // evita leer URLs largas (las quitamos, igual ya las mandamos por SMS)
+    .replace(/\bhttps?:\/\/\S+/gi, ' ')
+    // evita leer HTML
     .replace(/[<>&]/g, ' ')
+    // normaliza espacios y recorta
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 1500);
@@ -150,11 +171,11 @@ router.post('/', async (req: Request, res: Response) => {
       if (totalTokens > 0) {
         await pool.query(
           `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-          VALUES ($1, 'voz', date_trunc('month', CURRENT_DATE), $2)
-          ON CONFLICT (tenant_id, canal, mes)
-          DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+           VALUES ($1, 'voz', date_trunc('month', (now() at time zone 'America/New_York')::date), $2)
+           ON CONFLICT (tenant_id, canal, mes)
+           DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
           [tenant.id, totalTokens]
-        );
+        );        
       }
 
     } catch (e) {
@@ -272,18 +293,24 @@ router.post('/', async (req: Request, res: Response) => {
             console.log(`[VOICE/SMS] Enviando SMS desde ${smsFrom} a ${fromNumber} → ${chosen.nombre}: ${chosen.url}`);
 
             const client = Twilio(process.env.TWILIO_ACCOUNT_SID!, process.env.TWILIO_AUTH_TOKEN!);
-            await client.messages.create({
+            // ✅ no bloquear la llamada por el SMS
+            client.messages.create({
               from: smsFrom,
               to: fromNumber,
               body: `📎 ${chosen.nombre || 'Enlace'}: ${chosen.url}`,
+            })
+            .then(() => {
+              console.log('[VOICE/SMS] SMS enviado OK');
+              // opcional: registra mensaje "system" asincrónico también sin await
+              pool.query(
+                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+                VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
+                [tenant.id, `SMS enviado con link: ${chosen.nombre} → ${chosen.url}`, smsFrom]
+              ).catch(console.error);
+            })
+            .catch((e) => {
+              console.error('[VOICE/SMS] Falló SMS:', e?.code, e?.message || e);
             });
-
-            // guarda evidencia del SMS enviado (opcional pero útil para auditoría/front)
-            await pool.query(
-              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-              VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
-              [tenant.id, `SMS enviado con link: ${chosen.nombre} → ${chosen.url}`, smsFrom]
-            );
 
             respuesta += locale.startsWith('es')
               ? ' Te lo acabo de enviar por SMS.'
@@ -312,9 +339,12 @@ router.post('/', async (req: Request, res: Response) => {
     // ——— ¿Terminamos? ———
     const fin = /(gracias|eso es todo|nada más|nada mas|bye|ad[ií]os)/i.test(userInput);
 
+    respuesta = formatTimesForLocale(respuesta, locale as any);
+
     // Hablar (sanitiza para evitar 13520)
     const speakOut = sanitizeForSay(respuesta);
     vr.say({ language: locale as any, voice: voiceName }, speakOut);
+    vr.pause({ length: 1 });
 
     if (!fin) {
       vr.gather({
