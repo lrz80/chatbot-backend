@@ -7,11 +7,11 @@ import Twilio from 'twilio';
 
 const router = Router();
 
-function formatTimesForLocale(text: string, locale: string) {
+function formatTimesForLocale(text: string, locale: 'es-ES' | 'en-US') {
   // match HH:MM (24h o 12h)
   return text.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, (_, hhStr, mm) => {
     const hh = parseInt(hhStr, 10);
-    if (/^en(-|_)/i.test(locale)) {
+    if (locale === 'en-US') {
       const ampm = hh >= 12 ? 'pm' : 'am';
       const h12 = hh % 12 === 0 ? 12 : hh % 12;
       return `${h12}:${mm} ${ampm}`;
@@ -28,11 +28,6 @@ const toTwilioLocale = (code?: string) => {
   if (c.startsWith('en')) return 'en-US' as const;
   if (c.startsWith('pt')) return 'pt-BR' as const;
   return 'es-ES' as const;
-};
-
-const pickVoice = (locale: string) => {
-  if (locale.toLowerCase().startsWith('pt')) return 'Polly/Vitoria';
-  return 'alice';
 };
 
 const sanitizeForSay = (s: string) =>
@@ -123,8 +118,7 @@ router.post('/', async (req: Request, res: Response) => {
     if (!cfg) return res.sendStatus(404);
 
     const locale = toTwilioLocale(cfg.idioma || 'es-ES');
-    const isEs = /^es(-|_)/i.test(locale);
-    const voiceName: any = pickVoice(locale);
+    const voiceName: any = 'alice';
 
     const vr = new twiml.VoiceResponse();
 
@@ -148,9 +142,6 @@ router.post('/', async (req: Request, res: Response) => {
     let respuesta =
       locale.startsWith('es') ? 'Disculpa, no entendí eso.' : "Sorry, I didn’t catch that.";
 
-    // Ajuste de respuesta por defecto segun idioma
-    respuesta = isEs ? 'Disculpa, no entendi eso.' : "Sorry, I didn't catch that.";
-
     try {
       const { default: OpenAI } = await import('openai');
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
@@ -171,20 +162,24 @@ router.post('/', async (req: Request, res: Response) => {
 
       respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
 
-      // ✅ Guardado robusto de tokens (funciona aunque OpenAI no mande total_tokens)
-      const usage = (completion as any).usage || {};
+      // ✅ Guardado robusto de tokens en ambos canales
+      const usage = (completion as any).usage ?? {};
+
       const totalTokens =
-        usage.total_tokens ??
-        ((usage.prompt_tokens || 0) + (usage.completion_tokens || 0)) ?? 0;
+        (typeof usage.total_tokens === 'number')
+          ? usage.total_tokens
+          : ( (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0) );
 
       if (totalTokens > 0) {
         await pool.query(
           `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-           VALUES ($1, 'voz', date_trunc('month', (now() at time zone 'America/New_York')::date), $2)
-           ON CONFLICT (tenant_id, canal, mes)
-           DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+          VALUES
+            ($1, 'tokens_openai', date_trunc('month', NOW()), $2),
+            ($1, 'voz',           date_trunc('month', NOW()), $2)
+          ON CONFLICT (tenant_id, canal, mes)
+          DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
           [tenant.id, totalTokens]
-        );        
+        );
       }
 
     } catch (e) {
@@ -288,14 +283,15 @@ router.post('/', async (req: Request, res: Response) => {
 
         if (chosen?.url) {
           // ✅ valida que el número "from" sea SMS-capable (E.164 y configurado como SMS)
-          const smsFrom: string | undefined =
-            tenant.twilio_sms_number && /^\+\d{7,15}$/.test(tenant.twilio_sms_number)
-              ? tenant.twilio_sms_number
-              : undefined;
+          const isE164 = (n?: string) => !!n && /^\+\d{7,15}$/.test(n);
+
+          const smsFrom =
+            (isE164(tenant.twilio_sms_number) ? tenant.twilio_sms_number : null) ??
+            (isE164(tenant.twilio_voice_number) ? tenant.twilio_voice_number : null);
 
           if (!smsFrom) {
-            console.warn('[VOICE/SMS] No hay twilio_sms_number válido configurado para este tenant.');
-            respuesta += isEs
+            console.warn('[VOICE/SMS] No hay número E.164 para SMS/voz en el tenant.');
+            respuesta += locale.startsWith('es')
               ? ' No hay un número SMS configurado para enviar el enlace.'
               : ' There is no SMS-capable number configured to send the link.';
           } else {
@@ -321,19 +317,19 @@ router.post('/', async (req: Request, res: Response) => {
               console.error('[VOICE/SMS] Falló SMS:', e?.code, e?.message || e);
             });
 
-            respuesta += isEs
+            respuesta += locale.startsWith('es')
               ? ' Te lo acabo de enviar por SMS.'
               : ' I just texted it to you.';
           }
         } else {
           console.warn('[VOICE/SMS] No hay links_utiles guardados para este tenant.');
-          respuesta += isEs
+          respuesta += locale.startsWith('es')
             ? ' No encontré un enlace registrado aún.'
             : " I couldn't find a saved link yet.";
         }
       } catch (e: any) {
         console.error('[VOICE/SMS] Error enviando SMS:', e?.code, e?.message, e?.moreInfo || e);
-        respuesta += isEs
+        respuesta += locale.startsWith('es')
           ? ' Hubo un problema al enviar el SMS.'
           : ' There was a problem sending the text.';
       }
@@ -366,7 +362,7 @@ router.post('/', async (req: Request, res: Response) => {
     } else {
       vr.say(
         { language: locale as any, voice: voiceName },
-        isEs
+        locale.startsWith('es')
           ? 'Gracias por tu llamada. ¡Hasta luego!'
           : 'Thanks for calling. Goodbye!'
       );
