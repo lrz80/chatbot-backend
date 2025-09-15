@@ -7,11 +7,11 @@ import Twilio from 'twilio';
 
 const router = Router();
 
-function formatTimesForLocale(text: string, locale: 'es-ES' | 'en-US') {
+function formatTimesForLocale(text: string, locale: string) {
   // match HH:MM (24h o 12h)
   return text.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, (_, hhStr, mm) => {
     const hh = parseInt(hhStr, 10);
-    if (locale === 'en-US') {
+    if (/^en(-|_)/i.test(locale)) {
       const ampm = hh >= 12 ? 'pm' : 'am';
       const h12 = hh % 12 === 0 ? 12 : hh % 12;
       return `${h12}:${mm} ${ampm}`;
@@ -28,6 +28,11 @@ const toTwilioLocale = (code?: string) => {
   if (c.startsWith('en')) return 'en-US' as const;
   if (c.startsWith('pt')) return 'pt-BR' as const;
   return 'es-ES' as const;
+};
+
+const pickVoice = (locale: string) => {
+  if (locale.toLowerCase().startsWith('pt')) return 'Polly/Vitoria';
+  return 'alice';
 };
 
 const sanitizeForSay = (s: string) =>
@@ -118,7 +123,8 @@ router.post('/', async (req: Request, res: Response) => {
     if (!cfg) return res.sendStatus(404);
 
     const locale = toTwilioLocale(cfg.idioma || 'es-ES');
-    const voiceName: any = 'alice';
+    const isEs = /^es(-|_)/i.test(locale);
+    const voiceName: any = pickVoice(locale);
 
     const vr = new twiml.VoiceResponse();
 
@@ -141,6 +147,9 @@ router.post('/', async (req: Request, res: Response) => {
     // ——— OpenAI: respuesta breve y natural ———
     let respuesta =
       locale.startsWith('es') ? 'Disculpa, no entendí eso.' : "Sorry, I didn’t catch that.";
+
+    // Ajuste de respuesta por defecto segun idioma
+    respuesta = isEs ? 'Disculpa, no entendi eso.' : "Sorry, I didn't catch that.";
 
     try {
       const { default: OpenAI } = await import('openai');
@@ -286,7 +295,7 @@ router.post('/', async (req: Request, res: Response) => {
 
           if (!smsFrom) {
             console.warn('[VOICE/SMS] No hay twilio_sms_number válido configurado para este tenant.');
-            respuesta += locale.startsWith('es')
+            respuesta += isEs
               ? ' No hay un número SMS configurado para enviar el enlace.'
               : ' There is no SMS-capable number configured to send the link.';
           } else {
@@ -312,19 +321,19 @@ router.post('/', async (req: Request, res: Response) => {
               console.error('[VOICE/SMS] Falló SMS:', e?.code, e?.message || e);
             });
 
-            respuesta += locale.startsWith('es')
+            respuesta += isEs
               ? ' Te lo acabo de enviar por SMS.'
               : ' I just texted it to you.';
           }
         } else {
           console.warn('[VOICE/SMS] No hay links_utiles guardados para este tenant.');
-          respuesta += locale.startsWith('es')
+          respuesta += isEs
             ? ' No encontré un enlace registrado aún.'
             : " I couldn't find a saved link yet.";
         }
       } catch (e: any) {
         console.error('[VOICE/SMS] Error enviando SMS:', e?.code, e?.message, e?.moreInfo || e);
-        respuesta += locale.startsWith('es')
+        respuesta += isEs
           ? ' Hubo un problema al enviar el SMS.'
           : ' There was a problem sending the text.';
       }
@@ -357,7 +366,7 @@ router.post('/', async (req: Request, res: Response) => {
     } else {
       vr.say(
         { language: locale as any, voice: voiceName },
-        locale.startsWith('es')
+        isEs
           ? 'Gracias por tu llamada. ¡Hasta luego!'
           : 'Thanks for calling. Goodbye!'
       );
