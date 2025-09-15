@@ -2,6 +2,8 @@
 import { Router, Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
+import { cycleStartForNow } from '../utils/billingCycle';
+
 
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
@@ -13,7 +15,6 @@ const CANALES = [
   { canal: 'voz', limite: 50000 },
   { canal: 'sms', limite: 500 },
   { canal: 'email', limite: 2000 },
-  { canal: 'tokens_openai', limite: null },
   { canal: 'almacenamiento', limite: 5120 },
   { canal: 'contactos', limite: 500 },
 ];
@@ -31,27 +32,30 @@ router.get('/', async (req: Request, res: Response) => {
     const tenantId = user.tenant_id;
 
     // 🔍 Obtenemos membresia_inicio del tenant
-    const tenantRes = await pool.query('SELECT membresia_inicio FROM tenants WHERE id = $1', [tenantId]);
+    const tenantRes = await pool.query(
+      'SELECT membresia_inicio FROM tenants WHERE id = $1',
+      [tenantId]
+    );
     const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
     if (!membresiaInicio) return res.status(400).json({ error: 'Membresía no configurada' });
 
-    console.log(`🔄 Usando membresia_inicio como ciclo: ${membresiaInicio}`);
+    // 🔁 mismo cálculo que el webhook
+    const ciclo = cycleStartForNow(membresiaInicio);
 
-    // 🔍 Obtenemos usos acumulados del ciclo actual usando membresia_inicio como referencia
-    const usoRes = await pool.query(`
-      SELECT 
-        CASE 
-          WHEN canal IN ('facebook', 'instagram') THEN 'meta'
-          ELSE canal
-        END as canal,
-        SUM(usados) as usados
-      FROM uso_mensual
-      WHERE tenant_id = $1 AND mes = $2
-      GROUP BY CASE 
-          WHEN canal IN ('facebook', 'instagram') THEN 'meta'
-          ELSE canal
-        END
-    `, [tenantId, membresiaInicio]);
+    const usoRes = await pool.query(
+      `
+        SELECT 
+          CASE 
+            WHEN canal IN ('facebook', 'instagram') THEN 'meta'
+            ELSE canal
+          END as canal,
+          SUM(usados) as usados
+        FROM uso_mensual
+        WHERE tenant_id = $1 AND mes = $2::date
+        GROUP BY 1
+      `,
+      [tenantId, ciclo]
+    );
 
     // 🔍 Obtener créditos extra válidos (no vencidos)
     const creditosRes = await pool.query(`

@@ -4,6 +4,7 @@ import { twiml } from 'twilio';
 import pool from '../../lib/db';
 import { incrementarUsoPorNumero } from '../../lib/incrementUsage';
 import Twilio from 'twilio';
+import { cycleStartForNow } from '../../utils/billingCycle';
 
 const router = Router();
 
@@ -90,9 +91,13 @@ router.post('/', async (req: Request, res: Response) => {
 
   try {
     const tRes = await pool.query(
-      'SELECT * FROM tenants WHERE twilio_voice_number = $1 LIMIT 1',
+      `SELECT id, name, membresia_activa, membresia_inicio, twilio_sms_number, twilio_voice_number
+      FROM tenants
+      WHERE twilio_voice_number = $1
+      LIMIT 1`,
       [numero]
     );
+
     const tenant = tRes.rows[0];
     if (!tenant) return res.sendStatus(404);
 
@@ -170,15 +175,17 @@ router.post('/', async (req: Request, res: Response) => {
           ? usage.total_tokens
           : ( (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0) );
 
+      // calcula el inicio de ciclo con el util
+      const cicloInicio = cycleStartForNow(tenant.membresia_inicio);
+
+      // ✅ suma uso al canal 'voz' en el ciclo vigente
       if (totalTokens > 0) {
         await pool.query(
           `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-          VALUES
-            ($1, 'tokens_openai', date_trunc('month', NOW()), $2),
-            ($1, 'voz',           date_trunc('month', NOW()), $2)
+          VALUES ($1, 'voz', $2::date, $3)
           ON CONFLICT (tenant_id, canal, mes)
           DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-          [tenant.id, totalTokens]
+          [tenant.id, cicloInicio, totalTokens]
         );
       }
 
