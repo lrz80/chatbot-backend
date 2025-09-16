@@ -20,9 +20,15 @@ export const authenticateUser = async (
 
   console.log("🔐 [AUTH] Ruta solicitada:", req.method, req.originalUrl);
   console.log("🔐 [AUTH] Cookie recibida:", req.cookies?.token ? "✅ Sí" : "❌ No");
-  console.log("🔐 [AUTH] Header Authorization:", req.headers.authorization || "❌ No header");
+  const authHeader = req.headers.authorization || '';
+  console.log("🔐 [AUTH] Header Authorization:", authHeader || "❌ No header");
 
-  const token = req.cookies?.token || req.headers.authorization?.split(" ")[1];
+  // Soporta "Bearer ..." (mayúsculas/minúsculas) y evita .split sin header
+  const lower = authHeader.toLowerCase();
+  const headerToken =
+    lower.startsWith('bearer ') ? authHeader.slice(7).trim() : undefined;
+
+  const token = req.cookies?.token || headerToken;
 
   if (!token) {
     console.warn("⚠️ Token no encontrado en cookies ni headers");
