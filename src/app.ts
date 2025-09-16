@@ -66,6 +66,9 @@ import faqsSugeridas from './routes/faqs/sugeridas';
 import faqsAprobar from './routes/faqs/aprobar';
 import faqsRechazar from './routes/faqs/rechazar';
 import eliminarFaqRoute from './routes/faqs/eliminar';
+import voiceStatus from './routes/webhook/voice-status';
+import voiceMinutesStats from './routes/stats/voice-minutes';
+import voiceTopup from './routes/voice/topup';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -171,6 +174,9 @@ app.use('/api/faqs/sugeridas', faqsSugeridas);
 app.use('/api/faqs/aprobar', faqsAprobar);
 app.use('/api/faqs/rechazar', faqsRechazar);
 app.use("/api/faqs/eliminar", eliminarFaqRoute);
+app.use('/webhook/voice-status', voiceStatus);
+app.use('/api/stats', voiceMinutesStats);
+app.use('/api', voiceTopup);
 
 // ✅ Ruta base
 app.get('/', (req, res) => {
