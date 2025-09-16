@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
 const CANALES = [
   { canal: 'whatsapp', limite: 500 },
-  { canal: 'meta', limite: 500 }, // Incluye meta correctamente
+  { canal: 'meta', limite: 1000 }, // Incluye meta correctamente
   { canal: 'followup', limite: 500 },
   { canal: 'voz', limite: 50000 },
   { canal: 'sms', limite: 500 },

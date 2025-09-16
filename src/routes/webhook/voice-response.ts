@@ -8,19 +8,83 @@ import { cycleStartForNow } from '../../utils/billingCycle';
 
 const router = Router();
 
-function formatTimesForLocale(text: string, locale: 'es-ES' | 'en-US') {
-  // match HH:MM (24h o 12h)
-  return text.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, (_, hhStr, mm) => {
-    const hh = parseInt(hhStr, 10);
-    if (locale === 'en-US') {
-      const ampm = hh >= 12 ? 'pm' : 'am';
-      const h12 = hh % 12 === 0 ? 12 : hh % 12;
-      return `${h12}:${mm} ${ampm}`;
-    } else {
-      // español: 24h claras (evita “meridiano”)
-      return `${hh.toString().padStart(2, '0')}:${mm}`;
+function normalizeClockText(text: string, locale: string) {
+  let s = text || '';
+  const isUS = (locale || '').toLowerCase() === 'en-us';
+
+  // Unificar “antes/después del meridiano” → am/pm y variantes a.m./p.m.
+  s = s
+    .replace(/\bantes\s+del\s+meridiano\b/gi, 'am')
+    .replace(/\bdespu[eé]s\s+del\s+meridiano\b/gi, 'pm')
+    .replace(/\ba\.?\s*m\.?\b/gi, 'am')
+    .replace(/\bp\.?\s*m\.?\b/gi, 'pm');
+
+  // 12h con minutos: "hh:mm am/pm"
+  s = s.replace(/\b(1[0-2]|0?[1-9]):([0-5]\d)\s*(am|pm)\b/gi, (_, h, mm, ap) => {
+    const hNum = parseInt(h, 10) % 12; // 12 -> 0
+    if (isUS) {
+      const h12 = hNum === 0 ? 12 : hNum;
+      return `${h12}:${mm} ${ap.toLowerCase()}`;
     }
+    const h24 = (ap.toLowerCase() === 'pm') ? hNum + 12 : hNum;
+    return `${h24.toString().padStart(2, '0')}:${mm}`;
   });
+
+  // 12h sin minutos: "hh am/pm"
+  s = s.replace(/\b(1[0-2]|0?[1-9])\s*(am|pm)\b/gi, (_, h, ap) => {
+    const hNum = parseInt(h, 10) % 12;
+    if (isUS) {
+      const h12 = hNum === 0 ? 12 : hNum;
+      return `${h12}:00 ${ap.toLowerCase()}`;
+    }
+    const h24 = (ap.toLowerCase() === 'pm') ? hNum + 12 : hNum;
+    return `${h24.toString().padStart(2, '0')}:00`;
+  });
+
+  // Rangos "6 a 7 pm" / "6 a 7 am"
+  s = s.replace(/\b(1[0-2]|0?[1-9])\s*(?:a|hasta|-|–|—)\s*(1[0-2]|0?[1-9])\s*pm\b/gi, (_, h1, h2) => {
+    if (isUS) {
+      const a = (parseInt(h1,10)%12)||12;
+      const b = (parseInt(h2,10)%12)||12;
+      return `${a}:00 pm a ${b}:00 pm`;
+    }
+    const a24 = (parseInt(h1,10)%12)+12;
+    const b24 = (parseInt(h2,10)%12)+12;
+    return `${a24.toString().padStart(2,'0')}:00 a ${b24.toString().padStart(2,'0')}:00`;
+  });
+  s = s.replace(/\b(1[0-2]|0?[1-9])\s*(?:a|hasta|-|–|—)\s*(1[0-2]|0?[1-9])\s*am\b/gi, (_, h1, h2) => {
+    if (isUS) {
+      const a = (parseInt(h1,10)%12)||12;
+      const b = (parseInt(h2,10)%12)||12;
+      return `${a}:00 am a ${b}:00 am`;
+    }
+    const a24 = (parseInt(h1,10)%12);
+    const b24 = (parseInt(h2,10)%12);
+    return `${a24.toString().padStart(2,'0')}:00 a ${b24.toString().padStart(2,'0')}:00`;
+  });
+
+  // Tiempos ya en hh:mm
+  if (isUS) {
+    s = s.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, (_, hh, mm) => {
+      const h = parseInt(hh, 10);
+      const ap = h >= 12 ? 'pm' : 'am';
+      const h12 = (h % 12) || 12;
+      return `${h12}:${mm} ${ap}`;
+    });
+  } else {
+    s = s.replace(/\b([01]?\d|2[0-3]):([0-5]\d)\b/g, (_, hh, mm) =>
+      `${parseInt(hh, 10).toString().padStart(2, '0')}:${mm}`
+    );
+    // Borrar cualquier resto de am/pm o “meridiano”
+    s = s
+      .replace(/\b(am|pm)\b/gi, '')
+      .replace(/\b(a\.?\s*m\.?|p\.?\s*m\.?)\b/gi, '')
+      .replace(/\b(antes\s+del\s+meridiano|despu[eé]s\s+del\s+meridiano)\b/gi, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+
+  return s;
 }
 
 const toTwilioLocale = (code?: string) => {
@@ -351,10 +415,12 @@ router.post('/', async (req: Request, res: Response) => {
     // ——— ¿Terminamos? ———
     const fin = /(gracias|eso es todo|nada más|nada mas|bye|ad[ií]os)/i.test(userInput);
 
-    respuesta = formatTimesForLocale(respuesta, locale as any);
+    // ✅ Normaliza horas y limpia meridiano/ampm ANTES de sanitizeForSay
+    respuesta = normalizeClockText(respuesta, locale as any);
 
     // Hablar (sanitiza para evitar 13520)
     const speakOut = sanitizeForSay(respuesta);
+
     vr.say({ language: locale as any, voice: voiceName }, speakOut);
     vr.pause({ length: 1 });
 
