@@ -130,6 +130,13 @@ const guessType = (t: string): LinkType => {
 
 const short = (s: string, n = 120) => (s.length > n ? s.slice(0, n) + '…' : s);
 
+ // Confirmación del usuario para SMS
+ const saidYes = (t: string) =>
+   /\b(s[ií]|sí por favor|claro|dale|ok(?:ay)?|porfa|env[ií]alo|m[aá]ndalo|mándalo|hazlo|sí, envíalo|yes|yep|please do|send it|text it)\b/i.test(t || '');
+ const saidNo = (t: string) =>
+   /\b(no|no gracias|mejor no|luego|despu[eé]s|m[aá]s tarde|not now|don'?t)\b/i.test(t || '');
+
+
 // ———————————————————————————
 //  Marca dinámica del tenant (solo `name`)
 // ———————————————————————————
@@ -255,35 +262,50 @@ router.post('/', async (req: Request, res: Response) => {
       console.warn('⚠️ OpenAI falló, usando fallback:', e);
     }
 
+        // ¿El turno anterior dejó un SMS pendiente?
+        const { rows: lastAssistantRows } = await pool.query(
+          `SELECT content
+            FROM messages
+            WHERE tenant_id = $1
+              AND canal = 'voz'
+              AND role = 'assistant'
+              AND from_number = $2
+            ORDER BY timestamp DESC
+            LIMIT 1`,
+          [tenant.id, didNumber || 'sistema']
+        );
+        const lastAssistantText: string = lastAssistantRows?.[0]?.content || '';
+        const pendingMatch = lastAssistantText.match(/<SMS_PENDING:(reservar|comprar|soporte|web)>/i);
+
     // ——— Decidir si hay que ENVIAR SMS con link útil ———
     const tagMatch = respuesta.match(/\[\[SMS:(reservar|comprar|soporte|web)\]\]/i);
     let smsType: LinkType | null = tagMatch ? (tagMatch[1].toLowerCase() as LinkType) : null;
+
+    // Confirmación diferida: si había pendiente y el usuario dijo "sí"
+    if (!smsType && pendingMatch && saidYes(userInput)) {
+      smsType = pendingMatch[1].toLowerCase() as LinkType;
+      console.log('[VOICE/SMS] Confirmación afirmativa → tipo =', smsType);
+    }
+    // Si rechazó, no enviamos
+    if (!smsType && pendingMatch && saidNo(userInput)) {
+      console.log('[VOICE/SMS] Usuario rechazó el SMS.');
+    }
 
     if (!smsType && askedForSms(userInput)) {
       smsType = guessType(userInput);
       console.log('[VOICE/SMS] Usuario solicitó SMS → tipo inferido =', smsType);
     }
 
-    if (tagMatch) respuesta = respuesta.replace(tagMatch[0], '').trim();
-
-    // ——— Guardar conversación ———
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-       VALUES ($1, 'user', $2, NOW(), 'voz', $3)`,
-      [tenant.id, userInput, callerE164 || 'anónimo']
-    );
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-       VALUES ($1, 'assistant', $2, NOW(), 'voz', $3)`,
-      [tenant.id, respuesta, didNumber || 'sistema']
-    );
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, created_at)
-       VALUES ($1, 'voz', NOW())`,
-      [tenant.id]
-    );
-
-    await incrementarUsoPorNumero(didNumber);
+    // OPCIONAL: si el asistente "prometió" enviar SMS, pedimos confirmación (no enviamos todavía)
+    if (!smsType && didAssistantPromiseSms(respuesta)) {
+      const ask = locale.startsWith('es')
+        ? '¿Quieres que te lo envíe por SMS? Di "sí" para enviarlo por mensaje.'
+        : 'Do you want me to text it to you? Say "yes" to send it.';
+      if (tagMatch) respuesta = respuesta.replace(tagMatch[0], '').trim();
+      const pendingType = guessType(`${userInput} ${respuesta}`);
+      // Tag oculto; no se pronuncia (sanitizeForSay quita < >)
+      respuesta = `${respuesta} ${ask} <SMS_PENDING:${pendingType}>`.trim();
+    }
 
     // ——— Si hay que mandar SMS ———
     if (smsType) {
@@ -402,6 +424,25 @@ router.post('/', async (req: Request, res: Response) => {
     } else {
       console.log('[VOICE/SMS] No se detectó condición para enviar SMS.', 'userInput=', short(userInput), 'respuesta=', short(respuesta));
     }
+
+    // ——— Guardar conversación ———
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+       VALUES ($1, 'user', $2, NOW(), 'voz', $3)`,
+      [tenant.id, userInput, callerE164 || 'anónimo']
+    );
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+       VALUES ($1, 'assistant', $2, NOW(), 'voz', $3)`,
+      [tenant.id, respuesta, didNumber || 'sistema']
+    );
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, created_at)
+       VALUES ($1, 'voz', NOW())`,
+      [tenant.id]
+    );
+
+    await incrementarUsoPorNumero(didNumber);
 
     // ——— ¿Terminamos? ———
     const fin = /(gracias|eso es todo|nada más|nada mas|bye|ad[ií]os)/i.test(userInput);
