@@ -9,7 +9,7 @@ export function normalizarNumero(numero: string): string {
   const limpio = (numero || "").trim();
 
   // Si viene con prefijo WhatsApp, NO sirve para SMS.
-  if (limpio.startsWith("whatsapp:")) return limpio; // lo dejamos igual para detectarlo arriba
+  if (limpio.startsWith("whatsapp:")) return limpio;
 
   if (/^\+\d{10,15}$/.test(limpio)) return limpio;
 
@@ -28,7 +28,7 @@ if (!callbackBaseUrl) {
   console.log("📤 Usando callback URL:", `${callbackBaseUrl}/api/webhook/sms-status`);
 }
 
-type SendSmsOpts = {
+export type SendSmsOpts = {
   mensaje: string;
   destinatarios: string[];       // uno o varios
   fromNumber?: string;           // E.164; opcional si usas messagingServiceSid
@@ -37,12 +37,41 @@ type SendSmsOpts = {
   campaignId?: number | null;    // opcional para campañas; en voz puedes pasar null
 };
 
-/**
- * Envía SMS vía Twilio (REST API) con logs y registro en sms_status_logs.
- * - Soporta fromNumber o messagingServiceSid.
- * - Evita WhatsApp como remitente/destino para SMS.
- */
-export async function sendSMS({
+// ———————————————————————————————————————————————————————
+// Overloads: acepta objeto (nuevo) o 5 args posicionales (legacy)
+// ———————————————————————————————————————————————————————
+export async function sendSMS(opts: SendSmsOpts): Promise<number>;
+export async function sendSMS(
+  mensaje: string,
+  destinatarios: string[],
+  fromNumber: string,
+  tenantId: string,
+  campaignId: number
+): Promise<number>;
+export async function sendSMS(
+  a: any,
+  b?: any,
+  c?: any,
+  d?: any,
+  e?: any
+): Promise<number> {
+  if (typeof a === "string") {
+    // Legacy: (mensaje, destinatarios, fromNumber, tenantId, campaignId)
+    const opts: SendSmsOpts = {
+      mensaje: a,
+      destinatarios: b || [],
+      fromNumber: c,
+      tenantId: d,
+      campaignId: e,
+    };
+    return _sendSMS(opts);
+  }
+  // Nuevo: objeto
+  return _sendSMS(a as SendSmsOpts);
+}
+
+// Implementación real (no exportar directamente)
+async function _sendSMS({
   mensaje,
   destinatarios,
   fromNumber,
@@ -52,7 +81,6 @@ export async function sendSMS({
 }: SendSmsOpts): Promise<number> {
   let enviados = 0;
 
-  // Validación básica del remitente
   if (!fromNumber && !messagingServiceSid) {
     throw new Error("Debes proveer fromNumber (SMS-capable) o messagingServiceSid");
   }
@@ -60,7 +88,6 @@ export async function sendSMS({
     throw new Error("fromNumber apunta a WhatsApp; no puede enviar SMS. Usa un número SMS-capable o messagingServiceSid.");
   }
 
-  // Normaliza el fromNumber si existe
   const fromE164 = fromNumber ? normalizarNumero(fromNumber) : undefined;
 
   for (const rawTo of destinatarios) {
@@ -80,16 +107,9 @@ export async function sendSMS({
     }
 
     try {
-      const createArgs: any = {
-        body: mensaje,
-        to,
-      };
-
-      if (messagingServiceSid) {
-        createArgs.messagingServiceSid = messagingServiceSid;
-      } else if (fromE164) {
-        createArgs.from = fromE164;
-      }
+      const createArgs: any = { body: mensaje, to };
+      if (messagingServiceSid) createArgs.messagingServiceSid = messagingServiceSid;
+      else if (fromE164) createArgs.from = fromE164;
 
       if (callbackBaseUrl) {
         createArgs.statusCallback = `${callbackBaseUrl}/api/webhook/sms-status${
@@ -119,16 +139,15 @@ export async function sendSMS({
     } catch (error: any) {
       const code = error?.code ?? error?.status ?? "unknown";
       const more = error?.moreInfo ? ` moreInfo=${error.moreInfo}` : "";
-      console.error(`❌ Error enviando SMS a ${to}: code=${code} msg=${error?.message || error} ${more}`);
+      console.error(`❌ Error enviando SMS a ${to}: code=${code} msg=${error?.message || error}${more}`);
 
       await pool.query(
         `INSERT INTO sms_status_logs (
           tenant_id, campaign_id, message_sid, status, to_number, from_number, error_code, error_message, timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        ) VALUES ($1, $2, NULL, $3, $4, $5, $6, $7, $8)`,
         [
           tenantId,
           campaignId,
-          null,
           "failed",
           to,
           fromE164 ?? `svc:${messagingServiceSid}`,
@@ -176,7 +195,7 @@ export async function sendTenantLinksBySms({
   toNumberRaw: string; // viene de req.body.From (voz)
   limit?: number;
 }) {
-  // 1) Cargar remitente recomendado y/o servicio de mensajería
+  // 1) Cargar remitente recomendado y/o servicio
   const { rows: trows } = await pool.query(
     `SELECT twilio_sms_number, twilio_voice_number, messaging_service_sid
      FROM tenants WHERE id = $1 LIMIT 1`,
@@ -188,7 +207,7 @@ export async function sendTenantLinksBySms({
   const messagingServiceSid = (trows[0].messaging_service_sid as string) || undefined;
 
   if (!smsFrom && !messagingServiceSid) {
-    throw new Error("No hay twilio_sms_number / twilio_voice_number SMS-capable ni messaging_service_sid configurado");
+    throw new Error("No hay twilio_sms_number/twilio_voice_number SMS-capable ni messaging_service_sid configurado");
   }
   if (smsFrom && smsFrom.startsWith("whatsapp:")) {
     throw new Error("twilio_sms_number/twilio_voice_number es WhatsApp; configura un número SMS-capable o usa messaging_service_sid");
@@ -209,13 +228,11 @@ export async function sendTenantLinksBySms({
     return { ok: true, sent: 0, note: "no_links" as const };
   }
 
-  // 3) Armar mensaje con firma dinámica por tenant
   const bullets = links.map((r: any, i: number) => `${i + 1}. ${r.title || "Link"}: ${r.url}`).join("\n");
   const brand = await getTenantBrand(tenantId);
-  const signature = `— ${brand}`; // si prefieres ASCII: `- ${brand}`
-  const body = `Gracias por llamar. Te comparto los links:\n${bullets}\n${signature}`;
+  const body = `Gracias por llamar. Te comparto los links:\n${bullets}\n— ${brand}`;
 
-  // 4) Enviar
+  // 3) Enviar
   const to = normalizarNumero(toNumberRaw);
   const sent = await sendSMS({
     mensaje: body,
