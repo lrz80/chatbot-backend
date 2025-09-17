@@ -108,105 +108,41 @@ const askedForSms = (t: string) => {
   const s = (t || '').toLowerCase();
   return (
     /(\bsms\b|\bmensaje\b|\btexto\b|\bmand(a|e|alo)\b|\benv[ií]a(lo)?\b|\bp[aá]same\b|\bp[aá]salo\b|\btext\b|\btext me\b|\bmessage me\b)/i.test(s) &&
-    /link|enlace|liga|url|p[aá]gina|web|reserv|agend|cita|turno|compr|pag|pago|checkout|soporte|support|precio|precios|tarifa|tarifas|pricing|rates/i.test(s)
+    /link|enlace|liga|url|p[aá]gina|web|reserv|agend|cita|turno|compr|pag|pago|checkout|soporte|support/i.test(s)
   );
 };
 
 const didAssistantPromiseSms = (t: string) =>
-  /\b(te lo (?:env[ií]o|enviar[eé]) por sms|te lo mando por sms|te lo envío por mensaje|te lo mando por mensaje|i'?ll text it to you|i'?ll send (it|the link) by text|i can text (it|you))\b/i.test(
+  /\b(te lo (?:env[ií]o|enviar[eé]) por sms|te lo mando por sms|te lo envío por mensaje|te lo mando por mensaje|i'?ll text it to you|i'?ll send it by text)\b/i.test(
     t || ''
   );
 
-// ✅ aceptación aunque no diga "sms" (para ofertas previas)
-const acceptedSms = (t: string) =>
-  /\b(s[ií]|sí|si|ok|dale|va|claro|perfecto|por favor|please|yes|yep|yeah|sure|send it|env[ií]alo|m[aá]ndalo)\b/i.test(t || '');
-
 type LinkType = 'reservar' | 'comprar' | 'soporte' | 'web';
 
-// Heurística directa desde la pregunta del usuario
-const inferOfferType = (t: string): LinkType | null => {
+const guessType = (t: string): LinkType => {
   const s = (t || '').toLowerCase();
-  if (/(precio|precios|tarifa|tarifas|pricing|rates|membres[ií]a|planes|paquetes|cost(o|s)|cu[aá]nto|how much)/.test(s)) return 'comprar';
-  if (/(reserv|agend|cita|turno|horari|schedule|class(es)?|clase|booking|appointment)/.test(s)) return 'reservar';
+  if (/(reserv|agend|cita|turno|booking|appointment)/.test(s)) return 'reservar';
+  if (/(compr|pag|pago|checkout|buy|pay|payment)/.test(s)) return 'comprar';
   if (/(soporte|support|ticket|help|ayuda)/.test(s)) return 'soporte';
-  if (/(web|sitio|p[aá]gina|home|website|info)/.test(s)) return 'web';
-  return null;
+  if (/(web|sitio|p[aá]gina|home|website)/.test(s)) return 'web';
+  return 'reservar';
 };
 
-// Normaliza un texto corto para logs
 const short = (s: string, n = 120) => (s.length > n ? s.slice(0, n) + '…' : s);
 
 // ———————————————————————————
-//  Firma de marca dinámica por tenant
+//  Marca dinámica del tenant (solo `name`)
 // ———————————————————————————
 async function getTenantBrand(tenantId: string): Promise<string> {
   const { rows } = await pool.query(
-    `SELECT COALESCE(
-        NULLIF(TRIM(business_name), ''),
-        NULLIF(TRIM(nombre_negocio), ''),
-        NULLIF(TRIM(name), '')
-      ) AS brand
-     FROM tenants
-     WHERE id = $1
-     LIMIT 1`,
+    `SELECT NULLIF(TRIM(name), '') AS brand
+       FROM tenants
+      WHERE id = $1
+      LIMIT 1`,
     [tenantId]
   );
   const brand = (rows?.[0]?.brand || '').toString().trim();
   return brand || 'Amy';
-}
-
-// ———————————————————————————
-//  Búsqueda de links por tipo (links_utiles) y fallback a voice_links
-// ———————————————————————————
-async function findLinkByType(tenantId: string, kind: LinkType) {
-  const synonyms: Record<LinkType, string[]> = {
-    // 👇 añadimos términos de precios aquí para cubrir "precios"
-    reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment', 'horario', 'horarios', 'schedule'],
-    comprar: ['comprar', 'pagar', 'checkout', 'payment', 'pay', 'precio', 'precios', 'tarifa', 'tarifas', 'pricing', 'rates', 'membresía', 'membresia', 'membership', 'planes', 'paquetes'],
-    soporte: ['soporte', 'support', 'ticket', 'ayuda'],
-    web: ['web', 'sitio', 'pagina', 'página', 'home', 'website', 'info'],
-  };
-
-  const syns = synonyms[kind];
-  const likeAny = syns.map((w) => `%${w}%`);
-
-  const base = 3;
-  const inPlaceholders = syns.map((_, i) => `lower($${base + i})`).join(', ');
-  const likeBase = base + syns.length;
-  const likeClauses = likeAny.map((_, i) => `lower(tipo) LIKE lower($${likeBase + i})`).join(' OR ');
-
-  const sql = `
-    SELECT id, tipo, nombre, url
-      FROM links_utiles
-     WHERE tenant_id = $1
-       AND (
-         lower(tipo) = lower($2)
-         OR lower(tipo) IN (${inPlaceholders})
-         OR ${likeClauses}
-       )
-     ORDER BY created_at DESC
-     LIMIT 1
-  `;
-  const params = [tenantId, kind, ...syns, ...likeAny];
-  const { rows } = await pool.query(sql, params);
-  if (rows[0]) return rows[0];
-
-  // Fallback: lista corta desde voice_links (top 5)
-  const { rows: vlinks } = await pool.query(
-    `SELECT title, url
-       FROM voice_links
-      WHERE tenant_id = $1
-      ORDER BY orden ASC, id ASC
-      LIMIT 5`,
-    [tenantId]
-  );
-
-  if (vlinks.length) {
-    const bullets = vlinks.map((r: any, i: number) => `${i + 1}. ${r.title || 'Link'}: ${r.url}`).join('\n');
-    return { nombre: 'Links útiles', url: null, bullets };
-  }
-
-  return null;
 }
 
 // ———————————————————————————
@@ -223,12 +159,12 @@ router.post('/', async (req: Request, res: Response) => {
   const userInputRaw = (req.body.SpeechResult || '').toString();
   const userInput = userInputRaw.trim();
 
+  // UNA SOLA instancia de VoiceResponse
   const vr = new twiml.VoiceResponse();
 
   try {
-    // 🧭 Tenant por DID de voz
     const tRes = await pool.query(
-      `SELECT id, name, business_name, nombre_negocio,
+      `SELECT id, name,
               membresia_activa, membresia_inicio,
               twilio_sms_number, twilio_voice_number, messaging_service_sid
          FROM tenants
@@ -240,16 +176,15 @@ router.post('/', async (req: Request, res: Response) => {
     const tenant = tRes.rows[0];
     if (!tenant) return res.sendStatus(404);
 
-    // 🔒 Membresía
     if (!tenant.membresia_activa) {
-      vr.say({ voice: 'alice', language: 'es-ES' as any },
+      vr.say(
+        { voice: 'alice', language: 'es-ES' as any },
         'Tu membresía está inactiva. Por favor actualízala para continuar. ¡Gracias!'
       );
       vr.hangup();
       return res.type('text/xml').send(vr.toString());
     }
 
-    // 🎛️ Voice config
     const cfgRes = await pool.query(
       `SELECT * FROM voice_configs
         WHERE tenant_id = $1 AND canal = 'voz'
@@ -263,22 +198,6 @@ router.post('/', async (req: Request, res: Response) => {
     const locale = toTwilioLocale(cfg.idioma || 'es-ES');
     const voiceName: any = 'alice';
 
-    // ——— ¿Hubo oferta de SMS en el turno previo? ———
-    let previouslyOffered: LinkType | null = null;
-    try {
-      const { rows: prev } = await pool.query(
-        `SELECT content
-           FROM messages
-          WHERE tenant_id = $1 AND canal = 'voz' AND role = 'assistant' AND from_number = $2
-          ORDER BY timestamp DESC
-          LIMIT 1`,
-        [tenant.id, didNumber || 'sistema']
-      );
-      const lastAssistant = prev?.[0]?.content || '';
-      const m = lastAssistant.match(/\[\[OFFER_SMS:(reservar|comprar|soporte|web)\]\]/i);
-      if (m) previouslyOffered = m[1].toLowerCase() as LinkType;
-    } catch {}
-
     // Primera vuelta: sin SpeechResult → saludo + gather
     if (!userInput) {
       const brand = await getTenantBrand(tenant.id);
@@ -286,7 +205,7 @@ router.post('/', async (req: Request, res: Response) => {
       vr.say({ language: locale as any, voice: voiceName }, initial);
       vr.gather({
         input: ['speech'] as any,
-        action: '/webhook/voice-response',
+        action: '/webhook/voice-response', // ajusta si tu API cuelga de /api
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
@@ -308,7 +227,7 @@ router.post('/', async (req: Request, res: Response) => {
             role: 'system',
             content:
               (cfg.system_prompt as string)?.trim() ||
-              `Eres Amy, una asistente telefónica amable y concisa del negocio ${brand}. Responde breve y natural. No leas URLs largas en voz. Cuando corresponda, ofrece enviar el enlace por SMS.`,
+              `Eres Amy, una asistente telefónica amable y concisa del negocio ${brand}. Responde breve y natural. Recuerda: nunca leas enlaces; si hace falta, di "te lo envío por SMS".`,
           },
           { role: 'user', content: userInput },
         ],
@@ -316,7 +235,6 @@ router.post('/', async (req: Request, res: Response) => {
 
       respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
 
-      // Tokens → uso mensual
       const usage = (completion as any).usage ?? {};
       const totalTokens =
         typeof usage.total_tokens === 'number'
@@ -337,47 +255,19 @@ router.post('/', async (req: Request, res: Response) => {
       console.warn('⚠️ OpenAI falló, usando fallback:', e);
     }
 
-    // ——— Detección de intención SMS ———
+    // ——— Decidir si hay que ENVIAR SMS con link útil ———
     const tagMatch = respuesta.match(/\[\[SMS:(reservar|comprar|soporte|web)\]\]/i);
     let smsType: LinkType | null = tagMatch ? (tagMatch[1].toLowerCase() as LinkType) : null;
 
-    // 1) Usuario pide SMS explícitamente
     if (!smsType && askedForSms(userInput)) {
-      smsType = inferOfferType(userInput) || 'reservar';
+      smsType = guessType(userInput);
       console.log('[VOICE/SMS] Usuario solicitó SMS → tipo inferido =', smsType);
     }
-
-    // 2) Asistente lo prometió en la respuesta
     if (!smsType && didAssistantPromiseSms(respuesta)) {
-      smsType = inferOfferType(`${userInput} ${respuesta}`) || 'reservar';
+      smsType = guessType(`${userInput} ${respuesta}`);
       console.log('[VOICE/SMS] Asistente prometió SMS → tipo inferido =', smsType);
     }
-
-    // 3) Aceptación de una oferta previa (aunque no diga "sms")
-    if (!smsType && previouslyOffered && acceptedSms(userInput)) {
-      smsType = previouslyOffered;
-      console.log('[VOICE/SMS] Usuario aceptó oferta previa → tipo =', smsType);
-    }
-
-    // limpia etiqueta de envío inmediato si existiera
     if (tagMatch) respuesta = respuesta.replace(tagMatch[0], '').trim();
-
-    // ——— Propuesta PROACTIVA de SMS si hay link relevante ———
-    // (Solo ofrece si NO acabamos de decidir enviar)
-    let offeredNow: LinkType | null = null;
-    if (!smsType && !previouslyOffered) {
-      const offerKind = inferOfferType(userInput);
-      if (offerKind) {
-        const candidate = await findLinkByType(tenant.id, offerKind);
-        if (candidate) {
-          offeredNow = offerKind;
-          const offerLine = locale.startsWith('es')
-            ? ' Si quieres, te lo envío por SMS.'
-            : ' If you’d like, I can text it to you.';
-          respuesta += offerLine + ` [[OFFER_SMS:${offerKind}]]`;
-        }
-      }
-    }
 
     // ——— Guardar conversación ———
     await pool.query(
@@ -398,14 +288,58 @@ router.post('/', async (req: Request, res: Response) => {
 
     await incrementarUsoPorNumero(didNumber);
 
-    // ——— Envío de SMS si corresponde ———
+    // ——— Si hay que mandar SMS ———
     if (smsType) {
       try {
-        // Buscar link por tipo (y fallback a voice_links)
-        const chosen = await findLinkByType(tenant.id, smsType);
+        const synonyms: Record<LinkType, string[]> = {
+          reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
+          comprar:  ['comprar', 'pagar', 'checkout', 'payment', 'pay'],
+          soporte:  ['soporte', 'support', 'ticket', 'ayuda'],
+          web:      ['web', 'sitio', 'pagina', 'página', 'home', 'website'],
+        };
+        const syns = synonyms[smsType];
+        const likeAny = syns.map((w) => `%${w}%`);
 
+        const base = 3;
+        const inPlaceholders = syns.map((_, i) => `lower($${base + i})`).join(', ');
+        const likeBase = base + syns.length;
+        const likeClauses = likeAny.map((_, i) => `lower(tipo) LIKE lower($${likeBase + i})`).join(' OR ');
+
+        const sql = `
+          SELECT id, tipo, nombre, url
+            FROM links_utiles
+           WHERE tenant_id = $1
+             AND (
+               lower(tipo) = lower($2)
+               OR lower(tipo) IN (${inPlaceholders})
+               OR ${likeClauses}
+             )
+           ORDER BY created_at DESC
+           LIMIT 1
+        `;
+        const params = [tenant.id, smsType, ...syns, ...likeAny];
+        const { rows: linksByType } = await pool.query(sql, params);
+
+        let chosen: { nombre?: string; url?: string } | null = linksByType[0] || null;
+
+        // Fallback a voice_links
+        let bulletsFromVoice: string | null = null;
         if (!chosen) {
-          console.warn('[VOICE/SMS] No hay links para este tenant.');
+          const { rows: vlinks } = await pool.query(
+            `SELECT title, url
+               FROM voice_links
+              WHERE tenant_id = $1
+              ORDER BY orden ASC, id ASC
+              LIMIT 5`,
+            [tenant.id]
+          );
+          if (vlinks.length > 0) {
+            bulletsFromVoice = vlinks.map((r: any, i: number) => `${i + 1}. ${r.title || 'Link'}: ${r.url}`).join('\n');
+          }
+        }
+
+        if (!chosen && !bulletsFromVoice) {
+          console.warn('[VOICE/SMS] No hay links_utiles ni voice_links para este tenant.');
           respuesta += locale.startsWith('es')
             ? ' No encontré un enlace registrado aún.'
             : " I couldn't find a saved link yet.";
@@ -413,11 +347,10 @@ router.post('/', async (req: Request, res: Response) => {
           const brand = await getTenantBrand(tenant.id);
           let body: string;
 
-          if (chosen.url) {
+          if (chosen?.url) {
             body = `📎 ${chosen.nombre || 'Enlace'}: ${chosen.url}\n— ${brand}`;
           } else {
-            // bullets desde voice_links
-            body = `Gracias por llamar. Te comparto los links:\n${chosen.bullets}\n— ${brand}`;
+            body = `Gracias por llamar. Te comparto los links:\n${bulletsFromVoice}\n— ${brand}`;
           }
 
           const smsFrom = tenant.twilio_sms_number || tenant.twilio_voice_number || '';
@@ -426,11 +359,19 @@ router.post('/', async (req: Request, res: Response) => {
           const toDest = callerE164;
           if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
             console.warn('[VOICE/SMS] Número destino inválido para SMS:', callerRaw, '→', toDest);
-            // Nota: no añadimos texto extra a respuesta aquí porque ya se guardó arriba.
+            respuesta += locale.startsWith('es')
+              ? ' No pude validar tu número para enviarte el SMS.'
+              : ' I could not validate your number to text you.';
           } else if (!smsFrom && !messagingServiceSid) {
             console.warn('[VOICE/SMS] No hay from SMS-capable ni messaging_service_sid configurado.');
+            respuesta += locale.startsWith('es')
+              ? ' No hay un número SMS configurado para enviar el enlace.'
+              : ' There is no SMS-capable number configured to send the link.';
           } else if (smsFrom && smsFrom.startsWith('whatsapp:')) {
             console.warn('[VOICE/SMS] El número configurado es WhatsApp; no envía SMS.');
+            respuesta += locale.startsWith('es')
+              ? ' El número configurado es WhatsApp y no puede enviar SMS.'
+              : ' The configured number is WhatsApp-only and cannot send SMS.';
           } else {
             sendSMS({
               mensaje: body,
@@ -439,35 +380,39 @@ router.post('/', async (req: Request, res: Response) => {
               messagingServiceSid,
               tenantId: tenant.id,
               campaignId: null,
-            }).then((n) => {
-              console.log('[VOICE/SMS] sendSMS -> enviados =', n);
-              pool.query(
-                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-                 VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
-                [tenant.id, `SMS enviado con ${chosen.url ? 'link único' : 'lista de links'}.`, smsFrom || `svc:${messagingServiceSid}`]
-              ).catch(console.error);
-            }).catch((e) => {
-              console.error('[VOICE/SMS] sendSMS ERROR:', e?.code, e?.message || e);
-            });
+            })
+              .then((n) => {
+                console.log('[VOICE/SMS] sendSMS -> enviados =', n);
+                pool.query(
+                  `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+                   VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
+                  [tenant.id, `SMS enviado con ${chosen?.url ? 'link único' : 'lista de links'}.`, smsFrom || `svc:${messagingServiceSid}`]
+                ).catch(console.error);
+              })
+              .catch((e) => {
+                console.error('[VOICE/SMS] sendSMS ERROR:', e?.code, e?.message || e);
+              });
+
+            respuesta += locale.startsWith('es')
+              ? ' Te lo acabo de enviar por SMS.'
+              : ' I just texted it to you.';
           }
         }
       } catch (e: any) {
         console.error('[VOICE/SMS] Error enviando SMS:', e?.code, e?.message, e?.moreInfo || e);
+        respuesta += locale.startsWith('es')
+          ? ' Hubo un problema al enviar el SMS.'
+          : ' There was a problem sending the text.';
       }
     } else {
-      console.log(
-        '[VOICE/SMS] No se envía SMS (ninguna condición de envío cumplida).',
-        'prevOffered=', previouslyOffered, 'offeredNow=', offeredNow,
-        'userInput=', short(userInput)
-      );
+      console.log('[VOICE/SMS] No se detectó condición para enviar SMS.', 'userInput=', short(userInput), 'respuesta=', short(respuesta));
     }
 
     // ——— ¿Terminamos? ———
     const fin = /(gracias|eso es todo|nada más|nada mas|bye|ad[ií]os)/i.test(userInput);
 
-    // Normaliza horas y limpia meridiano/ampm ANTES de sanitizeForSay
-    let speakResp = normalizeClockText(respuesta, locale as any);
-    const speakOut = sanitizeForSay(speakResp);
+    respuesta = normalizeClockText(respuesta, locale as any);
+    const speakOut = sanitizeForSay(respuesta);
 
     vr.say({ language: locale as any, voice: voiceName }, speakOut);
     vr.pause({ length: 1 });
