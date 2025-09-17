@@ -227,7 +227,7 @@ router.post('/', async (req: Request, res: Response) => {
             role: 'system',
             content:
               (cfg.system_prompt as string)?.trim() ||
-              `Eres Amy, una asistente telefónica amable y concisa del negocio ${brand}. Responde breve y natural. Recuerda: nunca leas enlaces; si hace falta, di "te lo envío por SMS".`,
+              `Eres Amy, una asistente telefónica amable y concisa del negocio ${brand}. Responde breve y natural. Nunca leas enlaces en voz. No prometas enviar SMS a menos que el usuario lo pida explícitamente.`,
           },
           { role: 'user', content: userInput },
         ],
@@ -263,10 +263,7 @@ router.post('/', async (req: Request, res: Response) => {
       smsType = guessType(userInput);
       console.log('[VOICE/SMS] Usuario solicitó SMS → tipo inferido =', smsType);
     }
-    if (!smsType && didAssistantPromiseSms(respuesta)) {
-      smsType = guessType(`${userInput} ${respuesta}`);
-      console.log('[VOICE/SMS] Asistente prometió SMS → tipo inferido =', smsType);
-    }
+
     if (tagMatch) respuesta = respuesta.replace(tagMatch[0], '').trim();
 
     // ——— Guardar conversación ———
