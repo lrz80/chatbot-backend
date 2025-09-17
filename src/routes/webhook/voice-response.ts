@@ -281,6 +281,9 @@ router.post('/', async (req: Request, res: Response) => {
     const tagMatch = respuesta.match(/\[\[SMS:(reservar|comprar|soporte|web)\]\]/i);
     let smsType: LinkType | null = tagMatch ? (tagMatch[1].toLowerCase() as LinkType) : null;
 
+    // Evita que el tag aparezca en la locución
+    if (tagMatch) respuesta = respuesta.replace(tagMatch[0], '').trim();
+
     // Confirmación diferida: si había pendiente y el usuario dijo "sí"
     if (!smsType && pendingMatch && saidYes(userInput)) {
       smsType = pendingMatch[1].toLowerCase() as LinkType;
