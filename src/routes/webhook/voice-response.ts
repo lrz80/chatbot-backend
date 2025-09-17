@@ -166,7 +166,7 @@ router.post('/', async (req: Request, res: Response) => {
     const tRes = await pool.query(
       `SELECT id, name,
               membresia_activa, membresia_inicio,
-              twilio_sms_number, twilio_voice_number, messaging_service_sid
+              twilio_sms_number, twilio_voice_number
          FROM tenants
         WHERE twilio_voice_number = $1
         LIMIT 1`,
@@ -354,7 +354,6 @@ router.post('/', async (req: Request, res: Response) => {
           }
 
           const smsFrom = tenant.twilio_sms_number || tenant.twilio_voice_number || '';
-          const messagingServiceSid = tenant.messaging_service_sid || undefined;
 
           const toDest = callerE164;
           if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
@@ -362,8 +361,8 @@ router.post('/', async (req: Request, res: Response) => {
             respuesta += locale.startsWith('es')
               ? ' No pude validar tu número para enviarte el SMS.'
               : ' I could not validate your number to text you.';
-          } else if (!smsFrom && !messagingServiceSid) {
-            console.warn('[VOICE/SMS] No hay from SMS-capable ni messaging_service_sid configurado.');
+          } else if (!smsFrom) {
+            console.warn('[VOICE/SMS] No hay un número SMS-capable configurado.');
             respuesta += locale.startsWith('es')
               ? ' No hay un número SMS configurado para enviar el enlace.'
               : ' There is no SMS-capable number configured to send the link.';
@@ -377,7 +376,6 @@ router.post('/', async (req: Request, res: Response) => {
               mensaje: body,
               destinatarios: [toDest],
               fromNumber: smsFrom || undefined,
-              messagingServiceSid,
               tenantId: tenant.id,
               campaignId: null,
             })
@@ -386,7 +384,7 @@ router.post('/', async (req: Request, res: Response) => {
                 pool.query(
                   `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
                    VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
-                  [tenant.id, `SMS enviado con ${chosen?.url ? 'link único' : 'lista de links'}.`, smsFrom || `svc:${messagingServiceSid}`]
+                  [tenant.id, `SMS enviado con ${chosen?.url ? 'link único' : 'lista de links'}.`, smsFrom || 'sms']
                 ).catch(console.error);
               })
               .catch((e) => {
