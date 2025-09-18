@@ -348,7 +348,7 @@ try {
     // 🔎 Overrides por palabras clave
     const priceRegex = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
 
-    // ⚠️ Solo vamos a "precio" si el usuario SÍ menciona precio y NO trae temporalidad
+    // ⚠️ Solo "precio" si el usuario lo pidió explícitamente y NO hay temporalidad
     if (priceRegex.test(userInput) && !hasTemporal) {
       intencionProc = 'precio';
       intencionParaFaq = 'precio';
@@ -364,7 +364,7 @@ try {
 
     try {
       const ents = extractEntitiesLite(userInput);
-      // Dispara si hay especificidad temporal, excepto saludo/agradecimiento puros
+      // Dispara si hay fecha/día/hora, excepto saludo/thanks puros
       const esInfoEspecifica =
         ents.hasSpecificity &&
         !((intencionLower === 'saludo' && greetingOnly) || (intencionLower === 'agradecimiento' && thanksOnly));
@@ -383,6 +383,22 @@ try {
           umbral: INTENT_THRESHOLD,
           filtrarPorIdioma: true
         });
+
+        // 🚧 No aceptes "precio" del intent-matcher si hay temporalidad y el usuario NO pidió precio
+        if (respIntent && respIntent.intent &&
+            respIntent.intent.toLowerCase() === 'precio') {
+          const _entsGuard = entsEarly || extractEntitiesLite(userInput);
+          const _hasTemporalGuard = !!(_entsGuard.dateLike || _entsGuard.dayLike || _entsGuard.timeLike);
+          const _askedPrice = priceRegex.test(userInput);
+          if (_hasTemporalGuard && !_askedPrice) {
+            console.log('🛑 Bloqueo respuesta "precio" por temporalidad sin mención de precio.');
+            // Anula para forzar FAQ similitud u OpenAI templado
+            // @ts-ignore
+            respIntent.intent = null;
+            // @ts-ignore
+            respIntent.respuesta = null;
+          }
+        }
 
         if (respIntent?.respuesta) {
           let out = respIntent.respuesta;
