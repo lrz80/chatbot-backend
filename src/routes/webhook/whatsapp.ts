@@ -369,12 +369,54 @@ try {
 
         if (respIntent?.respuesta) {
           let out = respIntent.respuesta;
+
+          // —— construir "fechaRef" solo con lo ya detectado (sin consultar DB)
+          const ents = extractEntitiesLite(userInput);
+          let fechaRef = ents.dateLike || ents.dayLike || null;
+          if (fechaRef) {
+            // capitaliza 1ra letra
+            fechaRef = fechaRef.charAt(0).toUpperCase() + fechaRef.slice(1);
+          }
+
+          // —— links por tenant (multitenant-safe, busca en varios campos/JSON)
+          function getLink(keys: string[]): string | null {
+            for (const k of keys) {
+              if (tenant && typeof tenant[k] === 'string' && tenant[k]) return tenant[k];
+            }
+            const pools = ['links','meta','config','settings','extras'];
+            for (const p of pools) {
+              try {
+                const raw = tenant?.[p];
+                const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                if (obj && typeof obj === 'object') {
+                  for (const k of keys) if (typeof obj[k] === 'string' && obj[k]) return obj[k];
+                }
+              } catch {}
+            }
+            return null;
+          }
+          const bookingLink    = getLink(['booking_url','reserva_url','link_reserva','schedule_url','glofox_booking']);
+          const firstClassLink = getLink(['free_class_url','primera_clase_url','link_primera_clase','glofox_free']);
+
+          // —— envuelve la FAQ con contexto cuando hay especificidad
+          if (ents.hasSpecificity) {
+            const prefijo = fechaRef
+              ? `¡Claro que sí! Para *${fechaRef}*:\n`
+              : `¡Claro que sí! Te paso la info específica:\n`;
+            let sufijo = '';
+            if (bookingLink)    sufijo += `\n\nReserva aquí: ${bookingLink}`;
+            if (firstClassLink) sufijo += `\n\n¿Primera vez? *Primera clase gratis* aquí: ${firstClassLink}`;
+            out = `${prefijo}${out}${sufijo}\n\nSi necesitas algo más, dime.`;
+          }
+
+          // — asegúrate del idioma del cliente
           try {
             const langOut = await detectarIdioma(out);
             if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
               out = await traducirMensaje(out, idiomaDestino);
             }
           } catch {}
+
           await enviarWhatsApp(fromNumber, out, tenant.id);
 
           await pool.query(
@@ -391,17 +433,17 @@ try {
             [tenant.id, 'whatsapp', messageId]
           );
 
-          // follow-up (opcional): reusa tu schedule actual
+          // follow-up (opcional, tu lógica actual)
           try {
             let intFinal = (respIntent.intent || '').toLowerCase().trim();
             if (intFinal === 'duda') intFinal = buildDudaSlug(userInput);
             intFinal = normalizeIntentAlias(intFinal);
-
             const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
             const nivel = det?.nivel_interes ?? 1;
             await scheduleFollowUp(intFinal, nivel);
           } catch {}
-          return; // ✅ terminamos rama específica por intención
+
+          return; // ¡importante!
         }
 
         // 2) FAQ por similitud (⚠️ sin flujos)
