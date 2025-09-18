@@ -333,12 +333,26 @@ try {
     intencionProc = normalizeIntentAlias(intencionProc);
     intencionParaFaq = normalizeIntentAlias(intencionParaFaq);
 
+    // 👉 Detección de temporalidad/especificidad (sin DB)
+    const entsEarly = extractEntitiesLite(userInput);
+    const hasTemporal = !!(entsEarly.dateLike || entsEarly.dayLike || entsEarly.timeLike);
+
+    // 👉 Si hay temporalidad + verbo de acción, prioriza "reservar"
+    const reservarHint = /\b(book|reserve|reserv|try|attend|assistir|asistir|ir|quiero ir|quiero probar|try out)\b/i;
+    if (hasTemporal && reservarHint.test(userInput)) {
+      intencionProc = 'reservar';
+      intencionParaFaq = 'reservar';
+      console.log('🎯 Override a "reservar" por temporalidad + verbo de acción.');
+    }
+
     // 🔎 Overrides por palabras clave
     const priceRegex = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
-    if (priceRegex.test(userInput)) {
+
+    // ⚠️ Solo vamos a "precio" si el usuario SÍ menciona precio y NO trae temporalidad
+    if (priceRegex.test(userInput) && !hasTemporal) {
       intencionProc = 'precio';
       intencionParaFaq = 'precio';
-      console.log('🎯 Override a intención precio por keyword');
+      console.log('🎯 Override a "precio" (sin temporalidad).');
     } else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userInput)) {
       intencionProc = 'clases_online';
       intencionParaFaq = 'clases_online';
@@ -350,7 +364,10 @@ try {
 
     try {
       const ents = extractEntitiesLite(userInput);
-      const esInfoEspecifica = (intencionProc === 'pedir_info') && ents.hasSpecificity;
+      // Dispara si hay especificidad temporal, excepto saludo/agradecimiento puros
+      const esInfoEspecifica =
+        ents.hasSpecificity &&
+        !((intencionLower === 'saludo' && greetingOnly) || (intencionLower === 'agradecimiento' && thanksOnly));
 
       if (esInfoEspecifica) {
         // 1) Intent matcher (oficial del tenant)
