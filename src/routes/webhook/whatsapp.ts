@@ -19,6 +19,7 @@ import { detectarIntencion } from '../../lib/detectarIntencion';
 import { runBeginnerRecoInterceptor } from '../../lib/recoPrincipiantes/interceptor';
 import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
 import { buscarRespuestaPorIntencion } from "../../services/intent-matcher";
+import { extractEntitiesLite } from '../../utils/extractEntitiesLite';
 
 const INTENT_THRESHOLD = Math.min(
   0.95,
@@ -348,21 +349,49 @@ try {
     console.log(`🎯 Intención final (canónica) = ${INTENCION_FINAL_CANONICA}`);
 
     if (!isNumericOnly && intencionProc === 'pedir_info' && flows.length > 0 && flows[0].opciones?.length > 0) {
-    
+    // [ADD] Detecta especificidad liviana (sin DB ni librerías pesadas)
+    const ents = extractEntitiesLite(userInput);
+
+    // Construye overlay si hay especificidad
+    let overlay: string | null = null;
+    if (ents.hasSpecificity) {
+      const pistas = [
+        ents.dateLike ? `fecha: ${ents.dateLike}` : null,
+        ents.dayLike  ? `día: ${ents.dayLike}`   : null,
+        ents.timeLike ? `hora: ${ents.timeLike}` : null,
+        ents.topicLike? `tema: ${ents.topicLike}`: null,
+      ].filter(Boolean).join(' · ');
+
+      overlay = pistas
+        ? `¡Gracias por escribirnos! 🙌\nHe tomado nota de tu solicitud *específica* (${pistas}).`
+        : `¡Gracias por escribirnos! 🙌\nVeo que pides *información específica*.`;
+    }
+
     const pregunta = flows[0]?.pregunta || flows[0]?.mensaje || '¿Cómo puedo ayudarte?';
     const opciones = flows[0].opciones.map((op: any, i: number) =>
       `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`).join('\n');
-  
+
     let menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
-  
+
+    // Traducciones si el idioma del cliente no es ES
     if (idiomaDestino !== 'es') {
-      try { menu = await traducirMensaje(menu, idiomaDestino); } catch {}
+      try {
+        if (overlay) overlay = await traducirMensaje(overlay, idiomaDestino);
+        menu = await traducirMensaje(menu, idiomaDestino);
+      } catch {}
     }
-  
+
+    // Si hay overlay, envíalo ANTES del menú
+    if (overlay) {
+      await enviarWhatsApp(fromNumber, overlay, tenant.id);
+    }
+
     await enviarWhatsApp(fromNumber, menu, tenant.id);
-    console.log("📬 Menú enviado desde Flujos Guiados Interactivos.");
+    console.log(overlay
+      ? "📬 Overlay específico + Menú enviado desde Flujos Guiados."
+      : "📬 Menú enviado desde Flujos Guiados Interactivos.");
     return;
-  }  
+  }
 
   const nrm = (t: string) =>
     (t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
@@ -420,21 +449,44 @@ try {
         return;
       }
   
+      // [ADD] Overlay específico si detecta pistas (fecha/hora/día/tema)
+      const ents = extractEntitiesLite(userInput);
+
+      let overlay: string | null = null;
+      if (ents.hasSpecificity) {
+        const pistas = [
+          ents.dateLike ? `fecha: ${ents.dateLike}` : null,
+          ents.dayLike  ? `día: ${ents.dayLike}`   : null,
+          ents.timeLike ? `hora: ${ents.timeLike}` : null,
+          ents.topicLike? `tema: ${ents.topicLike}`: null,
+        ].filter(Boolean).join(' · ');
+
+        overlay = pistas
+          ? `¡Gracias por escribirnos! 🙌\nHe tomado nota de tu solicitud *específica* (${pistas}).`
+          : `¡Gracias por escribirnos! 🙌\nVeo que pides *información específica*.`;
+      }
+
       const pregunta = flow.pregunta || flow.mensaje || '¿Cómo puedo ayudarte?';
       const opciones = flow.opciones
         .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
         .join('\n');
-  
+
       let menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
-  
+
+      // Traducción si aplica
       if (idiomaDestino !== 'es') {
         try {
+          if (overlay) overlay = await traducirMensaje(overlay, idiomaDestino);
           menu = await traducirMensaje(menu, idiomaDestino);
         } catch (e) {
-          console.warn('No se pudo traducir el menú, se enviará en ES:', e);
+          console.warn('No se pudo traducir overlay/menú, se envía en ES:', e);
         }
       }
-  
+
+      // Enviar overlay (si lo hay) y luego el menú
+      if (overlay) {
+        await enviarWhatsApp(fromNumber, overlay, tenant.id);
+      }
       await enviarWhatsApp(fromNumber, menu, tenant.id);
   
       // 🔹 Guardar estado para no reenviar hasta que responda
