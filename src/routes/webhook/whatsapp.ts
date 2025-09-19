@@ -644,6 +644,39 @@ try {
 
   console.log('[INTENTS] result=', respIntent);
 
+  // --- Anti-mismatch entre intención canónica y matcher (segundo bloque) ---
+  const canonical = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+  const respIntentName = (respIntent?.intent || '').toLowerCase();
+
+  // Intenciones "fuertes" (directas)
+  const isCanonicalDirect = isDirectIntent(canonical, INTENTS_DIRECT);
+
+  // ¿El usuario pidió explícitamente precio?
+  const askedPrice = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i
+    .test(userInput);
+
+  // 1) Nunca aceptes 'precio' si NO lo pidió y la canónica es distinta
+  if (respIntent && respIntentName === 'precio' && !askedPrice && canonical && canonical !== 'precio') {
+    console.log('[GUARD-2] bloqueo precio: no fue solicitado y la canónica=', canonical, 'score=', respIntent?.score);
+    // @ts-ignore
+    respIntent.intent = null;
+    // @ts-ignore
+    respIntent.respuesta = null;
+  }
+
+  // 2) Si la canónica es DIRECTA y difiere del matcher, exige score alto (>= 0.85)
+  if (respIntent && isCanonicalDirect && respIntentName && respIntentName !== canonical) {
+    const minOverride = 0.85;
+    const score = Number(respIntent?.score ?? 0);
+    if (score < minOverride) {
+      console.log('[GUARD-2] canónica directa vs matcher (score bajo). Mantengo canónica:', { canonical, respIntentName, score });
+      // @ts-ignore
+      respIntent.intent = null;
+      // @ts-ignore
+      respIntent.respuesta = null;
+    }
+  }
+
   if (respIntent?.respuesta) {
     // Asegura que la salida esté en el idioma del cliente
     let out = respIntent.respuesta;
