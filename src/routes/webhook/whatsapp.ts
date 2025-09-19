@@ -214,7 +214,7 @@ try {
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
-    // ============================================================
+     // ============================================================
   // MODO SIMPLE: SOLO FAQs -> OpenAI (sin flujos ni intenciones)
   // Se activa con DISABLE_FLOWS=1 y DISABLE_INTENTS=1
   // ============================================================
@@ -223,6 +223,9 @@ try {
     const saludoCorto = ["hola","buenas","hello","hi","hey"];
     if (saludoCorto.includes(normalizarTexto(userInput))) {
       const out = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+
+      // --- LOG de rama (bienvenida por saludo) ---
+      console.log('[SIMPLE] branch=welcome');
 
       await enviarWhatsApp(fromNumber, out, tenant.id);
 
@@ -270,7 +273,7 @@ try {
           out = await traducirMensaje(out, idiomaDestino);
         }
       } catch {}
-      
+
       // (opcional) registra tokens
       try {
         const tokens = completion.usage?.total_tokens || 0;
@@ -284,9 +287,81 @@ try {
           );
         }
       } catch {}
+
+      // --- LOG de rama (fallback IA) ---
+      console.log('[SIMPLE] branch=fallback-IA');
+    } else {
+      // --- LOG de rama (FAQ similitud) ---
+      console.log('[SIMPLE] branch=FAQ-sim');
     }
 
-    // 4) Enviar, guardar y salir
+    // ---- helper rápido para sacar links del tenant (en este scope) ----
+    function getLink(keys: string[]): string | null {
+      for (const k of keys) {
+        const v = (tenant as any)?.[k];
+        if (typeof v === 'string' && v) return v;
+      }
+      for (const pool of ['links','meta','config','settings','extras']) {
+        try {
+          const raw = (tenant as any)?.[pool];
+          const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+          if (obj && typeof obj === 'object') {
+            for (const k of keys) {
+              const vv = (obj as any)?.[k];
+              if (typeof vv === 'string' && vv) return vv;
+            }
+          }
+        } catch {}
+      }
+      return null;
+    }
+
+        // ---- Heurística mínima para mantener follow-ups sin sistema de intenciones ----
+        function inferSimpleIntent(text: string): string {
+          const t = (text || '').toLowerCase();
+          // pistas para "reservar"
+          if (/\b(reserv|agendar|book|schedule|quiero ir|asistir|probar|try)\b/.test(t)) return 'reservar';
+          // pistas para "precio"
+          if (/\b(precio|precios|costo|costos|tarifa|tarifas|mensualidad|membership|price|cost|fee|fees|cuesta|cuestan)\b/.test(t)) return 'precio';
+          // pistas para "horario"
+          if (/\b(horario|hora|hours|time|qué hora|a qué hora|cuando|cuándo|what time|schedule)\b/.test(t)) return 'horario';
+          // pistas para "ubicacion"
+          if (/\b(ubicaci[oó]n|address|direcci[oó]n|location|donde|dónde)\b/.test(t)) return 'ubicacion';
+          // interés en clases en general
+          if (/\b(clase|clases|class|classes|spin|spinning|indoor cycling|me interesa|interesad[oa])\b/.test(t)) return 'interes_clases';
+          return 'general';
+        }
+
+        function inferSimpleInterestLevel(text: string): number {
+          const t = (text || '').toLowerCase();
+          let nivel = 1;
+          if (/\b(me interesa|quiero|i want|i’d like|i would like|interesad[oa])\b/.test(t)) nivel = Math.max(nivel, 2);
+          if (/\b(reserv|agendar|book|schedule|asistir|confirmar|comprar|pagar)\b/.test(t)) nivel = Math.max(nivel, 3);
+          // referencia a fecha/hora eleva interés
+          if (/\b(\d{1,2}\s+de\s+\w+|\b(today|tomorrow|hoy|mañana)\b|\b\d{1,2}[:.]\d{2}\b)\b/.test(t)) nivel = Math.max(nivel, 3);
+          return nivel;
+        }
+
+    // 4) Overlay de links (reserva / primera clase) siempre que existan
+    const bookingLink    = getLink(['booking_url','reserva_url','link_reserva','schedule_url','glofox_booking']);
+    const firstClassLink = getLink(['free_class_url','primera_clase_url','link_primera_clase','glofox_free']);
+
+    if (bookingLink || firstClassLink) {
+      let extra = '';
+      if (bookingLink)    extra += `\n\nReserva aquí: ${bookingLink}`;
+      if (firstClassLink) extra += `\n\n¿Primera vez? *Primera clase gratis* aquí: ${firstClassLink}`;
+
+      try {
+        // traduce el extra si el cliente no es ES
+        const langExtra = await detectarIdioma(extra);
+        if (langExtra && langExtra !== 'zxx' && langExtra !== idiomaDestino) {
+          extra = await traducirMensaje(extra, idiomaDestino);
+        }
+      } catch {}
+      out += extra;
+    }
+
+    // 5) Enviar, guardar y salir
     await enviarWhatsApp(fromNumber, out, tenant.id);
 
     await pool.query(
@@ -302,12 +377,23 @@ try {
       [tenant.id, 'whatsapp', messageId]
     );
 
+        // --- Mantener follow-ups programables desde el dashboard (1–23 horas) ---
+    try {
+      const intFinal = inferSimpleIntent(userInput);     // 'reservar' | 'precio' | 'horario' | 'ubicacion' | 'interes_clases' | 'general'
+      const nivel    = inferSimpleInterestLevel(userInput); // 1–3
+      // Reutiliza tu misma función existente; respeta follow_up_settings.minutos_espera (config del dashboard)
+      await scheduleFollowUp(intFinal, nivel);
+      console.log('[SIMPLE] follow-up scheduled:', { intFinal, nivel });
+    } catch (e) {
+      console.warn('⚠️ No se pudo programar follow-up (modo simple):', e);
+    }
+
     // Nota: en modo simple NO programamos follow-ups basados en intenciones.
     return;
   }
 
   // ⏲️ Programador de follow-up (WhatsApp)
-  const scheduleFollowUp = async (intFinal: string, nivel: number) => {
+  async function scheduleFollowUp(intFinal: string, nivel: number) {
     try {
       const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
       const condition = (nivel >= 3) || intencionesFollowUp.includes((intFinal || '').toLowerCase());
