@@ -20,6 +20,7 @@ import { runBeginnerRecoInterceptor } from '../../lib/recoPrincipiantes/intercep
 import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
 import { buscarRespuestaPorIntencion } from "../../services/intent-matcher";
 import { extractEntitiesLite } from '../../utils/extractEntitiesLite';
+import { featureFlags } from '../../lib/featureFlags';
 
 const INTENT_THRESHOLD = Math.min(
   0.95,
@@ -211,6 +212,98 @@ try {
     await upsertIdiomaClienteDB(tenant.id, fromNumber, normalizado);
     idiomaDestino = normalizado;
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
+  }
+
+    // ============================================================
+  // MODO SIMPLE: SOLO FAQs -> OpenAI (sin flujos ni intenciones)
+  // Se activa con DISABLE_FLOWS=1 y DISABLE_INTENTS=1
+  // ============================================================
+  if (featureFlags.disableFlows && featureFlags.disableIntents) {
+    // 1) Saludo corto => bienvenida directa
+    const saludoCorto = ["hola","buenas","hello","hi","hey"];
+    if (saludoCorto.includes(normalizarTexto(userInput))) {
+      const out = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+
+      await enviarWhatsApp(fromNumber, out, tenant.id);
+
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+         VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+         ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+        [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+      );
+      await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT DO NOTHING`,
+        [tenant.id, 'whatsapp', messageId]
+      );
+      return;
+    }
+
+    // 2) FAQs por similitud (comparando en ES si hace falta)
+    const mensajeNorm = normalizarTexto(userInput);
+    const mensajeEs = (idiomaDestino !== 'es')
+      ? await traducirMensaje(mensajeNorm, 'es').catch(() => mensajeNorm)
+      : mensajeNorm;
+
+    let out = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeEs, idiomaDestino);
+
+    // 3) Fallback OpenAI (con tu prompt del canal)
+    if (!out) {
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          { role: 'system', content: promptBase },
+          { role: 'user', content: userInput },
+        ],
+      });
+
+      out = completion.choices[0]?.message?.content?.trim()
+           || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+
+      // Asegura idioma del cliente
+      try {
+        const langOut = await detectarIdioma(out);
+        if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+          out = await traducirMensaje(out, idiomaDestino);
+        }
+      } catch {}
+      
+      // (opcional) registra tokens
+      try {
+        const tokens = completion.usage?.total_tokens || 0;
+        if (tokens > 0) {
+          await pool.query(
+            `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+             VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+             ON CONFLICT (tenant_id, canal, mes)
+             DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+            [tenant.id, tokens]
+          );
+        }
+      } catch {}
+    }
+
+    // 4) Enviar, guardar y salir
+    await enviarWhatsApp(fromNumber, out, tenant.id);
+
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+    );
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT DO NOTHING`,
+      [tenant.id, 'whatsapp', messageId]
+    );
+
+    // Nota: en modo simple NO programamos follow-ups basados en intenciones.
+    return;
   }
 
   // ⏲️ Programador de follow-up (WhatsApp)
