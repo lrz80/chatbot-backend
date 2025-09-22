@@ -314,7 +314,7 @@ function stripLeadGreetings(t: string) {
   let intencionParaFaq = intencionLower; // esta será la que usemos para consultar FAQ
 
   // 4️⃣ Si es saludo/agradecimiento, solo sal si el mensaje es SOLO eso
-  const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches))?|buenos\s+(dias|días))\s*$/i
+  const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))\s*$/i
   .test(userInput.trim());
   const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
 
@@ -359,13 +359,38 @@ function stripLeadGreetings(t: string) {
     intencionProc = normalizeIntentAlias(intencionProc);
     intencionParaFaq = normalizeIntentAlias(intencionParaFaq);
 
-    // 👉 Detección de temporalidad/especificidad (sin DB)
-    const entsEarly = extractEntitiesLite(userInput);
-    const hasTemporal = !!(entsEarly.dateLike || entsEarly.dayLike || entsEarly.timeLike);
+    // 👉 Detección de temporalidad/especificidad (sin DB) + fallbacks
+    const cleanedForTime = stripLeadGreetings(userInput);
+
+    // 1) Intenta con extractor “lite”
+    const entsEarly = extractEntitiesLite(cleanedForTime);
+
+    // 2) Fallbacks simples (palabras de tiempo, días y horas)
+    const temporalWordRe = /\b(hoy|mañana|pasado\s*mañana|tonight|esta\s*(?:tarde|noche|mañana|manana|semana)|this\s*(?:evening|morning|afternoon))\b/i;
+    const dayNameRe = /\b(lunes|martes|mi[eé]rcoles|miercoles|jueves|viernes|s[áa]bado|sabado|domingo)\b/i;
+    const clockRe = /\b([01]?\d|2[0-3]):[0-5]\d\s*(?:am|pm)?\b/i;
+
+    // 3) hasTemporal robusto
+    const hasTemporal =
+      !!(entsEarly.dateLike || entsEarly.dayLike || entsEarly.timeLike) ||
+      temporalWordRe.test(cleanedForTime) ||
+      dayNameRe.test(cleanedForTime) ||
+      clockRe.test(cleanedForTime);
+
+    // (opcional) logs de diagnóstico
+    console.log('[TemporalDetect]', {
+      cleanedForTime,
+      entsEarly,
+      hasTemporal,
+      word: temporalWordRe.test(cleanedForTime),
+      day: dayNameRe.test(cleanedForTime),
+      clock: clockRe.test(cleanedForTime),
+    });
 
     // ✅ NUEVO: si hay fecha/hora y preguntan por disponibilidad → "horario"
-    const scheduleHint = /\b(hay|habrá|abren|abre|clase|clases|horario|schedule|available|disponible|queda[n]?|cupos?)\b/i;
-    if (hasTemporal && scheduleHint.test(userInput)) {
+    const scheduleHint = /\b(hay|habrá|habra|abren|abre|clase|clases|horario|schedule|available|disponible|queda[n]?|cupos?)\b/i;
+
+    if (hasTemporal && scheduleHint.test(cleanedForTime)) {
       intencionProc = 'horario';
       intencionParaFaq = 'horario';
       console.log('🎯 Override a "horario" por temporalidad + consulta de disponibilidad.');
