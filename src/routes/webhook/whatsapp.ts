@@ -21,6 +21,9 @@ import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
 import { buscarRespuestaPorIntencion } from "../../services/intent-matcher";
 import { extractEntitiesLite } from '../../utils/extractEntitiesLite';
 
+const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
+const MATCHER_MIN_OVERRIDE = 0.85; // exige score alto para sobreescribir una intención "directa"
+
 const INTENT_THRESHOLD = Math.min(
   0.95,
   Math.max(0.30, Number(process.env.INTENT_MATCH_THRESHOLD ?? 0.55))
@@ -84,7 +87,6 @@ async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma:
 router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
 
-  const twiml = new MessagingResponse();
   res.type('text/xml').send(new MessagingResponse().toString());
 
   setTimeout(async () => {
@@ -156,6 +158,25 @@ try {
   const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
   let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idioma);
   const canal = 'whatsapp';
+
+  function getLink(keys: string[]): string | null {
+  for (const key of keys) {
+    if (tenant && typeof tenant[key] === 'string' && tenant[key]) return tenant[key];
+  }
+  const pools = ['links','meta','config','settings','extras'];
+  for (const p of pools) {
+    try {
+      const raw = tenant?.[p];
+      const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (obj && typeof obj === 'object') {
+        for (const key of keys) {
+          if (typeof obj[key] === 'string' && obj[key]) return obj[key];
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
 
   // 🧹 Cancela cualquier follow-up pendiente para este contacto al recibir nuevo mensaje
   try {
@@ -284,7 +305,8 @@ try {
   let intencionParaFaq = intencionLower; // esta será la que usemos para consultar FAQ
 
   // 4️⃣ Si es saludo/agradecimiento, solo sal si el mensaje es SOLO eso
-  const greetingOnly = /^\s*(hola|buenas(?:\s+(tardes|noches|dias))?|hello|hi|hey)\s*$/i.test(userInput.trim());
+  const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches))?|buenos\s+(dias|días))\s*$/i
+  .test(userInput.trim());
   const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
 
   if ((intencionLower === "saludo" && greetingOnly) || (intencionLower === "agradecimiento" && thanksOnly)) {
@@ -335,11 +357,8 @@ try {
       console.log('🎯 Override a "reservar" por temporalidad + verbo de acción.');
     }
 
-    // 🔎 Overrides por palabras clave
-    const priceRegex = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
-
     // ⚠️ Solo "precio" si el usuario lo pidió explícitamente y NO hay temporalidad
-    if (priceRegex.test(userInput) && !hasTemporal) {
+    if (PRICE_REGEX.test(userInput) && !hasTemporal) {
       intencionProc = 'precio';
       intencionParaFaq = 'precio';
       console.log('🎯 Override a "precio" (sin temporalidad).');
@@ -370,7 +389,7 @@ try {
           canal: 'whatsapp',
           mensajeUsuario: textoParaMatch,
           idiomaDetectado: idiomaDestino,
-          umbral: INTENT_THRESHOLD,
+          umbral: Math.max(INTENT_THRESHOLD, 0.70),
           filtrarPorIdioma: true
         });
 
@@ -379,7 +398,7 @@ try {
             respIntent.intent.toLowerCase() === 'precio') {
           const _entsGuard = entsEarly || extractEntitiesLite(userInput);
           const _hasTemporalGuard = !!(_entsGuard.dateLike || _entsGuard.dayLike || _entsGuard.timeLike);
-          const _askedPrice = priceRegex.test(userInput);
+          const _askedPrice = PRICE_REGEX.test(userInput);
           if (_hasTemporalGuard && !_askedPrice) {
             console.log('🛑 Bloqueo respuesta "precio" por temporalidad sin mención de precio.');
             // Anula para forzar FAQ similitud u OpenAI templado
@@ -396,11 +415,9 @@ try {
 
         // Intenciones "fuertes" (directas)
         const isCanonicalDirect = isDirectIntent(canonical, INTENTS_DIRECT);
-        const isRespDirect      = isDirectIntent(respIntentName, INTENTS_DIRECT);
-
+        
         // El usuario pidió explícitamente precio?
-        const askedPrice = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i
-          .test(userInput);
+        const askedPrice = PRICE_REGEX.test(userInput);
 
         // 1) Nunca aceptes 'precio' si NO lo pidió y tenemos una intención canónica distinta
         if (respIntent && respIntentName === 'precio' && !askedPrice) {
@@ -415,9 +432,8 @@ try {
         // 2) Si la canónica es DIRECTA y difiere de lo que trae el matcher,
         //    exige un score muy alto para permitir override (p. ej. ≥ 0.85)
         if (respIntent && isCanonicalDirect && respIntentName && respIntentName !== canonical) {
-          const minOverride = 0.85; // endurece más que INTENT_THRESHOLD
           const score = Number(respIntent?.score ?? 0);
-          if (score < minOverride) {
+          if (score < MATCHER_MIN_OVERRIDE) {
             console.log('[GUARD] canónica directa vs matcher (score bajo). Mantengo canónica:', { canonical, respIntentName, score });
             // @ts-ignore
             respIntent.intent = null;
@@ -437,25 +453,12 @@ try {
             fechaRef = fechaRef.charAt(0).toUpperCase() + fechaRef.slice(1);
           }
 
-          // —— links por tenant (multitenant-safe, busca en varios campos/JSON)
-          function getLink(keys: string[]): string | null {
-            for (const k of keys) {
-              if (tenant && typeof tenant[k] === 'string' && tenant[k]) return tenant[k];
-            }
-            const pools = ['links','meta','config','settings','extras'];
-            for (const p of pools) {
-              try {
-                const raw = tenant?.[p];
-                const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                if (obj && typeof obj === 'object') {
-                  for (const k of keys) if (typeof obj[k] === 'string' && obj[k]) return obj[k];
-                }
-              } catch {}
-            }
-            return null;
-          }
-          const bookingLink    = getLink(['booking_url','reserva_url','link_reserva','schedule_url','glofox_booking']);
-          const firstClassLink = getLink(['free_class_url','primera_clase_url','link_primera_clase','glofox_free']);
+          const bookingLink = getLink([
+            'booking_url','reserva_url','link_reserva','schedule_url','glofox_booking','booking'
+          ]);
+          const firstClassLink = getLink([
+            'free_class_url','primera_clase_url','link_primera_clase','first_class','glofox_free'
+          ]);
 
           // —— envuelve la FAQ con contexto cuando hay especificidad
           if (ents.hasSpecificity) {
@@ -531,7 +534,6 @@ try {
         }
 
         // 3) Fallback OpenAI (templado específico, sin consultar DB de clases)
-        //    - Formatea "Sábado 20 de septiembre" si puede, con Intl de ES
         let fechaBonita: string | null = null;
         try {
           const chrono = await import('chrono-node');
@@ -549,35 +551,12 @@ try {
         }
         const fechaRef = fechaBonita || ents.dateLike || 'la fecha que indicas';
 
-        // —— Links por tenant (multitenant-safe, campos flexibles) ——
-        function getLink(keys: string[]): string | null {
-          // 1) Busca campo directo en tenant (booking_url, reserva_url, etc.)
-          for (const k of keys) {
-            if (tenant && typeof tenant[k] === 'string' && tenant[k]) return tenant[k];
-          }
-          // 2) Intenta JSON en tenant.links / tenant.meta / tenant.config
-          const candidates = ['links', 'meta', 'config', 'settings', 'extras'];
-          for (const c of candidates) {
-            try {
-              const raw = tenant?.[c];
-              const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
-              if (obj && typeof obj === 'object') {
-                for (const k of keys) {
-                  if (typeof obj[k] === 'string' && obj[k]) return obj[k];
-                }
-              }
-            } catch {}
-          }
-          return null;
-        }
-
-        const bookingLink = getLink(['booking_url','reserva_url','link_reserva','booking','schedule_url','glofox_booking']);
+        const bookingLink    = getLink(['booking_url','reserva_url','link_reserva','booking','schedule_url','glofox_booking']);
         const firstClassLink = getLink(['free_class_url','primera_clase_url','link_primera_clase','first_class','glofox_free']);
 
-        // —— Texto templado específico (ES) ——
         let out =
-    `¡Claro que sí! Para la fecha que mencionas, *${fechaRef}*, ofrecemos clases de indoor cycling. 
-    Te recomiendo *reservar* para asegurar tu lugar (los cupos son limitados).`;
+          `¡Claro que sí! Para la fecha que mencionas, *${fechaRef}*, ofrecemos clases de indoor cycling.
+        Te recomiendo *reservar* para asegurar tu lugar (los cupos son limitados).`;
 
         if (bookingLink) {
           out += `\n\nPuedes reservar aquí: ${bookingLink}`;
@@ -585,7 +564,6 @@ try {
         if (firstClassLink) {
           out += `\n\n¿Es tu primera vez con nosotros? *La primera clase es gratis*. Actívala aquí: ${firstClassLink}`;
         }
-
         out += `\n\nSi tienes otra pregunta, dime y te ayudo. ¡Te esperamos *${fechaRef}*!`;
 
         // Asegura idioma del cliente
@@ -596,6 +574,7 @@ try {
           }
         } catch {}
 
+        // Enviar y registrar
         await enviarWhatsApp(fromNumber, out, tenant.id);
 
         await pool.query(
@@ -604,6 +583,7 @@ try {
           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
           [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
         );
+
         await pool.query(
           `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
           VALUES ($1, $2, $3, NOW())
@@ -613,12 +593,12 @@ try {
 
         // (opcional) follow-up
         try {
-          const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-          const nivel = det?.nivel_interes ?? 1;
-          await scheduleFollowUp('pedir_info_especifica', nivel);
+          const det2 = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+          const nivel2 = det2?.nivel_interes ?? 1;
+          await scheduleFollowUp('pedir_info_especifica', nivel2);
         } catch {}
 
-        return; // ✅ cerramos rama específica (no se enviará menú)
+        return; // ✅ cerramos rama específica (ya respondimos)
       }
     } catch (e) {
       console.warn('⚠️ Rama específica falló; continuará pipeline normal:', e);
@@ -638,7 +618,7 @@ try {
     canal: 'whatsapp',              // este webhook es WhatsApp
     mensajeUsuario: textoParaMatch,
     idiomaDetectado: idiomaDestino, // 'es' | 'en'
-    umbral: INTENT_THRESHOLD,
+    umbral: Math.max(INTENT_THRESHOLD, 0.70),
     filtrarPorIdioma: true
   });
 
@@ -652,8 +632,7 @@ try {
   const isCanonicalDirect = isDirectIntent(canonical, INTENTS_DIRECT);
 
   // ¿El usuario pidió explícitamente precio?
-  const askedPrice = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i
-    .test(userInput);
+  const askedPrice = PRICE_REGEX.test(userInput);
 
   // 1) Nunca aceptes 'precio' si NO lo pidió y la canónica es distinta
   if (respIntent && respIntentName === 'precio' && !askedPrice && canonical && canonical !== 'precio') {
@@ -666,9 +645,8 @@ try {
 
   // 2) Si la canónica es DIRECTA y difiere del matcher, exige score alto (>= 0.85)
   if (respIntent && isCanonicalDirect && respIntentName && respIntentName !== canonical) {
-    const minOverride = 0.85;
     const score = Number(respIntent?.score ?? 0);
-    if (score < minOverride) {
+    if (score < MATCHER_MIN_OVERRIDE) {
       console.log('[GUARD-2] canónica directa vs matcher (score bajo). Mantengo canónica:', { canonical, respIntentName, score });
       // @ts-ignore
       respIntent.intent = null;
