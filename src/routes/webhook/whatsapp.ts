@@ -404,6 +404,36 @@ function stripLeadGreetings(t: string) {
       console.log('🎯 Override a "reservar" por temporalidad + verbo de acción.');
     }
 
+    // === Interest/first-time & typo-tolerant “asistir” ===
+    const firstTimerHint = /\b(primera\s+vez|es\s+mi\s+primera\s+vez|soy\s+nuev[oa])\b/i;
+    const interestHint   = /\b(interesad[oa]s?|me\s+interesa|me\s+gustar(?:ía|ia)\s+(ir|probar|asistir)|me\s+apunto|quiero\s+(ir|probar|asistir|reservar))\b/i;
+    // tolerante a errores comunes de "asistir": asiatir, asitir, astistir, etc.
+    const asistirFuzzy   = /\b(asistir|asiatir|asitir|astistir|asisitr|asistiré?)\b/i;
+
+    // Si el detector dijo "saludo"/"agradecimiento" pero hay temporalidad + acción/interés → reservar
+    if ((intencionProc === 'saludo' || intencionProc === 'agradecimiento') && hasTemporal &&
+        (reservarHint.test(cleanedForTime) || interestHint.test(cleanedForTime) || asistirFuzzy.test(cleanedForTime) || firstTimerHint.test(cleanedForTime))) {
+      intencionProc = 'reservar';
+      intencionParaFaq = 'reservar';
+      console.log('🎯 Override saludo→reservar por temporalidad + interés/acción.');
+    }
+
+    // Orden de preferencia con temporalidad
+    if (hasTemporal && (reservarHint.test(cleanedForTime) || asistirFuzzy.test(cleanedForTime) || interestHint.test(cleanedForTime))) {
+      intencionProc = 'reservar';
+      intencionParaFaq = 'reservar';
+      console.log('🎯 Override a "reservar" por temporalidad + interés/acción (fuzzy).');
+    } else if (hasTemporal && scheduleHint.test(cleanedForTime)) {
+      intencionProc = 'horario';
+      intencionParaFaq = 'horario';
+      console.log('🎯 Override a "horario" por temporalidad + consulta de disponibilidad.');
+    } else if (firstTimerHint.test(cleanedForTime) || interestHint.test(cleanedForTime)) {
+      // sin fecha/hora pero con interés/primera vez → interes_clases
+      intencionProc = 'interes_clases';
+      intencionParaFaq = 'interes_clases';
+      console.log('🎯 Override a "interes_clases" por primera vez/interés sin fecha.');
+    }
+
     // ⚠️ Solo "precio" si NO hay temporalidad
     if (PRICE_REGEX.test(cleanedForTime) && !hasTemporal) {
       intencionProc = 'precio';
