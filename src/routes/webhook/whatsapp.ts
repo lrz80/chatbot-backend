@@ -178,6 +178,15 @@ try {
   return null;
 }
 
+// 👇 PÉGALO AQUÍ (debajo de getLink)
+function stripLeadGreetings(t: string) {
+  return t
+    .replace(/^\s*(hola+[\s!.,]*)?/i, '')
+    .replace(/^\s*(saludos+[\s!.,]*)?/i, '')
+    .replace(/^\s*(hello+|hi+|hey+)[\s!.,]*/i, '')
+    .trim();
+}
+
   // 🧹 Cancela cualquier follow-up pendiente para este contacto al recibir nuevo mensaje
   try {
       await pool.query(
@@ -328,9 +337,14 @@ try {
       ? await traducirMensaje(userInput, 'es')
       : userInput;
 
-    const { intencion: intencionProcesada } = await detectarIntencion(textoTraducido, tenant.id, 'whatsapp');
+    // ✅ NUEVO: quitar saludos al inicio para no sesgar la intención
+    const textoParaIntent = stripLeadGreetings(textoTraducido);
+
+    const { intencion: intencionProcesada } =
+      await detectarIntencion(textoParaIntent, tenant.id, 'whatsapp');
+
     intencionProc = (intencionProcesada || '').trim().toLowerCase();
-    intencionParaFaq = intencionProc; // <- la que usaremos luego en el SELECT de FAQs
+    intencionParaFaq = intencionProc;
     console.log(`🧠 Intención detectada (procesada): "${intencionProc}"`);
 
     // [ADD] Si la intención es "duda", refinamos a un sub-slug tipo "duda__duracion_clase"
@@ -348,6 +362,14 @@ try {
     // 👉 Detección de temporalidad/especificidad (sin DB)
     const entsEarly = extractEntitiesLite(userInput);
     const hasTemporal = !!(entsEarly.dateLike || entsEarly.dayLike || entsEarly.timeLike);
+
+    // ✅ NUEVO: si hay fecha/hora y preguntan por disponibilidad → "horario"
+    const scheduleHint = /\b(hay|habrá|abren|abre|clase|clases|horario|schedule|available|disponible|queda[n]?|cupos?)\b/i;
+    if (hasTemporal && scheduleHint.test(userInput)) {
+      intencionProc = 'horario';
+      intencionParaFaq = 'horario';
+      console.log('🎯 Override a "horario" por temporalidad + consulta de disponibilidad.');
+    }
 
     // 👉 Si hay temporalidad + verbo de acción, prioriza "reservar"
     const reservarHint = /\b(book|reserve|reserv|try|attend|assistir|asistir|ir|quiero ir|quiero probar|try out)\b/i;
