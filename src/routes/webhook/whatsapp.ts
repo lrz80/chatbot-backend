@@ -398,22 +398,23 @@ function stripLeadGreetings(t: string) {
 
     // 👉 Si hay temporalidad + verbo de acción, prioriza "reservar"
     const reservarHint = /\b(book|reserve|reserv|try|attend|assistir|asistir|ir|quiero ir|quiero probar|try out)\b/i;
-    if (hasTemporal && reservarHint.test(userInput)) {
+    if (hasTemporal && reservarHint.test(cleanedForTime)) {
       intencionProc = 'reservar';
       intencionParaFaq = 'reservar';
       console.log('🎯 Override a "reservar" por temporalidad + verbo de acción.');
     }
 
-    // ⚠️ Solo "precio" si el usuario lo pidió explícitamente y NO hay temporalidad
-    if (PRICE_REGEX.test(userInput) && !hasTemporal) {
+    // ⚠️ Solo "precio" si NO hay temporalidad
+    if (PRICE_REGEX.test(cleanedForTime) && !hasTemporal) {
       intencionProc = 'precio';
       intencionParaFaq = 'precio';
       console.log('🎯 Override a "precio" (sin temporalidad).');
-    } else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userInput)) {
+    } else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(cleanedForTime)) {
       intencionProc = 'clases_online';
       intencionParaFaq = 'clases_online';
       console.log('🎯 Override a intención clases_online por keyword');
     }
+    console.log('🛠 override check', { intencionProc, intencionParaFaq, hasTemporal, cleanedForTime });
 
     INTENCION_FINAL_CANONICA = (intencionParaFaq || intencionProc || '').trim().toLowerCase();
     console.log(`🎯 Intención final (canónica) = ${INTENCION_FINAL_CANONICA}`);
