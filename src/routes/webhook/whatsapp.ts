@@ -281,53 +281,63 @@ function stripLeadGreetings(t: string) {
    INTENCION_FINAL_CANONICA = '';
  }
 
- // b) Respuesta por INTENCIÓN (tabla intents/intenciones del tenant)
- try {
-   if (INTENCION_FINAL_CANONICA) {
-     const { rows } = await pool.query(
-       `SELECT respuesta
-          FROM intents
-         WHERE tenant_id = $1 AND canal = $2 AND slug = $3
-         LIMIT 1`,
-       [tenant.id, 'whatsapp', INTENCION_FINAL_CANONICA]
-     );
-     if (rows[0]?.respuesta) {
-       let out = rows[0].respuesta as string;
-       try {
-         const langOut = await detectarIdioma(out);
-         if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-           out = await traducirMensaje(out, idiomaDestino);
-         }
-       } catch {}
-       try {
-       await enviarWhatsApp(fromNumber, out, tenant.id);
-       } catch (e) {
-         console.error('❌ Error enviando WhatsApp (intención):', e);
-       }
-       await pool.query(
-         `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-           VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-         [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-       );
-       await pool.query(
-         `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-            VALUES ($1, $2, $3, NOW())
-            ON CONFLICT DO NOTHING`,
-         [tenant.id, 'whatsapp', messageId]
-       );
-       // follow-up (opcional; mantén tu función)
-       try {
-         const det2 = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-         const nivel2 = det2?.nivel_interes ?? 1;
-         await scheduleFollowUp(INTENCION_FINAL_CANONICA, nivel2);
-       } catch {}
-       return;
-     }
-   }
- } catch (e) {
-   console.warn('⚠️ Intent lookup falló:', e);
- }
+ // b) Respuesta por INTENCIÓN (tabla intenciones del tenant)
+  try {
+    if (INTENCION_FINAL_CANONICA) {
+      const { rows } = await pool.query(
+        `SELECT respuesta
+          FROM intenciones
+          WHERE tenant_id = $1
+            AND canal = $2
+            AND LOWER(nombre) = LOWER($3)
+            AND (activo IS TRUE OR activo IS NULL)
+          ORDER BY prioridad DESC NULLS LAST, updated_at DESC NULLS LAST
+          LIMIT 1`,
+        [tenant.id, 'whatsapp', INTENCION_FINAL_CANONICA]
+      );
+
+      if (rows[0]?.respuesta) {
+        let out = rows[0].respuesta as string;
+
+        try {
+          const langOut = await detectarIdioma(out);
+          if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+            out = await traducirMensaje(out, idiomaDestino);
+          }
+        } catch {}
+
+        try {
+          await enviarWhatsApp(fromNumber, out, tenant.id);
+        } catch (e) {
+          console.error('❌ Error enviando WhatsApp (intención):', e);
+        }
+
+        await pool.query(
+          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+          VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+          ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+          [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+        );
+
+        await pool.query(
+          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+          VALUES ($1, $2, $3, NOW())
+          ON CONFLICT DO NOTHING`,
+          [tenant.id, 'whatsapp', messageId]
+        );
+
+        try {
+          const det2 = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+          const nivel2 = det2?.nivel_interes ?? 1;
+          await scheduleFollowUp(INTENCION_FINAL_CANONICA, nivel2);
+        } catch {}
+
+        return;
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ Intent lookup (intenciones) falló:', e);
+  }
 
  // c) FAQ directa por intención (faqs oficiales)
  try {
