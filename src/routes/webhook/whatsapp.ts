@@ -4,7 +4,7 @@ import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import OpenAI from 'openai';
 import twilio from 'twilio';
-import { buildDudaSlug, isDirectIntent, normalizeIntentAlias } from '../../lib/intentSlug';
+import { buildDudaSlug, normalizeIntentAlias } from '../../lib/intentSlug';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
@@ -16,26 +16,9 @@ import {
   normalizarTexto
 } from '../../lib/faq/similaridadFaq';
 import { detectarIntencion } from '../../lib/detectarIntencion';
-import { runBeginnerRecoInterceptor } from '../../lib/recoPrincipiantes/interceptor';
-import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
-import { buscarRespuestaPorIntencion } from "../../services/intent-matcher";
-import { extractEntitiesLite } from '../../utils/extractEntitiesLite';
-
-const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
-const MATCHER_MIN_OVERRIDE = 0.85; // exige score alto para sobreescribir una intención "directa"
-
-const INTENT_THRESHOLD = Math.min(
-  0.95,
-  Math.max(0.30, Number(process.env.INTENT_MATCH_THRESHOLD ?? 0.55))
-);
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
-
-const INTENTS_DIRECT = new Set([
-  'interes_clases','precio','horario','ubicacion','reservar','comprar','confirmar',
-  'clases_online' // 👈 añade esto
-]);
 
 // Intenciones que deben ser únicas por tenant/canal
 const INTENT_UNIQUE = new Set([
@@ -156,27 +139,8 @@ try {
 
   const idioma = await detectarIdioma(userInput);
   const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
-  let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idioma);
+  let respuesta: string = getBienvenidaPorCanal('whatsapp', tenant, idioma);
   const canal = 'whatsapp';
-
-  function getLink(keys: string[]): string | null {
-  for (const key of keys) {
-    if (tenant && typeof tenant[key] === 'string' && tenant[key]) return tenant[key];
-  }
-  const pools = ['links','meta','config','settings','extras'];
-  for (const p of pools) {
-    try {
-      const raw = tenant?.[p];
-      const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      if (obj && typeof obj === 'object') {
-        for (const key of keys) {
-          if (typeof obj[key] === 'string' && obj[key]) return obj[key];
-        }
-      }
-    } catch {}
-  }
-  return null;
-}
 
 // 👇 PÉGALO AQUÍ (debajo de getLink)
 function stripLeadGreetings(t: string) {
@@ -210,8 +174,6 @@ function stripLeadGreetings(t: string) {
     console.error("❌ Error cargando FAQs:", err);
     faqs = [];
   }  
-
-  const mensajeUsuario = normalizarTexto(userInput);
 
   // 1️⃣ Detectar si es solo número
   const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
@@ -302,735 +264,156 @@ function stripLeadGreetings(t: string) {
     }
   };
 
-  // después de calcular idiomaDestino...
-  let INTENCION_FINAL_CANONICA = '';
+ // 3️⃣ Pipeline simple: INTENCIÓN → FAQ → SIMILITUD → OPENAI
+ 
+ let INTENCION_FINAL_CANONICA = '';
+ let respuestaDesdeFaq: string | null = null;
 
-  // 3️⃣ Detectar intención
-  const { intencion: intencionDetectada } = await detectarIntencion(mensajeUsuario, tenant.id, 'whatsapp');
-  const intencionLower = intencionDetectada?.trim().toLowerCase() || "";
-  console.log(`🧠 Intención detectada al inicio para tenant ${tenant.id}: "${intencionLower}"`);
+ // a) Detectar intención (canónica)
+ try {
+   const textoParaIntent = (idiomaDestino !== 'es')
+     ? await traducirMensaje(stripLeadGreetings(userInput), 'es').catch(() => userInput)
+     : stripLeadGreetings(userInput);
+   const det = await detectarIntencion(textoParaIntent, tenant.id, 'whatsapp');
+   INTENCION_FINAL_CANONICA = normalizeIntentAlias((det?.intencion || '').trim().toLowerCase());
+ } catch (e) {
+   console.warn('⚠️ detectarIntencion falló:', e);
+   INTENCION_FINAL_CANONICA = '';
+ }
 
-  let intencionProc = intencionLower; // se actualizará tras traducir (si aplica)
-  let intencionParaFaq = intencionLower; // esta será la que usemos para consultar FAQ
-
-  // 4️⃣ Si es saludo/agradecimiento, solo sal si el mensaje es SOLO eso
-  const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))\s*$/i
-  .test(userInput.trim());
-  const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
-
-  if ((intencionLower === "saludo" && greetingOnly) || (intencionLower === "agradecimiento" && thanksOnly)) {
-    const respuestaRapida =
-      intencionLower === "agradecimiento"
-        ? "¡De nada! 💬 ¿Quieres ver otra opción del menú?"
-        : await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
-
-    await enviarWhatsApp(fromNumber, respuestaRapida, tenant.id);
-    return;
-  }
-
-  if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
-    respuesta = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino); // antes: idioma
-  }else {
-  
-    // Paso 1: Detectar idioma y traducir para evaluar intención
-    const textoTraducido = idiomaDestino !== 'es'
-      ? await traducirMensaje(userInput, 'es')
-      : userInput;
-
-    // ✅ NUEVO: quitar saludos al inicio para no sesgar la intención
-    const textoParaIntent = stripLeadGreetings(textoTraducido);
-
-    const { intencion: intencionProcesada } =
-      await detectarIntencion(textoParaIntent, tenant.id, 'whatsapp');
-
-    intencionProc = (intencionProcesada || '').trim().toLowerCase();
-    intencionParaFaq = intencionProc;
-    console.log(`🧠 Intención detectada (procesada): "${intencionProc}"`);
-
-    // [ADD] Si la intención es "duda", refinamos a un sub-slug tipo "duda__duracion_clase"
-    if (intencionProc === 'duda') {
-      const refined = buildDudaSlug(userInput);
-      console.log(`🎯 Refino duda → ${refined}`);
-      intencionProc = refined;
-      intencionParaFaq = refined; // este es el que usas para consultar FAQ
-    }
-
-    // 🔹 Canonicaliza alias (virtuales → online, etc.)
-    intencionProc = normalizeIntentAlias(intencionProc);
-    intencionParaFaq = normalizeIntentAlias(intencionParaFaq);
-
-    // 👉 Detección de temporalidad/especificidad (sin DB) + fallbacks
-    const cleanedForTime = stripLeadGreetings(userInput);
-
-    // 1) Intenta con extractor “lite”
-    const entsEarly = extractEntitiesLite(cleanedForTime);
-
-    // 2) Fallbacks simples (palabras de tiempo, días y horas)
-    const temporalWordRe = /\b(hoy|mañana|pasado\s*mañana|tonight|esta\s*(?:tarde|noche|mañana|manana|semana)|this\s*(?:evening|morning|afternoon))\b/i;
-    const dayNameRe = /\b(lunes|martes|mi[eé]rcoles|miercoles|jueves|viernes|s[áa]bado|sabado|domingo)\b/i;
-    const clockRe = /\b([01]?\d|2[0-3]):[0-5]\d\s*(?:am|pm)?\b/i;
-
-    // 3) hasTemporal robusto
-    const hasTemporal =
-      !!(entsEarly.dateLike || entsEarly.dayLike || entsEarly.timeLike) ||
-      temporalWordRe.test(cleanedForTime) ||
-      dayNameRe.test(cleanedForTime) ||
-      clockRe.test(cleanedForTime);
-
-    // (opcional) logs de diagnóstico
-    console.log('[TemporalDetect]', {
-      cleanedForTime,
-      entsEarly,
-      hasTemporal,
-      word: temporalWordRe.test(cleanedForTime),
-      day: dayNameRe.test(cleanedForTime),
-      clock: clockRe.test(cleanedForTime),
-    });
-
-    // ✅ NUEVO: si hay fecha/hora y preguntan por disponibilidad → "horario"
-    const scheduleHint = /\b(hay|habrá|habra|abren|abre|clase|clases|horario|schedule|available|disponible|queda[n]?|cupos?)\b/i;
-
-    if (hasTemporal && scheduleHint.test(cleanedForTime)) {
-      intencionProc = 'horario';
-      intencionParaFaq = 'horario';
-      console.log('🎯 Override a "horario" por temporalidad + consulta de disponibilidad.');
-    }
-
-    // 👉 Si hay temporalidad + verbo de acción, prioriza "reservar"
-    const reservarHint = /\b(book|reserve|reserv|try|attend|assistir|asistir|ir|quiero ir|quiero probar|try out)\b/i;
-    if (hasTemporal && reservarHint.test(cleanedForTime)) {
-      intencionProc = 'reservar';
-      intencionParaFaq = 'reservar';
-      console.log('🎯 Override a "reservar" por temporalidad + verbo de acción.');
-    }
-
-    // === Interest/first-time & typo-tolerant “asistir” ===
-    const firstTimerHint = /\b(primera\s+vez|es\s+mi\s+primera\s+vez|soy\s+nuev[oa])\b/i;
-    const interestHint   = /\b(interesad[oa]s?|me\s+interesa|me\s+gustar(?:ía|ia)\s+(ir|probar|asistir)|me\s+apunto|quiero\s+(ir|probar|asistir|reservar))\b/i;
-    // tolerante a errores comunes de "asistir": asiatir, asitir, astistir, etc.
-    const asistirFuzzy   = /\b(asistir|asiatir|asitir|astistir|asisitr|asistiré?)\b/i;
-
-    // Si el detector dijo "saludo"/"agradecimiento" pero hay temporalidad + acción/interés → reservar
-    if ((intencionProc === 'saludo' || intencionProc === 'agradecimiento') && hasTemporal &&
-        (reservarHint.test(cleanedForTime) || interestHint.test(cleanedForTime) || asistirFuzzy.test(cleanedForTime) || firstTimerHint.test(cleanedForTime))) {
-      intencionProc = 'reservar';
-      intencionParaFaq = 'reservar';
-      console.log('🎯 Override saludo→reservar por temporalidad + interés/acción.');
-    }
-
-    // Orden de preferencia con temporalidad
-    if (hasTemporal && (reservarHint.test(cleanedForTime) || asistirFuzzy.test(cleanedForTime) || interestHint.test(cleanedForTime))) {
-      intencionProc = 'reservar';
-      intencionParaFaq = 'reservar';
-      console.log('🎯 Override a "reservar" por temporalidad + interés/acción (fuzzy).');
-    } else if (hasTemporal && scheduleHint.test(cleanedForTime)) {
-      intencionProc = 'horario';
-      intencionParaFaq = 'horario';
-      console.log('🎯 Override a "horario" por temporalidad + consulta de disponibilidad.');
-    } else if (firstTimerHint.test(cleanedForTime) || interestHint.test(cleanedForTime)) {
-      // sin fecha/hora pero con interés/primera vez → interes_clases
-      intencionProc = 'interes_clases';
-      intencionParaFaq = 'interes_clases';
-      console.log('🎯 Override a "interes_clases" por primera vez/interés sin fecha.');
-    }
-
-    // ⚠️ Solo "precio" si NO hay temporalidad
-    if (PRICE_REGEX.test(cleanedForTime) && !hasTemporal) {
-      intencionProc = 'precio';
-      intencionParaFaq = 'precio';
-      console.log('🎯 Override a "precio" (sin temporalidad).');
-    } else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(cleanedForTime)) {
-      intencionProc = 'clases_online';
-      intencionParaFaq = 'clases_online';
-      console.log('🎯 Override a intención clases_online por keyword');
-    }
-    console.log('🛠 override check', { intencionProc, intencionParaFaq, hasTemporal, cleanedForTime });
-
-    INTENCION_FINAL_CANONICA = (intencionParaFaq || intencionProc || '').trim().toLowerCase();
-    console.log(`🎯 Intención final (canónica) = ${INTENCION_FINAL_CANONICA}`);
-
-    try {
-      const ents = extractEntitiesLite(userInput);
-      // Dispara si hay fecha/día/hora, excepto saludo/thanks puros
-      const esInfoEspecifica =
-        ents.hasSpecificity &&
-        !((intencionLower === 'saludo' && greetingOnly) || (intencionLower === 'agradecimiento' && thanksOnly));
-
-      if (esInfoEspecifica) {
-        // 1) Intent matcher (oficial del tenant)
-        const textoParaMatch = (idiomaDestino !== 'es')
-          ? await traducirMensaje(userInput, 'es').catch(() => userInput)
-          : userInput;
-
-        const respIntent = await buscarRespuestaPorIntencion({
-          tenant_id: tenant.id,
-          canal: 'whatsapp',
-          mensajeUsuario: textoParaMatch,
-          idiomaDetectado: idiomaDestino,
-          umbral: Math.max(INTENT_THRESHOLD, 0.70),
-          filtrarPorIdioma: true
-        });
-
-        // 🚧 No aceptes "precio" del intent-matcher si hay temporalidad y el usuario NO pidió precio
-        if (respIntent && respIntent.intent &&
-            respIntent.intent.toLowerCase() === 'precio') {
-          const _entsGuard = entsEarly || extractEntitiesLite(userInput);
-          const _hasTemporalGuard = !!(_entsGuard.dateLike || _entsGuard.dayLike || _entsGuard.timeLike);
-          const _askedPrice = PRICE_REGEX.test(userInput);
-          if (_hasTemporalGuard && !_askedPrice) {
-            console.log('🛑 Bloqueo respuesta "precio" por temporalidad sin mención de precio.');
-            // Anula para forzar FAQ similitud u OpenAI templado
-            // @ts-ignore
-            respIntent.intent = null;
-            // @ts-ignore
-            respIntent.respuesta = null;
-          }
-        }
-
-        // --- Anti-mismatch entre intención canónica y matcher ---
-        const canonical = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-        const respIntentName = (respIntent?.intent || '').toLowerCase();
-
-        // Intenciones "fuertes" (directas)
-        const isCanonicalDirect = isDirectIntent(canonical, INTENTS_DIRECT);
-        
-        // El usuario pidió explícitamente precio?
-        const askedPrice = PRICE_REGEX.test(userInput);
-
-        // 1) Nunca aceptes 'precio' si NO lo pidió y tenemos una intención canónica distinta
-        if (respIntent && respIntentName === 'precio' && !askedPrice) {
-          console.log('[GUARD] bloqueo precio: no fue solicitado y la canónica=', canonical);
-          // anula matcher para forzar FAQ/similitud/openai
-          // @ts-ignore
-          respIntent.intent = null;
-          // @ts-ignore
-          respIntent.respuesta = null;
-        }
-
-        // 2) Si la canónica es DIRECTA y difiere de lo que trae el matcher,
-        //    exige un score muy alto para permitir override (p. ej. ≥ 0.85)
-        if (respIntent && isCanonicalDirect && respIntentName && respIntentName !== canonical) {
-          const score = Number(respIntent?.score ?? 0);
-          if (score < MATCHER_MIN_OVERRIDE) {
-            console.log('[GUARD] canónica directa vs matcher (score bajo). Mantengo canónica:', { canonical, respIntentName, score });
-            // @ts-ignore
-            respIntent.intent = null;
-            // @ts-ignore
-            respIntent.respuesta = null;
-          }
-        }
-
-        if (respIntent?.respuesta) {
-          let out = respIntent.respuesta;
-
-          // —— construir "fechaRef" solo con lo ya detectado (sin consultar DB)
-          const ents = extractEntitiesLite(userInput);
-          let fechaRef = ents.dateLike || ents.dayLike || null;
-          if (fechaRef) {
-            // capitaliza 1ra letra
-            fechaRef = fechaRef.charAt(0).toUpperCase() + fechaRef.slice(1);
-          }
-
-          const bookingLink = getLink([
-            'booking_url','reserva_url','link_reserva','schedule_url','glofox_booking','booking'
-          ]);
-          const firstClassLink = getLink([
-            'free_class_url','primera_clase_url','link_primera_clase','first_class','glofox_free'
-          ]);
-
-          // —— envuelve la FAQ con contexto cuando hay especificidad
-          if (ents.hasSpecificity) {
-            const prefijo = fechaRef
-              ? `¡Claro que sí! Para *${fechaRef}*:\n`
-              : `¡Claro que sí! Te paso la info específica:\n`;
-            let sufijo = '';
-            if (bookingLink)    sufijo += `\n\nReserva aquí: ${bookingLink}`;
-            if (firstClassLink) sufijo += `\n\n¿Primera vez? *Primera clase gratis* aquí: ${firstClassLink}`;
-            out = `${prefijo}${out}${sufijo}\n\nSi necesitas algo más, dime.`;
-          }
-
-          // — asegúrate del idioma del cliente
-          try {
-            const langOut = await detectarIdioma(out);
-            if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-              out = await traducirMensaje(out, idiomaDestino);
-            }
-          } catch {}
-
-          await enviarWhatsApp(fromNumber, out, tenant.id);
-
-          await pool.query(
-            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-            VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-            ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-            [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-          );
-
-          await pool.query(
-            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+ // b) Respuesta por INTENCIÓN (tabla intents/intenciones del tenant)
+ try {
+   if (INTENCION_FINAL_CANONICA) {
+     const { rows } = await pool.query(
+       `SELECT respuesta
+          FROM intents
+         WHERE tenant_id = $1 AND canal = $2 AND slug = $3
+         LIMIT 1`,
+       [tenant.id, 'whatsapp', INTENCION_FINAL_CANONICA]
+     );
+     if (rows[0]?.respuesta) {
+       let out = rows[0].respuesta as string;
+       try {
+         const langOut = await detectarIdioma(out);
+         if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+           out = await traducirMensaje(out, idiomaDestino);
+         }
+       } catch {}
+       try {
+       await enviarWhatsApp(fromNumber, out, tenant.id);
+       } catch (e) {
+         console.error('❌ Error enviando WhatsApp (intención):', e);
+       }
+       await pool.query(
+         `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+           VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+         [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+       );
+       await pool.query(
+         `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
             VALUES ($1, $2, $3, NOW())
             ON CONFLICT DO NOTHING`,
-            [tenant.id, 'whatsapp', messageId]
-          );
+         [tenant.id, 'whatsapp', messageId]
+       );
+       // follow-up (opcional; mantén tu función)
+       try {
+         const det2 = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+         const nivel2 = det2?.nivel_interes ?? 1;
+         await scheduleFollowUp(INTENCION_FINAL_CANONICA, nivel2);
+       } catch {}
+       return;
+     }
+   }
+ } catch (e) {
+   console.warn('⚠️ Intent lookup falló:', e);
+ }
 
-          // follow-up (opcional, tu lógica actual)
-          try {
-            let intFinal = (respIntent.intent || '').toLowerCase().trim();
-            if (intFinal === 'duda') intFinal = buildDudaSlug(userInput);
-            intFinal = normalizeIntentAlias(intFinal);
-            const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-            const nivel = det?.nivel_interes ?? 1;
-            await scheduleFollowUp(intFinal, nivel);
-          } catch {}
+ // c) FAQ directa por intención (faqs oficiales)
+ try {
+   if (INTENCION_FINAL_CANONICA) {
+     const { rows } = await pool.query(
+       `SELECT respuesta FROM faqs
+         WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3)
+         LIMIT 1`,
+       [tenant.id, 'whatsapp', INTENCION_FINAL_CANONICA]
+     );
+     if (rows[0]?.respuesta) {
+       respuestaDesdeFaq = rows[0].respuesta;
+     }
+   }
+ } catch (e) {
+   console.warn('⚠️ FAQ por intención falló:', e);
+ }
 
-          return; // ¡importante!
-        }
+ if (respuestaDesdeFaq) {
+   // Traduce si hace falta
+   let out = respuestaDesdeFaq;
+   try {
+     const langOut = await detectarIdioma(out);
+     if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+       out = await traducirMensaje(out, idiomaDestino);
+     }
+   } catch {}
+   try {
+     await enviarWhatsApp(fromNumber, out, tenant.id);
+     } catch (e) {
+       console.error('❌ Error enviando WhatsApp (FAQ directa):', e);
+     }
+   await pool.query(
+     `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+        VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+        ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+     [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+   );
+   await pool.query(
+     `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT DO NOTHING`,
+     [tenant.id, 'whatsapp', messageId]
+   );
+   try {
+     const det2 = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+     const nivel2 = det2?.nivel_interes ?? 1;
+     await scheduleFollowUp(INTENCION_FINAL_CANONICA || 'faq', nivel2);
+   } catch {}
+   return;
+ }
 
-        // 2) FAQ por similitud (⚠️ sin flujos)
-        {
-          const mensajeTraducido = (idiomaDestino !== 'es')
-            ? await traducirMensaje(normalizarTexto(userInput), 'es')
-            : normalizarTexto(userInput);
-
-          let out = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeTraducido, idiomaDestino);
-          if (out) {
-            await enviarWhatsApp(fromNumber, out, tenant.id);
-            await pool.query(
-              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-              [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-            );
-            await pool.query(
-              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-              VALUES ($1, $2, $3, NOW())
-              ON CONFLICT DO NOTHING`,
-              [tenant.id, 'whatsapp', messageId]
-            );
-            return; // ✅ terminamos rama específica por similitud
-          }
-        }
-
-        // 3) Fallback OpenAI (templado específico, sin consultar DB de clases)
-        let fechaBonita: string | null = null;
-        try {
-          const chrono = await import('chrono-node');
-          const d = chrono.es.parseDate(userInput, new Date(), { forwardDate: true });
-          if (d) {
-            fechaBonita = d.toLocaleDateString('es-ES', {
-              weekday: 'long', day: 'numeric', month: 'long'
-            });
-            // Capitaliza 1ra letra del día
-            fechaBonita = fechaBonita.charAt(0).toUpperCase() + fechaBonita.slice(1);
-          }
-        } catch {
-          // si no está chrono, seguimos con el texto detectado
-          fechaBonita = ents.dateLike || null;
-        }
-        const fechaRef = fechaBonita || ents.dateLike || 'la fecha que indicas';
-
-        const bookingLink    = getLink(['booking_url','reserva_url','link_reserva','booking','schedule_url','glofox_booking']);
-        const firstClassLink = getLink(['free_class_url','primera_clase_url','link_primera_clase','first_class','glofox_free']);
-
-        let out =
-          `¡Claro que sí! Para la fecha que mencionas, *${fechaRef}*, ofrecemos clases de indoor cycling.
-        Te recomiendo *reservar* para asegurar tu lugar (los cupos son limitados).`;
-
-        if (bookingLink) {
-          out += `\n\nPuedes reservar aquí: ${bookingLink}`;
-        }
-        if (firstClassLink) {
-          out += `\n\n¿Es tu primera vez con nosotros? *La primera clase es gratis*. Actívala aquí: ${firstClassLink}`;
-        }
-        out += `\n\nSi tienes otra pregunta, dime y te ayudo. ¡Te esperamos *${fechaRef}*!`;
-
-        // Asegura idioma del cliente
-        try {
-          const langOut = await detectarIdioma(out);
-          if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-            out = await traducirMensaje(out, idiomaDestino);
-          }
-        } catch {}
-
-        // Enviar y registrar
-        await enviarWhatsApp(fromNumber, out, tenant.id);
-
-        await pool.query(
-          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+ // d) FAQ por similitud (multi-idioma)
+ {
+   const mensajeTraducido = (idiomaDestino !== 'es')
+     ? await traducirMensaje(normalizarTexto(userInput), 'es').catch(() => normalizarTexto(userInput))
+     : normalizarTexto(userInput);
+   const out = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeTraducido, idiomaDestino);
+   if (out) {
+     try {
+       await enviarWhatsApp(fromNumber, out, tenant.id);
+     } catch (e) {
+       console.error('❌ Error enviando WhatsApp (FAQ similitud):', e);
+     }
+     await pool.query(
+       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
           VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-          [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-        );
-
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+     );
+     await pool.query(
+       `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
           VALUES ($1, $2, $3, NOW())
           ON CONFLICT DO NOTHING`,
-          [tenant.id, 'whatsapp', messageId]
-        );
-
-        // (opcional) follow-up
-        try {
-          const det2 = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-          const nivel2 = det2?.nivel_interes ?? 1;
-          await scheduleFollowUp('pedir_info_especifica', nivel2);
-        } catch {}
-
-        return; // ✅ cerramos rama específica (ya respondimos)
-      }
-    } catch (e) {
-      console.warn('⚠️ Rama específica falló; continuará pipeline normal:', e);
-    }
-
-// ─── INTENCIONES (matcher) — RESPONDE ANTES DE FAQs/IA ───────────────────────
-try {
-  // Comparamos en ES (igual que FAQs). Si el cliente no habla ES, traducimos su mensaje a ES.
-  const textoParaMatch = (idiomaDestino !== 'es')
-    ? await traducirMensaje(userInput, 'es').catch(() => userInput)
-    : userInput;
-
-  console.log('[INTENTS] match input=', textoParaMatch);
-
-  const respIntent = await buscarRespuestaPorIntencion({
-    tenant_id: tenant.id,
-    canal: 'whatsapp',              // este webhook es WhatsApp
-    mensajeUsuario: textoParaMatch,
-    idiomaDetectado: idiomaDestino, // 'es' | 'en'
-    umbral: Math.max(INTENT_THRESHOLD, 0.70),
-    filtrarPorIdioma: true
-  });
-
-  console.log('[INTENTS] result=', respIntent);
-
-  // --- Anti-mismatch entre intención canónica y matcher (segundo bloque) ---
-  const canonical = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-  const respIntentName = (respIntent?.intent || '').toLowerCase();
-
-  // Intenciones "fuertes" (directas)
-  const isCanonicalDirect = isDirectIntent(canonical, INTENTS_DIRECT);
-
-  // ¿El usuario pidió explícitamente precio?
-  const askedPrice = PRICE_REGEX.test(userInput);
-
-  // 1) Nunca aceptes 'precio' si NO lo pidió y la canónica es distinta
-  if (respIntent && respIntentName === 'precio' && !askedPrice && canonical && canonical !== 'precio') {
-    console.log('[GUARD-2] bloqueo precio: no fue solicitado y la canónica=', canonical, 'score=', respIntent?.score);
-    // @ts-ignore
-    respIntent.intent = null;
-    // @ts-ignore
-    respIntent.respuesta = null;
-  }
-
-  // 2) Si la canónica es DIRECTA y difiere del matcher, exige score alto (>= 0.85)
-  if (respIntent && isCanonicalDirect && respIntentName && respIntentName !== canonical) {
-    const score = Number(respIntent?.score ?? 0);
-    if (score < MATCHER_MIN_OVERRIDE) {
-      console.log('[GUARD-2] canónica directa vs matcher (score bajo). Mantengo canónica:', { canonical, respIntentName, score });
-      // @ts-ignore
-      respIntent.intent = null;
-      // @ts-ignore
-      respIntent.respuesta = null;
-    }
-  }
-
-  if (respIntent?.respuesta) {
-    // Asegura que la salida esté en el idioma del cliente
-    let out = respIntent.respuesta;
-    try {
-      const langOut = await detectarIdioma(out);
-      if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-        out = await traducirMensaje(out, idiomaDestino);
-      }
-    } catch {}
-
-    // envia y registra assistant (usa un id distinto para no chocar)
-    await enviarWhatsApp(fromNumber, out, tenant.id);
-
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-    );
-
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-
-    console.log(`✅ Respondido por INTENCIÓN: "${respIntent.intent}" score=${respIntent.score}`);
-
-    try {
-      let intFinal = (respIntent.intent || '').toLowerCase().trim();
-      if (intFinal === 'duda') intFinal = buildDudaSlug(userInput);
-      intFinal = normalizeIntentAlias(intFinal);
-    
-      const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-      const nivel = det?.nivel_interes ?? 1;
-    
-      await scheduleFollowUp(intFinal, nivel);
-    } catch (e) {
-      console.warn('⚠️ No se pudo programar follow-up post-intent (WA):', e);
-    }
-    
-    return; // ¡Importante! Ya respondimos, salimos aquí.
-  }
-} catch (e) {
-  console.warn('⚠️ Matcher de intenciones no coincidió o falló:', e);
-}
-
-// 🔎 Interceptor canal-agnóstico (recomendación principiantes)
-const interceptado = await runBeginnerRecoInterceptor({
-  tenantId: tenant.id,
-  canal: 'whatsapp',
-  fromNumber,
-  userInput,
-  idiomaDestino,
-  intencionParaFaq,
-  promptBase,
-  enviarFn: enviarWhatsApp, // tu sender chunker
-});
-
-if (interceptado) {
-  // ya respondió + registró sugerida + (opcional) follow-up se maneja afuera si quieres
-  // Si quieres mantener tu follow-up actual aquí, puedes dejarlo después de este if.
-  console.log('✅ Interceptor principiantes respondió en WhatsApp.');
-
-  try {
-    let intFinal = (intencionParaFaq || '').toLowerCase().trim();
-    if (!intFinal) {
-      const detTmp = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-      intFinal = normalizeIntentAlias((detTmp?.intencion || '').toLowerCase());
-    }
-    const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-    const nivel = det?.nivel_interes ?? 1;
-    await scheduleFollowUp(intFinal, nivel);
-  } catch (e) {
-    console.warn('⚠️ No se pudo programar follow-up tras interceptor (WA):', e);
-  }  
-  return; // evita FAQ genérica
-}
-
-  // [REPLACE] lookup robusto
-  let respuestaDesdeFaq: string | null = null;
-
-  if (isDirectIntent(intencionParaFaq, INTENTS_DIRECT)) {
-    if (intencionParaFaq === 'precio') {
-      // 🔎 Usa helper robusto para precios (alias + sub-slugs)
-      respuestaDesdeFaq = await fetchFaqPrecio(tenant.id, canal);
-      if (respuestaDesdeFaq) {
-        console.log('📚 FAQ precio (robusta) encontrada.');
-      }
-    } else {
-      // Camino normal para otras intenciones directas
-      const { rows: faqPorIntencion } = await pool.query(
-        `SELECT respuesta FROM faqs 
-        WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3) LIMIT 1`,
-        [tenant.id, canal, intencionParaFaq]
-      );
-      if (faqPorIntencion.length > 0) {
-        respuestaDesdeFaq = faqPorIntencion[0].respuesta;
-      }
-    }
-  }
-
-  // 🔄 Si NO hay FAQ "reservar" pero la intención final es reservar → usa OpenAI con promptBase
-  if (!respuestaDesdeFaq && INTENCION_FINAL_CANONICA === 'reservar') {
-    const bookingLink = getLink(['booking_url','reserva_url','link_reserva','schedule_url','glofox_booking','booking']);
-    const firstClassLink = getLink(['free_class_url','primera_clase_url','link_primera_clase','first_class','glofox_free']);
-
-    // Construimos un “mini contexto” para el LLM (en el idioma del cliente).
-    const contextoCTA = [
-      bookingLink ? `Reserva: ${bookingLink}` : null,
-      firstClassLink ? `Primera clase gratis: ${firstClassLink}` : null,
-    ].filter(Boolean).join(' | ') || 'Reserva: (sin link configurado)';
-
-    // Damos pista de fecha/hora si las detectamos (no consultamos DB)
-    const ents = extractEntitiesLite(userInput);
-    const cuando = [ents.dateLike, ents.dayLike, ents.timeLike].filter(Boolean).join(' ');
-
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-
-    // Usamos tu promptBase pero con una instrucción adicional para CTA de reserva
-    const systemPrompt = [
-      promptBase,
-      '',
-      'Si la intención del usuario es RESERVAR:',
-      '- Responde breve y directa, con tono amable.',
-      '- Incluye un llamado a la acción claro con el enlace de reserva si existe.',
-      '- Si hay "primera clase gratis", menciónala al final con su enlace si existe.',
-      '- Si el usuario dio fecha/hora, refléjala en la respuesta sin inventar disponibilidad.',
-      '- No inventes horarios ni cupos; invita a reservar con el enlace.',
-    ].join('\n');
-
-    const userPrompt = [
-      `MENSAJE_USUARIO: ${userInput}`,
-      `INTENCION_FINAL: ${INTENCION_FINAL_CANONICA}`,
-      `CUANDO_DETECTADO: ${cuando || 'no especificado'}`,
-      `ENLACES: ${contextoCTA}`,
-      `IDIOMA_SALIDA: ${idiomaDestino}`,
-    ].join('\n');
-
-    let out = '';
-    try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        temperature: 0.4,
-      });
-
-      out = completion.choices[0]?.message?.content?.trim() || '';
-    } catch (e) {
-      console.warn('⚠️ Fallback OpenAI reservar falló, usaré mensaje fijo:', e);
-    }
-
-    // Fallback ultra simple si LLM no devolvió nada
-    if (!out) {
-      out = `¡Excelente! Te ayudo a reservar${cuando ? ` para ${cuando}` : ''}.` +
-          (bookingLink ? `\n\nReserva aquí: ${bookingLink}` : '') +
-          (firstClassLink ? `\n\n¿Es tu primera vez? *Primera clase gratis* aquí: ${firstClassLink}` : '') +
-          `\n\n¿Quieres que te guíe con el proceso?`;
-    }
-
-    // Garantiza idioma del cliente
-    try {
-      const langOut = await detectarIdioma(out);
-      if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-        out = await traducirMensaje(out, idiomaDestino);
-      }
-    } catch {}
-
-    await enviarWhatsApp(fromNumber, out, tenant.id);
-
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-    );
-
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-
-    // (opcional) follow-up en base a reservar
-    try {
-      const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-      const nivel = det?.nivel_interes ?? 1;
-      await scheduleFollowUp('reservar', nivel);
-    } catch {}
-
-    return; // ✅ ya respondimos por vía LLM cuando no hay FAQ "reservar"
-  }
-
-  if (respuestaDesdeFaq) {
-    // Traducir si hace falta
-    let out = respuestaDesdeFaq;
-    const idiomaRespuesta = await detectarIdioma(out);
-    if (idiomaRespuesta && idiomaRespuesta !== 'zxx' && idiomaRespuesta !== idiomaDestino) {
-      out = await traducirMensaje(out, idiomaDestino);
-    }
-    respuesta = out;
-
-    console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencionParaFaq}"`);
-    console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
-
-    await enviarWhatsApp(fromNumber, respuesta, tenant.id);
-    console.log("📬 Respuesta enviada vía Twilio (desde FAQ oficial):", respuesta);
-
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, respuesta, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-    );
-
-    // Inteligencia + follow-up (único, configurable)
-    try {
-      // Solo usamos el detector para el nivel; la intención ya está canónica
-      const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-      const nivelFaq = det?.nivel_interes ?? 1;
-      const intFinal = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-
-      const intencionesCliente = [
-        "comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"
-      ];
-      if (intencionesCliente.some(p => intFinal.includes(p))) {
-        await pool.query(
-          `UPDATE clientes
-            SET segmento = 'cliente'
-          WHERE tenant_id = $1 AND contacto = $2
-            AND (segmento = 'lead' OR segmento IS NULL)`,
-          [tenant.id, fromNumber]
-        );
-      }
-
-      await pool.query(
-        `INSERT INTO sales_intelligence
-          (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
-        [tenant.id, fromNumber, canal, userInput, intFinal, nivelFaq, messageId]
-      );
-
-      const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
-      if (nivelFaq >= 3 || intencionesFollowUp.includes(intFinal)) {
-        await scheduleFollowUp(intFinal, nivelFaq);
-      }      
-    } catch (e) {
-      console.warn('⚠️ No se pudo registrar/schedule tras FAQ oficial:', e);
-    }
-
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-    
-    return; // salir aquí si hubo FAQ directa
-  }
-
-// Si NO hubo FAQ directa → similaridad
-{
-  const mensajeTraducido = (idiomaDestino !== 'es')
-    ? await traducirMensaje(mensajeUsuario, 'es')
-    : mensajeUsuario;
-
-  respuesta = await buscarRespuestaSimilitudFaqsTraducido(
-    faqs,
-    mensajeTraducido,
-    idiomaDestino
-  );
-}
-
-// 🔒 Protección adicional: si ya respondió con FAQ oficial, no continuar
-if (respuestaDesdeFaq) {
-  console.log("🔒 Ya se respondió con una FAQ oficial. Se cancela generación de sugerida.");
-  return;
-}
-
-// ⛔ No generes sugeridas si el mensaje NO tiene letras (p.ej. "8") o es muy corto
-const hasLetters = /\p{L}/u.test(userInput);
-if (!hasLetters || normalizarTexto(userInput).length < 4) {
-  console.log('🧯 No se genera sugerida (sin letras o texto muy corto).');
-  return;
-}
+       [tenant.id, 'whatsapp', messageId]
+     );
+     return;
+   }
+ }
 
 // 🧠 Si no hay respuesta aún, generar con OpenAI y registrar como FAQ sugerida
 if (!respuestaDesdeFaq && !respuesta) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
   const completion = await openai.chat.completions.create({
-    model: "gpt-3.5-turbo",
+    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
     messages: [
       { role: 'system', content: promptBase },
       { role: 'user', content: userInput },
@@ -1104,7 +487,7 @@ if (!respuestaDesdeFaq && !respuesta) {
     const { intencion: intencionDetectadaParaGuardar } =
     await detectarIntencion(textoTraducidoParaGuardar, tenant.id, 'whatsapp');
 
-    let intencionFinal = intencionDetectadaParaGuardar.trim().toLowerCase();
+    let intencionFinal = (intencionDetectadaParaGuardar || '').trim().toLowerCase();
     if (intencionFinal === 'duda') {
       intencionFinal = buildDudaSlug(userInput);
     }
@@ -1170,7 +553,11 @@ if (!respuestaDesdeFaq && !respuesta) {
     [tenant.id, respuesta, canal, fromNumber || 'anónimo', `${messageId}-bot`]
   );  
 
-  await enviarWhatsApp(fromNumber, respuesta, tenant.id);
+  try {
+    await enviarWhatsApp(fromNumber, respuesta, tenant.id);
+  } catch (e) {
+    console.error('❌ Error enviando WhatsApp (fallback OpenAI):', e);
+  }
   console.log("📬 Respuesta enviada vía Twilio:", respuesta);
 
   await pool.query(
@@ -1228,5 +615,4 @@ if (!respuestaDesdeFaq && !respuesta) {
   } catch (err) {
     console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
   }   
-  } 
 } 
