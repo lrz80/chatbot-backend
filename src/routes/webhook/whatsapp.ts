@@ -343,40 +343,31 @@ if (hasTemporal && reserveHit) {
 
       if (rows[0]?.respuesta) {
         let out = rows[0].respuesta as string;
-
         try {
           const langOut = await detectarIdioma(out);
           if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
             out = await traducirMensaje(out, idiomaDestino);
           }
         } catch {}
-
-        try {
-          await enviarWhatsApp(fromNumber, out, tenant.id);
-        } catch (e) {
-          console.error('❌ Error enviando WhatsApp (intención):', e);
-        }
-
+        try { await enviarWhatsApp(fromNumber, out, tenant.id); } catch (e) { console.error('❌ WA (intención):', e); }
         await pool.query(
           `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
           VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
           [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
         );
-
         await pool.query(
           `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
           VALUES ($1, $2, $3, NOW())
           ON CONFLICT DO NOTHING`,
           [tenant.id, 'whatsapp', messageId]
         );
-
+        // follow-up
         try {
           const det2 = await detectarIntencion(userInput, tenant.id, 'whatsapp');
           const nivel2 = det2?.nivel_interes ?? 1;
           await scheduleFollowUp(INTENCION_FINAL_CANONICA, nivel2);
         } catch {}
-
         return;
       }
     }
