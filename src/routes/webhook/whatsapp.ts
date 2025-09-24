@@ -8,7 +8,6 @@ import { buildDudaSlug, normalizeIntentAlias } from '../../lib/intentSlug';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
-import { buscarRespuestaSimilitudFaqsTraducido } from '../../lib/respuestasTraducidas';
 import { enviarWhatsApp } from '../../lib/senders/whatsapp';
 import {
   yaExisteComoFaqSugerida,
@@ -139,7 +138,7 @@ try {
 
   const idioma = await detectarIdioma(userInput);
   const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
-  let respuesta: string = getBienvenidaPorCanal('whatsapp', tenant, idioma);
+  let respuesta = '';
   const canal = 'whatsapp';
 
 // 👇 PÉGALO AQUÍ (debajo de getLink)
@@ -426,36 +425,8 @@ if (hasTemporal && reserveHit) {
    return;
  }
 
- // d) FAQ por similitud (multi-idioma)
- {
-   const mensajeTraducido = (idiomaDestino !== 'es')
-     ? await traducirMensaje(normalizarTexto(userInput), 'es').catch(() => normalizarTexto(userInput))
-     : normalizarTexto(userInput);
-   const out = await buscarRespuestaSimilitudFaqsTraducido(faqs, mensajeTraducido, idiomaDestino);
-   if (out) {
-     try {
-       await enviarWhatsApp(fromNumber, out, tenant.id);
-     } catch (e) {
-       console.error('❌ Error enviando WhatsApp (FAQ similitud):', e);
-     }
-     await pool.query(
-       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-          VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-          ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-       [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-     );
-     await pool.query(
-       `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-          VALUES ($1, $2, $3, NOW())
-          ON CONFLICT DO NOTHING`,
-       [tenant.id, 'whatsapp', messageId]
-     );
-     return;
-   }
- }
-
-// 🧠 Si no hay respuesta aún, generar con OpenAI y registrar como FAQ sugerida
-if (!respuestaDesdeFaq && !respuesta) {
+// 🧠 Si no hubo FAQ/intención, genera con OpenAI usando el prompt del canal
+if (!respuestaDesdeFaq) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
   const completion = await openai.chat.completions.create({
@@ -467,8 +438,8 @@ if (!respuestaDesdeFaq && !respuesta) {
   });
 
   respuesta = completion.choices[0]?.message?.content?.trim()
-          || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-
+           || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+           
   const respuestaGenerada = respuesta;
 
   // 🌐 Asegurar idioma del cliente
