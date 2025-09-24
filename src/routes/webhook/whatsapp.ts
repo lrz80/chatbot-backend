@@ -276,35 +276,43 @@ function stripLeadGreetings(t: string) {
      : stripLeadGreetings(userInput);
    const det = await detectarIntencion(textoParaIntent, tenant.id, 'whatsapp');
    INTENCION_FINAL_CANONICA = normalizeIntentAlias((det?.intencion || '').trim().toLowerCase());
- } catch (e) {
-   console.warn('⚠️ detectarIntencion falló:', e);
-   INTENCION_FINAL_CANONICA = '';
- }
 
- // --- Override ligero por temporalidad para mapear a HORARIO/RESERVAR ---
+   // --- Override ligero por temporalidad para mapear a HORARIO/RESERVAR ---
   const cleaned = stripLeadGreetings(userInput);
 
-  // tokens de tiempo (fechas/horas sencillas)
-  const timeLikeRe = /\b(\d{1,2}([:.]\d{2})?\s*(am|pm)?)\b/i;
+  // HH:MM / H:MM con o sin am/pm
+  const timeLikeRe = /\b([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?\b/i;
+  // Palabras de tiempo (hoy/mañana/etc)
   const dayWordRe  = /\b(hoy|mañana|pasado\s*mañana|esta\s*(tarde|noche|mañana)|tonight|esta\s*semana|fin\s*de\s*semana)\b/i;
+  // Días de la semana
   const dayNameRe  = /\b(lunes|martes|mi[eé]rcoles|miercoles|jueves|viernes|s[áa]bado|sabado|domingo)\b/i;
 
-  // pistas de consulta de disponibilidad/agenda
+  // Consulta de disponibilidad/horarios
   const scheduleHintRe = /\b(horario|habrá|habra|abren?|clase|clases|schedule|disponible|queda[n]?|cupos?)\b/i;
-  // pistas de intención de acción (reservar/ir)
+  // Intención de acción (reservar/ir)
   const reserveHintRe  = /\b(reserv(ar|a|o)|book|apart(ar|o)|quiero\s+ir|asistir|probar|inscribirme)\b/i;
 
   const hasTemporal = timeLikeRe.test(cleaned) || dayWordRe.test(cleaned) || dayNameRe.test(cleaned);
 
-  // Si el detector dijo nada o "duda", pero hay temporalidad + pista de horario → horario
+  // Log para verificar en runtime
+  console.log('[Temporal override]', { cleaned, hasTemporal, schedule: scheduleHintRe.test(cleaned), reserve: reserveHintRe.test(cleaned), INTENCION_FINAL_CANONICA });
+
+  // Si no hay intención o es "duda", y hay temporalidad + pista de horario → horario
   if ((!INTENCION_FINAL_CANONICA || INTENCION_FINAL_CANONICA === 'duda') && hasTemporal && scheduleHintRe.test(cleaned)) {
     INTENCION_FINAL_CANONICA = 'horario';
+    console.log('🎯 Override → horario');
   }
 
   // Si además hay verbo de acción → prioriza reservar
   if (hasTemporal && reserveHintRe.test(cleaned)) {
     INTENCION_FINAL_CANONICA = 'reservar';
+    console.log('🎯 Override → reservar');
   }
+
+ } catch (e) {
+   console.warn('⚠️ detectarIntencion falló:', e);
+   INTENCION_FINAL_CANONICA = '';
+ }
 
  // b) Respuesta por INTENCIÓN (tabla intenciones del tenant)
   try {
