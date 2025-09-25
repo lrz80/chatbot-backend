@@ -15,6 +15,7 @@ import {
   normalizarTexto
 } from '../../lib/faq/similaridadFaq';
 import { detectarIntencion } from '../../lib/detectarIntencion';
+import { getTenantTimezone } from '../../lib/getTenantTimezone';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -64,6 +65,53 @@ async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma:
   } catch (e) {
     console.warn('No se pudo guardar idioma del cliente:', e);
   }
+}
+
+function isValidIanaTZ(tz?: string | null): tz is string {
+  if (!tz || typeof tz !== 'string') return false;
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; }
+  catch { return false; }
+}
+
+function tryJson<T=any>(v: any): T | null {
+  if (!v || typeof v !== 'string') return null;
+  try { return JSON.parse(v); } catch { return null; }
+}
+
+function pickTZ(...cands: Array<any>): string | null {
+  for (const c of cands) {
+    if (typeof c === 'string' && isValidIanaTZ(c)) return c;
+    // soporta paths tipo obj.timezone/obj.settings.timezone como strings json
+    const j = tryJson(c);
+    if (j && typeof j === 'object') {
+      const maybe = (j.timezone || j.time_zone || j.tz);
+      if (typeof maybe === 'string' && isValidIanaTZ(maybe)) return maybe;
+    }
+    if (c && typeof c === 'object') {
+      const maybe = (c.timezone || c.time_zone || c.tz);
+      if (typeof maybe === 'string' && isValidIanaTZ(maybe)) return maybe;
+    }
+  }
+  return null;
+}
+
+/**
+ * Resuelve la zona horaria del tenant desde varios campos comunes:
+ * - columnas directas: timezone | time_zone | tz
+ * - JSONs: settings | config | meta | extras | links  (string o objeto)
+ * - geo hints opcionales: country_code -> fallback simple
+ */
+function resolveTenantTimeZoneFromSettings(tenant: any): string {
+  const tz =
+    tenant?.settings?.timezone ||
+    tenant?.settings?.time_zone ||
+    tenant?.timezone || tenant?.time_zone || tenant?.tz;
+
+  if (isValidIanaTZ(tz)) return tz;
+  if (tenant?.country_code === 'PR') return 'America/Puerto_Rico';
+  if (tenant?.country_code === 'US') return 'America/New_York';
+  if (tenant?.country_code === 'MX') return 'America/Mexico_City';
+  return 'UTC';
 }
 
 router.post('/', async (req: Request, res: Response) => {
@@ -193,6 +241,15 @@ function stripLeadGreetings(t: string) {
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
+  // ✅ PON ESTO DESPUÉS de calcular idiomaDestino (y antes del pipeline)
+  const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?)\s*$/i.test(userInput.trim());
+  const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
+
+  if (greetingOnly || thanksOnly) {
+    const out = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+    try { await enviarWhatsApp(fromNumber, out, tenant.id); } catch {}
+    return;
+  }
 
   // ⏲️ Programador de follow-up (WhatsApp)
   async function scheduleFollowUp(intFinal: string, nivel: number) {
@@ -263,7 +320,7 @@ function stripLeadGreetings(t: string) {
     }
   };
 
- // 3️⃣ Pipeline simple: INTENCIÓN → FAQ → SIMILITUD → OPENAI
+ // 3️⃣ Pipeline simple: INTENCIÓN → INTENCIONES(tabla) → FAQ → OPENAI
  
  let INTENCION_FINAL_CANONICA = '';
  let respuestaDesdeFaq: string | null = null;
@@ -425,31 +482,95 @@ if (hasTemporal && reserveHit) {
    return;
  }
 
-// 🧠 Si no hubo FAQ/intención, genera con OpenAI usando el prompt del canal
-if (!respuestaDesdeFaq) {
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+  // 🧠 Si no hubo FAQ/intención, genera con OpenAI usando el prompt del canal (con fecha/rails)
+  if (!respuestaDesdeFaq) {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
-  const completion = await openai.chat.completions.create({
-    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+  // ✅ Zona horaria del tenant (oficial)
+  const timeZone = getTenantTimezone(tenant);
+
+  // 2) Fechas absolutas para hoy/mañana en la zona del negocio
+  const now = new Date();
+  const nowInTz = new Date(
+    now.toLocaleString('en-US', { timeZone })
+  );
+  const tomorrowInTz = new Date(nowInTz.getTime() + 24 * 60 * 60 * 1000);
+
+  const fmtFecha = (d: Date) =>
+    d.toLocaleDateString('es-ES', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      timeZone
+    });
+
+  const HOY = fmtFecha(nowInTz);        // ej. "miércoles, 24 de septiembre de 2025"
+  const MANANA = fmtFecha(tomorrowInTz); // ej. "jueves, 25 de septiembre de 2025"
+
+  // 3) Extraer hora solicitada (si viene)
+  const lower = (userInput || '').toLowerCase();
+  const horaMatch = lower.match(/([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?/i);
+  const HORA_PEDIDA = horaMatch ? horaMatch[0].replace('.', ':') : null;
+
+  // 4) ¿El usuario dijo explícitamente "mañana"?
+  const DICE_MANANA = /(mañana|manana)/i.test(lower);
+
+  // 5) Armar contexto explícito para el LLM
+  const contextoFecha = [
+    `ZONA_HORARIA_NEGOCIO: ${timeZone}`,
+    `HOY: ${HOY}`,
+    `MANANA: ${MANANA}`,
+    `USUARIO_PREGUNTA: ${userInput}`,
+    `PARSEO: ${[
+      DICE_MANANA ? `pide = MANANA` : `pide = (no_detectado)`,
+      HORA_PEDIDA ? `hora = ${HORA_PEDIDA}` : `hora = (no_detectada)`
+    ].join(' | ')}`
+  ].join('\n');
+
+  // 6) Rails si es intención de agenda
+  const isAgendaIntent = ['horario','reservar'].includes((INTENCION_FINAL_CANONICA || '').toLowerCase());
+  const systemPrompt = isAgendaIntent
+    ? [
+        promptBase,
+        '',
+        '=== CONTEXTO_DE_FECHA ===',
+        contextoFecha,
+        '',
+        '=== REGLAS PARA HORARIOS/RESERVAS (SIN CALENDARIO EN TIEMPO REAL) ===',
+        '- NO confirmes ni niegues disponibilidad, cancelaciones ni cupos.',
+        '- NO inventes horarios diferentes a los “horarios base” del negocio (si están en el prompt).',
+        '- Si el usuario pide un día/hora (p. ej. "mañana 7:00pm"), repite esa intención y pide confirmar en el enlace de reservas.',
+        '- Sé breve, amable y en el idioma del cliente.',
+      ].join('\n')
+    : [
+        promptBase,
+        '',
+        '=== CONTEXTO_DE_FECHA ===',
+        contextoFecha
+      ].join('\n');
+
+    const completion = await openai.chat.completions.create({
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    temperature: 0.3,
+    max_tokens: 280,           // evita parrafadas largas
+    presence_penalty: 0,
+    frequency_penalty: 0,
     messages: [
-      { role: 'system', content: promptBase },
-      { role: 'user', content: userInput },
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userInput }
     ],
   });
 
   respuesta = completion.choices[0]?.message?.content?.trim()
-           || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-           
-  const respuestaGenerada = respuesta;
+    || 'Puedo ayudarte con los horarios. ¿Te parece si lo confirmamos en el enlace de reservas o prefieres otra hora?';
 
-  // 🌐 Asegurar idioma del cliente
+  // 🌐 Ajuste de idioma de salida
   try {
     const idiomaRespuesta = await detectarIdioma(respuesta);
-  if (idiomaRespuesta && idiomaRespuesta !== 'zxx' &&
-      idiomaRespuesta !== idiomaDestino) {
-    respuesta = await traducirMensaje(respuesta, idiomaDestino);
-  }
-
+    if (idiomaRespuesta && idiomaRespuesta !== 'zxx' && idiomaRespuesta !== idiomaDestino) {
+      respuesta = await traducirMensaje(respuesta, idiomaDestino);
+    }
   } catch (e) {
     console.warn('No se pudo traducir la respuesta de OpenAI:', e);
   }
@@ -472,13 +593,13 @@ if (!respuestaDesdeFaq) {
   // Verificación de duplicados
   const yaExisteSugerida = yaExisteComoFaqSugerida(
     userInput,
-    respuestaGenerada,
+    respuestaNormalizada,
     sugeridasExistentes
   );
 
   const yaExisteAprobada = yaExisteComoFaqAprobada(
     userInput,
-    respuestaGenerada,
+    respuestaNormalizada,
     faqs
   );
 
