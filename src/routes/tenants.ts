@@ -67,8 +67,12 @@ router.get('/me', async (req: Request, res: Response) => {
   try {
     const tenantId = await getTenantIdFromCookie(req);
     const { rows } = await pool.query(
-      `SELECT id, name, slug, categoria, idioma, prompt, bienvenida, settings, links
-         FROM tenants WHERE id = $1`,
+      `SELECT
+         id, name, slug, categoria, idioma, prompt,
+         mensaje_bienvenida AS bienvenida,
+         settings, links
+       FROM tenants
+       WHERE id = $1`,
       [tenantId]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Tenant no encontrado' });
@@ -102,7 +106,7 @@ router.post('/', async (req: Request, res: Response) => {
       idioma = 'es',
       prompt = 'Eres un asistente útil.',
       bienvenida = '¡Hola! 👋 Soy tu asistente virtual. ¿En qué puedo ayudarte?',
-      timezone, // puede venir del front (ej. Intl.DateTimeFormat().resolvedOptions().timeZone)
+      timezone, // puede venir del front
 
       // booking URL (varios alias soportados)
       booking_url,
@@ -122,7 +126,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     const slug = toSlug(name);
 
-    // 1) Actualiza campos “planos”
+    // 1) Actualiza campos “planos” (columna correcta: mensaje_bienvenida)
     await pool.query(
       `UPDATE tenants
          SET name = $1,
@@ -130,27 +134,27 @@ router.post('/', async (req: Request, res: Response) => {
              categoria = $3,
              idioma = $4,
              prompt = $5,
-             bienvenida = $6
+             mensaje_bienvenida = $6
        WHERE id = $7`,
       [name, slug, categoria, idioma, prompt, bienvenida, user.tenant_id]
     );
 
-    // 2) Si viene timezone y parece válida IANA, guárdala en settings.timezone
+    // 2) settings.timezone
     if (isString(timezone) && isLikelyIana(timezone)) {
       await pool.query(
         `UPDATE tenants
-            SET settings = jsonb_set(
-              COALESCE(settings, '{}'::jsonb),
-              '{timezone}',
-              to_jsonb($2::text),
-              true
-            )
-          WHERE id = $1`,
+           SET settings = jsonb_set(
+             COALESCE(settings, '{}'::jsonb),
+             '{timezone}',
+             to_jsonb($2::text),
+             true
+           )
+         WHERE id = $1`,
         [user.tenant_id, timezone]
       );
     }
 
-    // 3) Booking URL (acepta varios alias). Se guarda en settings.booking.booking_url
+    // 3) Booking URL -> settings.booking.booking_url + enabled
     const bookingUrlCandidate = firstString(booking_url, reservas_url, agenda_url, booking);
     if (isValidUrl(bookingUrlCandidate)) {
       await pool.query(
@@ -171,15 +175,20 @@ router.post('/', async (req: Request, res: Response) => {
       );
     }
 
-    // 4) Availability API (endpoint para chequear cupos) y headers opcionales
+    // 4) Availability API -> settings.availability.api_url (+enabled) y headers
     const apiUrlCandidate = firstString(availability_api_url, booking_api_url);
     if (isValidUrl(apiUrlCandidate)) {
       await pool.query(
         `UPDATE tenants
            SET settings = jsonb_set(
-             COALESCE(settings, '{}'::jsonb),
-             '{booking,api_url}',
-             to_jsonb($2::text),
+             jsonb_set(
+               COALESCE(settings, '{}'::jsonb),
+               '{availability,api_url}',
+               to_jsonb($2::text),
+               true
+             ),
+             '{availability,enabled}',
+             'true'::jsonb,
              true
            )
          WHERE id = $1`,
@@ -193,8 +202,8 @@ router.post('/', async (req: Request, res: Response) => {
         `UPDATE tenants
            SET settings = jsonb_set(
              COALESCE(settings, '{}'::jsonb),
-             '{booking,headers}',
-             to_jsonb($2::jsonb),
+             '{availability,headers}',
+             $2::jsonb,
              true
            )
          WHERE id = $1`,
@@ -202,9 +211,13 @@ router.post('/', async (req: Request, res: Response) => {
       );
     }
 
-    // 5) Devuelve estado actual (incluye settings para que verifiques)
+    // 5) Devuelve estado actual (alias mantiene 'bienvenida' para el front)
     const { rows } = await pool.query(
-      'SELECT id, name, slug, categoria, idioma, prompt, bienvenida, settings FROM tenants WHERE id = $1',
+      `SELECT id, name, slug, categoria, idioma, prompt,
+              mensaje_bienvenida AS bienvenida,
+              settings
+         FROM tenants
+        WHERE id = $1`,
       [user.tenant_id]
     );
     res.status(200).json({ success: true, tenant: rows[0] });
@@ -234,13 +247,13 @@ router.patch('/timezone', async (req: Request, res: Response) => {
 
     await pool.query(
       `UPDATE tenants
-          SET settings = jsonb_set(
-            COALESCE(settings, '{}'::jsonb),
-            '{timezone}',
-            to_jsonb($2::text),
-            true
-          )
-        WHERE id = $1`,
+         SET settings = jsonb_set(
+           COALESCE(settings, '{}'::jsonb),
+           '{timezone}',
+           to_jsonb($2::text),
+           true
+         )
+       WHERE id = $1`,
       [user.tenant_id, tz]
     );
 
