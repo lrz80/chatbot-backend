@@ -106,7 +106,7 @@ router.post('/', async (req: Request, res: Response) => {
       idioma = 'es',
       prompt = 'Eres un asistente útil.',
       bienvenida = '¡Hola! 👋 Soy tu asistente virtual. ¿En qué puedo ayudarte?',
-      timezone, // puede venir del front
+      timezone, // puede venir del front (ej. Intl.DateTimeFormat().resolvedOptions().timeZone)
 
       // booking URL (varios alias soportados)
       booking_url,
@@ -126,7 +126,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     const slug = toSlug(name);
 
-    // 1) Actualiza campos “planos” (columna correcta: mensaje_bienvenida)
+    // 1) Actualiza campos “planos”
     await pool.query(
       `UPDATE tenants
          SET name = $1,
@@ -139,22 +139,22 @@ router.post('/', async (req: Request, res: Response) => {
       [name, slug, categoria, idioma, prompt, bienvenida, user.tenant_id]
     );
 
-    // 2) settings.timezone
+    // 2) Si viene timezone y parece válida IANA, guárdala en settings.timezone
     if (isString(timezone) && isLikelyIana(timezone)) {
       await pool.query(
         `UPDATE tenants
-           SET settings = jsonb_set(
-             COALESCE(settings, '{}'::jsonb),
-             '{timezone}',
-             to_jsonb($2::text),
-             true
-           )
-         WHERE id = $1`,
+            SET settings = jsonb_set(
+              COALESCE(settings, '{}'::jsonb),
+              '{timezone}',
+              to_jsonb($2::text),
+              true
+            )
+          WHERE id = $1`,
         [user.tenant_id, timezone]
       );
     }
 
-    // 3) Booking URL -> settings.booking.booking_url + enabled
+    // 3) Booking URL (acepta varios alias). Se guarda en settings.booking.booking_url + enabled
     const bookingUrlCandidate = firstString(booking_url, reservas_url, agenda_url, booking);
     if (isValidUrl(bookingUrlCandidate)) {
       await pool.query(
@@ -175,7 +175,7 @@ router.post('/', async (req: Request, res: Response) => {
       );
     }
 
-    // 4) Availability API -> settings.availability.api_url (+enabled) y headers
+    // 4) Availability API (endpoint para chequear cupos) y headers opcionales
     const apiUrlCandidate = firstString(availability_api_url, booking_api_url);
     if (isValidUrl(apiUrlCandidate)) {
       await pool.query(
@@ -203,7 +203,7 @@ router.post('/', async (req: Request, res: Response) => {
            SET settings = jsonb_set(
              COALESCE(settings, '{}'::jsonb),
              '{availability,headers}',
-             $2::jsonb,
+             to_jsonb($2::jsonb),
              true
            )
          WHERE id = $1`,
@@ -211,7 +211,7 @@ router.post('/', async (req: Request, res: Response) => {
       );
     }
 
-    // 5) Devuelve estado actual (alias mantiene 'bienvenida' para el front)
+    // 5) Devuelve estado actual (incluye settings para que verifiques)
     const { rows } = await pool.query(
       `SELECT id, name, slug, categoria, idioma, prompt,
               mensaje_bienvenida AS bienvenida,
@@ -247,13 +247,13 @@ router.patch('/timezone', async (req: Request, res: Response) => {
 
     await pool.query(
       `UPDATE tenants
-         SET settings = jsonb_set(
-           COALESCE(settings, '{}'::jsonb),
-           '{timezone}',
-           to_jsonb($2::text),
-           true
-         )
-       WHERE id = $1`,
+          SET settings = jsonb_set(
+            COALESCE(settings, '{}'::jsonb),
+            '{timezone}',
+            to_jsonb($2::text),
+            true
+          )
+        WHERE id = $1`,
       [user.tenant_id, tz]
     );
 
