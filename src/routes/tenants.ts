@@ -7,7 +7,7 @@ import pool from '../lib/db';
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
-// Utilidades pequeñas
+// ---------- Utils ----------
 function isString(x: any): x is string { return typeof x === 'string'; }
 /** Validación ligera de zona IANA (ej. America/Mexico_City). */
 function isLikelyIana(tz: string) {
@@ -22,8 +22,37 @@ function toSlug(s: string) {
     .replace(/[^a-z0-9]+/g, '-')              // no letras/números -> -
     .replace(/^-+|-+$/g, '');                 // bordes
 }
+/** Devuelve el primer string no-vacío; si no hay, null. */
+function firstString(...vals: any[]): string | null {
+  for (const v of vals) {
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return null;
+}
+/** URL válida (http/https). */
+function isValidUrl(u?: string | null): u is string {
+  if (!u) return false;
+  try {
+    const url = new URL(u);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch { return false; }
+}
+/** Convierte a objeto simple (si viene string JSON). */
+function toPlainObject(x: any): Record<string, any> | null {
+  if (!x) return null;
+  if (typeof x === 'string') {
+    try {
+      const parsed = JSON.parse(x);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    } catch { return null; }
+  }
+  if (typeof x === 'object' && !Array.isArray(x)) return x as Record<string, any>;
+  return null;
+}
 
-// ✅ Actualizar perfil del negocio (y opcionalmente timezone)
+// ---------- Rutas ----------
+
+// ✅ Actualizar perfil del negocio (timezone, booking_url, api_url, headers)
 router.post('/', async (req: Request, res: Response) => {
   const token = req.cookies?.token;
   if (!token) return res.status(401).json({ error: 'Token requerido' });
@@ -37,12 +66,24 @@ router.post('/', async (req: Request, res: Response) => {
     if (!user?.tenant_id) return res.status(404).json({ error: 'Usuario sin tenant asociado' });
 
     const {
+      // básicos
       name,
       categoria,
       idioma = 'es',
       prompt = 'Eres un asistente útil.',
       bienvenida = '¡Hola! 👋 Soy tu asistente virtual. ¿En qué puedo ayudarte?',
-      timezone, // 👈 puede venir del front (ej. Intl.DateTimeFormat().resolvedOptions().timeZone)
+      timezone, // puede venir del front (ej. Intl.DateTimeFormat().resolvedOptions().timeZone)
+
+      // booking URL (varios alias soportados)
+      booking_url,
+      reservas_url,
+      agenda_url,
+      booking,
+
+      // availability API + headers (varios alias)
+      availability_api_url,
+      booking_api_url,
+      availability_headers,   // objeto o string JSON
     } = req.body || {};
 
     if (!name || !categoria) {
@@ -79,8 +120,63 @@ router.post('/', async (req: Request, res: Response) => {
       );
     }
 
-    // 3) Devuelve estado actual (incluye settings para que verifiques)
-    const { rows } = await pool.query('SELECT id, name, slug, categoria, idioma, prompt, bienvenida, settings FROM tenants WHERE id = $1', [user.tenant_id]);
+    // 3) Booking URL (acepta varios alias). Se guarda en settings.booking.booking_url
+    const bookingUrlCandidate = firstString(booking_url, reservas_url, agenda_url, booking);
+    if (isValidUrl(bookingUrlCandidate)) {
+      await pool.query(
+        `UPDATE tenants
+           SET settings = jsonb_set(
+             jsonb_set(
+               COALESCE(settings, '{}'::jsonb),
+               '{booking,booking_url}',
+               to_jsonb($2::text),
+               true
+             ),
+             '{booking,enabled}',
+             'true'::jsonb,
+             true
+           )
+         WHERE id = $1`,
+        [user.tenant_id, bookingUrlCandidate]
+      );
+    }
+
+    // 4) Availability API (endpoint para chequear cupos) y headers opcionales
+    const apiUrlCandidate = firstString(availability_api_url, booking_api_url);
+    if (isValidUrl(apiUrlCandidate)) {
+      await pool.query(
+        `UPDATE tenants
+           SET settings = jsonb_set(
+             COALESCE(settings, '{}'::jsonb),
+             '{booking,api_url}',
+             to_jsonb($2::text),
+             true
+           )
+         WHERE id = $1`,
+        [user.tenant_id, apiUrlCandidate]
+      );
+    }
+
+    const headersObj = toPlainObject(availability_headers);
+    if (headersObj) {
+      await pool.query(
+        `UPDATE tenants
+           SET settings = jsonb_set(
+             COALESCE(settings, '{}'::jsonb),
+             '{booking,headers}',
+             to_jsonb($2::jsonb),
+             true
+           )
+         WHERE id = $1`,
+        [user.tenant_id, JSON.stringify(headersObj)]
+      );
+    }
+
+    // 5) Devuelve estado actual (incluye settings para que verifiques)
+    const { rows } = await pool.query(
+      'SELECT id, name, slug, categoria, idioma, prompt, bienvenida, settings FROM tenants WHERE id = $1',
+      [user.tenant_id]
+    );
     res.status(200).json({ success: true, tenant: rows[0] });
   } catch (error) {
     console.error('❌ Error en /api/tenants:', error);
@@ -88,7 +184,7 @@ router.post('/', async (req: Request, res: Response) => {
   }
 });
 
-// (Opcional pero útil) endpoint dedicado para actualizar solo la timezone
+// (Opcional) endpoint dedicado para actualizar solo la timezone
 router.patch('/timezone', async (req: Request, res: Response) => {
   const token = req.cookies?.token;
   if (!token) return res.status(401).json({ error: 'Token requerido' });

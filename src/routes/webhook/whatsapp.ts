@@ -16,6 +16,7 @@ import {
 } from '../../lib/faq/similaridadFaq';
 import { detectarIntencion } from '../../lib/detectarIntencion';
 import { getTenantTimezone } from '../../lib/getTenantTimezone';
+import { checkAvailability } from '../../lib/availability';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -67,53 +68,6 @@ async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma:
   }
 }
 
-function isValidIanaTZ(tz?: string | null): tz is string {
-  if (!tz || typeof tz !== 'string') return false;
-  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; }
-  catch { return false; }
-}
-
-function tryJson<T=any>(v: any): T | null {
-  if (!v || typeof v !== 'string') return null;
-  try { return JSON.parse(v); } catch { return null; }
-}
-
-function pickTZ(...cands: Array<any>): string | null {
-  for (const c of cands) {
-    if (typeof c === 'string' && isValidIanaTZ(c)) return c;
-    // soporta paths tipo obj.timezone/obj.settings.timezone como strings json
-    const j = tryJson(c);
-    if (j && typeof j === 'object') {
-      const maybe = (j.timezone || j.time_zone || j.tz);
-      if (typeof maybe === 'string' && isValidIanaTZ(maybe)) return maybe;
-    }
-    if (c && typeof c === 'object') {
-      const maybe = (c.timezone || c.time_zone || c.tz);
-      if (typeof maybe === 'string' && isValidIanaTZ(maybe)) return maybe;
-    }
-  }
-  return null;
-}
-
-/**
- * Resuelve la zona horaria del tenant desde varios campos comunes:
- * - columnas directas: timezone | time_zone | tz
- * - JSONs: settings | config | meta | extras | links  (string o objeto)
- * - geo hints opcionales: country_code -> fallback simple
- */
-function resolveTenantTimeZoneFromSettings(tenant: any): string {
-  const tz =
-    tenant?.settings?.timezone ||
-    tenant?.settings?.time_zone ||
-    tenant?.timezone || tenant?.time_zone || tenant?.tz;
-
-  if (isValidIanaTZ(tz)) return tz;
-  if (tenant?.country_code === 'PR') return 'America/Puerto_Rico';
-  if (tenant?.country_code === 'US') return 'America/New_York';
-  if (tenant?.country_code === 'MX') return 'America/Mexico_City';
-  return 'UTC';
-}
-
 router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
 
@@ -129,6 +83,25 @@ router.post('/', async (req: Request, res: Response) => {
 });
 
 export default router;
+
+function getLinkFromTenant(tenant: any, keys: string[]): string | null {
+  const pools = ['links','meta','config','settings','extras'];
+  for (const p of pools) {
+    try {
+      const raw = tenant?.[p];
+      const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (obj && typeof obj === 'object') {
+        for (const k of keys) {
+          if (typeof obj[k] === 'string' && obj[k]) return obj[k];
+        }
+      }
+    } catch {}
+  }
+  for (const k of keys) {
+    if (tenant && typeof tenant[k] === 'string' && tenant[k]) return tenant[k];
+  }
+  return null;
+}
 
 async function procesarMensajeWhatsApp(body: any) {
   const to = body.To || '';
@@ -188,6 +161,7 @@ try {
   const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
   let respuesta = '';
   const canal = 'whatsapp';
+  
 
 // 👇 PÉGALO AQUÍ (debajo de getLink)
 function stripLeadGreetings(t: string) {
@@ -228,6 +202,9 @@ function stripLeadGreetings(t: string) {
   // 2️⃣ Calcular idiomaDestino
   const tenantBase: 'es'|'en' = normalizeLang(tenant?.idioma || 'es');
   let idiomaDestino: 'es'|'en';
+
+  const bookingLink =
+  getLinkFromTenant(tenant, ['booking_url','booking','reservas_url','reservar_url','agenda_url']) || null;
 
   if (isNumericOnly) {
     idiomaDestino = await getIdiomaClienteDB(tenant.id, fromNumber, tenantBase);
@@ -365,17 +342,131 @@ function stripLeadGreetings(t: string) {
 
   console.log('[Temporal override v2]', { cleaned, hasTemporal, scheduleHit, reserveHit, INTENCION_FINAL_CANONICA });
 
-  // Si no hay intención o es "duda", y hay temporalidad + pista de horario → horario
-  if ((!INTENCION_FINAL_CANONICA || INTENCION_FINAL_CANONICA === 'duda') && hasTemporal && scheduleHit) {
-    INTENCION_FINAL_CANONICA = 'horario';
-    console.log('🎯 Override → horario');
+  // === DISPONIBILIDAD EN TIEMPO REAL (si el tenant tiene booking.enabled) ===
+  try {
+    if (['horario','reservar'].includes((INTENCION_FINAL_CANONICA || '').toLowerCase())) {
+      const timeZone = getTenantTimezone(tenant);
+
+      // 1) Fecha base en TZ del tenant
+      const now = new Date();
+      const nowInTz = new Date(now.toLocaleString('en-US', { timeZone }));
+      const base = new Date(nowInTz);
+
+      const text = (userInput || '').toLowerCase();
+      const saysManana = /(mañana|manana)/i.test(text);
+      const saysHoy    = /\bhoy\b/i.test(text);
+
+      // Si dijo "mañana", +1 día; si dijo "hoy" o nada, se queda en hoy
+      if (saysManana) base.setDate(base.getDate() + 1);
+
+      // 2) Extraer hora solicitada (si viene)
+      const match = text.match(/([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?/i);
+      const horaPedida = match ? match[0].replace('.', ':') : null;
+
+      function to24h(h?: string | null): string | null {
+        if (!h) return null;
+        const m = h.trim().match(/^([01]?\d|2[0-3])(?::?([0-5]\d))?\s*(am|pm)?$/i);
+        if (!m) return null;
+        let hh = parseInt(m[1], 10);
+        const mm = m[2] ? m[2] : '00';
+        const ap = m[3]?.toLowerCase();
+        if (ap === 'am') {
+          if (hh === 12) hh = 0;
+        } else if (ap === 'pm') {
+          if (hh !== 12) hh += 12;
+        }
+        return `${String(hh).padStart(2,'0')}:${mm}`;
+      }
+
+      const hora24 = to24h(horaPedida);
+
+      // 3) Formatear fecha YYYY-MM-DD en TZ del tenant
+      const y = base.getFullYear();
+      const m = String(base.getMonth() + 1).padStart(2, '0');
+      const d = String(base.getDate()).padStart(2, '0');
+      const fechaISO = `${y}-${m}-${d}`;
+
+      // 4) Revisar que el tenant tenga booking.enabled
+      let bookingEnabled = false;
+      try {
+        const raw = tenant?.settings;
+        const settings = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        bookingEnabled = Boolean(settings?.booking?.enabled);
+      } catch {}
+
+      if (bookingEnabled) {
+        const q = { date: fechaISO, time: hora24 || undefined, service: undefined as any };
+        const avail = await checkAvailability(tenant, q);
+
+        if (avail.ok && typeof avail.available === 'boolean') {
+          const bookingLink =
+            getLinkFromTenant(tenant, ['booking_url','booking','reservas_url','reservar_url','agenda_url']) || avail.booking_link || null;
+
+          if (avail.available) {
+            let msg = `¡Listo! ${saysManana ? 'Mañana' : (saysHoy ? 'Hoy' : 'Para esa fecha')} ${hora24 ? `a las ${hora24}` : ''} hay cupos disponibles.`;
+            if (typeof avail.remaining === 'number') msg += ` Quedan ${avail.remaining}.`;
+            if (bookingLink) msg += `\n\nReserva aquí: ${bookingLink}`;
+            await enviarWhatsApp(fromNumber, msg, tenant.id);
+            // Registrar y cortar flujo como ya haces:
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenant.id, msg, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+            );
+            await pool.query(
+              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+              VALUES ($1, $2, $3, NOW())
+              ON CONFLICT DO NOTHING`,
+              [tenant.id, 'whatsapp', messageId]
+            );
+            return;
+          } else {
+            let msg = `Por ahora no veo cupos ${saysManana ? 'mañana' : (saysHoy ? 'hoy' : 'para esa fecha')}${hora24 ? ` a las ${hora24}` : ''}.`;
+            if (avail.next_slots?.length) {
+              const sug = avail.next_slots.slice(0,3).map(s => `• ${s.start}`).join('\n');
+              msg += `\nOpciones cercanas:\n${sug}`;
+            }
+            const bookingLink =
+              getLinkFromTenant(tenant, ['booking_url','booking','reservas_url','reservar_url','agenda_url']) || avail.booking_link || null;
+            if (bookingLink) msg += `\n\nPuedes reservar aquí: ${bookingLink}`;
+            await enviarWhatsApp(fromNumber, msg, tenant.id);
+            // Registrar y cortar flujo:
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenant.id, msg, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+            );
+            await pool.query(
+              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+              VALUES ($1, $2, $3, NOW())
+              ON CONFLICT DO NOTHING`,
+              [tenant.id, 'whatsapp', messageId]
+            );
+            return;
+          }
+        }
+        // Si la API devolvió error o no respondió con available → seguimos al flujo normal (intenciones/FAQ/LLM)
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ checkAvailability falló (se continúa con flujo normal):', e);
   }
 
-// Si además hay verbo de acción → prioriza reservar
-if (hasTemporal && reserveHit) {
-  INTENCION_FINAL_CANONICA = 'reservar';
-  console.log('🎯 Override → reservar');
-}
+  // Regla general: si hay temporalidad + pista de horario → horario,
+  // salvo que ya tengamos una acción más específica.
+  const baseInt = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+  if (hasTemporal && scheduleHit && !['reservar','comprar','precio'].includes(baseInt)) {
+    INTENCION_FINAL_CANONICA = 'horario';
+    console.log('🎯 Override → horario (ampliado)');
+  }
+
+  // Si además hay verbo de acción → prioriza reservar
+  if (hasTemporal && reserveHit) {
+    INTENCION_FINAL_CANONICA = 'reservar';
+    console.log('🎯 Override → reservar');
+  }
 
  } catch (e) {
    console.warn('⚠️ detectarIntencion falló:', e);
@@ -399,6 +490,12 @@ if (hasTemporal && reserveHit) {
 
       if (rows[0]?.respuesta) {
         let out = rows[0].respuesta as string;
+
+        // 👉 agrega CTA si aplica
+        if (bookingLink && /reserv|agenda|confirm/i.test((INTENCION_FINAL_CANONICA||'') + ' ' + userInput)) {
+          out += `\n\nReserva aquí: ${bookingLink}`;
+        }
+        
         try {
           const langOut = await detectarIdioma(out);
           if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
@@ -712,13 +809,6 @@ if (hasTemporal && reserveHit) {
     const textoNormalizado = userInput.trim().toLowerCase();
   
     console.log(`🔎 Intención (final) = ${intFinal}, Nivel de interés: ${nivel_interes}`);
-  
-    // 🛑 No registrar si es saludo puro
-    const saludos = ["hola", "buenas", "buenos días", "buenas tardes", "buenas noches", "hello", "hi", "hey"];
-    if (saludos.includes(textoNormalizado)) {
-      console.log("⚠️ Mensaje ignorado por ser saludo.");
-      return;
-    }
   
     // 🔥 Segmentación con intención final
     const intencionesCliente = [
