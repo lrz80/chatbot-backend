@@ -50,7 +50,37 @@ function toPlainObject(x: any): Record<string, any> | null {
   return null;
 }
 
-// ---------- Rutas ----------
+// 🔎 Auth helper
+async function getTenantIdFromCookie(req: Request): Promise<string> {
+  const token = req.cookies?.token;
+  if (!token) throw new Error('Token requerido');
+  const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+  const uid = decoded.uid;
+  const userRes = await pool.query('SELECT tenant_id FROM users WHERE uid = $1 LIMIT 1', [uid]);
+  const user = userRes.rows[0];
+  if (!user?.tenant_id) throw new Error('Usuario sin tenant asociado');
+  return user.tenant_id as string;
+}
+
+// ✅ GET /api/tenants/me — trae el tenant con settings/links
+router.get('/me', async (req: Request, res: Response) => {
+  try {
+    const tenantId = await getTenantIdFromCookie(req);
+    const { rows } = await pool.query(
+      `SELECT id, name, slug, categoria, idioma, prompt, bienvenida, settings, links
+         FROM tenants WHERE id = $1`,
+      [tenantId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Tenant no encontrado' });
+    res.json(rows[0]);
+  } catch (e: any) {
+    const msg = e?.message || 'Error';
+    const code = msg.includes('Token') ? 401 : msg.includes('tenant') ? 404 : 500;
+    if (code === 401 || code === 404) return res.status(code).json({ error: msg });
+    console.error('❌ GET /api/tenants/me:', e);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
 
 // ✅ Actualizar perfil del negocio (timezone, booking_url, api_url, headers)
 router.post('/', async (req: Request, res: Response) => {
