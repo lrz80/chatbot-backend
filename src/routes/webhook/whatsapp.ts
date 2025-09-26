@@ -461,6 +461,7 @@ function addBookingCTA({
       if (bookingEnabled) {
         const q = { date: fechaISO, time: hora24 || undefined, service: undefined as any };
         const avail = await checkAvailability(tenant, q);
+        console.log('🔍 RT availability resp:', JSON.stringify(avail));
 
         if (avail.ok && typeof avail.available === 'boolean') {
           const bookingLink =
@@ -471,6 +472,7 @@ function addBookingCTA({
             let msg = `¡Listo! ${saysManana ? 'Mañana' : (saysHoy ? 'Hoy' : 'Para esa fecha')} ${hora24 ? `a las ${hora24}` : ''} hay cupos disponibles.`;
             if (typeof avail.remaining === 'number') msg += ` Quedan ${avail.remaining}.`;
             if (bookingLink) msg += `\n\nReserva aquí: ${bookingLink}`;
+            console.log('🟩 RT → hay cupos, msg:', msg);
             await enviarWhatsApp(fromNumber, msg, tenant.id);
             // Registrar y cortar flujo como ya haces:
             await pool.query(
@@ -497,6 +499,7 @@ function addBookingCTA({
               console.log('🔗 bookingLink resuelto =', bookingLink);
 
             if (bookingLink) msg += `\n\nPuedes reservar aquí: ${bookingLink}`;
+            console.log('🟨 RT → sin cupos, msg:', msg);
             await enviarWhatsApp(fromNumber, msg, tenant.id);
             // Registrar y cortar flujo:
             await pool.query(
