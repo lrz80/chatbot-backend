@@ -421,7 +421,7 @@ function addBookingCTA({
       try {
         const raw = tenant?.settings;
         const settings = typeof raw === 'string' ? JSON.parse(raw) : raw;
-        bookingEnabled = Boolean(settings?.booking?.enabled);
+        bookingEnabled = (settings?.booking?.enabled ?? false) || !!bookingLink;
       } catch {}
 
       if (bookingEnabled) {
