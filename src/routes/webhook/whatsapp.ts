@@ -106,6 +106,18 @@ function getLinkFromTenant(tenant: any, keys: string[]): string | null {
   return null;
 }
 
+function to24hSafe(h?: string | null): string | null {
+  if (!h) return null;
+  const m = h.trim().match(/^([01]?\d|2[0-3])(?::?([0-5]\d))?\s*(am|pm)?$/i);
+  if (!m) return null;
+  let hh = parseInt(m[1], 10);
+  const mm = m[2] ? m[2] : '00';
+  const ap = m[3]?.toLowerCase();
+  if (ap === 'am') { if (hh === 12) hh = 0; }
+  else if (ap === 'pm') { if (hh !== 12) hh += 12; }
+  return `${String(hh).padStart(2,'0')}:${mm}`;
+}
+
 async function procesarMensajeWhatsApp(body: any) {
   const to = body.To || '';
   const from = body.From || '';
@@ -389,6 +401,31 @@ function addBookingCTA({
       // Si dijo "mañana", +1 día; si dijo "hoy" o nada, se queda en hoy
       if (saysManana) base.setDate(base.getDate() + 1);
 
+      // --- NUEVO: mapear día de semana a fecha próxima ---
+      const dayNameMap: Record<string, number> = {
+        'domingo': 0, 'lunes': 1, 'martes': 2,
+        'miercoles': 3, 'miércoles': 3,
+        'jueves': 4, 'viernes': 5,
+        'sabado': 6, 'sábado': 6,
+      };
+      function nextDow(from: Date, targetDow: number) {
+        const d = new Date(from);
+        const diff = (targetDow + 7 - d.getDay()) % 7 || 7; // próxima ocurrencia (no hoy)
+        d.setDate(d.getDate() + diff);
+        return d;
+      }
+
+      // Tomamos 'cleaned' (ya lo tienes arriba) para buscar día por nombre
+      let targetDate = base;
+      const dayNameMatch = cleaned.toLowerCase().match(/(domingo|lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado)/);
+      if (dayNameMatch) {
+        const dow = dayNameMap[dayNameMatch[1]];
+        targetDate = nextDow(base, dow);
+      } else if (saysManana) {
+        targetDate = new Date(base);
+        targetDate.setDate(base.getDate() + 1);
+      }
+
       // 2) Extraer hora solicitada (si viene)
       const match = text.match(/([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?/i);
       const horaPedida = match ? match[0].replace('.', ':') : null;
@@ -400,20 +437,17 @@ function addBookingCTA({
         let hh = parseInt(m[1], 10);
         const mm = m[2] ? m[2] : '00';
         const ap = m[3]?.toLowerCase();
-        if (ap === 'am') {
-          if (hh === 12) hh = 0;
-        } else if (ap === 'pm') {
-          if (hh !== 12) hh += 12;
-        }
+        if (ap === 'am') { if (hh === 12) hh = 0; }
+        else if (ap === 'pm') { if (hh !== 12) hh += 12; }
         return `${String(hh).padStart(2,'0')}:${mm}`;
       }
 
-      const hora24 = to24h(horaPedida);
+      const hora24 = to24hSafe(horaPedida);
 
-      // 3) Formatear fecha YYYY-MM-DD en TZ del tenant
-      const y = base.getFullYear();
-      const m = String(base.getMonth() + 1).padStart(2, '0');
-      const d = String(base.getDate()).padStart(2, '0');
+      // 3) Formatear fecha YYYY-MM-DD en TZ del tenant **desde targetDate**
+      const y = targetDate.getFullYear();
+      const m = String(targetDate.getMonth() + 1).padStart(2, '0');
+      const d = String(targetDate.getDate()).padStart(2, '0');
       const fechaISO = `${y}-${m}-${d}`;
 
       // 4) Revisar que el tenant tenga booking.enabled
@@ -506,6 +540,42 @@ function addBookingCTA({
    INTENCION_FINAL_CANONICA = '';
  }
 
+ // --- NUEVO: atajo determinista sin RT para agenda ---
+{
+  const canon = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+  const isAgenda = ['horario','reservar'].includes(canon);
+
+  if (isAgenda && hasTemporal) {
+    // Variables locales PARA ESTE GUARD (evita fuera de scope)
+    const cleanedForGuard = stripLeadGreetings(userInput);
+    const dayNameMatch = cleanedForGuard.toLowerCase().match(/(domingo|lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado)/);
+    const saysMananaGuard = /(mañana|manana)/i.test(cleanedForGuard);
+    const horaMatchForGuard = (userInput || '').toLowerCase().match(/([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?/i);
+    const hora24 = to24hSafe(horaMatchForGuard ? horaMatchForGuard[0].replace('.', ':') : null);
+
+    const cuando = saysMananaGuard ? 'mañana' : (dayNameMatch ? `el ${dayNameMatch[1]}` : 'esa fecha');
+    const horaTxt = hora24 ? ` a las ${hora24}` : '';
+
+    const msg = (`¡Genial! Para ${cuando}${horaTxt} te ayudo a reservar. ` +
+                `Por favor confirma cupos y reserva aquí: ${bookingLink ?? ''}`).trim();
+
+    try { await enviarWhatsApp(fromNumber, msg, tenant.id); } catch {}
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, msg, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+    );
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT DO NOTHING`,
+      [tenant.id, 'whatsapp', messageId]
+    );
+    return; // evita LLM y cualquier alucinación/listado
+  }
+}
+
  // ✅ Fallback seguro para intención "horario" si no retornó nada arriba
   //    - Intenta una consulta simple a API (si existe vía getBookingConfig)
   //    - Siempre adjunta el link de reservas si lo hay
@@ -540,6 +610,7 @@ function addBookingCTA({
       }
 
       // Enviar y registrar
+      console.log('📝 Fallback horario → texto a enviar:', texto);
       try { await enviarWhatsApp(fromNumber, texto, tenant.id); } catch (e) { console.error('❌ WA (horario fallback):', e); }
 
       await pool.query(
@@ -737,10 +808,12 @@ function addBookingCTA({
         contextoFecha,
         '',
         '=== REGLAS PARA HORARIOS/RESERVAS (SIN CALENDARIO EN TIEMPO REAL) ===',
-        '- NO confirmes ni niegues disponibilidad, cancelaciones ni cupos.',
-        '- NO inventes horarios diferentes a los “horarios base” del negocio (si están en el prompt).',
-        '- Si el usuario pide un día/hora (p. ej. "mañana 7:00pm"), repite esa intención y pide confirmar en el enlace de reservas.',
-        '- Sé breve, amable y en el idioma del cliente.',
+      '- NO confirmes ni niegues disponibilidad, cancelaciones ni cupos.',
+      '- NO listes horarios por día ni inventes franjas.',
+      '- NO digas que “no hay clase” a una hora específica.',
+      '- NO inventes horarios diferentes a los “horarios base” del negocio (si están en el prompt).',
+      '- Si el usuario pide un día/hora (p. ej. "lunes 7:30pm"), repite esa intención y pide confirmar en el enlace de reservas.',
+      '- Sé breve, amable y en el idioma del cliente.',
       ].join('\n')
     : [
         promptBase,
