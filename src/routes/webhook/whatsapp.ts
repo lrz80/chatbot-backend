@@ -332,6 +332,10 @@ function addBookingCTA({
  let INTENCION_FINAL_CANONICA = '';
  let respuestaDesdeFaq: string | null = null;
 
+ let hasTemporal = false;
+ let scheduleHit = false;
+ let reserveHit  = false;
+
  // a) Detectar intención (canónica)
  try {
    const textoParaIntent = (idiomaDestino !== 'es')
@@ -362,13 +366,9 @@ function addBookingCTA({
   // Intención de acción (reservar/ir)
   const reserveHintRe  = /(reserv(ar|a|o)|book|apart(ar|o)|quiero\s+ir|asistir|probar|inscribirme)/i;
 
-  const hasTemporal =
-    timeLikeRe.test(lower) ||
-    dayWordRe.test(noAcc) ||
-    dayNameRe.test(noAcc);
-
-  const scheduleHit = scheduleHintRe.test(noAcc);
-  const reserveHit  = reserveHintRe.test(noAcc);
+  hasTemporal = timeLikeRe.test(lower) || dayWordRe.test(noAcc) || dayNameRe.test(noAcc);
+  scheduleHit = scheduleHintRe.test(noAcc);
+  reserveHit  = reserveHintRe.test(noAcc);
 
   console.log('[Temporal override v2]', { cleaned, hasTemporal, scheduleHit, reserveHit, INTENCION_FINAL_CANONICA });
 
@@ -509,7 +509,8 @@ function addBookingCTA({
  // ✅ Fallback seguro para intención "horario" si no retornó nada arriba
   //    - Intenta una consulta simple a API (si existe vía getBookingConfig)
   //    - Siempre adjunta el link de reservas si lo hay
-  if ((INTENCION_FINAL_CANONICA || '').toLowerCase() === 'horario') {
+  const canon = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+  if (canon === 'horario' && (hasTemporal || reserveHit)) {
     try {
       const cfg = await getBookingConfig(tenant.id);
       let texto: string;
@@ -727,7 +728,7 @@ function addBookingCTA({
   ].join('\n');
 
   // 6) Rails si es intención de agenda
-  const isAgendaIntent = ['horario','reservar'].includes((INTENCION_FINAL_CANONICA || '').toLowerCase());
+  const isAgendaIntent = (['horario','reservar'].includes(canon)) && (hasTemporal || reserveHit);
   const systemPrompt = isAgendaIntent
     ? [
         promptBase,
