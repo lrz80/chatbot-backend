@@ -87,6 +87,7 @@ router.get('/me', async (req: Request, res: Response) => {
 });
 
 // ✅ Actualizar perfil del negocio (timezone, booking_url, api_url, headers)
+// ✅ Actualizar perfil del negocio (parcial: name/categoria opcionales; guarda settings.* y links.*)
 router.post('/', async (req: Request, res: Response) => {
   const token = req.cookies?.token;
   if (!token) return res.status(401).json({ error: 'Token requerido' });
@@ -98,48 +99,62 @@ router.post('/', async (req: Request, res: Response) => {
     const userRes = await pool.query('SELECT tenant_id FROM users WHERE uid = $1 LIMIT 1', [uid]);
     const user = userRes.rows[0];
     if (!user?.tenant_id) return res.status(404).json({ error: 'Usuario sin tenant asociado' });
+    const tenantId = user.tenant_id as string;
 
     const {
-      // básicos
+      // básicos (todos OPCIONALES ahora)
       name,
       categoria,
-      idioma = 'es',
-      prompt = 'Eres un asistente útil.',
-      bienvenida = '¡Hola! 👋 Soy tu asistente virtual. ¿En qué puedo ayudarte?',
-      timezone, // puede venir del front (ej. Intl.DateTimeFormat().resolvedOptions().timeZone)
+      idioma,
+      prompt,
+      bienvenida,
+      timezone,
 
-      // booking URL (varios alias soportados)
+      // booking URL (alias)
       booking_url,
       reservas_url,
       agenda_url,
       booking,
 
-      // availability API + headers (varios alias)
+      // availability API + headers (alias)
       availability_api_url,
       booking_api_url,
       availability_headers,   // objeto o string JSON
     } = req.body || {};
 
-    if (!name || !categoria) {
-      return res.status(400).json({ error: 'Nombre y categoría son requeridos' });
+    // 0) Normalizadores
+    const slug = name ? toSlug(name) : undefined;
+    const bookingUrlCandidate = firstString(booking_url, reservas_url, agenda_url, booking);
+    const apiUrlCandidate = firstString(availability_api_url, booking_api_url);
+    const headersObj = toPlainObject(availability_headers);
+
+    // 1) Actualiza campos “planos” SOLO si vienen
+    if (
+      typeof name !== 'undefined' ||
+      typeof categoria !== 'undefined' ||
+      typeof idioma !== 'undefined' ||
+      typeof prompt !== 'undefined' ||
+      typeof bienvenida !== 'undefined'
+    ) {
+      // construye UPDATE dinámico
+      const sets: string[] = [];
+      const vals: any[] = [];
+      let i = 1;
+
+      if (typeof name !== 'undefined')      { sets.push(`name = $${i++}`); vals.push(name); }
+      if (typeof slug !== 'undefined')      { sets.push(`slug = $${i++}`); vals.push(slug); }
+      if (typeof categoria !== 'undefined') { sets.push(`categoria = $${i++}`); vals.push(categoria); }
+      if (typeof idioma !== 'undefined')    { sets.push(`idioma = $${i++}`); vals.push(idioma); }
+      if (typeof prompt !== 'undefined')    { sets.push(`prompt = $${i++}`); vals.push(prompt); }
+      if (typeof bienvenida !== 'undefined'){ sets.push(`mensaje_bienvenida = $${i++}`); vals.push(bienvenida); }
+
+      if (sets.length) {
+        const sql = `UPDATE tenants SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${i}`;
+        await pool.query(sql, [...vals, tenantId]);
+      }
     }
 
-    const slug = toSlug(name);
-
-    // 1) Actualiza campos “planos”
-    await pool.query(
-      `UPDATE tenants
-         SET name = $1,
-             slug = $2,
-             categoria = $3,
-             idioma = $4,
-             prompt = $5,
-             mensaje_bienvenida = $6
-       WHERE id = $7`,
-      [name, slug, categoria, idioma, prompt, bienvenida, user.tenant_id]
-    );
-
-    // 2) Si viene timezone y parece válida IANA, guárdala en settings.timezone
+    // 2) Timezone → settings.timezone
     if (isString(timezone) && isLikelyIana(timezone)) {
       await pool.query(
         `UPDATE tenants
@@ -148,78 +163,86 @@ router.post('/', async (req: Request, res: Response) => {
               '{timezone}',
               to_jsonb($2::text),
               true
-            )
+            ),
+                updated_at = NOW()
           WHERE id = $1`,
-        [user.tenant_id, timezone]
+        [tenantId, timezone]
       );
     }
 
-    // 3) Booking URL (acepta varios alias). Se guarda en settings.booking.booking_url + enabled
-    const bookingUrlCandidate = firstString(booking_url, reservas_url, agenda_url, booking);
+    // 3) Booking URL → settings.booking.booking_url y links.booking_url
     if (isValidUrl(bookingUrlCandidate)) {
+      // settings
       await pool.query(
         `UPDATE tenants
            SET settings = jsonb_set(
-             jsonb_set(
-               COALESCE(settings, '{}'::jsonb),
-               '{booking,booking_url}',
-               to_jsonb($2::text),
-               true
-             ),
-             '{booking,enabled}',
-             'true'::jsonb,
-             true
-           )
+                 jsonb_set(
+                   COALESCE(settings, '{}'::jsonb),
+                   '{booking,booking_url}',
+                   to_jsonb($2::text),
+                   true
+                 ),
+                 '{booking,enabled}',
+                 'true'::jsonb,
+                 true
+               ),
+               -- links espelho
+               links = COALESCE(links, '{}'::jsonb) || jsonb_build_object('booking_url', to_jsonb($2::text)),
+               updated_at = NOW()
          WHERE id = $1`,
-        [user.tenant_id, bookingUrlCandidate]
+        [tenantId, bookingUrlCandidate]
       );
     }
 
-    // 4) Availability API (endpoint para chequear cupos) y headers opcionales
-    const apiUrlCandidate = firstString(availability_api_url, booking_api_url);
+    // 4) Availability API → settings.availability.api_url y links.booking_api_url
     if (isValidUrl(apiUrlCandidate)) {
       await pool.query(
         `UPDATE tenants
            SET settings = jsonb_set(
-             jsonb_set(
-               COALESCE(settings, '{}'::jsonb),
-               '{availability,api_url}',
-               to_jsonb($2::text),
-               true
-             ),
-             '{availability,enabled}',
-             'true'::jsonb,
-             true
-           )
+                 jsonb_set(
+                   COALESCE(settings, '{}'::jsonb),
+                   '{availability,api_url}',
+                   to_jsonb($2::text),
+                   true
+                 ),
+                 '{availability,enabled}',
+                 'true'::jsonb,
+                 true
+               ),
+               links = COALESCE(links, '{}'::jsonb) || jsonb_build_object('booking_api_url', to_jsonb($2::text)),
+               updated_at = NOW()
          WHERE id = $1`,
-        [user.tenant_id, apiUrlCandidate]
+        [tenantId, apiUrlCandidate]
       );
     }
 
-    const headersObj = toPlainObject(availability_headers);
+    // 5) Headers → settings.availability.headers y links.booking_headers
     if (headersObj) {
       await pool.query(
         `UPDATE tenants
            SET settings = jsonb_set(
-             COALESCE(settings, '{}'::jsonb),
-             '{availability,headers}',
-             to_jsonb($2::jsonb),
-             true
-           )
+                 COALESCE(settings, '{}'::jsonb),
+                 '{availability,headers}',
+                 to_jsonb($2::jsonb),
+                 true
+               ),
+               links = COALESCE(links, '{}'::jsonb) || jsonb_build_object('booking_headers', to_jsonb($2::jsonb)),
+               updated_at = NOW()
          WHERE id = $1`,
-        [user.tenant_id, JSON.stringify(headersObj)]
+        [tenantId, headersObj]
       );
     }
 
-    // 5) Devuelve estado actual (incluye settings para que verifiques)
+    // 6) Devuelve estado actual
     const { rows } = await pool.query(
       `SELECT id, name, slug, categoria, idioma, prompt,
               mensaje_bienvenida AS bienvenida,
-              settings
+              settings, links
          FROM tenants
         WHERE id = $1`,
-      [user.tenant_id]
+      [tenantId]
     );
+
     res.status(200).json({ success: true, tenant: rows[0] });
   } catch (error) {
     console.error('❌ Error en /api/tenants:', error);
