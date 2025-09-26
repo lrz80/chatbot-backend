@@ -17,6 +17,9 @@ import {
 import { detectarIntencion } from '../../lib/detectarIntencion';
 import { getTenantTimezone } from '../../lib/getTenantTimezone';
 import { checkAvailability } from '../../lib/availability';
+import { getBookingConfig, checkAvailabilityNextClass } from '../../lib/booking';
+import { format } from 'date-fns';
+import { es } from 'date-fns/locale';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -170,6 +173,32 @@ function stripLeadGreetings(t: string) {
     .replace(/^\s*(saludos+[\s!.,]*)?/i, '')
     .replace(/^\s*(hello+|hi+|hey+)[\s!.,]*/i, '')
     .trim();
+}
+
+function addBookingCTA({
+  out,
+  intentLow,
+  bookingLink,
+  userInput
+}: {
+  out: string;
+  intentLow: string;
+  bookingLink?: string | null;
+  userInput: string;
+}) {
+  if (!bookingLink) return out;
+
+  // Evita duplicar el mismo link o añadir si ya hay alguna URL
+  const alreadyHasLink = out.includes(bookingLink);
+  if (alreadyHasLink) return out;
+
+  const mustForce = intentLow === 'horario' || intentLow === 'reservar';
+  const smellsLikeCta = /reserv|agenda|confirm/i.test(`${intentLow} ${userInput}`);
+
+  if (mustForce || smellsLikeCta) {
+    return out + `\n\nReserva aquí: ${bookingLink}`;
+  }
+  return out;
 }
 
   // 🧹 Cancela cualquier follow-up pendiente para este contacto al recibir nuevo mensaje
@@ -473,6 +502,69 @@ function stripLeadGreetings(t: string) {
    INTENCION_FINAL_CANONICA = '';
  }
 
+ // ✅ Fallback seguro para intención "horario" si no retornó nada arriba
+  //    - Intenta una consulta simple a API (si existe vía getBookingConfig)
+  //    - Siempre adjunta el link de reservas si lo hay
+  if ((INTENCION_FINAL_CANONICA || '').toLowerCase() === 'horario') {
+    try {
+      const cfg = await getBookingConfig(tenant.id);
+      let texto: string;
+
+      if (cfg?.apiUrl) {
+        const quick = await checkAvailabilityNextClass(cfg.apiUrl, cfg.headers);
+        if (quick.hasClass && quick.whenText) {
+          texto =
+            `¡Hola! Según agenda, la próxima clase disponible es ${quick.whenText}.` +
+            (cfg.bookingUrl ? ` Reserva aquí: ${cfg.bookingUrl}` : '');
+        } else {
+          const maniana = new Date(Date.now() + 24 * 60 * 60 * 1000);
+          const manianaTxt = format(maniana, "EEEE d 'de' MMMM 'de' yyyy", { locale: es });
+          texto =
+            `¡Hola! No veo cupos confirmados ahora mismo para *mañana* (${manianaTxt}). ` +
+            (cfg.bookingUrl ? `Puedes confirmar o revisar otras horas aquí: ${cfg.bookingUrl}` : 'Puedes intentar más tarde.');
+        }
+      } else {
+        // Sin API → solo link (si existe)
+        const maniana = new Date(Date.now() + 24 * 60 * 60 * 1000);
+        const manianaTxt = format(maniana, "EEEE d 'de' MMMM 'de' yyyy", { locale: es });
+        const link =
+          getLinkFromTenant(tenant, ['booking_url','booking','reservas_url','reservar_url','agenda_url']);
+        texto =
+          `¡Hola! Para *mañana* (${manianaTxt}) te sugiero confirmar disponibilidad en nuestro enlace de reservas.` +
+          (link ? ` ${link}` : '');
+      }
+
+      // Enviar y registrar
+      try { await enviarWhatsApp(fromNumber, texto, tenant.id); } catch (e) { console.error('❌ WA (horario fallback):', e); }
+
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+        VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+        ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+        [tenant.id, texto, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+      );
+      await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT DO NOTHING`,
+        [tenant.id, 'whatsapp', messageId]
+      );
+
+      // (Opcional) programa follow-up solo si no hubo API o no hubo cupos
+      try {
+        const nivel2 = 1;
+        const sinApi = !cfg?.apiUrl;
+        if (sinApi) {
+          await scheduleFollowUp('horario', nivel2);
+        }
+      } catch {}
+
+      return; // corta flujo para no caer en intenciones/FAQ/LLM
+    } catch (e) {
+      console.warn('⚠️ Fallback de horario falló, continúo con pipeline:', e);
+    }
+  }
+
  // b) Respuesta por INTENCIÓN (tabla intenciones del tenant)
   try {
     if (INTENCION_FINAL_CANONICA) {
@@ -491,11 +583,10 @@ function stripLeadGreetings(t: string) {
       if (rows[0]?.respuesta) {
         let out = rows[0].respuesta as string;
 
-        // 👉 agrega CTA si aplica
-        if (bookingLink && /reserv|agenda|confirm/i.test((INTENCION_FINAL_CANONICA||'') + ' ' + userInput)) {
-          out += `\n\nReserva aquí: ${bookingLink}`;
-        }
-        
+        // 👉 CTA uniforme con helper
+        const intentLow = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+        out = addBookingCTA({ out, intentLow, bookingLink, userInput });
+
         try {
           const langOut = await detectarIdioma(out);
           if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
@@ -548,6 +639,10 @@ function stripLeadGreetings(t: string) {
  if (respuestaDesdeFaq) {
    // Traduce si hace falta
    let out = respuestaDesdeFaq;
+   // 👉 CTA uniforme para FAQ (intención horario/reservar o si huele a CTA)
+   const intentLowFaq = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+   out = addBookingCTA({ out, intentLow: intentLowFaq, bookingLink, userInput });
+
    try {
      const langOut = await detectarIdioma(out);
      if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
@@ -787,6 +882,10 @@ function stripLeadGreetings(t: string) {
      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
     [tenant.id, respuesta, canal, fromNumber || 'anónimo', `${messageId}-bot`]
   );  
+
+  // 👉 CTA uniforme para fallback OpenAI (según intención)
+  const intentLowOai = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+  respuesta = addBookingCTA({ out: respuesta, intentLow: intentLowOai, bookingLink, userInput });
 
   try {
     await enviarWhatsApp(fromNumber, respuesta, tenant.id);
