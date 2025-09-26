@@ -234,6 +234,7 @@ function addBookingCTA({
 
   const bookingLink =
   getLinkFromTenant(tenant, ['booking_url','booking','reservas_url','reservar_url','agenda_url']) || null;
+  console.log('🔗 bookingLink resuelto =', bookingLink);
 
   if (isNumericOnly) {
     idiomaDestino = await getIdiomaClienteDB(tenant.id, fromNumber, tenantBase);
@@ -430,6 +431,7 @@ function addBookingCTA({
         if (avail.ok && typeof avail.available === 'boolean') {
           const bookingLink =
             getLinkFromTenant(tenant, ['booking_url','booking','reservas_url','reservar_url','agenda_url']) || avail.booking_link || null;
+            console.log('🔗 bookingLink resuelto =', bookingLink);
 
           if (avail.available) {
             let msg = `¡Listo! ${saysManana ? 'Mañana' : (saysHoy ? 'Hoy' : 'Para esa fecha')} ${hora24 ? `a las ${hora24}` : ''} hay cupos disponibles.`;
@@ -458,6 +460,8 @@ function addBookingCTA({
             }
             const bookingLink =
               getLinkFromTenant(tenant, ['booking_url','booking','reservas_url','reservar_url','agenda_url']) || avail.booking_link || null;
+              console.log('🔗 bookingLink resuelto =', bookingLink);
+
             if (bookingLink) msg += `\n\nPuedes reservar aquí: ${bookingLink}`;
             await enviarWhatsApp(fromNumber, msg, tenant.id);
             // Registrar y cortar flujo:
@@ -586,6 +590,8 @@ function addBookingCTA({
         // 👉 CTA uniforme con helper
         const intentLow = (INTENCION_FINAL_CANONICA || '').toLowerCase();
         out = addBookingCTA({ out, intentLow, bookingLink, userInput });
+
+        console.log('💬 INTENCION reply:', { intentLow, out });
 
         try {
           const langOut = await detectarIdioma(out);
@@ -767,125 +773,22 @@ function addBookingCTA({
     console.warn('No se pudo traducir la respuesta de OpenAI:', e);
   }
 
-  const respuestaGeneradaLimpia = respuesta;
-  const preguntaNormalizada = normalizarTexto(userInput);
-  const respuestaNormalizada = respuestaGeneradaLimpia.trim();
+  // 👉 CTA uniforme para fallback OpenAI (según intención) **ANTES** de persistir
+const intentLowOai = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+respuesta = addBookingCTA({ out: respuesta, intentLow: intentLowOai, bookingLink, userInput });
 
-  let sugeridasExistentes: any[] = [];
-  try {
-    const sugeridasRes = await pool.query(
-      'SELECT id, pregunta, respuesta_sugerida FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2',
-      [tenant.id, canal]
-    );
-    sugeridasExistentes = sugeridasRes.rows || [];
-  } catch (error) {
-    console.error('⚠️ Error consultando FAQ sugeridas:', error);
-  }
+// Normalizaciones/registro con el **texto final**
+const respuestaGeneradaLimpia = respuesta;
+const preguntaNormalizada = normalizarTexto(userInput);
+const respuestaNormalizada = respuestaGeneradaLimpia.trim();
 
-  // Verificación de duplicados
-  const yaExisteSugerida = yaExisteComoFaqSugerida(
-    userInput,
-    respuestaNormalizada,
-    sugeridasExistentes
-  );
-
-  const yaExisteAprobada = yaExisteComoFaqAprobada(
-    userInput,
-    respuestaNormalizada,
-    faqs
-  );
-
-  if (yaExisteSugerida || yaExisteAprobada) {
-    if (yaExisteSugerida) {
-      await pool.query(
-        `UPDATE faq_sugeridas 
-         SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
-         WHERE id = $1`,
-        [yaExisteSugerida.id]
-      );
-      console.log(`⚠️ Pregunta similar ya sugerida (ID: ${yaExisteSugerida.id})`);
-    } else {
-      console.log(`⚠️ Pregunta ya registrada como FAQ oficial.`);
-    }
-  } else {
-    // 🧠 Detectar intención para evitar duplicados semánticos
-    const textoTraducidoParaGuardar = idioma !== 'es'
-    ? await traducirMensaje(userInput, 'es')
-    : userInput;
-
-    // [REPLACE] Normaliza "duda" a sub-slug antes de guardar la sugerida
-    const { intencion: intencionDetectadaParaGuardar } =
-    await detectarIntencion(textoTraducidoParaGuardar, tenant.id, 'whatsapp');
-
-    let intencionFinal = (intencionDetectadaParaGuardar || '').trim().toLowerCase();
-    if (intencionFinal === 'duda') {
-      intencionFinal = buildDudaSlug(userInput);
-    }
-    intencionFinal = normalizeIntentAlias(intencionFinal); // 👈 CANONICALIZA AQUÍ
-
-    const { rows: sugeridasConIntencion } = await pool.query(
-    `SELECT intencion FROM faq_sugeridas 
-    WHERE tenant_id = $1 AND canal = $2 AND procesada = false`,
-    [tenant.id, canal]
-    );
-
-    const { rows: faqsOficiales } = await pool.query(
-    `SELECT intencion FROM faqs 
-    WHERE tenant_id = $1 AND canal = $2`,
-    [tenant.id, canal]
-    );
-
-    // 🧠 Compara intención detectada con las oficiales (aplica unicidad solo a INTENT_UNIQUE)
-    const enforzaUnicidad = INTENT_UNIQUE.has(intencionFinal);
-
-    const yaExisteIntencionOficial = faqsOficiales.some(faq =>
-      (faq.intencion || '').trim().toLowerCase() === intencionFinal
-    );
-
-    if (enforzaUnicidad && yaExisteIntencionOficial) {
-      console.log(`⚠️ Ya existe una FAQ oficial con la intención "${intencionFinal}" para este canal y tenant. No se guardará.`);
-    } else {
-      const yaExisteIntencion = sugeridasConIntencion.some(faq =>
-        (faq.intencion || '').trim().toLowerCase() === intencionFinal
-      );
-
-      if (enforzaUnicidad && yaExisteIntencion) {
-        console.log(`⚠️ Ya existe una FAQ sugerida con la intención "${intencionFinal}" para este canal y tenant. No se guardará.`);
-        // 🚫 No hacer return aquí
-      } else {
-        // ✅ Insertar la sugerencia (para intenciones no-únicas como "duda", se permite múltiples)
-        await pool.query(
-          `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
-          VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
-          [tenant.id, canal, preguntaNormalizada, respuestaNormalizada, idioma, intencionFinal]
-        );
-        console.log(`📝 Pregunta no resuelta registrada: "${preguntaNormalizada}"`);
-      }
-    }
-  }
-    const tokensConsumidos = completion.usage?.total_tokens || 0;
-    if (tokensConsumidos > 0) {
-      await pool.query(
-        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-         VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-         ON CONFLICT (tenant_id, canal, mes)
-         DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-        [tenant.id, tokensConsumidos]
-      );
-    }    
-  }  
-
-  // Insertar mensaje bot (esto no suma a uso)
-  await pool.query(
-    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-     VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-     ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-    [tenant.id, respuesta, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-  );  
-
-  // 👉 CTA uniforme para fallback OpenAI (según intención)
-  const intentLowOai = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-  respuesta = addBookingCTA({ out: respuesta, intentLow: intentLowOai, bookingLink, userInput });
+// Insertar mensaje bot (esto no suma a uso)
+await pool.query(
+  `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+   VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+   ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+  [tenant.id, respuesta, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+);
 
   try {
     await enviarWhatsApp(fromNumber, respuesta, tenant.id);
@@ -942,4 +845,5 @@ function addBookingCTA({
   } catch (err) {
     console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
   }   
-} 
+}
+}
