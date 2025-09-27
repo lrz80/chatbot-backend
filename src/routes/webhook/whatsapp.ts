@@ -106,6 +106,26 @@ function getLinkFromTenant(tenant: any, keys: string[]): string | null {
   return null;
 }
 
+async function fetchHorarioBase(tenantId: string): Promise<string | null> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT respuesta
+         FROM intenciones
+        WHERE tenant_id = $1
+          AND canal = 'whatsapp'
+          AND LOWER(nombre) = 'horario'
+          AND (activo IS TRUE OR activo IS NULL)
+        ORDER BY prioridad DESC NULLS LAST, updated_at DESC NULLS LAST
+        LIMIT 1`,
+      [tenantId]
+    );
+    return rows[0]?.respuesta || null;
+  } catch (e) {
+    console.warn('⚠️ No se pudo obtener la intención "horario":', e);
+    return null;
+  }
+}
+
 function to24hSafe(h?: string | null): string | null {
   if (!h) return null;
   const m = h.trim().match(/^([01]?\d|2[0-3])(?::?([0-5]\d))?\s*(am|pm)?$/i);
@@ -543,41 +563,59 @@ function addBookingCTA({
    INTENCION_FINAL_CANONICA = '';
  }
 
- // --- NUEVO: atajo determinista sin RT para agenda ---
-{
-  const canon = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-  const isAgenda = ['horario','reservar'].includes(canon);
+ // --- NUEVO: atajo determinista sin RT para agenda (NO eco de hora del usuario) ---
+  {
+    const canon = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+    const isAgenda = ['horario','reservar'].includes(canon);
 
-  if (isAgenda && hasTemporal) {
-    // Variables locales PARA ESTE GUARD (evita fuera de scope)
-    const cleanedForGuard = stripLeadGreetings(userInput);
-    const dayNameMatch = cleanedForGuard.toLowerCase().match(/(domingo|lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado)/);
-    const saysMananaGuard = /(mañana|manana)/i.test(cleanedForGuard);
-    const horaMatchForGuard = (userInput || '').toLowerCase().match(/([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?/i);
-    const hora24 = to24hSafe(horaMatchForGuard ? horaMatchForGuard[0].replace('.', ':') : null);
+    // Si es agenda y hay temporalidad, pero NO tenemos RT confirmado, respondemos con el "horario" base.
+    // Nota: en este punto, si RT falló o bookingEnabled es falso, caemos aquí ANTES de ir al LLM.
+    if (isAgenda && hasTemporal) {
+      // 1) Intentar traer el "horario" canónico desde la tabla intenciones
+      let out = await fetchHorarioBase(tenant.id);
 
-    const cuando = saysMananaGuard ? 'mañana' : (dayNameMatch ? `el ${dayNameMatch[1]}` : 'esa fecha');
-    const horaTxt = hora24 ? ` a las ${hora24}` : '';
+      // 2) Si no existiera la intención "horario", usar un mensaje genérico NEUTRO (sin eco de la hora)
+      if (!out) {
+        out = 'Te ayudo a reservar. Por favor revisa nuestros horarios disponibles y confirma tu cupo en el enlace.';
+      }
 
-    const msg = (`¡Genial! Para ${cuando}${horaTxt} te ayudo a reservar. ` +
-                `Por favor confirma cupos y reserva aquí: ${bookingLink ?? ''}`).trim();
+      // 3) Añadir CTA uniforme (si tienes bookingLink configurado)
+      out = addBookingCTA({
+        out,
+        intentLow: canon,
+        bookingLink,
+        userInput
+      });
 
-    try { await enviarWhatsApp(fromNumber, msg, tenant.id); } catch {}
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, msg, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-    );
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
-      [tenant.id, 'whatsapp', messageId]
-    );
-    return; // evita LLM y cualquier alucinación/listado
+      // 4) Ajuste de idioma si aplica
+      try {
+        const langOut = await detectarIdioma(out);
+        if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+          out = await traducirMensaje(out, idiomaDestino);
+        }
+      } catch {}
+
+      // 5) Enviar y registrar, y cortar el flujo (no ir al LLM)
+      try { await enviarWhatsApp(fromNumber, out, tenant.id); } catch {}
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+        VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+        ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+        [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+      );
+      await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT DO NOTHING`,
+        [tenant.id, 'whatsapp', messageId]
+      );
+
+      // (Opcional) programa follow-up light
+      try { await scheduleFollowUp(canon, 1); } catch {}
+
+      return; // ✅ IMPORTANTÍSIMO: no caemos al LLM
+    }
   }
-}
 
  // ✅ Fallback seguro para intención "horario" si no retornó nada arriba
   //    - Intenta una consulta simple a API (si existe vía getBookingConfig)
