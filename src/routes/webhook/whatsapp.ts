@@ -16,10 +16,6 @@ import {
 } from '../../lib/faq/similaridadFaq';
 import { detectarIntencion } from '../../lib/detectarIntencion';
 import { getTenantTimezone } from '../../lib/getTenantTimezone';
-import { checkAvailability } from '../../lib/availability';
-import { getBookingConfig, checkAvailabilityNextClass } from '../../lib/booking';
-import { format } from 'date-fns';
-import { es } from 'date-fns/locale';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -104,65 +100,6 @@ function getLinkFromTenant(tenant: any, keys: string[]): string | null {
     if (tenant && typeof tenant[k] === 'string' && tenant[k]) return tenant[k];
   }
   return null;
-}
-
-async function fetchHorarioBase(tenantId: string): Promise<string | null> {
-  try {
-    const { rows } = await pool.query(
-      `SELECT respuesta
-         FROM intenciones
-        WHERE tenant_id = $1
-          AND canal = 'whatsapp'
-          AND LOWER(nombre) = 'horario'
-          AND (activo IS TRUE OR activo IS NULL)
-        ORDER BY prioridad DESC NULLS LAST, updated_at DESC NULLS LAST
-        LIMIT 1`,
-      [tenantId]
-    );
-    return rows[0]?.respuesta || null;
-  } catch (e) {
-    console.warn('⚠️ No se pudo obtener la intención "horario":', e);
-    return null;
-  }
-}
-
-function getTransactionalLink(tenant: any): string | null {
-  // prioriza links típicos por vertical; usa lo que el tenant tenga cargado
-  return (
-    getLinkFromTenant(tenant, [
-      // reservas/turnos/mesas
-      'booking_url','reservas_url','reservar_url','agenda_url',
-      // ordering / e-commerce
-      'checkout_url','cart_url','menu_url','order_url',
-      // catálogo genérico
-      'catalog_url','shop_url'
-    ]) || null
-  );
-}
-
-// Clasificador universal de buckets
-function classifyBucket(t: string): 'AVAILABILITY'|'TRANSACTION'|'GEN' {
-  const s = (t || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
-  const hasTime = /(^|\b)([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?(\b|$)/i.test(s);
-  const hasDay  = /(hoy|manana|pasado\s*manana|lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo|esta\s*semana|fin\s*de\s*semana)/i.test(s);
-  const availHints = /(horario|abren?|abierto|cierran?|disponible|cupos?|turno|mesa|waiting\s*list|stock|existencia|hay|queda|agenda|schedule)/i.test(s);
-  const txnHints = /(reserv(ar|a|o)|book|orden(ar)?|order|compr(ar|a)|buy|pagar|checkout|delivery|envio|envío|pickup|take\s*out|apart(ar|o)|inscribirme)/i.test(s);
-
-  if (hasTime || hasDay || availHints) return 'AVAILABILITY';
-  if (txnHints) return 'TRANSACTION';
-  return 'GEN';
-}
-
-function to24hSafe(h?: string | null): string | null {
-  if (!h) return null;
-  const m = h.trim().match(/^([01]?\d|2[0-3])(?::?([0-5]\d))?\s*(am|pm)?$/i);
-  if (!m) return null;
-  let hh = parseInt(m[1], 10);
-  const mm = m[2] ? m[2] : '00';
-  const ap = m[3]?.toLowerCase();
-  if (ap === 'am') { if (hh === 12) hh = 0; }
-  else if (ap === 'pm') { if (hh !== 12) hh += 12; }
-  return `${String(hh).padStart(2,'0')}:${mm}`;
 }
 
 async function procesarMensajeWhatsApp(body: any) {
@@ -321,6 +258,20 @@ function addBookingCTA({
     faqs = [];
   }  
 
+  // Cargar FAQ sugeridas existentes (para evitar duplicados)
+  let sugeridasExistentes: any[] = [];
+  try {
+    const sugRes = await pool.query(
+      `SELECT id, pregunta, respuesta_sugerida
+        FROM faq_sugeridas
+        WHERE tenant_id = $1 AND canal = $2`,
+      [tenant.id, 'whatsapp']
+    );
+    sugeridasExistentes = sugRes.rows || [];
+  } catch (error) {
+    console.error('⚠️ Error consultando FAQ sugeridas:', error);
+  }
+
   // 1️⃣ Detectar si es solo número
   const isNumericOnly = /^\s*\d+\s*$/.test(aggregatedInput);
 
@@ -357,194 +308,6 @@ function addBookingCTA({
     try { await enviarWhatsApp(fromNumber, out, tenant.id); } catch {}
     return;
   }
-}
-
-// === ROUTER UNIVERSAL DE BUCKETS (multi-vertical) ===
-const bucket = classifyBucket(aggregatedInput);
-console.log('🧭 bucket =', bucket);
-
-// Links transaccionales (booking / checkout / menú / catálogo)
-const bookingOrCheckoutLink = getTransactionalLink(tenant);
-
-// Ejecutar RT availability SOLO si el bucket lo amerita
-if (bucket === 'AVAILABILITY' || bucket === 'TRANSACTION') {
-  // === DISPONIBILIDAD EN TIEMPO REAL (si el tenant tiene booking.enabled) ===
-  try {
-    // Resuelve si el tenant tiene booking habilitado o al menos un link transaccional
-    let bookingEnabled = false;
-    try {
-      const raw = tenant?.settings;
-      const settings = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      bookingEnabled = (settings?.booking?.enabled ?? false) || !!bookingOrCheckoutLink;
-    } catch {}
-
-    if (bookingEnabled) {
-      const timeZone = getTenantTimezone(tenant);
-
-      // Fecha base en TZ del tenant
-      const now = new Date();
-      const nowInTz = new Date(now.toLocaleString('en-US', { timeZone }));
-      const base = new Date(nowInTz);
-
-      // Texto y helpers locales
-      const cleaned = stripLeadGreetings(aggregatedInput);
-      const text = (aggregatedInput || '').toLowerCase();
-      const saysManana = /(mañana|manana)/i.test(text);
-      const saysHoy    = /\bhoy\b/i.test(text);
-
-      if (saysManana) base.setDate(base.getDate() + 1);
-
-      // Día de semana → próxima ocurrencia
-      const dayNameMap: Record<string, number> = {
-        'domingo': 0, 'lunes': 1, 'martes': 2,
-        'miercoles': 3, 'miércoles': 3,
-        'jueves': 4, 'viernes': 5,
-        'sabado': 6, 'sábado': 6,
-      };
-      function nextDow(from: Date, targetDow: number) {
-        const d = new Date(from);
-        const diff = (targetDow + 7 - d.getDay()) % 7 || 7;
-        d.setDate(d.getDate() + diff);
-        return d;
-      }
-
-      let targetDate = base;
-      const dayNameMatch = cleaned.toLowerCase().match(/(domingo|lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado)/);
-      if (dayNameMatch) {
-        const dow = dayNameMap[dayNameMatch[1]];
-        targetDate = nextDow(base, dow);
-      } else if (saysManana) {
-        targetDate = new Date(base);
-        targetDate.setDate(base.getDate() + 1);
-      }
-
-      // Hora solicitada (si viene)
-      const match = text.match(/([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?/i);
-      const horaPedida = match ? match[0].replace('.', ':') : null;
-      const hora24 = to24hSafe(horaPedida);
-
-      // Fecha YYYY-MM-DD en TZ del tenant
-      const y = targetDate.getFullYear();
-      const m = String(targetDate.getMonth() + 1).padStart(2, '0');
-      const d = String(targetDate.getDate()).padStart(2, '0');
-      const fechaISO = `${y}-${m}-${d}`;
-
-      // Consulta RT
-      const q = { date: fechaISO, time: hora24 || undefined, service: undefined as any };
-      const avail = await checkAvailability(tenant, q);
-      console.log('🔍 RT availability resp:', JSON.stringify(avail));
-
-      // Link final a usar
-      const resolvedLink =
-        getLinkFromTenant(tenant, ['booking_url','booking','reservas_url','reservar_url','agenda_url']) ||
-        avail.booking_link ||
-        bookingOrCheckoutLink ||
-        null;
-
-      if (avail.ok && typeof avail.available === 'boolean') {
-        if (avail.available) {
-          let msg = `¡Listo! ${saysManana ? 'Mañana' : (saysHoy ? 'Hoy' : 'Para esa fecha')} ${hora24 ? `a las ${hora24}` : ''} hay cupos disponibles.`;
-          if (typeof avail.remaining === 'number') msg += ` Quedan ${avail.remaining}.`;
-          if (resolvedLink) msg += `\n\nReserva aquí: ${resolvedLink}`;
-          await enviarWhatsApp(fromNumber, msg, tenant.id);
-          await pool.query(
-            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-             VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-             ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-            [tenant.id, msg, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-          );
-          await pool.query(
-            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-             VALUES ($1, $2, $3, NOW())
-             ON CONFLICT DO NOTHING`,
-            [tenant.id, 'whatsapp', messageId]
-          );
-          return; // corta flujo
-        } else {
-          let msg = `Por ahora no veo cupos ${saysManana ? 'mañana' : (saysHoy ? 'hoy' : 'para esa fecha')}${hora24 ? ` a las ${hora24}` : ''}.`;
-          if (avail.next_slots?.length) {
-            const sug = avail.next_slots.slice(0,3).map(s => `• ${s.start}`).join('\n');
-            msg += `\nOpciones cercanas:\n${sug}`;
-          }
-          if (resolvedLink) msg += `\n\nPuedes reservar aquí: ${resolvedLink}`;
-          await enviarWhatsApp(fromNumber, msg, tenant.id);
-          await pool.query(
-            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-             VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-             ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-            [tenant.id, msg, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-          );
-          await pool.query(
-            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-             VALUES ($1, $2, $3, NOW())
-             ON CONFLICT DO NOTHING`,
-            [tenant.id, 'whatsapp', messageId]
-          );
-          return; // corta flujo
-        }
-      }
-      // Si la API no devolvió available ⇒ seguimos con bucket handlers (abajo)
-    }
-  } catch (e) {
-    console.warn('⚠️ checkAvailability falló (se continúa con flujo normal):', e);
-  }
-}
-
-// 1) AVAILABILITY
-if (bucket === 'AVAILABILITY') {
-  // Si hay RT específico por tenant, podrías llamarlo aquí.
-  // Si no hay RT o falla, usamos "horario base" + CTA y cortamos flujo.
-  let out = await fetchHorarioBase(tenant.id);
-  if (!out) {
-    out = 'Aquí tienes nuestros horarios y disponibilidad general. Revisa el enlace para confirmar en tiempo real.';
-  }
-  out = addBookingCTA({
-    out,
-    intentLow: 'horario',
-    bookingLink: bookingOrCheckoutLink,
-    userInput: aggregatedInput
-  });
-
-  try { await enviarWhatsApp(fromNumber, out, tenant.id); } catch {}
-  await pool.query(
-    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-     VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-     ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-    [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-  );
-  await pool.query(
-    `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-     VALUES ($1, $2, $3, NOW())
-     ON CONFLICT DO NOTHING`,
-    [tenant.id, 'whatsapp', messageId]
-  );
-  return; // ⛔ corta antes de FAQ/LLM
-}
-
-// 3) TRANSACTION
-if (bucket === 'TRANSACTION') {
-  let out = '¡Perfecto! Te ayudo a completar tu pedido/reserva en el enlace.';
-  out = addBookingCTA({
-    out,
-    intentLow: 'reservar',
-    bookingLink: bookingOrCheckoutLink,
-    userInput: aggregatedInput
-  });
-
-  try { await enviarWhatsApp(fromNumber, out, tenant.id); } catch {}
-  await pool.query(
-    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-     VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-     ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-    [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-  );
-  await pool.query(
-    `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-     VALUES ($1, $2, $3, NOW())
-     ON CONFLICT DO NOTHING`,
-    [tenant.id, 'whatsapp', messageId]
-  );
-  return; // ⛔ corta
 }
 
 // 4) GEN → sigue el pipeline normal (FAQ/LLM)
@@ -783,63 +546,46 @@ if (bucket === 'TRANSACTION') {
    return;
  }
 
-  // 🧠 Si no hubo FAQ/intención, genera con OpenAI usando el prompt del canal (con fecha/rails)
-  if (!respuestaDesdeFaq) {
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+  // 🧠 Si no hubo FAQ/intención, responde SOLO con lo que esté en el prompt del tenant (sin RT, sin inventar)
+if (!respuestaDesdeFaq) {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
-  // ✅ Zona horaria del tenant (oficial)
+  // (Opcional) contexto horario por claridad de redacción, pero sin confirmar nada:
   const timeZone = getTenantTimezone(tenant);
-
-  // 2) Fechas absolutas para hoy/mañana en la zona del negocio
   const now = new Date();
-  const nowInTz = new Date(
-    now.toLocaleString('en-US', { timeZone })
-  );
+  const nowInTz = new Date(now.toLocaleString('en-US', { timeZone }));
   const tomorrowInTz = new Date(nowInTz.getTime() + 24 * 60 * 60 * 1000);
 
   const fmtFecha = (d: Date) =>
-    d.toLocaleDateString('es-ES', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      timeZone
-    });
+    d.toLocaleDateString('es-ES', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone });
 
-  const HOY = fmtFecha(nowInTz);        // ej. "miércoles, 24 de septiembre de 2025"
-  const MANANA = fmtFecha(tomorrowInTz); // ej. "jueves, 25 de septiembre de 2025"
+  const HOY = fmtFecha(nowInTz);
+  const MANANA = fmtFecha(tomorrowInTz);
 
-  // 3) Extraer hora solicitada (si viene)
-  const lowerForLLM = (aggregatedInput || '').toLowerCase();
-  const horaMatch   = lowerForLLM.match(/([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?/i);
-  const HORA_PEDIDA = horaMatch ? horaMatch[0].replace('.', ':') : null;
-  const DICE_MANANA = /(mañana|manana)/i.test(lowerForLLM);
-
-  // 5) Armar contexto explícito para el LLM
   const contextoFecha = [
     `ZONA_HORARIA_NEGOCIO: ${timeZone}`,
     `HOY: ${HOY}`,
     `MANANA: ${MANANA}`,
-    `USUARIO_PREGUNTA: ${aggregatedInput}`,
-    `PARSEO: ${[
-      DICE_MANANA ? `pide = MANANA` : `pide = (no_detectado)`,
-      HORA_PEDIDA ? `hora = ${HORA_PEDIDA}` : `hora = (no_detectada)`
-    ].join(' | ')}`
+    `USUARIO_PREGUNTA: ${aggregatedInput}`
   ].join('\n');
 
-  // El router ya manejó AVAILABILITY/TRANSACTION; aquí somos GEN
-const systemPrompt = [
-  promptBase,
-  '',
-  '=== CONTEXTO_DE_FECHA ===',
-  contextoFecha
-].join('\n');
+  const systemPrompt = [
+    promptBase,
+    '',
+    '=== CONTEXTO_DE_FECHA ===',
+    contextoFecha,
+    '',
+    '=== REGLAS DE RESPUESTA ===',
+    '- Responde ÚNICAMENTE con información contenida en este prompt/base de negocio.',
+    '- No confirmes disponibilidad, cupos, horarios específicos ni estados de stock a menos que estén explícitos en el prompt.',
+    '- Si el usuario pide algo que no está en el prompt, indícale amablemente que no puedo confirmarlo desde aquí y ofrece el enlace del negocio si existe.',
+    '- Sé breve, claro y mantén el idioma del cliente.'
+  ].join('\n');
 
-
-    const completion = await openai.chat.completions.create({
+  const completion = await openai.chat.completions.create({
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-    temperature: 0.3,
-    max_tokens: 280,           // evita parrafadas largas
+    temperature: 0.2,
+    max_tokens: 280,
     presence_penalty: 0,
     frequency_penalty: 0,
     messages: [
@@ -848,39 +594,29 @@ const systemPrompt = [
     ],
   });
 
-  respuesta = completion.choices[0]?.message?.content?.trim()
-    || 'Puedo ayudarte con los horarios. ¿Te parece si lo confirmamos en el enlace de reservas o prefieres otra hora?';
+  let respuesta = completion.choices[0]?.message?.content?.trim()
+    || 'Puedo ayudarte con la información disponible. Si necesitas confirmar algo específico, te comparto el enlace correspondiente.';
 
-  // 🌐 Ajuste de idioma de salida
+  // Ajuste de idioma si hiciera falta
   try {
     const idiomaRespuesta = await detectarIdioma(respuesta);
     if (idiomaRespuesta && idiomaRespuesta !== 'zxx' && idiomaRespuesta !== idiomaDestino) {
       respuesta = await traducirMensaje(respuesta, idiomaDestino);
     }
-  } catch (e) {
-    console.warn('No se pudo traducir la respuesta de OpenAI:', e);
-  }
+  } catch {}
 
-  // 👉 CTA uniforme para fallback OpenAI (según intención) **ANTES** de persistir
-const intentLowOai = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-respuesta = addBookingCTA({ out: respuesta, intentLow: intentLowOai, bookingLink, userInput: aggregatedInput });
+  // (Opcional) CTA según tenant
+  const intentLowOai = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+  respuesta = addBookingCTA({ out: respuesta, intentLow: intentLowOai, bookingLink, userInput: aggregatedInput });
 
-// Normalizaciones/registro con el **texto final**
-const respuestaGeneradaLimpia = respuesta;
-const preguntaNormalizada = normalizarTexto(aggregatedInput);
-const respuestaNormalizada = respuestaGeneradaLimpia.trim();
-
-// Insertar mensaje bot (esto no suma a uso)
-await pool.query(
-  `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-   VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-   ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-  [tenant.id, respuesta, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-);
-
-  try {
-    await enviarWhatsApp(fromNumber, respuesta, tenant.id);
-  } catch (e) {
+  // Persistir + enviar
+  await pool.query(
+    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+     VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+     ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+    [tenant.id, respuesta, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+  );
+  try { await enviarWhatsApp(fromNumber, respuesta, tenant.id); } catch (e) {
     console.error('❌ Error enviando WhatsApp (fallback OpenAI):', e);
   }
   console.log("📬 Respuesta enviada vía Twilio:", respuesta);
@@ -889,49 +625,79 @@ await pool.query(
     `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
      VALUES ($1, $2, $3, NOW())
      ON CONFLICT DO NOTHING`,
-    [tenant.id, canal, messageId]
-  );  
+    [tenant.id, 'whatsapp', messageId]
+  );
 
+  // Inteligencia de ventas + follow-up
   try {
     const det = await detectarIntencion(aggregatedInput, tenant.id, 'whatsapp');
     const nivel_interes = det?.nivel_interes ?? 1;
     const intFinal = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-    const textoNormalizado = userInput.trim().toLowerCase();
-  
-    console.log(`🔎 Intención (final) = ${intFinal}, Nivel de interés: ${nivel_interes}`);
-  
-    // 🔥 Segmentación con intención final
-    const intencionesCliente = [
-      "comprar", "compra", "pagar", "agendar", "reservar", "confirmar",
-      "interes_clases", "precio"
-    ];
+
+    const intencionesCliente = ["comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"];
     if (intencionesCliente.some(p => intFinal.includes(p))) {
       await pool.query(
-        `UPDATE clientes
-            SET segmento = 'cliente'
-          WHERE tenant_id = $1
-            AND contacto = $2
-            AND (segmento = 'lead' OR segmento IS NULL)`,
+        `UPDATE clientes SET segmento = 'cliente'
+         WHERE tenant_id = $1 AND contacto = $2
+           AND (segmento = 'lead' OR segmento IS NULL)`,
         [tenant.id, fromNumber]
       );
     }
-  
-    // 🔥 Registrar en sales_intelligence con intención final
+
     await pool.query(
       `INSERT INTO sales_intelligence
         (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
-      [tenant.id, fromNumber, canal, aggregatedInput, intFinal, nivel_interes, messageId]
+      [tenant.id, fromNumber, 'whatsapp', aggregatedInput, intFinal, nivel_interes, messageId]
     );
-  
-    // 🚀 Follow-up con intención final
+
     if (nivel_interes >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
       await scheduleFollowUp(intFinal, nivel_interes);
     }
-    
   } catch (err) {
     console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
-  }   
-}
+  }
+
+  // (Opcional) sugerir FAQ si no existe (igual que en Meta)
+  try {
+    // Normaliza la pregunta original del usuario
+    const preguntaN = normalizarTexto(aggregatedInput || '');
+
+    // 1) Checar duplicado en sugeridas (usa el ARRAY cargado)
+    const yaExisteSug = yaExisteComoFaqSugerida(aggregatedInput || '', respuesta || '', sugeridasExistentes);
+
+    // 2) Checar duplicado en oficiales (usa el ARRAY `faqs` que ya cargas arriba)
+    const yaExisteAprob = yaExisteComoFaqAprobada(aggregatedInput || '', respuesta || '', faqs);
+
+    if (yaExisteSug || yaExisteAprob) {
+      if (yaExisteSug) {
+        // ya existe como sugerida → sólo incrementa contador y actualiza fecha
+        await pool.query(
+          `UPDATE faq_sugeridas
+              SET veces_repetida = COALESCE(veces_repetida, 0) + 1,
+                  ultima_fecha    = NOW()
+            WHERE id = $1`,
+          [yaExisteSug.id]
+        );
+        console.log(`🔁 Pregunta similar ya sugerida (ID: ${yaExisteSug.id})`);
+      } else {
+        console.log('🔁 Pregunta ya registrada como FAQ oficial.');
+      }
+    } else {
+      // Nueva sugerencia (aplica un mínimo de longitud para evitar ruido)
+      if (preguntaN.length >= 20) {
+        await pool.query(
+          `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, veces_repetida, created_at)
+          VALUES ($1, $2, $3, $4, 1, NOW())`,
+          [tenant.id, 'whatsapp', aggregatedInput, respuesta || null]
+        );
+        console.log('🆕 Pregunta sugerida creada.');
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ No se pudo sugerir FAQ:', e);
+  }
+  return;
+  }
 }
