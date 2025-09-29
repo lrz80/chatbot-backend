@@ -314,7 +314,7 @@ function addBookingCTA({
     const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
     await upsertIdiomaClienteDB(tenant.id, fromNumber, normalizado);
     idiomaDestino = normalizado;
-    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
+    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= aggregated`);
   }
 
   // ✅ PON ESTO DESPUÉS de calcular idiomaDestino (y antes del pipeline)
@@ -493,18 +493,6 @@ function addBookingCTA({
       const match = text.match(/([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?/i);
       const horaPedida = match ? match[0].replace('.', ':') : null;
 
-      function to24h(h?: string | null): string | null {
-        if (!h) return null;
-        const m = h.trim().match(/^([01]?\d|2[0-3])(?::?([0-5]\d))?\s*(am|pm)?$/i);
-        if (!m) return null;
-        let hh = parseInt(m[1], 10);
-        const mm = m[2] ? m[2] : '00';
-        const ap = m[3]?.toLowerCase();
-        if (ap === 'am') { if (hh === 12) hh = 0; }
-        else if (ap === 'pm') { if (hh !== 12) hh += 12; }
-        return `${String(hh).padStart(2,'0')}:${mm}`;
-      }
-
       const hora24 = to24hSafe(horaPedida);
 
       // 3) Formatear fecha YYYY-MM-DD en TZ del tenant **desde targetDate**
@@ -606,9 +594,11 @@ function addBookingCTA({
    INTENCION_FINAL_CANONICA = '';
  }
 
+ // canon único para todo el flujo
+ const canon = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+
  // --- NUEVO: atajo determinista sin RT para agenda (NO eco de hora del usuario) ---
   {
-    const canon = (INTENCION_FINAL_CANONICA || '').toLowerCase();
     const isAgenda = ['horario','reservar'].includes(canon);
 
     // Si es agenda y hay temporalidad, pero NO tenemos RT confirmado, respondemos con el "horario" base.
@@ -627,7 +617,7 @@ function addBookingCTA({
         out,
         intentLow: canon,
         bookingLink,
-        userInput
+        userInput: aggregatedInput
       });
 
       // 🔎 LOG útil para auditar lo enviado por el atajo determinista
@@ -666,7 +656,6 @@ function addBookingCTA({
  // ✅ Fallback seguro para intención "horario" si no retornó nada arriba
   //    - Intenta una consulta simple a API (si existe vía getBookingConfig)
   //    - Siempre adjunta el link de reservas si lo hay
-  const canon = (INTENCION_FINAL_CANONICA || '').toLowerCase();
   if (canon === 'horario' && (hasTemporal || reserveHit)) {
     try {
       const cfg = await getBookingConfig(tenant.id);
@@ -748,7 +737,7 @@ function addBookingCTA({
 
         // 👉 CTA uniforme con helper
         const intentLow = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-        out = addBookingCTA({ out, intentLow, bookingLink, userInput });
+        out = addBookingCTA({ out, intentLow, bookingLink, userInput: aggregatedInput });
 
         console.log('💬 INTENCION reply:', { intentLow, out });
 
@@ -806,7 +795,7 @@ function addBookingCTA({
    let out = respuestaDesdeFaq;
    // 👉 CTA uniforme para FAQ (intención horario/reservar o si huele a CTA)
    const intentLowFaq = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-   out = addBookingCTA({ out, intentLow: intentLowFaq, bookingLink, userInput });
+   out = addBookingCTA({ out, intentLow: intentLowFaq, bookingLink, userInput: aggregatedInput });
 
    try {
      const langOut = await detectarIdioma(out);
@@ -934,11 +923,11 @@ function addBookingCTA({
 
   // 👉 CTA uniforme para fallback OpenAI (según intención) **ANTES** de persistir
 const intentLowOai = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-respuesta = addBookingCTA({ out: respuesta, intentLow: intentLowOai, bookingLink, userInput });
+respuesta = addBookingCTA({ out: respuesta, intentLow: intentLowOai, bookingLink, userInput: aggregatedInput });
 
 // Normalizaciones/registro con el **texto final**
 const respuestaGeneradaLimpia = respuesta;
-const preguntaNormalizada = normalizarTexto(userInput);
+const preguntaNormalizada = normalizarTexto(aggregatedInput);
 const respuestaNormalizada = respuestaGeneradaLimpia.trim();
 
 // Insertar mensaje bot (esto no suma a uso)
@@ -964,7 +953,7 @@ await pool.query(
   );  
 
   try {
-    const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+    const det = await detectarIntencion(aggregatedInput, tenant.id, 'whatsapp');
     const nivel_interes = det?.nivel_interes ?? 1;
     const intFinal = (INTENCION_FINAL_CANONICA || '').toLowerCase();
     const textoNormalizado = userInput.trim().toLowerCase();
@@ -993,7 +982,7 @@ await pool.query(
         (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
-      [tenant.id, fromNumber, canal, userInput, intFinal, nivel_interes, messageId]
+      [tenant.id, fromNumber, canal, aggregatedInput, intFinal, nivel_interes, messageId]
     );
   
     // 🚀 Follow-up con intención final
