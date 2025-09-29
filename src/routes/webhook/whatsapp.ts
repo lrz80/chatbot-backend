@@ -102,6 +102,80 @@ function getLinkFromTenant(tenant: any, keys: string[]): string | null {
   return null;
 }
 
+function getTransactionalLink(tenant: any): string | null {
+  return (
+    getLinkFromTenant(tenant, [
+      // reservas/turnos/mesas
+      'booking_url','reservas_url','reservar_url','agenda_url',
+      // ordering / e-commerce
+      'checkout_url','cart_url','menu_url','order_url',
+      // catálogo genérico
+      'catalog_url','shop_url'
+    ]) || null
+  );
+}
+
+function parseLinksFromPrompt(promptText: string) {
+  const find = (re: RegExp) => (promptText.match(re)?.[0] || null);
+
+  return {
+    // Soporte
+    waSupport:   find(/https?:\/\/wa\.me\/\d+/i),
+
+    // Reservas / turnos / clases
+    schedule:    find(/https?:\/\/[^\s]+\/classes-day-view/i)  // Glofox
+               || find(/https?:\/\/[^\s]+\/(book|reserve|booking)/i),
+
+    // Membresías / precios
+    memberships: find(/https?:\/\/[^\s]+\/memberships(?!\/)/i)
+               || find(/https?:\/\/[^\s]+\/(plans|pricing?)/i),
+
+    // “Free trial” / clase gratis / demo
+    freeTrial:   find(/https?:\/\/[^\s]+\/(free|trial|demo|buy)/i),
+
+    // Restaurante / e-commerce
+    menu:        find(/https?:\/\/[^\s]+\/(menu|carta)/i),
+    order:       find(/https?:\/\/[^\s]+\/(order|pickup|delivery|take(out)?)/i),
+    checkout:    find(/https?:\/\/[^\s]+\/(checkout|cart)/i),
+    catalog:     find(/https?:\/\/[^\s]+\/(catalog|shop|store)/i),
+  };
+}
+
+function pickPromptLink({
+  intentLow, bucket, text, promptLinks, tenant
+}: {
+  intentLow: string,
+  bucket: 'AVAILABILITY'|'TRANSACTION'|'GEN',
+  text: string,
+  promptLinks: ReturnType<typeof parseLinksFromPrompt>,
+  tenant: any
+}) {
+  const s = text.toLowerCase();
+
+  // Señales por contenido (multinegocio)
+  if (/(soporte|support|whatsapp|ayuda\s+t(?:e|é)cnica)/i.test(s) && promptLinks.waSupport) return promptLinks.waSupport;
+
+  if (/(precio|plan(es)?|membres[ií]a|cost|tarifa|rates|pricing)/i.test(s) && promptLinks.memberships) return promptLinks.memberships;
+  if (/(clase\s+gratis|free\s+(class|trial)|demo)/i.test(s) && promptLinks.freeTrial) return promptLinks.freeTrial;
+
+  if (/(menu|carta)/i.test(s) && promptLinks.menu) return promptLinks.menu;
+  if (/(orden(ar)?|order|pedido|delivery|domicilio|env[ií]o|pickup|take\s*out)/i.test(s)) {
+    if (promptLinks.order) return promptLinks.order;
+    if (promptLinks.checkout) return promptLinks.checkout;
+  }
+  if (/(cat[aá]logo|catalog|shop|store)/i.test(s) && promptLinks.catalog) return promptLinks.catalog;
+
+  // Por intención/bucket (reserva/horarios → schedule / order)
+  if (bucket !== 'GEN' || intentLow === 'reservar' || intentLow === 'horario') {
+    if (promptLinks.schedule) return promptLinks.schedule;
+    if (promptLinks.order)    return promptLinks.order;
+    if (promptLinks.checkout) return promptLinks.checkout;
+  }
+
+  // Fallback: lo que venga del tenant (links/meta/settings…)
+  return getTransactionalLink(tenant);
+}
+
 async function procesarMensajeWhatsApp(body: any) {
   const to = body.To || '';
   const from = body.From || '';
@@ -195,9 +269,10 @@ try {
 
   const idioma = await detectarIdioma(aggregatedInput);
   const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
+  const promptLinks = parseLinksFromPrompt(String(promptBase || ''));
   let respuesta = '';
   const canal = 'whatsapp';
-
+  
   // URL presente en el prompt (fallback si no hay link en settings/tenant)
   const promptUrl = extractFirstUrl(promptBase);
 
@@ -478,7 +553,19 @@ function addBookingCTA({
 
         // 👉 CTA uniforme con helper
         const intentLow = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-        out = addBookingCTA({ out, intentLow, bookingLink, userInput: aggregatedInput });
+        const linkForThisIntent = pickPromptLink({
+          intentLow,
+          bucket: 'GEN',
+          text: aggregatedInput,
+          promptLinks,
+          tenant
+        });
+        out = addBookingCTA({
+          out,
+          intentLow,
+          bookingLink: linkForThisIntent,
+          userInput: aggregatedInput
+        });
 
         console.log('💬 INTENCION reply:', { intentLow, out });
 
@@ -536,7 +623,20 @@ function addBookingCTA({
    let out = respuestaDesdeFaq;
    // 👉 CTA uniforme para FAQ (intención horario/reservar o si huele a CTA)
    const intentLowFaq = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-   out = addBookingCTA({ out, intentLow: intentLowFaq, bookingLink, userInput: aggregatedInput });
+   const linkForFaq = pickPromptLink({
+     intentLow: intentLowFaq,
+     bucket: 'GEN',
+     text: aggregatedInput,
+     promptLinks,
+     tenant
+   });
+  out = addBookingCTA({
+    out,
+    intentLow: intentLowFaq,
+    bookingLink: linkForFaq,
+    userInput: aggregatedInput
+  });
+
 
    try {
      const langOut = await detectarIdioma(out);
@@ -630,7 +730,19 @@ if (!respuestaDesdeFaq) {
 
   // (Opcional) CTA según tenant
   const intentLowOai = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-  respuesta = addBookingCTA({ out: respuesta, intentLow: intentLowOai, bookingLink, userInput: aggregatedInput });
+  const linkForGen = pickPromptLink({
+    intentLow: intentLowOai,
+    bucket: 'GEN',
+    text: aggregatedInput,
+    promptLinks,
+    tenant
+  });
+  respuesta = addBookingCTA({
+    out: respuesta,
+    intentLow: intentLowOai,
+    bookingLink: linkForGen || bookingLink, // si no encontró, usa tu fallback
+    userInput: aggregatedInput
+  });
 
   // Persistir + enviar
   await pool.query(
