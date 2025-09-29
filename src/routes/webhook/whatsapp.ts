@@ -229,16 +229,29 @@ function addBookingCTA({
 }) {
   if (!bookingLink) return out;
 
-  // Evita duplicar el mismo link o añadir si ya hay alguna URL
-  const alreadyHasLink = out.includes(bookingLink);
-  if (alreadyHasLink) return out;
+  // Si ya hay esa misma URL o cualquier URL en el texto, no duplicar
+  if (out.includes(bookingLink) || /\bhttps?:\/\/\S+/i.test(out)) return out;
 
-  const mustForce = intentLow === 'horario' || intentLow === 'reservar';
-  const smellsLikeCta = /reserv|agenda|confirm/i.test(`${intentLow} ${userInput}`);
+  // Intenciones donde SIEMPRE mostramos CTA
+  const FORCE_INTENTS = new Set([
+    'horario','reservar','comprar','confirmar',
+    // 👉 añadimos casos de política/cancelación/reprogramación
+    'cancelar','cancelacion','cancelación','reprogramar','cambiar','cambio'
+  ]);
 
-  if (mustForce || smellsLikeCta) {
-    return out + `\n\nReserva aquí: ${bookingLink}`;
+  // Si la intención cae en la lista forzada -> añade CTA
+  if (FORCE_INTENTS.has((intentLow || '').toLowerCase())) {
+    return out + `\n\nReserva/gestiona aquí: ${bookingLink}`;
   }
+
+  // Palabras que huelen a transacción/gestión (por texto del usuario o del propio mensaje)
+  const smellsLikeCta = /(reserv|agenda|confirm|cancel|cambi|reprogram|refun|devolu|pol[ií]tica)/i
+    .test(`${intentLow} ${userInput} ${out}`);
+
+  if (smellsLikeCta) {
+    return out + `\n\nReserva/gestiona aquí: ${bookingLink}`;
+  }
+
   return out;
 }
 
