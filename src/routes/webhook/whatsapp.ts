@@ -82,7 +82,7 @@ router.post('/', async (req: Request, res: Response) => {
     } catch (error) {
       console.error("❌ Error procesando mensaje:", error);
     }
-  }, 0);
+  }, 2000);
 });
 
 export default router;
@@ -168,6 +168,43 @@ try {
   console.warn('No se pudo registrar mensaje user:', e);
 }
 
+  // 🧩 Agregar mensajes recientes del mismo contacto (ventana de 30s)
+  // Debe ir después del INSERT del mensaje 'user' y antes de detectar idioma/intención.
+  const AGG_WINDOW_SECONDS = 30;
+
+  // Trae mensajes del mismo contacto en la ventana, solo role='user'
+  let aggregatedInput = userInput;
+  try {
+    const { rows: recentMsgs } = await pool.query(
+      `
+      SELECT role, content, timestamp
+      FROM messages
+      WHERE tenant_id = $1
+        AND canal = 'whatsapp'
+        AND from_number = $2
+        AND role = 'user'
+        AND timestamp >= NOW() - INTERVAL '${AGG_WINDOW_SECONDS} seconds'
+      ORDER BY timestamp ASC
+      `,
+      [tenant.id, fromNumber]
+    );
+
+    // Si hay varios "trozos", júntalos en uno solo
+    if (recentMsgs?.length) {
+      const parts = recentMsgs.map(r => (r.content || '').trim()).filter(Boolean);
+
+      // Evita que "hola / cómo estás" contaminen el intent
+      const throwaway = /^(hola+|hello|hi|hey|buenas(\s+(tardes|noches|dias|días))?|como\s+estas|cómo\s+estás|\?+)$/i;
+      const cleanedParts = parts.filter(p => !throwaway.test(p.trim()));
+
+      if (cleanedParts.length) {
+        aggregatedInput = cleanedParts.join(' ').replace(/\s+/g, ' ').trim();
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ No se pudo agregar mensajes recientes:', e);
+  }
+
 // 2.b) Incrementar uso mensual (antes de cualquier return)
 try {
   const { rows: rowsTenant } = await pool.query(
@@ -192,7 +229,7 @@ try {
   console.error('❌ Error incrementando uso_mensual:', e);
 }
 
-  const idioma = await detectarIdioma(userInput);
+  const idioma = await detectarIdioma(aggregatedInput);
   const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
   let respuesta = '';
   const canal = 'whatsapp';
@@ -258,7 +295,7 @@ function addBookingCTA({
   }  
 
   // 1️⃣ Detectar si es solo número
-  const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
+  const isNumericOnly = /^\s*\d+\s*$/.test(aggregatedInput);
 
   // 2️⃣ Calcular idiomaDestino
   const tenantBase: 'es'|'en' = normalizeLang(tenant?.idioma || 'es');
@@ -273,7 +310,7 @@ function addBookingCTA({
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (solo número)`);
   } else {
     let detectado: string | null = null;
-    try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
+    try { detectado = normLang(await detectarIdioma(aggregatedInput)); } catch {}
     const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
     await upsertIdiomaClienteDB(tenant.id, fromNumber, normalizado);
     idiomaDestino = normalizado;
@@ -281,14 +318,19 @@ function addBookingCTA({
   }
 
   // ✅ PON ESTO DESPUÉS de calcular idiomaDestino (y antes del pipeline)
-  const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?)\s*$/i.test(userInput.trim());
-  const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
+  const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?)\s*$/i
+    .test(aggregatedInput.trim());
+  const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i
+    .test(aggregatedInput.trim());
 
   if (greetingOnly || thanksOnly) {
+  const hasMoreContentSoon = aggregatedInput && aggregatedInput !== (userInput || '').trim();
+  if (!hasMoreContentSoon) {
     const out = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
     try { await enviarWhatsApp(fromNumber, out, tenant.id); } catch {}
     return;
   }
+}
 
   // ⏲️ Programador de follow-up (WhatsApp)
   async function scheduleFollowUp(intFinal: string, nivel: number) {
@@ -371,13 +413,14 @@ function addBookingCTA({
  // a) Detectar intención (canónica)
  try {
    const textoParaIntent = (idiomaDestino !== 'es')
-     ? await traducirMensaje(stripLeadGreetings(userInput), 'es').catch(() => userInput)
-     : stripLeadGreetings(userInput);
+     ? await traducirMensaje(stripLeadGreetings(aggregatedInput), 'es').catch(() => aggregatedInput)
+     : stripLeadGreetings(aggregatedInput);
+
    const det = await detectarIntencion(textoParaIntent, tenant.id, 'whatsapp');
    INTENCION_FINAL_CANONICA = normalizeIntentAlias((det?.intencion || '').trim().toLowerCase());
 
    // --- Override ligero por temporalidad (tolerante a acentos) ---
-  const cleaned = stripLeadGreetings(userInput);
+  const cleaned = stripLeadGreetings(aggregatedInput);
 
   // Normaliza a lower y quita acentos para matching robusto
   const lower = cleaned.toLowerCase();
@@ -414,7 +457,7 @@ function addBookingCTA({
       const nowInTz = new Date(now.toLocaleString('en-US', { timeZone }));
       const base = new Date(nowInTz);
 
-      const text = (userInput || '').toLowerCase();
+      const text = (aggregatedInput || '').toLowerCase();
       const saysManana = /(mañana|manana)/i.test(text);
       const saysHoy    = /\bhoy\b/i.test(text);
 
@@ -586,6 +629,9 @@ function addBookingCTA({
         bookingLink,
         userInput
       });
+
+      // 🔎 LOG útil para auditar lo enviado por el atajo determinista
+      console.log('🧭 Determinista sin RT → usando intención "horario" base:', { canon, out });
 
       // 4) Ajuste de idioma si aplica
       try {
@@ -820,19 +866,17 @@ function addBookingCTA({
   const MANANA = fmtFecha(tomorrowInTz); // ej. "jueves, 25 de septiembre de 2025"
 
   // 3) Extraer hora solicitada (si viene)
-  const lower = (userInput || '').toLowerCase();
-  const horaMatch = lower.match(/([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?/i);
+  const lowerForLLM = (aggregatedInput || '').toLowerCase();
+  const horaMatch   = lowerForLLM.match(/([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?/i);
   const HORA_PEDIDA = horaMatch ? horaMatch[0].replace('.', ':') : null;
-
-  // 4) ¿El usuario dijo explícitamente "mañana"?
-  const DICE_MANANA = /(mañana|manana)/i.test(lower);
+  const DICE_MANANA = /(mañana|manana)/i.test(lowerForLLM);
 
   // 5) Armar contexto explícito para el LLM
   const contextoFecha = [
     `ZONA_HORARIA_NEGOCIO: ${timeZone}`,
     `HOY: ${HOY}`,
     `MANANA: ${MANANA}`,
-    `USUARIO_PREGUNTA: ${userInput}`,
+    `USUARIO_PREGUNTA: ${aggregatedInput}`,
     `PARSEO: ${[
       DICE_MANANA ? `pide = MANANA` : `pide = (no_detectado)`,
       HORA_PEDIDA ? `hora = ${HORA_PEDIDA}` : `hora = (no_detectada)`
@@ -871,7 +915,7 @@ function addBookingCTA({
     frequency_penalty: 0,
     messages: [
       { role: 'system', content: systemPrompt },
-      { role: 'user', content: userInput }
+      { role: 'user', content: aggregatedInput }
     ],
   });
 
