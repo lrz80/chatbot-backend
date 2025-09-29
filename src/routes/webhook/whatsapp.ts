@@ -197,7 +197,9 @@ try {
   const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
   let respuesta = '';
   const canal = 'whatsapp';
-  
+
+  // URL presente en el prompt (fallback si no hay link en settings/tenant)
+  const promptUrl = extractFirstUrl(promptBase);
 
 // 👇 PÉGALO AQUÍ (debajo de getLink)
 function stripLeadGreetings(t: string) {
@@ -206,6 +208,12 @@ function stripLeadGreetings(t: string) {
     .replace(/^\s*(saludos+[\s!.,]*)?/i, '')
     .replace(/^\s*(hello+|hi+|hey+)[\s!.,]*/i, '')
     .trim();
+}
+
+function extractFirstUrl(text?: string | null): string | null {
+  if (!text) return null;
+  const m = text.match(/\bhttps?:\/\/[^\s)]+/i);
+  return m ? m[0] : null;
 }
 
 function addBookingCTA({
@@ -280,7 +288,9 @@ function addBookingCTA({
   let idiomaDestino: 'es'|'en';
 
   const bookingLink =
-  getLinkFromTenant(tenant, ['booking_url','booking','reservas_url','reservar_url','agenda_url']) || null;
+    getLinkFromTenant(tenant, ['booking_url','booking','reservas_url','reservar_url','agenda_url'])
+    || promptUrl
+    || null;
   console.log('🔗 bookingLink resuelto =', bookingLink);
 
   if (isNumericOnly) {
