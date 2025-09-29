@@ -688,7 +688,7 @@ if (!respuestaDesdeFaq) {
       // Nueva sugerencia (aplica un mínimo de longitud para evitar ruido)
       if (preguntaN.length >= 20) {
         await pool.query(
-          `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, veces_repetida, created_at)
+          `INSERT INTO faq_sugeridas (tenant_id, canal, pregunta, respuesta_sugerida, veces_repetida, ultima_fecha)
           VALUES ($1, $2, $3, $4, 1, NOW())`,
           [tenant.id, 'whatsapp', aggregatedInput, respuesta || null]
         );
