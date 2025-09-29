@@ -126,25 +126,6 @@ async function fetchHorarioBase(tenantId: string): Promise<string | null> {
   }
 }
 
-async function fetchPolicyBase(tenantId: string): Promise<string | null> {
-  try {
-    const { rows } = await pool.query(
-      `SELECT respuesta
-         FROM intenciones
-        WHERE tenant_id = $1 AND canal = 'whatsapp'
-          AND LOWER(nombre) = 'policy'
-          AND (activo IS TRUE OR activo IS NULL)
-        ORDER BY prioridad DESC NULLS LAST, updated_at DESC NULLS LAST
-        LIMIT 1`,
-      [tenantId]
-    );
-    return rows[0]?.respuesta || null;
-  } catch (e) {
-    console.warn('⚠️ No se pudo obtener la intención "policy":', e);
-    return null;
-  }
-}
-
 function getTransactionalLink(tenant: any): string | null {
   // prioriza links típicos por vertical; usa lo que el tenant tenga cargado
   return (
@@ -160,21 +141,13 @@ function getTransactionalLink(tenant: any): string | null {
 }
 
 // Clasificador universal de buckets
-function classifyBucket(t: string): 'AVAILABILITY'|'TRANSACTION'|'POLICY'|'GEN' {
+function classifyBucket(t: string): 'AVAILABILITY'|'TRANSACTION'|'GEN' {
   const s = (t || '').toLowerCase().normalize('NFD').replace(/\p{M}/gu, '');
-
-  // Señales temporales/hora/dia/abierto/stock HOY
   const hasTime = /(^|\b)([01]?\d|2[0-3])([:.]\d{2})?\s*(am|pm)?(\b|$)/i.test(s);
-  const hasDay = /(hoy|manana|pasado\s*manana|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|esta\s*semana|fin\s*de\s*semana)/i.test(s);
-  const availHints = /(horario|abren?|abierto|cierran?|disponible|cupos?|turno|mesa|waiting\s*list|stock|existencia|hay|queda)/i.test(s);
+  const hasDay  = /(hoy|manana|pasado\s*manana|lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo|esta\s*semana|fin\s*de\s*semana)/i.test(s);
+  const availHints = /(horario|abren?|abierto|cierran?|disponible|cupos?|turno|mesa|waiting\s*list|stock|existencia|hay|queda|agenda|schedule)/i.test(s);
+  const txnHints = /(reserv(ar|a|o)|book|orden(ar)?|order|compr(ar|a)|buy|pagar|checkout|delivery|envio|envío|pickup|take\s*out|apart(ar|o)|inscribirme)/i.test(s);
 
-  // Señales transacción (ordenar/comprar/reservar/pagar/envío/pickup)
-  const txnHints = /(reserv(ar|a|o)|book|orden(ar)?|order|compr(ar|a)|buy|pagar|checkout|delivery|envio|pickup|take\s*out|apart(ar|o)|inscribirme)/i.test(s);
-
-  // Señales política (cancel/devoluciones/reembolso/envío terms)
-  const policyHints = /(cancel(a|ar|acion|ación)|reagendar|reprogramar|reembolso|refund|devoluc(i|í)on|return|cambio|politica|policy|terminos|envio|shipping|fee|cargo)/i.test(s);
-
-  if (policyHints) return 'POLICY';
   if (hasTime || hasDay || availHints) return 'AVAILABILITY';
   if (txnHints) return 'TRANSACTION';
   return 'GEN';
@@ -546,31 +519,6 @@ if (bucket === 'AVAILABILITY') {
     [tenant.id, 'whatsapp', messageId]
   );
   return; // ⛔ corta antes de FAQ/LLM
-}
-
-// 2) POLICY
-if (bucket === 'POLICY') {
-  let out = await fetchPolicyBase(tenant.id);
-  if (!out) {
-    out = 'Nuestra política de cancelaciones, cambios y reembolsos se detalla en el enlace. Si tienes un caso específico, cuéntame y te ayudo.';
-  }
-  const policyLink = getLinkFromTenant(tenant, ['policy_url','terms_url','faq_url']);
-  if (policyLink && !out.includes(policyLink)) out += `\n\nMás info: ${policyLink}`;
-
-  try { await enviarWhatsApp(fromNumber, out, tenant.id); } catch {}
-  await pool.query(
-    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-     VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-     ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-    [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-  );
-  await pool.query(
-    `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-     VALUES ($1, $2, $3, NOW())
-     ON CONFLICT DO NOTHING`,
-    [tenant.id, 'whatsapp', messageId]
-  );
-  return; // ⛔ corta
 }
 
 // 3) TRANSACTION
