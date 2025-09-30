@@ -510,6 +510,20 @@ function applyCortesiaWording(out: string, userInput: string, idiomaDestino: 'es
   }
 }
 
+// ===== Remover links irrelevantes según la categoría detectada =====
+function stripLinksForCategory(out: string, category: ReturnType<typeof classifyQuestion>): string {
+  // En consultas de FREE_TRIAL no queremos distraer con soporte (wa.me)
+  if (category === 'FREE_TRIAL') {
+    // 1) quita líneas sueltas con wa.me (bullets o líneas completas)
+    out = out.replace(/^[ \t]*[-•]?\s*https?:\/\/wa\.me\/\d+[ \t]*\r?\n?/gim, '');
+    // 2) quita wa.me embebido en medio del texto
+    out = out.replace(/\bhttps?:\/\/wa\.me\/\d+\b/gi, '');
+    // Limpia espacios dobles dejados por el replace
+    out = out.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  return out;
+}
+
   // 🧹 Cancela cualquier follow-up pendiente para este contacto al recibir nuevo mensaje
   try {
       await pool.query(
@@ -817,6 +831,29 @@ function applyCortesiaWording(out: string, userInput: string, idiomaDestino: 'es
     userInput: aggregatedInput
   });
 
+  // 🟢 “Cortesía / complimentary” si el cliente lo pidió
+  out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+
+  // 🔎 Categoriza por lo que pidió el cliente
+  const category = classifyQuestion(aggregatedInput, intentLowFaq);
+
+  // 🚫 Si es FREE_TRIAL, elimina wa.me u otros enlaces de soporte
+  out = stripLinksForCategory(out, category);
+
+  // 🔗 Seleccionar link por lo que el cliente preguntó (sin “preferidos”)
+  {
+    const selected = selectLinkByCategory(category, promptLinks, tenant, bookingLink);
+    if (selected && !out.includes(selected)) {
+      const line =
+        category === 'FREE_TRIAL' ? `\n\nActiva tu clase de cortesía aquí: ${selected}` :
+        category === 'RESERVE'    ? `\n\nReserva/gestiona aquí: ${selected}` :
+        category === 'PRICING'    ? `\n\nPlanes y precios: ${selected}` :
+        category === 'SUPPORT'    ? `\n\nSoporte técnico: ${selected}` :
+                                    `\n\nMás información: ${selected}`;
+      out = out + line;
+    }
+  }
+
   // 🟢 Wording “de cortesía / complimentary” si el cliente lo pidió
   out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
 
@@ -911,6 +948,7 @@ if (!respuestaDesdeFaq) {
     '=== REGLAS DE RESPUESTA ===',
     '- Responde ÚNICAMENTE con información contenida en este prompt/base del negocio.',
     '- Si mencionas políticas, horarios, reservas, precios o ubicación, incluye 1 enlace de apoyo de la sección "ENLACES_OFICIALES" **solo si es pertinente**.',
+    '- Si el usuario pregunta por “free / gratis / prueba / cortesía”, NO incluyas enlaces de soporte (wa.me). Usa únicamente la URL de activación/compra/prueba relacionada.',
     '- No inventes enlaces. Usa EXCLUSIVAMENTE las URLs listadas en "ENLACES_OFICIALES".',
     '- Este canal es WhatsApp: pega la URL completa (sin markdown). No uses acortadores.',
     '- No confirmes disponibilidad/cupos/stock/fechas exactas a menos que estén explícitos en el prompt.',
@@ -959,6 +997,26 @@ if (!respuestaDesdeFaq) {
 
   // 🟢 Lenguaje “de cortesía / complimentary” si el cliente lo pidió
   respuesta = applyCortesiaWording(respuesta, aggregatedInput, idiomaDestino);
+
+  // 🔎 Categoriza por lo que pidió el cliente
+  const category = classifyQuestion(aggregatedInput, intentLowOai);
+
+  // 🚫 Si es FREE_TRIAL, elimina wa.me u otros enlaces de soporte
+  respuesta = stripLinksForCategory(respuesta, category);
+
+  // 🔗 Seleccionar link por lo que el cliente preguntó (sin “preferidos”)
+  {
+    const selected = selectLinkByCategory(category, promptLinks, tenant, linkForGen || bookingLink);
+    if (selected && !respuesta.includes(selected)) {
+      const line =
+        category === 'FREE_TRIAL' ? `\n\nActiva tu clase de cortesía aquí: ${selected}` :
+        category === 'RESERVE'    ? `\n\nReserva/gestiona aquí: ${selected}` :
+        category === 'PRICING'    ? `\n\nPlanes y precios: ${selected}` :
+        category === 'SUPPORT'    ? `\n\nSoporte técnico: ${selected}` :
+                                    `\n\nMás información: ${selected}`;
+      respuesta = respuesta + line;
+    }
+  }
 
   // 🔗 Seleccionar link por lo que el cliente preguntó (sin "preferidos")
   {
