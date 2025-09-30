@@ -17,6 +17,7 @@ import {
 import { detectarIntencion } from '../../lib/detectarIntencion';
 import { getTenantTimezone } from '../../lib/getTenantTimezone';
 
+
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
@@ -139,6 +140,55 @@ function parseLinksFromPrompt(promptText: string) {
     checkout:    find(/https?:\/\/[^\s]+\/(checkout|cart)/i),
     catalog:     find(/https?:\/\/[^\s]+\/(catalog|shop|store)/i),
   };
+}
+
+// ===== Enlaces desde el propio prompt (markdown + URLs sueltas) =====
+const MD_LINK = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi;
+const BARE_URL = /\bhttps?:\/\/[^\s)>\]]+/gi;
+
+function normalizeUrl(u: string) {
+  try {
+    const url = new URL(u.trim());
+    url.hash = ''; // sin fragmento
+    if (url.pathname.endsWith('/') && url.pathname !== '/') {
+      url.pathname = url.pathname.slice(0, -1);
+    }
+    return url.toString();
+  } catch {
+    return u.trim();
+  }
+}
+
+function extractAllLinksFromPrompt(promptText: string, max = 16): Array<{label: string, url: string}> {
+  const found: Array<{label: string, url: string}> = [];
+  // 1) markdown [label](url)
+  let m: RegExpExecArray | null;
+  while ((m = MD_LINK.exec(promptText)) && found.length < max) {
+    found.push({ label: m[1].trim(), url: normalizeUrl(m[2]) });
+  }
+  // 2) bare urls (sin repetir)
+  const existing = new Set(found.map(l => l.url));
+  const bare = promptText.match(BARE_URL) || [];
+  for (const raw of bare) {
+    const url = normalizeUrl(raw);
+    if (!existing.has(url)) {
+      found.push({ label: url, url });
+      existing.add(url);
+      if (found.length >= max) break;
+    }
+  }
+  // 3) de-dup por host+path
+  const uniq = new Map<string, {label: string, url: string}>();
+  for (const l of found) {
+    try {
+      const u = new URL(l.url);
+      const key = `${u.hostname}${u.pathname}`;
+      if (!uniq.has(key)) uniq.set(key, l);
+    } catch {
+      if (!uniq.has(l.url)) uniq.set(l.url, l);
+    }
+  }
+  return Array.from(uniq.values()).slice(0, max);
 }
 
 function pickPromptLink({
@@ -695,13 +745,24 @@ if (!respuestaDesdeFaq) {
   const systemPrompt = [
     promptBase,
     '',
+    // === ENLACES OFICIALES (extraídos del prompt del tenant) ===
+    (() => {
+      const all = extractAllLinksFromPrompt(String(promptBase || ''), 16);
+      if (!all.length) return '=== ENLACES_OFICIALES ===\n(No se detectaron URLs en el prompt del negocio).';
+      const lines = all.map(l => `- ${l.url}`); // WhatsApp: URL cruda (no markdown)
+      return ['=== ENLACES_OFICIALES ===', ...lines].join('\n');
+    })(),
+    '',
     '=== CONTEXTO_DE_FECHA ===',
     contextoFecha,
     '',
     '=== REGLAS DE RESPUESTA ===',
-    '- Responde ÚNICAMENTE con información contenida en este prompt/base de negocio.',
-    '- No confirmes disponibilidad, cupos, horarios específicos ni estados de stock a menos que estén explícitos en el prompt.',
-    '- Si el usuario pide algo que no está en el prompt, indícale amablemente que no puedo confirmarlo desde aquí y ofrece el enlace del negocio si existe.',
+    '- Responde ÚNICAMENTE con información contenida en este prompt/base del negocio.',
+    '- Si mencionas políticas, horarios, reservas, precios o ubicación, incluye 1 enlace de apoyo de la sección "ENLACES_OFICIALES" **solo si es pertinente**.',
+    '- No inventes enlaces. Usa EXCLUSIVAMENTE las URLs listadas en "ENLACES_OFICIALES".',
+    '- Este canal es WhatsApp: pega la URL completa (sin markdown). No uses acortadores.',
+    '- No confirmes disponibilidad/cupos/stock/fechas exactas a menos que estén explícitos en el prompt.',
+    '- Si piden algo fuera del prompt, dilo con amabilidad y ofrece el enlace correspondiente (si existe) para verificar.',
     '- Sé breve, claro y mantén el idioma del cliente.'
   ].join('\n');
 
