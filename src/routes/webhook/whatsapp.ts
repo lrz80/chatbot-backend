@@ -230,6 +230,92 @@ function pickPromptLink({
   return getTransactionalLink(tenant);
 }
 
+// ===== Clasificar la pregunta del cliente (sin "preferido") =====
+type QCategory =
+  | 'FREE_TRIAL'
+  | 'RESERVE'
+  | 'PRICING'
+  | 'SUPPORT'
+  | 'MENU'
+  | 'ORDER'
+  | 'CATALOG'
+  | 'NONE';
+
+function classifyQuestion(userText: string, intentLow: string): QCategory {
+  const s = (userText || '').toLowerCase();
+
+  // Señales por texto del cliente
+  if (/(gratis|free|trial|prueba|cortes[ií]a)/i.test(s)) return 'FREE_TRIAL';
+  if (/(precio|plan(es)?|membres[ií]a|tarifa|rates|pricing)/i.test(s)) return 'PRICING';
+  if (/(reserv(ar|a|o)|agenda(r)?|book|apart(ar|o)|cupos?|horario|schedule)/i.test(s)) return 'RESERVE';
+  if (/(soporte|support|whatsapp|ayuda\s+t(?:e|é)cnica)/i.test(s)) return 'SUPPORT';
+  if (/(menu|carta)/i.test(s)) return 'MENU';
+  if (/(orden(ar)?|order|pedido|delivery|domicilio|env[ií]o|pickup|take\s*out)/i.test(s)) return 'ORDER';
+  if (/(cat[aá]logo|catalog|shop|store)/i.test(s)) return 'CATALOG';
+
+  // Señales por intención canónica (si llega)
+  const i = (intentLow || '').toLowerCase();
+  if (['reservar','horario','confirmar','reprogramar','cancelar','cambio','interes_clases'].includes(i)) return 'RESERVE';
+  if (['precio','comprar'].includes(i)) return 'PRICING';
+
+  return 'NONE';
+}
+
+// ===== Elegir link según categoría detectada (desde links del prompt) =====
+function selectLinkByCategory(
+  category: QCategory,
+  promptLinks: ReturnType<typeof parseLinksFromPrompt>,
+  tenant: any,
+  bookingLinkFallback?: string | null
+): string | null {
+  switch (category) {
+    case 'FREE_TRIAL':
+      return promptLinks.freeTrial || promptLinks.memberships || promptLinks.schedule || bookingLinkFallback || null;
+    case 'RESERVE':
+      return promptLinks.schedule || bookingLinkFallback || null;
+    case 'PRICING':
+      return promptLinks.memberships || null;
+    case 'SUPPORT':
+      return promptLinks.waSupport || null;
+    case 'MENU':
+      return promptLinks.menu || null;
+    case 'ORDER':
+      return promptLinks.order || promptLinks.checkout || null;
+    case 'CATALOG':
+      return promptLinks.catalog || null;
+    default:
+      // último recurso: lo que el tenant tenga como transaccional
+      return getTransactionalLink(tenant);
+  }
+}
+
+// ===== Cortesía wording (ES/EN) =====
+function applyCortesiaWording(out: string, userInput: string, idiomaDestino: 'es'|'en'): string {
+  const s = `${userInput} ${out}`.toLowerCase();
+  const askedFree = /(gratis|free|trial|prueba|cortes[ií]a)/i.test(s);
+  if (!askedFree) return out;
+
+  if (idiomaDestino === 'en') {
+    if (!/\bcomplimentary\b/i.test(out)) {
+      let replaced = out
+        .replace(/\bfree trial\b/ig, 'free trial (complimentary)')
+        .replace(/\bfree\b/ig, 'free (complimentary)');
+      if (replaced === out) replaced = out + ' (complimentary).';
+      return replaced;
+    }
+    return out;
+  } else {
+    if (!/\bde\s+cortes[ií]a\b/i.test(out)) {
+      let replaced = out
+        .replace(/\bprueba\s+gratis\b/ig, 'prueba gratis (de cortesía)')
+        .replace(/\bgratis\b/ig, 'gratis (de cortesía)');
+      if (replaced === out) replaced = out + ' (de cortesía).';
+      return replaced;
+    }
+    return out;
+  }
+}
+
 async function procesarMensajeWhatsApp(body: any) {
   const to = body.To || '';
   const from = body.From || '';
@@ -363,7 +449,7 @@ function addBookingCTA({
 
   // Intenciones donde SIEMPRE mostramos CTA
   const FORCE_INTENTS = new Set([
-    'horario','reservar','comprar','confirmar',
+    'horario','reservar','comprar','confirmar','interes_clases',
     // 👉 añadimos casos de política/cancelación/reprogramación
     'cancelar','cancelacion','cancelación','reprogramar','cambiar','cambio'
   ]);
@@ -731,6 +817,25 @@ function applyCortesiaWording(out: string, userInput: string, idiomaDestino: 'es
     userInput: aggregatedInput
   });
 
+  // 🟢 Wording “de cortesía / complimentary” si el cliente lo pidió
+  out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+
+  // 🔗 Seleccionar link por lo que el cliente preguntó (sin "preferidos")
+  {
+    const category = classifyQuestion(aggregatedInput, intentLowFaq);
+    const selected = selectLinkByCategory(category, promptLinks, tenant, bookingLink);
+    if (selected && !out.includes(selected)) {
+      const line =
+        category === 'FREE_TRIAL' ? `\n\nActiva tu clase de cortesía aquí: ${selected}` :
+        category === 'RESERVE'    ? `\n\nReserva/gestiona aquí: ${selected}` :
+        category === 'PRICING'    ? `\n\nPlanes y precios: ${selected}` :
+        category === 'SUPPORT'    ? `\n\nSoporte técnico: ${selected}` :
+        `\n\nMás información: ${selected}`;
+      // Añade CTA aunque exista otra URL: son propósitos distintos
+      out = out + line;
+    }
+  }
+
   // 🟢 Lenguaje “de cortesía / complimentary” si el cliente lo pidió
   out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
 
@@ -854,7 +959,22 @@ if (!respuestaDesdeFaq) {
 
   // 🟢 Lenguaje “de cortesía / complimentary” si el cliente lo pidió
   respuesta = applyCortesiaWording(respuesta, aggregatedInput, idiomaDestino);
-  
+
+  // 🔗 Seleccionar link por lo que el cliente preguntó (sin "preferidos")
+  {
+    const category = classifyQuestion(aggregatedInput, intentLowOai);
+    const selected = selectLinkByCategory(category, promptLinks, tenant, linkForGen || bookingLink);
+    if (selected && !respuesta.includes(selected)) {
+      const line =
+        category === 'FREE_TRIAL' ? `\n\nActiva tu clase de cortesía aquí: ${selected}` :
+        category === 'RESERVE'    ? `\n\nReserva/gestiona aquí: ${selected}` :
+        category === 'PRICING'    ? `\n\nPlanes y precios: ${selected}` :
+        category === 'SUPPORT'    ? `\n\nSoporte técnico: ${selected}` :
+        `\n\nMás información: ${selected}`;
+      respuesta = respuesta + line;
+    }
+  }
+
   // Persistir + enviar
   await pool.query(
     `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
