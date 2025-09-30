@@ -131,8 +131,8 @@ function parseLinksFromPrompt(promptText: string) {
     memberships: find(/https?:\/\/[^\s]+\/memberships(?!\/)/i)
                || find(/https?:\/\/[^\s]+\/(plans|pricing?)/i),
 
-    // “Free trial” / clase gratis / demo
-    freeTrial:   find(/https?:\/\/[^\s]+\/(free|trial|demo|buy)/i),
+    // “Free trial” / clase gratis / demo / cortesía
+    freeTrial:   find(/https?:\/\/[^\s]+\/(free|trial|demo|buy|cortes(i|í)a)/i),
 
     // Restaurante / e-commerce
     menu:        find(/https?:\/\/[^\s]+\/(menu|carta)/i),
@@ -208,7 +208,9 @@ function pickPromptLink({
   if (/(soporte|support|whatsapp|ayuda\s+t(?:e|é)cnica)/i.test(s) && promptLinks.waSupport) return promptLinks.waSupport;
 
   if (/(precio|plan(es)?|membres[ií]a|cost|tarifa|rates|pricing)/i.test(s) && promptLinks.memberships) return promptLinks.memberships;
-  if (/(clase\s+gratis|free\s+(class|trial)|demo)/i.test(s) && promptLinks.freeTrial) return promptLinks.freeTrial;
+  if (/(clase\s+gratis|gratis|free\s+(class|trial)|free|trial|demo|cortes[ií]a)/i.test(s) && promptLinks.freeTrial) {
+    return promptLinks.freeTrial;
+  }
 
   if (/(menu|carta)/i.test(s) && promptLinks.menu) return promptLinks.menu;
   if (/(orden(ar)?|order|pedido|delivery|domicilio|env[ií]o|pickup|take\s*out)/i.test(s)) {
@@ -385,6 +387,41 @@ function addBookingCTA({
   }
 
   return out;
+}
+
+// ===== Cortesía wording (ES/EN) =====
+function applyCortesiaWording(out: string, userInput: string, idiomaDestino: 'es'|'en'): string {
+  const s = `${userInput} ${out}`.toLowerCase();
+  const askedFree = /(gratis|free|trial|prueba|cortes[ií]a)/i.test(s);
+  if (!askedFree) return out;
+
+  if (idiomaDestino === 'en') {
+    // Evita duplicar si ya dice complimentary
+    if (!/\bcomplimentary\b/i.test(out)) {
+      // Inserta “(complimentary)” tras “free/free trial” si aparece; si no, agrega nota al final.
+      let replaced = out
+        .replace(/\bfree trial\b/ig, 'free trial (complimentary)')
+        .replace(/\bfree\b/ig, 'free (complimentary)');
+      if (replaced === out) {
+        replaced = out + ' (complimentary).';
+      }
+      return replaced;
+    }
+    return out;
+  } else {
+    // ES: “de cortesía”. Evita duplicados.
+    if (!/\bde\s+cortes[ií]a\b/i.test(out)) {
+      // Inserta junto a “gratis / prueba gratis”
+      let replaced = out
+        .replace(/\bprueba\s+gratis\b/ig, 'prueba gratis (de cortesía)')
+        .replace(/\bgratis\b/ig, 'gratis (de cortesía)');
+      if (replaced === out) {
+        replaced = out + ' (de cortesía).';
+      }
+      return replaced;
+    }
+    return out;
+  }
 }
 
   // 🧹 Cancela cualquier follow-up pendiente para este contacto al recibir nuevo mensaje
@@ -694,6 +731,8 @@ function addBookingCTA({
     userInput: aggregatedInput
   });
 
+  // 🟢 Lenguaje “de cortesía / complimentary” si el cliente lo pidió
+  out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
 
    try {
      const langOut = await detectarIdioma(out);
@@ -813,6 +852,9 @@ if (!respuestaDesdeFaq) {
     userInput: aggregatedInput
   });
 
+  // 🟢 Lenguaje “de cortesía / complimentary” si el cliente lo pidió
+  respuesta = applyCortesiaWording(respuesta, aggregatedInput, idiomaDestino);
+  
   // Persistir + enviar
   await pool.query(
     `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
