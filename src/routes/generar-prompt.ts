@@ -30,13 +30,15 @@ const BARE_URL = /\bhttps?:\/\/[^\s)>\]]+/gi;
 function normalizeUrl(u: string) {
   try {
     const url = new URL(u.trim());
-    url.hash = "";
-    if (url.pathname.endsWith("/") && url.pathname !== "/") {
+    // conserva el hash (necesario para rutas SPA tipo Glofox)
+    // quita "/" final solo si NO hay hash
+    if (url.pathname.endsWith('/') && url.pathname !== '/' && !url.hash) {
       url.pathname = url.pathname.slice(0, -1);
     }
-    return url.toString();
+    // usar href para conservar hash tal cual
+    return url.href;
   } catch {
-    return (u || "").trim();
+    return u.trim();
   }
 }
 

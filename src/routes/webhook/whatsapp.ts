@@ -149,11 +149,13 @@ const BARE_URL = /\bhttps?:\/\/[^\s)>\]]+/gi;
 function normalizeUrl(u: string) {
   try {
     const url = new URL(u.trim());
-    url.hash = ''; // sin fragmento
-    if (url.pathname.endsWith('/') && url.pathname !== '/') {
+    // conserva el hash (necesario para rutas SPA tipo Glofox)
+    // quita "/" final solo si NO hay hash
+    if (url.pathname.endsWith('/') && url.pathname !== '/' && !url.hash) {
       url.pathname = url.pathname.slice(0, -1);
     }
-    return url.toString();
+    // usar href para conservar hash tal cual
+    return url.href;
   } catch {
     return u.trim();
   }
@@ -182,7 +184,7 @@ function extractAllLinksFromPrompt(promptText: string, max = 16): Array<{label: 
   for (const l of found) {
     try {
       const u = new URL(l.url);
-      const key = `${u.hostname}${u.pathname}`;
+      const key = `${u.hostname}${u.pathname}${u.hash}`;
       if (!uniq.has(key)) uniq.set(key, l);
     } catch {
       if (!uniq.has(l.url)) uniq.set(l.url, l);
@@ -355,7 +357,7 @@ function addBookingCTA({
   if (!bookingLink) return out;
 
   // Si ya hay esa misma URL o cualquier URL en el texto, no duplicar
-  if (out.includes(bookingLink) || /\bhttps?:\/\/\S+/i.test(out)) return out;
+  if (out.includes(bookingLink)) return out;
 
   // Intenciones donde SIEMPRE mostramos CTA
   const FORCE_INTENTS = new Set([
@@ -366,6 +368,11 @@ function addBookingCTA({
 
   // Si la intención cae en la lista forzada -> añade CTA
   if (FORCE_INTENTS.has((intentLow || '').toLowerCase())) {
+    const hasGenericGlofox = /\bhttps?:\/\/app\.glofox\.com\/portal\b/i.test(out);
+    if (hasGenericGlofox && !out.includes(bookingLink)) {
+      out = out.replace(/\bhttps?:\/\/app\.glofox\.com\/portal\b/ig, bookingLink);
+      return out;
+    }
     return out + `\n\nReserva/gestiona aquí: ${bookingLink}`;
   }
 
@@ -748,6 +755,7 @@ if (!respuestaDesdeFaq) {
     // === ENLACES OFICIALES (extraídos del prompt del tenant) ===
     (() => {
       const all = extractAllLinksFromPrompt(String(promptBase || ''), 16);
+      all.sort((a, b) => b.url.length - a.url.length);
       if (!all.length) return '=== ENLACES_OFICIALES ===\n(No se detectaron URLs en el prompt del negocio).';
       const lines = all.map(l => `- ${l.url}`); // WhatsApp: URL cruda (no markdown)
       return ['=== ENLACES_OFICIALES ===', ...lines].join('\n');
