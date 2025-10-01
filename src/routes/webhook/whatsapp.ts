@@ -970,31 +970,37 @@ if (!respuestaDesdeFaq) {
   ].join('\n');
 
   const systemPrompt = [
-    promptBase,
-    '',
-    // === ENLACES OFICIALES (extraídos del prompt del tenant) ===
-    (() => {
-      const all = extractAllLinksFromPrompt(String(promptBase || ''), 16);
-      all.sort((a, b) => b.url.length - a.url.length);
-      if (!all.length) return '=== ENLACES_OFICIALES ===\n(No se detectaron URLs en el prompt del negocio).';
-      const lines = all.map(l => `- ${l.url}`); // WhatsApp: URL cruda (no markdown)
-      return ['=== ENLACES_OFICIALES ===', ...lines].join('\n');
-    })(),
-    '',
-    '=== CONTEXTO_DE_FECHA ===',
-    contextoFecha,
-    '',
-    '=== REGLAS DE RESPUESTA ===',
-    '- Responde ÚNICAMENTE con información contenida en este prompt/base del negocio.',
-    '- Si mencionas políticas, horarios, reservas, precios o ubicación, incluye 1 enlace de apoyo de la sección "ENLACES_OFICIALES" **solo si es pertinente**.',
-    '- Si el usuario pregunta por “free / gratis / prueba / cortesía”, NO incluyas enlaces de soporte (wa.me). Usa únicamente la URL de activación/compra/prueba relacionada.',
-    '- No inventes enlaces. Usa EXCLUSIVAMENTE las URLs listadas en "ENLACES_OFICIALES".',
-    '- Este canal es WhatsApp: pega la URL completa (sin markdown). No uses acortadores.',
-    '- No confirmes disponibilidad/cupos/stock/fechas exactas a menos que estén explícitos en el prompt.',
-    '- Si piden algo fuera del prompt, dilo con amabilidad y ofrece el enlace correspondiente (si existe) para verificar.',
-    '- Si el usuario hace varias preguntas (p. ej., precios y horarios), responde ambos puntos y añade 1 enlace relevante por cada tema desde ENLACES_OFICIALES.',
-    '- Sé breve, claro y mantén el idioma del cliente.'
-  ].join('\n');
+  promptBase,
+  '',
+  // === ENLACES OFICIALES (extraídos del prompt del negocio) ===
+  (() => {
+    const all = extractAllLinksFromPrompt(String(promptBase || ''), 16);
+    all.sort((a, b) => b.url.length - a.url.length);
+    if (!all.length) return '=== ENLACES_OFICIALES ===\n(No se detectaron URLs en el prompt del negocio).';
+    const lines = all.map(l => `- ${l.url}`); // WhatsApp: URL cruda (no markdown)
+    return ['=== ENLACES_OFICIALES ===', ...lines].join('\n');
+  })(),
+  '',
+  '=== CONTEXTO_DE_FECHA ===',
+  contextoFecha,
+  '',
+  '=== REGLAS DE RESPUESTA (ESTRICTAS) ===',
+  '- Responde ÚNICAMENTE con información contenida en este prompt/base del negocio.',
+  '- NO inventes productos, planes (duo, grupales, corporativos), políticas, horarios ni condiciones que no figuren explícitamente aquí.',
+  '- Si el usuario pide algo que NO está en el prompt, respóndelo con una frase clara tipo: "Por el momento no tengo esa información en mis datos."',
+  '- Cuando falte la información pedida, ofrece 1 enlace pertinente de la sección ENLACES_OFICIALES:',
+  '    • Si preguntan por planes/precios → comparte el enlace de membresías/precios.',
+  '    • Si necesitan hablar con alguien → comparte el wa.me de soporte (si existe).',
+  '- Usa EXCLUSIVAMENTE URLs listadas en ENLACES_OFICIALES. No inventes enlaces ni uses acortadores.',
+  '- Este canal es WhatsApp: pega la URL completa (sin markdown).',
+  '- No confirmes disponibilidad/cupos/stock/fechas exactas a menos que estén explícitos en el prompt.',
+  '- Si el usuario hace varias preguntas (p. ej., precios y horarios), responde ambos puntos y añade a lo sumo 1 enlace relevante por cada tema.',
+  '- Mantén el idioma del cliente y sé breve.',
+  '',
+  '=== PLANTILLAS CUANDO FALTA INFORMACIÓN ===',
+  '- ES: "Por el momento no tengo esa información en mis datos. Estos son los planes disponibles: <URL_DE_MEMBRESIAS>. Si prefieres, te conecto con un asesor aquí: <URL_WA>."',
+  '- EN: "At the moment I don’t have that information in my data. These are the available plans: <MEMBERSHIPS_URL>. If you prefer, I can connect you with an advisor here: <WA_URL>."'
+].join('\\n');
 
   const completion = await openai.chat.completions.create({
     model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
