@@ -16,7 +16,8 @@ import {
 } from '../../lib/faq/similaridadFaq';
 import { detectarIntencion } from '../../lib/detectarIntencion';
 import { getTenantTimezone } from '../../lib/getTenantTimezone';
-
+import { composePricingReserveMessage } from '../../lib/reply/composeMultiCat';
+import { extractLinksFromPrompt } from '../../lib/links/fromPrompt';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -70,6 +71,21 @@ async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma:
 
 router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
+
+  // ⬇️ Pega este bloque al inicio del handler del webhook de WhatsApp
+  const rawFrom = String(req.body?.From || '');       // ej: 'whatsapp:+1863...'
+  const rawTo   = String(req.body?.To || '');         // ej: 'whatsapp:+1463...'
+
+  /**
+   * numeroDestino:
+   * - Si tu función enviarWhatsApp espera el formato Twilio ('whatsapp:+1...'), usa rawFrom.
+   * - Si espera E.164 sin prefijo 'whatsapp:', usa fromE164.
+   */
+  const fromE164 = rawFrom.replace(/^whatsapp:/, ''); // '+1863...'
+  const toE164   = rawTo.replace(/^whatsapp:/, '');   // '+1463...'
+
+  // ⚠️ Ajusta esto según tu sender actual:
+  const numeroDestino = rawFrom; // o usa fromE164 si tu enviarWhatsApp NO usa el prefijo 'whatsapp:'
 
   res.type('text/xml').send(new MessagingResponse().toString());
 
@@ -522,41 +538,6 @@ function addBookingCTA({
   return out;
 }
 
-// ===== Cortesía wording (ES/EN) =====
-function applyCortesiaWording(out: string, userInput: string, idiomaDestino: 'es'|'en'): string {
-  const s = `${userInput} ${out}`.toLowerCase();
-  const askedFree = /(gratis|free|trial|prueba|cortes[ií]a)/i.test(s);
-  if (!askedFree) return out;
-
-  if (idiomaDestino === 'en') {
-    // Evita duplicar si ya dice complimentary
-    if (!/\bcomplimentary\b/i.test(out)) {
-      // Inserta “(complimentary)” tras “free/free trial” si aparece; si no, agrega nota al final.
-      let replaced = out
-        .replace(/\bfree trial\b/ig, 'free trial (complimentary)')
-        .replace(/\bfree\b/ig, 'free (complimentary)');
-      if (replaced === out) {
-        replaced = out + ' (complimentary).';
-      }
-      return replaced;
-    }
-    return out;
-  } else {
-    // ES: “de cortesía”. Evita duplicados.
-    if (!/\bde\s+cortes[ií]a\b/i.test(out)) {
-      // Inserta junto a “gratis / prueba gratis”
-      let replaced = out
-        .replace(/\bprueba\s+gratis\b/ig, 'prueba gratis (de cortesía)')
-        .replace(/\bgratis\b/ig, 'gratis (de cortesía)');
-      if (replaced === out) {
-        replaced = out + ' (de cortesía).';
-      }
-      return replaced;
-    }
-    return out;
-  }
-}
-
 // ===== Remover links irrelevantes según la categoría detectada =====
 function stripLinksForCategory(out: string, category: ReturnType<typeof classifyQuestion>): string {
   // En consultas de FREE_TRIAL no queremos distraer con soporte (wa.me)
@@ -909,6 +890,38 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
       out += `\n\n${line}`;
     }
   }
+
+  // ====== LINKS DESDE PROMPT DEL NEGOCIO (multitenant/multicanal) ======
+let resolvedMultiCat = false;
+
+try {
+  // 1) Trae el prompt real del negocio para este canal
+  const promptBaseLocal = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
+
+  // 2) Extrae y rankea links desde el prompt
+  const links = extractLinksFromPrompt(String(promptBaseLocal || ''), 20);
+
+  // 3) Construye el mensaje multi-pregunta si hay categorías relevantes
+  const hasRelevantCats = Array.isArray(cats) && cats.some(c => c === 'PRICING' || c === 'RESERVE');
+
+  if (hasRelevantCats) {
+    const msg = composePricingReserveMessage({
+      cats,
+      links: {
+        memberships: links.bestMemberships,
+        classes: links.bestClasses,
+        contact: links.bestContact
+      },
+      // Si tu tenant/prompt indica “plan para dos”, aquí podrías evaluarlo
+      hasDuoPlan: false
+    });
+
+    await enviarWhatsApp(fromNumber, msg, tenant.id);
+    resolvedMultiCat = true;
+  }
+} catch (e) {
+  console.error('Error en multi-categoría (links desde prompt):', e);
+}
 
   console.log('🔎 Multi-cat WA[FAQ]', { cats, ctas });
 
