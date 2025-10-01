@@ -811,7 +811,24 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
           userInput: aggregatedInput
         });
 
-        console.log('💬 INTENCION reply:', { intentLow, out });
+        // 🆕 Wording “de cortesía / complimentary” si el cliente lo pidió
+        out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+
+        // 🆕 Clasificar TODAS las categorías que aparecen en el mensaje
+        const cats = classifyAllCategories(aggregatedInput, intentLow);
+        // 🆕 Si incluye FREE_TRIAL, elimina wa.me u otros de soporte (no aplica en tu ejemplo, pero queda robusto)
+        if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as any);
+
+        // 🆕 Construir CTAs para cada categoría y agregarlas si faltan
+        const ctas = buildCategoryCTAs(cats, promptLinks, tenant, bookingLink);
+        for (const line of ctas) {
+          const urlPart = line.split(': ')[1] || ''; // lo que va después de "Planes y precios: "
+          if (urlPart && !out.includes(urlPart)) {
+            out += `\n\n${line}`;
+          }
+        }
+
+        console.log('💬 INTENCION reply (multi-cat):', { intentLow, cats, out });
 
         try {
           const langOut = await detectarIdioma(out);
@@ -832,7 +849,7 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
           ON CONFLICT DO NOTHING`,
           [tenant.id, 'whatsapp', messageId]
         );
-        // follow-up
+        // follow-up intacto…
         try {
           const det2 = await detectarIntencion(userInput, tenant.id, 'whatsapp');
           const nivel2 = det2?.nivel_interes ?? 1;
