@@ -811,9 +811,6 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
           userInput: aggregatedInput
         });
 
-        // 🆕 Wording “de cortesía / complimentary” si el cliente lo pidió
-        out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
-
         // 🆕 Clasificar TODAS las categorías que aparecen en el mensaje
         const cats = classifyAllCategories(aggregatedInput, intentLow);
         // 🆕 Si incluye FREE_TRIAL, elimina wa.me u otros de soporte (no aplica en tu ejemplo, pero queda robusto)
@@ -827,6 +824,11 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
             out += `\n\n${line}`;
           }
         }
+
+        console.log('🔎 Multi-cat WA[Intenciones]', { cats, ctas });
+
+        // ✅ Aplica wording de cortesía UNA sola vez, al final (coherente con FAQ/OpenAI)
+        out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
 
         console.log('💬 INTENCION reply (multi-cat):', { intentLow, cats, out });
 
@@ -898,17 +900,9 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
     userInput: aggregatedInput
   });
 
-  // 🟢 “Cortesía / complimentary” si el cliente lo pidió
-  out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
-
-  // 🔎 Categoriza por lo que pidió el cliente
-  const category = classifyQuestion(aggregatedInput, intentLowFaq);
-
-  // 🚫 Si es FREE_TRIAL, elimina wa.me u otros enlaces de soporte
-  out = stripLinksForCategory(out, category);
-
-  // 🔗 Seleccionar link por lo que el cliente preguntó (sin “preferidos”)
+  // 🔗 MÚLTIPLES categorías en un solo mensaje
   const cats = classifyAllCategories(aggregatedInput, intentLowFaq);
+  
   // En FREE_TRIAL limpiamos wa.me si el LLM lo metió
   if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as QCategory);
   const ctas = buildCategoryCTAs(cats, promptLinks, tenant, bookingLink);
@@ -918,26 +912,9 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
     }
   }
 
-  // 🟢 Wording “de cortesía / complimentary” si el cliente lo pidió
-  out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+  console.log('🔎 Multi-cat WA[FAQ]', { cats, ctas });
 
-  // 🔗 Seleccionar link por lo que el cliente preguntó (sin "preferidos")
-  {
-    const category = classifyQuestion(aggregatedInput, intentLowFaq);
-    const selected = selectLinkByCategory(category, promptLinks, tenant, bookingLink);
-    if (selected && !out.includes(selected)) {
-      const line =
-        category === 'FREE_TRIAL' ? `\n\nActiva tu clase de cortesía aquí: ${selected}` :
-        category === 'RESERVE'    ? `\n\nReserva/gestiona aquí: ${selected}` :
-        category === 'PRICING'    ? `\n\nPlanes y precios: ${selected}` :
-        category === 'SUPPORT'    ? `\n\nSoporte técnico: ${selected}` :
-        `\n\nMás información: ${selected}`;
-      // Añade CTA aunque exista otra URL: son propósitos distintos
-      out = out + line;
-    }
-  }
-
-  // 🟢 Lenguaje “de cortesía / complimentary” si el cliente lo pidió
+  // 🟢 Wording de cortesía (aplicar UNA vez, al final, antes de traducir)
   out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
 
    try {
@@ -1079,20 +1056,7 @@ if (!respuestaDesdeFaq) {
     }
   }
 
-  // 🔗 Seleccionar link por lo que el cliente preguntó (sin "preferidos")
-  {
-    const category = classifyQuestion(aggregatedInput, intentLowOai);
-    const selected = selectLinkByCategory(category, promptLinks, tenant, linkForGen || bookingLink);
-    if (selected && !respuesta.includes(selected)) {
-      const line =
-        category === 'FREE_TRIAL' ? `\n\nActiva tu clase de cortesía aquí: ${selected}` :
-        category === 'RESERVE'    ? `\n\nReserva/gestiona aquí: ${selected}` :
-        category === 'PRICING'    ? `\n\nPlanes y precios: ${selected}` :
-        category === 'SUPPORT'    ? `\n\nSoporte técnico: ${selected}` :
-        `\n\nMás información: ${selected}`;
-      respuesta = respuesta + line;
-    }
-  }
+  console.log('🔎 Multi-cat WA[OpenAI]', { cats, ctas });
 
   // Persistir + enviar
   await pool.query(
