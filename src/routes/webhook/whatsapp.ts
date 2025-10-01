@@ -123,9 +123,11 @@ function parseLinksFromPrompt(promptText: string) {
     // Soporte
     waSupport:   find(/https?:\/\/wa\.me\/\d+/i),
 
-    // Reservas / turnos / clases
-    schedule:    find(/https?:\/\/[^\s]+\/classes-day-view/i)  // Glofox
-               || find(/https?:\/\/[^\s]+\/(book|reserve|booking)/i),
+    // Reservas / turnos / clases (vendor-agnostic por path)
+    schedule:
+      find(/https?:\/\/[^\s]+\/(classes?-?(day|week|month|calendar)-?view)/i)   // clases-day-view y variantes
+      || find(/https?:\/\/[^\s]+\/(schedule|calendar|timetable)/i)              // términos genéricos
+      || find(/https?:\/\/[^\s]+\/(book|reserve|booking|appointments?)/i),      // verbos genéricos
 
     // Membresías / precios
     memberships: find(/https?:\/\/[^\s]+\/memberships(?!\/)/i)
@@ -506,11 +508,6 @@ function addBookingCTA({
 
   // Si la intención cae en la lista forzada -> añade CTA
   if (FORCE_INTENTS.has((intentLow || '').toLowerCase())) {
-    const hasGenericGlofox = /\bhttps?:\/\/app\.glofox\.com\/portal\b/i.test(out);
-    if (hasGenericGlofox && !out.includes(bookingLink)) {
-      out = out.replace(/\bhttps?:\/\/app\.glofox\.com\/portal\b/ig, bookingLink);
-      return out;
-    }
     return out + `\n\nReserva/gestiona aquí: ${bookingLink}`;
   }
 
@@ -621,6 +618,7 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
 
   const bookingLink =
     getLinkFromTenant(tenant, ['booking_url','booking','reservas_url','reservar_url','agenda_url'])
+    || promptLinks.schedule
     || promptUrl
     || null;
   console.log('🔗 bookingLink resuelto =', bookingLink);
