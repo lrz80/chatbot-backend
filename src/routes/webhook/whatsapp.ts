@@ -261,6 +261,32 @@ function classifyQuestion(userText: string, intentLow: string): QCategory {
   return 'NONE';
 }
 
+// ===== Clasificar múltiples categorías desde un mismo mensaje =====
+function classifyAllCategories(userText: string, intentLow: string): QCategory[] {
+  const s = (userText || '').toLowerCase();
+  const cats: QCategory[] = [];
+
+  // por texto del cliente
+  if (/(gratis|free|trial|prueba|cortes[ií]a)/i.test(s)) cats.push('FREE_TRIAL');
+  if (/(precio|plan(es)?|membres[ií]a|tarifa|rates|pricing)/i.test(s)) cats.push('PRICING');
+  if (/(reserv(ar|a|o)|agenda(r)?|book|apart(ar|o)|cupos?|horario|schedule)/i.test(s)) cats.push('RESERVE');
+  if (/(soporte|support|whatsapp|ayuda\s+t(?:e|é)cnica)/i.test(s)) cats.push('SUPPORT');
+  if (/(menu|carta)/i.test(s)) cats.push('MENU');
+  if (/(orden(ar)?|order|pedido|delivery|domicilio|env[ií]o|pickup|take\s*out)/i.test(s)) cats.push('ORDER');
+  if (/(cat[aá]logo|catalog|shop|store)/i.test(s)) cats.push('CATALOG');
+
+  // por intención canónica
+  const i = (intentLow || '').toLowerCase();
+  if (['reservar','horario','confirmar','reprogramar','cancelar','cambio','interes_clases'].includes(i) && !cats.includes('RESERVE')) cats.push('RESERVE');
+  if (['precio','comprar'].includes(i) && !cats.includes('PRICING')) cats.push('PRICING');
+
+  // normaliza orden: FREE_TRIAL, PRICING, RESERVE, SUPPORT, MENU, ORDER, CATALOG, NONE
+  const order: QCategory[] = ['FREE_TRIAL','PRICING','RESERVE','SUPPORT','MENU','ORDER','CATALOG'];
+  const unique = Array.from(new Set(cats));
+  const sorted = unique.sort((a,b) => order.indexOf(a) - order.indexOf(b));
+  return sorted.length ? sorted : ['NONE'];
+}
+
 // ===== Elegir link según categoría detectada (desde links del prompt) =====
 function selectLinkByCategory(
   category: QCategory,
@@ -287,6 +313,30 @@ function selectLinkByCategory(
       // último recurso: lo que el tenant tenga como transaccional
       return getTransactionalLink(tenant);
   }
+}
+
+// ===== Construir CTAs por categorías detectadas =====
+function buildCategoryCTAs(
+  categories: QCategory[],
+  promptLinks: ReturnType<typeof parseLinksFromPrompt>,
+  tenant: any,
+  bookingLinkFallback?: string | null
+): string[] {
+  const lines: string[] = [];
+  for (const cat of categories) {
+    const url = selectLinkByCategory(cat, promptLinks, tenant, bookingLinkFallback);
+    if (!url) continue;
+    const text =
+      cat === 'FREE_TRIAL' ? `Activa tu clase de cortesía aquí: ${url}` :
+      cat === 'PRICING'    ? `Planes y precios: ${url}` :
+      cat === 'RESERVE'    ? `Horarios y reservas: ${url}` :
+      cat === 'SUPPORT'    ? `Soporte técnico: ${url}` :
+      cat === 'MENU'       ? `Ver menú: ${url}` :
+      cat === 'ORDER'      ? `Hacer pedido: ${url}` :
+      /*CATALOG*/            `Ver catálogo: ${url}`;
+    lines.push(text);
+  }
+  return lines;
 }
 
 // ===== Cortesía wording (ES/EN) =====
@@ -841,16 +891,13 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
   out = stripLinksForCategory(out, category);
 
   // 🔗 Seleccionar link por lo que el cliente preguntó (sin “preferidos”)
-  {
-    const selected = selectLinkByCategory(category, promptLinks, tenant, bookingLink);
-    if (selected && !out.includes(selected)) {
-      const line =
-        category === 'FREE_TRIAL' ? `\n\nActiva tu clase de cortesía aquí: ${selected}` :
-        category === 'RESERVE'    ? `\n\nReserva/gestiona aquí: ${selected}` :
-        category === 'PRICING'    ? `\n\nPlanes y precios: ${selected}` :
-        category === 'SUPPORT'    ? `\n\nSoporte técnico: ${selected}` :
-                                    `\n\nMás información: ${selected}`;
-      out = out + line;
+  const cats = classifyAllCategories(aggregatedInput, intentLowFaq);
+  // En FREE_TRIAL limpiamos wa.me si el LLM lo metió
+  if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as QCategory);
+  const ctas = buildCategoryCTAs(cats, promptLinks, tenant, bookingLink);
+  for (const line of ctas) {
+    if (!out.includes(line.split(': ')[1])) {
+      out += `\n\n${line}`;
     }
   }
 
@@ -953,6 +1000,7 @@ if (!respuestaDesdeFaq) {
     '- Este canal es WhatsApp: pega la URL completa (sin markdown). No uses acortadores.',
     '- No confirmes disponibilidad/cupos/stock/fechas exactas a menos que estén explícitos en el prompt.',
     '- Si piden algo fuera del prompt, dilo con amabilidad y ofrece el enlace correspondiente (si existe) para verificar.',
+    '- Si el usuario hace varias preguntas (p. ej., precios y horarios), responde ambos puntos y añade 1 enlace relevante por cada tema desde ENLACES_OFICIALES.',
     '- Sé breve, claro y mantén el idioma del cliente.'
   ].join('\n');
 
@@ -1005,16 +1053,12 @@ if (!respuestaDesdeFaq) {
   respuesta = stripLinksForCategory(respuesta, category);
 
   // 🔗 Seleccionar link por lo que el cliente preguntó (sin “preferidos”)
-  {
-    const selected = selectLinkByCategory(category, promptLinks, tenant, linkForGen || bookingLink);
-    if (selected && !respuesta.includes(selected)) {
-      const line =
-        category === 'FREE_TRIAL' ? `\n\nActiva tu clase de cortesía aquí: ${selected}` :
-        category === 'RESERVE'    ? `\n\nReserva/gestiona aquí: ${selected}` :
-        category === 'PRICING'    ? `\n\nPlanes y precios: ${selected}` :
-        category === 'SUPPORT'    ? `\n\nSoporte técnico: ${selected}` :
-                                    `\n\nMás información: ${selected}`;
-      respuesta = respuesta + line;
+  const cats = classifyAllCategories(aggregatedInput, intentLowOai);
+  if (cats.includes('FREE_TRIAL')) respuesta = stripLinksForCategory(respuesta, 'FREE_TRIAL' as QCategory);
+  const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForGen || bookingLink);
+  for (const line of ctas) {
+    if (!respuesta.includes(line.split(': ')[1])) {
+      respuesta += `\n\n${line}`;
     }
   }
 
