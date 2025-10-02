@@ -133,31 +133,99 @@ function getTransactionalLink(tenant: any): string | null {
 }
 
 function parseLinksFromPrompt(promptText: string) {
-  const find = (re: RegExp) => (promptText.match(re)?.[0] || null);
+  if (!promptText) {
+    return {
+      support: null,
+      schedule: null,
+      memberships: null,
+      freeTrial: null,
+      menu: null,
+      order: null,
+      checkout: null,
+      catalog: null,
+    };
+  }
 
-  return {
-    // Soporte
-    waSupport:   find(/https?:\/\/wa\.me\/\d+/i),
+  const mdLinkRe = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi;
+  const bareUrlRe = /\bhttps?:\/\/[^\s)>\]]+/gi;
 
-    // Reservas / turnos / clases (vendor-agnostic por path)
-    schedule:
-      find(/https?:\/\/[^\s]+\/(classes?-?(day|week|month|calendar)-?view)/i)   // clases-day-view y variantes
-      || find(/https?:\/\/[^\s]+\/(schedule|calendar|timetable)/i)              // términos genéricos
-      || find(/https?:\/\/[^\s]+\/(book|reserve|booking|appointments?)/i),      // verbos genéricos
+  type Found = { url: string; label: string; ctx: string; };
+  const found: Found[] = [];
 
-    // Membresías / precios
-    memberships: find(/https?:\/\/[^\s]+\/memberships(?!\/)/i)
-               || find(/https?:\/\/[^\s]+\/(plans|pricing?)/i),
+  // Markdown [label](url)
+  let m: RegExpExecArray | null;
+  while ((m = mdLinkRe.exec(promptText))) {
+    const label = (m[1] || '').trim();
+    const url   = m[2].trim();
+    const startCtx = Math.max(0, m.index - 80);
+    const ctx = (promptText.slice(startCtx, m.index) + " " + label).toLowerCase();
+    found.push({ url, label, ctx });
+  }
 
-    // “Free trial” / clase gratis / demo / cortesía
-    freeTrial:   find(/https?:\/\/[^\s]+\/(free|trial|demo|buy|cortes(i|í)a)/i),
+  // URLs sueltas
+  const existing = new Set(found.map(f => f.url));
+  const bare = promptText.match(bareUrlRe) || [];
+  for (const urlRaw of bare) {
+    const url = urlRaw.trim();
+    if (existing.has(url)) continue;
+    const idx = promptText.indexOf(url);
+    const startCtx = Math.max(0, idx - 80);
+    const ctx = promptText.slice(startCtx, idx).toLowerCase();
+    found.push({ url, label: url, ctx });
+    existing.add(url);
+  }
 
-    // Restaurante / e-commerce
-    menu:        find(/https?:\/\/[^\s]+\/(menu|carta)/i),
-    order:       find(/https?:\/\/[^\s]+\/(order|pickup|delivery|take(out)?)/i),
-    checkout:    find(/https?:\/\/[^\s]+\/(checkout|cart)/i),
-    catalog:     find(/https?:\/\/[^\s]+\/(catalog|shop|store)/i),
-  };
+  // Palabras clave por categoría (sin depender de dominio)
+  const saysSupport  = (t: string) => /(soporte|support|ayuda|contacto|contáctanos|asistencia)/i.test(t);
+  const saysSchedule = (t: string) => /(horario|calendario|reserv|agenda|book|schedule|timetable|clases?)/i.test(t);
+  const saysPricing  = (t: string) => /(precio|plan|membres[ií]a|pricing|rates|cost)/i.test(t);
+  const saysTrial    = (t: string) => /(trial|cortes[ií]a|prueba\s*gratis|free\s*(class|trial)|demo)/i.test(t);
+  const saysMenu     = (t: string) => /(menu|carta)/i.test(t);
+  const saysOrder    = (t: string) => /(orden|order|pedido|delivery|env[ií]o|pickup|take\s*out)/i.test(t);
+  const saysCheckout = (t: string) => /(checkout|cart)/i.test(t);
+  const saysCatalog  = (t: string) => /(cat[aá]logo|catalog|shop|store)/i.test(t);
+
+  // salidas
+  let support: string | null = null;
+  let schedule: string | null = null;
+  let memberships: string | null = null;
+  let freeTrial: string | null = null;
+  let menu: string | null = null;
+  let order: string | null = null;
+  let checkout: string | null = null;
+  let catalog: string | null = null;
+
+  for (const f of found) {
+    const url = f.url;
+    const ctx = (f.ctx + " " + f.label).toLowerCase();
+
+    if (!support && saysSupport(ctx)) {
+      support = url; continue;
+    }
+    if (!freeTrial && saysTrial(ctx)) {
+      freeTrial = url; continue;
+    }
+    if (!schedule && saysSchedule(ctx)) {
+      schedule = url; continue;
+    }
+    if (!memberships && saysPricing(ctx)) {
+      memberships = url; continue;
+    }
+    if (!menu && saysMenu(ctx)) {
+      menu = url; continue;
+    }
+    if (!order && saysOrder(ctx)) {
+      order = url; continue;
+    }
+    if (!checkout && saysCheckout(ctx)) {
+      checkout = url; continue;
+    }
+    if (!catalog && saysCatalog(ctx)) {
+      catalog = url; continue;
+    }
+  }
+
+  return { support, schedule, memberships, freeTrial, menu, order, checkout, catalog };
 }
 
 // ===== Enlaces desde el propio prompt (markdown + URLs sueltas) =====
@@ -223,7 +291,8 @@ function pickPromptLink({
   const s = text.toLowerCase();
 
   // Señales por contenido (multinegocio)
-  if (/(soporte|support|whatsapp|ayuda\s+t(?:e|é)cnica)/i.test(s) && promptLinks.waSupport) return promptLinks.waSupport;
+  if (/(soporte|support|whatsapp|ayuda\s+t(?:e|é)cnica|contacto)/i.test(s) && promptLinks.support) 
+  return promptLinks.support;
 
   if (/(precio|plan(es)?|membres[ií]a|cost|tarifa|rates|pricing)/i.test(s) && promptLinks.memberships) return promptLinks.memberships;
   if (/(clase\s+gratis|gratis|free\s+(class|trial)|free|trial|demo|cortes[ií]a)/i.test(s) && promptLinks.freeTrial) {
@@ -320,7 +389,7 @@ function selectLinkByCategory(
     case 'PRICING':
       return promptLinks.memberships || null;
     case 'SUPPORT':
-      return promptLinks.waSupport || null;
+      return promptLinks.support || null;
     case 'MENU':
       return promptLinks.menu || null;
     case 'ORDER':
