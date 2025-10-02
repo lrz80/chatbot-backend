@@ -552,6 +552,9 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
   return out;
 }
 
+// Indica si ya armamos una respuesta multi-categoría (para omitir follow-up)
+let resolvedMultiCat = false;
+
   // 🧹 Cancela cualquier follow-up pendiente para este contacto al recibir nuevo mensaje
   try {
       await pool.query(
@@ -635,6 +638,12 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
 
   // ⏲️ Programador de follow-up (WhatsApp)
   async function scheduleFollowUp(intFinal: string, nivel: number) {
+    // 🛑 Si ya entregamos respuesta multi-categoría completa en el mismo mensaje, no agendamos follow-up
+    if (resolvedMultiCat) {
+      console.log('🛑 Follow-up omitido: ya se entregó respuesta multi-pregunta (precios + horarios).');
+      return;
+    }
+
     try {
       const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
       const condition = (nivel >= 3) || intencionesFollowUp.includes((intFinal || '').toLowerCase());
@@ -892,36 +901,34 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
   }
 
   // ====== LINKS DESDE PROMPT DEL NEGOCIO (multitenant/multicanal) ======
-let resolvedMultiCat = false;
+  try {
+    const promptBaseLocal = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
+    const links = extractLinksFromPrompt(String(promptBaseLocal || ''), 20);
 
-try {
-  // 1) Trae el prompt real del negocio para este canal
-  const promptBaseLocal = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
+    const hasRelevantCats = Array.isArray(cats) && cats.some(c => c === 'PRICING' || c === 'RESERVE');
+    if (hasRelevantCats) {
+      const msg = composePricingReserveMessage({
+        cats,
+        links: {
+          memberships: links.bestMemberships,
+          classes:     links.bestClasses,
+          contact:     links.bestContact
+        },
+        hasDuoPlan: false
+      });
 
-  // 2) Extrae y rankea links desde el prompt
-  const links = extractLinksFromPrompt(String(promptBaseLocal || ''), 20);
+      // Unificar en el MISMO mensaje (no dispares enviarWhatsApp aquí)
+      const alreadyHasMembership = links.bestMemberships && out.includes(links.bestMemberships);
+      const alreadyHasClasses    = links.bestClasses     && out.includes(links.bestClasses);
 
-  // 3) Construye el mensaje multi-pregunta si hay categorías relevantes
-  const hasRelevantCats = Array.isArray(cats) && cats.some(c => c === 'PRICING' || c === 'RESERVE');
-
-  if (hasRelevantCats) {
-    const msg = composePricingReserveMessage({
-      cats,
-      links: {
-        memberships: links.bestMemberships,
-        classes: links.bestClasses,
-        contact: links.bestContact
-      },
-      // Si tu tenant/prompt indica “plan para dos”, aquí podrías evaluarlo
-      hasDuoPlan: false
-    });
-
-    await enviarWhatsApp(fromNumber, msg, tenant.id);
-    resolvedMultiCat = true;
+      if (!alreadyHasMembership || !alreadyHasClasses) {
+        out += `\n\n${msg}`;
+      }
+      resolvedMultiCat = true;
+    }
+  } catch (e) {
+    console.error('Error en multi-categoría (links desde prompt):', e);
   }
-} catch (e) {
-  console.error('Error en multi-categoría (links desde prompt):', e);
-}
 
   console.log('🔎 Multi-cat WA[FAQ]', { cats, ctas });
 
