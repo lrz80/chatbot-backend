@@ -4,7 +4,7 @@ import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import OpenAI from 'openai';
 import twilio from 'twilio';
-import { buildDudaSlug, normalizeIntentAlias } from '../../lib/intentSlug';
+import { normalizeIntentAlias } from '../../lib/intentSlug';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
@@ -21,6 +21,50 @@ import { extractLinksFromPrompt } from '../../lib/links/fromPrompt';
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
+
+// 🧠 Memoria de idioma (proceso) + helpers
+const LAST_LANG_BY_NUMBER = new Map<string, 'es'|'en'>(); // fromNumber -> 'es'|'en'
+function explicitLangOverride(t: string): 'es'|'en'|null {
+  const s = (t || '').toLowerCase().trim();
+  if (/\b(english please|in english|english)\b/.test(s)) return 'en';
+  if (/\b(en español|spanish please|español|habla español)\b/.test(s)) return 'es';
+  return null;
+}
+const CONFLICTIVE_WORDS = new Set(['cycling','hola','hello','ok','thanks','gracias','schedule']);
+function isVeryShortOrConflictive(t: string) {
+  const words = (t || '').trim().split(/\s+/).filter(Boolean);
+  return words.length <= 2 || CONFLICTIVE_WORDS.has((t || '').toLowerCase().trim());
+}
+function normLangBase(code?: string|null): 'es'|'en' {
+  const base = (code || '').split(/[-_]/)[0].toLowerCase();
+  return base.startsWith('en') ? 'en' : 'es';
+}
+async function detectarIdiomaSeguro({
+  text, fromNumber, tenantId, tenantBase
+}: { text: string; fromNumber: string; tenantId: string; tenantBase: 'es'|'en' }): Promise<'es'|'en'> {
+  const ov = explicitLangOverride(text);
+  if (ov) { LAST_LANG_BY_NUMBER.set(fromNumber, ov); await upsertIdiomaClienteDB(tenantId, fromNumber, ov); return ov; }
+  if (isVeryShortOrConflictive(text)) {
+    const mem = LAST_LANG_BY_NUMBER.get(fromNumber);
+    if (mem) return mem;
+    const dbLang = await getIdiomaClienteDB(tenantId, fromNumber, tenantBase);
+    LAST_LANG_BY_NUMBER.set(fromNumber, dbLang);
+    return dbLang;
+  }
+  try {
+    let d = await detectarIdioma(text);
+    d = (d === 'cy') ? 'en' : d;
+    const nx = (d && (d === 'en' || d === 'es')) ? (d as 'en'|'es') : null;
+    const out = nx || LAST_LANG_BY_NUMBER.get(fromNumber) || (await getIdiomaClienteDB(tenantId, fromNumber, tenantBase));
+    LAST_LANG_BY_NUMBER.set(fromNumber, out);
+    await upsertIdiomaClienteDB(tenantId, fromNumber, out);
+    return out;
+  } catch {
+    const out = LAST_LANG_BY_NUMBER.get(fromNumber) || (await getIdiomaClienteDB(tenantId, fromNumber, tenantBase));
+    LAST_LANG_BY_NUMBER.set(fromNumber, out);
+    return out;
+  }
+}
 
 // Intenciones que deben ser únicas por tenant/canal
 const INTENT_UNIQUE = new Set([
@@ -71,22 +115,6 @@ async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma:
 
 router.post('/', async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
-
-  // ⬇️ Pega este bloque al inicio del handler del webhook de WhatsApp
-  const rawFrom = String(req.body?.From || '');       // ej: 'whatsapp:+1863...'
-  const rawTo   = String(req.body?.To || '');         // ej: 'whatsapp:+1463...'
-
-  /**
-   * numeroDestino:
-   * - Si tu función enviarWhatsApp espera el formato Twilio ('whatsapp:+1...'), usa rawFrom.
-   * - Si espera E.164 sin prefijo 'whatsapp:', usa fromE164.
-   */
-  const fromE164 = rawFrom.replace(/^whatsapp:/, ''); // '+1863...'
-  const toE164   = rawTo.replace(/^whatsapp:/, '');   // '+1463...'
-
-  // ⚠️ Ajusta esto según tu sender actual:
-  const numeroDestino = rawFrom; // o usa fromE164 si tu enviarWhatsApp NO usa el prefijo 'whatsapp:'
-
   res.type('text/xml').send(new MessagingResponse().toString());
 
   setTimeout(async () => {
@@ -544,42 +572,284 @@ try {
   console.error('❌ Error incrementando uso_mensual:', e);
 }
 
-  const idioma = await detectarIdioma(aggregatedInput);
-  const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
+  const tenantBase: 'es'|'en' = normalizeLang(tenant?.idioma || 'es');
+  const idiomaDestino: 'es'|'en' = await detectarIdiomaSeguro({
+    text: aggregatedInput,
+    fromNumber,
+    tenantId: tenant.id,
+    tenantBase: tenantBase
+  });
+  const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
+
   const promptLinks = parseLinksFromPrompt(String(promptBase || ''));
   let respuesta = '';
   const canal = 'whatsapp';
-  
+
+  // Fallback de reservas/agenda si el prompt no trae link claro
+  const bookingLink =
+    promptLinks.schedule ||
+    getLinkFromTenant(tenant, ['booking_url','reservas_url','reservar_url','agenda_url']) ||
+    null;
+
   // URL presente en el prompt (fallback si no hay link en settings/tenant)
   const promptUrl = extractFirstUrl(promptBase);
 
-// 👇 PÉGALO AQUÍ (debajo de getLink)
-function stripLeadGreetings(t: string) {
-  return t
-    .replace(/^\s*(hola+[\s!.,]*)?/i, '')
-    .replace(/^\s*(saludos+[\s!.,]*)?/i, '')
-    .replace(/^\s*(hello+|hi+|hey+)[\s!.,]*/i, '')
-    .trim();
-}
+  // 🚦 MODO SIMPLE HÍBRIDO (Prompt-First: conserva FAQs/Intenciones/Follow-up)
+  const simpleMode = Boolean((tenant as any)?.simple_mode);
+  if (simpleMode) {
+    try {
+      // Saludo/agradecimiento → bienvenida y return
+      const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|d[ií]as))?)\s*$/i.test(aggregatedInput.trim());
+      const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(aggregatedInput.trim());
+      if (greetingOnly || thanksOnly) {
+        const outB = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+        if (outB) {
+          await enviarWhatsApp(fromNumber, outB, tenant.id);
+          await pool.query(
+            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+            VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+            ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+            [tenant.id, outB, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+          );
+          await pool.query(
+            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT DO NOTHING`,
+            [tenant.id, 'whatsapp', messageId]
+          );
+          return;
+        }
+      }
 
-function extractFirstUrl(text?: string | null): string | null {
-  if (!text) return null;
-  const m = text.match(/\bhttps?:\/\/[^\s)]+/i);
-  return m ? m[0] : null;
-}
+      // 1) Detectar intención + categorías para decidir si usamos INTENCIONES/FAQ
+      let INTENCION_FINAL_CANONICA = '';
+      try {
+        const textoParaIntent = (idiomaDestino !== 'es')
+          ? await traducirMensaje(stripLeadGreetings(aggregatedInput), 'es').catch(() => aggregatedInput)
+          : stripLeadGreetings(aggregatedInput);
+        const det = await detectarIntencion(textoParaIntent, tenant.id, 'whatsapp');
+        INTENCION_FINAL_CANONICA = normalizeIntentAlias((det?.intencion || '').trim().toLowerCase());
+      } catch {}
+      const intentLow = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+      const cats = classifyAllCategories(aggregatedInput, intentLow);
+      const hitsStrong = (intentLow && INTENT_UNIQUE.has(intentLow)) || cats.includes('PRICING') || cats.includes('RESERVE');
 
-function addBookingCTA({
-  out,
-  intentLow,
-  bookingLink,
-  userInput
-}: {
-  out: string;
-  intentLow: string;
-  bookingLink?: string | null;
-  userInput: string;
-}) {
-  if (!bookingLink) return out;
+      // 2) INTENCIONES → (si hay) responder
+      if (hitsStrong) {
+        try {
+          const { rows } = await pool.query(
+            `SELECT respuesta
+              FROM intenciones
+              WHERE tenant_id = $1 AND canal = $2 AND LOWER(nombre) = LOWER($3)
+                AND (activo IS TRUE OR activo IS NULL)
+              ORDER BY prioridad DESC NULLS LAST, updated_at DESC NULLS LAST
+              LIMIT 1`,
+            [tenant.id, 'whatsapp', INTENCION_FINAL_CANONICA]
+          );
+          if (rows[0]?.respuesta) {
+            let out = String(rows[0].respuesta || '');
+
+            const linkForThisIntent = pickPromptLink({ intentLow, bucket: 'GEN', text: aggregatedInput, promptLinks, tenant });
+            out = addBookingCTA({ out, intentLow, bookingLink: linkForThisIntent, userInput: aggregatedInput });
+
+            if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as any);
+            const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForThisIntent);
+            for (const line of ctas) {
+              const urlPart = line.split(': ')[1] || '';
+              if (urlPart && !out.includes(urlPart)) out += `\n\n${line}`;
+            }
+            out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+
+            try {
+              const langOut = await detectarIdioma(out);
+              if (langOut && langOut !== 'zxx' && normLangBase(langOut) !== idiomaDestino) {
+                out = await traducirMensaje(out, idiomaDestino);
+              }
+            } catch {}
+
+            await enviarWhatsApp(fromNumber, out, tenant.id);
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+            );
+            await pool.query(
+              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+              VALUES ($1, $2, $3, NOW())
+              ON CONFLICT DO NOTHING`,
+              [tenant.id, 'whatsapp', messageId]
+            );
+
+            // follow-up conservado
+            try {
+              const det2 = await detectarIntencion(aggregatedInput, tenant.id, 'whatsapp');
+              const nivel2 = det2?.nivel_interes ?? 1;
+              await scheduleFollowUp(INTENCION_FINAL_CANONICA, nivel2);
+            } catch {}
+            return;
+          }
+        } catch {}
+        // 2.b) FAQ por intención
+        try {
+          const { rows } = await pool.query(
+            `SELECT respuesta FROM faqs
+              WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3)
+              LIMIT 1`,
+            [tenant.id, 'whatsapp', INTENCION_FINAL_CANONICA]
+          );
+          if (rows[0]?.respuesta) {
+            let out = String(rows[0].respuesta || '');
+            const linkForFaq = pickPromptLink({ intentLow, bucket: 'GEN', text: aggregatedInput, promptLinks, tenant });
+            out = addBookingCTA({ out, intentLow, bookingLink: linkForFaq, userInput: aggregatedInput });
+
+            if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as any);
+            const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForFaq);
+            for (const line of ctas) {
+              const urlPart = line.split(': ')[1] || '';
+              if (urlPart && !out.includes(urlPart)) out += `\n\n${line}`;
+            }
+            out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+
+            try {
+              const langOut = await detectarIdioma(out);
+              if (langOut && langOut !== 'zxx' && normLangBase(langOut) !== idiomaDestino) {
+                out = await traducirMensaje(out, idiomaDestino);
+              }
+            } catch {}
+
+            await enviarWhatsApp(fromNumber, out, tenant.id);
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+            );
+            await pool.query(
+              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+              VALUES ($1, $2, $3, NOW())
+              ON CONFLICT DO NOTHING`,
+              [tenant.id, 'whatsapp', messageId]
+            );
+
+            try {
+              const det2 = await detectarIntencion(aggregatedInput, tenant.id, 'whatsapp');
+              const nivel2 = det2?.nivel_interes ?? 1;
+              await scheduleFollowUp(INTENCION_FINAL_CANONICA || 'faq', nivel2);
+            } catch {}
+            return;
+          }
+        } catch {}
+      }
+
+      // 3) Sin match fuerte → LLM con SOLO el prompt (Prompt-First)
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.3,
+        max_tokens: 800,
+        messages: [
+          { role: 'system', content: String(promptBase || 'Eres un asistente del negocio. Responde claro y útil.') },
+          { role: 'user', content: aggregatedInput }
+        ]
+      });
+      let out = completion.choices?.[0]?.message?.content?.trim()
+        || (idiomaDestino === 'es'
+              ? 'Puedo ayudarte con la información disponible del negocio.'
+              : 'I can help you with the available business information.');
+
+      const intentLowOai = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+      const linkForGen = pickPromptLink({ intentLow: intentLowOai, bucket: 'GEN', text: aggregatedInput, promptLinks, tenant });
+      out = addBookingCTA({ out, intentLow: intentLowOai, bookingLink: linkForGen, userInput: aggregatedInput });
+
+      if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as any);
+      const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForGen);
+      for (const line of ctas) {
+        const urlPart = line.split(': ')[1] || '';
+        if (urlPart && !out.includes(urlPart)) out += `\n\n${line}`;
+      }
+      out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+
+      try {
+        const langOut = await detectarIdioma(out);
+        if (langOut && langOut !== 'zxx' && normLangBase(langOut) !== idiomaDestino) {
+          out = await traducirMensaje(out, idiomaDestino);
+        }
+      } catch {}
+
+      await enviarWhatsApp(fromNumber, out, tenant.id);
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+        VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+        ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+        [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+      );
+      await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT DO NOTHING`,
+        [tenant.id, 'whatsapp', messageId]
+      );
+
+      // conserva sales intelligence + follow-up
+      try {
+        const det = await detectarIntencion(aggregatedInput, tenant.id, 'whatsapp');
+        const nivel_interes = det?.nivel_interes ?? 1;
+        const intFinal = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+        if (['comprar','compra','pagar','agendar','reservar','confirmar','interes_clases','precio','horario'].some(k => intFinal.includes(k))) {
+          await pool.query(
+            `UPDATE clientes SET segmento = 'cliente'
+            WHERE tenant_id = $1 AND contacto = $2
+              AND (segmento = 'lead' OR segmento IS NULL)`,
+            [tenant.id, fromNumber]
+          );
+        }
+        await pool.query(
+          `INSERT INTO sales_intelligence
+            (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
+          [tenant.id, fromNumber, 'whatsapp', aggregatedInput, intFinal, nivel_interes, messageId]
+        );
+        if (nivel_interes >= 3 || ['interes_clases','reservar','precio','comprar','horario'].includes(intFinal)) {
+          await scheduleFollowUp(intFinal, nivel_interes);
+        }
+      } catch {}
+      return;
+
+    } catch (e) {
+      console.error('❌ SimpleMode híbrido error, fallback a legacy:', e);
+      // si algo falla aquí, sigue tu pipeline normal abajo
+    }
+  }
+
+  // 👇 PÉGALO AQUÍ (debajo de getLink)
+  function stripLeadGreetings(t: string) {
+    return t
+      .replace(/^\s*(hola+[\s!.,]*)?/i, '')
+      .replace(/^\s*(saludos+[\s!.,]*)?/i, '')
+      .replace(/^\s*(hello+|hi+|hey+)[\s!.,]*/i, '')
+      .trim();
+  }
+
+  function extractFirstUrl(text?: string | null): string | null {
+    if (!text) return null;
+    const m = text.match(/\bhttps?:\/\/[^\s)]+/i);
+    return m ? m[0] : null;
+  }
+
+  function addBookingCTA({
+    out,
+    intentLow,
+    bookingLink,
+    userInput
+  }: {
+    out: string;
+    intentLow: string;
+    bookingLink?: string | null;
+    userInput: string;
+  }) {
+    if (!bookingLink) return out;
 
   // Si ya hay esa misma URL o cualquier URL en el texto, no duplicar
   if (out.includes(bookingLink)) return out;
@@ -660,32 +930,6 @@ let resolvedMultiCat = false;
     sugeridasExistentes = sugRes.rows || [];
   } catch (error) {
     console.error('⚠️ Error consultando FAQ sugeridas:', error);
-  }
-
-  // 1️⃣ Detectar si es solo número
-  const isNumericOnly = /^\s*\d+\s*$/.test(aggregatedInput);
-
-  // 2️⃣ Calcular idiomaDestino
-  const tenantBase: 'es'|'en' = normalizeLang(tenant?.idioma || 'es');
-  let idiomaDestino: 'es'|'en';
-
-  const bookingLink =
-    getLinkFromTenant(tenant, ['booking_url','booking','reservas_url','reservar_url','agenda_url'])
-    || promptLinks.schedule
-    || promptUrl
-    || null;
-  console.log('🔗 bookingLink resuelto =', bookingLink);
-
-  if (isNumericOnly) {
-    idiomaDestino = await getIdiomaClienteDB(tenant.id, fromNumber, tenantBase);
-    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (solo número)`);
-  } else {
-    let detectado: string | null = null;
-    try { detectado = normLang(await detectarIdioma(aggregatedInput)); } catch {}
-    const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
-    await upsertIdiomaClienteDB(tenant.id, fromNumber, normalizado);
-    idiomaDestino = normalizado;
-    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= aggregated`);
   }
 
   // ✅ PON ESTO DESPUÉS de calcular idiomaDestino (y antes del pipeline)
@@ -969,6 +1213,23 @@ let resolvedMultiCat = false;
     }
   }
 
+  function stripMembershipBuy(u?: string | null): string | undefined {
+  if (!u) return undefined;
+  return u.replace(/(\/memberships)\/[^/]+\/buy(?:[?#].*)?$/i, '$1');
+}
+
+function chooseSafeClassesLink(
+  candidate: string | null | undefined,
+  promptLinks: ReturnType<typeof parseLinksFromPrompt>,
+  bookingLink: string | null | undefined
+): string | undefined {
+  // Si huele a memberships/buy, usa un link seguro de clases/agenda
+  if (candidate && /\/memberships(\/|$)/i.test(candidate)) {
+    return promptLinks.schedule ?? bookingLink ?? undefined;
+  }
+  return candidate ?? promptLinks.schedule ?? bookingLink ?? undefined;
+}
+
   // ====== LINKS DESDE PROMPT DEL NEGOCIO (multitenant/multicanal) ======
   try {
     const promptBaseLocal = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
@@ -976,12 +1237,26 @@ let resolvedMultiCat = false;
 
     const hasRelevantCats = Array.isArray(cats) && cats.some(c => c === 'PRICING' || c === 'RESERVE');
     if (hasRelevantCats) {
+      const safeMemberships: string | undefined =
+        stripMembershipBuy(links.bestMemberships ?? undefined)
+        ?? promptLinks.memberships
+        ?? undefined;
+
+      const safeClasses: string | undefined =
+        chooseSafeClassesLink(links.bestClasses ?? undefined, promptLinks, bookingLink ?? undefined)
+        ?? undefined;
+
+      const safeContact: string | undefined =
+        links.bestContact
+        ?? promptLinks.support
+        ?? undefined;
+
       const msg = composePricingReserveMessage({
         cats,
         links: {
-          memberships: links.bestMemberships,
-          classes:     links.bestClasses,
-          contact:     links.bestContact
+          memberships: safeMemberships,
+          classes:     safeClasses,
+          contact:     safeContact
         },
         hasDuoPlan: false
       });
