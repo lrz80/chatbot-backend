@@ -432,23 +432,65 @@ function buildCategoryCTAs(
   promptLinks: ReturnType<typeof parseLinksFromPrompt>,
   tenant: any,
   bookingLinkFallback?: string | null,
-  idiomaDestino: 'es'|'en' = 'es',          // 👈 nuevo
-  supportUrl?: string | undefined            // 👈 opcional por si quieres mostrar soporte cuando corresponda
+  idiomaDestino: 'es'|'en' = 'es',
+  supportUrl?: string | undefined
 ): string[] {
   const L = (es: string, en: string) => (idiomaDestino === 'en' ? en : es);
 
+  // 👇 Ajuste: si solo viene NONE y tenemos un link claro de horarios, tratamos como RESERVE
+  const catsToUse = [...categories];
+  if (
+    catsToUse.length === 1 &&
+    catsToUse[0] === 'NONE' &&
+    (promptLinks.schedule || bookingLinkFallback)
+  ) {
+    catsToUse[0] = 'RESERVE';
+  }
+
+  // Heurística para etiquetar por URL cuando caemos al default:
+  const guessLabelByUrl = (url: string) => {
+    const s = (url || '').toLowerCase();
+    if (/(classes|schedule|agenda|reserv)/.test(s)) return L('Horarios y reservas', 'Schedule & bookings');
+    if (/(memberships|pricing|plans|rates|price)/.test(s)) return L('Planes y precios', 'Plans & pricing');
+    if (/(menu|carta)/.test(s)) return L('Ver menú', 'View menu');
+    if (/(order|checkout|cart|delivery|pickup|takeout|take-out)/.test(s)) return L('Hacer pedido', 'Place an order');
+    if (/(catalog|shop|store)/.test(s)) return L('Ver catálogo', 'View catalog');
+    // Fallback genérico
+    return L('Más información', 'More info');
+  };
+
   const lines: string[] = [];
-  for (const cat of categories) {
+  for (const cat of catsToUse) {
     const url = selectLinkByCategory(cat, promptLinks, tenant, bookingLinkFallback);
     if (!url) continue;
-    const text =
-      cat === 'FREE_TRIAL' ? `${L('Activa tu clase de cortesía aquí', 'Activate your complimentary class here')}: ${url}` :
-      cat === 'PRICING'    ? `${L('Planes y precios', 'Plans & pricing')}: ${url}` :
-      cat === 'RESERVE'    ? `${L('Horarios y reservas', 'Schedule & bookings')}: ${url}` :
-      cat === 'SUPPORT'    ? (supportUrl ? `${L('Soporte técnico', 'Support')}: ${supportUrl}` : '') :
-      cat === 'MENU'       ? `${L('Ver menú', 'View menu')}: ${url}` :
-      cat === 'ORDER'      ? `${L('Hacer pedido', 'Place an order')}: ${url}` :
-                             `${L('Ver catálogo', 'View catalog')}: ${url}`;
+
+    let text = '';
+    switch (cat) {
+      case 'FREE_TRIAL':
+        text = `${L('Activa tu clase de cortesía aquí', 'Activate your complimentary class here')}: ${url}`;
+        break;
+      case 'PRICING':
+        text = `${L('Planes y precios', 'Plans & pricing')}: ${url}`;
+        break;
+      case 'RESERVE':
+        text = `${L('Horarios y reservas', 'Schedule & bookings')}: ${url}`;
+        break;
+      case 'SUPPORT':
+        text = supportUrl ? `${L('Soporte técnico', 'Support')}: ${supportUrl}` : '';
+        break;
+      case 'MENU':
+        text = `${L('Ver menú', 'View menu')}: ${url}`;
+        break;
+      case 'ORDER':
+        text = `${L('Hacer pedido', 'Place an order')}: ${url}`;
+        break;
+      case 'CATALOG':
+        text = `${L('Ver catálogo', 'View catalog')}: ${url}`;
+        break;
+      default:
+        // NONE u otros: deduce etiqueta según la URL
+        text = `${guessLabelByUrl(url)}: ${url}`;
+    }
 
     if (text) lines.push(text);
   }
