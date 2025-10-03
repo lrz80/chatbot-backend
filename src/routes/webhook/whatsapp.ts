@@ -356,19 +356,19 @@ type QCategory =
   | 'CATALOG'
   | 'NONE';
 
+const GENERIC_INFO_RE = /\b(more info|more information|info|information|details|detalles|más info|mas info|más información|mas informacion)\b/i;
+
 function classifyQuestion(userText: string, intentLow: string): QCategory {
   const s = (userText || '').toLowerCase();
 
-  // Señales por texto del cliente
   if (/(gratis|free|trial|prueba|cortes[ií]a)/i.test(s)) return 'FREE_TRIAL';
-  if (/(precio|plan(es)?|membres[ií]a|tarifa|rates|pricing)/i.test(s)) return 'PRICING';
-  if (/(reserv(ar|a|o)|agenda(r)?|book|apart(ar|o)|cupos?|horario|schedule)/i.test(s)) return 'RESERVE';
+  if (/(precio|plan(es)?|membres[ií]a|tarifa|rates|pricing)/i.test(s) || GENERIC_INFO_RE.test(s)) return 'PRICING';
+  if (/(reserv(ar|a|o)|agenda(r)?|book|apart(ar|o)|cupos?|horario|schedule)/i.test(s) || GENERIC_INFO_RE.test(s)) return 'RESERVE';
   if (/(soporte|support|whatsapp|ayuda\s+t(?:e|é)cnica)/i.test(s)) return 'SUPPORT';
   if (/(menu|carta)/i.test(s)) return 'MENU';
   if (/(orden(ar)?|order|pedido|delivery|domicilio|env[ií]o|pickup|take\s*out)/i.test(s)) return 'ORDER';
   if (/(cat[aá]logo|catalog|shop|store)/i.test(s)) return 'CATALOG';
 
-  // Señales por intención canónica (si llega)
   const i = (intentLow || '').toLowerCase();
   if (['reservar','horario','confirmar','reprogramar','cancelar','cambio','interes_clases'].includes(i)) return 'RESERVE';
   if (['precio','comprar'].includes(i)) return 'PRICING';
@@ -376,26 +376,22 @@ function classifyQuestion(userText: string, intentLow: string): QCategory {
   return 'NONE';
 }
 
-// ===== Clasificar múltiples categorías desde un mismo mensaje =====
 function classifyAllCategories(userText: string, intentLow: string): QCategory[] {
   const s = (userText || '').toLowerCase();
   const cats: QCategory[] = [];
 
-  // por texto del cliente
   if (/(gratis|free|trial|prueba|cortes[ií]a)/i.test(s)) cats.push('FREE_TRIAL');
-  if (/(precio|plan(es)?|membres[ií]a|tarifa|rates|pricing)/i.test(s)) cats.push('PRICING');
-  if (/(reserv(ar|a|o)|agenda(r)?|book|apart(ar|o)|cupos?|horario|schedule)/i.test(s)) cats.push('RESERVE');
+  if (/(precio|plan(es)?|membres[ií]a|tarifa|rates|pricing)/i.test(s) || GENERIC_INFO_RE.test(s)) cats.push('PRICING');
+  if (/(reserv(ar|a|o)|agenda(r)?|book|apart(ar|o)|cupos?|horario|schedule)/i.test(s) || GENERIC_INFO_RE.test(s)) cats.push('RESERVE');
   if (/(soporte|support|whatsapp|ayuda\s+t(?:e|é)cnica)/i.test(s)) cats.push('SUPPORT');
   if (/(menu|carta)/i.test(s)) cats.push('MENU');
   if (/(orden(ar)?|order|pedido|delivery|domicilio|env[ií]o|pickup|take\s*out)/i.test(s)) cats.push('ORDER');
   if (/(cat[aá]logo|catalog|shop|store)/i.test(s)) cats.push('CATALOG');
 
-  // por intención canónica
   const i = (intentLow || '').toLowerCase();
   if (['reservar','horario','confirmar','reprogramar','cancelar','cambio','interes_clases'].includes(i) && !cats.includes('RESERVE')) cats.push('RESERVE');
   if (['precio','comprar'].includes(i) && !cats.includes('PRICING')) cats.push('PRICING');
 
-  // normaliza orden: FREE_TRIAL, PRICING, RESERVE, SUPPORT, MENU, ORDER, CATALOG, NONE
   const order: QCategory[] = ['FREE_TRIAL','PRICING','RESERVE','SUPPORT','MENU','ORDER','CATALOG'];
   const unique = Array.from(new Set(cats));
   const sorted = unique.sort((a,b) => order.indexOf(a) - order.indexOf(b));
@@ -435,21 +431,26 @@ function buildCategoryCTAs(
   categories: QCategory[],
   promptLinks: ReturnType<typeof parseLinksFromPrompt>,
   tenant: any,
-  bookingLinkFallback?: string | null
+  bookingLinkFallback?: string | null,
+  idiomaDestino: 'es'|'en' = 'es',          // 👈 nuevo
+  supportUrl?: string | undefined            // 👈 opcional por si quieres mostrar soporte cuando corresponda
 ): string[] {
+  const L = (es: string, en: string) => (idiomaDestino === 'en' ? en : es);
+
   const lines: string[] = [];
   for (const cat of categories) {
     const url = selectLinkByCategory(cat, promptLinks, tenant, bookingLinkFallback);
     if (!url) continue;
     const text =
-      cat === 'FREE_TRIAL' ? `Activa tu clase de cortesía aquí: ${url}` :
-      cat === 'PRICING'    ? `Planes y precios: ${url}` :
-      cat === 'RESERVE'    ? `Horarios y reservas: ${url}` :
-      cat === 'SUPPORT'    ? `Soporte técnico: ${url}` :
-      cat === 'MENU'       ? `Ver menú: ${url}` :
-      cat === 'ORDER'      ? `Hacer pedido: ${url}` :
-      /*CATALOG*/            `Ver catálogo: ${url}`;
-    lines.push(text);
+      cat === 'FREE_TRIAL' ? `${L('Activa tu clase de cortesía aquí', 'Activate your complimentary class here')}: ${url}` :
+      cat === 'PRICING'    ? `${L('Planes y precios', 'Plans & pricing')}: ${url}` :
+      cat === 'RESERVE'    ? `${L('Horarios y reservas', 'Schedule & bookings')}: ${url}` :
+      cat === 'SUPPORT'    ? (supportUrl ? `${L('Soporte técnico', 'Support')}: ${supportUrl}` : '') :
+      cat === 'MENU'       ? `${L('Ver menú', 'View menu')}: ${url}` :
+      cat === 'ORDER'      ? `${L('Hacer pedido', 'Place an order')}: ${url}` :
+                             `${L('Ver catálogo', 'View catalog')}: ${url}`;
+
+    if (text) lines.push(text);
   }
   return lines;
 }
@@ -582,6 +583,12 @@ try {
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
 
   const promptLinks = parseLinksFromPrompt(String(promptBase || ''));
+  // Enlace oficial de soporte (disponible para TODO el handler)
+  const supportUrl: string | undefined =
+    promptLinks.support
+    ?? getLinkFromTenant(tenant, ['support_url','whatsapp_url','wa_url','contact_url','soporte_url'])
+    ?? undefined;
+
   let respuesta = '';
   const canal = 'whatsapp';
 
@@ -590,9 +597,6 @@ try {
     promptLinks.schedule ||
     getLinkFromTenant(tenant, ['booking_url','reservas_url','reservar_url','agenda_url']) ||
     null;
-
-  // URL presente en el prompt (fallback si no hay link en settings/tenant)
-  const promptUrl = extractFirstUrl(promptBase);
 
   // 🚦 MODO SIMPLE HÍBRIDO (Prompt-First: conserva FAQs/Intenciones/Follow-up)
   const simpleMode = Boolean((tenant as any)?.simple_mode);
@@ -652,13 +656,14 @@ try {
             const linkForThisIntent = pickPromptLink({ intentLow, bucket: 'GEN', text: aggregatedInput, promptLinks, tenant });
             out = addBookingCTA({ out, intentLow, bookingLink: linkForThisIntent, userInput: aggregatedInput });
 
-            if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as any);
-            const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForThisIntent);
+            if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as QCategory);
+            const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForThisIntent, idiomaDestino, supportUrl);
             for (const line of ctas) {
               const urlPart = line.split(': ')[1] || '';
               if (urlPart && !out.includes(urlPart)) out += `\n\n${line}`;
             }
             out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+            out = sanitizeSupportLinks(out, supportUrl);
 
             try {
               const langOut = await detectarIdioma(out);
@@ -703,13 +708,14 @@ try {
             const linkForFaq = pickPromptLink({ intentLow, bucket: 'GEN', text: aggregatedInput, promptLinks, tenant });
             out = addBookingCTA({ out, intentLow, bookingLink: linkForFaq, userInput: aggregatedInput });
 
-            if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as any);
-            const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForFaq);
+            if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as QCategory);
+            const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForFaq, idiomaDestino, supportUrl);
             for (const line of ctas) {
               const urlPart = line.split(': ')[1] || '';
               if (urlPart && !out.includes(urlPart)) out += `\n\n${line}`;
             }
             out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+            out = sanitizeSupportLinks(out, supportUrl);
 
             try {
               const langOut = await detectarIdioma(out);
@@ -762,13 +768,14 @@ try {
       const linkForGen = pickPromptLink({ intentLow: intentLowOai, bucket: 'GEN', text: aggregatedInput, promptLinks, tenant });
       out = addBookingCTA({ out, intentLow: intentLowOai, bookingLink: linkForGen, userInput: aggregatedInput });
 
-      if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as any);
-      const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForGen);
+      if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as QCategory);
+      const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForGen, idiomaDestino, supportUrl);
       for (const line of ctas) {
         const urlPart = line.split(': ')[1] || '';
         if (urlPart && !out.includes(urlPart)) out += `\n\n${line}`;
       }
       out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+      out = sanitizeSupportLinks(out, supportUrl);
 
       try {
         const langOut = await detectarIdioma(out);
@@ -832,12 +839,6 @@ try {
       .trim();
   }
 
-  function extractFirstUrl(text?: string | null): string | null {
-    if (!text) return null;
-    const m = text.match(/\bhttps?:\/\/[^\s)]+/i);
-    return m ? m[0] : null;
-  }
-
   function addBookingCTA({
     out,
     intentLow,
@@ -888,6 +889,27 @@ function stripLinksForCategory(out: string, category: ReturnType<typeof classify
     // Limpia espacios dobles dejados por el replace
     out = out.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
   }
+  return out;
+}
+
+// === helpers de soporte: limpia/sustituye wa.me ===
+function sanitizeSupportLinks(text: string, supportUrl?: string) {
+  let out = text;
+
+  // Si NO hay link oficial de soporte: elimina cualquier wa.me y frase asociada
+  if (!supportUrl) {
+    out = out
+      .replace(/https?:\/\/wa\.me\/\d+/gi, '')
+      .replace(/(?:If you prefer, I can connect you with an advisor here:[^\n]+)\.?/gi, '')
+      .replace(/(?:Si prefieres, te conecto con un asesor aquí:[^\n]+)\.?/gi, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]{2,}/g, ' ')
+      .trim();
+  } else {
+    // Si SÍ hay link oficial: sustituye cualquier wa.me por el oficial
+    out = out.replace(/https?:\/\/wa\.me\/\d+/gi, supportUrl);
+  }
+
   return out;
 }
 
@@ -1115,10 +1137,10 @@ let resolvedMultiCat = false;
         // 🆕 Clasificar TODAS las categorías que aparecen en el mensaje
         const cats = classifyAllCategories(aggregatedInput, intentLow);
         // 🆕 Si incluye FREE_TRIAL, elimina wa.me u otros de soporte (no aplica en tu ejemplo, pero queda robusto)
-        if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as any);
+        if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as QCategory);
 
         // 🆕 Construir CTAs para cada categoría y agregarlas si faltan
-        const ctas = buildCategoryCTAs(cats, promptLinks, tenant, bookingLink);
+        const ctas = buildCategoryCTAs(cats, promptLinks, tenant, bookingLink, idiomaDestino, supportUrl);
         for (const line of ctas) {
           const urlPart = line.split(': ')[1] || ''; // lo que va después de "Planes y precios: "
           if (urlPart && !out.includes(urlPart)) {
@@ -1130,6 +1152,7 @@ let resolvedMultiCat = false;
 
         // ✅ Aplica wording de cortesía UNA sola vez, al final (coherente con FAQ/OpenAI)
         out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+        out = sanitizeSupportLinks(out, supportUrl);
 
         console.log('💬 INTENCION reply (multi-cat):', { intentLow, cats, out });
 
@@ -1206,7 +1229,7 @@ let resolvedMultiCat = false;
   
   // En FREE_TRIAL limpiamos wa.me si el LLM lo metió
   if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as QCategory);
-  const ctas = buildCategoryCTAs(cats, promptLinks, tenant, bookingLink);
+  const ctas = buildCategoryCTAs(cats, promptLinks, tenant, bookingLink, idiomaDestino, supportUrl);
   for (const line of ctas) {
     if (!out.includes(line.split(': ')[1])) {
       out += `\n\n${line}`;
@@ -1278,6 +1301,7 @@ function chooseSafeClassesLink(
 
   // 🟢 Wording de cortesía (aplicar UNA vez, al final, antes de traducir)
   out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+  out = sanitizeSupportLinks(out, supportUrl);
 
    try {
      const langOut = await detectarIdioma(out);
@@ -1405,19 +1429,8 @@ if (!respuestaDesdeFaq) {
     ],
   });
 
-  let respuesta = completion.choices[0]?.message?.content?.trim()
-    || 'Puedo ayudarte con la información disponible. Si necesitas confirmar algo específico, te comparto el enlace correspondiente.';
-
-  // Ajuste de idioma si hiciera falta
-  try {
-    const idiomaRespuesta = await detectarIdioma(respuesta);
-    if (idiomaRespuesta && idiomaRespuesta !== 'zxx' && idiomaRespuesta !== idiomaDestino) {
-      respuesta = await traducirMensaje(respuesta, idiomaDestino);
-    }
-  } catch {}
-
-  // (Opcional) CTA según tenant
   const intentLowOai = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+
   const linkForGen = pickPromptLink({
     intentLow: intentLowOai,
     bucket: 'GEN',
@@ -1425,31 +1438,49 @@ if (!respuestaDesdeFaq) {
     promptLinks,
     tenant
   });
-  respuesta = addBookingCTA({
-    out: respuesta,
-    intentLow: intentLowOai,
-    bookingLink: linkForGen || bookingLink, // si no encontró, usa tu fallback
-    userInput: aggregatedInput
-  });
 
-  // 🟢 Lenguaje “de cortesía / complimentary” si el cliente lo pidió
-  respuesta = applyCortesiaWording(respuesta, aggregatedInput, idiomaDestino);
+  let respuestaText = completion.choices[0]?.message?.content?.trim()
+  || 'Puedo ayudarte con la información disponible. Si necesitas confirmar algo específico, te comparto el enlace correspondiente.';
 
-  // 🔎 Categoriza por lo que pidió el cliente
-  const category = classifyQuestion(aggregatedInput, intentLowOai);
-
-  // 🚫 Si es FREE_TRIAL, elimina wa.me u otros enlaces de soporte
-  respuesta = stripLinksForCategory(respuesta, category);
-
-  // 🔗 Seleccionar link por lo que el cliente preguntó (sin “preferidos”)
-  const cats = classifyAllCategories(aggregatedInput, intentLowOai);
-  if (cats.includes('FREE_TRIAL')) respuesta = stripLinksForCategory(respuesta, 'FREE_TRIAL' as QCategory);
-  const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForGen || bookingLink);
-  for (const line of ctas) {
-    if (!respuesta.includes(line.split(': ')[1])) {
-      respuesta += `\n\n${line}`;
-    }
+// Ajuste de idioma si hiciera falta
+try {
+  const idiomaRespuesta = await detectarIdioma(respuestaText);
+  if (idiomaRespuesta && idiomaRespuesta !== 'zxx' && idiomaRespuesta !== idiomaDestino) {
+    respuestaText = await traducirMensaje(respuestaText, idiomaDestino);
   }
+} catch {}
+
+// (Opcional) CTA según tenant
+respuestaText = addBookingCTA({
+  out: respuestaText,
+  intentLow: intentLowOai,
+  bookingLink: linkForGen || bookingLink,
+  userInput: aggregatedInput
+});
+
+// 🟢 Lenguaje “de cortesía / complimentary”
+respuestaText = applyCortesiaWording(respuestaText, aggregatedInput, idiomaDestino);
+
+// 🔎 Categoriza...
+const category = classifyQuestion(aggregatedInput, intentLowOai);
+
+// 🚫 Si es FREE_TRIAL ...
+respuestaText = stripLinksForCategory(respuestaText, category);
+
+// 🔗 Seleccionar link ...
+const cats = classifyAllCategories(aggregatedInput, intentLowOai);
+if (cats.includes('FREE_TRIAL')) respuestaText = stripLinksForCategory(respuestaText, 'FREE_TRIAL' as QCategory);
+respuestaText = sanitizeSupportLinks(respuestaText, supportUrl); 
+const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForGen || bookingLink, idiomaDestino, supportUrl);
+for (const line of ctas) {
+  if (!respuestaText.includes(line.split(': ')[1])) {
+    respuestaText += `\n\n${line}`;
+  }
+}
+
+// 👉 Asigna al `respuesta` externo ANTES de persistir/enviar
+respuesta = respuestaText;
+
 
   console.log('🔎 Multi-cat WA[OpenAI]', { cats, ctas });
 
