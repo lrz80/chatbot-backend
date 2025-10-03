@@ -680,64 +680,9 @@ try {
       const cats = classifyAllCategories(aggregatedInput, intentLow);
       const hitsStrong = (intentLow && INTENT_UNIQUE.has(intentLow)) || cats.includes('PRICING') || cats.includes('RESERVE');
 
-      // 2) INTENCIONES → (si hay) responder
+      // 2) PRIORIDAD: FAQ por intención → luego Intenciones
       if (hitsStrong) {
-        try {
-          const { rows } = await pool.query(
-            `SELECT respuesta
-              FROM intenciones
-              WHERE tenant_id = $1 AND canal = $2 AND LOWER(nombre) = LOWER($3)
-                AND (activo IS TRUE OR activo IS NULL)
-              ORDER BY prioridad DESC NULLS LAST, updated_at DESC NULLS LAST
-              LIMIT 1`,
-            [tenant.id, 'whatsapp', INTENCION_FINAL_CANONICA]
-          );
-          if (rows[0]?.respuesta) {
-            let out = String(rows[0].respuesta || '');
-
-            const linkForThisIntent = pickPromptLink({ intentLow, bucket: 'GEN', text: aggregatedInput, promptLinks, tenant });
-            out = addBookingCTA({ out, intentLow, bookingLink: linkForThisIntent, userInput: aggregatedInput });
-
-            if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as QCategory);
-            const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForThisIntent, idiomaDestino, supportUrl);
-            for (const line of ctas) {
-              const urlPart = line.split(': ')[1] || '';
-              if (urlPart && !out.includes(urlPart)) out += `\n\n${line}`;
-            }
-            out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
-            out = sanitizeSupportLinks(out, supportUrl);
-
-            try {
-              const langOut = await detectarIdioma(out);
-              if (langOut && langOut !== 'zxx' && normLangBase(langOut) !== idiomaDestino) {
-                out = await traducirMensaje(out, idiomaDestino);
-              }
-            } catch {}
-
-            await enviarWhatsApp(fromNumber, out, tenant.id);
-            await pool.query(
-              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-              [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-            );
-            await pool.query(
-              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-              VALUES ($1, $2, $3, NOW())
-              ON CONFLICT DO NOTHING`,
-              [tenant.id, 'whatsapp', messageId]
-            );
-
-            // follow-up conservado
-            try {
-              const det2 = await detectarIntencion(aggregatedInput, tenant.id, 'whatsapp');
-              const nivel2 = det2?.nivel_interes ?? 1;
-              await scheduleFollowUp(INTENCION_FINAL_CANONICA, nivel2);
-            } catch {}
-            return;
-          }
-        } catch {}
-        // 2.b) FAQ por intención
+        // 2.a) FAQ por intención primero
         try {
           const { rows } = await pool.query(
             `SELECT respuesta FROM faqs
@@ -747,15 +692,19 @@ try {
           );
           if (rows[0]?.respuesta) {
             let out = String(rows[0].respuesta || '');
+
             const linkForFaq = pickPromptLink({ intentLow, bucket: 'GEN', text: aggregatedInput, promptLinks, tenant });
             out = addBookingCTA({ out, intentLow, bookingLink: linkForFaq, userInput: aggregatedInput });
 
+            const cats = classifyAllCategories(aggregatedInput, intentLow);
             if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as QCategory);
+
             const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForFaq, idiomaDestino, supportUrl);
             for (const line of ctas) {
               const urlPart = line.split(': ')[1] || '';
               if (urlPart && !out.includes(urlPart)) out += `\n\n${line}`;
             }
+
             out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
             out = sanitizeSupportLinks(out, supportUrl);
 
@@ -784,6 +733,65 @@ try {
               const det2 = await detectarIntencion(aggregatedInput, tenant.id, 'whatsapp');
               const nivel2 = det2?.nivel_interes ?? 1;
               await scheduleFollowUp(INTENCION_FINAL_CANONICA || 'faq', nivel2);
+            } catch {}
+            return;
+          }
+        } catch {}
+
+        // 2.b) Si no hubo FAQ: Intenciones (tabla)
+        try {
+          const { rows } = await pool.query(
+            `SELECT respuesta
+              FROM intenciones
+              WHERE tenant_id = $1 AND canal = $2 AND LOWER(nombre) = LOWER($3)
+                AND (activo IS TRUE OR activo IS NULL)
+              ORDER BY prioridad DESC NULLS LAST, updated_at DESC NULLS LAST
+              LIMIT 1`,
+            [tenant.id, 'whatsapp', INTENCION_FINAL_CANONICA]
+          );
+          if (rows[0]?.respuesta) {
+            let out = String(rows[0].respuesta || '');
+
+            const linkForThisIntent = pickPromptLink({ intentLow, bucket: 'GEN', text: aggregatedInput, promptLinks, tenant });
+            out = addBookingCTA({ out, intentLow, bookingLink: linkForThisIntent, userInput: aggregatedInput });
+
+            const cats = classifyAllCategories(aggregatedInput, intentLow);
+            if (cats.includes('FREE_TRIAL')) out = stripLinksForCategory(out, 'FREE_TRIAL' as QCategory);
+
+            const ctas = buildCategoryCTAs(cats, promptLinks, tenant, linkForThisIntent, idiomaDestino, supportUrl);
+            for (const line of ctas) {
+              const urlPart = line.split(': ')[1] || '';
+              if (urlPart && !out.includes(urlPart)) out += `\n\n${line}`;
+            }
+
+            out = applyCortesiaWording(out, aggregatedInput, idiomaDestino);
+            out = sanitizeSupportLinks(out, supportUrl);
+
+            try {
+              const langOut = await detectarIdioma(out);
+              if (langOut && langOut !== 'zxx' && normLangBase(langOut) !== idiomaDestino) {
+                out = await traducirMensaje(out, idiomaDestino);
+              }
+            } catch {}
+
+            await enviarWhatsApp(fromNumber, out, tenant.id);
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+            );
+            await pool.query(
+              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+              VALUES ($1, $2, $3, NOW())
+              ON CONFLICT DO NOTHING`,
+              [tenant.id, 'whatsapp', messageId]
+            );
+
+            try {
+              const det2 = await detectarIntencion(aggregatedInput, tenant.id, 'whatsapp');
+              const nivel2 = det2?.nivel_interes ?? 1;
+              await scheduleFollowUp(INTENCION_FINAL_CANONICA, nivel2);
             } catch {}
             return;
           }
