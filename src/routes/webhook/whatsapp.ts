@@ -159,26 +159,6 @@ try {
   let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idioma);
   const canal = 'whatsapp';
 
-  function getLink(keys: string[]): string | null {
-  for (const key of keys) {
-    if (tenant && typeof tenant[key] === 'string' && tenant[key]) return tenant[key];
-  }
-  const pools = ['links','meta','config','settings','extras'];
-  for (const p of pools) {
-    try {
-      const raw = tenant?.[p];
-      const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      if (obj && typeof obj === 'object') {
-        for (const key of keys) {
-          if (typeof obj[key] === 'string' && obj[key]) return obj[key];
-        }
-      }
-    } catch {}
-  }
-  return null;
-}
-
-// 👇 PÉGALO AQUÍ (debajo de getLink)
 function stripLeadGreetings(t: string) {
   return t
     .replace(/^\s*(hola+[\s!.,]*)?/i, '')
@@ -531,22 +511,11 @@ function stripLeadGreetings(t: string) {
             fechaRef = fechaRef.charAt(0).toUpperCase() + fechaRef.slice(1);
           }
 
-          const bookingLink = getLink([
-            'booking_url','reserva_url','link_reserva','schedule_url','glofox_booking','booking'
-          ]);
-          const firstClassLink = getLink([
-            'free_class_url','primera_clase_url','link_primera_clase','first_class','glofox_free'
-          ]);
-
-          // —— envuelve la FAQ con contexto cuando hay especificidad
           if (ents.hasSpecificity) {
             const prefijo = fechaRef
               ? `¡Claro que sí! Para *${fechaRef}*:\n`
               : `¡Claro que sí! Te paso la info específica:\n`;
-            let sufijo = '';
-            if (bookingLink)    sufijo += `\n\nReserva aquí: ${bookingLink}`;
-            if (firstClassLink) sufijo += `\n\n¿Primera vez? *Primera clase gratis* aquí: ${firstClassLink}`;
-            out = `${prefijo}${out}${sufijo}\n\nSi necesitas algo más, dime.`;
+            out = `${prefijo}${out}\n\nSi necesitas algo más, dime.`;
           }
 
           // — asegúrate del idioma del cliente
@@ -676,9 +645,6 @@ try {
 }
 
 // Enlaces (multitenant via tenant.* y pools JSON)
-const bookingLink    = getLink(['booking_url','reserva_url','link_reserva','booking','schedule_url','glofox_booking']);
-const firstClassLink = getLink(['free_class_url','primera_clase_url','link_primera_clase','first_class','glofox_free']);
-
 let out: string;
 if (necesitaAclarar) {
   out = `¡Genial! ¿Te refieres ${fechaLabel}? Puedo ayudarte a reservar tu bici.`;
@@ -689,8 +655,6 @@ if (necesitaAclarar) {
   out = `¡Claro! Ofrecemos clases de indoor cycling y puedo ayudarte a reservar tu lugar.`;
 }
 
-if (bookingLink)    out += `\n\nReserva aquí: ${bookingLink}`;
-if (firstClassLink) out += `\n\n¿Es tu primera vez? *Activa tu primera clase gratis* aquí: ${firstClassLink}`;
 out += `\n\nSi necesitas algo más, dime y te ayudo.`;
 
 // Asegura idioma del cliente
@@ -881,40 +845,28 @@ if (interceptado) {
     }
   }
 
-  // 🔄 Si NO hay FAQ "reservar" pero la intención final es reservar → usa OpenAI con promptBase
+  // 🔄 Si NO hay FAQ "reservar" pero la intención final es reservar → usa OpenAI con promptBase (sin links)
   if (!respuestaDesdeFaq && INTENCION_FINAL_CANONICA === 'reservar') {
-    const bookingLink = getLink(['booking_url','reserva_url','link_reserva','schedule_url','glofox_booking','booking']);
-    const firstClassLink = getLink(['free_class_url','primera_clase_url','link_primera_clase','first_class','glofox_free']);
-
-    // Construimos un “mini contexto” para el LLM (en el idioma del cliente).
-    const contextoCTA = [
-      bookingLink ? `Reserva: ${bookingLink}` : null,
-      firstClassLink ? `Primera clase gratis: ${firstClassLink}` : null,
-    ].filter(Boolean).join(' | ') || 'Reserva: (sin link configurado)';
-
-    // Damos pista de fecha/hora si las detectamos (no consultamos DB)
     const ents = extractEntitiesLite(userInput);
     const cuando = [ents.dateLike, ents.dayLike, ents.timeLike].filter(Boolean).join(' ');
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
-    // Usamos tu promptBase pero con una instrucción adicional para CTA de reserva
+    // Mantén tu prompt base, pero sin CTAs con links
     const systemPrompt = [
       promptBase,
       '',
       'Si la intención del usuario es RESERVAR:',
       '- Responde breve y directa, con tono amable.',
-      '- Incluye un llamado a la acción claro con el enlace de reserva si existe.',
-      '- Si hay "primera clase gratis", menciónala al final con su enlace si existe.',
       '- Si el usuario dio fecha/hora, refléjala en la respuesta sin inventar disponibilidad.',
-      '- No inventes horarios ni cupos; invita a reservar con el enlace.',
+      '- No inventes horarios ni cupos.',
+      '- Ofrece guía paso a paso si el usuario la pide.',
     ].join('\n');
 
     const userPrompt = [
       `MENSAJE_USUARIO: ${userInput}`,
       `INTENCION_FINAL: ${INTENCION_FINAL_CANONICA}`,
       `CUANDO_DETECTADO: ${cuando || 'no especificado'}`,
-      `ENLACES: ${contextoCTA}`,
       `IDIOMA_SALIDA: ${idiomaDestino}`,
     ].join('\n');
 
@@ -928,18 +880,15 @@ if (interceptado) {
         ],
         temperature: 0.4,
       });
-
       out = completion.choices[0]?.message?.content?.trim() || '';
     } catch (e) {
       console.warn('⚠️ Fallback OpenAI reservar falló, usaré mensaje fijo:', e);
     }
 
-    // Fallback ultra simple si LLM no devolvió nada
+    // Fallback ultra simple si LLM no devolvió nada (sin links)
     if (!out) {
       out = `¡Excelente! Te ayudo a reservar${cuando ? ` para ${cuando}` : ''}.` +
-          (bookingLink ? `\n\nReserva aquí: ${bookingLink}` : '') +
-          (firstClassLink ? `\n\n¿Es tu primera vez? *Primera clase gratis* aquí: ${firstClassLink}` : '') +
-          `\n\n¿Quieres que te guíe con el proceso?`;
+            `\n\n¿Quieres que te guíe con el proceso?`;
     }
 
     // Garantiza idioma del cliente
@@ -966,14 +915,13 @@ if (interceptado) {
       [tenant.id, canal, messageId]
     );
 
-    // (opcional) follow-up en base a reservar
     try {
       const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
       const nivel = det?.nivel_interes ?? 1;
       await scheduleFollowUp('reservar', nivel);
     } catch {}
 
-    return; // ✅ ya respondimos por vía LLM cuando no hay FAQ "reservar"
+    return; // ✅ ya respondimos
   }
 
   if (respuestaDesdeFaq) {
