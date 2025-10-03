@@ -405,49 +405,95 @@ try {
   }
 
   if (respIntent?.respuesta) {
-    // Asegura que la salida esté en el idioma del cliente
-    let out = respIntent.respuesta;
+  let facts = respIntent.respuesta;
+
+  // (Opcional) añade un breve resumen si el user pidió “info + precios”
+  const askedInfo = /\b(info(?:rmación)?|clases?|servicios?)\b/i.test(userInput);
+  const askedPrice = PRICE_REGEX.test(userInput);
+  if (askedInfo && askedPrice) {
     try {
-      const langOut = await detectarIdioma(out);
-      if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-        out = await traducirMensaje(out, idiomaDestino);
-      }
+      const { rows } = await pool.query(
+        `SELECT respuesta FROM faqs
+         WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) IN ('interes_clases','info_general','servicios')
+         ORDER BY 1 LIMIT 1`,
+        [tenant.id, canal]
+      );
+      const extra = rows[0]?.respuesta?.trim();
+      if (extra) facts = `${extra}\n\n${facts}`;
     } catch {}
-
-    // envia y registra assistant (usa un id distinto para no chocar)
-    await enviarWhatsApp(fromNumber, out, tenant.id);
-
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-    );
-
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-
-    console.log(`✅ Respondido por INTENCIÓN: "${respIntent.intent}" score=${respIntent.score}`);
-
-    try {
-      let intFinal = (respIntent.intent || '').toLowerCase().trim();
-      if (intFinal === 'duda') intFinal = buildDudaSlug(userInput);
-      intFinal = normalizeIntentAlias(intFinal);
-    
-      const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-      const nivel = det?.nivel_interes ?? 1;
-    
-      await scheduleFollowUp(intFinal, nivel);
-    } catch (e) {
-      console.warn('⚠️ No se pudo programar follow-up post-intent (WA):', e);
-    }
-    
-    return; // ¡Importante! Ya respondimos, salimos aquí.
   }
+
+  // 🔸 Siempre pasa por LLM con tu promptBase para “salir del prompt”
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+  const systemPrompt = [
+    promptBase,
+    '',
+    'Tienes HECHOS verificables del negocio. Responde corto, cálido y claro.',
+    'No inventes datos fuera de HECHOS. Si hay links, inclúyelos una vez.',
+  ].join('\n');
+
+  const userPrompt = [
+    `MENSAJE_USUARIO:\n${userInput}`,
+    '',
+    `HECHOS (usa sólo esto como fuente):\n${facts}`,
+    '',
+    `IDIOMA_SALIDA: ${idiomaDestino}`
+  ].join('\n');
+
+  let out = facts; // fallback mínimo si el LLM falla
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      temperature: 0.4,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    });
+    out = completion.choices[0]?.message?.content?.trim() || out;
+  } catch (e) {
+    console.warn('LLM compose falló; uso facts crudos:', e);
+  }
+
+  // Asegura idioma
+  try {
+    const langOut = await detectarIdioma(out);
+    if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+      out = await traducirMensaje(out, idiomaDestino);
+    }
+  } catch {}
+
+  await enviarWhatsApp(fromNumber, out, tenant.id);
+
+  await pool.query(
+    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+     VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+     ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+    [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+  );
+
+  await pool.query(
+    `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT DO NOTHING`,
+    [tenant.id, canal, messageId]
+  );
+
+  // follow-up igual que antes
+  try {
+    let intFinal = (respIntent.intent || '').toLowerCase().trim();
+    if (intFinal === 'duda') intFinal = buildDudaSlug(userInput);
+    intFinal = normalizeIntentAlias(intFinal);
+    const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+    const nivel = det?.nivel_interes ?? 1;
+    await scheduleFollowUp(intFinal, nivel);
+  } catch (e) {
+    console.warn('⚠️ No se pudo programar follow-up post-intent (WA):', e);
+  }
+
+  return; // <- ahora sí sales, pero después de “pasar por el prompt”
+}
+
 } catch (e) {
   console.warn('⚠️ Matcher de intenciones no coincidió o falló:', e);
 }
