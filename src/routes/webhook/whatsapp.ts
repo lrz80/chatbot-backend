@@ -554,72 +554,94 @@ if (interceptado) {
   }
 
   if (respuestaDesdeFaq) {
-    // Traducir si hace falta
-    let out = respuestaDesdeFaq;
-    const idiomaRespuesta = await detectarIdioma(out);
-    if (idiomaRespuesta && idiomaRespuesta !== 'zxx' && idiomaRespuesta !== idiomaDestino) {
+  // 1) Construye los HECHOS desde la FAQ oficial
+  let facts = respuestaDesdeFaq;
+
+  // 2) Pásalo por OpenAI con tu promptBase (igual que en la rama de intents)
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+  const systemPrompt = [
+    promptBase,
+    '',
+    `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
+    'Formato WhatsApp: máx. 6 líneas, claro y con bullets si hace falta.',
+    'Usa únicamente los HECHOS; no inventes.',
+    'Si hay ENLACES_OFICIALES en los hechos, comparte solo 1 (el más pertinente) tal cual.'
+  ].join('\n');
+
+  const userPrompt = [
+    `MENSAJE_USUARIO:\n${userInput}`,
+    '',
+    `HECHOS (fuente autorizada):\n${facts}`
+  ].join('\n');
+
+  let out = facts; // fallback si el LLM falla
+  let tokens = 0;
+  try {
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      temperature: 0.3,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt }
+      ],
+    });
+    out = completion.choices[0]?.message?.content?.trim() || out;
+    tokens = completion.usage?.total_tokens || 0;
+  } catch (e) {
+    console.warn('LLM compose (FAQ) falló; envío facts crudos:', e);
+  }
+
+  // 3) Asegura idioma de salida
+  try {
+    const langOut = await detectarIdioma(out);
+    if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
       out = await traducirMensaje(out, idiomaDestino);
     }
-    respuesta = out;
+  } catch {}
 
-    console.log(`✅ Respuesta tomada desde FAQ oficial por intención: "${intencionParaFaq}"`);
-    console.log("📚 FAQ utilizada:", respuestaDesdeFaq);
+  // 4) Enviar y registrar (igual que siempre)
+  await enviarWhatsApp(fromNumber, out, tenant.id);
 
-    await enviarWhatsApp(fromNumber, respuesta, tenant.id);
-    console.log("📬 Respuesta enviada vía Twilio (desde FAQ oficial):", respuesta);
+  await pool.query(
+    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+     VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+     ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+    [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+  );
+  await pool.query(
+    `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT DO NOTHING`,
+    [tenant.id, canal, messageId]
+  );
 
+  if (tokens > 0) {
     await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, respuesta, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+      `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+       VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+       ON CONFLICT (tenant_id, canal, mes)
+       DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+      [tenant.id, tokens]
     );
-
-    // Inteligencia + follow-up (único, configurable)
-    try {
-      // Solo usamos el detector para el nivel; la intención ya está canónica
-      const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-      const nivelFaq = det?.nivel_interes ?? 1;
-      const intFinal = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-
-      const intencionesCliente = [
-        "comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"
-      ];
-      if (intencionesCliente.some(p => intFinal.includes(p))) {
-        await pool.query(
-          `UPDATE clientes
-            SET segmento = 'cliente'
-          WHERE tenant_id = $1 AND contacto = $2
-            AND (segmento = 'lead' OR segmento IS NULL)`,
-          [tenant.id, fromNumber]
-        );
-      }
-
-      await pool.query(
-        `INSERT INTO sales_intelligence
-          (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
-        [tenant.id, fromNumber, canal, userInput, intFinal, nivelFaq, messageId]
-      );
-
-      const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
-      if (nivelFaq >= 3 || intencionesFollowUp.includes(intFinal)) {
-        await scheduleFollowUp(intFinal, nivelFaq);
-      }      
-    } catch (e) {
-      console.warn('⚠️ No se pudo registrar/schedule tras FAQ oficial:', e);
-    }
-
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-    
-    return; // salir aquí si hubo FAQ directa
   }
+
+  // ⚙️ Mantén tu bloque de inteligencia/follow-up tal cual, luego RETURN
+  try {
+    const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+    const nivelFaq = det?.nivel_interes ?? 1;
+    const intFinal = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+
+    const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
+    if (nivelFaq >= 3 || intencionesFollowUp.includes(intFinal)) {
+      await scheduleFollowUp(intFinal, nivelFaq);
+    }
+  } catch (e) {
+    console.warn('⚠️ No se pudo programar follow-up tras FAQ (WA):', e);
+  }
+
+  return; // 🔚 importante para no caer a los bloques de abajo
+}
 
 // Si NO hubo FAQ directa → similaridad
 {
