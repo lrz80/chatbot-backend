@@ -282,6 +282,75 @@ function stripLeadGreetings(t: string) {
     }
   };
 
+  // ===== EARLY RETURN: responder SOLO con promptBase (sin helpers/faq) =====
+  try {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+    const systemPrompt = [
+      promptBase,
+      '',
+      `Reglas:
+      - Usa EXCLUSIVAMENTE la información explícita en este prompt. Si algo no está, dilo sin inventar.
+      - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
+      - Formato WhatsApp: máx. ~6 líneas; usa viñetas si ayuda.
+      - Si el usuario pregunta varias cosas, respóndelas TODAS en un solo mensaje.
+      - Si mencionas precios, horarios, reservas o políticas, incluye como mucho 1 enlace de ENLACES_OFICIALES del prompt (texto plano).
+      - No uses enlaces fuera de ENLACES_OFICIALES.`
+    ].join('\n');
+
+    const userPrompt = `MENSAJE_USUARIO:\n${userInput}\n\nResponde usando solo los datos del prompt.`;
+
+    let out: string;
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPrompt }
+      ],
+    });
+    out = completion.choices[0]?.message?.content?.trim()
+      || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+
+    // Asegura idioma por si acaso
+    try {
+      const langOut = await detectarIdioma(out);
+      if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+        out = await traducirMensaje(out, idiomaDestino);
+      }
+    } catch {}
+
+    await enviarWhatsApp(fromNumber, out, tenant.id);
+
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+    );
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT DO NOTHING`,
+      [tenant.id, canal, messageId]
+    );
+
+    // (Opcional) conserva tus métricas/follow-up sin afectar el contenido
+    try {
+      const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+      const nivel = det?.nivel_interes ?? 1;
+      const intFinal = (det?.intencion || '').toLowerCase();
+      if (nivel >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
+        await scheduleFollowUp(intFinal, nivel);
+      }
+    } catch {}
+
+    return; // <-- IMPORTANTE: sal del handler para no ejecutar el pipeline viejo
+  } catch (e) {
+    console.warn('❌ LLM compose falló; continúa pipeline legacy:', e);
+  }
+  // ===== FIN EARLY RETURN =======================================================
+
   // después de calcular idiomaDestino...
   let INTENCION_FINAL_CANONICA = '';
 
