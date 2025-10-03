@@ -294,8 +294,7 @@ function stripLeadGreetings(t: string) {
       - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
       - Formato WhatsApp: máx. ~6 líneas; usa viñetas si ayuda.
       - Si el usuario pregunta varias cosas, respóndelas TODAS en un solo mensaje.
-      - Si mencionas precios, horarios, reservas o políticas, incluye como mucho 1 enlace de ENLACES_OFICIALES del prompt (texto plano).
-      - No uses enlaces fuera de ENLACES_OFICIALES.`
+      - Si mencionas precios, horarios, reservas o políticas, incluye como mucho 1 enlace del prompt (texto plano).`
     ].join('\n');
 
     const userPrompt = `MENSAJE_USUARIO:\n${userInput}\n\nResponde usando solo los datos del prompt.`;
