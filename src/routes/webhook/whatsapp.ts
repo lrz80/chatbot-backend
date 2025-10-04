@@ -305,13 +305,25 @@ function stripLeadGreetings(t: string) {
 
     let out: string;
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       temperature: 0.2,
+      max_tokens: 400,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user',   content: userPrompt }
       ],
     });
+    // registrar tokens
+    const used = completion.usage?.total_tokens || 0;
+    if (used > 0) {
+      await pool.query(
+        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+        VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+        ON CONFLICT (tenant_id, canal, mes)
+        DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+        [tenant.id, used]
+      );
+    }
     out = completion.choices[0]?.message?.content?.trim()
       || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
 
@@ -515,13 +527,25 @@ try {
   let out = facts; // fallback mínimo si el LLM falla
   try {
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      temperature: 0.4,
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      temperature: 0.2,
+      max_tokens: 400,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
     });
+    // registrar tokens
+    const used = completion.usage?.total_tokens || 0;
+    if (used > 0) {
+      await pool.query(
+        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+        VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+        ON CONFLICT (tenant_id, canal, mes)
+        DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+        [tenant.id, used]
+      );
+    }
     out = completion.choices[0]?.message?.content?.trim() || out;
   } catch (e) {
     console.warn('LLM compose falló; uso facts crudos:', e);
@@ -651,13 +675,25 @@ if (interceptado) {
   let tokens = 0;
   try {
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
-      temperature: 0.3,
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      temperature: 0.2,
+      max_tokens: 400,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user',   content: userPrompt }
       ],
     });
+    // registrar tokens
+    const used = completion.usage?.total_tokens || 0;
+    if (used > 0) {
+      await pool.query(
+        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+        VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+        ON CONFLICT (tenant_id, canal, mes)
+        DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+        [tenant.id, used]
+      );
+    }
     out = completion.choices[0]?.message?.content?.trim() || out;
     tokens = completion.usage?.total_tokens || 0;
   } catch (e) {
@@ -746,13 +782,26 @@ if (!respuestaDesdeFaq && !respuesta) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
   const completion = await openai.chat.completions.create({
-    model: "gpt-3.5-turbo",
+    model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+    temperature: 0.2,
+    max_tokens: 400,
     messages: [
       { role: 'system', content: promptBase },
       { role: 'user', content: userInput },
     ],
   });
 
+  // registrar tokens
+  const used = completion.usage?.total_tokens || 0;
+  if (used > 0) {
+    await pool.query(
+      `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+      VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+      ON CONFLICT (tenant_id, canal, mes)
+      DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+      [tenant.id, used]
+    );
+  }
   respuesta = completion.choices[0]?.message?.content?.trim()
           || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
 
