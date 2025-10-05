@@ -287,19 +287,19 @@ function stripLeadGreetings(t: string) {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
     const systemPrompt = [
-      promptBase,
-      '',
-      `Reglas:
-      - Usa EXCLUSIVAMENTE la información explícita en este prompt. Si algo no está, dilo sin inventar.
-      - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
-      - WhatsApp: máx. ~6 líneas; usa viñetas si ayuda.
-      - Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.
-      - CTA único (si aplica). Enlaces: solo si están listados dentro del prompt (ENLACES_OFICIALES).`,
-      '',
-      `MODO VENDEDOR (alto desempeño):
-      - Entender → proponer → cerrar con CTA. No inventes beneficios ni precios.
-      - Si piden algo que NO existe, dilo y redirige al plan más cercano SIEMPRE basado en los datos del prompt.`
-    ].join('\n');
+    promptBase,
+    '',
+    `Reglas:
+    - Usa EXCLUSIVAMENTE la información explícita en este prompt. Si algo no está, dilo sin inventar.
+    - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
+    - WhatsApp: máx. ~6 líneas en PROSA. **Prohibido Markdown, encabezados, viñetas o numeraciones.**
+    - Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.
+    - CTA único (si aplica). Enlaces: solo si están listados dentro del prompt (ENLACES_OFICIALES).`,
+    '',
+    `MODO VENDEDOR (alto desempeño):
+    - Entender → proponer → cerrar con CTA. No inventes beneficios ni precios.
+    - Si piden algo que NO existe, dilo y redirige al plan más cercano SIEMPRE basado en los datos del prompt.`
+  ].join('\n');
 
     const userPrompt = `MENSAJE_USUARIO:\n${userInput}\n\nResponde usando solo los datos del prompt.`;
 
@@ -510,11 +510,13 @@ try {
   // 🔸 Siempre pasa por LLM con tu promptBase para “salir del prompt”
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
   const systemPrompt = [
-    promptBase,
-    '',
-    'Tienes HECHOS verificables del negocio. Responde corto, cálido y claro.',
-    'No inventes datos fuera de HECHOS. Si hay links, inclúyelos una vez.',
-  ].join('\n');
+  promptBase,
+  '',
+  `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
+  'Formato WhatsApp: máx. 6 líneas en PROSA. **Sin Markdown, sin viñetas, sin encabezados/###**.',
+  'Usa únicamente los HECHOS; no inventes.',
+  'Si hay ENLACES_OFICIALES en los hechos, comparte solo 1 (el más pertinente) tal cual.'
+].join('\n');
 
   const userPrompt = [
     `MENSAJE_USUARIO:\n${userInput}`,
