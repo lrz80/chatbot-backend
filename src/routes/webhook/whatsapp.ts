@@ -253,14 +253,10 @@ function stripLeadGreetings(t: string) {
           [tenant.id, canal, messageId]
         );
 
-        // follow-up opcional (reusa tu lógica actual)
-        try {
-          const det = await detectarIntencion(userInput, tenant.id, canal);
-          const nivel = det?.nivel_interes ?? 1;
-          await scheduleFollowUp((det?.intencion || '').toLowerCase(), nivel);
-        } catch {}
+        // follow-up directo para multi-intención
+        await scheduleFollowUp('interes_clases', 3);
 
-        return; // ⬅️ muy importante: corta el pipeline aquí
+        return; // ⬅️ antes de salir del fast-path
       }
     }
   } catch (e) {

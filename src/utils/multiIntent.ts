@@ -95,10 +95,22 @@ export async function answerMultiIntent({
 }: {
   tenantId: string; canal: Canal; userText: string; idiomaDestino: 'es'|'en';
 }) {
-  // 1) detectar top intents
-  const intents = await detectTopIntents(userText, tenantId, canal, 3);
+  // 1) Detecta top intents
+  const rawIntents = await detectTopIntents(userText, tenantId, canal, 3);
 
-  // 2) traer FAQs por intención
+  // 2) Re-ordena por prioridad de negocio
+  const prio = (i:string) => {
+    const x = i.toLowerCase();
+    if (x === 'interes_clases') return 1;
+    if (x === 'precio')        return 2;
+    if (x === 'horario')       return 3;
+    if (x === 'ubicacion')     return 4;
+    return 9;
+  };
+  const intents = [...rawIntents]
+    .sort((a,b) => prio(a.intent) - prio(b.intent));
+
+  // 3) Trae “hechos” por intención
   const chunksByIntent: Record<string,string> = {};
   for (const it of intents) {
     const ans = await fetchAnswer(tenantId, canal, it.intent);
@@ -106,83 +118,69 @@ export async function answerMultiIntent({
   }
   if (!Object.keys(chunksByIntent).length) return null;
 
-  // 3) helpers de formato
-  const clean = (t:string) =>
-    (t || '')
-      // fuera encabezados/viñetas y dobles espacios
-      .replace(/^[-*•]\s*/gm,'')
-      .replace(/#{1,6}\s*/g,'')
-      .replace(/\r/g,'')
-      .replace(/\n{3,}/g,'\n\n')
-      .trim();
+  // 4) Helpers de formato (prosa breve)
+  const clean = (t:string) => (t || '')
+    // fuera encabezados/viñetas y dobles espacios
+    .replace(/^[\-*•]\s*/gm,'')
+    .replace(/#{1,6}\s*/g,'')
+    .replace(/\r/g,'')
+    .replace(/\n{3,}/g,'\n\n')
+    .trim();
 
   const firstSentence = (t:string, max=180) => {
-    const s = t.split(/(?<=\.)\s|\n/)[0]?.trim() || t.trim();
-    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+    const c = clean(t);
+    const cut = c.split(/(?<=\.)\s|\n/)[0] || c;
+    return cut.length <= max ? cut : (cut.slice(0, max-1).trim() + '…');
   };
 
-  const pickLink = (parts:string[]) => {
-    const urls = parts.flatMap(p => [...p.matchAll(/https?:\/\/\S+/gi)].map(m=>m[0]));
-    // prioriza glofox / booking / membership
-    const preferred = urls.find(u => /glofox|book|reserv|membership|buy/i.test(u));
-    return preferred || urls[0] || null;
+  const grabFirstUrl = (t:string) => {
+    const m = (t || '').match(/\bhttps?:\/\/[^\s)]+/i);
+    return m?.[0] || null;
   };
 
-  // 4) prioriza qué meter (precio + info/servicios)
-  const txtPrecio   = clean(chunksByIntent['precio'] || '');
-  const txtInfo     = clean(chunksByIntent['interes_clases'] || chunksByIntent['pedir_info'] || '');
-  const txtHorario  = clean(chunksByIntent['horario'] || '');
-  const txtUbic     = clean(chunksByIntent['ubicacion'] || '');
-
-  // arma líneas cortas
-  const lineIntro   = idiomaDestino === 'en'
-    ? 'Sure — quick summary:'
+  // 5) Construir mensaje único (máx. ~6 líneas)
+  const intro = idiomaDestino === 'en'
+    ? 'Sure — quick overview:'
     : 'Claro — te cuento rapidito:';
 
-  const lineInfo = txtInfo
-    ? (idiomaDestino === 'en'
-        ? firstSentence(txtInfo, 220)
-        : firstSentence(txtInfo, 220))
-    : '';
+  const lines: string[] = [intro];
 
-  const linePrecio = txtPrecio
-    ? (idiomaDestino === 'en'
-        ? 'Prices: ' + firstSentence(txtPrecio.replace(/\n/g,' '), 220)
-        : 'Precios: ' + firstSentence(txtPrecio.replace(/\n/g,' '), 220))
-    : '';
+  if (chunksByIntent['interes_clases']) {
+    lines.push(firstSentence(chunksByIntent['interes_clases'], 220));
+  }
 
-  const lineHorario = txtHorario
-    ? (idiomaDestino === 'en'
-        ? 'Schedule: ' + firstSentence(txtHorario.replace(/\n/g,' '), 180)
-        : 'Horarios: ' + firstSentence(txtHorario.replace(/\n/g,' '), 180))
-    : '';
+  if (chunksByIntent['precio']) {
+    const p = firstSentence(chunksByIntent['precio'], 220);
+    lines.push(idiomaDestino === 'en' ? `Prices: ${p}` : `Precios: ${p}`);
+  }
 
-  const lineUbic = txtUbic
-    ? (idiomaDestino === 'en'
-        ? 'Location: ' + firstSentence(txtUbic.replace(/\n/g,' '), 130)
-        : 'Ubicación: ' + firstSentence(txtUbic.replace(/\n/g,' '), 130))
-    : '';
+  if (chunksByIntent['horario']) {
+    lines.push(firstSentence(chunksByIntent['horario'], 160));
+  }
 
-  const ctaLink = pickLink([txtPrecio, txtInfo, txtHorario, txtUbic]);
-  const lineCTA = ctaLink
-    ? (idiomaDestino === 'en'
-        ? `Book or see more here: ${ctaLink}`
-        : `Reserva o mira más aquí: ${ctaLink}`)
-    : '';
+  if (chunksByIntent['ubicacion']) {
+    lines.push(firstSentence(chunksByIntent['ubicacion'], 160));
+  }
 
-  // 5) compón en 4–6 líneas máx (sin bullets/markdown)
-  const lines = [lineIntro, lineInfo, linePrecio, lineHorario || lineUbic, lineCTA]
-    .filter(Boolean);
+  // 6) Un (1) link relevante si existe
+  const urls = [
+    grabFirstUrl(chunksByIntent['interes_clases'] || ''),
+    grabFirstUrl(chunksByIntent['precio'] || ''),
+    grabFirstUrl(chunksByIntent['horario'] || ''),
+  ].filter(Boolean) as string[];
 
-  let out = lines.join('\n').slice(0, 950); // margen WhatsApp
+  const oneLink = urls[0];
+  if (oneLink) {
+    lines.push(oneLink);
+  }
 
-  // 6) asegurar idioma (por si las FAQs estaban en otro)
-  try {
-    const langOut = await detectarIdioma(out);
-    if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-      out = await traducirMensaje(out, idiomaDestino);
-    }
-  } catch {}
+  // 7) CTA de cierre
+  const cta = idiomaDestino === 'en'
+    ? 'Want me to book a spot for you?'
+    : '¿Quieres que te agende un cupo?';
+  lines.push(cta);
 
+  // 8) Limita a 6 líneas y une
+  const out = lines.slice(0, 6).join('\n');
   return out;
 }
