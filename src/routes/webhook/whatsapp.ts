@@ -282,89 +282,102 @@ function stripLeadGreetings(t: string) {
     }
   };
 
-  // ===== EARLY RETURN: responder SOLO con promptBase (sin helpers/faq) =====
-  try {
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+  // 🔎 Intención antes del EARLY RETURN
+  const { intencion: intenTemp } = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+  const intenCanon = normalizeIntentAlias((intenTemp || '').toLowerCase());
 
-    const systemPrompt = [
-    promptBase,
-    '',
-    `Reglas:
-    - Usa EXCLUSIVAMENTE la información explícita en este prompt. Si algo no está, dilo sin inventar.
-    - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
-    - WhatsApp: máx. ~6 líneas en PROSA. **Prohibido Markdown, encabezados, viñetas o numeraciones.**
-    - Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.
-    - CTA único (si aplica). Enlaces: solo si están listados dentro del prompt (ENLACES_OFICIALES).`,
-    '',
-    `MODO VENDEDOR (alto desempeño):
-    - Entender → proponer → cerrar con CTA. No inventes beneficios ni precios.
-    - Si piden algo que NO existe, dilo y redirige al plan más cercano SIEMPRE basado en los datos del prompt.`
-  ].join('\n');
+  // 👉 si es directa, NO hagas early return; deja que pase al pipeline de FAQ
+  const esDirecta = INTENTS_DIRECT.has(intenCanon);
 
-    const userPrompt = `MENSAJE_USUARIO:\n${userInput}\n\nResponde usando solo los datos del prompt.`;
+  if (!esDirecta) {
+    console.log('🛣️ Ruta: EARLY_RETURN con promptBase (no directa). Intención=', intenCanon);
 
-    let out: string;
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      temperature: 0.2,
-      max_tokens: 400,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: userPrompt }
-      ],
-    });
-    // registrar tokens
-    const used = completion.usage?.total_tokens || 0;
-    if (used > 0) {
+    try {
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+      const systemPrompt = [
+        promptBase,
+        '',
+        `Reglas:
+        - Usa EXCLUSIVAMENTE la información explícita en este prompt. Si algo no está, dilo sin inventar.
+        - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
+        - WhatsApp: máx. ~6 líneas en PROSA. **Prohibido Markdown, encabezados, viñetas o numeraciones.**
+        - Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.
+        - CTA único (si aplica). Enlaces: solo si están listados dentro del prompt (ENLACES_OFICIALES).`,
+        '',
+        `MODO VENDEDOR (alto desempeño):
+        - Entender → proponer → cerrar con CTA. No inventes beneficios ni precios.
+        - Si piden algo que NO existe, dilo y redirige al plan más cercano SIEMPRE basado en los datos del prompt.`
+      ].join('\n');
+
+      const userPrompt = `MENSAJE_USUARIO:\n${userInput}\n\nResponde usando solo los datos del prompt.`;
+
+      let out = '';
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.2,
+        max_tokens: 400,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userPrompt }
+        ],
+      });
+
+      const used = completion.usage?.total_tokens ?? 0;
+      if (used > 0) {
+        await pool.query(
+          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+          VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+          ON CONFLICT (tenant_id, canal, mes)
+          DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+          [tenant.id, used]
+        );
+      }
+
+      out = completion.choices[0]?.message?.content?.trim()
+        || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+
+      // Asegura idioma por si acaso
+      try {
+        const langOut = await detectarIdioma(out);
+        if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+          out = await traducirMensaje(out, idiomaDestino);
+        }
+      } catch {}
+
+      await enviarWhatsApp(fromNumber, out, tenant.id);
+
       await pool.query(
-        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-        VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-        ON CONFLICT (tenant_id, canal, mes)
-        DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-        [tenant.id, used]
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+        VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+        ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+        [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
       );
+      await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT DO NOTHING`,
+        [tenant.id, canal, messageId]
+      );
+
+      // (Opcional) métricas / follow-up
+      try {
+        const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+        const nivel = det?.nivel_interes ?? 1;
+        const intFinal = (det?.intencion || '').toLowerCase();
+        if (nivel >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
+          await scheduleFollowUp(intFinal, nivel);
+        }
+      } catch {}
+
+      return; // ✅ Solo retornas si hiciste EARLY RETURN OK
+    } catch (e) {
+      console.warn('❌ EARLY_RETURN falló; sigo con pipeline FAQ/intents:', e);
+      // ⛔️ Sin return aquí: continúa al pipeline de FAQ
     }
-    out = completion.choices[0]?.message?.content?.trim()
-      || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-
-    // Asegura idioma por si acaso
-    try {
-      const langOut = await detectarIdioma(out);
-      if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-        out = await traducirMensaje(out, idiomaDestino);
-      }
-    } catch {}
-
-    await enviarWhatsApp(fromNumber, out, tenant.id);
-
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-    );
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-
-    // (Opcional) conserva tus métricas/follow-up sin afectar el contenido
-    try {
-      const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-      const nivel = det?.nivel_interes ?? 1;
-      const intFinal = (det?.intencion || '').toLowerCase();
-      if (nivel >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
-        await scheduleFollowUp(intFinal, nivel);
-      }
-    } catch {}
-
-    return; // <-- IMPORTANTE: sal del handler para no ejecutar el pipeline viejo
-  } catch (e) {
-    console.warn('❌ LLM compose falló; continúa pipeline legacy:', e);
+  } else {
+    console.log('🛣️ Ruta: FAQ/Intents (intención directa). Intención=', intenCanon);
   }
-  // ===== FIN EARLY RETURN =======================================================
 
   // después de calcular idiomaDestino...
   let INTENCION_FINAL_CANONICA = '';
