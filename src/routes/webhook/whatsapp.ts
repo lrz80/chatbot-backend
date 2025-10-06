@@ -21,7 +21,8 @@ import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
 import { buscarRespuestaPorIntencion } from "../../services/intent-matcher";
 import { extractEntitiesLite } from '../../utils/extractEntitiesLite';
 import { getFaqByIntent } from "../../utils/getFaqByIntent";
-
+import { answerMultiIntent, detectTopIntents } from '../../utils/multiIntent';
+import type { Canal } from '../../lib/detectarIntencion';
 
 const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
 const MATCHER_MIN_OVERRIDE = 0.85; // exige score alto para sobreescribir una intención "directa"
@@ -120,6 +121,8 @@ async function procesarMensajeWhatsApp(body: any) {
     return;
   }
 
+  const canal: Canal = 'whatsapp'; // ✅ tip estricto, en el scope correcto
+
   // 2.a) Guardar el mensaje del usuario una sola vez (idempotente)
 try {
   await pool.query(
@@ -159,8 +162,7 @@ try {
   const idioma = await detectarIdioma(userInput);
   const promptBase = getPromptPorCanal('whatsapp', tenant, idioma);
   let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idioma);
-  const canal = 'whatsapp';
-
+  
 function stripLeadGreetings(t: string) {
   return t
     .replace(/^\s*(hola+[\s!.,]*)?/i, '')
@@ -212,6 +214,53 @@ function stripLeadGreetings(t: string) {
     await upsertIdiomaClienteDB(tenant.id, fromNumber, normalizado);
     idiomaDestino = normalizado;
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
+  }
+
+  // === FAST-PATH MULTI-INTENCIÓN (evita tokens si ya hay info en DB) ===
+  try {
+    const top = await detectTopIntents(userInput, tenant.id, canal, 3);
+
+    // multi si detecta 2+ intenciones o mezcla "precio" + "info/servicios"
+    const hasPrecio = /\b(precio|precios|tarifa|cost)/i.test(userInput);
+    const hasInfo   = /\b(info|informaci[óo]n|servicio|servicios|clases?)\b/i.test(userInput);
+    const multiAsk  = top.length >= 2 || (hasPrecio && hasInfo);
+
+    if (multiAsk) {
+      const out = await answerMultiIntent({
+        tenantId: tenant.id,
+        canal,
+        userText: userInput,
+        idiomaDestino
+      });
+
+      if (out) {
+        await enviarWhatsApp(fromNumber, out, tenant.id);
+
+        await pool.query(
+          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+          VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+          ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+          [tenant.id, out, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+        );
+        await pool.query(
+          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+          VALUES ($1, $2, $3, NOW())
+          ON CONFLICT DO NOTHING`,
+          [tenant.id, canal, messageId]
+        );
+
+        // follow-up opcional (reusa tu lógica actual)
+        try {
+          const det = await detectarIntencion(userInput, tenant.id, canal);
+          const nivel = det?.nivel_interes ?? 1;
+          await scheduleFollowUp((det?.intencion || '').toLowerCase(), nivel);
+        } catch {}
+
+        return; // ⬅️ muy importante: corta el pipeline aquí
+      }
+    }
+  } catch (e) {
+    console.warn('⚠️ Multi-intent fast-path falló; sigo pipeline normal:', e);
   }
 
   // ⏲️ Programador de follow-up (WhatsApp)

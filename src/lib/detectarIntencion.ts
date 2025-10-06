@@ -2,8 +2,13 @@
 import OpenAI from 'openai';
 import pool from './db';
 
-type Intento = { intencion: string; nivel_interes: number };
-type Canal = 'whatsapp' | 'facebook' | 'instagram' | 'voz' | 'preview';
+export type Intento = { intencion: string; nivel_interes: number }; // ⬅ export
+export type Canal =
+  | 'whatsapp'
+  | 'facebook'
+  | 'instagram'
+  | 'voz'
+  | 'preview'; // ⬅ export
 
 const stripDiacritics = (s: string) =>
   s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
