@@ -218,20 +218,24 @@ function stripLeadGreetings(t: string) {
 
   // === FAST-PATH MULTI-INTENCIÓN (evita tokens si ya hay info en DB) ===
   try {
-    const top = await detectTopIntents(userInput, tenant.id, canal, 3);
+    const top = await detectTopIntents(userInput, tenant.id, canal as Canal, 3);
+    console.log('[MULTI] top=', top);
 
-    // multi si detecta 2+ intenciones o mezcla "precio" + "info/servicios"
-    const hasPrecio = /\b(precio|precios|tarifa|cost)/i.test(userInput);
-    const hasInfo   = /\b(info|informaci[óo]n|servicio|servicios|clases?)\b/i.test(userInput);
+    const hasPrecio = top.some(t => t.intent === 'precio');
+    const hasInfo   = top.some(t => t.intent === 'interes_clases' || t.intent === 'pedir_info');
     const multiAsk  = top.length >= 2 || (hasPrecio && hasInfo);
+
+    console.log('[MULTI] hasPrecio=', hasPrecio, 'hasInfo=', hasInfo, 'len=', top.length, 'multiAsk=', multiAsk);
 
     if (multiAsk) {
       const out = await answerMultiIntent({
         tenantId: tenant.id,
-        canal,
+        canal: canal as Canal,
         userText: userInput,
         idiomaDestino
       });
+
+      console.log('[MULTI] answer length=', out?.length || 0);
 
       if (out) {
         await enviarWhatsApp(fromNumber, out, tenant.id);

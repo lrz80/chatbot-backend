@@ -34,6 +34,7 @@ export async function detectTopIntents(
   threshold = 0.55
 ): Promise<Detected[]> {
   const cleaned = STRIP_GREET(text);
+  console.log('[MULTI] cleaned=', cleaned); // 👈 NUEVO
   const lc = norm(cleaned);
 
   const bag: Detected[] = [];
@@ -48,8 +49,8 @@ export async function detectTopIntents(
     // si falla, seguimos con heurísticas
   }
 
-  // 2) heurísticas rápidas (0 tokens)
-  if (/\b(precio|precios|tarifa|cost|fee|fees|price|prices)\b/i.test(lc)) {
+    // 2) heurísticas rápidas (0 tokens)
+  if (/\b(precio|precios|costo|costos|tarifa|tarifas|fee|fees|price|prices|cost)\b/i.test(lc)) {
     bag.push({ intent: 'precio', score: 0.95 });
   }
   if (/\b(info|informacion|informaci[óo]n|servicio|servicios|clase|clases)\b/i.test(lc)) {
@@ -64,7 +65,7 @@ export async function detectTopIntents(
 
   // 3) ordenar, normalizar alias, deduplicar y filtrar por umbral
   const seen = new Set<string>();
-  return bag
+  const out = bag
     .sort((a, b) => b.score - a.score)
     .filter((x) => {
       x.intent = normalizeIntentAlias(x.intent);
@@ -73,6 +74,9 @@ export async function detectTopIntents(
       return x.score >= threshold;
     })
     .slice(0, maxIntents);
+
+  console.log('[MULTI] intents=', out); // 👈 NUEVO
+  return out;
 }
 
 async function fetchAnswer(
