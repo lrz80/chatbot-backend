@@ -79,11 +79,7 @@ export async function detectTopIntents(
   return out;
 }
 
-async function fetchAnswer(
-  tenantId: string,
-  canal: Canal,
-  intent: string
-): Promise<string | null> {
+async function fetchAnswer(tenantId:string, canal: Canal, intent:string): Promise<string|null> {
   const i = intent.toLowerCase();
   if (i === 'precio') return await fetchFaqPrecio(tenantId, canal);
   const hit = await getFaqByIntent(tenantId, canal, i);
@@ -95,32 +91,92 @@ async function fetchAnswer(
  * Regresa `null` si no hay nada que responder (p.ej., sin FAQs cargadas).
  */
 export async function answerMultiIntent({
-  tenantId,
-  canal,
-  userText,
-  idiomaDestino
+  tenantId, canal, userText, idiomaDestino
 }: {
-  tenantId: string;
-  canal: Canal;
-  userText: string;
-  idiomaDestino: 'es' | 'en';
+  tenantId: string; canal: Canal; userText: string; idiomaDestino: 'es'|'en';
 }) {
+  // 1) detectar top intents
   const intents = await detectTopIntents(userText, tenantId, canal, 3);
-  if (!intents.length) return null;
 
-  const chunks: string[] = [];
+  // 2) traer FAQs por intención
+  const chunksByIntent: Record<string,string> = {};
   for (const it of intents) {
     const ans = await fetchAnswer(tenantId, canal, it.intent);
-    if (ans && ans.trim()) {
-      chunks.push(ans.trim());
-    }
+    if (ans) chunksByIntent[it.intent] = ans.trim();
   }
+  if (!Object.keys(chunksByIntent).length) return null;
 
-  if (!chunks.length) return null;
+  // 3) helpers de formato
+  const clean = (t:string) =>
+    (t || '')
+      // fuera encabezados/viñetas y dobles espacios
+      .replace(/^[-*•]\s*/gm,'')
+      .replace(/#{1,6}\s*/g,'')
+      .replace(/\r/g,'')
+      .replace(/\n{3,}/g,'\n\n')
+      .trim();
 
-  let out = chunks.join('\n\n');
+  const firstSentence = (t:string, max=180) => {
+    const s = t.split(/(?<=\.)\s|\n/)[0]?.trim() || t.trim();
+    return s.length > max ? s.slice(0, max - 1) + '…' : s;
+  };
 
-  // Asegura idioma de salida del bloque combinado
+  const pickLink = (parts:string[]) => {
+    const urls = parts.flatMap(p => [...p.matchAll(/https?:\/\/\S+/gi)].map(m=>m[0]));
+    // prioriza glofox / booking / membership
+    const preferred = urls.find(u => /glofox|book|reserv|membership|buy/i.test(u));
+    return preferred || urls[0] || null;
+  };
+
+  // 4) prioriza qué meter (precio + info/servicios)
+  const txtPrecio   = clean(chunksByIntent['precio'] || '');
+  const txtInfo     = clean(chunksByIntent['interes_clases'] || chunksByIntent['pedir_info'] || '');
+  const txtHorario  = clean(chunksByIntent['horario'] || '');
+  const txtUbic     = clean(chunksByIntent['ubicacion'] || '');
+
+  // arma líneas cortas
+  const lineIntro   = idiomaDestino === 'en'
+    ? 'Sure — quick summary:'
+    : 'Claro — te cuento rapidito:';
+
+  const lineInfo = txtInfo
+    ? (idiomaDestino === 'en'
+        ? firstSentence(txtInfo, 220)
+        : firstSentence(txtInfo, 220))
+    : '';
+
+  const linePrecio = txtPrecio
+    ? (idiomaDestino === 'en'
+        ? 'Prices: ' + firstSentence(txtPrecio.replace(/\n/g,' '), 220)
+        : 'Precios: ' + firstSentence(txtPrecio.replace(/\n/g,' '), 220))
+    : '';
+
+  const lineHorario = txtHorario
+    ? (idiomaDestino === 'en'
+        ? 'Schedule: ' + firstSentence(txtHorario.replace(/\n/g,' '), 180)
+        : 'Horarios: ' + firstSentence(txtHorario.replace(/\n/g,' '), 180))
+    : '';
+
+  const lineUbic = txtUbic
+    ? (idiomaDestino === 'en'
+        ? 'Location: ' + firstSentence(txtUbic.replace(/\n/g,' '), 130)
+        : 'Ubicación: ' + firstSentence(txtUbic.replace(/\n/g,' '), 130))
+    : '';
+
+  const ctaLink = pickLink([txtPrecio, txtInfo, txtHorario, txtUbic]);
+  const lineCTA = ctaLink
+    ? (idiomaDestino === 'en'
+        ? `Book or see more here: ${ctaLink}`
+        : `Reserva o mira más aquí: ${ctaLink}`)
+    : '';
+
+  // 5) compón en 4–6 líneas máx (sin bullets/markdown)
+  const lines = [lineIntro, lineInfo, linePrecio, lineHorario || lineUbic, lineCTA]
+    .filter(Boolean);
+
+  let out = lines.join('\n').slice(0, 950); // margen WhatsApp
+
+  // 6) asegurar idioma (por si las FAQs estaban en otro)
   try {
     const langOut = await detectarIdioma(out);
     if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
