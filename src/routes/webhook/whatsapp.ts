@@ -20,6 +20,8 @@ import { runBeginnerRecoInterceptor } from '../../lib/recoPrincipiantes/intercep
 import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
 import { buscarRespuestaPorIntencion } from "../../services/intent-matcher";
 import { extractEntitiesLite } from '../../utils/extractEntitiesLite';
+import { getFaqByIntent } from "../../utils/getFaqByIntent";
+
 
 const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
 const MATCHER_MIN_OVERRIDE = 0.85; // exige score alto para sobreescribir una intención "directa"
@@ -211,7 +213,6 @@ function stripLeadGreetings(t: string) {
     idiomaDestino = normalizado;
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
-
 
   // ⏲️ Programador de follow-up (WhatsApp)
   async function scheduleFollowUp(intFinal: string, nivel: number) {
@@ -644,25 +645,28 @@ if (interceptado) {
   // [REPLACE] lookup robusto
   let respuestaDesdeFaq: string | null = null;
 
+  // justo antes de llamar al util:
+  console.log('[FAQ-LOOKUP] tenant=', tenant.id, 'canal=', canal, 'intent=', intencionParaFaq);
+
+  const hit = await getFaqByIntent(tenant.id, canal, intencionParaFaq);
+  if (hit) {
+    console.log('📚 FAQ encontrada →', hit.id, hit.intencion, 'canal:', hit.canal);
+    respuestaDesdeFaq = hit.respuesta;
+  } else {
+    console.log('🚫 FAQ NO encontrada para intent:', intencionParaFaq);
+  }
+
   if (isDirectIntent(intencionParaFaq, INTENTS_DIRECT)) {
-    if (intencionParaFaq === 'precio') {
-      // 🔎 Usa helper robusto para precios (alias + sub-slugs)
-      respuestaDesdeFaq = await fetchFaqPrecio(tenant.id, canal);
-      if (respuestaDesdeFaq) {
-        console.log('📚 FAQ precio (robusta) encontrada.');
-      }
-    } else {
-      // Camino normal para otras intenciones directas
-      const { rows: faqPorIntencion } = await pool.query(
-        `SELECT respuesta FROM faqs 
-        WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) = LOWER($3) LIMIT 1`,
-        [tenant.id, canal, intencionParaFaq]
-      );
-      if (faqPorIntencion.length > 0) {
-        respuestaDesdeFaq = faqPorIntencion[0].respuesta;
-      }
+  if (intencionParaFaq === 'precio') {
+    respuestaDesdeFaq = await fetchFaqPrecio(tenant.id, canal);
+  } else {
+    const hit = await getFaqByIntent(tenant.id, canal, intencionParaFaq);
+    if (hit) {
+      respuestaDesdeFaq = hit.respuesta;
+      console.log('📚 FAQ encontrada para intención:', hit.intencion, 'canal:', hit.canal);
     }
   }
+}
 
   if (respuestaDesdeFaq) {
   // 1) Construye los HECHOS desde la FAQ oficial
