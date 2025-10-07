@@ -2,36 +2,48 @@
 
 import express from 'express';
 import pool from '../../lib/db';
+import OpenAI from 'openai';
+
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { buscarRespuestaDesdeFlowsTraducido } from '../../lib/respuestasTraducidas';
-import { detectarIntencion } from '../../lib/detectarIntencion';
-import { enviarMensajePorPartes } from '../../lib/enviarMensajePorPartes';
-import OpenAI from 'openai';
+
 import { buildDudaSlug, normalizeIntentAlias, isDirectIntent } from '../../lib/intentSlug';
+import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
+
 import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
-import { runBeginnerRecoInterceptor } from '../../lib/recoPrincipiantes/interceptor';
 import {
   yaExisteComoFaqSugerida,
   yaExisteComoFaqAprobada,
   normalizarTexto
 } from '../../lib/faq/similaridadFaq';
+
+import { detectarIntencion } from '../../lib/detectarIntencion';
+import { runBeginnerRecoInterceptor } from '../../lib/recoPrincipiantes/interceptor';
 import { buscarRespuestaPorIntencion } from '../../services/intent-matcher';
 
-// Umbral del intent-matcher controlado por ENV (clamp 0.30–0.95)
+import { enviarMensajePorPartes } from '../../lib/enviarMensajePorPartes';
+
+import { extractEntitiesLite } from '../../utils/extractEntitiesLite';
+import { getFaqByIntent } from '../../utils/getFaqByIntent';
+import { answerMultiIntent, detectTopIntents } from '../../utils/multiIntent';
+import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
+
+type CanalEnvio = 'facebook' | 'instagram';
+
+const router = express.Router();
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+// ———————————————————————————————————————————————————————————
+// Config comunes (idénticos a WhatsApp)
+// ———————————————————————————————————————————————————————————
+const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
+const MATCHER_MIN_OVERRIDE = 0.85;
+
 const INTENT_THRESHOLD = Math.min(
   0.95,
   Math.max(0.30, Number(process.env.INTENT_MATCH_THRESHOLD ?? 0.55))
 );
-
-// Helpers de idioma (consistentes con WhatsApp)
-const normLang = (code?: string | null) => {
-  if (!code) return null;
-  const base = code.toString().split(/[-_]/)[0].toLowerCase();
-  return base === 'zxx' ? null : base;
-};
-const normalizeLang = (code?: string | null): 'es' | 'en' =>
-  (code || '').toLowerCase().startsWith('en') ? 'en' : 'es';
 
 const INTENTS_DIRECT = new Set([
   'interes_clases','precio','horario','ubicacion','reservar','comprar','confirmar','clases_online'
@@ -41,12 +53,22 @@ const INTENT_UNIQUE = new Set([
   'precio','horario','ubicacion','reservar','comprar','confirmar','interes_clases','clases_online'
 ]);
 
-// — helpers idioma persistente (como en WhatsApp) —
-async function getIdiomaClienteDB(
-  tenantId: string,
-  contacto: string,
-  fallback: 'es'|'en'
-): Promise<'es'|'en'> {
+// Normalizadores de idioma
+const normLang = (code?: string | null) => {
+  if (!code) return null;
+  const base = code.toString().split(/[-_]/)[0].toLowerCase();
+  return base === 'zxx' ? null : base;
+};
+const normalizeLang = (code?: string | null): 'es' | 'en' =>
+  (code || '').toLowerCase().startsWith('en') ? 'en' : 'es';
+
+function getConfigDelayMinutes(cfg: any, fallbackMin = 60) {
+  const m = Number(cfg?.minutos_espera);
+  return Number.isFinite(m) && m > 0 ? m : fallbackMin;
+}
+
+// Idioma persistente por contacto
+async function getIdiomaClienteDB(tenantId: string, contacto: string, fallback: 'es'|'en'): Promise<'es'|'en'> {
   try {
     const { rows } = await pool.query(
       `SELECT idioma FROM clientes WHERE tenant_id = $1 AND contacto = $2 LIMIT 1`,
@@ -57,16 +79,7 @@ async function getIdiomaClienteDB(
   return fallback;
 }
 
-function getConfigDelayMinutes(cfg: any, fallbackMin = 60) {
-  const m = Number(cfg?.minutos_espera);
-  return Number.isFinite(m) && m > 0 ? m : fallbackMin;
-}
-
-async function upsertIdiomaClienteDB(
-  tenantId: string,
-  contacto: string,
-  idioma: 'es'|'en'
-) {
+async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma: 'es'|'en') {
   try {
     await pool.query(
       `INSERT INTO clientes (tenant_id, contacto, idioma)
@@ -80,24 +93,7 @@ async function upsertIdiomaClienteDB(
   }
 }
 
-async function getFaqByIntent(
-  tenantId: string,
-  intent: string
-): Promise<{ pregunta: string; respuesta: string } | null> {
-  const { rows } = await pool.query(
-    `SELECT pregunta, respuesta
-       FROM faqs
-      WHERE tenant_id = $1
-        AND canal = ANY($2::text[])
-        AND LOWER(intencion) = LOWER($3)
-      ORDER BY id DESC
-      LIMIT 1`,
-    [tenantId, ['meta','facebook','instagram'], intent]
-  );
-  return rows[0] || null;
-}
-
-// Calcula el ciclo mensual vigente a partir de membresia_inicio
+// Ciclo mensual similar a WA
 function cicloMesDesdeMembresia(membresiaInicioISO: string): string {
   const inicio = new Date(membresiaInicioISO);
   const ahora = new Date();
@@ -110,9 +106,12 @@ function cicloMesDesdeMembresia(membresiaInicioISO: string): string {
   return cicloInicio.toISOString().split('T')[0]; // YYYY-MM-DD
 }
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const router = express.Router();
+// Evita loops por duplicados Meta mid
+const mensajesProcesados = new Set<string>();
 
+// ———————————————————————————————————————————————————————————
+// Verificación GET (Meta)
+// ———————————————————————————————————————————————————————————
 router.get('/api/facebook/webhook', (req, res) => {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || 'testtoken';
   const mode = req.query['hub.mode'];
@@ -127,66 +126,59 @@ router.get('/api/facebook/webhook', (req, res) => {
       return res.sendStatus(403);
     }
   }
-
   res.sendStatus(400);
 });
 
-const mensajesProcesados = new Set<string>();
-
+// ———————————————————————————————————————————————————————————
+// POST: Meta (Facebook / Instagram) — igual a WhatsApp en flujo
+// ———————————————————————————————————————————————————————————
 router.post('/api/facebook/webhook', async (req, res) => {
   res.sendStatus(200);
-  console.log("🌐 Webhook Meta recibido:", JSON.stringify(req.body, null, 2));
   try {
     const body = req.body;
-    if (body.object !== 'page' && body.object !== 'instagram') return res.sendStatus(404);
+    if (body.object !== 'page' && body.object !== 'instagram') return;
 
     for (const entry of body.entry) {
       const pageId = entry.id;
 
       for (const messagingEvent of entry.messaging) {
-        // ✅ SOLO ignorar echos reales. Sin comparar sender.id con entry.id.
-        if (!messagingEvent.message) {
-          console.log('⏭️ Evento sin "message", ignorado.');
-          continue;
-        }
-        if (messagingEvent.message.is_echo === true) {
-          console.log('⏭️ Echo Meta detectado, ignorado. mid=%s', messagingEvent.message.mid);
-          continue;
-        }
-        if (!messagingEvent.message.text) {
-          console.log('⏭️ Mensaje sin texto, ignorado.');
-          continue;
-        }
+        if (!messagingEvent.message) continue;
+        if (messagingEvent.message.is_echo === true) continue;
+        if (!messagingEvent.message.text) continue;
 
         const senderId = messagingEvent.sender.id;
         const messageId = messagingEvent.message.mid;
-        const userMessage = messagingEvent.message.text;
-        const isNumericOnly = /^\s*\d+\s*$/.test(userMessage);
-        // ... (detectas idioma, cargas tenant, calculas canalEnvio/tenantId/accessToken)
+        const userInput = messagingEvent.message.text || '';
+        const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
 
-        // 📢 Unir tenants + meta-configs
+        // dedupe por mid (memoria)
+        if (mensajesProcesados.has(messageId)) continue;
+        mensajesProcesados.add(messageId);
+        setTimeout(() => mensajesProcesados.delete(messageId), 60000);
+
+        // Unir tenants + meta-configs (id x pageId o ig id)
         const { rows } = await pool.query(
-          `SELECT t.*, m.prompt_meta, m.bienvenida_meta 
-          FROM tenants t
-          LEFT JOIN meta_configs m ON t.id = m.tenant_id
-          WHERE t.facebook_page_id = $1 OR t.instagram_page_id = $1 LIMIT 1`,
+          `SELECT t.*
+                 , m.prompt_meta
+                 , m.bienvenida_meta
+                 , t.facebook_access_token
+            FROM tenants t
+       LEFT JOIN meta_configs m ON t.id = m.tenant_id
+           WHERE t.facebook_page_id = $1 OR t.instagram_page_id = $1
+           LIMIT 1`,
           [pageId]
         );
-        if (rows.length === 0) continue;
+        if (!rows.length) continue;
 
         const tenant = rows[0];
+        const tenantId: string = tenant.id;
+
         const isInstagram = tenant.instagram_page_id && tenant.instagram_page_id === pageId;
+        const canalEnvio: CanalEnvio = isInstagram ? 'instagram' : 'facebook';
+        const canalContenido = 'meta'; // FAQs/Flows se guardan como 'meta'
+        const accessToken = tenant.facebook_access_token as string;
 
-        // Canal real para envío/registro/uso
-        const canalEnvio: 'facebook' | 'instagram' = isInstagram ? 'instagram' : 'facebook';
-
-        // Unificamos contenidos (FAQs/Flows) bajo 'meta'
-        const canalContenido: 'meta' = 'meta';
-
-        const tenantId = tenant.id;
-        const accessToken = tenant.facebook_access_token;
-
-        // helper local para enviar a Meta en partes
+        // helper envío Meta (chunked)
         const sendMeta = async (text: string) => {
           await enviarMensajePorPartes({
             respuesta: text,
@@ -197,68 +189,142 @@ router.post('/api/facebook/webhook', async (req, res) => {
             accessToken,
           });
         };
+        const enviarMetaSeguro = async (_to: string, text: string, _tenantId: string) => sendMeta(text);
 
-        /// dedupe por mid (deja esto igual)
-if (mensajesProcesados.has(messageId)) {
-  console.log('⚠️ Mensaje duplicado ignorado por Set en memoria:', messageId);
-  continue;
-}
-mensajesProcesados.add(messageId);
-setTimeout(() => mensajesProcesados.delete(messageId), 60000);
+        // Idempotencia: si ya está en messages, avanzar
+        const existingMsg = await pool.query(
+          `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
+          [tenantId, messageId]
+        );
+        if (existingMsg.rows.length > 0) continue;
 
-// ... calcular idiomaDestino ...
+        // 🧹 Cancela follow-ups pendientes de este contacto
+        try {
+          await pool.query(
+            `DELETE FROM mensajes_programados
+              WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+            [tenantId, canalEnvio, senderId]
+          );
+        } catch {}
 
-// Si ya procesamos este mid en DB, salir
-const existingMsg = await pool.query(
-  `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
-  [tenantId, messageId]
-);
-if (existingMsg.rows.length > 0) continue;
+        // Idioma destino consistente a WA
+        const tenantBase: 'es'|'en' = normalizeLang(tenant?.idioma || 'es');
+        let idiomaDestino: 'es'|'en';
+        if (isNumericOnly) {
+          idiomaDestino = await getIdiomaClienteDB(tenantId, senderId, tenantBase);
+        } else {
+          let detectado: string | null = null;
+          try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
+          const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
+          await upsertIdiomaClienteDB(tenantId, senderId, normalizado);
+          idiomaDestino = normalizado;
+        }
 
-// 🧹 AHORA sí: borra pendientes del contacto (esto ya no se come el recién insertado)
-try {
-  await pool.query(
-    `DELETE FROM mensajes_programados
-      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
-    [tenantId, canalEnvio, senderId]
-  );
-  console.log('🧽 Follow-ups pendientes limpiados para', { tenantId, canalEnvio, senderId });
-} catch (e) {
-  console.warn('No se pudieron limpiar follow-ups pendientes:', e);
-}
+        // Incrementar uso mensual por mensaje entrante (como WA)
+        try {
+          const tRes = await pool.query(`SELECT membresia_inicio FROM tenants WHERE id = $1`, [tenantId]);
+          const membresiaInicio = tRes.rows[0]?.membresia_inicio;
+          if (membresiaInicio) {
+            const cicloMes = cicloMesDesdeMembresia(membresiaInicio);
+            await pool.query(
+              `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+               VALUES ($1, $2, $3, 1)
+               ON CONFLICT (tenant_id, canal, mes)
+               DO UPDATE SET usados = uso_mensual.usados + 1`,
+              [tenantId, canalEnvio, cicloMes]
+            );
+          }
+        } catch {}
 
+        // Guardar mensaje user (una vez)
+        try {
+          await pool.query(
+            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+             VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
+             ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+            [tenantId, userInput, canalEnvio, senderId || 'anónimo', messageId]
+          );
+        } catch {}
 
-        // Programa follow-up según intención final y nivel de interés
-        const scheduleFollowUp = async (intFinal: string, nivel: number) => {
+        // Bloqueo por membresía (igual WA)
+        const estaActiva = tenant.membresia_activa === true || tenant.membresia_activa === 'true' || tenant.membresia_activa === 1;
+        if (!estaActiva) {
+          console.log(`🚫 Tenant ${tenantId} sin membresía activa. No se responderá en Meta.`);
+          continue;
+        }
+
+        // Prompt base y bienvenida por CANAL
+        const promptBase = getPromptPorCanal('meta', tenant, idiomaDestino);
+        const bienvenida = getBienvenidaPorCanal('meta', tenant, idiomaDestino);
+
+        // —————————————————————————
+        // FAST-PATH MULTI-INTENCIÓN
+        // —————————————————————————
+        try {
+          const top = await detectTopIntents(userInput, tenantId, canalContenido as any, 3);
+          const hasPrecio = top.some(t => t.intent === 'precio');
+          const hasInfo   = top.some(t => t.intent === 'interes_clases' || t.intent === 'pedir_info');
+          const multiAsk  = top.length >= 2 || (hasPrecio && hasInfo);
+
+          if (multiAsk) {
+            const multi = await answerMultiIntent({
+              tenantId,
+              canal: canalContenido as any,
+              userText: userInput,
+              idiomaDestino,
+              promptBase
+            });
+
+            if (multi?.text) {
+              const out = tidyMultiAnswer(multi.text, {
+                maxLines: 6,
+                freezeUrls: true,
+                cta: '¿Hay algo más en lo que te pueda ayudar?'
+              });
+
+              await sendMeta(out);
+
+              await pool.query(
+                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+                 VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+                 ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+                [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+              );
+              await pool.query(
+                `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+                 VALUES ($1, $2, $3, NOW())
+                 ON CONFLICT DO NOTHING`,
+                [tenantId, canalEnvio, messageId]
+              );
+
+              await scheduleFollowUp('interes_clases', 3);
+              continue; // ⬅️ salir fast-path
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ Multi-intent fast-path falló; sigo pipeline normal:', e);
+        }
+
+        // Follow-up scheduler (idéntico a WA)
+        async function scheduleFollowUp(intFinal: string, nivel: number) {
           try {
-            // 🔐 Gate de disparo
             const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
             const condition = (nivel >= 3) || intencionesFollowUp.includes((intFinal || '').toLowerCase());
-            console.log('⏩ followup gate', { intFinal, nivel, condition });
             if (!condition) return;
 
-            // Cargar configuración
             const { rows: cfgRows } = await pool.query(
               `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
               [tenantId]
             );
             const cfg = cfgRows[0];
-            if (!cfg) {
-              console.log('⛔ followup: no hay follow_up_settings para tenant', tenantId);
-              return;
-            }
+            if (!cfg) return;
 
-            // Elegir mensaje según intención
             let msg = cfg.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
-            if (intFinal.includes("precio") && cfg.mensaje_precio) {
-              msg = cfg.mensaje_precio;
-            } else if ((intFinal.includes("agendar") || intFinal.includes("reservar")) && cfg.mensaje_agendar) {
-              msg = cfg.mensaje_agendar;
-            } else if ((intFinal.includes("ubicacion") || intFinal.includes("location")) && cfg.mensaje_ubicacion) {
-              msg = cfg.mensaje_ubicacion;
-            }
+            const low = (intFinal || '').toLowerCase();
+            if (low.includes("precio") && cfg.mensaje_precio) msg = cfg.mensaje_precio;
+            else if ((low.includes("agendar") || low.includes("reservar")) && cfg.mensaje_agendar) msg = cfg.mensaje_agendar;
+            else if ((low.includes("ubicacion") || low.includes("location")) && cfg.mensaje_ubicacion) msg = cfg.mensaje_ubicacion;
 
-            // Asegurar idioma del cliente
             try {
               const lang = await detectarIdioma(msg);
               if (lang && lang !== 'zxx' && lang !== idiomaDestino) {
@@ -266,499 +332,186 @@ try {
               }
             } catch {}
 
-            // ⏱️ Calcular delay y fecha
+            // limpia duplicados
+            await pool.query(
+              `DELETE FROM mensajes_programados
+                WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+              [tenantId, canalEnvio, senderId]
+            );
+
             const delayMin = getConfigDelayMinutes(cfg, 60);
             const fechaEnvio = new Date();
             fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
 
-            // Guardar en mensajes_programados y loguear el id
-            const ins = await pool.query(
+            const { rows } = await pool.query(
               `INSERT INTO mensajes_programados
                 (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-              VALUES ($1, $2, $3, $4, $5, false)
-              RETURNING id`,
+               VALUES ($1, $2, $3, $4, $5, false)
+               RETURNING id`,
               [tenantId, canalEnvio, senderId, msg, fechaEnvio]
             );
 
-            console.log('📅 Follow-up programado', {
-              id: ins.rows[0]?.id,
-              tenantId,
-              canal: canalEnvio,
-              contacto: senderId,
-              delayMin,
-              fechaEnvio: fechaEnvio.toISOString()
+            console.log('📅 Follow-up programado (META)', {
+              id: rows[0]?.id, tenantId, contacto: senderId, delayMin, fechaEnvio: fechaEnvio.toISOString()
             });
           } catch (e) {
-            console.warn('⚠️ No se pudo programar follow-up:', e);
+            console.warn('⚠️ No se pudo programar follow-up (META):', e);
           }
-        };
+        }
 
-        // wrapper con firma esperada por el interceptor
-        const enviarMetaSeguro = async (_to: string, text: string, _tenantId: string) => {
-          await sendMeta(text); // el "to" real ya lo tenemos en senderId
-        };
+        // Saludos/agradecimientos (solo si el mensaje ES solo eso)
+        const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|d[ií]as))?)\s*$/i.test(userInput.trim());
+        const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
+        if (greetingOnly || thanksOnly) {
+          let out = thanksOnly
+            ? (idiomaDestino === 'es'
+                ? '¡De nada! 💬 ¿Quieres ver otra opción del menú?'
+                : "You're welcome! 💬 Would you like to see other options?")
+            : bienvenida;
 
-        // 📚 Carga de FAQs y Flows (antes de usarlos)
+          try {
+            const langOut = await detectarIdioma(out);
+            if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+              out = await traducirMensaje(out, idiomaDestino);
+            }
+          } catch {}
+          await sendMeta(out);
+
+          await pool.query(
+            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+             VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+             ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+            [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+          );
+          continue;
+        }
+
+        // Cargar FAQs y Flows del canal meta
         let faqs: any[] = [];
         let flows: any[] = [];
-
         try {
           const resFaqs = await pool.query(
             `SELECT pregunta, respuesta
-                FROM faqs
+               FROM faqs
               WHERE tenant_id = $1
                 AND canal = ANY($2::text[])`,
             [tenantId, ['meta','facebook','instagram']]
           );
           faqs = resFaqs.rows || [];
         } catch {}
-
-        const canal = 'meta';
-
         try {
           const resFlows = await pool.query(
             'SELECT data FROM flows WHERE tenant_id = $1 AND canal = $2 LIMIT 1',
-            [tenantId, canal] // canal puede ser 'whatsapp' | 'meta' | 'facebook' | 'instagram'
+            [tenantId, canalContenido]
           );
           const raw = resFlows.rows[0]?.data;
           flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
           if (!Array.isArray(flows)) flows = [];
-        } catch (error) {
-          flows = [];
-        }        
-        
-        // Detectado del mensaje actual (puede ser útil puntualmente)
-        const idioma = await detectarIdioma(userMessage);
+        } catch { flows = []; }
 
-        // Idioma base del tenant y destino final a usar en TODAS las respuestas
-        const tenantBase: 'es'|'en' = normalizeLang(tenant?.idioma || 'es');
-        let idiomaDestino: 'es'|'en';
-
-        if (isNumericOnly) {
-          // si el usuario mandó solo un número, usamos lo último que guardamos
-          idiomaDestino = await getIdiomaClienteDB(tenantId, senderId, tenantBase);
-          console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (solo número)`);
-        } else {
-          // si escribió texto, detectamos y guardamos
-          let detectado: string | null = null;
-          try { detectado = normLang(await detectarIdioma(userMessage)); } catch {}
-          const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
-          await upsertIdiomaClienteDB(tenantId, senderId, normalizado);
-          idiomaDestino = normalizado;
-          console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userMessage`);
-        }
-
-        // ✅ Incremento de uso con ciclo vigente y canal real
-        const tenantRes = await pool.query(
-          'SELECT membresia_inicio FROM tenants WHERE id = $1',
-          [tenantId]
-        );
-        const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
-
-        if (membresiaInicio) {
-          const cicloMes = cicloMesDesdeMembresia(membresiaInicio);
-          await pool.query(
-            `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-            VALUES ($1, $2, $3, 1)
-            ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
-            [tenantId, canalEnvio, cicloMes]
-          );
-        }
-
-        // 🔒 Chequeo membresía antes de cualquier envío
-        const estaActiva =
-        tenant.membresia_activa === true ||
-        tenant.membresia_activa === 'true' ||
-        tenant.membresia_activa === 1;
-
-        if (!estaActiva) {
-        console.log(`🚫 Tenant ${tenantId} con membresía inactiva. Solo registramos el mensaje y salimos.`);
-        await pool.query(
-          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-          VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-          ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-          [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
-        );
-        continue; // 👉 no contestes nada en Meta si no está activa
-        }
-
-        // 3.4) Saludo / agradecimiento SOLO → respuesta corta y salir
-        const greetingOnly = /^\s*(hola|buenas(?:\s+(tardes|noches|d[ií]as))?|hello|hi|hey)\s*$/i.test(userMessage.trim());
-        const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userMessage.trim());
-
-        if (greetingOnly || thanksOnly) {
-          // guarda el mensaje del usuario (una sola vez)
-          await pool.query(
-            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-            VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-            ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-            [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
-          );
-
-          const fallbackBienvenidaES = "Hola, soy Amy, ¿en qué puedo ayudarte hoy?";
-          const mensajeBienvenida = (tenant.bienvenida_meta?.trim() || fallbackBienvenidaES);
-
-          let out = thanksOnly
-            ? (idioma === 'es'
-                ? "¡De nada! 💬 ¿Quieres ver otra opción del menú?"
-                : "You're welcome! 💬 Would you like to see other options?")
-            : mensajeBienvenida;
-
-          // asegura idioma del cliente
-          try {
-            const langOut = await detectarIdioma(out);
-            if (langOut && langOut !== 'zxx' && langOut !== idioma) {
-              out = await traducirMensaje(out, idiomaDestino);
-            }
-          } catch {}
-
-          await sendMeta(out);
-
-          await pool.query(
-            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-            VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-            ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-            [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
-          );
-
-          // no seguimos a similitud/LLM/menú
-          continue;
-        }
-
-        const nrm = (t: string) =>
-          (t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-        const nUser = nrm(userMessage);
-        
-        // ✅ Detector robusto para “pedir info”
-        const esPedirInfo =
-        /\bmas\s*info\b/.test(nUser) ||
-        /\binfo\b/.test(nUser) ||
-        /\binf\b/.test(nUser) ||
-        /\bquiero\s+mas\b/.test(nUser) ||
-        nUser.endsWith(' inf') ||
-        nUser.includes('quiero informacion') ||
-        nUser.includes('mas informacion');
-
-        const keywordsInfo = [
-        'quiero informacion',
-        'más información',
-        'mas informacion',
-        'info',
-        'necesito informacion',
-        'deseo informacion',
-        'quiero saber',
-        'me puedes decir',
-        'quiero saber mas',
-        'i want info',
-        'i want information',
-        'more info',
-        'more information',
-        'tell me more',
-        'inf',
-        ];
-
-        // 🧠 Flujos guiados (si mensaje es “quiero info”, “más información”, etc.)
-        if (esPedirInfo || keywordsInfo.some(k => nUser.includes(nrm(k)))) {
-          const flow = flows[0];
-          if (flow?.opciones?.length > 0) {
-            // 🔁 Reenviar siempre el menú cuando el usuario lo pide explícitamente
-            const pregunta = flow.pregunta || flow.mensaje || '¿Cómo puedo ayudarte?';
-            const opciones = flow.opciones
-              .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
-              .join('\n');
-
-            let menu = `💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
-
-            if (idiomaDestino !== 'es') {
-              try { menu = await traducirMensaje(menu, idiomaDestino); } 
-              catch (e) { console.warn('No se pudo traducir el menú, se enviará en ES:', e); }
-            }
-
-            await sendMeta(menu);
-
-            // Mantener estado (idempotente) por si luego el usuario responde con número
-            await pool.query(
-              `UPDATE clientes SET estado = 'menu_enviado'
-              WHERE tenant_id = $1 AND contacto = $2`,
-              [tenantId, senderId]
-            );
-
-            console.log("📬 Menú (re)enviado por petición de info.");
-            continue; // ⛔ cortar el flujo aquí
-          }
-        }
-
-        // 🛑 Atajo: si el usuario mandó SOLO un número, resolver flujos YA y salir
-        if (isNumericOnly && Array.isArray(flows[0]?.opciones) && flows[0].opciones.length) {
-          const digitOnlyNum = userMessage.replace(/[^\p{N}]/gu, '').trim();
-          const n = Number(digitOnlyNum);
-          const opcionesNivel1 = flows[0].opciones;
-
-        // 📝 Guardamos el mensaje del usuario una sola vez aquí
-        await pool.query(
-          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-          VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-          ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-          [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
-        );
-
-          if (Number.isInteger(n) && n >= 1 && n <= opcionesNivel1.length) {
-            const opcionSeleccionada = opcionesNivel1[n - 1];
-
-            // 1) Respuesta directa
-            if (opcionSeleccionada?.respuesta) {
-              let out = opcionSeleccionada.respuesta;
-
-              try {
-                const idiomaOut = await detectarIdioma(out);
-                if (idiomaOut && idiomaOut !== 'zxx' && idiomaOut !== idioma) {
-                  out = await traducirMensaje(out, idiomaDestino);
-                }
-              } catch {}
-
-              // 📌 Recordatorio de menú
-              out += "\n\n💡 ¿Quieres ver otra opción del menú? Responde con el número correspondiente.";
-
-              await sendMeta(out);
-
-              // Guarda el mensaje asistente (canal real)
-              await pool.query(
-                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-                [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
-              );
-
-              // ⛔ Importante: no sigas con similitud/LLM
-              continue;
-            }
-
-            // 3.5) Intención → canonizar → FAQ directa (atajo) y salir
-            try {
-              // Detecta intención en ES (si el usuario no escribió en ES, traducimos SOLO para detectar)
-              const textoES = (idioma === 'es') ? userMessage : await traducirMensaje(userMessage, 'es');
-
-              const det = await detectarIntencion(textoES, tenantId, canalEnvio);
-              let intencionProc = (det?.intencion || '').trim().toLowerCase();
-              let intencionParaFaq = intencionProc;
-
-              // Si es "duda" → sub-slug (ej: duda__duracion_clase)
-              if (intencionProc === 'duda') {
-                const refined = buildDudaSlug(userMessage);
-                intencionProc = refined;
-                intencionParaFaq = refined;
-              }
-
-              // Canonicaliza alias (virtuales→online, etc.)
-              intencionProc = normalizeIntentAlias(intencionProc);
-              intencionParaFaq = normalizeIntentAlias(intencionParaFaq);
-
-              // Overrides por keywords
-              const priceRegex = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
-              if (priceRegex.test(userMessage)) {
-                intencionProc = 'precio';
-                intencionParaFaq = 'precio';
-              } else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userMessage)) {
-                intencionProc = 'clases_online';
-                intencionParaFaq = 'clases_online';
-              }
-
-              if (isDirectIntent(intencionParaFaq, INTENTS_DIRECT)) {
-                // 1) Buscar FAQ directa por intención (precio usa helper especial)
-                let respuestaDesdeFaq: string | null = null;
-
-                if (intencionParaFaq === 'precio') {
-                  respuestaDesdeFaq = await fetchFaqPrecio(tenantId, canalContenido); // 'meta'
-                } else {
-                  const { rows: faqPorIntencion } = await pool.query(
-                    `SELECT respuesta
-                      FROM faqs
-                      WHERE tenant_id = $1
-                        AND canal = ANY($2::text[])
-                        AND LOWER(intencion) = LOWER($3)
-                      LIMIT 1`,
-                    [tenantId, ['meta','facebook','instagram'], intencionParaFaq]
-                  );
-                  respuestaDesdeFaq = faqPorIntencion[0]?.respuesta || null;
-                }
-
-                if (respuestaDesdeFaq) {
-                  // Asegura idioma del cliente
-                  let out = respuestaDesdeFaq;
-                  try {
-                    const langOut = await detectarIdioma(out);
-                    if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-                      out = await traducirMensaje(out, idiomaDestino);
-                    }
-                  } catch {}
-
-                  // Guarda mensaje del usuario (una vez)
-                  await pool.query(
-                    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                    VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-                    ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-                    [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
-                  );
-
-                  // Envía y guarda respuesta
-                  await sendMeta(out);
-                  await pool.query(
-                    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                    VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-                    ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-                    [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
-                  );
-
-                  // Interaction (opcional)
-                  await pool.query(
-                    `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-                    VALUES ($1, $2, $3, NOW())
-                    ON CONFLICT DO NOTHING`,
-                    [tenantId, canalEnvio, messageId]
-                  );
-
-                  try {
-                    const det = await detectarIntencion(userMessage, tenantId, canalEnvio);
-                    const nivel = det?.nivel_interes ?? 1;
-                    const intFinal = (intencionParaFaq || '').toLowerCase();
-                  
-                    // Segmentación como en WhatsApp
-                    const intencionesCliente = ["comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"];
-                    if (intencionesCliente.some(p => intFinal.includes(p))) {
-                      await pool.query(
-                        `UPDATE clientes
-                           SET segmento = 'cliente'
-                         WHERE tenant_id = $1 AND contacto = $2
-                           AND (segmento = 'lead' OR segmento IS NULL)`,
-                        [tenantId, senderId]
-                      );
-                    }
-                  
-                    await scheduleFollowUp(intFinal, nivel);
-                  } catch {}
-                  
-                  continue;
-                }
-              }
-            } catch (e) {
-              console.warn('⚠️ Fallback: no se pudo resolver FAQ directa por intención:', e);
-            }
-
-            // 1.5) Submenú terminal (solo mensaje)
-            if (opcionSeleccionada?.submenu && !opcionSeleccionada?.submenu?.opciones?.length) {
-              let out = opcionSeleccionada.submenu.mensaje || '';
-              if (out) {
-                try {
-                  const idiomaOut = await detectarIdioma(out);
-                  if (idiomaOut && idiomaOut !== 'zxx' && idiomaOut !== idioma) {
-                    out = await traducirMensaje(out, idiomaDestino);
-                  }
-                } catch {}
-
-                await sendMeta(out);
-
-                await pool.query(
-                  `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                  VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-                  ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-                  [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
-                );
-
-                // ⬇️ aquí reseteas el estado
-                await pool.query(
-                  `UPDATE clientes SET estado = 'fuera_menu'
-                  WHERE tenant_id = $1 AND contacto = $2`,
-                  [tenantId, senderId]
-                );
-
-                continue;
-              }
-            }
-
-            // 2) Submenú con opciones
-            if (opcionSeleccionada?.submenu?.opciones?.length) {
-              const titulo = opcionSeleccionada.submenu.mensaje || 'Elige una opción:';
-              const opcionesSm = opcionSeleccionada.submenu.opciones
-                .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
-                .join('\n');
-
-              let menuSm = `💡 ${titulo}\n${opcionesSm}\n\nResponde con el número de la opción que deseas.`;
-
-              try {
-                const idMenu = await detectarIdioma(menuSm);
-                if (idMenu && idMenu !== 'zxx' && idMenu !== idiomaDestino) {
-                  menuSm = await traducirMensaje(menuSm, idiomaDestino);
-                }
-              } catch {}
-
-              await sendMeta(menuSm);
-
-              // ➕ seguimos en el flujo guiado
-              await pool.query(
-                `UPDATE clientes SET estado = 'menu_enviado'
-                WHERE tenant_id = $1 AND contacto = $2`,
-                [tenantId, senderId]
-              );
-              continue;
-            }
-
-            // Opción válida pero sin contenido → reenvía menú principal
-            const pregunta = flows[0].pregunta || flows[0].mensaje || '¿Cómo puedo ayudarte?';
-            const opciones = flows[0].opciones
-              .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
-              .join('\n');
-
-            let menu = `⚠️ Esa opción aún no tiene contenido. Elige otra.\n\n💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
-
-            try {
-              if (idiomaDestino !== 'es') {
-                menu = await traducirMensaje(menu, idiomaDestino);
-              }
-            } catch {}
-
-            await sendMeta(menu);
-            continue;
-          } else {
-            // Número fuera de rango → menú principal
-            const pregunta = flows[0].pregunta || flows[0].mensaje || '¿Cómo puedo ayudarte?';
-            const opciones = flows[0].opciones
-              .map((op: any, i: number) => `${i + 1}️⃣ ${op.texto || `Opción ${i + 1}`}`)
-              .join('\n');
-
-            let menu = `⚠️ Opción no válida. Intenta de nuevo.\n\n💡 ${pregunta}\n${opciones}\n\nResponde con el número de la opción que deseas.`;
-
-            try {
-              if (idiomaDestino !== 'es') {
-                menu = await traducirMensaje(menu, idiomaDestino);
-              }
-            } catch {}
-
-            await sendMeta(menu);
-            continue;
-          }
-        }
-
-        // === Entrenamiento por Intención (tabla intenciones) ===
+        // —————————————————————————
+        // INTENT MATCHER (con guards)
+        // —————————————————————————
         try {
-          // Detecta idioma del mensaje del usuario (normalizado a 'es' | 'en')
-          const idiomaDet: 'es' | 'en' = normalizeLang(normLang(idioma) || tenantBase);
+          const idiomaDet: 'es'|'en' = normalizeLang(normLang(await detectarIdioma(userInput)) || tenantBase);
+          const textoParaMatch = (idiomaDet === 'es') ? userInput : await traducirMensaje(userInput, 'es');
 
-          // Para el match de patrones, convenimos comparar en ES (como en FAQs)
-          const textoParaMatch = (idiomaDet === 'es')
-            ? userMessage
-            : await traducirMensaje(userMessage, 'es');
+          const respIntent = await buscarRespuestaPorIntencion({
+            tenant_id: tenantId,
+            canal: 'meta',
+            mensajeUsuario: textoParaMatch,
+            idiomaDetectado: idiomaDet,
+            umbral: Math.max(INTENT_THRESHOLD, 0.70),
+            filtrarPorIdioma: true
+          });
 
-            const respIntent = await buscarRespuestaPorIntencion({
-              tenant_id: tenantId,
-              canal: 'meta',
-              mensajeUsuario: textoParaMatch,
-              idiomaDetectado: idiomaDet,
-              umbral: INTENT_THRESHOLD, // 👈 usa ENV
-            });            
+          // Canonical detect (rápido) para aplicar guards
+          const { intencion: intenTemp } = await detectarIntencion(userInput, tenantId, canalEnvio);
+          const canonical = normalizeIntentAlias((intenTemp || '').toLowerCase());
+          const isCanonicalDirect = isDirectIntent(canonical, INTENTS_DIRECT);
+          const respIntentName = (respIntent?.intent || '').toLowerCase();
+          const askedPrice = PRICE_REGEX.test(userInput);
 
-          if (respIntent) {
-            // Asegura idioma final al cliente
-            let out = respIntent.respuesta;
+          // Guard 1: no “precio” si no lo pidió y la canónica difiere
+          if (respIntent && respIntentName === 'precio' && !askedPrice && canonical && canonical !== 'precio') {
+            // @ts-ignore
+            respIntent.intent = null;
+            // @ts-ignore
+            respIntent.respuesta = null;
+          }
+          // Guard 2: si canónica es DIRECTA y difiere, exige score alto
+          if (respIntent && isCanonicalDirect && respIntentName && respIntentName !== canonical) {
+            const score = Number(respIntent?.score ?? 0);
+            if (score < MATCHER_MIN_OVERRIDE) {
+              // @ts-ignore
+              respIntent.intent = null;
+              // @ts-ignore
+              respIntent.respuesta = null;
+            }
+          }
+
+          if (respIntent?.respuesta) {
+            // Pasar por LLM con promptBase (igual WA)
+            const systemPrompt = [
+              promptBase,
+              '',
+              `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
+              'Formato Meta: máx. ~6 líneas en PROSA. Sin Markdown, sin bullets.',
+              'Usa únicamente los HECHOS; no inventes.',
+              'Si hay ENLACES_OFICIALES en los hechos/prompt, comparte solo 1 (el más pertinente) tal cual.'
+            ].join('\n');
+
+            let facts = respIntent.respuesta;
+            const askedInfo = /\b(info(?:rmación)?|clases?|servicios?)\b/i.test(userInput);
+            if (askedInfo && askedPrice) {
+              try {
+                const { rows } = await pool.query(
+                  `SELECT respuesta FROM faqs
+                    WHERE tenant_id = $1
+                      AND canal = ANY($2::text[])
+                      AND LOWER(intencion) IN ('interes_clases','info_general','servicios')
+                    ORDER BY 1 LIMIT 1`,
+                  [tenantId, ['meta','facebook','instagram']]
+                );
+                const extra = rows[0]?.respuesta?.trim();
+                if (extra) facts = `${extra}\n\n${facts}`;
+              } catch {}
+            }
+
+            const userPrompt = [
+              `MENSAJE_USUARIO:\n${userInput}`,
+              '',
+              `HECHOS (usa sólo esto como fuente):\n${facts}`,
+              '',
+              `IDIOMA_SALIDA: ${idiomaDestino}`
+            ].join('\n');
+
+            let out = facts;
+            try {
+              const completion = await openai.chat.completions.create({
+                model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+                temperature: 0.2,
+                max_tokens: 400,
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user', content: userPrompt },
+                ],
+              });
+              const used = completion.usage?.total_tokens || 0;
+              if (used > 0) {
+                await pool.query(
+                  `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+                   VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+                   ON CONFLICT (tenant_id, canal, mes)
+                   DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+                  [tenantId, used]
+                );
+              }
+              out = completion.choices[0]?.message?.content?.trim() || out;
+            } catch (e) {
+              console.warn('LLM compose falló; uso facts crudos:', e);
+            }
+
             try {
               const langOut = await detectarIdioma(out);
               if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
@@ -766,414 +519,142 @@ try {
               }
             } catch {}
 
-            // Guarda 'user' (una vez)
-            await pool.query(
-              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-              VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-              [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
-            );
-
-            // Envía y guarda 'assistant'
             await sendMeta(out);
             await pool.query(
               `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+               VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+               ON CONFLICT (tenant_id, message_id) DO NOTHING`,
               [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
             );
-
-            // Registra interacción
             await pool.query(
               `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-              VALUES ($1, $2, $3, NOW())
-              ON CONFLICT DO NOTHING`,
+               VALUES ($1, $2, $3, NOW())
+               ON CONFLICT DO NOTHING`,
               [tenantId, canalEnvio, messageId]
             );
 
-            // (Opcional) segmentación + follow-up, usando el detector actual
             try {
-              const det = await detectarIntencion(userMessage, tenantId, canalEnvio);
+              const det = await detectarIntencion(userInput, tenantId, canalEnvio);
               const nivel = det?.nivel_interes ?? 1;
-
-              let intFinal = (respIntent.intent || '').toLowerCase();
-              if (intFinal === 'duda') intFinal = buildDudaSlug(userMessage);
+              let intFinal = (respIntent.intent || '').toLowerCase().trim();
+              if (intFinal === 'duda') intFinal = buildDudaSlug(userInput);
               intFinal = normalizeIntentAlias(intFinal);
-
-              const priceRegex = /\b(precio|precios|costo|costos|cu[eé]sta[n]?|tarifa[s]?|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
-              if (priceRegex.test(userMessage)) {
-                intFinal = 'precio';
-              }
-
-
-              // Segmentación como en WhatsApp
-              const intencionesCliente = ["comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"];
-              if (intencionesCliente.some(p => intFinal.includes(p))) {
-                await pool.query(
-                  `UPDATE clientes
-                    SET segmento = 'cliente'
-                  WHERE tenant_id = $1 AND contacto = $2
-                    AND (segmento = 'lead' OR segmento IS NULL)`,
-                  [tenantId, senderId]
-                );
-              }
-
               await scheduleFollowUp(intFinal, nivel);
-            } catch (e) {
-              console.warn('⚠️ No se pudo evaluar/programar follow-up post-intención:', e);
-            }
+            } catch {}
 
-            console.log('🎯 Intent matcher HIT', {
-              tenantId,
-              canal: canalEnvio,
-              intent: respIntent.intent,
-              score: respIntent.score,
-              pattern: respIntent.matchedPattern,
-              th: INTENT_THRESHOLD
-            });
-            
-            // 🔚 Corta aquí: ya respondió por intención (no pases a interceptor/FAQ/LLM)
-            continue;
-
-          } else {
-            console.log('🪫 Intent matcher: no match', {
-              tenantId,
-              canal: canalEnvio,
-              th: INTENT_THRESHOLD,
-              text: userMessage.slice(0, 160),
-            });
+            continue; // ✅ ya respondió por intención
           }
         } catch (e) {
-          console.warn('⚠️ Intent matcher falló o no encontró coincidencia:', e);
+          console.warn('⚠️ Matcher de intenciones no coincidió o falló:', e);
         }
 
-        // === ATajo directo de intención: PRECIO (solo Meta/Facebook/IG) ===
-        try {
-          const txt = (userMessage || '').toLowerCase();
-          const priceRegex = /\b(precio|precios|costo|costos|cu[eé]sta[n]?|tarifa[s]?|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/;
-
-          if (priceRegex.test(txt)) {
-            // nombres sin modificar DB (cubre 'precio' o 'precios')
-            const nombres = ['precio', 'precios'];
-
-            const { rows } = await pool.query(
-              `SELECT respuesta
-                FROM intenciones
-                WHERE tenant_id = $1
-                  AND canal = ANY($2::text[])
-                  AND activo = TRUE
-                  AND LOWER(nombre) = ANY($3::text[])
-                ORDER BY prioridad ASC, id ASC
-                LIMIT 1`,
-              [tenantId, ['meta','facebook','instagram'], nombres]
-            );
-
-            const resp = rows[0]?.respuesta;
-            if (resp) {
-              // asegurar idioma del cliente
-              let out = resp;
-              try {
-                const langOut = await detectarIdioma(out);
-                if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-                  out = await traducirMensaje(out, idiomaDestino);
-                }
-              } catch {}
-
-              // guarda user (una sola vez)
-              await pool.query(
-                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                VALUES ($1,'user',$2,NOW(),$3,$4,$5)
-                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-                [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
-              );
-
-              // envía y guarda assistant
-              await sendMeta(out);
-              await pool.query(
-                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                VALUES ($1,'assistant',$2,NOW(),$3,$4,$5)
-                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-                [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
-              );
-
-              await pool.query(
-                `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-                VALUES ($1,$2,$3,NOW())
-                ON CONFLICT DO NOTHING`,
-                [tenantId, canalEnvio, messageId]
-              );
-
-              console.log('🎯 Enviado por INTENCIÓN (atajo precio)');
-
-              // Segmentar posible cliente (igual que en WhatsApp)
-              try {
-                await pool.query(
-                  `UPDATE clientes
-                    SET segmento = 'cliente'
-                  WHERE tenant_id = $1 AND contacto = $2
-                    AND (segmento = 'lead' OR segmento IS NULL)`,
-                  [tenantId, senderId]
-                );
-              } catch {}
-
-              try {
-                // Nivel alto por intención de precio; si puedes, mide con el detector
-                const det = await detectarIntencion(userMessage, tenantId, canalEnvio);
-                const nivel = det?.nivel_interes ?? 3;
-                await scheduleFollowUp('precio', nivel);
-              } catch (e) {
-                console.warn('⚠️ No se pudo programar follow-up tras atajo precio:', e);
-              }
-
-              continue; // ⛔ no sigas a interceptor/FAQ/LLM
-            }
-          }
-        } catch (e) {
-          console.warn('⚠️ Atajo precio falló:', e);
-        }
-
-        // === ATAJOS DIRECTOS DE INTENCIÓN (Meta: FB/IG) ===
-        function quickIntentOf(txtRaw: string) {
-          const txt = (txtRaw || '').toLowerCase();
-          const m = [
-            { name: 'precio', aliases: ['precio','precios'], rx: /\b(precio|precios|costo|costos|cu[eé]sta[n]?|tarifa[s]?|mensualidad|membres[ií]a|price|prices|cost|fee|fees|price\s*list)\b/ },
-            { name: 'reservar', aliases: ['reservar','reserva','agendar','agenda','booking','book'], rx: /\b(reserv[ae]r|reserva|agendar|agenda|booking|book)\b/ },
-            { name: 'horario', aliases: ['horario','horarios'], rx: /\b(horario[s]?|schedule|times?)\b/ },
-            { name: 'ubicacion', aliases: ['ubicacion','ubicación','direccion','dirección','address','location'], rx: /\b(ubicaci[oó]n|direcci[oó]n|address|location|d[oó]nde)\b/ },
-            { name: 'clases_online', aliases: ['clases_online','online','virtual'], rx: /\b(online|en\s*linea|en\s*l[ií]nea|virtual(?:es|idad)?)\b/ },
-          ];
-          for (const it of m) if (it.rx.test(txt)) return it;
-          return null;
-        }
-
-        try {
-          const quick = quickIntentOf(userMessage);
-          if (quick) {
-            const { rows } = await pool.query(
-              `SELECT respuesta
-                FROM intenciones
-                WHERE tenant_id = $1
-                  AND canal = ANY($2::text[])
-                  AND activo = TRUE
-                  AND LOWER(nombre) = ANY($3::text[])
-                ORDER BY prioridad ASC, id ASC
-                LIMIT 1`,
-              [tenantId, ['meta','facebook','instagram'], quick.aliases.map(s => s.toLowerCase())]
-            );
-
-            const resp = rows[0]?.respuesta;
-            if (resp) {
-              // Asegura idioma del cliente
-              let out = resp;
-              try {
-                const langOut = await detectarIdioma(out);
-                if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-                  out = await traducirMensaje(out, idiomaDestino);
-                }
-              } catch {}
-
-              // Guarda user una sola vez
-              await pool.query(
-                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                VALUES ($1,'user',$2,NOW(),$3,$4,$5)
-                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-                [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
-              );
-
-              // Envía y guarda assistant
-              await sendMeta(out);
-              await pool.query(
-                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                VALUES ($1,'assistant',$2,NOW(),$3,$4,$5)
-                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-                [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
-              );
-
-              await pool.query(
-                `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-                VALUES ($1,$2,$3,NOW())
-                ON CONFLICT DO NOTHING`,
-                [tenantId, canalEnvio, messageId]
-              );
-
-              console.log(`🎯 Enviado por INTENCIÓN (atajo ${quick.name})`);
-
-              // Segmentar si aplica
-              try {
-                const intFinal = (quick.name || '').toLowerCase();
-                const intencionesCliente = ["comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"];
-                if (intencionesCliente.some(p => intFinal.includes(p))) {
-                  await pool.query(
-                    `UPDATE clientes
-                      SET segmento = 'cliente'
-                    WHERE tenant_id = $1 AND contacto = $2
-                      AND (segmento = 'lead' OR segmento IS NULL)`,
-                    [tenantId, senderId]
-                  );
-                }
-              } catch {}
-
-              try {
-                const det = await detectarIntencion(userMessage, tenantId, canalEnvio);
-                const nivel = det?.nivel_interes ?? 2;
-                // normaliza alias por las dudas
-                let intFinal = (quick.name || '').toLowerCase();
-                if (intFinal === 'duda') intFinal = buildDudaSlug(userMessage);
-                intFinal = normalizeIntentAlias(intFinal);
-                await scheduleFollowUp(intFinal, nivel);
-              } catch (e) {
-                console.warn('⚠️ No se pudo programar follow-up en atajo rápido:', e);
-              }
-
-              continue; // ⛔ no sigas a interceptor/FAQ/LLM
-            }
-          }
-        } catch (e) {
-          console.warn('⚠️ Atajos de intención fallaron:', e);
-        }
-
-        // === Interceptor de principiantes (como WhatsApp) ===
-
-        // 1) Intención canónica para usar en FAQ y en el interceptor
+        // Interceptor de principiantes (canal-agnóstico)
         let intencionParaFaq = '';
         try {
-          // Detectamos en ES para consistencia, traduciendo si hace falta
-          const textoES = (idiomaDestino === 'es') ? userMessage : await traducirMensaje(userMessage, 'es');
+          const textoES = (idiomaDestino === 'es') ? userInput : await traducirMensaje(userInput, 'es');
           const det0 = await detectarIntencion(textoES, tenantId, canalEnvio);
           let proc = (det0?.intencion || '').trim().toLowerCase();
+          if (proc === 'duda') proc = buildDudaSlug(userInput);
+          proc = normalizeIntentAlias(proc);
 
-          if (proc === 'duda') proc = buildDudaSlug(userMessage);       // duda → duda__subslug
-          proc = normalizeIntentAlias(proc);                             // alias a canon
-
-          // overrides por keywords
-          const priceRegex = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
-          if (priceRegex.test(userMessage)) {
-            proc = 'precio';
-          } else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userMessage)) {
-            proc = 'clases_online';
-          }
+          if (PRICE_REGEX.test(userInput)) proc = 'precio';
+          else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userInput)) proc = 'clases_online';
 
           intencionParaFaq = proc;
         } catch {}
 
-        // 2) promptBase (como en WhatsApp, pero alimentado desde meta_configs)
-        const rawPrompt = tenant.prompt_meta?.trim() || 'Información del negocio no disponible.';
-        let promptBase = rawPrompt;
-        try {
-          if (idiomaDestino !== 'es') {
-            promptBase = await traducirMensaje(rawPrompt, idiomaDestino);
-          }
-        } catch { /* si falla, usamos rawPrompt */ }
-
-        // 💡 Intent-first: si hay intención directa, responde con la FAQ OFICIAL y corta.
-        if (isDirectIntent(intencionParaFaq, INTENTS_DIRECT)) {
-          const oficial = await getFaqByIntent(tenantId, intencionParaFaq);
-          if (oficial?.respuesta) {
-            let out = oficial.respuesta;
-            try {
-              const langOut = await detectarIdioma(out);
-              if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-                out = await traducirMensaje(out, idiomaDestino);
-              }
-            } catch {}
-
-            // Guarda el mensaje del usuario
-            await pool.query(
-              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-              VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-              [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
-            );
-
-            // Envía y guarda respuesta
-            await sendMeta(out);
-            await pool.query(
-              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-              [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
-            );
-
-            await pool.query(
-              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-              VALUES ($1, $2, $3, NOW())
-              ON CONFLICT DO NOTHING`,
-              [tenantId, canalEnvio, messageId]
-            );
-
-            console.log('🎯 FAQ oficial enviada por intención:', intencionParaFaq);
-            continue; // ⛔ no pases al interceptor ni al resto
-          }
-        }
-
-        // 3) Ejecutar interceptor
         const interceptado = await runBeginnerRecoInterceptor({
           tenantId,
-          canal: canalEnvio,             // 'facebook' | 'instagram'
-          fromNumber: senderId,          // contacto
-          userInput: userMessage,
+          canal: canalEnvio,
+          fromNumber: senderId,
+          userInput,
           idiomaDestino,
           intencionParaFaq,
           promptBase,
-          enviarFn: enviarMetaSeguro,    // wrapper que acabamos de crear
+          enviarFn: enviarMetaSeguro,
         });
 
         if (interceptado) {
-          // Registrar interacción y cortar (ya respondió el interceptor)
           await pool.query(
             `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-            VALUES ($1, $2, $3, NOW())
-            ON CONFLICT DO NOTHING`,
+             VALUES ($1, $2, $3, NOW())
+             ON CONFLICT DO NOTHING`,
             [tenantId, canalEnvio, messageId]
           );
+          // follow-up post interceptor (opcional)
+          try {
+            const det = await detectarIntencion(userInput, tenantId, canalEnvio);
+            await scheduleFollowUp(intencionParaFaq || normalizeIntentAlias(det?.intencion || ''), det?.nivel_interes ?? 1);
+          } catch {}
           continue;
         }
-        // === fin interceptor ===
 
-        // === Paso 2: FAQ directa por intención (global, igual WhatsApp) ===
+        // FAQ directa por intención (global, igual a WA)
         try {
-          // Reutilizamos intencionParaFaq del interceptor; si está vacío, la calculamos
-          let intentFAQ = (typeof intencionParaFaq === 'string' ? intencionParaFaq : '').trim().toLowerCase();
-
+          let intentFAQ = (intencionParaFaq || '').trim().toLowerCase();
           if (!intentFAQ) {
-            const textoES = (idiomaDestino === 'es') ? userMessage : await traducirMensaje(userMessage, 'es');
+            const textoES = (idiomaDestino === 'es') ? userInput : await traducirMensaje(userInput, 'es');
             const det1 = await detectarIntencion(textoES, tenantId, canalEnvio);
             let proc = (det1?.intencion || '').trim().toLowerCase();
-            if (proc === 'duda') proc = buildDudaSlug(userMessage);  // duda -> duda__subslug
-            proc = normalizeIntentAlias(proc);                       // alias -> canónica
-
-            // overrides por keywords
-            const priceRegex = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
-            if (priceRegex.test(userMessage)) {
-              proc = 'precio';
-            } else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userMessage)) {
-              proc = 'clases_online';
-            }
+            if (proc === 'duda') proc = buildDudaSlug(userInput);
+            proc = normalizeIntentAlias(proc);
+            if (PRICE_REGEX.test(userInput)) proc = 'precio';
+            else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userInput)) proc = 'clases_online';
             intentFAQ = proc;
           }
 
           if (isDirectIntent(intentFAQ, INTENTS_DIRECT)) {
             let respuestaDesdeFaq: string | null = null;
-
             if (intentFAQ === 'precio') {
-              // helper robusto para precio (alias/sub-slugs)
-              respuestaDesdeFaq = await fetchFaqPrecio(tenantId, canalContenido); // 'meta'
+              respuestaDesdeFaq = await fetchFaqPrecio(tenantId, canalContenido);
             } else {
-              const { rows: r } = await pool.query(
-                `SELECT respuesta
-                    FROM faqs
-                  WHERE tenant_id = $1
-                    AND canal = ANY($2::text[])
-                    AND LOWER(intencion) = LOWER($3)
-                  LIMIT 1`,
-                [tenantId, ['meta','facebook','instagram'], intentFAQ]
-              );
-              respuestaDesdeFaq = r[0]?.respuesta || null;
+              const hit = await getFaqByIntent(tenantId, canalContenido as any, intentFAQ);
+              respuestaDesdeFaq = hit?.respuesta || null;
             }
 
             if (respuestaDesdeFaq) {
-              // Traducir a idioma del cliente si hace falta
+              // Pasar por LLM con promptBase (igual WA/intent branch de arriba)
+              const systemPrompt = [
+                promptBase,
+                '',
+                `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
+                'Formato Meta: máx. ~6 líneas, claro, sin bullets.',
+                'Usa SOLO la información del prompt/HECHOS.',
+                'Si hay ENLACES_OFICIALES, comparte solo 1 (el más pertinente).'
+              ].join('\n');
+
+              const userPrompt = [
+                `MENSAJE_USUARIO:\n${userInput}`,
+                '',
+                `HECHOS (fuente autorizada):\n${respuestaDesdeFaq}`
+              ].join('\n');
+
               let out = respuestaDesdeFaq;
+              try {
+                const completion = await openai.chat.completions.create({
+                  model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+                  temperature: 0.2,
+                  max_tokens: 400,
+                  messages: [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user',   content: userPrompt }
+                  ],
+                });
+                const used = completion.usage?.total_tokens || 0;
+                if (used > 0) {
+                  await pool.query(
+                    `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+                     VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+                     ON CONFLICT (tenant_id, canal, mes)
+                     DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+                    [tenantId, used]
+                  );
+                }
+                out = completion.choices[0]?.message?.content?.trim() || out;
+              } catch (e) {
+                console.warn('LLM compose (FAQ) falló; envío facts crudos:', e);
+              }
+
               try {
                 const langOut = await detectarIdioma(out);
                 if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
@@ -1181,364 +662,255 @@ try {
                 }
               } catch {}
 
-              // Guardar mensaje del usuario (una sola vez)
-              await pool.query(
-                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-                [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
-              );
-
-              // Enviar y guardar respuesta
               await sendMeta(out);
               await pool.query(
                 `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+                 VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+                 ON CONFLICT (tenant_id, message_id) DO NOTHING`,
                 [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
               );
-
               await pool.query(
                 `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-                VALUES ($1, $2, $3, NOW())
-                ON CONFLICT DO NOTHING`,
+                 VALUES ($1, $2, $3, NOW())
+                 ON CONFLICT DO NOTHING`,
                 [tenantId, canalEnvio, messageId]
               );
 
-              // ❗Cortar aquí: no pasar a similitud/LLM si ya hubo FAQ directa
-              continue;
+              // follow-up si aplica
+              try {
+                const det = await detectarIntencion(userInput, tenantId, canalEnvio);
+                const nivel = det?.nivel_interes ?? 1;
+                await scheduleFollowUp(intentFAQ, nivel);
+              } catch {}
+
+              continue; // ⛔️ no sigas a similitud/LLM genérico
             }
           }
         } catch (e) {
           console.warn('⚠️ FAQ directa global falló:', e);
         }
-        // === fin Paso 2 ===
 
-        const { intencion, nivel_interes } = await detectarIntencion(userMessage, tenant.id, canalEnvio);
-        const intencionLower = intencion?.toLowerCase() || '';
-
-        let respuesta: string | null = null;
-
-        if (["finalizar", "cerrar", "terminar", "gracias", "eso es todo", "no necesito más"].some(p => intencionLower.includes(p))) {
-          respuesta = "¡Gracias por contactarnos! Si necesitas más información, no dudes en escribirnos. ¡Hasta pronto!";
-        } else {
-          // 1️⃣ Flujos guiados (Meta) → usando lógica traducida (idéntica a WhatsApp)
+        // FLOWS (Meta) si aplica
+        try {
+          const idiomaMsg = await detectarIdioma(userInput);
           const respuestaFlujoMeta = await buscarRespuestaDesdeFlowsTraducido(
-            flows,
-            userMessage,
-            idioma
+            flows, userInput, idiomaMsg
           );
           if (respuestaFlujoMeta) {
-            respuesta = respuestaFlujoMeta;
-
-            // Asegura idioma final
-            const idiomaResp = await detectarIdioma(respuesta);
+            let out = respuestaFlujoMeta;
+            const idiomaResp = await detectarIdioma(out);
             if (idiomaResp && idiomaResp !== 'zxx' && idiomaResp !== idiomaDestino) {
-              respuesta = await traducirMensaje(respuesta, idiomaDestino);
+              out = await traducirMensaje(out, idiomaDestino);
             }
-
-            await sendMeta(respuesta);
+            await sendMeta(out);
             await pool.query(
               `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-              [tenantId, respuesta, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+               VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+               ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
             );
-
             await pool.query(
               `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-              VALUES ($1, $2, $3, NOW())
-              ON CONFLICT DO NOTHING`,
+               VALUES ($1, $2, $3, NOW())
+               ON CONFLICT DO NOTHING`,
               [tenantId, canalEnvio, messageId]
             );
-
             continue; // ⚠️ termina aquí si encontró coincidencia en el flujo
           }
-
-            if (!respuesta) {
-              const mensajeBienvenida = tenant.bienvenida_meta?.trim() || "Hola, soy Amy, ¿en qué puedo ayudarte hoy?";
-              const promptMeta = tenant.prompt_meta?.trim() || "Información del negocio no disponible.";
-            
-              const saludoDetectado = ["hola", "hello", "buenos días", "buenas tardes", "buenas noches", "saludos"].some(p =>
-                userMessage.toLowerCase().includes(p)
-              );
-            
-              const dudaGenericaDetectada = ["quiero más información", "i want more information", "me interesa", "más detalles", "información"].some(p =>
-                userMessage.toLowerCase().includes(p)
-              );
-            
-              const nombreNegocio = tenant.nombre || tenant.name || 'tu negocio';
-
-              if (saludoDetectado) {
-                respuesta = mensajeBienvenida;
-              } else if (dudaGenericaDetectada) {
-                respuesta = "¡Claro! ¿Qué información específica te interesa? Puedo ayudarte con precios, servicios, horarios u otros detalles.";
-              } else {
-                // 🎯 Lógica de traducción para que el prompt se adapte al idioma del cliente
-                const idiomaCliente = await detectarIdioma(userMessage);
-                let promptMetaAdaptado = promptMeta;
-                let promptGenerado = '';
-
-                if (idiomaCliente !== 'es') {
-                  try {
-                    promptMetaAdaptado = await traducirMensaje(promptMeta, idiomaCliente);
-
-                    promptGenerado = `You are Amy, a helpful virtual assistant for the local business "${nombreNegocio}". A customer asked: "${userMessage}". Respond clearly, briefly, and helpfully using the following information:\n\n${promptMetaAdaptado}`;
-                  } catch (err) {
-                    console.error('❌ Error traduciendo prompt_meta:', err);
-                    promptGenerado = `You are Amy, a virtual assistant. A customer asked: "${userMessage}". Reply concisely.`;
-                  }
-                } else {
-                  promptGenerado = `Eres Amy, una asistente virtual para el negocio local "${nombreNegocio}". Un cliente preguntó: "${userMessage}". Responde de forma clara, breve y útil usando esta información:\n\n${promptMeta}`;
-                }
-
-                try {
-                  const completion = await openai.chat.completions.create({
-                    model: 'gpt-3.5-turbo',
-                    messages: [{ role: 'user', content: promptGenerado }],
-                    max_tokens: 400,
-                  });
-
-                  respuesta = completion.choices[0]?.message?.content?.trim() || "Lo siento, no tengo información disponible.";
-                  const tokensConsumidos = completion.usage?.total_tokens || 0;
-
-                  // === Paso 3: registro de FAQ sugerida (dedupe + INTENT_UNIQUE) ===
-
-                  // ⛔ No generes sugeridas si el mensaje NO tiene letras o es muy corto
-                  const hasLetters = /\p{L}/u.test(userMessage);
-                  if (!hasLetters || normalizarTexto(userMessage).length < 4) {
-                    console.log('🧯 No se genera sugerida (sin letras o texto muy corto).');
-                  } else {
-                    // Asegura idioma de salida al cliente
-                    try {
-                      const idiomaRespuesta = await detectarIdioma(respuesta || '');
-                      if (idiomaRespuesta && idiomaRespuesta !== 'zxx' && idiomaRespuesta !== idiomaDestino) {
-                        respuesta = await traducirMensaje(respuesta || '', idiomaDestino);
-                      }
-                    } catch (e) {
-                      console.warn('No se pudo traducir la respuesta de OpenAI:', e);
-                    }
-
-                    const preguntaNormalizada = normalizarTexto(userMessage);
-                    const respuestaNormalizada = (respuesta || '').trim();
-
-                    // Carga existentes (sugeridas y oficiales) para evitar duplicados
-                    let sugeridasExistentes: any[] = [];
-                    try {
-                      const sugRes = await pool.query(
-                        'SELECT id, pregunta, respuesta_sugerida FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2',
-                        [tenantId, canalContenido] // 'meta'
-                      );
-                      sugeridasExistentes = sugRes.rows || [];
-                    } catch (error) {
-                      console.error('⚠️ Error consultando FAQ sugeridas:', error);
-                    }
-
-                    // FAQs oficiales ya cargadas arriba en `faqs`
-                    const yaExisteSug = yaExisteComoFaqSugerida(userMessage, respuesta || '', sugeridasExistentes);
-                    const yaExisteAprob = yaExisteComoFaqAprobada(userMessage, respuesta || '', faqs);
-
-                    if (yaExisteSug || yaExisteAprob) {
-                      if (yaExisteSug) {
-                        await pool.query(
-                          `UPDATE faq_sugeridas
-                            SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
-                          WHERE id = $1`,
-                          [yaExisteSug.id]
-                        );
-                        console.log(`⚠️ Pregunta similar ya sugerida (ID: ${yaExisteSug.id})`);
-                      } else {
-                        console.log(`⚠️ Pregunta ya registrada como FAQ oficial.`);
-                      }
-                    } else {
-                      // Detecta intención en ES para guardar (canónica + subslug duda + overrides)
-                      const textoESparaGuardar = (idiomaDestino === 'es') ? userMessage : await traducirMensaje(userMessage, 'es');
-                      const detGuardar = await detectarIntencion(textoESparaGuardar, tenantId, canalEnvio);
-                      let intencionFinal = (detGuardar?.intencion || '').trim().toLowerCase();
-
-                      if (intencionFinal === 'duda') {
-                        intencionFinal = buildDudaSlug(userMessage); // p.ej. duda__duracion_clase
-                      }
-                      intencionFinal = normalizeIntentAlias(intencionFinal);
-
-                      // Overrides por keywords
-                      const priceRegex = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
-                      if (priceRegex.test(userMessage)) {
-                        intencionFinal = 'precio';
-                      } else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userMessage)) {
-                        intencionFinal = 'clases_online';
-                      }
-
-                      // Enforce unicidad para INTENT_UNIQUE
-                      if (INTENT_UNIQUE.has(intencionFinal)) {
-                          // ✅ Chequear oficial en TODO el grupo Meta
-                          const { rows: faqsOficiales } = await pool.query(
-                            `SELECT 1
-                                FROM faqs
-                              WHERE tenant_id = $1
-                                AND canal = ANY($2::text[])
-                                AND LOWER(intencion) = LOWER($3)
-                              LIMIT 1`,
-                            [tenantId, ['meta','facebook','instagram'], intencionFinal]
-                          );
-                          if (faqsOficiales.length > 0) {
-                            console.log(`⛔ Skip sugerida: ya hay FAQ oficial para "${intencionFinal}".`);
-                          } else {
-                            // ¿ya existe sugerida con misma intención sin procesar?
-                            const { rows: sugConInt } = await pool.query(
-                              `SELECT 1 FROM faq_sugeridas
-                                WHERE tenant_id = $1 AND canal = $2 AND procesada = false
-                                  AND LOWER(intencion) = LOWER($3)
-                                LIMIT 1`,
-                              [tenantId, canalContenido, intencionFinal]
-                            );
-                            if (sugConInt.length > 0) {
-                              console.log(`⚠️ Ya existe FAQ sugerida con intención "${intencionFinal}". No se guarda duplicado.`);
-                            } else {
-                              await pool.query(
-                                `INSERT INTO faq_sugeridas
-                                  (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
-                                VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
-                                [tenantId, canalContenido, preguntaNormalizada, respuestaNormalizada, idioma, intencionFinal]
-                              );
-                              console.log(`📝 Sugerida creada (única) intención="${intencionFinal}"`);
-                            }
-                          }
-                        } else {
-                        // Intenciones no-únicas (p.ej. múltiples dudas refinadas)
-                        await pool.query(
-                          `INSERT INTO faq_sugeridas
-                            (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
-                          VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
-                          [tenantId, canalContenido, preguntaNormalizada, respuestaNormalizada, idioma, intencionFinal]
-                        );
-                        console.log(`📝 Sugerida creada (no-única) intención="${intencionFinal}"`);
-                      }
-                    }
-                  }
-                  // === fin Paso 3 ===
-
-                  if (tokensConsumidos > 0) {
-                    await pool.query(
-                      `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-                       VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE)::date, $2)
-                       ON CONFLICT (tenant_id, canal, mes)
-                       DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-                      [tenantId, tokensConsumidos]
-                    );                    
-                  }
-                } catch (err) {
-                  console.error('❌ Error con OpenAI:', err);
-                  respuesta = "Lo siento, no tengo información disponible en este momento.";
-                }
-              }
-            }                        
+        } catch (e) {
+          console.warn('⚠️ Flows falló:', e);
         }
 
-        respuesta = respuesta ?? "Lo siento, no tengo información disponible.";
-        const idiomaFinal = await detectarIdioma(respuesta);
-        if (idiomaFinal && idiomaFinal !== 'zxx' && idiomaFinal !== idiomaDestino) {
-          respuesta = await traducirMensaje(respuesta, idiomaDestino);
-        }
+        // —————————————————————————
+        // Similaridad + LLM fallback (sugeridas)
+        // —————————————————————————
+        let respuesta: string | null = null;
 
-        // 💡 Solo guardar si la intención es realmente de venta
-        const intencionesValidas = ['comprar', 'pagar', 'precio', 'reservar'];
-
-        if (intencionesValidas.includes(intencionLower) && (nivel_interes ?? 0) >= 2) {
-          await pool.query(
-            `INSERT INTO sales_intelligence (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, fecha)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-            ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-            [tenantId, senderId, canalEnvio, userMessage, intencion, nivel_interes, messageId]
-          );
-        }
-
-        // 📝 Guardar mensaje del usuario
-        await pool.query(
-          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-           VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-           [tenantId, userMessage, canalEnvio, senderId || 'anónimo', messageId]
-        );        
-
-        console.log(`🔍 Tenant ${tenantId} membresía_activa:`, tenant.membresia_activa, typeof tenant.membresia_activa);
-
-        const yaExisteContenidoReciente = await pool.query(
-          `SELECT 1 FROM messages WHERE tenant_id = $1 AND role = 'assistant' AND canal = $2 AND content = $3 
-           AND timestamp >= NOW() - INTERVAL '5 seconds' LIMIT 1`,
-           [tenantId, canalEnvio, respuesta]
-        );        
-        if (yaExisteContenidoReciente.rows.length === 0) {
+        // Similaridad sobre FAQs traducidas (reutiliza helper existente si lo prefieres)
+        // Aquí haremos un fallback directo a LLM con promptBase si no hubo nada antes:
+        if (!respuesta) {
           try {
-            console.log('📤 Enviando mensaje a Meta...', { respuesta, canal: canalEnvio, senderId });
+            const systemPrompt = [
+              promptBase,
+              '',
+              `Reglas:
+              - Usa EXCLUSIVAMENTE la info del prompt. Si falta algo, dilo sin inventar.
+              - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
+              - Meta: máx. ~6 líneas en PROSA. Sin Markdown/viñetas.
+              - Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.
+              - CTA único (si aplica). Enlaces: solo si están en ENLACES_OFICIALES.`
+            ].join('\n');
 
-            await enviarMensajePorPartes({
-              respuesta,
-              senderId,
-              tenantId,
-              canal: canalEnvio,
-              messageId,
-              accessToken,
+            const userPrompt = `MENSAJE_USUARIO:\n${userInput}\n\nResponde usando solo los datos del prompt.`;
+
+            const completion = await openai.chat.completions.create({
+              model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+              temperature: 0.2,
+              max_tokens: 400,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user',   content: userPrompt }
+              ],
             });
 
-            console.log('✅ Mensaje enviado correctamente.');
-          } catch (err: any) {
-            console.error('❌ Error al enviar mensaje por partes:', err?.response?.data || err.message || err);
+            const used = completion.usage?.total_tokens ?? 0;
+            if (used > 0) {
+              await pool.query(
+                `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+                 VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+                 ON CONFLICT (tenant_id, canal, mes)
+                 DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+                [tenantId, used]
+              );
+            }
+
+            respuesta = completion.choices[0]?.message?.content?.trim()
+                      || bienvenida;
+
+            // Asegura idioma
+            try {
+              const langOut = await detectarIdioma(respuesta);
+              if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+                respuesta = await traducirMensaje(respuesta, idiomaDestino);
+              }
+            } catch {}
+
+            // Registrar FAQ sugerida (con reglas de unicidad como WA)
+            const hasLetters = /\p{L}/u.test(userInput);
+            if (hasLetters && normalizarTexto(userInput).length >= 4) {
+              const preguntaNormalizada = normalizarTexto(userInput);
+              const respuestaNormalizada = (respuesta || '').trim();
+
+              let sugeridasExistentes: any[] = [];
+              try {
+                const sugRes = await pool.query(
+                  'SELECT id, pregunta, respuesta_sugerida FROM faq_sugeridas WHERE tenant_id = $1 AND canal = $2',
+                  [tenantId, canalContenido]
+                );
+                sugeridasExistentes = sugRes.rows || [];
+              } catch {}
+
+              const yaExisteSug = yaExisteComoFaqSugerida(userInput, respuesta || '', sugeridasExistentes);
+              const yaExisteAprob = yaExisteComoFaqAprobada(userInput, respuesta || '', faqs);
+
+              if (!yaExisteSug && !yaExisteAprob) {
+                const textoESparaGuardar = (idiomaDestino === 'es') ? userInput : await traducirMensaje(userInput, 'es');
+                const detGuardar = await detectarIntencion(textoESparaGuardar, tenantId, canalEnvio);
+                let intencionFinal = (detGuardar?.intencion || '').trim().toLowerCase();
+                if (intencionFinal === 'duda') intencionFinal = buildDudaSlug(userInput);
+                intencionFinal = normalizeIntentAlias(intencionFinal);
+
+                if (PRICE_REGEX.test(userInput)) intencionFinal = 'precio';
+                else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userInput)) intencionFinal = 'clases_online';
+
+                if (INTENT_UNIQUE.has(intencionFinal)) {
+                  const { rows: faqsOficiales } = await pool.query(
+                    `SELECT 1
+                       FROM faqs
+                      WHERE tenant_id = $1
+                        AND canal = ANY($2::text[])
+                        AND LOWER(intencion) = LOWER($3)
+                      LIMIT 1`,
+                    [tenantId, ['meta','facebook','instagram'], intencionFinal]
+                  );
+                  if (!faqsOficiales.length) {
+                    const { rows: sugConInt } = await pool.query(
+                      `SELECT 1 FROM faq_sugeridas
+                        WHERE tenant_id = $1 AND canal = $2 AND procesada = false
+                          AND LOWER(intencion) = LOWER($3)
+                        LIMIT 1`,
+                      [tenantId, canalContenido, intencionFinal]
+                    );
+                    if (!sugConInt.length) {
+                      await pool.query(
+                        `INSERT INTO faq_sugeridas
+                          (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
+                        VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
+                        [tenantId, canalContenido, preguntaNormalizada, respuestaNormalizada, idiomaDestino, intencionFinal]
+                      );
+                    }
+                  }
+                } else {
+                  await pool.query(
+                    `INSERT INTO faq_sugeridas
+                      (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
+                    VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
+                    [tenantId, canalContenido, preguntaNormalizada, respuestaNormalizada, idiomaDestino, intencionFinal]
+                  );
+                }
+              } else if (yaExisteSug) {
+                await pool.query(
+                  `UPDATE faq_sugeridas
+                     SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
+                   WHERE id = $1`,
+                  [yaExisteSug.id]
+                );
+              }
+            }
+          } catch (e) {
+            console.warn('❌ EARLY_RETURN Meta falló:', e);
           }
-          
         }
 
-        await pool.query(
-          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-           VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-           [tenantId, respuesta, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
-        );
-        
+        // Enviar salida final si llegamos aquí
+        const outFinal = respuesta || bienvenida;
         try {
-          // Usa la intención ya detectada, pero canonízala para consistencia
-          let intFinal = (intencionLower || '').trim().toLowerCase();
-          if (intFinal === 'duda') {
-            intFinal = buildDudaSlug(userMessage);
-          }
-          intFinal = normalizeIntentAlias(intFinal);
-        
-          // Overrides por keywords
-          const priceRegex = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
-          if (priceRegex.test(userMessage)) {
-            intFinal = 'precio';
-          } else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userMessage)) {
-            intFinal = 'clases_online';
-          }
-        
-          // Segmentación como en WhatsApp
+          await sendMeta(outFinal);
+          await pool.query(
+            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+             VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+             ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+            [tenantId, outFinal, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+          );
+          await pool.query(
+            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+             VALUES ($1, $2, $3, NOW())
+             ON CONFLICT DO NOTHING`,
+            [tenantId, canalEnvio, messageId]
+          );
+        } catch (err: any) {
+          console.error('❌ Error enviando a Meta:', err?.response?.data || err.message || err);
+        }
+
+        // Inteligencia de ventas + follow-up final (idéntico a WA)
+        try {
+          const det = await detectarIntencion(userInput, tenantId, canalEnvio);
+          const nivel_interes = det?.nivel_interes ?? 1;
+          let intFinal = normalizeIntentAlias((det?.intencion || '').toLowerCase());
+
+          if (intFinal === 'duda') intFinal = buildDudaSlug(userInput);
+          if (PRICE_REGEX.test(userInput)) intFinal = 'precio';
+          else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userInput)) intFinal = 'clases_online';
+
+          // Segmentación básica
           const intencionesCliente = ["comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"];
           if (intencionesCliente.some(p => intFinal.includes(p))) {
             await pool.query(
               `UPDATE clientes
-                 SET segmento = 'cliente'
+                  SET segmento = 'cliente'
                WHERE tenant_id = $1 AND contacto = $2
                  AND (segmento = 'lead' OR segmento IS NULL)`,
               [tenantId, senderId]
             );
           }
-        
-          await scheduleFollowUp(intFinal, nivel_interes ?? 1);
-        } catch (e) {
-          console.warn('⚠️ Error al evaluar/programar follow-up final:', e);
-        }
-        
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-           VALUES ($1, $2, $3, NOW())
-           ON CONFLICT DO NOTHING`,
-           [tenant.id, canalEnvio, messageId]
-        );
 
+          // Sales intelligence (opcional)
+          await pool.query(
+            `INSERT INTO sales_intelligence
+              (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
+            [tenantId, senderId, canalEnvio, userInput, intFinal, nivel_interes, messageId]
+          );
+
+          await scheduleFollowUp(intFinal, nivel_interes);
+        } catch (e) {
+          console.warn('⚠️ Error en inteligencia de ventas o seguimiento:', e);
+        }
       }
     }
   } catch (error: any) {
-    console.error('❌ Error en webhook:', error.response?.data || error.message || error);
+    console.error('❌ Error en webhook Meta:', error?.response?.data || error.message || error);
   }
 });
 
