@@ -242,8 +242,8 @@ function stripLeadGreetings(t: string) {
       if (raw) {
         const out = tidyMultiAnswer(raw, {
           maxLines: 6,
-          preferredDomains: ['app.glofox.com','glofox.com'],
-          cta: '¿Quieres que te envíe el enlace oficial para ver horarios/precios o resolver otra duda?'
+          freezeUrls: true,
+          cta: '¿Hay algo mas en lo que te pueda ayudar?'
         });
 
         await enviarWhatsApp(fromNumber, out, tenant.id);
