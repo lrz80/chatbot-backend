@@ -101,7 +101,9 @@ export async function answerMultiIntent(opts: {
     `Reglas:
     - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
     - WhatsApp: máx. ~6 líneas en prosa. Sin viñetas/markdown.
-    - Usa SOLO la información del prompt. Si faltan datos (p.ej. precios), dilo explícitamente y ofrece el siguiente paso (enlace oficial/CTA).
+    - Usa SOLO la información del prompt.
+    - SI HAY PRECIOS EN EL PROMPT/HECHOS, MENCIONA al menos 1–3 planes con su monto (resumen corto).
+    - Si NO hay precios en el prompt/HECHOS, dilo explícitamente y ofrece el siguiente paso (enlace oficial/CTA).
     - Si el usuario preguntó varias cosas, cúbrelas en UN solo mensaje.`,
   ].join('\n');
 
@@ -113,9 +115,8 @@ export async function answerMultiIntent(opts: {
       `MENSAJE_USUARIO:\n${userText}`,
       '',
       `HECHOS (usa esto como única fuente):\n${hechos}`,
-      missing.length
-        ? `\nNOTA: No hay datos oficiales para: ${missing.join(', ')}. Si el usuario pidió eso, indícalo y ofrece el enlace/CTA más útil.`
-        : ''
+      missing.length ? `\nNOTA: No hay datos oficiales para: ${missing.join(', ')}.` : '',
+      `\nINSTRUCCIÓN: Si en los HECHOS aparecen montos ($, USD), incluye un resumen de precios en texto plano.`
     ].join('\n');
 
     try {
@@ -157,7 +158,7 @@ export async function answerMultiIntent(opts: {
       max_tokens: 400,
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user',   content: `MENSAJE_USUARIO:\n${userText}\n\nResponde solo con lo que está en el prompt. Si faltan precios u horarios oficiales, dilo y ofrece el mejor siguiente paso (link o agendar).` }
+        { role: 'user', content: `MENSAJE_USUARIO:\n${userText}\n\nResponde solo con lo que está en el prompt. Si el prompt contiene montos/precios, dilo de forma breve; si no, indícalo y ofrece el mejor siguiente paso (link o agendar).` }
       ],
     });
     const out = completion.choices[0]?.message?.content?.trim();

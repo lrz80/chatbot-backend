@@ -737,8 +737,10 @@ if (interceptado) {
     '',
     `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
     'Formato WhatsApp: máx. 6 líneas, claro y con bullets si hace falta.',
-    'Usa únicamente los HECHOS; no inventes.',
-    'Si hay ENLACES_OFICIALES en los hechos, comparte solo 1 (el más pertinente) tal cual.'
+    'Usa SOLO la información del prompt.',
+    'SI HAY PRECIOS EN EL PROMPT/HECHOS, MENCIONA al menos 1-3 planes con su monto (resumen corto).',
+    'Si hay ENLACES_OFICIALES en los prompt/hechos, comparte solo 1 (el más pertinente) tal cual.',
+    'Si el usuario preguntó varias cosas, cúbrelas en UN solo mensaje.'
   ].join('\n');
 
   const userPrompt = [
