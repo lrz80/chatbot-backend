@@ -1,5 +1,4 @@
 // utils/multiIntent.ts
-import pool from '../lib/db';
 import { Canal } from '../lib/detectarIntencion';
 import { normalizeIntentAlias } from '../lib/intentSlug';
 import { traducirMensaje } from '../lib/traducirMensaje';
@@ -10,10 +9,14 @@ import { linksFromPrompt, pickUrlForIntents } from './linksFromPrompt';
 
 type TopIntent = { intent: string; score: number };
 
+export type MultiAnswer = {
+  text: string;              // respuesta final (lista para enviar)
+  missingIntents: string[];  // intents sin FAQ oficial (ej. ['precio'])
+};
+
 const CANDIDATES = [
   'interes_clases','info_general','servicios',
   'precio','horario','ubicacion','reservar','comprar','clases_online',
-  // 👇 nuevas
   'soporte','faq','politicas','giftcards'
 ];
 
@@ -31,10 +34,10 @@ function keywordVote(txt: string) {
   if (/\b(compr(ar|a)|buy|checkout)\b/i.test(s)) add('comprar', 1);
   if (/\b(online|virtual)\b/i.test(s)) add('clases_online', 1);
 
-  // 👇 soporte / contacto
+  // soporte / contacto
   if (/\b(soporte|support|ayuda|help|contact(o)?|customer\s*service|n[uú]mero|whatsapp|instagram|facebook|email)\b/i.test(s)) add('soporte', 2);
 
-  // 👇 extras
+  // extras
   if (/\b(faq|preguntas\s*frecuentes)\b/i.test(s)) add('faq', 1);
   if (/\b(pol[ií]tica(s)?|policies|terms|privacidad|privacy)\b/i.test(s)) add('politicas', 1);
   if (/\b(gift\s*card(s)?|giftcards?)\b/i.test(s)) add('giftcards', 1);
@@ -60,7 +63,7 @@ export async function answerMultiIntent(opts: {
   idiomaDestino: 'es'|'en';
   /** pásame el prompt base ya resuelto por canal/tenant/idioma */
   promptBase: string;
-}): Promise<string | null> {
+}): Promise<MultiAnswer | null> {
   const { tenantId, canal, userText, idiomaDestino, promptBase } = opts;
 
   const top = await detectTopIntents(userText, tenantId, canal, 4);
@@ -178,10 +181,10 @@ export async function answerMultiIntent(opts: {
   // Elige el enlace exacto desde el prompt para las intenciones detectadas (sin heurísticas)
   const linkMap = linksFromPrompt(promptBase);
   const chosenUrl = pickUrlForIntents(linkMap, canal, intentsOrdered);
-
   if (chosenUrl && !outText.includes(chosenUrl)) {
     outText = `${outText}\n\n${chosenUrl}`;
   }
 
-  return outText.trim();
+  // Devuelve también qué intenciones faltaron (para guardar faq_sugeridas en el caller)
+  return { text: outText.trim(), missingIntents: missing };
 }

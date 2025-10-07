@@ -229,21 +229,15 @@ function stripLeadGreetings(t: string) {
     console.log('[MULTI] hasPrecio=', hasPrecio, 'hasInfo=', hasInfo, 'len=', top.length, 'multiAsk=', multiAsk);
 
     if (multiAsk) {
-      const raw = await answerMultiIntent({
-        tenantId: tenant.id,
-        canal: canal as Canal,
-        userText: userInput,
-        idiomaDestino,
-        promptBase // 👈 pasa tu prompt ya resuelto por canal/tenant/idioma
-      });
+      const multi = await answerMultiIntent({ tenantId: tenant.id, canal: canal as Canal, userText: userInput, idiomaDestino, promptBase });
 
-      console.log('[MULTI] answer length=', raw?.length || 0);
+      console.log('[MULTI] answer length=', multi?.text?.length ?? 0);
 
-      if (raw) {
-        const out = tidyMultiAnswer(raw, {
+      if (multi) {
+        const out = tidyMultiAnswer(multi.text, {
           maxLines: 6,
           freezeUrls: true,
-          cta: '¿Hay algo mas en lo que te pueda ayudar?'
+          cta: '¿Hay algo más en lo que te pueda ayudar?'
         });
 
         await enviarWhatsApp(fromNumber, out, tenant.id);
@@ -260,6 +254,65 @@ function stripLeadGreetings(t: string) {
           ON CONFLICT DO NOTHING`,
           [tenant.id, canal, messageId]
         );
+
+        // 👉 REGISTRAR FAQS SUGERIDAS SOLO PARA LAS INTENCIONES QUE FALTARON
+        try {
+          if (multi.missingIntents?.length) {
+            // Carga FAQs oficiales para evitar duplicados por intención
+            const { rows: faqsOficiales } = await pool.query(
+              `SELECT intencion FROM faqs WHERE tenant_id = $1 AND canal = $2`,
+              [tenant.id, canal]
+            );
+            const oficialesSet = new Set((faqsOficiales||[]).map(r => (r.intencion||'').trim().toLowerCase()));
+
+            // Carga sugeridas pendientes para no duplicar intención única
+            const { rows: sugeridasExist } = await pool.query(
+              `SELECT id, pregunta, respuesta_sugerida, intencion
+                FROM faq_sugeridas
+                WHERE tenant_id = $1 AND canal = $2 AND procesada = false`,
+              [tenant.id, canal]
+            );
+
+            const preguntaNormalizada = normalizarTexto(userInput);
+            const respuestaNormalizada = out.trim();
+
+            for (const miss of multi.missingIntents) {
+              const inten = (miss || '').trim().toLowerCase();
+              // si ya existe oficial, no sugerir
+              if (oficialesSet.has(inten)) continue;
+
+              // si es intención única y ya hay sugerida igual, no sugerir
+              const esUnica = INTENT_UNIQUE.has(inten);
+              const yaSugInt = sugeridasExist.some(s => (s.intencion||'').trim().toLowerCase() === inten);
+              if (esUnica && yaSugInt) continue;
+
+              // dedupe por texto (opcional, rápido)
+              const dupSug = yaExisteComoFaqSugerida(userInput, respuestaNormalizada, sugeridasExist);
+              const dupAprob = yaExisteComoFaqAprobada(userInput, respuestaNormalizada, faqs);
+              if (dupSug || dupAprob) {
+                if (dupSug) {
+                  await pool.query(
+                    `UPDATE faq_sugeridas
+                        SET veces_repetida = veces_repetida + 1, ultima_fecha = NOW()
+                      WHERE id = $1`,
+                    [dupSug.id]
+                  );
+                }
+                continue;
+              }
+
+              // Inserta sugerida
+              await pool.query(
+                `INSERT INTO faq_sugeridas
+                  (tenant_id, canal, pregunta, respuesta_sugerida, idioma, procesada, ultima_fecha, intencion)
+                VALUES ($1, $2, $3, $4, $5, false, NOW(), $6)`,
+                [tenant.id, canal, preguntaNormalizada, respuestaNormalizada, idiomaDestino, inten]
+              );
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ No se pudieron registrar faq_sugeridas desde fast-path:', e);
+        }
 
         // follow-up directo para multi-intención
         await scheduleFollowUp('interes_clases', 3);
