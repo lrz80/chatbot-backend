@@ -1,186 +1,168 @@
-// backend/src/utils/multiIntent.ts
+// utils/multiIntent.ts
 import pool from '../lib/db';
-import { detectarIntencion } from '../lib/detectarIntencion';
+import { Canal } from '../lib/detectarIntencion';
 import { normalizeIntentAlias } from '../lib/intentSlug';
 import { traducirMensaje } from '../lib/traducirMensaje';
-import { detectarIdioma } from '../lib/detectarIdioma';
 import { getFaqByIntent } from './getFaqByIntent';
 import { fetchFaqPrecio } from '../lib/faq/fetchFaqPrecio';
-import type { Canal } from '../lib/detectarIntencion';
+import OpenAI from 'openai';
 
-type Detected = { intent: string; score: number };
+type TopIntent = { intent: string; score: number };
 
-// ——— utilidades de normalización ———
-const stripDiacritics = (s: string) =>
-  (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-const norm = (s: string) => stripDiacritics((s || '').toLowerCase().trim());
+const CANDIDATES = [
+  'interes_clases','info_general','servicios','precio','horario','ubicacion','reservar','comprar','clases_online'
+];
 
-// Saludos al inicio (hola/hi/hey/buenos días/tardes/noches) → fuera
-const STRIP_GREET = (t: string) =>
-  (t || '')
-    .replace(/^\s*(hola+|hello+|hi+|hey+|buen[oa]s(?:\s+(d[ií]as|tardes|noches))?)[\s!.,:-]*/i, '')
-    .trim();
+// Heurística sencilla por keywords (si no usas embeddings aquí)
+function keywordVote(txt: string) {
+  const s = (txt || '').toLowerCase();
+  const votes: Record<string, number> = {};
+  const add = (k: string, w = 1) => (votes[k] = (votes[k] || 0) + w);
 
-/**
- * Detecta hasta N intenciones “top” combinando:
- * - una pasada por `detectarIntencion` (si cae a heurísticas, 0 tokens; si usa fallback LLM, consumirá tokens)
- * - reglas rápidas por palabras clave
- */
+  if (/\b(info|información|services?|servicios?|clases?)\b/i.test(s)) add('interes_clases', 2);
+  if (/\b(precio|precios|cost(o|os)|tarifa(s)?|fee|fees|price|prices|rate|rates|cu[oó]ta|mensualidad|membership|charge|tuition)\b/i.test(s)) add('precio', 2);
+  if (/\b(horario|schedule|schedules|available times?)\b/i.test(s)) add('horario', 1);
+  if (/\b(ubicaci[oó]n|address|location|d[oó]nde)\b/i.test(s)) add('ubicacion', 1);
+  if (/\b(reserv(ar|a)|agendar|book|booking)\b/i.test(s)) add('reservar', 1);
+  if (/\b(compr(ar|a)|buy|checkout)\b/i.test(s)) add('comprar', 1);
+  if (/\b(online|virtual)\b/i.test(s)) add('clases_online', 1);
+
+  const arr = Object.entries(votes).map(([intent, score]) => ({ intent, score }));
+  return arr.sort((a, b) => b.score - a.score);
+}
+
 export async function detectTopIntents(
-  text: string,
-  tenantId: string,
-  canal: Canal,
-  maxIntents = 3,
-  threshold = 0.55
-): Promise<Detected[]> {
-  const cleaned = STRIP_GREET(text);
-  console.log('[MULTI] cleaned=', cleaned); // 👈 NUEVO
-  const lc = norm(cleaned);
+  userText: string,
+  _tenantId: string,
+  _canal: Canal,
+  k = 3
+): Promise<TopIntent[]> {
+  const ranked = keywordVote(userText).slice(0, k);
+  return ranked.map(r => ({ intent: normalizeIntentAlias(r.intent), score: r.score }));
+}
 
-  const bag: Detected[] = [];
+export async function answerMultiIntent(opts: {
+  tenantId: string;
+  canal: Canal;
+  userText: string;
+  idiomaDestino: 'es'|'en';
+  /** pásame el prompt base ya resuelto por canal/tenant/idioma */
+  promptBase: string;
+}): Promise<string | null> {
+  const { tenantId, canal, userText, idiomaDestino, promptBase } = opts;
 
-  // 1) clasificador general (puede usar fallback LLM)
-  try {
-    const { intencion } = await detectarIntencion(cleaned, tenantId, canal);
-    if (intencion) {
-      bag.push({ intent: normalizeIntentAlias(intencion.toLowerCase()), score: 1 });
+  const top = await detectTopIntents(userText, tenantId, canal, 4);
+  if (!top?.length) {
+    // ❗️Sin señales: deja que el pipeline normal maneje
+    return null;
+  }
+
+  const hasInfo   = top.some(t => ['interes_clases','info_general','servicios'].includes(t.intent));
+  const hasPrecio = top.some(t => t.intent === 'precio');
+
+  // Orden sugerido (info → precio → demás)
+  const intentsOrdered = [
+    ...(hasInfo ? ['interes_clases'] : []),
+    ...(hasPrecio ? ['precio'] : []),
+    ...top.map(t => t.intent).filter(i => !['interes_clases','precio'].includes(i))
+  ].filter((v, i, a) => a.indexOf(v) === i);
+
+  const parts: string[] = [];
+  const missing: string[] = [];
+
+  for (const intent of intentsOrdered) {
+    let fact: string | null = null;
+
+    if (intent === 'precio') {
+      fact = await fetchFaqPrecio(tenantId, canal);
+      if (!fact) {
+        const hitPrecio = await getFaqByIntent(tenantId, canal, 'precio');
+        fact = hitPrecio?.respuesta || null;
+      }
+    } else {
+      const hit = await getFaqByIntent(tenantId, canal, intent);
+      fact = hit?.respuesta || null;
     }
+
+    if (fact) {
+      parts.push(fact.trim());
+    } else {
+      missing.push(intent);
+    }
+  }
+
+  // ⚠️ Si no hay NINGÚN fact, igual contesta usando el promptBase (LLM),
+  // siendo transparente con la falta de datos específicos.
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+  const systemPrompt = [
+    promptBase,
+    '',
+    `Reglas:
+    - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
+    - WhatsApp: máx. ~6 líneas en prosa. Sin viñetas/markdown.
+    - Usa SOLO la información del prompt. Si faltan datos (p.ej. precios), dilo explícitamente y ofrece el siguiente paso (enlace oficial/CTA).
+    - Si el usuario preguntó varias cosas, cúbrelas en UN solo mensaje.`,
+  ].join('\n');
+
+  // Caso A: hay algunos facts → pásalos como HECHOS al LLM para que los compacte;
+  // menciona honestamente lo que falte (missing)
+  if (parts.length) {
+    const hechos = parts.join('\n\n');
+    const userMsg = [
+      `MENSAJE_USUARIO:\n${userText}`,
+      '',
+      `HECHOS (usa esto como única fuente):\n${hechos}`,
+      missing.length
+        ? `\nNOTA: No hay datos oficiales para: ${missing.join(', ')}. Si el usuario pidió eso, indícalo y ofrece el enlace/CTA más útil.`
+        : ''
+    ].join('\n');
+
+    try {
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.2,
+        max_tokens: 400,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: userMsg }
+        ],
+      });
+
+      const out = completion.choices[0]?.message?.content?.trim();
+      if (out) {
+        try {
+          const langOut = idiomaDestino; // ya pedimos idioma en systemPrompt
+          const t = await traducirMensaje(out, langOut);
+          return (t || out).trim();
+        } catch { return out; }
+      }
+    } catch {
+      // si LLM falla, devuelve facts unidos
+      try {
+        const joined = parts.join('\n\n');
+        const t = await traducirMensaje(joined, idiomaDestino);
+        return (t || joined).trim();
+      } catch {
+        return parts.join('\n\n').trim();
+      }
+    }
+  }
+
+  // Caso B: no hubo facts → responde directamente con LLM usando promptBase
+  try {
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      temperature: 0.2,
+      max_tokens: 400,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: `MENSAJE_USUARIO:\n${userText}\n\nResponde solo con lo que está en el prompt. Si faltan precios u horarios oficiales, dilo y ofrece el mejor siguiente paso (link o agendar).` }
+      ],
+    });
+    const out = completion.choices[0]?.message?.content?.trim();
+    return out || null;
   } catch {
-    // si falla, seguimos con heurísticas
+    return null;
   }
-
-    // 2) heurísticas rápidas (0 tokens)
-  if (/\b(precio|precios|costo|costos|tarifa|tarifas|fee|fees|price|prices|cost)\b/i.test(lc)) {
-    bag.push({ intent: 'precio', score: 0.95 });
-  }
-  if (/\b(info|informacion|informaci[óo]n|servicio|servicios|clase|clases)\b/i.test(lc)) {
-    bag.push({ intent: 'interes_clases', score: 0.8 });
-  }
-  if (/\b(horario|horarios|hours|hour|schedule|time|times)\b/i.test(lc)) {
-    bag.push({ intent: 'horario', score: 0.8 });
-  }
-  if (/\b(ubicacion|ubicaci[óo]n|donde|dónde|address|direcci[óo]n|location)\b/i.test(lc)) {
-    bag.push({ intent: 'ubicacion', score: 0.7 });
-  }
-
-  // 3) ordenar, normalizar alias, deduplicar y filtrar por umbral
-  const seen = new Set<string>();
-  const out = bag
-    .sort((a, b) => b.score - a.score)
-    .filter((x) => {
-      x.intent = normalizeIntentAlias(x.intent);
-      if (seen.has(x.intent)) return false;
-      seen.add(x.intent);
-      return x.score >= threshold;
-    })
-    .slice(0, maxIntents);
-
-  console.log('[MULTI] intents=', out); // 👈 NUEVO
-  return out;
-}
-
-async function fetchAnswer(tenantId:string, canal: Canal, intent:string): Promise<string|null> {
-  const i = intent.toLowerCase();
-  if (i === 'precio') return await fetchFaqPrecio(tenantId, canal);
-  const hit = await getFaqByIntent(tenantId, canal, i);
-  return hit?.respuesta ?? null;
-}
-
-/**
- * Responde preguntas con 2–3 intenciones en un mismo mensaje.
- * Regresa `null` si no hay nada que responder (p.ej., sin FAQs cargadas).
- */
-export async function answerMultiIntent({
-  tenantId, canal, userText, idiomaDestino
-}: {
-  tenantId: string; canal: Canal; userText: string; idiomaDestino: 'es'|'en';
-}) {
-  // 1) Detecta top intents
-  const rawIntents = await detectTopIntents(userText, tenantId, canal, 3);
-
-  // 2) Re-ordena por prioridad de negocio
-  const prio = (i:string) => {
-    const x = i.toLowerCase();
-    if (x === 'interes_clases') return 1;
-    if (x === 'precio')        return 2;
-    if (x === 'horario')       return 3;
-    if (x === 'ubicacion')     return 4;
-    return 9;
-  };
-  const intents = [...rawIntents]
-    .sort((a,b) => prio(a.intent) - prio(b.intent));
-
-  // 3) Trae “hechos” por intención
-  const chunksByIntent: Record<string,string> = {};
-  for (const it of intents) {
-    const ans = await fetchAnswer(tenantId, canal, it.intent);
-    if (ans) chunksByIntent[it.intent] = ans.trim();
-  }
-  if (!Object.keys(chunksByIntent).length) return null;
-
-  // 4) Helpers de formato (prosa breve)
-  const clean = (t:string) => (t || '')
-    // fuera encabezados/viñetas y dobles espacios
-    .replace(/^[\-*•]\s*/gm,'')
-    .replace(/#{1,6}\s*/g,'')
-    .replace(/\r/g,'')
-    .replace(/\n{3,}/g,'\n\n')
-    .trim();
-
-  const firstSentence = (t:string, max=180) => {
-    const c = clean(t);
-    const cut = c.split(/(?<=\.)\s|\n/)[0] || c;
-    return cut.length <= max ? cut : (cut.slice(0, max-1).trim() + '…');
-  };
-
-  const grabFirstUrl = (t:string) => {
-    const m = (t || '').match(/\bhttps?:\/\/[^\s)]+/i);
-    return m?.[0] || null;
-  };
-
-  // 5) Construir mensaje único (máx. ~6 líneas)
-  const intro = idiomaDestino === 'en'
-    ? 'Sure — quick overview:'
-    : 'Claro — te cuento rapidito:';
-
-  const lines: string[] = [intro];
-
-  if (chunksByIntent['interes_clases']) {
-    lines.push(firstSentence(chunksByIntent['interes_clases'], 220));
-  }
-
-  if (chunksByIntent['precio']) {
-    const p = firstSentence(chunksByIntent['precio'], 220);
-    lines.push(idiomaDestino === 'en' ? `Prices: ${p}` : `Precios: ${p}`);
-  }
-
-  if (chunksByIntent['horario']) {
-    lines.push(firstSentence(chunksByIntent['horario'], 160));
-  }
-
-  if (chunksByIntent['ubicacion']) {
-    lines.push(firstSentence(chunksByIntent['ubicacion'], 160));
-  }
-
-  // 6) Un (1) link relevante si existe
-  const urls = [
-    grabFirstUrl(chunksByIntent['interes_clases'] || ''),
-    grabFirstUrl(chunksByIntent['precio'] || ''),
-    grabFirstUrl(chunksByIntent['horario'] || ''),
-  ].filter(Boolean) as string[];
-
-  const oneLink = urls[0];
-  if (oneLink) {
-    lines.push(oneLink);
-  }
-
-  // 7) CTA de cierre
-  const cta = idiomaDestino === 'en'
-    ? 'Want me to book a spot for you?'
-    : '¿Quieres que te agende un cupo?';
-  lines.push(cta);
-
-  // 8) Limita a 6 líneas y une
-  const out = lines.slice(0, 6).join('\n');
-  return out;
 }

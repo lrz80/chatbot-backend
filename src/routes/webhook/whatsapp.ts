@@ -23,6 +23,7 @@ import { extractEntitiesLite } from '../../utils/extractEntitiesLite';
 import { getFaqByIntent } from "../../utils/getFaqByIntent";
 import { answerMultiIntent, detectTopIntents } from '../../utils/multiIntent';
 import type { Canal } from '../../lib/detectarIntencion';
+import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
 
 const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
 const MATCHER_MIN_OVERRIDE = 0.85; // exige score alto para sobreescribir una intención "directa"
@@ -228,16 +229,23 @@ function stripLeadGreetings(t: string) {
     console.log('[MULTI] hasPrecio=', hasPrecio, 'hasInfo=', hasInfo, 'len=', top.length, 'multiAsk=', multiAsk);
 
     if (multiAsk) {
-      const out = await answerMultiIntent({
+      const raw = await answerMultiIntent({
         tenantId: tenant.id,
         canal: canal as Canal,
         userText: userInput,
-        idiomaDestino
+        idiomaDestino,
+        promptBase // 👈 pasa tu prompt ya resuelto por canal/tenant/idioma
       });
 
-      console.log('[MULTI] answer length=', out?.length || 0);
+      console.log('[MULTI] answer length=', raw?.length || 0);
 
-      if (out) {
+      if (raw) {
+        const out = tidyMultiAnswer(raw, {
+          maxLines: 6,
+          preferredDomains: ['app.glofox.com','glofox.com'],
+          cta: '¿Quieres que te envíe el enlace oficial para ver horarios/precios o resolver otra duda?'
+        });
+
         await enviarWhatsApp(fromNumber, out, tenant.id);
 
         await pool.query(
