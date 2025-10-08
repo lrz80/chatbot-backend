@@ -1,7 +1,7 @@
 // chatbot-backend/src/app.ts
 
 import express from 'express';
-import cors from 'cors';
+import cors, { CorsOptions } from 'cors';
 import cookieParser from 'cookie-parser';
 import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
@@ -26,7 +26,7 @@ import intentsRouter from './routes/intents';
 import verifyRoutes from './routes/verify';
 import forgotPasswordRoute from './routes/auth/forgot-password';
 import checkoutRoute from './routes/stripe/checkout';
-import stripeWebhook from './routes/stripe/webhook'; // 👈 Este debe ir ANTES del json
+import stripeWebhook from './routes/stripe/webhook'; // 👈 Debe ir ANTES del json
 import flowsRoutes from "./routes/flows";
 import statsKpisRouter from './routes/stats-kpis';
 import uploadLogoRoute from './routes/upload-logo';
@@ -51,7 +51,7 @@ import horaPico from './routes/stats/hora-pico';
 import ventasStats from './routes/sales-intelligence/stats';
 import mensajesNuevosRouter from "./routes/messages/nuevos";
 import contactosRoutes from "./routes/contactos/index";
-import smsStatusWebhook from "./routes/webhook/sms-status"; 
+import smsStatusWebhook from "./routes/webhook/sms-status";
 import checkoutCreditRoute from './routes/stripe/checkout-credit';
 import limiteContactosRoute from './routes/contactos/limite';
 import sendgridTemplates from "./routes/sendgrid/templates";
@@ -61,7 +61,7 @@ import stripeCancelRouter from './routes/stripe/cancel';
 import resetNotificaciones from './routes/creditos/reset-notificaciones';
 import renewMembership from './routes/tenants/renew-membership';
 import metaConfigRoutes from './routes/meta-config';
-import mensajeConteoRouter from './routes/messages/conteo'; // ✅ nuevo
+import mensajeConteoRouter from './routes/messages/conteo';
 import faqsSugeridas from './routes/faqs/sugeridas';
 import faqsAprobar from './routes/faqs/aprobar';
 import faqsRechazar from './routes/faqs/rechazar';
@@ -74,49 +74,61 @@ if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
 }
 console.log("🔐 DATABASE_URL en arranque: cargada correctamente");
-
 console.log("🔐 STRIPE KEY desde ENV: cargada correctamente");
-
 console.log("🔁 Versión redeployada manualmente");
-
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// —— Proxy / estáticos ————————————————————————————————
+app.set('trust proxy', 1); // cookies Secure detrás de proxy/CDN
 app.use("/uploads", express.static(path.join(__dirname, "../public/uploads")));
-console.log("📂 Servidor estático montado en:", path.join(__dirname, "../public/uploads"));
+console.log("📂 Servidor estático en:", path.join(__dirname, "../public/uploads"));
 
-const allowedOrigins = ['https://www.aamy.ai', 'https://aamy.ai']; // añade apex si lo usas
+// —— CORS (ANTES de rutas, con credenciales y preflight) ——
+const WHITELIST = [
+  'https://www.aamy.ai',
+  'https://aamy.ai',
+  'http://localhost:3000'
+];
 
-app.use(cors({
-  origin: (origin, cb) => (!origin || allowedOrigins.includes(origin)) ? cb(null, true) : cb(new Error('Not allowed by CORS')),
+const corsOptions: CorsOptions = {
+  origin(origin, cb) {
+    if (!origin || WHITELIST.includes(origin)) return cb(null, true);
+    return cb(new Error(`Not allowed by CORS: ${origin}`));
+  },
   credentials: true,
   methods: ['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept','Origin'],
-  optionsSuccessStatus: 204,
-}));
+  maxAge: 86400
+};
 
-app.options('*', cors({
-  origin: (origin, cb) => (!origin || allowedOrigins.includes(origin)) ? cb(null, true) : cb(new Error('Not allowed by CORS')),
-  credentials: true,
-  methods: ['GET','HEAD','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','X-Requested-With','Accept','Origin'],
-}));
+// asegura que caches/proxies respeten el Origin
+app.use((req, res, next) => {
+  res.setHeader('Vary', 'Origin');
+  next();
+});
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // preflight global
 
-
-// ✅ Webhook Stripe primero (usa body raw, no json)
+// —— Stripe webhook (raw body) ————————————————
 app.use(
   '/api/stripe/webhook',
   bodyParser.raw({ type: 'application/json' }),
   stripeWebhook
 );
 
-// ✅ Middlewares globales
-app.use(express.json());                      // ✅ JSON normal
-app.use(express.urlencoded({ extended: false })); // ✅ Twilio (x-www-form-urlencoded)
+// —— Parsers / cookies ————————————————————————————
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
-// ✅ Rutas
+// —— Healthcheck (útil para 502) ————————————————
+app.get('/health', (_req, res) => {
+  res.status(200).json({ ok: true, at: new Date().toISOString() });
+});
+
+// —— Rutas (mismo orden que tenías) ——————————————
 app.use('/auth', authRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/tenants', tenantRoutes);
@@ -169,7 +181,7 @@ app.use('/api/stripe/cancel', stripeCancelRouter);
 app.use('/api/creditos', resetNotificaciones);
 app.use('/api/tenants', renewMembership);
 app.use('/api/meta-config', metaConfigRoutes);
-app.use('/api/messages/conteo', mensajeConteoRouter); // ✅ activamos ruta
+app.use('/api/messages/conteo', mensajeConteoRouter);
 app.use('/api/faqs/sugeridas', faqsSugeridas);
 app.use('/api/faqs/aprobar', faqsAprobar);
 app.use('/api/faqs/rechazar', faqsRechazar);
@@ -178,19 +190,39 @@ app.use('/webhook/voice-status', voiceStatus);
 app.use('/api/stats', voiceMinutesStats);
 app.use('/api', voiceTopup);
 
-// ✅ Ruta base
-app.get('/', (req, res) => {
+// —— Ruta base ————————————————————————————————
+app.get('/', (_req, res) => {
   res.send('Backend corriendo 🟢');
 });
 
-// ✅ Ping para mantener Railway activo
+// —— Ping keep-alive (ignora errores) ————————————
 setInterval(() => {
+  // En Node 18+ existe fetch global
   fetch('https://api.aamy.ai/')
-    .then(() => console.log('🔁 Ping enviado a backend'))
-    .catch(() => console.warn('⚠️ Ping fallido'));
+    .then(() => console.log('🔁 Ping backend OK'))
+    .catch(() => console.warn('⚠️ Ping backend fallido'));
 }, 1000 * 30);
 
-// ✅ Levantar servidor
+// —— Handler de errores (incluye CORS en errores) ————
+app.use(
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  (err: any, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    const origin = req.headers.origin as string | undefined;
+    if (origin && WHITELIST.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+    const status = err?.status || 500;
+    console.error('❌ Error handler:', status, err?.message, '→', req.originalUrl);
+    res.status(status).json({
+      ok: false,
+      error: err?.message || 'Internal Server Error',
+      path: req.originalUrl
+    });
+  }
+);
+
+// —— Levantar servidor ————————————————————————
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
 });
