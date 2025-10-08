@@ -2,6 +2,10 @@
 import { Router, Request, Response } from 'express';
 import pool from '../lib/db';
 import jwt, { JwtPayload } from 'jsonwebtoken';
+import axios from 'axios'; // 👈 nuevo
+
+const APP_ID = process.env.FB_APP_ID || '';
+const APP_SECRET = process.env.FB_APP_SECRET || '';
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
@@ -21,12 +25,43 @@ router.get('/', async (req: Request, res: Response) => {
       const config = configRes.rows[0] || {};
   
       const tenantRes = await pool.query(`
-        SELECT facebook_page_id, facebook_page_name, instagram_page_id, instagram_page_name, membresia_activa
-        FROM tenants WHERE id = $1 LIMIT 1
+        SELECT 
+          facebook_page_id, 
+          facebook_page_name, 
+          instagram_page_id, 
+          instagram_page_name, 
+          membresia_activa,
+          facebook_access_token       -- 👈 nuevo
+        FROM tenants 
+        WHERE id = $1 
+        LIMIT 1
       `, [tenantId]);
-      
+
       const tenant = tenantRes.rows[0] || {};
-      
+
+      // 👉 Determinar estado de conexión y si requiere reconexión
+      const hasPageId = Boolean(tenant.facebook_page_id || tenant.instagram_page_id);
+      let needsReconnect = false;
+
+      if (tenant.facebook_access_token) {
+        try {
+          // Prueba simple: /me con el PAGE TOKEN
+          await axios.get('https://graph.facebook.com/v19.0/me', {
+            params: { access_token: tenant.facebook_access_token },
+            timeout: 6000,
+          });
+        } catch (e: any) {
+          const code = e?.response?.data?.error?.code;
+          if (code === 190) {
+            // Token inválido/caducado
+            needsReconnect = true;
+          } else {
+            // Otros errores de red/API: no marcamos como reconexión, solo registramos
+            console.warn('⚠️ Chequeo token FB falló (no 190):', e?.response?.data || e?.message);
+          }
+        }
+      }
+
       return res.status(200).json({
         ...config,
         facebook_page_id: tenant.facebook_page_id,
@@ -34,6 +69,8 @@ router.get('/', async (req: Request, res: Response) => {
         instagram_page_id: tenant.instagram_page_id,
         instagram_page_name: tenant.instagram_page_name,
         membresia_activa: tenant.membresia_activa, // ✅ AÑADIDO
+        connected: hasPageId,          // 👈 nuevo
+        needs_reconnect: needsReconnect // 👈 nuevo
       });
       
     } catch (err) {

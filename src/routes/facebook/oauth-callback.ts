@@ -7,15 +7,18 @@ import jwt from 'jsonwebtoken';
 
 const router = express.Router();
 
+const PUBLIC_BACKEND_URL = process.env.PUBLIC_BACKEND_URL || 'https://api.aamy.ai';
+
 router.get('/api/facebook/oauth-callback', async (req, res) => {
   const { code } = req.query;
-
-  if (!code) return res.status(400).send("No code provided");
+  if (!code) {
+    return res.redirect(`${PUBLIC_BACKEND_URL}/api/facebook/oauth-start`);
+  }
 
   try {
     const appId = process.env.FB_APP_ID!;
     const appSecret = process.env.FB_APP_SECRET!;
-    const redirectUri = 'https://api.aamy.ai/api/facebook/oauth-callback';
+    const redirectUri = `${PUBLIC_BACKEND_URL}/api/facebook/oauth-callback`;
 
     // 1. Intercambiar el code por un access_token
     const tokenRes = await axios.get('https://graph.facebook.com/v19.0/oauth/access_token', {

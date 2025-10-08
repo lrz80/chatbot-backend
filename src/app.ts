@@ -69,6 +69,7 @@ import eliminarFaqRoute from './routes/faqs/eliminar';
 import voiceStatus from './routes/webhook/voice-status';
 import voiceMinutesStats from './routes/stats/voice-minutes';
 import voiceTopup from './routes/voice/topup';
+import facebookOauthStart from './routes/facebook/oauth-start';           // ✅ nuevo
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -189,6 +190,7 @@ app.use("/api/faqs/eliminar", eliminarFaqRoute);
 app.use('/webhook/voice-status', voiceStatus);
 app.use('/api/stats', voiceMinutesStats);
 app.use('/api', voiceTopup);
+app.use(facebookOauthStart);   
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
