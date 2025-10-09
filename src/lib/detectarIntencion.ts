@@ -38,8 +38,14 @@ export const INTENT_VENTA = new Set<string>([
   'planes'
 ]);
 
-export function esIntencionDeVenta(intent: string) {
-  return INTENT_VENTA.has((intent || '').toLowerCase());
+export function esIntencionDeVenta(raw: string): boolean {
+  const s = (raw || '').toLowerCase();
+  // Intenciones que cuentan como “venta”
+  const ventas = [
+    'precio', 'reservar', 'agendar', 'comprar', 'pagar',
+    'confirmar', 'interes_clases', 'clases_online', 'me interesa'
+  ];
+  return ventas.some(v => s.includes(v));
 }
 
 export async function detectarIntencion(
