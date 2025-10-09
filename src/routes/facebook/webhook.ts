@@ -3,31 +3,28 @@
 import express from 'express';
 import pool from '../../lib/db';
 import OpenAI from 'openai';
-
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { buscarRespuestaDesdeFlowsTraducido } from '../../lib/respuestasTraducidas';
-
 import { buildDudaSlug, normalizeIntentAlias, isDirectIntent } from '../../lib/intentSlug';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
-
 import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
 import {
   yaExisteComoFaqSugerida,
   yaExisteComoFaqAprobada,
   normalizarTexto
 } from '../../lib/faq/similaridadFaq';
-
 import { detectarIntencion } from '../../lib/detectarIntencion';
 import { runBeginnerRecoInterceptor } from '../../lib/recoPrincipiantes/interceptor';
 import { buscarRespuestaPorIntencion } from '../../services/intent-matcher';
-
 import { enviarMensajePorPartes } from '../../lib/enviarMensajePorPartes';
-
 import { extractEntitiesLite } from '../../utils/extractEntitiesLite';
 import { getFaqByIntent } from '../../utils/getFaqByIntent';
 import { answerMultiIntent, detectTopIntents } from '../../utils/multiIntent';
 import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
+import { Router, Request, Response } from 'express';
+import { buscarRespuestaSimilitudFaqsTraducido } from '../../lib/respuestasTraducidas';
+import type { Canal } from '../../lib/detectarIntencion';
 
 type CanalEnvio = 'facebook' | 'instagram';
 
