@@ -105,11 +105,12 @@ async function recordSalesIntent(
   try {
     await pool.query(
       `INSERT INTO sales_intelligence
-         (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-       ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
+        (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, fecha)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+      ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
       [tenantId, contacto, canal, mensaje, intencion, nivel_interes, messageId]
     );
+
   } catch (e) {
     console.warn('⚠️ No se pudo insertar en sales_intelligence (WA):', e);
   }
