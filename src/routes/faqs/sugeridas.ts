@@ -13,11 +13,11 @@ router.get('/', authenticateUser, async (req, res) => {
     ? canalQuery.map(c => c.toString())
     : [canalQuery?.toString() || 'whatsapp'];
 
-  // 🔁 Si es 'meta', convertirlo en ['facebook', 'instagram']
-  if (canales.includes('meta')) {
-    canales = canales.filter(c => c !== 'meta');
-    canales.push('facebook', 'instagram');
-  }
+  // 🔁 Si llega 'meta', expandimos pero mantenemos 'meta'
+if (canales.includes('meta')) {
+  canales = canales.filter(c => c !== 'meta');
+  canales.push('meta', 'facebook', 'instagram'); // <- agrega 'meta'
+}
 
   try {
     const { rows } = await pool.query(
