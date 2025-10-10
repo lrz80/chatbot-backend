@@ -1,11 +1,16 @@
 import pool from '../lib/db';
 import { sendEmailSendgrid } from '../lib/senders/email-sendgrid';
-import { sendSMSNotificacion } from '../lib/senders/smsNotificacion'; // 🔥 Importa la nueva función
+import { sendSMSNotificacion } from '../lib/senders/smsNotificacion';
 import express from 'express';
+
+function toISODate(d: Date) {
+  return d.toISOString().substring(0, 10);
+}
 
 async function verificarNotificaciones() {
   console.log("🚨 Verificando límites de uso...");
 
+  // 1) Desactivar membresías vencidas
   await pool.query(`
     UPDATE tenants
     SET membresia_activa = false
@@ -13,54 +18,91 @@ async function verificarNotificaciones() {
   `);
   console.log("🔄 Membresías vencidas actualizadas.");
 
-  const canales = ['whatsapp', 'meta', 'followup', 'voz', 'sms', 'email'];
+  const canales: Array<'whatsapp' | 'meta' | 'followup' | 'voz' | 'sms' | 'email'> = ['whatsapp', 'meta', 'followup', 'voz', 'sms', 'email'];
 
   for (const canal of canales) {
+    // ⚠️ Podría haber múltiples usuarios por tenant → filas duplicadas.
+    // Usaremos un Set para no procesar dos veces el mismo tenant en este canal.
+    const procesados = new Set<string>();
+
     const { rows: tenants } = await pool.query(`
-      SELECT u.tenant_id, u.usados, u.limite, 
-             t.name AS tenant_name, t.telefono_negocio, t.email_negocio,
-             u2.email AS user_email, u2.telefono AS user_phone,
-             t.membresia_inicio
+      SELECT 
+        u.tenant_id, 
+        u.usados, 
+        u.limite, 
+        t.name              AS tenant_name, 
+        t.telefono_negocio, 
+        t.email_negocio,
+        u2.email            AS user_email, 
+        u2.telefono         AS user_phone,
+        t.membresia_inicio
       FROM uso_mensual u
-      JOIN tenants t ON u.tenant_id = t.id
+      JOIN tenants t   ON u.tenant_id = t.id
       LEFT JOIN users u2 ON u2.tenant_id = u.tenant_id
       WHERE u.canal = $1 AND u.limite IS NOT NULL
     `, [canal]);
 
     for (const tenant of tenants) {
-      const fechaInicio = tenant.membresia_inicio ? new Date(tenant.membresia_inicio) : null;
-      if (!fechaInicio) {
-        console.warn(`⛔️ Tenant ${tenant.tenant_id} no tiene membresia_inicio`);
+      const tid = String(tenant.tenant_id);
+
+      // Evita duplicados por múltiples usuarios del mismo tenant
+      if (procesados.has(tid)) continue;
+      procesados.add(tid);
+
+      const fechaInicio: Date | null = tenant.membresia_inicio ? new Date(tenant.membresia_inicio) : null;
+      if (!fechaInicio || Number.isNaN(fechaInicio.getTime())) {
+        console.warn(`⛔️ Tenant ${tid} no tiene membresia_inicio válida`);
         continue;
       }
 
+      // 2) Recalcular usados/limite del ciclo vigente
       const usadosQuery = await pool.query(`
-        SELECT COALESCE(SUM(usados), 0) as total_usados, MAX(limite) as limite,
-               bool_or(notificado_80) as notificado_80, bool_or(notificado_100) as notificado_100
+        SELECT 
+          COALESCE(SUM(usados), 0)             AS total_usados,   -- Para VOZ esto suele venir en segundos
+          MAX(limite)                          AS limite,         -- En VOZ suelen ser minutos/mes
+          BOOL_OR(notificado_80)               AS notificado_80, 
+          BOOL_OR(notificado_100)              AS notificado_100
         FROM uso_mensual
-        WHERE tenant_id = $1 AND canal = $2 AND mes >= $3
-      `, [tenant.tenant_id, canal, fechaInicio.toISOString().substring(0, 10)]);
+        WHERE tenant_id = $1 
+          AND canal = $2 
+          AND mes >= $3
+      `, [tid, canal, toISODate(fechaInicio)]);
 
-      const usados = parseInt(usadosQuery.rows[0]?.total_usados || '0', 10);
+      const usadosRaw = parseInt(usadosQuery.rows[0]?.total_usados || '0', 10);
       let limite = parseInt(usadosQuery.rows[0]?.limite || '0', 10);
-      const notificado_80 = usadosQuery.rows[0]?.notificado_80;
-      const notificado_100 = usadosQuery.rows[0]?.notificado_100;
+      const notificado_80  = Boolean(usadosQuery.rows[0]?.notificado_80);
+      const notificado_100 = Boolean(usadosQuery.rows[0]?.notificado_100);
 
+      // 3) Sumar créditos activos (add-ons)
       const creditosQuery = await pool.query(`
         SELECT COALESCE(SUM(cantidad), 0) AS creditos
         FROM creditos_comprados
-        WHERE tenant_id = $1 AND canal = $2 AND fecha_compra <= NOW() AND fecha_vencimiento >= NOW()
-      `, [tenant.tenant_id, canal]);
+        WHERE tenant_id = $1 
+          AND canal = $2 
+          AND fecha_compra <= NOW() 
+          AND fecha_vencimiento >= NOW()
+      `, [tid, canal]);
+
       const creditos = parseInt(creditosQuery.rows[0]?.creditos || '0', 10);
       limite += creditos;
 
-      const porcentaje = limite ? (usados / limite) * 100 : 0;
+      // 4) Normalizar unidades
+      // - Para VOZ: "usados" vienen en segundos -> convertir a minutos redondeando hacia arriba.
+      // - Para el resto de canales: se asume que "usados" y "limite" ya están en la misma unidad (mensajes/créditos).
+      const usadosNormalizados = (canal === 'voz')
+        ? Math.ceil(usadosRaw / 60) // seg → min
+        : usadosRaw;
+
+      // Evitar división por cero y casos ilógicos de límite nulo
+      const limiteSeguro = Math.max(1, limite); 
+      const porcentaje = (usadosNormalizados / limiteSeguro) * 100;
 
       if (porcentaje < 80) {
         console.log(`🔕 ${tenant.tenant_name} (${canal}) consumo bajo (${porcentaje.toFixed(1)}%), no se notificará.`);
         continue;
       }
 
+      // No repetir notificaciones
       if (porcentaje >= 100 && notificado_100) {
         console.log(`🔕 ${tenant.tenant_name} (${canal}) ya notificado por 100%.`);
         continue;
@@ -74,60 +116,75 @@ async function verificarNotificaciones() {
       const mensajeTexto = `
 Hola ${tenant.tenant_name},
 
-Has usado ${usados} de ${limite} en ${canal.toUpperCase()} desde tu membresía activa.
+Has usado ${usadosNormalizados} de ${limiteSeguro} en ${canal.toUpperCase()} desde tu membresía activa.
 ${porcentaje >= 100 ? '🚫 Has superado tu límite mensual.' : '⚠️ Estás alcanzando tu límite mensual (80%+).'}
 
 Te recomendamos aumentar el límite para evitar interrupciones.
 
 Atentamente,
-Aamy.ai`;
+Aamy.ai`.trim();
 
-      const correo = tenant.user_email;
-      if (typeof correo === 'string') {
-      const contactos = [{ email: correo, nombre: tenant.tenant_name }];
-      await sendEmailSendgrid(
+      // 5) Email (si hay al menos un correo de usuario)
+      const correo = typeof tenant.user_email === 'string' && tenant.user_email.includes('@')
+        ? tenant.user_email
+        : null;
+
+      if (correo) {
+        const contactos = [{ email: correo, nombre: tenant.tenant_name }];
+        await sendEmailSendgrid(
           mensajeTexto,
           contactos,
           'Aamy.ai',
-          String(tenant.tenant_id),
+          String(tid),
           0,
           undefined,
           undefined,
           'https://aamy.ai/avatar-amy.png',
-          asunto,
-          asunto
-      );
-      console.log(`📧 Email enviado a: ${correo}`);
+          asunto,     // asunto para SendGrid
+          asunto      // título visual
+        );
+        console.log(`📧 Email enviado a: ${correo}`);
       } else {
-      console.warn(`❌ No se encontró user_email válido para ${tenant.tenant_name}`);
+        console.warn(`❌ No se encontró user_email válido para ${tenant.tenant_name}`);
       }
 
-      const telefonos = [tenant.telefono_negocio, tenant.user_phone].filter(t => typeof t === 'string');
-      for (const telefono of telefonos) {
-        await sendSMSNotificacion(mensajeTexto, [telefono]); // 🔥 Usa la nueva función
-        console.log(`📲 SMS notificación enviado a: ${telefono}`);
+      // 6) SMS (dedupe y validación básica)
+      const telefonos = [tenant.telefono_negocio, tenant.user_phone]
+        .filter((t: unknown): t is string => typeof t === 'string' && t.trim().length > 0);
+
+      const enviadosSMS = new Set<string>();
+      for (const tel of telefonos) {
+        if (enviadosSMS.has(tel)) continue;
+        enviadosSMS.add(tel);
+        await sendSMSNotificacion(mensajeTexto, [tel]);
+        console.log(`📲 SMS notificación enviado a: ${tel}`);
       }
 
-      const notificacionField = porcentaje >= 100 ? 'notificado_100' : 'notificado_80';
+      // 7) Marcar notificado
+      const notificacionField = (porcentaje >= 100) ? 'notificado_100' : 'notificado_80';
       await pool.query(`
         UPDATE uso_mensual
         SET ${notificacionField} = TRUE
         WHERE tenant_id = $1 AND canal = $2 AND mes >= $3
-      `, [tenant.tenant_id, canal, fechaInicio.toISOString().substring(0, 10)]);
+      `, [tid, canal, toISODate(fechaInicio)]);
     }
   }
 
   console.log("✅ Verificación de notificaciones completada.");
 }
 
+// Intervalo cada 5 minutos
 setInterval(() => {
-  verificarNotificaciones();
+  verificarNotificaciones().catch(err => {
+    console.error("❌ Error en verificarNotificaciones:", err);
+  });
 }, 5 * 60 * 1000);
 
 console.log("⏰ Scheduler de notificaciones corriendo...");
 
 export { verificarNotificaciones };
 
+// Mini servidor para healthcheck
 const app = express();
 const PORT = process.env.PORT || 3002;
 
