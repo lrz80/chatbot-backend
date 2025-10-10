@@ -304,25 +304,25 @@ router.post('/api/facebook/webhook', async (req, res) => {
        // Follow-up scheduler + registro de intención (canónica)
       async function scheduleFollowUp(intFinal: string, nivel: number) {
         try {
-          // 1) Normaliza SIEMPRE la intención a su alias canónico (singular, slugs, etc.)
-          const canon = normalizeIntentAlias((intFinal || '').toLowerCase().trim());
-          if (!canon) return;
+          // 👇 Forzamos canónico aquí
+          const canon = normalizeIntentAlias((intFinal || '').toLowerCase().trim()) || '';
+          // fallback específico para precios si tu normalizador no lo convierte
+          const canonFinal = PRICE_REGEX.test(canon) || PRICE_REGEX.test(intFinal) ? 'precio' : canon;
+          if (!canonFinal) return;
 
-          // 2) Registrar en sales_intelligence con la intención canónica
           await pool.query(
             `INSERT INTO sales_intelligence
               (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, fecha)
             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
             ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
-            [tenantId, senderId, canalEnvio, userInput, canon, Math.max(1, Number(nivel) || 1), messageId]
+            [tenantId, senderId, canalEnvio, userInput, canonFinal, Math.max(1, Number(nivel)||1), messageId]
           );
           console.log('🧠 Intent registrada (META)', {
-            tenantId, contacto: senderId, canal: canalEnvio, intencion: canon, nivel
+            tenantId, contacto: senderId, canal: canalEnvio, intencion: canonFinal, nivel
           });
 
-          // 3) Lógica de follow-up (usa la intención canónica)
           const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
-          const condition = (nivel >= 3) || intencionesFollowUp.includes(canon);
+          const condition = (nivel >= 3) || intencionesFollowUp.includes(canonFinal);
           if (!condition) return;
 
           const { rows: cfgRows } = await pool.query(
