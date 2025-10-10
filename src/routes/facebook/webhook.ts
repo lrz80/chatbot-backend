@@ -301,73 +301,78 @@ router.post('/api/facebook/webhook', async (req, res) => {
           console.warn('⚠️ Multi-intent fast-path falló; sigo pipeline normal:', e);
         }
 
-        // Follow-up scheduler (idéntico a WA) + REGISTRO DE INTENCIÓN DE VENTA
-        async function scheduleFollowUp(intFinal: string, nivel: number) {
+       // Follow-up scheduler + registro de intención (canónica)
+      async function scheduleFollowUp(intFinal: string, nivel: number) {
+        try {
+          // 1) Normaliza SIEMPRE la intención a su alias canónico (singular, slugs, etc.)
+          const canon = normalizeIntentAlias((intFinal || '').toLowerCase().trim());
+          if (!canon) return;
+
+          // 2) Registrar en sales_intelligence con la intención canónica
+          await pool.query(
+            `INSERT INTO sales_intelligence
+              (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, fecha)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+            ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
+            [tenantId, senderId, canalEnvio, userInput, canon, Math.max(1, Number(nivel) || 1), messageId]
+          );
+          console.log('🧠 Intent registrada (META)', {
+            tenantId, contacto: senderId, canal: canalEnvio, intencion: canon, nivel
+          });
+
+          // 3) Lógica de follow-up (usa la intención canónica)
+          const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
+          const condition = (nivel >= 3) || intencionesFollowUp.includes(canon);
+          if (!condition) return;
+
+          const { rows: cfgRows } = await pool.query(
+            `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
+            [tenantId]
+          );
+          const cfg = cfgRows[0];
+          if (!cfg) return;
+
+          // Mensaje por defecto + variantes por intención
+          let msg = cfg.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
+          if (canon === "precio" && cfg.mensaje_precio) msg = cfg.mensaje_precio;
+          else if ((canon === "reservar" || canon === "comprar") && cfg.mensaje_agendar) msg = cfg.mensaje_agendar;
+          else if (canon === "ubicacion" && cfg.mensaje_ubicacion) msg = cfg.mensaje_ubicacion;
+
+          // Asegura idioma de salida consistente
           try {
-            const intClean = (intFinal || '').toLowerCase().trim();
-            if (!intClean) return; // ← evita insertar intención vacía
-            await pool.query(
-              `INSERT INTO sales_intelligence
-                (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, fecha)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-              ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
-              [tenantId, senderId, canalEnvio, userInput, intClean, Math.max(1, Number(nivel)||1), messageId]
-            );
-            console.log('🧠 Intent registrada (META)', {
-              tenantId, contacto: senderId, canal: canalEnvio, intencion: intClean, nivel
-            });
+            const lang = await detectarIdioma(msg);
+            if (lang && lang !== 'zxx' && lang !== idiomaDestino) {
+              msg = await traducirMensaje(msg, idiomaDestino);
+            }
+          } catch {}
 
-            // 2) ——————————————————————————————————————————
-            // Lógica de follow-up (igual a como ya la tenías)
-            const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
-            const condition = (nivel >= 3) || intencionesFollowUp.includes(intClean);
-            if (!condition) return;
+          // 4) Limpia duplicados pendientes para este contacto
+          await pool.query(
+            `DELETE FROM mensajes_programados
+              WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+            [tenantId, canalEnvio, senderId]
+          );
 
-            const { rows: cfgRows } = await pool.query(
-              `SELECT * FROM follow_up_settings WHERE tenant_id = $1`,
-              [tenantId]
-            );
-            const cfg = cfgRows[0];
-            if (!cfg) return;
+          // 5) Programa el follow-up
+          const delayMin = getConfigDelayMinutes(cfg, 60);
+          const fechaEnvio = new Date();
+          fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
 
-            let msg = cfg.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
-            if (intClean.includes("precio") && cfg.mensaje_precio) msg = cfg.mensaje_precio;
-            else if ((intClean.includes("agendar") || intClean.includes("reservar")) && cfg.mensaje_agendar) msg = cfg.mensaje_agendar;
-            else if ((intClean.includes("ubicacion") || intClean.includes("location")) && cfg.mensaje_ubicacion) msg = cfg.mensaje_ubicacion;
+          const { rows } = await pool.query(
+            `INSERT INTO mensajes_programados
+              (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
+            VALUES ($1, $2, $3, $4, $5, false)
+            RETURNING id`,
+            [tenantId, canalEnvio, senderId, msg, fechaEnvio]
+          );
 
-            try {
-              const lang = await detectarIdioma(msg);
-              if (lang && lang !== 'zxx' && lang !== idiomaDestino) {
-                msg = await traducirMensaje(msg, idiomaDestino);
-              }
-            } catch {}
-
-            // limpia duplicados
-            await pool.query(
-              `DELETE FROM mensajes_programados
-                WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
-              [tenantId, canalEnvio, senderId]
-            );
-
-            const delayMin = getConfigDelayMinutes(cfg, 60);
-            const fechaEnvio = new Date();
-            fechaEnvio.setMinutes(fechaEnvio.getMinutes() + delayMin);
-
-            const { rows } = await pool.query(
-              `INSERT INTO mensajes_programados
-                (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-              VALUES ($1, $2, $3, $4, $5, false)
-              RETURNING id`,
-              [tenantId, canalEnvio, senderId, msg, fechaEnvio]
-            );
-
-            console.log('📅 Follow-up programado (META)', {
-              id: rows[0]?.id, tenantId, contacto: senderId, delayMin, fechaEnvio: fechaEnvio.toISOString()
-            });
-          } catch (e) {
-            console.warn('⚠️ No se pudo programar follow-up o registrar intención (META):', e);
-          }
+          console.log('📅 Follow-up programado (META)', {
+            id: rows[0]?.id, tenantId, contacto: senderId, delayMin, fechaEnvio: fechaEnvio.toISOString()
+          });
+        } catch (e) {
+          console.warn('⚠️ No se pudo programar follow-up o registrar intención (META):', e);
         }
+      }
 
         // Saludos/agradecimientos (solo si el mensaje ES solo eso)
         const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|d[ií]as))?)\s*$/i.test(userInput.trim());
