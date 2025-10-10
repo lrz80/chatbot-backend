@@ -18,10 +18,11 @@ router.post("/", authenticateUser, async (req, res) => {
 
   const {
     idioma,
-    // "categoria" puede venir del front, pero si tu tabla no tiene esa columna, no se persiste
     categoria,
     funciones_asistente,
     info_clave,
+    // 👇 nueva bandera opcional desde el frontend
+    modo_resumen_sms,
   } = req.body || {};
 
   if (!tenant_id) return res.status(401).json({ error: "Tenant no autenticado." });
@@ -41,16 +42,18 @@ router.post("/", authenticateUser, async (req, res) => {
       return res.status(403).json({ error: "Tu membresía está inactiva. Actívala para continuar." });
     }
 
-    // Generar prompt + bienvenida (multi-tenant, con reglas de SMS para links)
+    // Generar prompt + bienvenida (multi-tenant)
     const { prompt, bienvenida } = await PromptTemplate({
       idioma: normLocale(idioma),
       categoria: categoria || "default",
       tenant_id,
-      funciones_asistente,
-      info_clave,
+      funciones_asistente: funciones_asistente.trim(),
+      info_clave: info_clave.trim(),
+      // 👇 pasamos la bandera al template
+      modo_resumen_sms: Boolean(modo_resumen_sms),
     });
 
-    // Guardar/actualizar voice_config (sin columna 'categoria' si no existe)
+    // Guardar/actualizar voice_config
     await pool.query(
       `INSERT INTO voice_configs (
          tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints,
@@ -68,12 +71,12 @@ router.post("/", authenticateUser, async (req, res) => {
       [
         tenant_id,
         normLocale(idioma),
-        "alice",                 // voz de Twilio por defecto
+        "alice",                 // voz por defecto
         prompt,
         bienvenida,
-        null,                    // voice_hints opcional (null si no hay)
-        funciones_asistente,
-        info_clave,
+        null,                    // voice_hints opcional
+        funciones_asistente.trim(),
+        info_clave.trim(),
       ]
     );
 

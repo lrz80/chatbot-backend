@@ -7,6 +7,7 @@ type PromptData = {
   tenant_id: string;
   funciones_asistente?: string;
   info_clave?: string;
+  modo_resumen_sms?: boolean;   // 👈 NUEVO
 };
 
 function sanitize(text: string): string {
@@ -19,6 +20,7 @@ export async function PromptTemplate({
   tenant_id,
   funciones_asistente,
   info_clave,
+  modo_resumen_sms,                // 👈 NUEVO
 }: PromptData) {
   // 1) Cargar datos del tenant si faltan funciones/info + obtener nombre de marca
   let funciones = sanitize(funciones_asistente || "");
@@ -52,17 +54,17 @@ export async function PromptTemplate({
   // 3) Idioma y plantillas
   const isEn = (idioma || "").toLowerCase().startsWith("en");
 
+  // ---------- ESPAÑOL ----------
   if (!isEn) {
-    // Español
     const bienvenida = `Hola, soy Amy del equipo de ${brand}. ¿En qué puedo ayudarte hoy?`;
 
-    const prompt = `
+    let prompt = `
 Eres Amy, una asistente telefónica real, cálida y natural del negocio ${brand}.
 Contexto del negocio: ${info}
 Tu objetivo principal: ${funciones}
 
 REGLAS IMPORTANTES (OBLIGATORIAS):
-1) **Nunca pronuncies enlaces/URLs, códigos o números largos** (no digas "www", "http" o "https").  
+1) **Nunca pronuncies enlaces/URLs, códigos o números largos** (no digas "www", "http" o "https").
    Si hace falta compartir un enlace, di: **"Te lo envío por SMS ahora"** y continúa. El sistema enviará el SMS.
 2) **Respuestas cortas (1–2 frases), claras y conversacionales**. Evita sonar robótico.
 3) Habla siempre como parte real del equipo (no digas que eres asistente virtual o IA).
@@ -82,19 +84,31 @@ Si el cliente agradece o quiere terminar, despídete con cortesía.
 (Referencia de contexto: ${catTexts.es})
     `.trim();
 
+    // 👇 MODO RESUMEN + OFRECER SMS EXPLÍCITO
+    if (modo_resumen_sms) {
+      prompt += `
+
+MODO RESUMEN + SMS (ACTIVO):
+- **Máximo 2 frases** por respuesta y **≤ 260 caracteres**.
+- Evita listados, políticas o textos extensos; **resume** siempre.
+- No pronuncies URLs.
+- Cierra con: **"¿Quieres que te envíe un SMS con el enlace para ver más detalles?"**
+- Si el cliente acepta, confirma brevemente y espera a que el sistema envíe el SMS (no afirmes que ya se envió si no hay confirmación del sistema).`.trim();
+    }
+
     return { bienvenida, prompt };
   }
 
-  // Inglés
+  // ---------- INGLÉS ----------
   const bienvenida = `Hi, this is Amy from ${brand}. How can I help you today?`;
 
-  const prompt = `
+  let prompt = `
 You are Amy, a warm, natural phone assistant for ${brand}.
 Business context: ${info}
 Primary goal: ${funciones}
 
 HARD RULES:
-1) **Never read URLs/links, codes, or long numbers aloud** (do not say "www", "http", or "https").  
+1) **Never read URLs/links, codes, or long numbers aloud** (do not say "www", "http", or "https").
    If a link is needed, say: **"I'll text it to you now"** and continue. The system will send the SMS.
 2) **Keep answers short (1–2 sentences), clear, and conversational.**
 3) Speak as a real team member (never say you are an AI or a bot).
@@ -113,6 +127,17 @@ STYLE:
 If they thank you or want to end, close politely.
 (Context reference: ${catTexts.en})
   `.trim();
+
+  if (modo_resumen_sms) {
+    prompt += `
+
+SUMMARY + SMS MODE (ENABLED):
+- **Max 2 sentences** per reply and **≤ 260 characters**.
+- Avoid lists, policies or long texts; **summarize**.
+- Do not read URLs.
+- End with: **"Would you like me to text you the link with more details?"**
+- If they accept, acknowledge briefly and wait for the system to send the SMS (do not claim it was sent unless confirmed).`.trim();
+  }
 
   return { bienvenida, prompt };
 }
