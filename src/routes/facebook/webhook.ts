@@ -5,7 +5,6 @@ import pool from '../../lib/db';
 import OpenAI from 'openai';
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
-import { buscarRespuestaDesdeFlowsTraducido } from '../../lib/respuestasTraducidas';
 import { buildDudaSlug, normalizeIntentAlias, isDirectIntent } from '../../lib/intentSlug';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
@@ -172,7 +171,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         const isInstagram = tenant.instagram_page_id && tenant.instagram_page_id === pageId;
         const canalEnvio: CanalEnvio = isInstagram ? 'instagram' : 'facebook';
-        const canalContenido = 'meta'; // FAQs/Flows se guardan como 'meta'
+        const canalContenido = 'meta'; // FAQs se guardan como 'meta'
         const accessToken = tenant.facebook_access_token as string;
 
         // helper envío Meta (chunked)
@@ -302,11 +301,26 @@ router.post('/api/facebook/webhook', async (req, res) => {
           console.warn('⚠️ Multi-intent fast-path falló; sigo pipeline normal:', e);
         }
 
-        // Follow-up scheduler (idéntico a WA)
+        // Follow-up scheduler (idéntico a WA) + REGISTRO DE INTENCIÓN DE VENTA
         async function scheduleFollowUp(intFinal: string, nivel: number) {
           try {
+            const intClean = (intFinal || '').toLowerCase().trim();
+            if (!intClean) return; // ← evita insertar intención vacía
+            await pool.query(
+              `INSERT INTO sales_intelligence
+                (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, fecha)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+              ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
+              [tenantId, senderId, canalEnvio, userInput, intClean, Math.max(1, Number(nivel)||1), messageId]
+            );
+            console.log('🧠 Intent registrada (META)', {
+              tenantId, contacto: senderId, canal: canalEnvio, intencion: intClean, nivel
+            });
+
+            // 2) ——————————————————————————————————————————
+            // Lógica de follow-up (igual a como ya la tenías)
             const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
-            const condition = (nivel >= 3) || intencionesFollowUp.includes((intFinal || '').toLowerCase());
+            const condition = (nivel >= 3) || intencionesFollowUp.includes(intClean);
             if (!condition) return;
 
             const { rows: cfgRows } = await pool.query(
@@ -317,10 +331,9 @@ router.post('/api/facebook/webhook', async (req, res) => {
             if (!cfg) return;
 
             let msg = cfg.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
-            const low = (intFinal || '').toLowerCase();
-            if (low.includes("precio") && cfg.mensaje_precio) msg = cfg.mensaje_precio;
-            else if ((low.includes("agendar") || low.includes("reservar")) && cfg.mensaje_agendar) msg = cfg.mensaje_agendar;
-            else if ((low.includes("ubicacion") || low.includes("location")) && cfg.mensaje_ubicacion) msg = cfg.mensaje_ubicacion;
+            if (intClean.includes("precio") && cfg.mensaje_precio) msg = cfg.mensaje_precio;
+            else if ((intClean.includes("agendar") || intClean.includes("reservar")) && cfg.mensaje_agendar) msg = cfg.mensaje_agendar;
+            else if ((intClean.includes("ubicacion") || intClean.includes("location")) && cfg.mensaje_ubicacion) msg = cfg.mensaje_ubicacion;
 
             try {
               const lang = await detectarIdioma(msg);
@@ -343,8 +356,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
             const { rows } = await pool.query(
               `INSERT INTO mensajes_programados
                 (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
-               VALUES ($1, $2, $3, $4, $5, false)
-               RETURNING id`,
+              VALUES ($1, $2, $3, $4, $5, false)
+              RETURNING id`,
               [tenantId, canalEnvio, senderId, msg, fechaEnvio]
             );
 
@@ -352,7 +365,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
               id: rows[0]?.id, tenantId, contacto: senderId, delayMin, fechaEnvio: fechaEnvio.toISOString()
             });
           } catch (e) {
-            console.warn('⚠️ No se pudo programar follow-up (META):', e);
+            console.warn('⚠️ No se pudo programar follow-up o registrar intención (META):', e);
           }
         }
 
@@ -383,9 +396,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
           continue;
         }
 
-        // Cargar FAQs y Flows del canal meta
+        // Cargar FAQs del canal meta
         let faqs: any[] = [];
-        let flows: any[] = [];
         try {
           const resFaqs = await pool.query(
             `SELECT pregunta, respuesta
@@ -396,19 +408,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
           );
           faqs = resFaqs.rows || [];
         } catch {}
-        try {
-          const resFlows = await pool.query(
-            'SELECT data FROM flows WHERE tenant_id = $1 AND canal = $2 LIMIT 1',
-            [tenantId, canalContenido]
-          );
-          const raw = resFlows.rows[0]?.data;
-          flows = typeof raw === 'string' ? JSON.parse(raw) : raw;
-          if (!Array.isArray(flows)) flows = [];
-        } catch { flows = []; }
-
-        // —————————————————————————
+    
         // INTENT MATCHER (con guards)
-        // —————————————————————————
         try {
           const idiomaDet: 'es'|'en' = normalizeLang(normLang(await detectarIdioma(userInput)) || tenantBase);
           const textoParaMatch = (idiomaDet === 'es') ? userInput : await traducirMensaje(userInput, 'es');
@@ -687,37 +688,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
           console.warn('⚠️ FAQ directa global falló:', e);
         }
 
-        // FLOWS (Meta) si aplica
-        try {
-          const idiomaMsg = await detectarIdioma(userInput);
-          const respuestaFlujoMeta = await buscarRespuestaDesdeFlowsTraducido(
-            flows, userInput, idiomaMsg
-          );
-          if (respuestaFlujoMeta) {
-            let out = respuestaFlujoMeta;
-            const idiomaResp = await detectarIdioma(out);
-            if (idiomaResp && idiomaResp !== 'zxx' && idiomaResp !== idiomaDestino) {
-              out = await traducirMensaje(out, idiomaDestino);
-            }
-            await sendMeta(out);
-            await pool.query(
-              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-               VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-               ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-              [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
-            );
-            await pool.query(
-              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-               VALUES ($1, $2, $3, NOW())
-               ON CONFLICT DO NOTHING`,
-              [tenantId, canalEnvio, messageId]
-            );
-            continue; // ⚠️ termina aquí si encontró coincidencia en el flujo
-          }
-        } catch (e) {
-          console.warn('⚠️ Flows falló:', e);
-        }
-
         // —————————————————————————
         // Similaridad + LLM fallback (sugeridas)
         // —————————————————————————
@@ -890,15 +860,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
               [tenantId, senderId]
             );
           }
-
-          // Sales intelligence (opcional)
-          await pool.query(
-            `INSERT INTO sales_intelligence
-              (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
-             ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
-            [tenantId, senderId, canalEnvio, userInput, intFinal, nivel_interes, messageId]
-          );
 
           await scheduleFollowUp(intFinal, nivel_interes);
         } catch (e) {
