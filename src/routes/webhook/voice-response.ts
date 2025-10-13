@@ -88,8 +88,22 @@ function normalizeClockText(text: string, locale: string) {
 type CallState = {
   awaiting?: boolean;
   pendingType?: 'reservar' | 'comprar' | 'soporte' | 'web' | null;
+  smsSent?: boolean;
 };
 const CALL_STATE = new Map<string, CallState>();
+
+// ✅ TTL para limpiar memoria si Twilio no manda el último hit
+const STATE_TTL_MS = 30 * 60 * 1000; // 30 min
+const STATE_TIME = new Map<string, number>();
+setInterval(() => {
+  const now = Date.now();
+  for (const [sid, t] of STATE_TIME.entries()) {
+    if (now - t > STATE_TTL_MS) {
+      CALL_STATE.delete(sid);
+      STATE_TIME.delete(sid);
+    }
+  }
+}, 10 * 60 * 1000);
 
 const toTwilioLocale = (code?: string) => {
   const c = (code || '').toLowerCase();
@@ -107,6 +121,12 @@ const sanitizeForSay = (s: string) =>
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 1500);
+
+// ✅ recorte duro a 2 frases máximo antes de locutar
+function twoSentencesMax(s: string) {
+  const parts = (s || '').replace(/\s+/g, ' ').trim().split(/(?<=[\.\?\!])\s+/);
+  return parts.slice(0, 2).join(' ').trim();
+}
 
 // ———————————————————————————
 //  Detección de SMS + tipo de link
@@ -161,7 +181,112 @@ async function getTenantBrand(tenantId: string): Promise<string> {
   return brand || 'Amy';
 }
 
-// ———————————————————————————
+async function enviarSmsConLink(
+  tipo: LinkType,
+  {
+    tenantId,
+    callerE164,
+    callerRaw,
+    smsFromCandidate, // tenant.twilio_sms_number || tenant.twilio_voice_number
+    callSid,
+  }: {
+    tenantId: string;
+    callerE164: string | null;
+    callerRaw: string;
+    smsFromCandidate: string | null;
+    callSid: string;
+  }
+) {
+  // 1) Buscar link útil por tipo (links_utiles) con fallback a voice_links
+  const synonyms: Record<LinkType, string[]> = {
+    reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
+    comprar:  ['comprar', 'pagar', 'checkout', 'payment', 'pay'],
+    soporte:  ['soporte', 'support', 'ticket', 'ayuda'],
+    web:      ['web', 'sitio', 'pagina', 'página', 'home', 'website'],
+  };
+  const syns = synonyms[tipo];
+  const likeAny = syns.map((w) => `%${w}%`);
+
+  const base = 3;
+  const inPlaceholders = syns.map((_, i) => `lower($${base + i})`).join(', ');
+  const likeBase = base + syns.length;
+  const likeClauses = likeAny.map((_, i) => `lower(tipo) LIKE lower($${likeBase + i})`).join(' OR ');
+
+  const sql = `
+    SELECT id, tipo, nombre, url
+      FROM links_utiles
+     WHERE tenant_id = $1
+       AND (
+         lower(tipo) = lower($2)
+         OR lower(tipo) IN (${inPlaceholders})
+         OR ${likeClauses}
+       )
+     ORDER BY created_at DESC
+     LIMIT 1
+  `;
+  const params = [tenantId, tipo, ...syns, ...likeAny];
+  const { rows: linksByType } = await pool.query(sql, params);
+
+  let chosen: { nombre?: string; url?: string } | null = linksByType[0] || null;
+
+  let bulletsFromVoice: string | null = null;
+  if (!chosen) {
+    const { rows: vlinks } = await pool.query(
+      `SELECT title, url
+         FROM voice_links
+        WHERE tenant_id = $1
+        ORDER BY orden ASC, id ASC
+        LIMIT 5`,
+      [tenantId]
+    );
+    if (vlinks.length > 0) {
+      bulletsFromVoice = vlinks.map((r: any, i: number) => `${i + 1}. ${r.title || 'Link'}: ${r.url}`).join('\n');
+    }
+  }
+
+  const brand = await getTenantBrand(tenantId);
+  let body: string;
+  if (chosen?.url) {
+    body = `📎 ${chosen.nombre || 'Enlace'}: ${chosen.url}\n— ${brand}`;
+  } else if (bulletsFromVoice) {
+    body = `Gracias por llamar. Te comparto los links:\n${bulletsFromVoice}\n— ${brand}`;
+  } else {
+    throw new Error('No hay links_utiles ni voice_links configurados.');
+  }
+
+  const smsFrom = smsFromCandidate || '';
+  const toDest = callerE164;
+
+  if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
+    throw new Error(`Número destino inválido: ${callerRaw} → ${toDest}`);
+  }
+  if (!smsFrom) {
+    throw new Error('No hay un número SMS-capable configurado.');
+  }
+  if (smsFrom.startsWith('whatsapp:')) {
+    throw new Error('Número configurado es WhatsApp-only; no envía SMS.');
+  }
+
+  // 2) Enviar SMS
+  const n = await sendSMS({
+    mensaje: body,
+    destinatarios: [toDest],
+    fromNumber: smsFrom,
+    tenantId,
+    campaignId: null,
+  });
+  console.log('[VOICE/SMS] sendSMS -> enviados =', n);
+
+  // 3) Limpiar estado de la llamada y log en messages
+  CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: true }); // ✅ marca idempotencia
+  STATE_TIME.set(callSid, Date.now());
+  await pool.query(
+    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+     VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
+    [tenantId, `SMS enviado con ${chosen?.url ? 'link único' : 'lista de links'}.`, smsFrom || 'sms']
+  );
+}
+
 //  Handler
 // ———————————————————————————
 router.post('/', async (req: Request, res: Response) => {
@@ -184,6 +309,21 @@ router.post('/', async (req: Request, res: Response) => {
   const state = CALL_STATE.get(callSid) || {};
 
   try {
+    // ✅ handler de silencio (cuando Twilio devuelve sin SpeechResult/Digits en turnos posteriores)
+    if (!userInput && !digits && Object.prototype.hasOwnProperty.call(req.body, 'SpeechResult')) {
+      const vrSilence = new twiml.VoiceResponse();
+      vrSilence.say({ language: 'es-ES' as any, voice: 'alice' as any }, '¿Me lo repites, por favor?');
+      vrSilence.gather({
+        input: ['speech','dtmf'] as any,
+        numDigits: 1,
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: 'es-ES' as any,
+        speechTimeout: 'auto',
+      });
+      STATE_TIME.set(callSid, Date.now()); // ✅ refresca TTL
+      return res.type('text/xml').send(vrSilence.toString());
+    }
     const tRes = await pool.query(
       `SELECT id, name,
               membresia_activa, membresia_inicio,
@@ -227,12 +367,84 @@ router.post('/', async (req: Request, res: Response) => {
       vr.gather({
         input: ['speech', 'dtmf'] as any,
         numDigits: 1,
-        action: '/webhook/voice-response', // ajusta si tu API cuelga de /api
+        action: '/webhook/voice-response', // 🔁 si sirves bajo /api, cambia a '/api/webhook/voice-response'
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
       });
+      CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: false });
+      STATE_TIME.set(callSid, Date.now());
+      return res.type('text/xml').send(vr.toString());
+    }
+
+    // ✅ FAST-PATH: confirmación de SMS sin pasar por OpenAI
+    let earlySmsType: LinkType | null = null;
+
+    // Caso A: venías esperando confirmación por estado y dijo “sí/1”
+    if (state.awaiting && (saidYes(userInput) || digits === '1')) {
+      earlySmsType = (state.pendingType || guessType(userInput)) as LinkType;
       CALL_STATE.set(callSid, { awaiting: false, pendingType: null });
+    }
+
+    // Caso B: último turno marcó <SMS_PENDING:...> y ahora dijo “sí/1”
+    if (!earlySmsType) {
+      const { rows: lastAssistantRows } = await pool.query(
+        `SELECT content
+          FROM messages
+          WHERE tenant_id = $1 AND canal = 'voz' AND role = 'assistant' AND from_number = $2
+          ORDER BY timestamp DESC LIMIT 1`,
+        [tenant?.id, didNumber || 'sistema']
+      );
+      const lastAssistantText: string = lastAssistantRows?.[0]?.content || '';
+      const pendingMatch = lastAssistantText.match(/<SMS_PENDING:(reservar|comprar|soporte|web)>/i);
+      if (pendingMatch && (saidYes(userInput) || digits === '1')) {
+        earlySmsType = pendingMatch[1].toLowerCase() as LinkType;
+      }
+    }
+
+    if (earlySmsType) {
+      // 🔔 salta todo OpenAI y manda SMS ya
+      await enviarSmsConLink(earlySmsType, {
+        tenantId: tenant.id,
+        callerE164,
+        callerRaw,
+        smsFromCandidate: tenant.twilio_sms_number || tenant.twilio_voice_number || '',
+        callSid,
+      });
+      const ok = locale.startsWith('es')
+        ? 'Listo, te envié el enlace por SMS. ¿Algo más?'
+        : 'Done, I just texted you the link. Anything else?';
+
+      vr.say({ language: locale as any, voice: voiceName }, ok);
+      vr.gather({
+        input: ['speech', 'dtmf'] as any,
+        numDigits: 1,
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: locale as any,
+        speechTimeout: 'auto',
+      });
+
+      // Guarda conversación mínima del fast-path
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+        VALUES ($1, 'user', $2, NOW(), 'voz', $3)`,
+        [tenant.id, userInput, callerE164 || 'anónimo']
+      );
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
+        VALUES ($1, 'assistant', $2, NOW(), 'voz', $3)`,
+        [tenant.id, ok, didNumber || 'sistema']
+      );
+      await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, created_at)
+        VALUES ($1, 'voz', NOW())`,
+        [tenant.id]
+      );
+
+      await incrementarUsoPorNumero(didNumber);
+      STATE_TIME.set(callSid, Date.now());
+
       return res.type('text/xml').send(vr.toString());
     }
 
@@ -243,6 +455,9 @@ router.post('/', async (req: Request, res: Response) => {
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
       const brand = await getTenantBrand(tenant.id);
 
+      // ✅ timeout de 6s para evitar cuelgues
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6000);
       const completion = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
@@ -254,7 +469,8 @@ router.post('/', async (req: Request, res: Response) => {
           },
           { role: 'user', content: userInput },
         ],
-      });
+      }, { signal: controller.signal as any });
+      clearTimeout(timer);
 
       respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
 
@@ -353,6 +569,10 @@ router.post('/', async (req: Request, res: Response) => {
 
     // ——— Si hay que mandar SMS ———
     if (smsType) {
+      // ✅ evita doble envío si el webhook se reintenta
+      if (state.smsSent) {
+        console.log('[VOICE/SMS] SMS ya enviado en esta llamada, se omite reintento.');
+      } else {
       try {
         const synonyms: Record<LinkType, string[]> = {
           reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
@@ -444,8 +664,9 @@ router.post('/', async (req: Request, res: Response) => {
             })
               .then((n) => {
                 console.log('[VOICE/SMS] sendSMS -> enviados =', n);
-                // ✅ limpia el estado
-                CALL_STATE.set(callSid, { awaiting: false, pendingType: null });
+                // ✅ limpia/actualiza estado + marca smsSent
+                CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: true });
+                STATE_TIME.set(callSid, Date.now());
                 pool.query(
                   `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
                    VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
@@ -467,6 +688,7 @@ router.post('/', async (req: Request, res: Response) => {
           ? ' Hubo un problema al enviar el SMS.'
           : ' There was a problem sending the text.';
       }
+      } // <- fin anti-doble envío
     } else {
       console.log('[VOICE/SMS] No se detectó condición para enviar SMS.', 'userInput=', short(userInput), 'respuesta=', short(respuesta));
     }
@@ -493,6 +715,8 @@ router.post('/', async (req: Request, res: Response) => {
     // ——— ¿Terminamos? ———
     const fin = /(gracias|eso es todo|nada más|nada mas|bye|ad[ií]os)/i.test(userInput);
 
+    // ✅ recorte a 2 frases y normalización de horas antes de locutar
+    respuesta = twoSentencesMax(respuesta);
     respuesta = normalizeClockText(respuesta, locale as any);
     const speakOut = sanitizeForSay(respuesta);
 
@@ -501,26 +725,37 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (!fin) {
       vr.gather({
-        input: ['speech', 'dtmf'] as any,
-        numDigits: 1,   
-        action: '/webhook/voice-response',
+        input: ['speech','dtmf'] as any,
+        numDigits: 1,
+        action: '/webhook/voice-response', // 🔁 si usas /api, ajusta aquí también
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
       });
     } else {
-      vr.say(
-        { language: locale as any, voice: voiceName },
-        locale.startsWith('es') ? 'Gracias por tu llamada. ¡Hasta luego!' : 'Thanks for calling. Goodbye!'
-      );
+      CALL_STATE.delete(callSid);              // ✅ limpiar aquí
+      STATE_TIME.delete(callSid);
+      vr.say({ language: locale as any, voice: voiceName },
+            locale.startsWith('es') ? 'Gracias por tu llamada. ¡Hasta luego!' : 'Thanks for calling. Goodbye!');
       vr.hangup();
     }
 
     return res.type('text/xml').send(vr.toString());
   } catch (err) {
-    console.error('❌ Error en voice-response:', err);
-    return res.sendStatus(500);
-  }
+  console.error('❌ Error en voice-response:', err);
+  const vrErr = new twiml.VoiceResponse();
+  vrErr.say({ language: 'es-ES', voice: 'alice' },
+    'Perdón, hubo un problema. ¿Quieres que te envíe la información por SMS? Di sí o pulsa 1.');
+  vrErr.gather({
+    input: ['speech','dtmf'] as any,
+    numDigits: 1,
+    action: '/webhook/voice-response', // 🔁 ajusta si usas /api
+    method: 'POST',
+    language: 'es-ES',
+    speechTimeout: 'auto',
+  });
+  return res.type('text/xml').send(vrErr.toString());  // ✅ mantener la llamada viva
+}
 });
 
 export default router;
