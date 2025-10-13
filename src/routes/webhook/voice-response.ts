@@ -86,10 +86,13 @@ function normalizeClockText(text: string, locale: string) {
 
 // ===== Estado por llamada (en memoria) =====
 type CallState = {
-  awaiting?: boolean;
+  awaiting?: boolean;  // esperando confirmación de envío
   pendingType?: 'reservar' | 'comprar' | 'soporte' | 'web' | null;
-  smsSent?: boolean;
+  awaitingNumber?: boolean; // esperando que nos dicte/marque un número
+  altDest?: string | null;  // número alterno confirmado por el usuario (E.164)
+  smsSent?: boolean;        // idempotencia: ya se envió SMS en esta llamada
 };
+
 const CALL_STATE = new Map<string, CallState>();
 
 // ✅ TTL para limpiar memoria si Twilio no manda el último hit
@@ -121,6 +124,16 @@ const sanitizeForSay = (s: string) =>
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 1500);
+
+// ——— Helpers para confirmar/capturar número destino ———
+const maskForVoice = (n: string) =>
+  (n || '')
+    .replace(/^\+?(\d{0,3})\d{0,6}(\d{2})(\d{2})$/, (_, p, a, b) =>
+      `+${p || ''} *** ** ${a} ${b}`
+    );
+
+const extractDigits = (t: string) => (t || '').replace(/\D+/g, '');
+const isValidE164 = (n?: string | null) => !!n && /^\+\d{10,15}$/.test(n);
 
 // ✅ recorte duro a 2 frases máximo antes de locutar
 function twoSentencesMax(s: string) {
@@ -187,14 +200,16 @@ async function enviarSmsConLink(
     tenantId,
     callerE164,
     callerRaw,
-    smsFromCandidate, // tenant.twilio_sms_number || tenant.twilio_voice_number
+    smsFromCandidate,
     callSid,
+    overrideDestE164, // 👈 NUEVO (opcional)
   }: {
     tenantId: string;
     callerE164: string | null;
     callerRaw: string;
     smsFromCandidate: string | null;
     callSid: string;
+    overrideDestE164?: string | null;
   }
 ) {
   // 1) Buscar link útil por tipo (links_utiles) con fallback a voice_links
@@ -255,7 +270,9 @@ async function enviarSmsConLink(
   }
 
   const smsFrom = smsFromCandidate || '';
-  const toDest = callerE164;
+  const toDest = overrideDestE164 && isValidE164(overrideDestE164)
+  ? overrideDestE164
+  : callerE164;
 
   if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
     throw new Error(`Número destino inválido: ${callerRaw} → ${toDest}`);
@@ -383,7 +400,7 @@ router.post('/', async (req: Request, res: Response) => {
     // Caso A: venías esperando confirmación por estado y dijo “sí/1”
     if (state.awaiting && (saidYes(userInput) || digits === '1')) {
       earlySmsType = (state.pendingType || guessType(userInput)) as LinkType;
-      CALL_STATE.set(callSid, { awaiting: false, pendingType: null });
+      CALL_STATE.set(callSid, { ...state, awaiting: false, pendingType: null });
     }
 
     // Caso B: último turno marcó <SMS_PENDING:...> y ahora dijo “sí/1”
@@ -403,13 +420,13 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     if (earlySmsType) {
-      // 🔔 salta todo OpenAI y manda SMS ya
       await enviarSmsConLink(earlySmsType, {
         tenantId: tenant.id,
         callerE164,
         callerRaw,
         smsFromCandidate: tenant.twilio_sms_number || tenant.twilio_voice_number || '',
         callSid,
+        overrideDestE164: (state.altDest && isValidE164(state.altDest)) ? state.altDest : undefined,
       });
       const ok = locale.startsWith('es')
         ? 'Listo, te envié el enlace por SMS. ¿Algo más?'
@@ -567,6 +584,54 @@ router.post('/', async (req: Request, res: Response) => {
       smsType,
     });
 
+    // ——— Confirmación/Captura de número destino antes de enviar ———
+    if (smsType) {
+      // número preferido: alterno confirmado > callerE164
+      const preferred = (state.altDest && isValidE164(state.altDest)) ? state.altDest : callerE164;
+
+      // si el usuario ya dijo explícitamente "sí" o pulsó 1 en este turno, no bloqueamos
+      const thisTurnYes = saidYes(userInput) || digits === '1';
+
+      if (!thisTurnYes) {
+        // si no tenemos número válido, pedirlo
+        if (!isValidE164(preferred)) {
+          const askNum = locale.startsWith('es')
+            ? '¿A qué número te lo envío? Dímelo con el código de país o márcalo ahora.'
+            : 'What number should I text? Please include country code or key it in now.';
+          // marcar que esperamos número
+          CALL_STATE.set(callSid, { ...state, awaitingNumber: true, pendingType: smsType });
+          vr.say({ language: locale as any, voice: voiceName }, askNum);
+          vr.gather({
+            input: ['speech','dtmf'] as any,
+            numDigits: 15,
+            action: '/webhook/voice-response',
+            method: 'POST',
+            language: locale as any,
+            speechTimeout: 'auto',
+          });
+          return res.type('text/xml').send(vr.toString());
+        }
+
+        // tenemos un número, pedir confirmación rápida
+        const confirm = locale.startsWith('es')
+          ? `Te lo envío al ${maskForVoice(preferred)}. Di "sí" o pulsa 1 para confirmar, o dicta otro número.`
+          : `I'll text ${maskForVoice(preferred)}. Say "yes" or press 1 to confirm, or say another number.`;
+        CALL_STATE.set(callSid, { ...state, awaiting: true, awaitingNumber: true, pendingType: smsType });
+        vr.say({ language: locale as any, voice: voiceName }, confirm);
+        vr.gather({
+          input: ['speech','dtmf'] as any,
+          numDigits: 15,
+          action: '/webhook/voice-response',
+          method: 'POST',
+          language: locale as any,
+          speechTimeout: 'auto',
+        });
+        return res.type('text/xml').send(vr.toString());
+      }
+
+      // Si thisTurnYes === true, seguimos abajo al bloque de envío
+    }
+
     // ——— Si hay que mandar SMS ———
     if (smsType) {
       // ✅ evita doble envío si el webhook se reintenta
@@ -638,7 +703,18 @@ router.post('/', async (req: Request, res: Response) => {
 
           const smsFrom = tenant.twilio_sms_number || tenant.twilio_voice_number || '';
 
-          const toDest = callerE164;
+          // elegir destino final: altDest confirmado o callerE164
+          const override = (state.altDest && isValidE164(state.altDest)) ? state.altDest : null;
+          const toDest = override || callerE164;
+
+          console.log('[VOICE/SMS] SENDING', {
+            smsFrom,
+            toDest,
+            callerRaw,
+            callSid,
+            tenantId: tenant.id
+          });
+
           if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
             console.warn('[VOICE/SMS] Número destino inválido para SMS:', callerRaw, '→', toDest);
             respuesta += locale.startsWith('es')
