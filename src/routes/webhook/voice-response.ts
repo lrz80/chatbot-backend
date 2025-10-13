@@ -84,6 +84,13 @@ function normalizeClockText(text: string, locale: string) {
   return s;
 }
 
+// ===== Estado por llamada (en memoria) =====
+type CallState = {
+  awaiting?: boolean;
+  pendingType?: 'reservar' | 'comprar' | 'soporte' | 'web' | null;
+};
+const CALL_STATE = new Map<string, CallState>();
+
 const toTwilioLocale = (code?: string) => {
   const c = (code || '').toLowerCase();
   if (c.startsWith('es')) return 'es-ES' as const;
@@ -106,10 +113,12 @@ const sanitizeForSay = (s: string) =>
 // ———————————————————————————
 const askedForSms = (t: string) => {
   const s = (t || '').toLowerCase();
-  return (
-    /(\bsms\b|\bmensaje\b|\btexto\b|\bmand(a|e|alo)\b|\benv[ií]a(lo)?\b|\bp[aá]same\b|\bp[aá]salo\b|\btext\b|\btext me\b|\bmessage me\b)/i.test(s) &&
-    /link|enlace|liga|url|p[aá]gina|web|reserv|agend|cita|turno|compr|pag|pago|checkout|soporte|support/i.test(s)
-  );
+  const wantsSms =
+    /(\bsms\b|\bmensaje\b|\btexto\b|\bmand(a|e|alo)\b|\benv[ií]a(lo)?\b|\btext\b|\btext me\b|\bmessage me\b)/i.test(s);
+  if (!wantsSms) return false;
+  const mentionsLink =
+    /link|enlace|liga|url|p[aá]gina|web|reserv|agend|cita|turno|compr|pag|pago|checkout|soporte|support/i.test(s);
+  return mentionsLink || true; // 👈 permite sin “link”
 };
 
 const didAssistantPromiseSms = (t: string) =>
@@ -166,8 +175,13 @@ router.post('/', async (req: Request, res: Response) => {
   const userInputRaw = (req.body.SpeechResult || '').toString();
   const userInput = userInputRaw.trim();
 
+  const digits = (req.body.Digits || '').toString().trim();  // 👈 nuevo
+
   // UNA SOLA instancia de VoiceResponse
   const vr = new twiml.VoiceResponse();
+
+  const callSid: string = (req.body.CallSid || '').toString();
+  const state = CALL_STATE.get(callSid) || {};
 
   try {
     const tRes = await pool.query(
@@ -211,12 +225,14 @@ router.post('/', async (req: Request, res: Response) => {
       const initial = sanitizeForSay(`Hola, soy Amy de ${brand}. ¿En qué puedo ayudarte?`);
       vr.say({ language: locale as any, voice: voiceName }, initial);
       vr.gather({
-        input: ['speech'] as any,
+        input: ['speech', 'dtmf'] as any,
+        numDigits: 1,
         action: '/webhook/voice-response', // ajusta si tu API cuelga de /api
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
       });
+      CALL_STATE.set(callSid, { awaiting: false, pendingType: null });
       return res.type('text/xml').send(vr.toString());
     }
 
@@ -285,13 +301,19 @@ router.post('/', async (req: Request, res: Response) => {
     if (tagMatch) respuesta = respuesta.replace(tagMatch[0], '').trim();
 
     // Confirmación diferida: si había pendiente y el usuario dijo "sí"
-    if (!smsType && pendingMatch && saidYes(userInput)) {
-      smsType = pendingMatch[1].toLowerCase() as LinkType;
-      console.log('[VOICE/SMS] Confirmación afirmativa → tipo =', smsType);
+    if (!smsType && state.awaiting && (saidYes(userInput) || digits === '1')) {
+      smsType = (state.pendingType || guessType(userInput)) as LinkType;
+      console.log('[VOICE/SMS] Confirmación por estado → tipo =', smsType);
+      state.awaiting = false;
+      state.pendingType = null;
+      CALL_STATE.set(callSid, state);
     }
     // Si rechazó, no enviamos
-    if (!smsType && pendingMatch && saidNo(userInput)) {
-      console.log('[VOICE/SMS] Usuario rechazó el SMS.');
+    if (!smsType && state.awaiting && (saidNo(userInput) || digits === '2')) {
+      console.log('[VOICE/SMS] Usuario rechazó el SMS (estado).');
+      state.awaiting = false;
+      state.pendingType = null;
+      CALL_STATE.set(callSid, state);
     }
 
     if (!smsType && askedForSms(userInput)) {
@@ -299,16 +321,35 @@ router.post('/', async (req: Request, res: Response) => {
       console.log('[VOICE/SMS] Usuario solicitó SMS → tipo inferido =', smsType);
     }
 
-    // OPCIONAL: si el asistente "prometió" enviar SMS, pedimos confirmación (no enviamos todavía)
+    // Si el asistente "prometió" enviar SMS:
     if (!smsType && didAssistantPromiseSms(respuesta)) {
-      const ask = locale.startsWith('es')
-        ? '¿Quieres que te lo envíe por SMS? Di "sí" para enviarlo por mensaje.'
-        : 'Do you want me to text it to you? Say "yes" to send it.';
-      if (tagMatch) respuesta = respuesta.replace(tagMatch[0], '').trim();
       const pendingType = guessType(`${userInput} ${respuesta}`);
-      // Tag oculto; no se pronuncia (sanitizeForSay quita < >)
-      respuesta = `${respuesta} ${ask} <SMS_PENDING:${pendingType}>`.trim();
+
+      // Caso inmediato: usuario ya dijo "sí" o pulsó 1
+      if (saidYes(userInput) || digits === '1') {
+        smsType = pendingType as LinkType;
+        console.log('[VOICE/SMS] Promesa + "sí/1" inmediato → tipo =', smsType);
+      } else if (!saidNo(userInput) && digits !== '2') {
+        // Pedimos confirmación y guardamos estado para el próximo turno
+        const ask = locale.startsWith('es')
+          ? '¿Quieres que te lo envíe por SMS? Di "sí" o pulsa 1 para enviarlo.'
+          : 'Do you want me to text it to you? Say "yes" or press 1 to send it.';
+        respuesta = `${respuesta} ${ask} <SMS_PENDING:${pendingType}>`.trim();
+        CALL_STATE.set(callSid, { awaiting: true, pendingType });
+      }
     }
+
+    console.log('[VOICE/SMS] dbg', {
+      awaiting: state.awaiting,
+      pendingType: state.pendingType,
+      digits,
+      saidYes: saidYes(userInput),
+      saidNo: saidNo(userInput),
+      tagMatch: !!tagMatch,
+      pendingMatch: !!pendingMatch,
+      askedForSms: askedForSms(userInput),
+      smsType,
+    });
 
     // ——— Si hay que mandar SMS ———
     if (smsType) {
@@ -403,6 +444,8 @@ router.post('/', async (req: Request, res: Response) => {
             })
               .then((n) => {
                 console.log('[VOICE/SMS] sendSMS -> enviados =', n);
+                // ✅ limpia el estado
+                CALL_STATE.set(callSid, { awaiting: false, pendingType: null });
                 pool.query(
                   `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
                    VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
@@ -458,7 +501,8 @@ router.post('/', async (req: Request, res: Response) => {
 
     if (!fin) {
       vr.gather({
-        input: ['speech'] as any,
+        input: ['speech', 'dtmf'] as any,
+        numDigits: 1,   
         action: '/webhook/voice-response',
         method: 'POST',
         language: locale as any,
