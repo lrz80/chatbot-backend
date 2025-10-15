@@ -338,6 +338,8 @@ router.post('/', async (req: Request, res: Response) => {
         method: 'POST',
         language: 'es-ES' as any,
         speechTimeout: 'auto',
+        timeout: 7,                 // 👈 añade
+        actionOnEmptyResult: true,  // 👈 añade
       });
       STATE_TIME.set(callSid, Date.now()); // ✅ refresca TTL
       return res.type('text/xml').send(vrSilence.toString());
@@ -409,6 +411,8 @@ router.post('/', async (req: Request, res: Response) => {
           method: 'POST',
           language: locale as any,
           speechTimeout: 'auto',
+          timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
+          actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
         });
         return res.type('text/xml').send(vr.toString());
       }
@@ -430,6 +434,8 @@ router.post('/', async (req: Request, res: Response) => {
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
+        timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
+        actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
       });
       CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: false });
       STATE_TIME.set(callSid, Date.now());
@@ -482,6 +488,8 @@ router.post('/', async (req: Request, res: Response) => {
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
+        timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
+        actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
       });
 
       // Guarda conversación mínima del fast-path
@@ -576,6 +584,8 @@ router.post('/', async (req: Request, res: Response) => {
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
+        timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
+        actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
       });
       return res.type('text/xml').send(vr.toString());
     }
@@ -723,6 +733,8 @@ router.post('/', async (req: Request, res: Response) => {
             method: 'POST',
             language: locale as any,
             speechTimeout: 'auto',
+            timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
+            actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
           });
           return res.type('text/xml').send(vr.toString());
         }
@@ -740,6 +752,8 @@ router.post('/', async (req: Request, res: Response) => {
           method: 'POST',
           language: locale as any,
           speechTimeout: 'auto',
+          timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
+          actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
         });
         return res.type('text/xml').send(vr.toString());
       }
@@ -923,6 +937,8 @@ router.post('/', async (req: Request, res: Response) => {
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
+        timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
+        actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
       });
     } else {
       CALL_STATE.delete(callSid);              // ✅ limpiar aquí
