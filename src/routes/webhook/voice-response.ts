@@ -215,10 +215,11 @@ async function enviarSmsConLink(
   // 1) Buscar link útil por tipo (links_utiles) con fallback a voice_links
   const synonyms: Record<LinkType, string[]> = {
     reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
-    comprar:  ['comprar', 'pagar', 'checkout', 'payment', 'pay'],
-    soporte:  ['soporte', 'support', 'ticket', 'ayuda'],
-    web:      ['web', 'sitio', 'pagina', 'página', 'home', 'website'],
+    comprar:  ['comprar', 'pagar', 'checkout', 'payment', 'pay', 'precio', 'precios', 'prices'],
+    soporte:  ['soporte', 'support', 'ticket', 'ayuda', 'whatsapp', 'wa.me', 'whats'],
+    web:      ['web', 'sitio', 'pagina', 'página', 'home', 'website', 'ubicacion', 'ubicación', 'location', 'mapa', 'maps', 'google maps'],
   };
+
   const syns = synonyms[tipo];
   const likeAny = syns.map((w) => `%${w}%`);
 
@@ -376,15 +377,56 @@ router.post('/', async (req: Request, res: Response) => {
     const locale = toTwilioLocale(cfg.idioma || 'es-ES');
     const voiceName: any = 'alice';
 
-    // Primera vuelta: sin SpeechResult → saludo + gather
+    // ===== Resultado de transferencia (Dial action) =====
+    const isTransferCallback = (req.query && req.query.transfer === '1') || typeof req.body.DialCallStatus !== 'undefined';
+    if (isTransferCallback) {
+      const status = (req.body.DialCallStatus || '').toString(); // completed | no-answer | busy | failed | canceled
+      console.log('[TRANSFER CALLBACK] DialCallStatus =', status);
+
+      if (['no-answer','busy','failed','canceled'].includes(status)) {
+        try {
+          // Enviar link de WhatsApp por SMS (tipo 'soporte' con sinónimos de whatsapp)
+          await enviarSmsConLink('soporte', {
+            tenantId: tenant.id,
+            callerE164,
+            callerRaw,
+            smsFromCandidate: tenant.twilio_sms_number || tenant.twilio_voice_number || '',
+            callSid,
+          });
+          vr.say({ language: locale as any, voice: voiceName },
+                'No se pudo completar la transferencia. Te envié el WhatsApp por SMS. ¿Algo más?');
+        } catch (e) {
+          console.error('[TRANSFER SMS FALLBACK] Error:', e);
+          vr.say({ language: locale as any, voice: voiceName },
+                'No se pudo completar la transferencia. Si quieres, te envío el WhatsApp por SMS. Di "sí" o pulsa 1.');
+          CALL_STATE.set(callSid, { ...state, awaiting: true, pendingType: 'soporte' });
+        }
+
+        vr.gather({
+          input: ['speech','dtmf'] as any,
+          numDigits: 1,
+          action: '/webhook/voice-response',
+          method: 'POST',
+          language: locale as any,
+          speechTimeout: 'auto',
+        });
+        return res.type('text/xml').send(vr.toString());
+      }
+
+      // Si fue "completed", simplemente retomamos flujo normal (no respondemos nada especial)
+    }
+
+    // Primera vuelta: sin SpeechResult → saludo + menú + gather
     if (!userInput) {
       const brand = await getTenantBrand(tenant.id);
-      const initial = sanitizeForSay(`Hola, soy Amy de ${brand}. ¿En qué puedo ayudarte?`);
+      const initial = sanitizeForSay(`Hola, soy Amy de ${brand}. ¿En qué puedo ayudarte?
+      Marca 1 para precios, 2 para horarios, 3 para ubicación, 4 para hablar con un representante.`);
+
       vr.say({ language: locale as any, voice: voiceName }, initial);
       vr.gather({
-        input: ['speech', 'dtmf'] as any,
+        input: ['dtmf','speech'] as any,
         numDigits: 1,
-        action: '/webhook/voice-response', // 🔁 si sirves bajo /api, cambia a '/api/webhook/voice-response'
+        action: '/webhook/voice-response',
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
@@ -462,6 +504,79 @@ router.post('/', async (req: Request, res: Response) => {
       await incrementarUsoPorNumero(didNumber);
       STATE_TIME.set(callSid, Date.now());
 
+      return res.type('text/xml').send(vr.toString());
+    }
+
+    // ===== IVR simple por dígito (1/2/3/4) =====
+    if (digits && !state.awaiting) {
+      // Contenidos hablados (ajústalos a tu negocio)
+      const PRECIOS   = 'Nuestros precios principales: corte 25 dólares, color 60, paquete 80.';
+      const HORARIOS  = 'Abrimos de lunes a sábado de 9 a 18 horas.';
+      const UBICACION = 'Estamos en Avenida Siempre Viva 742, Colonia Centro.';
+
+      // Número de representante E.164 si quieres transferir (o deja null)
+      const REPRESENTANTE_NUMBER = '+15551234567'; // ← pon aquí tu número de agente o null
+
+      // Helper: ofrece SMS y setea el pendingType según la opción
+      const offerSms = (tipo: LinkType) => {
+        const ask = locale.startsWith('es')
+          ? '¿Quieres que te lo envíe por SMS? Di "sí" o pulsa 1.'
+          : 'Do you want me to text it to you? Say "yes" or press 1.';
+        vr.say({ language: locale as any, voice: voiceName }, ask);
+        CALL_STATE.set(callSid, { ...state, awaiting: true, pendingType: tipo });
+      };
+
+      switch (digits) {
+        case '1': { // precios → mapeamos a 'comprar' (por “precios/checkout”)
+          vr.say({ language: locale as any, voice: voiceName }, PRECIOS);
+          offerSms('comprar');
+          break;
+        }
+        case '2': { // horarios → mapeamos a 'web' (típico link informativo)
+          vr.say({ language: locale as any, voice: voiceName }, HORARIOS);
+          offerSms('web');
+          break;
+        }
+        case '3': { // ubicación → mapeamos a 'web' (link de Google Maps)
+          vr.say({ language: locale as any, voice: voiceName }, UBICACION);
+          offerSms('web');
+          break;
+        }
+        case '4': { // representante
+          if (REPRESENTANTE_NUMBER) {
+            vr.say({ language: locale as any, voice: voiceName }, 'Te comunico con un representante. Un momento, por favor.');
+            const dial = vr.dial({
+              action: '/webhook/voice-response?transfer=1', // ← volverá aquí al colgar/resultado
+              method: 'POST',
+              timeout: 20, // segundos para contestar
+            });
+            dial.number(REPRESENTANTE_NUMBER);
+            return res.type('text/xml').send(vr.toString());
+          } else {
+            vr.say({ language: locale as any, voice: voiceName },
+                  'En breve te atenderá un representante. Si prefieres, te envío nuestro WhatsApp por SMS.');
+            // para 4, si no se puede transferir, también ofrece SMS de WhatsApp → 'soporte'
+            offerSms('soporte');
+          }
+          break;
+        }
+        default: {
+          vr.say({ language: locale as any, voice: voiceName }, 'No reconocí esa opción.');
+        }
+      }
+
+      // Re-ofrecer menú y conversación
+      vr.pause({ length: 1 });
+      vr.say({ language: locale as any, voice: voiceName },
+            '¿Necesitas algo más? Marca 1 precios, 2 horarios, 3 ubicación, 4 representante, o dime en qué te ayudo.');
+      vr.gather({
+        input: ['dtmf','speech'] as any,
+        numDigits: 1,
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: locale as any,
+        speechTimeout: 'auto',
+      });
       return res.type('text/xml').send(vr.toString());
     }
 
@@ -641,10 +756,11 @@ router.post('/', async (req: Request, res: Response) => {
       try {
         const synonyms: Record<LinkType, string[]> = {
           reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
-          comprar:  ['comprar', 'pagar', 'checkout', 'payment', 'pay'],
-          soporte:  ['soporte', 'support', 'ticket', 'ayuda'],
-          web:      ['web', 'sitio', 'pagina', 'página', 'home', 'website'],
+          comprar:  ['comprar', 'pagar', 'checkout', 'payment', 'pay', 'precio', 'precios', 'prices'],
+          soporte:  ['soporte', 'support', 'ticket', 'ayuda', 'whatsapp', 'wa.me', 'whats'],
+          web:      ['web', 'sitio', 'pagina', 'página', 'home', 'website', 'ubicacion', 'ubicación', 'location', 'mapa', 'maps', 'google maps'],
         };
+
         const syns = synonyms[smsType];
         const likeAny = syns.map((w) => `%${w}%`);
 
