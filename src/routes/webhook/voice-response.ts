@@ -422,25 +422,30 @@ router.post('/', async (req: Request, res: Response) => {
 
     // Primera vuelta: sin SpeechResult → saludo + menú + gather
     if (!userInput) {
-      const brand = await getTenantBrand(tenant.id);
-      const initial = sanitizeForSay(`Hola, soy Amy de ${brand}. ¿En qué puedo ayudarte?
-      Marca 1 para precios, 2 para horarios, 3 para ubicación, 4 para hablar con un representante.`);
+    const brand = await getTenantBrand(tenant.id);
 
-      vr.say({ language: locale as any, voice: voiceName }, initial);
-      vr.gather({
-        input: ['dtmf','speech'] as any,
-        numDigits: 1,
-        action: '/webhook/voice-response',
-        method: 'POST',
-        language: locale as any,
-        speechTimeout: 'auto',
-        timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
-        actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
-      });
-      CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: false });
-      STATE_TIME.set(callSid, Date.now());
-      return res.type('text/xml').send(vr.toString());
-    }
+    const gather = vr.gather({
+      input: ['dtmf', 'speech'] as any,
+      numDigits: 1,
+      action: '/webhook/voice-response',
+      method: 'POST',
+      language: locale as any,
+      speechTimeout: 'auto',
+      bargeIn: true,                 // 👈 permite marcar/interrumpir mientras habla
+      actionOnEmptyResult: true,     // 👈 si no marca/ni habla, igual postea
+      timeout: 4                     // 👈 segundos esperando DTMF si no hay habla
+    });
+
+    gather.say(
+      { language: locale as any, voice: voiceName },
+      `Hola, soy Amy de ${brand}. ¿En qué puedo ayudarte?
+      Marca 1 para precios, 2 para horarios, 3 para ubicación, 4 para hablar con un representante.`
+    );
+
+    CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: false });
+    STATE_TIME.set(callSid, Date.now());
+    return res.type('text/xml').send(vr.toString());
+  }
 
     // ✅ FAST-PATH: confirmación de SMS sin pasar por OpenAI
     let earlySmsType: LinkType | null = null;
@@ -573,20 +578,22 @@ router.post('/', async (req: Request, res: Response) => {
         }
       }
 
-      // Re-ofrecer menú y conversación
-      vr.pause({ length: 1 });
-      vr.say({ language: locale as any, voice: voiceName },
-            '¿Necesitas algo más? Marca 1 precios, 2 horarios, 3 ubicación, 4 representante, o dime en qué te ayudo.');
-      vr.gather({
+      // Re-ofrecer menú y conversación (say DENTRO del gather)
+      const repGather = vr.gather({
         input: ['dtmf','speech'] as any,
         numDigits: 1,
         action: '/webhook/voice-response',
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
-        timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
-        actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
+        timeout: 7,
+        actionOnEmptyResult: true,
+        bargeIn: true,
       });
+      repGather.say(
+        { language: locale as any, voice: voiceName },
+        '¿Necesitas algo más? Marca 1 precios, 2 horarios, 3 ubicación, 4 representante, o dime en qué te ayudo.'
+      );
       return res.type('text/xml').send(vr.toString());
     }
 
@@ -926,22 +933,21 @@ router.post('/', async (req: Request, res: Response) => {
     respuesta = normalizeClockText(respuesta, locale as any);
     const speakOut = sanitizeForSay(respuesta);
 
-    vr.say({ language: locale as any, voice: voiceName }, speakOut);
-    vr.pause({ length: 1 });
-
     if (!fin) {
-      vr.gather({
+      const contGather = vr.gather({
         input: ['speech','dtmf'] as any,
         numDigits: 1,
-        action: '/webhook/voice-response', // 🔁 si usas /api, ajusta aquí también
+        action: '/webhook/voice-response',
         method: 'POST',
         language: locale as any,
         speechTimeout: 'auto',
-        timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
-        actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
+        timeout: 7,
+        actionOnEmptyResult: true,
+        bargeIn: true,
       });
+      contGather.say({ language: locale as any, voice: voiceName }, speakOut);
     } else {
-      CALL_STATE.delete(callSid);              // ✅ limpiar aquí
+      CALL_STATE.delete(callSid);
       STATE_TIME.delete(callSid);
       vr.say({ language: locale as any, voice: voiceName },
             locale.startsWith('es') ? 'Gracias por tu llamada. ¡Hasta luego!' : 'Thanks for calling. Goodbye!');
