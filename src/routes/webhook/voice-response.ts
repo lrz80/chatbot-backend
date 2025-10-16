@@ -248,15 +248,18 @@ async function enviarSmsConLink(
   let bulletsFromVoice: string | null = null;
   if (!chosen) {
     const { rows: vlinks } = await pool.query(
-      `SELECT title, url
-         FROM links_utiles
+      `SELECT nombre, tipo, url
+        FROM links_utiles
         WHERE tenant_id = $1
-        ORDER BY orden ASC, id ASC
+          AND COALESCE(TRIM(url), '') <> ''
+        ORDER BY created_at DESC, id DESC
         LIMIT 5`,
       [tenantId]
     );
     if (vlinks.length > 0) {
-      bulletsFromVoice = vlinks.map((r: any, i: number) => `${i + 1}. ${r.title || 'Link'}: ${r.url}`).join('\n');
+      bulletsFromVoice = vlinks
+        .map((r: any, i: number) => `${i + 1}. ${r.nombre || r.tipo || 'Enlace'}: ${r.url}`)
+        .join('\n');
     }
   }
 
@@ -596,7 +599,8 @@ router.post('/', async (req: Request, res: Response) => {
             return res.type('text/xml').send(vr.toString());
           } else {
             vr.say({ language: locale as any, voice: voiceName },
-                  'En breve te atenderá un representante. Si prefieres, te envío nuestro WhatsApp por SMS.');
+              'Ahora mismo no puedo transferirte. Si quieres, te envío nuestro WhatsApp por SMS.'
+            );
             // para 4, si no se puede transferir, también ofrece SMS de WhatsApp → 'soporte'
             offerSms('soporte');
           }
@@ -845,16 +849,17 @@ router.post('/', async (req: Request, res: Response) => {
         let bulletsFromVoice: string | null = null;
         if (!chosen) {
           const { rows: vlinks } = await pool.query(
-            `SELECT nombre AS title, url
+            `SELECT nombre, tipo, url
               FROM links_utiles
               WHERE tenant_id = $1
-              ORDER BY id ASC
+                AND COALESCE(TRIM(url), '') <> ''
+              ORDER BY created_at DESC, id DESC
               LIMIT 5`,
             [tenant.id]
           );
           if (vlinks.length > 0) {
             bulletsFromVoice = vlinks
-              .map((r: any, i: number) => `${i + 1}. ${r.title || 'Link'}: ${r.url}`)
+              .map((r: any, i: number) => `${i + 1}. ${r.nombre || r.tipo || 'Enlace'}: ${r.url}`)
               .join('\n');
           }
         }
