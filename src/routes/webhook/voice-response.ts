@@ -551,12 +551,13 @@ router.post('/', async (req: Request, res: Response) => {
     // ===== IVR simple por dígito (1/2/3/4) =====
     if (digits && !state.awaiting) {
       // Contenidos hablados (ajústalos a tu negocio)
-      const PRECIOS   = 'Nuestros precios principales: corte 25 dólares, color 60, paquete 80.';
-      const HORARIOS  = 'Abrimos de lunes a sábado de 9 a 18 horas.';
-      const UBICACION = 'Estamos en Avenida Siempre Viva 742, Colonia Centro.';
+      const PRECIOS   = 'Te puedo enviar la lista de precios por SMS o el enlace para verlos actualizados.';
+      const HORARIOS  = 'Te envío el horario actualizado por SMS si quieres.';
+      const UBICACION = 'Te envío la ubicación por SMS.';
+
 
       // Número de representante E.164 si quieres transferir (o deja null)
-      const REPRESENTANTE_NUMBER = '+15551234567'; // ← pon aquí tu número de agente o null
+      const REPRESENTANTE_NUMBER = cfg?.representante_number || null;
 
       // Helper: ofrece SMS y setea el pendingType según la opción
       const offerSms = (tipo: LinkType) => {
@@ -637,17 +638,22 @@ router.post('/', async (req: Request, res: Response) => {
       const timer = setTimeout(() => controller.abort(), 6000);
       const completion = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
+        temperature: 0, // 👈 evita alucinaciones
         messages: [
           {
             role: 'system',
             content:
               (cfg.system_prompt as string)?.trim() ||
-              `Eres Amy, una asistente telefónica amable y concisa del negocio ${brand}. Responde breve y natural. Nunca leas enlaces en voz. No prometas enviar SMS a menos que el usuario lo pida explícitamente.`,
+              `Eres Amy, asistente telefónica del negocio ${brand}. 
+              REGLAS:
+              - NO menciones precios ni montos al hablar, nunca inventes números.
+              - Si el usuario pregunta por precios, horarios, ubicación o pagos, ofrece enviar un SMS con el enlace correspondiente (no los leas en voz).
+              - Jamás leas URL en voz. 
+              - Responde breve y natural.`
           },
           { role: 'user', content: userInput },
         ],
       }, { signal: controller.signal as any });
-      clearTimeout(timer);
 
       respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
 
