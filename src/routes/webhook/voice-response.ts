@@ -295,6 +295,12 @@ async function enviarSmsConLink(
   });
   console.log('[VOICE/SMS] sendSMS -> enviados =', n);
 
+  console.log('[VOICE][SMS_SENT]', JSON.stringify({
+    callSid,
+    sent: n,
+    to: toDest
+  }));
+
   // 3) Limpiar estado de la llamada y log en messages
   CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: true }); // ✅ marca idempotencia
   STATE_TIME.set(callSid, Date.now());
@@ -326,6 +332,14 @@ router.post('/', async (req: Request, res: Response) => {
   const callSid: string = (req.body.CallSid || '').toString();
   const state = CALL_STATE.get(callSid) || {};
 
+  // ⬇️ LOG — lo que dijo el cliente
+  console.log('[VOICE][USER]', JSON.stringify({
+    callSid,
+    from: callerE164 || callerRaw,
+    digits,
+    userInput
+  }));
+
   try {
     // ✅ handler de silencio (cuando Twilio devuelve sin SpeechResult/Digits en turnos posteriores)
     if (!userInput && !digits && Object.prototype.hasOwnProperty.call(req.body, 'SpeechResult')) {
@@ -342,6 +356,12 @@ router.post('/', async (req: Request, res: Response) => {
         actionOnEmptyResult: true,  // 👈 añade
       });
       STATE_TIME.set(callSid, Date.now()); // ✅ refresca TTL
+      console.log('[VOICE][BOT]', JSON.stringify({
+        callSid,
+        to: didNumber,
+        speakOut: '¿Me lo repites, por favor?'
+      }));
+
       return res.type('text/xml').send(vrSilence.toString());
     }
     const tRes = await pool.query(
@@ -414,6 +434,12 @@ router.post('/', async (req: Request, res: Response) => {
           timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
           actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
         });
+        console.log('[VOICE][BOT]', JSON.stringify({
+          callSid,
+          to: didNumber,
+          speakOut: 'No se pudo completar la transferencia...'
+        }));
+
         return res.type('text/xml').send(vr.toString());
       }
 
@@ -809,19 +835,21 @@ router.post('/', async (req: Request, res: Response) => {
 
         let chosen: { nombre?: string; url?: string } | null = linksByType[0] || null;
 
-        // Fallback a voice_links
+        // Fallback a lista desde links_utiles
         let bulletsFromVoice: string | null = null;
         if (!chosen) {
           const { rows: vlinks } = await pool.query(
-            `SELECT title, url
-               FROM voice_links
+            `SELECT nombre AS title, url
+              FROM links_utiles
               WHERE tenant_id = $1
-              ORDER BY orden ASC, id ASC
+              ORDER BY id ASC
               LIMIT 5`,
             [tenant.id]
           );
           if (vlinks.length > 0) {
-            bulletsFromVoice = vlinks.map((r: any, i: number) => `${i + 1}. ${r.title || 'Link'}: ${r.url}`).join('\n');
+            bulletsFromVoice = vlinks
+              .map((r: any, i: number) => `${i + 1}. ${r.title || 'Link'}: ${r.url}`)
+              .join('\n');
           }
         }
 
@@ -934,6 +962,13 @@ router.post('/', async (req: Request, res: Response) => {
     respuesta = twoSentencesMax(respuesta);
     respuesta = normalizeClockText(respuesta, locale as any);
     const speakOut = sanitizeForSay(respuesta);
+
+    // ⬇️ LOG — lo que dirá el bot (lo que Twilio locuta)
+    console.log('[VOICE][BOT]', JSON.stringify({
+      callSid,
+      to: didNumber,
+      speakOut
+    }));
 
     if (!fin) {
       const contGather = vr.gather({
