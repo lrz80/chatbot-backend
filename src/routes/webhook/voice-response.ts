@@ -421,31 +421,33 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // Primera vuelta: sin SpeechResult → saludo + menú + gather
-    if (!userInput) {
-    const brand = await getTenantBrand(tenant.id);
+    const isFirstTurn = !CALL_STATE.has(callSid) && !userInput && !digits;
 
-    const gather = vr.gather({
-      input: ['dtmf', 'speech'] as any,
-      numDigits: 1,
-      action: '/webhook/voice-response',
-      method: 'POST',
-      language: locale as any,
-      speechTimeout: 'auto',
-      bargeIn: true,                 // 👈 permite marcar/interrumpir mientras habla
-      actionOnEmptyResult: true,     // 👈 si no marca/ni habla, igual postea
-      timeout: 4                     // 👈 segundos esperando DTMF si no hay habla
-    });
+    if (isFirstTurn) {
+      const brand = await getTenantBrand(tenant.id);
 
-    gather.say(
-      { language: locale as any, voice: voiceName },
-      `Hola, soy Amy de ${brand}. ¿En qué puedo ayudarte?
-      Marca 1 para precios, 2 para horarios, 3 para ubicación, 4 para hablar con un representante.`
-    );
+      const gather = vr.gather({
+        input: ['dtmf', 'speech'] as any,
+        numDigits: 1,
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: locale as any,
+        speechTimeout: 'auto',
+        bargeIn: true,
+        actionOnEmptyResult: true,
+        timeout: 4
+      });
 
-    CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: false });
-    STATE_TIME.set(callSid, Date.now());
-    return res.type('text/xml').send(vr.toString());
-  }
+      gather.say(
+        { language: locale as any, voice: voiceName },
+        `Hola, soy Amy de ${brand}. ¿En qué puedo ayudarte?
+        Marca 1 para precios, 2 para horarios, 3 para ubicación, 4 para hablar con un representante.`
+      );
+
+      CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: false });
+      STATE_TIME.set(callSid, Date.now());
+      return res.type('text/xml').send(vr.toString());
+    }
 
     // ✅ FAST-PATH: confirmación de SMS sin pasar por OpenAI
     let earlySmsType: LinkType | null = null;
