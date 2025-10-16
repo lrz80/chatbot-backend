@@ -212,7 +212,7 @@ async function enviarSmsConLink(
     overrideDestE164?: string | null;
   }
 ) {
-  // 1) Buscar link útil por tipo (links_utiles) con fallback a voice_links
+  // 1) Buscar link útil por tipo (links_utiles) 
   const synonyms: Record<LinkType, string[]> = {
     reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
     comprar:  ['comprar', 'pagar', 'checkout', 'payment', 'pay', 'precio', 'precios', 'prices'],
@@ -249,7 +249,7 @@ async function enviarSmsConLink(
   if (!chosen) {
     const { rows: vlinks } = await pool.query(
       `SELECT title, url
-         FROM voice_links
+         FROM links_utiles
         WHERE tenant_id = $1
         ORDER BY orden ASC, id ASC
         LIMIT 5`,
@@ -267,7 +267,7 @@ async function enviarSmsConLink(
   } else if (bulletsFromVoice) {
     body = `Gracias por llamar. Te comparto los links:\n${bulletsFromVoice}\n— ${brand}`;
   } else {
-    throw new Error('No hay links_utiles ni voice_links configurados.');
+    throw new Error('No hay links_utiles configurados.');
   }
 
   const smsFrom = smsFromCandidate || '';
