@@ -142,9 +142,7 @@ function twoSentencesMax(s: string) {
   return parts.slice(0, 2).join(' ').trim();
 }
 
-// ———————————————————————————
 //  Detección de SMS + tipo de link
-// ———————————————————————————
 const askedForSms = (t: string) => {
   const s = (t || '').toLowerCase();
   const wantsSms =
@@ -408,6 +406,43 @@ function playMainMenu(
   );
 }
 
+// --- Selección de idioma inicial ---
+function introByLanguage(selected?: string) {
+  const vr = new twiml.VoiceResponse();
+
+  if (selected === 'es') {
+    vr.say({ language: 'es-ES', voice: 'alice' }, 'Hola, soy Amy de Synergy Zone. Continuamos en español.');
+  } else {
+    vr.say({ language: 'en-US', voice: 'alice' }, 'Hi, this is Amy from Synergy Zone. Para español, marque dos.');
+    vr.gather({
+      input: ['dtmf'],
+      numDigits: 1,
+      timeout: 5,
+      action: '/webhook/voice-response/lang',
+      method: 'POST'
+    });
+  }
+
+  return vr.toString();
+}
+
+router.post('/lang', async (req: Request, res: Response) => {
+  const digits = (req.body.Digits || '').trim();
+  const vr = new twiml.VoiceResponse();
+
+  if (digits === '2') {
+    // Usuario eligió español
+    vr.say({ language: 'es-ES', voice: 'alice' }, 'Has seleccionado español.');
+    vr.redirect('/webhook/voice-response?lang=es');
+  } else {
+    // Por defecto sigue en inglés
+    vr.say({ language: 'en-US', voice: 'alice' }, 'Continuing in English.');
+    vr.redirect('/webhook/voice-response?lang=en');
+  }
+
+  return res.type('text/xml').send(vr.toString());
+});
+
 //  Handler
 router.post('/', async (req: Request, res: Response) => {
   const to = (req.body.To || '').toString();
@@ -428,7 +463,19 @@ router.post('/', async (req: Request, res: Response) => {
   const callSid: string = (req.body.CallSid || '').toString();
   const state = CALL_STATE.get(callSid) || {};
 
-  const pickLangMode = req.query && req.query.pickLang === '1';
+  // --- Selección de idioma por query (?lang=en|es) e intro por defecto en inglés ---
+  const langParam = typeof req.query.lang === 'string' ? (req.query.lang as string) : undefined;
+
+  // Si es la primera vez y no hay idioma aún, reproducir intro en inglés con opción a marcar 2 para español
+  if (!langParam && !CALL_STATE.has(callSid) && !userInput && !digits) {
+    return res.type('text/xml').send(introByLanguage());
+  }
+
+  // Si viene ?lang=..., persiste en estado para el resto de la llamada
+  if (langParam) {
+    const chosen = langParam === 'es' ? 'es-ES' : 'en-US';
+    CALL_STATE.set(callSid, { ...state, lang: chosen });
+  }
 
   // ⬇️ LOG — lo que dijo el cliente
   console.log('[VOICE][USER]', JSON.stringify({
@@ -457,7 +504,7 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // Si NO estamos esperando confirmación, usa tu fallback normal:
-    const effectiveLocale = ((state.lang as any) || 'es-ES') as any; // ⛔ no usar cfgLocale aquí
+    const effectiveLocale = ((state.lang as any) || 'en-US') as any; // inglés por defecto
 
     const askRepeat = effectiveLocale.startsWith('es')
       ? '¿Me lo repites, por favor?'
@@ -512,8 +559,9 @@ router.post('/', async (req: Request, res: Response) => {
     const cfg = cfgRes.rows[0];
     if (!cfg) return res.sendStatus(404);
 
-    const cfgLocale = toTwilioLocale(cfg.idioma || 'es-ES');
-    const currentLocale = (state.lang as any) || cfgLocale;
+    const cfgLocale = toTwilioLocale(cfg.idioma || 'en-US'); // si quieres, pon en-US por defecto a nivel cfg
+    const currentLocale = (state.lang as any) || (langParam === 'es' ? 'es-ES' : 'en-US');
+
     const voiceName: any = 'alice';
 
     // ===== Resultado de transferencia (Dial action) =====
@@ -561,44 +609,6 @@ router.post('/', async (req: Request, res: Response) => {
       }
 
       // Si fue "completed", simplemente retomamos flujo normal (no respondemos nada especial)
-    }
-
-    // Primera vuelta: sin SpeechResult → saludo + menú + gather
-    const isFirstTurn = !CALL_STATE.has(callSid) && !userInput && !digits;
-
-    if (isFirstTurn) {
-      // 🔁 REEMPLAZA TODO EL CONTENIDO DEL if POR ESTO:
-      const brand = await getTenantBrand(tenant.id);
-
-      // Pre-menú SOLO idioma (DTMF)
-      const lg = vr.gather({
-        input: ['dtmf'] as any,
-        numDigits: 1,
-        action: '/webhook/voice-response?pickLang=1',
-        method: 'POST',
-        timeout: 4
-      });
-
-      // Español por defecto + instrucción de inglés
-      lg.say({ language: 'es-ES' as any, voice: voiceName },
-        `Hola, soy Amy de ${brand}. Para continuar en español, espera. Para inglés, marca 2.`
-      );
-      // Eco en inglés muy breve
-      lg.say({ language: 'en-US' as any, voice: voiceName }, `For English, press 2.`);
-
-      CALL_STATE.set(callSid, { ...state, lang: 'es-ES', awaiting: false, pendingType: null, smsSent: false });
-      STATE_TIME.set(callSid, Date.now());
-      return res.type('text/xml').send(vr.toString());
-    }
-
-    if (pickLangMode) {
-      const brand = await getTenantBrand(tenant.id);
-      const chosen = digits === '2' ? 'en-US' : 'es-ES';
-      CALL_STATE.set(callSid, { ...state, lang: chosen, awaiting: false });
-      STATE_TIME.set(callSid, Date.now());
-
-      playMainMenu(vr, chosen as any, voiceName, brand);
-      return res.type('text/xml').send(vr.toString());
     }
 
     // ✅ capturar número cuando estábamos esperando uno
