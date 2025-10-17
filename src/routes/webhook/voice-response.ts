@@ -377,7 +377,23 @@ function offerSms(
   const ask = locale.startsWith('es')
     ? '¿Quieres que te lo envíe por SMS? Di "sí" o pulsa 1.'
     : 'Do you want me to text it to you? Say "yes" or press 1.';
-  vr.say({ language: locale as any, voice: voiceName }, ask);
+
+  const gather = vr.gather({
+    input: ['speech','dtmf'] as any,
+    numDigits: 1,
+    action: '/webhook/voice-response',
+    method: 'POST',
+    language: locale as any,
+    speechTimeout: 'auto',
+    timeout: 7,
+    actionOnEmptyResult: true,
+    bargeIn: true,
+    // 👇 ayuda al ASR a captar “sí/yes/1”
+    hints: locale.startsWith('es') ? 'sí, si, uno, 1' : 'yes, one, 1',
+  });
+
+  gather.say({ language: locale as any, voice: voiceName }, ask);
+
   CALL_STATE.set(callSid, { ...state, awaiting: true, pendingType: tipo });
   STATE_TIME.set(callSid, Date.now());
 }
@@ -445,27 +461,38 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     // ✅ handler de silencio (cuando Twilio devuelve sin SpeechResult/Digits en turnos posteriores)
     if (!userInput && !digits && Object.prototype.hasOwnProperty.call(req.body, 'SpeechResult')) {
-      const vrSilence = new twiml.VoiceResponse();
-      vrSilence.say({ language: 'es-ES' as any, voice: 'alice' as any }, '¿Me lo repites, por favor?');
-      vrSilence.gather({
-        input: ['speech','dtmf'] as any,
-        numDigits: 1,
-        action: '/webhook/voice-response',
-        method: 'POST',
-        language: 'es-ES' as any,
-        speechTimeout: 'auto',
-        timeout: 7,                 // 👈 añade
-        actionOnEmptyResult: true,  // 👈 añade
-      });
-      STATE_TIME.set(callSid, Date.now()); // ✅ refresca TTL
-      console.log('[VOICE][BOT]', JSON.stringify({
+    // Si estamos esperando confirmación del SMS, re-pregunta esa confirmación (y escucha)
+    if (state.awaiting && state.pendingType) {
+      const vrAsk = new twiml.VoiceResponse();
+      offerSms(
+        vrAsk,
+        ((state.lang as any) || 'es-ES') as any,
+        'alice',
         callSid,
-        to: didNumber,
-        speakOut: '¿Me lo repites, por favor?'
-      }));
-
-      return res.type('text/xml').send(vrSilence.toString());
+        state,
+        state.pendingType
+      );
+      STATE_TIME.set(callSid, Date.now());
+      return res.type('text/xml').send(vrAsk.toString());
     }
+
+    // Si NO estamos esperando confirmación, usa tu fallback normal:
+    const vrSilence = new twiml.VoiceResponse();
+    vrSilence.say({ language: 'es-ES' as any, voice: 'alice' as any }, '¿Me lo repites, por favor?');
+    vrSilence.gather({
+      input: ['speech','dtmf'] as any,
+      numDigits: 1,
+      action: '/webhook/voice-response',
+      method: 'POST',
+      language: 'es-ES' as any,
+      speechTimeout: 'auto',
+      timeout: 7,
+      actionOnEmptyResult: true,
+    });
+    STATE_TIME.set(callSid, Date.now());
+    return res.type('text/xml').send(vrSilence.toString());
+  }
+
     const tRes = await pool.query(
       `SELECT id, name,
               membresia_activa, membresia_inicio,
@@ -672,21 +699,24 @@ router.post('/', async (req: Request, res: Response) => {
           const spoken = await snippetFromPrompt({ topic: 'precios', cfg, locale: currentLocale as any, brand });
           vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
           offerSms(vr, currentLocale as any, voiceName, callSid, state, 'comprar');
-          break;
+
+          return res.type('text/xml').send(vr.toString());
         }
         case '2': { // HORARIOS
           const brand = await getTenantBrand(tenant.id);
           const spoken = await snippetFromPrompt({ topic: 'horarios', cfg, locale: currentLocale as any, brand });
           vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
           offerSms(vr, currentLocale as any, voiceName, callSid, state, 'web');
-          break;
+          
+          return res.type('text/xml').send(vr.toString());
         }
         case '3': { // UBICACIÓN
           const brand = await getTenantBrand(tenant.id);
           const spoken = await snippetFromPrompt({ topic: 'ubicacion', cfg, locale: currentLocale as any, brand });
           vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
           offerSms(vr, currentLocale as any, voiceName, callSid, state, 'web');
-          break;
+          
+          return res.type('text/xml').send(vr.toString());
         }
         case '4': { // REPRESENTANTE
           if (REPRESENTANTE_NUMBER) {
@@ -710,7 +740,8 @@ router.post('/', async (req: Request, res: Response) => {
             );
             offerSms(vr, currentLocale as any, voiceName, callSid, state, 'soporte');
           }
-          break;
+          
+          return res.type('text/xml').send(vr.toString());
         }
         default: {
           vr.say({ language: currentLocale as any, voice: voiceName },
@@ -718,26 +749,6 @@ router.post('/', async (req: Request, res: Response) => {
           );
         }
       }
-
-      // Re-ofrecer menú y conversación (say DENTRO del gather)
-      const repGather = vr.gather({
-        input: ['dtmf','speech'] as any,
-        numDigits: 1,
-        action: '/webhook/voice-response',
-        method: 'POST',
-        language: currentLocale as any,
-        speechTimeout: 'auto',
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
-      });
-      repGather.say(
-        { language: currentLocale as any, voice: voiceName },
-        currentLocale.startsWith('es')
-          ? '¿Necesitas algo más? Marca 1 precios, 2 horarios, 3 ubicación, 4 representante, o dime en qué te ayudo.'
-          : 'Anything else? Press 1 for prices, 2 for hours, 3 for location, 4 for a representative, or tell me how I can help.'
-      );
-      return res.type('text/xml').send(vr.toString());
     }
 
     // ——— FAST INTENT: si el usuario pidió algo directo (sin DTMF), lee desde prompt y luego ofrece SMS ———
@@ -757,23 +768,6 @@ router.post('/', async (req: Request, res: Response) => {
 
       offerSms(vr, currentLocale as any, voiceName, callSid, state, tipoLink);
 
-      const repGather = vr.gather({
-        input: ['dtmf','speech'] as any,
-        numDigits: 1,
-        action: '/webhook/voice-response',
-        method: 'POST',
-        language: currentLocale as any,
-        speechTimeout: 'auto',
-        timeout: 7,
-        actionOnEmptyResult: true,
-        bargeIn: true,
-      });
-      repGather.say(
-        { language: currentLocale as any, voice: voiceName },
-        currentLocale.startsWith('es')
-          ? '¿Necesitas algo más? Marca 1 precios, 2 horarios, 3 ubicación, 4 representante, o dime en qué te ayudo.'
-          : 'Anything else? Press 1 for prices, 2 for hours, 3 for location, 4 for a representative, or tell me how I can help.'
-      );
       return res.type('text/xml').send(vr.toString());
     };
 
