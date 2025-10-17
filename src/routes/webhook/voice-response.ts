@@ -243,33 +243,13 @@ async function enviarSmsConLink(
 
   let chosen: { nombre?: string; url?: string } | null = linksByType[0] || null;
 
-  let bulletsFromVoice: string | null = null;
-  if (!chosen) {
-    const { rows: vlinks } = await pool.query(
-      `SELECT nombre, tipo, url
-        FROM links_utiles
-        WHERE tenant_id = $1
-          AND COALESCE(TRIM(url), '') <> ''
-        ORDER BY created_at DESC, id DESC
-        LIMIT 5`,
-      [tenantId]
-    );
-    if (vlinks.length > 0) {
-      bulletsFromVoice = vlinks
-        .map((r: any, i: number) => `${i + 1}. ${r.nombre || r.tipo || 'Enlace'}: ${r.url}`)
-        .join('\n');
-    }
+  // ⛔ Solo un link; si no hay, error
+  if (!chosen?.url) {
+    throw new Error('No hay links_utiles configurados para el tipo solicitado.');
   }
 
   const brand = await getTenantBrand(tenantId);
-  let body: string;
-  if (chosen?.url) {
-    body = `📎 ${chosen.nombre || 'Enlace'}: ${chosen.url}\n— ${brand}`;
-  } else if (bulletsFromVoice) {
-    body = `Gracias por llamar. Te comparto los links:\n${bulletsFromVoice}\n— ${brand}`;
-  } else {
-    throw new Error('No hay links_utiles configurados.');
-  }
+  const body = `📎 ${chosen.nombre || 'Enlace'}: ${chosen.url}\n— ${brand}`;
 
   const smsFrom = smsFromCandidate || '';
   const toDest = overrideDestE164 && isValidE164(overrideDestE164)
@@ -308,7 +288,7 @@ async function enviarSmsConLink(
   await pool.query(
     `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
      VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
-    [tenantId, `SMS enviado con ${chosen?.url ? 'link único' : 'lista de links'}.`, smsFrom || 'sms']
+    [tenantId, 'SMS enviado con link único.', smsFrom || 'sms']
   );
 }
 
@@ -477,18 +457,25 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // Si NO estamos esperando confirmación, usa tu fallback normal:
+    const effectiveLocale = ((state.lang as any) || 'es-ES') as any; // ⛔ no usar cfgLocale aquí
+
+    const askRepeat = effectiveLocale.startsWith('es')
+      ? '¿Me lo repites, por favor?'
+      : 'Could you repeat that, please?';
+
     const vrSilence = new twiml.VoiceResponse();
-    vrSilence.say({ language: 'es-ES' as any, voice: 'alice' as any }, '¿Me lo repites, por favor?');
+    vrSilence.say({ language: effectiveLocale as any, voice: 'alice' as any }, askRepeat);
     vrSilence.gather({
       input: ['speech','dtmf'] as any,
       numDigits: 1,
       action: '/webhook/voice-response',
       method: 'POST',
-      language: 'es-ES' as any,
+      language: effectiveLocale as any,
       speechTimeout: 'auto',
       timeout: 7,
       actionOnEmptyResult: true,
     });
+
     STATE_TIME.set(callSid, Date.now());
     return res.type('text/xml').send(vrSilence.toString());
   }
@@ -612,6 +599,78 @@ router.post('/', async (req: Request, res: Response) => {
 
       playMainMenu(vr, chosen as any, voiceName, brand);
       return res.type('text/xml').send(vr.toString());
+    }
+
+    // ✅ capturar número cuando estábamos esperando uno
+    if (state.awaitingNumber && (userInput || digits)) {
+      const rawDigits = digits || extractDigits(userInput);
+      let candidate = rawDigits ? `+${rawDigits.replace(/^\+/, '')}` : null;
+
+      try {
+        if (candidate) candidate = normalizarNumero(candidate);
+      } catch {}
+
+      if (!candidate || !isValidE164(candidate)) {
+        const askAgain = currentLocale.startsWith('es')
+          ? 'No pude tomar ese número. Dímelo con código de país o márcalo ahora.'
+          : 'I couldn’t catch that number. Please include the country code or key it in now.';
+        const vrNum = new twiml.VoiceResponse();
+        vrNum.say({ language: currentLocale as any, voice: 'alice' }, askAgain);
+        vrNum.gather({
+          input: ['speech','dtmf'] as any,
+          numDigits: 15,
+          action: '/webhook/voice-response',
+          method: 'POST',
+          language: currentLocale as any,
+          speechTimeout: 'auto',
+          timeout: 7,
+          actionOnEmptyResult: true,
+        });
+        STATE_TIME.set(callSid, Date.now());
+        return res.type('text/xml').send(vrNum.toString());
+      }
+
+      // guardamos destino y dejamos de esperar número
+      const nextState = { ...state, altDest: candidate, awaitingNumber: false };
+      CALL_STATE.set(callSid, nextState);
+      STATE_TIME.set(callSid, Date.now());
+
+      // si había tipo pendiente, enviamos ya
+      const tipo = nextState.pendingType || 'web';
+      try {
+        await enviarSmsConLink(tipo, {
+          tenantId: tenant.id,
+          callerE164,
+          callerRaw,
+          smsFromCandidate: tenant.twilio_sms_number || tenant.twilio_voice_number || '',
+          callSid,
+          overrideDestE164: candidate,
+        });
+        const ok = currentLocale.startsWith('es')
+          ? 'Listo, te envié el enlace por SMS. ¿Algo más?'
+          : 'Done, I just texted you the link. Anything else?';
+
+        const vrOk = new twiml.VoiceResponse();
+        vrOk.say({ language: currentLocale as any, voice: 'alice' }, ok);
+        vrOk.gather({
+          input: ['speech','dtmf'] as any,
+          numDigits: 1,
+          action: '/webhook/voice-response',
+          method: 'POST',
+          language: currentLocale as any,
+          speechTimeout: 'auto',
+          timeout: 7,
+          actionOnEmptyResult: true,
+        });
+        return res.type('text/xml').send(vrOk.toString());
+      } catch (e) {
+        const bad = currentLocale.startsWith('es')
+          ? 'No pude enviar el SMS ahora mismo.'
+          : 'I couldn’t send the text right now.';
+        const vrBad = new twiml.VoiceResponse();
+        vrBad.say({ language: currentLocale as any, voice: 'alice' }, bad);
+        return res.type('text/xml').send(vrBad.toString());
+      }
     }
 
     // ✅ FAST-PATH: confirmación de SMS sin pasar por OpenAI
@@ -992,53 +1051,21 @@ router.post('/', async (req: Request, res: Response) => {
 
         let chosen: { nombre?: string; url?: string } | null = linksByType[0] || null;
 
-        // Fallback a lista desde links_utiles
-        let bulletsFromVoice: string | null = null;
-        if (!chosen) {
-          const { rows: vlinks } = await pool.query(
-            `SELECT nombre, tipo, url
-              FROM links_utiles
-              WHERE tenant_id = $1
-                AND COALESCE(TRIM(url), '') <> ''
-              ORDER BY created_at DESC, id DESC
-              LIMIT 5`,
-            [tenant.id]
-          );
-          if (vlinks.length > 0) {
-            bulletsFromVoice = vlinks
-              .map((r: any, i: number) => `${i + 1}. ${r.nombre || r.tipo || 'Enlace'}: ${r.url}`)
-              .join('\n');
-          }
-        }
-
-        if (!chosen && !bulletsFromVoice) {
-          console.warn('[VOICE/SMS] No hay links_utiles ni voice_links para este tenant.');
+        if (!chosen?.url) {
+          console.warn('[VOICE/SMS] No hay link para el tipo solicitado:', smsType);
           respuesta += currentLocale.startsWith('es')
-            ? ' No encontré un enlace registrado aún.'
-            : " I couldn't find a saved link yet.";
+            ? ' No encontré un enlace registrado para eso.'
+            : ' I couldn’t find a saved link for that.';
         } else {
           const brand = await getTenantBrand(tenant.id);
-          let body: string;
-
-          if (chosen?.url) {
-            body = `📎 ${chosen.nombre || 'Enlace'}: ${chosen.url}\n— ${brand}`;
-          } else {
-            body = `Gracias por llamar. Te comparto los links:\n${bulletsFromVoice}\n— ${brand}`;
-          }
-
+          const body = `📎 ${chosen.nombre || 'Enlace'}: ${chosen.url}\n— ${brand}`;
           const smsFrom = tenant.twilio_sms_number || tenant.twilio_voice_number || '';
 
           // elegir destino final: altDest confirmado o callerE164
           const override = (state.altDest && isValidE164(state.altDest)) ? state.altDest : null;
           const toDest = override || callerE164;
 
-          console.log('[VOICE/SMS] SENDING', {
-            smsFrom,
-            toDest,
-            callerRaw,
-            callSid,
-            tenantId: tenant.id
-          });
+          console.log('[VOICE/SMS] SENDING', { smsFrom, toDest, callerRaw, callSid, tenantId: tenant.id });
 
           if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
             console.warn('[VOICE/SMS] Número destino inválido para SMS:', callerRaw, '→', toDest);
@@ -1065,13 +1092,12 @@ router.post('/', async (req: Request, res: Response) => {
             })
               .then((n) => {
                 console.log('[VOICE/SMS] sendSMS -> enviados =', n);
-                // ✅ limpia/actualiza estado + marca smsSent
                 CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: true });
                 STATE_TIME.set(callSid, Date.now());
                 pool.query(
                   `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
-                   VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
-                  [tenant.id, `SMS enviado con ${chosen?.url ? 'link único' : 'lista de links'}.`, smsFrom || 'sms']
+                  VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
+                  [tenant.id, 'SMS enviado con link único.', smsFrom || 'sms']
                 ).catch(console.error);
               })
               .catch((e) => {
@@ -1153,16 +1179,20 @@ router.post('/', async (req: Request, res: Response) => {
   } catch (err) {
   console.error('❌ Error en voice-response:', err);
   const vrErr = new twiml.VoiceResponse();
-  vrErr.say({ language: 'es-ES', voice: 'alice' },
-    'Perdón, hubo un problema. ¿Quieres que te envíe la información por SMS? Di sí o pulsa 1.');
+  const errLocale = ((state.lang as any) || 'es-ES') as any; // ⛔ no usar cfgLocale aquí
+  const errText = errLocale.startsWith('es')
+    ? 'Perdón, hubo un problema. ¿Quieres que te envíe la información por SMS? Di sí o pulsa 1.'
+    : 'Sorry, there was a problem. Do you want me to text you the info? Say yes or press 1.';
+  vrErr.say({ language: errLocale as any, voice: 'alice' }, errText);
   vrErr.gather({
     input: ['speech','dtmf'] as any,
     numDigits: 1,
-    action: '/webhook/voice-response', // 🔁 ajusta si usas /api
+    action: '/webhook/voice-response',
     method: 'POST',
-    language: 'es-ES',
+    language: errLocale as any,
     speechTimeout: 'auto',
   });
+
   return res.type('text/xml').send(vrErr.toString());  // ✅ mantener la llamada viva
 }
 });
