@@ -91,6 +91,7 @@ type CallState = {
   awaitingNumber?: boolean; // esperando que nos dicte/marque un número
   altDest?: string | null;  // número alterno confirmado por el usuario (E.164)
   smsSent?: boolean;        // idempotencia: ya se envió SMS en esta llamada
+  lang?: 'es-ES' | 'en-US' | 'pt-BR';
 };
 
 const CALL_STATE = new Map<string, CallState>();
@@ -178,10 +179,7 @@ const short = (s: string, n = 120) => (s.length > n ? s.slice(0, n) + '…' : s)
  const saidNo = (t: string) =>
    /\b(no|no gracias|mejor no|luego|despu[eé]s|m[aá]s tarde|not now|don'?t)\b/i.test(t || '');
 
-
-// ———————————————————————————
 //  Marca dinámica del tenant (solo `name`)
-// ———————————————————————————
 async function getTenantBrand(tenantId: string): Promise<string> {
   const { rows } = await pool.query(
     `SELECT NULLIF(TRIM(name), '') AS brand
@@ -339,7 +337,7 @@ ${(cfg.system_prompt || '').toString().trim()}
 ${(cfg.info_clave || '').toString().trim()}
 
 REGLAS DE RESPUESTA:
-- Devuelve 1–2 frases MÁXIMO, aptas para locución telefónica.
+- Devuelve 1-2 frases MÁXIMO, aptas para locución telefónica.
 - NO incluyas URLs ni digas "te envío link" (eso se ofrece fuera).
 - NO inventes datos: si no hay dato explícito en lo anterior, di:
   "${locale.startsWith('es') ? 'No tengo ese dato exacto aquí.' : 'I don’t have that exact detail here.'}"
@@ -384,6 +382,36 @@ function offerSms(
   STATE_TIME.set(callSid, Date.now());
 }
 
+function playMainMenu(
+  vr: twiml.VoiceResponse,
+  locale: 'es-ES' | 'en-US' | 'pt-BR',
+  voiceName: any,
+  brand: string
+) {
+  const gather = vr.gather({
+    input: ['dtmf','speech'] as any,
+    numDigits: 1,
+    action: '/webhook/voice-response',
+    method: 'POST',
+    language: locale as any,
+    speechTimeout: 'auto',
+    bargeIn: true,
+    actionOnEmptyResult: true,
+    timeout: 4,
+  });
+
+  const text = locale.startsWith('es')
+    ? `¿En qué puedo ayudarte? Marca 1 para precios, 2 para horarios, 3 para ubicación, 4 para hablar con un representante.`
+    : `How can I help? Press 1 for prices, 2 for hours, 3 for location, 4 to speak with a representative.`;
+
+  // saludo muy corto + menú
+  gather.say({ language: locale as any, voice: voiceName },
+    locale.startsWith('es')
+      ? `Hola, soy Amy de ${brand}. ${text}`
+      : `Hi, I'm Amy from ${brand}. ${text}`
+  );
+}
+
 //  Handler
 router.post('/', async (req: Request, res: Response) => {
   const to = (req.body.To || '').toString();
@@ -403,6 +431,8 @@ router.post('/', async (req: Request, res: Response) => {
 
   const callSid: string = (req.body.CallSid || '').toString();
   const state = CALL_STATE.get(callSid) || {};
+
+  const pickLangMode = req.query && req.query.pickLang === '1';
 
   // ⬇️ LOG — lo que dijo el cliente
   console.log('[VOICE][USER]', JSON.stringify({
@@ -468,7 +498,8 @@ router.post('/', async (req: Request, res: Response) => {
     const cfg = cfgRes.rows[0];
     if (!cfg) return res.sendStatus(404);
 
-    const locale = toTwilioLocale(cfg.idioma || 'es-ES');
+    const cfgLocale = toTwilioLocale(cfg.idioma || 'es-ES');
+    const currentLocale = (state.lang as any) || cfgLocale;
     const voiceName: any = 'alice';
 
     // ===== Resultado de transferencia (Dial action) =====
@@ -487,11 +518,11 @@ router.post('/', async (req: Request, res: Response) => {
             smsFromCandidate: tenant.twilio_sms_number || tenant.twilio_voice_number || '',
             callSid,
           });
-          vr.say({ language: locale as any, voice: voiceName },
+          vr.say({ language: currentLocale as any, voice: voiceName },
                 'No se pudo completar la transferencia. Te envié el WhatsApp por SMS. ¿Algo más?');
         } catch (e) {
           console.error('[TRANSFER SMS FALLBACK] Error:', e);
-          vr.say({ language: locale as any, voice: voiceName },
+          vr.say({ language: currentLocale as any, voice: voiceName },
                 'No se pudo completar la transferencia. Si quieres, te envío el WhatsApp por SMS. Di "sí" o pulsa 1.');
           CALL_STATE.set(callSid, { ...state, awaiting: true, pendingType: 'soporte' });
         }
@@ -501,7 +532,7 @@ router.post('/', async (req: Request, res: Response) => {
           numDigits: 1,
           action: '/webhook/voice-response',
           method: 'POST',
-          language: locale as any,
+          language: currentLocale as any,
           speechTimeout: 'auto',
           timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
           actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
@@ -522,28 +553,37 @@ router.post('/', async (req: Request, res: Response) => {
     const isFirstTurn = !CALL_STATE.has(callSid) && !userInput && !digits;
 
     if (isFirstTurn) {
+      // 🔁 REEMPLAZA TODO EL CONTENIDO DEL if POR ESTO:
       const brand = await getTenantBrand(tenant.id);
 
-      const gather = vr.gather({
-        input: ['dtmf', 'speech'] as any,
+      // Pre-menú SOLO idioma (DTMF)
+      const lg = vr.gather({
+        input: ['dtmf'] as any,
         numDigits: 1,
-        action: '/webhook/voice-response',
+        action: '/webhook/voice-response?pickLang=1',
         method: 'POST',
-        language: locale as any,
-        speechTimeout: 'auto',
-        bargeIn: true,
-        actionOnEmptyResult: true,
         timeout: 4
       });
 
-      gather.say(
-        { language: locale as any, voice: voiceName },
-        `Hola, soy Amy de ${brand}. ¿En qué puedo ayudarte?
-        Marca 1 para precios, 2 para horarios, 3 para ubicación, 4 para hablar con un representante.`
+      // Español por defecto + instrucción de inglés
+      lg.say({ language: 'es-ES' as any, voice: voiceName },
+        `Hola, soy Amy de ${brand}. Para continuar en español, espera. Para inglés, marca 2.`
       );
+      // Eco en inglés muy breve
+      lg.say({ language: 'en-US' as any, voice: voiceName }, `For English, press 2.`);
 
-      CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: false });
+      CALL_STATE.set(callSid, { ...state, lang: 'es-ES', awaiting: false, pendingType: null, smsSent: false });
       STATE_TIME.set(callSid, Date.now());
+      return res.type('text/xml').send(vr.toString());
+    }
+
+    if (pickLangMode) {
+      const brand = await getTenantBrand(tenant.id);
+      const chosen = digits === '2' ? 'en-US' : 'es-ES';
+      CALL_STATE.set(callSid, { ...state, lang: chosen, awaiting: false });
+      STATE_TIME.set(callSid, Date.now());
+
+      playMainMenu(vr, chosen as any, voiceName, brand);
       return res.type('text/xml').send(vr.toString());
     }
 
@@ -581,17 +621,17 @@ router.post('/', async (req: Request, res: Response) => {
         callSid,
         overrideDestE164: (state.altDest && isValidE164(state.altDest)) ? state.altDest : undefined,
       });
-      const ok = locale.startsWith('es')
+      const ok = currentLocale.startsWith('es')
         ? 'Listo, te envié el enlace por SMS. ¿Algo más?'
         : 'Done, I just texted you the link. Anything else?';
 
-      vr.say({ language: locale as any, voice: voiceName }, ok);
+      vr.say({ language: currentLocale as any, voice: voiceName }, ok);
       vr.gather({
         input: ['speech', 'dtmf'] as any,
         numDigits: 1,
         action: '/webhook/voice-response',
         method: 'POST',
-        language: locale as any,
+        language: currentLocale as any,
         speechTimeout: 'auto',
         timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
         actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
@@ -627,49 +667,55 @@ router.post('/', async (req: Request, res: Response) => {
       const REPRESENTANTE_NUMBER = cfg?.representante_number || null;
 
       switch (digits) {
-        case '1': {
+        case '1': { // PRECIOS
           const brand = await getTenantBrand(tenant.id);
-          const spoken = await snippetFromPrompt({ topic: 'precios', cfg, locale, brand });
-          vr.say({ language: locale as any, voice: voiceName }, spoken);
-          offerSms(vr, locale as any, voiceName, callSid, state, 'comprar');
+          const spoken = await snippetFromPrompt({ topic: 'precios', cfg, locale: currentLocale as any, brand });
+          vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
+          offerSms(vr, currentLocale as any, voiceName, callSid, state, 'comprar');
           break;
         }
         case '2': { // HORARIOS
           const brand = await getTenantBrand(tenant.id);
-          const spoken = await snippetFromPrompt({ topic: 'horarios', cfg, locale, brand });
-          vr.say({ language: locale as any, voice: voiceName }, spoken);
-          offerSms(vr, locale as any, voiceName, callSid, state, 'web');
+          const spoken = await snippetFromPrompt({ topic: 'horarios', cfg, locale: currentLocale as any, brand });
+          vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
+          offerSms(vr, currentLocale as any, voiceName, callSid, state, 'web');
           break;
         }
         case '3': { // UBICACIÓN
           const brand = await getTenantBrand(tenant.id);
-          const spoken = await snippetFromPrompt({ topic: 'ubicacion', cfg, locale, brand });
-          vr.say({ language: locale as any, voice: voiceName }, spoken);
-          offerSms(vr, locale as any, voiceName, callSid, state, 'web');
+          const spoken = await snippetFromPrompt({ topic: 'ubicacion', cfg, locale: currentLocale as any, brand });
+          vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
+          offerSms(vr, currentLocale as any, voiceName, callSid, state, 'web');
           break;
         }
-
-        case '4': { // representante
+        case '4': { // REPRESENTANTE
           if (REPRESENTANTE_NUMBER) {
-            vr.say({ language: locale as any, voice: voiceName }, 'Te comunico con un representante. Un momento, por favor.');
+            vr.say({ language: currentLocale as any, voice: voiceName }, 
+              currentLocale.startsWith('es')
+                ? 'Te comunico con un representante. Un momento, por favor.'
+                : 'Connecting you to a representative. One moment, please.'
+            );
             const dial = vr.dial({
-              action: '/webhook/voice-response?transfer=1', // ← volverá aquí al colgar/resultado
+              action: '/webhook/voice-response?transfer=1',
               method: 'POST',
-              timeout: 20, // segundos para contestar
+              timeout: 20,
             });
             dial.number(REPRESENTANTE_NUMBER);
             return res.type('text/xml').send(vr.toString());
           } else {
-            vr.say({ language: locale as any, voice: voiceName },
-              'Ahora mismo no puedo transferirte. Si quieres, te envío nuestro WhatsApp por SMS.'
+            vr.say({ language: currentLocale as any, voice: voiceName }, 
+              currentLocale.startsWith('es')
+                ? 'Ahora mismo no puedo transferirte. Si quieres, te envío nuestro WhatsApp por SMS.'
+                : 'I can’t transfer you right now. I can text you our WhatsApp if you want.'
             );
-            // para 4, si no se puede transferir, también ofrece SMS de WhatsApp → 'soporte'
-            offerSms(vr, locale as any, voiceName, callSid, state, 'soporte');
+            offerSms(vr, currentLocale as any, voiceName, callSid, state, 'soporte');
           }
           break;
         }
         default: {
-          vr.say({ language: locale as any, voice: voiceName }, 'No reconocí esa opción.');
+          vr.say({ language: currentLocale as any, voice: voiceName },
+            currentLocale.startsWith('es') ? 'No reconocí esa opción.' : 'I didn’t recognize that option.'
+          );
         }
       }
 
@@ -679,15 +725,17 @@ router.post('/', async (req: Request, res: Response) => {
         numDigits: 1,
         action: '/webhook/voice-response',
         method: 'POST',
-        language: locale as any,
+        language: currentLocale as any,
         speechTimeout: 'auto',
         timeout: 7,
         actionOnEmptyResult: true,
         bargeIn: true,
       });
       repGather.say(
-        { language: locale as any, voice: voiceName },
-        '¿Necesitas algo más? Marca 1 precios, 2 horarios, 3 ubicación, 4 representante, o dime en qué te ayudo.'
+        { language: currentLocale as any, voice: voiceName },
+        currentLocale.startsWith('es')
+          ? '¿Necesitas algo más? Marca 1 precios, 2 horarios, 3 ubicación, 4 representante, o dime en qué te ayudo.'
+          : 'Anything else? Press 1 for prices, 2 for hours, 3 for location, 4 for a representative, or tell me how I can help.'
       );
       return res.type('text/xml').send(vr.toString());
     }
@@ -703,28 +751,31 @@ router.post('/', async (req: Request, res: Response) => {
       const wantsPayments = /(pago|pagar|checkout|buy|pay|payment)/i.test(s);
 
       const sayAndOffer = async (topic: 'precios'|'horarios'|'ubicacion'|'pagos', tipoLink: LinkType) => {
-        const spokenRaw = await snippetFromPrompt({ topic, cfg, locale, brand });
-        const spoken = normalizeClockText(twoSentencesMax(spokenRaw), locale as any);
-        vr.say({ language: locale as any, voice: voiceName }, spoken);
+      const spokenRaw = await snippetFromPrompt({ topic, cfg, locale: currentLocale as any, brand });
+      const spoken = normalizeClockText(twoSentencesMax(spokenRaw), currentLocale as any);
+      vr.say({ language: currentLocale as any, voice: voiceName }, spoken);
 
-        offerSms(vr, locale as any, voiceName, callSid, state, tipoLink);
+      offerSms(vr, currentLocale as any, voiceName, callSid, state, tipoLink);
 
-        const repGather = vr.gather({
-          input: ['dtmf','speech'] as any,
-          numDigits: 1,
-          action: '/webhook/voice-response',
-          method: 'POST',
-          language: locale as any,
-          speechTimeout: 'auto',
-          timeout: 7,
-          actionOnEmptyResult: true,
-          bargeIn: true,
-        });
-        repGather.say({ language: locale as any, voice: voiceName },
-          '¿Necesitas algo más? Marca 1 precios, 2 horarios, 3 ubicación, 4 representante, o dime en qué te ayudo.'
-        );
-        return res.type('text/xml').send(vr.toString());
-      };
+      const repGather = vr.gather({
+        input: ['dtmf','speech'] as any,
+        numDigits: 1,
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: currentLocale as any,
+        speechTimeout: 'auto',
+        timeout: 7,
+        actionOnEmptyResult: true,
+        bargeIn: true,
+      });
+      repGather.say(
+        { language: currentLocale as any, voice: voiceName },
+        currentLocale.startsWith('es')
+          ? '¿Necesitas algo más? Marca 1 precios, 2 horarios, 3 ubicación, 4 representante, o dime en qué te ayudo.'
+          : 'Anything else? Press 1 for prices, 2 for hours, 3 for location, 4 for a representative, or tell me how I can help.'
+      );
+      return res.type('text/xml').send(vr.toString());
+    };
 
       if (wantsPrices)   { await sayAndOffer('precios',   'comprar'); }
       if (wantsHours)    { await sayAndOffer('horarios',  'web');     }
@@ -733,7 +784,7 @@ router.post('/', async (req: Request, res: Response) => {
     }
 
     // ——— OpenAI ———
-    let respuesta = locale.startsWith('es') ? 'Disculpa, no entendí eso.' : "Sorry, I didn’t catch that.";
+    let respuesta = currentLocale.startsWith('es') ? 'Disculpa, no entendí eso.' : "Sorry, I didn’t catch that.";
     try {
       const { default: OpenAI } = await import('openai');
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
@@ -836,7 +887,7 @@ router.post('/', async (req: Request, res: Response) => {
         console.log('[VOICE/SMS] Promesa + "sí/1" inmediato → tipo =', smsType);
       } else if (!saidNo(userInput) && digits !== '2') {
         // Pedimos confirmación y guardamos estado para el próximo turno
-        const ask = locale.startsWith('es')
+        const ask = currentLocale.startsWith('es')
           ? '¿Quieres que te lo envíe por SMS? Di "sí" o pulsa 1 para enviarlo.'
           : 'Do you want me to text it to you? Say "yes" or press 1 to send it.';
         respuesta = `${respuesta} ${ask} <SMS_PENDING:${pendingType}>`.trim();
@@ -867,18 +918,18 @@ router.post('/', async (req: Request, res: Response) => {
       if (!thisTurnYes) {
         // si no tenemos número válido, pedirlo
         if (!isValidE164(preferred)) {
-          const askNum = locale.startsWith('es')
+          const askNum = currentLocale.startsWith('es')
             ? '¿A qué número te lo envío? Dímelo con el código de país o márcalo ahora.'
             : 'What number should I text? Please include country code or key it in now.';
           // marcar que esperamos número
           CALL_STATE.set(callSid, { ...state, awaitingNumber: true, pendingType: smsType });
-          vr.say({ language: locale as any, voice: voiceName }, askNum);
+          vr.say({ language: currentLocale as any, voice: voiceName }, askNum);
           vr.gather({
             input: ['speech','dtmf'] as any,
             numDigits: 15,
             action: '/webhook/voice-response',
             method: 'POST',
-            language: locale as any,
+            language: currentLocale as any,
             speechTimeout: 'auto',
             timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
             actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
@@ -887,17 +938,17 @@ router.post('/', async (req: Request, res: Response) => {
         }
 
         // tenemos un número, pedir confirmación rápida
-        const confirm = locale.startsWith('es')
+        const confirm = currentLocale.startsWith('es')
           ? `Te lo envío al ${maskForVoice(preferred)}. Di "sí" o pulsa 1 para confirmar, o dicta otro número.`
           : `I'll text ${maskForVoice(preferred)}. Say "yes" or press 1 to confirm, or say another number.`;
         CALL_STATE.set(callSid, { ...state, awaiting: true, awaitingNumber: true, pendingType: smsType });
-        vr.say({ language: locale as any, voice: voiceName }, confirm);
+        vr.say({ language: currentLocale as any, voice: voiceName }, confirm);
         vr.gather({
           input: ['speech','dtmf'] as any,
           numDigits: 15,
           action: '/webhook/voice-response',
           method: 'POST',
-          language: locale as any,
+          language: currentLocale as any,
           speechTimeout: 'auto',
           timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
           actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
@@ -968,7 +1019,7 @@ router.post('/', async (req: Request, res: Response) => {
 
         if (!chosen && !bulletsFromVoice) {
           console.warn('[VOICE/SMS] No hay links_utiles ni voice_links para este tenant.');
-          respuesta += locale.startsWith('es')
+          respuesta += currentLocale.startsWith('es')
             ? ' No encontré un enlace registrado aún.'
             : " I couldn't find a saved link yet.";
         } else {
@@ -997,17 +1048,17 @@ router.post('/', async (req: Request, res: Response) => {
 
           if (!toDest || !/^\+\d{10,15}$/.test(toDest)) {
             console.warn('[VOICE/SMS] Número destino inválido para SMS:', callerRaw, '→', toDest);
-            respuesta += locale.startsWith('es')
+            respuesta += currentLocale.startsWith('es')
               ? ' No pude validar tu número para enviarte el SMS.'
               : ' I could not validate your number to text you.';
           } else if (!smsFrom) {
             console.warn('[VOICE/SMS] No hay un número SMS-capable configurado.');
-            respuesta += locale.startsWith('es')
+            respuesta += currentLocale.startsWith('es')
               ? ' No hay un número SMS configurado para enviar el enlace.'
               : ' There is no SMS-capable number configured to send the link.';
           } else if (smsFrom && smsFrom.startsWith('whatsapp:')) {
             console.warn('[VOICE/SMS] El número configurado es WhatsApp; no envía SMS.');
-            respuesta += locale.startsWith('es')
+            respuesta += currentLocale.startsWith('es')
               ? ' El número configurado es WhatsApp y no puede enviar SMS.'
               : ' The configured number is WhatsApp-only and cannot send SMS.';
           } else {
@@ -1033,14 +1084,14 @@ router.post('/', async (req: Request, res: Response) => {
                 console.error('[VOICE/SMS] sendSMS ERROR:', e?.code, e?.message || e);
               });
 
-            respuesta += locale.startsWith('es')
+            respuesta += currentLocale.startsWith('es')
               ? ' Te lo acabo de enviar por SMS.'
               : ' I just texted it to you.';
           }
         }
       } catch (e: any) {
         console.error('[VOICE/SMS] Error enviando SMS:', e?.code, e?.message, e?.moreInfo || e);
-        respuesta += locale.startsWith('es')
+        respuesta += currentLocale.startsWith('es')
           ? ' Hubo un problema al enviar el SMS.'
           : ' There was a problem sending the text.';
       }
@@ -1073,7 +1124,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     // ✅ recorte a 2 frases y normalización de horas antes de locutar
     respuesta = twoSentencesMax(respuesta);
-    respuesta = normalizeClockText(respuesta, locale as any);
+    respuesta = normalizeClockText(respuesta, currentLocale as any);
     const speakOut = sanitizeForSay(respuesta);
 
     // ⬇️ LOG — lo que dirá el bot (lo que Twilio locuta)
@@ -1089,18 +1140,18 @@ router.post('/', async (req: Request, res: Response) => {
         numDigits: 1,
         action: '/webhook/voice-response',
         method: 'POST',
-        language: locale as any,
+        language: currentLocale as any,
         speechTimeout: 'auto',
         timeout: 7,
         actionOnEmptyResult: true,
         bargeIn: true,
       });
-      contGather.say({ language: locale as any, voice: voiceName }, speakOut);
+      contGather.say({ language: currentLocale as any, voice: voiceName }, speakOut);
     } else {
       CALL_STATE.delete(callSid);
       STATE_TIME.delete(callSid);
-      vr.say({ language: locale as any, voice: voiceName },
-            locale.startsWith('es') ? 'Gracias por tu llamada. ¡Hasta luego!' : 'Thanks for calling. Goodbye!');
+      vr.say({ language: currentLocale as any, voice: voiceName },
+            currentLocale.startsWith('es') ? 'Gracias por tu llamada. ¡Hasta luego!' : 'Thanks for calling. Goodbye!');
       vr.hangup();
     }
 
