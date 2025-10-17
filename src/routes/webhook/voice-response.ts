@@ -553,11 +553,6 @@ router.post('/', async (req: Request, res: Response) => {
 
     // ===== IVR simple por dígito (1/2/3/4) =====
     if (digits && !state.awaiting) {
-      // Contenidos hablados (ajústalos a tu negocio)
-      const PRECIOS   = 'Te puedo enviar la lista de precios por SMS o el enlace para verlos actualizados.';
-      const HORARIOS  = 'Te envío el horario actualizado por SMS si quieres.';
-      const UBICACION = 'Te envío la ubicación por SMS.';
-
 
       // Número de representante E.164 si quieres transferir (o deja null)
       const REPRESENTANTE_NUMBER = cfg?.representante_number || null;
@@ -572,21 +567,159 @@ router.post('/', async (req: Request, res: Response) => {
       };
 
       switch (digits) {
-        case '1': { // precios → mapeamos a 'comprar' (por “precios/checkout”)
-          vr.say({ language: locale as any, voice: voiceName }, PRECIOS);
-          offerSms('comprar');
-          break;
+        case '1': { // precios
+          // No leemos montos en voz; solo ofrecemos SMS con el enlace/checkout
+          const askTxt = locale.startsWith('es')
+            ? '¿Quieres que te envíe la lista de precios por SMS? Di "sí" o pulsa 1.'
+            : 'Want me to text you the price list? Say "yes" or press 1.';
+
+          // marcamos el pendingType para el próximo turno
+          CALL_STATE.set(callSid, { ...state, awaiting: true, pendingType: 'comprar' });
+
+          const repGather = vr.gather({
+            input: ['dtmf','speech'] as any,
+            numDigits: 1,
+            action: '/webhook/voice-response',
+            method: 'POST',
+            language: locale as any,
+            speechTimeout: 'auto',
+            timeout: 7,
+            actionOnEmptyResult: true,
+            bargeIn: true,
+          });
+          repGather.say(
+            { language: locale as any, voice: voiceName },
+            `${askTxt} ¿Necesitas algo más? Marca 1 precios, 2 horarios, 3 ubicación, 4 representante, o dime en qué te ayudo.`
+          );
+          return res.type('text/xml').send(vr.toString());
         }
-        case '2': { // horarios → mapeamos a 'web' (típico link informativo)
-          vr.say({ language: locale as any, voice: voiceName }, HORARIOS);
-          offerSms('web');
-          break;
+
+        case '2': { // horarios
+          let horariosText = '';
+          try {
+            const { default: OpenAI } = await import('openai');
+            const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+            const fuente = `${cfg.system_prompt || ''}\n${cfg.info_clave || ''}`;
+            // Pedimos SOLO 1 frase, sin URLs ni precios
+            const completion = await openai.chat.completions.create({
+              model: 'gpt-4o-mini',
+              temperature: 0,
+              messages: [
+                {
+                  role: 'system',
+                  content:
+                    `Eres un extractor de datos de negocio. 
+                    SOLO puedes usar el contenido entre <<< >>>. 
+                    Devuelve exactamente UNA frase en ${locale.startsWith('es') ? 'español' : 'inglés'} con el horario del negocio.
+                    No incluyas URLs ni precios. Si no está, devuelve: "Ahora mismo no tengo ese dato."`
+                },
+                {
+                  role: 'user',
+                  content: `<<<${fuente}>>>\nExtrae el horario en una sola frase natural.`
+                }
+              ],
+            });
+            horariosText = completion.choices?.[0]?.message?.content?.trim() || '';
+          } catch (_) {
+            horariosText = '';
+          }
+
+          if (!horariosText) {
+            horariosText = locale.startsWith('es')
+              ? 'Ahora mismo no tengo ese dato.'
+              : 'I don’t have that info right now.';
+          }
+
+          vr.say({ language: locale as any, voice: voiceName }, horariosText);
+
+          // Ofrecer SMS después de decir el dato
+          const askTxt = locale.startsWith('es')
+            ? '¿Quieres que te lo envíe por SMS? Di "sí" o pulsa 1.'
+            : 'Do you want me to text it to you? Say "yes" or press 1.';
+          CALL_STATE.set(callSid, { ...state, awaiting: true, pendingType: 'web' });
+
+          const repGather = vr.gather({
+            input: ['dtmf','speech'] as any,
+            numDigits: 1,
+            action: '/webhook/voice-response',
+            method: 'POST',
+            language: locale as any,
+            speechTimeout: 'auto',
+            timeout: 7,
+            actionOnEmptyResult: true,
+            bargeIn: true,
+          });
+          repGather.say(
+            { language: locale as any, voice: voiceName },
+            `${askTxt} ¿Necesitas algo más? Marca 1 precios, 2 horarios, 3 ubicación, 4 representante, o dime en qué te ayudo.`
+          );
+          return res.type('text/xml').send(vr.toString());
         }
-        case '3': { // ubicación → mapeamos a 'web' (link de Google Maps)
-          vr.say({ language: locale as any, voice: voiceName }, UBICACION);
-          offerSms('web');
-          break;
+
+        case '3': { // ubicación
+          let ubicacionText = '';
+          try {
+            const { default: OpenAI } = await import('openai');
+            const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+            const fuente = `${cfg.system_prompt || ''}\n${cfg.info_clave || ''}`;
+            // Pedimos SOLO 1 frase, sin URLs ni precios
+            const completion = await openai.chat.completions.create({
+              model: 'gpt-4o-mini',
+              temperature: 0,
+              messages: [
+                {
+                  role: 'system',
+                  content:
+                    `Eres un extractor de datos de negocio. 
+                    SOLO puedes usar el contenido entre <<< >>>. 
+                    Devuelve exactamente UNA frase en ${locale.startsWith('es') ? 'español' : 'inglés'} con la dirección o ubicación del negocio.
+                    No incluyas URLs ni precios. Si no está, devuelve: "Ahora mismo no tengo ese dato."`
+                },
+                {
+                  role: 'user',
+                  content: `<<<${fuente}>>>\nExtrae la ubicación en una sola frase natural.`
+                }
+              ],
+            });
+            ubicacionText = completion.choices?.[0]?.message?.content?.trim() || '';
+          } catch (_) {
+            ubicacionText = '';
+          }
+
+          if (!ubicacionText) {
+            ubicacionText = locale.startsWith('es')
+              ? 'Ahora mismo no tengo ese dato.'
+              : 'I don’t have that info right now.';
+          }
+
+          vr.say({ language: locale as any, voice: voiceName }, ubicacionText);
+
+          // Ofrecer SMS después de decir el dato
+          const askTxt = locale.startsWith('es')
+            ? '¿Quieres que te lo envíe por SMS? Di "sí" o pulsa 1.'
+            : 'Do you want me to text it to you? Say "yes" or press 1.';
+          CALL_STATE.set(callSid, { ...state, awaiting: true, pendingType: 'web' });
+
+          const repGather = vr.gather({
+            input: ['dtmf','speech'] as any,
+            numDigits: 1,
+            action: '/webhook/voice-response',
+            method: 'POST',
+            language: locale as any,
+            speechTimeout: 'auto',
+            timeout: 7,
+            actionOnEmptyResult: true,
+            bargeIn: true,
+          });
+          repGather.say(
+            { language: locale as any, voice: voiceName },
+            `${askTxt} ¿Necesitas algo más? Marca 1 precios, 2 horarios, 3 ubicación, 4 representante, o dime en qué te ayudo.`
+          );
+          return res.type('text/xml').send(vr.toString());
         }
+
         case '4': { // representante
           if (REPRESENTANTE_NUMBER) {
             vr.say({ language: locale as any, voice: voiceName }, 'Te comunico con un representante. Un momento, por favor.');
