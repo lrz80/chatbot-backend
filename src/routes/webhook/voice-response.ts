@@ -92,6 +92,7 @@ type CallState = {
   altDest?: string | null;  // número alterno confirmado por el usuario (E.164)
   smsSent?: boolean;        // idempotencia: ya se envió SMS en esta llamada
   lang?: 'es-ES' | 'en-US' | 'pt-BR';
+  turn?: number;
 };
 
 const CALL_STATE = new Map<string, CallState>();
@@ -340,6 +341,7 @@ REGLAS DE RESPUESTA:
       ? 'No tengo ese dato exacto aquí.'
       : 'I don’t have that exact detail here.';
   }
+  console.log('[VOICE][SNIPPET]', JSON.stringify({ topic, brand, locale, text }));
   return text;
 }
 
@@ -374,13 +376,18 @@ function offerSms(
 
   CALL_STATE.set(callSid, { ...state, awaiting: true, pendingType: tipo });
   STATE_TIME.set(callSid, Date.now());
+
+  // 👉 log del prompt de confirmación SMS
+  logBotSay({ callSid, to: 'ivr', text: ask, lang: locale, context: `offer-sms:${tipo}` });
 }
 
 function playMainMenu(
   vr: twiml.VoiceResponse,
   locale: 'es-ES' | 'en-US' | 'pt-BR',
   voiceName: any,
-  brand: string
+  brand: string,
+  callSid?: string,   // 👈 NUEVO
+  toNumber?: string   // 👈 NUEVO
 ) {
   const gather = vr.gather({
     input: ['dtmf','speech'] as any,
@@ -398,12 +405,14 @@ function playMainMenu(
     ? `¿En qué puedo ayudarte? Marca 1 para precios, 2 para horarios, 3 para ubicación, 4 para hablar con un representante.`
     : `How can I help? Press 1 for prices, 2 for hours, 3 for location, 4 to speak with a representative.`;
 
-  // saludo muy corto + menú
-  gather.say({ language: locale as any, voice: voiceName },
-    locale.startsWith('es')
-      ? `Hola, soy Amy de ${brand}. ${text}`
-      : `Hi, I'm Amy from ${brand}. ${text}`
-  );
+  const line = locale.startsWith('es')
+    ? `Hola, soy Amy de ${brand}. ${text}`
+    : `Hi, I'm Amy from ${brand}. ${text}`;
+
+  gather.say({ language: locale as any, voice: voiceName }, line);
+
+  // 👉 Log exacto de lo que locutas en el menú
+  logBotSay({ callSid: callSid || 'N/A', to: toNumber || 'ivr', text: line, lang: locale, context: 'menu' });
 }
 
 // --- Selección de idioma inicial ---
@@ -424,6 +433,29 @@ function introByLanguage(selected?: string) {
   }
 
   return vr.toString();
+}
+
+// ——— LOG HELPERS ———
+function logUserAsk({
+  callSid, from, digits, userInput, lang, rawBody
+}: {
+  callSid: string; from: string; digits?: string; userInput?: string; lang?: string; rawBody?: any;
+}) {
+  console.log('[VOICE][ASK]', JSON.stringify({
+    callSid, from, lang, digits: digits || '', text: (userInput || '').trim(),
+    // opcional: quita si no quieres payload completo
+    // rawTwilio: rawBody
+  }));
+}
+
+function logBotSay({
+  callSid, to, text, lang, context
+}: {
+  callSid: string; to: string; text: string; lang?: string; context?: string;
+}) {
+  console.log('[VOICE][SAY]', JSON.stringify({
+    callSid, to, lang, speakOut: text, ctx: context || ''
+  }));
 }
 
 router.post('/lang', async (req: Request, res: Response) => {
@@ -457,19 +489,35 @@ router.post('/', async (req: Request, res: Response) => {
 
   const digits = (req.body.Digits || '').toString().trim();  // 👈 nuevo
 
+  // 👉 ASR confidence (si Twilio la envía)
+  const asrConfidence = (req.body.Confidence || req.body.SpeechConfidence || '').toString();
+
   // UNA SOLA instancia de VoiceResponse
   const vr = new twiml.VoiceResponse();
 
   const callSid: string = (req.body.CallSid || '').toString();
   const state = CALL_STATE.get(callSid) || {};
 
+  const turn = (state.turn ?? 0) + 1;
+  CALL_STATE.set(callSid, { ...state, turn });
+  console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
+
   // --- Selección de idioma por query (?lang=en|es) e intro por defecto en inglés ---
   const langParam = typeof req.query.lang === 'string' ? (req.query.lang as string) : undefined;
 
   // Si es la primera vez y no hay idioma aún, reproducir intro en inglés con opción a marcar 2 para español
   if (!langParam && !CALL_STATE.has(callSid) && !userInput && !digits) {
-    return res.type('text/xml').send(introByLanguage());
-  }
+  // 👉 Lo que vamos a locutar en el intro
+  const introEn = 'Hi, this is Amy from Synergy Zone. Para español, marque dos.';
+  console.log('[VOICE][SAY]', JSON.stringify({
+    callSid,
+    to: didNumber,
+    lang: 'en-US',
+    speakOut: introEn,
+    ctx: 'intro'
+  }));
+  return res.type('text/xml').send(introByLanguage());
+}
 
   // Si viene ?lang=..., persiste en estado para el resto de la llamada
   if (langParam) {
@@ -478,12 +526,14 @@ router.post('/', async (req: Request, res: Response) => {
   }
 
   // ⬇️ LOG — lo que dijo el cliente
-  console.log('[VOICE][USER]', JSON.stringify({
+  logUserAsk({
     callSid,
     from: callerE164 || callerRaw,
     digits,
-    userInput
-  }));
+    userInput,
+    lang: (state.lang as any) || (typeof req.query.lang === 'string' ? (req.query.lang === 'es' ? 'es-ES' : 'en-US') : undefined),
+    // rawBody: req.body, // <- útil para debug profundo, comenta si es muy ruidoso
+  });
 
   try {
     // ✅ handler de silencio (cuando Twilio devuelve sin SpeechResult/Digits en turnos posteriores)
@@ -523,6 +573,15 @@ router.post('/', async (req: Request, res: Response) => {
       actionOnEmptyResult: true,
     });
 
+    // Después de construir askRepeat y antes de return:
+    logBotSay({
+      callSid,
+      to: didNumber,
+      text: askRepeat,
+      lang: effectiveLocale as any,
+      context: 'silence-reprompt'
+    });
+
     STATE_TIME.set(callSid, Date.now());
     return res.type('text/xml').send(vrSilence.toString());
   }
@@ -559,7 +618,6 @@ router.post('/', async (req: Request, res: Response) => {
     const cfg = cfgRes.rows[0];
     if (!cfg) return res.sendStatus(404);
 
-    const cfgLocale = toTwilioLocale(cfg.idioma || 'en-US'); // si quieres, pon en-US por defecto a nivel cfg
     const currentLocale = (state.lang as any) || (langParam === 'es' ? 'es-ES' : 'en-US');
 
     const voiceName: any = 'alice';
@@ -840,10 +898,10 @@ router.post('/', async (req: Request, res: Response) => {
       return res.type('text/xml').send(vr.toString());
     };
 
-      if (wantsPrices)   { await sayAndOffer('precios',   'comprar'); }
-      if (wantsHours)    { await sayAndOffer('horarios',  'web');     }
-      if (wantsLocation) { await sayAndOffer('ubicacion', 'web');     }
-      if (wantsPayments) { await sayAndOffer('pagos',     'comprar'); }
+      if (wantsPrices)   return await sayAndOffer('precios',   'comprar');
+      if (wantsHours)    return await sayAndOffer('horarios',  'web');
+      if (wantsLocation) return await sayAndOffer('ubicacion', 'web');
+      if (wantsPayments) return await sayAndOffer('pagos',     'comprar');
     }
 
     // ——— OpenAI ———
@@ -876,6 +934,7 @@ router.post('/', async (req: Request, res: Response) => {
       }, { signal: controller.signal as any });
 
       respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
+      console.log('[VOICE][OPENAI_RAW]', JSON.stringify({ callSid, lang: currentLocale, respuestaRaw: respuesta }));
 
       const usage = (completion as any).usage ?? {};
       const totalTokens =
@@ -1158,11 +1217,13 @@ router.post('/', async (req: Request, res: Response) => {
     const speakOut = sanitizeForSay(respuesta);
 
     // ⬇️ LOG — lo que dirá el bot (lo que Twilio locuta)
-    console.log('[VOICE][BOT]', JSON.stringify({
+    logBotSay({
       callSid,
       to: didNumber,
-      speakOut
-    }));
+      text: speakOut,
+      lang: currentLocale as any,
+      context: 'final-say'
+    });
 
     if (!fin) {
       const contGather = vr.gather({
