@@ -110,14 +110,6 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000);
 
-const toTwilioLocale = (code?: string) => {
-  const c = (code || '').toLowerCase();
-  if (c.startsWith('es')) return 'es-ES' as const;
-  if (c.startsWith('en')) return 'en-US' as const;
-  if (c.startsWith('pt')) return 'pt-BR' as const;
-  return 'es-ES' as const;
-};
-
 const sanitizeForSay = (s: string) =>
   (s || '')
     .replace(/[*_`~^>#-]+/g, ' ')
@@ -210,14 +202,7 @@ async function enviarSmsConLink(
   }
 ) {
   // 1) Buscar link útil por tipo (links_utiles) 
-  const synonyms: Record<LinkType, string[]> = {
-    reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
-    comprar:  ['comprar', 'pagar', 'checkout', 'payment', 'pay', 'precio', 'precios', 'prices'],
-    soporte:  ['soporte', 'support', 'ticket', 'ayuda', 'whatsapp', 'wa.me', 'whats'],
-    web:      ['web', 'sitio', 'pagina', 'página', 'home', 'website', 'ubicacion', 'ubicación', 'location', 'mapa', 'maps', 'google maps'],
-  };
-
-  const syns = synonyms[tipo];
+  const syns = LINK_SYNONYMS[tipo];
   const likeAny = syns.map((w) => `%${w}%`);
 
   const base = 3;
@@ -458,6 +443,13 @@ function logBotSay({
   }));
 }
 
+const LINK_SYNONYMS: Record<LinkType, string[]> = {
+  reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
+  comprar:  ['comprar', 'pagar', 'checkout', 'payment', 'pay', 'precio', 'precios', 'prices'],
+  soporte:  ['soporte', 'support', 'ticket', 'ayuda', 'whatsapp', 'wa.me', 'whats'],
+  web:      ['web', 'sitio', 'pagina', 'página', 'home', 'website', 'ubicacion', 'ubicación', 'location', 'mapa', 'maps', 'google maps'],
+};
+
 router.post('/lang', async (req: Request, res: Response) => {
   const digits = (req.body.Digits || '').trim();
   const vr = new twiml.VoiceResponse();
@@ -488,9 +480,6 @@ router.post('/', async (req: Request, res: Response) => {
   const userInput = userInputRaw.trim();
 
   const digits = (req.body.Digits || '').toString().trim();  // 👈 nuevo
-
-  // 👉 ASR confidence (si Twilio la envía)
-  const asrConfidence = (req.body.Confidence || req.body.SpeechConfidence || '').toString();
 
   // UNA SOLA instancia de VoiceResponse
   const vr = new twiml.VoiceResponse();
@@ -932,7 +921,7 @@ router.post('/', async (req: Request, res: Response) => {
           { role: 'user', content: userInput },
         ],
       }, { signal: controller.signal as any });
-
+      
       respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
       console.log('[VOICE][OPENAI_RAW]', JSON.stringify({ callSid, lang: currentLocale, respuestaRaw: respuesta }));
 
@@ -1088,14 +1077,7 @@ router.post('/', async (req: Request, res: Response) => {
         console.log('[VOICE/SMS] SMS ya enviado en esta llamada, se omite reintento.');
       } else {
       try {
-        const synonyms: Record<LinkType, string[]> = {
-          reservar: ['reservar', 'reserva', 'agendar', 'cita', 'turno', 'booking', 'appointment'],
-          comprar:  ['comprar', 'pagar', 'checkout', 'payment', 'pay', 'precio', 'precios', 'prices'],
-          soporte:  ['soporte', 'support', 'ticket', 'ayuda', 'whatsapp', 'wa.me', 'whats'],
-          web:      ['web', 'sitio', 'pagina', 'página', 'home', 'website', 'ubicacion', 'ubicación', 'location', 'mapa', 'maps', 'google maps'],
-        };
-
-        const syns = synonyms[smsType];
+        const syns = LINK_SYNONYMS[smsType];
         const likeAny = syns.map((w) => `%${w}%`);
 
         const base = 3;
