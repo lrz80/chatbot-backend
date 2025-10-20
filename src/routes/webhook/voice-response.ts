@@ -450,6 +450,20 @@ const LINK_SYNONYMS: Record<LinkType, string[]> = {
   web:      ['web', 'sitio', 'pagina', 'página', 'home', 'website', 'ubicacion', 'ubicación', 'location', 'mapa', 'maps', 'google maps'],
 };
 
+function coerceSpeechToDigit(s: string): '1'|'2'|'3'|'4'|undefined {
+  const w = (s || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .trim();
+
+  if (/^(1|one|uno)$/i.test(w)) return '1';
+  if (/^(2|two|dos)$/i.test(w)) return '2';
+  if (/^(3|three|tres)$/i.test(w)) return '3';
+  // Twilio suele transcribir "four" como "for."
+  if (/^(4|four|for|for\.)$/i.test(w)) return '4';
+  return undefined;
+}
+
 router.post('/lang', async (req: Request, res: Response) => {
   const digits = (req.body.Digits || '').trim();
   const vr = new twiml.VoiceResponse();
@@ -479,7 +493,12 @@ router.post('/', async (req: Request, res: Response) => {
   const userInputRaw = (req.body.SpeechResult || '').toString();
   const userInput = userInputRaw.trim();
 
-  const digits = (req.body.Digits || '').toString().trim();  // 👈 nuevo
+  let digits = (req.body.Digits || '').toString().trim();
+
+  if (!digits && userInput) {
+    const coerced = coerceSpeechToDigit(userInput);
+    if (coerced) digits = coerced;
+  }
 
   // UNA SOLA instancia de VoiceResponse
   const vr = new twiml.VoiceResponse();
@@ -495,7 +514,7 @@ router.post('/', async (req: Request, res: Response) => {
   const langParam = typeof req.query.lang === 'string' ? (req.query.lang as string) : undefined;
 
   // Si es la primera vez y no hay idioma aún, reproducir intro en inglés con opción a marcar 2 para español
-  if (!langParam && !CALL_STATE.has(callSid) && !userInput && !digits) {
+  if (!langParam && !state.turn && !userInput && !digits) {
   // 👉 Lo que vamos a locutar en el intro
   const introEn = 'Hi, this is Amy from Synergy Zone. Para español, marque dos.';
   console.log('[VOICE][SAY]', JSON.stringify({
@@ -1052,7 +1071,7 @@ router.post('/', async (req: Request, res: Response) => {
         const confirm = currentLocale.startsWith('es')
           ? `Te lo envío al ${maskForVoice(preferred)}. Di "sí" o pulsa 1 para confirmar, o dicta otro número.`
           : `I'll text ${maskForVoice(preferred)}. Say "yes" or press 1 to confirm, or say another number.`;
-        CALL_STATE.set(callSid, { ...state, awaiting: true, awaitingNumber: true, pendingType: smsType });
+        CALL_STATE.set(callSid, { ...state, awaiting: true, pendingType: smsType });
         vr.say({ language: currentLocale as any, voice: voiceName }, confirm);
         vr.gather({
           input: ['speech','dtmf'] as any,
