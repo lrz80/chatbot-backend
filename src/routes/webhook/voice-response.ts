@@ -411,21 +411,23 @@ function introByLanguage(selected?: string) {
     return vr.toString();
   }
 
-  // Intro por defecto en inglés con opción a marcar 2
+  // Intro por defecto en inglés con opción a marcar 2 o decirlo
   const g = vr.gather({
-    input: ['dtmf'] as any,
+    input: ['dtmf','speech'] as any,   // 👈 ahora también voz
     numDigits: 1,
     timeout: 7,
     language: 'en-US' as any,
+    speechTimeout: 'auto',
+    hints: 'spanish, español, dos, two, 2',  // 👈 ayuda al ASR
     action: '/webhook/voice-response/lang',
     method: 'POST',
-    actionOnEmptyResult: true,   // 👈 clave: si no marca nada, igual llamará a /lang
+    actionOnEmptyResult: true,
     bargeIn: true
   });
 
-  // Pon el prompt DENTRO del Gather
+  // Prompt DENTRO del Gather
   g.say({ language: 'en-US' as any, voice: 'alice' },
-    'Hi, this is Amy from Synergy Zone. For Spanish, press two.');
+    'Hi, this is Amy from Synergy Zone. For Spanish, press two or say “Spanish”.');
 
   return vr.toString();
 }
@@ -475,15 +477,28 @@ function coerceSpeechToDigit(s: string): '1'|'2'|'3'|'4'|undefined {
 }
 
 router.post('/lang', async (req: Request, res: Response) => {
-  const digits = (req.body.Digits || '').trim();
-  const vr = new twiml.VoiceResponse();
+  const rawDigits = (req.body.Digits || '').toString().trim();
+  const speech = (req.body.SpeechResult || '').toString().toLowerCase().trim();
 
-  if (digits === '2') {
-    // Usuario eligió español
+  console.log('[VOICE][LANG]', JSON.stringify({
+    digits: rawDigits,
+    speech,
+    bodyKeys: Object.keys(req.body || {})
+  }));
+
+  // Coaccionamos también la voz a "2" si dice "dos"/"spanish"/"español"
+  let chosen: 'en' | 'es' = 'en';
+  if (rawDigits === '2') {
+    chosen = 'es';
+  } else if (/(spanish|español|dos|\b2\b)/i.test(speech)) {
+    chosen = 'es';
+  }
+
+  const vr = new twiml.VoiceResponse();
+  if (chosen === 'es') {
     vr.say({ language: 'es-ES', voice: 'alice' }, 'Has seleccionado español.');
     vr.redirect('/webhook/voice-response?lang=es');
   } else {
-    // Por defecto sigue en inglés
     vr.say({ language: 'en-US', voice: 'alice' }, 'Continuing in English.');
     vr.redirect('/webhook/voice-response?lang=en');
   }
