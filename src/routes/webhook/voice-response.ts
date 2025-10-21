@@ -405,17 +405,27 @@ function introByLanguage(selected?: string) {
   const vr = new twiml.VoiceResponse();
 
   if (selected === 'es') {
+    // Intro en español y pasamos al flujo principal en ES
     vr.say({ language: 'es-ES', voice: 'alice' }, 'Hola, soy Amy de Synergy Zone. Continuamos en español.');
-  } else {
-    vr.say({ language: 'en-US', voice: 'alice' }, 'Hi, this is Amy from Synergy Zone. Para español, marque dos.');
-    vr.gather({
-      input: ['dtmf'],
-      numDigits: 1,
-      timeout: 5,
-      action: '/webhook/voice-response/lang',
-      method: 'POST'
-    });
+    vr.redirect('/webhook/voice-response?lang=es');
+    return vr.toString();
   }
+
+  // Intro por defecto en inglés con opción a marcar 2
+  const g = vr.gather({
+    input: ['dtmf'] as any,
+    numDigits: 1,
+    timeout: 7,
+    language: 'en-US' as any,
+    action: '/webhook/voice-response/lang',
+    method: 'POST',
+    actionOnEmptyResult: true,   // 👈 clave: si no marca nada, igual llamará a /lang
+    bargeIn: true
+  });
+
+  // Pon el prompt DENTRO del Gather
+  g.say({ language: 'en-US' as any, voice: 'alice' },
+    'Hi, this is Amy from Synergy Zone. For Spanish, press two.');
 
   return vr.toString();
 }
