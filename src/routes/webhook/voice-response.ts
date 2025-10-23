@@ -146,10 +146,10 @@ const askedForSms = (t: string) => {
   return mentionsLink || true; // 👈 permite sin “link”
 };
 
-const didAssistantPromiseSms = (t: string) =>
-  /\b(te lo (?:env[ií]o|enviar[eé]) por sms|te lo mando por sms|te lo envío por mensaje|te lo mando por mensaje|i'?ll text it to you|i'?ll send it by text)\b/i.test(
-    t || ''
-  );
+const didAssistantPromiseSms = (t: string) => {
+  const s = normTxt(t);
+  return /\b(te lo envio por sms|te lo mand(o|are) por sms|te lo envio por mensaje|te lo mando por mensaje|ill text it to you|ill send it by text)\b/u.test(s);
+};
 
 type LinkType = 'reservar' | 'comprar' | 'soporte' | 'web';
 
@@ -164,11 +164,28 @@ const guessType = (t: string): LinkType => {
 
 const short = (s: string, n = 120) => (s.length > n ? s.slice(0, n) + '…' : s);
 
- // Confirmación del usuario para SMS
- const saidYes = (t: string) =>
-   /\b(s[ií]|sí por favor|claro|dale|ok(?:ay)?|porfa|env[ií]alo|m[aá]ndalo|mándalo|hazlo|sí, envíalo|yes|yep|please do|send it|text it)\b/i.test(t || '');
- const saidNo = (t: string) =>
-   /\b(no|no gracias|mejor no|luego|despu[eé]s|m[aá]s tarde|not now|don'?t)\b/i.test(t || '');
+function normTxt(t: string) {
+  return (t || '')
+    .normalize('NFD')                  // separa acentos
+    .replace(/[\u0300-\u036f]/g, '')  // quita acentos
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')// quita puntuación
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+// Confirmación del usuario para SMS
+const saidYes = (t: string) => {
+ const s = normTxt(t);
+ // cubre: si, si por favor, claro, dale, ok/okay, porfa, envialo, mandalo, hazlo, yes, yep, please do, send it, text it
+ return /\b(si|si por favor|claro|dale|ok|okay|porfa|envialo|mandalo|hazlo|yes|yep|please do|send it|text it)\b/u.test(s);
+};
+
+const saidNo = (t: string) => {
+  const s = normTxt(t);
+  // cubre: no, no gracias, mejor no, luego, despues, mas tarde, not now, don't
+  return /\b(no|no gracias|mejor no|luego|despues|mas tarde|not now|dont)\b/u.test(s);
+};
 
 //  Marca dinámica del tenant (solo `name`)
 async function getTenantBrand(tenantId: string): Promise<string> {
@@ -267,7 +284,7 @@ async function enviarSmsConLink(
   }));
 
   // 3) Limpiar estado de la llamada y log en messages
-  CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: true }); // ✅ marca idempotencia
+  CALL_STATE.set(callSid, { ...(CALL_STATE.get(callSid) || {}), awaiting: false, pendingType: null, smsSent: true }); // ✅ marca idempotencia
   STATE_TIME.set(callSid, Date.now());
   await pool.query(
     `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
@@ -465,14 +482,23 @@ const LINK_SYNONYMS: Record<LinkType, string[]> = {
 function coerceSpeechToDigit(s: string): '1'|'2'|'3'|'4'|undefined {
   const w = (s || '')
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .trim();
 
-  if (/^(1|one|uno)$/i.test(w)) return '1';
-  if (/^(2|two|dos)$/i.test(w)) return '2';
-  if (/^(3|three|tres)$/i.test(w)) return '3';
-  // Twilio suele transcribir "four" como "for."
-  if (/^(4|four|for|for\.)$/i.test(w)) return '4';
+  // Palabras clave → dígitos
+  if (/\b(precio|precios|tarifa|tarifas|price|prices|pagar|pago|checkout|buy|pay|payment)\b/u.test(w)) return '1';
+  if (/\b(horario|horarios|hours|schedule|open|close|abren|cierran)\b/u.test(w)) return '2';
+  if (/\b(ubicacion|ubicación|direccion|dirección|address|location|mapa|maps|google maps)\b/u.test(w)) return '3';
+  if (/\b(representante|humano|agente|persona|operator|representative)\b/u.test(w)) return '4';
+
+  // Números en texto
+  if (/^(1|one|uno)\b/u.test(w)) return '1';
+  if (/^(2|two|dos)\b/u.test(w)) return '2';
+  if (/^(3|three|tres)\b/u.test(w)) return '3';
+  // Twilio a veces transcribe "four" como "for."
+  if (/^(4|four|for)\b/u.test(w)) return '4';
+
   return undefined;
 }
 
@@ -531,10 +557,6 @@ router.post('/', async (req: Request, res: Response) => {
   const callSid: string = (req.body.CallSid || '').toString();
   const state = CALL_STATE.get(callSid) || {};
 
-  const turn = (state.turn ?? 0) + 1;
-  CALL_STATE.set(callSid, { ...state, turn });
-  console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
-
   // --- Selección de idioma por query (?lang=en|es) e intro por defecto en inglés ---
   const langParam = typeof req.query.lang === 'string' ? (req.query.lang as string) : undefined;
 
@@ -551,6 +573,10 @@ router.post('/', async (req: Request, res: Response) => {
   }));
   return res.type('text/xml').send(introByLanguage());
 }
+
+const turn = (state.turn ?? 0) + 1;
+CALL_STATE.set(callSid, { ...state, turn });
+console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
 
   // Si viene ?lang=..., persiste en estado para el resto de la llamada
   if (langParam) {
@@ -569,56 +595,6 @@ router.post('/', async (req: Request, res: Response) => {
   });
 
   try {
-    // ✅ handler de silencio (cuando Twilio devuelve sin SpeechResult/Digits en turnos posteriores)
-    if (!userInput && !digits && Object.prototype.hasOwnProperty.call(req.body, 'SpeechResult')) {
-    // Si estamos esperando confirmación del SMS, re-pregunta esa confirmación (y escucha)
-    if (state.awaiting && state.pendingType) {
-      const vrAsk = new twiml.VoiceResponse();
-      offerSms(
-        vrAsk,
-        ((state.lang as any) || 'es-ES') as any,
-        'alice',
-        callSid,
-        state,
-        state.pendingType
-      );
-      STATE_TIME.set(callSid, Date.now());
-      return res.type('text/xml').send(vrAsk.toString());
-    }
-
-    // Si NO estamos esperando confirmación, usa tu fallback normal:
-    const effectiveLocale = ((state.lang as any) || 'en-US') as any; // inglés por defecto
-
-    const askRepeat = effectiveLocale.startsWith('es')
-      ? '¿Me lo repites, por favor?'
-      : 'Could you repeat that, please?';
-
-    const vrSilence = new twiml.VoiceResponse();
-    vrSilence.say({ language: effectiveLocale as any, voice: 'alice' as any }, askRepeat);
-    vrSilence.gather({
-      input: ['speech','dtmf'] as any,
-      numDigits: 1,
-      action: '/webhook/voice-response',
-      method: 'POST',
-      language: effectiveLocale as any,
-      speechTimeout: 'auto',
-      timeout: 7,
-      actionOnEmptyResult: true,
-    });
-
-    // Después de construir askRepeat y antes de return:
-    logBotSay({
-      callSid,
-      to: didNumber,
-      text: askRepeat,
-      lang: effectiveLocale as any,
-      context: 'silence-reprompt'
-    });
-
-    STATE_TIME.set(callSid, Date.now());
-    return res.type('text/xml').send(vrSilence.toString());
-  }
-
     const tRes = await pool.query(
       `SELECT id, name,
               membresia_activa, membresia_inicio,
@@ -654,6 +630,38 @@ router.post('/', async (req: Request, res: Response) => {
     const currentLocale = (state.lang as any) || (langParam === 'es' ? 'es-ES' : 'en-US');
 
     const voiceName: any = 'alice';
+
+    // ——— Menú inicial si aún no hay input ni confirmaciones pendientes ———
+    if (!userInput && !digits && !state.awaiting && !state.awaitingNumber) {
+      const brandForMenu = await getTenantBrand(tenant.id);
+      playMainMenu(vr, currentLocale as any, voiceName, brandForMenu, callSid, didNumber);
+      return res.type('text/xml').send(vr.toString());
+    }
+
+    // ✅ handler de silencio (cuando Twilio devuelve sin SpeechResult/Digits en turnos posteriores)
+    if (!userInput && !digits && Object.prototype.hasOwnProperty.call(req.body, 'SpeechResult')) {
+      // Si estamos esperando confirmación del SMS, re-pregunta esa confirmación (y escucha)
+      if (state.awaiting && state.pendingType) {
+        const vrAsk = new twiml.VoiceResponse();
+        offerSms(
+          vrAsk,
+          currentLocale as any,
+          voiceName,
+          callSid,
+          state,
+          state.pendingType
+        );
+        STATE_TIME.set(callSid, Date.now());
+        return res.type('text/xml').send(vrAsk.toString());
+      }
+
+      // Si NO estamos esperando confirmación → vuelve al menú
+      const vrSilence = new twiml.VoiceResponse();
+      const brandForMenu = await getTenantBrand(tenant.id);
+      playMainMenu(vrSilence, currentLocale as any, voiceName, brandForMenu, callSid, didNumber);
+      STATE_TIME.set(callSid, Date.now());
+      return res.type('text/xml').send(vrSilence.toString());
+    }
 
     // ===== Resultado de transferencia (Dial action) =====
     const isTransferCallback = (req.query && req.query.transfer === '1') || typeof req.body.DialCallStatus !== 'undefined';
@@ -965,6 +973,7 @@ router.post('/', async (req: Request, res: Response) => {
           { role: 'user', content: userInput },
         ],
       }, { signal: controller.signal as any });
+      clearTimeout(timer);
       
       respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
       console.log('[VOICE][OPENAI_RAW]', JSON.stringify({ callSid, lang: currentLocale, respuestaRaw: respuesta }));
@@ -1187,7 +1196,7 @@ router.post('/', async (req: Request, res: Response) => {
             })
               .then((n) => {
                 console.log('[VOICE/SMS] sendSMS -> enviados =', n);
-                CALL_STATE.set(callSid, { awaiting: false, pendingType: null, smsSent: true });
+                CALL_STATE.set(callSid, { ...(CALL_STATE.get(callSid) || {}), awaiting: false, pendingType: null, smsSent: true });
                 STATE_TIME.set(callSid, Date.now());
                 pool.query(
                   `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number)
@@ -1264,6 +1273,11 @@ router.post('/', async (req: Request, res: Response) => {
         bargeIn: true,
       });
       contGather.say({ language: currentLocale as any, voice: voiceName }, speakOut);
+      const tailHelp = currentLocale.startsWith('es')
+        ? 'Dime: precios, horarios, ubicación; o marca 1, 2, 3 o 4.'
+        : 'Say: prices, hours, location; or press 1, 2, 3 or 4.';
+      contGather.say({ language: currentLocale as any, voice: voiceName }, tailHelp);
+
     } else {
       CALL_STATE.delete(callSid);
       STATE_TIME.delete(callSid);
