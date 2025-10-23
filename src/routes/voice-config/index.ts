@@ -57,7 +57,7 @@ router.get("/", authenticateUser, async (req, res) => {
 });
 
 // 📤 GUARDAR configuración de voz
-router.post("/", authenticateUser, upload.none(), async (req, res) => {
+router.post("/", authenticateUser, async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
   let {
     idioma,
@@ -86,9 +86,11 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
   if (!tenant_id) {
     return res.status(401).json({ error: "Tenant no autenticado." });
   }
-  if (!idioma || !voice_name) {
-    return res.status(400).json({ error: "Faltan campos requeridos." });
+  if (!idioma) {
+  return res.status(400).json({ error: "Falta idioma." });
   }
+  // voice_name es opcional: si viene vacío, usamos 'alice' como default
+  voice_name = voice_name || "alice";
   if (!system_prompt || !welcome_message) {
     return res.status(400).json({ error: "Prompt o mensaje de bienvenida vacío." });
   }
