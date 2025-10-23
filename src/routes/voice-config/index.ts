@@ -3,6 +3,7 @@ import express from "express";
 import multer from "multer";
 import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
+import { normalizarNumero } from "../../lib/senders/sms";
 
 const router = express.Router();
 const upload = multer();
@@ -67,7 +68,8 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
     canal = "voz",                 // ✅ usa "voz"
     funciones_asistente,
     info_clave,
-    audio_demo_url
+    audio_demo_url,
+    representante_number
   } = req.body;
 
   // Normaliza a texto
@@ -79,6 +81,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
   canal               = toText(canal) || "voz";
   funciones_asistente = toText(funciones_asistente);
   info_clave          = toText(info_clave);
+  representante_number = toText(representante_number);
 
   if (!tenant_id) {
     return res.status(401).json({ error: "Tenant no autenticado." });
@@ -89,14 +92,23 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
   if (!system_prompt || !welcome_message) {
     return res.status(400).json({ error: "Prompt o mensaje de bienvenida vacío." });
   }
+  if (representante_number) {
+    try {
+      representante_number = normalizarNumero(representante_number); // ej: +13057206515
+    } catch {
+      return res.status(400).json({ error: "representante_number inválido" });
+    }
+  } else {
+    representante_number = null as any;
+  }
 
   try {
     await pool.query(
       `INSERT INTO voice_configs (
          tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints,
-         canal, funciones_asistente, info_clave, audio_demo_url, created_at, updated_at
+         canal, funciones_asistente, info_clave, audio_demo_url, representante_number, created_at, updated_at
        )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, NOW(), NOW())
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW(), NOW())
        ON CONFLICT (tenant_id, idioma, canal)
        DO UPDATE SET
          voice_name          = EXCLUDED.voice_name,
@@ -106,6 +118,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
          funciones_asistente = EXCLUDED.funciones_asistente,
          info_clave          = EXCLUDED.info_clave,
          audio_demo_url      = EXCLUDED.audio_demo_url,
+         representante_number = EXCLUDED.representante_number,
          updated_at          = NOW()`,
       [
         tenant_id,
@@ -117,7 +130,8 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
         canal,
         funciones_asistente,
         info_clave,
-        audio_demo_url || null
+        audio_demo_url || null,
+        representante_number
       ]
     );
 

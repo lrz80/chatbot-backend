@@ -267,6 +267,15 @@ async function enviarSmsConLink(
     throw new Error('Número configurado es WhatsApp-only; no envía SMS.');
   }
 
+  console.log('[VOICE/SMS] DEBUG about to send', {
+    tipo,
+    toDest,
+    smsFrom,
+    tenantId,
+    callSid,
+    chosen
+  });
+
   // 2) Enviar SMS
   const n = await sendSMS({
     mensaje: body,
@@ -974,7 +983,7 @@ console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
         ],
       }, { signal: controller.signal as any });
       clearTimeout(timer);
-      
+
       respuesta = completion.choices[0]?.message?.content?.trim() || respuesta;
       console.log('[VOICE][OPENAI_RAW]', JSON.stringify({ callSid, lang: currentLocale, respuestaRaw: respuesta }));
 
