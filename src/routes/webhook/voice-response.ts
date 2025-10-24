@@ -638,7 +638,7 @@ console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
 
     const currentLocale = (state.lang as any) || (langParam === 'es' ? 'es-ES' : 'en-US');
 
-    const voiceName: any = 'alice';
+    const voiceName: any = (cfg?.voice_name || 'alice') as any;
 
     // ——— Menú inicial si aún no hay input ni confirmaciones pendientes ———
     if (!userInput && !digits && !state.awaiting && !state.awaitingNumber) {

@@ -57,7 +57,7 @@ router.get("/", authenticateUser, async (req, res) => {
 });
 
 // 📤 GUARDAR configuración de voz
-router.post("/", authenticateUser, async (req, res) => {
+router.post("/", authenticateUser, upload.none(), async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
   let {
     idioma,
@@ -74,7 +74,7 @@ router.post("/", authenticateUser, async (req, res) => {
 
   // Normaliza a texto
   idioma              = toText(idioma);
-  voice_name          = toText(voice_name);
+  voice_name          = toText(voice_name) || "alice";
   system_prompt       = toText(system_prompt);
   welcome_message     = toText(welcome_message);
   voice_hints         = toText(voice_hints);
