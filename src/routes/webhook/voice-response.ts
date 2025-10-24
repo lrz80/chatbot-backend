@@ -452,8 +452,9 @@ function introByLanguage(selected?: string) {
   });
 
   // Prompt DENTRO del Gather
-  g.say({ language: 'en-US' as any, voice: 'alice' },
-    'Hi, this is Amy from Synergy Zone. For Spanish, press two or say “Spanish”.');
+  g.say({ language: 'en-US' as any, voice: 'alice' }, 'Hi, this is Amy from Synergy Zone.');
+  // …y la instrucción de idioma en español ✅
+  g.say({ language: 'es-ES' as any, voice: 'alice' }, 'Para español, marque dos o diga “Español”.');
 
   return vr.toString();
 }
@@ -509,6 +510,55 @@ function coerceSpeechToDigit(s: string): '1'|'2'|'3'|'4'|undefined {
   if (/^(4|four|for)\b/u.test(w)) return '4';
 
   return undefined;
+}
+
+// Convierte números hablados a dígitos (ES/EN) para capturar teléfonos por voz
+function wordsToDigits(s: string) {
+  if (!s) return '';
+  const txt = s
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // sin acentos
+    .replace(/[^\p{L}\p{N}\s\+]/gu, ' ')             // limpia símbolos raros
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const map: Record<string, string> = {
+    // ESP
+    'cero':'0','uno':'1','una':'1','dos':'2','tres':'3','cuatro':'4','cinco':'5','seis':'6','siete':'7','ocho':'8','nueve':'9',
+    'diez':'10', // por si lo dicen en pareja; intentaremos dividir luego
+    // ENG
+    'zero':'0','oh':'0','o':'0', // "oh" / "o" a veces para 0
+    'one':'1','won':'1', 'juan':'1','two':'2','too':'2','to':'2','three':'3','tri':'3', 'tree':'3', 'free':'3','four':'4','for':'4','fore':'4','five':'5','six':'6','seven':'7','eight':'8','ate':'8','eit':'8','nine':'9','nain':'9',
+    // Ruido común
+    'plus':'+','mas':'+','más':'+','signo':'','signo+':'','guion':'','guión':'','dash':'','space':'','y':'','and':'',
+    // “relleno” que conviene ignorar cuando dictan: “mi número es…”
+    'mi':'','numero':'','número':'','es':'','my':'','number':'','is':'','codigo':'','código':'','area':'','code':'',
+    'con':'','de':'','a':'','al':'','please':'','por':'','favor':'','please,':'',
+  };
+
+  const out: string[] = [];
+  for (const token of txt.split(' ')) {
+    if (/^\+?\d+$/.test(token)) { out.push(token); continue; } // ya venía como 305 o +1
+    const m = map[token];
+    if (m != null) out.push(m);
+  }
+
+  let joined = out.join('');
+  // Normaliza múltiplos '+' y deja solo el inicial
+  if ((joined.match(/\+/g) || []).length > 1) {
+    joined = '+' + joined.replace(/\+/g, '');
+  }
+  // Si quedó "10" proveniente de "diez", parte en "1" "0" (teléfonos se dictan dígito a dígito)
+  joined = joined.replace(/10/g, '10'); // (nada que hacer si realmente dijeron "diez"; se usa tal cual)
+  // Quita caracteres que no sean + o dígito:
+  joined = joined.replace(/[^\d+]/g, '');
+
+  // Si NO empieza con '+' y parece número válido de 10–15, prepende '+' (lo haces igual en tu flujo)
+  if (!joined.startsWith('+') && /^\d{10,15}$/.test(joined)) {
+    joined = '+' + joined;
+  }
+
+  return joined;
 }
 
 router.post('/lang', async (req: Request, res: Response) => {
@@ -719,9 +769,19 @@ console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
       // Si fue "completed", simplemente retomamos flujo normal (no respondemos nada especial)
     }
 
+    console.log('[VOICE][NUM_CAPTURE]', JSON.stringify({
+      callSid,
+      SpeechResult: req.body.SpeechResult,
+      Digits: req.body.Digits
+    }));
+
     // ✅ capturar número cuando estábamos esperando uno
     if (state.awaitingNumber && (userInput || digits)) {
-      const rawDigits = digits || extractDigits(userInput);
+      let rawDigits = digits || extractDigits(userInput);
+      if (!rawDigits) {
+        const spoken = wordsToDigits(userInput);
+        rawDigits = extractDigits(spoken) || ''; // vuelve a limpiar por si vino con '+'
+      }
       let candidate = rawDigits ? `+${rawDigits.replace(/^\+/, '')}` : null;
 
       try {
@@ -735,15 +795,21 @@ console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
         const vrNum = new twiml.VoiceResponse();
         vrNum.say({ language: currentLocale as any, voice: 'alice' }, askAgain);
         vrNum.gather({
-          input: ['speech','dtmf'] as any,
-          numDigits: 15,
-          action: '/webhook/voice-response',
-          method: 'POST',
-          language: currentLocale as any,
-          speechTimeout: 'auto',
-          timeout: 7,
-          actionOnEmptyResult: true,
-        });
+        input: ['speech','dtmf'] as any,
+        numDigits: 15,
+        action: '/webhook/voice-response',
+        method: 'POST',
+        language: currentLocale as any,
+        speechTimeout: 'auto',
+        timeout: 10,               // un poco más de tiempo
+        actionOnEmptyResult: true,
+        bargeIn: true,
+        enhanced: true,            // mejora el ASR
+        speechModel: 'phone_call', // modelo recomendado para llamadas
+        hints: currentLocale.startsWith('es')
+          ? 'más, mas, signo, uno, dos, tres, cuatro, cinco, seis, siete, ocho, nueve, cero, guion, espacio'
+          : 'plus, one, two, three, four, five, six, seven, eight, nine, zero, dash, space'
+      });
         STATE_TIME.set(callSid, Date.now());
         return res.type('text/xml').send(vrNum.toString());
       }
@@ -1104,8 +1170,14 @@ console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
             method: 'POST',
             language: currentLocale as any,
             speechTimeout: 'auto',
-            timeout: 7,                 // 👈 NUEVO ( segundos sin audio )
-            actionOnEmptyResult: true,  // 👈 NUEVO (llama igual al action)
+            timeout: 10,               // un poco más de tiempo
+            actionOnEmptyResult: true,
+            bargeIn: true,
+            enhanced: true,            // mejora el ASR
+            speechModel: 'phone_call', // modelo recomendado para llamadas
+            hints: currentLocale.startsWith('es')
+              ? 'más, mas, signo, uno, dos, tres, cuatro, cinco, seis, siete, ocho, nueve, cero, guion, espacio'
+              : 'plus, one, two, three, four, five, six, seven, eight, nine, zero, dash, space'
           });
           return res.type('text/xml').send(vr.toString());
         }
