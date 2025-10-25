@@ -431,29 +431,27 @@ function introByLanguage(selected?: string) {
   const vr = new twiml.VoiceResponse();
 
   if (selected === 'es') {
-    // Intro en español y pasamos al flujo principal en ES
     vr.say({ language: 'es-ES', voice: 'alice' }, 'Hola, soy Amy de Synergy Zone. Continuamos en español.');
     vr.redirect('/webhook/voice-response?lang=es');
     return vr.toString();
   }
 
-  // Intro por defecto en inglés con opción a marcar 2 o decirlo
   const g = vr.gather({
-    input: ['dtmf','speech'] as any,   // 👈 ahora también voz
+    input: ['dtmf','speech'] as any,
     numDigits: 1,
-    timeout: 7,
-    language: 'en-US' as any,
+    timeout: 10,                 // un poco más generoso
+    language: 'en-US' as any,    // ASR principal en inglés (seguimos entendiendo "two"/"spanish")
     speechTimeout: 'auto',
-    hints: 'spanish, español, dos, two, 2',  // 👈 ayuda al ASR
+    enhanced: true,              // ✅ ASR mejorado
+    speechModel: 'phone_call',   // ✅ recomendado para llamadas
+    hints: 'spanish, espanol, español, castellano, dos, two, 2',
     action: '/webhook/voice-response/lang',
     method: 'POST',
     actionOnEmptyResult: true,
     bargeIn: true
   });
 
-  // Prompt DENTRO del Gather
   g.say({ language: 'en-US' as any, voice: 'alice' }, 'Hi, this is Amy from Synergy Zone.');
-  // …y la instrucción de idioma en español ✅
   g.say({ language: 'es-ES' as any, voice: 'alice' }, 'Para español, marque dos o diga “Español”.');
 
   return vr.toString();
@@ -563,7 +561,15 @@ function wordsToDigits(s: string) {
 
 router.post('/lang', async (req: Request, res: Response) => {
   const rawDigits = (req.body.Digits || '').toString().trim();
-  const speech = (req.body.SpeechResult || '').toString().toLowerCase().trim();
+
+  // ⬇️ normaliza: minúsculas + sin tildes/diacríticos
+  const speechRaw = (req.body.SpeechResult || '').toString().trim();
+  const speech = speechRaw
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quita acentos: español -> espanol
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')                // limpia signos
+    .replace(/\s+/g, ' ')
+    .trim();
 
   console.log('[VOICE][LANG]', JSON.stringify({
     digits: rawDigits,
@@ -571,11 +577,10 @@ router.post('/lang', async (req: Request, res: Response) => {
     bodyKeys: Object.keys(req.body || {})
   }));
 
-  // Coaccionamos también la voz a "2" si dice "dos"/"spanish"/"español"
   let chosen: 'en' | 'es' = 'en';
   if (rawDigits === '2') {
     chosen = 'es';
-  } else if (/(spanish|español|dos|\b2\b)/i.test(speech)) {
+  } else if (/(spanish|espanol|español|castellano|\b2\b|dos)/i.test(speech)) {
     chosen = 'es';
   }
 
