@@ -245,6 +245,12 @@ async function procesarMensajeWhatsApp(body: any) {
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
+    // CTA multilenguaje para cierres consistentes
+  const CTA_TXT =
+    idiomaDestino === 'en'
+      ? 'Is there anything else I can help you with?'
+      : '¿Hay algo más en lo que te pueda ayudar?';
+
   // === FAST-PATH MULTI-INTENCIÓN ===
   try {
     const top = await detectTopIntents(userInput, tenant.id, canal as Canal, 3);
@@ -265,7 +271,7 @@ async function procesarMensajeWhatsApp(body: any) {
         const out = tidyMultiAnswer(multi.text, {
           maxLines: 6,
           freezeUrls: true,
-          cta: '¿Hay algo más en lo que te pueda ayudar?'
+          cta: CTA_TXT
         });
 
         await enviarWhatsApp(fromNumber, out, tenant.id);
@@ -484,14 +490,20 @@ async function procesarMensajeWhatsApp(body: any) {
   const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
 
   if ((intencionLower === "saludo" && greetingOnly) || (intencionLower === "agradecimiento" && thanksOnly)) {
-    const respuestaRapida =
-      intencionLower === "agradecimiento"
-        ? "¡De nada! 💬 ¿Quieres ver otra opción del menú?"
-        : await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+  let respuestaRapida = "";
 
-    await enviarWhatsApp(fromNumber, respuestaRapida, tenant.id);
-    return;
+  if (intencionLower === "agradecimiento") {
+    respuestaRapida =
+      idiomaDestino === 'en'
+        ? "You're welcome! 💬 Would you like to see another option from the menu?"
+        : "¡De nada! 💬 ¿Quieres ver otra opción del menú?";
+  } else {
+    respuestaRapida = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
   }
+
+  await enviarWhatsApp(fromNumber, respuestaRapida, tenant.id);
+  return;
+}
 
   if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
     respuesta = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);

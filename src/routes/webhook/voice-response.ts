@@ -436,23 +436,26 @@ function introByLanguage(selected?: string) {
     return vr.toString();
   }
 
-  const g = vr.gather({
+  // Paso 1: ES
+  const gEs = vr.gather({
     input: ['dtmf','speech'] as any,
     numDigits: 1,
-    timeout: 10,                 // un poco más generoso
-    language: 'en-US' as any,    // ASR principal en inglés (seguimos entendiendo "two"/"spanish")
+    timeout: 6,
+    language: 'es-ES' as any,
     speechTimeout: 'auto',
-    enhanced: true,              // ✅ ASR mejorado
-    speechModel: 'phone_call',   // ✅ recomendado para llamadas
-    hints: 'spanish, espanol, español, castellano, dos, two, 2',
+    enhanced: true,
+    speechModel: 'phone_call',
+    hints: 'español, espanol, castellano, dos, 2',
     action: '/webhook/voice-response/lang',
     method: 'POST',
     actionOnEmptyResult: true,
     bargeIn: true
   });
+  gEs.say({ language: 'es-ES' as any, voice: 'alice' }, 'Para español, marque dos o diga “Español”.');
 
-  g.say({ language: 'en-US' as any, voice: 'alice' }, 'Hi, this is Amy from Synergy Zone.');
-  g.say({ language: 'es-ES' as any, voice: 'alice' }, 'Para español, marque dos o diga “Español”.');
+  // Si no hubo resultado, Twilio pegará igual al action; en /lang puedes detectar vacío.
+  // Si quieres forzar fallback sin depender del POST vacío:
+  vr.redirect('/webhook/voice-response/lang?fallback=en'); // <- opcional
 
   return vr.toString();
 }
