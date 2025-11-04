@@ -549,6 +549,110 @@ async function procesarMensajeWhatsApp(body: any) {
       console.warn('⚠️ Rama específica falló; continuará pipeline normal:', e);
     }
 
+    // 💡 Heurística específica: si el usuario pide precios + horarios, compón una respuesta combinada.
+    const WANTS_SCHEDULE = /\b(schedule|schedules?|hours?|times?|timetable|horario|horarios)\b/i.test(userInput);
+    const WANTS_PRICE = PRICE_REGEX.test(userInput);
+
+    if (WANTS_PRICE && WANTS_SCHEDULE) {
+      try {
+        // Trae ambas FAQs
+        const [faqPrecio, faqHorario] = await Promise.all([
+          fetchFaqPrecio(tenant.id, canal),
+          (async () => {
+            const hitH = await getFaqByIntent(tenant.id, canal, 'horario');
+            return hitH?.respuesta || null;
+          })()
+        ]);
+
+        // Si no hay alguna de las dos, sigue el pipeline normal
+        if (!faqPrecio || !faqHorario) {
+          console.log('ℹ️ Combo precio+horario: falta alguna FAQ; sigo pipeline normal.');
+        } else {
+          // Construye "hechos" combinados y pásalos por tu promptBase para formato/tono/idioma
+          const facts = [
+            'INFO_PRECIOS:\n' + faqPrecio,
+            '',
+            'INFO_HORARIO:\n' + faqHorario
+          ].join('\n');
+
+          const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+          const systemPrompt = [
+            promptBase,
+            '',
+            `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
+            'Formato WhatsApp: máx. 6 líneas en prosa (sin bullets).',
+            'Usa solo los HECHOS provistos. Si hay enlaces oficiales, comparte solo 1 (el más pertinente).',
+            'Incluye precios y horarios en un mismo mensaje, cerrando con un CTA breve.'
+          ].join('\n');
+
+          const userPrompt = [
+            `MENSAJE_USUARIO:\n${userInput}`,
+            '',
+            `HECHOS AUTORIZADOS (usa ambos):\n${facts}`
+          ].join('\n');
+
+          let out = '';
+          try {
+            const completion = await openai.chat.completions.create({
+              model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+              temperature: 0.2,
+              max_tokens: 400,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt },
+              ],
+            });
+            out = (completion.choices[0]?.message?.content || '').trim();
+            // Asegura idioma por si acaso
+            try {
+              const langOut = await detectarIdioma(out);
+              if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+                out = await traducirMensaje(out, idiomaDestino);
+              }
+            } catch {}
+          } catch (e) {
+            console.warn('⚠️ LLM combo precio+horario falló; uso facts crudos:', e);
+            out = `${faqHorario}\n\n${faqPrecio}`;
+          }
+
+          // CTA consistente con el idioma
+          const CTA_TXT =
+            idiomaDestino === 'en'
+              ? 'Is there anything else I can help you with?'
+              : '¿Hay algo más en lo que te pueda ayudar?';
+
+          out = `${out}\n\n${CTA_TXT}`;
+
+          await enviarWhatsApp(fromNumber, out, tenant.id);
+
+          await pool.query(
+            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+            VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+            ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+            [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
+          );
+          await pool.query(
+            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT DO NOTHING`,
+            [tenant.id, canal, messageId]
+          );
+
+          // registra intención/seguimiento con "precio" como señal de venta
+          try {
+            const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+            const intFinal = normalizeIntentAlias(det?.intencion || 'precio');
+            await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, det?.nivel_interes ?? 1, messageId);
+            await scheduleFollowUp(intFinal, det?.nivel_interes ?? 1);
+          } catch {}
+
+          return; // ⬅️ ya respondimos el combo; salimos
+        }
+      } catch (e) {
+        console.warn('⚠️ Heurística precio+horario falló; sigo pipeline normal:', e);
+      }
+    }
+
     // ─── INTENT MATCHER — RESPONDE ANTES DE FAQs/IA ───────────────────────
     try {
       // Comparamos en ES (igual que FAQs). Si el cliente no habla ES, traducimos su mensaje a ES.
@@ -601,18 +705,24 @@ async function procesarMensajeWhatsApp(body: any) {
         let facts = respIntent.respuesta;
 
         // (Opcional) añade un breve resumen si el user pidió “info + precios”
-        const askedInfo = /\b(info(?:rmación)?|clases?|servicios?)\b/i.test(userInput);
+        const askedInfo = /\b(info(?:rmación)?|information|clases?|servicios?)\b/i.test(userInput);
         const askedPrice2 = PRICE_REGEX.test(userInput);
-        if (askedInfo && askedPrice2) {
+        const askedSchedule = /\b(schedule|schedules?|hours?|times?|timetable|horario|horarios)\b/i.test(userInput);
+
+        if ((askedInfo && askedPrice2) || (askedInfo && askedSchedule) || (askedPrice2 && askedSchedule)) {
           try {
-            const { rows } = await pool.query(
-              `SELECT respuesta FROM faqs
-               WHERE tenant_id = $1 AND canal = $2 AND LOWER(intencion) IN ('interes_clases','info_general','servicios')
-               ORDER BY 1 LIMIT 1`,
-              [tenant.id, canal]
-            );
-            const extra = rows[0]?.respuesta?.trim();
-            if (extra) facts = `${extra}\n\n${facts}`;
+            // agrega una FAQ adicional a los facts según falte precio u horario
+            const needPrice = !/precio/i.test(respIntent?.intent || '') && askedPrice2;
+            const needHorario = (respIntent?.intent || '') !== 'horario' && askedSchedule;
+
+            if (needPrice) {
+              const precio = await fetchFaqPrecio(tenant.id, canal);
+              if (precio) facts = `${facts}\n\n${precio}`;
+            }
+            if (needHorario) {
+              const hitHorario = await getFaqByIntent(tenant.id, canal, 'horario');
+              if (hitHorario?.respuesta) facts = `${facts}\n\n${hitHorario.respuesta}`;
+            }
           } catch {}
         }
 
