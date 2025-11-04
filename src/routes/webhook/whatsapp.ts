@@ -313,7 +313,7 @@ async function procesarMensajeWhatsApp(body: any) {
 
       // Usa el CTA según idioma (asegúrate de haber definido CTA_TXT tras calcular idiomaDestino)
       const out = tidyMultiAnswer(multiText, {
-        maxLines: 16,
+        maxLines: 36,
         freezeUrls: true,
         cta: CTA_TXT
       });
