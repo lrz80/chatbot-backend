@@ -270,33 +270,30 @@ async function procesarMensajeWhatsApp(body: any) {
       if (multi) {
       let multiText = multi.text || '';
 
-      // Detecta si pidió precio y horario explícitamente
       const askedSchedule = /\b(schedule|schedules?|hours?|times?|timetable|horario|horarios)\b/i.test(userInput);
-      const askedPrice = PRICE_REGEX.test(userInput);
+      const askedPrice    = PRICE_REGEX.test(userInput);
 
-      // ¿El texto devuelto NO contiene precios? (busca $ o montos tipo 19.99 / 169.99)
-      const hasPriceInText = /\$|S\/\.?\s?|\b\d{1,3}(?:[.,]\d{2})\b/.test(multiText);
-      // ¿El texto devuelto NO contiene horarios? (busca un patrón básico HH:MM[am|pm])
+      const hasPriceInText    = /\$|S\/\.?\s?|\b\d{1,3}(?:[.,]\d{2})\b/.test(multiText); // añade S/ por si acaso
       const hasScheduleInText = /\b(\d{1,2}:\d{2}\s?(?:am|pm)?)\b/i.test(multiText);
 
-      // Si pidió precios y no aparecen, agrega FAQ de precios
+      // ⬇️ PREPEND precios si faltan
       if (askedPrice && !hasPriceInText) {
         try {
           const precioFAQ = await fetchFaqPrecio(tenant.id, canal);
           if (precioFAQ?.trim()) {
-            multiText = [multiText.trim(), '', precioFAQ.trim()].join('\n\n');
+            multiText = [precioFAQ.trim(), '', multiText.trim()].join('\n\n'); // <— PREPEND
           }
         } catch (e) {
           console.warn('⚠️ No se pudo anexar FAQ precios en MULTI:', e);
         }
       }
 
-      // Si pidió horario y no aparece, agrega FAQ de horario
+      // ⬇️ APPEND horario si falta
       if (askedSchedule && !hasScheduleInText) {
         try {
           const hitH = await getFaqByIntent(tenant.id, canal, 'horario');
           if (hitH?.respuesta?.trim()) {
-            multiText = [multiText.trim(), '', hitH.respuesta.trim()].join('\n\n');
+            multiText = [multiText.trim(), '', hitH.respuesta.trim()].join('\n\n'); // <— APPEND
           }
         } catch (e) {
           console.warn('⚠️ No se pudo anexar FAQ horario en MULTI:', e);
@@ -313,12 +310,30 @@ async function procesarMensajeWhatsApp(body: any) {
 
       // Usa el CTA según idioma (asegúrate de haber definido CTA_TXT tras calcular idiomaDestino)
       const out = tidyMultiAnswer(multiText, {
-        maxLines: 36,
+        maxLines: 16,
         freezeUrls: true,
         cta: CTA_TXT
       });
 
       await enviarWhatsApp(fromNumber, out, tenant.id);
+
+      // ⬇️ Fallback: si pidió precios y el mensaje final no los trae, manda un resumen breve
+      if (askedPrice && !(/\$|S\/\.?\s?|\b\d{1,3}(?:[.,]\d{2})\b/.test(out))) {
+        try {
+          const precioFAQ = await fetchFaqPrecio(tenant.id, canal);
+          if (precioFAQ?.trim()) {
+            // Tomar 2–3 líneas con montos
+            const resumen = precioFAQ
+              .split('\n')
+              .filter(l => /\$|S\/\.?\s?|\b\d{1,3}(?:[.,]\d{2})\b/.test(l))
+              .slice(0, 3)
+              .join('\n');
+            if (resumen) {
+              await enviarWhatsApp(fromNumber, resumen, tenant.id);
+            }
+          }
+        } catch {}
+      }
       
         await pool.query(
           `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
