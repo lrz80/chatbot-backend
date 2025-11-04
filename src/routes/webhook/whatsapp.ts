@@ -268,14 +268,58 @@ async function procesarMensajeWhatsApp(body: any) {
       console.log('[MULTI] answer length=', multi?.text?.length ?? 0);
 
       if (multi) {
-        const out = tidyMultiAnswer(multi.text, {
-          maxLines: 6,
-          freezeUrls: true,
-          cta: CTA_TXT
-        });
+      let multiText = multi.text || '';
 
-        await enviarWhatsApp(fromNumber, out, tenant.id);
+      // Detecta si pidió precio y horario explícitamente
+      const askedSchedule = /\b(schedule|schedules?|hours?|times?|timetable|horario|horarios)\b/i.test(userInput);
+      const askedPrice = PRICE_REGEX.test(userInput);
 
+      // ¿El texto devuelto NO contiene precios? (busca $ o montos tipo 19.99 / 169.99)
+      const hasPriceInText = /\$|S\/\.?\s?|\b\d{1,3}(?:[.,]\d{2})\b/.test(multiText);
+      // ¿El texto devuelto NO contiene horarios? (busca un patrón básico HH:MM[am|pm])
+      const hasScheduleInText = /\b(\d{1,2}:\d{2}\s?(?:am|pm)?)\b/i.test(multiText);
+
+      // Si pidió precios y no aparecen, agrega FAQ de precios
+      if (askedPrice && !hasPriceInText) {
+        try {
+          const precioFAQ = await fetchFaqPrecio(tenant.id, canal);
+          if (precioFAQ?.trim()) {
+            multiText = [multiText.trim(), '', precioFAQ.trim()].join('\n\n');
+          }
+        } catch (e) {
+          console.warn('⚠️ No se pudo anexar FAQ precios en MULTI:', e);
+        }
+      }
+
+      // Si pidió horario y no aparece, agrega FAQ de horario
+      if (askedSchedule && !hasScheduleInText) {
+        try {
+          const hitH = await getFaqByIntent(tenant.id, canal, 'horario');
+          if (hitH?.respuesta?.trim()) {
+            multiText = [multiText.trim(), '', hitH.respuesta.trim()].join('\n\n');
+          }
+        } catch (e) {
+          console.warn('⚠️ No se pudo anexar FAQ horario en MULTI:', e);
+        }
+      }
+
+      // Asegura idioma de salida por si acaso
+      try {
+        const langOut = await detectarIdioma(multiText);
+        if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+          multiText = await traducirMensaje(multiText, idiomaDestino);
+        }
+      } catch {}
+
+      // Usa el CTA según idioma (asegúrate de haber definido CTA_TXT tras calcular idiomaDestino)
+      const out = tidyMultiAnswer(multiText, {
+        maxLines: 8,
+        freezeUrls: true,
+        cta: CTA_TXT
+      });
+
+      await enviarWhatsApp(fromNumber, out, tenant.id);
+      
         await pool.query(
           `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
           VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
