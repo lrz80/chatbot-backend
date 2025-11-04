@@ -31,6 +31,8 @@ import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
 const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
 const MATCHER_MIN_OVERRIDE = 0.85; // exige score alto para sobreescribir una intención "directa"
 
+const MAX_WHATSAPP_LINES = 16; // 14–16 es el sweet spot
+
 const INTENT_THRESHOLD = Math.min(
   0.95,
   Math.max(0.30, Number(process.env.INTENT_MATCH_THRESHOLD ?? 0.55))
@@ -310,7 +312,7 @@ async function procesarMensajeWhatsApp(body: any) {
 
       // Usa el CTA según idioma (asegúrate de haber definido CTA_TXT tras calcular idiomaDestino)
       const out = tidyMultiAnswer(multiText, {
-        maxLines: 16,
+        maxLines: MAX_WHATSAPP_LINES,
         freezeUrls: true,
         cta: CTA_TXT
       });
@@ -453,7 +455,7 @@ async function procesarMensajeWhatsApp(body: any) {
         `Reglas:
         - Usa EXCLUSIVAMENTE la información explícita en este prompt. Si algo no está, dilo sin inventar.
         - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
-        - WhatsApp: máx. ~6 líneas en PROSA. **Prohibido Markdown, encabezados, viñetas o numeraciones.**
+        - WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas en PROSA. **Prohibido Markdown, encabezados, viñetas o numeraciones.**
         - Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.
         - CTA único (si aplica). Enlaces: solo si están listados dentro del prompt (ENLACES_OFICIALES).`,
         '',
@@ -639,7 +641,7 @@ async function procesarMensajeWhatsApp(body: any) {
             promptBase,
             '',
             `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
-            'Formato WhatsApp: máx. 6 líneas en prosa (sin bullets).',
+            `Formato WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas en prosa (sin bullets).`,
             'Usa solo los HECHOS provistos. Si hay enlaces oficiales, comparte solo 1 (el más pertinente).',
             'Incluye precios y horarios en un mismo mensaje, cerrando con un CTA breve.'
           ].join('\n');
@@ -791,7 +793,7 @@ async function procesarMensajeWhatsApp(body: any) {
           promptBase,
           '',
           `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
-          'Formato WhatsApp: máx. 6 líneas en PROSA. **Sin Markdown, sin viñetas, sin encabezados/###**.',
+          `Formato WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas en PROSA. **Sin Markdown, sin viñetas, sin encabezados/###**.`,
           'Usa únicamente los HECHOS; no inventes.',
           'Si hay ENLACES_OFICIALES en los hechos, comparte solo 1 (el más pertinente) tal cual.'
         ].join('\n');
@@ -945,7 +947,7 @@ async function procesarMensajeWhatsApp(body: any) {
       promptBase,
       '',
       `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
-      'Formato WhatsApp: máx. 6 líneas, claro y con bullets si hace falta.',
+      `Formato WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas, claro y con bullets si hace falta.`,
       'Usa SOLO la información del prompt.',
       'SI HAY PRECIOS EN EL PROMPT/HECHOS, MENCIONA al menos 1-3 planes con su monto (resumen corto).',
       'Si hay ENLACES_OFICIALES en los prompt/hechos, comparte solo 1 (el más pertinente) tal cual.',
@@ -1010,16 +1012,6 @@ async function procesarMensajeWhatsApp(body: any) {
        ON CONFLICT DO NOTHING`,
       [tenant.id, canal, messageId]
     );
-
-    if (tokens > 0) {
-      await pool.query(
-        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-         VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-         ON CONFLICT (tenant_id, canal, mes)
-         DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-        [tenant.id, tokens]
-      );
-    }
 
     // 🔔 Registrar venta si aplica + follow-up
     try {
