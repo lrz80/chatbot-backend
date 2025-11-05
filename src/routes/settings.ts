@@ -7,6 +7,18 @@ import { authenticateUser } from '../middleware/auth';
 
 const router = express.Router();
 
+/** Valida URLs http(s) sencillas */
+function isValidUrl(u?: string) {
+  try {
+    if (!u) return false;
+    if (!/^https?:\/\//i.test(u)) return false;
+    new URL(u);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ✅ GET: Perfil del negocio + FAQs e Intents por canal + Límite por canal (base + créditos extra)
 router.get('/', authenticateUser, async (req: any, res: Response) => {
   console.log('🧪 Entró al endpoint /api/settings');
@@ -42,7 +54,8 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
 
     for (const c of canales) {
       const baseRes = await pool.query(
-        `SELECT limite, usados FROM uso_mensual WHERE tenant_id = $1 AND canal = $2 AND mes = date_trunc('month', CURRENT_DATE)`,
+        `SELECT limite, usados FROM uso_mensual
+         WHERE tenant_id = $1 AND canal = $2 AND mes = date_trunc('month', CURRENT_DATE)`,
         [tenant_id, c]
       );
       const base = baseRes.rows[0] || { limite: 0, usados: 0 };
@@ -88,7 +101,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       membresia_activa: tenant.membresia_activa ?? false,
       membresia_vigencia: tenant.membresia_vigencia ?? null,
       es_trial: (es_trial || tenant.es_trial) ?? false,
-      estado_membresia_texto,  // ✅ Nuevo campo dinámico
+      estado_membresia_texto,
       onboarding_completado: tenant.onboarding_completado,
       name: tenant.name || '',
       categoria: tenant.categoria || '',
@@ -114,6 +127,9 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       faq: faqsRes.rows,
       intents: intentsRes.rows,
       limites,
+      // ✅ CTA global expuesto en GET
+      cta_text: tenant.cta_text || '',
+      cta_url: tenant.cta_url || '',
     });
 
   } catch (error) {
@@ -150,10 +166,12 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
       'instagram_business_account_id',
       'email_negocio',
       'telefono_negocio',
+      // ✅ CTA global
+      'cta_text',
+      'cta_url',
     ]);
 
-    // 🚫 Ignora por completo faqs/intents/canal si llegan en el body
-    // (se manejan en /api/faqs y /api/intents)
+    // 🚫 Ignora faqs/intents/canal si llegan en el body (se manejan en /api/faqs y /api/intents)
     const body = { ...req.body };
     delete body.faq;
     delete body.intents;
@@ -187,21 +205,50 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
       instagram_business_account_id: 'instagram_business_account_id',
       email_negocio: 'email_negocio',
       telefono_negocio: 'telefono_negocio',
+      cta_text: 'cta_text',
+      cta_url: 'cta_url',
     };
 
-    // Construye UPDATE selectivo: solo claves permitidas y con valor "no vacío"
+    // Construye UPDATE selectivo
     const sets: string[] = [];
     const values: any[] = [];
 
-    for (const [k, v] of Object.entries(body)) {
+    for (const [k, v0] of Object.entries(body)) {
       if (!allowed.has(k)) continue;
-      if (v === undefined || v === null) continue;
-      const val = typeof v === 'string' ? v.trim() : v;
-      if (typeof val === 'string' && val === '') continue; // no pisar con string vacío
 
+      const isStr = typeof v0 === 'string';
+      const v = isStr ? (v0 as string).trim() : v0;
       const col = mapCol[k];
+
+      // 👇 Excepción: permitir limpiar CTA y validar URL si viene no vacía
+      if (k === 'cta_text') {
+        // string vacía -> NULL (limpia), con texto -> guarda
+        sets.push(`${col} = $${sets.length + 1}`);
+        values.push(isStr ? ((v as string) === '' ? null : v) : v);
+        continue;
+      }
+      if (k === 'cta_url') {
+        let val: any = null;
+        if (isStr && (v as string) !== '') {
+          if (!isValidUrl(v as string)) {
+            return res.status(400).json({ error: 'cta_url inválida. Debe iniciar con http(s)://' });
+          }
+          val = v;
+        } else {
+          // string vacía -> NULL (limpia)
+          val = null;
+        }
+        sets.push(`${col} = $${sets.length + 1}`);
+        values.push(val);
+        continue;
+      }
+
+      // comportamiento normal para el resto de campos
+      if (v === undefined || v === null) continue;
+      if (typeof v === 'string' && v === '') continue; // no pisar con string vacío
+
       sets.push(`${col} = $${sets.length + 1}`);
-      values.push(val);
+      values.push(v);
     }
 
     if (!sets.length) {
