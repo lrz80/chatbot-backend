@@ -357,7 +357,7 @@ async function procesarMensajeWhatsApp(body: any) {
         firstOfTop: top?.[0]?.intent || null,
         prefer
       });
-      const cta1 = intentForCTA ? await getTenantCTA(tenant.id, normalizeIntentAlias(intentForCTA)) : null;
+      const cta1 = await pickCTA(tenant, intentForCTA);
       const outWithCTA = appendCTAWithCap(out, cta1);
 
       await enviarWhatsApp(fromNumber, outWithCTA, tenant.id);
@@ -420,6 +420,35 @@ async function procesarMensajeWhatsApp(body: any) {
       [tenantId, intent]
     );
     return rows[0] || null;
+  }
+
+  // ✅ helper local (antes de getGlobalCTAFromTenant/pickCTA)
+  function isValidUrl(u?: string) {
+    try {
+      if (!u) return false;
+      if (!/^https?:\/\//i.test(u)) return false; // exigir http/https
+      new URL(u);                                 // valida formato
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // ⬇️ usa isValidUrl aquí
+  function getGlobalCTAFromTenant(tenant: any) {
+    const t = (tenant?.cta_text || '').trim();
+    const u = (tenant?.cta_url  || '').trim();
+    if (t && isValidUrl(u)) return { cta_text: t, cta_url: u };
+    return null;
+  }
+
+  // ⬇️ NUEVO: selector unificado (intención → por-intención; si no, global)
+  async function pickCTA(tenant: any, intent: string | null) {
+    if (intent) {
+      const byIntent = await getTenantCTA(tenant.id, normalizeIntentAlias(intent));
+      if (byIntent) return byIntent;
+    }
+    return getGlobalCTAFromTenant(tenant);
   }
 
   // ⏲️ Programador de follow-up (WhatsApp)
@@ -558,7 +587,7 @@ async function procesarMensajeWhatsApp(body: any) {
       const intentForCTA = pickIntentForCTA({
         fallback: intenCanon // ya calculaste intenCanon antes
       });
-      const cta2 = intentForCTA ? await getTenantCTA(tenant.id, intentForCTA) : null;
+      const cta2 = await pickCTA(tenant, intentForCTA);
       const outWithCTA = appendCTAWithCap(out, cta2);
 
       await enviarWhatsApp(fromNumber, outWithCTA, tenant.id);
@@ -911,7 +940,7 @@ async function procesarMensajeWhatsApp(body: any) {
           matcher: respIntent?.intent || null,
           canonical: INTENCION_FINAL_CANONICA || null
         });
-        const cta3 = intentForCTA ? await getTenantCTA(tenant.id, intentForCTA) : null;
+        const cta3 = await pickCTA(tenant, intentForCTA);
         const outWithCTA = appendCTAWithCap(out, cta3);
 
         await enviarWhatsApp(fromNumber, outWithCTA, tenant.id);
@@ -1076,7 +1105,7 @@ async function procesarMensajeWhatsApp(body: any) {
       canonical: INTENCION_FINAL_CANONICA || null,
       fallback: intencionParaFaq || null
     });
-    const cta4 = intentForCTA ? await getTenantCTA(tenant.id, intentForCTA) : null;
+    const cta4 = await pickCTA(tenant, intentForCTA);
     const outWithCTA = appendCTAWithCap(out, cta4);
 
     await enviarWhatsApp(fromNumber, outWithCTA, tenant.id);
@@ -1345,7 +1374,7 @@ async function procesarMensajeWhatsApp(body: any) {
   } catch {}
 
   const intentForCTANorm = intentForCTA ? normalizeIntentAlias(intentForCTA) : null;
-  const cta5 = intentForCTANorm ? await getTenantCTA(tenant.id, intentForCTANorm) : null;
+  const cta5 = await pickCTA(tenant, intentForCTANorm);
   const withDefaultCta = cta5 ? respuesta : `${respuesta}\n\n${CTA_TXT}`;
   const respuestaWithCTA = appendCTAWithCap(withDefaultCta, cta5);
 
