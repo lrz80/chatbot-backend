@@ -19,7 +19,7 @@ function isValidUrl(u?: string) {
   }
 }
 
-// ✅ GET: Perfil del negocio + FAQs e Intents por canal + Límite por canal (base + créditos extra)
+// ✅ GET: Perfil del negocio + FAQs + Intents + CTA global (desde tenant_ctas)
 router.get('/', authenticateUser, async (req: any, res: Response) => {
   console.log('🧪 Entró al endpoint /api/settings');
   try {
@@ -48,6 +48,13 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       'SELECT id, nombre, ejemplos, respuesta FROM intents WHERE tenant_id = $1 AND canal = $2 ORDER BY id',
       [tenant_id, canal]
     );
+
+    // ✅ Obtener CTA global desde tenant_ctas (intent='global')
+    const ctaRes = await pool.query(
+      'SELECT cta_text, cta_url FROM tenant_ctas WHERE tenant_id = $1 AND intent = $2 LIMIT 1',
+      [tenant_id, 'global']
+    );
+    const cta = ctaRes.rows[0] || { cta_text: '', cta_url: '' };
 
     const canales = ['contactos', 'whatsapp', 'sms', 'email', 'voz', 'meta', 'followup', 'tokens_openai'];
     const limites: any = {};
@@ -108,87 +115,65 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       idioma: tenant.idioma || 'es',
       prompt: tenant.prompt || '',
       bienvenida: tenant.mensaje_bienvenida || '',
-      direccion: tenant.direccion || '',
-      horario_atencion: tenant.horario_atencion || '',
-      twilio_number: tenant.twilio_number || '',
-      twilio_sms_number: tenant.twilio_sms_number || '',
-      twilio_voice_number: tenant.twilio_voice_number || '',
       informacion_negocio: tenant.informacion_negocio || '',
       funciones_asistente: tenant.funciones_asistente || '',
       info_clave: tenant.info_clave || '',
       logo_url: tenant.logo_url || '',
-      plan: tenant.plan || '',
-      fecha_registro: tenant.fecha_registro || null,
-      facebook_page_id: tenant.facebook_page_id || '',
-      facebook_page_name: tenant.facebook_page_name || '',
-      facebook_access_token: tenant.facebook_access_token || '',
-      instagram_page_id: tenant.instagram_page_id || '',
-      instagram_page_name: tenant.instagram_page_name || '',
       faq: faqsRes.rows,
       intents: intentsRes.rows,
       limites,
-      // ✅ CTA global expuesto en GET
-      cta_text: tenant.cta_text || '',
-      cta_url: tenant.cta_url || '',
+      // ✅ CTA global
+      cta_text: cta.cta_text || '',
+      cta_url: cta.cta_url || '',
     });
-
   } catch (error) {
     console.error('❌ Error en GET /api/settings:', error);
     return res.status(401).json({ error: 'Token inválido' });
   }
 });
 
+// ✅ PATCH: guarda o actualiza el CTA global en tenant_ctas
 router.patch('/', authenticateUser, async (req: any, res: Response) => {
   try {
     const tenant_id = req.user?.tenant_id;
     if (!tenant_id) return res.status(401).json({ error: 'Tenant no autenticado' });
 
-    // Campos que SÍ se pueden actualizar desde /api/settings
+    const { cta_text, cta_url, ...body } = req.body;
+
+    // 🔹 Guardar/actualizar CTA global (intent = 'global')
+    if (cta_text !== undefined || cta_url !== undefined) {
+      const cleanText = (cta_text ?? '').trim();
+      const cleanUrl = (cta_url ?? '').trim();
+
+      if (cleanUrl && !isValidUrl(cleanUrl)) {
+        return res.status(400).json({ error: 'cta_url inválida. Debe iniciar con http(s)://' });
+      }
+
+      await pool.query(
+        `INSERT INTO tenant_ctas (tenant_id, intent, cta_text, cta_url)
+         VALUES ($1, 'global', $2, $3)
+         ON CONFLICT (tenant_id, intent)
+         DO UPDATE SET
+           cta_text = EXCLUDED.cta_text,
+           cta_url  = EXCLUDED.cta_url,
+           updated_at = NOW()`,
+        [tenant_id, cleanText || null, cleanUrl || null]
+      );
+    }
+
+    // 🔹 Actualizar otros campos del tenant
     const allowed = new Set([
-      'nombre_negocio',        // -> tenants.name
-      'categoria',
-      'idioma',
-      'direccion',
-      'horario_atencion',
-      'prompt',
-      'bienvenida',            // -> tenants.mensaje_bienvenida
-      'informacion_negocio',
-      'funciones_asistente',
-      'info_clave',
-      'logo_url',
-      'prompt_meta',
-      'bienvenida_meta',
-      'facebook_page_id',
-      'facebook_page_name',
-      'facebook_access_token',
-      'instagram_page_id',
-      'instagram_page_name',
-      'instagram_business_account_id',
-      'email_negocio',
-      'telefono_negocio',
-      // ✅ CTA global
-      'cta_text',
-      'cta_url',
+      'nombre_negocio', 'categoria', 'idioma', 'prompt', 'bienvenida',
+      'informacion_negocio', 'funciones_asistente', 'info_clave', 'logo_url',
+      'prompt_meta', 'bienvenida_meta', 'facebook_page_id', 'facebook_page_name',
+      'facebook_access_token', 'instagram_page_id', 'instagram_page_name',
+      'instagram_business_account_id', 'email_negocio', 'telefono_negocio'
     ]);
 
-    // 🚫 Ignora faqs/intents/canal si llegan en el body (se manejan en /api/faqs y /api/intents)
-    const body = { ...req.body };
-    delete body.faq;
-    delete body.intents;
-    delete body.canal;
-
-    // Trae el registro actual para tener defaults
-    const curRes = await pool.query('SELECT * FROM tenants WHERE id = $1 LIMIT 1', [tenant_id]);
-    const cur = curRes.rows[0];
-    if (!cur) return res.status(404).json({ error: 'Tenant no encontrado' });
-
-    // Mapea nombres de payload -> columnas reales
     const mapCol: Record<string, string> = {
       nombre_negocio: 'name',
       categoria: 'categoria',
       idioma: 'idioma',
-      direccion: 'direccion',
-      horario_atencion: 'horario_atencion',
       prompt: 'prompt',
       bienvenida: 'mensaje_bienvenida',
       informacion_negocio: 'informacion_negocio',
@@ -205,72 +190,36 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
       instagram_business_account_id: 'instagram_business_account_id',
       email_negocio: 'email_negocio',
       telefono_negocio: 'telefono_negocio',
-      cta_text: 'cta_text',
-      cta_url: 'cta_url',
     };
 
-    // Construye UPDATE selectivo
     const sets: string[] = [];
     const values: any[] = [];
 
-    for (const [k, v0] of Object.entries(body)) {
+    for (const [k, v] of Object.entries(body)) {
       if (!allowed.has(k)) continue;
-
-      const isStr = typeof v0 === 'string';
-      const v = isStr ? (v0 as string).trim() : v0;
-      const col = mapCol[k];
-
-      // 👇 Excepción: permitir limpiar CTA y validar URL si viene no vacía
-      if (k === 'cta_text') {
-        // string vacía -> NULL (limpia), con texto -> guarda
-        sets.push(`${col} = $${sets.length + 1}`);
-        values.push(isStr ? ((v as string) === '' ? null : v) : v);
-        continue;
-      }
-      if (k === 'cta_url') {
-        let val: any = null;
-        if (isStr && (v as string) !== '') {
-          if (!isValidUrl(v as string)) {
-            return res.status(400).json({ error: 'cta_url inválida. Debe iniciar con http(s)://' });
-          }
-          val = v;
-        } else {
-          // string vacía -> NULL (limpia)
-          val = null;
-        }
-        sets.push(`${col} = $${sets.length + 1}`);
-        values.push(val);
-        continue;
-      }
-
-      // comportamiento normal para el resto de campos
       if (v === undefined || v === null) continue;
-      if (typeof v === 'string' && v === '') continue; // no pisar con string vacío
-
-      sets.push(`${col} = $${sets.length + 1}`);
-      values.push(v);
+      const val = typeof v === 'string' ? v.trim() : v;
+      if (typeof val === 'string' && val === '') continue;
+      sets.push(`${mapCol[k]} = $${sets.length + 1}`);
+      values.push(val);
     }
 
-    if (!sets.length) {
-      // nada que actualizar (y NO tocamos faqs/intents)
-      return res.json({ ok: true, updated: 0 });
+    if (sets.length) {
+      sets.push(`updated_at = NOW()`);
+      const sql = `UPDATE tenants SET ${sets.join(', ')} WHERE id = $${values.length + 1}`;
+      values.push(tenant_id);
+      await pool.query(sql, values);
     }
 
-    sets.push(`updated_at = NOW()`);
-    const sql = `UPDATE tenants SET ${sets.join(', ')} WHERE id = $${values.length + 1}`;
-    values.push(tenant_id);
+    return res.json({ ok: true });
 
-    await pool.query(sql, values);
-    return res.json({ ok: true, updated: sets.length - 1 });
   } catch (e) {
     console.error('❌ PATCH /api/settings error', e);
     return res.status(500).json({ error: 'Error al actualizar settings' });
   }
 });
 
-// (opcional) Mantén POST por compatibilidad, apuntando al mismo handler seguro
 router.post('/', authenticateUser, async (req, res) => {
-  // delega al PATCH para la misma lógica
   (router as any).handle({ ...req, method: 'PATCH' }, res);
 });
 
