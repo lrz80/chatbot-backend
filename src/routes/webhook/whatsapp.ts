@@ -357,7 +357,7 @@ async function procesarMensajeWhatsApp(body: any) {
         firstOfTop: top?.[0]?.intent || null,
         prefer
       });
-      const cta1 = await pickCTA(tenant, intentForCTA, 'whatsapp');
+      const cta1 = await pickCTA(tenant, intentForCTA);
       const outWithCTA = appendCTAWithCap(out, cta1);
 
       await enviarWhatsApp(fromNumber, outWithCTA, tenant.id);
@@ -414,17 +414,15 @@ async function procesarMensajeWhatsApp(body: any) {
     console.warn('⚠️ Multi-intent fast-path falló; sigo pipeline normal:', e);
   }
 
-  // Lee CTA por intención + canal desde la tabla ctas (o '*' como comodín)
-  async function getTenantCTA(tenantId: string, intent: string, channel: string) {
+  // CTA por intención (usa tenant_ctas)
+  async function getTenantCTA(tenantId: string, intent: string) {
     const { rows } = await pool.query(
       `SELECT cta_text, cta_url
-        FROM ctas
+        FROM tenant_ctas
         WHERE tenant_id = $1
           AND intent = $2
-          AND (channel = $3 OR channel = '*')
-        ORDER BY CASE WHEN channel = $3 THEN 0 ELSE 1 END
         LIMIT 1`,
-      [tenantId, normalizeIntentAlias(intent), channel]
+      [tenantId, normalizeIntentAlias(intent)]
     );
     return rows[0] || null;
   }
@@ -449,14 +447,13 @@ async function procesarMensajeWhatsApp(body: any) {
     return null;
   }
 
-  // ⬇️ NUEVO: selector unificado (intención → por-intención; si no, global)
-  // Selector unificado: intenta por intención+canal y, si no hay, usa CTA global del tenant
-  async function pickCTA(tenant: any, intent: string | null, channel: string) {
+  // Selecciona CTA por intención; si no hay, usa CTA global del tenant
+  async function pickCTA(tenant: any, intent: string | null) {
     if (intent) {
-      const byIntent = await getTenantCTA(tenant.id, intent, channel);
+      const byIntent = await getTenantCTA(tenant.id, intent);
       if (byIntent) return byIntent;
     }
-    return getGlobalCTAFromTenant(tenant); // sigue usando tenant.cta_text/cta_url si los tienes
+    return getGlobalCTAFromTenant(tenant); // usa tenant.cta_text / cta_url si existen
   }
 
   // ⏲️ Programador de follow-up (WhatsApp)
@@ -595,7 +592,7 @@ async function procesarMensajeWhatsApp(body: any) {
       const intentForCTA = pickIntentForCTA({
         fallback: intenCanon // ya calculaste intenCanon antes
       });
-      const cta2 = await pickCTA(tenant, intentForCTA, 'whatsapp');
+      const cta2 = await pickCTA(tenant, intentForCTA);
       const outWithCTA = appendCTAWithCap(out, cta2);
 
       await enviarWhatsApp(fromNumber, outWithCTA, tenant.id);
@@ -948,7 +945,7 @@ async function procesarMensajeWhatsApp(body: any) {
           matcher: respIntent?.intent || null,
           canonical: INTENCION_FINAL_CANONICA || null
         });
-        const cta3 = await pickCTA(tenant, intentForCTA, 'whatsapp');
+        const cta3 = await pickCTA(tenant, intentForCTA);
         const outWithCTA = appendCTAWithCap(out, cta3);
 
         await enviarWhatsApp(fromNumber, outWithCTA, tenant.id);
@@ -1113,7 +1110,7 @@ async function procesarMensajeWhatsApp(body: any) {
       canonical: INTENCION_FINAL_CANONICA || null,
       fallback: intencionParaFaq || null
     });
-    const cta4 = await pickCTA(tenant, intentForCTA, 'whatsapp');
+    const cta4 = await pickCTA(tenant, intentForCTA);
     const outWithCTA = appendCTAWithCap(out, cta4);
 
     await enviarWhatsApp(fromNumber, outWithCTA, tenant.id);
@@ -1182,7 +1179,7 @@ async function procesarMensajeWhatsApp(body: any) {
         });
       } catch {}
 
-      const cta5 = intentForCTA ? await getTenantCTA(tenant.id, intentForCTA,'whatsapp') : null;
+      const cta5 = intentForCTA ? await getTenantCTA(tenant.id, intentForCTA) : null;
       const withDefaultCta = cta5 ? respuesta : `${respuesta}\n\n${CTA_TXT}`;
       const respuestaWithCTA = appendCTAWithCap(withDefaultCta, cta5);
 
@@ -1382,7 +1379,7 @@ async function procesarMensajeWhatsApp(body: any) {
   } catch {}
 
   const intentForCTANorm = intentForCTA ? normalizeIntentAlias(intentForCTA) : null;
-  const cta5 = await pickCTA(tenant, intentForCTANorm, 'whatsapp');
+  const cta5 = await pickCTA(tenant, intentForCTANorm);
   const withDefaultCta = cta5 ? respuesta : `${respuesta}\n\n${CTA_TXT}`;
   const respuestaWithCTA = appendCTAWithCap(withDefaultCta, cta5);
 
