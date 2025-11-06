@@ -68,8 +68,14 @@ router.get('/me', async (req: Request, res: Response) => {
     const tenantId = await getTenantIdFromCookie(req);
     const { rows } = await pool.query(
       `SELECT
-         id, name, slug, categoria, idioma, prompt,
+         id, name, slug, categoria, idioma,
+         COALESCE(plan, 'trial') AS plan,
+         COALESCE(membresia_activa, false) AS membresia_activa,
+         membresia_inicio,
+         prompt,
          mensaje_bienvenida AS bienvenida,
+         plan,    
+         membresia_activa,  
          settings, links
        FROM tenants
        WHERE id = $1`,
@@ -235,7 +241,11 @@ router.post('/', async (req: Request, res: Response) => {
 
     // 6) Devuelve estado actual
     const { rows } = await pool.query(
-      `SELECT id, name, slug, categoria, idioma, prompt,
+      `SELECT id, name, slug, categoria, idioma,
+              COALESCE(plan, 'trial') AS plan,
+              COALESCE(membresia_activa, false) AS membresia_activa,
+              membresia_inicio,
+              prompt,
               mensaje_bienvenida AS bienvenida,
               settings, links
          FROM tenants
@@ -284,6 +294,42 @@ router.patch('/timezone', async (req: Request, res: Response) => {
   } catch (e) {
     console.error('❌ Error en PATCH /api/tenants/timezone:', e);
     res.status(500).json({ error: 'Error interno del servidor' });
+  }
+});
+
+router.get('/features', async (req, res) => {
+  try {
+    const tenantId = await getTenantIdFromCookie(req);
+    const { rows } = await pool.query(
+      `SELECT plan, membresia_activa, es_trial, trial_ends_at
+       FROM tenants WHERE id = $1`,
+      [tenantId]
+    );
+    const t = rows[0];
+    if (!t) return res.status(404).json({ error: 'Tenant no encontrado' });
+
+    const now = new Date();
+    const trialActiva = !!t.es_trial && (!t.trial_ends_at || new Date(t.trial_ends_at) > now);
+
+    // Reglas:
+    // - WhatsApp: permitido si membresía activa OR trial activa
+    // - Meta/Voice/Email/SMS: sólo si membresía activa Y no trial
+    const whatsapp = t.membresia_activa || trialActiva;
+    const otros = t.membresia_activa && !trialActiva;
+
+    // (Opcional) puedes matizar por plan si quieres tiers más adelante
+    const features = {
+      whatsapp,
+      meta: otros,
+      voice: otros,
+      sms: otros,
+      email: otros,
+    };
+
+    return res.json({ plan: t.plan, membresia_activa: t.membresia_activa, es_trial: trialActiva, trial_ends_at: t.trial_ends_at, features });
+  } catch (e) {
+    console.error('❌ /api/tenants/features', e);
+    res.status(500).json({ error: 'Error interno' });
   }
 });
 
