@@ -92,6 +92,27 @@ async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma:
   }
 }
 
+async function translateCTAIfNeeded(
+  cta: { cta_text: string; cta_url: string } | null,
+  idiomaDestino: 'es'|'en'
+) {
+  if (!cta) return null;
+  let txt = (cta.cta_text || '').trim();
+  try {
+    // si el idioma destino es EN y el CTA no parece inglés, tradúcelo;
+    // (o traduce siempre a idiomaDestino si prefieres)
+    const lang = await detectarIdioma(txt).catch(() => null);
+    if (lang && lang !== 'zxx' && ((idiomaDestino === 'en' && !/^en/i.test(lang)) ||
+                                   (idiomaDestino === 'es' && !/^es/i.test(lang)))) {
+      txt = await traducirMensaje(txt, idiomaDestino);
+    } else if (!lang) {
+      // sin detección: fuerza a idiomaDestino por seguridad
+      txt = await traducirMensaje(txt, idiomaDestino);
+    }
+  } catch {}
+  return { cta_text: txt, cta_url: cta.cta_url };
+}
+
 // ⬇️ Helper único para registrar INTENCIÓN DE VENTA (evita duplicar lógica)
 async function recordSalesIntent(
   tenantId: string,
@@ -137,16 +158,47 @@ function pickIntentForCTA(
   return cand.find(Boolean) || null;
 }
 
-function appendCTAWithCap(text: string, cta: { cta_text: string; cta_url: string } | null) {
+function appendCTAWithCap(
+  text: string,
+  cta: { cta_text: string; cta_url: string } | null
+) {
   if (!cta) return text;
   const extra = `\n\n${cta.cta_text}: ${cta.cta_url}`;
-  const lines = text.split('\n').filter(l => l !== '');
-  // deja 2 líneas para el CTA
-  if (lines.length >= (MAX_WHATSAPP_LINES - 2)) {
-    const trimmed = lines.slice(0, MAX_WHATSAPP_LINES - 2).join('\n');
-    return trimmed + extra;
+  const lines = text.split('\n'); // ❗️ no filtramos vacías
+  const limit = Math.max(0, MAX_WHATSAPP_LINES - 2); // deja 2 líneas para CTA
+  if (lines.length > limit) {
+    return lines.slice(0, limit).join('\n') + extra;
   }
   return text + extra;
+}
+
+// Evita enviar duplicado si Twilio reintenta el webhook
+async function safeEnviarWhatsApp(
+  tenantId: string,
+  canal: string,
+  messageId: string | null,
+  toNumber: string,
+  text: string
+) {
+  try {
+    if (!messageId) {
+      await enviarWhatsApp(toNumber, text, tenantId);
+      return;
+    }
+    const { rows: sent } = await pool.query(
+      `SELECT 1 FROM interactions WHERE tenant_id=$1 AND canal=$2 AND message_id=$3 LIMIT 1`,
+      [tenantId, canal, messageId]
+    );
+    if (!sent[0]) {
+      await enviarWhatsApp(toNumber, text, tenantId);
+    } else {
+      console.log('⏩ safeEnviarWhatsApp: ya se envió este message_id, no se duplica.');
+    }
+  } catch (e) {
+    console.error('❌ safeEnviarWhatsApp error:', e);
+    // último recurso: intenta enviar de todos modos
+    try { await enviarWhatsApp(toNumber, text, tenantId); } catch {}
+  }
 }
 
 router.post('/', async (req: Request, res: Response) => {
@@ -357,10 +409,12 @@ async function procesarMensajeWhatsApp(body: any) {
         firstOfTop: top?.[0]?.intent || null,
         prefer
       });
-      const cta1 = await pickCTA(tenant, intentForCTA);
-      const outWithCTA = appendCTAWithCap(out, cta1);
+      
+      const ctaXraw = await pickCTA(tenant, intentForCTA, canal);
+      const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
+      const outWithCTA = appendCTAWithCap(out, ctaX);
 
-      await enviarWhatsApp(fromNumber, outWithCTA, tenant.id);
+      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
 
       alreadySent = true;
 
@@ -415,16 +469,34 @@ async function procesarMensajeWhatsApp(body: any) {
   }
 
   // CTA por intención (usa tenant_ctas)
-  async function getTenantCTA(tenantId: string, intent: string) {
-    const { rows } = await pool.query(
+  async function getTenantCTA(tenantId: string, intent: string, channel: string) {
+    const inten = normalizeIntentAlias(intent);
+
+    // 1) intento exacto por canal o comodín '*'
+    let q = await pool.query(
       `SELECT cta_text, cta_url
         FROM tenant_ctas
         WHERE tenant_id = $1
           AND intent = $2
+          AND (canal = $3 OR canal = '*')
+    ORDER BY CASE WHEN canal=$3 THEN 0 ELSE 1 END
         LIMIT 1`,
-      [tenantId, normalizeIntentAlias(intent)]
+      [tenantId, inten, channel]
     );
-    return rows[0] || null;
+    if (q.rows[0]) return q.rows[0];
+
+    // 2) fallback por 'global' del mismo canal (o '*')
+    q = await pool.query(
+      `SELECT cta_text, cta_url
+        FROM tenant_ctas
+        WHERE tenant_id = $1
+          AND intent = 'global'
+          AND (canal = $2 OR canal = '*')
+    ORDER BY CASE WHEN canal=$2 THEN 0 ELSE 1 END
+        LIMIT 1`,
+      [tenantId, channel]
+    );
+    return q.rows[0] || null;
   }
 
   // ✅ helper local (antes de getGlobalCTAFromTenant/pickCTA)
@@ -448,13 +520,17 @@ async function procesarMensajeWhatsApp(body: any) {
   }
 
   // Selecciona CTA por intención; si no hay, usa CTA global del tenant
-  async function pickCTA(tenant: any, intent: string | null) {
-    if (intent) {
-      const byIntent = await getTenantCTA(tenant.id, intent);
-      if (byIntent) return byIntent;
-    }
-    return getGlobalCTAFromTenant(tenant); // usa tenant.cta_text / cta_url si existen
+  async function pickCTA(tenant: any, intent: string | null, channel: string) {
+  if (intent) {
+    const byIntent = await getTenantCTA(tenant.id, intent, channel);
+    if (byIntent) return byIntent;
   }
+  // fallback opcional desde columnas del tenant (si las usas)
+  const t = (tenant?.cta_text || '').trim();
+  const u = (tenant?.cta_url  || '').trim();
+  if (t && isValidUrl(u)) return { cta_text: t, cta_url: u };
+  return null;
+}
 
   // ⏲️ Programador de follow-up (WhatsApp)
   async function scheduleFollowUp(intFinal: string, nivel: number) {
@@ -592,10 +668,11 @@ async function procesarMensajeWhatsApp(body: any) {
       const intentForCTA = pickIntentForCTA({
         fallback: intenCanon // ya calculaste intenCanon antes
       });
-      const cta2 = await pickCTA(tenant, intentForCTA);
-      const outWithCTA = appendCTAWithCap(out, cta2);
+      const ctaXraw = await pickCTA(tenant, intentForCTA, canal);
+      const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
+      const outWithCTA = appendCTAWithCap(out, ctaX);
 
-      await enviarWhatsApp(fromNumber, outWithCTA, tenant.id);
+      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
       alreadySent = true;
 
       await pool.query(
@@ -945,10 +1022,11 @@ async function procesarMensajeWhatsApp(body: any) {
           matcher: respIntent?.intent || null,
           canonical: INTENCION_FINAL_CANONICA || null
         });
-        const cta3 = await pickCTA(tenant, intentForCTA);
-        const outWithCTA = appendCTAWithCap(out, cta3);
+        const ctaXraw = await pickCTA(tenant, intentForCTA, canal);
+        const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
+        const outWithCTA = appendCTAWithCap(out, ctaX);
 
-        await enviarWhatsApp(fromNumber, outWithCTA, tenant.id);
+        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
         alreadySent = true;
 
         await pool.query(
@@ -1110,10 +1188,11 @@ async function procesarMensajeWhatsApp(body: any) {
       canonical: INTENCION_FINAL_CANONICA || null,
       fallback: intencionParaFaq || null
     });
-    const cta4 = await pickCTA(tenant, intentForCTA);
-    const outWithCTA = appendCTAWithCap(out, cta4);
+    const ctaXraw = await pickCTA(tenant, intentForCTA, canal);
+    const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
+    const outWithCTA = appendCTAWithCap(out, ctaX);
 
-    await enviarWhatsApp(fromNumber, outWithCTA, tenant.id);
+    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
     alreadySent = true;
 
     await pool.query(
@@ -1169,7 +1248,6 @@ async function procesarMensajeWhatsApp(body: any) {
     console.log('🧯 No se genera sugerida (sin letras o texto muy corto).');
     // aun así responde si hay "respuesta" calculada
     if (respuesta) {
-      // ⬇️ CTA por intención (fallback final/generativa)
       let intentForCTA: string | null = null;
       try {
         const detEnd = await detectarIntencion(userInput, tenant.id, 'whatsapp');
@@ -1179,11 +1257,13 @@ async function procesarMensajeWhatsApp(body: any) {
         });
       } catch {}
 
-      const cta5 = intentForCTA ? await getTenantCTA(tenant.id, intentForCTA) : null;
+      const cta5raw = intentForCTA ? await getTenantCTA(tenant.id, intentForCTA, canal) : null;
+      const cta5    = await translateCTAIfNeeded(cta5raw, idiomaDestino);
+
       const withDefaultCta = cta5 ? respuesta : `${respuesta}\n\n${CTA_TXT}`;
       const respuestaWithCTA = appendCTAWithCap(withDefaultCta, cta5);
 
-      await enviarWhatsApp(fromNumber, respuestaWithCTA, tenant.id);
+      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuestaWithCTA);
 
       await pool.query(
         `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
@@ -1379,12 +1459,14 @@ async function procesarMensajeWhatsApp(body: any) {
   } catch {}
 
   const intentForCTANorm = intentForCTA ? normalizeIntentAlias(intentForCTA) : null;
-  const cta5 = await pickCTA(tenant, intentForCTANorm);
+  const cta5raw = await pickCTA(tenant, intentForCTANorm, canal);
+  const cta5    = await translateCTAIfNeeded(cta5raw, idiomaDestino);
+
   const withDefaultCta = cta5 ? respuesta : `${respuesta}\n\n${CTA_TXT}`;
   const respuestaWithCTA = appendCTAWithCap(withDefaultCta, cta5);
 
   if (!alreadySent) {
-    await enviarWhatsApp(fromNumber, respuestaWithCTA, tenant.id);
+    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuestaWithCTA);
     console.log("📬 Respuesta enviada vía Twilio:", respuestaWithCTA);
   }
 
