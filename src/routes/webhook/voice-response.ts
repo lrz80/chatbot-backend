@@ -675,6 +675,26 @@ console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
     const tenant = tRes.rows[0];
     if (!tenant) return res.sendStatus(404);
 
+    // ✅ BLOQUEO DE CANAL: VOZ (fail-safe si no hay fila)
+    try {
+      const { rows: ch } = await pool.query(
+        'SELECT voice_enabled FROM channel_settings WHERE tenant_id = $1',
+        [tenant.id]
+      );
+      if (!ch[0]?.voice_enabled) {
+        const bye = new twiml.VoiceResponse();
+        bye.say({ language: 'es-ES', voice: 'alice' }, 'Este canal de voz no está disponible por el momento.');
+        bye.hangup();
+        return res.type('text/xml').send(bye.toString());
+      }
+    } catch (e) {
+      console.warn('Guard VOZ: no se pudo leer channel_settings; bloqueo por seguridad:', e);
+      const bye = new twiml.VoiceResponse();
+      bye.say({ language: 'es-ES', voice: 'alice' }, 'Lo sentimos, no podemos atender esta llamada ahora.');
+      bye.hangup();
+      return res.type('text/xml').send(bye.toString());
+    }
+
     if (!tenant.membresia_activa) {
       vr.say(
         { voice: 'alice', language: 'es-ES' as any },

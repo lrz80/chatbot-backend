@@ -28,6 +28,23 @@ router.post('/', async (req: Request, res: Response) => {
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.sendStatus(404);
 
+    // ✅ BLOQUEO DE CANAL: SMS (fail-safe)
+    try {
+      const { rows: ch } = await pool.query(
+        'SELECT sms_enabled FROM channel_settings WHERE tenant_id = $1',
+        [tenant.id]
+      );
+      if (!ch[0]?.sms_enabled) {
+        console.log(`🚫 SMS deshabilitado para tenant ${tenant.id}`);
+        return res.type('text/xml').send('<Response></Response>'); // responde 200 y no envía mensaje
+        // Si prefieres avisar:
+        // return res.type('text/xml').send('<Response><Message>SMS no disponible por el momento.</Message></Response>');
+      }
+    } catch (e) {
+      console.warn('Guard SMS: no se pudo leer channel_settings; bloqueo por seguridad:', e);
+      return res.type('text/xml').send('<Response></Response>');
+    }
+
     if (!tenant.membresia_activa) {
       console.log(`🚫 SMS bloqueado: membresía inactiva para ${tenant.name}`);
       return res.type('text/xml').send(`<Response><Message>Tu membresía está inactiva. Por favor actívala para continuar.</Message></Response>`);

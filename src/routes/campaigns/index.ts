@@ -156,6 +156,32 @@ router.post(
         return res.status(400).json({ error: "Faltan campos obligatorios." });
       }
 
+      // ✅ BLOQUEO DE CANAL EN CAMPAÑAS (fail-safe: si no hay fila, se bloquea)
+      try {
+        const { rows: ch } = await pool.query(
+          `SELECT whatsapp_enabled, sms_enabled, email_enabled
+            FROM channel_settings
+            WHERE tenant_id = $1
+            LIMIT 1`,
+          [tenant_id]
+        );
+
+        const flags = ch[0] || {};
+        const enabled =
+          (canal === 'whatsapp' && !!flags.whatsapp_enabled) ||
+          (canal === 'sms'      && !!flags.sms_enabled)      ||
+          (canal === 'email'    && !!flags.email_enabled);
+
+        if (!enabled) {
+          return res.status(403).json({
+            error: `El canal "${canal}" está deshabilitado para este tenant.`
+          });
+        }
+      } catch (e) {
+        console.warn('Guard campañas: no se pudo leer channel_settings; bloqueo por seguridad:', e);
+        return res.status(403).json({ error: 'Campañas temporalmente deshabilitadas.' });
+      }
+
       // Parse segmentos desde string o array
       let segmentosParsed: any[] = [];
       try {

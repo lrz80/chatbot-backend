@@ -174,6 +174,21 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const canalContenido = 'meta'; // FAQs se guardan como 'meta'
         const accessToken = tenant.facebook_access_token as string;
 
+        // ✅ BLOQUEO DE CANAL: META (facebook/instagram)
+        try {
+          const { rows: ch } = await pool.query(
+            `SELECT meta_enabled FROM channel_settings WHERE tenant_id = $1`,
+            [tenantId]
+          );
+          if (!ch[0]?.meta_enabled) {
+            console.log(`🚫 META deshabilitado para tenant ${tenantId}. Mensaje ignorado.`);
+            continue; // salta este evento y NO responde
+          }
+        } catch (e) {
+          console.warn('No se pudo leer channel_settings; bloqueo por seguridad:', e);
+          continue; // fail-safe: si no puedo leer, no respondo
+        }
+
         // helper envío Meta (chunked)
         const sendMeta = async (text: string) => {
           await enviarMensajePorPartes({
