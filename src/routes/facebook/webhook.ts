@@ -24,6 +24,7 @@ import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
 import { Router, Request, Response } from 'express';
 import { buscarRespuestaSimilitudFaqsTraducido } from '../../lib/respuestasTraducidas';
 import type { Canal } from '../../lib/detectarIntencion';
+import { requireChannel } from "../../middleware/requireChannel";
 
 type CanalEnvio = 'facebook' | 'instagram';
 
@@ -108,7 +109,7 @@ const mensajesProcesados = new Set<string>();
 // ———————————————————————————————————————————————————————————
 // Verificación GET (Meta)
 // ———————————————————————————————————————————————————————————
-router.get('/api/facebook/webhook', (req, res) => {
+router.get('/api/facebook/webhook', requireChannel("meta"), (req, res) => {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || 'testtoken';
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];

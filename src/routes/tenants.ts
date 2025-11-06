@@ -297,14 +297,20 @@ router.patch('/timezone', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/features', async (req, res) => {
-  try {
-    const tenantId = await getTenantIdFromCookie(req);
-    const { rows } = await pool.query(
-      `SELECT plan, membresia_activa, es_trial, trial_ends_at
-       FROM tenants WHERE id = $1`,
-      [tenantId]
-    );
+ router.get('/me', async (req: Request, res: Response) => {
+   try {
+     const tenantId = await getTenantIdFromCookie(req);
+     const { rows } = await pool.query(
+       `SELECT
+          id, name, slug, categoria, idioma, prompt,
+          mensaje_bienvenida AS bienvenida,
+          plan, membresia_activa, es_trial, membresia_inicio, membresia_vigencia,
+          settings, links
+        FROM tenants
+        WHERE id = $1`,
+       [tenantId]
+     );
+
     const t = rows[0];
     if (!t) return res.status(404).json({ error: 'Tenant no encontrado' });
 
