@@ -2,6 +2,7 @@
 import { Router, Request, Response } from "express";
 import pool from "../lib/db";
 import { authenticateUser } from "../middleware/auth";
+import { normalizeIntentAlias } from "../lib/intentSlug";
 
 // Shape real que pone tu middleware
 type AuthedReq = Request & {
@@ -36,7 +37,8 @@ function isValidUrl(u?: string) {
 }
 
 function cleanItem(x: any, indexForOrder = 0): Required<CtaItem> {
-  const intent = String(x?.intent || "").trim().toLowerCase();
+  const intentRaw = String(x?.intent || "").trim().toLowerCase();
+  const intent = normalizeIntentAlias(intentRaw);       // 👈 normaliza aquí
   const cta_text = String(x?.cta_text || "").trim();
   const cta_url = String(x?.cta_url || "").trim();
   const canal = String(x?.canal || "whatsapp").trim().toLowerCase();
@@ -156,25 +158,25 @@ router.post("/", async (req: AuthedReq, res: Response) => {
   }
 });
 
-// -----------------------------
-// DELETE: eliminar CTA por id (seguro por tenant)
-// -----------------------------
-router.delete("/:id", async (req: AuthedReq, res: Response) => {
+// DELETE: eliminar CTA por intent+canal (seguro por tenant)
+router.delete("/:intent", async (req: AuthedReq, res: Response) => {
   try {
     const tenantId = req.user?.tenant_id;
-    if (!tenantId) return res.status(401).json({ error: "Unauthorized" });
+    if (!tenantId) return res.status(401).json({ ok: false, error: "unauthorized" });
 
-    const { id } = req.params;
-    if (!id) return res.status(400).json({ error: "Missing id param" });
+    const canal = String(req.query.canal || "whatsapp").toLowerCase(); // 👈 toma canal
+    const intent = normalizeIntentAlias(String(req.params.intent || "").trim());
+    if (!intent) return res.status(400).json({ ok: false, error: "invalid-intent" });
 
-    await pool.query(`DELETE FROM tenant_ctas WHERE id = $1 AND tenant_id = $2`, [
-      id,
-      tenantId,
-    ]);
-    res.json({ success: true });
-  } catch (err) {
-    console.error("[CTAS][DELETE] Error:", err);
-    res.status(500).json({ error: "Internal error" });
+    await pool.query(
+      `DELETE FROM tenant_ctas WHERE tenant_id = $1 AND canal = $2 AND intent = $3`,
+      [tenantId, canal, intent]                                      // 👈 incluye canal
+    );
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error("[CTAs:DELETE] error:", e);
+    return res.status(500).json({ ok: false, error: "db-error" });
   }
 });
 
