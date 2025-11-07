@@ -8,6 +8,68 @@ import { authenticateUser } from "../../middleware/auth";
 import { sendEmailSendgrid, sendEmailWithTemplate } from "../../lib/senders/email-sendgrid";
 import { subirArchivoAR2 } from "../../lib/r2/subirArchivoAR2";
 
+// ====== Channel Gate (mantenimiento global/tenant) ======
+const GLOBAL_ID = process.env.GLOBAL_CHANNEL_TENANT_ID || '00000000-0000-0000-0000-000000000001';
+
+type Canal = 'whatsapp' | 'sms' | 'email';
+
+function resolveEnabledFlag(row: any, canal: Canal) {
+  if (canal === 'whatsapp') return !!row.whatsapp_enabled;
+  if (canal === 'sms')      return !!row.sms_enabled;
+  if (canal === 'email')    return !!row.email_enabled;
+  return false;
+}
+
+function resolvePausedUntil(row: any, canal: Canal): Date | null {
+  // Asegúrate de tener estas columnas en channel_settings
+  // paused_until_whatsapp, paused_until_sms, paused_until_email (TIMESTAMP NULL)
+  if (canal === 'whatsapp') return row.paused_until_whatsapp ? new Date(row.paused_until_whatsapp) : null;
+  if (canal === 'sms')      return row.paused_until_sms ? new Date(row.paused_until_sms) : null;
+  if (canal === 'email')    return row.paused_until_email ? new Date(row.paused_until_email) : null;
+  return null;
+}
+
+/**
+ * Regresa true si el canal está operativo considerando:
+ *  - flags globales (fila GLOBAL_ID)
+ *  - flags del tenant
+ *  - paused_until global y por tenant
+ * Reglas:
+ *  - Si global está deshabilitado → bloquea siempre.
+ *  - Si global está en pausa (ahora < paused_until_global) → bloquea siempre.
+ *  - Si tenant deshabilita → bloquea.
+ *  - Si tenant pausa → bloquea.
+ */
+async function isChannelAllowedForTenant(tenantId: string, canal: Canal) {
+  const { rows } = await pool.query(
+    `SELECT *
+       FROM channel_settings
+      WHERE tenant_id = $1 OR tenant_id = $2`,
+    [tenantId, GLOBAL_ID]
+  );
+
+  const now = Date.now();
+  const globalRow = rows.find(r => r.tenant_id === GLOBAL_ID) || {};
+  const tenantRow = rows.find(r => r.tenant_id === tenantId) || {};
+
+  // Global
+  const globalEnabled = resolveEnabledFlag(globalRow, canal);
+  const globalPausedUntil = resolvePausedUntil(globalRow, canal);
+  const globalPaused = globalPausedUntil ? globalPausedUntil.getTime() > now : false;
+
+  if (!globalEnabled || globalPaused) return false;
+
+  // Tenant
+  // Si no hay fila del tenant, por seguridad exige que exista y permita.
+  // (Si prefieres permitir por defecto, cambia a: const tenantEnabled = tenantRow ? ... : true)
+  if (!tenantRow || !resolveEnabledFlag(tenantRow, canal)) return false;
+
+  const tenantPausedUntil = resolvePausedUntil(tenantRow, canal);
+  const tenantPaused = tenantPausedUntil ? tenantPausedUntil.getTime() > now : false;
+
+  return !tenantPaused;
+}
+
 const router = express.Router();
 
 /** ============ Multer (subidas) ============ */
@@ -43,7 +105,7 @@ const upload = multer({ storage });
 const CANAL_LIMITES: Record<string, number> = {
   whatsapp: 300,
   sms: 500,
-  email: 1000,
+  email: 2000,
 };
 
 /** ============ Helpers de límite dinámico ============ */
@@ -156,30 +218,11 @@ router.post(
         return res.status(400).json({ error: "Faltan campos obligatorios." });
       }
 
-      // ✅ BLOQUEO DE CANAL EN CAMPAÑAS (fail-safe: si no hay fila, se bloquea)
-      try {
-        const { rows: ch } = await pool.query(
-          `SELECT whatsapp_enabled, sms_enabled, email_enabled
-            FROM channel_settings
-            WHERE tenant_id = $1
-            LIMIT 1`,
-          [tenant_id]
-        );
-
-        const flags = ch[0] || {};
-        const enabled =
-          (canal === 'whatsapp' && !!flags.whatsapp_enabled) ||
-          (canal === 'sms'      && !!flags.sms_enabled)      ||
-          (canal === 'email'    && !!flags.email_enabled);
-
-        if (!enabled) {
-          return res.status(403).json({
-            error: `El canal "${canal}" está deshabilitado para este tenant.`
-          });
-        }
-      } catch (e) {
-        console.warn('Guard campañas: no se pudo leer channel_settings; bloqueo por seguridad:', e);
-        return res.status(403).json({ error: 'Campañas temporalmente deshabilitadas.' });
+      // ✅ Gate unificado: global + tenant + pausas
+      const canalName = (canal || '').toLowerCase() as Canal;
+      const allowed = await isChannelAllowedForTenant(tenant_id, canalName);
+      if (!allowed) {
+        return res.status(403).json({ error: 'channel_blocked', canal: canalName });
       }
 
       // Parse segmentos desde string o array
