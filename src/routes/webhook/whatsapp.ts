@@ -27,6 +27,8 @@ import { getFaqByIntent } from "../../utils/getFaqByIntent";
 import { answerMultiIntent, detectTopIntents } from '../../utils/multiIntent';
 import type { Canal } from '../../lib/detectarIntencion';
 import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
+import { requireChannelEnabled } from "../../middleware/requireChannelEnabled";
+
 
 const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
 const MATCHER_MIN_OVERRIDE = 0.85; // exige score alto para sobreescribir una intención "directa"
@@ -201,18 +203,50 @@ async function safeEnviarWhatsApp(
   }
 }
 
-router.post('/', async (req: Request, res: Response) => {
+router.post("/", async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
 
-  res.type('text/xml').send(new MessagingResponse().toString());
+  try {
+    // 🔍 1. Identificar el tenant
+    const fromNumber = req.body?.From || req.body?.WaId;
+    const { rows } = await pool.query(
+      "SELECT tenant_id FROM tenants WHERE twilio_number = $1 OR twilio_sms_number = $1",
+      [fromNumber]
+    );
 
-  setTimeout(async () => {
-    try {
-      await procesarMensajeWhatsApp(req.body);
-    } catch (error) {
-      console.error("❌ Error procesando mensaje:", error);
+    const tenantId = rows[0]?.tenant_id || "global";
+
+    // ⚙️ 2. Consultar si el canal está habilitado
+    const { rows: settings } = await pool.query(
+      "SELECT whatsapp_enabled FROM channel_settings WHERE tenant_id = $1 OR tenant_id = 'global' ORDER BY tenant_id DESC LIMIT 1",
+      [tenantId]
+    );
+
+    const canalActivo = settings[0]?.whatsapp_enabled ?? true;
+
+    if (!canalActivo) {
+      console.log(`🚫 WhatsApp deshabilitado temporalmente para tenant ${tenantId}`);
+      const twiml = new MessagingResponse();
+      twiml.message("📴 El canal de WhatsApp está temporalmente en mantenimiento. Inténtalo más tarde.");
+      return res.type("text/xml").status(503).send(twiml.toString());
     }
-  }, 0);
+
+    // ✅ 3. Confirmar recepción a Twilio (evita reintentos)
+    res.type("text/xml").send(new MessagingResponse().toString());
+
+    // ⚡ 4. Procesar el mensaje en segundo plano
+    setTimeout(async () => {
+      try {
+        await procesarMensajeWhatsApp(req.body);
+      } catch (error) {
+        console.error("❌ Error procesando mensaje:", error);
+      }
+    }, 0);
+
+  } catch (error) {
+    console.error("❌ Error general en webhook:", error);
+    res.status(500).send("Error interno");
+  }
 });
 
 export default router;

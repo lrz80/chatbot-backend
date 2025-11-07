@@ -8,6 +8,8 @@ import { sendSMS, normalizarNumero } from '../../lib/senders/sms';
 
 const router = Router();
 
+const GLOBAL_ID = process.env.GLOBAL_CHANNEL_TENANT_ID!;
+
 // ———————————————————————————
 //  Helpers de formato de hora / idioma / sanitización
 // ———————————————————————————
@@ -300,6 +302,27 @@ async function enviarSmsConLink(
      VALUES ($1, 'system', $2, NOW(), 'voz', $3)`,
     [tenantId, 'SMS enviado con link único.', smsFrom || 'sms']
   );
+}
+
+async function isVoiceChannelOpen(tenantId: string): Promise<boolean> {
+  // Prioriza tenant; si no existe, cae a global
+  const { rows } = await pool.query(
+    `SELECT voice_enabled, paused_until_voice
+      FROM channel_settings
+      WHERE tenant_id = $1 OR tenant_id = $2
+      ORDER BY CASE WHEN tenant_id = $1 THEN 0 ELSE 1 END
+      LIMIT 1`,
+    [tenantId, GLOBAL_ID]
+  );
+
+  const row = rows[0];
+  if (!row) return true; // si no hay fila, por defecto abierto
+
+  const enabled = row.voice_enabled !== false; // null/true => abierto
+  const pausedUntil = row.paused_until_voice ? new Date(row.paused_until_voice) : null;
+  const paused = pausedUntil ? pausedUntil.getTime() > Date.now() : false;
+
+  return enabled && !paused;
 }
 
 //  Snippet desde prompt (sin DB extra)
@@ -675,20 +698,28 @@ console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
     const tenant = tRes.rows[0];
     if (!tenant) return res.sendStatus(404);
 
-    // ✅ BLOQUEO DE CANAL: VOZ (fail-safe si no hay fila)
+    // ✅ BLOQUEO DE CANAL: VOZ (global/tenant + pausa)
     try {
-      const { rows: ch } = await pool.query(
-        'SELECT voice_enabled FROM channel_settings WHERE tenant_id = $1',
-        [tenant.id]
-      );
-      if (!ch[0]?.voice_enabled) {
+      const open = await isVoiceChannelOpen(tenant.id);
+      if (!open) {
+        // Limpieza de estado por si ya existe
+        CALL_STATE.delete(callSid);
+        STATE_TIME.delete(callSid);
+
         const bye = new twiml.VoiceResponse();
-        bye.say({ language: 'es-ES', voice: 'alice' }, 'Este canal de voz no está disponible por el momento.');
+        const lang = ((state.lang as any) || 'es-ES') as any;
+        bye.say({ language: lang, voice: 'alice' },
+          lang.startsWith('es')
+            ? 'Este canal de voz está temporalmente en mantenimiento. Por favor, inténtalo más tarde.'
+            : 'This voice channel is temporarily under maintenance. Please try again later.'
+        );
         bye.hangup();
-        return res.type('text/xml').send(bye.toString());
+        return res.type('text/xml').send(bye.toString()); // 200 OK con TwiML (Twilio no reintenta)
       }
     } catch (e) {
-      console.warn('Guard VOZ: no se pudo leer channel_settings; bloqueo por seguridad:', e);
+      console.warn('Guard VOZ: error consultando channel_settings; bloquea por seguridad:', e);
+      CALL_STATE.delete(callSid);
+      STATE_TIME.delete(callSid);
       const bye = new twiml.VoiceResponse();
       bye.say({ language: 'es-ES', voice: 'alice' }, 'Lo sentimos, no podemos atender esta llamada ahora.');
       bye.hangup();

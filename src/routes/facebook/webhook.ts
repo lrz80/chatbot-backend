@@ -31,6 +31,8 @@ type CanalEnvio = 'facebook' | 'instagram';
 const router = express.Router();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
+const GLOBAL_ID = process.env.GLOBAL_CHANNEL_TENANT_ID
+  || '00000000-0000-0000-0000-000000000001'; // fallback seguro
 // ———————————————————————————————————————————————————————————
 // Config comunes (idénticos a WhatsApp)
 // ———————————————————————————————————————————————————————————
@@ -101,6 +103,24 @@ function cicloMesDesdeMembresia(membresiaInicioISO: string): string {
   const cicloInicio = new Date(inicio);
   cicloInicio.setMonth(inicio.getMonth() + diffMes);
   return cicloInicio.toISOString().split('T')[0]; // YYYY-MM-DD
+}
+
+async function isMetaChannelOpen(tenantId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT meta_enabled, paused_until_meta
+       FROM channel_settings
+      WHERE tenant_id = $1 OR tenant_id = $2
+      ORDER BY CASE WHEN tenant_id = $1 THEN 0 ELSE 1 END
+      LIMIT 1`,
+    [tenantId, GLOBAL_ID]
+  );
+  const row = rows[0];
+  if (!row) return true;                   // sin fila => abierto por defecto
+  const enabled = row.meta_enabled !== false; // null/true => abierto
+  const paused = row.paused_until_meta
+    ? new Date(row.paused_until_meta).getTime() > Date.now()
+    : false;
+  return enabled && !paused;
 }
 
 // Evita loops por duplicados Meta mid
@@ -175,19 +195,16 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const canalContenido = 'meta'; // FAQs se guardan como 'meta'
         const accessToken = tenant.facebook_access_token as string;
 
-        // ✅ BLOQUEO DE CANAL: META (facebook/instagram)
+        // ✅ BLOQUEO DE CANAL: META (global/tenant + pausa)
         try {
-          const { rows: ch } = await pool.query(
-            `SELECT meta_enabled FROM channel_settings WHERE tenant_id = $1`,
-            [tenantId]
-          );
-          if (!ch[0]?.meta_enabled) {
-            console.log(`🚫 META deshabilitado para tenant ${tenantId}. Mensaje ignorado.`);
-            continue; // salta este evento y NO responde
+          const open = await isMetaChannelOpen(tenantId);
+          if (!open) {
+            console.log(`🚫 META en mantenimiento/deshabilitado para tenant ${tenantId}. Mensaje ignorado.`);
+            continue; // no respondas nada a Meta; ya mandaste 200 arriba
           }
         } catch (e) {
-          console.warn('No se pudo leer channel_settings; bloqueo por seguridad:', e);
-          continue; // fail-safe: si no puedo leer, no respondo
+          console.warn('Guard META: error consultando channel_settings; bloqueo por seguridad:', e);
+          continue;
         }
 
         // helper envío Meta (chunked)
