@@ -72,6 +72,7 @@ import voiceTopup from './routes/voice/topup';
 import facebookOauthStart from './routes/facebook/oauth-start';           // ✅ nuevo
 import ctasRouter from './routes/ctas';
 import channelSettingsRouter from "./routes/channel-settings";
+import cronRoutes from "./routes/internal/cron";
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -195,6 +196,7 @@ app.use('/api', voiceTopup);
 app.use(facebookOauthStart);  
 app.use('/api/ctas', ctasRouter); 
 app.use("/api/channel-settings", channelSettingsRouter);
+app.use("/api/internal/cron", cronRoutes);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
