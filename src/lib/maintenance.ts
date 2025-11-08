@@ -1,7 +1,14 @@
+// src/lib/maintenance.ts
 import pool from "../lib/db";
 
+const GLOBAL_TENANT_ID = "00000000-0000-0000-0000-000000000001";
+
+/**
+ * Retorna si un canal está en mantenimiento.
+ * Busca primero por tenant_id y luego por un registro global (tenant_id IS NULL).
+ */
 export async function getMaintenance(
-  canal: "sms"|"email"|"whatsapp"|"meta"|"voice",
+  canal: "sms" | "email" | "whatsapp" | "meta" | "voice",
   tenantId?: string
 ) {
   const { rows } = await pool.query(
@@ -11,11 +18,14 @@ export async function getMaintenance(
       SELECT cm.*
       FROM channel_maintenance cm
       WHERE cm.canal = $1 AND cm.tenant_id = $2
+
       UNION ALL
-      -- 2️⃣ fallback global
+
+      -- 2️⃣ fallback global (tenant_id IS NULL)
       SELECT cm.*
       FROM channel_maintenance cm
       WHERE cm.canal = $1 AND cm.tenant_id IS NULL
+
       LIMIT 1
     )
     SELECT
@@ -34,7 +44,7 @@ export async function getMaintenance(
 
   const inWindow =
     (!r.starts_at || new Date(r.starts_at) <= now) &&
-    (!r.ends_at   || new Date(r.ends_at)   >= now);
+    (!r.ends_at || new Date(r.ends_at) >= now);
 
   const active = !!r.maintenance && inWindow;
 
@@ -46,22 +56,35 @@ export async function getMaintenance(
   };
 }
 
+/**
+ * Obtiene si un canal está habilitado para un tenant.
+ * Si no existe registro del tenant, usa el registro global (UUID fijo).
+ */
 export async function getChannelEnabledBySettings(
   tenantId: string,
-  canal: "sms"|"email"|"whatsapp"|"meta"|"voice"
+  canal: "sms" | "email" | "whatsapp" | "meta" | "voice"
 ) {
   const { rows } = await pool.query(
-    `SELECT whatsapp_enabled, sms_enabled, email_enabled, meta_enabled, voice_enabled
-     FROM channel_settings WHERE tenant_id = $1 LIMIT 1`,
-    [tenantId]
+    `
+    SELECT whatsapp_enabled, sms_enabled, email_enabled, meta_enabled, voice_enabled
+    FROM channel_settings
+    WHERE tenant_id = $1
+       OR tenant_id = $2
+    ORDER BY (tenant_id = $1) DESC
+    LIMIT 1
+    `,
+    [tenantId, GLOBAL_TENANT_ID]
   );
+
   const flags = rows[0] || {};
+
   const map = {
     whatsapp: !!flags.whatsapp_enabled,
-    sms:      !!flags.sms_enabled,
-    email:    !!flags.email_enabled,
-    meta:     !!flags.meta_enabled,
-    voice:    !!flags.voice_enabled,
+    sms: !!flags.sms_enabled,
+    email: !!flags.email_enabled,
+    meta: !!flags.meta_enabled,
+    voice: !!flags.voice_enabled,
   };
+
   return map[canal] ?? false;
 }
