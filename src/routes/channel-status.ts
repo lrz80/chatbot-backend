@@ -4,40 +4,59 @@ import { getMaintenance } from "../lib/maintenance";
 
 const router = Router();
 
+type Canal = "sms" | "email" | "whatsapp" | "meta" | "voice";
+const ALLOWED: ReadonlyArray<Canal> = ["sms", "email", "whatsapp", "meta", "voice"] as const;
+
 /**
  * GET /api/channel/status?canal=sms|email|whatsapp|meta|voice
- * Devuelve: enabled, maintenance, blocked_by_plan, paused_until, message
+ * Devuelve: enabled, blocked, blocked_by_plan, maintenance, maintenance_message, paused_until, reason
  */
 router.get("/", async (req: Request, res: Response) => {
   try {
-    const canal = String(req.query.canal || "").toLowerCase();
-    if (!["sms", "email", "whatsapp", "meta", "voice"].includes(canal)) {
+    const canal = String(req.query.canal || "").toLowerCase() as Canal;
+    if (!ALLOWED.includes(canal)) {
       return res.status(400).json({ error: "canal_invalid" });
     }
 
+    // Intenta múltiples ubicaciones típicas para tenant_id
     const tenantId =
-      (req as any).user?.tenant_id ||
-      (req as any).tenant_id ||
+      (req as any).user?.tenant_id ??
+      (res.locals && (res.locals as any).tenant_id) ??
+      (req as any).tenant_id ??
       (req as any).tenantId;
 
     if (!tenantId) return res.status(401).json({ error: "unauthorized" });
 
-    const feats = await getFeatures(tenantId);
-    const enabledFlag = !!feats[`${canal}_enabled`];
+    const feats: any = await getFeatures(tenantId);
 
+    // Map flexible por si tus flags usan nombres distintos
+    // Esperado: whatsapp_enabled, sms_enabled, meta_enabled, email_enabled, voice_enabled
+    const enabledFlag: boolean =
+      feats?.[`${canal}_enabled`] ??
+      // alternativas por si en tu sistema existen
+      (canal === "meta" ? feats?.facebook_enabled || feats?.ig_enabled || feats?.meta : undefined) ??
+      false;
+
+    // Pausas: prioriza específicas por canal, luego global
+    const pausedUntilRaw: string | Date | null =
+      feats?.[`paused_until_${canal}`] ?? feats?.paused_until ?? null;
+
+    // Normaliza a string ISO (frontend hace new Date(...))
     const pausedUntil =
-      feats[`paused_until_${canal}`] || feats.paused_until || null;
+      pausedUntilRaw instanceof Date
+        ? pausedUntilRaw.toISOString()
+        : pausedUntilRaw
+        ? String(pausedUntilRaw)
+        : null;
 
     const maint = await getMaintenance(canal as any, tenantId);
-
-    const maintenanceActive = !!maint.maintenance;
+    const maintenanceActive = !!maint?.maintenance;
     const pausedActive = isPaused(pausedUntil);
 
-    // Regla: bloqueado si NO enabled, o si hay mantenimiento, o si está pausado
+    // Bloqueo si: no enabled por plan, o mantenimiento, o pausa
     const blocked = !enabledFlag || maintenanceActive || pausedActive;
 
-    // Mensaje razon
-    const reason = !enabledFlag
+    const reason: "plan" | "maintenance" | "paused" | null = !enabledFlag
       ? "plan"
       : maintenanceActive
       ? "maintenance"
@@ -47,12 +66,12 @@ router.get("/", async (req: Request, res: Response) => {
 
     return res.json({
       canal,
-      enabled: enabledFlag,
+      enabled: !!enabledFlag,
       blocked,
       blocked_by_plan: !enabledFlag,
       maintenance: maintenanceActive,
-      maintenance_message: maint.message || null,
-      paused_until: pausedUntil || null,
+      maintenance_message: maint?.message || null,
+      paused_until: pausedUntil, // ISO string o null
       reason,
     });
   } catch (e) {
