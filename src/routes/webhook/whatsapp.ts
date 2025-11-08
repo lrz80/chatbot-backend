@@ -207,39 +207,61 @@ router.post("/", async (req: Request, res: Response) => {
   console.log("📩 Webhook recibido:", req.body);
 
   try {
-    // 🔍 1. Identificar el tenant
-    const fromNumber = req.body?.From || req.body?.WaId;
-    const { rows } = await pool.query(
-      "SELECT tenant_id FROM tenants WHERE twilio_number = $1 OR twilio_sms_number = $1",
-      [fromNumber]
+    // 🔍 1) Normaliza números de Twilio
+    const to = req.body?.To || '';
+    const from = req.body?.From || req.body?.WaId || '';
+    const numero = to.replace('whatsapp:', '').replace('tel:', '');        // TU número (asignado al tenant)
+    const fromNumber = from.replace('whatsapp:', '').replace('tel:', '');   // Número del cliente
+    const userInput = req.body?.Body || '';
+    const messageId = req.body?.MessageSid || req.body?.SmsMessageSid || null;
+
+    // 🔎 2) Busca el tenant por TU número (no por el del cliente)
+    const { rows: trows } = await pool.query(
+      `SELECT * 
+        FROM tenants 
+        WHERE twilio_number = $1 
+          OR twilio_sms_number = $1 
+          OR twilio_voice_number = $1 
+        LIMIT 1`,
+      [numero]
     );
+    const tenant = trows[0];
 
-    const tenantId = rows[0]?.tenant_id || "global";
+    if (!tenant) {
+      console.log('⚠️ No se encontró tenant para el número (To):', numero);
+      const twiml = new MessagingResponse();
+      twiml.message("⚠️ Número no asignado.");
+      return res.type("text/xml").status(200).send(twiml.toString());
+    }
 
-    // ⚙️ 2. Consultar si el canal está habilitado
-    const { rows: settings } = await pool.query(
-      "SELECT whatsapp_enabled FROM channel_settings WHERE tenant_id = $1 OR tenant_id = 'global' ORDER BY tenant_id DESC LIMIT 1",
-      [tenantId]
+    // ⚙️ 3) Chequea si el canal WhatsApp está habilitado (tenant o global)
+    const { rows: srows } = await pool.query(
+      `SELECT whatsapp_enabled
+        FROM channel_settings
+        WHERE tenant_id = $1
+          OR tenant_id = 'global'
+    ORDER BY tenant_id DESC
+        LIMIT 1`,
+      [tenant.id]
     );
-
-    const canalActivo = settings[0]?.whatsapp_enabled ?? true;
+    const canalActivo = srows[0]?.whatsapp_enabled ?? true;
 
     if (!canalActivo) {
-      console.log(`🚫 WhatsApp deshabilitado temporalmente para tenant ${tenantId}`);
+      console.log(`🚫 WhatsApp deshabilitado temporalmente para tenant ${tenant.id}`);
       const twiml = new MessagingResponse();
       twiml.message("📴 El canal de WhatsApp está temporalmente en mantenimiento. Inténtalo más tarde.");
       return res.type("text/xml").status(503).send(twiml.toString());
     }
 
-    // ✅ 3. Confirmar recepción a Twilio (evita reintentos)
+    // ✅ 4) Ack inmediato a Twilio para evitar reintentos
     res.type("text/xml").send(new MessagingResponse().toString());
 
-    // ⚡ 4. Procesar el mensaje en segundo plano
+    // ⚡ 5) Procesa el mensaje en background (no bloquea el ACK)
     setTimeout(async () => {
       try {
         await procesarMensajeWhatsApp(req.body);
       } catch (error) {
-        console.error("❌ Error procesando mensaje:", error);
+        console.error("❌ Error procesando mensaje (bg):", error);
       }
     }, 0);
 
