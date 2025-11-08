@@ -204,69 +204,16 @@ async function safeEnviarWhatsApp(
 }
 
 router.post("/", async (req: Request, res: Response) => {
-  console.log("📩 Webhook recibido:", req.body);
-
   try {
-    // 🔍 1) Normaliza números de Twilio
-    const to = req.body?.To || '';
-    const from = req.body?.From || req.body?.WaId || '';
-    const numero = to.replace('whatsapp:', '').replace('tel:', '');        // TU número (asignado al tenant)
-    const fromNumber = from.replace('whatsapp:', '').replace('tel:', '');   // Número del cliente
-    const userInput = req.body?.Body || '';
-    const messageId = req.body?.MessageSid || req.body?.SmsMessageSid || null;
-
-    // 🔎 2) Busca el tenant por TU número (no por el del cliente)
-    const { rows: trows } = await pool.query(
-      `SELECT * 
-        FROM tenants 
-        WHERE twilio_number = $1 
-          OR twilio_sms_number = $1 
-          OR twilio_voice_number = $1 
-        LIMIT 1`,
-      [numero]
-    );
-    const tenant = trows[0];
-
-    if (!tenant) {
-      console.log('⚠️ No se encontró tenant para el número (To):', numero);
-      const twiml = new MessagingResponse();
-      twiml.message("⚠️ Número no asignado.");
-      return res.type("text/xml").status(200).send(twiml.toString());
-    }
-
-    // ⚙️ 3) Chequea si el canal WhatsApp está habilitado (tenant o global)
-    const { rows: srows } = await pool.query(
-      `SELECT whatsapp_enabled
-        FROM channel_settings
-        WHERE tenant_id = $1
-          OR tenant_id = 'global'
-    ORDER BY tenant_id DESC
-        LIMIT 1`,
-      [tenant.id]
-    );
-    const canalActivo = srows[0]?.whatsapp_enabled ?? true;
-
-    if (!canalActivo) {
-      console.log(`🚫 WhatsApp deshabilitado temporalmente para tenant ${tenant.id}`);
-      const twiml = new MessagingResponse();
-      twiml.message("📴 El canal de WhatsApp está temporalmente en mantenimiento. Inténtalo más tarde.");
-      return res.type("text/xml").status(503).send(twiml.toString());
-    }
-
-    // ✅ 4) Ack inmediato a Twilio para evitar reintentos
+    // Responde a Twilio de inmediato
     res.type("text/xml").send(new MessagingResponse().toString());
 
-    // ⚡ 5) Procesa el mensaje en background (no bloquea el ACK)
+    // Procesa el mensaje aparte (no bloquea la respuesta a Twilio)
     setTimeout(async () => {
-      try {
-        await procesarMensajeWhatsApp(req.body);
-      } catch (error) {
-        console.error("❌ Error procesando mensaje (bg):", error);
-      }
+      await procesarMensajeWhatsApp(req.body);
     }, 0);
-
   } catch (error) {
-    console.error("❌ Error general en webhook:", error);
+    console.error("❌ Error en webhook:", error);
     res.status(500).send("Error interno");
   }
 });
@@ -275,18 +222,26 @@ export default router;
 
 async function procesarMensajeWhatsApp(body: any) {
   let alreadySent = false;
-  const to = body.To || '';
-  const from = body.From || '';
-  const numero = to.replace('whatsapp:', '').replace('tel:', '');
-  const fromNumber = from.replace('whatsapp:', '').replace('tel:', '');
-  const userInput = body.Body || '';
-  const messageId = body.MessageSid || body.SmsMessageSid || null;
 
-  const tenantRes = await pool.query('SELECT * FROM tenants WHERE twilio_number = $1 LIMIT 1', [numero]);
+  // Datos básicos del webhook
+  const to = body?.To || '';
+  const from = body?.From || '';
+  const userInput = body?.Body || '';
+  const messageId = body?.MessageSid || body?.SmsMessageSid || null;
+
+  // Números “limpios”
+  const numero      = to.replace('whatsapp:', '').replace('tel:', '');   // Tu número Twilio (del negocio)
+  const fromNumber  = from.replace('whatsapp:', '').replace('tel:', ''); // Número del cliente
+
+  // Busca el tenant por su número de WhatsApp
+  const tenantRes = await pool.query(
+    'SELECT * FROM tenants WHERE twilio_number = $1 LIMIT 1',
+    [numero]
+  );
   const tenant = tenantRes.rows[0];
   if (!tenant) return;
 
-  // 🚫 No responder si la membresía está inactiva
+  // Si no hay membresía activa: no respondas
   if (!tenant.membresia_activa) {
     console.log(`⛔ Membresía inactiva para tenant ${tenant.name || tenant.id}. No se responderá.`);
     return;
@@ -524,50 +479,50 @@ async function procesarMensajeWhatsApp(body: any) {
     console.warn('⚠️ Multi-intent fast-path falló; sigo pipeline normal:', e);
   }
 
-  // CTA por intención (usa tenant_ctas)
+  // CTA por intención (usa tenant_ctas.intent_slug en TEXT, no UUID)
   async function getTenantCTA(tenantId: string, intent: string, channel: string) {
-    const inten = normalizeIntentAlias(intent);
+    const inten = normalizeIntentAlias((intent || '').trim().toLowerCase());
 
-    // 1) intento exacto por canal o comodín '*'
+    // 1) Coincidencia exacta por canal o comodín '*'
     let q = await pool.query(
       `SELECT cta_text, cta_url
-        FROM tenant_ctas
-        WHERE tenant_id = $1
-          AND intent = $2
-          AND (canal = $3 OR canal = '*')
-    ORDER BY CASE WHEN canal=$3 THEN 0 ELSE 1 END
-        LIMIT 1`,
+      FROM tenant_ctas
+      WHERE tenant_id = $1
+        AND intent_slug = $2
+        AND (canal = $3 OR canal = '*')
+      ORDER BY CASE WHEN canal=$3 THEN 0 ELSE 1 END
+      LIMIT 1`,
       [tenantId, inten, channel]
     );
     if (q.rows[0]) return q.rows[0];
 
-    // 2) fallback por 'global' del mismo canal (o '*')
+    // 2) Fallback 'global' del mismo canal (o '*')
     q = await pool.query(
       `SELECT cta_text, cta_url
-        FROM tenant_ctas
-        WHERE tenant_id = $1
-          AND intent = 'global'
-          AND (canal = $2 OR canal = '*')
-    ORDER BY CASE WHEN canal=$2 THEN 0 ELSE 1 END
-        LIMIT 1`,
+      FROM tenant_ctas
+      WHERE tenant_id = $1
+        AND intent_slug = 'global'
+        AND (canal = $2 OR canal = '*')
+      ORDER BY CASE WHEN canal=$2 THEN 0 ELSE 1 END
+      LIMIT 1`,
       [tenantId, channel]
     );
     return q.rows[0] || null;
   }
 
-  // ✅ helper local (antes de getGlobalCTAFromTenant/pickCTA)
+  // ✅ Valida URL simple
   function isValidUrl(u?: string) {
     try {
       if (!u) return false;
-      if (!/^https?:\/\//i.test(u)) return false; // exigir http/https
-      new URL(u);                                 // valida formato
+      if (!/^https?:\/\//i.test(u)) return false;
+      new URL(u);
       return true;
     } catch {
       return false;
     }
   }
 
-  // ⬇️ usa isValidUrl aquí
+  // ✅ CTA “global” guardada en las columnas del tenant (no en tenant_ctas)
   function getGlobalCTAFromTenant(tenant: any) {
     const t = (tenant?.cta_text || '').trim();
     const u = (tenant?.cta_url  || '').trim();
