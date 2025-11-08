@@ -1,15 +1,18 @@
+// src/routes/channel-status.ts
 import { Router, Request, Response } from "express";
 import { getFeatures, isPaused } from "../lib/features";
 import { getMaintenance } from "../lib/maintenance";
+import { authenticateUser } from "../middleware/auth"; 
 
-const router = Router();
+const router = Router();                 // ✅ 1) crea el router primero
+router.use(authenticateUser);                // ✅ 2) y luego aplica el guard
 
 type Canal = "sms" | "email" | "whatsapp" | "meta" | "voice";
 const ALLOWED: ReadonlyArray<Canal> = ["sms", "email", "whatsapp", "meta", "voice"] as const;
 
 /**
  * GET /api/channel/status?canal=sms|email|whatsapp|meta|voice
- * Devuelve: enabled, blocked, blocked_by_plan, maintenance, maintenance_message, paused_until, reason
+ * Responde: enabled, blocked, blocked_by_plan, maintenance, maintenance_message, paused_until, reason
  */
 router.get("/", async (req: Request, res: Response) => {
   try {
@@ -18,10 +21,10 @@ router.get("/", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "canal_invalid" });
     }
 
-    // Intenta múltiples ubicaciones típicas para tenant_id
+    // tenant_id desde el middleware de auth
     const tenantId =
       (req as any).user?.tenant_id ??
-      (res.locals && (res.locals as any).tenant_id) ??
+      (res.locals as any)?.tenant_id ??
       (req as any).tenant_id ??
       (req as any).tenantId;
 
@@ -29,19 +32,16 @@ router.get("/", async (req: Request, res: Response) => {
 
     const feats: any = await getFeatures(tenantId);
 
-    // Map flexible por si tus flags usan nombres distintos
-    // Esperado: whatsapp_enabled, sms_enabled, meta_enabled, email_enabled, voice_enabled
+    // Flag por plan (p.ej. meta_enabled, whatsapp_enabled, etc.)
     const enabledFlag: boolean =
       feats?.[`${canal}_enabled`] ??
-      // alternativas por si en tu sistema existen
       (canal === "meta" ? feats?.facebook_enabled || feats?.ig_enabled || feats?.meta : undefined) ??
       false;
 
-    // Pausas: prioriza específicas por canal, luego global
+    // Pausa específica del canal > pausa global
     const pausedUntilRaw: string | Date | null =
       feats?.[`paused_until_${canal}`] ?? feats?.paused_until ?? null;
 
-    // Normaliza a string ISO (frontend hace new Date(...))
     const pausedUntil =
       pausedUntilRaw instanceof Date
         ? pausedUntilRaw.toISOString()
@@ -53,16 +53,10 @@ router.get("/", async (req: Request, res: Response) => {
     const maintenanceActive = !!maint?.maintenance;
     const pausedActive = isPaused(pausedUntil);
 
-    // Bloqueo si: no enabled por plan, o mantenimiento, o pausa
     const blocked = !enabledFlag || maintenanceActive || pausedActive;
 
-    const reason: "plan" | "maintenance" | "paused" | null = !enabledFlag
-      ? "plan"
-      : maintenanceActive
-      ? "maintenance"
-      : pausedActive
-      ? "paused"
-      : null;
+    const reason: "plan" | "maintenance" | "paused" | null =
+      !enabledFlag ? "plan" : maintenanceActive ? "maintenance" : pausedActive ? "paused" : null;
 
     return res.json({
       canal,
@@ -71,7 +65,7 @@ router.get("/", async (req: Request, res: Response) => {
       blocked_by_plan: !enabledFlag,
       maintenance: maintenanceActive,
       maintenance_message: maint?.message || null,
-      paused_until: pausedUntil, // ISO string o null
+      paused_until: pausedUntil,
       reason,
     });
   } catch (e) {
