@@ -73,6 +73,7 @@ import facebookOauthStart from './routes/facebook/oauth-start';           // ✅
 import ctasRouter from './routes/ctas';
 import channelSettingsRouter from "./routes/channel-settings";
 import cronRoutes from "./routes/internal/cron";
+import channelStatusRouter from "./routes/channel-status";
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -197,6 +198,7 @@ app.use(facebookOauthStart);
 app.use('/api/ctas', ctasRouter); 
 app.use("/api/channel-settings", channelSettingsRouter);
 app.use("/api/internal/cron", cronRoutes);
+app.use("/api/channel/status", channelStatusRouter);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
