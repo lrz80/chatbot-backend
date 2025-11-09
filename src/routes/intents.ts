@@ -165,67 +165,64 @@ router.post('/', authenticateUser, async (req: Request, res: Response) => {
   }
 });
 
-/** ✅ PUT /api/intents/:id
- *  Body opcional: { canal?, nombre?, ejemplos?, respuesta?, idioma?, activo?, prioridad? }
+/** ✅ PUT: Reemplazo total por canal
+ *  URL: /api/intents?canal=whatsapp|meta|facebook|instagram|voz
+ *  Body: { intents: [{ id?, nombre, ejemplos, respuesta, idioma?, activo?, prioridad? }, ...] }
+ *  Nota: ignora 'id' al insertar (se generan nuevos). Si quieres preservar 'id', se puede extender.
  */
-router.put('/:id', authenticateUser, async (req: Request, res: Response) => {
+router.put('/', authenticateUser, async (req: Request, res: Response) => {
   const tenantId = (req as any).user?.tenant_id;
   if (!tenantId) return res.status(401).json({ error: 'Tenant no autenticado' });
 
-  const id = Number(req.params.id);
-  if (!id) return res.status(400).json({ error: 'ID inválido' });
+  // canal explícito (NO expandimos 'meta' aquí; se guarda exactamente el canal indicado)
+  let canal = String((req.query?.canal as string) || '').trim().toLowerCase();
+  const ALLOWED = new Set(['whatsapp','facebook','instagram','meta','voz']);
+  if (!ALLOWED.has(canal)) canal = 'whatsapp';
 
-  const {
-    canal, nombre, ejemplos, respuesta, idioma, activo, prioridad
-  } = req.body || {};
+  const raw = req.body?.intents;
+  if (!Array.isArray(raw)) {
+    return res.status(400).json({ error: 'intents debe ser un arreglo' });
+  }
 
-  const ejemplosParsed =
-    typeof ejemplos === 'undefined' ? null : toEjemplosArray(ejemplos); // 👈
+  // normaliza/valida
+  const intents = raw
+    .map((it: any) => ({
+      nombre: String(it?.nombre || '').trim(),
+      ejemplos: toEjemplosArray(it?.ejemplos),
+      respuesta: String(it?.respuesta || '').trim(),
+      idioma: typeof it?.idioma === 'string' ? it.idioma : null,
+      activo: typeof it?.activo === 'boolean' ? it.activo : true,
+      prioridad: Number.isFinite(it?.prioridad) ? Number(it.prioridad) : 100,
+    }))
+    .filter((it: any) => it.nombre && it.ejemplos.length && it.respuesta);
 
+  const client = await pool.connect();
   try {
-    const { rows } = await pool.query(
-      `UPDATE intenciones
-          SET canal      = COALESCE($1, canal),
-              nombre     = COALESCE($2, nombre),
-              ejemplos   = COALESCE($3, ejemplos),
-              respuesta  = COALESCE($4, respuesta),
-              idioma     = $5,
-              activo     = COALESCE($6, activo),
-              prioridad  = COALESCE($7, prioridad),
-              updated_at = NOW()
-        WHERE id = $8 AND tenant_id = $9
-        RETURNING id, canal, nombre, ejemplos, respuesta, idioma, prioridad, activo, created_at, updated_at`,
-      [
-        canal ?? null,
-        nombre ?? null,
-        ejemplosParsed, // 👈 asegura array o null (no cambia)
-        respuesta ?? null,
-        typeof idioma === 'undefined' ? null : idioma,
-        typeof activo === 'boolean' ? activo : null,
-        typeof prioridad === 'number' ? prioridad : null,
-        id,
-        tenantId
-      ]
+    await client.query('BEGIN');
+
+    // 1) borra TODO lo existente para el canal del tenant (reemplazo total)
+    await client.query(
+      `DELETE FROM intenciones WHERE tenant_id = $1 AND canal = $2`,
+      [tenantId, canal]
     );
 
-    if (!rows[0]) return res.status(404).json({ error: 'Intención no encontrada' });
+    // 2) inserta todas las nuevas (ids fresh autoincrement)
+    for (const it of intents) {
+      await client.query(
+        `INSERT INTO intenciones (tenant_id, canal, nombre, ejemplos, respuesta, idioma, activo, prioridad)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [tenantId, canal, it.nombre, it.ejemplos, it.respuesta, it.idioma, it.activo, it.prioridad]
+      );
+    }
 
-    const r = rows[0];
-    return res.json({
-      id: r.id,
-      canal: r.canal,
-      nombre: r.nombre,
-      ejemplos: toEjemplosArray(r.ejemplos), // 👈 por si el driver devuelve string
-      respuesta: r.respuesta,
-      idioma: r.idioma,
-      prioridad: r.prioridad,
-      activo: r.activo,
-      created_at: r.created_at,
-      updated_at: r.updated_at
-    });
+    await client.query('COMMIT');
+    return res.json({ ok: true, count: intents.length });
   } catch (err) {
-    console.error('❌ PUT /api/intents/:id error:', err);
-    return res.status(500).json({ error: 'Error actualizando intención' });
+    await client.query('ROLLBACK');
+    console.error('❌ PUT /api/intents error:', err);
+    return res.status(500).json({ error: 'Error guardando intenciones' });
+  } finally {
+    client.release();
   }
 });
 
