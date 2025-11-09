@@ -169,14 +169,14 @@ router.put('/', authenticateUser, async (req: Request, res: Response) => {
   const tenantId = (req as any).user?.tenant_id;
   if (!tenantId) return res.status(401).json({ error: 'Tenant no autenticado' });
 
-  // canal explícito en query
   let canalQ = String((req.query?.canal as string) || '').trim().toLowerCase();
   const ALLOWED = new Set(['whatsapp','facebook','instagram','meta','voz']);
   if (!ALLOWED.has(canalQ)) canalQ = 'whatsapp';
 
-  // si en algún momento guardaste FB/IG por separado, puedes querer expandir:
+  // Si alguna vez guardaste por separado facebook/instagram,
+  // descomenta la siguiente línea para BORRAR todo al usar "meta":
   // const canales = canalesDe(canalQ).map(c => c.toLowerCase());
-  const canales = [canalQ]; // ← si quieres borrar también facebook/instagram cuando canalQ=meta, cambia por la línea de arriba
+  const canales = [canalQ];
 
   const raw = req.body?.intents;
   if (!Array.isArray(raw)) return res.status(400).json({ error: 'intents debe ser un arreglo' });
@@ -196,21 +196,18 @@ router.put('/', authenticateUser, async (req: Request, res: Response) => {
   try {
     await client.query('BEGIN');
 
-    // 🔎 log de diagnóstico (puedes dejarlo unos días)
-    console.log('🧹 intents.put DELETE for tenant:', tenantId, 'canales:', canales);
-
-    // 1) borrar robusto por canal (case-insensitive y sin espacios)
+    // 🧹 Borrado robusto (insensible a espacios/case)
     const del = await client.query(
-      `DELETE FROM intenciones 
-        WHERE tenant_id = $1 
-          AND LOWER(TRIM(canal)) = ANY($2)`,
+      `DELETE FROM intenciones
+        WHERE tenant_id = $1
+          AND LOWER(TRIM(canal)) = ANY($2::text[])`,
       [tenantId, canales]
     );
 
-    // 2) insertar nuevas
+    // ➕ Inserta nuevas
     for (const it of intents) {
       await client.query(
-        `INSERT INTO intenciones 
+        `INSERT INTO intenciones
            (tenant_id, canal, nombre, ejemplos, respuesta, idioma, activo, prioridad)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [tenantId, canalQ, it.nombre, it.ejemplos, it.respuesta, it.idioma, it.activo, it.prioridad]
@@ -218,7 +215,6 @@ router.put('/', authenticateUser, async (req: Request, res: Response) => {
     }
 
     await client.query('COMMIT');
-
     return res.json({ ok: true, deleted: del.rowCount, inserted: intents.length });
   } catch (err) {
     await client.query('ROLLBACK');
