@@ -66,16 +66,25 @@ router.post('/', authenticateUser, async (req, res) => {
 
 router.delete('/:id', authenticateUser, async (req, res) => {
   const tenantId = (req as any).user?.tenant_id;
-  const id = Number(req.params.id);
-  if (!tenantId || !id) return res.status(400).json({ error: 'ID o tenant inválido' });
+  const idParam = (req.params.id || '').trim();
+
+  if (!tenantId || !idParam) {
+    return res.status(400).json({ error: 'ID o tenant inválido' });
+  }
+
+  // Detecta si es numérico (BIGINT) o UUID
+  const isNumeric = /^\d+$/.test(idParam);
+  const whereId = isNumeric ? 'id = $1::bigint' : 'id = $1::uuid';
 
   try {
     const { rowCount } = await pool.query(
-      `DELETE FROM intenciones WHERE id = $1 AND tenant_id = $2`,
-      [id, tenantId]
+      `DELETE FROM intenciones WHERE ${whereId} AND tenant_id = $2`,
+      [idParam, tenantId]
     );
 
-    if (rowCount === 0) return res.status(404).json({ error: 'Intención no encontrada' });
+    if (rowCount === 0) {
+      return res.status(404).json({ error: 'Intención no encontrada' });
+    }
     res.json({ ok: true });
   } catch (err) {
     console.error('❌ DELETE /api/intents/:id error:', err);
