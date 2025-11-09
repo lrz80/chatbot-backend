@@ -165,26 +165,22 @@ router.post('/', authenticateUser, async (req: Request, res: Response) => {
   }
 });
 
-/** ✅ PUT: Reemplazo total por canal
- *  URL: /api/intents?canal=whatsapp|meta|facebook|instagram|voz
- *  Body: { intents: [{ id?, nombre, ejemplos, respuesta, idioma?, activo?, prioridad? }, ...] }
- *  Nota: ignora 'id' al insertar (se generan nuevos). Si quieres preservar 'id', se puede extender.
- */
 router.put('/', authenticateUser, async (req: Request, res: Response) => {
   const tenantId = (req as any).user?.tenant_id;
   if (!tenantId) return res.status(401).json({ error: 'Tenant no autenticado' });
 
-  // canal explícito (NO expandimos 'meta' aquí; se guarda exactamente el canal indicado)
-  let canal = String((req.query?.canal as string) || '').trim().toLowerCase();
+  // canal explícito en query
+  let canalQ = String((req.query?.canal as string) || '').trim().toLowerCase();
   const ALLOWED = new Set(['whatsapp','facebook','instagram','meta','voz']);
-  if (!ALLOWED.has(canal)) canal = 'whatsapp';
+  if (!ALLOWED.has(canalQ)) canalQ = 'whatsapp';
+
+  // si en algún momento guardaste FB/IG por separado, puedes querer expandir:
+  // const canales = canalesDe(canalQ).map(c => c.toLowerCase());
+  const canales = [canalQ]; // ← si quieres borrar también facebook/instagram cuando canalQ=meta, cambia por la línea de arriba
 
   const raw = req.body?.intents;
-  if (!Array.isArray(raw)) {
-    return res.status(400).json({ error: 'intents debe ser un arreglo' });
-  }
+  if (!Array.isArray(raw)) return res.status(400).json({ error: 'intents debe ser un arreglo' });
 
-  // normaliza/valida
   const intents = raw
     .map((it: any) => ({
       nombre: String(it?.nombre || '').trim(),
@@ -194,29 +190,36 @@ router.put('/', authenticateUser, async (req: Request, res: Response) => {
       activo: typeof it?.activo === 'boolean' ? it.activo : true,
       prioridad: Number.isFinite(it?.prioridad) ? Number(it.prioridad) : 100,
     }))
-    .filter((it: any) => it.nombre && it.ejemplos.length && it.respuesta);
+    .filter(it => it.nombre && it.ejemplos.length && it.respuesta);
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    // 1) borra TODO lo existente para el canal del tenant (reemplazo total)
-    await client.query(
-      `DELETE FROM intenciones WHERE tenant_id = $1 AND canal = $2`,
-      [tenantId, canal]
+    // 🔎 log de diagnóstico (puedes dejarlo unos días)
+    console.log('🧹 intents.put DELETE for tenant:', tenantId, 'canales:', canales);
+
+    // 1) borrar robusto por canal (case-insensitive y sin espacios)
+    const del = await client.query(
+      `DELETE FROM intenciones 
+        WHERE tenant_id = $1 
+          AND LOWER(TRIM(canal)) = ANY($2)`,
+      [tenantId, canales]
     );
 
-    // 2) inserta todas las nuevas (ids fresh autoincrement)
+    // 2) insertar nuevas
     for (const it of intents) {
       await client.query(
-        `INSERT INTO intenciones (tenant_id, canal, nombre, ejemplos, respuesta, idioma, activo, prioridad)
+        `INSERT INTO intenciones 
+           (tenant_id, canal, nombre, ejemplos, respuesta, idioma, activo, prioridad)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [tenantId, canal, it.nombre, it.ejemplos, it.respuesta, it.idioma, it.activo, it.prioridad]
+        [tenantId, canalQ, it.nombre, it.ejemplos, it.respuesta, it.idioma, it.activo, it.prioridad]
       );
     }
 
     await client.query('COMMIT');
-    return res.json({ ok: true, count: intents.length });
+
+    return res.json({ ok: true, deleted: del.rowCount, inserted: intents.length });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ PUT /api/intents error:', err);
