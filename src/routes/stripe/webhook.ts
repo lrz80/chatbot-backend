@@ -241,7 +241,19 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
         const vigencia = new Date(subscription.current_period_end * 1000);
         const esTrial = subscription.status === 'trialing';
-        const planValue = esTrial ? 'trial' : 'pro';
+
+        // 🔎 Lee el nombre del plan desde Stripe automáticamente
+        const product = subscription.items.data[0]?.price?.product;
+        let planValue = 'pro'; // valor por defecto
+
+        if (typeof product === 'string') {
+          try {
+            const stripeProduct = await stripe.products.retrieve(product);
+            planValue = (stripeProduct.name || 'pro').toLowerCase(); // usa el nombre del producto en Stripe
+          } catch (e) {
+            console.warn('⚠️ No se pudo leer el nombre del producto:', e);
+          }
+        }
 
         // 3) Activa membresía y guarda subscription_id
         await pool.query(
@@ -302,7 +314,19 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
     if (tenant_id) {
       const esTrial = subscription.status === 'trialing';
-      const planValue = esTrial ? 'trial' : 'pro';
+
+      // 🔎 Lee el nombre del plan desde Stripe automáticamente
+      const product = subscription.items.data[0]?.price?.product;
+      let planValue = 'pro'; // valor por defecto
+
+      if (typeof product === 'string') {
+        try {
+          const stripeProduct = await stripe.products.retrieve(product);
+          planValue = (stripeProduct.name || 'pro').toLowerCase(); // usa el nombre del producto en Stripe
+        } catch (e) {
+          console.warn('⚠️ No se pudo leer el nombre del producto:', e);
+        }
+      }
 
       await pool.query(
         `
