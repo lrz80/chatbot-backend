@@ -171,30 +171,46 @@ router.post("/", async (req: AuthedReq, res: Response) => {
   }
 });
 
-// DELETE: eliminar CTA por intent+canal (seguro por tenant)
+// DELETE: borrado duro por intent (sin tombstone) + limpia filas viejas sin slug
 router.delete("/:intent", async (req: AuthedReq, res: Response) => {
+  const client = await pool.connect();
   try {
     const tenantId = req.user?.tenant_id;
     if (!tenantId) return res.status(401).json({ ok: false, error: "unauthorized" });
 
     const canal = String(req.query.canal || "whatsapp").toLowerCase();
     const raw   = String(req.params.intent || "").trim();
+    const canonical = normalizeIntentAlias(raw.toLowerCase());
     const slug  = intentToSlug(raw);
 
     if (!slug) return res.status(400).json({ ok: false, error: "invalid-intent" });
 
-    await pool.query(
-      `INSERT INTO tenant_ctas (tenant_id, canal, intent, intent_slug, cta_text, cta_url, deleted, updated_at)
-       VALUES ($1,$2,'',$3,'','',TRUE, now())
-       ON CONFLICT (tenant_id, canal, intent_slug)
-       DO UPDATE SET deleted = TRUE, updated_at = now()`,
-      [tenantId, canal, slug]
+    await client.query("BEGIN");
+
+    // Borra cualquier fila del tenant para ese intent/canal:
+    //  - coincidencia por slug correcto
+    //  - coincidencia por intent canónico con slug nulo/vacío (legacy)
+    await client.query(
+      `
+      DELETE FROM tenant_ctas
+      WHERE tenant_id = $1
+        AND canal = $2
+        AND (
+              intent_slug = $3
+           OR (intent = $4 AND (intent_slug IS NULL OR intent_slug = ''))
+        )
+      `,
+      [tenantId, canal, slug, canonical]
     );
 
+    await client.query("COMMIT");
     return res.json({ ok: true });
   } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
     console.error("[CTAs:DELETE] error:", e);
     return res.status(500).json({ ok: false, error: "db-error" });
+  } finally {
+    client.release();
   }
 });
 
