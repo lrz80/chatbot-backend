@@ -19,26 +19,33 @@ const PLAN_FEATURES: Record<string, Partial<Record<Canal, boolean>>> = {
 
 /** 🔹 Determina qué plan está activo considerando trial */
 function resolveEffectivePlan(row: any): { planName: string; trialActive: boolean } {
-  const plan = String(row?.plan || "").toLowerCase() || "trial";
+  // normaliza
+  const rawPlan = String(row?.plan || "").toLowerCase().trim();
+
+  // ⚠️ Regla clave: si hay plan pago (distinto de "trial" / "free"), SIEMPRE priorizarlo
+  if (rawPlan && rawPlan !== "trial" && rawPlan !== "free") {
+    return { planName: rawPlan, trialActive: false };
+  }
+
   const es_trial = !!row?.es_trial;
   const trial_ends_at = row?.trial_ends_at ? dayjs(row.trial_ends_at) : null;
   const now = dayjs();
 
-  // Si el trial sigue vigente
+  // Si solo hay trial (sin plan pago definido)
   if (es_trial && trial_ends_at && now.isBefore(trial_ends_at)) {
     return { planName: "trial", trialActive: true };
   }
 
-  // Si el trial venció y hay plan_after_trial definido
+  // Si el trial venció y hay plan_after_trial
   const planAfter = String(row?.plan_after_trial || "").toLowerCase().trim();
   if (es_trial && trial_ends_at && now.isAfter(trial_ends_at)) {
     if (planAfter) return { planName: planAfter, trialActive: false };
-    if (plan && plan !== "trial") return { planName: plan, trialActive: false };
-    return { planName: "starter", trialActive: false };
+    // fallback razonable
+    return { planName: rawPlan || "starter", trialActive: false };
   }
 
-  // Si no está en trial
-  return { planName: plan || "starter", trialActive: false };
+  // Sin trial activo
+  return { planName: rawPlan || "starter", trialActive: false };
 }
 
 /**
