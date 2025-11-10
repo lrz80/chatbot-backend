@@ -7,7 +7,7 @@ import pool from '../../lib/db';
 const router = express.Router();
 
 // ⚙️ Sube este PRICE_ID a tu .env si prefieres: STRIPE_PRICE_PRO=price_...
-const PRICE_ID = process.env.STRIPE_PRICE_PRO || 'price_1R8AcL05RmqANw5ePQ1CbtZ8';
+const PRICE_ID = process.env.STRIPE_PRICE_PRO || 'price_1R8C4K05RmqANw5eLQo1xPMU';
 
 // POST /api/stripe/checkout
 router.post('/checkout', async (req, res) => {
