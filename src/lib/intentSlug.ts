@@ -152,3 +152,13 @@ export function buildDudaSlug(userText: string): string {
 export function isDirectIntent(intent: string, baseSet: Set<string>): boolean {
   return baseSet.has(intent) || intent.startsWith('duda__');
 }
+
+// ✅ Slug final: usa tu mapa de alias + slugify
+export function intentToSlug(intent: string = ""): string {
+  const canonical = normalizeIntentAlias(intent || "");
+  return canonical
+    .normalize("NFKD").replace(/[\u0300-\u036f]/g, "") // sin acentos
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")                       // todo lo no [a-z0-9] -> "-"
+    .replace(/(^-|-$)/g, "");                          // sin guiones en bordes
+}

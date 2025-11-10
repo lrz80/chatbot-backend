@@ -2,7 +2,7 @@
 import { Router, Request, Response } from "express";
 import pool from "../lib/db";
 import { authenticateUser } from "../middleware/auth";
-import { normalizeIntentAlias } from "../lib/intentSlug";
+import { normalizeIntentAlias, intentToSlug } from "../lib/intentSlug";
 
 // Shape real que pone tu middleware
 type AuthedReq = Request & {
@@ -12,6 +12,7 @@ type AuthedReq = Request & {
 type CtaItem = {
   id?: number;
   intent: string;
+  intent_slug?: string;
   cta_text: string;
   cta_url: string;
   canal?: string;
@@ -38,15 +39,18 @@ function isValidUrl(u?: string) {
 
 function cleanItem(x: any, indexForOrder = 0): Required<CtaItem> {
   const intentRaw = String(x?.intent || "").trim().toLowerCase();
-  const intent = normalizeIntentAlias(intentRaw);       // 👈 normaliza aquí
-  const cta_text = String(x?.cta_text || "").trim();
-  const cta_url = String(x?.cta_url || "").trim();
-  const canal = String(x?.canal || "whatsapp").trim().toLowerCase();
-  const activo = x?.activo === false ? false : true;
-  const orden =
-    Number.isFinite(x?.orden) && x?.orden > 0 ? Number(x?.orden) : indexForOrder + 1;
 
-  return { id: x?.id, intent, cta_text, cta_url, canal, activo, orden } as Required<CtaItem>;
+  // canónico + slug
+  const intent = normalizeIntentAlias(intentRaw);
+  const intent_slug = intentToSlug(intentRaw); // (usa alias internamente)
+
+  const cta_text = String(x?.cta_text || "").trim();
+  const cta_url  = String(x?.cta_url  || "").trim();
+  const canal    = String(x?.canal    || "whatsapp").trim().toLowerCase();
+  const activo   = x?.activo === false ? false : true;
+  const orden    = Number.isFinite(x?.orden) && x?.orden > 0 ? Number(x?.orden) : indexForOrder + 1;
+
+  return { id: x?.id, intent, intent_slug, cta_text, cta_url, canal, activo, orden } as Required<CtaItem>;
 }
 
 // -----------------------------
@@ -60,10 +64,10 @@ router.get("/", async (req: AuthedReq, res: Response) => {
     const canal = String(req.query.canal || "whatsapp").toLowerCase();
 
     const { rows } = await pool.query(
-      `SELECT id, intent, cta_text, cta_url, canal, activo, orden, updated_at
-       FROM tenant_ctas
-       WHERE tenant_id = $1 AND canal = $2
-       ORDER BY orden ASC, id ASC`,
+      `SELECT id, intent, intent_slug, cta_text, cta_url, canal, activo, orden, updated_at
+         FROM tenant_ctas
+        WHERE tenant_id = $1 AND canal = $2 AND deleted = FALSE
+        ORDER BY orden ASC, id ASC`,
       [tenantId, canal]
     );
 
@@ -100,22 +104,29 @@ router.post("/", async (req: AuthedReq, res: Response) => {
         return res.status(400).json({ error: "Hay URLs inválidas (deben iniciar con http(s)://)" });
       }
 
-      await pool.query("BEGIN");
-      // Reemplazo simple del set por canal
       await pool.query(
         `DELETE FROM tenant_ctas WHERE tenant_id = $1 AND canal = $2`,
         [tenantId, canal]
-      );
-
-      for (const it of limpias) {
-        await pool.query(
-          `INSERT INTO tenant_ctas
-             (tenant_id, canal, intent, cta_text, cta_url, activo, orden, updated_at)
-           VALUES
-             ($1, $2, $3, $4, $5, $6, $7, now())`,
-          [tenantId, it.canal, it.intent, it.cta_text, it.cta_url, it.activo, it.orden]
         );
-      }
+
+        for (const it of limpias) {
+        await pool.query(
+            `INSERT INTO tenant_ctas
+            (tenant_id, canal, intent, intent_slug, cta_text, cta_url, activo, orden, deleted, updated_at)
+            VALUES
+            ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, now())
+            ON CONFLICT (tenant_id, canal, intent_slug)
+            DO UPDATE SET
+            intent     = EXCLUDED.intent,
+            cta_text   = EXCLUDED.cta_text,
+            cta_url    = EXCLUDED.cta_url,
+            activo     = EXCLUDED.activo,
+            orden      = EXCLUDED.orden,
+            deleted    = FALSE,
+            updated_at = now()`,
+            [tenantId, it.canal, it.intent, it.intent_slug, it.cta_text, it.cta_url, it.activo, it.orden]
+        );
+        }
 
       await pool.query("COMMIT");
       return res.json({ ok: true, count: limpias.length });
@@ -134,18 +145,20 @@ router.post("/", async (req: AuthedReq, res: Response) => {
 
     const { rows } = await pool.query(
       `INSERT INTO tenant_ctas
-         (tenant_id, canal, intent, cta_text, cta_url, activo, orden, updated_at)
-       VALUES
-         ($1, $2, $3, $4, $5, $6, $7, now())
-       ON CONFLICT (tenant_id, canal, intent)
-       DO UPDATE SET
-         cta_text  = EXCLUDED.cta_text,
-         cta_url   = EXCLUDED.cta_url,
-         activo    = EXCLUDED.activo,
-         orden     = EXCLUDED.orden,
-         updated_at = now()
-       RETURNING id, intent, cta_text, cta_url, canal, activo, orden, updated_at`,
-      [tenantId, body.canal, body.intent, body.cta_text, body.cta_url, body.activo, body.orden]
+          (tenant_id, canal, intent, intent_slug, cta_text, cta_url, activo, orden, deleted, updated_at)
+      VALUES
+          ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, now())
+      ON CONFLICT (tenant_id, canal, intent_slug)
+      DO UPDATE SET
+          intent     = EXCLUDED.intent,
+          cta_text   = EXCLUDED.cta_text,
+          cta_url    = EXCLUDED.cta_url,
+          activo     = EXCLUDED.activo,
+          orden      = EXCLUDED.orden,
+          deleted    = FALSE,
+          updated_at = now()
+      RETURNING id, intent, intent_slug, cta_text, cta_url, canal, activo, orden, updated_at`,
+     [tenantId, body.canal, body.intent, body.intent_slug, body.cta_text, body.cta_url, body.activo, body.orden]
     );
 
     res.json(rows[0]);
@@ -164,13 +177,18 @@ router.delete("/:intent", async (req: AuthedReq, res: Response) => {
     const tenantId = req.user?.tenant_id;
     if (!tenantId) return res.status(401).json({ ok: false, error: "unauthorized" });
 
-    const canal = String(req.query.canal || "whatsapp").toLowerCase(); // 👈 toma canal
-    const intent = normalizeIntentAlias(String(req.params.intent || "").trim());
-    if (!intent) return res.status(400).json({ ok: false, error: "invalid-intent" });
+    const canal = String(req.query.canal || "whatsapp").toLowerCase();
+    const raw   = String(req.params.intent || "").trim();
+    const slug  = intentToSlug(raw);
+
+    if (!slug) return res.status(400).json({ ok: false, error: "invalid-intent" });
 
     await pool.query(
-      `DELETE FROM tenant_ctas WHERE tenant_id = $1 AND canal = $2 AND intent = $3`,
-      [tenantId, canal, intent]                                      // 👈 incluye canal
+      `INSERT INTO tenant_ctas (tenant_id, canal, intent, intent_slug, cta_text, cta_url, deleted, updated_at)
+       VALUES ($1,$2,'',$3,'','',TRUE, now())
+       ON CONFLICT (tenant_id, canal, intent_slug)
+       DO UPDATE SET deleted = TRUE, updated_at = now()`,
+      [tenantId, canal, slug]
     );
 
     return res.json({ ok: true });
