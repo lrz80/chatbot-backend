@@ -12,6 +12,99 @@ const router = express.Router();
 let stripe: Stripe;
 let STRIPE_WEBHOOK_SECRET: string;
 
+type ChannelFlags = {
+  whatsapp_enabled: boolean;
+  meta_enabled: boolean;
+  voice_enabled: boolean;
+  sms_enabled: boolean;
+  email_enabled: boolean;
+};
+
+const bool = (v: any, fallback = false) =>
+  String(v ?? '').toLowerCase() === 'true' ? true : (v === true ? true : fallback);
+
+// ✅ UPsert a channel_settings
+const upsertChannelFlags = async (tenantId: string, flags: ChannelFlags) => {
+  await pool.query(
+    `
+    INSERT INTO channel_settings
+      (tenant_id, whatsapp_enabled, meta_enabled, voice_enabled, sms_enabled, email_enabled)
+    VALUES
+      ($1,        $2,               $3,          $4,            $5,          $6)
+    ON CONFLICT (tenant_id)
+    DO UPDATE SET
+      whatsapp_enabled = EXCLUDED.whatsapp_enabled,
+      meta_enabled     = EXCLUDED.meta_enabled,
+      voice_enabled    = EXCLUDED.voice_enabled,
+      sms_enabled      = EXCLUDED.sms_enabled,
+      email_enabled    = EXCLUDED.email_enabled
+    `,
+    [
+      tenantId,
+      flags.whatsapp_enabled,
+      flags.meta_enabled,
+      flags.voice_enabled,
+      flags.sms_enabled,
+      flags.email_enabled,
+    ]
+  );
+};
+
+// Lee metadata del producto y produce flags (si no hay metadata, por defecto TODO TRUE)
+const flagsFromProduct = (product: Stripe.Product): ChannelFlags => {
+  const md = (product.metadata || {}) as Record<string, string>;
+  const defaultsAllTrue: ChannelFlags = {
+    whatsapp_enabled: true,
+    meta_enabled: true,
+    voice_enabled: true,
+    sms_enabled: true,
+    email_enabled: true,
+  };
+  return {
+    whatsapp_enabled: bool(md.whatsapp_enabled, defaultsAllTrue.whatsapp_enabled),
+    meta_enabled:     bool(md.meta_enabled,     defaultsAllTrue.meta_enabled),
+    voice_enabled:    bool(md.voice_enabled,    defaultsAllTrue.voice_enabled),
+    sms_enabled:      bool(md.sms_enabled,      defaultsAllTrue.sms_enabled),
+    email_enabled:    bool(md.email_enabled,    defaultsAllTrue.email_enabled),
+  };
+};
+
+// 🔎 Obtiene el product de Stripe desde la Checkout Session (modo subscription)
+const getProductFromCheckoutSession = async (stripe: Stripe, sessionId: string) => {
+  const items = await stripe.checkout.sessions.listLineItems(sessionId, { limit: 1 });
+  const price = items.data[0]?.price;
+  const productId = typeof price?.product === 'string' ? price?.product : undefined;
+  if (!productId) return null;
+  return await stripe.products.retrieve(productId);
+};
+
+// 🔎 Obtiene el product de Stripe desde la Subscription
+const getProductFromSubscription = async (stripe: Stripe, subscription: Stripe.Subscription) => {
+  const price = subscription.items?.data?.[0]?.price;
+  const productId = typeof price?.product === 'string' ? price?.product : undefined;
+  if (!productId) return null;
+  return await stripe.products.retrieve(productId);
+};
+
+// 🔎 Obtiene todos los productos de una suscripción (por si vendes bundles con varios precios)
+const getProductsFromSubscription = async (stripe: Stripe, sub: Stripe.Subscription) => {
+  const prods: Stripe.Product[] = [];
+  for (const it of sub.items.data) {
+    const pid = typeof it.price.product === 'string' ? it.price.product : undefined;
+    if (pid) prods.push(await stripe.products.retrieve(pid));
+  }
+  return prods;
+};
+
+// 🔗 Combina múltiples conjuntos de flags (si un cliente tiene varios productos activos)
+const combineFlags = (all: ChannelFlags[]) => ({
+  whatsapp_enabled: all.some(f => f.whatsapp_enabled),
+  meta_enabled:     all.some(f => f.meta_enabled),
+  voice_enabled:    all.some(f => f.voice_enabled),
+  sms_enabled:      all.some(f => f.sms_enabled),
+  email_enabled:    all.some(f => f.email_enabled),
+});
+
 function initStripe() {
   if (!stripe) {
     const key = process.env.STRIPE_SECRET_KEY;
@@ -130,16 +223,27 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     // Modo "subscription" (membresías)
     if (email && session.subscription) {
       try {
-        const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [email]);
-        const user = userRes.rows[0];
-        if (!user) return res.status(200).json({ received: true });
+        // 1) Obtén el tenantId de metadata si vino en el Checkout; si no, busca por email
+        let tenantId: string | null = session.metadata?.tenant_id ?? null;
 
+        if (!tenantId) {
+          const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [email]);
+          tenantId = userRes.rows[0]?.uid ?? null;
+        }
+
+        if (!tenantId) {
+          console.warn('⚠️ No se encontró tenantId para la suscripción (ni por metadata ni por email).');
+          return res.status(200).json({ received: true });
+        }
+
+        // 2) Datos de la suscripción
         const subscriptionId = session.subscription as string;
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
         const vigencia = new Date(subscription.current_period_end * 1000);
         const esTrial = subscription.status === 'trialing';
         const planValue = esTrial ? 'trial' : 'pro';
 
+        // 3) Activa membresía y guarda subscription_id
         await pool.query(
           `
           UPDATE tenants
@@ -151,12 +255,36 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
               es_trial = $6
           WHERE id = $1
           `,
-          [user.uid, vigencia, new Date(subscription.start_date * 1000), planValue, subscriptionId, esTrial]
+          [tenantId, vigencia, new Date(subscription.start_date * 1000), planValue, subscriptionId, esTrial]
         );
 
-        await resetearCanales(user.uid);
+        // 4) Reinicia usos
+        await resetearCanales(tenantId);
 
-        const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [user.uid]);
+        // 5) Lee el producto de Stripe y aplica flags de canales
+        try {
+          const product = await getProductFromCheckoutSession(stripe, session.id);
+          if (product) {
+            const flags = flagsFromProduct(product);
+            await upsertChannelFlags(tenantId, flags);
+            console.log('✅ Channel flags actualizados por checkout:', flags, 'tenant:', tenantId);
+          } else {
+            // fallback: todos true
+            await upsertChannelFlags(tenantId, {
+              whatsapp_enabled: true,
+              meta_enabled: true,
+              voice_enabled: true,
+              sms_enabled: true,
+              email_enabled: true,
+            });
+            console.log('ℹ️ No se obtuvo product; activados todos los canales por defecto.');
+          }
+        } catch (e) {
+          console.error('❌ Error estableciendo channel flags post-checkout:', e);
+        }
+
+        // 6) Email de bienvenida/activación
+        const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [tenantId]);
         const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
         await sendSubscriptionActivatedEmail(email, tenantName);
       } catch (error) {
@@ -193,6 +321,19 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           tenant_id,
         ]
       );
+
+      try {
+        const products = await getProductsFromSubscription(stripe, subscription);
+        if (products.length && tenant_id) {
+          const allFlags = products.map(p => flagsFromProduct(p));
+          const combined = combineFlags(allFlags);
+          await upsertChannelFlags(tenant_id, combined);
+          console.log('🔄 Channel flags actualizados (multi-product):', combined, 'tenant:', tenant_id);
+        }
+
+      } catch (e) {
+        console.error('❌ Error actualizando channel flags en subscription.updated:', e);
+      }
 
       console.log(`🔄 Subscripción actualizada para tenant ${tenant_id}: plan=${planValue}, es_trial=${esTrial}`);
     }
@@ -306,6 +447,15 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         `,
         [user.uid]
       );
+
+      await upsertChannelFlags(user.uid, {
+        whatsapp_enabled: false,
+        meta_enabled: false,
+        voice_enabled: false,
+        sms_enabled: false,
+        email_enabled: false,
+      });
+      console.log('🛑 Channel flags desactivados por cancelación para', user.uid);
 
       console.log('🛑 Cancelando plan para', customerEmail, 'con UID', user.uid);
 
