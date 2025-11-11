@@ -83,37 +83,46 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       };
     }
 
-    // ====================== NUEVO BLOQUE ======================
+    // ====================== NUEVO BLOQUE (trial/banners) ======================
     const hoy = new Date();
     const vigencia = tenant.membresia_vigencia ? new Date(tenant.membresia_vigencia) : null;
 
-    // Si no usas subscription_id, calcula trial por plan o flag
+    // ¿El plan actual es trial? (o flag heredado)
     const es_trial = Boolean(tenant.plan === 'trial' || tenant.es_trial === true);
 
-    // trial vigente si es trial y no ha vencido
-    const trial_vigente = Boolean(es_trial && vigencia && vigencia >= hoy);
+    // Trial activo si es trial y aún no vence
+    const trial_activo = Boolean(es_trial && vigencia && vigencia >= hoy);
 
-    // puede editar si plan activo o trial vigente
-    const can_edit = Boolean(tenant.membresia_activa || trial_vigente);
+    // Compat: algunos componentes esperan trial_vigente
+    const trial_vigente = trial_activo;
 
-    // Texto UI
+    // Normaliza el flag por si viene undefined en algunos tenants
+    const trial_ever_claimed = !!tenant.trial_ever_claimed;
+
+    // Trial disponible si NUNCA lo ha usado y no tiene plan activo ni trial activo
+    const trial_disponible = Boolean(!tenant.trial_ever_claimed && !tenant.membresia_activa && !trial_activo);
+
+    // Puede editar si tiene plan activo o trial activo
+    const can_edit = Boolean(tenant.membresia_activa || trial_activo);
+
+    // Texto para UI
     let estado_membresia_texto = '🔴 Inactiva';
-    if (tenant.membresia_activa) {
+    if (tenant.membresia_activa && tenant.plan !== 'trial') {
       const f = vigencia ? vigencia.toLocaleDateString() : '';
       estado_membresia_texto = `✅ Activa - Plan ${tenant.plan || 'Pro'} hasta ${f}`;
-    } else if (trial_vigente) {
+    } else if (trial_activo) {
       const f = vigencia ? vigencia.toLocaleDateString() : '';
       estado_membresia_texto = `🟡 Prueba gratis activa hasta ${f}`;
-    } else if (es_trial && vigencia && vigencia < hoy) {
-      const f = vigencia.toLocaleDateString();
-      estado_membresia_texto = `🔴 Prueba gratis vencida el ${f}`;
+    } else if (tenant.trial_ever_claimed) {
+      estado_membresia_texto = '🔴 Prueba gratis vencida.';
     }
 
-    // Aliases que el front espera
+    // Aliases esperados por el front
     const plan_name: string | null = tenant.plan ?? null;
-    const plan: string | null = plan_name;                // 👈 alias usado por el front
+    const plan: string | null = plan_name;
     const registered_at: string | null = tenant.created_at ?? null;
-    const fecha_registro: string | null = registered_at;  // 👈 alias usado por el front
+    const fecha_registro: string | null = registered_at;
+    // ==================== FIN NUEVO BLOQUE ====================
 
     return res.status(200).json({
       uid: user.uid,
@@ -124,9 +133,12 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       // Membresía / trial
       membresia_activa: Boolean(tenant.membresia_activa),
       membresia_vigencia: tenant.membresia_vigencia ?? null,
-      es_trial,                  // 👈 ya sin subscription_id
-      trial_vigente,            // 👈 expuesto
-      can_edit,                 // 👈 expuesto
+      es_trial,
+      trial_vigente,                  // alias de trial_activo
+      trial_activo,                   // por si el front usa este nombre
+      trial_disponible,               // << NECESARIO para “Activa tu prueba gratis”
+      trial_ever_claimed,             // << NECESARIO para saber si ya la usó
+      can_edit,
       estado_membresia_texto,
 
       // Perfil negocio

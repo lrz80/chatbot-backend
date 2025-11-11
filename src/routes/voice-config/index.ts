@@ -32,56 +32,45 @@ const normRowForUI = (row: any = {}) => {
   };
 };
 
-// 📥 OBTENER configuración de voz (versión definitiva)
+// 📥 OBTENER configuración de voz
 router.get("/", authenticateUser, async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
-  let { idioma = "es-ES", canal = "voz" } = req.query;
+  const idiomaQ = String((req.query.idioma as string) || "es").toLowerCase();
+  const canalQ  = String((req.query.canal  as string) || "voz").toLowerCase();
 
-  // Normaliza idioma y canal
-  idioma = String(idioma).toLowerCase().startsWith("en") ? "en" : "es";
-  canal = String(canal).toLowerCase() === "voice" ? "voz" : "voz";
+  // normaliza: es -> es-ES, en -> en-US (opcional; sirve para guardar coherente)
+  const canon = (x: string) => x.startsWith("es") ? "es-ES" : x.startsWith("en") ? "en-US" : x;
+  const idiomaCanon = canon(idiomaQ);
 
   try {
-    // Busca exacto, si no hay, busca fallback (cualquier idioma o canal)
-    let { rows } = await pool.query(
-      `SELECT *
-         FROM voice_configs
-        WHERE tenant_id = $1
-          AND idioma = $2
-          AND canal = $3
-        ORDER BY updated_at DESC
-        LIMIT 1`,
-      [tenant_id, idioma, canal]
+    // 1) intenta match exacto o por prefijo (es / es-ES)
+    const { rows } = await pool.query(
+      `
+      SELECT * FROM voice_configs
+       WHERE tenant_id = $1
+         AND lower(canal) = $2
+         AND (
+           lower(idioma) = $3
+           OR lower(idioma) LIKE $4    -- 'es-%' si piden 'es'
+           OR $3 LIKE lower(idioma)||'%'  -- si guardaste 'es' y piden 'es-ES'
+         )
+      ORDER BY updated_at DESC, created_at DESC
+      LIMIT 1
+      `,
+      [tenant_id, canalQ, idiomaCanon, idiomaCanon.split("-")[0] + "-%"]
     );
 
-    if (!rows[0]) {
-      const fb = await pool.query(
-        `SELECT * FROM voice_configs
-          WHERE tenant_id = $1
-          ORDER BY updated_at DESC
-          LIMIT 1`,
-        [tenant_id]
-      );
-      rows = fb.rows;
-    }
+    if (rows[0]) return res.json(normRowForUI(rows[0]));
 
-    const r = rows[0] || {};
-
-    return res.json({
-      idioma: r.idioma || idioma,
-      voice_name: r.voice_name || "",
-      prompt: r.system_prompt || "",
-      bienvenida: r.welcome_message || "",
-      funciones_asistente: r.funciones_asistente || "",
-      info_clave: r.info_clave || "",
-      voice_hints: r.voice_hints || "",
-      representante_number: r.representante_number || "",
-      categoria: r.categoria || null,
-      canal: r.canal || "voz",
-    });
+    // 2) Fallback: última config del tenant (cualquier idioma/canal)
+    const r2 = await pool.query(
+      `SELECT * FROM voice_configs WHERE tenant_id = $1 ORDER BY updated_at DESC, created_at DESC LIMIT 1`,
+      [tenant_id]
+    );
+    return res.json(normRowForUI(r2.rows[0] || {}));
   } catch (err) {
     console.error("❌ Error al obtener configuración de voz:", err);
-    res.status(500).json({ error: "Error al obtener configuración de voz" });
+    res.status(500).json({ error: "Error al obtener configuración." });
   }
 });
 
@@ -135,34 +124,39 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
 
   try {
     await pool.query(
-      `INSERT INTO voice_configs (
-         tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints,
-         canal, funciones_asistente, info_clave, audio_demo_url, representante_number, created_at, updated_at
-       )
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW(), NOW())
-       ON CONFLICT (tenant_id)
-       DO UPDATE SET
-         voice_name          = EXCLUDED.voice_name,
-         system_prompt       = EXCLUDED.system_prompt,
-         welcome_message     = EXCLUDED.welcome_message,
-         voice_hints         = EXCLUDED.voice_hints,
-         funciones_asistente = EXCLUDED.funciones_asistente,
-         info_clave          = EXCLUDED.info_clave,
-         audio_demo_url      = EXCLUDED.audio_demo_url,
-         representante_number = EXCLUDED.representante_number,
-         updated_at          = NOW()`,
+      `
+      INSERT INTO voice_configs (
+        tenant_id, idioma, voice_name, system_prompt, welcome_message, voice_hints,
+        canal, funciones_asistente, info_clave, audio_demo_url, representante_number,
+        created_at, updated_at
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW(), NOW())
+      ON CONFLICT (tenant_id)                             -- 👈 misma key única del error
+      DO UPDATE SET
+        idioma               = EXCLUDED.idioma,
+        voice_name           = COALESCE(NULLIF(EXCLUDED.voice_name, ''), voice_configs.voice_name),
+        system_prompt        = EXCLUDED.system_prompt,
+        welcome_message      = EXCLUDED.welcome_message,
+        voice_hints          = EXCLUDED.voice_hints,
+        canal                = EXCLUDED.canal,
+        funciones_asistente  = EXCLUDED.funciones_asistente,
+        info_clave           = EXCLUDED.info_clave,
+        audio_demo_url       = EXCLUDED.audio_demo_url,
+        representante_number = EXCLUDED.representante_number,
+        updated_at           = NOW()
+      `,
       [
         tenant_id,
-        idioma,
-        voice_name,
+        idioma || 'es',
+        voice_name || 'alice',
         system_prompt,
         welcome_message,
-        voice_hints,
-        canal,
-        funciones_asistente,
-        info_clave,
+        voice_hints || '',
+        'voz',                                // asegura canal consistente
+        funciones_asistente || '',
+        info_clave || '',
         audio_demo_url || null,
-        representante_number
+        representante_number || null,
       ]
     );
 

@@ -74,6 +74,7 @@ import ctasRouter from './routes/ctas';
 import channelSettingsRouter from "./routes/channel-settings";
 import cronRoutes from "./routes/internal/cron";
 import channelStatusRouter from "./routes/channel-status";
+import billingRoutes from './routes/billing';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -199,6 +200,7 @@ app.use('/api/ctas', ctasRouter);
 app.use("/api/channel-settings", channelSettingsRouter);
 app.use("/api/internal/cron", cronRoutes);
 app.use("/api/channel/status", channelStatusRouter);
+app.use('/api/billing', billingRoutes);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
