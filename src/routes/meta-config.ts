@@ -37,6 +37,7 @@ router.get('/', async (req: Request, res: Response) => {
   
       const tenantRes = await pool.query(`
         SELECT 
+          name,              -- 👈 añade esto
           facebook_page_id, 
           facebook_page_name, 
           instagram_page_id, 
