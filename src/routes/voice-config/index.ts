@@ -111,7 +111,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
          canal, funciones_asistente, info_clave, audio_demo_url, representante_number, created_at, updated_at
        )
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW(), NOW())
-       ON CONFLICT (tenant_id, idioma, canal)
+       ON CONFLICT ON CONSTRAINT unique_voice_config_per_tenant
        DO UPDATE SET
          voice_name          = EXCLUDED.voice_name,
          system_prompt       = EXCLUDED.system_prompt,
