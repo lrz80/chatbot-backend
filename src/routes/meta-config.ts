@@ -21,7 +21,18 @@ router.get('/', async (req: Request, res: Response) => {
       const tenantId = userRes.rows[0]?.tenant_id;
       if (!tenantId) return res.status(404).json({ error: 'Usuario sin tenant asociado' });
   
-      const configRes = await pool.query('SELECT * FROM meta_configs WHERE tenant_id = $1 LIMIT 1', [tenantId]);
+      const configRes = await pool.query(`
+        SELECT 
+          funciones_asistente,
+          info_clave,
+          COALESCE(prompt_meta, prompt)       AS prompt,        -- 👈 alias
+          COALESCE(bienvenida_meta, bienvenida) AS bienvenida,  -- 👈 alias
+          idioma
+        FROM meta_configs
+        WHERE tenant_id = $1
+        LIMIT 1
+      `, [tenantId]);
+      
       const config = configRes.rows[0] || {};
   
       const tenantRes = await pool.query(`
