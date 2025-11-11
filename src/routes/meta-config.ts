@@ -25,8 +25,8 @@ router.get('/', async (req: Request, res: Response) => {
         SELECT 
           funciones_asistente,
           info_clave,
-          COALESCE(prompt_meta, prompt_meta)       AS prompt,        -- 👈 alias
-          COALESCE(bienvenida_meta, bienvenida_meta) AS bienvenida,  -- 👈 alias
+          prompt_meta        AS prompt, 
+          bienvenida_meta    AS bienvenida, 
           idioma
         FROM meta_configs
         WHERE tenant_id = $1
