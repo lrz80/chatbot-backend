@@ -128,9 +128,14 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       faq: faqsRes.rows,
       intents: intentsRes.rows,
       limites,
-      // ✅ CTA global
       cta_text: cta.cta_text || '',
       cta_url: cta.cta_url || '',
+      email_negocio: tenant.email_negocio || '',
+      telefono_negocio: tenant.telefono_negocio || '',
+      direccion: tenant.direccion || '',              // si tu columna se llama diferente, mapea aquí
+      twilio_number: tenant.twilio_number || null,
+      twilio_sms_number: tenant.twilio_sms_number || null,
+      twilio_voice_number: tenant.twilio_voice_number || null,
       plan_name,         // ← viene de tenants.plan
       registered_at,     // ← viene de tenants.created_at
     });
@@ -175,7 +180,9 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
       'informacion_negocio', 'funciones_asistente', 'info_clave', 'logo_url',
       'prompt_meta', 'bienvenida_meta', 'facebook_page_id', 'facebook_page_name',
       'facebook_access_token', 'instagram_page_id', 'instagram_page_name',
-      'instagram_business_account_id', 'email_negocio', 'telefono_negocio'
+      'instagram_business_account_id', 'email_negocio', 'telefono_negocio',
+      'direccion',                 // ⬅️ agregar
+      'horario_atencion',          // ⬅️ si tienes esa columna
     ]);
 
     const mapCol: Record<string, string> = {
@@ -198,6 +205,8 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
       instagram_business_account_id: 'instagram_business_account_id',
       email_negocio: 'email_negocio',
       telefono_negocio: 'telefono_negocio',
+      direccion: 'direccion',                   // ⬅️ agregar
+      horario_atencion: 'horario_atencion',     // ⬅️ si existe
     };
 
     const sets: string[] = [];
