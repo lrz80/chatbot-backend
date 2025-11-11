@@ -76,6 +76,7 @@ router.get('/', async (req: Request, res: Response) => {
 
       return res.status(200).json({
         ...config,
+        name: tenant.name,
         facebook_page_id: tenant.facebook_page_id,
         facebook_page_name: tenant.facebook_page_name,
         instagram_page_id: tenant.instagram_page_id,
