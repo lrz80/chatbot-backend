@@ -83,38 +83,53 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       };
     }
 
-    const es_trial = tenant.subscription_id?.startsWith('trial_') || tenant.es_trial;
+    // ====================== NUEVO BLOQUE ======================
+    const hoy = new Date();
+    const vigencia = tenant.membresia_vigencia ? new Date(tenant.membresia_vigencia) : null;
 
-    const nombrePlanUi = tenant.plan || 'Plan';
+    // Si no usas subscription_id, calcula trial por plan o flag
+    const es_trial = Boolean(tenant.plan === 'trial' || tenant.es_trial === true);
 
+    // trial vigente si es trial y no ha vencido
+    const trial_vigente = Boolean(es_trial && vigencia && vigencia >= hoy);
+
+    // puede editar si plan activo o trial vigente
+    const can_edit = Boolean(tenant.membresia_activa || trial_vigente);
+
+    // Texto UI
     let estado_membresia_texto = '🔴 Inactiva';
     if (tenant.membresia_activa) {
-      if (es_trial) {
-        const fechaVigencia = tenant.membresia_vigencia
-          ? new Date(tenant.membresia_vigencia).toLocaleDateString()
-          : '';
-        estado_membresia_texto = `🟡 Activa - Período de Prueba hasta ${fechaVigencia}`;
-      } else {
-        const fechaVigencia = tenant.membresia_vigencia
-          ? new Date(tenant.membresia_vigencia).toLocaleDateString()
-          : '';
-        estado_membresia_texto = `✅ Activa - ${nombrePlanUi} hasta ${fechaVigencia}`;
-      }
+      const f = vigencia ? vigencia.toLocaleDateString() : '';
+      estado_membresia_texto = `✅ Activa - Plan ${tenant.plan || 'Pro'} hasta ${f}`;
+    } else if (trial_vigente) {
+      const f = vigencia ? vigencia.toLocaleDateString() : '';
+      estado_membresia_texto = `🟡 Prueba gratis activa hasta ${f}`;
+    } else if (es_trial && vigencia && vigencia < hoy) {
+      const f = vigencia.toLocaleDateString();
+      estado_membresia_texto = `🔴 Prueba gratis vencida el ${f}`;
     }
 
-    // 🔹 Plan activo y fecha de registro desde tenants
+    // Aliases que el front espera
     const plan_name: string | null = tenant.plan ?? null;
+    const plan: string | null = plan_name;                // 👈 alias usado por el front
     const registered_at: string | null = tenant.created_at ?? null;
+    const fecha_registro: string | null = registered_at;  // 👈 alias usado por el front
 
     return res.status(200).json({
       uid: user.uid,
       email: user.email,
       owner_name: user.owner_name,
       tenant_id,
-      membresia_activa: tenant.membresia_activa ?? false,
+
+      // Membresía / trial
+      membresia_activa: Boolean(tenant.membresia_activa),
       membresia_vigencia: tenant.membresia_vigencia ?? null,
-      es_trial: (es_trial || tenant.es_trial) ?? false,
+      es_trial,                  // 👈 ya sin subscription_id
+      trial_vigente,            // 👈 expuesto
+      can_edit,                 // 👈 expuesto
       estado_membresia_texto,
+
+      // Perfil negocio
       onboarding_completado: tenant.onboarding_completado,
       name: tenant.name || '',
       categoria: tenant.categoria || '',
@@ -125,20 +140,32 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       funciones_asistente: tenant.funciones_asistente || '',
       info_clave: tenant.info_clave || '',
       logo_url: tenant.logo_url || '',
-      faq: faqsRes.rows,
-      intents: intentsRes.rows,
-      limites,
-      cta_text: cta.cta_text || '',
-      cta_url: cta.cta_url || '',
       email_negocio: tenant.email_negocio || '',
       telefono_negocio: tenant.telefono_negocio || '',
-      direccion: tenant.direccion || '',              // si tu columna se llama diferente, mapea aquí
+      direccion: tenant.direccion || '',
+
+      // Twilio
       twilio_number: tenant.twilio_number || null,
       twilio_sms_number: tenant.twilio_sms_number || null,
       twilio_voice_number: tenant.twilio_voice_number || null,
-      plan_name,         // ← viene de tenants.plan
-      registered_at,     // ← viene de tenants.created_at
+
+      // Plan / fechas (con aliases para el front)
+      plan_name,
+      plan,                // 👈 tu front lee formData.plan
+      registered_at,
+      fecha_registro,      // 👈 tu front lee formData.fecha_registro
+
+      // Datos de entrenamiento
+      faq: faqsRes.rows,
+      intents: intentsRes.rows,
+
+      // Límites + CTA global
+      limites,
+      cta_text: cta.cta_text || '',
+      cta_url: cta.cta_url || '',
     });
+    // ==================== FIN NUEVO BLOQUE ====================
+
   } catch (error) {
     console.error('❌ Error en GET /api/settings:', error);
     return res.status(401).json({ error: 'Token inválido' });
