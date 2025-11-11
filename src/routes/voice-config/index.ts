@@ -32,27 +32,56 @@ const normRowForUI = (row: any = {}) => {
   };
 };
 
-// 📥 OBTENER configuración de voz
+// 📥 OBTENER configuración de voz (versión definitiva)
 router.get("/", authenticateUser, async (req, res) => {
   const { tenant_id } = req.user as { tenant_id: string };
-  const { idioma = "es-ES", canal = "voz" } = req.query; // ✅ usa "voz"
+  let { idioma = "es-ES", canal = "voz" } = req.query;
+
+  // Normaliza idioma y canal
+  idioma = String(idioma).toLowerCase().startsWith("en") ? "en" : "es";
+  canal = String(canal).toLowerCase() === "voice" ? "voz" : "voz";
 
   try {
-    const { rows } = await pool.query(
+    // Busca exacto, si no hay, busca fallback (cualquier idioma o canal)
+    let { rows } = await pool.query(
       `SELECT *
          FROM voice_configs
         WHERE tenant_id = $1
-          AND idioma    = $2
-          AND canal     = $3
-        ORDER BY updated_at DESC, created_at DESC
+          AND idioma = $2
+          AND canal = $3
+        ORDER BY updated_at DESC
         LIMIT 1`,
-      [tenant_id, String(idioma), String(canal)]
+      [tenant_id, idioma, canal]
     );
 
-    return res.json(normRowForUI(rows[0]));
+    if (!rows[0]) {
+      const fb = await pool.query(
+        `SELECT * FROM voice_configs
+          WHERE tenant_id = $1
+          ORDER BY updated_at DESC
+          LIMIT 1`,
+        [tenant_id]
+      );
+      rows = fb.rows;
+    }
+
+    const r = rows[0] || {};
+
+    return res.json({
+      idioma: r.idioma || idioma,
+      voice_name: r.voice_name || "",
+      prompt: r.system_prompt || "",
+      bienvenida: r.welcome_message || "",
+      funciones_asistente: r.funciones_asistente || "",
+      info_clave: r.info_clave || "",
+      voice_hints: r.voice_hints || "",
+      representante_number: r.representante_number || "",
+      categoria: r.categoria || null,
+      canal: r.canal || "voz",
+    });
   } catch (err) {
     console.error("❌ Error al obtener configuración de voz:", err);
-    res.status(500).json({ error: "Error al obtener configuración." });
+    res.status(500).json({ error: "Error al obtener configuración de voz" });
   }
 });
 
@@ -111,7 +140,7 @@ router.post("/", authenticateUser, upload.none(), async (req, res) => {
          canal, funciones_asistente, info_clave, audio_demo_url, representante_number, created_at, updated_at
        )
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW(), NOW())
-       ON CONFLICT ON CONSTRAINT unique_voice_config_per_tenant
+       ON CONFLICT (tenant_id)
        DO UPDATE SET
          voice_name          = EXCLUDED.voice_name,
          system_prompt       = EXCLUDED.system_prompt,
