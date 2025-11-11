@@ -1,5 +1,7 @@
+// backend/src/routes/channel-settings.ts
 import express, { Request, Response } from "express";
 import dayjs from "dayjs";
+import Stripe from "stripe";
 import { authenticateUser } from "../middleware/auth";
 import { getMaintenance, getChannelEnabledBySettings } from "../lib/maintenance";
 import pool from "../lib/db";
@@ -8,21 +10,77 @@ const router = express.Router();
 
 type Canal = "sms" | "email" | "whatsapp" | "meta" | "voice";
 
-/** 🔹 Define los canales habilitados por plan */
-const PLAN_FEATURES: Record<string, Partial<Record<Canal, boolean>>> = {
-  trial:     { whatsapp: true,  sms: false, email: false, meta: false, voice: false },
-  starter:   { whatsapp: true,  sms: false, email: false, meta: false, voice: false },
-  pro:       { whatsapp: true,  sms: true,  email: true,  meta: true,  voice: false },
-  business:  { whatsapp: true,  sms: true,  email: true,  meta: true,  voice: true  },
-  enterprise:{ whatsapp: true,  sms: true,  email: true,  meta: true,  voice: true  },
+// ⚠️ Ya NO usamos un mapa hardcodeado de features.
+// En su lugar, leemos del Product de Stripe (metadata).
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
+  apiVersion: '2022-11-15',
+});
+
+// Mapea nombre de plan -> Product ID en Stripe (usa envs)
+const PLAN_TO_PRODUCT: Record<string, string> = {
+  trial: process.env.STRIPE_PRODUCT_TRIAL_ID || "",
+  free: process.env.STRIPE_PRODUCT_TRIAL_ID || "", // opcional: trata "free" como trial
+  starter: process.env.STRIPE_PRODUCT_STARTER_ID || "",
+  pro: process.env.STRIPE_PRODUCT_PRO_ID || "",
+  business: process.env.STRIPE_PRODUCT_BUSINESS_ID || "",
+  enterprise: process.env.STRIPE_PRODUCT_ENTERPRISE_ID || "",
 };
 
-/** 🔹 Determina qué plan está activo considerando trial */
+// Cache sencillo para no golpear Stripe en cada request
+const FEATURES_CACHE: Record<
+  string,
+  {
+    exp: number;
+    features: Partial<Record<Canal, boolean>>;
+  }
+> = {};
+const TTL_MS = 10 * 60 * 1000; // 10 minutos
+
+function toBool(v?: string | null) {
+  return String(v ?? "").toLowerCase() === "true";
+}
+
+async function getFeaturesFromStripe(planName: string) {
+  const key = planName.toLowerCase();
+  const hit = FEATURES_CACHE[key];
+  if (hit && hit.exp > Date.now()) return hit.features;
+
+  const productId = PLAN_TO_PRODUCT[key];
+  if (!productId) {
+    // Fallback conservador si el plan no está mapeado
+    const fallback = { whatsapp: true, sms: false, email: false, meta: false, voice: false };
+    FEATURES_CACHE[key] = { exp: Date.now() + TTL_MS, features: fallback };
+    return fallback;
+  }
+
+  try {
+    const p = await stripe.products.retrieve(productId);
+    const md = p.metadata || {};
+
+    const features = {
+      whatsapp: toBool(md.whatsapp_enabled),
+      sms: toBool(md.sms_enabled),
+      email: toBool(md.email_enabled),
+      meta: toBool(md.meta_enabled),
+      voice: toBool(md.voice_enabled),
+    };
+
+    FEATURES_CACHE[key] = { exp: Date.now() + TTL_MS, features };
+    return features;
+  } catch (err) {
+    console.error("[channel-settings] Stripe fetch error:", err);
+    // Fallback si Stripe falla
+    const fallback = { whatsapp: true, sms: false, email: false, meta: false, voice: false };
+    FEATURES_CACHE[key] = { exp: Date.now() + TTL_MS, features: fallback };
+    return fallback;
+  }
+}
+
+/** 🔹 Determina el plan efectivo considerando trial/plan pago */
 function resolveEffectivePlan(row: any): { planName: string; trialActive: boolean } {
-  // normaliza
   const rawPlan = String(row?.plan || "").toLowerCase().trim();
 
-  // ⚠️ Regla clave: si hay plan pago (distinto de "trial" / "free"), SIEMPRE priorizarlo
+  // Regla: si hay plan pago distinto de trial/free => priorizar
   if (rawPlan && rawPlan !== "trial" && rawPlan !== "free") {
     return { planName: rawPlan, trialActive: false };
   }
@@ -31,12 +89,10 @@ function resolveEffectivePlan(row: any): { planName: string; trialActive: boolea
   const trial_ends_at = row?.trial_ends_at ? dayjs(row.trial_ends_at) : null;
   const now = dayjs();
 
-  // Si solo hay trial (sin plan pago definido)
   if (es_trial && trial_ends_at && now.isBefore(trial_ends_at)) {
     return { planName: "trial", trialActive: true };
   }
 
-  // Si el trial venció y hay plan_after_trial
   const planAfter = String(row?.plan_after_trial || "").toLowerCase().trim();
   if (es_trial && trial_ends_at && now.isAfter(trial_ends_at)) {
     if (planAfter) return { planName: planAfter, trialActive: false };
@@ -44,30 +100,25 @@ function resolveEffectivePlan(row: any): { planName: string; trialActive: boolea
     return { planName: rawPlan || "starter", trialActive: false };
   }
 
-  // Sin trial activo
   return { planName: rawPlan || "starter", trialActive: false };
 }
 
 /**
  * GET /api/channel-settings?canal=sms|email|whatsapp|meta|voice
- * Devuelve:
- *   - enabled (final)
- *   - plan_enabled
- *   - settings_enabled
- *   - maintenance (+window)
- *   - plan_current / trial_active
+ * Responde:
+ *   enabled, plan_enabled, settings_enabled, maintenance (+window), plan_current, trial_active
  */
 router.get("/", authenticateUser, async (req: Request, res: Response) => {
   try {
     const canal = String(req.query.canal || "").toLowerCase() as Canal;
-    if (!["sms","email","whatsapp","meta","voice"].includes(canal)) {
+    if (!["sms", "email", "whatsapp", "meta", "voice"].includes(canal)) {
       return res.status(400).json({ error: "canal inválido" });
     }
 
     const { tenant_id } = req.user as { tenant_id: string };
     if (!tenant_id) return res.status(401).json({ error: "unauthorized" });
 
-    // 1️⃣ mantenimiento (global + tenant)
+    // 1) Mantenimiento (global + tenant)
     const maintRaw = await getMaintenance(canal, tenant_id).catch(() => null);
     const maint = {
       maintenance: !!maintRaw?.maintenance,
@@ -76,37 +127,36 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
       ends_at: maintRaw?.ends_at || null,
     };
 
-    // 2️⃣ flags de activación del canal (toggle global/tenant)
+    // 2) Toggle por tenant
     const settingsEnabled = !!(await getChannelEnabledBySettings(tenant_id, canal));
 
-    // 3️⃣ leer plan/es_trial/trial_ends_at/plan_after_trial
+    // 3) Plan del tenant
     const { rows } = await pool.query(
       `SELECT plan, es_trial, trial_ends_at, plan_after_trial 
        FROM tenants 
        WHERE id = $1`,
       [tenant_id]
     );
-
     const tenant = rows[0] || {};
     const { planName, trialActive } = resolveEffectivePlan(tenant);
 
-    // 4️⃣ enabled por plan
-    const enabledByPlan = !!PLAN_FEATURES[planName]?.[canal];
+    // 4) Features del plan desde Stripe
+    const planFeatures = await getFeaturesFromStripe(planName);
+    const enabledByPlan = !!planFeatures[canal];
 
-    // 5️⃣ habilitado final para la UI
+    // 5) Gate final
     const enabled = enabledByPlan && settingsEnabled && !maint.maintenance;
 
     res.setHeader("Cache-Control", "no-store");
     return res.json({
       canal,
-      enabled,                  // ✅ control final para UI
+      enabled,
       plan_enabled: enabledByPlan,
       settings_enabled: settingsEnabled,
       maintenance: maint.maintenance,
       maintenance_message: maint.message,
-      maintenance_window: (maint.starts_at || maint.ends_at)
-        ? { starts_at: maint.starts_at, ends_at: maint.ends_at }
-        : null,
+      maintenance_window:
+        maint.starts_at || maint.ends_at ? { starts_at: maint.starts_at, ends_at: maint.ends_at } : null,
       plan_current: planName,
       trial_active: trialActive,
       trial_ends_at: tenant.trial_ends_at || null,
@@ -115,6 +165,6 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
     console.error("channel-settings error:", e);
     return res.status(500).json({ error: "Error obteniendo estado de canal" });
   }
-}); // ✅ cierre del router.get
+});
 
-export default router; // ✅ cierre del archivo
+export default router;
