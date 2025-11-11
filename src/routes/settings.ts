@@ -85,6 +85,8 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
 
     const es_trial = tenant.subscription_id?.startsWith('trial_') || tenant.es_trial;
 
+    const nombrePlanUi = tenant.plan || 'Plan';
+
     let estado_membresia_texto = '🔴 Inactiva';
     if (tenant.membresia_activa) {
       if (es_trial) {
@@ -96,9 +98,13 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
         const fechaVigencia = tenant.membresia_vigencia
           ? new Date(tenant.membresia_vigencia).toLocaleDateString()
           : '';
-        estado_membresia_texto = `✅ Activa - Plan Pro hasta ${fechaVigencia}`;
+        estado_membresia_texto = `✅ Activa - ${nombrePlanUi} hasta ${fechaVigencia}`;
       }
     }
+
+    // 🔹 Plan activo y fecha de registro desde tenants
+    const plan_name: string | null = tenant.plan ?? null;
+    const registered_at: string | null = tenant.created_at ?? null;
 
     return res.status(200).json({
       uid: user.uid,
@@ -125,6 +131,8 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       // ✅ CTA global
       cta_text: cta.cta_text || '',
       cta_url: cta.cta_url || '',
+      plan_name,         // ← viene de tenants.plan
+      registered_at,     // ← viene de tenants.created_at
     });
   } catch (error) {
     console.error('❌ Error en GET /api/settings:', error);
