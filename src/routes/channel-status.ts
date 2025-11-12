@@ -3,17 +3,14 @@ import { Router, Request, Response } from "express";
 import { getFeatures, isPaused } from "../lib/features";
 import { getMaintenance } from "../lib/maintenance";
 import { authenticateUser } from "../middleware/auth"; 
+import pool from "../lib/db";                           // ⬅️ importa DB para leer tenants
 
-const router = Router();                 // ✅ 1) crea el router primero
-router.use(authenticateUser);                // ✅ 2) y luego aplica el guard
+const router = Router();
+router.use(authenticateUser);
 
 type Canal = "sms" | "email" | "whatsapp" | "meta" | "voice";
 const ALLOWED: ReadonlyArray<Canal> = ["sms", "email", "whatsapp", "meta", "voice"] as const;
 
-/**
- * GET /api/channel/status?canal=sms|email|whatsapp|meta|voice
- * Responde: enabled, blocked, blocked_by_plan, maintenance, maintenance_message, paused_until, reason
- */
 router.get("/", async (req: Request, res: Response) => {
   try {
     const canal = String(req.query.canal || "").toLowerCase() as Canal;
@@ -21,7 +18,6 @@ router.get("/", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "canal_invalid" });
     }
 
-    // tenant_id desde el middleware de auth
     const tenantId =
       (req as any).user?.tenant_id ??
       (res.locals as any)?.tenant_id ??
@@ -32,40 +28,68 @@ router.get("/", async (req: Request, res: Response) => {
 
     const feats: any = await getFeatures(tenantId);
 
-    // Flag por plan (p.ej. meta_enabled, whatsapp_enabled, etc.)
+    // Flag por plan (channel_settings)
     const enabledFlag: boolean =
       feats?.[`${canal}_enabled`] ??
-      (canal === "meta" ? feats?.facebook_enabled || feats?.ig_enabled || feats?.meta : undefined) ??
+      (canal === "meta"
+        ? feats?.facebook_enabled || feats?.ig_enabled || feats?.meta
+        : undefined) ??
       false;
+
+    // ⬇️ 1) Lee membresía/trial del tenant
+    const tRes = await pool.query(
+      `SELECT membresia_activa, membresia_vigencia, es_trial
+         FROM tenants
+        WHERE id = $1
+        LIMIT 1`,
+      [tenantId]
+    );
+    const t = tRes.rows[0];
+    const hoy = new Date();
+    const vigencia = t?.membresia_vigencia ? new Date(t.membresia_vigencia) : null;
+    const trial_activo = Boolean(t?.es_trial && vigencia && vigencia >= hoy);
+    const plan_activo = Boolean(t?.membresia_activa);
+    const can_edit = plan_activo || trial_activo;   // 👈 requisito para “enabled”
 
     // Pausa específica del canal > pausa global
     const pausedUntilRaw: string | Date | null =
       feats?.[`paused_until_${canal}`] ?? feats?.paused_until ?? null;
-
-    const pausedUntil =
+    const paused_until =
       pausedUntilRaw instanceof Date
         ? pausedUntilRaw.toISOString()
         : pausedUntilRaw
         ? String(pausedUntilRaw)
         : null;
 
+    // Mantenimiento
     const maint = await getMaintenance(canal as any, tenantId);
     const maintenanceActive = !!maint?.maintenance;
-    const pausedActive = isPaused(pausedUntil);
+    const pausedActive = isPaused(paused_until);
 
-    const blocked = !enabledFlag || maintenanceActive || pausedActive;
+    // ⬇️ 2) enabled ahora depende del plan + membresía/trial + runtime
+    const enabled = enabledFlag && can_edit && !maintenanceActive && !pausedActive;
 
-    const reason: "plan" | "maintenance" | "paused" | null =
-      !enabledFlag ? "plan" : maintenanceActive ? "maintenance" : pausedActive ? "paused" : null;
+    // Motivo de bloqueo:
+    // - Si el plan no lo incluye, razón = "plan"
+    // - Si hay mantenimiento, razón = "maintenance"
+    // - Si está en pausa, razón = "paused"
+    // - Si solo falta membresía/trial, dejamos reason = null (tu UI general ya muestra “Activa tu membresía”)
+    let reason: "plan" | "maintenance" | "paused" | null = null;
+    if (!enabledFlag) reason = "plan";
+    else if (maintenanceActive) reason = "maintenance";
+    else if (pausedActive) reason = "paused";
+
+    const blocked_by_plan = !enabledFlag;
+    const blocked = blocked_by_plan || maintenanceActive || pausedActive || !can_edit;
 
     return res.json({
       canal,
-      enabled: !!enabledFlag,
+      enabled,
       blocked,
-      blocked_by_plan: !enabledFlag,
+      blocked_by_plan,
       maintenance: maintenanceActive,
       maintenance_message: maint?.message || null,
-      paused_until: pausedUntil,
+      paused_until,
       reason,
     });
   } catch (e) {
