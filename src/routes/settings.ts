@@ -83,38 +83,33 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       };
     }
 
-    // ====================== NUEVO BLOQUE (trial/banners) ======================
+    // ====================== BLOQUE MEMBRESÍA / TRIAL ======================
     const hoy = new Date();
     const vigencia = tenant.membresia_vigencia ? new Date(tenant.membresia_vigencia) : null;
 
-    // ¿El plan actual es trial? (o flag heredado)
-    const es_trial = Boolean(tenant.plan === 'trial' || tenant.es_trial === true);
+    // Stripe pone la suscripción con status "trialing"; tu webhook ya guarda es_trial=true
+    const es_trial = Boolean(tenant.es_trial === true);
 
-    // Trial activo si es trial y aún no vence
+    // Trial ACTIVO si es_trial y no ha vencido la vigencia
     const trial_activo = Boolean(es_trial && vigencia && vigencia >= hoy);
 
-    // Compat: algunos componentes esperan trial_vigente
-    const trial_vigente = trial_activo;
-
-    // Normaliza el flag por si viene undefined en algunos tenants
-    const trial_ever_claimed = !!tenant.trial_ever_claimed;
-
-    // Trial disponible si NUNCA lo ha usado y no tiene plan activo ni trial activo
+    // Trial DISPONIBLE si nunca lo ha usado y no tiene plan activo ni trial activo
     const trial_disponible = Boolean(!tenant.trial_ever_claimed && !tenant.membresia_activa && !trial_activo);
 
-    // Puede editar si tiene plan activo o trial activo
+    // Puede editar si plan activo o trial activo
     const can_edit = Boolean(tenant.membresia_activa || trial_activo);
 
-    // Texto para UI
+    // Texto UI (prioriza trial aunque membresía_activa sea true)
     let estado_membresia_texto = '🔴 Inactiva';
-    if (tenant.membresia_activa && tenant.plan !== 'trial') {
+    if (trial_activo) {
       const f = vigencia ? vigencia.toLocaleDateString() : '';
-      estado_membresia_texto = `✅ Activa - Plan ${tenant.plan || 'Pro'} hasta ${f}`;
-    } else if (trial_activo) {
+      estado_membresia_texto = `🟡 Período de prueba activo hasta ${f}`;
+    } else if (tenant.membresia_activa) {
       const f = vigencia ? vigencia.toLocaleDateString() : '';
-      estado_membresia_texto = `🟡 Prueba gratis activa hasta ${f}`;
+      const planLegible = (tenant.plan || 'Pro').replace(/^\w/, (c: string) => c.toUpperCase());
+      estado_membresia_texto = `✅ Activa - Plan ${planLegible} hasta ${f}`;
     } else if (tenant.trial_ever_claimed) {
-      estado_membresia_texto = '🔴 Prueba gratis vencida.';
+      estado_membresia_texto = '🔴 Período de prueba vencido.';
     }
 
     // Aliases esperados por el front
@@ -122,7 +117,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     const plan: string | null = plan_name;
     const registered_at: string | null = tenant.created_at ?? null;
     const fecha_registro: string | null = registered_at;
-    // ==================== FIN NUEVO BLOQUE ====================
+    // ==================== FIN BLOQUE ====================
 
     return res.status(200).json({
       uid: user.uid,
@@ -134,12 +129,18 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       membresia_activa: Boolean(tenant.membresia_activa),
       membresia_vigencia: tenant.membresia_vigencia ?? null,
       es_trial,
-      trial_vigente,                  // alias de trial_activo
-      trial_activo,                   // por si el front usa este nombre
-      trial_disponible,               // << NECESARIO para “Activa tu prueba gratis”
-      trial_ever_claimed,             // << NECESARIO para saber si ya la usó
+      trial_activo,                  // ✅ nombre real calculado arriba
+      trial_vigente: trial_activo,   // ✅ alias, por compatibilidad con el front
+      trial_disponible,              // ✅ para CTA de “prueba gratis” (redirige a /upgrade)
+      trial_ever_claimed: Boolean(tenant.trial_ever_claimed), // ✅ viene de DB
       can_edit,
       estado_membresia_texto,
+
+      // Plan / fechas
+      plan_name,
+      plan,
+      registered_at,
+      fecha_registro,
 
       // Perfil negocio
       onboarding_completado: tenant.onboarding_completado,
@@ -160,12 +161,6 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       twilio_number: tenant.twilio_number || null,
       twilio_sms_number: tenant.twilio_sms_number || null,
       twilio_voice_number: tenant.twilio_voice_number || null,
-
-      // Plan / fechas (con aliases para el front)
-      plan_name,
-      plan,                // 👈 tu front lee formData.plan
-      registered_at,
-      fecha_registro,      // 👈 tu front lee formData.fecha_registro
 
       // Datos de entrenamiento
       faq: faqsRes.rows,
