@@ -3,6 +3,7 @@ import express from 'express';
 import Stripe from 'stripe';
 import jwt from 'jsonwebtoken';
 import pool from '../../lib/db';
+import { hasUsedTrialByEmail } from '../../lib/trial'; // ⬅️ NUEVO
 
 const router = express.Router();
 
@@ -17,41 +18,50 @@ router.post('/checkout', async (req, res) => {
 
   try {
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET!);
-    const tenantId = decoded.uid;
+    const tenantId: string = decoded.uid;
 
-    // 👉 viene del front
+    // 👉 viene del front: cuál price_id escogió el cliente
     const price_id: string | undefined = req.body?.price_id;
     if (!price_id) return res.status(400).json({ error: 'price_id requerido' });
 
-    // email del usuario
-    const u = await pool.query('SELECT email FROM users WHERE uid=$1', [tenantId]);
-    const email = u.rows[0]?.email;
+    // email del usuario (base para decidir trial por email)
+    const u = await pool.query('SELECT email FROM users WHERE uid = $1', [tenantId]);
+    const email: string | undefined = u.rows[0]?.email;
     if (!email) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    // ¿ya usó prueba antes?
+    // ✅ ¿ese EMAIL ya usó trial alguna vez? (registro permanente)
+    const alreadyTookTrialByEmail = await hasUsedTrialByEmail(email);
+
+    // (Opcional) por compatibilidad con tenants existentes que ya marcaron el trial
     const t = await pool.query(
-      'SELECT COALESCE(trial_ever_claimed,false) AS used FROM tenants WHERE id=$1',
+      'SELECT COALESCE(trial_ever_claimed,false) AS used FROM tenants WHERE id = $1',
       [tenantId]
     );
-    const trial_already_used = !!t.rows[0]?.used;
+    const alreadyTookTrialByTenant = !!t.rows[0]?.used;
 
-    // Si NUNCA usó prueba, damos 14 días. Si ya la usó, SIN trial.
-    const allow_trial = !trial_already_used;
+    // Solo permitimos trial si JAMÁS lo usó por email NI por tenant previo
+    const allow_trial = !(alreadyTookTrialByEmail || alreadyTookTrialByTenant);
+
+    // Armamos subscription_data condicional (solo añadimos trial si corresponde)
+    const subscription_data: Stripe.Checkout.SessionCreateParams.SubscriptionData = {
+      metadata: { tenant_id: tenantId }, // útil para el webhook
+      ...(allow_trial ? { trial_period_days: 14 } : {}),
+    };
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       payment_method_types: ['card'],
       customer_email: email,
       metadata: {
-        tenant_id: tenantId,
+        tenant_id: tenantId, // leído por el webhook
         price_id,
       },
       line_items: [{ price: price_id, quantity: 1 }],
-      ...(allow_trial ? { subscription_data: { trial_period_days: 14 } } : {}),
+      subscription_data,                         // ⬅️ aquí aplicamos o no el trial
       allow_promotion_codes: true,
       client_reference_id: tenantId,
       success_url: 'https://aamy.ai/dashboard?success=1',
-      cancel_url: 'https://aamy.ai/upgrade?canceled=1',
+      cancel_url:  'https://aamy.ai/upgrade?canceled=1',
     });
 
     return res.json({ url: session.url });

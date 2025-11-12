@@ -6,6 +6,7 @@ import { transporter } from '../../lib/mailer';
 import { sendSubscriptionActivatedEmail } from '../../lib/mailer';
 import { sendRenewalSuccessEmail } from '../../lib/mailer';
 import { sendCancelationEmail } from '../../lib/mailer';
+import { markTrialUsedByEmail } from '../../lib/trial';
 
 const router = express.Router();
 
@@ -72,8 +73,9 @@ const flagsFromProduct = (product: Stripe.Product): ChannelFlags => {
 // 🔎 Obtiene el product de Stripe desde la Checkout Session (modo subscription)
 const getProductFromCheckoutSession = async (stripe: Stripe, sessionId: string) => {
   const items = await stripe.checkout.sessions.listLineItems(sessionId, { limit: 1 });
-  const price = items.data[0]?.price;
-  const productId = typeof price?.product === 'string' ? price?.product : undefined;
+  const price = items.data?.[0]?.price;
+  if (!price) return null;
+  const productId = typeof price.product === 'string' ? price.product : undefined;
   if (!productId) return null;
   return await stripe.products.retrieve(productId);
 };
@@ -105,40 +107,6 @@ const combineFlags = (all: ChannelFlags[]) => ({
   email_enabled:    all.some(f => f.email_enabled),
 });
 
-// ✅ Helpers para resolver tenant_id y plan desde Stripe
-// Intenta obtener tenant_id desde metadata; si no, por email → users.tenant_id
-const resolveTenantIdFromSession = async (session: Stripe.Checkout.Session): Promise<string | null> => {
-  if (session.metadata?.tenant_id) return session.metadata.tenant_id;
-
-  const email = session.customer_email;
-  if (!email) return null;
-
-  const u = await pool.query('SELECT tenant_id FROM users WHERE email = $1 LIMIT 1', [email]);
-  return u.rows[0]?.tenant_id ?? null;
-};
-
-const resolveTenantIdFromSubscription = async (stripe: Stripe, sub: Stripe.Subscription): Promise<string | null> => {
-  // 1) Metadata en la Subscription (si la pones en checkout.subscription_data.metadata)
-  const metaTid = (sub.metadata?.tenant_id as string) || null;
-  if (metaTid) return metaTid;
-
-  // 2) Por subscription_id en tenants (si ya la guardaste)
-  const t = await pool.query('SELECT id FROM tenants WHERE subscription_id = $1 LIMIT 1', [sub.id]);
-  if (t.rows[0]?.id) return t.rows[0].id;
-
-  // 3) Por email del customer
-  const custId = sub.customer;
-  if (typeof custId === 'string') {
-    const customer = await stripe.customers.retrieve(custId);
-    const email = (typeof customer !== 'string' && 'email' in customer) ? (customer.email as string | null) : null;
-    if (email) {
-      const u = await pool.query('SELECT tenant_id FROM users WHERE email = $1 LIMIT 1', [email]);
-      return u.rows[0]?.tenant_id ?? null;
-    }
-  }
-  return null;
-};
-
 // Nombre/alias del plan desde la Subscription (lee el Product)
 const getPlanNameFromSubscription = async (stripe: Stripe, sub: Stripe.Subscription): Promise<string> => {
   const price = sub.items?.data?.[0]?.price;
@@ -152,9 +120,6 @@ const getPlanNameFromSubscription = async (stripe: Stripe, sub: Stripe.Subscript
     return 'pro';
   }
 };
-
-// ¿La suscripción tiene trial?
-const subscriptionHasTrial = (sub: Stripe.Subscription): boolean => Boolean(sub.status === 'trialing' || sub.trial_end);
 
 function initStripe() {
   if (!stripe) {
@@ -298,6 +263,15 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         const product = subscription.items.data[0]?.price?.product;
         let planValue = 'pro'; // valor por defecto
 
+        if (hasTrialFlag && email) {
+          try {
+            // Guarda también el customerId si quieres
+            const customerId = typeof subscription.customer === 'string' ? subscription.customer : null;
+            await markTrialUsedByEmail(email, customerId || undefined);
+          } catch (e) {
+            console.warn('⚠️ No se pudo marcar trial en trial_registry:', e);
+          }
+        }
         if (typeof product === 'string') {
           try {
             const stripeProduct = await stripe.products.retrieve(product);
@@ -359,7 +333,11 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         // 6) Email de bienvenida/activación
         const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [tenantId]);
         const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
-        await sendSubscriptionActivatedEmail(email, tenantName);
+        try {
+          await sendSubscriptionActivatedEmail(email, tenantName);
+        } catch (e) {
+          console.warn('✉️ Aviso: fallo enviando correo de activación (se ignora):', e);
+        }
       } catch (error) {
         console.error('❌ Error activando membresía:', error);
       }
@@ -372,7 +350,20 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   if (event.type === 'customer.subscription.updated') {
     const subscription = event.data.object as Stripe.Subscription;
     const tenant_id = await getTenantIdBySubscriptionId(subscription.id);
-
+    const customerId = typeof subscription.customer === 'string' ? subscription.customer : null;
+    if (subscription.status === 'trialing' || subscription.trial_end) {
+      try {
+        if (customerId) {
+          const customer = await stripe.customers.retrieve(customerId);
+          const email = (typeof customer !== 'string' && 'email' in customer) ? (customer.email as string | null) : null;
+          if (email) {
+            await markTrialUsedByEmail(email, customerId);
+          }
+        }
+      } catch (e) {
+        console.warn('⚠️ No se pudo actualizar trial_registry en subscription.updated:', e);
+      }
+    }
     if (tenant_id) {
       const esTrial = subscription.status === 'trialing';
       const hasTrialFlag = Boolean(subscription.trial_end); // hubo trial alguna vez
@@ -494,6 +485,19 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         [user.tenant_id, nuevaVigencia, planValue]
       );
 
+      // 🔁 Sincroniza flags de canales al renovar (por si cambió de plan)
+      try {
+        const products = await getProductsFromSubscription(stripe, subscription);
+        if (products.length) {
+          const allFlags = products.map(p => flagsFromProduct(p));
+          const combined = combineFlags(allFlags);
+          await upsertChannelFlags(user.tenant_id, combined);
+          console.log('🔁 Channel flags actualizados (invoice.payment_succeeded):', combined, 'tenant:', user.tenant_id);
+        }
+      } catch (e) {
+        console.warn('⚠️ No se pudieron actualizar channel flags en invoice.payment_succeeded:', e);
+      }
+
       console.log('🔁 Membresía renovada para', customerEmail, 'tenant', user.tenant_id);
       await resetearCanales(user.tenant_id);
 
@@ -554,7 +558,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         sms_enabled: false,
         email_enabled: false,
       });
-      console.log('🛑 Channel flags desactivados por cancelación para', user.uid);
+      console.log('🛑 Channel flags desactivados por cancelación para tenant', user.tenant_id);
 
       console.log('🛑 Cancelando plan para', customerEmail, 'con UID', user.uid);
 

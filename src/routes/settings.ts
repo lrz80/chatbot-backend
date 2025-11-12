@@ -6,6 +6,7 @@ import pool from '../lib/db';
 import { authenticateUser } from '../middleware/auth';
 
 const router = express.Router();
+const normalizeEmail = (e?: string | null) => (e || '').trim().toLowerCase();
 
 /** Valida URLs http(s) sencillas */
 function isValidUrl(u?: string) {
@@ -33,6 +34,13 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     const userRes = await pool.query('SELECT uid, email, owner_name FROM users WHERE uid = $1', [uid]);
     const user = userRes.rows[0];
     if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    // ¿Este email ya tomó trial alguna vez? (registro permanente por email)
+    const usedByEmailRes = await pool.query(
+      `SELECT 1 FROM trial_registry WHERE email_normalized = $1 LIMIT 1`,
+      [normalizeEmail(user.email)]
+    );
+    const trial_usado_por_email = !!usedByEmailRes.rows[0];
 
     const tenantRes = await pool.query(`SELECT * FROM tenants WHERE id = $1 LIMIT 1`, [tenant_id]);
     const tenant = tenantRes.rows[0];
@@ -87,14 +95,18 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     const hoy = new Date();
     const vigencia = tenant.membresia_vigencia ? new Date(tenant.membresia_vigencia) : null;
 
-    // Stripe pone la suscripción con status "trialing"; tu webhook ya guarda es_trial=true
-    const es_trial = Boolean(tenant.es_trial === true);
-
-    // Trial ACTIVO si es_trial y no ha vencido la vigencia
+    const es_trial = tenant.es_trial === true;
     const trial_activo = Boolean(es_trial && vigencia && vigencia >= hoy);
 
-    // Trial DISPONIBLE si nunca lo ha usado y no tiene plan activo ni trial activo
-    const trial_disponible = Boolean(!tenant.trial_ever_claimed && !tenant.membresia_activa && !trial_activo);
+    // Trial disponible SOLO si:
+    //  - NUNCA lo usó por email (trial_registry)
+    //  - y además no tiene plan activo ni trial activo
+    const trial_disponible = Boolean(
+      !trial_usado_por_email &&
+      !tenant.trial_ever_claimed &&
+      !tenant.membresia_activa &&
+      !trial_activo
+    );
 
     // Puede editar si plan activo o trial activo
     const can_edit = Boolean(tenant.membresia_activa || trial_activo);
