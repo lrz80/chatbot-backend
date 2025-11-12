@@ -91,6 +91,36 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       };
     }
 
+    // ➕ Flags de canales que incluye el plan actual (se llenan en el webhook de Stripe)
+    const chRes = await pool.query(
+      `SELECT whatsapp_enabled, meta_enabled, voice_enabled, sms_enabled, email_enabled
+      FROM channel_settings
+      WHERE tenant_id = $1
+      LIMIT 1`,
+      [tenant_id]
+    );
+    const ch = chRes.rows[0] || {};
+    const channel_flags = {
+      whatsapp: !!ch?.whatsapp_enabled,
+      meta:     !!ch?.meta_enabled,
+      voice:    !!ch?.voice_enabled,
+      sms:      !!ch?.sms_enabled,
+      email:    !!ch?.email_enabled,
+    };
+
+    // Conveniencias: ¿puede editar/usar por canal? (plan lo incluye + plan activo o trial)
+    const plan_activo_o_trial = Boolean(
+      tenant.membresia_activa ||
+      (tenant.es_trial && tenant.membresia_vigencia && new Date(tenant.membresia_vigencia) >= new Date())
+    );
+    const can_edit_by_channel = {
+      whatsapp: channel_flags.whatsapp && plan_activo_o_trial,
+      meta:     channel_flags.meta     && plan_activo_o_trial,
+      voice:    channel_flags.voice    && plan_activo_o_trial,
+      sms:      channel_flags.sms      && plan_activo_o_trial,
+      email:    channel_flags.email    && plan_activo_o_trial,
+    };
+
     // ====================== BLOQUE MEMBRESÍA / TRIAL ======================
     const hoy = new Date();
     const vigencia = tenant.membresia_vigencia ? new Date(tenant.membresia_vigencia) : null;
@@ -182,6 +212,10 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       limites,
       cta_text: cta.cta_text || '',
       cta_url: cta.cta_url || '',
+
+      // Flags de canales incluidos y permisos por canal
+      channel_flags,
+      can_edit_by_channel,
     });
     // ==================== FIN NUEVO BLOQUE ====================
 
