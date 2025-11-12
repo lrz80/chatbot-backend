@@ -128,80 +128,90 @@ async function loadSettings(tenantId: string): Promise<Features["settings"]> {
   return out;
 }
 
+async function tableExists(table: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `select to_regclass($1) as reg`,
+    [`public.${table}`]
+  );
+  return !!rows[0]?.reg;
+}
+
 // -------- Carga PLAN (prioridad: tenant_plan_features → tenants.plan → default)
 async function loadPlan(tenantId: string): Promise<Features["plan"]> {
-  if (!tenantId || !isUUID(tenantId)) return { ...EMPTY_PLAN };
+  if (!tenantId || !/^[0-9a-f-]{36}$/i.test(tenantId)) return { ...EMPTY_PLAN };
 
-  // 1) Cache por-tenant sincronizada desde Stripe (recomendado)
+  // 1) Cache por-tenant sincronizada desde Stripe (solo si la tabla existe)
   try {
-    const q1 = await pool.query(
-      `select product_id, 
-              coalesce(whatsapp_enabled,false) as whatsapp_enabled,
-              coalesce(meta_enabled,false)     as meta_enabled,
-              coalesce(voice_enabled,false)    as voice_enabled,
-              coalesce(sms_enabled,false)      as sms_enabled,
-              coalesce(email_enabled,false)    as email_enabled
-       from tenant_plan_features
-       where tenant_id = $1
-       limit 1`,
+    if (await tableExists("tenant_plan_features")) {
+      const q1 = await pool.query(
+        `select product_id, 
+                coalesce(whatsapp_enabled,false) as whatsapp_enabled,
+                coalesce(meta_enabled,false)     as meta_enabled,
+                coalesce(voice_enabled,false)    as voice_enabled,
+                coalesce(sms_enabled,false)      as sms_enabled,
+                coalesce(email_enabled,false)    as email_enabled
+         from tenant_plan_features
+         where tenant_id = $1
+         limit 1`,
+        [tenantId]
+      );
+      if (q1.rows[0]) {
+        const r = q1.rows[0];
+        return {
+          whatsapp_enabled: !!r.whatsapp_enabled,
+          meta_enabled: !!r.meta_enabled,
+          voice_enabled: !!r.voice_enabled,
+          sms_enabled: !!r.sms_enabled,
+          email_enabled: !!r.email_enabled,
+          source: "tenant_plan_features",
+          product_id: r.product_id,
+          plan_name: null,
+        };
+      }
+    }
+  } catch (_) {
+    // silencioso: no logueamos para evitar ruido en DB logs
+  }
+
+  // 2) Fallback: usa plan guardado en tenants y mapea con ENV
+  try {
+    const q2 = await pool.query(
+      `select plan as plan_name
+         from tenants
+        where id = $1
+        limit 1`,
       [tenantId]
     );
-    if (q1.rows[0]) {
-      const r = q1.rows[0];
-      return {
-        whatsapp_enabled: !!r.whatsapp_enabled,
-        meta_enabled: !!r.meta_enabled,
-        voice_enabled: !!r.voice_enabled,
-        sms_enabled: !!r.sms_enabled,
-        email_enabled: !!r.email_enabled,
-        source: "tenant_plan_features",
-        product_id: r.product_id,
-        plan_name: null,
-      };
+    if (q2.rows[0]) {
+      const { plan_name } = q2.rows[0];
+      const plan = String(plan_name || "").toLowerCase();
+
+      if (plan === "starter") {
+        return {
+          whatsapp_enabled: true,
+          meta_enabled: false,
+          voice_enabled: false,
+          sms_enabled: false,
+          email_enabled: false,
+          source: "tenants.plan",
+          product_id: process.env.STRIPE_PRODUCT_STARTER_ID || null,
+          plan_name,
+        };
+      }
+      if (plan === "pro") {
+        return {
+          whatsapp_enabled: true,
+          meta_enabled: true,
+          voice_enabled: true,
+          sms_enabled: true,
+          email_enabled: true,
+          source: "tenants.plan",
+          product_id: process.env.STRIPE_PRODUCT_PRO_ID || null,
+          plan_name,
+        };
+      }
     }
-  } catch (_) {/* tabla puede no existir aún */}
-
-  // 2) Fallback: usa variable de entorno de Stripe (sin requerir columna)
-try {
-  const q2 = await pool.query(
-    `select plan as plan_name
-       from tenants
-      where id = $1
-      limit 1`,
-    [tenantId]
-  );
-
-  if (q2.rows[0]) {
-    const { plan_name } = q2.rows[0];
-    const plan = String(plan_name || "").toLowerCase();
-
-    if (plan === "starter") {
-      return {
-        whatsapp_enabled: true,
-        meta_enabled: false,
-        voice_enabled: false,
-        sms_enabled: false,
-        email_enabled: false,
-        source: "tenants.plan",
-        product_id: process.env.STRIPE_PRODUCT_STARTER_ID || null,
-        plan_name,
-      };
-    }
-
-    if (plan === "pro") {
-      return {
-        whatsapp_enabled: true,
-        meta_enabled: true,
-        voice_enabled: true,
-        sms_enabled: true,
-        email_enabled: true,
-        source: "tenants.plan",
-        product_id: process.env.STRIPE_PRODUCT_PRO_ID || null,
-        plan_name,
-      };
-    }
-  }
-} catch (_) {/* columna puede no existir */}
+  } catch (_) {}
 
   // 3) Default conservador
   return { ...EMPTY_PLAN };
