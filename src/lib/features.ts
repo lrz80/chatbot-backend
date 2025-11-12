@@ -161,45 +161,47 @@ async function loadPlan(tenantId: string): Promise<Features["plan"]> {
     }
   } catch (_) {/* tabla puede no existir aún */}
 
-  // 2) Fallback: usa columna de tenants (plan_name/product_id) si la tienes
-  try {
-    const q2 = await pool.query(
-      `select plan as plan_name, stripe_product_id as product_id
+  // 2) Fallback: usa variable de entorno de Stripe (sin requerir columna)
+try {
+  const q2 = await pool.query(
+    `select plan as plan_name
        from tenants
-       where id = $1
-       limit 1`,
-      [tenantId]
-    );
-    if (q2.rows[0]) {
-      const { plan_name, product_id } = q2.rows[0];
-      // Mapa simple starter/pro; ajusta si tienes más planes
-      if (String(plan_name || "").toLowerCase() === "starter") {
-        return {
-          whatsapp_enabled: true,
-          meta_enabled: false,
-          voice_enabled: false,
-          sms_enabled: false,
-          email_enabled: false,
-          source: "tenants.plan",
-          product_id,
-          plan_name,
-        };
-      }
-      if (String(plan_name || "").toLowerCase() === "pro") {
-        return {
-          whatsapp_enabled: true,
-          meta_enabled: true,
-          voice_enabled: true,
-          sms_enabled: true,
-          email_enabled: true,
-          source: "tenants.plan",
-          product_id,
-          plan_name,
-        };
-      }
-      // Si hay product_id específico, puedes decidir según envs STRIPE_PRODUCT_* si quieres.
+      where id = $1
+      limit 1`,
+    [tenantId]
+  );
+
+  if (q2.rows[0]) {
+    const { plan_name } = q2.rows[0];
+    const plan = String(plan_name || "").toLowerCase();
+
+    if (plan === "starter") {
+      return {
+        whatsapp_enabled: true,
+        meta_enabled: false,
+        voice_enabled: false,
+        sms_enabled: false,
+        email_enabled: false,
+        source: "tenants.plan",
+        product_id: process.env.STRIPE_PRODUCT_STARTER_ID || null,
+        plan_name,
+      };
     }
-  } catch (_) {/* columna puede no existir */}
+
+    if (plan === "pro") {
+      return {
+        whatsapp_enabled: true,
+        meta_enabled: true,
+        voice_enabled: true,
+        sms_enabled: true,
+        email_enabled: true,
+        source: "tenants.plan",
+        product_id: process.env.STRIPE_PRODUCT_PRO_ID || null,
+        plan_name,
+      };
+    }
+  }
+} catch (_) {/* columna puede no existir */}
 
   // 3) Default conservador
   return { ...EMPTY_PLAN };
