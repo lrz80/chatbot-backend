@@ -25,6 +25,7 @@ import { Router, Request, Response } from 'express';
 import { buscarRespuestaSimilitudFaqsTraducido } from '../../lib/respuestasTraducidas';
 import type { Canal } from '../../lib/detectarIntencion';
 import { requireChannel } from "../../middleware/requireChannel";
+import { canUseChannel } from "../../lib/features";
 
 type CanalEnvio = 'facebook' | 'instagram';
 
@@ -195,15 +196,20 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const canalContenido = 'meta'; // FAQs se guardan como 'meta'
         const accessToken = tenant.facebook_access_token as string;
 
-        // ✅ BLOQUEO DE CANAL: META (global/tenant + pausa)
+
+        // 🚧 Gate unificado por plan/pausa/mantenimiento
         try {
-          const open = await isMetaChannelOpen(tenantId);
-          if (!open) {
-            console.log(`🚫 META en mantenimiento/deshabilitado para tenant ${tenantId}. Mensaje ignorado.`);
-            continue; // no respondas nada a Meta; ya mandaste 200 arriba
+          const gate = await canUseChannel(tenantId, "meta");
+          if (!gate.plan_enabled) {
+            console.log("🛑 META bloqueado por plan; no se responderá.", { tenantId });
+            continue; // no respondas nada (ya hiciste 200 arriba)
+          }
+          if (gate.reason === "paused") {
+            console.log("⏸️ META en pausa hasta", gate.paused_until, "; no se responderá.");
+            continue;
           }
         } catch (e) {
-          console.warn('Guard META: error consultando channel_settings; bloqueo por seguridad:', e);
+          console.warn("Guard META: error calculando canUseChannel; bloqueo por seguridad:", e);
           continue;
         }
 
