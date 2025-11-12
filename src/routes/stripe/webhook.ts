@@ -51,22 +51,26 @@ const upsertChannelFlags = async (tenantId: string, flags: ChannelFlags) => {
   );
 };
 
-// Lee metadata del producto y produce flags (si no hay metadata, por defecto TODO TRUE)
+// Lee metadata del PRODUCTO y produce flags.
+// ⚠️ Si el producto NO tiene metadata, por defecto TODO EN FALSE
+// (si tu plan Starter incluye WhatsApp, déjalo true aquí)
 const flagsFromProduct = (product: Stripe.Product): ChannelFlags => {
   const md = (product.metadata || {}) as Record<string, string>;
-  const defaultsAllTrue: ChannelFlags = {
-    whatsapp_enabled: true,
-    meta_enabled: true,
-    voice_enabled: true,
-    sms_enabled: true,
-    email_enabled: true,
+
+  const defaults: ChannelFlags = {
+    whatsapp_enabled: true,  // Starter incluye WhatsApp
+    meta_enabled:     false,
+    voice_enabled:    false,
+    sms_enabled:      false,
+    email_enabled:    false,
   };
+
   return {
-    whatsapp_enabled: bool(md.whatsapp_enabled, defaultsAllTrue.whatsapp_enabled),
-    meta_enabled:     bool(md.meta_enabled,     defaultsAllTrue.meta_enabled),
-    voice_enabled:    bool(md.voice_enabled,    defaultsAllTrue.voice_enabled),
-    sms_enabled:      bool(md.sms_enabled,      defaultsAllTrue.sms_enabled),
-    email_enabled:    bool(md.email_enabled,    defaultsAllTrue.email_enabled),
+    whatsapp_enabled: bool(md.whatsapp_enabled, defaults.whatsapp_enabled),
+    meta_enabled:     bool(md.meta_enabled,     defaults.meta_enabled),
+    voice_enabled:    bool(md.voice_enabled,    defaults.voice_enabled),
+    sms_enabled:      bool(md.sms_enabled,      defaults.sms_enabled),
+    email_enabled:    bool(md.email_enabled,    defaults.email_enabled),
   };
 };
 
