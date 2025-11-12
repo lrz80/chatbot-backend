@@ -1,15 +1,18 @@
 // src/routes/channel-status.ts
 import { Router, Request, Response } from "express";
-import { canUseChannel } from "../lib/features";   // 👈 usa el gate unificado
-import { getMaintenance } from "../lib/maintenance";
 import { authenticateUser } from "../middleware/auth";
+import { canUseChannel, type Canal } from "../lib/features";
+import { getMaintenance } from "../lib/maintenance";
 
 const router = Router();
 router.use(authenticateUser);
 
-type Canal = "sms" | "email" | "whatsapp" | "meta" | "voice";
 const ALLOWED: ReadonlyArray<Canal> = ["sms", "email", "whatsapp", "meta", "voice"] as const;
 
+/**
+ * GET /api/channel/status?canal=sms|email|whatsapp|meta|voice
+ * Responde: enabled, blocked, blocked_by_plan, maintenance, maintenance_message, paused_until, reason
+ */
 router.get("/", async (req: Request, res: Response) => {
   try {
     const canal = String(req.query.canal || "").toLowerCase() as Canal;
@@ -20,35 +23,35 @@ router.get("/", async (req: Request, res: Response) => {
       (res.locals as any)?.tenant_id ??
       (req as any).tenant_id ??
       (req as any).tenantId;
-
     if (!tenantId) return res.status(401).json({ error: "unauthorized" });
 
-    // 1) Gate único: plan + settings + pausas
-    const gate = await canUseChannel(tenantId, canal);
+    // 1) Reglas de plan + toggles + pausa
+    const gate = await canUseChannel(tenantId, canal); // { enabled, reason, plan_enabled, settings_enabled, paused_until }
 
-    // 2) (Opcional) mantenimiento por canal/tenant
+    // 2) Mantenimiento (si lo manejas)
     const maint = await getMaintenance(canal as any, tenantId);
-    const maintenanceActive = !!maint?.maintenance;
+    const maintenance = !!maint?.maintenance;
+    const maintenance_message = maint?.message || null;
 
-    // 3) Estado final para UI
-    const enabled = gate.enabled && !maintenanceActive;
-    const blocked_by_plan = !gate.plan_enabled;
-    const blocked = !enabled || blocked_by_plan || maintenanceActive;
+    // 3) Estado final y razón priorizada
+    // prioridad: mantenimiento > pausa > plan
+    let reason: "plan" | "maintenance" | "paused" | null = null;
+    if (maintenance) reason = "maintenance";
+    else if (gate.reason === "paused") reason = "paused";
+    else if (!gate.plan_enabled) reason = "plan";
+
+    const blocked =
+      maintenance || gate.reason === "paused" || !gate.plan_enabled || !gate.settings_enabled;
 
     return res.json({
       canal,
-      enabled,
+      enabled: gate.enabled && !maintenance,
       blocked,
-      blocked_by_plan,
-      maintenance: maintenanceActive,
-      maintenance_message: maint?.message || null,
-      paused_until: gate.paused_until ? gate.paused_until.toISOString() : null,
-      reason: blocked_by_plan ? "plan" : (gate.reason ?? (maintenanceActive ? "maintenance" : null)),
-      // opcional: diagnósticos útiles para el cliente
-      diagnostics: {
-        plan_enabled: gate.plan_enabled,
-        settings_enabled: gate.settings_enabled,
-      },
+      blocked_by_plan: !gate.plan_enabled,
+      maintenance,
+      maintenance_message,
+      paused_until: gate.paused_until,
+      reason,
     });
   } catch (e) {
     console.error("channel-status error:", e);
