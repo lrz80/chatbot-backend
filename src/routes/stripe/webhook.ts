@@ -544,10 +544,10 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             plan = NULL
         WHERE id = $1
         `,
-        [user.uid]
+        [user.tenant_id]
       );
 
-      await upsertChannelFlags(user.uid, {
+      await upsertChannelFlags(user.tenant_id, {
         whatsapp_enabled: false,
         meta_enabled: false,
         voice_enabled: false,
