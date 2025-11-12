@@ -105,6 +105,57 @@ const combineFlags = (all: ChannelFlags[]) => ({
   email_enabled:    all.some(f => f.email_enabled),
 });
 
+// ✅ Helpers para resolver tenant_id y plan desde Stripe
+// Intenta obtener tenant_id desde metadata; si no, por email → users.tenant_id
+const resolveTenantIdFromSession = async (session: Stripe.Checkout.Session): Promise<string | null> => {
+  if (session.metadata?.tenant_id) return session.metadata.tenant_id;
+
+  const email = session.customer_email;
+  if (!email) return null;
+
+  const u = await pool.query('SELECT tenant_id FROM users WHERE email = $1 LIMIT 1', [email]);
+  return u.rows[0]?.tenant_id ?? null;
+};
+
+const resolveTenantIdFromSubscription = async (stripe: Stripe, sub: Stripe.Subscription): Promise<string | null> => {
+  // 1) Metadata en la Subscription (si la pones en checkout.subscription_data.metadata)
+  const metaTid = (sub.metadata?.tenant_id as string) || null;
+  if (metaTid) return metaTid;
+
+  // 2) Por subscription_id en tenants (si ya la guardaste)
+  const t = await pool.query('SELECT id FROM tenants WHERE subscription_id = $1 LIMIT 1', [sub.id]);
+  if (t.rows[0]?.id) return t.rows[0].id;
+
+  // 3) Por email del customer
+  const custId = sub.customer;
+  if (typeof custId === 'string') {
+    const customer = await stripe.customers.retrieve(custId);
+    const email = (typeof customer !== 'string' && 'email' in customer) ? (customer.email as string | null) : null;
+    if (email) {
+      const u = await pool.query('SELECT tenant_id FROM users WHERE email = $1 LIMIT 1', [email]);
+      return u.rows[0]?.tenant_id ?? null;
+    }
+  }
+  return null;
+};
+
+// Nombre/alias del plan desde la Subscription (lee el Product)
+const getPlanNameFromSubscription = async (stripe: Stripe, sub: Stripe.Subscription): Promise<string> => {
+  const price = sub.items?.data?.[0]?.price;
+  const productId = typeof price?.product === 'string' ? price.product : undefined;
+  if (!productId) return 'pro';
+  try {
+    const product = await stripe.products.retrieve(productId);
+    const name = (product.name || 'pro').toLowerCase();
+    return name;
+  } catch {
+    return 'pro';
+  }
+};
+
+// ¿La suscripción tiene trial?
+const subscriptionHasTrial = (sub: Stripe.Subscription): boolean => Boolean(sub.status === 'trialing' || sub.trial_end);
+
 function initStripe() {
   if (!stripe) {
     const key = process.env.STRIPE_SECRET_KEY;
@@ -227,8 +278,8 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         let tenantId: string | null = session.metadata?.tenant_id ?? null;
 
         if (!tenantId) {
-          const userRes = await pool.query('SELECT uid FROM users WHERE email = $1', [email]);
-          tenantId = userRes.rows[0]?.uid ?? null;
+          const userRes = await pool.query('SELECT tenant_id FROM users WHERE email = $1 LIMIT 1', [email]);
+          tenantId = userRes.rows[0]?.tenant_id ?? null;
         }
 
         if (!tenantId) {
@@ -241,6 +292,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
         const vigencia = new Date(subscription.current_period_end * 1000);
         const esTrial = subscription.status === 'trialing';
+        const hasTrialFlag = Boolean(subscription.trial_end); // hubo trial si existe trial_end
 
         // 🔎 Lee el nombre del plan desde Stripe automáticamente
         const product = subscription.items.data[0]?.price?.product;
@@ -255,29 +307,38 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           }
         }
 
-        // 3) Activa membresía y guarda subscription_id
+        // 3) Activa membresía y guarda subscription_id (+ marca trial_ever_claimed si aplicó)
         await pool.query(
           `
           UPDATE tenants
-          SET membresia_activa = true,
-              membresia_vigencia = $2,
-              membresia_inicio = $3,
-              plan = $4,
-              subscription_id = $5,
-              es_trial = $6
+          SET membresia_activa     = true,
+              membresia_vigencia   = $2,
+              membresia_inicio     = $3,
+              plan                 = $4,
+              subscription_id      = $5,
+              es_trial             = $6,
+              trial_ever_claimed   = CASE WHEN $7 THEN true ELSE trial_ever_claimed END
           WHERE id = $1
           `,
-          [tenantId, vigencia, new Date(subscription.start_date * 1000), planValue, subscriptionId, esTrial]
+          [
+            tenantId,
+            vigencia,
+            new Date(subscription.start_date * 1000),
+            planValue,
+            subscriptionId,
+            esTrial,
+            hasTrialFlag, // 👈 si hubo trial, queda marcado para siempre
+          ]
         );
 
         // 4) Reinicia usos
         await resetearCanales(tenantId);
 
-        // 5) Lee el producto de Stripe y aplica flags de canales
+        // 5) Lee el producto y aplica flags de canales
         try {
-          const product = await getProductFromCheckoutSession(stripe, session.id);
-          if (product) {
-            const flags = flagsFromProduct(product);
+          const productFromCheckout = await getProductFromCheckoutSession(stripe, session.id);
+          if (productFromCheckout) {
+            const flags = flagsFromProduct(productFromCheckout);
             await upsertChannelFlags(tenantId, flags);
             console.log('✅ Channel flags actualizados por checkout:', flags, 'tenant:', tenantId);
           } else {
@@ -314,6 +375,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
     if (tenant_id) {
       const esTrial = subscription.status === 'trialing';
+      const hasTrialFlag = Boolean(subscription.trial_end); // hubo trial alguna vez
 
       // 🔎 Lee el nombre del plan desde Stripe automáticamente
       const product = subscription.items.data[0]?.price?.product;
@@ -331,17 +393,19 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       await pool.query(
         `
         UPDATE tenants
-        SET es_trial = $1,
-            plan = $2,
-            membresia_inicio = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END,
-            membresia_vigencia = $4
-        WHERE id = $5
+        SET es_trial             = $1,
+            plan                 = $2,
+            membresia_inicio     = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END,
+            membresia_vigencia   = $4,
+            trial_ever_claimed   = CASE WHEN $5 THEN true ELSE trial_ever_claimed END
+        WHERE id = $6
         `,
         [
           esTrial,
           planValue,
-          new Date(subscription.current_period_start * 1000), // solo si sale del trial
-          new Date(subscription.current_period_end * 1000),   // actualizar vigencia
+          new Date(subscription.current_period_start * 1000), // si sale del trial
+          new Date(subscription.current_period_end * 1000),
+          hasTrialFlag,
           tenant_id,
         ]
       );
@@ -354,7 +418,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           await upsertChannelFlags(tenant_id, combined);
           console.log('🔄 Channel flags actualizados (multi-product):', combined, 'tenant:', tenant_id);
         }
-
       } catch (e) {
         console.error('❌ Error actualizando channel flags en subscription.updated:', e);
       }
@@ -403,26 +466,38 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         ? new Date(subscription.current_period_end * 1000)
         : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // fallback
 
-      const userRes = await pool.query('SELECT uid, tenant_id FROM users WHERE email = $1', [customerEmail]);
+      // nombre de plan real desde Stripe
+      const priceProd = subscription.items.data[0]?.price?.product;
+      let planValue = 'pro';
+      if (typeof priceProd === 'string') {
+        try {
+          const stripeProduct = await stripe.products.retrieve(priceProd);
+          planValue = (stripeProduct.name || 'pro').toLowerCase();
+        } catch (e) {
+          console.warn('⚠️ No se pudo leer el nombre del producto (invoice):', e);
+        }
+      }
+
+      const userRes = await pool.query('SELECT tenant_id FROM users WHERE email = $1 LIMIT 1', [customerEmail]);
       const user = userRes.rows[0];
-      if (!user) return res.status(200).json({ received: true });
+      if (!user?.tenant_id) return res.status(200).json({ received: true });
 
       await pool.query(
         `
         UPDATE tenants
-        SET membresia_activa = true,
+        SET membresia_activa   = true,
             membresia_vigencia = $2,
-            membresia_inicio = NOW(),
-            plan = 'pro'
+            membresia_inicio   = NOW(),
+            plan               = $3
         WHERE id = $1
         `,
-        [user.uid, nuevaVigencia]
+        [user.tenant_id, nuevaVigencia, planValue]
       );
 
-      console.log('🔁 Membresía renovada para', customerEmail);
-      await resetearCanales(user.uid);
+      console.log('🔁 Membresía renovada para', customerEmail, 'tenant', user.tenant_id);
+      await resetearCanales(user.tenant_id);
 
-      const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [user.uid]);
+      const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [user.tenant_id]);
       const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
 
       await sendRenewalSuccessEmail(customerEmail, tenantName);

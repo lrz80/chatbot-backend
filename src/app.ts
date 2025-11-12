@@ -75,6 +75,8 @@ import channelSettingsRouter from "./routes/channel-settings";
 import cronRoutes from "./routes/internal/cron";
 import channelStatusRouter from "./routes/channel-status";
 import billingRoutes from './routes/billing';
+import stripeCheckoutRoutes from './routes/stripe/checkout';
+import stripePlansRoutes from './routes/stripe/plans';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -201,6 +203,8 @@ app.use("/api/channel-settings", channelSettingsRouter);
 app.use("/api/internal/cron", cronRoutes);
 app.use("/api/channel/status", channelStatusRouter);
 app.use('/api/billing', billingRoutes);
+app.use('/api/stripe', stripeCheckoutRoutes);
+app.use('/api/stripe', stripePlansRoutes);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
