@@ -573,8 +573,21 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [user.tenant_id]);
       const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
 
-      await sendCancelationEmail(customerEmail, tenantName);
-      console.log('📧 Correo de cancelación enviado');
+      // Enviar correo de cancelación (no bloquear si falla)
+      try {
+        // Evita enviar a buzones de prueba/bloqueados
+        const skip = !customerEmail ||
+                    /^(demo|test|no-reply)@aamy\.ai$/i.test(customerEmail);
+        if (!skip) {
+          await sendCancelationEmail(customerEmail, tenantName);
+          console.log('📧 Correo de cancelación enviado a', customerEmail);
+        } else {
+          console.log('✉️ Salteado envío de cancelación a', customerEmail);
+        }
+      } catch (mailErr: any) {
+        console.warn('✉️ Aviso: fallo enviando correo de cancelación (se ignora):',
+          mailErr?.responseCode, mailErr?.response || mailErr?.message || mailErr);
+      }
     } catch (err) {
       console.error('❌ Error al cancelar membresía:', err);
     }
