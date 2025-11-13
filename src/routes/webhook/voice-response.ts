@@ -721,10 +721,18 @@ console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
     }
 
     if (!tenant.membresia_activa) {
-      vr.say(
-        { voice: 'alice', language: 'es-ES' as any },
-        'Tu membresía está inactiva. Por favor actualízala para continuar. ¡Gracias!'
-      );
+      // idioma según lo que ya eligió la persona (o inglés por defecto)
+      const lang =
+        ((state.lang as any) ||
+          (typeof req.query.lang === 'string' && req.query.lang === 'es'
+            ? 'es-ES'
+            : 'en-US')) as any;
+
+      const text = lang.startsWith('es')
+        ? 'En este momento no hay asistente disponible en este número. Gracias por llamar.'
+        : 'The assistant for this number is not available at the moment. Thank you for calling.';
+
+      vr.say({ voice: 'alice', language: lang }, text);
       vr.hangup();
       return res.type('text/xml').send(vr.toString());
     }
