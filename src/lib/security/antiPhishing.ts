@@ -57,23 +57,39 @@ function looksPhishy(text: string): { suspicious: boolean; reason: string } {
 }
 
 async function isSenderBlocked(pool: Pool, tenantId: string, channelUserId: string) {
+  // En modo revisión, nunca bloquees por lista
+  if ((process.env.ANTI_PHISHING_MODE || 'review').toLowerCase() === 'review') {
+    return false;
+  }
   const q = await pool.query(
-    `SELECT 1 AS x
+    `SELECT 1
        FROM blocked_senders
       WHERE tenant_id = $1 AND channel_user_id = $2
       LIMIT 1`,
     [tenantId, channelUserId]
   );
-  return q.rows.length > 0; // ✅ evita el 'possibly null' de rowCount
+  return q.rows.length > 0;
 }
 
-async function blockSender(pool: Pool, tenantId: string, channelUserId: string, reason: string) {
-  await pool.query(
-    `INSERT INTO blocked_senders (tenant_id, channel_user_id, reason)
-     VALUES ($1,$2,$3)
-     ON CONFLICT (tenant_id, channel_user_id) DO NOTHING`,
-    [tenantId, channelUserId, reason]
-  );
+export async function blockSender(
+  pool: Pool,
+  tenantId: string,
+  channelUserId: string,
+  reason: string,
+  channel: string = 'whatsapp'   // compat
+) {
+  try {
+    await pool.query(
+      `INSERT INTO spam_reports (tenant_id, channel, channel_user_id, text, reason)
+       VALUES ($1, $2, $3, '', $4)
+       ON CONFLICT DO NOTHING`,
+      [tenantId, channel, channelUserId, reason]
+    );
+    console.log(`⚠️ [antiPhishing] Registro pasivo: ${channelUserId} (${reason}) canal=${channel}`);
+  } catch (err) {
+    console.warn("No se pudo registrar evento de spam:", err);
+  }
+  return false; // nunca bloquea
 }
 
 async function recordSpam(pool: Pool, tenantId: string, channel: string, channelUserId: string, text: string, reason: string) {
@@ -117,7 +133,7 @@ export async function antiPhishingGuard(p: GuardParams): Promise<boolean> {
   const urls = extractUrls(p.userInput || "");
   const autoBlock = (process.env.SPAM_AUTOBLOCK || "true").toLowerCase() === "true";
   if (autoBlock && urls.length) {
-    await blockSender(p.pool, p.tenantId, p.senderId, reason);
+    await blockSender(p.pool, p.tenantId, p.senderId, reason, p.channel);
   }
 
   return true; // ya se manejó
