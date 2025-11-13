@@ -3,6 +3,7 @@
 import { Router, Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
+import { ensureUniqueSlug } from "../lib/slug";
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
@@ -129,7 +130,12 @@ router.post('/', async (req: Request, res: Response) => {
     } = req.body || {};
 
     // 0) Normalizadores
-    const slug = name ? toSlug(name) : undefined;
+    let slug: string | undefined = undefined;
+    if (typeof name !== 'undefined') {
+      // evita el 23505 al actualizar nombre/slug
+      slug = await ensureUniqueSlug(pool, name, { excludeTenantId: tenantId });
+    }
+
     const bookingUrlCandidate = firstString(booking_url, reservas_url, agenda_url, booking);
     const apiUrlCandidate = firstString(availability_api_url, booking_api_url);
     const headersObj = toPlainObject(availability_headers);
