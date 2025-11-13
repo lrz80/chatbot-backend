@@ -430,35 +430,52 @@ function playMainMenu(
 }
 
 // --- Selección de idioma inicial ---
-function introByLanguage(selected?: string) {
+// Antes: function introByLanguage(selected?: string) {
+function introByLanguage(selected?: string, brand?: string) {
   const vr = new twiml.VoiceResponse();
 
+  const business = brand && brand.trim().length > 0 ? brand.trim() : undefined;
+
+  // Si ya viene forzado a español (?lang=es)
   if (selected === 'es') {
-    vr.say({ language: 'es-ES', voice: 'alice' }, 'Hola, soy Amy de Synergy Zone. Continuamos en español.');
+    const lineEs = business
+      ? `Hola, soy Amy del equipo de ${business}. Continuamos en español.`
+      : 'Hola, soy Amy. Continuamos en español.';
+
+    vr.say({ language: 'es-ES', voice: 'alice' }, lineEs);
     vr.redirect('/webhook/voice-response?lang=es');
     return vr.toString();
   }
 
-  // Paso 1: ES
-  const gEs = vr.gather({
-    input: ['dtmf','speech'] as any,
+  // Intro en INGLÉS con nombre del negocio (si lo tenemos)
+  const lineEn = business
+    ? `Hi, this is Amy from ${business}.`
+    : 'Hi, this is Amy.';
+
+  vr.say({ language: 'en-US', voice: 'alice' }, lineEn);
+
+  // Frase en ESPAÑOL para elegir idioma + gather
+  const g = vr.gather({
+    input: ['dtmf', 'speech'] as any,
     numDigits: 1,
     timeout: 6,
     language: 'es-ES' as any,
     speechTimeout: 'auto',
     enhanced: true,
     speechModel: 'phone_call',
-    hints: 'español, espanol, castellano, dos, 2',
+    hints: 'español, espanol, dos, 2',
     action: '/webhook/voice-response/lang',
     method: 'POST',
     actionOnEmptyResult: true,
-    bargeIn: true
+    bargeIn: true,
   });
-  gEs.say({ language: 'es-ES' as any, voice: 'alice' }, 'Para español, marque dos o diga “Español”.');
 
-  // Si no hubo resultado, Twilio pegará igual al action; en /lang puedes detectar vacío.
-  // Si quieres forzar fallback sin depender del POST vacío:
-  vr.redirect('/webhook/voice-response/lang?fallback=en'); // <- opcional
+  g.say(
+    { language: 'es-ES', voice: 'alice' },
+    'Para español, marque dos o diga “Español”.'
+  );
+
+  vr.redirect('/webhook/voice-response/lang?fallback=en');
 
   return vr.toString();
 }
@@ -627,26 +644,7 @@ router.post('/', async (req: Request, res: Response) => {
   const callSid: string = (req.body.CallSid || '').toString();
   const state = CALL_STATE.get(callSid) || {};
 
-  // --- Selección de idioma por query (?lang=en|es) e intro por defecto en inglés ---
   const langParam = typeof req.query.lang === 'string' ? (req.query.lang as string) : undefined;
-
-  // Si es la primera vez y no hay idioma aún, reproducir intro en inglés con opción a marcar 2 para español
-  if (!langParam && !state.turn && !userInput && !digits) {
-  // 👉 Lo que vamos a locutar en el intro
-  const introEn = 'Hi, this is Amy from Synergy Zone. Para español, marque dos.';
-  console.log('[VOICE][SAY]', JSON.stringify({
-    callSid,
-    to: didNumber,
-    lang: 'en-US',
-    speakOut: introEn,
-    ctx: 'intro'
-  }));
-  return res.type('text/xml').send(introByLanguage());
-}
-
-const turn = (state.turn ?? 0) + 1;
-CALL_STATE.set(callSid, { ...state, turn });
-console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
 
   // Si viene ?lang=..., persiste en estado para el resto de la llamada
   if (langParam) {
@@ -678,6 +676,9 @@ console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
     const tenant = tRes.rows[0];
     if (!tenant) return res.sendStatus(404);
 
+    // Nombre de marca del tenant (para hablar en la intro)
+    const brand = await getTenantBrand(tenant.id);
+
     // ✅ Gate VOZ por plan + toggles + pausa (igual que el front)
     try {
       const gate = await canUseChannel(tenant.id, "voice");
@@ -688,15 +689,16 @@ console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
         STATE_TIME.delete(callSid);
 
         const bye = new twiml.VoiceResponse();
-        const lang = ((state.lang as any) || 'es-ES') as any;
+        const lang =
+          ((state.lang as any) ||
+            (typeof req.query.lang === 'string' && req.query.lang === 'es'
+              ? 'es-ES'
+              : 'en-US')) as any;
 
-        const msg = !gate.plan_enabled
-          ? (lang.startsWith('es')
-              ? 'Este número no tiene asistente de voz activo en tu plan actual.'
-              : 'This number does not have voice assistant enabled on your current plan.')
-          : (lang.startsWith('es')
-              ? 'Este canal de voz está temporalmente en pausa. Por favor, inténtalo más tarde.'
-              : 'This voice channel is temporarily paused. Please try again later.');
+        // ✅ Mensaje 100% neutro para el cliente (no menciona plan ni membresía)
+        const msg = lang.startsWith('es')
+          ? 'En este momento no hay asistente de voz disponible en este número. Gracias por llamar.'
+          : 'The voice assistant for this number is not available at the moment. Thank you for calling.';
 
         console.log("🛑 VOZ bloqueado por plan/toggle/pausa", {
           tenantId: tenant.id,
@@ -750,6 +752,17 @@ console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
     const currentLocale = (state.lang as any) || (langParam === 'es' ? 'es-ES' : 'en-US');
 
     const voiceName: any = (cfg?.voice_name || 'alice') as any;
+
+    // 👉 Primer hit de la llamada: intro en inglés + “para español oprima 2” con nombre del negocio
+    if (!state.turn && !langParam && !userInput && !digits) {
+      const introXml = introByLanguage(undefined, brand);
+      return res.type('text/xml').send(introXml);
+    }
+
+    // A partir de aquí ya contamos los turnos de la llamada
+    const turn = (state.turn ?? 0) + 1;
+    CALL_STATE.set(callSid, { ...state, turn });
+    console.log('[VOICE][TURN]', JSON.stringify({ callSid, turn }));
 
     // ——— Menú inicial si aún no hay input ni confirmaciones pendientes ———
     if (!userInput && !digits && !state.awaiting && !state.awaitingNumber) {
