@@ -84,9 +84,9 @@ async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma:
   try {
     await pool.query(
       `INSERT INTO clientes (tenant_id, contacto, idioma)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (tenant_id, contacto)
-       DO UPDATE SET idioma = EXCLUDED.idioma`,
+      VALUES ($1, $2, $3)
+      ON CONFLICT (tenant_id, contacto)
+      DO UPDATE SET idioma = EXCLUDED.idioma, updated_at = now()`,
       [tenantId, contacto, idioma]
     );
   } catch (e) {
