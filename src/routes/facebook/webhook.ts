@@ -26,6 +26,7 @@ import { buscarRespuestaSimilitudFaqsTraducido } from '../../lib/respuestasTradu
 import type { Canal } from '../../lib/detectarIntencion';
 import { requireChannel } from "../../middleware/requireChannel";
 import { canUseChannel } from "../../lib/features";
+import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 
 type CanalEnvio = 'facebook' | 'instagram';
 
@@ -233,16 +234,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         );
         if (existingMsg.rows.length > 0) continue;
 
-        // 🧹 Cancela follow-ups pendientes de este contacto
-        try {
-          await pool.query(
-            `DELETE FROM mensajes_programados
-              WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
-            [tenantId, canalEnvio, senderId]
-          );
-        } catch {}
-
-        // Idioma destino consistente a WA
+        // 🌐 Idioma destino (mismo que WA) — MOVER AQUÍ
         const tenantBase: 'es'|'en' = normalizeLang(tenant?.idioma || 'es');
         let idiomaDestino: 'es'|'en';
         if (isNumericOnly) {
@@ -254,6 +246,31 @@ router.post('/api/facebook/webhook', async (req, res) => {
           await upsertIdiomaClienteDB(tenantId, senderId, normalizado);
           idiomaDestino = normalizado;
         }
+
+        // 🛡️ Anti-phishing reutilizable (EARLY EXIT)
+        const handledPhishing = await antiPhishingGuard({
+          pool,
+          tenantId,
+          channel: canalEnvio,   // "facebook" o "instagram"
+          senderId,
+          messageId,
+          userInput,
+          idiomaDestino,         // ✅ ahora sí lo pasamos
+          send: async (text) => sendMeta(text),
+        });
+        if (handledPhishing) {
+          // Ya se respondió y registró; NO sigas con FAQs/IA/etc.
+          continue;
+        }
+
+        // 🧹 Cancela follow-ups pendientes de este contacto
+        try {
+          await pool.query(
+            `DELETE FROM mensajes_programados
+              WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+            [tenantId, canalEnvio, senderId]
+          );
+        } catch {}
 
         // Incrementar uso mensual por mensaje entrante (como WA)
         try {
