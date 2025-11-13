@@ -28,6 +28,7 @@ import { answerMultiIntent, detectTopIntents } from '../../utils/multiIntent';
 import type { Canal } from '../../lib/detectarIntencion';
 import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
 import { requireChannelEnabled } from "../../middleware/requireChannelEnabled";
+import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 
 
 const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
@@ -248,6 +249,27 @@ async function procesarMensajeWhatsApp(body: any) {
   }
 
   const canal: Canal = 'whatsapp';
+
+  // 🛡️ Anti-phishing (EARLY EXIT antes de guardar mensajes/uso/tokens)
+  {
+    const handledPhishing = await antiPhishingGuard({
+      pool,
+      tenantId: tenant.id,
+      channel: "whatsapp",
+      senderId: fromNumber,     // número del cliente
+      messageId,                // SID de Twilio
+      userInput,                // texto recibido
+      send: async (text: string) => {
+        // usa tu sender real de WA
+        await enviarWhatsApp(fromNumber, text, tenant.id);
+      },
+    });
+
+    if (handledPhishing) {
+      // Ya respondió con mensaje seguro, marcó spam y cortó el flujo.
+      return;
+    }
+  }
 
   // 2.a) Guardar el mensaje del usuario una sola vez (idempotente)
   try {
