@@ -305,9 +305,14 @@ router.post('/api/facebook/webhook', async (req, res) => {
           continue;
         }
 
-        // Prompt base y bienvenida por CANAL
-        const promptBase = getPromptPorCanal('meta', tenant, idiomaDestino);
-        const bienvenida = getBienvenidaPorCanal('meta', tenant, idiomaDestino);
+        // Prompt base y bienvenida por CANAL (prioriza meta_configs)
+        const promptBase =
+          (tenant.prompt_meta && String(tenant.prompt_meta).trim())
+          || getPromptPorCanal('meta', tenant, idiomaDestino);
+
+        const bienvenida =
+          (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
+          || getBienvenidaPorCanal('meta', tenant, idiomaDestino);
 
         // —————————————————————————
         // FAST-PATH MULTI-INTENCIÓN
@@ -752,7 +757,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         // —————————————————————————
         // Similaridad + LLM fallback (sugeridas)
         // —————————————————————————
-        let respuesta: string | null = null;
+        let respuesta = '';
 
         // Similaridad sobre FAQs traducidas (reutiliza helper existente si lo prefieres)
         // Aquí haremos un fallback directo a LLM con promptBase si no hubo nada antes:
