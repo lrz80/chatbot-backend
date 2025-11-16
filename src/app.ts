@@ -77,6 +77,7 @@ import channelStatusRouter from "./routes/channel-status";
 import billingRoutes from './routes/billing';
 import stripeCheckoutRoutes from './routes/stripe/checkout';
 import stripePlansRoutes from './routes/stripe/plans';
+import twilioEmbeddedRouter from './routes/twilioEmbedded';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -205,6 +206,7 @@ app.use("/api/channel/status", channelStatusRouter);
 app.use('/api/billing', billingRoutes);
 app.use('/api/stripe', stripeCheckoutRoutes);
 app.use('/api/stripe', stripePlansRoutes);
+app.use(twilioEmbeddedRouter);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
