@@ -116,6 +116,7 @@ export async function enviarWhatsApp(
   tenantId: string
 ) {
   const fromNumber = await obtenerNumeroDeTenant(tenantId); // número real del tenant (E.164, sin prefijo)
+  console.log("WHATSAPP ENVIAR -> tenantId:", tenantId, "fromNumber:", fromNumber);
   const numero = normalizarNumero(telefono);
   if (!numero || !fromNumber) {
     console.warn("❌ Número inválido o tenant sin número asignado");
