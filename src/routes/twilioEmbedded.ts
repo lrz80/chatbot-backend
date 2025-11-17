@@ -8,8 +8,8 @@ const router = Router();
 
 // Cliente Twilio maestro
 const masterClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID!,
-  process.env.TWILIO_AUTH_TOKEN!
+  process.env.TWILIO_MASTER_ACCOUNT_SID!,
+  process.env.TWILIO_MASTER_AUTH_TOKEN!
 );
 
 /**
