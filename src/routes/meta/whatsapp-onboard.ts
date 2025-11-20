@@ -1,52 +1,81 @@
+// src/routes/meta/whatsapp-onboard.ts
 import { Router, Request, Response } from "express";
 import pool from "../../lib/db";
-import auth from "../auth"; // ajusta la ruta a tu middleware real
+import { authenticateUser } from "../../middleware/auth"; // 👈 igual que en el resto
 
 const router = Router();
 
-// POST /api/meta/whatsapp/onboard-complete
+// POST  /api/meta/whatsapp/onboard-complete
+// (recuerda: en app.ts ya montas este router con: app.use("/api/meta", whatsappOnboardRouter);)
 router.post(
   "/whatsapp/onboard-complete",
-  auth, // el usuario debe estar logueado
+  authenticateUser, // el usuario debe estar logueado en tu SaaS
   async (req: Request, res: Response) => {
     try {
-      const user = (req as any).user; // según tu tipo real
+      const user = (req as any).user;
       const tenantId = user?.tenant_id;
 
       if (!tenantId) {
         return res.status(401).json({ error: "Tenant no encontrado en sesión" });
       }
 
-      const { code, waba_id, phone_number_id } = req.body as {
-        code?: string;
+      // Lo que el frontend nos va a mandar después del Embedded Signup
+      const {
+        waba_id,
+        phone_number_id,
+        phone_number,
+        access_token,
+      } = req.body as {
         waba_id?: string;
         phone_number_id?: string;
+        phone_number?: string;
+        access_token?: string;
       };
 
-      if (!code && !waba_id && !phone_number_id) {
+      if (!waba_id && !phone_number_id && !phone_number && !access_token) {
         return res
           .status(400)
           .json({ error: "No llegaron datos de WhatsApp desde el frontend" });
       }
 
-      // Guardar en la tabla tenants (ajusta nombres de columnas si son otros)
+      // 🔐 Guardar en la tabla tenants usando TUS columnas reales:
+      //   - whatsapp_business_id
+      //   - whatsapp_phone_number_id
+      //   - whatsapp_phone_number
+      //   - whatsapp_access_token
+      //   - whatsapp_connected
+      //   - whatsapp_connected_at
       await pool.query(
         `
         UPDATE tenants
         SET
-          whatsapp_waba_id = COALESCE($1, whatsapp_waba_id),
-          whatsapp_phone_number_id = COALESCE($2, whatsapp_phone_number_id),
-          whatsapp_onboard_code = COALESCE($3, whatsapp_onboard_code),
-          whatsapp_connected = TRUE,
-          updated_at = NOW()
-        WHERE id = $4
+          whatsapp_business_id      = COALESCE($1, whatsapp_business_id),
+          whatsapp_phone_number_id  = COALESCE($2, whatsapp_phone_number_id),
+          whatsapp_phone_number     = COALESCE($3, whatsapp_phone_number),
+          whatsapp_access_token     = COALESCE($4, whatsapp_access_token),
+          whatsapp_connected        = TRUE,
+          whatsapp_connected_at     = NOW(),
+          updated_at                = NOW()
+        WHERE id = $5
       `,
-        [waba_id || null, phone_number_id || null, code || null, tenantId]
+        [
+          waba_id || null,
+          phone_number_id || null,
+          phone_number || null,
+          access_token || null,
+          tenantId,
+        ]
       );
+
+      console.log("✅ WhatsApp conectado para tenant", tenantId, {
+        waba_id,
+        phone_number_id,
+        phone_number,
+      });
 
       return res.json({ success: true });
     } catch (err) {
-      console.error("Error en /whatsapp/onboard-complete:", err);
+      console.error("❌ Error en /whatsapp/onboard-complete:", err);
       return res
         .status(500)
         .json({ error: "Error interno guardando datos de WhatsApp" });
