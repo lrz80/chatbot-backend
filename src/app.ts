@@ -78,6 +78,7 @@ import billingRoutes from './routes/billing';
 import stripeCheckoutRoutes from './routes/stripe/checkout';
 import stripePlansRoutes from './routes/stripe/plans';
 import twilioEmbeddedRouter from './routes/twilioEmbedded';
+import whatsappOnboardRouter from "./routes/meta/whatsapp-onboard";
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -207,6 +208,7 @@ app.use('/api/billing', billingRoutes);
 app.use('/api/stripe', stripeCheckoutRoutes);
 app.use('/api/stripe', stripePlansRoutes);
 app.use(twilioEmbeddedRouter);
+app.use("/api/meta", whatsappOnboardRouter);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {

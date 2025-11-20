@@ -85,16 +85,9 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
         instagram_business_account_id = $4,
         instagram_page_id = $5,
         instagram_page_name = $6
-       WHERE id = $7`,
-      [
-        pageId,
-        pageName,
-        pageAccessToken,
-        instagramBusinessAccountId,
-        instagramPageId,
-        instagramPageUsername,
-        tenantId,
-      ]
+        WHERE id = $7`,
+      [pageId, pageName, pageAccessToken, instagramBusinessAccountId, instagramPageId,
+      instagramPageUsername, tenantId]
     );
 
     console.log('✅ Datos de Facebook e Instagram guardados exitosamente para tenant:', tenantId);
