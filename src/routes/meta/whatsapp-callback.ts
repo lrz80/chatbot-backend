@@ -38,6 +38,7 @@ router.get("/api/meta-webhook", (req: Request, res: Response) => {
  *  - Y la info de sesión de Embedded Signup (WABA, número, etc.) si la apuntas a esta URL
  */
 router.post("/api/meta-webhook", async (req: Request, res: Response) => {
+  console.log('📩 META WEBHOOK RAW BODY:', JSON.stringify(req.body, null, 2));
   try {
     const body = req.body as any;
     console.log("📩 POST /api/meta-webhook BODY:", JSON.stringify(body, null, 2));
