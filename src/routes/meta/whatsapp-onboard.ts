@@ -2,140 +2,128 @@
 import { Router, Request, Response } from "express";
 import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
-import fetch from "node-fetch";
 
 const router = Router();
 
-// VARIABLES DE ENTORNO – asegúrate de que EXISTEN en Railway
-const META_APP_ID = process.env.META_APP_ID!;
-const META_APP_SECRET = process.env.META_APP_SECRET!;
-const META_WHATSAPP_REDIRECT_URI =
-  "https://www.aamy.ai/meta/whatsapp-redirect";
+const META_APP_ID = process.env.META_APP_ID || "";
+const META_APP_SECRET = process.env.META_APP_SECRET || "";
+const META_WHATSAPP_REDIRECT_URI = process.env.META_WHATSAPP_REDIRECT_URI || "";
 
-// POST  /api/meta/whatsapp/onboard-complete
+if (!META_APP_ID || !META_APP_SECRET || !META_WHATSAPP_REDIRECT_URI) {
+  console.warn(
+    "⚠️ META_APP_ID / META_APP_SECRET / META_WHATSAPP_REDIRECT_URI no configuradas correctamente"
+  );
+}
+
+// POST /api/meta/whatsapp/onboard-complete
 router.post(
   "/whatsapp/onboard-complete",
   authenticateUser,
   async (req: Request, res: Response) => {
-    const user = (req as any).user;
-    const tenantId = user?.tenant_id;
-    const { code, state } = req.body as { code?: string; state?: string };
-
-    console.log("🚀 POST /api/meta/whatsapp/onboard-complete", {
-      tenantId,
-      code,
-      state,
-    });
-
     try {
+      const user = (req as any).user;
+      const tenantId = user?.tenant_id;
+
+      console.log("🚀 [META WA] POST /api/meta/whatsapp/onboard-complete BODY:", req.body);
+      console.log("👤 [META WA] Tenant desde sesión:", tenantId);
+
       if (!tenantId) {
-        console.error("❌ Tenant no encontrado en sesión");
         return res.status(401).json({ error: "Tenant no encontrado en sesión" });
       }
 
+      const { code } = req.body as { code?: string };
+
       if (!code) {
-        console.error("❌ No se recibió code desde Meta");
         return res
           .status(400)
-          .json({ error: "No se recibió el código de autorización (code)." });
+          .json({ error: "No se recibió el código (code) de Meta" });
       }
 
-      if (!META_APP_ID || !META_APP_SECRET) {
-        console.error(
-          "❌ Faltan META_APP_ID o META_APP_SECRET en variables de entorno"
-        );
-        return res.status(500).json({
-          error:
-            "Faltan META_APP_ID o META_APP_SECRET en el backend. Configura las variables en Railway.",
-        });
-      }
+      // 1) Intercambiar code -> access_token
+      const tokenUrl =
+        `https://graph.facebook.com/v20.0/oauth/access_token` +
+        `?client_id=${encodeURIComponent(META_APP_ID)}` +
+        `&client_secret=${encodeURIComponent(META_APP_SECRET)}` +
+        `&redirect_uri=${encodeURIComponent(META_WHATSAPP_REDIRECT_URI)}` +
+        `&code=${encodeURIComponent(code)}`;
 
-      // 1) Intercambiar el code por un access token de usuario
-      const tokenUrl = new URL(
-        "https://graph.facebook.com/v20.0/oauth/access_token"
+      console.log("🌐 [META WA] Llamando a:", tokenUrl);
+
+      const tokenResp = await fetch(tokenUrl);
+      const tokenJson: any = await tokenResp.json().catch(() => ({}));
+
+      console.log(
+        "🔑 [META WA] Respuesta oauth/access_token status=",
+        tokenResp.status,
+        "body=",
+        tokenJson
       );
-      tokenUrl.searchParams.set("client_id", META_APP_ID);
-      tokenUrl.searchParams.set("redirect_uri", META_WHATSAPP_REDIRECT_URI);
-      tokenUrl.searchParams.set("client_secret", META_APP_SECRET);
-      tokenUrl.searchParams.set("code", code);
 
-      console.log("🌐 Llamando a:", tokenUrl.toString());
-
-      const tokenRes = await fetch(tokenUrl.toString(), {
-        method: "GET",
-      });
-
-      const tokenJson = (await tokenRes.json()) as any;
-      console.log("🔑 tokenJson:", tokenJson);
-
-      if (!tokenRes.ok || !tokenJson.access_token) {
-        console.error(
-          "❌ Error obteniendo access_token de Meta:",
-          tokenJson
-        );
+      if (!tokenResp.ok || !tokenJson.access_token) {
         return res.status(500).json({
           error:
             "No se pudo obtener el access_token de Meta. Revisa APP_ID/SECRET y redirect_uri.",
-          meta: tokenJson,
+          meta_error: tokenJson,
         });
       }
 
-      const userAccessToken = tokenJson.access_token as string;
+      const accessToken = tokenJson.access_token as string;
 
-      // 2) Obtener la WABA asociada al usuario
-      const wabaRes = await fetch(
-        `https://graph.facebook.com/v20.0/me/whatsapp_business_accounts?access_token=${encodeURIComponent(
-          userAccessToken
-        )}`
+      // 2) Obtener los WhatsApp Business Accounts y teléfonos
+      const wabaUrl =
+        "https://graph.facebook.com/v20.0/me" +
+        "?fields=whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number}}" +
+        `&access_token=${encodeURIComponent(accessToken)}`;
+
+      console.log("🌐 [META WA] Llamando a:", wabaUrl);
+
+      const wabaResp = await fetch(wabaUrl);
+      const wabaJson: any = await wabaResp.json().catch(() => ({}));
+
+      console.log(
+        "🏢 [META WA] Respuesta me{whatsapp_business_accounts} status=",
+        wabaResp.status,
+        "body=",
+        JSON.stringify(wabaJson, null, 2)
       );
-      const wabaJson = (await wabaRes.json()) as any;
-      console.log("🏢 wabaJson:", wabaJson);
 
-      if (!wabaRes.ok || !Array.isArray(wabaJson.data) || !wabaJson.data[0]) {
-        console.error(
-          "❌ No se encontró cuenta de WhatsApp Business en wabaJson",
-          wabaJson
-        );
+      if (!wabaResp.ok) {
         return res.status(500).json({
           error:
-            "No se encontró ninguna cuenta de WhatsApp Business asociada a este login.",
-          meta: wabaJson,
+            "No se pudo obtener la información de la cuenta de WhatsApp Business.",
+          meta_error: wabaJson,
         });
       }
 
-      const wabaId = wabaJson.data[0].id as string;
+      const waba =
+        wabaJson?.whatsapp_business_accounts?.data?.[0] ||
+        wabaJson?.whatsapp_business_accounts?.[0] ||
+        null;
 
-      // 3) Obtener los números de teléfono de esa WABA
-      const phonesRes = await fetch(
-        `https://graph.facebook.com/v20.0/${wabaId}/phone_numbers?access_token=${encodeURIComponent(
-          userAccessToken
-        )}`
-      );
-      const phonesJson = (await phonesRes.json()) as any;
-      console.log("📞 phonesJson:", phonesJson);
+      const phone =
+        waba?.phone_numbers?.data?.[0] ||
+        waba?.phone_numbers?.[0] ||
+        null;
 
-      if (
-        !phonesRes.ok ||
-        !Array.isArray(phonesJson.data) ||
-        !phonesJson.data[0]
-      ) {
-        console.error(
-          "❌ No se encontró ningún número de WhatsApp asociado a la WABA",
-          phonesJson
-        );
+      const wabaId = waba?.id || null;
+      const phoneNumberId = phone?.id || null;
+      const displayPhoneNumber = phone?.display_phone_number || null;
+
+      console.log("📌 [META WA] Parsed ->", {
+        wabaId,
+        phoneNumberId,
+        displayPhoneNumber,
+      });
+
+      if (!wabaId || !phoneNumberId || !displayPhoneNumber) {
         return res.status(500).json({
           error:
-            "No se encontró ningún número de WhatsApp asociado a la WABA seleccionada.",
-          meta: phonesJson,
+            "No se pudo detectar el WABA o el número de WhatsApp desde la respuesta de Meta.",
+          meta_raw: wabaJson,
         });
       }
 
-      const phone = phonesJson.data[0];
-      const phoneNumberId = phone.id as string;
-      const displayPhoneNumber =
-        (phone.display_phone_number as string) || null;
-
-      // 4) Guardar en la tabla tenants
+      // 3) Guardar en tenants
       await pool.query(
         `
         UPDATE tenants
@@ -144,9 +132,9 @@ router.post(
           whatsapp_phone_number_id  = $2,
           whatsapp_phone_number     = $3,
           whatsapp_access_token     = $4,
-          whatsapp_status           = 'connected',
           whatsapp_connected        = TRUE,
           whatsapp_connected_at     = NOW(),
+          whatsapp_status           = 'connected',
           updated_at                = NOW()
         WHERE id = $5
       `,
@@ -154,12 +142,12 @@ router.post(
           wabaId,
           phoneNumberId,
           displayPhoneNumber,
-          userAccessToken,
+          accessToken,
           tenantId,
         ]
       );
 
-      console.log("✅ WhatsApp conectado para tenant", tenantId, {
+      console.log("✅ [META WA] WhatsApp conectado para tenant", tenantId, {
         wabaId,
         phoneNumberId,
         displayPhoneNumber,
@@ -167,12 +155,12 @@ router.post(
 
       return res.json({
         success: true,
-        wabaId,
-        phoneNumberId,
-        displayPhoneNumber,
+        waba_id: wabaId,
+        phone_number_id: phoneNumberId,
+        phone_number: displayPhoneNumber,
       });
-    } catch (err) {
-      console.error("❌ Error en /whatsapp/onboard-complete:", err);
+    } catch (err: any) {
+      console.error("❌ [META WA] Error en /whatsapp/onboard-complete:", err);
       return res
         .status(500)
         .json({ error: "Error interno guardando datos de WhatsApp" });
