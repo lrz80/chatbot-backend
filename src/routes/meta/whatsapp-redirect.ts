@@ -17,8 +17,8 @@ router.get("/meta/whatsapp-redirect", async (req: Request, res: Response) => {
       `https://graph.facebook.com/v18.0/oauth/access_token`,
       {
         params: {
-          client_id: process.env.FACEBOOK_APP_ID,
-          client_secret: process.env.FACEBOOK_APP_SECRET,
+          client_id: process.env.META_APP_ID,
+          client_secret: process.env.META_APP_SECRET,
           redirect_uri: "https://www.aamy.ai/meta/whatsapp-redirect",
           code,
         },
