@@ -1,101 +1,87 @@
 // src/routes/meta/whatsapp-onboard.ts
-import { Router, Request, Response } from "express";
-import pool from "../../lib/db";
-import { authenticateUser } from "../../middleware/auth";
+import express, { Request, Response } from "express";
+import pool from "../../lib/db"; // ajusta el path si tu db.ts está en otro sitio
+import { authenticateUser } from "../../middleware/auth"; // MISMO middleware que usas en /api/settings
 
-const router = Router();
+const router = express.Router();
 
+// ---- Tipos para la request autenticada ----
+interface AuthedUser {
+  uid: string;
+  tenant_id: string;
+  email?: string;
+}
+
+type AuthedRequest = Request & {
+  user?: AuthedUser;
+};
+
+// ---- Ruta que recibe el POST del Embedded Signup ----
 router.post(
-  "/whatsapp/onboard-complete",
+  "/whatsapp-onboard",
   authenticateUser,
-  async (req: Request, res: Response) => {
+  async (req: AuthedRequest, res: Response) => {
     try {
-      const user = (req as any).user;
-      const tenantId = user?.tenant_id;
+      const tenantId = req.user?.tenant_id;
 
       if (!tenantId) {
-        console.error("❌ [META WA] Tenant no encontrado en sesión");
-        return res.status(401).json({ error: "Tenant no encontrado en sesión" });
+        console.warn("[WA ONBOARD] Sin tenant_id en req.user");
+        return res.status(401).json({ ok: false, error: "Unauthenticated" });
       }
 
-      const { code } = req.body as { code?: string };
+      const body: any = req.body || {};
+      console.log("[WA ONBOARD] Payload recibido:", JSON.stringify(body, null, 2));
 
-      console.log("🔁 [META WA] /whatsapp/onboard-complete body:", req.body);
+      // Extraemos valores posibles del payload de Meta
+      const wabaId =
+        body.waba_id ||
+        body.wa_waba_id ||
+        body.raw?.wa_waba_id ||
+        null;
 
-      if (!code) {
-        return res.status(400).json({ error: "No llegó el código 'code' desde Meta" });
-      }
+      const phoneNumber =
+        body.phone_number ||
+        body.wa_phone_number ||
+        body.raw?.phone_number ||
+        null;
 
-      const appId = process.env.META_APP_ID;
-      const appSecret = process.env.META_APP_SECRET;
-      const redirectUri = process.env.META_WHATSAPP_REDIRECT_URI;
+      const phoneNumberId =
+        body.phone_number_id ||
+        body.wa_phone_number_id ||
+        body.raw?.wa_phone_number_id ||
+        null;
 
-      if (!appId || !appSecret || !redirectUri) {
-        console.error("❌ [META WA] Faltan envs META_APP_ID / META_APP_SECRET / META_WHATSAPP_REDIRECT_URI");
-        return res.status(500).json({
-          error:
-            "Configuración de Meta incompleta en el backend. Revisa las variables de entorno.",
-        });
-      }
+      // Para Twilio-like sender_sid, de momento usamos el número como identificador
+      const senderSid = phoneNumber || null;
 
-      // 1) Intercambiar code -> access_token
-      const tokenUrl = new URL("https://graph.facebook.com/v20.0/oauth/access_token");
-      tokenUrl.searchParams.set("client_id", appId);
-      tokenUrl.searchParams.set("client_secret", appSecret);
-      tokenUrl.searchParams.set("redirect_uri", redirectUri);
-      tokenUrl.searchParams.set("code", code);
-
-      console.log("🌐 [META WA] Llamando a:", tokenUrl.toString());
-
-      const tokenRes = await fetch(tokenUrl.toString(), { method: "GET" });
-      const tokenJson = await tokenRes.json();
-
-      console.log("📦 [META WA] Respuesta access_token:", tokenRes.status, tokenJson);
-
-      if (!tokenRes.ok) {
-        return res.status(500).json({
-          error: "No se pudo obtener el access_token de Meta. Revisa APP_ID/SECRET y redirect_uri.",
-          meta: tokenJson,
-        });
-      }
-
-      const accessToken = (tokenJson as any).access_token as string | undefined;
-
-      if (!accessToken) {
-        return res.status(500).json({
-          error: "Meta no devolvió access_token en la respuesta.",
-          meta: tokenJson,
-        });
-      }
-
-      // ⚠️ Paso siguiente: usar accessToken para obtener waba_id, phone_number_id, etc.
-      // De momento solo lo guardamos como whatsapp_access_token y marcamos whatsapp_connected=true
-
+      // ---- Actualizamos la fila del tenant ----
       await pool.query(
         `
         UPDATE tenants
         SET
-          whatsapp_access_token = $1,
-          whatsapp_connected    = TRUE,
-          whatsapp_connected_at = NOW(),
-          updated_at            = NOW()
-        WHERE id = $2
-      `,
-        [accessToken, tenantId]
+          whatsapp_business_id     = COALESCE($2, whatsapp_business_id),
+          whatsapp_phone_number    = COALESCE($3, whatsapp_phone_number),
+          whatsapp_phone_number_id = COALESCE($4, whatsapp_phone_number_id),
+          whatsapp_sender_sid      = COALESCE($5, whatsapp_sender_sid),
+          whatsapp_status          = 'active'
+        WHERE id = $1
+        `,
+        [tenantId, wabaId, phoneNumber, phoneNumberId, senderSid]
       );
 
-      console.log("✅ [META WA] Guardado access_token para tenant", tenantId);
+      console.log("[WA ONBOARD] Datos guardados para tenant", tenantId);
 
       return res.json({
-        success: true,
-        access_token: accessToken,
-        raw: tokenJson,
+        ok: true,
+        tenant_id: tenantId,
+        waba_id: wabaId,
+        phone_number: phoneNumber,
+        phone_number_id: phoneNumberId,
+        sender_sid: senderSid,
       });
     } catch (err) {
-      console.error("❌ [META WA] Error en /whatsapp/onboard-complete:", err);
-      return res
-        .status(500)
-        .json({ error: "Error interno guardando datos de WhatsApp" });
+      console.error("[WA ONBOARD] Error guardando datos:", err);
+      return res.status(500).json({ ok: false, error: "server_error" });
     }
   }
 );
