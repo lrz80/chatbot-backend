@@ -80,6 +80,8 @@ import stripePlansRoutes from './routes/stripe/plans';
 import twilioEmbeddedRouter from './routes/twilioEmbedded';
 import whatsappOnboardRouter from "./routes/meta/whatsapp-onboard";
 import whatsappCallbackRouter from "./routes/meta/whatsapp-callback";
+import whatsappRedirectRoute from "./routes/meta/whatsapp-redirect";
+
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -211,6 +213,8 @@ app.use('/api/stripe', stripePlansRoutes);
 app.use(twilioEmbeddedRouter);
 app.use("/api/meta", whatsappOnboardRouter);
 app.use("/api/meta-webhook", whatsappCallbackRouter);
+app.use("/", whatsappRedirectRoute);
+
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
