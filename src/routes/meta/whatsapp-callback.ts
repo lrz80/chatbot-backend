@@ -114,4 +114,22 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * POST: aquí llegan los mensajes reales desde Meta (WhatsApp Cloud)
+ * Ejemplo: texto, entrega, lectura, multimedia, template, etc.
+ */
+router.post("/whatsapp/callback", async (req: Request, res: Response) => {
+  try {
+    console.log("📩 [WA WEBHOOK] Evento entrante:", JSON.stringify(req.body, null, 2));
+
+    // Meta exige SIEMPRE respuesta 200 para confirmar recepción,
+    // si no, reintenta varias veces.
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("❌ [WA WEBHOOK] Error procesando evento:", err);
+    // Aun con error, responde 200 para evitar reintentos infinitos
+    res.sendStatus(200);
+  }
+});
+
 export default router;
