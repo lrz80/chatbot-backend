@@ -221,7 +221,7 @@ router.post("/", async (req: Request, res: Response) => {
 
 export default router;
 
-async function procesarMensajeWhatsApp(body: any) {
+export async function procesarMensajeWhatsApp(body: any) {
   let alreadySent = false;
 
   // Datos básicos del webhook
@@ -234,11 +234,18 @@ async function procesarMensajeWhatsApp(body: any) {
   const numero      = to.replace('whatsapp:', '').replace('tel:', '');   // Tu número Twilio (del negocio)
   const fromNumber  = from.replace('whatsapp:', '').replace('tel:', ''); // Número del cliente
 
-  // Busca el tenant por su número de WhatsApp
+  // Busca el tenant por su número de WhatsApp (Twilio o Meta)
   const tenantRes = await pool.query(
-    'SELECT * FROM tenants WHERE twilio_number = $1 LIMIT 1',
+    `
+      SELECT *
+      FROM tenants
+      WHERE twilio_number = $1
+         OR whatsapp_phone_number = $1
+      LIMIT 1
+    `,
     [numero]
   );
+
   const tenant = tenantRes.rows[0];
   if (!tenant) return;
 

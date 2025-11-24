@@ -1,6 +1,7 @@
 // src/routes/meta/whatsapp-callback.ts
 import express, { Request, Response } from "express";
 import pool from "../../lib/db";
+import { procesarMensajeWhatsApp } from "../webhook/whatsapp";
 
 const router = express.Router();
 
@@ -270,11 +271,68 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
       JSON.stringify(req.body, null, 2)
     );
 
-    // TODO:
-    //  - Detectar de qué tenant es el mensaje (por phone_number_id / WABA ID)
-    //  - Reutilizar tu lógica de whatsapp.ts (intents, FAQs, flows, OpenAI)
-    //  - Guardar en messages, interactions, sales_intelligence, etc.
-    //  - Enviar respuesta a través de la API de WhatsApp Cloud
+    const body = req.body as any;
+
+    // Estructura típica del webhook de WhatsApp Cloud:
+    // object: "whatsapp_business_account"
+    // entry[0].changes[0].value.{ metadata, contacts, messages }
+    const entry = body?.entry?.[0];
+    const change = entry?.changes?.[0];
+    const value = change?.value;
+
+    if (!value || value.messaging_product !== "whatsapp") {
+      console.warn("[WA META] Webhook sin messaging_product=whatsapp");
+      return res.sendStatus(200);
+    }
+
+    const metadata = value.metadata || {};
+    const messages = value.messages || [];
+    const contacts = value.contacts || [];
+
+    if (!messages.length) {
+      console.log("[WA META] Sin messages en payload, nada que procesar.");
+      return res.sendStatus(200);
+    }
+
+    const msg = messages[0];
+
+    // Número del negocio (el oficial de WhatsApp Cloud)
+    const displayPhoneRaw: string = metadata.display_phone_number || "";
+    const toNumber =
+      displayPhoneRaw.startsWith("+") ? displayPhoneRaw : `+${displayPhoneRaw}`;
+
+    // Número del cliente
+    const fromRaw: string =
+      msg.from || contacts[0]?.wa_id || "";
+    const fromNumber =
+      fromRaw.startsWith("+") ? fromRaw : `+${fromRaw}`;
+
+    // Texto del mensaje (solo manejamos text simple por ahora)
+    const textBody: string =
+      msg.text?.body ||
+      msg.button?.text ||
+      msg.interactive?.button_reply?.title ||
+      "";
+
+    if (!textBody) {
+      console.log("[WA META] Mensaje sin texto útil, no se procesa.");
+      return res.sendStatus(200);
+    }
+
+    const messageId: string = msg.id || null;
+
+    // Simulamos el body de Twilio para reutilizar procesarMensajeWhatsApp
+    const fakeTwilioBody = {
+      To: `whatsapp:${toNumber}`,
+      From: `whatsapp:${fromNumber}`,
+      Body: textBody,
+      MessageSid: messageId,
+    };
+
+    console.log("[WA META] Mapeado a fakeTwilioBody:", fakeTwilioBody);
+
+    // Aquí reutilizamos TODA tu lógica actual de WhatsApp (intents, FAQs, flows, ventas, etc.)
+    await procesarMensajeWhatsApp(fakeTwilioBody);
 
     // Meta exige SIEMPRE 200 para confirmar recepción.
     res.sendStatus(200);
