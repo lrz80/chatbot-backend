@@ -1,6 +1,7 @@
 // src/routes/meta/whatsapp-callback.ts
 import express, { Request, Response } from "express";
 import pool from "../../lib/db";
+import { procesarMensajeWhatsApp } from "../webhook/whatsapp";
 
 const router = express.Router();
 
@@ -221,6 +222,48 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     return res
       .status(500)
       .send("<h1>Error interno</h1><p>Revisa los logs del servidor.</p>");
+  }
+});
+
+// 📩 3) RECEPCIÓN DE MENSAJES ENTRANTES (POST)
+router.post("/whatsapp/callback", async (req: Request, res: Response) => {
+  try {
+    console.log("📩 [WA WEBHOOK] Evento entrante desde Meta:", JSON.stringify(req.body, null, 2));
+
+    // Meta requiere un 200 OK rápido
+    res.sendStatus(200);
+
+    // Verifica si hay mensajes
+    const entry = req.body.entry?.[0];
+    const change = entry?.changes?.[0];
+    const value = change?.value;
+
+    if (!value?.messages) return;
+
+    for (const msg of value.messages) {
+      const fromNumber = msg.from; // cliente
+      const toNumber = value?.metadata?.display_phone_number; // Tu número oficial
+      const textBody = msg.text?.body || "";
+      const messageId = msg.id;
+
+      console.log("➡️ Procesando mensaje desde Meta:", {
+        fromNumber,
+        toNumber,
+        textBody,
+      });
+
+      const fakeTwilioBody = {
+        To: `whatsapp:${toNumber}`,
+        From: `whatsapp:${fromNumber}`,
+        Body: textBody,
+        MessageSid: messageId,
+      };
+
+      await procesarMensajeWhatsApp(fakeTwilioBody);
+    }
+  } catch (err) {
+    console.error("❌ [WA WEBHOOK] Error manejando mensaje entrante:", err);
+    return res.sendStatus(500);
   }
 });
 
