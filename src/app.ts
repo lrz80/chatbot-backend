@@ -78,10 +78,7 @@ import billingRoutes from './routes/billing';
 import stripeCheckoutRoutes from './routes/stripe/checkout';
 import stripePlansRoutes from './routes/stripe/plans';
 import twilioEmbeddedRouter from './routes/twilioEmbedded';
-import whatsappRedirectRoute from "./routes/meta/whatsapp-redirect";
 import metaRoutes from "./routes/meta";
-import metaWhatsappCallbackRouter from "./routes/meta/whatsapp-callback";
-
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -211,9 +208,7 @@ app.use('/api/billing', billingRoutes);
 app.use('/api/stripe', stripeCheckoutRoutes);
 app.use('/api/stripe', stripePlansRoutes);
 app.use(twilioEmbeddedRouter);
-app.use("/", whatsappRedirectRoute);
 app.use("/api/meta", metaRoutes);
-app.use("/api/meta", metaWhatsappCallbackRouter);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
