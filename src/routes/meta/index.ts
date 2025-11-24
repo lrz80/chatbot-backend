@@ -8,8 +8,8 @@ import whatsappRedirect from "./whatsapp-redirect";
 
 const router = Router();
 
-// Ruta que expone /api/meta/whatsapp-onboard/start
-router.use("/", whatsappOnboard);
+// Ruta que inicia el flujo OAuth "simple" para conectar WhatsApp
+router.use("/whatsapp-onboard", whatsappOnboard);
 
 // Ruta que recibe el callback de Meta después del signup
 router.use("/whatsapp/callback", whatsappCallback);
