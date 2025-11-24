@@ -2,14 +2,14 @@
 import { Router, Request, Response } from "express";
 import pool from "../../lib/db";
 
-import whatsappOnboard from "./whatsapp-onboard-start";
+import whatsappOnboardStart from "./whatsapp-onboard-start";
 import whatsappCallback from "./whatsapp-callback";
 import whatsappRedirect from "./whatsapp-redirect";
 
 const router = Router();
 
-// Ruta que inicia el flujo OAuth "simple" para conectar WhatsApp
-router.use("/whatsapp-onboard", whatsappOnboard);
+// ✅ Router que expone POST /api/meta/whatsapp-onboard/start
+router.use("/", whatsappOnboardStart);
 
 // Ruta que recibe el callback de Meta después del signup
 router.use("/whatsapp/callback", whatsappCallback);
