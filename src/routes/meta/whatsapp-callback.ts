@@ -4,7 +4,7 @@ import express, { Request, Response } from "express";
 const router = express.Router();
 
 // Debe coincidir con el que pusiste en Railway
-const VERIFY_TOKEN = process.env.META_WHATSAPP_VERIFY_TOKEN || "";
+const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || "";
 
 router.get("/", (req: Request, res: Response) => {
   const mode = req.query["hub.mode"];
