@@ -164,14 +164,14 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       const updateQuery = `
         UPDATE tenants
         SET
-          whatsapp_business_id      = COALESCE($1, whatsapp_business_id),
-          whatsapp_phone_number_id  = COALESCE($2, whatsapp_phone_number_id),
-          whatsapp_phone_number     = COALESCE($3, whatsapp_phone_number),
-          whatsapp_access_token     = $4,
-          whatsapp_status           = 'connected'
-        WHERE tenant_id::text = $5 OR id::text = $5
-        RETURNING id, tenant_id;
-      `;
+            whatsapp_business_id      = COALESCE($1, whatsapp_business_id),
+            whatsapp_phone_number_id  = COALESCE($2, whatsapp_phone_number_id),
+            whatsapp_phone_number     = COALESCE($3, whatsapp_phone_number),
+            whatsapp_access_token     = $4,
+            whatsapp_status           = 'connected'
+        WHERE id::text = $5
+        RETURNING id;
+        `;
 
       const updateValues = [
         wabaId,
