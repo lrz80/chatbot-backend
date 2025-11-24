@@ -1,130 +1,226 @@
 // src/routes/meta/whatsapp-callback.ts
 import express, { Request, Response } from "express";
 import pool from "../../lib/db";
-import { procesarMensajeWhatsApp } from "../webhook/whatsapp";
 
 const router = express.Router();
 
-// FRONTEND URL
-const FRONTEND_URL = "https://www.aamy.ai";
-const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
-
 /**
- * GET /api/meta/whatsapp/callback
+ * Endpoint de Callback / Webhook para WhatsApp en Meta
  *
- * ✓ Handshake (hub.challenge)
- * ✓ Retorno de Embedded Signup (waba_id, phone_number_id, etc.)
- * ✗ No maneja OAuth con "code" (ese es para Facebook Login, no para WhatsApp)
+ * URL pública: https://api.aamy.ai/api/meta/whatsapp/callback
+ *
+ * 1) VERIFICACIÓN DE WEBHOOK (GET con hub.mode / hub.challenge)
+ * 2) CALLBACK OAUTH (GET con code + state) desde el login de Meta
  */
 router.get("/whatsapp/callback", async (req: Request, res: Response) => {
   try {
     console.log("🌐 [WA CALLBACK] Query recibida:", req.query);
 
-    // 1️⃣ WEBHOOK VERIFICATION
-    const mode = req.query["hub.mode"];
-    const verifyToken = req.query["hub.verify_token"];
-    const challenge = req.query["hub.challenge"];
+    // ───────────────────────────────────────────────
+    // 1) HANDSHAKE DE VERIFICACIÓN DEL WEBHOOK (hub.challenge)
+    //    Esta llamada viene desde la pestaña "Webhooks" de WhatsApp en el App Dashboard.
+    // ───────────────────────────────────────────────
+    const mode = req.query["hub.mode"] as string | undefined;
+    const verifyToken = req.query["hub.verify_token"] as string | undefined;
+    const challenge = req.query["hub.challenge"] as string | undefined;
 
     if (mode === "subscribe") {
-      if (verifyToken === VERIFY_TOKEN) {
-        console.log("✅ Webhook verificado correctamente.");
-        return res.status(200).send(challenge as string);
+      const EXPECTED_TOKEN = process.env.META_VERIFY_TOKEN;
+
+      console.log("🧩 [WA CALLBACK] Handshake webhook. Token esperado:", EXPECTED_TOKEN);
+      console.log("🧩 [WA CALLBACK] Token recibido:", verifyToken);
+
+      if (verifyToken && EXPECTED_TOKEN && verifyToken === EXPECTED_TOKEN) {
+        console.log("✅ [WA CALLBACK] Webhook verificado correctamente.");
+        // Meta espera el challenge en texto plano con 200
+        return res.status(200).send(challenge ?? "");
+      } else {
+        console.warn(
+          "⚠️ [WA CALLBACK] Verificación de webhook fallida. Token recibido:",
+          verifyToken
+        );
+        return res.sendStatus(403);
       }
-      console.warn("⚠️ Token inválido.");
-      return res.sendStatus(403);
     }
 
-    // 2️⃣ RETORNO DE EMBEDDED SIGNUP
-    const q = req.query as Record<string, string | undefined>;
+    // ───────────────────────────────────────────────
+    // 2) CALLBACK OAUTH (code + state)
+    //    Esta llamada viene del flujo de login que dispara ConnectWhatsAppButton.
+    // ───────────────────────────────────────────────
+    const code = req.query.code as string | undefined;
+    const state = req.query.state as string | undefined; // tenantId
 
-    const tenantId = q.state;
-    const wabaId = q.waba_id || q.wa_waba_id || null;
-    const phoneNumberId = q.phone_number_id || q.wa_phone_number_id || null;
-    const phoneNumber = q.phone_number || q.wa_phone_number || null;
-    const accessToken = q.access_token || q.wa_persistent_token || null;
-
-    if (!tenantId) {
+    if (!code) {
+      // ni webhook (hub.mode) ni oauth (code)
+      console.warn("⚠️ [WA CALLBACK] Sin hub.mode ni code en query.");
       return res
         .status(400)
-        .send("<h3>Error: falta state (tenantId)</h3>");
+        .send("<h1>Callback inválido</h1><p>No se recibió code ni hub.challenge.</p>");
     }
 
-    console.log("📌 Datos Embedded Signup:", {
-      tenantId,
-      wabaId,
-      phoneNumberId,
-      phoneNumber,
-      accessToken: accessToken ? "***" : null,
-    });
+    if (!state) {
+      console.warn("⚠️ [WA CALLBACK] Falta parámetro state (tenantId) en callback OAuth.");
+      return res
+        .status(400)
+        .send("<h1>Error</h1><p>No se pudo identificar el negocio (falta state).</p>");
+    }
 
-    await pool.query(
-      `
-      UPDATE tenants
-      SET
-        whatsapp_business_id      = COALESCE($1, whatsapp_business_id),
-        whatsapp_phone_number_id  = COALESCE($2, whatsapp_phone_number_id),
-        whatsapp_phone_number     = COALESCE($3, whatsapp_phone_number),
-        whatsapp_access_token     = COALESCE($4, whatsapp_access_token),
-        whatsapp_status           = 'connected'
-      WHERE id = $5
-    `,
-      [wabaId, phoneNumberId, phoneNumber, accessToken, tenantId]
-    );
+    const tenantId = state;
+    console.log("🏢 [WA CALLBACK] tenantId desde state:", tenantId);
 
-    // 3️⃣ Finalizar (cerrar popup y actualizar frontend)
+    const APP_ID = process.env.META_APP_ID;
+    const APP_SECRET = process.env.META_APP_SECRET;
+    const BACKEND_PUBLIC_URL =
+      process.env.BACKEND_PUBLIC_URL || "https://api.aamy.ai";
+
+    if (!APP_ID || !APP_SECRET) {
+      console.error(
+        "❌ [WA CALLBACK] Falta META_APP_ID o META_APP_SECRET en variables de entorno."
+      );
+      return res
+        .status(500)
+        .send("<h1>Error</h1><p>Configuración del servidor incompleta (APP_ID/SECRET).</p>");
+    }
+
+    const redirectUri = `${BACKEND_PUBLIC_URL}/api/meta/whatsapp/callback`;
+    console.log("🔁 [WA CALLBACK] Intercambiando code por access_token en Graph...");
+    console.log("🔁 redirect_uri usado:", redirectUri);
+
+    // 2.1 Intercambiar code por access_token
+    const tokenUrl =
+      `https://graph.facebook.com/v18.0/oauth/access_token` +
+      `?client_id=${encodeURIComponent(APP_ID)}` +
+      `&client_secret=${encodeURIComponent(APP_SECRET)}` +
+      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+      `&code=${encodeURIComponent(code)}`;
+
+    const tokenResp = await fetch(tokenUrl);
+    const tokenJson: any = await tokenResp.json();
+
+    console.log("🔑 [WA CALLBACK] Respuesta token:", tokenJson);
+
+    if (!tokenResp.ok || !tokenJson.access_token) {
+      console.error(
+        "❌ [WA CALLBACK] Error obteniendo access_token de Meta:",
+        tokenJson
+      );
+      return res
+        .status(500)
+        .send("<h1>Error</h1><p>No se pudo obtener access_token de Meta.</p>");
+    }
+
+    const accessToken = tokenJson.access_token as string;
+
+    // 2.2 Intentar obtener WABA y número de WhatsApp
+    let wabaId: string | null = null;
+    let phoneNumberId: string | null = null;
+    let phoneNumber: string | null = null;
+
+    try {
+      // Pedimos los negocios y sus cuentas de WhatsApp
+      const meUrl =
+        `https://graph.facebook.com/v18.0/me` +
+        `?fields=businesses{owned_whatsapp_business_accounts{ id, name, messaging_product, phone_numbers{ id, display_phone_number, verified_name }}}` +
+        `&access_token=${encodeURIComponent(accessToken)}`;
+
+      console.log("📡 [WA CALLBACK] Consultando negocios y WABA:", meUrl);
+      const meResp = await fetch(meUrl);
+      const meJson: any = await meResp.json();
+
+      console.log("📡 [WA CALLBACK] Respuesta /me:", JSON.stringify(meJson, null, 2));
+
+      const businesses = meJson?.businesses?.data ?? [];
+      const firstBiz = businesses[0];
+
+      const wabas =
+        firstBiz?.owned_whatsapp_business_accounts?.data ??
+        firstBiz?.owned_whatsapp_business_accounts ??
+        [];
+      const firstWaba = wabas[0];
+
+      wabaId = firstWaba?.id || null;
+
+      const phones =
+        firstWaba?.phone_numbers?.data ??
+        firstWaba?.phone_numbers ??
+        [];
+      const firstPhone = phones[0];
+
+      phoneNumberId = firstPhone?.id || null;
+      phoneNumber = firstPhone?.display_phone_number || null;
+
+      console.log("📌 [WA CALLBACK] WABA detectado:", {
+        wabaId,
+        phoneNumberId,
+        phoneNumber,
+      });
+    } catch (e) {
+      console.warn("⚠️ [WA CALLBACK] No se pudo obtener WABA/número desde Graph:", e);
+    }
+
+    // 2.3 Guardar en DB (tabla tenants)
+    try {
+      const updateQuery = `
+        UPDATE tenants
+        SET
+          whatsapp_business_id      = COALESCE($1, whatsapp_business_id),
+          whatsapp_phone_number_id  = COALESCE($2, whatsapp_phone_number_id),
+          whatsapp_phone_number     = COALESCE($3, whatsapp_phone_number),
+          whatsapp_access_token     = $4,
+          whatsapp_status           = 'connected'
+        WHERE tenant_id::text = $5 OR id::text = $5
+        RETURNING id, tenant_id;
+      `;
+
+      const updateValues = [
+        wabaId,
+        phoneNumberId,
+        phoneNumber,
+        accessToken,
+        tenantId,
+      ];
+
+      const result = await pool.query(updateQuery, updateValues);
+      console.log("💾 [WA CALLBACK] Guardado en DB. RowCount:", result.rowCount);
+      console.log("💾 [WA CALLBACK] Tenant actualizado:", result.rows[0]);
+    } catch (dbErr) {
+      console.error("❌ [WA CALLBACK] Error guardando datos en tenants:", dbErr);
+    }
+
+    // 2.4 Cerrar popup y volver al dashboard
+    const FRONTEND_URL = process.env.FRONTEND_URL || "https://www.aamy.ai";
+
     return res.send(`<!doctype html>
-      <html>
-        <body style="background:#050515;color:#fff;font-family:sans-serif;text-align:center;padding-top:40px;">
-          <h1>WhatsApp conectado</h1>
-          <p>Ya puedes cerrar esta ventana.</p>
-          <script>
-            if (window.opener) {
-              window.opener.location = "${FRONTEND_URL}/dashboard/training?whatsapp=connected";
-              window.close();
-            } else {
-              window.location = "${FRONTEND_URL}/dashboard/training?whatsapp=connected";
-            }
-          </script>
-        </body>
-      </html>`);
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>WhatsApp conectado</title>
+  </head>
+  <body style="background:#050515;color:#fff;font-family:sans-serif;text-align:center;padding-top:40px;">
+    <h1>WhatsApp conectado</h1>
+    <p>Ya puedes cerrar esta ventana.</p>
+    <script>
+      (function() {
+        var target = "${FRONTEND_URL}/dashboard/training?whatsapp=connected";
+        try {
+          if (window.opener && !window.opener.closed) {
+            window.opener.location = target;
+            window.close();
+            return;
+          }
+        } catch (e) {
+          console.error("No se pudo acceder a window.opener", e);
+        }
+        window.location = target;
+      })();
+    </script>
+  </body>
+</html>`);
   } catch (err) {
-    console.error("❌ Error en /whatsapp/callback:", err);
-    return res.status(500).send("Error interno.");
-  }
-});
-
-/**
- * POST /api/meta/whatsapp/callback
- * = Webhook de mensajes reales de WhatsApp Cloud API
- */
-router.post("/whatsapp/callback", async (req: Request, res: Response) => {
-  try {
-    console.log("📩 [WA WEBHOOK] Payload:", JSON.stringify(req.body, null, 2));
-
-    const body = req.body as any;
-    const entry = body?.entry?.[0];
-    const change = entry?.changes?.[0];
-    const value = change?.value;
-
-    if (!value || value.messaging_product !== "whatsapp") {
-      return res.sendStatus(200);
-    }
-
-    const msg = value.messages?.[0];
-    if (!msg) return res.sendStatus(200);
-
-    // Adaptar al formato Twilio para reutilizar lógica actual
-    await procesarMensajeWhatsApp({
-      To: `whatsapp:+${value.metadata.display_phone_number}`,
-      From: `whatsapp:+${msg.from}`,
-      Body: msg.text?.body || "",
-      MessageSid: msg.id,
-    });
-
-    return res.sendStatus(200);
-  } catch (err) {
-    console.error("❌ Error procesando webhook WhatsApp:", err);
-    return res.sendStatus(200);
+    console.error("❌ [WA CALLBACK] Error general:", err);
+    return res
+      .status(500)
+      .send("<h1>Error interno</h1><p>Revisa los logs del servidor.</p>");
   }
 });
 
