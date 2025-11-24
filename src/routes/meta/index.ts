@@ -1,18 +1,28 @@
 // src/routes/meta/index.ts
 import { Router } from "express";
-import whatsappOnboard from "./whatsapp-onboard";
-import whatsappCallback from "./whatsapp-callback";
-import whatsappRedirect from "./whatsapp-redirect";
+import whatsappOnboardStart from "./whatsapp-onboard-start";  // Inicia flujo (genera URL)
+import whatsappCallback from "./whatsapp-callback";           // Recibe callback desde Meta
+import whatsappRedirect from "./whatsapp-redirect";           // (Opcional) redirección front
 
 const router = Router();
 
-// Ruta que recibe los datos del Embedded Signup
-router.use("/whatsapp/onboard-complete", whatsappOnboard);
+/**
+ * 🚀 Iniciar el flujo de conexión con WhatsApp Cloud (genera URL de Meta)
+ * Endpoint utilizado por el frontend (ConnectWhatsAppButton)
+ * POST https://api.aamy.ai/api/meta/whatsapp-onboard/start
+ */
+router.use("/whatsapp-onboard/start", whatsappOnboardStart);
 
-// Ruta que recibe el callback de Meta después del signup
+/**
+ * 📥 Endpoint que recibe el callback real desde Meta con code/token y tenantId
+ * GET/POST https://api.aamy.ai/api/meta/whatsapp/callback
+ */
 router.use("/whatsapp/callback", whatsappCallback);
 
-// Ruta opcional que usa tu front al regresar desde Meta
+/**
+ * 🌐 (Opcional) Si usas una pantalla intermedia en frontend
+ * https://api.aamy.ai/api/meta/whatsapp-redirect
+ */
 router.use("/whatsapp-redirect", whatsappRedirect);
 
 export default router;
