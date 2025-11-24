@@ -9,7 +9,7 @@ const router = express.Router();
  * Genera la URL de OAuth de Meta para conectar WhatsApp Cloud.
  * El frontend abre esta URL en un popup.
  */
-router.post("/whatsapp-onboard/start", async (req: Request, res: Response) => {
+router.post("/", async (req: Request, res: Response) => {   // <-- AQUÍ, SOLO "/"
   try {
     const APP_ID = process.env.META_APP_ID;
     const BACKEND_PUBLIC_URL =
