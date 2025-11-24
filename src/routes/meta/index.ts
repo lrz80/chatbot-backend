@@ -135,13 +135,21 @@ router.get("/whatsapp/accounts", async (req: Request, res: Response) => {
 /**
  * Callback OAuth de Meta para WhatsApp:
  * GET /api/meta/whatsapp/callback
+ * POST /api/meta/whatsapp/callback (webhook)
+ *
+ * Dentro de whatsapp-callback.ts ya están:
+ *   router.get("/whatsapp/callback", ...)
+ *   router.post("/whatsapp/callback", ...)
  */
-router.use("/whatsapp/callback", whatsappCallback);
+router.use("/", whatsappCallback);
 
 /**
  * Ruta opcional de redirect para el front:
  * GET /api/meta/whatsapp-redirect
+ *
+ * Dentro de whatsapp-redirect.ts ya defines el path interno.
  */
-router.use("/whatsapp-redirect", whatsappRedirect);
+router.use("/", whatsappRedirect);
 
 export default router;
+
