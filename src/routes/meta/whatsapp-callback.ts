@@ -27,13 +27,11 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
 
     if (mode === "subscribe") {
       const EXPECTED_TOKEN = process.env.META_VERIFY_TOKEN;
-
       console.log("🧩 [WA CALLBACK] Handshake webhook. Token esperado:", EXPECTED_TOKEN);
       console.log("🧩 [WA CALLBACK] Token recibido:", verifyToken);
 
       if (verifyToken && EXPECTED_TOKEN && verifyToken === EXPECTED_TOKEN) {
         console.log("✅ [WA CALLBACK] Webhook verificado correctamente.");
-        // Meta espera el challenge en texto plano con 200
         return res.status(200).send(challenge ?? "");
       } else {
         console.warn(
@@ -52,7 +50,6 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     const state = req.query.state as string | undefined; // tenantId
 
     if (!code) {
-      // ni webhook (hub.mode) ni oauth (code)
       console.warn("⚠️ [WA CALLBACK] Sin hub.mode ni code en query.");
       return res
         .status(400)
@@ -87,7 +84,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     console.log("🔁 [WA CALLBACK] Intercambiando code por access_token en Graph...");
     console.log("🔁 redirect_uri usado:", redirectUri);
 
-    // 2.1 Intercambiar code por access_token
+    // 2.1 Intercambiar code por access_token (token DE USUARIO que se loguea)
     const tokenUrl =
       `https://graph.facebook.com/v18.0/oauth/access_token` +
       `?client_id=${encodeURIComponent(APP_ID)}` +
@@ -98,7 +95,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     const tokenResp = await fetch(tokenUrl);
     const tokenJson: any = await tokenResp.json();
 
-    
+    console.log("🔑 [WA CALLBACK] Respuesta token:", tokenJson);
 
     if (!tokenResp.ok || !tokenJson.access_token) {
       console.error(
@@ -112,170 +109,29 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
 
     const accessToken = tokenJson.access_token as string;
 
-    // 🔐 Elegir token correcto para consultar Graph API
-    const SYSTEM_TOKEN = process.env.FACEBOOK_SYSTEM_USER_TOKEN; // Token permanente con permisos de WhatsApp
-
-    if (SYSTEM_TOKEN) {
-    console.log("🔑 Usando token de System User para Graph.");
-    } else {
-    console.log("⚠️ No hay FACEBOOK_SYSTEM_USER_TOKEN, usando accessToken de login (puede fallar).");
-    }
-
-    const graphAccessToken = SYSTEM_TOKEN || accessToken;
-
-    // 2.2 Intentar obtener WABA y número de WhatsApp
-    let wabaId: string | null = null;
-    let phoneNumberId: string | null = null;
-    let phoneNumber: string | null = null;
-
-    try {
-      // 2.2.1 Primer intento: usuario humano con businesses{...}
-      const meUrl =
-        `https://graph.facebook.com/v18.0/me` +
-        `?fields=businesses{` +
-        `  name,` +
-        `  owned_whatsapp_business_accounts{` +
-        `    id, name, messaging_product,` +
-        `    phone_numbers{ id, display_phone_number, verified_name }` +
-        `  }` +
-        `}` +
-        `&access_token=${encodeURIComponent(graphAccessToken)}`;
-
-      console.log("📡 [WA CALLBACK] Consultando /me (businesses + WABAs):", meUrl);
-
-      const meResp = await fetch(meUrl);
-      const meJson: any = await meResp.json();
-
-      console.log(
-        "📡 [WA CALLBACK] Respuesta /me:",
-        JSON.stringify(meJson, null, 2)
-      );
-
-      let businesses =
-        meJson?.businesses?.data ??
-        meJson?.businesses ??
-        [];
-
-      // Si no hay businesses, asumimos que /me ES el negocio (System User de Business)
-      if (!Array.isArray(businesses) || businesses.length === 0) {
-        console.warn(
-          "⚠️ [WA CALLBACK] /me no tiene businesses. Probando como Business directo con owned_whatsapp_business_accounts..."
-        );
-
-        const businessId = meJson?.id as string | undefined;
-
-        if (businessId) {
-          const bizUrl =
-            `https://graph.facebook.com/v18.0/${encodeURIComponent(businessId)}` +
-            `?fields=owned_whatsapp_business_accounts{` +
-            `  id, name, messaging_product,` +
-            `  phone_numbers{ id, display_phone_number, verified_name }` +
-            `}` +
-            `&access_token=${encodeURIComponent(graphAccessToken)}`;
-
-          console.log("📡 [WA CALLBACK] Consultando Business directo:", bizUrl);
-
-          const bizResp = await fetch(bizUrl);
-          const bizJson: any = await bizResp.json();
-
-          console.log(
-            "📡 [WA CALLBACK] Respuesta Business:",
-            JSON.stringify(bizJson, null, 2)
-          );
-
-          const wabasFromBiz =
-            bizJson?.owned_whatsapp_business_accounts?.data ??
-            bizJson?.owned_whatsapp_business_accounts ??
-            [];
-
-          const firstWabaBiz = wabasFromBiz[0];
-
-          if (firstWabaBiz) {
-            wabaId = firstWabaBiz.id || null;
-
-            const phonesFromBiz =
-              firstWabaBiz?.phone_numbers?.data ??
-              firstWabaBiz?.phone_numbers ??
-              [];
-
-            const firstPhoneBiz = phonesFromBiz[0];
-            phoneNumberId = firstPhoneBiz?.id || null;
-            phoneNumber = firstPhoneBiz?.display_phone_number || null;
-          }
-        }
-      } else {
-        // Caso normal: usuario con businesses{...}
-        const firstBiz = businesses[0];
-
-        const wabas =
-          firstBiz?.owned_whatsapp_business_accounts?.data ??
-          firstBiz?.owned_whatsapp_business_accounts ??
-          [];
-
-        const firstWaba = wabas[0];
-
-        wabaId = firstWaba?.id || null;
-
-        const phones =
-          firstWaba?.phone_numbers?.data ??
-          firstWaba?.phone_numbers ??
-          [];
-
-        const firstPhone = phones[0];
-
-        phoneNumberId = firstPhone?.id || null;
-        phoneNumber = firstPhone?.display_phone_number || null;
-      }
-
-      console.log("📌 [WA CALLBACK] WABA detectado:", {
-        wabaId,
-        phoneNumberId,
-        phoneNumber,
-      });
-
-      if (!wabaId || !phoneNumberId || !phoneNumber) {
-        console.warn(
-          "⚠️ [WA CALLBACK] No se encontró ningún número de WhatsApp activo en las WABAs del negocio."
-        );
-      }
-    } catch (e) {
-      console.warn("⚠️ [WA CALLBACK] Error obteniendo WABA/número desde Graph:", e);
-    }
-
-    // 2.3 Guardar en DB (tabla tenants)
+    // ───────────────────────────────────────────────
+    // 2.2 Guardar SOLO el access_token y estado "connected"
+    //     No intentamos detectar WABA ni número aquí.
+    // ───────────────────────────────────────────────
     try {
       const updateQuery = `
         UPDATE tenants
         SET
-          whatsapp_business_id     = COALESCE($1, whatsapp_business_id),
-          whatsapp_phone_number_id = COALESCE($2, whatsapp_phone_number_id),
-          whatsapp_phone_number    = COALESCE($3, whatsapp_phone_number),
-          whatsapp_access_token    = $4,
-          whatsapp_status          = CASE
-                                        WHEN $2 IS NOT NULL AND $3 IS NOT NULL THEN 'connected'
-                                        ELSE whatsapp_status
-                                     END,
-          updated_at              = NOW()
-        WHERE id::text = $5
-        RETURNING id, whatsapp_business_id, whatsapp_phone_number_id, whatsapp_phone_number;
+          whatsapp_access_token = $1,
+          whatsapp_status       = 'connected',
+          updated_at            = NOW()
+        WHERE id::text = $2
+        RETURNING id, whatsapp_status;
       `;
 
-      const updateValues = [
-        wabaId,
-        phoneNumberId,
-        phoneNumber,
-        accessToken,
-        tenantId,
-      ];
-
-      const result = await pool.query(updateQuery, updateValues);
-      console.log("💾 [WA CALLBACK] Guardado en DB. RowCount:", result.rowCount);
+      const result = await pool.query(updateQuery, [accessToken, tenantId]);
+      console.log("💾 [WA CALLBACK] Guardado access_token en DB. RowCount:", result.rowCount);
       console.log("💾 [WA CALLBACK] Tenant actualizado:", result.rows[0]);
     } catch (dbErr) {
-      console.error("❌ [WA CALLBACK] Error guardando datos en tenants:", dbErr);
+      console.error("❌ [WA CALLBACK] Error guardando access_token en tenants:", dbErr);
     }
 
-    // 2.4 Cerrar popup y volver al dashboard
+    // 2.3 Cerrar popup y volver al dashboard
     const FRONTEND_URL = process.env.FRONTEND_URL || "https://www.aamy.ai";
 
     return res.send(`<!doctype html>
@@ -320,7 +176,6 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
     // Meta requiere un 200 OK rápido
     res.sendStatus(200);
 
-    // Verifica si hay mensajes
     const entry = req.body.entry?.[0];
     const change = entry?.changes?.[0];
     const value = change?.value;
