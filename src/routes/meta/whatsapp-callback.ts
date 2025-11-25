@@ -129,52 +129,65 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     let phoneNumber: string | null = null;
 
     try {
-      // 2.2.1 Obtener las cuentas de WhatsApp Business (WABA)
-      const wabaListUrl =
-        `https://graph.facebook.com/v18.0/me/whatsapp_business_accounts` +
-        `?fields=id,name` +
+      // 2.2.1 Igual que en /whatsapp/accounts: ir por /me?fields=businesses{...}
+      const meUrl =
+        `https://graph.facebook.com/v18.0/me` +
+        `?fields=businesses{` +
+        `  name,` +
+        `  owned_whatsapp_business_accounts{` +
+        `    id, name, messaging_product,` +
+        `    phone_numbers{ id, display_phone_number, verified_name }` +
+        `  }` +
+        `}` +
         `&access_token=${encodeURIComponent(graphAccessToken)}`;
 
-      console.log("📡 [WA CALLBACK] Consultando WABAs concedidos:", wabaListUrl);
-      const wabaListResp = await fetch(wabaListUrl);
-      const wabaListJson: any = await wabaListResp.json();
+      console.log("📡 [WA CALLBACK] Consultando /me (businesses + WABAs):", meUrl);
+
+      const meResp = await fetch(meUrl);
+      const meJson: any = await meResp.json();
 
       console.log(
-        "📡 [WA CALLBACK] Respuesta /me/whatsapp_business_accounts:",
-        JSON.stringify(wabaListJson, null, 2)
+        "📡 [WA CALLBACK] Respuesta /me:",
+        JSON.stringify(meJson, null, 2)
       );
 
-      const firstWaba = wabaListJson?.data?.[0];
+      const businesses =
+        meJson?.businesses?.data ??
+        meJson?.businesses ??
+        [];
+
+      const firstBiz = businesses[0];
+
+      const wabas =
+        firstBiz?.owned_whatsapp_business_accounts?.data ??
+        firstBiz?.owned_whatsapp_business_accounts ??
+        [];
+
+      const firstWaba = wabas[0];
+
       wabaId = firstWaba?.id || null;
 
-      if (!wabaId) {
-        console.warn("⚠️ [WA CALLBACK] No se encontraron WABAs en la cuenta de Meta.");
-      } else {
-        // 2.2.2 Con el WABA, obtener los phone_numbers
-        const phonesUrl =
-          `https://graph.facebook.com/v18.0/${encodeURIComponent(wabaId)}/phone_numbers` +
-          `?fields=id,display_phone_number,verified_name` +
-          `&access_token=${encodeURIComponent(graphAccessToken)}`;
+      const phones =
+        firstWaba?.phone_numbers?.data ??
+        firstWaba?.phone_numbers ??
+        [];
 
-        console.log("📡 [WA CALLBACK] Consultando phone_numbers:", phonesUrl);
-        const phonesResp = await fetch(phonesUrl);
-        const phonesJson: any = await phonesResp.json();
+      const firstPhone = phones[0];
 
-        console.log(
-          "📡 [WA CALLBACK] Respuesta /{wabaId}/phone_numbers:",
-          JSON.stringify(phonesJson, null, 2)
-        );
-
-        const firstPhone = phonesJson?.data?.[0];
-        phoneNumberId = firstPhone?.id || null;
-        phoneNumber = firstPhone?.display_phone_number || null;
-      }
+      phoneNumberId = firstPhone?.id || null;
+      phoneNumber = firstPhone?.display_phone_number || null;
 
       console.log("📌 [WA CALLBACK] WABA detectado:", {
         wabaId,
         phoneNumberId,
         phoneNumber,
       });
+
+      if (!wabaId || !phoneNumberId || !phoneNumber) {
+        console.warn(
+          "⚠️ [WA CALLBACK] No se encontró ningún número de WhatsApp activo en las WABAs del negocio."
+        );
+      }
     } catch (e) {
       console.warn("⚠️ [WA CALLBACK] Error obteniendo WABA/número desde Graph:", e);
     }
