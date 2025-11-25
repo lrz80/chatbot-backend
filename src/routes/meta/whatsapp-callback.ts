@@ -129,7 +129,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     let phoneNumber: string | null = null;
 
     try {
-      // 2.2.1 Igual que en /whatsapp/accounts: ir por /me?fields=businesses{...}
+      // 2.2.1 Primer intento: usuario humano con businesses{...}
       const meUrl =
         `https://graph.facebook.com/v18.0/me` +
         `?fields=businesses{` +
@@ -151,31 +151,81 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
         JSON.stringify(meJson, null, 2)
       );
 
-      const businesses =
+      let businesses =
         meJson?.businesses?.data ??
         meJson?.businesses ??
         [];
 
-      const firstBiz = businesses[0];
+      // Si no hay businesses, asumimos que /me ES el negocio (System User de Business)
+      if (!Array.isArray(businesses) || businesses.length === 0) {
+        console.warn(
+          "⚠️ [WA CALLBACK] /me no tiene businesses. Probando como Business directo con owned_whatsapp_business_accounts..."
+        );
 
-      const wabas =
-        firstBiz?.owned_whatsapp_business_accounts?.data ??
-        firstBiz?.owned_whatsapp_business_accounts ??
-        [];
+        const businessId = meJson?.id as string | undefined;
 
-      const firstWaba = wabas[0];
+        if (businessId) {
+          const bizUrl =
+            `https://graph.facebook.com/v18.0/${encodeURIComponent(businessId)}` +
+            `?fields=owned_whatsapp_business_accounts{` +
+            `  id, name, messaging_product,` +
+            `  phone_numbers{ id, display_phone_number, verified_name }` +
+            `}` +
+            `&access_token=${encodeURIComponent(graphAccessToken)}`;
 
-      wabaId = firstWaba?.id || null;
+          console.log("📡 [WA CALLBACK] Consultando Business directo:", bizUrl);
 
-      const phones =
-        firstWaba?.phone_numbers?.data ??
-        firstWaba?.phone_numbers ??
-        [];
+          const bizResp = await fetch(bizUrl);
+          const bizJson: any = await bizResp.json();
 
-      const firstPhone = phones[0];
+          console.log(
+            "📡 [WA CALLBACK] Respuesta Business:",
+            JSON.stringify(bizJson, null, 2)
+          );
 
-      phoneNumberId = firstPhone?.id || null;
-      phoneNumber = firstPhone?.display_phone_number || null;
+          const wabasFromBiz =
+            bizJson?.owned_whatsapp_business_accounts?.data ??
+            bizJson?.owned_whatsapp_business_accounts ??
+            [];
+
+          const firstWabaBiz = wabasFromBiz[0];
+
+          if (firstWabaBiz) {
+            wabaId = firstWabaBiz.id || null;
+
+            const phonesFromBiz =
+              firstWabaBiz?.phone_numbers?.data ??
+              firstWabaBiz?.phone_numbers ??
+              [];
+
+            const firstPhoneBiz = phonesFromBiz[0];
+            phoneNumberId = firstPhoneBiz?.id || null;
+            phoneNumber = firstPhoneBiz?.display_phone_number || null;
+          }
+        }
+      } else {
+        // Caso normal: usuario con businesses{...}
+        const firstBiz = businesses[0];
+
+        const wabas =
+          firstBiz?.owned_whatsapp_business_accounts?.data ??
+          firstBiz?.owned_whatsapp_business_accounts ??
+          [];
+
+        const firstWaba = wabas[0];
+
+        wabaId = firstWaba?.id || null;
+
+        const phones =
+          firstWaba?.phone_numbers?.data ??
+          firstWaba?.phone_numbers ??
+          [];
+
+        const firstPhone = phones[0];
+
+        phoneNumberId = firstPhone?.id || null;
+        phoneNumber = firstPhone?.display_phone_number || null;
+      }
 
       console.log("📌 [WA CALLBACK] WABA detectado:", {
         wabaId,
