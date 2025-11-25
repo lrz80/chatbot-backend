@@ -198,6 +198,8 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       email_negocio: tenant.email_negocio || '',
       telefono_negocio: tenant.telefono_negocio || '',
       direccion: tenant.direccion || '',
+      whatsapp_status: tenant.whatsapp_status ?? null,
+      whatsapp_phone_number: tenant.whatsapp_phone_number ?? null,
 
       // Twilio
       twilio_number: tenant.twilio_number || null,
