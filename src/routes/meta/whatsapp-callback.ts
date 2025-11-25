@@ -118,35 +118,30 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     let phoneNumber: string | null = null;
 
     try {
-      // Pedimos los negocios y sus cuentas de WhatsApp
-      const meUrl =
-        `https://graph.facebook.com/v18.0/me` +
-        `?fields=businesses{owned_whatsapp_business_accounts{ id, name, messaging_product, phone_numbers{ id, display_phone_number, verified_name }}}` +
+      const wabaUrl =
+        `https://graph.facebook.com/v18.0/me/whatsapp_business_accounts` +
+        `?fields=id,name,phone_numbers{id,display_phone_number,verified_name}` +
         `&access_token=${encodeURIComponent(accessToken)}`;
 
-      console.log("📡 [WA CALLBACK] Consultando negocios y WABA:", meUrl);
-      const meResp = await fetch(meUrl);
-      const meJson: any = await meResp.json();
+      console.log("📡 [WA CALLBACK] Consultando WABAs concedidos:", wabaUrl);
+      const wabaResp = await fetch(wabaUrl);
+      const wabaJson: any = await wabaResp.json();
 
-      console.log("📡 [WA CALLBACK] Respuesta /me:", JSON.stringify(meJson, null, 2));
+      console.log(
+        "📡 [WA CALLBACK] Respuesta /me/whatsapp_business_accounts:",
+        JSON.stringify(wabaJson, null, 2)
+      );
 
-      const businesses = meJson?.businesses?.data ?? [];
-      const firstBiz = businesses[0];
-
-      const wabas =
-        firstBiz?.owned_whatsapp_business_accounts?.data ??
-        firstBiz?.owned_whatsapp_business_accounts ??
-        [];
-      const firstWaba = wabas[0];
-
-      wabaId = firstWaba?.id || null;
+      const firstWaba = wabaJson?.data?.[0];
 
       const phones =
         firstWaba?.phone_numbers?.data ??
         firstWaba?.phone_numbers ??
         [];
+
       const firstPhone = phones[0];
 
+      wabaId = firstWaba?.id || null;
       phoneNumberId = firstPhone?.id || null;
       phoneNumber = firstPhone?.display_phone_number || null;
 
@@ -155,8 +150,14 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
         phoneNumberId,
         phoneNumber,
       });
+
+      if (!wabaId || !phoneNumberId) {
+        console.warn(
+          "⚠️ [WA CALLBACK] No se encontró ningún WABA con phone_numbers activo."
+        );
+      }
     } catch (e) {
-      console.warn("⚠️ [WA CALLBACK] No se pudo obtener WABA/número desde Graph:", e);
+      console.warn("⚠️ [WA CALLBACK] Error obteniendo WABA/número desde Graph:", e);
     }
 
     // 2.3 Guardar en DB (tabla tenants) – SIEMPRE sobrescribimos
