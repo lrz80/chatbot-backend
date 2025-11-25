@@ -118,60 +118,72 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     let phoneNumber: string | null = null;
 
     try {
-      const wabaUrl =
+      // 2.2.1 Obtener las cuentas de WhatsApp Business (WABA)
+      const wabaListUrl =
         `https://graph.facebook.com/v18.0/me/whatsapp_business_accounts` +
-        `?fields=id,name,phone_numbers{id,display_phone_number,verified_name}` +
+        `?fields=id,name` +
         `&access_token=${encodeURIComponent(accessToken)}`;
 
-      console.log("📡 [WA CALLBACK] Consultando WABAs concedidos:", wabaUrl);
-      const wabaResp = await fetch(wabaUrl);
-      const wabaJson: any = await wabaResp.json();
+      console.log("📡 [WA CALLBACK] Consultando WABAs concedidos:", wabaListUrl);
+      const wabaListResp = await fetch(wabaListUrl);
+      const wabaListJson: any = await wabaListResp.json();
 
       console.log(
         "📡 [WA CALLBACK] Respuesta /me/whatsapp_business_accounts:",
-        JSON.stringify(wabaJson, null, 2)
+        JSON.stringify(wabaListJson, null, 2)
       );
 
-      const firstWaba = wabaJson?.data?.[0];
-
-      const phones =
-        firstWaba?.phone_numbers?.data ??
-        firstWaba?.phone_numbers ??
-        [];
-
-      const firstPhone = phones[0];
-
+      const firstWaba = wabaListJson?.data?.[0];
       wabaId = firstWaba?.id || null;
-      phoneNumberId = firstPhone?.id || null;
-      phoneNumber = firstPhone?.display_phone_number || null;
+
+      if (!wabaId) {
+        console.warn("⚠️ [WA CALLBACK] No se encontraron WABAs en la cuenta de Meta.");
+      } else {
+        // 2.2.2 Con el WABA, obtener los phone_numbers
+        const phonesUrl =
+          `https://graph.facebook.com/v18.0/${encodeURIComponent(wabaId)}/phone_numbers` +
+          `?fields=id,display_phone_number,verified_name` +
+          `&access_token=${encodeURIComponent(accessToken)}`;
+
+        console.log("📡 [WA CALLBACK] Consultando phone_numbers:", phonesUrl);
+        const phonesResp = await fetch(phonesUrl);
+        const phonesJson: any = await phonesResp.json();
+
+        console.log(
+          "📡 [WA CALLBACK] Respuesta /{wabaId}/phone_numbers:",
+          JSON.stringify(phonesJson, null, 2)
+        );
+
+        const firstPhone = phonesJson?.data?.[0];
+        phoneNumberId = firstPhone?.id || null;
+        phoneNumber = firstPhone?.display_phone_number || null;
+      }
 
       console.log("📌 [WA CALLBACK] WABA detectado:", {
         wabaId,
         phoneNumberId,
         phoneNumber,
       });
-
-      if (!wabaId || !phoneNumberId) {
-        console.warn(
-          "⚠️ [WA CALLBACK] No se encontró ningún WABA con phone_numbers activo."
-        );
-      }
     } catch (e) {
       console.warn("⚠️ [WA CALLBACK] Error obteniendo WABA/número desde Graph:", e);
     }
 
-    // 2.3 Guardar en DB (tabla tenants) – SIEMPRE sobrescribimos
+    // 2.3 Guardar en DB (tabla tenants)
     try {
       const updateQuery = `
         UPDATE tenants
         SET
-          whatsapp_business_id     = $1,
-          whatsapp_phone_number_id = $2,
-          whatsapp_phone_number    = $3,
+          whatsapp_business_id     = COALESCE($1, whatsapp_business_id),
+          whatsapp_phone_number_id = COALESCE($2, whatsapp_phone_number_id),
+          whatsapp_phone_number    = COALESCE($3, whatsapp_phone_number),
           whatsapp_access_token    = $4,
-          whatsapp_status          = 'connected'
+          whatsapp_status          = CASE
+                                        WHEN $2 IS NOT NULL AND $3 IS NOT NULL THEN 'connected'
+                                        ELSE whatsapp_status
+                                     END,
+          updated_at              = NOW()
         WHERE id::text = $5
-        RETURNING id;
+        RETURNING id, whatsapp_business_id, whatsapp_phone_number_id, whatsapp_phone_number;
       `;
 
       const updateValues = [
