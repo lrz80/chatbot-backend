@@ -33,12 +33,28 @@ router.get("/whatsapp/accounts", async (req: Request, res: Response) => {
     }
 
     const accessToken = tenant.whatsapp_access_token as string | null;
-    if (!accessToken) {
+
+    // 🔐 Token de System User (el mismo que usas en el callback)
+    const systemToken =
+      process.env.FACEBOOK_SYSTEM_USER_TOKEN ||
+      process.env.META_WABA_TOKEN ||
+      process.env.META_WHATSAPP_TOKEN ||
+      null;
+
+    if (!accessToken && !systemToken) {
       return res.status(400).json({
         error:
-          "Este tenant aún no tiene un access_token de Meta. Primero conecta WhatsApp.",
+          "Este tenant aún no tiene un access_token de Meta y no hay token de System User configurado. Primero conecta WhatsApp.",
       });
     }
+
+    const graphAccessToken: string = (systemToken || accessToken)!;
+
+    console.log(
+      "[WA ACCOUNTS] Usando token:",
+      systemToken ? "SYSTEM_USER" : "TENANT_ACCESS_TOKEN"
+    );
+
 
     // Llamada a Graph para listar negocios, WABAs y números
     const meUrl =
@@ -50,7 +66,7 @@ router.get("/whatsapp/accounts", async (req: Request, res: Response) => {
       `    phone_numbers{ id, display_phone_number, verified_name }` +
       `  }` +
       `}` +
-      `&access_token=${encodeURIComponent(accessToken)}`;
+      `&access_token=${encodeURIComponent(graphAccessToken)}`;
 
     console.log("[WA ACCOUNTS] Consultando /me:", meUrl);
 

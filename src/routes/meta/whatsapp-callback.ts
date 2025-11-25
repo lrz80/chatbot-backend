@@ -98,7 +98,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     const tokenResp = await fetch(tokenUrl);
     const tokenJson: any = await tokenResp.json();
 
-    console.log("🔑 [WA CALLBACK] Respuesta token:", tokenJson);
+    
 
     if (!tokenResp.ok || !tokenJson.access_token) {
       console.error(
@@ -112,6 +112,17 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
 
     const accessToken = tokenJson.access_token as string;
 
+    // 🔐 Elegir token correcto para consultar Graph API
+    const SYSTEM_TOKEN = process.env.FACEBOOK_SYSTEM_USER_TOKEN; // Token permanente con permisos de WhatsApp
+
+    if (SYSTEM_TOKEN) {
+    console.log("🔑 Usando token de System User para Graph.");
+    } else {
+    console.log("⚠️ No hay FACEBOOK_SYSTEM_USER_TOKEN, usando accessToken de login (puede fallar).");
+    }
+
+    const graphAccessToken = SYSTEM_TOKEN || accessToken;
+
     // 2.2 Intentar obtener WABA y número de WhatsApp
     let wabaId: string | null = null;
     let phoneNumberId: string | null = null;
@@ -122,7 +133,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       const wabaListUrl =
         `https://graph.facebook.com/v18.0/me/whatsapp_business_accounts` +
         `?fields=id,name` +
-        `&access_token=${encodeURIComponent(accessToken)}`;
+        `&access_token=${encodeURIComponent(graphAccessToken)}`;
 
       console.log("📡 [WA CALLBACK] Consultando WABAs concedidos:", wabaListUrl);
       const wabaListResp = await fetch(wabaListUrl);
@@ -143,7 +154,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
         const phonesUrl =
           `https://graph.facebook.com/v18.0/${encodeURIComponent(wabaId)}/phone_numbers` +
           `?fields=id,display_phone_number,verified_name` +
-          `&access_token=${encodeURIComponent(accessToken)}`;
+          `&access_token=${encodeURIComponent(graphAccessToken)}`;
 
         console.log("📡 [WA CALLBACK] Consultando phone_numbers:", phonesUrl);
         const phonesResp = await fetch(phonesUrl);
