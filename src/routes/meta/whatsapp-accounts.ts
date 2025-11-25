@@ -14,7 +14,7 @@ const router = express.Router();
 router.get("/whatsapp/accounts", async (req: Request, res: Response) => {
   try {
     // @ts-ignore - tu middleware de auth llena req.user
-    const tenantId = req.user?.tenant_id as string | undefined;
+    const tenantId = (req as any).user?.tenant_id as string | undefined;
 
     if (!tenantId) {
       console.warn("[WA ACCOUNTS] Sin tenantId en req.user");
@@ -34,27 +34,15 @@ router.get("/whatsapp/accounts", async (req: Request, res: Response) => {
 
     const accessToken = tenant.whatsapp_access_token as string | null;
 
-    // 🔐 Token de System User (el mismo que usas en el callback)
-    const systemToken =
-      process.env.FACEBOOK_SYSTEM_USER_TOKEN ||
-      process.env.META_WABA_TOKEN ||
-      process.env.META_WHATSAPP_TOKEN ||
-      null;
-
-    if (!accessToken && !systemToken) {
+    if (!accessToken) {
+      console.warn(
+        "[WA ACCOUNTS] Tenant sin whatsapp_access_token. Primero debe conectar WhatsApp."
+      );
       return res.status(400).json({
         error:
-          "Este tenant aún no tiene un access_token de Meta y no hay token de System User configurado. Primero conecta WhatsApp.",
+          "Este tenant aún no tiene un access_token de Meta. Primero conecta WhatsApp.",
       });
     }
-
-    const graphAccessToken: string = (systemToken || accessToken)!;
-
-    console.log(
-      "[WA ACCOUNTS] Usando token:",
-      systemToken ? "SYSTEM_USER" : "TENANT_ACCESS_TOKEN"
-    );
-
 
     // Llamada a Graph para listar negocios, WABAs y números
     const meUrl =
@@ -66,12 +54,17 @@ router.get("/whatsapp/accounts", async (req: Request, res: Response) => {
       `    phone_numbers{ id, display_phone_number, verified_name }` +
       `  }` +
       `}` +
-      `&access_token=${encodeURIComponent(graphAccessToken)}`;
+      `&access_token=${encodeURIComponent(accessToken)}`;
 
     console.log("[WA ACCOUNTS] Consultando /me:", meUrl);
 
     const meResp = await fetch(meUrl);
     const meJson: any = await meResp.json();
+
+    console.log(
+      "[WA ACCOUNTS] Respuesta /me:",
+      JSON.stringify(meJson, null, 2)
+    );
 
     if (!meResp.ok) {
       console.error("[WA ACCOUNTS] Error desde Graph:", meJson);
@@ -81,7 +74,8 @@ router.get("/whatsapp/accounts", async (req: Request, res: Response) => {
       });
     }
 
-    const businesses = meJson?.businesses?.data ?? [];
+    const businesses =
+      meJson?.businesses?.data ?? meJson?.businesses ?? [];
 
     // Normalizamos la respuesta para el frontend
     const accounts: Array<{
@@ -141,7 +135,7 @@ router.get("/whatsapp/accounts", async (req: Request, res: Response) => {
 router.post("/whatsapp/select-number", async (req: Request, res: Response) => {
   try {
     // @ts-ignore
-    const tenantId = req.user?.tenant_id as string | undefined;
+    const tenantId = (req as any).user?.tenant_id as string | undefined;
     if (!tenantId) {
       return res.status(401).json({ error: "No autenticado" });
     }
@@ -161,7 +155,8 @@ router.post("/whatsapp/select-number", async (req: Request, res: Response) => {
         whatsapp_business_id      = $1,
         whatsapp_phone_number_id  = $2,
         whatsapp_phone_number     = $3,
-        whatsapp_status           = 'connected'
+        whatsapp_status           = 'connected',
+        updated_at                = NOW()
       WHERE id = $4
       RETURNING id, whatsapp_business_id, whatsapp_phone_number_id, whatsapp_phone_number;
     `;
