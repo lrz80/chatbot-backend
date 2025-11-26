@@ -9,7 +9,7 @@ const router = express.Router();
  * Genera la URL de OAuth de Meta para conectar WhatsApp Cloud.
  * El frontend abre esta URL en un popup.
  */
-router.post("/", async (req: Request, res: Response) => {   // <-- AQUÍ, SOLO "/"
+router.post("/", async (req: Request, res: Response) => {   // <-- SOLO "/"
   try {
     const APP_ID = process.env.META_APP_ID;
     const BACKEND_PUBLIC_URL =
@@ -38,16 +38,18 @@ router.post("/", async (req: Request, res: Response) => {   // <-- AQUÍ, SOLO "
 
     const redirectUri = `${BACKEND_PUBLIC_URL}/api/meta/whatsapp/callback`;
 
+    // 👇 Aquí añadimos business_management
     const scopes = [
       "whatsapp_business_management",
       "whatsapp_business_messaging",
       "pages_show_list",
+      "business_management",
     ].join(",");
 
     const url = new URL("https://www.facebook.com/v18.0/dialog/oauth");
     url.searchParams.set("client_id", APP_ID);
     url.searchParams.set("redirect_uri", redirectUri);
-    url.searchParams.set("state", tenantId); // importantísimo
+    url.searchParams.set("state", tenantId); // importantísimo: multi-tenant
     url.searchParams.set("scope", scopes);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("display", "popup");
