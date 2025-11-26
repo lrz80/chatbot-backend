@@ -5,6 +5,7 @@ import { authenticateUser } from "../../middleware/auth";
 
 const router = express.Router();
 
+// Hacemos un tipo “suave” para tener req.user tipado
 interface AuthedRequest extends Request {
   user?: {
     uid: string;
@@ -18,7 +19,7 @@ interface AuthedRequest extends Request {
  *
  * Devuelve todas las WABAs y números de WhatsApp disponibles
  * para el tenant autenticado, usando el whatsapp_access_token
- * (token de usuario que hizo el login).
+ * guardado en la tabla tenants.
  */
 router.get(
   "/whatsapp/accounts",
@@ -34,9 +35,9 @@ router.get(
 
       // Traer access_token desde tenants (token del usuario que hizo el login)
       const { rows } = await pool.query(
-        `SELECT id, whatsapp_access_token
-         FROM tenants
-         WHERE id = $1
+        `SELECT whatsapp_access_token 
+         FROM tenants 
+         WHERE id = $1 
          LIMIT 1`,
         [tenantId]
       );
@@ -46,41 +47,50 @@ router.get(
         return res.status(404).json({ error: "Tenant no encontrado" });
       }
 
-      const accessToken: string | null = tenant.whatsapp_access_token;
+      const accessToken = tenant.whatsapp_access_token as string | null;
+
       if (!accessToken) {
-        console.warn("[WA ACCOUNTS] Tenant sin whatsapp_access_token");
+        console.warn(
+          "[WA ACCOUNTS] Tenant sin whatsapp_access_token. Primero debe conectar WhatsApp."
+        );
         return res.status(400).json({
           error:
             "Este tenant aún no tiene un access_token de Meta. Primero conecta WhatsApp.",
         });
       }
 
-      // 🔹 IMPORTANTE: usar el token de USUARIO y el endpoint correcto
-      //    /me/whatsapp_business_accounts con scope whatsapp_business_management
-      const wabaUrl =
-        `https://graph.facebook.com/v18.0/me/whatsapp_business_accounts` +
-        `?fields=id,name,phone_numbers{id,display_phone_number,verified_name}` +
+      // Llamada a Graph para listar WABAs y números
+      const meUrl =
+        `https://graph.facebook.com/v18.0/me` +
+        `?fields=whatsapp_business_accounts{` +
+        `  id,name,` +
+        `  phone_numbers{ id, display_phone_number, verified_name }` +
+        `}` +
         `&access_token=${encodeURIComponent(accessToken)}`;
 
-      console.log("[WA ACCOUNTS] Consultando WABAs con token de usuario:", wabaUrl);
+      console.log("[WA ACCOUNTS] Consultando /me:", meUrl);
 
-      const wabaResp = await fetch(wabaUrl);
-      const wabaJson: any = await wabaResp.json();
+      const meResp = await fetch(meUrl);
+      const meJson: any = await meResp.json();
 
       console.log(
-        "[WA ACCOUNTS] Respuesta /me/whatsapp_business_accounts:",
-        JSON.stringify(wabaJson, null, 2)
+        "[WA ACCOUNTS] Respuesta /me:",
+        JSON.stringify(meJson, null, 2)
       );
 
-      if (!wabaResp.ok) {
-        console.error("[WA ACCOUNTS] Error desde Graph:", wabaJson);
+      if (!meResp.ok) {
+        console.error("[WA ACCOUNTS] Error desde Graph:", meJson);
         return res.status(500).json({
-          error: "Meta Graph devolvió un error al listar cuentas de WhatsApp",
-          detail: wabaJson,
+          error:
+            "Meta Graph devolvió un error al listar cuentas de WhatsApp",
+          detail: meJson,
         });
       }
 
-      const data = wabaJson?.data ?? [];
+      const wabas =
+        meJson?.whatsapp_business_accounts?.data ??
+        meJson?.whatsapp_business_accounts ??
+        [];
 
       const accounts: Array<{
         business_id: string | null;
@@ -92,14 +102,16 @@ router.get(
         verified_name: string | null;
       }> = [];
 
-      for (const w of data) {
+      // En este flujo, el "business_id" no viene directo en la respuesta,
+      // pero para tu lógica actual no es obligatorio. Lo dejamos en null.
+      for (const w of wabas) {
         const wabaId = w.id as string;
         const wabaName = (w.name as string) ?? null;
 
         const phones = w.phone_numbers?.data ?? w.phone_numbers ?? [];
         for (const ph of phones) {
           accounts.push({
-            business_id: null, // este endpoint no devuelve el business_id directamente
+            business_id: null,
             business_name: null,
             waba_id: wabaId,
             waba_name: wabaName,
@@ -118,9 +130,9 @@ router.get(
       return res.json({ accounts });
     } catch (err) {
       console.error("❌ [WA ACCOUNTS] Error inesperado:", err);
-      return res
-        .status(500)
-        .json({ error: "Error interno al listar cuentas de WhatsApp" });
+      return res.status(500).json({
+        error: "Error interno al listar cuentas de WhatsApp",
+      });
     }
   }
 );
@@ -176,9 +188,9 @@ router.post(
       return res.json({ ok: true, tenant: rows[0] });
     } catch (err) {
       console.error("❌ [WA SELECT] Error inesperado:", err);
-      return res
-        .status(500)
-        .json({ error: "Error interno al guardar el número seleccionado" });
+      return res.status(500).json({
+        error: "Error interno al guardar el número seleccionado",
+      });
     }
   }
 );
