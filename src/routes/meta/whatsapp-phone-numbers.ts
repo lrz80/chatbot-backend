@@ -8,7 +8,8 @@ const router = Router();
 /**
  * GET /api/meta/whatsapp/phone-numbers
  *
- * Devuelve los números de WhatsApp Business activos para el tenant actual.
+ * Descubre todos los WABA y sus números disponibles para el tenant actual.
+ * NO guarda nada en la base de datos. Solo lista.
  */
 router.get(
   "/whatsapp/phone-numbers",
@@ -30,10 +31,11 @@ router.get(
 
       const accessToken = rows[0]?.whatsapp_access_token;
       if (!accessToken) {
-        return res.json({ phoneNumbers: [], status: "no_token" });
+        console.warn("[WA PHONE NUMBERS] Sin whatsapp_access_token en tenant");
+        return res.json({ accounts: [], status: "no_token" });
       }
 
-      // 2️⃣ Obtener Business ID
+      // 2️⃣ Obtener todas las businesses vinculadas al usuario
       const businessResp = await fetch(
         `https://graph.facebook.com/v18.0/me/businesses?access_token=${encodeURIComponent(
           accessToken
@@ -46,77 +48,141 @@ router.get(
         JSON.stringify(businessData, null, 2)
       );
 
-      if (!businessData?.data?.length) {
-        return res.json({ phoneNumbers: [], status: "no_business" });
-      }
-      const businessId = businessData.data[0].id as string;
-
-      // 3️⃣ Obtener WABA IDs
-      const wabaResp = await fetch(
-        `https://graph.facebook.com/v18.0/${encodeURIComponent(
-          businessId
-        )}/owned_whatsapp_business_accounts?access_token=${encodeURIComponent(
-          accessToken
-        )}`
-      );
-      const wabaData: any = await wabaResp.json();
-
-      console.log(
-        "[WA PHONE NUMBERS] owned_whatsapp_business_accounts =>",
-        JSON.stringify(wabaData, null, 2)
-      );
-
-      if (!wabaData?.data?.length) {
-        return res.json({ phoneNumbers: [], status: "no_waba" });
-      }
-      const wabaId = wabaData.data[0].id as string;
-
-      // 4️⃣ Obtener números del WABA
-      const phoneResp = await fetch(
-        `https://graph.facebook.com/v18.0/${encodeURIComponent(
-          wabaId
-        )}/phone_numbers?access_token=${encodeURIComponent(accessToken)}`
-      );
-      const phoneData: any = await phoneResp.json();
-
-      console.log(
-        "[WA PHONE NUMBERS] /phone_numbers =>",
-        JSON.stringify(phoneData, null, 2)
-      );
-
-      if (!phoneData?.data?.length) {
-        return res.json({ phoneNumbers: [], status: "no_numbers" });
+      const businesses = businessData?.data || [];
+      if (!Array.isArray(businesses) || businesses.length === 0) {
+        console.warn("[WA PHONE NUMBERS] Usuario sin businesses");
+        return res.json({ accounts: [], status: "no_business" });
       }
 
-      const phoneNumbers = phoneData.data.map((p: any) => ({
-        phone_number_id: p.id,
-        display_phone_number: p.display_phone_number,
-        verified_name: p.verified_name,
-        waba_id: wabaId,
-      }));
+      // 3️⃣ Para cada business, buscar WABAs (owned + client) y sus números
+      const accounts: Array<{
+        business_id: string;
+        business_name?: string;
+        waba_id: string;
+        waba_type: "owned" | "client";
+        phone_numbers: {
+          phone_number_id: string;
+          display_phone_number: string;
+          verified_name?: string;
+        }[];
+      }> = [];
 
-      // 5️⃣ Opcional: guardar el primer número en tenants
-      await pool.query(
-        `
-        UPDATE tenants
-        SET
-          whatsapp_business_id     = $1,
-          whatsapp_phone_number_id = $2,
-          whatsapp_phone_number    = $3,
-          updated_at               = NOW()
-        WHERE id = $4
-        `,
-        [
-          wabaId,
-          phoneNumbers[0].phone_number_id,
-          phoneNumbers[0].display_phone_number,
-          tenantId,
-        ]
-      );
+      for (const biz of businesses) {
+        const bizId = biz.id as string;
+        const bizName = biz.name as string | undefined;
 
-      return res.json({ phoneNumbers, status: "ok" });
+        // owned_whatsapp_business_accounts
+        const ownedResp = await fetch(
+          `https://graph.facebook.com/v18.0/${encodeURIComponent(
+            bizId
+          )}/owned_whatsapp_business_accounts?access_token=${encodeURIComponent(
+            accessToken
+          )}`
+        );
+        const ownedJson: any = await ownedResp.json();
+        console.log(
+          `[WA PHONE NUMBERS] owned_whatsapp_business_accounts (biz ${bizId}) =>`,
+          JSON.stringify(ownedJson, null, 2)
+        );
+
+        const ownedWabas: any[] = Array.isArray(ownedJson?.data)
+          ? ownedJson.data
+          : [];
+
+        // client_whatsapp_business_accounts
+        const clientResp = await fetch(
+          `https://graph.facebook.com/v18.0/${encodeURIComponent(
+            bizId
+          )}/client_whatsapp_business_accounts?access_token=${encodeURIComponent(
+            accessToken
+          )}`
+        );
+        const clientJson: any = await clientResp.json();
+        console.log(
+          `[WA PHONE NUMBERS] client_whatsapp_business_accounts (biz ${bizId}) =>`,
+          JSON.stringify(clientJson, null, 2)
+        );
+
+        const clientWabas: any[] = Array.isArray(clientJson?.data)
+          ? clientJson.data
+          : [];
+
+        // Para cada WABA (owned)
+        for (const w of ownedWabas) {
+          const wabaId = w.id as string;
+
+          const phoneResp = await fetch(
+            `https://graph.facebook.com/v18.0/${encodeURIComponent(
+              wabaId
+            )}/phone_numbers?access_token=${encodeURIComponent(accessToken)}`
+          );
+          const phoneData: any = await phoneResp.json();
+
+          console.log(
+            `[WA PHONE NUMBERS] /${wabaId}/phone_numbers (owned) =>`,
+            JSON.stringify(phoneData, null, 2)
+          );
+
+          const phone_numbers: any[] = Array.isArray(phoneData?.data)
+            ? phoneData.data
+            : [];
+
+          accounts.push({
+            business_id: bizId,
+            business_name: bizName,
+            waba_id: wabaId,
+            waba_type: "owned",
+            phone_numbers: phone_numbers.map((p: any) => ({
+              phone_number_id: p.id,
+              display_phone_number: p.display_phone_number,
+              verified_name: p.verified_name,
+            })),
+          });
+        }
+
+        // Para cada WABA (client)
+        for (const w of clientWabas) {
+          const wabaId = w.id as string;
+
+          const phoneResp = await fetch(
+            `https://graph.facebook.com/v18.0/${encodeURIComponent(
+              wabaId
+            )}/phone_numbers?access_token=${encodeURIComponent(accessToken)}`
+          );
+          const phoneData: any = await phoneResp.json();
+
+          console.log(
+            `[WA PHONE NUMBERS] /${wabaId}/phone_numbers (client) =>`,
+            JSON.stringify(phoneData, null, 2)
+          );
+
+          const phone_numbers: any[] = Array.isArray(phoneData?.data)
+            ? phoneData.data
+            : [];
+
+          accounts.push({
+            business_id: bizId,
+            business_name: bizName,
+            waba_id: wabaId,
+            waba_type: "client",
+            phone_numbers: phone_numbers.map((p: any) => ({
+              phone_number_id: p.id,
+              display_phone_number: p.display_phone_number,
+              verified_name: p.verified_name,
+            })),
+          });
+        }
+      }
+
+      if (!accounts.length) {
+        console.warn("[WA PHONE NUMBERS] No se encontraron WABAs con números");
+        return res.json({ accounts: [], status: "no_waba" });
+      }
+
+      // ❗ IMPORTANTE: aquí SOLO devolvemos; NO guardamos nada todavía
+      return res.json({ accounts, status: "ok" });
     } catch (error) {
-      console.error("[WA PHONE NUMBERS] Error:", error);
+      console.error("[WA PHONE NUMBERS] Error inesperado:", error);
       return res
         .status(500)
         .json({ error: "Error consultando números de WhatsApp." });
@@ -126,9 +192,8 @@ router.get(
 
 /**
  * POST /api/meta/whatsapp/select-number
- * body: { phoneNumberId: string, displayPhoneNumber: string }
  *
- * Guarda en tenants el número elegido por el tenant.
+ * Guarda en tenants el número y WABA que el cliente haya elegido en el dashboard.
  */
 router.post(
   "/whatsapp/select-number",
@@ -144,27 +209,29 @@ router.post(
           .json({ error: "No se encontró tenantId en el usuario" });
       }
 
-      const { phoneNumberId, displayPhoneNumber } = req.body as {
+      const { wabaId, phoneNumberId, displayPhoneNumber } = req.body as {
+        wabaId?: string;
         phoneNumberId?: string;
         displayPhoneNumber?: string;
       };
 
-      if (!phoneNumberId || !displayPhoneNumber) {
-        return res
-          .status(400)
-          .json({ error: "Faltan phoneNumberId o displayPhoneNumber" });
+      if (!wabaId || !phoneNumberId || !displayPhoneNumber) {
+        return res.status(400).json({
+          error: "Faltan wabaId, phoneNumberId o displayPhoneNumber",
+        });
       }
 
       await pool.query(
         `
         UPDATE tenants
         SET
-          whatsapp_phone_number_id = $1,
-          whatsapp_phone_number    = $2,
+          whatsapp_business_id     = $1,
+          whatsapp_phone_number_id = $2,
+          whatsapp_phone_number    = $3,
           updated_at               = NOW()
-        WHERE id = $3
+        WHERE id = $4
         `,
-        [phoneNumberId, displayPhoneNumber, tenantId]
+        [wabaId, phoneNumberId, displayPhoneNumber, tenantId]
       );
 
       return res.json({ ok: true });
