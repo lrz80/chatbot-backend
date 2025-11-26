@@ -19,7 +19,6 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
 
     // ───────────────────────────────────────────────
     // 1) HANDSHAKE DE VERIFICACIÓN DEL WEBHOOK (hub.challenge)
-    //    Esta llamada viene desde la pestaña "Webhooks" de WhatsApp en el App Dashboard.
     // ───────────────────────────────────────────────
     const mode = req.query["hub.mode"] as string | undefined;
     const verifyToken = req.query["hub.verify_token"] as string | undefined;
@@ -44,7 +43,6 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
 
     // ───────────────────────────────────────────────
     // 2) CALLBACK OAUTH (code + state)
-    //    Esta llamada viene del flujo de login que dispara ConnectWhatsAppButton.
     // ───────────────────────────────────────────────
     const code = req.query.code as string | undefined;
     const state = req.query.state as string | undefined; // tenantId
@@ -84,7 +82,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     console.log("🔁 [WA CALLBACK] Intercambiando code por access_token en Graph...");
     console.log("🔁 redirect_uri usado:", redirectUri);
 
-    // 2.1 Intercambiar code por access_token (token DE USUARIO que se loguea)
+    // 2.1 Intercambiar code por access_token (token DE USUARIO)
     const tokenUrl =
       `https://graph.facebook.com/v18.0/oauth/access_token` +
       `?client_id=${encodeURIComponent(APP_ID)}` +
@@ -110,26 +108,32 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     const accessToken = tokenJson.access_token as string;
 
     // ───────────────────────────────────────────────
-    // 2.2 Obtener el WhatsApp Business Account (WABA) del usuario
+    // 2.2 Obtener el WhatsApp Business Account (WABA)
+    //     Usamos el edge /me/whatsapp_business_accounts
     // ───────────────────────────────────────────────
-    console.log("📡 [WA CALLBACK] Consultando /me para obtener whatsapp_business_accounts...");
-    const meUrl =
-      `https://graph.facebook.com/v18.0/me` +
-      `?fields=id,name,whatsapp_business_accounts{id,name}` +
-      `&access_token=${encodeURIComponent(accessToken)}`;
+    console.log("📡 [WA CALLBACK] Consultando /me/whatsapp_business_accounts...");
+    const wabaUrl =
+      `https://graph.facebook.com/v18.0/me/whatsapp_business_accounts` +
+      `?access_token=${encodeURIComponent(accessToken)}` +
+      `&fields=id,name`;
 
-    const meResp = await fetch(meUrl);
-    const meJson: any = await meResp.json();
+    const wabaResp = await fetch(wabaUrl);
+    const wabaJson: any = await wabaResp.json();
 
-    console.log("📡 [WA CALLBACK] Respuesta /me:", JSON.stringify(meJson, null, 2));
+    console.log(
+      "📡 [WA CALLBACK] Respuesta whatsapp_business_accounts:",
+      JSON.stringify(wabaJson, null, 2)
+    );
 
-    if (!meResp.ok) {
-      console.error("❌ [WA CALLBACK] Error leyendo /me:", meJson);
-      // Aún así guardamos el token pero sin WABA
+    let whatsappBusinessId: string | null = null;
+
+    if (wabaResp.ok && Array.isArray(wabaJson.data) && wabaJson.data.length > 0) {
+      whatsappBusinessId = wabaJson.data[0].id;
+    } else {
+      console.warn(
+        "⚠️ [WA CALLBACK] No se encontraron whatsapp_business_accounts en la respuesta."
+      );
     }
-
-    const waba = meJson.whatsapp_business_accounts?.[0];
-    const whatsappBusinessId: string | null = waba?.id ?? null;
 
     console.log("🏢 [WA CALLBACK] whatsapp_business_id detectado:", whatsappBusinessId);
 
