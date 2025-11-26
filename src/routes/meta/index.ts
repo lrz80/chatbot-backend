@@ -4,6 +4,7 @@ import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
 import whatsappCallback from "./whatsapp-callback";
 import whatsappRedirect from "./whatsapp-redirect";
+import whatsappPhoneNumbersRouter from "../meta/whatsapp-phone-numbers";
 
 const router = Router();
 
@@ -51,6 +52,7 @@ router.post(
         "whatsapp_business_management",
         "whatsapp_business_messaging",
         "pages_show_list",
+        "business_management", // 👈 ESTE FALTABA
       ].join(",");
 
       const url = new URL("https://www.facebook.com/v18.0/dialog/oauth");
@@ -197,6 +199,7 @@ router.use("/", whatsappCallback);
  * Dentro de whatsapp-redirect.ts ya defines el path interno.
  */
 router.use("/", whatsappRedirect);
+router.use("/", whatsappPhoneNumbersRouter);
 
 export default router;
 
