@@ -110,8 +110,31 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     const accessToken = tokenJson.access_token as string;
 
     // ───────────────────────────────────────────────
-    // 2.2 Guardar SOLO el access_token y estado "connected"
-    //     No intentamos detectar WABA ni número aquí.
+    // 2.2 Obtener el WhatsApp Business Account (WABA) del usuario
+    // ───────────────────────────────────────────────
+    console.log("📡 [WA CALLBACK] Consultando /me para obtener whatsapp_business_accounts...");
+    const meUrl =
+      `https://graph.facebook.com/v18.0/me` +
+      `?fields=id,name,whatsapp_business_accounts{id,name}` +
+      `&access_token=${encodeURIComponent(accessToken)}`;
+
+    const meResp = await fetch(meUrl);
+    const meJson: any = await meResp.json();
+
+    console.log("📡 [WA CALLBACK] Respuesta /me:", JSON.stringify(meJson, null, 2));
+
+    if (!meResp.ok) {
+      console.error("❌ [WA CALLBACK] Error leyendo /me:", meJson);
+      // Aún así guardamos el token pero sin WABA
+    }
+
+    const waba = meJson.whatsapp_business_accounts?.[0];
+    const whatsappBusinessId: string | null = waba?.id ?? null;
+
+    console.log("🏢 [WA CALLBACK] whatsapp_business_id detectado:", whatsappBusinessId);
+
+    // ───────────────────────────────────────────────
+    // 2.3 Guardar access_token, estado "connected" y whatsapp_business_id
     // ───────────────────────────────────────────────
     try {
       const updateQuery = `
@@ -119,19 +142,25 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
         SET
           whatsapp_access_token = $1,
           whatsapp_status       = 'connected',
+          whatsapp_business_id  = $2,
           updated_at            = NOW()
-        WHERE id::text = $2
-        RETURNING id, whatsapp_status;
+        WHERE id::text = $3
+        RETURNING id, whatsapp_status, whatsapp_business_id;
       `;
 
-      const result = await pool.query(updateQuery, [accessToken, tenantId]);
-      console.log("💾 [WA CALLBACK] Guardado access_token en DB. RowCount:", result.rowCount);
+      const result = await pool.query(updateQuery, [
+        accessToken,
+        whatsappBusinessId,
+        tenantId,
+      ]);
+
+      console.log("💾 [WA CALLBACK] Guardado en DB. RowCount:", result.rowCount);
       console.log("💾 [WA CALLBACK] Tenant actualizado:", result.rows[0]);
     } catch (dbErr) {
-      console.error("❌ [WA CALLBACK] Error guardando access_token en tenants:", dbErr);
+      console.error("❌ [WA CALLBACK] Error guardando datos en tenants:", dbErr);
     }
 
-    // 2.3 Cerrar popup y volver al dashboard
+    // 2.4 Cerrar popup y volver al dashboard
     const FRONTEND_URL = process.env.FRONTEND_URL || "https://www.aamy.ai";
 
     return res.send(`<!doctype html>
