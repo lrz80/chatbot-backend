@@ -79,6 +79,7 @@ import stripeCheckoutRoutes from './routes/stripe/checkout';
 import stripePlansRoutes from './routes/stripe/plans';
 import twilioEmbeddedRouter from './routes/twilioEmbedded';
 import metaRoutes from "./routes/meta";
+import telnyxForwardRouter from './routes/voice/telnyx-forward';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -209,6 +210,7 @@ app.use('/api/stripe', stripeCheckoutRoutes);
 app.use('/api/stripe', stripePlansRoutes);
 app.use(twilioEmbeddedRouter);
 app.use("/api/meta", metaRoutes);
+app.use('/api/voice', telnyxForwardRouter);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
