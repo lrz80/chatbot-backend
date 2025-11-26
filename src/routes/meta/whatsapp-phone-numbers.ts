@@ -1,9 +1,8 @@
-// src/routes/meta/whatsapp-phone-numbers.ts
-import express, { Request, Response } from "express";
+import { Router, Request, Response } from "express";
 import pool from "../../lib/db";
 import { authenticateUser } from "../../middleware/auth";
 
-const router = express.Router();
+const router = Router();
 
 /**
  * GET /api/meta/whatsapp/phone-numbers
