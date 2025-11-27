@@ -3,60 +3,40 @@ import express, { Request, Response } from "express";
 
 const router = express.Router();
 
-/**
- * POST /api/meta/whatsapp-onboard/start
- *
- * Genera la URL de OAuth de Meta para conectar WhatsApp Cloud.
- * El frontend abre esta URL en un popup.
- */
-router.post("/", async (req: Request, res: Response) => {   // <-- SOLO "/"
+router.post("/", async (req: Request, res: Response) => {
   try {
     const APP_ID = process.env.META_APP_ID;
+    const CONFIG_ID = process.env.META_CONFIG_ID;
     const BACKEND_PUBLIC_URL =
       process.env.BACKEND_PUBLIC_URL || "https://api.aamy.ai";
 
-    if (!APP_ID) {
-      console.error("[WA ONBOARD START] Falta META_APP_ID en env");
-      return res
-        .status(500)
-        .json({ error: "Falta configuración META_APP_ID en el servidor" });
+    if (!APP_ID || !CONFIG_ID) {
+      console.error("[WA ONBOARD START] Falta APP_ID o CONFIG_ID");
+      return res.status(500).json({
+        error:
+          "Falta configuración del App de Meta (META_APP_ID o META_CONFIG_ID).",
+      });
     }
 
-    // tenantId viene del body o del token (según tu auth)
-    const tenantIdFromBody = (req.body?.tenantId as string | undefined)?.trim();
+    // tenantId viene del body o desde req.user
     const tenantId =
-      tenantIdFromBody ||
-      // @ts-ignore si usas middleware de auth con req.user
-      (req.user?.tenant_id as string | undefined);
+      (req.body?.tenantId as string) ||
+      // @ts-ignore
+      req.user?.tenant_id;
 
     if (!tenantId) {
-      console.warn("[WA ONBOARD START] No se recibió tenantId");
-      return res
-        .status(400)
-        .json({ error: "Falta tenantId para iniciar el onboarding" });
+      return res.status(400).json({ error: "Falta tenantId" });
     }
 
-    const redirectUri = `${BACKEND_PUBLIC_URL}/api/meta/whatsapp/callback`;
+    /**
+     * URL oficial de Embedded Signup con soporte multi-tenant (state)
+     * Incluye app_id + config_id + estado con tenantId.
+     */
+    const url = `https://business.facebook.com/messaging/whatsapp/onboard/?app_id=${APP_ID}&config_id=${CONFIG_ID}&state=${tenantId}`;
 
-    // 👇 Aquí añadimos business_management
-    const scopes = [
-      "whatsapp_business_management",
-      "whatsapp_business_messaging",
-      "pages_show_list",
-      "business_management",
-    ].join(",");
+    console.log("🌐 URL Embedded Signup generada:", url);
 
-    const url = new URL("https://www.facebook.com/v18.0/dialog/oauth");
-    url.searchParams.set("client_id", APP_ID);
-    url.searchParams.set("redirect_uri", redirectUri);
-    url.searchParams.set("state", tenantId); // importantísimo: multi-tenant
-    url.searchParams.set("scope", scopes);
-    url.searchParams.set("response_type", "code");
-    url.searchParams.set("display", "popup");
-
-    console.log("🌐 URL de Meta generada:", url.toString());
-
-    return res.json({ url: url.toString() });
+    return res.json({ url });
   } catch (err) {
     console.error("❌ [WA ONBOARD START] Error inesperado:", err);
     return res
