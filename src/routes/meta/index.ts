@@ -21,8 +21,7 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       const APP_ID = process.env.META_APP_ID;
-      const BACKEND_PUBLIC_URL =
-        process.env.BACKEND_PUBLIC_URL || "https://api.aamy.ai";
+      const CONFIG_ID = process.env.META_EMBEDDED_SIGNUP_CONFIG_ID;
 
       if (!APP_ID) {
         console.error("[WA ONBOARD START] Falta META_APP_ID en env");
@@ -31,11 +30,17 @@ router.post(
           .json({ error: "Falta configuración META_APP_ID en el servidor" });
       }
 
+      if (!CONFIG_ID) {
+        console.error("[WA ONBOARD START] Falta META_EMBEDDED_SIGNUP_CONFIG_ID en env");
+        return res
+          .status(500)
+          .json({ error: "Falta configuración META_EMBEDDED_SIGNUP_CONFIG_ID" });
+      }
+
       const tenantIdFromBody = (req.body as any)?.tenantId
         ? String((req.body as any).tenantId).trim()
         : undefined;
 
-      // 👇 Ahora sí tenemos req.user gracias a authenticateUser
       const tenantId =
         tenantIdFromBody || (req as any).user?.tenant_id;
 
@@ -46,24 +51,13 @@ router.post(
           .json({ error: "Falta tenantId para iniciar el onboarding" });
       }
 
-      const redirectUri = `${BACKEND_PUBLIC_URL}/api/meta/whatsapp/callback`;
-
-      const scopes = [
-        "whatsapp_business_management",
-        "whatsapp_business_messaging",
-        "pages_show_list",
-        "business_management", // 👈 ESTE FALTABA
-      ].join(",");
-
-      const url = new URL("https://www.facebook.com/v18.0/dialog/oauth");
-      url.searchParams.set("client_id", APP_ID);
-      url.searchParams.set("redirect_uri", redirectUri);
+      // ✅ URL Meta-hosted Embedded Signup
+      const url = new URL("https://business.facebook.com/messaging/whatsapp/onboard/");
+      url.searchParams.set("app_id", APP_ID);
+      url.searchParams.set("config_id", CONFIG_ID);
       url.searchParams.set("state", tenantId);
-      url.searchParams.set("scope", scopes);
-      url.searchParams.set("response_type", "code");
-      url.searchParams.set("display", "popup");
 
-      console.log("🌐 URL de Meta generada:", url.toString());
+      console.log("[WA ONBOARD START] URL Embedded Signup:", url.toString());
 
       return res.json({ url: url.toString() });
     } catch (err) {
