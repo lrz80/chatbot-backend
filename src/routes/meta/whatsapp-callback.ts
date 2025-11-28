@@ -102,23 +102,49 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
 
     const accessToken = tokenJson.access_token as string;
 
-    // 2.2 Guardar SOLO el access_token y estado "connected"
+    // 2.1 Detectar la WABA (whatsapp_business_account) asociada a este login
+    let wabaId: string | null = null;
+    try {
+      const wabaResp = await fetch(
+        `https://graph.facebook.com/v18.0/me/whatsapp_business_accounts?access_token=${encodeURIComponent(
+          accessToken
+        )}`
+      );
+      const wabaJson: any = await wabaResp.json();
+      console.log(
+        "[WA CALLBACK] whatsapp_business_accounts:",
+        JSON.stringify(wabaJson, null, 2)
+      );
+
+      if (Array.isArray(wabaJson?.data) && wabaJson.data.length === 1) {
+        wabaId = wabaJson.data[0].id as string;
+        console.log("✅ [WA CALLBACK] WABA detectada para este tenant:", wabaId);
+      } else {
+        console.warn(
+          "[WA CALLBACK] No se detectó una única WABA. No se actualizará whatsapp_business_id automáticamente."
+        );
+      }
+    } catch (wErr) {
+      console.error("⚠️ [WA CALLBACK] Error consultando whatsapp_business_accounts:", wErr);
+    }
+
+    // 2.2 Guardar access_token + (opcionalmente) WABA ID + estado conectado
     try {
       const updateQuery = `
         UPDATE tenants
         SET
           whatsapp_access_token = $1,
+          whatsapp_business_id  = COALESCE($2, whatsapp_business_id),
           whatsapp_status       = 'connected',
           updated_at            = NOW()
-        WHERE id::text = $2
-        RETURNING id, whatsapp_status;
+        WHERE id::text = $3
+        RETURNING id, whatsapp_status, whatsapp_business_id;
       `;
 
-      const result = await pool.query(updateQuery, [accessToken, tenantId]);
-      console.log("💾 [WA CALLBACK] Guardado access_token en DB. RowCount:", result.rowCount);
+      const result = await pool.query(updateQuery, [accessToken, wabaId, tenantId]);
       console.log("💾 [WA CALLBACK] Tenant actualizado:", result.rows[0]);
     } catch (dbErr) {
-      console.error("❌ [WA CALLBACK] Error guardando access_token en tenants:", dbErr);
+      console.error("❌ [WA CALLBACK] Error guardando datos en tenants:", dbErr);
     }
 
     const FRONTEND_URL = process.env.FRONTEND_URL || "https://www.aamy.ai";
@@ -157,10 +183,13 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
   }
 });
 
-// 📩 POST /whatsapp/callback se mantiene como ya lo tienes
+// 📩 POST /whatsapp/callback (webhook de mensajes)
 router.post("/whatsapp/callback", async (req: Request, res: Response) => {
   try {
-    console.log("📩 [WA WEBHOOK] Evento entrante desde Meta:", JSON.stringify(req.body, null, 2));
+    console.log(
+      "📩 [WA WEBHOOK] Evento entrante desde Meta:",
+      JSON.stringify(req.body, null, 2)
+    );
 
     res.sendStatus(200);
 
