@@ -38,9 +38,7 @@ router.get(
         [tenantId]
       );
 
-      const accessToken = rows[0]?.whatsapp_access_token as
-        | string
-        | undefined;
+      const accessToken = rows[0]?.whatsapp_access_token as string | undefined;
       const wabaId = rows[0]?.whatsapp_business_id as string | undefined;
 
       if (!accessToken) {
@@ -55,30 +53,46 @@ router.get(
         return res.json({ accounts: [], status: "no_waba_configured" });
       }
 
-      // 2️⃣ Consultar la WABA directamente por ID con sus phone_numbers
-      const wabaUrl =
+      // 2️⃣ Info básica de la WABA
+      const wabaInfoUrl =
         `https://graph.facebook.com/v18.0/${encodeURIComponent(wabaId)}` +
-        `?fields=id,name,` +
-        `phone_numbers{id,display_phone_number,verified_name,code_verification_status}` +
-        `&access_token=${encodeURIComponent(accessToken)}`;
+        `?fields=id,name&access_token=${encodeURIComponent(accessToken)}`;
 
-      console.log("[WA PHONE NUMBERS] Consultando WABA:", wabaUrl);
+      console.log("[WA PHONE NUMBERS] Consultando info WABA:", wabaInfoUrl);
+      const wabaInfoResp = await fetch(wabaInfoUrl);
+      const wabaInfoJson: any = await wabaInfoResp.json();
 
-      const wabaResp = await fetch(wabaUrl);
-      const wabaJson: any = await wabaResp.json();
-
-      console.log(
-        "[WA PHONE NUMBERS] Respuesta WABA:",
-        JSON.stringify(wabaJson, null, 2)
-      );
-
-      if (!wabaResp.ok) {
-        console.error("[WA PHONE NUMBERS] Error desde Graph:", wabaJson);
+      if (!wabaInfoResp.ok) {
+        console.error("[WA PHONE NUMBERS] Error info WABA:", wabaInfoJson);
         return res.status(500).json({
-          error: "Meta Graph devolvió un error al listar números de WhatsApp",
-          detail: wabaJson,
+          error: "Error obteniendo info de la WABA",
+          detail: wabaInfoJson,
         });
       }
+
+      // 3️⃣ Edge de números: /{WABA_ID}/phone_numbers
+      const phonesUrl =
+        `https://graph.facebook.com/v18.0/${encodeURIComponent(wabaId)}` +
+        `/phone_numbers?access_token=${encodeURIComponent(accessToken)}`;
+
+      console.log("[WA PHONE NUMBERS] Consultando números:", phonesUrl);
+      const phonesResp = await fetch(phonesUrl);
+      const phonesJson: any = await phonesResp.json();
+
+      console.log(
+        "[WA PHONE NUMBERS] Respuesta /phone_numbers:",
+        JSON.stringify(phonesJson, null, 2)
+      );
+
+      if (!phonesResp.ok) {
+        console.error("[WA PHONE NUMBERS] Error desde Graph:", phonesJson);
+        return res.status(500).json({
+          error: "Meta Graph devolvió un error al listar números de WhatsApp",
+          detail: phonesJson,
+        });
+      }
+
+      const phones = (phonesJson.data ?? []) as any[];
 
       type Account = {
         waba_id: string;
@@ -91,9 +105,7 @@ router.get(
         }[];
       };
 
-      const phones = wabaJson.phone_numbers?.data ?? wabaJson.phone_numbers ?? [];
-
-      const phone_numbers = (phones as any[]).map((p) => ({
+      const phone_numbers = phones.map((p: any) => ({
         phone_number_id: String(p.id),
         display_phone_number: String(p.display_phone_number),
         verified_name: (p.verified_name as string) ?? null,
@@ -105,8 +117,8 @@ router.get(
 
       if (phone_numbers.length > 0) {
         accounts.push({
-          waba_id: String(wabaJson.id ?? wabaId),
-          waba_name: (wabaJson.name as string) ?? null,
+          waba_id: String(wabaInfoJson.id ?? wabaId),
+          waba_name: (wabaInfoJson.name as string) ?? null,
           phone_numbers,
         });
       }
