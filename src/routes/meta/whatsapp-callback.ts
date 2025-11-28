@@ -102,119 +102,22 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
 
     const accessToken = tokenJson.access_token as string;
 
-    // 2.1 Intentar detectar la WABA (whatsapp_business_account) asociada a este login
-    let wabaId: string | null = null;
-    const candidateWabas = new Set<string>();
-
-    // 2.1.a Intento 1: /me/whatsapp_business_accounts
-    try {
-      const wabaResp = await fetch(
-        `https://graph.facebook.com/v18.0/me/whatsapp_business_accounts?access_token=${encodeURIComponent(
-          accessToken
-        )}`
-      );
-      const wabaJson: any = await wabaResp.json();
-      console.log(
-        "[WA CALLBACK] /me/whatsapp_business_accounts:",
-        JSON.stringify(wabaJson, null, 2)
-      );
-
-      if (Array.isArray(wabaJson?.data)) {
-        for (const w of wabaJson.data) {
-          if (w?.id) candidateWabas.add(String(w.id));
-        }
-      }
-    } catch (wErr) {
-      console.error(
-        "⚠️ [WA CALLBACK] Error en /me/whatsapp_business_accounts:",
-        wErr
-      );
-    }
-
-    // 2.1.b Intento 2: /me/businesses -> owned_whatsapp_business_accounts
-    if (candidateWabas.size === 0) {
-      try {
-        const bizResp = await fetch(
-          `https://graph.facebook.com/v18.0/me/businesses?access_token=${encodeURIComponent(
-            accessToken
-          )}`
-        );
-        const bizJson: any = await bizResp.json();
-        console.log(
-          "[WA CALLBACK] /me/businesses:",
-          JSON.stringify(bizJson, null, 2)
-        );
-
-        const businesses: any[] = Array.isArray(bizJson?.data)
-          ? bizJson.data
-          : [];
-
-        for (const biz of businesses) {
-          const bizId = String(biz.id);
-          try {
-            const ownedResp = await fetch(
-              `https://graph.facebook.com/v18.0/${encodeURIComponent(
-                bizId
-              )}/owned_whatsapp_business_accounts?access_token=${encodeURIComponent(
-                accessToken
-              )}`
-            );
-            const ownedJson: any = await ownedResp.json();
-            console.log(
-              `[WA CALLBACK] owned_whatsapp_business_accounts (biz ${bizId}):`,
-              JSON.stringify(ownedJson, null, 2)
-            );
-
-            const ownedWabas: any[] = Array.isArray(ownedJson?.data)
-              ? ownedJson.data
-              : [];
-
-            for (const w of ownedWabas) {
-              if (w?.id) candidateWabas.add(String(w.id));
-            }
-          } catch (owErr) {
-            console.warn(
-              `[WA CALLBACK] Error consultando owned_whatsapp_business_accounts de biz ${bizId}:`,
-              owErr
-            );
-          }
-        }
-      } catch (bizErr) {
-        console.error("⚠️ [WA CALLBACK] Error en /me/businesses:", bizErr);
-      }
-    }
-
-    if (candidateWabas.size === 1) {
-      wabaId = Array.from(candidateWabas)[0];
-      console.log("✅ [WA CALLBACK] WABA detectada para este tenant:", wabaId);
-    } else if (candidateWabas.size > 1) {
-      console.warn(
-        "[WA CALLBACK] Se detectaron varias WABAs para este login, no se asigna automáticamente:",
-        Array.from(candidateWabas)
-      );
-    } else {
-      console.warn(
-        "[WA CALLBACK] No se encontró ninguna WABA asociada a este login."
-      );
-    }
-
-    // 2.2 Guardar access_token + (opcionalmente) WABA ID + estado conectado
+    // 👉 SOLO guardamos access_token y status "connected"
     try {
       const updateQuery = `
         UPDATE tenants
         SET
           whatsapp_access_token = $1,
-          whatsapp_business_id  = COALESCE($2, whatsapp_business_id),
           whatsapp_status       = 'connected',
           updated_at            = NOW()
-        WHERE id::text = $3
-        RETURNING id, whatsapp_status, whatsapp_business_id;
+        WHERE id::text = $2
+        RETURNING id, whatsapp_status;
       `;
 
-      const result = await pool.query(updateQuery, [accessToken, wabaId, tenantId]);
+      const result = await pool.query(updateQuery, [accessToken, tenantId]);
       console.log("💾 [WA CALLBACK] Tenant actualizado:", result.rows[0]);
     } catch (dbErr) {
-      console.error("❌ [WA CALLBACK] Error guardando datos en tenants:", dbErr);
+      console.error("❌ [WA CALLBACK] Error guardando access_token en tenants:", dbErr);
     }
 
     const FRONTEND_URL = process.env.FRONTEND_URL || "https://www.aamy.ai";
