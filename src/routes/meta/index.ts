@@ -9,6 +9,131 @@ import whatsappPhoneNumbersRouter from "../meta/whatsapp-phone-numbers";
 const router = Router();
 
 /**
+ * POST /api/meta/whatsapp/exchange-code
+ *
+ * El frontend nos envía el `code` devuelto por Embedded Signup.
+ * Aquí lo intercambiamos por access_token y lo guardamos en tenants.
+ */
+router.post(
+  "/whatsapp/exchange-code",
+  authenticateUser,
+  async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const tenantId =
+        user?.tenant_id || (req as any).user?.tenantId;
+
+      if (!tenantId) {
+        return res
+          .status(401)
+          .json({ error: "No autenticado: falta tenant_id en el token." });
+      }
+
+      const { code } = req.body as { code?: string };
+
+      if (!code) {
+        return res.status(400).json({ error: "Falta `code` en el body." });
+      }
+
+      const APP_ID = process.env.META_APP_ID;
+      const APP_SECRET = process.env.META_APP_SECRET;
+
+      if (!APP_ID || !APP_SECRET) {
+        console.error(
+          "❌ [WA EXCHANGE CODE] Falta META_APP_ID o META_APP_SECRET en env."
+        );
+        return res.status(500).json({
+          error: "Configuración del servidor incompleta (APP_ID/SECRET).",
+        });
+      }
+
+      console.log(
+        "🔁 [WA EXCHANGE CODE] Intercambiando code por access_token...",
+        { tenantId, code }
+      );
+
+      const tokenUrl =
+        `https://graph.facebook.com/v18.0/oauth/access_token` +
+        `?client_id=${encodeURIComponent(APP_ID)}` +
+        `&client_secret=${encodeURIComponent(APP_SECRET)}` +
+        `&code=${encodeURIComponent(code)}`;
+
+      console.log("🔁 [WA EXCHANGE CODE] URL:", tokenUrl);
+
+      const tokenResp = await fetch(tokenUrl);
+      const tokenJson: any = await tokenResp.json();
+
+      console.log(
+        "🔑 [WA EXCHANGE CODE] Respuesta token:",
+        tokenResp.status,
+        tokenJson
+      );
+
+      if (!tokenResp.ok || !tokenJson.access_token) {
+        console.error(
+          "❌ [WA EXCHANGE CODE] Error obteniendo access_token de Meta:",
+          tokenJson
+        );
+        return res.status(500).json({
+          error: "No se pudo obtener access_token de Meta.",
+          detail: tokenJson,
+        });
+      }
+
+      const accessToken = tokenJson.access_token as string;
+
+      try {
+        console.log(
+          "💾 [WA EXCHANGE CODE] Actualizando tenant con access_token...",
+          tenantId
+        );
+
+        const updateQuery = `
+          UPDATE tenants
+          SET
+            whatsapp_access_token = $1,
+            whatsapp_status       = 'connected',
+            updated_at            = NOW()
+          WHERE id::text = $2
+          RETURNING id, whatsapp_status;
+        `;
+
+        const result = await pool.query(updateQuery, [accessToken, tenantId]);
+
+        console.log(
+          "💾 [WA EXCHANGE CODE] UPDATE rowCount:",
+          result.rowCount,
+          "rows:",
+          result.rows
+        );
+
+        if (result.rowCount === 0) {
+          console.warn(
+            "⚠️ [WA EXCHANGE CODE] No se actualizó ningún tenant. " +
+              "Revisa que tenantId coincida EXACTAMENTE con tenants.id"
+          );
+        }
+      } catch (dbErr) {
+        console.error(
+          "❌ [WA EXCHANGE CODE] Error guardando access_token en tenants:",
+          dbErr
+        );
+        return res
+          .status(500)
+          .json({ error: "Error al guardar access_token en DB." });
+      }
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("❌ [WA EXCHANGE CODE] Error general:", err);
+      return res
+        .status(500)
+        .json({ error: "Error interno intercambiando el code." });
+    }
+  }
+);
+
+/**
  * POST /api/meta/whatsapp-onboard/start
  *
  * Genera la URL de OAuth de Meta para conectar WhatsApp Cloud.
@@ -31,18 +156,19 @@ router.post(
       }
 
       if (!CONFIG_ID) {
-        console.error("[WA ONBOARD START] Falta META_EMBEDDED_SIGNUP_CONFIG_ID en env");
-        return res
-          .status(500)
-          .json({ error: "Falta configuración META_EMBEDDED_SIGNUP_CONFIG_ID" });
+        console.error(
+          "[WA ONBOARD START] Falta META_EMBEDDED_SIGNUP_CONFIG_ID en env"
+        );
+        return res.status(500).json({
+          error: "Falta configuración META_EMBEDDED_SIGNUP_CONFIG_ID",
+        });
       }
 
       const tenantIdFromBody = (req.body as any)?.tenantId
         ? String((req.body as any).tenantId).trim()
         : undefined;
 
-      const tenantId =
-        tenantIdFromBody || (req as any).user?.tenant_id;
+      const tenantId = tenantIdFromBody || (req as any).user?.tenant_id;
 
       if (!tenantId) {
         console.warn("[WA ONBOARD START] No se recibió tenantId");
@@ -52,7 +178,9 @@ router.post(
       }
 
       // ✅ URL Meta-hosted Embedded Signup
-      const url = new URL("https://business.facebook.com/messaging/whatsapp/onboard/");
+      const url = new URL(
+        "https://business.facebook.com/messaging/whatsapp/onboard/"
+      );
       url.searchParams.set("app_id", APP_ID);
       url.searchParams.set("config_id", CONFIG_ID);
       url.searchParams.set("state", tenantId);
@@ -143,7 +271,7 @@ router.get(
  */
 router.delete(
   "/whatsapp/connection",
-  authenticateUser,                    // 👈 AÑADIDO
+  authenticateUser,
   async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
@@ -180,24 +308,19 @@ router.delete(
 );
 
 /**
- * Callback OAuth de Meta para WhatsApp:
+ * Callback / webhook WhatsApp:
  * GET /api/meta/whatsapp/callback
- * POST /api/meta/whatsapp/callback (webhook)
- *
- * Dentro de whatsapp-callback.ts ya están:
- *   router.get("/whatsapp/callback", ...)
- *   router.post("/whatsapp/callback", ...)
+ * POST /api/meta/whatsapp/callback
  */
 router.use("/", whatsappCallback);
 
 /**
  * Ruta opcional de redirect para el front:
  * GET /api/meta/whatsapp-redirect
- *
- * Dentro de whatsapp-redirect.ts ya defines el path interno.
  */
 router.use("/", whatsappRedirect);
+
+// Rutas para listar/seleccionar números
 router.use("/", whatsappPhoneNumbersRouter);
 
 export default router;
-
