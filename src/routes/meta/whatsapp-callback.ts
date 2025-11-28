@@ -115,7 +115,13 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       `;
 
       const result = await pool.query(updateQuery, [accessToken, tenantId]);
-      console.log("💾 [WA CALLBACK] Tenant actualizado:", result.rows[0]);
+      console.log(
+        "💾 [WA CALLBACK] UPDATE rowCount:",
+        result.rowCount,
+        "rows:",
+        result.rows
+      );
+
     } catch (dbErr) {
       console.error("❌ [WA CALLBACK] Error guardando access_token en tenants:", dbErr);
     }
