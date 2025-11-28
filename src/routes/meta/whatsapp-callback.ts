@@ -62,8 +62,6 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
 
     const APP_ID = process.env.META_APP_ID;
     const APP_SECRET = process.env.META_APP_SECRET;
-    const BACKEND_PUBLIC_URL =
-      process.env.BACKEND_PUBLIC_URL || "https://api.aamy.ai";
 
     if (!APP_ID || !APP_SECRET) {
       console.error(
@@ -74,21 +72,20 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
         .send("<h1>Error</h1><p>Configuración del servidor incompleta (APP_ID/SECRET).</p>");
     }
 
-    const redirectUri = `${BACKEND_PUBLIC_URL}/api/meta/whatsapp/callback`;
     console.log("🔁 [WA CALLBACK] Intercambiando code por access_token en Graph...");
-    console.log("🔁 redirect_uri usado:", redirectUri);
 
     const tokenUrl =
       `https://graph.facebook.com/v18.0/oauth/access_token` +
       `?client_id=${encodeURIComponent(APP_ID)}` +
       `&client_secret=${encodeURIComponent(APP_SECRET)}` +
-      `&redirect_uri=${encodeURIComponent(redirectUri)}` +
       `&code=${encodeURIComponent(code)}`;
+
+    console.log("🔁 [WA CALLBACK] URL intercambio code->token:", tokenUrl);
 
     const tokenResp = await fetch(tokenUrl);
     const tokenJson: any = await tokenResp.json();
 
-    console.log("🔑 [WA CALLBACK] Respuesta token:", tokenJson);
+    console.log("🔑 [WA CALLBACK] Respuesta token:", tokenResp.status, tokenJson);
 
     if (!tokenResp.ok || !tokenJson.access_token) {
       console.error(
@@ -100,7 +97,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
         .send("<h1>Error</h1><p>No se pudo obtener access_token de Meta.</p>");
     }
 
-        const accessToken = tokenJson.access_token as string;
+    const accessToken = tokenJson.access_token as string;
 
     // 👉 Guardamos access_token y status "connected" con logs detallados
     try {
