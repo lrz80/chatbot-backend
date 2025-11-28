@@ -9,9 +9,8 @@ const router = Router();
  * GET /api/meta/whatsapp/phone-numbers
  *
  * Lista las WABA y números disponibles para el tenant actual.
- * - Usa el whatsapp_access_token guardado en tenants.
- * - NO usa /me/businesses ni owned_whatsapp_business_accounts
- *   para evitar el permiso business_management.
+ * - Usa el whatsapp_access_token y whatsapp_business_id guardados en tenants.
+ * - NO usa /me/businesses ni owned_whatsapp_business_accounts.
  * - NO guarda nada en la base de datos. Solo lista.
  */
 router.get(
@@ -26,52 +25,60 @@ router.get(
         return res.status(401).json({ error: "No autenticado" });
       }
 
-      // 1️⃣ Obtener access_token desde la DB
+      // 1️⃣ Obtener access_token y WABA ID desde la DB
       const { rows } = await pool.query(
-        `SELECT whatsapp_access_token
-         FROM tenants
-         WHERE id = $1
-         LIMIT 1`,
+        `
+        SELECT
+          whatsapp_access_token,
+          whatsapp_business_id
+        FROM tenants
+        WHERE id = $1
+        LIMIT 1
+        `,
         [tenantId]
       );
 
-      const accessToken = rows[0]?.whatsapp_access_token as string | undefined;
+      const accessToken = rows[0]?.whatsapp_access_token as
+        | string
+        | undefined;
+      const wabaId = rows[0]?.whatsapp_business_id as string | undefined;
+
       if (!accessToken) {
         console.warn("[WA PHONE NUMBERS] Sin whatsapp_access_token en tenant");
         return res.json({ accounts: [], status: "no_token" });
       }
 
-      // 2️⃣ Consultar /me con whatsapp_business_accounts anidados
-      const meUrl =
-        `https://graph.facebook.com/v18.0/me` +
-        `?fields=whatsapp_business_accounts{` +
-        `id,name,` +
-        `phone_numbers{id,display_phone_number,verified_name,code_verification_status}` +
-        `}` +
-        `&access_token=${encodeURIComponent(accessToken)}`;
-
-      console.log("[WA PHONE NUMBERS] Consultando:", meUrl);
-
-      const meResp = await fetch(meUrl);
-      const meJson: any = await meResp.json();
-
-      console.log(
-        "[WA PHONE NUMBERS] Respuesta /me:",
-        JSON.stringify(meJson, null, 2)
-      );
-
-      if (!meResp.ok) {
-        console.error("[WA PHONE NUMBERS] Error desde Graph:", meJson);
-        return res.status(500).json({
-          error: "Meta Graph devolvió un error al listar cuentas de WhatsApp",
-          detail: meJson,
-        });
+      if (!wabaId) {
+        console.warn(
+          "[WA PHONE NUMBERS] Sin whatsapp_business_id en tenant (WABA no configurada)"
+        );
+        return res.json({ accounts: [], status: "no_waba_configured" });
       }
 
-      const wabas =
-        meJson?.whatsapp_business_accounts?.data ??
-        meJson?.whatsapp_business_accounts ??
-        [];
+      // 2️⃣ Consultar la WABA directamente por ID con sus phone_numbers
+      const wabaUrl =
+        `https://graph.facebook.com/v18.0/${encodeURIComponent(wabaId)}` +
+        `?fields=id,name,` +
+        `phone_numbers{id,display_phone_number,verified_name,code_verification_status}` +
+        `&access_token=${encodeURIComponent(accessToken)}`;
+
+      console.log("[WA PHONE NUMBERS] Consultando WABA:", wabaUrl);
+
+      const wabaResp = await fetch(wabaUrl);
+      const wabaJson: any = await wabaResp.json();
+
+      console.log(
+        "[WA PHONE NUMBERS] Respuesta WABA:",
+        JSON.stringify(wabaJson, null, 2)
+      );
+
+      if (!wabaResp.ok) {
+        console.error("[WA PHONE NUMBERS] Error desde Graph:", wabaJson);
+        return res.status(500).json({
+          error: "Meta Graph devolvió un error al listar números de WhatsApp",
+          detail: wabaJson,
+        });
+      }
 
       type Account = {
         waba_id: string;
@@ -84,30 +91,24 @@ router.get(
         }[];
       };
 
+      const phones = wabaJson.phone_numbers?.data ?? wabaJson.phone_numbers ?? [];
+
+      const phone_numbers = (phones as any[]).map((p) => ({
+        phone_number_id: String(p.id),
+        display_phone_number: String(p.display_phone_number),
+        verified_name: (p.verified_name as string) ?? null,
+        code_verification_status:
+          (p.code_verification_status as string) ?? null,
+      }));
+
       const accounts: Account[] = [];
 
-      for (const w of wabas) {
-        const wabaId = String(w.id);
-        const wabaName = (w.name as string) ?? null;
-
-        const phones = w.phone_numbers?.data ?? w.phone_numbers ?? [];
-
-        const phone_numbers = phones.map((p: any) => ({
-          phone_number_id: String(p.id),
-          display_phone_number: String(p.display_phone_number),
-          verified_name: (p.verified_name as string) ?? null,
-          code_verification_status:
-            (p.code_verification_status as string) ?? null,
-        }));
-
-        // Si no hay teléfonos en esa WABA, no la agregamos
-        if (phone_numbers.length > 0) {
-          accounts.push({
-            waba_id: wabaId,
-            waba_name: wabaName,
-            phone_numbers,
-          });
-        }
+      if (phone_numbers.length > 0) {
+        accounts.push({
+          waba_id: String(wabaJson.id ?? wabaId),
+          waba_name: (wabaJson.name as string) ?? null,
+          phone_numbers,
+        });
       }
 
       console.log(
