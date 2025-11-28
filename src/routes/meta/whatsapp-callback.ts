@@ -100,10 +100,13 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
         .send("<h1>Error</h1><p>No se pudo obtener access_token de Meta.</p>");
     }
 
-    const accessToken = tokenJson.access_token as string;
+        const accessToken = tokenJson.access_token as string;
 
-    // 👉 SOLO guardamos access_token y status "connected"
+    // 👉 Guardamos access_token y status "connected" con logs detallados
     try {
+      console.log("💾 [WA CALLBACK] Intentando actualizar tenant con access_token...");
+      console.log("💾 [WA CALLBACK] tenantId (state):", tenantId);
+
       const updateQuery = `
         UPDATE tenants
         SET
@@ -115,6 +118,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       `;
 
       const result = await pool.query(updateQuery, [accessToken, tenantId]);
+
       console.log(
         "💾 [WA CALLBACK] UPDATE rowCount:",
         result.rowCount,
@@ -122,6 +126,12 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
         result.rows
       );
 
+      if (result.rowCount === 0) {
+        console.warn(
+          "⚠️ [WA CALLBACK] No se actualizó ningún tenant. " +
+            "Revisa que state (tenantId) coincida EXACTAMENTE con tenants.id"
+        );
+      }
     } catch (dbErr) {
       console.error("❌ [WA CALLBACK] Error guardando access_token en tenants:", dbErr);
     }
