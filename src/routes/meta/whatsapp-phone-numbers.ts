@@ -8,8 +8,10 @@ const router = Router();
 /**
  * GET /api/meta/whatsapp/phone-numbers
  *
- * Descubre todos los WABA y sus números disponibles para el tenant actual.
- * NO guarda nada en la base de datos. Solo lista.
+ * Lista los WABA y números disponibles para el tenant actual.
+ * - Usa el access_token guardado en el tenant.
+ * - Si el tenant tiene whatsapp_business_id, se limita a ese Business.
+ * - NO guarda nada en la base de datos. Solo lista.
  */
 router.get(
   "/whatsapp/phone-numbers",
@@ -23,13 +25,25 @@ router.get(
         return res.status(401).json({ error: "No autenticado" });
       }
 
-      // 1️⃣ Obtener access_token desde la DB
+      // 1️⃣ Obtener access_token y (opcional) whatsapp_business_id desde la DB
       const { rows } = await pool.query(
-        `SELECT whatsapp_access_token FROM tenants WHERE id = $1 LIMIT 1`,
+        `
+        SELECT
+          whatsapp_access_token,
+          whatsapp_business_id -- aquí asumimos que guardas el Business Manager ID o WABA asociado al tenant
+        FROM tenants
+        WHERE id = $1
+        LIMIT 1
+        `,
         [tenantId]
       );
 
-      const accessToken = rows[0]?.whatsapp_access_token;
+      const accessToken = rows[0]?.whatsapp_access_token as string | undefined;
+      const tenantBusinessId = rows[0]?.whatsapp_business_id as
+        | string
+        | null
+        | undefined;
+
       if (!accessToken) {
         console.warn("[WA PHONE NUMBERS] Sin whatsapp_access_token en tenant");
         return res.json({ accounts: [], status: "no_token" });
@@ -48,13 +62,43 @@ router.get(
         JSON.stringify(businessData, null, 2)
       );
 
-      const businesses = businessData?.data || [];
-      if (!Array.isArray(businesses) || businesses.length === 0) {
+      let businesses: any[] = Array.isArray(businessData?.data)
+        ? businessData.data
+        : [];
+
+      if (!businesses.length) {
         console.warn("[WA PHONE NUMBERS] Usuario sin businesses");
         return res.json({ accounts: [], status: "no_business" });
       }
 
-      // 3️⃣ Para cada business, buscar WABAs (owned + client) y sus números
+      // 3️⃣ Si el tenant tiene un Business específico asociado, filtramos a ese
+      if (tenantBusinessId) {
+        const filtered = businesses.filter(
+          (b) => String(b.id) === String(tenantBusinessId)
+        );
+
+        if (filtered.length === 0) {
+          console.warn(
+            `[WA PHONE NUMBERS] El tenant tiene whatsapp_business_id=${tenantBusinessId}, pero /me/businesses no lo devuelve`
+          );
+          // Podemos devolver vacío para este caso
+          return res.json({
+            accounts: [],
+            status: "business_mismatch",
+          });
+        }
+
+        businesses = filtered;
+        console.log(
+          `[WA PHONE NUMBERS] Filtrando businesses por whatsapp_business_id=${tenantBusinessId}`
+        );
+      } else {
+        console.log(
+          "[WA PHONE NUMBERS] Tenant sin whatsapp_business_id, usando TODOS los businesses del token (modo compatible / debug)"
+        );
+      }
+
+      // 4️⃣ Para cada business filtrado, buscar WABAs (owned + client) y sus números
       const accounts: Array<{
         business_id: string;
         business_name?: string;
@@ -127,17 +171,19 @@ router.get(
             ? phoneData.data
             : [];
 
-          accounts.push({
-            business_id: bizId,
-            business_name: bizName,
-            waba_id: wabaId,
-            waba_type: "owned",
-            phone_numbers: phone_numbers.map((p: any) => ({
-              phone_number_id: p.id,
-              display_phone_number: p.display_phone_number,
-              verified_name: p.verified_name,
-            })),
-          });
+          if (phone_numbers.length) {
+            accounts.push({
+              business_id: bizId,
+              business_name: bizName,
+              waba_id: wabaId,
+              waba_type: "owned",
+              phone_numbers: phone_numbers.map((p: any) => ({
+                phone_number_id: p.id,
+                display_phone_number: p.display_phone_number,
+                verified_name: p.verified_name,
+              })),
+            });
+          }
         }
 
         // Para cada WABA (client)
@@ -160,17 +206,19 @@ router.get(
             ? phoneData.data
             : [];
 
-          accounts.push({
-            business_id: bizId,
-            business_name: bizName,
-            waba_id: wabaId,
-            waba_type: "client",
-            phone_numbers: phone_numbers.map((p: any) => ({
-              phone_number_id: p.id,
-              display_phone_number: p.display_phone_number,
-              verified_name: p.verified_name,
-            })),
-          });
+          if (phone_numbers.length) {
+            accounts.push({
+              business_id: bizId,
+              business_name: bizName,
+              waba_id: wabaId,
+              waba_type: "client",
+              phone_numbers: phone_numbers.map((p: any) => ({
+                phone_number_id: p.id,
+                display_phone_number: p.display_phone_number,
+                verified_name: p.verified_name,
+              })),
+            });
+          }
         }
       }
 
@@ -179,7 +227,7 @@ router.get(
         return res.json({ accounts: [], status: "no_waba" });
       }
 
-      // ❗ IMPORTANTE: aquí SOLO devolvemos; NO guardamos nada todavía
+      // Solo devolvemos; NO guardamos nada
       return res.json({ accounts, status: "ok" });
     } catch (error) {
       console.error("[WA PHONE NUMBERS] Error inesperado:", error);
@@ -225,7 +273,7 @@ router.post(
         `
         UPDATE tenants
         SET
-          whatsapp_business_id     = $1,
+          whatsapp_business_id     = $1, -- aquí en realidad estás guardando el WABA ID; en el futuro podrías renombrar la columna a whatsapp_waba_id
           whatsapp_phone_number_id = $2,
           whatsapp_phone_number    = $3,
           updated_at               = NOW()
