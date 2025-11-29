@@ -11,7 +11,8 @@ const REDIRECT_URI = "https://api.aamy.ai/api/meta/whatsapp/callback";
 
 // ⚠️ IMPORTANTE: esta ruta NO es el webhook de mensajes,
 // es solo el callback de OAuth / conexión de número.
-router.get("/meta/whatsapp/callback", async (req: Request, res: Response) => {
+// DEBE SER ASÍ
+router.get("/whatsapp/callback", async (req: Request, res: Response) => {
   try {
     console.log("🌐 [WA CALLBACK] Query recibida:", req.query);
 
