@@ -15,7 +15,9 @@ router.post("/", async (req: Request, res: Response) => {
     const CONFIG_ID = process.env.META_EMBEDDED_SIGNUP_CONFIG_ID; // ⚠️ nueva env
 
     if (!APP_ID || !CONFIG_ID) {
-      console.error("[WA ONBOARD START] Falta META_APP_ID o META_EMBEDDED_SIGNUP_CONFIG_ID");
+      console.error(
+        "[WA ONBOARD START] Falta META_APP_ID o META_EMBEDDED_SIGNUP_CONFIG_ID"
+      );
       return res
         .status(500)
         .json({ error: "Falta configuración de Meta (APP_ID o CONFIG_ID)" });
@@ -35,12 +37,22 @@ router.post("/", async (req: Request, res: Response) => {
         .json({ error: "Falta tenantId para iniciar el onboarding" });
     }
 
+    // 🔗 URL pública de tu backend
+    const BACKEND_PUBLIC_URL =
+      process.env.BACKEND_PUBLIC_URL || "https://api.aamy.ai";
+
+    const redirectUri = `${BACKEND_PUBLIC_URL}/api/meta/whatsapp/callback`;
+
     // ✅ URL correcta de Embedded Signup (Meta-hosted)
-    const url = new URL("https://business.facebook.com/messaging/whatsapp/onboard/");
+    const url = new URL(
+      "https://business.facebook.com/messaging/whatsapp/onboard/"
+    );
     url.searchParams.set("app_id", APP_ID);
     url.searchParams.set("config_id", CONFIG_ID);
-    // opcional pero MUY útil para multi-tenant:
+    // Muy útil para multi-tenant:
     url.searchParams.set("state", tenantId);
+    // 👉 CLAVE: decirle a Meta a dónde debe regresar
+    url.searchParams.set("redirect_uri", redirectUri);
 
     console.log("🌐 [WA ONBOARD START] URL Embedded Signup:", url.toString());
 
