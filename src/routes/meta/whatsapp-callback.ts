@@ -11,8 +11,11 @@ const router = express.Router();
  * URL pública: https://api.aamy.ai/api/meta/whatsapp/callback
  *
  * 1) VERIFICACIÓN DE WEBHOOK (GET con hub.mode / hub.challenge)
- * 2) CALLBACK OAUTH (GET con code + state) desde el login de Meta
+ * 2) CALLBACK OAUTH (GET con code + state) desde Embedded Signup
+ * 3) WEBHOOK DE MENSAJES (POST)
  */
+
+// 👉 GET: verificación de webhook + callback OAuth
 router.get("/whatsapp/callback", async (req: Request, res: Response) => {
   try {
     console.log("🌐 [WA CALLBACK] Query recibida:", req.query);
@@ -24,7 +27,10 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
 
     if (mode === "subscribe") {
       const EXPECTED_TOKEN = process.env.META_VERIFY_TOKEN;
-      console.log("🧩 [WA CALLBACK] Handshake webhook. Token esperado:", EXPECTED_TOKEN);
+      console.log(
+        "🧩 [WA CALLBACK] Handshake webhook. Token esperado:",
+        EXPECTED_TOKEN
+      );
       console.log("🧩 [WA CALLBACK] Token recibido:", verifyToken);
 
       if (verifyToken && EXPECTED_TOKEN && verifyToken === EXPECTED_TOKEN) {
@@ -47,14 +53,20 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       console.warn("⚠️ [WA CALLBACK] Sin hub.mode ni code en query.");
       return res
         .status(400)
-        .send("<h1>Callback inválido</h1><p>No se recibió code ni hub.challenge.</p>");
+        .send(
+          "<h1>Callback inválido</h1><p>No se recibió code ni hub.challenge.</p>"
+        );
     }
 
     if (!state) {
-      console.warn("⚠️ [WA CALLBACK] Falta parámetro state (tenantId) en callback OAuth.");
+      console.warn(
+        "⚠️ [WA CALLBACK] Falta parámetro state (tenantId) en callback OAuth."
+      );
       return res
         .status(400)
-        .send("<h1>Error</h1><p>No se pudo identificar el negocio (falta state).</p>");
+        .send(
+          "<h1>Error</h1><p>No se pudo identificar el negocio (falta state).</p>"
+        );
     }
 
     const tenantId = state;
@@ -69,11 +81,16 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       );
       return res
         .status(500)
-        .send("<h1>Error</h1><p>Configuración del servidor incompleta (APP_ID/SECRET).</p>");
+        .send(
+          "<h1>Error</h1><p>Configuración del servidor incompleta (APP_ID/SECRET).</p>"
+        );
     }
 
-    console.log("🔁 [WA CALLBACK] Intercambiando code por access_token en Graph...");
+    console.log(
+      "🔁 [WA CALLBACK] Intercambiando code por access_token en Graph..."
+    );
 
+    // ⚠️ IMPORTANTE: sin redirect_uri para Embedded Signup
     const tokenUrl =
       `https://graph.facebook.com/v18.0/oauth/access_token` +
       `?client_id=${encodeURIComponent(APP_ID)}` +
@@ -85,7 +102,11 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     const tokenResp = await fetch(tokenUrl);
     const tokenJson: any = await tokenResp.json();
 
-    console.log("🔑 [WA CALLBACK] Respuesta token:", tokenResp.status, tokenJson);
+    console.log(
+      "🔑 [WA CALLBACK] Respuesta token:",
+      tokenResp.status,
+      tokenJson
+    );
 
     if (!tokenResp.ok || !tokenJson.access_token) {
       console.error(
@@ -94,14 +115,18 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       );
       return res
         .status(500)
-        .send("<h1>Error</h1><p>No se pudo obtener access_token de Meta.</p>");
+        .send(
+          "<h1>Error</h1><p>No se pudo obtener access_token de Meta.</p>"
+        );
     }
 
     const accessToken = tokenJson.access_token as string;
 
-    // 👉 Guardamos access_token y status "connected" con logs detallados
+    // 👉 Guardamos access_token y status "connected"
     try {
-      console.log("💾 [WA CALLBACK] Intentando actualizar tenant con access_token...");
+      console.log(
+        "💾 [WA CALLBACK] Intentando actualizar tenant con access_token..."
+      );
       console.log("💾 [WA CALLBACK] tenantId (state):", tenantId);
 
       const updateQuery = `
@@ -130,10 +155,14 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
         );
       }
     } catch (dbErr) {
-      console.error("❌ [WA CALLBACK] Error guardando access_token en tenants:", dbErr);
+      console.error(
+        "❌ [WA CALLBACK] Error guardando access_token en tenants:",
+        dbErr
+      );
     }
 
-    const FRONTEND_URL = process.env.FRONTEND_URL || "https://www.aamy.ai";
+    const FRONTEND_URL =
+      process.env.FRONTEND_URL || "https://www.aamy.ai";
 
     return res.send(`<!doctype html>
 <html>
@@ -165,7 +194,9 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     console.error("❌ [WA CALLBACK] Error general:", err);
     return res
       .status(500)
-      .send("<h1>Error interno</h1><p>Revisa los logs del servidor.</p>");
+      .send(
+        "<h1>Error interno</h1><p>Revisa los logs del servidor.</p>"
+      );
   }
 });
 
