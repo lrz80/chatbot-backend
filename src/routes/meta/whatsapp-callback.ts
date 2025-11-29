@@ -1,67 +1,62 @@
 // src/routes/meta/whatsapp-callback.ts
 import express, { Request, Response } from "express";
+import jwt from "jsonwebtoken";
 import pool from "../../lib/db";
 
 const router = express.Router();
 
-/**
- * GET /api/meta/whatsapp/callback
- *
- * Callback de OAuth clásico (dialog/oauth).
- * Aquí:
- *   1) Recibimos ?code=...&state=tenantId
- *   2) Intercambiamos code -> access_token
- *   3) Consultamos /me?fields=whatsapp_business_accounts{phone_numbers{...}}
- *   4) Guardamos WABA + número en tenants y marcamos whatsapp_status = 'connected'
- */
-router.get("/whatsapp/callback", async (req: Request, res: Response) => {
+const APP_ID = process.env.META_APP_ID!;
+const APP_SECRET = process.env.META_APP_SECRET!;
+const REDIRECT_URI = "https://api.aamy.ai/api/meta/whatsapp/callback";
+
+// ⚠️ IMPORTANTE: esta ruta NO es el webhook de mensajes,
+// es solo el callback de OAuth / conexión de número.
+router.get("/meta/whatsapp/callback", async (req: Request, res: Response) => {
   try {
-    console.log("🟣 [WA CALLBACK] Query recibida:", req.query);
+    console.log("🌐 [WA CALLBACK] Query recibida:", req.query);
 
-    const q = req.query as Record<string, string | undefined>;
-    const code = q.code;
-    const state = q.state; // debería venir el tenant_id
-
-    // En muchos casos también tendrás req.user por cookie,
-    // pero usamos state como fuente principal
-    const user = (req as any).user;
-    const tenantIdFromToken = user?.tenant_id as string | undefined;
-
-    const tenantId = tenantIdFromToken || state;
+    // 1️⃣ Si algún día Meta te pega aquí un hub.challenge, podrías manejarlo;
+    // por ahora asumimos que cuando viene "code" es el flujo de conexión.
+    const code = req.query.code as string | undefined;
+    const state = req.query.state as string | undefined;
 
     if (!code) {
-      console.warn("⚠️ [WA CALLBACK] Falta parámetro code");
-      return res
-        .status(400)
-        .send("<h1>Error</h1><p>Falta el parámetro <code>code</code>.</p>");
+      console.warn("[WA CALLBACK] Falta parámetro code");
+      return res.status(400).send("Falta parámetro code");
+    }
+
+    // 2️⃣ Recuperar tenantId desde el JWT que pusimos en `state`
+    let tenantId: string | undefined;
+
+    if (state) {
+      try {
+        const decoded: any = jwt.verify(
+          state,
+          process.env.JWT_SECRET || "aamy-secret"
+        );
+        tenantId =
+          decoded.tenant_id || decoded.tenantId || decoded.uid || undefined;
+
+        console.log("[WA CALLBACK] State decodificado:", {
+          raw: state,
+          decoded,
+          tenantId,
+        });
+      } catch (err) {
+        console.warn("[WA CALLBACK] No se pudo decodificar state JWT:", err);
+      }
     }
 
     if (!tenantId) {
-      console.warn("⚠️ [WA CALLBACK] No se pudo determinar tenantId");
-      return res
-        .status(400)
-        .send(
-          "<h1>Error</h1><p>No se pudo identificar el negocio (falta <code>state</code> o <code>tenant_id</code>).</p>"
-        );
-    }
-
-    const APP_ID = process.env.META_APP_ID;
-    const APP_SECRET = process.env.META_APP_SECRET;
-
-    if (!APP_ID || !APP_SECRET) {
       console.error(
-        "❌ [WA CALLBACK] Falta META_APP_ID o META_APP_SECRET en variables de entorno."
+        "[WA CALLBACK] No se pudo determinar el tenant desde state/JWT"
       );
       return res
-        .status(500)
-        .send(
-          "<h1>Error servidor</h1><p>Configuración incompleta en el backend (APP_ID / SECRET).</p>"
-        );
+        .status(400)
+        .send("No se pudo identificar el negocio (falta tenantId en state).");
     }
 
-    // 1️⃣ Intercambiar code -> access_token
-    const REDIRECT_URI = "https://api.aamy.ai/api/meta/whatsapp/callback";
-
+    // 3️⃣ Intercambiar code -> access_token
     const tokenUrl =
       `https://graph.facebook.com/v18.0/oauth/access_token` +
       `?client_id=${encodeURIComponent(APP_ID)}` +
@@ -69,7 +64,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
       `&code=${encodeURIComponent(code)}`;
 
-    console.log("🔁 [WA CALLBACK] URL token:", tokenUrl);
+    console.log("[WA CALLBACK] URL token:", tokenUrl);
 
     const tokenResp = await fetch(tokenUrl);
     const tokenJson: any = await tokenResp.json();
@@ -87,27 +82,23 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       );
       return res
         .status(500)
-        .send(
-          "<h1>Error</h1><p>No se pudo obtener el token de acceso de Meta.</p>"
-        );
+        .send("No se pudo obtener el access_token desde Meta.");
     }
 
     const accessToken = tokenJson.access_token as string;
 
-    // 2️⃣ Consultar WABA + número
-    console.log(
-      "📞 [WA CALLBACK] Consultando WABA y números con /me (whatsapp_business_accounts)..."
-    );
-
+    // 4️⃣ Consultar WABA + número con ese access_token
     const meUrl =
       "https://graph.facebook.com/v18.0/me" +
       "?fields=whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}}";
+
+    console.log("[WA CALLBACK] Llamando a /me…");
 
     const meResp = await fetch(`${meUrl}&access_token=${accessToken}`);
     const meJson: any = await meResp.json();
 
     console.log(
-      "📞 [WA CALLBACK] Respuesta /me:",
+      "📞 [WA CALLBACK] Respuesta /me whatsapp_business_accounts:",
       meResp.status,
       JSON.stringify(meJson, null, 2)
     );
@@ -133,7 +124,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       whatsappPhoneNumber,
     });
 
-    // 3️⃣ Actualizar tenant en DB
+    // 5️⃣ Actualizar tenant en DB
     try {
       const updateQuery = `
         UPDATE tenants
@@ -173,7 +164,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
 
       if (result.rowCount === 0) {
         console.warn(
-          "⚠️ [WA CALLBACK] No se actualizó ningún tenant. Revisa que tenantId coincida EXACTAMENTE con tenants.id"
+          "⚠️ [WA CALLBACK] No se actualizó ningún tenant. Revisa que tenantId coincida con tenants.id"
         );
       }
     } catch (dbErr) {
@@ -183,26 +174,18 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       );
       return res
         .status(500)
-        .send(
-          "<h1>Error</h1><p>No se pudieron guardar los datos de WhatsApp en la base de datos.</p>"
-        );
+        .send("Error al guardar los datos de WhatsApp en la base de datos.");
     }
 
-    // 4️⃣ Responder HTML simple para el popup
-    return res.send(`
-      <!doctype html>
-      <html lang="es">
+    // 6️⃣ Página de éxito
+    res.send(`
+      <html>
         <head>
           <meta charset="utf-8" />
           <title>WhatsApp conectado</title>
-          <style>
-            body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 2rem; text-align: center; }
-            h1 { color: #16a34a; margin-bottom: 1rem; }
-            p { margin-bottom: 0.75rem; }
-          </style>
         </head>
-        <body>
-          <h1>✅ WhatsApp conectado correctamente</h1>
+        <body style="font-family: system-ui; text-align: center; margin-top: 80px">
+          <h1 style="font-size: 28px;">✅ WhatsApp conectado correctamente</h1>
           <p>Ya registramos tu cuenta de WhatsApp Business en Aamy.</p>
           <p>Puedes cerrar esta ventana y volver al dashboard.</p>
         </body>
@@ -212,9 +195,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
     console.error("❌ [WA CALLBACK] Error general:", err);
     return res
       .status(500)
-      .send(
-        "<h1>Error</h1><p>Ocurrió un error interno al procesar la conexión de WhatsApp.</p>"
-      );
+      .send("Error interno procesando el callback de WhatsApp.");
   }
 });
 
