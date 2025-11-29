@@ -9,7 +9,7 @@ const router = express.Router();
  * Devuelve la URL de Embedded Signup (Meta-hosted)
  * para que el frontend la abra en un popup.
  */
-router.post("/", async (req: Request, res: Response) => {
+router.post("/start", async (req: Request, res: Response) => {
   try {
     const APP_ID = process.env.META_APP_ID;
     const CONFIG_ID = process.env.META_EMBEDDED_SIGNUP_CONFIG_ID; // ⚠️ nueva env

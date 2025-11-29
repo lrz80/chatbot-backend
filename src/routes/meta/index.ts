@@ -5,6 +5,7 @@ import { authenticateUser } from "../../middleware/auth";
 import whatsappCallback from "./whatsapp-callback";
 import whatsappRedirect from "./whatsapp-redirect";
 import whatsappPhoneNumbersRouter from "../meta/whatsapp-phone-numbers";
+import whatsappOnboardStartRouter from "../../routes/meta/whatsapp-onboard-start";
 
 const router = Router();
 
@@ -121,186 +122,6 @@ router.post(
         return res
           .status(500)
           .json({ error: "Error al guardar access_token en DB." });
-      }
-
-      return res.json({ ok: true });
-    } catch (err) {
-      console.error("❌ [WA EXCHANGE CODE] Error general:", err);
-      return res
-        .status(500)
-        .json({ error: "Error interno intercambiando el code." });
-    }
-  }
-);
-
-/**
- * POST /api/meta/whatsapp-onboard/start
- *
- * Genera la URL de OAuth de Meta para conectar WhatsApp Cloud.
- * El frontend abre esta URL en un popup.
- */
-router.post(
-  "/whatsapp/exchange-code",
-  authenticateUser,
-  async (req: Request, res: Response) => {
-    try {
-      const user = (req as any).user;
-      const tenantId =
-        user?.tenant_id || (req as any).user?.tenantId;
-
-      if (!tenantId) {
-        return res
-          .status(401)
-          .json({ error: "No autenticado: falta tenant_id en el token." });
-      }
-
-      const { code } = req.body as { code?: string };
-
-      if (!code) {
-        return res.status(400).json({ error: "Falta `code` en el body." });
-      }
-
-      const APP_ID = process.env.META_APP_ID;
-      const APP_SECRET = process.env.META_APP_SECRET;
-
-      if (!APP_ID || !APP_SECRET) {
-        console.error(
-          "❌ [WA EXCHANGE CODE] Falta META_APP_ID o META_APP_SECRET en env."
-        );
-        return res.status(500).json({
-          error: "Configuración del servidor incompleta (APP_ID/SECRET).",
-        });
-      }
-
-      console.log(
-        "🔁 [WA EXCHANGE CODE] Intercambiando code por access_token...",
-        { tenantId, code }
-      );
-
-      const tokenUrl =
-        `https://graph.facebook.com/v18.0/oauth/access_token` +
-        `?client_id=${encodeURIComponent(APP_ID)}` +
-        `&client_secret=${encodeURIComponent(APP_SECRET)}` +
-        `&code=${encodeURIComponent(code)}`;
-
-      console.log("🔁 [WA EXCHANGE CODE] URL:", tokenUrl);
-
-      const tokenResp = await fetch(tokenUrl);
-      const tokenJson: any = await tokenResp.json();
-
-      console.log(
-        "🔑 [WA EXCHANGE CODE] Respuesta token:",
-        tokenResp.status,
-        tokenJson
-      );
-
-      if (!tokenResp.ok || !tokenJson.access_token) {
-        console.error(
-          "❌ [WA EXCHANGE CODE] Error obteniendo access_token de Meta:",
-          tokenJson
-        );
-        return res.status(500).json({
-          error: "No se pudo obtener access_token de Meta.",
-          detail: tokenJson,
-        });
-      }
-
-      const accessToken = tokenJson.access_token as string;
-
-      // 👉 NUEVO: con ese access_token sacamos WABA + phone number
-      console.log(
-        "📞 [WA EXCHANGE CODE] Consultando WABA y números con el access_token..."
-      );
-
-      const meUrl =
-        "https://graph.facebook.com/v18.0/me" +
-        "?fields=whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}}";
-
-      const meResp = await fetch(`${meUrl}&access_token=${accessToken}`);
-      const meJson: any = await meResp.json();
-
-      console.log(
-        "📞 [WA EXCHANGE CODE] Respuesta /me whatsapp_business_accounts:",
-        meResp.status,
-        JSON.stringify(meJson, null, 2)
-      );
-
-      let whatsappBusinessId: string | null = null;
-      let whatsappPhoneNumberId: string | null = null;
-      let whatsappPhoneNumber: string | null = null;
-
-      const waba = meJson.whatsapp_business_accounts?.[0];
-      if (waba) {
-        whatsappBusinessId = waba.id ?? null;
-        const phone = waba.phone_numbers?.[0];
-        if (phone) {
-          whatsappPhoneNumberId = phone.id ?? null;
-          whatsappPhoneNumber = phone.display_phone_number ?? null;
-        }
-      }
-
-      console.log("[WA EXCHANGE CODE] Datos resueltos:", {
-        whatsappBusinessId,
-        whatsappPhoneNumberId,
-        whatsappPhoneNumber,
-      });
-
-      try {
-        console.log(
-          "💾 [WA EXCHANGE CODE] Actualizando tenant con token + WABA + número...",
-          tenantId
-        );
-
-        const updateQuery = `
-          UPDATE tenants
-          SET
-            whatsapp_access_token     = $1,
-            whatsapp_business_id      = $2,
-            whatsapp_phone_number_id  = $3,
-            whatsapp_phone_number     = $4,
-            whatsapp_status           = 'connected',
-            whatsapp_connected        = TRUE,
-            whatsapp_connected_at     = NOW(),
-            updated_at                = NOW()
-          WHERE id::text = $5
-          RETURNING id,
-                    whatsapp_business_id,
-                    whatsapp_phone_number_id,
-                    whatsapp_phone_number,
-                    whatsapp_status,
-                    whatsapp_connected,
-                    whatsapp_connected_at;
-        `;
-
-        const result = await pool.query(updateQuery, [
-          accessToken,
-          whatsappBusinessId,
-          whatsappPhoneNumberId,
-          whatsappPhoneNumber,
-          tenantId,
-        ]);
-
-        console.log(
-          "💾 [WA EXCHANGE CODE] UPDATE rowCount:",
-          result.rowCount,
-          "rows:",
-          result.rows
-        );
-
-        if (result.rowCount === 0) {
-          console.warn(
-            "⚠️ [WA EXCHANGE CODE] No se actualizó ningún tenant. " +
-              "Revisa que tenantId coincida EXACTAMENTE con tenants.id"
-          );
-        }
-      } catch (dbErr) {
-        console.error(
-          "❌ [WA EXCHANGE CODE] Error guardando datos de WhatsApp en tenants:",
-          dbErr
-        );
-        return res
-          .status(500)
-          .json({ error: "Error al guardar datos de WhatsApp en DB." });
       }
 
       return res.json({ ok: true });
@@ -630,5 +451,6 @@ router.use("/", whatsappRedirect);
 
 // Rutas para listar/seleccionar números
 router.use("/", whatsappPhoneNumbersRouter);
+router.use("/whatsapp-onboard", whatsappOnboardStartRouter);
 
 export default router;
