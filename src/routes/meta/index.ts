@@ -347,6 +347,145 @@ router.delete(
 );
 
 /**
+ * GET /api/meta/whatsapp/oauth-callback
+ *
+ * Callback de OAuth clásico de Facebook Login.
+ * Aquí ya viene ?code=... en la URL, usamos la cookie del usuario
+ * (authenticateUser) para saber qué tenant actualizar.
+ */
+router.get(
+  "/whatsapp/oauth-callback",
+  authenticateUser,
+  async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const tenantId = user?.tenant_id as string | undefined;
+      const q = req.query as Record<string, string | undefined>;
+      const code = q.code;
+
+      if (!tenantId) {
+        console.error(
+          "[WA OAUTH CALLBACK] Falta tenant_id en el token del usuario."
+        );
+        return res
+          .status(401)
+          .send("No se pudo identificar el negocio (falta tenantId en sesión).");
+      }
+
+      if (!code) {
+        return res.status(400).send("Falta parámetro `code` en la URL.");
+      }
+
+      const APP_ID = process.env.META_APP_ID;
+      const APP_SECRET = process.env.META_APP_SECRET;
+
+      if (!APP_ID || !APP_SECRET) {
+        console.error(
+          "❌ [WA OAUTH CALLBACK] Falta META_APP_ID o META_APP_SECRET en env."
+        );
+        return res
+          .status(500)
+          .send("Configuración del servidor incompleta (APP_ID/SECRET).");
+      }
+
+      console.log(
+        "🔁 [WA OAUTH CALLBACK] Intercambiando code por access_token...",
+        { tenantId, code }
+      );
+
+      const tokenUrl =
+        `https://graph.facebook.com/v18.0/oauth/access_token` +
+        `?client_id=${encodeURIComponent(APP_ID)}` +
+        `&client_secret=${encodeURIComponent(APP_SECRET)}` +
+        `&code=${encodeURIComponent(code)}`;
+
+      console.log("[WA OAUTH CALLBACK] URL token:", tokenUrl);
+
+      const tokenResp = await fetch(tokenUrl);
+      const tokenJson: any = await tokenResp.json();
+
+      console.log(
+        "🔑 [WA OAUTH CALLBACK] Respuesta token:",
+        tokenResp.status,
+        tokenJson
+      );
+
+      if (!tokenResp.ok || !tokenJson.access_token) {
+        console.error(
+          "❌ [WA OAUTH CALLBACK] Error obteniendo access_token de Meta:",
+          tokenJson
+        );
+        return res
+          .status(500)
+          .send("No se pudo obtener access_token de Meta. Revisa logs.");
+      }
+
+      const accessToken = tokenJson.access_token as string;
+
+      try {
+        console.log(
+          "💾 [WA OAUTH CALLBACK] Actualizando tenant con access_token...",
+          tenantId
+        );
+
+        const updateQuery = `
+          UPDATE tenants
+          SET
+            whatsapp_access_token = $1,
+            whatsapp_status       = 'connected',
+            updated_at            = NOW()
+          WHERE id::text = $2
+          RETURNING id, whatsapp_status;
+        `;
+
+        const result = await pool.query(updateQuery, [accessToken, tenantId]);
+
+        console.log(
+          "💾 [WA OAUTH CALLBACK] UPDATE rowCount:",
+          result.rowCount,
+          "rows:",
+          result.rows
+        );
+
+        if (result.rowCount === 0) {
+          console.warn(
+            "⚠️ [WA OAUTH CALLBACK] No se actualizó ningún tenant. " +
+              "Revisa que tenantId coincida EXACTAMENTE con tenants.id"
+          );
+        }
+      } catch (dbErr) {
+        console.error(
+          "❌ [WA OAUTH CALLBACK] Error guardando access_token en tenants:",
+          dbErr
+        );
+        return res
+          .status(500)
+          .send("Error al guardar access_token en DB (ver logs).");
+      }
+
+      // Página simple para el popup
+      return res.send(`
+        <html>
+          <head>
+            <title>WhatsApp conectado</title>
+          </head>
+          <body style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; text-align:center; padding-top:40px;">
+            <h1>✅ WhatsApp conectado correctamente</h1>
+            <p>Ya registramos tu cuenta de WhatsApp Business en Aamy.</p>
+            <p>Puedes cerrar esta ventana y volver al dashboard.</p>
+          </body>
+        </html>
+      `);
+    } catch (err) {
+      console.error("❌ [WA OAUTH CALLBACK] Error general:", err);
+      return res
+        .status(500)
+        .send("Error interno al procesar el callback de WhatsApp.");
+    }
+  }
+);
+
+/**
  * Callback / webhook WhatsApp:
  * GET /api/meta/whatsapp/callback
  * POST /api/meta/whatsapp/callback

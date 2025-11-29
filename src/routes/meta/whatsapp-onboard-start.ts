@@ -6,7 +6,7 @@ const router = express.Router();
 
 const APP_ID = process.env.META_APP_ID;
 const REDIRECT_URI =
-  "https://api.aamy.ai/api/meta/whatsapp/callback"; // debe ser EXACTAMENTE igual al de Facebook Login
+  "https://api.aamy.ai/api/meta/whatsapp/oauth-callback"; // debe ser EXACTAMENTE igual al de Facebook Login
 
 /**
  * POST /api/meta/whatsapp-onboard/start
