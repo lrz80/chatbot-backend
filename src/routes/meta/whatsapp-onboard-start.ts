@@ -40,7 +40,6 @@ router.post("/start", authenticateUser, async (req: Request, res: Response) => {
       "business_management",
       "whatsapp_business_messaging",
       "whatsapp_business_management",
-      "read_business_management",
     ];
 
     const url = new URL("https://www.facebook.com/v18.0/dialog/oauth");
