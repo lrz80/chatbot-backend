@@ -139,7 +139,6 @@ router.post(
  * Genera la URL de OAuth de Meta para conectar WhatsApp Cloud.
  * El frontend abre esta URL en un popup.
  */
-// 🔐 Solo usuarios autenticados pueden iniciar el onboarding
 router.post(
   "/whatsapp-onboard/start",
   authenticateUser,
@@ -159,9 +158,9 @@ router.post(
         console.error(
           "[WA ONBOARD START] Falta META_EMBEDDED_SIGNUP_CONFIG_ID en env"
         );
-        return res.status(500).json({
-          error: "Falta configuración META_EMBEDDED_SIGNUP_CONFIG_ID",
-        });
+        return res
+          .status(500)
+          .json({ error: "Falta configuración META_EMBEDDED_SIGNUP_CONFIG_ID" });
       }
 
       const tenantIdFromBody = (req.body as any)?.tenantId
@@ -177,6 +176,12 @@ router.post(
           .json({ error: "Falta tenantId para iniciar el onboarding" });
       }
 
+      // 🔗 URL pública de tu backend
+      const BACKEND_PUBLIC_URL =
+        process.env.BACKEND_PUBLIC_URL || "https://api.aamy.ai";
+
+      const redirectUri = `${BACKEND_PUBLIC_URL}/api/meta/whatsapp/callback`;
+
       // ✅ URL Meta-hosted Embedded Signup
       const url = new URL(
         "https://business.facebook.com/messaging/whatsapp/onboard/"
@@ -184,6 +189,8 @@ router.post(
       url.searchParams.set("app_id", APP_ID);
       url.searchParams.set("config_id", CONFIG_ID);
       url.searchParams.set("state", tenantId);
+      // 👇 CLAVE: decirle a Meta a qué URL de tu backend debe volver
+      url.searchParams.set("redirect_uri", redirectUri);
 
       console.log("[WA ONBOARD START] URL Embedded Signup:", url.toString());
 
