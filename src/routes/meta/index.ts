@@ -393,10 +393,13 @@ router.get(
         { tenantId, code }
       );
 
+      const redirectUri = "https://api.aamy.ai/api/meta/whatsapp/oauth-callback";
+
       const tokenUrl =
         `https://graph.facebook.com/v18.0/oauth/access_token` +
         `?client_id=${encodeURIComponent(APP_ID)}` +
         `&client_secret=${encodeURIComponent(APP_SECRET)}` +
+        `&redirect_uri=${encodeURIComponent(redirectUri)}` +
         `&code=${encodeURIComponent(code)}`;
 
       console.log("[WA OAUTH CALLBACK] URL token:", tokenUrl);
