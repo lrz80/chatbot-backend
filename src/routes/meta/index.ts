@@ -140,66 +140,367 @@ router.post(
  * El frontend abre esta URL en un popup.
  */
 router.post(
-  "/whatsapp-onboard/start",
+  "/whatsapp/exchange-code",
   authenticateUser,
   async (req: Request, res: Response) => {
     try {
-      const APP_ID = process.env.META_APP_ID;
-      const CONFIG_ID = process.env.META_EMBEDDED_SIGNUP_CONFIG_ID;
+      const user = (req as any).user;
+      const tenantId =
+        user?.tenant_id || (req as any).user?.tenantId;
 
-      if (!APP_ID) {
-        console.error("[WA ONBOARD START] Falta META_APP_ID en env");
+      if (!tenantId) {
         return res
-          .status(500)
-          .json({ error: "Falta configuración META_APP_ID en el servidor" });
+          .status(401)
+          .json({ error: "No autenticado: falta tenant_id en el token." });
       }
 
-      if (!CONFIG_ID) {
+      const { code } = req.body as { code?: string };
+
+      if (!code) {
+        return res.status(400).json({ error: "Falta `code` en el body." });
+      }
+
+      const APP_ID = process.env.META_APP_ID;
+      const APP_SECRET = process.env.META_APP_SECRET;
+
+      if (!APP_ID || !APP_SECRET) {
         console.error(
-          "[WA ONBOARD START] Falta META_EMBEDDED_SIGNUP_CONFIG_ID en env"
+          "❌ [WA EXCHANGE CODE] Falta META_APP_ID o META_APP_SECRET en env."
+        );
+        return res.status(500).json({
+          error: "Configuración del servidor incompleta (APP_ID/SECRET).",
+        });
+      }
+
+      console.log(
+        "🔁 [WA EXCHANGE CODE] Intercambiando code por access_token...",
+        { tenantId, code }
+      );
+
+      const tokenUrl =
+        `https://graph.facebook.com/v18.0/oauth/access_token` +
+        `?client_id=${encodeURIComponent(APP_ID)}` +
+        `&client_secret=${encodeURIComponent(APP_SECRET)}` +
+        `&code=${encodeURIComponent(code)}`;
+
+      console.log("🔁 [WA EXCHANGE CODE] URL:", tokenUrl);
+
+      const tokenResp = await fetch(tokenUrl);
+      const tokenJson: any = await tokenResp.json();
+
+      console.log(
+        "🔑 [WA EXCHANGE CODE] Respuesta token:",
+        tokenResp.status,
+        tokenJson
+      );
+
+      if (!tokenResp.ok || !tokenJson.access_token) {
+        console.error(
+          "❌ [WA EXCHANGE CODE] Error obteniendo access_token de Meta:",
+          tokenJson
+        );
+        return res.status(500).json({
+          error: "No se pudo obtener access_token de Meta.",
+          detail: tokenJson,
+        });
+      }
+
+      const accessToken = tokenJson.access_token as string;
+
+      // 👉 NUEVO: con ese access_token sacamos WABA + phone number
+      console.log(
+        "📞 [WA EXCHANGE CODE] Consultando WABA y números con el access_token..."
+      );
+
+      const meUrl =
+        "https://graph.facebook.com/v18.0/me" +
+        "?fields=whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}}";
+
+      const meResp = await fetch(`${meUrl}&access_token=${accessToken}`);
+      const meJson: any = await meResp.json();
+
+      console.log(
+        "📞 [WA EXCHANGE CODE] Respuesta /me whatsapp_business_accounts:",
+        meResp.status,
+        JSON.stringify(meJson, null, 2)
+      );
+
+      let whatsappBusinessId: string | null = null;
+      let whatsappPhoneNumberId: string | null = null;
+      let whatsappPhoneNumber: string | null = null;
+
+      const waba = meJson.whatsapp_business_accounts?.[0];
+      if (waba) {
+        whatsappBusinessId = waba.id ?? null;
+        const phone = waba.phone_numbers?.[0];
+        if (phone) {
+          whatsappPhoneNumberId = phone.id ?? null;
+          whatsappPhoneNumber = phone.display_phone_number ?? null;
+        }
+      }
+
+      console.log("[WA EXCHANGE CODE] Datos resueltos:", {
+        whatsappBusinessId,
+        whatsappPhoneNumberId,
+        whatsappPhoneNumber,
+      });
+
+      try {
+        console.log(
+          "💾 [WA EXCHANGE CODE] Actualizando tenant con token + WABA + número...",
+          tenantId
+        );
+
+        const updateQuery = `
+          UPDATE tenants
+          SET
+            whatsapp_access_token     = $1,
+            whatsapp_business_id      = $2,
+            whatsapp_phone_number_id  = $3,
+            whatsapp_phone_number     = $4,
+            whatsapp_status           = 'connected',
+            whatsapp_connected        = TRUE,
+            whatsapp_connected_at     = NOW(),
+            updated_at                = NOW()
+          WHERE id::text = $5
+          RETURNING id,
+                    whatsapp_business_id,
+                    whatsapp_phone_number_id,
+                    whatsapp_phone_number,
+                    whatsapp_status,
+                    whatsapp_connected,
+                    whatsapp_connected_at;
+        `;
+
+        const result = await pool.query(updateQuery, [
+          accessToken,
+          whatsappBusinessId,
+          whatsappPhoneNumberId,
+          whatsappPhoneNumber,
+          tenantId,
+        ]);
+
+        console.log(
+          "💾 [WA EXCHANGE CODE] UPDATE rowCount:",
+          result.rowCount,
+          "rows:",
+          result.rows
+        );
+
+        if (result.rowCount === 0) {
+          console.warn(
+            "⚠️ [WA EXCHANGE CODE] No se actualizó ningún tenant. " +
+              "Revisa que tenantId coincida EXACTAMENTE con tenants.id"
+          );
+        }
+      } catch (dbErr) {
+        console.error(
+          "❌ [WA EXCHANGE CODE] Error guardando datos de WhatsApp en tenants:",
+          dbErr
         );
         return res
           .status(500)
-          .json({ error: "Falta configuración META_EMBEDDED_SIGNUP_CONFIG_ID" });
+          .json({ error: "Error al guardar datos de WhatsApp en DB." });
       }
 
-      const tenantIdFromBody = (req.body as any)?.tenantId
-        ? String((req.body as any).tenantId).trim()
-        : undefined;
-
-      const tenantId = tenantIdFromBody || (req as any).user?.tenant_id;
-
-      if (!tenantId) {
-        console.warn("[WA ONBOARD START] No se recibió tenantId");
-        return res
-          .status(400)
-          .json({ error: "Falta tenantId para iniciar el onboarding" });
-      }
-
-      // 🔗 URL pública de tu backend
-      const BACKEND_PUBLIC_URL =
-        process.env.BACKEND_PUBLIC_URL || "https://api.aamy.ai";
-
-      const redirectUri = `${BACKEND_PUBLIC_URL}/api/meta/whatsapp/callback`;
-
-      // ✅ URL Meta-hosted Embedded Signup
-      const url = new URL(
-        "https://business.facebook.com/messaging/whatsapp/onboard/"
-      );
-      url.searchParams.set("app_id", APP_ID);
-      url.searchParams.set("config_id", CONFIG_ID);
-      url.searchParams.set("state", tenantId);
-      // 👇 CLAVE: decirle a Meta a qué URL de tu backend debe volver
-      url.searchParams.set("redirect_uri", redirectUri);
-
-      console.log("[WA ONBOARD START] URL Embedded Signup:", url.toString());
-
-      return res.json({ url: url.toString() });
+      return res.json({ ok: true });
     } catch (err) {
-      console.error("❌ [WA ONBOARD START] Error inesperado:", err);
+      console.error("❌ [WA EXCHANGE CODE] Error general:", err);
       return res
         .status(500)
-        .json({ error: "No se pudo iniciar el onboarding de WhatsApp" });
+        .json({ error: "Error interno intercambiando el code." });
+    }
+  }
+);
+
+/**
+ * POST /api/meta/whatsapp/onboard-complete
+ *
+ * El frontend (página /meta/whatsapp-redirect) nos envía el `code` y el `state`
+ * después de que Meta termina el Embedded Signup.
+ * Aquí intercambiamos `code -> access_token`, consultamos WABA + número
+ * y actualizamos el tenant.
+ */
+router.post(
+  "/whatsapp/onboard-complete",
+  authenticateUser,
+  async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const tenantIdFromToken = user?.tenant_id as string | undefined;
+
+      const { code, state } = req.body as {
+        code?: string;
+        state?: string; // tenantId que venía en el botón
+      };
+
+      console.log("[WA ONBOARD COMPLETE] Body recibido:", {
+        code,
+        state,
+        tenantIdFromToken,
+      });
+
+      const tenantId = tenantIdFromToken || state;
+
+      if (!tenantId) {
+        return res
+          .status(401)
+          .json({ error: "No se pudo determinar el tenant (falta tenantId)." });
+      }
+
+      if (!code) {
+        return res.status(400).json({ error: "Falta `code` en el body." });
+      }
+
+      const APP_ID = process.env.META_APP_ID;
+      const APP_SECRET = process.env.META_APP_SECRET;
+
+      if (!APP_ID || !APP_SECRET) {
+        console.error(
+          "❌ [WA ONBOARD COMPLETE] Falta META_APP_ID o META_APP_SECRET en env."
+        );
+        return res.status(500).json({
+          error: "Configuración del servidor incompleta (APP_ID/SECRET).",
+        });
+      }
+
+      // 1️⃣ Intercambiar code -> access_token
+      const REDIRECT_URI = "https://www.aamy.ai/meta/whatsapp-redirect";
+
+      const tokenUrl =
+        `https://graph.facebook.com/v18.0/oauth/access_token` +
+        `?client_id=${encodeURIComponent(APP_ID)}` +
+        `&client_secret=${encodeURIComponent(APP_SECRET)}` +
+        `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+        `&code=${encodeURIComponent(code)}`;
+
+      console.log("[WA ONBOARD COMPLETE] URL token:", tokenUrl);
+
+      const tokenResp = await fetch(tokenUrl);
+      const tokenJson: any = await tokenResp.json();
+
+      console.log(
+        "🔑 [WA ONBOARD COMPLETE] Respuesta token:",
+        tokenResp.status,
+        tokenJson
+      );
+
+      if (!tokenResp.ok || !tokenJson.access_token) {
+        console.error(
+          "❌ [WA ONBOARD COMPLETE] Error obteniendo access_token de Meta:",
+          tokenJson
+        );
+        return res.status(500).json({
+          error: "No se pudo obtener access_token de Meta.",
+          detail: tokenJson,
+        });
+      }
+
+      const accessToken = tokenJson.access_token as string;
+
+      // 2️⃣ Consultar WABA + número con ese access_token
+      console.log(
+        "📞 [WA ONBOARD COMPLETE] Consultando WABA y números con /me..."
+      );
+
+      const meUrl =
+        "https://graph.facebook.com/v18.0/me" +
+        "?fields=whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}}";
+
+      const meResp = await fetch(`${meUrl}&access_token=${accessToken}`);
+      const meJson: any = await meResp.json();
+
+      console.log(
+        "📞 [WA ONBOARD COMPLETE] Respuesta /me whatsapp_business_accounts:",
+        meResp.status,
+        JSON.stringify(meJson, null, 2)
+      );
+
+      let whatsappBusinessId: string | null = null;
+      let whatsappPhoneNumberId: string | null = null;
+      let whatsappPhoneNumber: string | null = null;
+
+      const waba = meJson.whatsapp_business_accounts?.[0];
+      if (waba) {
+        whatsappBusinessId = waba.id ?? null;
+        const phone = waba.phone_numbers?.[0];
+        if (phone) {
+          whatsappPhoneNumberId = phone.id ?? null;
+          whatsappPhoneNumber = phone.display_phone_number ?? null;
+        }
+      }
+
+      console.log("[WA ONBOARD COMPLETE] Datos resueltos:", {
+        whatsappBusinessId,
+        whatsappPhoneNumberId,
+        whatsappPhoneNumber,
+      });
+
+      // 3️⃣ Actualizar tenant en DB
+      try {
+        console.log(
+          "💾 [WA ONBOARD COMPLETE] Actualizando tenant...",
+          tenantId
+        );
+
+        const updateQuery = `
+          UPDATE tenants
+          SET
+            whatsapp_access_token     = $1,
+            whatsapp_business_id      = $2,
+            whatsapp_phone_number_id  = $3,
+            whatsapp_phone_number     = $4,
+            whatsapp_status           = 'connected',
+            whatsapp_connected        = TRUE,
+            whatsapp_connected_at     = NOW(),
+            updated_at                = NOW()
+          WHERE id::text = $5
+          RETURNING id,
+                    whatsapp_business_id,
+                    whatsapp_phone_number_id,
+                    whatsapp_phone_number,
+                    whatsapp_status,
+                    whatsapp_connected,
+                    whatsapp_connected_at;
+        `;
+
+        const result = await pool.query(updateQuery, [
+          accessToken,
+          whatsappBusinessId,
+          whatsappPhoneNumberId,
+          whatsappPhoneNumber,
+          tenantId,
+        ]);
+
+        console.log(
+          "💾 [WA ONBOARD COMPLETE] UPDATE rowCount:",
+          result.rowCount,
+          "rows:",
+          result.rows
+        );
+
+        if (result.rowCount === 0) {
+          console.warn(
+            "⚠️ [WA ONBOARD COMPLETE] No se actualizó ningún tenant. " +
+              "Revisa que tenantId coincida EXACTAMENTE con tenants.id"
+          );
+        }
+      } catch (dbErr) {
+        console.error(
+          "❌ [WA ONBOARD COMPLETE] Error guardando datos de WhatsApp en tenants:",
+          dbErr
+        );
+        return res
+          .status(500)
+          .json({ error: "Error al guardar datos de WhatsApp en DB." });
+      }
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("❌ [WA ONBOARD COMPLETE] Error general:", err);
+      return res
+        .status(500)
+        .json({ error: "Error interno en onboard-complete." });
     }
   }
 );
