@@ -137,10 +137,9 @@ router.post(
 /**
  * POST /api/meta/whatsapp/onboard-complete
  *
- * El frontend (página /meta/whatsapp-redirect) nos envía el `code` y el `state`
- * después de que Meta termina el Embedded Signup.
- * Aquí intercambiamos `code -> access_token`, consultamos WABA + número
- * y actualizamos el tenant.
+ * El frontend (página /meta/whatsapp-redirect) nos envía
+ * wabaId + phoneNumberId cuando el Embedded Signup termina.
+ * Aquí solo actualizamos el tenant.
  */
 router.post(
   "/whatsapp/onboard-complete",
@@ -148,20 +147,18 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       const user = (req as any).user;
-      const tenantIdFromToken = user?.tenant_id as string | undefined;
+      const tenantId = user?.tenant_id as string | undefined;
 
-      const { code, state } = req.body as {
-        code?: string;
-        state?: string; // tenantId que venía en el botón
+      const { wabaId, phoneNumberId } = req.body as {
+        wabaId?: string;
+        phoneNumberId?: string;
       };
 
       console.log("[WA ONBOARD COMPLETE] Body recibido:", {
-        code,
-        state,
-        tenantIdFromToken,
+        wabaId,
+        phoneNumberId,
+        tenantId,
       });
-
-      const tenantId = tenantIdFromToken || state;
 
       if (!tenantId) {
         return res
@@ -169,95 +166,13 @@ router.post(
           .json({ error: "No se pudo determinar el tenant (falta tenantId)." });
       }
 
-      if (!code) {
-        return res.status(400).json({ error: "Falta `code` en el body." });
+      if (!wabaId || !phoneNumberId) {
+        return res
+          .status(400)
+          .json({ error: "Faltan wabaId o phoneNumberId en el body." });
       }
 
-      const APP_ID = process.env.META_APP_ID;
-      const APP_SECRET = process.env.META_APP_SECRET;
-
-      if (!APP_ID || !APP_SECRET) {
-        console.error(
-          "❌ [WA ONBOARD COMPLETE] Falta META_APP_ID o META_APP_SECRET en env."
-        );
-        return res.status(500).json({
-          error: "Configuración del servidor incompleta (APP_ID/SECRET).",
-        });
-      }
-
-      // 1️⃣ Intercambiar code -> access_token
-      const REDIRECT_URI = "https://www.aamy.ai/meta/whatsapp-redirect";
-
-      const tokenUrl =
-        `https://graph.facebook.com/v18.0/oauth/access_token` +
-        `?client_id=${encodeURIComponent(APP_ID)}` +
-        `&client_secret=${encodeURIComponent(APP_SECRET)}` +
-        `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-        `&code=${encodeURIComponent(code)}`;
-
-      console.log("[WA ONBOARD COMPLETE] URL token:", tokenUrl);
-
-      const tokenResp = await fetch(tokenUrl);
-      const tokenJson: any = await tokenResp.json();
-
-      console.log(
-        "🔑 [WA ONBOARD COMPLETE] Respuesta token:",
-        tokenResp.status,
-        tokenJson
-      );
-
-      if (!tokenResp.ok || !tokenJson.access_token) {
-        console.error(
-          "❌ [WA ONBOARD COMPLETE] Error obteniendo access_token de Meta:",
-          tokenJson
-        );
-        return res.status(500).json({
-          error: "No se pudo obtener access_token de Meta.",
-          detail: tokenJson,
-        });
-      }
-
-      const accessToken = tokenJson.access_token as string;
-
-      // 2️⃣ Consultar WABA + número con ese access_token
-      console.log(
-        "📞 [WA ONBOARD COMPLETE] Consultando WABA y números con /me..."
-      );
-
-      const meUrl =
-        "https://graph.facebook.com/v18.0/me" +
-        "?fields=whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}}";
-
-      const meResp = await fetch(`${meUrl}&access_token=${accessToken}`);
-      const meJson: any = await meResp.json();
-
-      console.log(
-        "📞 [WA ONBOARD COMPLETE] Respuesta /me whatsapp_business_accounts:",
-        meResp.status,
-        JSON.stringify(meJson, null, 2)
-      );
-
-      let whatsappBusinessId: string | null = null;
-      let whatsappPhoneNumberId: string | null = null;
-      let whatsappPhoneNumber: string | null = null;
-
-      const waba = meJson.whatsapp_business_accounts?.[0];
-      if (waba) {
-        whatsappBusinessId = waba.id ?? null;
-        const phone = waba.phone_numbers?.[0];
-        if (phone) {
-          whatsappPhoneNumberId = phone.id ?? null;
-          whatsappPhoneNumber = phone.display_phone_number ?? null;
-        }
-      }
-
-      console.log("[WA ONBOARD COMPLETE] Datos resueltos:", {
-        whatsappBusinessId,
-        whatsappPhoneNumberId,
-        whatsappPhoneNumber,
-      });
-
-      // 3️⃣ Actualizar tenant en DB
+      // Actualizar tenant en DB
       try {
         console.log(
           "💾 [WA ONBOARD COMPLETE] Actualizando tenant...",
@@ -267,29 +182,24 @@ router.post(
         const updateQuery = `
           UPDATE tenants
           SET
-            whatsapp_access_token     = $1,
-            whatsapp_business_id      = $2,
-            whatsapp_phone_number_id  = $3,
-            whatsapp_phone_number     = $4,
+            whatsapp_business_id      = $1,
+            whatsapp_phone_number_id  = $2,
             whatsapp_status           = 'connected',
             whatsapp_connected        = TRUE,
             whatsapp_connected_at     = NOW(),
             updated_at                = NOW()
-          WHERE id::text = $5
+          WHERE id::text = $3
           RETURNING id,
                     whatsapp_business_id,
                     whatsapp_phone_number_id,
-                    whatsapp_phone_number,
                     whatsapp_status,
                     whatsapp_connected,
                     whatsapp_connected_at;
         `;
 
         const result = await pool.query(updateQuery, [
-          accessToken,
-          whatsappBusinessId,
-          whatsappPhoneNumberId,
-          whatsappPhoneNumber,
+          wabaId,
+          phoneNumberId,
           tenantId,
         ]);
 
@@ -306,6 +216,8 @@ router.post(
               "Revisa que tenantId coincida EXACTAMENTE con tenants.id"
           );
         }
+
+        return res.json({ ok: true, tenant: result.rows[0] });
       } catch (dbErr) {
         console.error(
           "❌ [WA ONBOARD COMPLETE] Error guardando datos de WhatsApp en tenants:",
@@ -315,8 +227,6 @@ router.post(
           .status(500)
           .json({ error: "Error al guardar datos de WhatsApp en DB." });
       }
-
-      return res.json({ ok: true });
     } catch (err) {
       console.error("❌ [WA ONBOARD COMPLETE] Error general:", err);
       return res
