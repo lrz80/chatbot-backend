@@ -9,15 +9,10 @@ const APP_ID = process.env.META_APP_ID!;
 const APP_SECRET = process.env.META_APP_SECRET!;
 const REDIRECT_URI = "https://api.aamy.ai/api/meta/whatsapp/callback";
 
-// ⚠️ IMPORTANTE: esta ruta NO es el webhook de mensajes,
-// es solo el callback de OAuth / conexión de número.
-// DEBE SER ASÍ
 router.get("/whatsapp/callback", async (req: Request, res: Response) => {
   try {
     console.log("🌐 [WA CALLBACK] Query recibida:", req.query);
 
-    // 1️⃣ Si algún día Meta te pega aquí un hub.challenge, podrías manejarlo;
-    // por ahora asumimos que cuando viene "code" es el flujo de conexión.
     const code = req.query.code as string | undefined;
     const state = req.query.state as string | undefined;
 
@@ -26,7 +21,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       return res.status(400).send("Falta parámetro code");
     }
 
-    // 2️⃣ Recuperar tenantId desde el JWT que pusimos en `state`
+    // 1️⃣ Recuperar tenantId desde el JWT que pusimos en `state`
     let tenantId: string | undefined;
 
     if (state) {
@@ -57,7 +52,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
         .send("No se pudo identificar el negocio (falta tenantId en state).");
     }
 
-    // 3️⃣ Intercambiar code -> access_token
+    // 2️⃣ Intercambiar code -> access_token (token propio del tenant)
     const tokenUrl =
       `https://graph.facebook.com/v18.0/oauth/access_token` +
       `?client_id=${encodeURIComponent(APP_ID)}` +
@@ -88,33 +83,47 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
 
     const accessToken = tokenJson.access_token as string;
 
-    // 4️⃣ Consultar WABA + número con ese access_token
-    const meUrl =
-      "https://graph.facebook.com/v18.0/me" +
-      "?fields=whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}}";
-
-    console.log("[WA CALLBACK] Llamando a /me…");
-
-    const meResp = await fetch(`${meUrl}&access_token=${accessToken}`);
-    const meJson: any = await meResp.json();
-
-    console.log(
-      "📞 [WA CALLBACK] Respuesta /me whatsapp_business_accounts:",
-      meResp.status,
-      JSON.stringify(meJson, null, 2)
-    );
-
+    // 3️⃣ Resolver automáticamente la WABA y el número usando el WABA global
     let whatsappBusinessId: string | null = null;
     let whatsappPhoneNumberId: string | null = null;
     let whatsappPhoneNumber: string | null = null;
 
-    const waba = meJson.whatsapp_business_accounts?.[0];
-    if (waba) {
-      whatsappBusinessId = waba.id ?? null;
-      const phone = waba.phone_numbers?.[0];
-      if (phone) {
+    const globalToken = process.env.META_WA_ACCESS_TOKEN;
+    const globalWabaId = process.env.META_WABA_ID;
+
+    if (!globalToken || !globalWabaId) {
+      console.warn(
+        "[WA CALLBACK] Falta META_WA_ACCESS_TOKEN o META_WABA_ID; " +
+          "solo se guardará el access_token del tenant."
+      );
+    } else {
+      const phonesUrl =
+        "https://graph.facebook.com/v18.0/" +
+        encodeURIComponent(globalWabaId) +
+        "/phone_numbers?access_token=" +
+        encodeURIComponent(globalToken);
+
+      console.log("[WA CALLBACK] Consultando phone_numbers:", phonesUrl);
+
+      const phonesResp = await fetch(phonesUrl);
+      const phonesJson: any = await phonesResp.json();
+
+      console.log(
+        "📞 [WA CALLBACK] Respuesta phone_numbers:",
+        phonesResp.status,
+        JSON.stringify(phonesJson, null, 2)
+      );
+
+      if (phonesResp.ok && Array.isArray(phonesJson.data) && phonesJson.data.length > 0) {
+        const phone = phonesJson.data[0];
+
+        whatsappBusinessId = globalWabaId;
         whatsappPhoneNumberId = phone.id ?? null;
         whatsappPhoneNumber = phone.display_phone_number ?? null;
+      } else {
+        console.warn(
+          "[WA CALLBACK] No se pudieron obtener phone_numbers de la WABA global"
+        );
       }
     }
 
@@ -125,7 +134,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
       whatsappPhoneNumber,
     });
 
-    // 5️⃣ Actualizar tenant en DB
+    // 4️⃣ Actualizar tenant en DB (access_token + WABA + número)
     try {
       const updateQuery = `
         UPDATE tenants
@@ -178,7 +187,7 @@ router.get("/whatsapp/callback", async (req: Request, res: Response) => {
         .send("Error al guardar los datos de WhatsApp en la base de datos.");
     }
 
-    // 6️⃣ Página de éxito
+    // 5️⃣ Página de éxito
     res.send(`
       <html>
         <head>
