@@ -6,6 +6,7 @@ import whatsappCallback from "./whatsapp-callback";
 import whatsappRedirect from "./whatsapp-redirect";
 import whatsappPhoneNumbersRouter from "../meta/whatsapp-phone-numbers";
 import whatsappOnboardStartRouter from "../../routes/meta/whatsapp-onboard-start";
+import whatsappAccountsRouter from "./whatsapp-accounts";
 
 const router = Router();
 
@@ -439,5 +440,6 @@ router.use("/", whatsappRedirect);
 // Rutas para listar/seleccionar números
 router.use("/", whatsappPhoneNumbersRouter);
 router.use("/whatsapp-onboard", whatsappOnboardStartRouter);
+router.use("/", whatsappAccountsRouter);
 
 export default router;
