@@ -255,12 +255,16 @@ router.get(
           .json({ error: "No autenticado: falta tenant_id en el token." });
       }
 
+      // 1) Leer tenant, incluyendo el access_token
       const { rows } = await pool.query(
         `SELECT
+           id,
+           name,
            whatsapp_business_id,
            whatsapp_phone_number_id,
            whatsapp_phone_number,
-           name
+           whatsapp_access_token,
+           whatsapp_status
          FROM tenants
          WHERE id = $1
          LIMIT 1`,
@@ -272,28 +276,163 @@ router.get(
         return res.status(404).json({ error: "Tenant no encontrado." });
       }
 
-      const phoneNumbers: Array<{
-        waba_id: string | null;
-        phone_number_id: string | null;
-        display_phone_number: string | null;
-        verified_name: string | null;
-      }> = [];
+      let {
+        whatsapp_business_id,
+        whatsapp_phone_number_id,
+        whatsapp_phone_number,
+        whatsapp_access_token,
+        name,
+      } = row as {
+        whatsapp_business_id: string | null;
+        whatsapp_phone_number_id: string | null;
+        whatsapp_phone_number: string | null;
+        whatsapp_access_token: string | null;
+        name: string | null;
+      };
 
-      if (row.whatsapp_phone_number_id && row.whatsapp_phone_number) {
-        phoneNumbers.push({
-          waba_id: row.whatsapp_business_id ?? null,
-          phone_number_id: row.whatsapp_phone_number_id ?? null,
-          display_phone_number: row.whatsapp_phone_number ?? null,
-          verified_name: row.name ?? null,
+      // Si ya tenemos número en DB, simplemente lo devolvemos
+      if (whatsapp_phone_number_id && whatsapp_phone_number) {
+        const phoneNumbers = [
+          {
+            waba_id: whatsapp_business_id,
+            phone_number_id: whatsapp_phone_number_id,
+            display_phone_number: whatsapp_phone_number,
+            verified_name: name ?? null,
+          },
+        ];
+
+        return res.json({
+          phoneNumbers,
+          accounts: phoneNumbers,
         });
       }
 
-      return res.json({
-        phoneNumbers,
-        accounts: phoneNumbers,
-      });
+      // 2) Si NO hay número en DB pero SÍ hay access_token,
+      //    llamamos a Graph para detectar el WABA y su número.
+      if (!whatsapp_access_token) {
+        // No hay token todavía: no podemos consultar a Meta
+        return res.json({ phoneNumbers: [], accounts: [] });
+      }
+
+      try {
+        console.log(
+          "[WA ACCOUNTS] No hay número en DB, consultando a Meta con access_token…",
+          { tenantId }
+        );
+
+        const resp = await fetch(
+          "https://graph.facebook.com/v18.0/me" +
+            "?fields=whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}}" +
+            `&access_token=${encodeURIComponent(whatsapp_access_token)}`
+        );
+
+        const json: any = await resp.json();
+        console.log(
+          "[WA ACCOUNTS] Respuesta /me whatsapp_business_accounts:",
+          resp.status,
+          JSON.stringify(json, null, 2)
+        );
+
+        if (!resp.ok || !json.whatsapp_business_accounts) {
+          console.warn(
+            "[WA ACCOUNTS] No se pudieron obtener whatsapp_business_accounts desde Meta."
+          );
+          return res.json({ phoneNumbers: [], accounts: [] });
+        }
+
+        const wabas: any[] = json.whatsapp_business_accounts.data || [];
+
+        // Tomamos el primer WABA que tenga al menos un número
+        let selectedWaba: any | null = null;
+        let selectedPhone: any | null = null;
+
+        for (const w of wabas) {
+          const phones: any[] = w.phone_numbers?.data || w.phone_numbers || [];
+          if (phones.length > 0) {
+            // Preferir VERIFICADO si existe
+            selectedPhone =
+              phones.find(
+                (p) =>
+                  p.code_verification_status === "VERIFIED" ||
+                  p.code_verification_status === "VERIFIED_WHATSAPP"
+              ) || phones[0];
+            selectedWaba = w;
+            break;
+          }
+        }
+
+        if (!selectedWaba || !selectedPhone) {
+          console.warn(
+            "[WA ACCOUNTS] No se encontró ningún WABA con números de WhatsApp."
+          );
+          return res.json({ phoneNumbers: [], accounts: [] });
+        }
+
+        whatsapp_business_id = selectedWaba.id;
+        whatsapp_phone_number_id = selectedPhone.id;
+        whatsapp_phone_number = selectedPhone.display_phone_number;
+
+        // 3) Guardar en DB
+        try {
+          console.log(
+            "[WA ACCOUNTS] Guardando número detectado en tenants…",
+            {
+              tenantId,
+              whatsapp_business_id,
+              whatsapp_phone_number_id,
+              whatsapp_phone_number,
+            }
+          );
+
+          await pool.query(
+            `
+            UPDATE tenants
+            SET
+              whatsapp_business_id     = $1,
+              whatsapp_phone_number_id = $2,
+              whatsapp_phone_number    = $3,
+              updated_at               = NOW()
+            WHERE id = $4
+          `,
+            [
+              whatsapp_business_id,
+              whatsapp_phone_number_id,
+              whatsapp_phone_number,
+              tenantId,
+            ]
+          );
+        } catch (dbErr) {
+          console.error(
+            "[WA ACCOUNTS] Error guardando datos de número en DB:",
+            dbErr
+          );
+          // seguimos, igual devolvemos lo que obtuvimos
+        }
+
+        const phoneNumbers = [
+          {
+            waba_id: whatsapp_business_id,
+            phone_number_id: whatsapp_phone_number_id,
+            display_phone_number: whatsapp_phone_number,
+            verified_name: selectedPhone.verified_name || name || null,
+          },
+        ];
+
+        return res.json({
+          phoneNumbers,
+          accounts: phoneNumbers,
+        });
+      } catch (errFetch) {
+        console.error(
+          "[WA ACCOUNTS] Error consultando cuentas de WhatsApp en Meta:",
+          errFetch
+        );
+        return res
+          .status(500)
+          .json({ error: "Error consultando cuentas de WhatsApp en Meta." });
+      }
     } catch (err) {
-      console.error("[WA ACCOUNTS] Error listando números:", err);
+      console.error("[WA ACCOUNTS] Error general listando números:", err);
       return res
         .status(500)
         .json({ error: "Error listando cuentas de WhatsApp." });
