@@ -1,5 +1,6 @@
 // src/routes/meta/whatsapp-callback.ts
 import express, { Request, Response } from "express";
+import pool from "../../lib/db";
 
 const router = express.Router();
 
@@ -49,12 +50,12 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
       JSON.stringify(req.body, null, 2)
     );
 
-    // 1️⃣ Extraer datos básicos del mensaje
+    // 1️⃣ Extraer datos básicos del evento
     const entry = req.body?.entry?.[0]?.changes?.[0]?.value;
     const messages = entry?.messages;
 
+    // Puede ser solo un "status" de mensaje enviado, no un mensaje entrante
     if (!messages || !messages.length) {
-      // Puede ser un evento de status, template, etc. Lo ignoramos.
       return res.sendStatus(200);
     }
 
@@ -62,7 +63,9 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
 
     const from = msg.from as string | undefined; // número del cliente
     const body = msg.text?.body as string | undefined;
-    const phoneNumberId = entry?.metadata?.phone_number_id as string | undefined;
+    const phoneNumberId = entry?.metadata?.phone_number_id as
+      | string
+      | undefined;
 
     console.log("[META WEBHOOK] Parsed:", { from, body, phoneNumberId });
 
@@ -73,62 +76,148 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
       return res.sendStatus(200);
     }
 
-    // 2️⃣ Preparar una respuesta sencilla (eco)
-    const replyText =
-      body && body.trim().length > 0
-        ? `Hola 👋, recibí tu mensaje: "${body}". Muy pronto aquí responderá Aamy con toda su lógica de FAQs, flows e IA.`
-        : "Hola 👋, soy Aamy. Recibí tu mensaje desde WhatsApp Cloud API.";
+        // 2️⃣ Buscar tenant por phone_number_id en tu DB
+    let tenantRow: any | null = null;
 
-    // 3️⃣ Enviar mensaje usando WhatsApp Cloud API
-    const token = process.env.META_WA_ACCESS_TOKEN;
-    if (!token) {
-      console.error(
-        "❌ [META WEBHOOK] Falta META_WA_ACCESS_TOKEN para enviar mensajes."
+    try {
+      const { rows } = await pool.query(
+        `
+        SELECT
+          id,
+          name,
+          mensaje_bienvenida,
+          prompt,
+          funciones_asistente,
+          info_clave,
+          idioma,
+          categoria
+        FROM tenants
+        WHERE whatsapp_phone_number_id = $1
+        LIMIT 1
+      `,
+        [phoneNumberId]
       );
-      return res.sendStatus(200);
+
+      tenantRow = rows[0] || null;
+      console.log("[META WEBHOOK] Tenant encontrado:", tenantRow?.id);
+    } catch (dbErr) {
+      console.error("❌ [META WEBHOOK] Error buscando tenant:", dbErr);
     }
 
-    const url = `https://graph.facebook.com/v18.0/${encodeURIComponent(
-      phoneNumberId
-    )}/messages`;
+        if (!tenantRow) {
+      console.warn(
+        "[META WEBHOOK] No se encontró tenant para phone_number_id:",
+        phoneNumberId
+      );
+      // Aun así respondemos algo genérico para que el test funcione
+      return await enviarRespuestaMeta({
+        to: from,
+        phoneNumberId,
+        text:
+          body && body.trim().length > 0
+            ? `Hola 👋, recibí tu mensaje: "${body}". Aún no encuentro el negocio asociado a este número en Aamy.`
+            : "Hola 👋, soy Aamy. Recibí tu mensaje, pero aún no encuentro el negocio asociado a este número.",
+      });
+    }
 
-    const payload = {
-      messaging_product: "whatsapp",
+    // 3️⃣ Construir la respuesta usando la info del tenant
+    const nombreNegocio: string = tenantRow.name || "tu negocio";
+    const mensajeBienvenida: string | null = tenantRow.mensaje_bienvenida;
+    const funcionesAsistente: string | null = tenantRow.funciones_asistente;
+    const infoClave: string | null = tenantRow.info_clave;
+
+    let replyText: string;
+
+    const textoUsuario = (body || "").trim().toLowerCase();
+
+    // Caso 1: primer contacto tipo "hola" → usar bienvenida directa si existe
+    if (mensajeBienvenida && (textoUsuario === "hola" || textoUsuario === "buenas" || textoUsuario === "hi")) {
+      replyText = mensajeBienvenida;
+    } else if (body && body.trim().length > 0) {
+      // Caso 2: ya hizo una pregunta o escribió algo concreto
+      replyText = `Hola 👋, soy Aamy, asistente de ${nombreNegocio}.
+
+Recibí tu mensaje: "${body}".
+
+Puedo ayudarte con:
+${funcionesAsistente || "- Consultas generales\n- Horarios\n- Reservas y servicios"}
+
+Información clave del negocio:
+${infoClave || "Servicios, precios y políticas principales que has configurado en tu panel de Aamy."}
+`;
+    } else {
+      // Caso 3: mensaje vacío o raro
+      replyText = `Hola 👋, soy Aamy, asistente de ${nombreNegocio}. ¿En qué puedo ayudarte hoy?
+
+Puedo orientarte sobre:
+${funcionesAsistente || "- Servicios\n- Precios\n- Horarios\n- Reservas"}
+`;
+    }
+
+    // 4️⃣ Enviar mensaje usando WhatsApp Cloud API
+    await enviarRespuestaMeta({
       to: from,
-      type: "text",
-      text: {
-        preview_url: false,
-        body: replyText,
-      },
-    };
-
-    console.log("[META WEBHOOK] Enviando respuesta a WhatsApp:", {
-      url,
-      payload,
+      phoneNumberId,
+      text: replyText,
     });
 
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const respJson = await resp.json();
-    console.log(
-      "📤 [META WEBHOOK] Respuesta de envío de mensaje:",
-      resp.status,
-      respJson
-    );
-
-    // Siempre devolver 200 a Meta aunque el envío falle, para que no reintente.
     return res.sendStatus(200);
   } catch (err) {
     console.error("❌ [META WEBHOOK] Error procesando evento:", err);
     return res.sendStatus(500);
   }
 });
+
+// Función helper para enviar mensaje por Meta
+async function enviarRespuestaMeta(params: {
+  to: string;
+  phoneNumberId: string;
+  text: string;
+}) {
+  const { to, phoneNumberId, text } = params;
+
+  const token = process.env.META_WA_ACCESS_TOKEN;
+  if (!token) {
+    console.error(
+      "❌ [META WEBHOOK] Falta META_WA_ACCESS_TOKEN para enviar mensajes."
+    );
+    return;
+  }
+
+  const url = `https://graph.facebook.com/v18.0/${encodeURIComponent(
+    phoneNumberId
+  )}/messages`;
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to,
+    type: "text",
+    text: {
+      preview_url: false,
+      body: text,
+    },
+  };
+
+  console.log("[META WEBHOOK] Enviando respuesta a WhatsApp:", {
+    url,
+    payload,
+  });
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const respJson = await resp.json();
+  console.log(
+    "📤 [META WEBHOOK] Respuesta de envío de mensaje:",
+    resp.status,
+    respJson
+  );
+}
 
 export default router;
