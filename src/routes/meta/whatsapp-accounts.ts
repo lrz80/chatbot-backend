@@ -35,52 +35,25 @@ router.get(
         return res.status(401).json({ error: "No autenticado" });
       }
 
-      // 1) Traer tenant (solo para validar que existe y que hizo el flujo)
-      const { rows } = await pool.query(
-        `
-        SELECT whatsapp_access_token
-        FROM tenants
-        WHERE id = $1
-        LIMIT 1
-      `,
-        [tenantId]
-      );
+      // 👉 Ya no validamos whatsapp_access_token del tenant aquí.
+      // Solo necesitamos que el usuario exista y esté autenticado.
+      console.log("[WA ACCOUNTS] Listando números para tenant:", tenantId);
 
-      const tenant = rows[0];
-      if (!tenant) {
-        return res.status(404).json({ error: "Tenant no encontrado" });
-      }
-
-      const tenantAccessToken = tenant.whatsapp_access_token as string | null;
-
-      if (!tenantAccessToken) {
-        console.warn(
-          "[WA ACCOUNTS] Tenant sin whatsapp_access_token. Primero debe conectar WhatsApp."
-        );
-        return res.status(400).json({
-          error:
-            "Este tenant aún no tiene un access_token de Meta. Primero conecta WhatsApp.",
-        });
-      }
-
-      // 2) Usar el token maestro del backend (el que generaste en Meta)
+      // 1) Usar el token maestro del backend
       const accessToken = process.env.META_WA_ACCESS_TOKEN;
-      if (!accessToken) {
-        console.error("[WA ACCOUNTS] Falta META_WA_ACCESS_TOKEN en el servidor");
-        return res.status(500).json({
-          error: "Falta META_WA_ACCESS_TOKEN en el servidor",
-        });
-      }
-
       const wabaId = process.env.META_WABA_ID;
-      if (!wabaId) {
-        console.error("[WA ACCOUNTS] Falta META_WABA_ID en el servidor");
+
+      if (!accessToken || !wabaId) {
+        console.error(
+          "[WA ACCOUNTS] Falta META_WA_ACCESS_TOKEN o META_WABA_ID en env."
+        );
         return res.status(500).json({
-          error: "Falta META_WABA_ID en el servidor",
+          error:
+            "Configuración del servidor incompleta (META_WA_ACCESS_TOKEN / META_WABA_ID).",
         });
       }
 
-      // 3) Llamar a /{WABA_ID}/phone_numbers
+      // 2) Llamar a /{WABA_ID}/phone_numbers
       const url =
         "https://graph.facebook.com/v18.0/" +
         encodeURIComponent(wabaId) +
@@ -106,7 +79,6 @@ router.get(
         });
       }
 
-      // 4) Extraer teléfonos
       const phones = json.data ?? [];
 
       const accounts: Array<{
