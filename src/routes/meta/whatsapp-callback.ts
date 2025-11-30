@@ -1,12 +1,27 @@
 // src/routes/meta/whatsapp-callback.ts
 import express, { Request, Response } from "express";
 import pool from "../../lib/db";
+import OpenAI from "openai";
+import { detectarIdioma } from "../../lib/detectarIdioma";
+import { traducirMensaje } from "../../lib/traducirMensaje";
+import { getPromptPorCanal, getBienvenidaPorCanal } from "../../lib/getPromptPorCanal";
 
 const router = express.Router();
 
 // Debe ser el mismo valor que pusiste en el panel de Meta (Verify Token)
 const VERIFY_TOKEN =
   process.env.META_WEBHOOK_VERIFY_TOKEN || "aamy-meta-verify";
+
+const MAX_WHATSAPP_LINES = 16;
+
+const normLang = (code?: string | null) => {
+  if (!code) return null;
+  const base = code.toString().split(/[-_]/)[0].toLowerCase();
+  return base === "zxx" ? null : base;
+};
+
+const normalizeLang = (code?: string | null): "es" | "en" =>
+  (code || "").toLowerCase().startsWith("en") ? "en" : "es";
 
 /**
  * GET /api/meta/whatsapp/callback
@@ -50,67 +65,69 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
       JSON.stringify(req.body, null, 2)
     );
 
-    // 1️⃣ Extraer datos básicos del evento
-    const entry = req.body?.entry?.[0]?.changes?.[0]?.value;
-    const messages = entry?.messages;
+    // 1️⃣ Validar estructura básica (object debe ser whatsapp_business_account)
+    if (req.body?.object !== "whatsapp_business_account") {
+      return res.sendStatus(200);
+    }
+
+    const entry = req.body?.entry?.[0];
+    const change = entry?.changes?.[0];
+    const value = change?.value;
+
+    const messages = value?.messages;
+    const metadata = value?.metadata;
 
     // Puede ser solo un "status" de mensaje enviado, no un mensaje entrante
-    if (!messages || !messages.length) {
+    if (!messages || !messages.length || !metadata) {
       return res.sendStatus(200);
     }
 
     const msg = messages[0];
 
-    const from = msg.from as string | undefined; // número del cliente
-    const body = msg.text?.body as string | undefined;
-    const phoneNumberId = entry?.metadata?.phone_number_id as
-      | string
-      | undefined;
-
-    console.log("[META WEBHOOK] Parsed:", { from, body, phoneNumberId });
-
-    if (!from || !phoneNumberId) {
-      console.warn(
-        "[META WEBHOOK] Falta from o phoneNumberId, no se puede responder."
-      );
+    // Solo procesamos mensajes de texto por ahora
+    if (msg.type !== "text" || !msg.text?.body) {
       return res.sendStatus(200);
     }
 
-        // 2️⃣ Buscar tenant por phone_number_id en tu DB
-    let tenantRow: any | null = null;
+    const from = msg.from as string; // wa_id del cliente
+    const body = msg.text.body as string;
+    const phoneNumberId = metadata.phone_number_id as string;
+    const displayNumber = metadata.display_phone_number as string | undefined;
+
+    console.log("[META WEBHOOK] Parsed:", {
+      from,
+      body,
+      phoneNumberId,
+      displayNumber,
+    });
+
+    // 2️⃣ Buscar tenant por phone_number_id o por display_phone_number
+    let tenant: any | null = null;
 
     try {
       const { rows } = await pool.query(
         `
-        SELECT
-          id,
-          name,
-          mensaje_bienvenida,
-          prompt,
-          funciones_asistente,
-          info_clave,
-          idioma,
-          categoria
+        SELECT *
         FROM tenants
         WHERE whatsapp_phone_number_id = $1
+           OR whatsapp_phone_number    = $2
         LIMIT 1
       `,
-        [phoneNumberId]
+        [phoneNumberId, displayNumber || null]
       );
-
-      tenantRow = rows[0] || null;
-      console.log("[META WEBHOOK] Tenant encontrado:", tenantRow?.id);
+      tenant = rows[0] || null;
+      console.log("[META WEBHOOK] Tenant encontrado:", tenant?.id);
     } catch (dbErr) {
       console.error("❌ [META WEBHOOK] Error buscando tenant:", dbErr);
     }
 
-        if (!tenantRow) {
+    if (!tenant) {
       console.warn(
-        "[META WEBHOOK] No se encontró tenant para phone_number_id:",
-        phoneNumberId
+        "[META WEBHOOK] No se encontró tenant para este número de WhatsApp.",
+        { phoneNumberId, displayNumber }
       );
-      // Aun así respondemos algo genérico para que el test funcione
-      return await enviarRespuestaMeta({
+
+      await enviarRespuestaMeta({
         to: from,
         phoneNumberId,
         text:
@@ -118,47 +135,141 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
             ? `Hola 👋, recibí tu mensaje: "${body}". Aún no encuentro el negocio asociado a este número en Aamy.`
             : "Hola 👋, soy Aamy. Recibí tu mensaje, pero aún no encuentro el negocio asociado a este número.",
       });
+
+      return res.sendStatus(200);
     }
 
-    // 3️⃣ Construir la respuesta usando la info del tenant
-    const nombreNegocio: string = tenantRow.name || "tu negocio";
-    const mensajeBienvenida: string | null = tenantRow.mensaje_bienvenida;
-    const funcionesAsistente: string | null = tenantRow.funciones_asistente;
-    const infoClave: string | null = tenantRow.info_clave;
-
-    let replyText: string;
-
-    const textoUsuario = (body || "").trim().toLowerCase();
-
-    // Caso 1: primer contacto tipo "hola" → usar bienvenida directa si existe
-    if (mensajeBienvenida && (textoUsuario === "hola" || textoUsuario === "buenas" || textoUsuario === "hi")) {
-      replyText = mensajeBienvenida;
-    } else if (body && body.trim().length > 0) {
-      // Caso 2: ya hizo una pregunta o escribió algo concreto
-      replyText = `Hola 👋, soy Aamy, asistente de ${nombreNegocio}.
-
-Recibí tu mensaje: "${body}".
-
-Puedo ayudarte con:
-${funcionesAsistente || "- Consultas generales\n- Horarios\n- Reservas y servicios"}
-
-Información clave del negocio:
-${infoClave || "Servicios, precios y políticas principales que has configurado en tu panel de Aamy."}
-`;
-    } else {
-      // Caso 3: mensaje vacío o raro
-      replyText = `Hola 👋, soy Aamy, asistente de ${nombreNegocio}. ¿En qué puedo ayudarte hoy?
-
-Puedo orientarte sobre:
-${funcionesAsistente || "- Servicios\n- Precios\n- Horarios\n- Reservas"}
-`;
+    // 3️⃣ Respetar membresía activa (igual que en Twilio)
+    if (!tenant.membresia_activa) {
+      console.log(
+        `⛔ Membresía inactiva para tenant ${tenant.name || tenant.id}. No se responderá.`
+      );
+      return res.sendStatus(200);
     }
 
-    // 4️⃣ Enviar mensaje usando WhatsApp Cloud API
+    // 4️⃣ Detectar idioma destino (similar a Twilio)
+    const tenantBase: "es" | "en" = normalizeLang(tenant?.idioma || "es");
+    let idiomaDestino: "es" | "en" = tenantBase;
+
+    try {
+      const detected = await detectarIdioma(body);
+      const norm = normLang(detected) || tenantBase;
+      idiomaDestino = normalizeLang(norm);
+    } catch {
+      idiomaDestino = tenantBase;
+    }
+
+    console.log(`🌍 [META WEBHOOK] idiomaDestino = ${idiomaDestino}`);
+
+    const promptBase = getPromptPorCanal("whatsapp", tenant, idiomaDestino);
+
+    const CTA_TXT =
+      idiomaDestino === "en"
+        ? "Is there anything else I can help you with?"
+        : "¿Hay algo más en lo que te pueda ayudar?";
+
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
+
+    const systemPrompt = [
+      promptBase,
+      "",
+      `Reglas:
+- Usa EXCLUSIVAMENTE la información explícita en este prompt. Si algo no está, dilo sin inventar.
+- Responde SIEMPRE en ${
+        idiomaDestino === "en" ? "English" : "Español"
+      }.
+- WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas en PROSA. Sin Markdown ni bullets.
+- Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.`,
+    ].join("\n\n");
+
+    const userPrompt = `MENSAJE_USUARIO:\n${body}\n\nResponde usando solo los datos del prompt.`;
+
+    let respuesta = "";
+
+    try {
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+        temperature: 0.2,
+        max_tokens: 400,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      });
+
+      respuesta =
+        completion.choices[0]?.message?.content?.trim() ||
+        getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+
+      // Registrar tokens OpenAI (igual que en Twilio)
+      const used = completion.usage?.total_tokens ?? 0;
+      if (used > 0) {
+        await pool.query(
+          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+           VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+           ON CONFLICT (tenant_id, canal, mes)
+           DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+          [tenant.id, used]
+        );
+      }
+    } catch (e) {
+      console.error("❌ [META WEBHOOK] Error llamando a OpenAI:", e);
+      respuesta = getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+    }
+
+    // Asegurar idioma final
+    try {
+      const langOut = await detectarIdioma(respuesta);
+      if (
+        langOut &&
+        langOut !== "zxx" &&
+        !langOut.toLowerCase().startsWith(idiomaDestino)
+      ) {
+        respuesta = await traducirMensaje(respuesta, idiomaDestino);
+      }
+    } catch {}
+
+    // Añadir CTA simple al final
+    respuesta = `${respuesta}\n\n${CTA_TXT}`;
+
+    console.log("[META WEBHOOK] Respuesta generada:", respuesta);
+
+    // 5️⃣ Guardar mensaje USER + BOT (mínimo viable)
+    const messageId = msg.id || null;
+
+    try {
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+         VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
+         ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+        [tenant.id, body, "whatsapp", from || "meta", messageId]
+      );
+
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+         VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+         ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+        [tenant.id, respuesta, "whatsapp", from || "meta", `${messageId}-bot`]
+      );
+
+      await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT DO NOTHING`,
+        [tenant.id, "whatsapp", messageId]
+      );
+    } catch (e) {
+      console.warn(
+        "⚠️ [META WEBHOOK] No se pudo guardar en messages/interactions:",
+        e
+      );
+    }
+
+    // 6️⃣ Enviar mensaje usando WhatsApp Cloud API
     await enviarRespuestaMeta({
       to: from,
       phoneNumberId,
-      text: replyText,
+      text: respuesta,
     });
 
     return res.sendStatus(200);
