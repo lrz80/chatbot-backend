@@ -1,27 +1,13 @@
 // src/routes/meta/whatsapp-callback.ts
 import express, { Request, Response } from "express";
 import pool from "../../lib/db";
-import OpenAI from "openai";
-import { detectarIdioma } from "../../lib/detectarIdioma";
-import { traducirMensaje } from "../../lib/traducirMensaje";
-import { getPromptPorCanal, getBienvenidaPorCanal } from "../../lib/getPromptPorCanal";
+import { procesarMensajeWhatsApp } from "../webhook/whatsapp"; // 👈 reutilizamos tu flujo Twilio
 
 const router = express.Router();
 
 // Debe ser el mismo valor que pusiste en el panel de Meta (Verify Token)
 const VERIFY_TOKEN =
   process.env.META_WEBHOOK_VERIFY_TOKEN || "aamy-meta-verify";
-
-const MAX_WHATSAPP_LINES = 16;
-
-const normLang = (code?: string | null) => {
-  if (!code) return null;
-  const base = code.toString().split(/[-_]/)[0].toLowerCase();
-  return base === "zxx" ? null : base;
-};
-
-const normalizeLang = (code?: string | null): "es" | "en" =>
-  (code || "").toLowerCase().startsWith("en") ? "en" : "es";
 
 /**
  * GET /api/meta/whatsapp/callback
@@ -57,6 +43,7 @@ router.get("/whatsapp/callback", (req: Request, res: Response) => {
  * POST /api/meta/whatsapp/callback
  *
  * Aquí llegan TODOS los eventos de mensajes de WhatsApp Cloud API.
+ * Ahora solo hace de "adaptador" y delega a procesarMensajeWhatsApp.
  */
 router.post("/whatsapp/callback", async (req: Request, res: Response) => {
   try {
@@ -121,165 +108,78 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
       console.error("❌ [META WEBHOOK] Error buscando tenant:", dbErr);
     }
 
+    // Respondemos a Meta inmediatamente (como Twilio: no bloqueamos)
+    res.sendStatus(200);
+
+    // Si no hay tenant, respondemos algo simple y salimos
     if (!tenant) {
       console.warn(
         "[META WEBHOOK] No se encontró tenant para este número de WhatsApp.",
         { phoneNumberId, displayNumber }
       );
 
-      await enviarRespuestaMeta({
-        to: from,
-        phoneNumberId,
-        text:
-          body && body.trim().length > 0
-            ? `Hola 👋, recibí tu mensaje: "${body}". Aún no encuentro el negocio asociado a este número en Aamy.`
-            : "Hola 👋, soy Aamy. Recibí tu mensaje, pero aún no encuentro el negocio asociado a este número.",
-      });
-
-      return res.sendStatus(200);
-    }
-
-    // 3️⃣ Respetar membresía activa (igual que en Twilio)
-    if (!tenant.membresia_activa) {
-      console.log(
-        `⛔ Membresía inactiva para tenant ${tenant.name || tenant.id}. No se responderá.`
-      );
-      return res.sendStatus(200);
-    }
-
-    // 4️⃣ Detectar idioma destino (similar a Twilio)
-    const tenantBase: "es" | "en" = normalizeLang(tenant?.idioma || "es");
-    let idiomaDestino: "es" | "en" = tenantBase;
-
-    try {
-      const detected = await detectarIdioma(body);
-      const norm = normLang(detected) || tenantBase;
-      idiomaDestino = normalizeLang(norm);
-    } catch {
-      idiomaDestino = tenantBase;
-    }
-
-    console.log(`🌍 [META WEBHOOK] idiomaDestino = ${idiomaDestino}`);
-
-    const promptBase = getPromptPorCanal("whatsapp", tenant, idiomaDestino);
-
-    const CTA_TXT =
-      idiomaDestino === "en"
-        ? "Is there anything else I can help you with?"
-        : "¿Hay algo más en lo que te pueda ayudar?";
-
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
-
-    const systemPrompt = [
-      promptBase,
-      "",
-      `Reglas:
-- Usa EXCLUSIVAMENTE la información explícita en este prompt. Si algo no está, dilo sin inventar.
-- Responde SIEMPRE en ${
-        idiomaDestino === "en" ? "English" : "Español"
-      }.
-- WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas en PROSA. Sin Markdown ni bullets.
-- Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.`,
-    ].join("\n\n");
-
-    const userPrompt = `MENSAJE_USUARIO:\n${body}\n\nResponde usando solo los datos del prompt.`;
-
-    let respuesta = "";
-
-    try {
-      const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-        temperature: 0.2,
-        max_tokens: 400,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-      });
-
-      respuesta =
-        completion.choices[0]?.message?.content?.trim() ||
-        getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
-
-      // Registrar tokens OpenAI (igual que en Twilio)
-      const used = completion.usage?.total_tokens ?? 0;
-      if (used > 0) {
-        await pool.query(
-          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-           VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-           ON CONFLICT (tenant_id, canal, mes)
-           DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-          [tenant.id, used]
+      try {
+        await enviarRespuestaMeta({
+          to: from,
+          phoneNumberId,
+          text:
+            body && body.trim().length > 0
+              ? `Hola 👋, recibí tu mensaje: "${body}". Aún no encuentro el negocio asociado a este número en Aamy.`
+              : "Hola 👋, soy Aamy. Recibí tu mensaje, pero aún no encuentro el negocio asociado a este número.",
+        });
+      } catch (e) {
+        console.error(
+          "❌ [META WEBHOOK] Error enviando respuesta genérica sin tenant:",
+          e
         );
       }
-    } catch (e) {
-      console.error("❌ [META WEBHOOK] Error llamando a OpenAI:", e);
-      respuesta = getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+
+      return;
     }
 
-    // Asegurar idioma final
-    try {
-      const langOut = await detectarIdioma(respuesta);
-      if (
-        langOut &&
-        langOut !== "zxx" &&
-        !langOut.toLowerCase().startsWith(idiomaDestino)
-      ) {
-        respuesta = await traducirMensaje(respuesta, idiomaDestino);
+    // 3️⃣ Si hay tenant pero membresía inactiva, no seguimos el flujo
+    if (!tenant.membresia_activa) {
+      console.log(
+        `⛔ Membresía inactiva para tenant ${tenant.name || tenant.id}. No se procesará el mensaje.`
+      );
+      return;
+    }
+
+    // 4️⃣ Construir "body estilo Twilio" y delegar a procesarMensajeWhatsApp
+    const fakeBody = {
+      // El "To" para tu flujo es el número del negocio
+      To: `whatsapp:${tenant.whatsapp_phone_number || displayNumber || ""}`,
+      // El "From" es el número del cliente
+      From: `whatsapp:${from}`,
+      Body: body,
+      // Usamos el ID del mensaje de Cloud como MessageSid
+      MessageSid: msg.id,
+    };
+
+    // Procesar en background (igual patrón que Twilio)
+    setTimeout(async () => {
+      try {
+        console.log(
+          "[META WEBHOOK] Delegando a procesarMensajeWhatsApp con fakeBody"
+        );
+        await procesarMensajeWhatsApp(fakeBody);
+      } catch (e) {
+        console.error(
+          "❌ [META WEBHOOK] Error dentro de procesarMensajeWhatsApp:",
+          e
+        );
       }
-    } catch {}
-
-    // Añadir CTA simple al final
-    respuesta = `${respuesta}\n\n${CTA_TXT}`;
-
-    console.log("[META WEBHOOK] Respuesta generada:", respuesta);
-
-    // 5️⃣ Guardar mensaje USER + BOT (mínimo viable)
-    const messageId = msg.id || null;
-
-    try {
-      await pool.query(
-        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-         VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-         ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-        [tenant.id, body, "whatsapp", from || "meta", messageId]
-      );
-
-      await pool.query(
-        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-         VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-         ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-        [tenant.id, respuesta, "whatsapp", from || "meta", `${messageId}-bot`]
-      );
-
-      await pool.query(
-        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT DO NOTHING`,
-        [tenant.id, "whatsapp", messageId]
-      );
-    } catch (e) {
-      console.warn(
-        "⚠️ [META WEBHOOK] No se pudo guardar en messages/interactions:",
-        e
-      );
-    }
-
-    // 6️⃣ Enviar mensaje usando WhatsApp Cloud API
-    await enviarRespuestaMeta({
-      to: from,
-      phoneNumberId,
-      text: respuesta,
-    });
-
-    return res.sendStatus(200);
+    }, 0);
   } catch (err) {
     console.error("❌ [META WEBHOOK] Error procesando evento:", err);
-    return res.sendStatus(500);
+    // importante: si llegamos aquí antes de hacer res.status, devolvemos 500
+    if (!res.headersSent) {
+      return res.sendStatus(500);
+    }
   }
 });
 
-// Función helper para enviar mensaje por Meta
+// Función helper para enviar mensaje por Meta (se sigue usando solo para el caso "sin tenant")
 async function enviarRespuestaMeta(params: {
   to: string;
   phoneNumberId: string;
