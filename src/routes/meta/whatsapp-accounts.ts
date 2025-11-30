@@ -5,7 +5,6 @@ import { authenticateUser } from "../../middleware/auth";
 
 const router = express.Router();
 
-// Tipo “suave” para req.user
 interface AuthedRequest extends Request {
   user?: {
     uid: string;
@@ -17,8 +16,8 @@ interface AuthedRequest extends Request {
 /**
  * GET /api/meta/whatsapp/accounts
  *
- * Devuelve todas las WABAs y números de WhatsApp disponibles
- * para el tenant autenticado, usando el whatsapp_access_token
+ * Lista todas las WABA + números de WhatsApp a las que el usuario
+ * ha dado permiso a la app, usando el whatsapp_access_token
  * guardado en la tabla tenants.
  */
 router.get(
@@ -33,12 +32,14 @@ router.get(
         return res.status(401).json({ error: "No autenticado" });
       }
 
-      // Traer access_token desde tenants
+      // 1) Traer access_token desde tenants
       const { rows } = await pool.query(
-        `SELECT whatsapp_access_token 
-         FROM tenants 
-         WHERE id = $1 
-         LIMIT 1`,
+        `
+        SELECT whatsapp_access_token
+        FROM tenants
+        WHERE id = $1
+        LIMIT 1
+      `,
         [tenantId]
       );
 
@@ -59,13 +60,18 @@ router.get(
         });
       }
 
-      // Llamada a Graph para listar WABAs y números
+      // 2) Llamar a /me?fields=businesses{...}
       const meUrl =
-        `https://graph.facebook.com/v18.0/me` +
-        `?fields=whatsapp_business_accounts{` +
-        `  id,name,` +
-        `  phone_numbers{ id, display_phone_number, verified_name }` +
-        `}` +
+        "https://graph.facebook.com/v18.0/me" +
+        "?fields=businesses{" +
+        "id,name," +
+        "owned_whatsapp_business_accounts{" +
+        "  id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}" +
+        "}," +
+        "client_whatsapp_business_accounts{" +
+        "  id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}" +
+        "}" +
+        "}" +
         `&access_token=${encodeURIComponent(accessToken)}`;
 
       console.log("[WA ACCOUNTS] Consultando /me:", meUrl);
@@ -75,22 +81,19 @@ router.get(
 
       console.log(
         "[WA ACCOUNTS] Respuesta /me:",
+        meResp.status,
         JSON.stringify(meJson, null, 2)
       );
 
       if (!meResp.ok) {
         console.error("[WA ACCOUNTS] Error desde Graph:", meJson);
         return res.status(500).json({
-          error:
-            "Meta Graph devolvió un error al listar cuentas de WhatsApp",
+          error: "Meta Graph devolvió un error al listar cuentas de WhatsApp",
           detail: meJson,
         });
       }
 
-      const wabas =
-        meJson?.whatsapp_business_accounts?.data ??
-        meJson?.whatsapp_business_accounts ??
-        [];
+      const businesses = meJson.businesses?.data ?? [];
 
       const accounts: Array<{
         business_id: string | null;
@@ -102,22 +105,37 @@ router.get(
         verified_name: string | null;
       }> = [];
 
-      // En este flujo, el "business_id" no viene directo. Lo dejamos en null.
-      for (const w of wabas) {
-        const wabaId = w.id as string;
-        const wabaName = (w.name as string) ?? null;
+      for (const biz of businesses) {
+        const bizId = (biz.id as string) ?? null;
+        const bizName = (biz.name as string) ?? null;
 
-        const phones = w.phone_numbers?.data ?? w.phone_numbers ?? [];
-        for (const ph of phones) {
-          accounts.push({
-            business_id: null,
-            business_name: null,
-            waba_id: wabaId,
-            waba_name: wabaName,
-            phone_number_id: ph.id as string,
-            phone_number: ph.display_phone_number as string,
-            verified_name: (ph.verified_name as string) ?? null,
-          });
+        const owned =
+          biz.owned_whatsapp_business_accounts?.data ??
+          biz.owned_whatsapp_business_accounts ??
+          [];
+        const client =
+          biz.client_whatsapp_business_accounts?.data ??
+          biz.client_whatsapp_business_accounts ??
+          [];
+
+        const allWabas = [...owned, ...client];
+
+        for (const w of allWabas) {
+          const wabaId = w.id as string;
+          const wabaName = (w.name as string) ?? null;
+
+          const phones = w.phone_numbers?.data ?? w.phone_numbers ?? [];
+          for (const ph of phones) {
+            accounts.push({
+              business_id: bizId,
+              business_name: bizName,
+              waba_id: wabaId,
+              waba_name: wabaName,
+              phone_number_id: ph.id as string,
+              phone_number: ph.display_phone_number as string,
+              verified_name: (ph.verified_name as string) ?? null,
+            });
+          }
         }
       }
 
@@ -138,8 +156,6 @@ router.get(
 
 /**
  * POST /api/meta/whatsapp/select-number
- *
- * Guarda en la tabla tenants la WABA y número que el tenant quiere usar.
  */
 router.post(
   "/whatsapp/select-number",
@@ -179,10 +195,7 @@ router.post(
         tenantId,
       ]);
 
-      console.log(
-        "[WA SELECT] Tenant actualizado con selección manual:",
-        rows[0]
-      );
+      console.log("[WA SELECT] Tenant actualizado con selección manual:", rows[0]);
 
       return res.json({ ok: true, tenant: rows[0] });
     } catch (err) {
