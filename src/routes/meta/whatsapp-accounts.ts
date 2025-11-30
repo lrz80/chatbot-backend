@@ -16,9 +16,12 @@ interface AuthedRequest extends Request {
 /**
  * GET /api/meta/whatsapp/accounts
  *
- * Lista todas las WABA + números de WhatsApp a las que el usuario
- * ha dado permiso a la app, usando el whatsapp_access_token
- * guardado en la tabla tenants.
+ * Versión simplificada:
+ * - Verifica al usuario (authenticateUser)
+ * - Verifica que el tenant exista y tenga whatsapp_access_token (que ya hizo el flujo)
+ * - Usa un token maestro del backend (META_WA_ACCESS_TOKEN) para consultar
+ *   /me?fields=whatsapp_business_accounts{...}
+ * - NO usa businesses{...} → NO necesita business_management
  */
 router.get(
   "/whatsapp/accounts",
@@ -32,7 +35,7 @@ router.get(
         return res.status(401).json({ error: "No autenticado" });
       }
 
-      // 1) Traer access_token desde tenants
+      // 1) Traer tenant (solo para validar que existe y que hizo el flujo)
       const { rows } = await pool.query(
         `
         SELECT whatsapp_access_token
@@ -48,9 +51,9 @@ router.get(
         return res.status(404).json({ error: "Tenant no encontrado" });
       }
 
-      const accessToken = tenant.whatsapp_access_token as string | null;
+      const tenantAccessToken = tenant.whatsapp_access_token as string | null;
 
-      if (!accessToken) {
+      if (!tenantAccessToken) {
         console.warn(
           "[WA ACCOUNTS] Tenant sin whatsapp_access_token. Primero debe conectar WhatsApp."
         );
@@ -60,18 +63,22 @@ router.get(
         });
       }
 
-      // 2) Llamar a /me?fields=businesses{...}
+      // 2) Usar el token maestro del backend (el que generaste en Meta)
+      const accessToken = process.env.META_WA_ACCESS_TOKEN;
+      if (!accessToken) {
+        console.error("[WA ACCOUNTS] Falta META_WA_ACCESS_TOKEN en el servidor");
+        return res.status(500).json({
+          error: "Falta META_WA_ACCESS_TOKEN en el servidor",
+        });
+      }
+
+      // 3) Llamar a /me?fields=whatsapp_business_accounts{...}
+      const fields =
+        "whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}}";
+
       const meUrl =
         "https://graph.facebook.com/v18.0/me" +
-        "?fields=businesses{" +
-        "id,name," +
-        "owned_whatsapp_business_accounts{" +
-        "  id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}" +
-        "}," +
-        "client_whatsapp_business_accounts{" +
-        "  id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}" +
-        "}" +
-        "}" +
+        `?fields=${encodeURIComponent(fields)}` +
         `&access_token=${encodeURIComponent(accessToken)}`;
 
       console.log("[WA ACCOUNTS] Consultando /me:", meUrl);
@@ -93,7 +100,11 @@ router.get(
         });
       }
 
-      const businesses = meJson.businesses?.data ?? [];
+      // 4) Extraer WABAs y teléfonos desde whatsapp_business_accounts
+      const wabas =
+        meJson.whatsapp_business_accounts?.data ??
+        meJson.whatsapp_business_accounts ??
+        [];
 
       const accounts: Array<{
         business_id: string | null;
@@ -105,37 +116,21 @@ router.get(
         verified_name: string | null;
       }> = [];
 
-      for (const biz of businesses) {
-        const bizId = (biz.id as string) ?? null;
-        const bizName = (biz.name as string) ?? null;
+      for (const w of wabas) {
+        const wabaId = w.id as string;
+        const wabaName = (w.name as string) ?? null;
 
-        const owned =
-          biz.owned_whatsapp_business_accounts?.data ??
-          biz.owned_whatsapp_business_accounts ??
-          [];
-        const client =
-          biz.client_whatsapp_business_accounts?.data ??
-          biz.client_whatsapp_business_accounts ??
-          [];
-
-        const allWabas = [...owned, ...client];
-
-        for (const w of allWabas) {
-          const wabaId = w.id as string;
-          const wabaName = (w.name as string) ?? null;
-
-          const phones = w.phone_numbers?.data ?? w.phone_numbers ?? [];
-          for (const ph of phones) {
-            accounts.push({
-              business_id: bizId,
-              business_name: bizName,
-              waba_id: wabaId,
-              waba_name: wabaName,
-              phone_number_id: ph.id as string,
-              phone_number: ph.display_phone_number as string,
-              verified_name: (ph.verified_name as string) ?? null,
-            });
-          }
+        const phones = w.phone_numbers?.data ?? w.phone_numbers ?? [];
+        for (const ph of phones) {
+          accounts.push({
+            business_id: null, // aquí ya no tenemos businesses{...}
+            business_name: null,
+            waba_id: wabaId,
+            waba_name: wabaName,
+            phone_number_id: ph.id as string,
+            phone_number: ph.display_phone_number as string,
+            verified_name: (ph.verified_name as string) ?? null,
+          });
         }
       }
 
