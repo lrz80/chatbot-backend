@@ -72,39 +72,42 @@ router.get(
         });
       }
 
-      // 3) Llamar a /me?fields=whatsapp_business_accounts{...}
-      const fields =
-        "whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}}";
-
-      const meUrl =
-        "https://graph.facebook.com/v18.0/me" +
-        `?fields=${encodeURIComponent(fields)}` +
-        `&access_token=${encodeURIComponent(accessToken)}`;
-
-      console.log("[WA ACCOUNTS] Consultando /me:", meUrl);
-
-      const meResp = await fetch(meUrl);
-      const meJson: any = await meResp.json();
-
-      console.log(
-        "[WA ACCOUNTS] Respuesta /me:",
-        meResp.status,
-        JSON.stringify(meJson, null, 2)
-      );
-
-      if (!meResp.ok) {
-        console.error("[WA ACCOUNTS] Error desde Graph:", meJson);
+      const wabaId = process.env.META_WABA_ID;
+      if (!wabaId) {
+        console.error("[WA ACCOUNTS] Falta META_WABA_ID en el servidor");
         return res.status(500).json({
-          error: "Meta Graph devolvió un error al listar cuentas de WhatsApp",
-          detail: meJson,
+          error: "Falta META_WABA_ID en el servidor",
         });
       }
 
-      // 4) Extraer WABAs y teléfonos desde whatsapp_business_accounts
-      const wabas =
-        meJson.whatsapp_business_accounts?.data ??
-        meJson.whatsapp_business_accounts ??
-        [];
+      // 3) Llamar a /{WABA_ID}/phone_numbers
+      const url =
+        "https://graph.facebook.com/v18.0/" +
+        encodeURIComponent(wabaId) +
+        "/phone_numbers?access_token=" +
+        encodeURIComponent(accessToken);
+
+      console.log("[WA ACCOUNTS] Consultando phone_numbers:", url);
+
+      const resp = await fetch(url);
+      const json: any = await resp.json();
+
+      console.log(
+        "[WA ACCOUNTS] Respuesta phone_numbers:",
+        resp.status,
+        JSON.stringify(json, null, 2)
+      );
+
+      if (!resp.ok) {
+        console.error("[WA ACCOUNTS] Error desde Graph:", json);
+        return res.status(500).json({
+          error: "Meta Graph devolvió un error al listar phone_numbers",
+          detail: json,
+        });
+      }
+
+      // 4) Extraer teléfonos
+      const phones = json.data ?? [];
 
       const accounts: Array<{
         business_id: string | null;
@@ -116,22 +119,16 @@ router.get(
         verified_name: string | null;
       }> = [];
 
-      for (const w of wabas) {
-        const wabaId = w.id as string;
-        const wabaName = (w.name as string) ?? null;
-
-        const phones = w.phone_numbers?.data ?? w.phone_numbers ?? [];
-        for (const ph of phones) {
-          accounts.push({
-            business_id: null, // aquí ya no tenemos businesses{...}
-            business_name: null,
-            waba_id: wabaId,
-            waba_name: wabaName,
-            phone_number_id: ph.id as string,
-            phone_number: ph.display_phone_number as string,
-            verified_name: (ph.verified_name as string) ?? null,
-          });
-        }
+      for (const ph of phones) {
+        accounts.push({
+          business_id: null,
+          business_name: null,
+          waba_id: wabaId,
+          waba_name: null,
+          phone_number_id: ph.id as string,
+          phone_number: ph.display_phone_number as string,
+          verified_name: (ph.verified_name as string) ?? null,
+        });
       }
 
       console.log(
