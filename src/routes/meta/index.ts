@@ -361,23 +361,85 @@ router.get(
 
       const accessToken = tokenJson.access_token as string;
 
+      // 3️⃣ Resolver automáticamente WABA + número usando el token global
+      const globalToken = process.env.META_WA_ACCESS_TOKEN;
+      const globalWabaId = process.env.META_WABA_ID;
+
+      let whatsappBusinessId: string | null = null;
+      let whatsappPhoneNumberId: string | null = null;
+      let whatsappPhoneNumber: string | null = null;
+
+      if (!globalToken || !globalWabaId) {
+        console.warn(
+          "[WA OAUTH CALLBACK] Falta META_WA_ACCESS_TOKEN o META_WABA_ID; " +
+            "solo se guardará el access_token del tenant."
+        );
+      } else {
+        const phonesUrl =
+          "https://graph.facebook.com/v18.0/" +
+          encodeURIComponent(globalWabaId) +
+          "/phone_numbers?access_token=" +
+          encodeURIComponent(globalToken);
+
+        console.log("[WA OAUTH CALLBACK] Consultando phone_numbers:", phonesUrl);
+
+        const phonesResp = await fetch(phonesUrl);
+        const phonesJson: any = await phonesResp.json();
+
+        console.log(
+          "📞 [WA OAUTH CALLBACK] Respuesta phone_numbers:",
+          phonesResp.status,
+          JSON.stringify(phonesJson, null, 2)
+        );
+
+        if (phonesResp.ok && Array.isArray(phonesJson.data) && phonesJson.data.length > 0) {
+          const phone = phonesJson.data[0];
+
+          whatsappBusinessId = globalWabaId;
+          whatsappPhoneNumberId = phone.id ?? null;
+          whatsappPhoneNumber = phone.display_phone_number ?? null;
+        } else {
+          console.warn(
+            "[WA OAUTH CALLBACK] No se pudieron obtener phone_numbers de la WABA global"
+          );
+        }
+      }
+
+      // 4️⃣ Actualizar tenant en DB con access_token + número
       try {
         console.log(
-          "💾 [WA OAUTH CALLBACK] Actualizando tenant con access_token...",
-          tenantId
+          "💾 [WA OAUTH CALLBACK] Actualizando tenant con datos de WhatsApp...",
+          { tenantId, whatsappBusinessId, whatsappPhoneNumberId, whatsappPhoneNumber }
         );
 
         const updateQuery = `
           UPDATE tenants
           SET
-            whatsapp_access_token = $1,
-            whatsapp_status       = 'connected',
-            updated_at            = NOW()
-          WHERE id::text = $2
-          RETURNING id, whatsapp_status;
+            whatsapp_access_token     = $1,
+            whatsapp_business_id      = $2,
+            whatsapp_phone_number_id  = $3,
+            whatsapp_phone_number     = $4,
+            whatsapp_status           = 'connected',
+            whatsapp_connected        = TRUE,
+            whatsapp_connected_at     = NOW(),
+            updated_at                = NOW()
+          WHERE id::text = $5
+          RETURNING id,
+                    whatsapp_business_id,
+                    whatsapp_phone_number_id,
+                    whatsapp_phone_number,
+                    whatsapp_status,
+                    whatsapp_connected,
+                    whatsapp_connected_at;
         `;
 
-        const result = await pool.query(updateQuery, [accessToken, tenantId]);
+        const result = await pool.query(updateQuery, [
+          accessToken,
+          whatsappBusinessId,
+          whatsappPhoneNumberId,
+          whatsappPhoneNumber,
+          tenantId,
+        ]);
 
         console.log(
           "💾 [WA OAUTH CALLBACK] UPDATE rowCount:",
@@ -394,12 +456,12 @@ router.get(
         }
       } catch (dbErr) {
         console.error(
-          "❌ [WA OAUTH CALLBACK] Error guardando access_token en tenants:",
+          "❌ [WA OAUTH CALLBACK] Error guardando datos de WhatsApp en tenants:",
           dbErr
         );
         return res
           .status(500)
-          .send("Error al guardar access_token en DB (ver logs).");
+          .send("Error al guardar los datos de WhatsApp en DB (ver logs).");
       }
 
       // Página simple para el popup
