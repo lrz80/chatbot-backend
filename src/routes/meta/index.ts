@@ -466,17 +466,47 @@ router.get(
 
       // Página simple para el popup
       return res.send(`
-        <html>
-          <head>
-            <title>WhatsApp conectado</title>
-          </head>
-          <body style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; text-align:center; padding-top:40px;">
-            <h1>✅ WhatsApp conectado correctamente</h1>
-            <p>Ya registramos tu cuenta de WhatsApp Business en Aamy.</p>
-            <p>Puedes cerrar esta ventana y volver al dashboard.</p>
-          </body>
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <title>WhatsApp Connected</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              text-align: center;
+              margin-top: 80px;
+            }
+            .ok {
+              color: green;
+              font-size: 22px;
+              margin-bottom: 20px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="ok">✔ WhatsApp connected successfully</div>
+          <p>Your WhatsApp Business account has been successfully registered in Aamy.</p>
+          <p>This window will close automatically. You can also close it manually.</p>
+
+          <script>
+            setTimeout(() => {
+              // If this window was opened as a popup:
+              if (window.opener) {
+                try {
+                  window.opener.postMessage({ connected: true, channel: 'whatsapp' }, '*');
+                } catch (e) {}
+                window.close();
+              } else {
+                // If it was opened as a full tab, just redirect back to the dashboard
+                window.location.href = 'https://www.aamy.ai/dashboard/training?connected=whatsapp';
+              }
+            }, 2000);
+          </script>
+        </body>
         </html>
       `);
+
     } catch (err) {
       console.error("❌ [WA OAUTH CALLBACK] Error general:", err);
       return res
