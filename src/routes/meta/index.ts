@@ -310,127 +310,187 @@ router.get(
       // 2) Si NO hay número en DB pero SÍ hay access_token,
       //    llamamos a Graph para detectar el WABA y su número.
       if (!whatsapp_access_token) {
-        // No hay token todavía: no podemos consultar a Meta
+        console.warn(
+          "[WA ACCOUNTS] Tenant sin whatsapp_access_token. Primero debe conectar WhatsApp."
+        );
         return res.json({ phoneNumbers: [], accounts: [] });
       }
 
-      try {
+      console.log(
+        "[WA ACCOUNTS] No hay número en DB, consultando a Meta con access_token…",
+        { tenantId }
+      );
+
+      // 2.1) Negocios a los que el usuario tiene acceso
+      const businessesUrl =
+        `https://graph.facebook.com/v18.0/me/businesses` +
+        `?access_token=${encodeURIComponent(whatsapp_access_token)}`;
+
+      console.log("[WA ACCOUNTS] Consultando /me/businesses:", businessesUrl);
+
+      const businessesResp = await fetch(businessesUrl);
+      const businessesJson: any = await businessesResp.json();
+
+      console.log(
+        "[WA ACCOUNTS] Respuesta /me/businesses:",
+        businessesResp.status,
+        JSON.stringify(businessesJson, null, 2)
+      );
+
+      if (!businessesResp.ok) {
+        console.error("[WA ACCOUNTS] Error desde /me/businesses:", businessesJson);
+        return res.status(500).json({
+          error: "Meta Graph devolvió un error al listar negocios.",
+          detail: businessesJson,
+        });
+      }
+
+      const businesses = businessesJson.data ?? [];
+      if (!Array.isArray(businesses) || businesses.length === 0) {
+        console.warn(
+          "[WA ACCOUNTS] El usuario no tiene negocios asociados en /me/businesses."
+        );
+        return res.json({ phoneNumbers: [], accounts: [] });
+      }
+
+      type FoundNumber = {
+        business_id: string;
+        waba_id: string;
+        waba_name: string | null;
+        phone_number_id: string;
+        phone_number: string;
+        verified_name: string | null;
+      };
+
+      let found: FoundNumber | null = null;
+
+      // 2.2) Buscar la primera WABA con al menos un número
+      for (const biz of businesses) {
+        const businessId = biz.id as string;
         console.log(
-          "[WA ACCOUNTS] No hay número en DB, consultando a Meta con access_token…",
-          { tenantId }
+          "[WA ACCOUNTS] Revisando business:",
+          businessId,
+          biz.name
         );
 
-        const resp = await fetch(
-          "https://graph.facebook.com/v18.0/me" +
-            "?fields=whatsapp_business_accounts{id,name,phone_numbers{id,display_phone_number,verified_name,code_verification_status}}" +
-            `&access_token=${encodeURIComponent(whatsapp_access_token)}`
-        );
-
-        const json: any = await resp.json();
-        console.log(
-          "[WA ACCOUNTS] Respuesta /me whatsapp_business_accounts:",
-          resp.status,
-          JSON.stringify(json, null, 2)
-        );
-
-        if (!resp.ok || !json.whatsapp_business_accounts) {
-          console.warn(
-            "[WA ACCOUNTS] No se pudieron obtener whatsapp_business_accounts desde Meta."
-          );
-          return res.json({ phoneNumbers: [], accounts: [] });
-        }
-
-        const wabas: any[] = json.whatsapp_business_accounts.data || [];
-
-        // Tomamos el primer WABA que tenga al menos un número
-        let selectedWaba: any | null = null;
-        let selectedPhone: any | null = null;
-
-        for (const w of wabas) {
-          const phones: any[] = w.phone_numbers?.data || w.phone_numbers || [];
-          if (phones.length > 0) {
-            // Preferir VERIFICADO si existe
-            selectedPhone =
-              phones.find(
-                (p) =>
-                  p.code_verification_status === "VERIFIED" ||
-                  p.code_verification_status === "VERIFIED_WHATSAPP"
-              ) || phones[0];
-            selectedWaba = w;
-            break;
-          }
-        }
-
-        if (!selectedWaba || !selectedPhone) {
-          console.warn(
-            "[WA ACCOUNTS] No se encontró ningún WABA con números de WhatsApp."
-          );
-          return res.json({ phoneNumbers: [], accounts: [] });
-        }
-
-        whatsapp_business_id = selectedWaba.id;
-        whatsapp_phone_number_id = selectedPhone.id;
-        whatsapp_phone_number = selectedPhone.display_phone_number;
-
-        // 3) Guardar en DB
-        try {
-          console.log(
-            "[WA ACCOUNTS] Guardando número detectado en tenants…",
-            {
-              tenantId,
-              whatsapp_business_id,
-              whatsapp_phone_number_id,
-              whatsapp_phone_number,
-            }
-          );
-
-          await pool.query(
-            `
-            UPDATE tenants
-            SET
-              whatsapp_business_id     = $1,
-              whatsapp_phone_number_id = $2,
-              whatsapp_phone_number    = $3,
-              updated_at               = NOW()
-            WHERE id = $4
-          `,
-            [
-              whatsapp_business_id,
-              whatsapp_phone_number_id,
-              whatsapp_phone_number,
-              tenantId,
-            ]
-          );
-        } catch (dbErr) {
-          console.error(
-            "[WA ACCOUNTS] Error guardando datos de número en DB:",
-            dbErr
-          );
-          // seguimos, igual devolvemos lo que obtuvimos
-        }
-
-        const phoneNumbers = [
-          {
-            waba_id: whatsapp_business_id,
-            phone_number_id: whatsapp_phone_number_id,
-            display_phone_number: whatsapp_phone_number,
-            verified_name: selectedPhone.verified_name || name || null,
-          },
+        const wabaEndpoints = [
+          "owned_whatsapp_business_accounts",
+          "client_whatsapp_business_accounts",
         ];
 
-        return res.json({
-          phoneNumbers,
-          accounts: phoneNumbers,
-        });
-      } catch (errFetch) {
-        console.error(
-          "[WA ACCOUNTS] Error consultando cuentas de WhatsApp en Meta:",
-          errFetch
-        );
-        return res
-          .status(500)
-          .json({ error: "Error consultando cuentas de WhatsApp en Meta." });
+        for (const endpoint of wabaEndpoints) {
+          const wabaUrl =
+            `https://graph.facebook.com/v18.0/${businessId}/${endpoint}` +
+            `?fields=id,name,phone_numbers{ id,display_phone_number,verified_name }` +
+            `&access_token=${encodeURIComponent(whatsapp_access_token!)}`;
+
+          console.log("[WA ACCOUNTS] Consultando:", wabaUrl);
+
+          const wabaResp = await fetch(wabaUrl);
+          const wabaJson: any = await wabaResp.json();
+
+          console.log(
+            `[WA ACCOUNTS] Respuesta ${endpoint}:`,
+            wabaResp.status,
+            JSON.stringify(wabaJson, null, 2)
+          );
+
+          if (!wabaResp.ok) {
+            console.warn(
+              `[WA ACCOUNTS] Error en ${endpoint} para business ${businessId}:`,
+              wabaJson
+            );
+            continue;
+          }
+
+          const wabas = wabaJson.data ?? [];
+          for (const w of wabas) {
+            const phones = w.phone_numbers?.data ?? w.phone_numbers ?? [];
+            if (!phones.length) continue;
+
+            const ph = phones[0]; // por ahora tomamos el primero
+
+            found = {
+              business_id: businessId,
+              waba_id: w.id as string,
+              waba_name: (w.name as string) ?? null,
+              phone_number_id: ph.id as string,
+              phone_number: ph.display_phone_number as string,
+              verified_name: (ph.verified_name as string) ?? null,
+            };
+
+            break;
+          }
+
+          if (found) break;
+        }
+
+        if (found) break;
       }
+
+      if (!found) {
+        console.warn(
+          "[WA ACCOUNTS] No se encontraron WABAs con números en ninguno de los negocios."
+        );
+        return res.json({ phoneNumbers: [], accounts: [] });
+      }
+
+      console.log("[WA ACCOUNTS] Número encontrado automáticamente:", found);
+
+      whatsapp_business_id = found.waba_id;
+      whatsapp_phone_number_id = found.phone_number_id;
+      whatsapp_phone_number = found.phone_number;
+
+      // 3) Guardar en DB
+      try {
+        console.log(
+          "[WA ACCOUNTS] Guardando número detectado en tenants…",
+          {
+            tenantId,
+            whatsapp_business_id,
+            whatsapp_phone_number_id,
+            whatsapp_phone_number,
+          }
+        );
+
+        await pool.query(
+          `
+          UPDATE tenants
+          SET
+            whatsapp_business_id     = $1,
+            whatsapp_phone_number_id = $2,
+            whatsapp_phone_number    = $3,
+            whatsapp_status          = 'connected',
+            updated_at               = NOW()
+          WHERE id = $4
+        `,
+          [
+            whatsapp_business_id,
+            whatsapp_phone_number_id,
+            whatsapp_phone_number,
+            tenantId,
+          ]
+        );
+      } catch (dbErr) {
+        console.error(
+          "[WA ACCOUNTS] Error guardando datos de número en DB:",
+          dbErr
+        );
+      }
+
+      const phoneNumbers = [
+        {
+          waba_id: whatsapp_business_id,
+          phone_number_id: whatsapp_phone_number_id,
+          display_phone_number: whatsapp_phone_number,
+          verified_name: found.verified_name || name || null,
+        },
+      ];
+
+      return res.json({
+        phoneNumbers,
+        accounts: phoneNumbers,
+      });
     } catch (err) {
       console.error("[WA ACCOUNTS] Error general listando números:", err);
       return res
