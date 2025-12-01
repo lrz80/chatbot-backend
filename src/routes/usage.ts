@@ -128,6 +128,8 @@ router.get('/', async (req: Request, res: Response) => {
         canal,
         usados,
         limite: totalLimite,
+        limite_base: limiteBase ?? 0,      // 👈 base del plan
+        creditos_extras: creditosExtras,   // 👈 de la tabla creditos_comprados
         porcentaje,
         notificar,
       };
