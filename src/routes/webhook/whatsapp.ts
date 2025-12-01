@@ -399,17 +399,73 @@ export async function procesarMensajeWhatsApp(body: any) {
 
   const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs;
 
-  if (wantsMoreInfo) {
-    // 👉 Pregunta "más info" principal
-    let reply =
-      idiomaDestino === 'en'
-        ? 'What would you like to know more about? Our services, prices or something else?'
-        : '¿Sobre qué te gustaría saber más? ¿Servicios, precios u otra cosa?';
+  const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
 
-    // 👉 Si el mensaje venía CON saludo al inicio, anteponemos la bienvenida
+  if (wantsMoreInfo) {
     const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
       .test(userInput);
 
+    let reply: string;
+
+    try {
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+      const systemPrompt = [
+        promptBase,
+        '',
+        `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
+        `Formato WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas en prosa, sin bullets ni encabezados.`,
+        'Usa únicamente la información del prompt sobre servicios, precios, horarios, ubicación y canales oficiales.',
+        'No inventes precios ni beneficios que no estén en el prompt.',
+      ].join('\n');
+
+      const userPromptLLM =
+        idiomaDestino === 'en'
+          ? `The user is asking for more information in a general way (e.g. "I need more info", "I want more information").
+  Summarize briefly what this business offers (services, who it is for, key benefits, and pricing / membership structure if available in the prompt).
+  Then finish with this exact closing question in English:
+  "What would you like to know more about? Our services, prices, schedule, or something else?"`
+          : `El usuario está pidiendo más información de forma general (por ejemplo "quiero más info", "necesito más información").
+  Resume brevemente qué ofrece este negocio (servicios, para quién es, beneficios clave, y estructura de precios / membresías si está disponible en el prompt).
+  Luego termina con esta pregunta EXACTA en español:
+  "¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?"`;
+
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.2,
+        max_tokens: 400,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPromptLLM },
+        ],
+      });
+
+      reply =
+        completion.choices[0]?.message?.content?.trim() ??
+        (idiomaDestino === 'en'
+          ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
+          : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?');
+
+      // registra tokens
+      const used = completion.usage?.total_tokens || 0;
+      if (used > 0) {
+        await pool.query(
+          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+          VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+          ON CONFLICT (tenant_id, canal, mes)
+          DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+          [tenant.id, used]
+        );
+      }
+    } catch (e) {
+      console.warn('⚠️ LLM (more info) falló; uso fallback fijo:', e);
+      reply =
+        idiomaDestino === 'en'
+          ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
+          : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?';
+    }
+
+    // Si el mensaje venía CON saludo al inicio, antepone la bienvenida
     if (startsWithGreeting) {
       const saludo = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
       reply = `${saludo}\n\n${reply}`;
@@ -419,15 +475,15 @@ export async function procesarMensajeWhatsApp(body: any) {
 
     await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
       [tenant.id, reply, canal, fromNumber || 'anónimo', `${messageId}-bot`]
     );
 
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT DO NOTHING`,
       [tenant.id, canal, messageId]
     );
 
@@ -448,8 +504,8 @@ export async function procesarMensajeWhatsApp(body: any) {
     return;
   }
 
-  const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
-  let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+  // Antes: let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+  let respuesta: string | null = null;
 
   // CTA multilenguaje para cierres consistentes
   const CTA_TXT =
@@ -1589,6 +1645,11 @@ export async function procesarMensajeWhatsApp(body: any) {
   const intentForCTANorm = intentForCTA ? normalizeIntentAlias(intentForCTA) : null;
   const cta5raw = await pickCTA(tenant, intentForCTANorm, canal);
   const cta5    = await translateCTAIfNeeded(cta5raw, idiomaDestino);
+
+  // Si por alguna razón nadie llenó "respuesta", usa la bienvenida del tenant
+  if (!respuesta) {
+    respuesta = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+  }
 
   const withDefaultCta = cta5 ? respuesta : `${respuesta}\n\n${CTA_TXT}`;
   const respuestaWithCTA = appendCTAWithCap(withDefaultCta, cta5);
