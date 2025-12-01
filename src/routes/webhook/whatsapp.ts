@@ -29,6 +29,7 @@ import type { Canal } from '../../lib/detectarIntencion';
 import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
 import { requireChannelEnabled } from "../../middleware/requireChannelEnabled";
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
+import { cycleStartForNow } from '../../utils/billingCycle';
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -326,20 +327,20 @@ export async function procesarMensajeWhatsApp(
   // 2.b) Incrementar uso mensual (antes de cualquier return)
   try {
     const { rows: rowsTenant } = await pool.query(
-      `SELECT membresia_inicio FROM tenants WHERE id = $1`, [tenant.id]
+      `SELECT membresia_inicio FROM tenants WHERE id = $1`,
+      [tenant.id]
     );
     const membresiaInicio = rowsTenant[0]?.membresia_inicio;
+
     if (membresiaInicio) {
-      const inicio = new Date(membresiaInicio);
-      const ahora = new Date();
-      const diffInMonths = Math.floor((ahora.getFullYear() - inicio.getFullYear()) * 12 + (ahora.getMonth() - inicio.getMonth()));
-      const cicloInicio = new Date(inicio); cicloInicio.setMonth(inicio.getMonth() + diffInMonths);
-      const cicloMes = cicloInicio.toISOString().split('T')[0];
+      // 👇 Usamos EXACTAMENTE la misma función que /usage
+      const cicloMes = cycleStartForNow(membresiaInicio);
 
       await pool.query(
         `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
          VALUES ($1, $2, $3, 1)
-         ON CONFLICT (tenant_id, canal, mes) DO UPDATE SET usados = uso_mensual.usados + 1`,
+         ON CONFLICT (tenant_id, canal, mes)
+         DO UPDATE SET usados = uso_mensual.usados + 1`,
         [tenant.id, 'whatsapp', cicloMes]
       );
     }
