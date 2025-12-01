@@ -8,16 +8,47 @@ import { cycleStartForNow } from '../utils/billingCycle';
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
-const CANALES = [
-  { canal: 'whatsapp', limite: 500 },
-  { canal: 'meta', limite: 1000 }, // Incluye meta correctamente
-  { canal: 'followup', limite: 500 },
-  { canal: 'voz', limite: 50000 },
-  { canal: 'sms', limite: 500 },
-  { canal: 'email', limite: 2000 },
-  { canal: 'almacenamiento', limite: 5120 },
-  { canal: 'contactos', limite: 500 },
-];
+function getLimitesPorPlan(plan: string | null | undefined) {
+  const p = (plan || '').toLowerCase();
+
+  if (p === 'starter') {
+    return {
+      whatsapp: 1200,
+      meta: 0,
+      followup: 500,
+      voz: 0,
+      sms: 0,
+      email: 0,
+      almacenamiento: 5120,  // 5 GB
+      contactos: 0,
+    };
+  }
+
+  if (p === 'pro') {
+    return {
+      whatsapp: 3000,
+      meta: 2000,
+      followup: 2000,
+      voz: 0,
+      sms: 0,
+      email: 0,
+      almacenamiento: 5120,  // 5 GB
+      contactos: 0,
+    };
+  }
+
+  // PRO PLUS (plan de 139.99) por defecto
+  return {
+    whatsapp: 6000,
+    meta: 3000,
+    followup: 3500,
+    voz: 0,
+    sms: 300,
+    email: 4000,
+    almacenamiento: 10240, // 10 GB
+    contactos: 1500,
+  };
+}
 
 router.get('/', async (req: Request, res: Response) => {
   const token = req.cookies.token;
@@ -33,11 +64,18 @@ router.get('/', async (req: Request, res: Response) => {
 
     // 🔍 Obtenemos membresia_inicio del tenant
     const tenantRes = await pool.query(
-      'SELECT membresia_inicio FROM tenants WHERE id = $1',
+      'SELECT membresia_inicio, plan FROM tenants WHERE id = $1',
       [tenantId]
     );
-    const membresiaInicio = tenantRes.rows[0]?.membresia_inicio;
-    if (!membresiaInicio) return res.status(400).json({ error: 'Membresía no configurada' });
+    const tenantRow = tenantRes.rows[0];
+    const membresiaInicio = tenantRow?.membresia_inicio;
+    const tenantPlan = tenantRow?.plan || 'starter';
+
+    if (!membresiaInicio) {
+      return res.status(400).json({ error: 'Membresía no configurada' });
+    }
+
+    const limites = getLimitesPorPlan(tenantPlan);
 
     // 🔁 mismo cálculo que el webhook
     const ciclo = cycleStartForNow(membresiaInicio);
@@ -65,17 +103,22 @@ router.get('/', async (req: Request, res: Response) => {
       GROUP BY canal
     `, [tenantId]);
 
-    const creditosMap = new Map(creditosRes.rows.map((row: any) => [row.canal, parseInt(row.total)]));
-    const usosMap = new Map(usoRes.rows.map((row: any) => [row.canal, parseInt(row.usados)]));
+    const creditosMap = new Map(
+      creditosRes.rows.map((row: any) => [row.canal, parseInt(row.total, 10)])
+    );
+    const usosMap = new Map(
+      usoRes.rows.map((row: any) => [row.canal, parseInt(row.usados, 10)])
+    );
 
-    const usos = CANALES.map(({ canal, limite: limiteBase }) => {
+    // limites viene de getLimitesPorPlan(tenantPlan)
+    const usos = Object.entries(limites).map(([canal, limiteBase]) => {
       const usados = usosMap.get(canal) ?? 0;
       const creditosExtras = creditosMap.get(canal) ?? 0;
       const totalLimite = (limiteBase ?? 0) + creditosExtras;
 
       const porcentaje = totalLimite > 0 ? (usados / totalLimite) * 100 : 0;
 
-      let notificar = null;
+      let notificar: 'aviso' | 'limite' | null = null;
       if (totalLimite) {
         if (porcentaje >= 100) notificar = 'limite';
         else if (porcentaje >= 80) notificar = 'aviso';
@@ -86,11 +129,11 @@ router.get('/', async (req: Request, res: Response) => {
         usados,
         limite: totalLimite,
         porcentaje,
-        notificar
+        notificar,
       };
     });
 
-    return res.status(200).json({ usos, plan: 'custom' });
+    return res.status(200).json({ usos, plan: tenantPlan });
 
   } catch (error) {
     console.error('❌ Error en /usage:', error);
