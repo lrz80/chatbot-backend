@@ -163,16 +163,13 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
     setTimeout(async () => {
       try {
         console.log(
-          "[META WEBHOOK] Delegando a procesarMensajeWhatsApp con fakeBody + context"
+          "[META WEBHOOK] Delegando a procesarMensajeWhatsApp con fakeBody"
         );
-
-        const ctx: WhatsAppContext = {
-          tenant,
-          canal: "whatsapp",  // sigue siendo canal WhatsApp
-          origen: "meta",     // para distinguir si luego lo necesitas
-        };
-
-        await procesarMensajeWhatsApp(fakeBody, ctx);
+        await procesarMensajeWhatsApp(fakeBody, {
+          tenant,          // 👈 el que ya encontraste arriba por phone_number_id
+          canal: "whatsapp",
+          origen: "meta",
+        });
       } catch (e) {
         console.error(
           "❌ [META WEBHOOK] Error dentro de procesarMensajeWhatsApp:",
