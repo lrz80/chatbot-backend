@@ -400,10 +400,20 @@ export async function procesarMensajeWhatsApp(body: any) {
   const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs;
 
   if (wantsMoreInfo) {
-    const reply =
+    // 👉 Pregunta "más info" principal
+    let reply =
       idiomaDestino === 'en'
         ? 'What would you like to know more about? Our services, prices or something else?'
         : '¿Sobre qué te gustaría saber más? ¿Servicios, precios u otra cosa?';
+
+    // 👉 Si el mensaje venía CON saludo al inicio, anteponemos la bienvenida
+    const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
+      .test(userInput);
+
+    if (startsWithGreeting) {
+      const saludo = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+      reply = `${saludo}\n\n${reply}`;
+    }
 
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
