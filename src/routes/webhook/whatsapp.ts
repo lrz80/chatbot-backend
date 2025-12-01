@@ -239,19 +239,26 @@ export async function procesarMensajeWhatsApp(body: any) {
   const messageId = body?.MessageSid || body?.SmsMessageSid || null;
 
   // Números “limpios”
-  const numero      = to.replace('whatsapp:', '').replace('tel:', '');   // Tu número Twilio (del negocio)
-  const fromNumber  = from.replace('whatsapp:', '').replace('tel:', ''); // Número del cliente
+  const numero      = to.replace('whatsapp:', '').replace('tel:', '');   // número del negocio
+  const fromNumber  = from.replace('whatsapp:', '').replace('tel:', ''); // número del cliente
 
-  // Busca el tenant por su número de WhatsApp (Twilio o Meta)
+  // Normaliza variantes con / sin "+" para que coincida aunque en DB esté "1555..." o "+1555..."
+  const numeroSinMas = numero.replace(/^\+/, '');
+
+  console.log('🔎 numero normalizado =', { numero, numeroSinMas });
+
+  // Busca el tenant por su número de WhatsApp (Twilio o Cloud API)
   const tenantRes = await pool.query(
     `
       SELECT *
       FROM tenants
       WHERE twilio_number = $1
          OR whatsapp_phone_number = $1
+         OR twilio_number = $2
+         OR whatsapp_phone_number = $2
       LIMIT 1
     `,
-    [numero]
+    [numero, numeroSinMas]
   );
 
   const tenant = tenantRes.rows[0];
