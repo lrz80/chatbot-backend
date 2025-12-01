@@ -849,7 +849,27 @@ Luego termina con esta pregunta EXACTA en español:
 
   if (saludoPuroRegex.test(userInput.trim())) {
     const saludo = await getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-    await enviarWhatsApp(fromNumber, saludo, tenant.id);
+
+    // 1) Enviar usando safeEnviarWhatsApp (idempotente)
+    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludo);
+    alreadySent = true;
+
+    // 2) Registrar mensaje del bot
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, saludo, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+    );
+
+    // 3) Registrar interacción
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT DO NOTHING`,
+      [tenant.id, canal, messageId]
+    );
+
     return;
   }
 
@@ -977,21 +997,40 @@ Luego termina con esta pregunta EXACTA en español:
   const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
 
   if ((intencionLower === "saludo" && greetingOnly) || (intencionLower === "agradecimiento" && thanksOnly)) {
-  let respuestaRapida = "";
+    let respuestaRapida = "";
 
-  if (intencionLower === "agradecimiento") {
-    respuestaRapida =
-      idiomaDestino === 'en'
-        ? "You're welcome! 💬 Would you like to see another option from the menu?"
-        : "¡De nada! 💬 ¿Quieres ver otra opción del menú?";
-  } else {
-    respuestaRapida = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+    if (intencionLower === "agradecimiento") {
+      respuestaRapida =
+        idiomaDestino === 'en'
+          ? "You're welcome! 💬 Would you like to see another option from the menu?"
+          : "¡De nada! 💬 ¿Quieres ver otra opción del menú?";
+    } else {
+      respuestaRapida = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+    }
+
+    // 1) Enviar por canal usando el wrapper idempotente
+    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuestaRapida);
+    alreadySent = true;
+
+    // 2) Registrar mensaje del bot
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, respuestaRapida, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+    );
+
+    // 3) Registrar interacción
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT DO NOTHING`,
+      [tenant.id, canal, messageId]
+    );
+
+    // (Opcional) podríamos registrar intención de venta aquí, pero en saludos/agradecimientos normalmente es nivel de interés bajo.
+    return;
   }
-
-  await enviarWhatsApp(fromNumber, respuestaRapida, tenant.id);
-  alreadySent = true;
-  return;
-}
 
   if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
     respuesta = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
