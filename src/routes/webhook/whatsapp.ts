@@ -402,8 +402,8 @@ export async function procesarMensajeWhatsApp(body: any) {
   if (wantsMoreInfo) {
     const reply =
       idiomaDestino === 'en'
-        ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
-        : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?';
+        ? 'What would you like to know more about? Our services, prices or something else?'
+        : '¿Sobre qué te gustaría saber más? ¿Servicios, precios u otra cosa?';
 
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
