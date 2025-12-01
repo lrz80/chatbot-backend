@@ -400,7 +400,8 @@ export async function procesarMensajeWhatsApp(body: any) {
   const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs;
 
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
-
+  let respuesta: string | null = null;
+  
   if (wantsMoreInfo) {
     const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
       .test(userInput);
@@ -503,9 +504,6 @@ export async function procesarMensajeWhatsApp(body: any) {
 
     return;
   }
-
-  // Antes: let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-  let respuesta: string | null = null;
 
   // CTA multilenguaje para cierres consistentes
   const CTA_TXT =
