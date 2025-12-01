@@ -45,8 +45,16 @@ const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
 const INTENTS_DIRECT = new Set([
-  'interes_clases','precio','horario','ubicacion','reservar','comprar','confirmar',
-  'clases_online'
+  'interes_clases',
+  'precio',
+  'horario',
+  'ubicacion',
+  'reservar',
+  'comprar',
+  'confirmar',
+  'clases_online',
+  'saludo',          // 👈 NUEVO
+  'agradecimiento',  // 👈 NUEVO
 ]);
 
 // Intenciones que deben ser únicas por tenant/canal
@@ -640,6 +648,15 @@ export async function procesarMensajeWhatsApp(body: any) {
       console.warn('⚠️ No se pudo programar follow-up (WA):', e);
     }
   };
+
+  // 💬 Saludo puro: contesta solo con la bienvenida y sal
+  const saludoPuroRegex = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenos\s+(dias|días))\s*$/i;
+
+  if (saludoPuroRegex.test(userInput.trim())) {
+    const saludo = await getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+    await enviarWhatsApp(fromNumber, saludo, tenant.id);
+    return;
+  }
 
   // 🔎 Intención antes del EARLY RETURN
   const { intencion: intenTemp } = await detectarIntencion(userInput, tenant.id, 'whatsapp');
