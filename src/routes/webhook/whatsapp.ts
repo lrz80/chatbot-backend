@@ -384,27 +384,26 @@ export async function procesarMensajeWhatsApp(body: any) {
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
-  // Texto normalizado para español (quita mayúsculas, acentos, etc.)
+    // Texto normalizado (minúsculas, sin acentos)
   const textNorm = normalizarTexto(userInput);
 
-  // 🔍 Caso especial: usuario pide "más info" de forma muy genérica
-  const wantsMoreInfo =
-    // Inglés (acepta "inf", "info", "information")
-    /\b(need\s+more\s+in(?:f|fo|formation)|i\s+want\s+more\s+in(?:f|fo|formation)|more\s+in(?:f|fo|formation))\b/i.test(
-      userInput
-    ) ||
-    // Español (trabajamos sobre textNorm sin acentos)
-    /\b(mas\s+info|mas\s+informacion|necesito\s+mas\s+info|necesito\s+mas\s+informacion)\b/i.test(
-      textNorm
-    );
+  // 🔍 CASO ESPECIAL: usuario pide "más info" de forma muy genérica
+  const wantsMoreInfoEn =
+    /\b(need\s+more\s+in(?:f|fo|formation)|i\s+want\s+more\s+in(?:f|fo|formation)|more\s+in(?:f|fo|formation))\b/i
+      .test(userInput);
+
+  const wantsMoreInfoEs =
+    /\b((necesito|quiero)\s+mas\s+in(?:f|fo|formacion)|mas\s+info|mas\s+informacion)\b/i
+      .test(textNorm);
+
+  const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs;
 
   if (wantsMoreInfo) {
-    const bienvenida = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-
+    // 👇 YA NO incluimos la bienvenida para no repetir saludo
     const reply =
       idiomaDestino === 'en'
-        ? `${bienvenida}\n\nWhat would you like to know more about? Our services, prices, schedule, or something else?`
-        : `${bienvenida}\n\n¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?`;
+        ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
+        : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?';
 
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
@@ -436,7 +435,7 @@ export async function procesarMensajeWhatsApp(body: any) {
       console.warn('⚠️ No se pudo registrar sales_intelligence (more info):', e);
     }
 
-    return; // ⬅️ muy importante
+    return; // ⬅️ importantísimo
   }
 
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
