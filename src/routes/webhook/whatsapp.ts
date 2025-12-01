@@ -402,108 +402,121 @@ export async function procesarMensajeWhatsApp(body: any) {
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
   let respuesta: string | null = null;
   
-  if (wantsMoreInfo) {
-    const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
-      .test(userInput);
+ if (wantsMoreInfo) {
+  const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
+    .test(userInput);
 
-    let reply: string;
+  // Usamos el prompt del tenant específicamente para WhatsApp en el idioma detectado
+  const promptForInfo = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
 
-    try {
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+  let reply: string;
 
-      const systemPrompt = [
-        promptBase,
-        '',
-        `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
-        `Formato WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas en prosa, sin bullets ni encabezados.`,
-        'Usa únicamente la información del prompt sobre servicios, precios, horarios, ubicación y canales oficiales.',
-        'No inventes precios ni beneficios que no estén en el prompt.',
-      ].join('\n');
+  try {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
-      const userPromptLLM =
-        idiomaDestino === 'en'
-          ? `The user is asking for more information in a general way (e.g. "I need more info", "I want more information").
-  Summarize briefly what this business offers (services, who it is for, key benefits, and pricing / membership structure if available in the prompt).
-  Then finish with this exact closing question in English:
-  "What would you like to know more about? Our services, prices, schedule, or something else?"`
-          : `El usuario está pidiendo más información de forma general (por ejemplo "quiero más info", "necesito más información").
-  Resume brevemente qué ofrece este negocio (servicios, para quién es, beneficios clave, y estructura de precios / membresías si está disponible en el prompt).
-  Luego termina con esta pregunta EXACTA en español:
-  "¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?"`;
+    const systemPrompt = [
+      promptForInfo,
+      '',
+      `Instrucciones para este caso (PEDIR MÁS INFORMACIÓN):
+      - El usuario está pidiendo más información de forma general (por ejemplo "quiero más info", "necesito más información", "I need more info").
+      - Usa EXCLUSIVAMENTE la información del prompt del negocio: servicios, a quién va dirigido, beneficios clave, precios / membresías, horarios, ubicación y canales oficiales.
+      - NO inventes datos que no estén en el prompt.
+      - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
+      - Formato WhatsApp: máximo ${MAX_WHATSAPP_LINES} líneas en prosa, sin bullets ni encabezados.
+      - Si el mensaje venía con saludo (hola, hello, buenas, etc.), saluda SOLO una vez de forma breve y luego pasa directamente a la información.
+      - Cierra la respuesta con una sola pregunta corta para continuar la conversación (por ejemplo:
+        • En español: "¿Hay algo en específico que te gustaría saber? ¿Precios, horarios o servicios?"
+        • En inglés: "Is there anything specific you’d like to know? Prices, schedule or services?").
+      `
+    ].join('\n');
 
-      const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        temperature: 0.2,
-        max_tokens: 400,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPromptLLM },
-        ],
-      });
+    const userPromptLLM = `
+MENSAJE DEL CLIENTE:
+"${userInput}"
 
-      reply =
-        completion.choices[0]?.message?.content?.trim() ??
-        (idiomaDestino === 'en'
-          ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
-          : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?');
+TAREA:
+- Redacta una respuesta informativa usando SOLO los datos del negocio que tienes en el prompt.
+- Explica qué es el negocio, qué ofrece, para quién es y, si hay información disponible, sus planes / precios y horarios.
+- No repitas el saludo varias veces.
+- Termina con UNA sola pregunta de seguimiento para saber qué detalle quiere el cliente.
+    `;
 
-      // registra tokens
-      const used = completion.usage?.total_tokens || 0;
-      if (used > 0) {
-        await pool.query(
-          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-          VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-          ON CONFLICT (tenant_id, canal, mes)
-          DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-          [tenant.id, used]
-        );
-      }
-    } catch (e) {
-      console.warn('⚠️ LLM (more info) falló; uso fallback fijo:', e);
-      reply =
-        idiomaDestino === 'en'
-          ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
-          : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?';
-    }
+    const completion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      temperature: 0.3,
+      max_tokens: 500,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user',   content: userPromptLLM },
+      ],
+    });
 
-    // Si el mensaje venía CON saludo al inicio, antepone la bienvenida
-    if (startsWithGreeting) {
-      const saludo = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-      reply = `${saludo}\n\n${reply}`;
-    }
+    reply =
+      completion.choices[0]?.message?.content?.trim() ??
+      (idiomaDestino === 'en'
+        ? 'We offer automated customer service, sales and follow-ups. Is there anything specific you’d like to know? Prices, schedule or services?'
+        : 'Ofrecemos automatización de atención al cliente, ventas y seguimiento. ¿Hay algo en específico que te gustaría saber? ¿Precios, horarios o servicios?');
 
-    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, reply, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-    );
-
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-
-    try {
-      await recordSalesIntent(
-        tenant.id,
-        fromNumber,
-        canal,
-        userInput,
-        'pedir_info',
-        2,
-        messageId
+    // registra tokens
+    const used = completion.usage?.total_tokens || 0;
+    if (used > 0) {
+      await pool.query(
+        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+         VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+         ON CONFLICT (tenant_id, canal, mes)
+         DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+        [tenant.id, used]
       );
-    } catch (e) {
-      console.warn('⚠️ No se pudo registrar sales_intelligence (more info):', e);
     }
-
-    return;
+  } catch (e) {
+    console.warn('⚠️ LLM (more info) falló; uso fallback:', e);
+    reply =
+      idiomaDestino === 'en'
+        ? 'We offer AI-powered automation for customer service, sales and follow-ups. Is there anything specific you’d like to know? Prices, schedule or services?'
+        : 'Ofrecemos automatización con inteligencia artificial para atención al cliente, ventas y seguimiento. ¿Hay algo en específico que te gustaría saber? ¿Precios, horarios o servicios?';
   }
+
+  // IMPORTANTE: ya NO añadimos otro saludo aquí manualmente,
+  // el saludo va incluido (si corresponde) dentro de reply según el prompt.
+  // Si quieres mantener este bloque, puedes dejarlo comentado:
+  //
+  // if (startsWithGreeting) {
+  //   const saludo = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+  //   reply = `${saludo}\n\n${reply}`;
+  // }
+
+  await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+  await pool.query(
+    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+     VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+     ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+    [tenant.id, reply, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+  );
+
+  await pool.query(
+    `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT DO NOTHING`,
+    [tenant.id, canal, messageId]
+  );
+
+  try {
+    await recordSalesIntent(
+      tenant.id,
+      fromNumber,
+      canal,
+      userInput,
+      'pedir_info',
+      2,
+      messageId
+    );
+  } catch (e) {
+    console.warn('⚠️ No se pudo registrar sales_intelligence (more info):', e);
+  }
+
+  return;
+}
 
   // CTA multilenguaje para cierres consistentes
   const CTA_TXT =
