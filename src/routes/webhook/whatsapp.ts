@@ -384,6 +384,54 @@ export async function procesarMensajeWhatsApp(body: any) {
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
+    // 🔍 Caso especial: usuario pide "más info" de forma muy genérica
+  const wantsMoreInfo = /\b(more info|more information|mas info|más info|mas información|más información)\b/i.test(
+    userInput.toLowerCase()
+  );
+
+  if (wantsMoreInfo) {
+    const bienvenida = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+
+    const reply =
+      idiomaDestino === 'en'
+        ? `${bienvenida}\n\nWhat would you like to know more about? Our services, prices, schedule, or something else?`
+        : `${bienvenida}\n\n¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?`;
+
+    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+    // Guardar mensaje del bot en DB
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, reply, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+    );
+
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT DO NOTHING`,
+      [tenant.id, canal, messageId]
+    );
+
+    // Registrar intención como "pedir_info" para inteligencia de ventas / follow-up
+    try {
+      await recordSalesIntent(
+        tenant.id,
+        fromNumber,
+        canal,
+        userInput,
+        'pedir_info',
+        2,
+        messageId
+      );
+    } catch (e) {
+      console.warn('⚠️ No se pudo registrar sales_intelligence (more info):', e);
+    }
+
+    return; // ⬅️ Importante: NO sigas al EARLY_RETURN ni FAQs
+  }
+
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
   let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
 
