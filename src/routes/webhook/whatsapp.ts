@@ -384,7 +384,7 @@ export async function procesarMensajeWhatsApp(body: any) {
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
-  // Texto sin saludos al inicio para detectar "más info"
+   // Texto sin saludos al inicio para detectar "más info" y "demo"
   const cleanedForInfo = stripLeadGreetings(userInput);
   const cleanedNorm    = normalizarTexto(cleanedForInfo);
 
@@ -399,117 +399,204 @@ export async function procesarMensajeWhatsApp(body: any) {
 
   const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs;
 
+  // 🔍 CASO ESPECIAL: usuario pide una DEMO / demostración
+  const wantsDemo =
+    /\b(demuéstramelo|demuestrame|demuéstrame|hazme una demostración|hazme un demo|prueba real|ejemplo real|muéstrame cómo funciona|muéstrame cómo responde|show me|prove it|give me a demo)\b/i
+      .test(cleanedNorm);
+
+  // Prompt base del tenant para todo este flujo
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
-  let respuesta: string | null = null;
-  
- if (wantsMoreInfo) {
-  const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?)/i.test(userInput);
-
-  const promptForInfo = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
-
-  let reply: string;
-
-  try {
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-
-    const systemPrompt = [
-      `Eres Amy, asistente conversacional del negocio. Usa SOLO la información del prompt del tenant.`,
-      promptForInfo,
-      '',
-      `Contexto conversación:
-      - El cliente pide más información en general.
-      - NO inventes datos ni ofrezcas email o página si NO están en prompt.
-      - Si el negocio tiene link o números oficiales en el prompt, úsalos como CTA.
-      - Redacción natural, cercana, cálida, profesional, NO robótica.`,
-      '',
-      `Formato WhatsApp:
-      - Máximo ${MAX_WHATSAPP_LINES} líneas.
-      - No uses bullets, tablas ni encabezados.
-      - Evita repetir "¿hay algo más?".`,
-      '',
-      `Objetivo:
-      1. Explica brevemente qué ofrece este negocio (según prompt).
-      2. Describe para quién es, beneficios clave y si hay precios o planes.
-      3. Cierra SOLO con una pregunta natural que invite a continuar, según contexto del usuario
-         Ejemplos aceptables:
-         • "¿Te interesaría reservar, suscribirte o conocer los planes?"
-         • "¿Quieres que te explique cómo funciona el servicio?"
-         • "¿Deseas saber cómo activarlo?"`
-    ].join('\n');
-
-    const userPromptLLM = `
-Cliente pregunta: "${userInput}"
-
-Genera una respuesta en ${idiomaDestino === 'en' ? 'English' : 'Español'}, 
-usando solo los datos del negocio del prompt. 
-No inventes nombres, precios ni datos que no estén declarados.`;
-
-    const completion = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-      temperature: 0.35,
-      max_tokens: 500,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user',   content: userPromptLLM },
-      ],
-    });
-
-    reply = completion.choices[0]?.message?.content?.trim() || '';
-    
-    // registra uso tokens
-    const used = completion.usage?.total_tokens || 0;
-    if (used > 0) {
-      await pool.query(`
-        INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-        VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-        ON CONFLICT (tenant_id, canal, mes)
-        DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados
-      `, [tenant.id, used]);
-    }
-  } catch (e) {
-    console.warn('⚠️ LLM (more info) uso fallback:', e);
-    reply = idiomaDestino === 'en'
-      ? 'We specialize in automated customer service and AI-driven business solutions. Would you like to know about services, pricing, or how to start?'
-      : 'Somos una plataforma de automatización con IA para atención, ventas y seguimiento. ¿Quieres saber sobre precios, servicios o cómo empezar?';
-  }
-
-  await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-  // Guardar en DB igual que antes...
-  await pool.query(
-    `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-     VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-     ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-    [tenant.id, reply, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-  );
-
-  await pool.query(
-    `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-     VALUES ($1, $2, $3, NOW())
-     ON CONFLICT DO NOTHING`,
-    [tenant.id, canal, messageId]
-  );
-
-  try {
-    await recordSalesIntent(
-      tenant.id,
-      fromNumber,
-      canal,
-      userInput,
-      'pedir_info',
-      2,
-      messageId
-    );
-  } catch {}
-  
-  return;
-}
+  let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
 
   // CTA multilenguaje para cierres consistentes
   const CTA_TXT =
     idiomaDestino === 'en'
       ? 'Is there anything else I can help you with?'
       : '¿Hay algo más en lo que te pueda ayudar?';
+
+  // 🧩 Bloque especial: "quiero más info / need more info"
+  if (wantsMoreInfo) {
+    const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
+      .test(userInput);
+
+    let reply: string;
+
+    try {
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+      const systemPrompt = [
+        promptBase,
+        '',
+        `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
+        `Formato WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas en prosa, sin bullets ni encabezados.`,
+        'Usa únicamente la información del prompt sobre servicios, precios, horarios, ubicación y canales oficiales.',
+        'No inventes precios ni beneficios que no estén en el prompt.',
+      ].join('\n');
+
+      const userPromptLLM =
+        idiomaDestino === 'en'
+          ? `The user is asking for more information in a general way (e.g. "I need more info", "I want more information").
+Summarize briefly what this business offers (services, who it is for, key benefits, and pricing / membership structure if available in the prompt).
+Then finish with this exact closing question in English:
+"What would you like to know more about? Our services, prices, schedule, or something else?"`
+          : `El usuario está pidiendo más información de forma general (por ejemplo "quiero más info", "necesito más información").
+Resume brevemente qué ofrece este negocio (servicios, para quién es, beneficios clave, y estructura de precios / membresías si está disponible en el prompt).
+Luego termina con esta pregunta EXACTA en español:
+"¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?"`;
+
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.2,
+        max_tokens: 400,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPromptLLM },
+        ],
+      });
+
+      reply =
+        completion.choices[0]?.message?.content?.trim() ??
+        (idiomaDestino === 'en'
+          ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
+          : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?');
+
+      // registra tokens
+      const used = completion.usage?.total_tokens || 0;
+      if (used > 0) {
+        await pool.query(
+          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+           VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+           ON CONFLICT (tenant_id, canal, mes)
+           DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+          [tenant.id, used]
+        );
+      }
+    } catch (e) {
+      console.warn('⚠️ LLM (more info) falló; uso fallback fijo:', e);
+      reply =
+        idiomaDestino === 'en'
+          ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
+          : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?';
+    }
+
+    // Si el mensaje venía CON saludo al inicio, antepone la bienvenida
+    if (startsWithGreeting) {
+      const saludo = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+      reply = `${saludo}\n\n${reply}`;
+    }
+
+    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, reply, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+    );
+
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT DO NOTHING`,
+      [tenant.id, canal, messageId]
+    );
+
+    try {
+      await recordSalesIntent(
+        tenant.id,
+        fromNumber,
+        canal,
+        userInput,
+        'pedir_info',
+        2,
+        messageId
+      );
+    } catch (e) {
+      console.warn('⚠️ No se pudo registrar sales_intelligence (more info):', e);
+    }
+
+    return;
+  }
+
+  // 🧩 Bloque especial: DEMOSTRACIÓN ("demuéstramelo", "show me", etc.)
+  if (wantsDemo) {
+    try {
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+      const systemPrompt = [
+        `Eres Amy, asistente del negocio. El usuario pidió una DEMOSTRACIÓN real de cómo funciona el bot.`,
+        `Tu tarea: mostrar ejemplos prácticos, como si fueras un cliente y el bot respondiendo.`,
+        `Usa SOLO información del prompt del tenant. No inventes servicios ni precios.`,
+        `Muestra al menos 2 ejemplos: uno en español y otro en inglés si el negocio es bilingüe, pero manteniendo el límite de líneas.`,
+        `Formato WhatsApp, máximo ${MAX_WHATSAPP_LINES} líneas, SIN bullets, SIN encabezados, solo texto corrido tipo chat.`,
+        '',
+        promptBase
+      ].join('\n');
+
+      const userPromptLLM = `
+El usuario dijo: "${userInput}"
+Genera una demostración breve de cómo respondería Amy a clientes reales.
+Si detectas que el negocio es bilingüe por el prompt, incluye un ejemplo en español y otro en inglés.
+Usa información REAL del prompt del tenant.`;
+
+      const completion = await openai.chat.completions.create({
+        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+        temperature: 0.4,
+        max_tokens: 500,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPromptLLM },
+        ],
+      });
+
+      let reply = completion.choices[0]?.message?.content?.trim()
+        || 'Aquí tienes una demostración de cómo responde Amy.';
+
+      // Asegurar idioma principal correcto si hace falta
+      try {
+        const langOut = await detectarIdioma(reply);
+        if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+          reply = await traducirMensaje(reply, idiomaDestino);
+        }
+      } catch {}
+
+      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+         VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+         ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+        [tenant.id, reply, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+      );
+
+      await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT DO NOTHING`,
+        [tenant.id, canal, messageId]
+      );
+
+      // registrar intención "demo" como interés medio
+      try {
+        await recordSalesIntent(
+          tenant.id,
+          fromNumber,
+          canal,
+          userInput,
+          'demo',
+          2,
+          messageId
+        );
+      } catch (e) {
+        console.warn('⚠️ No se pudo registrar sales_intelligence (demo):', e);
+      }
+
+      return;
+    } catch (e) {
+      console.warn('⚠️ Bloque DEMO falló; sigo pipeline normal:', e);
+      // no hacemos return para que caiga a la lógica estándar
+    }
+  }
 
   // === FAST-PATH MULTI-INTENCIÓN ===
   try {
