@@ -520,82 +520,49 @@ Luego termina con esta pregunta EXACTA en español:
 
   // 🧩 Bloque especial: DEMOSTRACIÓN ("demuéstramelo", "show me", etc.)
   if (wantsDemo) {
+    const reply =
+      idiomaDestino === 'en'
+        ? `Sure 😊  
+  You can ask me anything about this business in English or Spanish.  
+  For example: pricing, services, how it works, or how I can help you.  
+  I will reply automatically, just like I would with a real customer.`
+        : `Claro 😊  
+  Puedes preguntarme lo que quieras sobre este negocio en español o en inglés.  
+  Por ejemplo: precios, servicios, cómo funciona, o cómo te puedo ayudar.  
+  Te responderé automáticamente, igual que si fueras un cliente real.`;
+
+    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, reply, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+    );
+
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT DO NOTHING`,
+      [tenant.id, canal, messageId]
+    );
+
     try {
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-
-      const systemPrompt = [
-        `Eres Amy, asistente del negocio. El usuario pidió una DEMOSTRACIÓN real de cómo funciona el bot.`,
-        `Tu tarea: mostrar ejemplos prácticos, como si fueras un cliente y el bot respondiendo.`,
-        `Usa SOLO información del prompt del tenant. No inventes servicios ni precios.`,
-        `Muestra al menos 2 ejemplos: uno en español y otro en inglés si el negocio es bilingüe, pero manteniendo el límite de líneas.`,
-        `Formato WhatsApp, máximo ${MAX_WHATSAPP_LINES} líneas, SIN bullets, SIN encabezados, solo texto corrido tipo chat.`,
-        '',
-        promptBase
-      ].join('\n');
-
-      const userPromptLLM = `
-El usuario dijo: "${userInput}"
-Genera una demostración breve de cómo respondería Amy a clientes reales.
-Si detectas que el negocio es bilingüe por el prompt, incluye un ejemplo en español y otro en inglés.
-Usa información REAL del prompt del tenant.`;
-
-      const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        temperature: 0.4,
-        max_tokens: 500,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPromptLLM },
-        ],
-      });
-
-      let reply = completion.choices[0]?.message?.content?.trim()
-        || 'Aquí tienes una demostración de cómo responde Amy.';
-
-      // Asegurar idioma principal correcto si hace falta
-      try {
-        const langOut = await detectarIdioma(reply);
-        if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-          reply = await traducirMensaje(reply, idiomaDestino);
-        }
-      } catch {}
-
-      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-      await pool.query(
-        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-         VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-         ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-        [tenant.id, reply, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+      // registramos la intención "demo" como interés medio (2)
+      await recordSalesIntent(
+        tenant.id,
+        fromNumber,
+        canal,
+        userInput,
+        'demo',
+        2,
+        messageId
       );
-
-      await pool.query(
-        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT DO NOTHING`,
-        [tenant.id, canal, messageId]
-      );
-
-      // registrar intención "demo" como interés medio
-      try {
-        await recordSalesIntent(
-          tenant.id,
-          fromNumber,
-          canal,
-          userInput,
-          'demo',
-          2,
-          messageId
-        );
-      } catch (e) {
-        console.warn('⚠️ No se pudo registrar sales_intelligence (demo):', e);
-      }
-
-      return;
     } catch (e) {
-      console.warn('⚠️ Bloque DEMO falló; sigo pipeline normal:', e);
-      // no hacemos return para que caiga a la lógica estándar
+      console.warn('⚠️ No se pudo registrar sales_intelligence (demo):', e);
     }
+
+    return; // 🔚 muy importante: salimos aquí y no seguimos el pipeline normal
   }
 
   // === FAST-PATH MULTI-INTENCIÓN ===
