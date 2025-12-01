@@ -384,22 +384,22 @@ export async function procesarMensajeWhatsApp(body: any) {
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
-    // Texto normalizado (minúsculas, sin acentos)
-  const textNorm = normalizarTexto(userInput);
+  // Texto sin saludos al inicio para detectar "más info"
+  const cleanedForInfo = stripLeadGreetings(userInput);
+  const cleanedNorm    = normalizarTexto(cleanedForInfo);
 
   // 🔍 CASO ESPECIAL: usuario pide "más info" de forma muy genérica
   const wantsMoreInfoEn =
     /\b(need\s+more\s+in(?:f|fo|formation)|i\s+want\s+more\s+in(?:f|fo|formation)|more\s+in(?:f|fo|formation))\b/i
-      .test(userInput);
+      .test(cleanedForInfo);
 
   const wantsMoreInfoEs =
     /\b((necesito|quiero)\s+mas\s+in(?:f|fo|formacion)|mas\s+info|mas\s+informacion)\b/i
-      .test(textNorm);
+      .test(cleanedNorm);
 
   const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs;
 
   if (wantsMoreInfo) {
-    // 👇 YA NO incluimos la bienvenida para no repetir saludo
     const reply =
       idiomaDestino === 'en'
         ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
@@ -435,7 +435,7 @@ export async function procesarMensajeWhatsApp(body: any) {
       console.warn('⚠️ No se pudo registrar sales_intelligence (more info):', e);
     }
 
-    return; // ⬅️ importantísimo
+    return;
   }
 
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
