@@ -88,25 +88,41 @@ router.get('/conteo', authenticateUser, async (req: Request, res: Response) => {
 
     const { rows } = await pool.query(
       `
-      SELECT TRIM(LOWER(m.canal)) AS canal,
-             COUNT(*)::int AS total
+      SELECT
+        CASE
+          WHEN TRIM(LOWER(m.canal)) IN ('whatsapp', 'wa', 'whatsapp_cloud', 'meta-whatsapp') THEN 'whatsapp'
+          WHEN TRIM(LOWER(m.canal)) IN ('facebook', 'fb') THEN 'facebook'
+          WHEN TRIM(LOWER(m.canal)) IN ('instagram', 'ig') THEN 'instagram'
+          WHEN TRIM(LOWER(m.canal)) IN ('voz', 'voice', 'llamada', 'telefono', 'phone') THEN 'voice'
+          ELSE TRIM(LOWER(m.canal))
+        END AS canal,
+        COUNT(*)::int AS total
       FROM messages m
       WHERE m.tenant_id = $1
-        AND TRIM(LOWER(COALESCE(m.role,''))) = 'user'
+        AND TRIM(LOWER(COALESCE(m.role, ''))) = 'user'
       GROUP BY 1
       `,
       [tenantId]
     );
 
-    const out: Record<string, number> = { whatsapp: 0, facebook: 0, instagram: 0, voice: 0 };
+    const out: Record<string, number> = {
+      whatsapp: 0,
+      facebook: 0,
+      instagram: 0,
+      voice: 0,
+    };
+
     for (const r of rows) {
-      const key = r.canal === 'voz' ? 'voice' : r.canal; // tolera 'voz'
-      if (out[key] !== undefined) out[key] = r.total;
+      const key = r.canal as string;
+      if (out[key] !== undefined) {
+        out[key] = r.total;
+      }
     }
-    res.json(out);
+
+    return res.json(out);
   } catch (error) {
     console.error('❌ Error en conteo global:', error);
-    res.status(500).json({ error: 'Error al obtener conteo global' });
+    return res.status(500).json({ error: 'Error al obtener conteo global' });
   }
 });
 
