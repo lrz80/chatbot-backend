@@ -1,17 +1,15 @@
 // src/routes/meta/whatsapp-callback.ts
 import express, { Request, Response } from "express";
 import pool from "../../lib/db";
-import { procesarMensajeWhatsApp } from "../webhook/whatsapp"; // 👈 reutilizamos tu flujo Twilio
+import { procesarMensajeWhatsApp } from "../webhook/whatsapp"; // 👈 motor central
 
 const router = express.Router();
 
-// Debe ser el mismo valor que pusiste en el panel de Meta (Verify Token)
 const VERIFY_TOKEN =
   process.env.META_WEBHOOK_VERIFY_TOKEN || "aamy-meta-verify";
 
 /**
  * GET /api/meta/whatsapp/callback
- *
  * Verificación del webhook (hub.challenge)
  */
 router.get("/whatsapp/callback", (req: Request, res: Response) => {
@@ -43,7 +41,8 @@ router.get("/whatsapp/callback", (req: Request, res: Response) => {
  * POST /api/meta/whatsapp/callback
  *
  * Aquí llegan TODOS los eventos de mensajes de WhatsApp Cloud API.
- * Ahora solo hace de "adaptador" y delega a procesarMensajeWhatsApp.
+ * Adaptamos el payload y delegamos a procesarMensajeWhatsApp,
+ * luego enviamos la respuesta por Graph API.
  */
 router.post("/whatsapp/callback", async (req: Request, res: Response) => {
   try {
@@ -52,7 +51,7 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
       JSON.stringify(req.body, null, 2)
     );
 
-    // 1️⃣ Validar estructura básica (object debe ser whatsapp_business_account)
+    // 1️⃣ Validar estructura básica
     if (req.body?.object !== "whatsapp_business_account") {
       return res.sendStatus(200);
     }
@@ -64,14 +63,14 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
     const messages = value?.messages;
     const metadata = value?.metadata;
 
-    // Puede ser solo un "status" de mensaje enviado, no un mensaje entrante
+    // Puede ser solo un "status", sin mensaje entrante
     if (!messages || !messages.length || !metadata) {
       return res.sendStatus(200);
     }
 
     const msg = messages[0];
 
-    // Solo procesamos mensajes de texto por ahora
+    // Solo procesamos texto por ahora
     if (msg.type !== "text" || !msg.text?.body) {
       return res.sendStatus(200);
     }
@@ -108,10 +107,10 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
       console.error("❌ [META WEBHOOK] Error buscando tenant:", dbErr);
     }
 
-    // Respondemos a Meta inmediatamente (como Twilio: no bloqueamos)
+    // ✅ Respondemos a Meta lo más rápido posible
     res.sendStatus(200);
 
-    // Si no hay tenant, respondemos algo simple y salimos
+    // 3️⃣ Caso sin tenant: respuesta simple y salimos (no se registra en DB)
     if (!tenant) {
       console.warn(
         "[META WEBHOOK] No se encontró tenant para este número de WhatsApp.",
@@ -137,7 +136,7 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
       return;
     }
 
-    // 3️⃣ Si hay tenant pero membresía inactiva, no seguimos el flujo
+    // 4️⃣ Membresía inactiva: no seguimos el flujo
     if (!tenant.membresia_activa) {
       console.log(
         `⛔ Membresía inactiva para tenant ${tenant.name || tenant.id}. No se procesará el mensaje.`
@@ -145,41 +144,42 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
       return;
     }
 
-    // 4️⃣ Construir "body estilo Twilio" y delegar a procesarMensajeWhatsApp
+    // 5️⃣ Construir "body estilo Twilio" para el motor central
     const fakeBody = {
-      // El "To" para tu flujo es el número del negocio
-      To: `whatsapp:${tenant.whatsapp_phone_number || displayNumber || ""}`,
-      // El "From" es el número del cliente
-      From: `whatsapp:${from}`,
+      To: `whatsapp:${tenant.whatsapp_phone_number || displayNumber || ""}`, // número del negocio (Cloud)
+      From: `whatsapp:${from}`, // número del cliente
       Body: body,
-      // Usamos el ID del mensaje de Cloud como MessageSid
       MessageSid: msg.id,
     };
 
-    // Procesar en background (igual patrón que Twilio)
-    setTimeout(async () => {
-      try {
-        console.log(
-          "[META WEBHOOK] Delegando a procesarMensajeWhatsApp con fakeBody"
-        );
-        await procesarMensajeWhatsApp(fakeBody);
-      } catch (e) {
-        console.error(
-          "❌ [META WEBHOOK] Error dentro de procesarMensajeWhatsApp:",
-          e
-        );
-      }
-    }, 0);
-  } catch (err) {
-    console.error("❌ [META WEBHOOK] Error procesando evento:", err);
-    // importante: si llegamos aquí antes de hacer res.status, devolvemos 500
-    if (!res.headersSent) {
-      return res.sendStatus(500);
-    }
-  }
-});
+    try {
+      console.log(
+        "[META WEBHOOK] Delegando a procesarMensajeWhatsApp con fakeBody"
+      );
 
-// Función helper para enviar mensaje por Meta (se sigue usando solo para el caso "sin tenant")
+      // Solo delegamos la lógica al motor central.
+      // procesarMensajeWhatsApp sigue enviando la respuesta como siempre.
+      await procesarMensajeWhatsApp(fakeBody, {
+        tenant,
+        canal: "whatsapp", // mismo nombre que usas en messages/interactions
+        origen: "meta",    // opcional, por si luego quieres diferenciar
+      });
+    } catch (e) {
+      console.error(
+        "❌ [META WEBHOOK] Error dentro de procesarMensajeWhatsApp:",
+        e
+      );
+    }
+
+      } catch (err) {
+        console.error("❌ [META WEBHOOK] Error procesando evento:", err);
+        if (!res.headersSent) {
+          return res.sendStatus(500);
+        }
+      }
+    });
+
+// Función helper para enviar mensaje por Meta
 async function enviarRespuestaMeta(params: {
   to: string;
   phoneNumberId: string;

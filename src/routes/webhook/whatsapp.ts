@@ -30,6 +30,12 @@ import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
 import { requireChannelEnabled } from "../../middleware/requireChannelEnabled";
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 
+// Puedes ponerlo debajo de los imports
+export type WhatsAppContext = {
+  tenant?: any;
+  canal?: string;
+  origen?: "twilio" | "meta";
+};
 
 const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
 const MATCHER_MIN_OVERRIDE = 0.85; // exige score alto para sobreescribir una intención "directa"
@@ -229,7 +235,10 @@ router.post("/", async (req: Request, res: Response) => {
 
 export default router;
 
-export async function procesarMensajeWhatsApp(body: any) {
+export async function procesarMensajeWhatsApp(
+  body: any,
+  context?: WhatsAppContext
+): Promise<void> {
   let alreadySent = false;
 
   // Datos básicos del webhook
