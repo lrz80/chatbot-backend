@@ -256,22 +256,30 @@ export async function procesarMensajeWhatsApp(
 
   console.log('🔎 numero normalizado =', { numero, numeroSinMas });
 
-  // Busca el tenant por su número de WhatsApp (Twilio o Cloud API)
-  const tenantRes = await pool.query(
-    `
-      SELECT *
-      FROM tenants
-      WHERE twilio_number = $1
-         OR whatsapp_phone_number = $1
-         OR twilio_number = $2
-         OR whatsapp_phone_number = $2
-      LIMIT 1
-    `,
-    [numero, numeroSinMas]
-  );
+  // 👉 1) intenta usar el tenant que viene en el contexto (Meta / otros canales)
+  let tenant = context?.tenant as any | undefined;
 
-  const tenant = tenantRes.rows[0];
-  if (!tenant) return;
+  // 👉 2) si no viene en el contexto (caso Twilio), haz el lookup por número
+  if (!tenant) {
+    const tenantRes = await pool.query(
+      `
+        SELECT *
+        FROM tenants
+        WHERE twilio_number = $1
+           OR whatsapp_phone_number = $1
+           OR twilio_number = $2
+           OR whatsapp_phone_number = $2
+        LIMIT 1
+      `,
+      [numero, numeroSinMas]
+    );
+    tenant = tenantRes.rows[0];
+  }
+
+  if (!tenant) {
+    console.log('⛔ No se encontró tenant para este número de WhatsApp.');
+    return;
+  }
 
   // Si no hay membresía activa: no respondas
   if (!tenant.membresia_activa) {
@@ -279,7 +287,8 @@ export async function procesarMensajeWhatsApp(
     return;
   }
 
-  const canal: Canal = 'whatsapp';
+  // 👇 canal puede venir en el contexto (meta/preview) o por defecto 'whatsapp'
+  const canal: Canal = (context?.canal as Canal) || 'whatsapp';
 
   // 🛡️ Anti-phishing (EARLY EXIT antes de guardar mensajes/uso/tokens)
   {

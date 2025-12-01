@@ -1,7 +1,10 @@
 // src/routes/meta/whatsapp-callback.ts
 import express, { Request, Response } from "express";
 import pool from "../../lib/db";
-import { procesarMensajeWhatsApp } from "../webhook/whatsapp"; // 👈 reutilizamos tu flujo Twilio
+import {
+  procesarMensajeWhatsApp,
+  WhatsAppContext,
+} from "../webhook/whatsapp"; // 👈 reutilizamos tu flujo Twilio con contexto
 
 const router = express.Router();
 
@@ -160,9 +163,16 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
     setTimeout(async () => {
       try {
         console.log(
-          "[META WEBHOOK] Delegando a procesarMensajeWhatsApp con fakeBody"
+          "[META WEBHOOK] Delegando a procesarMensajeWhatsApp con fakeBody + context"
         );
-        await procesarMensajeWhatsApp(fakeBody);
+
+        const ctx: WhatsAppContext = {
+          tenant,
+          canal: "whatsapp",  // sigue siendo canal WhatsApp
+          origen: "meta",     // para distinguir si luego lo necesitas
+        };
+
+        await procesarMensajeWhatsApp(fakeBody, ctx);
       } catch (e) {
         console.error(
           "❌ [META WEBHOOK] Error dentro de procesarMensajeWhatsApp:",
@@ -170,6 +180,7 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
         );
       }
     }, 0);
+
   } catch (err) {
     console.error("❌ [META WEBHOOK] Error procesando evento:", err);
     // importante: si llegamos aquí antes de hacer res.status, devolvemos 500
