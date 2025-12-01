@@ -520,16 +520,23 @@ Luego termina con esta pregunta EXACTA en español:
 
   // 🧩 Bloque especial: DEMOSTRACIÓN ("demuéstramelo", "show me", etc.)
   if (wantsDemo) {
+    // Saludo dinámico, ya multicanal/multitenant
+    const saludo = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+
+    const demoTextEs =
+      'Puedo responderte tanto en inglés como en español. ' +
+      'Pregúntame lo que quieras sobre nuestros servicios, precios u otra cosa ' +
+      'y te responderé en tu idioma.';
+
+    const demoTextEn =
+      'I can reply in both English and Spanish. ' +
+      'You can ask me anything about our services, prices or anything else, ' +
+      'and I will answer in your language.';
+
     const reply =
       idiomaDestino === 'en'
-        ? `Sure 😊  
-  You can ask me anything about this business in English or Spanish.  
-  For example: pricing, services, how it works, or how I can help you.  
-  I will reply automatically, just like I would with a real customer.`
-        : `Claro 😊  
-  Puedes preguntarme lo que quieras sobre este negocio en español o en inglés.  
-  Por ejemplo: precios, servicios, cómo funciona, o cómo te puedo ayudar.  
-  Te responderé automáticamente, igual que si fueras un cliente real.`;
+        ? `${saludo}\n\n${demoTextEn}`
+        : `${saludo}\n\n${demoTextEs}`;
 
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
@@ -547,8 +554,8 @@ Luego termina con esta pregunta EXACTA en español:
       [tenant.id, canal, messageId]
     );
 
+    // Registramos intención "demo" como interés medio
     try {
-      // registramos la intención "demo" como interés medio (2)
       await recordSalesIntent(
         tenant.id,
         fromNumber,
@@ -562,7 +569,7 @@ Luego termina con esta pregunta EXACTA en español:
       console.warn('⚠️ No se pudo registrar sales_intelligence (demo):', e);
     }
 
-    return; // 🔚 muy importante: salimos aquí y no seguimos el pipeline normal
+    return;
   }
 
   // === FAST-PATH MULTI-INTENCIÓN ===
