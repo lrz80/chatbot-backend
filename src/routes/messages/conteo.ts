@@ -17,37 +17,26 @@ router.get('/', authenticateUser, async (req, res) => {
       `
       SELECT
         CASE
-          -- 🔹 Cualquier variante que contenga "whatsapp" o empiece por "wa"
           WHEN LOWER(COALESCE(m.canal, '')) LIKE '%whatsapp%'
             OR LOWER(COALESCE(m.canal, '')) LIKE 'wa%' THEN 'whatsapp'
-
-          -- 🔹 Facebook
           WHEN LOWER(COALESCE(m.canal, '')) LIKE '%facebook%'
             OR LOWER(COALESCE(m.canal, '')) = 'fb' THEN 'facebook'
-
-          -- 🔹 Instagram
           WHEN LOWER(COALESCE(m.canal, '')) LIKE '%instagram%'
             OR LOWER(COALESCE(m.canal, '')) = 'ig' THEN 'instagram'
-
-          -- 🔹 Voz / llamadas telefónicas
           WHEN LOWER(COALESCE(m.canal, '')) LIKE '%voz%'
             OR LOWER(COALESCE(m.canal, '')) LIKE '%voice%'
             OR LOWER(COALESCE(m.canal, '')) LIKE '%llamada%'
             OR LOWER(COALESCE(m.canal, '')) LIKE '%telefono%' THEN 'voice'
-
-          -- 🔹 Cualquier otro canal se devuelve tal cual, normalizado
           ELSE TRIM(LOWER(COALESCE(m.canal, '')))
         END AS canal,
-        COUNT(DISTINCT m.message_id)::int AS total
+        COUNT(*)::int AS total
       FROM messages m
       WHERE m.tenant_id = $1
-        AND TRIM(LOWER(COALESCE(m.role, ''))) = 'user'   -- solo mensajes del cliente
       GROUP BY 1
       `,
       [tenantId]
     );
 
-    // Lo que el front espera:
     const conteo: Record<string, number> = {
       whatsapp: 0,
       facebook: 0,
@@ -61,6 +50,8 @@ router.get('/', authenticateUser, async (req, res) => {
         conteo[canal] = r.total;
       }
     }
+
+    console.log('📊 /api/messages/conteo (subrouter) =>', conteo);
 
     return res.json(conteo);
   } catch (err) {
