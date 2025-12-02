@@ -455,21 +455,31 @@ export async function procesarMensajeWhatsApp(
         promptBase,
         '',
         `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
-        `Formato WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas en prosa, sin bullets ni encabezados.`,
-        'Usa únicamente la información del prompt sobre servicios, precios, horarios, ubicación y canales oficiales.',
-        'No inventes precios ni beneficios que no estén en el prompt.',
+        `Formato WhatsApp: mensajes CORTOS (máx. 6-8 líneas), sin párrafos largos.`,
+        `No uses viñetas, listas ni encabezados. Solo texto corrido, claro y directo.`,
+        'Usa exclusivamente la información del negocio (servicios, precios, horarios, ubicación, beneficios reales).',
+        'No inventes precios, promociones ni beneficios que no estén en la información del negocio.',
+        'No repitas siempre la misma presentación; responde adaptándote a lo que el cliente pide.'
       ].join('\n');
 
       const userPromptLLM =
         idiomaDestino === 'en'
-          ? `The user is asking for more information in a general way (e.g. "I need more info", "I want more information").
-Summarize briefly what this business offers (services, who it is for, key benefits, and pricing / membership structure if available in the prompt).
-Then finish with this exact closing question in English:
-"What would you like to know more about? Our services, prices, schedule, or something else?"`
-          : `El usuario está pidiendo más información de forma general (por ejemplo "quiero más info", "necesito más información").
-Resume brevemente qué ofrece este negocio (servicios, para quién es, beneficios clave, y estructura de precios / membresías si está disponible en el prompt).
-Luego termina con esta pregunta EXACTA en español:
-"¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?"`;
+          ? `The user is asking for general information (e.g. "I need more info", "I want more information").
+  Using ONLY the business information in the prompt, write a very short explanation (2-4 sentences) of:
+  - what this business does,
+  - who it is for,
+  - and the main way to get started (book, buy, contact, etc.), if that is available.
+  Avoid marketing or hype. Be simple and clear.
+  End with this exact question in English:
+  "What would you like to know more about? Our services, prices, or something else?"`
+          : `El usuario está pidiendo información general (por ejemplo "quiero más info", "necesito más información").
+  Usando SOLO la información del negocio en el prompt, escribe una explicación muy corta (2-4 frases) de:
+  - qué hace este negocio,
+  - para quién es,
+  - y cuál es la principal forma de empezar (agendar, comprar, escribir, etc.) si esa información está disponible.
+  Evita sonar a anuncio o landing page; sé simple y claro.
+  Termina con esta pregunta EXACTA en español:
+  "¿Sobre qué te gustaría saber más? ¿Servicios, precios, u otra cosa?"`;
 
       const completion = await openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
