@@ -35,6 +35,8 @@ import {
   smallTalkRegex,
   buildSaludoConversacional,
   buildSaludoSmallTalk,
+  graciasPuroRegex,
+  buildGraciasRespuesta,
 } from '../../lib/saludosConversacionales';
 
 // Puedes ponerlo debajo de los imports
@@ -897,6 +899,29 @@ Luego termina con esta pregunta EXACTA en español:
        VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
        ON CONFLICT (tenant_id, message_id) DO NOTHING`,
       [tenant.id, saludo, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+    );
+
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT DO NOTHING`,
+      [tenant.id, canal, messageId]
+    );
+
+    return;
+  }
+
+    // 🙏 Mensaje de solo "gracias / thank you / thanks"
+  if (graciasPuroRegex.test(userInput.trim())) {
+    const respuesta = buildGraciasRespuesta(idiomaDestino);
+
+    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuesta);
+
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, respuesta, canal, fromNumber || 'anónimo', `${messageId}-bot`]
     );
 
     await pool.query(
