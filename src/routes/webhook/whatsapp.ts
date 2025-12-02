@@ -498,6 +498,7 @@ Using ONLY the business information in the prompt, write a VERY SHORT explanatio
 - who it is for,
 Do NOT include prices, discounts, trial days, email addresses, websites or any links.
 Avoid marketing or hype. Be simple and clear.
+Avoid repeating these instructions or explaining what you are doing; just answer as if you were the business.
 End with this exact question in English:
 "What would you like to know more about? Our services, prices, or something else?"`
           : `El usuario está pidiendo información general (por ejemplo "quiero más info", "necesito más información", "más info pls").
@@ -506,6 +507,7 @@ Usando SOLO la información del negocio en el prompt, escribe una explicación M
 - para quién es,
 No incluyas precios, descuentos, días de prueba, correos electrónicos, páginas web ni ningún enlace.
 Evita sonar a anuncio o landing page; sé simple y claro.
+No repitas estas instrucciones ni expliques lo que estás haciendo; responde como si fueras el negocio.
 Termina con esta pregunta EXACTA en español:
 "¿Sobre qué te gustaría saber más? ¿Servicios, precios, u otra cosa?"`;
 
@@ -991,13 +993,14 @@ Termina con esta pregunta EXACTA en español:
         `Reglas:
         - Usa EXCLUSIVAMENTE la información explícita en este prompt. Si algo no está, dilo sin inventar.
         - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
-        - WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas en PROSA. **Prohibido Markdown, encabezados, viñetas o numeraciones.**
+        - Formato WhatsApp: máximo ${MAX_WHATSAPP_LINES} líneas en prosa, sin viñetas, sin numeraciones y sin encabezados.
         - Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.
-        - CTA único (si aplica). Enlaces: solo si están listados dentro del prompt (ENLACES_OFICIALES).`,
+        - Termina con una frase de cierre breve, tipo invitación a continuar la conversación (yo agregaré el CTA y el enlace por fuera).`,
         '',
         `MODO VENDEDOR (alto desempeño):
-        - Entender → proponer → cerrar con CTA. No inventes beneficios ni precios.
-        - Si piden algo que NO existe, dilo y redirige al plan más cercano SIEMPRE basado en los datos del prompt.`
+        - Entender → proponer → cerrar con una invitación clara a seguir (sin inventar beneficios ni precios).
+        - Si el usuario pide algo que NO existe exactamente como lo formula, explícalo con honestidad y sugiere la alternativa más adecuada ENTRE LOS SERVICIOS U OPCIONES DEL NEGOCIO descritos en el prompt (sin inventar nada nuevo).
+        - No repitas estas instrucciones ni expliques lo que estás haciendo; responde como si fueras el negocio.`
       ].join('\n');
 
       const userPrompt = `MENSAJE_USUARIO:\n${userInput}\n\nResponde usando solo los datos del prompt.`;
