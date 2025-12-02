@@ -1032,40 +1032,39 @@ Luego termina con esta pregunta EXACTA en español:
   .test(userInput.trim());
   const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
 
-  if ((intencionLower === "saludo" && greetingOnly) || (intencionLower === "agradecimiento" && thanksOnly)) {
-    let respuestaRapida = "";
+  // 🔄 INTENCIÓN: Solo "agradecimiento"
+  // (Los saludos ya están manejados arriba con regex → DO NOT DUPLICATE)
+  if (intencionLower === "agradecimiento" && thanksOnly) {
+    let respuesta = "";
 
-    if (intencionLower === "agradecimiento") {
-      respuestaRapida =
-        idiomaDestino === 'en'
-          ? "You're welcome! 💬 Would you like to see another option from the menu?"
-          : "¡De nada! 💬 ¿Quieres ver otra opción del menú?";
+    if (idiomaDestino === 'en') {
+      respuesta = "You're welcome! If you need anything else, just let me know.";
     } else {
-      respuestaRapida = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+      respuesta = "¡Con gusto! Si necesitas algo más, solo dime.";
     }
 
-    // 1) Enviar por canal usando el wrapper idempotente
-    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuestaRapida);
-    alreadySent = true;
+    try {
+      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuesta);
 
-    // 2) Registrar mensaje del bot
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, respuestaRapida, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-    );
+      await pool.query(
+        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+        VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+        ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+        [tenant.id, respuesta, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+      );
 
-    // 3) Registrar interacción
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
+      await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT DO NOTHING`,
+        [tenant.id, canal, messageId]
+      );
 
-    // (Opcional) podríamos registrar intención de venta aquí, pero en saludos/agradecimientos normalmente es nivel de interés bajo.
-    return;
+      return;
+    } catch (err) {
+      console.error("❌ Error enviando respuesta rápida de agradecimiento:", err);
+      // Continuar al flujo normal si hay error
+    }
   }
 
   if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
