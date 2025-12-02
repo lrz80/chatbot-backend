@@ -415,15 +415,21 @@ export async function procesarMensajeWhatsApp(
   const cleanedForInfo = stripLeadGreetings(userInput);
   const cleanedNorm    = normalizarTexto(cleanedForInfo);
 
-  // Versión MUY simple: miramos cómo termina el mensaje
-  const cleanedLower = cleanedForInfo
-    ?.normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "") // quita acentos (información -> informacion)
-    .toLowerCase()
-    .trim() || "";
+  // 🔍 CASO ESPECIAL: usuario pide "más info" de forma muy genérica
+  const wantsMoreInfoEn =
+    /\b(need\s+more\s+in(?:f|fo|formation)|i\s+want\s+more\s+in(?:f|fo|formation)|more\s+in(?:f|fo|formation))\b/i
+      .test(cleanedForInfo);
 
-  // 🔍 CASO ESPECIAL: usuario pide "más info" de forma genérica
-  const wantsMoreInfo = /\b(mas\s+inf(?:o|ormacion)?|mas\s+info|mas\s+informacion|info|informacion)\s*$/.test(cleanedLower);
+  const wantsMoreInfoEs =
+    /\b((necesito|quiero)\s+mas\s+in(?:f|fo|formacion)|mas\s+info|mas\s+informacion)\b/i
+      .test(cleanedNorm);
+
+  // 🆕 Mensajes súper cortos tipo "info", "informacion", "informacion por favor"
+  const shortInfoOnly =
+    /^\s*(info|informacion|información|mas info|más info|mas informacion|mas información|más informacion|más información)(\s+por\s+fa(vor)?)?\s*$/i
+      .test(cleanedNorm);
+
+  const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs || shortInfoOnly;
 
   // 🔍 CASO ESPECIAL: usuario pide una DEMO / demostración
   const wantsDemo =
