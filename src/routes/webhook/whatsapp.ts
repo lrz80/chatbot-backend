@@ -424,9 +424,9 @@ export async function procesarMensajeWhatsApp(
     /\b((necesito|quiero)\s+mas\s+in(?:f|fo|formacion)|mas\s+info|mas\s+informacion)\b/i
       .test(cleanedNorm);
 
-  // 🆕 Mensajes súper cortos tipo "info", "informacion", "informacion por favor"
+  // 🆕 Mensajes cortos ES/EN o mezclados
   const shortInfoOnly =
-    /^\s*(info|informacion|información|mas info|más info|mas informacion|mas información|más informacion|más información)(\s+por\s+fa(vor)?)?\s*$/i
+    /^\s*(info|information|informacion|información|mas info|más info|more info|more information)(\s+(please|pls|por\s+fa(vor)?))?\s*$/i
       .test(cleanedNorm);
 
   const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs || shortInfoOnly;
