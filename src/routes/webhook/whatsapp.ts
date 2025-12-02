@@ -493,19 +493,17 @@ export async function procesarMensajeWhatsApp(
       const userPromptLLM =
         idiomaDestino === 'en'
           ? `The user is asking for general information (e.g. "I need more info", "I want more information", "more info pls").
-Using ONLY the business information in the prompt, write a VERY SHORT explanation (2–3 sentences) that says:
+Using ONLY the business information in the prompt, write a VERY SHORT explanation (2-3 sentences) that says:
 - what this business does,
 - who it is for,
-- and in general how people usually get started (for example: book a class, request a quote, send a message, etc.).
 Do NOT include prices, discounts, trial days, email addresses, websites or any links.
 Avoid marketing or hype. Be simple and clear.
 End with this exact question in English:
 "What would you like to know more about? Our services, prices, or something else?"`
           : `El usuario está pidiendo información general (por ejemplo "quiero más info", "necesito más información", "más info pls").
-Usando SOLO la información del negocio en el prompt, escribe una explicación MUY CORTA (2–3 frases) que diga:
+Usando SOLO la información del negocio en el prompt, escribe una explicación MUY CORTA (2-3 frases) que diga:
 - qué hace este negocio,
 - para quién es,
-- y en general cómo suele empezar la gente (por ejemplo: agendar una cita, solicitar una cotización, escribir por WhatsApp, etc.).
 No incluyas precios, descuentos, días de prueba, correos electrónicos, páginas web ni ningún enlace.
 Evita sonar a anuncio o landing page; sé simple y claro.
 Termina con esta pregunta EXACTA en español:
