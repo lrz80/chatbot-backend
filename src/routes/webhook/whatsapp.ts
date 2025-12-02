@@ -30,6 +30,12 @@ import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
 import { requireChannelEnabled } from "../../middleware/requireChannelEnabled";
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 import { cycleStartForNow } from '../../utils/billingCycle';
+import {
+  saludoPuroRegex,
+  smallTalkRegex,
+  buildSaludoConversacional,
+  buildSaludoSmallTalk,
+} from '../../lib/saludosConversacionales';
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -854,29 +860,49 @@ Luego termina con esta pregunta EXACTA en español:
     }
   };
 
-  // 💬 Saludo puro: contesta solo con la bienvenida y sal
-  const saludoPuroRegex = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenos\s+(dias|días))\s*$/i;
+    // 💬 Small-talk tipo "hello how are you" / "hola como estas"
+  if (smallTalkRegex.test(userInput.trim())) {
+    const saludoSmall = buildSaludoSmallTalk(tenant, idiomaDestino);
 
-  if (saludoPuroRegex.test(userInput.trim())) {
-    const saludo = await getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-
-    // 1) Enviar usando safeEnviarWhatsApp (idempotente)
-    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludo);
-    alreadySent = true;
+    // 1) Enviar saludo corto y humano
+    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludoSmall);
 
     // 2) Registrar mensaje del bot
     await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, saludo, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, saludoSmall, canal, fromNumber || 'anónimo', `${messageId}-bot`]
     );
 
     // 3) Registrar interacción
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT DO NOTHING`,
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT DO NOTHING`,
+      [tenant.id, canal, messageId]
+    );
+
+    return;
+  }
+
+  // 💬 Saludo puro: "hola", "hello", "buenas", etc.
+  if (saludoPuroRegex.test(userInput.trim())) {
+    const saludo = buildSaludoConversacional(tenant, idiomaDestino);
+
+    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludo);
+
+    await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+      [tenant.id, saludo, canal, fromNumber || 'anónimo', `${messageId}-bot`]
+    );
+
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT DO NOTHING`,
       [tenant.id, canal, messageId]
     );
 
