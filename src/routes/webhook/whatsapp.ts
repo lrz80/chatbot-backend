@@ -411,24 +411,23 @@ export async function procesarMensajeWhatsApp(
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
-   // Texto sin saludos al inicio para detectar "más info" y "demo"
+  // Texto sin saludos al inicio para detectar "más info" y "demo"
   const cleanedForInfo = stripLeadGreetings(userInput);
   const cleanedNorm    = normalizarTexto(cleanedForInfo);
 
-  // 🔍 CASO ESPECIAL: usuario pide "más info" de forma muy genérica
-  const wantsMoreInfoEn =
-    /\b(need\s+more\s+in(?:f|fo|formation)|i\s+want\s+more\s+in(?:f|fo|formation)|more\s+in(?:f|fo|formation))\b/i
-      .test(cleanedForInfo);
+  // Versión MUY simple: miramos cómo termina el mensaje
+  const cleanedLower = cleanedForInfo
+    ?.normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "") // quita acentos (información -> informacion)
+    .toLowerCase()
+    .trim() || "";
 
-  const wantsMoreInfoEs =
-    /\b((necesito|quiero)\s+mas\s+in(?:f|fo|formacion)|mas\s+info|mas\s+informacion)\b/i
-      .test(cleanedNorm);
-
-  const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs;
+  // 🔍 CASO ESPECIAL: usuario pide "más info" de forma genérica
+  const wantsMoreInfo = /\b(mas\s+inf(?:o|ormacion)?|mas\s+info|mas\s+informacion|info|informacion)\s*$/.test(cleanedLower);
 
   // 🔍 CASO ESPECIAL: usuario pide una DEMO / demostración
   const wantsDemo =
-    /\b(demuéstramelo|demuestrame|demuéstrame|hazme una demostración|hazme un demo|prueba real|ejemplo real|muéstrame cómo funciona|muéstrame cómo responde|show me|prove it|give me a demo)\b/i
+    /\b(demuéstramelo|demuestrame|demuestrame|hazme una demostracion|hazme un demo|prueba real|ejemplo real|muestrame como funciona|muestrame como responde|show me|prove it|give me a demo)\b/i
       .test(cleanedNorm);
 
   // Prompt base del tenant para todo este flujo
