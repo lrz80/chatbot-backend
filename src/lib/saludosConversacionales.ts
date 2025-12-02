@@ -10,8 +10,9 @@ export const saludoPuroRegex =
 export const smallTalkRegex =
   /^\s*(hola+[,!.\s]*(como|cómo)\s+estas?|hello[,!.\s]*how\s+are\s+you\??|hi[,!.\s]*how\s+are\s+you\??|how\s+are\s+you\??)\s*$/i;
 
+// Acepta "gracias", "gracias!", "thank you", "thanks!", "thx!!", etc.
 export const graciasPuroRegex =
-  /^\s*(gracias|muchas\s+gracias|thank\s*you|thanks|thx|ty)\s*$/i;
+  /^\s*(gracias|muchas\s+gracias|thank\s*you|thanks|thx|ty)[\s!¡¿?.,…]*$/i;
 
 // Saludo normal para cuando el mensaje es solo "hola", "hello", etc.
 export function buildSaludoConversacional(tenant: any, idioma: IdiomaBasico): string {
