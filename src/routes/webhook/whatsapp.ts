@@ -424,10 +424,31 @@ export async function procesarMensajeWhatsApp(
     /\b((necesito|quiero)\s+mas\s+in(?:f|fo|formacion)|mas\s+info|mas\s+informacion)\b/i
       .test(cleanedNorm);
 
-  // 🆕 Mensajes cortos ES/EN o mezclados
+  // 🆕 Detector flexible de mensajes pidiendo "más info"
+  const wantsMoreInfoDirect = [
+    "info",
+    "informacion",
+    "información",
+    "mas info",
+    "más info",
+    "more info",
+    "more information",
+    "more details",
+    "more detail",
+    "information",
+    "details"
+  ];
+
+  // 🆕 Expresiones adicionales de cierre
+  const trailing = /(pls?|please|por\s*fa(vor)?)/i;
+
+  // Limpieza para comparar bien
+  const msg = cleanedNorm.toLowerCase();
+
+  // REGEX FLEXIBLE: detecta cualquier frase que contenga una palabra de la lista
   const shortInfoOnly =
-    /^\s*(info|information|informacion|información|mas info|más info|more info|more information)(\s+(please|pls|por\s+fa(vor)?))?\s*$/i
-      .test(cleanedNorm);
+    wantsMoreInfoDirect.some(k => msg.includes(k)) ||
+    trailing.test(msg);
 
   const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs || shortInfoOnly;
 
