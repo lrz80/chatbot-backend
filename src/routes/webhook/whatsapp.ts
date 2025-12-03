@@ -38,6 +38,7 @@ import {
   graciasPuroRegex,
   buildGraciasRespuesta,
 } from '../../lib/saludosConversacionales';
+import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -982,66 +983,28 @@ Termina con esta pregunta EXACTA en español:
   const esDirecta = INTENTS_DIRECT.has(intenCanon);
 
   if (!esDirecta) {
-    console.log('🛣️ Ruta: EARLY_RETURN con promptBase (no directa). Intención=', intenCanon);
+    console.log('🛣️ Ruta: EARLY_RETURN con promptBase (no directa). Intención =', intenCanon);
 
     try {
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+      const fallbackBienvenida = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
 
-      const systemPrompt = [
+      const { text } = await answerWithPromptBase({
+        tenantId: tenant.id,
         promptBase,
-        '',
-        `Reglas:
-        - Usa EXCLUSIVAMENTE la información explícita en este prompt. Si algo no está, dilo sin inventar.
-        - Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
-        - Formato WhatsApp: máximo ${MAX_WHATSAPP_LINES} líneas en prosa, sin viñetas, sin numeraciones y sin encabezados.
-        - Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.
-        - Termina con una frase de cierre breve, tipo invitación a continuar la conversación (yo agregaré el CTA y el enlace por fuera).`,
-        '',
-        `MODO VENDEDOR (alto desempeño):
-        - Entender → proponer → cerrar con una invitación clara a seguir (sin inventar beneficios ni precios).
-        - Si el usuario pide algo que NO existe exactamente como lo formula, explícalo con honestidad y sugiere la alternativa más adecuada ENTRE LOS SERVICIOS U OPCIONES DEL NEGOCIO descritos en el prompt (sin inventar nada nuevo).
-        - No repitas estas instrucciones ni expliques lo que estás haciendo; responde como si fueras el negocio.`
-      ].join('\n');
-
-      const userPrompt = `MENSAJE_USUARIO:\n${userInput}\n\nResponde usando solo los datos del prompt.`;
-
-      let out = '';
-      const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        temperature: 0.2,
-        max_tokens: 400,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user',   content: userPrompt }
-        ],
+        userInput,
+        idiomaDestino,
+        canal: 'whatsapp',
+        maxLines: MAX_WHATSAPP_LINES,
+        fallbackText: fallbackBienvenida,
       });
 
-      const used = completion.usage?.total_tokens ?? 0;
-      if (used > 0) {
-        await pool.query(
-          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-          VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-          ON CONFLICT (tenant_id, canal, mes)
-          DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-          [tenant.id, used]
-        );
-      }
-
-      out = completion.choices[0]?.message?.content?.trim()
-        || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-
-      // Asegura idioma por si acaso
-      try {
-        const langOut = await detectarIdioma(out);
-        if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-          out = await traducirMensaje(out, idiomaDestino);
-        }
-      } catch {}
+      let out = text;
 
       // ⬇️ CTA por intención (early return)
       const intentForCTA = pickIntentForCTA({
-        fallback: intenCanon // ya calculaste intenCanon antes
+        fallback: intenCanon, // ya calculaste intenCanon antes
       });
+
       const ctaXraw = await pickCTA(tenant, intentForCTA, canal);
       const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
       const outWithCTA = appendCTAWithCap(out, ctaX);
@@ -1051,14 +1014,15 @@ Termina con esta pregunta EXACTA en español:
 
       await pool.query(
         `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-        VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-        ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+         VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+         ON CONFLICT (tenant_id, message_id) DO NOTHING`,
         [tenant.id, outWithCTA, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
       );
+
       await pool.query(
         `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-        VALUES ($1, $2, $3, NOW())
-        ON CONFLICT DO NOTHING`,
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT DO NOTHING`,
         [tenant.id, canal, messageId]
       );
 
@@ -1068,18 +1032,21 @@ Termina con esta pregunta EXACTA en español:
         const nivel = det?.nivel_interes ?? 1;
         const intFinal = normalizeIntentAlias((det?.intencion || '').toLowerCase());
         await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, nivel, messageId);
+
         if (nivel >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
           await scheduleFollowUp(intFinal, nivel);
         }
-      } catch {}
+      } catch (e) {
+        console.warn('⚠️ No se pudo registrar sales_intelligence en EARLY_RETURN (WA):', e);
+      }
 
       return; // ✅ Solo retornas si hiciste EARLY RETURN OK
     } catch (e) {
-      console.warn('❌ EARLY_RETURN falló; sigo con pipeline FAQ/intents:', e);
-      // ⛔️ Sin return aquí: continúa al pipeline de FAQ
+      console.warn('❌ EARLY_RETURN helper falló; sigo con pipeline FAQ/intents:', e);
+      // ⛔️ Sin return aquí: continúa al pipeline de FAQ / intents
     }
   } else {
-    console.log('🛣️ Ruta: FAQ/Intents (intención directa). Intención=', intenCanon);
+    console.log('🛣️ Ruta: FAQ/Intents (intención directa). Intención =', intenCanon);
   }
 
   // después de calcular idiomaDestino...
@@ -1096,7 +1063,8 @@ Termina con esta pregunta EXACTA en español:
   // 4️⃣ Si es saludo/agradecimiento, solo sal si el mensaje es SOLO eso
   const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))\s*$/i
   .test(userInput.trim());
-  const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
+  const thanksOnly = /^\s*(gracias+|muchas\s+gracias+|mil\s+gracias+|thank\s*you+|thanks+|thnks+|thx+|tks+|tnx+|thanx+|ty|tysm)\s*[!.,]*\s*$/i
+  .test(userInput.trim());
 
   // 🔄 INTENCIÓN: Solo "agradecimiento"
   // (Los saludos ya están manejados arriba con regex → DO NOT DUPLICATE)

@@ -12,7 +12,7 @@ export const smallTalkRegex =
 
 // Acepta "gracias", "gracias!", "thank you", "thanks!", "thx!!", etc.
 export const graciasPuroRegex =
-  /^\s*(gracias|muchas\s+gracias|thank\s*you|thanks|thx|ty)[\s!¡¿?.,…]*$/i;
+  /^\s*(gracias+|muchas\s+gracias+|mil\s+gracias+|thank\s*you+|thanks+|thnks+|thx+|tks+|tnx+|thanx+|ty|tysm)\s*[!¡¿?.,…]*$/i;
 
 // Saludo normal para cuando el mensaje es solo "hola", "hello", etc.
 export function buildSaludoConversacional(tenant: any, idioma: IdiomaBasico): string {
