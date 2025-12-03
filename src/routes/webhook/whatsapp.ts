@@ -39,6 +39,7 @@ import {
   buildGraciasRespuesta,
 } from '../../lib/saludosConversacionales';
 import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
+import { getIO } from '../../lib/socket';
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -323,12 +324,31 @@ export async function procesarMensajeWhatsApp(
 
   // 2.a) Guardar el mensaje del usuario una sola vez (idempotente)
   try {
-    await pool.query(
+    const result = await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
        VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
        ON CONFLICT (tenant_id, message_id) DO NOTHING`,
       [tenant.id, userInput, 'whatsapp', fromNumber || 'anónimo', messageId]
     );
+
+    // Solo emitimos si REALMENTE se insertó (evita duplicar en reintentos de Twilio)
+    if ((result.rowCount ?? 0) > 0) {
+      try {
+        const io = getIO();
+
+        io.to(tenant.id).emit('message:new', {
+          tenant_id: tenant.id,
+          canal: 'whatsapp',
+          role: 'user',
+          from_number: fromNumber || 'anónimo',
+          content: userInput,
+          message_id: messageId,
+          created_at: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.warn('⚠️ No se pudo emitir message:new (WA user):', err);
+      }
+    }
   } catch (e) {
     console.warn('No se pudo registrar mensaje user:', e);
   }
