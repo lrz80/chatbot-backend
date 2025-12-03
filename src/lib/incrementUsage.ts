@@ -2,6 +2,40 @@
 
 import pool from './db';
 import { getLimitesPorPlan } from './usageLimits';  // 👈 importamos límites
+import { cycleStartForNow } from '../utils/billingCycle';
+
+// 👇 ya existirá algo como esto
+// export async function incrementarUsoPorNumero(...) { ... }
+
+// ✅ NUEVO: sumar 1 al uso_mensual por canal (whatsapp, facebook, instagram, etc.)
+export async function incrementarUsoPorCanal(
+  tenantId: string,
+  canal: string
+) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT membresia_inicio
+         FROM tenants
+        WHERE id = $1`,
+      [tenantId]
+    );
+
+    const membresiaInicio = rows[0]?.membresia_inicio;
+    if (!membresiaInicio) return;
+
+    const cicloMes = cycleStartForNow(membresiaInicio);
+
+    await pool.query(
+      `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+       VALUES ($1, $2, $3, 1)
+       ON CONFLICT (tenant_id, canal, mes)
+       DO UPDATE SET usados = uso_mensual.usados + 1`,
+      [tenantId, canal, cicloMes]
+    );
+  } catch (e) {
+    console.error('❌ Error incrementando uso_mensual por canal:', e);
+  }
+}
 
 export async function incrementarUsoPorNumero(
   numero: string,

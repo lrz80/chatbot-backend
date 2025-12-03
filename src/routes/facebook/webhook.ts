@@ -27,6 +27,7 @@ import type { Canal } from '../../lib/detectarIntencion';
 import { requireChannel } from "../../middleware/requireChannel";
 import { canUseChannel } from "../../lib/features";
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
+import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
 
 type CanalEnvio = 'facebook' | 'instagram';
 
@@ -92,19 +93,6 @@ async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma:
   } catch (e) {
     console.warn('No se pudo guardar idioma del cliente:', e);
   }
-}
-
-// Ciclo mensual similar a WA
-function cicloMesDesdeMembresia(membresiaInicioISO: string): string {
-  const inicio = new Date(membresiaInicioISO);
-  const ahora = new Date();
-  const diffMes = Math.floor(
-    (ahora.getFullYear() - inicio.getFullYear()) * 12 +
-    (ahora.getMonth() - inicio.getMonth())
-  );
-  const cicloInicio = new Date(inicio);
-  cicloInicio.setMonth(inicio.getMonth() + diffMes);
-  return cicloInicio.toISOString().split('T')[0]; // YYYY-MM-DD
 }
 
 async function isMetaChannelOpen(tenantId: string): Promise<boolean> {
@@ -225,7 +213,16 @@ router.post('/api/facebook/webhook', async (req, res) => {
             accessToken,
           });
         };
-        const enviarMetaSeguro = async (_to: string, text: string, _tenantId: string) => sendMeta(text);
+
+        // ✅ NUEVO: versión que envía y cuenta uso_mensual SOLO en respuestas del bot
+        const sendMetaContabilizando = async (text: string) => {
+          await sendMeta(text);
+          await incrementarUsoPorCanal(tenantId, canalEnvio); // 'facebook' o 'instagram'
+        };
+
+        // Para los helpers que ya usan enviarMetaSeguro (recoPrincipiantes)
+        const enviarMetaSeguro = async (_to: string, text: string, _tenantId: string) =>
+          sendMetaContabilizando(text);
 
         // Idempotencia: si ya está en messages, avanzar
         const existingMsg = await pool.query(
@@ -251,13 +248,14 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const handledPhishing = await antiPhishingGuard({
           pool,
           tenantId,
-          channel: canalEnvio,   // "facebook" o "instagram"
+          channel: canalEnvio,
           senderId,
           messageId,
           userInput,
-          idiomaDestino,         // ✅ ahora sí lo pasamos
-          send: async (text) => sendMeta(text),
+          idiomaDestino,
+          send: async (text) => sendMetaContabilizando(text),
         });
+
         if (handledPhishing) {
           // Ya se respondió y registró; NO sigas con FAQs/IA/etc.
           continue;
@@ -270,22 +268,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
               WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
             [tenantId, canalEnvio, senderId]
           );
-        } catch {}
-
-        // Incrementar uso mensual por mensaje entrante (como WA)
-        try {
-          const tRes = await pool.query(`SELECT membresia_inicio FROM tenants WHERE id = $1`, [tenantId]);
-          const membresiaInicio = tRes.rows[0]?.membresia_inicio;
-          if (membresiaInicio) {
-            const cicloMes = cicloMesDesdeMembresia(membresiaInicio);
-            await pool.query(
-              `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-               VALUES ($1, $2, $3, 1)
-               ON CONFLICT (tenant_id, canal, mes)
-               DO UPDATE SET usados = uso_mensual.usados + 1`,
-              [tenantId, canalEnvio, cicloMes]
-            );
-          }
         } catch {}
 
         // Guardar mensaje user (una vez)
@@ -339,7 +321,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
                 cta: '¿Hay algo más en lo que te pueda ayudar?'
               });
 
-              await sendMeta(out);
+              await sendMetaContabilizando(out);
 
               await pool.query(
                 `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
@@ -451,7 +433,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
               out = await traducirMensaje(out, idiomaDestino);
             }
           } catch {}
-          await sendMeta(out);
+          await sendMetaContabilizando(out);
 
           await pool.query(
             `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
@@ -583,7 +565,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
               }
             } catch {}
 
-            await sendMeta(out);
+            await sendMetaContabilizando(out);
             await pool.query(
               `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
                VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
@@ -726,7 +708,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
                 }
               } catch {}
 
-              await sendMeta(out);
+              await sendMetaContabilizando(out);
               await pool.query(
                 `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
                  VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
@@ -888,7 +870,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         // Enviar salida final si llegamos aquí
         const outFinal = respuesta || bienvenida;
         try {
-          await sendMeta(outFinal);
+          await sendMetaContabilizando(outFinal);
           await pool.query(
             `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)

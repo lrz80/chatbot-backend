@@ -40,6 +40,7 @@ import {
 } from '../../lib/saludosConversacionales';
 import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
 import { getIO } from '../../lib/socket';
+import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -209,22 +210,37 @@ async function safeEnviarWhatsApp(
   text: string
 ) {
   try {
+    // Caso sin messageId (por seguridad)
     if (!messageId) {
       await enviarWhatsApp(toNumber, text, tenantId);
+      await incrementarUsoPorCanal(tenantId, canal); // ✅ cuenta SOLO respuesta del bot
       return;
     }
+
     const { rows: sent } = await pool.query(
-      `SELECT 1 FROM interactions WHERE tenant_id=$1 AND canal=$2 AND message_id=$3 LIMIT 1`,
+      `SELECT 1
+         FROM interactions
+        WHERE tenant_id = $1
+          AND canal = $2
+          AND message_id = $3
+        LIMIT 1`,
       [tenantId, canal, messageId]
     );
+
     if (!sent[0]) {
+      // 👉 Primera vez que respondemos este message_id
       await enviarWhatsApp(toNumber, text, tenantId);
+      await incrementarUsoPorCanal(tenantId, canal); // ✅ suma 1 SOLO si realmente se envía
     } else {
-      console.log('⏩ safeEnviarWhatsApp: ya se envió este message_id, no se duplica.');
+      console.log('⏩ safeEnviarWhatsApp: ya se envió este message_id, no se duplica ni se cuenta.');
     }
   } catch (e) {
     console.error('❌ safeEnviarWhatsApp error:', e);
-    try { await enviarWhatsApp(toNumber, text, tenantId); } catch {}
+    // Último intento: enviar y contar (mejor sobrecontar un poco que no responder)
+    try {
+      await enviarWhatsApp(toNumber, text, tenantId);
+      await incrementarUsoPorCanal(tenantId, canal);
+    } catch {}
   }
 }
 
@@ -347,8 +363,28 @@ export async function procesarMensajeWhatsApp(
     return;
   }
 
-  // 👇 canal puede venir en el contexto (meta/preview) o por defecto 'whatsapp'
+  // // canal puede venir en el contexto (meta/preview) o por defecto 'whatsapp'
   const canal: Canal = (context?.canal as Canal) || 'whatsapp';
+
+  // 👉 detectar si el mensaje es solo numérico (para usar idioma previo)
+  const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
+
+  // 👉 idioma base del tenant (fallback)
+  const tenantBase: 'es' | 'en' = normalizeLang(tenant?.idioma || 'es');
+
+  let idiomaDestino: 'es'|'en';
+
+  if (isNumericOnly) {
+    idiomaDestino = await getIdiomaClienteDB(tenant.id, fromNumber, tenantBase);
+    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (solo número)`);
+  } else {
+    let detectado: string | null = null;
+    try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
+    const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
+    await upsertIdiomaClienteDB(tenant.id, fromNumber, normalizado);
+    idiomaDestino = normalizado;
+    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
+  }
 
   // 🛡️ Anti-phishing (EARLY EXIT antes de guardar mensajes/uso/tokens)
   {
@@ -359,9 +395,10 @@ export async function procesarMensajeWhatsApp(
       senderId: fromNumber,     // número del cliente
       messageId,                // SID de Twilio
       userInput,                // texto recibido
+      idiomaDestino,            // ✅ igual que en Meta
       send: async (text: string) => {
-        // usa tu sender real de WA
-        await enviarWhatsApp(fromNumber, text, tenant.id);
+        // ✅ usa el wrapper que también contabiliza uso_mensual
+        await safeEnviarWhatsApp(tenant.id, 'whatsapp', messageId, fromNumber, text);
       },
     });
 
@@ -410,30 +447,6 @@ export async function procesarMensajeWhatsApp(
     console.warn('No se pudo registrar mensaje user:', e);
   }
 
-  // 2.b) Incrementar uso mensual (antes de cualquier return)
-  try {
-    const { rows: rowsTenant } = await pool.query(
-      `SELECT membresia_inicio FROM tenants WHERE id = $1`,
-      [tenant.id]
-    );
-    const membresiaInicio = rowsTenant[0]?.membresia_inicio;
-
-    if (membresiaInicio) {
-      // 👇 Usamos EXACTAMENTE la misma función que /usage
-      const cicloMes = cycleStartForNow(membresiaInicio);
-
-      await pool.query(
-        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-         VALUES ($1, $2, $3, 1)
-         ON CONFLICT (tenant_id, canal, mes)
-         DO UPDATE SET usados = uso_mensual.usados + 1`,
-        [tenant.id, 'whatsapp', cicloMes]
-      );
-    }
-  } catch (e) {
-    console.error('❌ Error incrementando uso_mensual:', e);
-  }
-
   const idioma = await detectarIdioma(userInput);
   
   function stripLeadGreetings(t: string) {
@@ -469,25 +482,6 @@ export async function procesarMensajeWhatsApp(
   }  
 
   const mensajeUsuario = normalizarTexto(stripLeadGreetings(userInput));
-
-  // 1️⃣ Detectar si es solo número
-  const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
-
-  // 2️⃣ Calcular idiomaDestino
-  const tenantBase: 'es'|'en' = normalizeLang(tenant?.idioma || 'es');
-  let idiomaDestino: 'es'|'en';
-
-  if (isNumericOnly) {
-    idiomaDestino = await getIdiomaClienteDB(tenant.id, fromNumber, tenantBase);
-    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (solo número)`);
-  } else {
-    let detectado: string | null = null;
-    try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
-    const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
-    await upsertIdiomaClienteDB(tenant.id, fromNumber, normalizado);
-    idiomaDestino = normalizado;
-    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
-  }
 
   // Texto sin saludos al inicio para detectar "más info" y "demo"
   const cleanedForInfo = stripLeadGreetings(userInput);
