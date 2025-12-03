@@ -224,8 +224,57 @@ async function safeEnviarWhatsApp(
     }
   } catch (e) {
     console.error('❌ safeEnviarWhatsApp error:', e);
-    // último recurso: intenta enviar de todos modos
     try { await enviarWhatsApp(toNumber, text, tenantId); } catch {}
+  }
+}
+
+// ⬇️ AQUÍ VA EL HELPER NUEVO
+async function saveAssistantMessageAndEmit(opts: {
+  tenantId: string;
+  canal: string;
+  fromNumber: string;
+  messageId: string | null;
+  content: string;
+}) {
+  const { tenantId, canal, fromNumber, messageId, content } = opts;
+
+  try {
+    const finalMessageId = messageId ? `${messageId}-bot` : null;
+
+    const { rows } = await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+       ON CONFLICT (tenant_id, message_id) DO NOTHING
+       RETURNING id, timestamp, role, content, canal, from_number`,
+      [tenantId, content, canal, fromNumber || 'anónimo', finalMessageId]
+    );
+
+    const inserted = rows[0];
+    if (!inserted) {
+      // ya existía → no emitimos nada
+      return;
+    }
+
+    const io = getIO();
+    if (!io) {
+      console.warn('⚠️ [SOCKET] getIO() devolvió null al guardar assistant.');
+      return;
+    }
+
+    const payload = {
+      id: inserted.id,
+      created_at: inserted.timestamp,
+      timestamp: inserted.timestamp,
+      role: inserted.role,
+      content: inserted.content,
+      canal: inserted.canal,
+      from_number: inserted.from_number,
+    };
+
+    console.log('📡 [SOCKET] Emitting message:new (assistant)', payload);
+    io.emit('message:new', payload);
+  } catch (e) {
+    console.warn('⚠️ No se pudo registrar mensaje assistant + socket:', e);
   }
 }
 
@@ -583,12 +632,13 @@ Termina con esta pregunta EXACTA en español:
 
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, reply, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-    );
+    await saveAssistantMessageAndEmit({
+      tenantId: tenant.id,
+      canal,
+      fromNumber: fromNumber || 'anónimo',
+      messageId,
+      content: reply,
+    });
 
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
@@ -939,12 +989,13 @@ Termina con esta pregunta EXACTA en español:
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludoSmall);
 
     // 2) Registrar mensaje del bot
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, saludoSmall, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-    );
+    await saveAssistantMessageAndEmit({
+      tenantId: tenant.id,
+      canal,
+      fromNumber: fromNumber || 'anónimo',
+      messageId,
+      content: saludoSmall,
+    });
 
     // 3) Registrar interacción
     await pool.query(
