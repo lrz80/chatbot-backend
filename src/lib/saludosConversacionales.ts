@@ -4,7 +4,7 @@ export type IdiomaBasico = 'es' | 'en';
 
 // Saludo muy corto tipo "hola", "hello", "buenas", etc.
 export const saludoPuroRegex =
-  /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenos\s+(dias|días))\s*$/i;
+  /^\s*(hola|hello|hi|hey|buenos?|buenas?|dias|días|tardes|noches)(\s+(hola|hello|hi|hey|buenos?|buenas?|dias|días|tardes|noches))*\s*[!¡¿?.,…]*\s*$/i;
 
 // Small-talk tipo "hola como estas", "hello how are you", etc.
 export const smallTalkRegex =

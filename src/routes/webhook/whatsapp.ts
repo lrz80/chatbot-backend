@@ -1152,15 +1152,9 @@ Termina con esta pregunta EXACTA en español:
   let intencionProc = intencionLower; // se actualizará tras traducir (si aplica)
   let intencionParaFaq = intencionLower; // esta será la que usemos para consultar FAQ
 
-  // 4️⃣ Si es saludo/agradecimiento, solo sal si el mensaje es SOLO eso
-  const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))\s*$/i
-  .test(userInput.trim());
-  const thanksOnly = /^\s*(gracias+|muchas\s+gracias+|mil\s+gracias+|thank\s*you+|thanks+|thnks+|thx+|tks+|tnx+|thanx+|ty|tysm)\s*[!.,]*\s*$/i
-  .test(userInput.trim());
-
   // 🔄 INTENCIÓN: Solo "agradecimiento"
   // (Los saludos ya están manejados arriba con regex → DO NOT DUPLICATE)
-  if (intencionLower === "agradecimiento" && thanksOnly) {
+  if (intencionLower === "agradecimiento" && graciasPuroRegex.test(userInput.trim())) {
     let respuesta = "";
 
     if (idiomaDestino === 'en') {
@@ -1194,9 +1188,6 @@ Termina con esta pregunta EXACTA en español:
     }
   }
 
-  if (["hola", "buenas", "hello", "hi", "hey"].includes(mensajeUsuario)) {
-    respuesta = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-  } else {
     // Paso 1: Detectar idioma y traducir para evaluar intención
     const textoTraducido = idiomaDestino !== 'es'
       ? await traducirMensaje(userInput, 'es')
@@ -1518,7 +1509,7 @@ Termina con esta pregunta EXACTA en español:
     } catch (e) {
       console.warn('⚠️ Matcher de intenciones no coincidió o falló:', e);
     }
-  }
+  
 
   // 🔎 Interceptor canal-agnóstico (recomendación principiantes)
   const interceptado = await runBeginnerRecoInterceptor({
