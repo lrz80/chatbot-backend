@@ -545,6 +545,11 @@ export async function procesarMensajeWhatsApp(
       ? 'Is there anything else I can help you with?'
       : '¿Hay algo más en lo que te pueda ayudar?';
 
+  // ⬇️ No empujar CTA si el mensaje es solo saludo / gracias / ok
+  const isSmallTalkOrCourtesy =
+    /^(hola|hello|hi|hey|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|thank\s+you|ok|okay|vale|perfecto)\b/i
+      .test(userInput.trim());
+
   // 🧩 Bloque especial: "quiero más info / need more info"
   if (wantsMoreInfo) {
     const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
@@ -1091,7 +1096,9 @@ Termina con esta pregunta EXACTA en español:
 
       const ctaXraw = await pickCTA(tenant, intentForCTA, canal);
       const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
-      const outWithCTA = appendCTAWithCap(out, ctaX);
+      const outWithCTA = isSmallTalkOrCourtesy
+        ? out                         // ❌ NO CTA si es saludo / gracias / ok
+        : appendCTAWithCap(out, ctaX); // ✅ CTA normal en el resto de casos
 
       await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
       alreadySent = true;
@@ -1921,12 +1928,19 @@ Termina con esta pregunta EXACTA en español:
     respuesta = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
   }
 
-  const withDefaultCta = cta5 ? respuesta : `${respuesta}\n\n${CTA_TXT}`;
-  const respuestaWithCTA = appendCTAWithCap(withDefaultCta, cta5);
+  let respuestaFinal: string;
+
+  if (isSmallTalkOrCourtesy) {
+    // 🙅‍♂️ Si el usuario solo dijo "hola", "buenos días", "thanks", etc. → SIN CTA
+    respuestaFinal = respuesta;
+  } else {
+    const withDefaultCta = cta5 ? respuesta : `${respuesta}\n\n${CTA_TXT}`;
+    respuestaFinal = appendCTAWithCap(withDefaultCta, cta5);
+  }
 
   if (!alreadySent) {
-    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuestaWithCTA);
-    console.log("📬 Respuesta enviada vía Twilio:", respuestaWithCTA);
+    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuestaFinal);
+    console.log("📬 Respuesta enviada vía Twilio:", respuestaFinal);
   }
 
   await pool.query(
