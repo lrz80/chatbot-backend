@@ -686,12 +686,13 @@ Termina con esta pregunta EXACTA en español:
 
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-      ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, reply, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-    );
+    await saveAssistantMessageAndEmit({
+      tenantId: tenant.id,
+      canal,
+      fromNumber: fromNumber || 'anónimo',
+      messageId,
+      content: reply,
+    });
 
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
@@ -818,12 +819,14 @@ Termina con esta pregunta EXACTA en español:
         } catch {}
       }
       
-        await pool.query(
-          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-          VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-          ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-          [tenant.id, outWithCTA, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-        );
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: fromNumber || 'anónimo',
+          messageId,
+          content: outWithCTA,
+        });
+
         await pool.query(
           `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
           VALUES ($1, $2, $3, NOW())
@@ -1014,12 +1017,13 @@ Termina con esta pregunta EXACTA en español:
 
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludo);
 
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, saludo, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-    );
+    await saveAssistantMessageAndEmit({
+      tenantId: tenant.id,
+      canal,
+      fromNumber: fromNumber || 'anónimo',
+      messageId,
+      content: saludo,
+    });
 
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
@@ -1037,12 +1041,13 @@ Termina con esta pregunta EXACTA en español:
 
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuesta);
 
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, respuesta, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-    );
+    await saveAssistantMessageAndEmit({
+      tenantId: tenant.id,
+      canal,
+      fromNumber: fromNumber || 'anónimo',
+      messageId,
+      content: respuesta,
+    });
 
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
@@ -1091,12 +1096,13 @@ Termina con esta pregunta EXACTA en español:
       await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
       alreadySent = true;
 
-      await pool.query(
-        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-         VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-         ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-        [tenant.id, outWithCTA, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-      );
+      await saveAssistantMessageAndEmit({
+        tenantId: tenant.id,
+        canal, // aquí ya vale 'whatsapp'
+        fromNumber: fromNumber || 'anónimo',
+        messageId,
+        content: outWithCTA,
+      });
 
       await pool.query(
         `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
@@ -1159,12 +1165,13 @@ Termina con esta pregunta EXACTA en español:
     try {
       await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuesta);
 
-      await pool.query(
-        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-        VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-        ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-        [tenant.id, respuesta, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-      );
+      await saveAssistantMessageAndEmit({
+        tenantId: tenant.id,
+        canal,
+        fromNumber: fromNumber || 'anónimo',
+        messageId,
+        content: respuesta,
+      });
 
       await pool.query(
         `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
@@ -1298,15 +1305,17 @@ Termina con esta pregunta EXACTA en español:
 
           out = `${out}\n\n${CTA_TXT}`;
 
-          await enviarWhatsApp(fromNumber, out, tenant.id);
+          await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, out);
           alreadySent = true;
 
-          await pool.query(
-            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-            VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-            ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-            [tenant.id, out, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-          );
+          await saveAssistantMessageAndEmit({
+            tenantId: tenant.id,
+            canal,
+            fromNumber: fromNumber || 'anónimo',
+            messageId,
+            content: out,
+          });
+
           await pool.query(
             `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
             VALUES ($1, $2, $3, NOW())
@@ -1468,12 +1477,13 @@ Termina con esta pregunta EXACTA en español:
         await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
         alreadySent = true;
 
-        await pool.query(
-          `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-           VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-           ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-          [tenant.id, outWithCTA, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-        );
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: fromNumber || 'anónimo',
+          messageId,
+          content: outWithCTA,
+        });
 
         await pool.query(
           `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
@@ -1634,12 +1644,14 @@ Termina con esta pregunta EXACTA en español:
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
     alreadySent = true;
 
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, outWithCTA, 'whatsapp', fromNumber || 'anónimo', `${messageId}-bot`]
-    );
+    await saveAssistantMessageAndEmit({
+      tenantId: tenant.id,
+      canal,
+      fromNumber: fromNumber || 'anónimo',
+      messageId,
+      content: outWithCTA,
+    });
+
     await pool.query(
       `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
        VALUES ($1, $2, $3, NOW())
@@ -1704,12 +1716,14 @@ Termina con esta pregunta EXACTA en español:
 
       await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuestaWithCTA);
 
-      await pool.query(
-        `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-         VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-         ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-        [tenant.id, respuestaWithCTA, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-      );
+      await saveAssistantMessageAndEmit({
+        tenantId: tenant.id,
+        canal,
+        fromNumber: fromNumber || 'anónimo',
+        messageId,
+        content: respuestaWithCTA,
+      });
+
       await pool.query(
         `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
          VALUES ($1, $2, $3, NOW())
@@ -1879,12 +1893,13 @@ Termina con esta pregunta EXACTA en español:
 
   // Insertar mensaje bot (esto no suma a uso)
   if (!alreadySent) {
-    await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-      [tenant.id, respuesta, canal, fromNumber || 'anónimo', `${messageId}-bot`]
-    );
+    await saveAssistantMessageAndEmit({
+      tenantId: tenant.id,
+      canal,
+      fromNumber: fromNumber || 'anónimo',
+      messageId,
+      content: respuesta,
+    });
   }
 
   // ⬇️ CTA por intención (fallback final/generativa)
