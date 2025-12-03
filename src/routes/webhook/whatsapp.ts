@@ -334,18 +334,27 @@ export async function procesarMensajeWhatsApp(
 
     const inserted = rows[0];
 
-    // Si realmente se insertó (no hubo conflicto), emitimos el evento realtime
+    // Solo emitimos si realmente se insertó (no hubo conflicto ON CONFLICT)
     if (inserted) {
       const io = getIO();
       if (io) {
-        io.to(String(tenant.id)).emit('message:new', {
+        const payload = {
           id: inserted.id,
-          created_at: inserted.timestamp,      // 👈 el frontend usa created_at
+          // mando ambas por si acaso: created_at y timestamp
+          created_at: inserted.timestamp,
+          timestamp: inserted.timestamp,
           role: inserted.role,
           content: inserted.content,
           canal: inserted.canal,
           from_number: inserted.from_number,
-        });
+        };
+
+        console.log('📡 [SOCKET] Emitting message:new', payload);
+
+        // 👇 GLOBAL (sin room) para que todos los sockets lo reciban
+        io.emit('message:new', payload);
+      } else {
+        console.warn('⚠️ [SOCKET] getIO() devolvió null, no se emitió message:new');
       }
     }
   } catch (e) {
