@@ -32,7 +32,7 @@ router.get('/', authenticateUser, async (req, res) => {
         COUNT(*)::int AS total
       FROM messages m
       WHERE m.tenant_id = $1
-        AND m.role = 'user'          -- 👈 solo mensajes del cliente
+        AND m.role = 'assistant'   -- 👈 SOLO respuestas del bot
       GROUP BY 1
       `,
       [tenantId]
