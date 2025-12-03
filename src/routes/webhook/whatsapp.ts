@@ -322,31 +322,30 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
-  // 2.a) Guardar el mensaje del usuario una sola vez (idempotente)
+  // 2.a) Guardar el mensaje del usuario una sola vez (idempotente) + emitir por socket
   try {
-    const result = await pool.query(
+    const { rows } = await pool.query(
       `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
        VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+       ON CONFLICT (tenant_id, message_id) DO NOTHING
+       RETURNING id, timestamp, role, content, canal, from_number`,
       [tenant.id, userInput, 'whatsapp', fromNumber || 'anónimo', messageId]
     );
 
-    // Solo emitimos si REALMENTE se insertó (evita duplicar en reintentos de Twilio)
-    if ((result.rowCount ?? 0) > 0) {
-      try {
-        const io = getIO();
+    const inserted = rows[0];
 
-        io.to(tenant.id).emit('message:new', {
-          tenant_id: tenant.id,
-          canal: 'whatsapp',
-          role: 'user',
-          from_number: fromNumber || 'anónimo',
-          content: userInput,
-          message_id: messageId,
-          created_at: new Date().toISOString(),
+    // Si realmente se insertó (no hubo conflicto), emitimos el evento realtime
+    if (inserted) {
+      const io = getIO();
+      if (io) {
+        io.to(String(tenant.id)).emit('message:new', {
+          id: inserted.id,
+          created_at: inserted.timestamp,      // 👈 el frontend usa created_at
+          role: inserted.role,
+          content: inserted.content,
+          canal: inserted.canal,
+          from_number: inserted.from_number,
         });
-      } catch (err) {
-        console.warn('⚠️ No se pudo emitir message:new (WA user):', err);
       }
     }
   } catch (e) {
