@@ -5,6 +5,8 @@ import cors, { CorsOptions } from 'cors';
 import cookieParser from 'cookie-parser';
 import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
+import http from 'http';
+import { initSocket } from './lib/socket';
 
 // Rutas principales
 import authRoutes from './routes/auth';
@@ -244,7 +246,12 @@ app.use(
   }
 );
 
-// —— Levantar servidor ————————————————————————
-app.listen(PORT, () => {
+// —— Levantar servidor con HTTP + Socket.IO ——————————
+const server = http.createServer(app);
+
+// Inicializar Socket.IO sobre este server
+initSocket(server);
+
+server.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
 });
