@@ -249,8 +249,8 @@ app.use(
 // —— Levantar servidor con HTTP + Socket.IO ——————————
 const server = http.createServer(app);
 
-// Inicializar Socket.IO sobre este server
-initSocket(server);
+// Inicializar Socket.IO sobre este server con los mismos orígenes del CORS
+initSocket(server, WHITELIST);
 
 server.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
