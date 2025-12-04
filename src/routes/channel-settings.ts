@@ -132,17 +132,28 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
 
     // 3) Plan del tenant
     const { rows } = await pool.query(
-      `SELECT plan, es_trial, trial_ends_at, plan_after_trial 
-       FROM tenants 
-       WHERE id = $1`,
+      `SELECT plan, es_trial, trial_ends_at, plan_after_trial, extra_features 
+      FROM tenants 
+      WHERE id = $1`,
       [tenant_id]
     );
+
     const tenant = rows[0] || {};
     const { planName, trialActive } = resolveEffectivePlan(tenant);
 
+    // 👇 Leemos extra_features (puede ser null)
+    const extra = (tenant.extra_features as any) || {};
+
     // 4) Features del plan desde Stripe
     const planFeatures = await getFeaturesFromStripe(planName);
-    const enabledByPlan = !!planFeatures[canal];
+
+    // Por defecto, lo que diga Stripe
+    let enabledByPlan = !!planFeatures[canal];
+
+    // 🟣 OVERRIDE limpio: tu tenant Starter con Meta “Pro”
+    if (canal === "meta" && extra.force_meta_pro === true) {
+      enabledByPlan = true;
+    }
 
     // 5) Gate final
     const enabled = enabledByPlan && settingsEnabled && !maint.maintenance;
