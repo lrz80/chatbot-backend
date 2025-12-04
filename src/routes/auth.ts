@@ -12,6 +12,18 @@ import { sendVerificationEmail } from '../lib/mailer';
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
 
+function slugifyTenantName(name: string, uid: string): string {
+  const base = name
+    .toLowerCase()
+    .normalize("NFD")               // quita acentos
+    .replace(/[\u0300-\u036f]/g, "")// restos de acentos
+    .replace(/[^a-z0-9]+/g, "-")    // todo lo que no sea letra/número -> guion
+    .replace(/^-+|-+$/g, "");       // quita guiones al inicio/fin
+
+  const suffix = uid.split("-")[0]; // para hacerlo único de forma simple
+  return `${base}-${suffix}`;
+}
+
 // ✅ Transport para enviar emails
 const transporter = nodemailer.createTransport({
   host: "mail.privateemail.com",
@@ -40,6 +52,7 @@ router.post('/register', async (req: Request, res: Response) => {
     const password_hash = await bcrypt.hash(password, 10);
     const uid = uuidv4();
     const owner_name = `${nombre} ${apellido}`;
+    const slug = slugifyTenantName(owner_name, uid);
     const token_verificacion = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '10m' });
     const verification_link = `${process.env.FRONTEND_URL}/auth/verify-email?token=${token_verificacion}`;
 
@@ -47,10 +60,10 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // ✅ Crear tenant antes del usuario
     await pool.query(
-      `INSERT INTO tenants (id, name, created_at, membresia_activa, membresia_vigencia)
-       VALUES ($1, $2, NOW(), false, NULL)`,
-      [uid, owner_name]
-    );    
+      `INSERT INTO tenants (id, name, slug, created_at, membresia_activa, membresia_vigencia)
+      VALUES ($1, $2, $3, NOW(), false, NULL)`,
+      [uid, owner_name, slug]
+    );
 
     // ✅ Crear usuario con tenant_id
     await pool.query(
