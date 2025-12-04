@@ -69,10 +69,16 @@ router.post('/register', async (req: Request, res: Response) => {
     
     res.status(201).json({ success: true });
     
-  } catch (error) {
-    console.error('❌ Error en registro:', error);
+  } catch (error: any) {
+    console.error('❌ Error en registro:', {
+      message: error?.message,
+      code: error?.code,
+      detail: error?.detail,
+      stack: error?.stack,
+    });
     res.status(500).json({ error: 'Error interno del servidor' });
   }
+
 });
 
 router.get("/verify-email", async (req: Request, res: Response) => {
