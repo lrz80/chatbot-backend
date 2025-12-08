@@ -281,6 +281,15 @@ router.post('/api/facebook/webhook', async (req, res) => {
           );
         } catch {}
 
+                // Helper para quitar saludos al inicio (igual que en WhatsApp)
+        function stripLeadGreetings(t: string) {
+          return t
+            .replace(/^\s*(hola+[\s!.,]*)?/i, '')
+            .replace(/^\s*(saludos+[\s!.,]*)?/i, '')
+            .replace(/^\s*(hello+|hi+|hey+)[\s!.,]*/i, '')
+            .trim();
+        }
+
         // Bloqueo por membresía (igual WA)
         const estaActiva = tenant.membresia_activa === true || tenant.membresia_activa === 'true' || tenant.membresia_activa === 1;
         if (!estaActiva) {
@@ -296,6 +305,193 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const bienvenida =
           (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
           || getBienvenidaPorCanal('meta', tenant, idiomaDestino);
+
+        // ============================================
+        // 🧩 CASO ESPECIAL: usuario pide "más info"
+        // ============================================
+        const cleanedForInfo = stripLeadGreetings(userInput);
+        const cleanedNorm    = normalizarTexto(cleanedForInfo);
+
+        const wantsMoreInfoEn =
+          /\b(need\s+more\s+in(?:f|fo|formation)|i\s+want\s+more\s+in(?:f|fo|formation)|more\s+in(?:f|fo|formation))\b/i
+            .test(cleanedForInfo);
+
+        const wantsMoreInfoEs =
+          /\b((necesito|quiero)\s+mas\s+in(?:f|fo|formacion)|mas\s+info|mas\s+informacion)\b/i
+            .test(cleanedNorm);
+
+        const wantsMoreInfoDirect = [
+          "info",
+          "informacion",
+          "información",
+          "mas info",
+          "más info",
+          "more info",
+          "more information",
+          "more details",
+          "more detail",
+          "information",
+          "details"
+        ];
+
+        const trailing = /(pls?|please|por\s*fa(vor)?)/i;
+
+        const msgLower = cleanedNorm.toLowerCase();
+        const shortInfoOnly =
+          wantsMoreInfoDirect.some(k => msgLower.includes(k)) ||
+          trailing.test(msgLower);
+
+        const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs || shortInfoOnly;
+
+        if (wantsMoreInfo) {
+          const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
+            .test(userInput);
+
+          let reply: string;
+
+          try {
+            const systemPrompt = [
+              promptBase,
+              '',
+              `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
+              'Formato Meta: mensajes MUY CORTOS (2–3 frases, máx. ~6 líneas), sin párrafos largos.',
+              'No uses viñetas, listas ni encabezados. Solo texto corrido, claro y directo.',
+              'No menciones correos, páginas web ni enlaces (no escribas "http", "www" ni "@").',
+              'No des precios concretos, montos, ni duración exacta de pruebas (solo describe de forma general).',
+              'Usa exclusivamente la información del negocio (servicios, tipo de clientes, forma general de empezar).',
+              'No repitas siempre la misma presentación; responde adaptándote a lo que el cliente pide.'
+            ].join('\n');
+
+            const userPromptLLM =
+              idiomaDestino === 'en'
+                ? `The user is asking for general information (e.g. "I need more info", "I want more information", "more info pls").
+Using ONLY the business information in the prompt, write a VERY SHORT explanation (2-3 sentences) that says:
+- what this business does,
+- who it is for.
+Do NOT include prices, discounts, trial days, email addresses, websites or any links.
+Avoid marketing or hype. Be simple and clear.
+Avoid repeating these instructions or explaining what you are doing; just answer as if you were the business.
+End with this exact question in English:
+"What would you like to know more about? Our services, prices, or something else?"`
+                : `El usuario está pidiendo información general (por ejemplo "quiero más info", "necesito más información", "más info pls").
+Usando SOLO la información del negocio en el prompt, escribe una explicación MUY CORTA (2-3 frases) que diga:
+- qué hace este negocio,
+- para quién es.
+No incluyas precios, descuentos, días de prueba, correos electrónicos, páginas web ni ningún enlace.
+Evita sonar a anuncio o landing page; sé simple y claro.
+No repitas estas instrucciones ni expliques lo que estás haciendo; responde como si fueras el negocio.
+Termina con esta pregunta EXACTA en español:
+"¿Sobre qué te gustaría saber más? ¿Servicios, precios, u otra cosa?"`;
+
+            const completion = await openai.chat.completions.create({
+              model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+              temperature: 0.2,
+              max_tokens: 400,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user',   content: userPromptLLM },
+              ],
+            });
+
+            reply =
+              completion.choices[0]?.message?.content?.trim() ??
+              (idiomaDestino === 'en'
+                ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
+                : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?');
+
+            const used = completion.usage?.total_tokens || 0;
+            if (used > 0) {
+              await pool.query(
+                `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+                 VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+                 ON CONFLICT (tenant_id, canal, mes)
+                 DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+                [tenantId, used]
+              );
+            }
+          } catch (e) {
+            console.warn('⚠️ LLM (more info META) falló; uso fallback fijo:', e);
+            reply =
+              idiomaDestino === 'en'
+                ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
+                : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?';
+          }
+
+          if (startsWithGreeting) {
+            reply = `${bienvenida}\n\n${reply}`;
+          }
+
+          await sendMetaContabilizando(reply);
+
+          await pool.query(
+            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+             VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+             ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+            [tenantId, reply, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+          );
+          await pool.query(
+            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+             VALUES ($1, $2, $3, NOW())
+             ON CONFLICT DO NOTHING`,
+            [tenantId, canalEnvio, messageId]
+          );
+
+          // Registrar intención de venta y follow-up igual que en WA
+          try {
+            await scheduleFollowUp('pedir_info', 2);
+          } catch (e) {
+            console.warn('⚠️ No se pudo registrar sales_intelligence (more info META):', e);
+          }
+
+          continue; // ⬅️ ya respondimos "más info"
+        }
+
+        // ============================================
+        // 🧩 CASO ESPECIAL: DEMOSTRACIÓN / DEMO
+        // ============================================
+        const wantsDemo =
+          /\b(demuéstramelo|demuestrame|demuestrame|hazme una demostracion|hazme un demo|prueba real|ejemplo real|muestrame como funciona|muestrame como responde|show me|prove it|give me a demo)\b/i
+            .test(cleanedNorm);
+
+        if (wantsDemo) {
+          const demoTextEs =
+            'Puedo responderte tanto en inglés como en español. ' +
+            'Pregúntame lo que quieras sobre nuestros servicios, precios u otra cosa ' +
+            'y te responderé en tu idioma.';
+
+          const demoTextEn =
+            'I can reply in both English and Spanish. ' +
+            'You can ask me anything about our services, prices or anything else, ' +
+            'and I will answer in your language.';
+
+          const reply =
+            idiomaDestino === 'en'
+              ? `${bienvenida}\n\n${demoTextEn}`
+              : `${bienvenida}\n\n${demoTextEs}`;
+
+          await sendMetaContabilizando(reply);
+
+          await pool.query(
+            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+             VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+             ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+            [tenantId, reply, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+          );
+          await pool.query(
+            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+             VALUES ($1, $2, $3, NOW())
+             ON CONFLICT DO NOTHING`,
+            [tenantId, canalEnvio, messageId]
+          );
+
+          try {
+            await scheduleFollowUp('demo', 2);
+          } catch (e) {
+            console.warn('⚠️ No se pudo registrar sales_intelligence (demo META):', e);
+          }
+
+          continue; // ⬅️ ya respondimos demo
+        }
 
         // —————————————————————————
         // FAST-PATH MULTI-INTENCIÓN
