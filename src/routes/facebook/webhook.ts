@@ -422,7 +422,9 @@ router.post('/api/facebook/webhook', async (req, res) => {
           || getBienvenidaPorCanal('meta', tenant, idiomaDestino);
 
         // Saludos/agradecimientos (solo si el mensaje ES solo eso)
-        const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|d[ií]as))?)\s*$/i.test(userInput.trim());
+        const greetingOnly = /^\s*(hola|hello|hi|hey|good\s+morning|good\s+afternoon|good\s+evening|buenas(?:\s+(tardes|noches|d[ií]as))?)\s*$/i
+          .test(userInput.trim());
+
         const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
         
         if (greetingOnly || thanksOnly) {
@@ -642,14 +644,12 @@ Termina con esta pregunta EXACTA en español:
         try {
           const top = await detectTopIntents(userInput, tenantId, canalContenido as any, 3);
 
-          // 👇 Nueva validación para evitar errores cuando top viene null/undefined
+          // 🔐 Guard: si no hay nada, no toques .some ni .length
           if (!top || !Array.isArray(top) || top.length === 0) {
             console.log('ℹ️ [META] detectTopIntents sin resultados; sigo pipeline normal.');
           } else {
             const hasPrecio = top.some(t => t.intent === 'precio');
-            const hasInfo   = top.some(
-              t => t.intent === 'interes_clases' || t.intent === 'pedir_info'
-            );
+            const hasInfo   = top.some(t => t.intent === 'interes_clases' || t.intent === 'pedir_info');
             const multiAsk  = top.length >= 2 || (hasPrecio && hasInfo);
 
             if (multiAsk) {
@@ -733,23 +733,22 @@ Termina con esta pregunta EXACTA en español:
                 // Guardar mensaje assistant en DB con el TEXTO FINAL (con CTA)
                 await pool.query(
                   `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                  VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-                  ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+                   VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+                   ON CONFLICT (tenant_id, message_id) DO NOTHING`,
                   [tenantId, outWithCTA, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
                 );
 
                 await pool.query(
                   `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-                  VALUES ($1, $2, $3, NOW())
-                  ON CONFLICT DO NOTHING`,
+                   VALUES ($1, $2, $3, NOW())
+                   ON CONFLICT DO NOTHING`,
                   [tenantId, canalEnvio, messageId]
                 );
 
                 // Follow-up igual que antes
                 await scheduleFollowUp('interes_clases', 3);
 
-                // ⬅️ salir fast-path
-                continue;
+                continue; // ⬅️ salir fast-path
               }
             }
           }
