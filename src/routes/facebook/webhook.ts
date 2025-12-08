@@ -340,14 +340,20 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const enviarMetaSeguro = async (_to: string, text: string, _tenantId: string) =>
           sendMetaContabilizando(text);
 
-                // Helper seguro para detectarIntencion en META
+        // Helper seguro para detectarIntencion en META
         async function detectarIntencionSafe(
           texto: string,
           tenantId: string,
           canal: CanalEnvio
         ) {
           try {
-            return await detectarIntencion(texto, tenantId, canal);
+            // 👇 Mapeamos facebook/instagram al canal lógico "meta"
+            const canalInterno: Canal =
+              canal === 'facebook' || canal === 'instagram'
+                ? ('meta' as Canal)
+                : (canal as Canal);
+
+            return await detectarIntencion(texto, tenantId, canalInterno);
           } catch (e) {
             console.warn('⚠️ detectarIntencion falló en META; regreso duda:', e);
             return {
@@ -855,7 +861,7 @@ Termina con esta pregunta EXACTA en español:
             .test(userInput.trim());
 
         // 🔎 Intención antes del EARLY RETURN (no directas)
-        const { intencion: intenTemp } = await detectarIntencion(userInput, tenantId, canalContenido as any);
+        const { intencion: intenTemp } = await detectarIntencionSafe(userInput, tenantId, canalEnvio);
         const intenCanon = normalizeIntentAlias((intenTemp || '').toLowerCase());
         const esDirecta  = INTENTS_DIRECT.has(intenCanon);
 
@@ -953,7 +959,7 @@ Termina con esta pregunta EXACTA en español:
 
             // 4) Follow-up usando la intención canónica
             try {
-              const det = await detectarIntencion(userInput, tenantId, canalContenido as any);
+              const det = await detectarIntencionSafe(userInput, tenantId, canalEnvio);
               const nivel = det?.nivel_interes ?? 1;
               await scheduleFollowUp(intenCanon || 'duda', nivel);
             } catch (e) {
