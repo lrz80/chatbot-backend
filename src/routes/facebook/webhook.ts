@@ -340,6 +340,23 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const enviarMetaSeguro = async (_to: string, text: string, _tenantId: string) =>
           sendMetaContabilizando(text);
 
+                // Helper seguro para detectarIntencion en META
+        async function detectarIntencionSafe(
+          texto: string,
+          tenantId: string,
+          canal: CanalEnvio
+        ) {
+          try {
+            return await detectarIntencion(texto, tenantId, canal);
+          } catch (e) {
+            console.warn('⚠️ detectarIntencion falló en META; regreso duda:', e);
+            return {
+              intencion: 'duda',
+              nivel_interes: 1
+            };
+          }
+        }
+
         // Idempotencia: si ya está en messages, avanzar
         const existingMsg = await pool.query(
           `SELECT 1 FROM messages WHERE tenant_id = $1 AND message_id = $2 LIMIT 1`,
@@ -981,7 +998,7 @@ Termina con esta pregunta EXACTA en español:
           });
 
           // Canonical detect (rápido) para aplicar guards
-          const { intencion: intenTemp } = await detectarIntencion(userInput, tenantId, canalEnvio);
+          const { intencion: intenTemp } = await detectarIntencionSafe(userInput, tenantId, canalEnvio);
           const canonical = normalizeIntentAlias((intenTemp || '').toLowerCase());
           const isCanonicalDirect = isDirectIntent(canonical, INTENTS_DIRECT);
           const respIntentName = (respIntent?.intent || '').toLowerCase();
@@ -1089,7 +1106,7 @@ Termina con esta pregunta EXACTA en español:
             );
 
             try {
-              const det = await detectarIntencion(userInput, tenantId, canalEnvio);
+              const det = await detectarIntencionSafe(userInput, tenantId, canalEnvio);
               const nivel = det?.nivel_interes ?? 1;
               let intFinal = (respIntent.intent || '').toLowerCase().trim();
               if (intFinal === 'duda') intFinal = buildDudaSlug(userInput);
@@ -1107,7 +1124,7 @@ Termina con esta pregunta EXACTA en español:
         let intencionParaFaq = '';
         try {
           const textoES = (idiomaDestino === 'es') ? userInput : await traducirMensaje(userInput, 'es');
-          const det0 = await detectarIntencion(textoES, tenantId, canalEnvio);
+          const det0 = await detectarIntencionSafe(textoES, tenantId, canalEnvio);
           let proc = (det0?.intencion || '').trim().toLowerCase();
           if (proc === 'duda') proc = buildDudaSlug(userInput);
           proc = normalizeIntentAlias(proc);
@@ -1138,7 +1155,7 @@ Termina con esta pregunta EXACTA en español:
           );
           // follow-up post interceptor (opcional)
           try {
-            const det = await detectarIntencion(userInput, tenantId, canalEnvio);
+            const det = await detectarIntencionSafe(userInput, tenantId, canalEnvio);
             await scheduleFollowUp(intencionParaFaq || normalizeIntentAlias(det?.intencion || ''), det?.nivel_interes ?? 1);
           } catch {}
           continue;
@@ -1149,7 +1166,7 @@ Termina con esta pregunta EXACTA en español:
           let intentFAQ = (intencionParaFaq || '').trim().toLowerCase();
           if (!intentFAQ) {
             const textoES = (idiomaDestino === 'es') ? userInput : await traducirMensaje(userInput, 'es');
-            const det1 = await detectarIntencion(textoES, tenantId, canalEnvio);
+            const det1 = await detectarIntencionSafe(textoES, tenantId, canalEnvio);
             let proc = (det1?.intencion || '').trim().toLowerCase();
             if (proc === 'duda') proc = buildDudaSlug(userInput);
             proc = normalizeIntentAlias(proc);
@@ -1233,7 +1250,7 @@ Termina con esta pregunta EXACTA en español:
 
               // follow-up si aplica
               try {
-                const det = await detectarIntencion(userInput, tenantId, canalEnvio);
+                const det = await detectarIntencionSafe(userInput, tenantId, canalEnvio);
                 const nivel = det?.nivel_interes ?? 1;
                 await scheduleFollowUp(intentFAQ, nivel);
               } catch {}
@@ -1319,7 +1336,7 @@ Termina con esta pregunta EXACTA en español:
 
               if (!yaExisteSug && !yaExisteAprob) {
                 const textoESparaGuardar = (idiomaDestino === 'es') ? userInput : await traducirMensaje(userInput, 'es');
-                const detGuardar = await detectarIntencion(textoESparaGuardar, tenantId, canalEnvio);
+                const detGuardar = await detectarIntencionSafe(textoESparaGuardar, tenantId, canalEnvio);
                 let intencionFinal = (detGuardar?.intencion || '').trim().toLowerCase();
                 if (intencionFinal === 'duda') intencionFinal = buildDudaSlug(userInput);
                 intencionFinal = normalizeIntentAlias(intencionFinal);
@@ -1398,7 +1415,7 @@ Termina con esta pregunta EXACTA en español:
 
         // Inteligencia de ventas + follow-up final (idéntico a WA)
         try {
-          const det = await detectarIntencion(userInput, tenantId, canalEnvio);
+          const det = await detectarIntencionSafe(userInput, tenantId, canalEnvio);
           const nivel_interes = det?.nivel_interes ?? 1;
           let intFinal = normalizeIntentAlias((det?.intencion || '').toLowerCase());
 
