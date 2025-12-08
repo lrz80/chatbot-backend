@@ -486,7 +486,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         const msgLower = cleanedNorm.toLowerCase();
         const shortInfoOnly =
-          wantsMoreInfoDirect.some(k => msgLower.includes(k)) ||
+          (wantsMoreInfoDirect || []).some(k => msgLower.includes(k)) ||
           trailing.test(msgLower);
 
         const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs || shortInfoOnly;
@@ -1408,7 +1408,7 @@ Termina con esta pregunta EXACTA en español:
 
           // Segmentación básica
           const intencionesCliente = ["comprar","compra","pagar","agendar","reservar","confirmar","interes_clases","precio"];
-          if (intencionesCliente.some(p => intFinal.includes(p))) {
+          if ((intencionesCliente || []).some(p => intFinal.includes(p))) {
             await pool.query(
               `UPDATE clientes
                   SET segmento = 'cliente'
