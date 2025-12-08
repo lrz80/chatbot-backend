@@ -448,7 +448,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const greetingOnly = /^\s*(?:hola+|holaa+|holi+s?|hello+|hi+|hey+|hey\s+there|whats?(?:ap+|app| up)?|que\s+tal|que\s+mas|qué\s+tal|qué\s+más|como\s+estas?|cómo\s+estas?|buen[oa]s?(?:\s+(?:d[ií]as?|tardes?|noches?))?|buen\s+d[ií]a|good\s+morning|good\s+afternoon|good\s+evening|good\s+night|good\s+day|g(?:m|n)\b)\s*[\W_]*$/iu.test(
           userInput.trim()
         );
-
         const thanksOnly = /^\s*(?:gracias+|much[ií]simas?\s+gracias|muchas?\s+gracias|mil\s+gracias|se\s+agradece|te\s+lo\s+agradezco|muy\s+amable|thanks?|thanx|thx|thank\s*you|thanks?\s+(?:a\s+lot|so\s+much)|i\s+appreciate\s+it|appreciate\s+it)\s*[\W_]*$/iu.test(
           userInput.trim()
         );
@@ -609,7 +608,6 @@ Termina con esta pregunta EXACTA en español:
 
           // Registrar intención de venta y follow-up igual que en WA
           try {
-            await scheduleFollowUp('pedir_info', 2);
           } catch (e) {
             console.warn('⚠️ No se pudo registrar sales_intelligence (more info META):', e);
           }
@@ -656,7 +654,6 @@ Termina con esta pregunta EXACTA en español:
           );
 
           try {
-            await scheduleFollowUp('demo', 2);
           } catch (e) {
             console.warn('⚠️ No se pudo registrar sales_intelligence (demo META):', e);
           }
@@ -815,9 +812,9 @@ Termina con esta pregunta EXACTA en español:
 
           // Mensaje por defecto + variantes por intención
           let msg = cfg.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
-          if (canon === "precio" && cfg.mensaje_precio) msg = cfg.mensaje_precio;
-          else if ((canon === "reservar" || canon === "comprar") && cfg.mensaje_agendar) msg = cfg.mensaje_agendar;
-          else if (canon === "ubicacion" && cfg.mensaje_ubicacion) msg = cfg.mensaje_ubicacion;
+          if (canonFinal === "precio" && cfg.mensaje_precio) msg = cfg.mensaje_precio;
+          else if ((canonFinal === "reservar" || canonFinal === "comprar") && cfg.mensaje_agendar) msg = cfg.mensaje_agendar;
+          else if (canonFinal === "ubicacion" && cfg.mensaje_ubicacion) msg = cfg.mensaje_ubicacion;
 
           // Asegura idioma de salida consistente
           try {
@@ -961,7 +958,6 @@ Termina con esta pregunta EXACTA en español:
             try {
               const det = await detectarIntencionSafe(userInput, tenantId, canalEnvio);
               const nivel = det?.nivel_interes ?? 1;
-              await scheduleFollowUp(intenCanon || 'duda', nivel);
             } catch (e) {
               console.warn('⚠️ [META] No se pudo programar follow-up en EARLY_RETURN:', e);
             }
