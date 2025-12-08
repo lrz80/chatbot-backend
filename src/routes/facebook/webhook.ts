@@ -28,6 +28,7 @@ import { requireChannel } from "../../middleware/requireChannel";
 import { canUseChannel } from "../../lib/features";
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
+import { detectarCortesia } from '../../lib/detectarCortesia';
 
 type CanalEnvio = 'facebook' | 'instagram';
 
@@ -444,18 +445,13 @@ router.post('/api/facebook/webhook', async (req, res) => {
           (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
           || getBienvenidaPorCanal('meta', tenant, idiomaDestino);
 
-        // Saludos/agradecimientos (solo si el mensaje ES solo eso, con emojis/puntuación)
-        const greetingOnly = /^\s*(?:hola+|holaa+|holi+s?|hello+|hi+|hey+|hey\s+there|whats?(?:ap+|app| up)?|que\s+tal|que\s+mas|qué\s+tal|qué\s+más|como\s+estas?|cómo\s+estas?|buen[oa]s?(?:\s+(?:d[ií]as?|tardes?|noches?))?|buen\s+d[ií]a|good\s+morning|good\s+afternoon|good\s+evening|good\s+night|good\s+day|g(?:m|n)\b)\s*[\W_]*$/iu.test(
-          userInput.trim()
-        );
-        const thanksOnly = /^\s*(?:gracias+|much[ií]simas?\s+gracias|muchas?\s+gracias|mil\s+gracias|se\s+agradece|te\s+lo\s+agradezco|muy\s+amable|thanks?|thanx|thx|thank\s*you|thanks?\s+(?:a\s+lot|so\s+much)|i\s+appreciate\s+it|appreciate\s+it)\s*[\W_]*$/iu.test(
-          userInput.trim()
-        );
+        // ✅ Cortesía (saludos y agradecimientos) - reusable helper
+        const { isGreeting, isThanks } = detectarCortesia(userInput);
 
-        if (greetingOnly || thanksOnly) {
-          let out = thanksOnly
+        if (isGreeting || isThanks) {
+          let out = isThanks
             ? (idiomaDestino === 'es'
-                ? '¡De nada! 💬 si necesitas algo mas dejame saber'
+                ? '¡De nada! 💬 si necesitas algo más, déjame saber.'
                 : "You're welcome! 💬 If you need anything else, let me know.")
             : bienvenida;
 
@@ -465,15 +461,17 @@ router.post('/api/facebook/webhook', async (req, res) => {
               out = await traducirMensaje(out, idiomaDestino);
             }
           } catch {}
+
           await sendMetaContabilizando(out);
 
           await pool.query(
             `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-             VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-             ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+            VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+            ON CONFLICT (tenant_id, message_id) DO NOTHING`,
             [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
           );
-          continue;
+
+          continue; // ⛔ NO sigue al pipeline de intents
         }
 
         // ============================================
