@@ -7,8 +7,9 @@ export type Canal =
   | 'whatsapp'
   | 'facebook'
   | 'instagram'
+  | 'meta'
   | 'voz'
-  | 'preview'; // ⬅ export
+  | 'preview';
 
 const stripDiacritics = (s: string) =>
   s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
@@ -92,10 +93,14 @@ Canal: ${canal}
     whatsapp: ['whatsapp', 'wasap', 'wpp'],
     facebook: ['facebook', 'fb', 'messenger', 'inbox'],
     instagram: ['instagram', 'ig', 'insta', 'dm'],
+    meta: ['facebook', 'instagram', 'messenger', 'ig', 'inbox', 'dm'],
     voz: ['llamar', 'llamada', 'call', 'phone', 'marcar'],
     preview: ['preview', 'demo', 'prueba']
   };
-  const mencionaCanal = canalHints[canal].some(k => textoCore.includes(norm(k)));
+
+  // 👇 Blindado para evitar TypeError
+  const hints = canalHints[canal] || [];
+  const mencionaCanal = hints.some(k => textoCore.includes(norm(k)));
 
   // 0) Flag de "pedir información" (NO devolvemos aún; dejamos que venta prevalezca)
   const pedirInfoPhrases = [
