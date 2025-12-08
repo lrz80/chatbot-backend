@@ -421,6 +421,34 @@ router.post('/api/facebook/webhook', async (req, res) => {
           (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
           || getBienvenidaPorCanal('meta', tenant, idiomaDestino);
 
+        // Saludos/agradecimientos (solo si el mensaje ES solo eso)
+        const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|d[ií]as))?)\s*$/i.test(userInput.trim());
+        const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
+        
+        if (greetingOnly || thanksOnly) {
+          let out = thanksOnly
+            ? (idiomaDestino === 'es'
+                ? '¡De nada! 💬 si necesitas algo mas dejame saber'
+                : "You're welcome! 💬 If you need anything else, let me know.")
+            : bienvenida;
+
+          try {
+            const langOut = await detectarIdioma(out);
+            if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+              out = await traducirMensaje(out, idiomaDestino);
+            }
+          } catch {}
+          await sendMetaContabilizando(out);
+
+          await pool.query(
+            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+             VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+             ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+            [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+          );
+          continue;
+        }
+
         // ============================================
         // 🧩 CASO ESPECIAL: usuario pide "más info"
         // ============================================
@@ -806,34 +834,6 @@ Termina con esta pregunta EXACTA en español:
         const isSmallTalkOrCourtesy =
           /^(hola|hello|hi|hey|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|thank\s+you|ok|okay|vale|perfecto)\b/i
             .test(userInput.trim());
-
-        // Saludos/agradecimientos (solo si el mensaje ES solo eso)
-        const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|d[ií]as))?)\s*$/i.test(userInput.trim());
-        const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
-        
-        if (greetingOnly || thanksOnly) {
-          let out = thanksOnly
-            ? (idiomaDestino === 'es'
-                ? '¡De nada! 💬 si necesitas algo mas dejame saber'
-                : "You're welcome! 💬 If you need anything else, let me know.")
-            : bienvenida;
-
-          try {
-            const langOut = await detectarIdioma(out);
-            if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-              out = await traducirMensaje(out, idiomaDestino);
-            }
-          } catch {}
-          await sendMetaContabilizando(out);
-
-          await pool.query(
-            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-             VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-             ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-            [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
-          );
-          continue;
-        }
 
         // 🔎 Intención antes del EARLY RETURN (no directas)
         const { intencion: intenTemp } = await detectarIntencion(userInput, tenantId, canalContenido as any);
