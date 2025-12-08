@@ -421,12 +421,15 @@ router.post('/api/facebook/webhook', async (req, res) => {
           (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
           || getBienvenidaPorCanal('meta', tenant, idiomaDestino);
 
-        // Saludos/agradecimientos (solo si el mensaje ES solo eso)
-        const greetingOnly = /^\s*(hola|hello|hi|hey|good\s+morning|good\s+afternoon|good\s+evening|buenas(?:\s+(tardes|noches|d[ií]as))?)\s*$/i
-          .test(userInput.trim());
+        // Saludos/agradecimientos (solo si el mensaje ES solo eso, con emojis/puntuación)
+        const greetingOnly = /^\s*(?:hola+|holaa+|holi+s?|hello+|hi+|hey+|hey\s+there|whats?(?:ap+|app| up)?|que\s+tal|que\s+mas|qué\s+tal|qué\s+más|como\s+estas?|cómo\s+estas?|buen[oa]s?(?:\s+(?:d[ií]as?|tardes?|noches?))?|buen\s+d[ií]a|good\s+morning|good\s+afternoon|good\s+evening|good\s+night|good\s+day|g(?:m|n)\b)\s*[\W_]*$/iu.test(
+          userInput.trim()
+        );
 
-        const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
-        
+        const thanksOnly = /^\s*(?:gracias+|much[ií]simas?\s+gracias|muchas?\s+gracias|mil\s+gracias|se\s+agradece|te\s+lo\s+agradezco|muy\s+amable|thanks?|thanx|thx|thank\s*you|thanks?\s+(?:a\s+lot|so\s+much)|i\s+appreciate\s+it|appreciate\s+it)\s*[\W_]*$/iu.test(
+          userInput.trim()
+        );
+
         if (greetingOnly || thanksOnly) {
           let out = thanksOnly
             ? (idiomaDestino === 'es'
