@@ -613,106 +613,116 @@ Termina con esta pregunta EXACTA en español:
         // —————————————————————————
         try {
           const top = await detectTopIntents(userInput, tenantId, canalContenido as any, 3);
-          const hasPrecio = top.some(t => t.intent === 'precio');
-          const hasInfo   = top.some(t => t.intent === 'interes_clases' || t.intent === 'pedir_info');
-          const multiAsk  = top.length >= 2 || (hasPrecio && hasInfo);
 
-          if (multiAsk) {
-            const multi = await answerMultiIntent({
-              tenantId,
-              canal: canalContenido as any,
-              userText: userInput,
-              idiomaDestino,
-              promptBase
-            });
+          // 👇 Nueva validación para evitar errores cuando top viene null/undefined
+          if (!top || !Array.isArray(top) || top.length === 0) {
+            console.log('ℹ️ [META] detectTopIntents sin resultados; sigo pipeline normal.');
+          } else {
+            const hasPrecio = top.some(t => t.intent === 'precio');
+            const hasInfo   = top.some(
+              t => t.intent === 'interes_clases' || t.intent === 'pedir_info'
+            );
+            const multiAsk  = top.length >= 2 || (hasPrecio && hasInfo);
 
-            if (multi?.text) {
-              let multiText = multi.text || '';
-
-              // ¿Pidió horarios / precios explícitamente?
-              const askedSchedule = /\b(schedule|schedules?|hours?|times?|timetable|horario|horarios)\b/i.test(userInput);
-              const askedPrice    = PRICE_REGEX.test(userInput);
-
-              const hasPriceInText    = /\$|S\/\.?\s?|\b\d{1,3}(?:[.,]\d{2})\b/.test(multiText);
-              const hasScheduleInText = /\b(\d{1,2}:\d{2}\s?(?:am|pm)?)\b/i.test(multiText);
-
-              // ⬇️ PREPEND precios si el usuario los pide y el texto no los trae
-              if (askedPrice && !hasPriceInText) {
-                try {
-                  const precioFAQ = await fetchFaqPrecio(tenantId, canalContenido as any);
-                  if (precioFAQ?.trim()) {
-                    multiText = [precioFAQ.trim(), '', multiText.trim()].join('\n\n');
-                  }
-                } catch (e) {
-                  console.warn('⚠️ [META] No se pudo anexar FAQ precios en MULTI:', e);
-                }
-              }
-
-              // ⬇️ APPEND horario si el usuario lo pide y el texto no lo trae
-              if (askedSchedule && !hasScheduleInText) {
-                try {
-                  const hitH = await getFaqByIntent(tenantId, canalContenido as any, 'horario');
-                  if (hitH?.respuesta?.trim()) {
-                    multiText = [multiText.trim(), '', hitH.respuesta.trim()].join('\n\n');
-                  }
-                } catch (e) {
-                  console.warn('⚠️ [META] No se pudo anexar FAQ horario en MULTI:', e);
-                }
-              }
-
-              // Asegura idioma de salida
-              try {
-                const langOut = await detectarIdioma(multiText);
-                if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
-                  multiText = await traducirMensaje(multiText, idiomaDestino);
-                }
-              } catch {}
-
-              // CTA de texto base (igual que en WhatsApp)
-              const CTA_TXT =
-                idiomaDestino === 'en'
-                  ? 'Is there anything else I can help you with?'
-                  : '¿Hay algo más en lo que te pueda ayudar?';
-
-              const out = tidyMultiAnswer(multiText, {
-                maxLines: MAX_WHATSAPP_LINES - 2, // deja espacio para CTA con link
-                freezeUrls: true,
-                cta: CTA_TXT
+            if (multiAsk) {
+              const multi = await answerMultiIntent({
+                tenantId,
+                canal: canalContenido as any,
+                userText: userInput,
+                idiomaDestino,
+                promptBase
               });
 
-              // ⬇️ CTA por intención (multi-intent)
-              const prefer = askedPrice ? 'precio' : (askedSchedule ? 'horario' : null);
-              const intentForCTA = pickIntentForCTA({
-                firstOfTop: top?.[0]?.intent || null,
-                prefer
-              });
+              if (multi?.text) {
+                let multiText = multi.text || '';
 
-              const ctaXraw = await pickCTA(tenant, intentForCTA, canalEnvio);
-              const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
-              const outWithCTA = appendCTAWithCap(out, ctaX);
+                // ¿Pidió horarios / precios explícitamente?
+                const askedSchedule = /\b(schedule|schedules?|hours?|times?|timetable|horario|horarios)\b/i
+                  .test(userInput);
+                const askedPrice    = PRICE_REGEX.test(userInput);
 
-              // Enviar a Facebook / Instagram contabilizando uso (igual que antes)
-              await sendMetaContabilizando(outWithCTA);
+                const hasPriceInText    = /\$|S\/\.?\s?|\b\d{1,3}(?:[.,]\d{2})\b/.test(multiText);
+                const hasScheduleInText = /\b(\d{1,2}:\d{2}\s?(?:am|pm)?)\b/i.test(multiText);
 
-              // Guardar mensaje assistant en DB con el TEXTO FINAL (con CTA)
-              await pool.query(
-                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-                [tenantId, outWithCTA, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
-              );
+                // ⬇️ PREPEND precios si el usuario los pide y el texto no los trae
+                if (askedPrice && !hasPriceInText) {
+                  try {
+                    const precioFAQ = await fetchFaqPrecio(tenantId, canalContenido as any);
+                    if (precioFAQ?.trim()) {
+                      multiText = [precioFAQ.trim(), '', multiText.trim()].join('\n\n');
+                    }
+                  } catch (e) {
+                    console.warn('⚠️ [META] No se pudo anexar FAQ precios en MULTI:', e);
+                  }
+                }
 
-              await pool.query(
-                `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-                VALUES ($1, $2, $3, NOW())
-                ON CONFLICT DO NOTHING`,
-                [tenantId, canalEnvio, messageId]
-              );
+                // ⬇️ APPEND horario si el usuario lo pide y el texto no lo trae
+                if (askedSchedule && !hasScheduleInText) {
+                  try {
+                    const hitH = await getFaqByIntent(tenantId, canalContenido as any, 'horario');
+                    if (hitH?.respuesta?.trim()) {
+                      multiText = [multiText.trim(), '', hitH.respuesta.trim()].join('\n\n');
+                    }
+                  } catch (e) {
+                    console.warn('⚠️ [META] No se pudo anexar FAQ horario en MULTI:', e);
+                  }
+                }
 
-              // De momento dejamos el follow-up igual que lo tenías
-              await scheduleFollowUp('interes_clases', 3);
+                // Asegura idioma de salida
+                try {
+                  const langOut = await detectarIdioma(multiText);
+                  if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+                    multiText = await traducirMensaje(multiText, idiomaDestino);
+                  }
+                } catch {}
 
-              continue; // ⬅️ salir fast-path
+                // CTA de texto base (igual que en WhatsApp)
+                const CTA_TXT =
+                  idiomaDestino === 'en'
+                    ? 'Is there anything else I can help you with?'
+                    : '¿Hay algo más en lo que te pueda ayudar?';
+
+                const out = tidyMultiAnswer(multiText, {
+                  maxLines: MAX_WHATSAPP_LINES - 2, // deja espacio para CTA con link
+                  freezeUrls: true,
+                  cta: CTA_TXT
+                });
+
+                // ⬇️ CTA por intención (multi-intent)
+                const prefer = askedPrice ? 'precio' : (askedSchedule ? 'horario' : null);
+                const intentForCTA = pickIntentForCTA({
+                  firstOfTop: top?.[0]?.intent || null,
+                  prefer
+                });
+
+                const ctaXraw = await pickCTA(tenant, intentForCTA, canalEnvio);
+                const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
+                const outWithCTA = appendCTAWithCap(out, ctaX);
+
+                // Enviar a Facebook / Instagram contabilizando uso (igual que antes)
+                await sendMetaContabilizando(outWithCTA);
+
+                // Guardar mensaje assistant en DB con el TEXTO FINAL (con CTA)
+                await pool.query(
+                  `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+                  VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+                  ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+                  [tenantId, outWithCTA, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+                );
+
+                await pool.query(
+                  `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+                  VALUES ($1, $2, $3, NOW())
+                  ON CONFLICT DO NOTHING`,
+                  [tenantId, canalEnvio, messageId]
+                );
+
+                // Follow-up igual que antes
+                await scheduleFollowUp('interes_clases', 3);
+
+                // ⬅️ salir fast-path
+                continue;
+              }
             }
           }
         } catch (e) {
