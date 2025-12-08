@@ -95,6 +95,121 @@ async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma:
   }
 }
 
+function pickIntentForCTA(
+  opts: {
+    canonical?: string | null;     // INTENCION_FINAL_CANONICA
+    matcher?: string | null;       // intención que venga del intent-matcher
+    firstOfTop?: string | null;    // top[0]?.intent en multi-intent
+    fallback?: string | null;      // intenCanon u otras
+    prefer?: string | null;        // fuerza algo (ej. 'precio' si el user pidió precios)
+  }
+) {
+  const cand = [
+    opts.prefer?.trim().toLowerCase(),
+    opts.matcher?.trim().toLowerCase(),
+    opts.firstOfTop?.trim().toLowerCase(),
+    opts.canonical?.trim().toLowerCase(),
+    opts.fallback?.trim().toLowerCase()
+  ];
+  return cand.find(Boolean) || null;
+}
+
+const MAX_WHATSAPP_LINES = 16; // podemos reutilizarlo también para Meta
+
+function appendCTAWithCap(
+  text: string,
+  cta: { cta_text: string; cta_url: string } | null
+) {
+  if (!cta) return text;
+  const extra = `\n\n${cta.cta_text}: ${cta.cta_url}`;
+  const lines = text.split('\n'); // no filtramos vacías
+  const limit = Math.max(0, MAX_WHATSAPP_LINES - 2); // deja 2 líneas para CTA
+  if (lines.length > limit) {
+    return lines.slice(0, limit).join('\n') + extra;
+  }
+  return text + extra;
+}
+
+async function translateCTAIfNeeded(
+  cta: { cta_text: string; cta_url: string } | null,
+  idiomaDestino: 'es'|'en'
+) {
+  if (!cta) return null;
+  let txt = (cta.cta_text || '').trim();
+  try {
+    const lang = await detectarIdioma(txt).catch(() => null);
+    if (lang && lang !== 'zxx' && ((idiomaDestino === 'en' && !/^en/i.test(lang)) ||
+                                   (idiomaDestino === 'es' && !/^es/i.test(lang)))) {
+      txt = await traducirMensaje(txt, idiomaDestino);
+    } else if (!lang) {
+      txt = await traducirMensaje(txt, idiomaDestino);
+    }
+  } catch {}
+  return { cta_text: txt, cta_url: cta.cta_url };
+}
+
+function isValidUrl(u?: string) {
+  try {
+    if (!u) return false;
+    if (!/^https?:\/\//i.test(u)) return false;
+    new URL(u);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// CTA “global” guardada en las columnas del tenant (no en tenant_ctas)
+function getGlobalCTAFromTenant(tenant: any) {
+  const t = (tenant?.cta_text || '').trim();
+  const u = (tenant?.cta_url  || '').trim();
+  if (t && isValidUrl(u)) return { cta_text: t, cta_url: u };
+  return null;
+}
+
+// CTA por intención (usa tenant_ctas.intent_slug en TEXT, no UUID)
+async function getTenantCTA(tenantId: string, intent: string, channel: string) {
+  const inten = normalizeIntentAlias((intent || '').trim().toLowerCase());
+
+  // 1) Coincidencia exacta por canal o comodín '*'
+  let q = await pool.query(
+    `SELECT cta_text, cta_url
+       FROM tenant_ctas
+      WHERE tenant_id = $1
+        AND intent_slug = $2
+        AND (canal = $3 OR canal = '*')
+      ORDER BY CASE WHEN canal=$3 THEN 0 ELSE 1 END
+      LIMIT 1`,
+    [tenantId, inten, channel]
+  );
+  if (q.rows[0]) return q.rows[0];
+
+  // 2) Fallback 'global' del mismo canal (o '*')
+  q = await pool.query(
+    `SELECT cta_text, cta_url
+       FROM tenant_ctas
+      WHERE tenant_id = $1
+        AND intent_slug = 'global'
+        AND (canal = $2 OR canal = '*')
+      ORDER BY CASE WHEN canal=$2 THEN 0 ELSE 1 END
+      LIMIT 1`,
+    [tenantId, channel]
+  );
+  return q.rows[0] || null;
+}
+
+// Selecciona CTA por intención; si no hay, usa CTA global del tenant
+async function pickCTA(tenant: any, intent: string | null, channel: string) {
+  if (intent) {
+    const byIntent = await getTenantCTA(tenant.id, intent, channel);
+    if (byIntent) return byIntent;
+  }
+  // fallback opcional desde columnas del tenant (si las usas)
+  const global = getGlobalCTAFromTenant(tenant);
+  if (global) return global;
+  return null;
+}
+
 async function isMetaChannelOpen(tenantId: string): Promise<boolean> {
   const { rows } = await pool.query(
     `SELECT meta_enabled, paused_until_meta
@@ -494,7 +609,7 @@ Termina con esta pregunta EXACTA en español:
         }
 
         // —————————————————————————
-        // FAST-PATH MULTI-INTENCIÓN
+        // FAST-PATH MULTI-INTENCIÓN (META con CTA)
         // —————————————————————————
         try {
           const top = await detectTopIntents(userInput, tenantId, canalContenido as any, 3);
@@ -512,28 +627,91 @@ Termina con esta pregunta EXACTA en español:
             });
 
             if (multi?.text) {
-              const out = tidyMultiAnswer(multi.text, {
-                maxLines: 6,
+              let multiText = multi.text || '';
+
+              // ¿Pidió horarios / precios explícitamente?
+              const askedSchedule = /\b(schedule|schedules?|hours?|times?|timetable|horario|horarios)\b/i.test(userInput);
+              const askedPrice    = PRICE_REGEX.test(userInput);
+
+              const hasPriceInText    = /\$|S\/\.?\s?|\b\d{1,3}(?:[.,]\d{2})\b/.test(multiText);
+              const hasScheduleInText = /\b(\d{1,2}:\d{2}\s?(?:am|pm)?)\b/i.test(multiText);
+
+              // ⬇️ PREPEND precios si el usuario los pide y el texto no los trae
+              if (askedPrice && !hasPriceInText) {
+                try {
+                  const precioFAQ = await fetchFaqPrecio(tenantId, canalContenido as any);
+                  if (precioFAQ?.trim()) {
+                    multiText = [precioFAQ.trim(), '', multiText.trim()].join('\n\n');
+                  }
+                } catch (e) {
+                  console.warn('⚠️ [META] No se pudo anexar FAQ precios en MULTI:', e);
+                }
+              }
+
+              // ⬇️ APPEND horario si el usuario lo pide y el texto no lo trae
+              if (askedSchedule && !hasScheduleInText) {
+                try {
+                  const hitH = await getFaqByIntent(tenantId, canalContenido as any, 'horario');
+                  if (hitH?.respuesta?.trim()) {
+                    multiText = [multiText.trim(), '', hitH.respuesta.trim()].join('\n\n');
+                  }
+                } catch (e) {
+                  console.warn('⚠️ [META] No se pudo anexar FAQ horario en MULTI:', e);
+                }
+              }
+
+              // Asegura idioma de salida
+              try {
+                const langOut = await detectarIdioma(multiText);
+                if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+                  multiText = await traducirMensaje(multiText, idiomaDestino);
+                }
+              } catch {}
+
+              // CTA de texto base (igual que en WhatsApp)
+              const CTA_TXT =
+                idiomaDestino === 'en'
+                  ? 'Is there anything else I can help you with?'
+                  : '¿Hay algo más en lo que te pueda ayudar?';
+
+              const out = tidyMultiAnswer(multiText, {
+                maxLines: MAX_WHATSAPP_LINES - 2, // deja espacio para CTA con link
                 freezeUrls: true,
-                cta: '¿Hay algo más en lo que te pueda ayudar?'
+                cta: CTA_TXT
               });
 
-              await sendMetaContabilizando(out);
+              // ⬇️ CTA por intención (multi-intent)
+              const prefer = askedPrice ? 'precio' : (askedSchedule ? 'horario' : null);
+              const intentForCTA = pickIntentForCTA({
+                firstOfTop: top?.[0]?.intent || null,
+                prefer
+              });
 
+              const ctaXraw = await pickCTA(tenant, intentForCTA, canalEnvio);
+              const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
+              const outWithCTA = appendCTAWithCap(out, ctaX);
+
+              // Enviar a Facebook / Instagram contabilizando uso (igual que antes)
+              await sendMetaContabilizando(outWithCTA);
+
+              // Guardar mensaje assistant en DB con el TEXTO FINAL (con CTA)
               await pool.query(
                 `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                 VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-                 ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-                [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+                VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+                [tenantId, outWithCTA, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
               );
+
               await pool.query(
                 `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-                 VALUES ($1, $2, $3, NOW())
-                 ON CONFLICT DO NOTHING`,
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT DO NOTHING`,
                 [tenantId, canalEnvio, messageId]
               );
 
+              // De momento dejamos el follow-up igual que lo tenías
               await scheduleFollowUp('interes_clases', 3);
+
               continue; // ⬅️ salir fast-path
             }
           }
