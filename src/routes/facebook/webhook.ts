@@ -1425,7 +1425,7 @@ Termina con esta pregunta EXACTA en español:
       }
     }
   } catch (error: any) {
-    console.error('❌ Error en webhook Meta:', error?.response?.data || error.message || error);
+    console.error('❌ Error en webhook Meta (stack completo):', error);
   }
 });
 
