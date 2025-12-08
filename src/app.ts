@@ -82,6 +82,7 @@ import stripePlansRoutes from './routes/stripe/plans';
 import twilioEmbeddedRouter from './routes/twilioEmbedded';
 import metaRoutes from "./routes/meta";
 import telnyxForwardRouter from './routes/voice/telnyx-forward';
+import facebookOAuthSessionsRouter from './routes/facebook/oauth-sessions';
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -213,6 +214,7 @@ app.use('/api/stripe', stripePlansRoutes);
 app.use(twilioEmbeddedRouter);
 app.use("/api/meta", metaRoutes);
 app.use('/api/voice', telnyxForwardRouter);
+app.use(facebookOAuthSessionsRouter);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
