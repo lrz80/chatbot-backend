@@ -792,9 +792,15 @@ Termina con esta pregunta EXACTA en español:
         }
       }
 
+        // No empujar CTA si el mensaje es solo saludo / gracias / ok (small talk)
+        const isSmallTalkOrCourtesy =
+          /^(hola|hello|hi|hey|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|thank\s+you|ok|okay|vale|perfecto)\b/i
+            .test(userInput.trim());
+
         // Saludos/agradecimientos (solo si el mensaje ES solo eso)
         const greetingOnly = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|d[ií]as))?)\s*$/i.test(userInput.trim());
         const thanksOnly   = /^\s*(gracias|thank\s*you|ty)\s*$/i.test(userInput.trim());
+        
         if (greetingOnly || thanksOnly) {
           let out = thanksOnly
             ? (idiomaDestino === 'es'
@@ -817,6 +823,122 @@ Termina con esta pregunta EXACTA en español:
             [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
           );
           continue;
+        }
+
+        // 🔎 Intención antes del EARLY RETURN (no directas)
+        const { intencion: intenTemp } = await detectarIntencion(userInput, tenantId, canalContenido as any);
+        const intenCanon = normalizeIntentAlias((intenTemp || '').toLowerCase());
+        const esDirecta  = INTENTS_DIRECT.has(intenCanon);
+
+        if (!esDirecta) {
+          console.log('🛣️ [META] EARLY_RETURN con promptBase (no directa). Intención =', intenCanon);
+
+          try {
+            const fallbackBienvenida =
+              (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
+              || getBienvenidaPorCanal('meta', tenant, idiomaDestino);
+
+            const systemPrompt = [
+              promptBase,
+              '',
+              `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
+              'Formato Meta: máx. ~6 líneas en PROSA. Sin Markdown, sin bullets.',
+              'Usa únicamente los HECHOS; no inventes.',
+              'Si hay ENLACES_OFICIALES en los hechos/prompt, comparte solo 1 (el más pertinente) tal cual.'
+            ].join('\n');
+
+            const userPrompt = [
+              `MENSAJE_USUARIO:\n${userInput}`,
+              '',
+              'Responde usando solo los datos del prompt del negocio.'
+            ].join('\n');
+
+            let out = fallbackBienvenida;
+
+            try {
+              const completion = await openai.chat.completions.create({
+                model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+                temperature: 0.2,
+                max_tokens: 400,
+                messages: [
+                  { role: 'system', content: systemPrompt },
+                  { role: 'user',   content: userPrompt },
+                ],
+              });
+
+              const used = completion.usage?.total_tokens || 0;
+              if (used > 0) {
+                await pool.query(
+                  `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+                   VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+                   ON CONFLICT (tenant_id, canal, mes)
+                   DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+                  [tenantId, used]
+                );
+              }
+
+              out = completion.choices[0]?.message?.content?.trim() || fallbackBienvenida;
+            } catch (e) {
+              console.warn('⚠️ [META] EARLY_RETURN LLM falló, usando bienvenida como fallback:', e);
+            }
+
+            // Asegurar idioma correcto
+            try {
+              const langOut = await detectarIdioma(out);
+              if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+                out = await traducirMensaje(out, idiomaDestino);
+              }
+            } catch {}
+
+            // CTA por intención (usando helpers de arriba)
+            const intentForCTA = pickIntentForCTA({
+              fallback: intenCanon || null,
+            });
+
+            const ctaXraw = await pickCTA(tenant, intentForCTA, canalEnvio);
+            const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
+
+            // ❌ NO CTA si era puro saludo / cortesía
+            const outWithCTA = isSmallTalkOrCourtesy
+              ? out
+              : appendCTAWithCap(out, ctaX);
+
+            // 1) Enviar a Meta contabilizando uso
+            await sendMetaContabilizando(outWithCTA);
+
+            // 2) Guardar mensaje del bot
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+               VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+               ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenantId, outWithCTA, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+            );
+
+            // 3) Registrar interacción
+            await pool.query(
+              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+               VALUES ($1, $2, $3, NOW())
+               ON CONFLICT DO NOTHING`,
+              [tenantId, canalEnvio, messageId]
+            );
+
+            // 4) Follow-up usando la intención canónica
+            try {
+              const det = await detectarIntencion(userInput, tenantId, canalContenido as any);
+              const nivel = det?.nivel_interes ?? 1;
+              await scheduleFollowUp(intenCanon || 'duda', nivel);
+            } catch (e) {
+              console.warn('⚠️ [META] No se pudo programar follow-up en EARLY_RETURN:', e);
+            }
+
+            // ✅ EARLY RETURN: ya respondimos este mensaje
+            continue;
+          } catch (e) {
+            console.warn('❌ [META] EARLY_RETURN helper falló; sigo pipeline FAQ/intents:', e);
+            // No hacemos continue; dejamos que siga al matcher/FAQ
+          }
+        } else {
+          console.log('🛣️ [META] Ruta: FAQ/Intents (intención directa). Intención =', intenCanon);
         }
 
         // Cargar FAQs del canal meta
