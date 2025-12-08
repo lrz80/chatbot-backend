@@ -46,6 +46,13 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
       );
     }
 
+    // 🔍 LOG NUEVO: ver a quién pertenece este token
+    const meRes = await axios.get(
+      'https://graph.facebook.com/v19.0/me',
+      { params: { access_token: accessToken } }
+    );
+    console.log('👤 [FB ME] id:', meRes.data?.id, 'name:', meRes.data?.name);
+    
     // 2. Obtener las páginas conectadas
     const pagesRes = await axios.get(
       'https://graph.facebook.com/v19.0/me/accounts',

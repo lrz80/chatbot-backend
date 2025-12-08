@@ -423,8 +423,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
         if (greetingOnly || thanksOnly) {
           let out = thanksOnly
             ? (idiomaDestino === 'es'
-                ? '¡De nada! 💬 ¿Quieres ver otra opción del menú?'
-                : "You're welcome! 💬 Would you like to see other options?")
+                ? '¡De nada! 💬 si necesitas algo mas dejame saber'
+                : "You're welcome! 💬 If you need anything else, let me know.")
             : bienvenida;
 
           try {
