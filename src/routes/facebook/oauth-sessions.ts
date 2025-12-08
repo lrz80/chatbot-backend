@@ -210,7 +210,7 @@ router.post(
         ]
       );
 
-      console.log('✅ Página Meta conectada para tenant:', {
+      console.log('✅ Página Meta conectada para tenant (DB):', {
         tenantId,
         pageId,
         pageName,
@@ -218,7 +218,40 @@ router.post(
         instagramPageUsername,
       });
 
-      // 5) (Opcional) eliminar sesión para no dejar tokens tirados
+      // 5) Suscribir la página a tu webhook (Messenger)
+      try {
+        const subRes = await axios.post(
+          `https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`,
+          null,
+          {
+            params: {
+              access_token: pageAccessToken,
+              subscribed_fields: [
+                'messages',
+                'messaging_postbacks',
+                'messaging_optins',
+                'messaging_referrals',
+                'message_reactions',
+                'message_reads',
+              ].join(','),
+            },
+          }
+        );
+
+        console.log('📡 Página suscrita a webhook (Messenger):', {
+          tenantId,
+          pageId,
+          result: subRes.data,
+        });
+      } catch (e: any) {
+        console.error(
+          '❌ Error suscribiendo página a webhook:',
+          e.response?.data || e.message
+        );
+        // No hacemos return aquí para no romper la UX, pero es importante revisarlo si falla
+      }
+
+      // 6) (Opcional pero recomendable) eliminar sesión
       await pool.query(
         'DELETE FROM facebook_oauth_sessions WHERE id = $1',
         [session_id]
