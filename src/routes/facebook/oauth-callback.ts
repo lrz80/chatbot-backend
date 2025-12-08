@@ -46,29 +46,6 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
       );
     }
 
-    // 🔍 Ver qué permisos tiene este token (no expone secretos)
-    try {
-      const permsRes = await axios.get(
-        'https://graph.facebook.com/v19.0/me/permissions',
-        { params: { access_token: accessToken } }
-      );
-      console.log(
-        '🔐 [FB PERMISSIONS]',
-        JSON.stringify(permsRes.data, null, 2)
-      );
-    } catch (permsErr: any) {
-      console.warn(
-        '⚠️ No se pudieron leer los permisos de este token:',
-        permsErr.response?.data || permsErr.message
-      );
-    }
-
-    // 🔍 Ver a quién pertenece este token (id + nombre está OK)
-    const meRes = await axios.get('https://graph.facebook.com/v19.0/me', {
-      params: { access_token: accessToken },
-    });
-    console.log('👤 [FB ME] id:', meRes.data?.id, 'name:', meRes.data?.name);
-
     // 2. Obtener las páginas conectadas
     const pagesRes = await axios.get(
       'https://graph.facebook.com/v19.0/me/accounts',
@@ -77,27 +54,15 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
 
     const pages = pagesRes.data?.data || [];
 
-    // ⚠️ IMPORTANTE: no logueamos access_token de las páginas
     console.log(
-      '✅ /me/accounts páginas encontradas:',
-      Array.isArray(pages) ? pages.length : 0
+      '✅ Respuesta /me/accounts:',
+      JSON.stringify(pagesRes.data, null, 2)
     );
-    if (Array.isArray(pages) && pages.length > 0) {
-      console.log(
-        '📄 /me/accounts páginas (id, name):',
-        pages.map((p: any) => ({
-          id: p.id,
-          name: p.name,
-        }))
-      );
-    }
 
     if (!Array.isArray(pages) || pages.length === 0) {
       console.error(
-        '❌ El usuario no tiene páginas accesibles o faltan permisos. Resumen:',
-        {
-          length: Array.isArray(pages) ? pages.length : 0,
-        }
+        '❌ El usuario no tiene páginas accesibles o faltan permisos:',
+        pagesRes.data
       );
       return res.redirect(
         `${FRONTEND_URL}/dashboard/meta-config?error=no_pages_or_permissions`
@@ -107,10 +72,7 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
     const page = pages[0];
 
     if (!page?.id || !page?.access_token) {
-      console.error('❌ Página sin id o access_token (solo id/name):', {
-        id: page?.id,
-        name: page?.name,
-      });
+      console.error('❌ Página sin id o access_token:', page);
       return res.redirect(
         `${FRONTEND_URL}/dashboard/meta-config?error=invalid_page_data`
       );
@@ -140,14 +102,7 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
 
       console.log(
         '✅ instagram_business_account:',
-        JSON.stringify(
-          {
-            hasInstagramBusinessAccount: !!instagramBusinessAccountId,
-            instagramBusinessAccountId,
-          },
-          null,
-          2
-        )
+        JSON.stringify(igRes.data, null, 2)
       );
     } catch (igErr: any) {
       console.warn(
@@ -175,10 +130,10 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
         instagramPageId = igProfileRes.data?.id || null;
         instagramPageUsername = igProfileRes.data?.username || null;
 
-        console.log('✅ Perfil de Instagram:', {
-          instagramPageId,
-          instagramPageUsername,
-        });
+        console.log(
+          '✅ Perfil de Instagram:',
+          JSON.stringify(igProfileRes.data, null, 2)
+        );
       } catch (igProfileErr: any) {
         console.warn(
           '⚠️ No se pudo obtener el perfil de Instagram:',
@@ -187,7 +142,7 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
       }
     }
 
-    // 5. Decodificar token JWT de cookies (no loguear todo el payload)
+    // 5. Decodificar token JWT de cookies
     const token = req.cookies?.token;
 
     if (!token) {
@@ -197,10 +152,7 @@ router.get('/api/facebook/oauth-callback', async (req, res) => {
 
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET!);
 
-    console.log('✅ TOKEN DECODIFICADO (resumen):', {
-      uid: decoded.uid,
-      tenant_id: decoded.tenant_id,
-    });
+    console.log('✅ TOKEN DECODIFICADO:', decoded);
 
     const tenantId = decoded.tenant_id;
     if (!tenantId) {
