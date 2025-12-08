@@ -645,10 +645,10 @@ Termina con esta pregunta EXACTA en español:
         // FAST-PATH MULTI-INTENCIÓN (META con CTA)
         // —————————————————————————
         try {
-          const top = await detectTopIntents(userInput, tenantId, canalContenido as any, 3);
+          // Siempre forzamos array (si viene undefined/null → [])
+          const top = (await detectTopIntents(userInput, tenantId, canalContenido as any, 3)) || [];
 
-          // 🔐 Guard: si no hay nada, no toques .some ni .length
-          if (!top || !Array.isArray(top) || top.length === 0) {
+          if (!Array.isArray(top) || top.length === 0) {
             console.log('ℹ️ [META] detectTopIntents sin resultados; sigo pipeline normal.');
           } else {
             const hasPrecio = top.some(t => t.intent === 'precio');
@@ -668,8 +668,7 @@ Termina con esta pregunta EXACTA en español:
                 let multiText = multi.text || '';
 
                 // ¿Pidió horarios / precios explícitamente?
-                const askedSchedule = /\b(schedule|schedules?|hours?|times?|timetable|horario|horarios)\b/i
-                  .test(userInput);
+                const askedSchedule = /\b(schedule|schedules?|hours?|times?|timetable|horario|horarios)\b/i.test(userInput);
                 const askedPrice    = PRICE_REGEX.test(userInput);
 
                 const hasPriceInText    = /\$|S\/\.?\s?|\b\d{1,3}(?:[.,]\d{2})\b/.test(multiText);
@@ -736,22 +735,23 @@ Termina con esta pregunta EXACTA en español:
                 // Guardar mensaje assistant en DB con el TEXTO FINAL (con CTA)
                 await pool.query(
                   `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-                   VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-                   ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+                  VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+                  ON CONFLICT (tenant_id, message_id) DO NOTHING`,
                   [tenantId, outWithCTA, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
                 );
 
                 await pool.query(
                   `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-                   VALUES ($1, $2, $3, NOW())
-                   ON CONFLICT DO NOTHING`,
+                  VALUES ($1, $2, $3, NOW())
+                  ON CONFLICT DO NOTHING`,
                   [tenantId, canalEnvio, messageId]
                 );
 
-                // Follow-up igual que antes
+                // De momento dejamos el follow-up igual que lo tenías
                 await scheduleFollowUp('interes_clases', 3);
 
-                continue; // ⬅️ salir fast-path
+                // ⬅️ salir fast-path (no seguir pipeline normal)
+                continue;
               }
             }
           }
