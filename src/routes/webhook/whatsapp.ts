@@ -558,7 +558,7 @@ export async function procesarMensajeWhatsApp(
         promptBase,
         '',
         `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
-        `Formato WhatsApp: mensajes MUY CORTOS (máx. 3–4 frases, 6–8 líneas como máximo), sin párrafos largos.`,
+        `Formato WhatsApp: mensajes MUY CORTOS (máx. 3-4 frases, 6-8 líneas como máximo), sin párrafos largos.`,
         `No uses viñetas, listas ni encabezados. Solo texto corrido, claro y directo.`,
         // 🔴 NUEVO: nada de links ni correos ni precios exactos
         'No menciones correos, páginas web ni enlaces (no escribas "http", "www" ni "@").',

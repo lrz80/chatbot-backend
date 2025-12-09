@@ -29,6 +29,14 @@ import { canUseChannel } from "../../lib/features";
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
 import { detectarCortesia } from '../../lib/detectarCortesia';
+import {
+  saludoPuroRegex,
+  smallTalkRegex,
+  buildSaludoConversacional,
+  buildSaludoSmallTalk,
+  graciasPuroRegex,
+  buildGraciasRespuesta,
+} from '../../lib/saludosConversacionales';
 
 type CanalEnvio = 'facebook' | 'instagram';
 
@@ -49,7 +57,16 @@ const INTENT_THRESHOLD = Math.min(
 );
 
 const INTENTS_DIRECT = new Set([
-  'interes_clases','precio','horario','ubicacion','reservar','comprar','confirmar','clases_online'
+  'interes_clases',
+  'precio',
+  'horario',
+  'ubicacion',
+  'reservar',
+  'comprar',
+  'confirmar',
+  'clases_online',
+  'saludo',          // 👈 NUEVO
+  'agradecimiento',  // 👈 NUEVO
 ]);
 
 const INTENT_UNIQUE = new Set([
@@ -96,6 +113,24 @@ async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma:
   }
 }
 
+async function translateCTAIfNeeded(
+  cta: { cta_text: string; cta_url: string } | null,
+  idiomaDestino: 'es'|'en'
+) {
+  if (!cta) return null;
+  let txt = (cta.cta_text || '').trim();
+  try {
+    const lang = await detectarIdioma(txt).catch(() => null);
+    if (lang && lang !== 'zxx' && ((idiomaDestino === 'en' && !/^en/i.test(lang)) ||
+                                   (idiomaDestino === 'es' && !/^es/i.test(lang)))) {
+      txt = await traducirMensaje(txt, idiomaDestino);
+    } else if (!lang) {
+      txt = await traducirMensaje(txt, idiomaDestino);
+    }
+  } catch {}
+  return { cta_text: txt, cta_url: cta.cta_url };
+}
+
 function pickIntentForCTA(
   opts: {
     canonical?: string | null;     // INTENCION_FINAL_CANONICA
@@ -129,24 +164,6 @@ function appendCTAWithCap(
     return lines.slice(0, limit).join('\n') + extra;
   }
   return text + extra;
-}
-
-async function translateCTAIfNeeded(
-  cta: { cta_text: string; cta_url: string } | null,
-  idiomaDestino: 'es'|'en'
-) {
-  if (!cta) return null;
-  let txt = (cta.cta_text || '').trim();
-  try {
-    const lang = await detectarIdioma(txt).catch(() => null);
-    if (lang && lang !== 'zxx' && ((idiomaDestino === 'en' && !/^en/i.test(lang)) ||
-                                   (idiomaDestino === 'es' && !/^es/i.test(lang)))) {
-      txt = await traducirMensaje(txt, idiomaDestino);
-    } else if (!lang) {
-      txt = await traducirMensaje(txt, idiomaDestino);
-    }
-  } catch {}
-  return { cta_text: txt, cta_url: cta.cta_url };
 }
 
 function isValidUrl(u?: string) {
@@ -448,12 +465,30 @@ router.post('/api/facebook/webhook', async (req, res) => {
         // ✅ Cortesía (saludos y agradecimientos) - reusable helper
         const { isGreeting, isThanks } = detectarCortesia(userInput);
 
-        if (isGreeting || isThanks) {
-          let out = isThanks
-            ? (idiomaDestino === 'es'
-                ? '¡De nada! 💬 si necesitas algo más, déjame saber.'
-                : "You're welcome! 💬 If you need anything else, let me know.")
-            : bienvenida;
+        const trimmed = userInput.trim();
+        const lowered = trimmed.toLowerCase();
+
+        // Solo queremos considerar "cortesía pura" cuando el mensaje ES básicamente un saludo,
+        // small talk o un gracias sin nada más relevante.
+        const esSaludoPuro   = saludoPuroRegex.test(lowered);
+        const esGraciasPuro  = graciasPuroRegex.test(lowered);
+        const esSmallTalk    = smallTalkRegex.test(lowered);
+
+        const esCortesiaPura = esSaludoPuro || esGraciasPuro || esSmallTalk;
+
+        if (esCortesiaPura) {
+          let out: string;
+
+          if (esGraciasPuro) {
+            // Respuesta para "gracias", "thank you", etc.
+            out = buildGraciasRespuesta(idiomaDestino);
+          } else if (esSmallTalk) {
+            // Ej: "cómo estás", "qué tal", "buen día" sin pregunta concreta
+            out = buildSaludoSmallTalk(idiomaDestino, bienvenida);
+          } else {
+            // Saludo puro: "hola", "buenos días", etc.
+            out = buildSaludoConversacional(idiomaDestino, bienvenida);
+          }
 
           try {
             const langOut = await detectarIdioma(out);
@@ -471,7 +506,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
             [tenantId, out, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
           );
 
-          continue; // ⛔ NO sigue al pipeline de intents
+          // 👈 Aquí sí queremos cortar el pipeline SOLO en cortesía "pura"
+          continue;
         }
 
         // ============================================
@@ -522,8 +558,9 @@ router.post('/api/facebook/webhook', async (req, res) => {
               promptBase,
               '',
               `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
-              'Formato Meta: mensajes MUY CORTOS (2–3 frases, máx. ~6 líneas), sin párrafos largos.',
-              'No uses viñetas, listas ni encabezados. Solo texto corrido, claro y directo.',
+              `Formato WhatsApp: mensajes MUY CORTOS (máx. 3-4 frases, 6-8 líneas como máximo), sin párrafos largos.`,
+              `No uses viñetas, listas ni encabezados. Solo texto corrido, claro y directo.`,
+              // 🔴 NUEVO: nada de links ni correos ni precios exactos
               'No menciones correos, páginas web ni enlaces (no escribas "http", "www" ni "@").',
               'No des precios concretos, montos, ni duración exacta de pruebas (solo describe de forma general).',
               'Usa exclusivamente la información del negocio (servicios, tipo de clientes, forma general de empezar).',
@@ -532,19 +569,19 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
             const userPromptLLM =
               idiomaDestino === 'en'
-                ? `The user is asking for general information (e.g. "I need more info", "I want more information", "more info pls").
+          ? `The user is asking for general information (e.g. "I need more info", "I want more information", "more info pls").
 Using ONLY the business information in the prompt, write a VERY SHORT explanation (2-3 sentences) that says:
 - what this business does,
-- who it is for.
+- who it is for,
 Do NOT include prices, discounts, trial days, email addresses, websites or any links.
 Avoid marketing or hype. Be simple and clear.
 Avoid repeating these instructions or explaining what you are doing; just answer as if you were the business.
 End with this exact question in English:
 "What would you like to know more about? Our services, prices, or something else?"`
-                : `El usuario está pidiendo información general (por ejemplo "quiero más info", "necesito más información", "más info pls").
+          : `El usuario está pidiendo información general (por ejemplo "quiero más info", "necesito más información", "más info pls").
 Usando SOLO la información del negocio en el prompt, escribe una explicación MUY CORTA (2-3 frases) que diga:
 - qué hace este negocio,
-- para quién es.
+- para quién es,
 No incluyas precios, descuentos, días de prueba, correos electrónicos, páginas web ni ningún enlace.
 Evita sonar a anuncio o landing page; sé simple y claro.
 No repitas estas instrucciones ni expliques lo que estás haciendo; responde como si fueras el negocio.
@@ -564,8 +601,8 @@ Termina con esta pregunta EXACTA en español:
             reply =
               completion.choices[0]?.message?.content?.trim() ??
               (idiomaDestino === 'en'
-                ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
-                : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?');
+                ? 'What would you like to know more about? Our services, prices or something else?'
+                : '¿Sobre qué te gustaría saber más? ¿Servicios, precios u otra cosa?');
 
             const used = completion.usage?.total_tokens || 0;
             if (used > 0) {
@@ -581,8 +618,8 @@ Termina con esta pregunta EXACTA en español:
             console.warn('⚠️ LLM (more info META) falló; uso fallback fijo:', e);
             reply =
               idiomaDestino === 'en'
-                ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
-                : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?';
+                ? 'What would you like to know more about? Our services, prices or something else?'
+                : '¿Sobre qué te gustaría saber más? ¿Servicios, precios u otra cosa?';
           }
 
           if (startsWithGreeting) {
@@ -929,7 +966,7 @@ Termina con esta pregunta EXACTA en español:
             const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
 
             // ❌ NO CTA si era puro saludo / cortesía
-            const outWithCTA = isSmallTalkOrCourtesy
+            const outWithCTA = esCortesiaPura
               ? out
               : appendCTAWithCap(out, ctaX);
 
