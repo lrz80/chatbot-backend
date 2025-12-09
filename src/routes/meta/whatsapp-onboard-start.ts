@@ -1,18 +1,26 @@
 // src/routes/meta/whatsapp-onboard-start.ts
 import express, { Request, Response } from "express";
 import { authenticateUser } from "../../middleware/auth";
+import jwt from "jsonwebtoken";
 
 const router = express.Router();
 
+// ID de la app (ya lo tienes en env)
 const APP_ID = process.env.META_APP_ID;
-const REDIRECT_URI =
-  "https://api.aamy.ai/api/meta/whatsapp/oauth-callback"; // debe ser EXACTAMENTE igual al de Facebook Login
+
+// CONFIG_ID del registro insertado (sácalo del panel de Meta y ponlo en env)
+const EMBEDDED_SIGNUP_CONFIG_ID =
+  process.env.META_EMBEDDED_SIGNUP_CONFIG_ID;
+
+// URL base que ves en "Tu página de destino del registro insertado alojada por Meta"
+const EMBEDDED_SIGNUP_BASE_URL =
+  "https://business.facebook.com/messaging/whatsapp/onboard/";
 
 /**
  * POST /api/meta/whatsapp-onboard/start
  *
- * Genera la URL de Login OAuth clásica de Facebook
- * para pedir permisos de WhatsApp Business y devuelve esa URL al frontend.
+ * Devuelve la URL del REGISTRO INSERTADO de WhatsApp (Embedded Signup)
+ * para que el frontend la abra en popup o redirección.
  */
 router.post(
   "/start",
@@ -24,7 +32,7 @@ router.post(
 
       if (!tenantId) {
         console.error(
-          "[WA ONBOARD START] Falta tenant_id en el token del usuario."
+          "[WA EMBEDDED START] Falta tenant_id en el token del usuario."
         );
         return res.status(401).json({
           error: "No autenticado: falta tenant_id en el token.",
@@ -32,31 +40,36 @@ router.post(
       }
 
       if (!APP_ID) {
-        console.error("[WA ONBOARD START] Falta META_APP_ID en env.");
+        console.error("[WA EMBEDDED START] Falta META_APP_ID en env.");
         return res.status(500).json({
           error: "Configuración del servidor incompleta (META_APP_ID).",
         });
       }
 
-      // Scopes válidos (IMPORTANTE: nada de read_business_management)
-      const scopes = [
-        "whatsapp_business_messaging",
-        "whatsapp_business_management",
-        "business_management",
-        // opcionales pero útiles:
-        "pages_show_list",
-        "pages_messaging",
-      ].join(",");
+      if (!EMBEDDED_SIGNUP_CONFIG_ID) {
+        console.error(
+          "[WA EMBEDDED START] Falta META_WHATSAPP_EMBEDDED_CONFIG_ID en env."
+        );
+        return res.status(500).json({
+          error:
+            "Configuración del servidor incompleta (META_WHATSAPP_EMBEDDED_CONFIG_ID).",
+        });
+      }
+
+      // Opcional pero recomendado: state firmado con tenantId
+      const state = jwt.sign(
+        { tenantId },
+        process.env.JWT_SECRET || "secret-key",
+        { expiresIn: "30m" }
+      );
 
       const url =
-        "https://www.facebook.com/v18.0/dialog/oauth" +
-        `?client_id=${encodeURIComponent(APP_ID)}` +
-        `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-        `&response_type=code` +
-        `&scope=${encodeURIComponent(scopes)}` +
-        `&state=${encodeURIComponent(tenantId)}`;
+        EMBEDDED_SIGNUP_BASE_URL +
+        `?app_id=${encodeURIComponent(APP_ID)}` +
+        `&config_id=${encodeURIComponent(EMBEDDED_SIGNUP_CONFIG_ID)}` +
+        `&state=${encodeURIComponent(state)}`;
 
-      console.log("[WA ONBOARD START] URL OAuth generada:", {
+      console.log("[WA EMBEDDED START] URL Embedded Signup generada:", {
         url,
         tenant_id: tenantId,
         email: user?.email,
@@ -64,10 +77,10 @@ router.post(
 
       return res.json({ url });
     } catch (err) {
-      console.error("[WA ONBOARD START] Error general:", err);
-      return res
-        .status(500)
-        .json({ error: "Error interno iniciando el onboarding de WhatsApp." });
+      console.error("[WA EMBEDDED START] Error general:", err);
+      return res.status(500).json({
+        error: "Error interno iniciando el registro insertado de WhatsApp.",
+      });
     }
   }
 );
