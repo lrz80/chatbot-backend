@@ -51,6 +51,10 @@ const GLOBAL_ID = process.env.GLOBAL_CHANNEL_TENANT_ID
 const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
 const MATCHER_MIN_OVERRIDE = 0.85;
 
+// 🔧 Comandos para tomar/soltar la conversación
+const CMD_DISABLE = /\b(aamy\s*disable|disable\s*aamy|modo\s*humano|human\s*mode|bot\s*off|desactivar\s*bot)\b/i;
+const CMD_ENABLE  = /\b(aamy\s*enable|enable\s*aamy|modo\s*bot|bot\s*on|activar\s*bot)\b/i;
+
 const INTENT_THRESHOLD = Math.min(
   0.95,
   Math.max(0.30, Number(process.env.INTENT_MATCH_THRESHOLD ?? 0.55))
@@ -290,6 +294,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const senderId = messagingEvent.sender.id;
         const messageId = messagingEvent.message.mid;
         const userInput = messagingEvent.message.text || '';
+
         const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
 
         // dedupe por mid (memoria)
@@ -300,13 +305,13 @@ router.post('/api/facebook/webhook', async (req, res) => {
         // Unir tenants + meta-configs (id x pageId o ig id)
         const { rows } = await pool.query(
           `SELECT t.*
-                 , m.prompt_meta
-                 , m.bienvenida_meta
-                 , t.facebook_access_token
+                , m.prompt_meta
+                , m.bienvenida_meta
+                , t.facebook_access_token
             FROM tenants t
-       LEFT JOIN meta_configs m ON t.id = m.tenant_id
-           WHERE t.facebook_page_id = $1 OR t.instagram_page_id = $1
-           LIMIT 1`,
+      LEFT JOIN meta_configs m ON t.id = m.tenant_id
+          WHERE t.facebook_page_id = $1 OR t.instagram_page_id = $1
+          LIMIT 1`,
           [pageId]
         );
         if (!rows.length) continue;
@@ -318,9 +323,9 @@ router.post('/api/facebook/webhook', async (req, res) => {
         try {
           const { rows: otherBots } = await pool.query(
             `SELECT id, nombre_negocio
-               FROM tenants
+              FROM tenants
               WHERE facebook_page_id = $1
-                 OR instagram_page_id = $1
+                OR instagram_page_id = $1
               LIMIT 1`,
             [senderId]
           );
@@ -343,6 +348,34 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const canalContenido = 'meta'; // FAQs se guardan como 'meta'
         const accessToken = tenant.facebook_access_token as string;
 
+        // ===============================
+        // 🧑‍💼 COMANDOS DE CONTROL HUMANO POR DM
+        // ===============================
+        if (CMD_DISABLE.test(userInput)) {
+          await pool.query(
+            `INSERT INTO clientes (tenant_id, contacto, human_override)
+            VALUES ($1, $2, true)
+            ON CONFLICT (tenant_id, contacto)
+            DO UPDATE SET human_override = true, updated_at = now()`,
+            [tenantId, senderId]
+          );
+
+          console.log('🔕 [META] Bot desactivado por comando para contacto:', senderId);
+          continue; // ⛔️ NO responde nada
+        }
+
+        if (CMD_ENABLE.test(userInput)) {
+          await pool.query(
+            `INSERT INTO clientes (tenant_id, contacto, human_override)
+            VALUES ($1, $2, false)
+            ON CONFLICT (tenant_id, contacto)
+            DO UPDATE SET human_override = false, updated_at = now()`,
+            [tenantId, senderId]
+          );
+
+          console.log('🔔 [META] Bot activo nuevamente por comando para contacto:', senderId);
+          continue; // ⛔️ NO responde nada
+        }
 
         // 🚧 Gate unificado por plan/pausa/mantenimiento
         try {
@@ -381,6 +414,20 @@ router.post('/api/facebook/webhook', async (req, res) => {
         // Para los helpers que ya usan enviarMetaSeguro (recoPrincipiantes)
         const enviarMetaSeguro = async (_to: string, text: string, _tenantId: string) =>
           sendMetaContabilizando(text);
+
+        // 📴 Si esta conversación está en modo humano, no responde el bot
+        const { rows: humanRows } = await pool.query(
+          `SELECT human_override
+            FROM clientes
+            WHERE tenant_id = $1 AND contacto = $2
+            LIMIT 1`,
+          [tenantId, senderId]
+        );
+
+        if (humanRows[0]?.human_override === true) {
+          console.log('🤝 [META] Conversación tomada por humano. Bot NO responde:', senderId);
+          continue;
+        }
 
         // Helper seguro para detectarIntencion en META
         async function detectarIntencionSafe(
