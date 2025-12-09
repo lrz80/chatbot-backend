@@ -314,6 +314,30 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const tenant = rows[0];
         const tenantId: string = tenant.id;
 
+        // 🛡️ Anti-loop: si el remitente es OTRA página/IG con bot en Aamy, ignorar para evitar ping-pong
+        try {
+          const { rows: otherBots } = await pool.query(
+            `SELECT id, nombre_negocio
+               FROM tenants
+              WHERE facebook_page_id = $1
+                 OR instagram_page_id = $1
+              LIMIT 1`,
+            [senderId]
+          );
+
+          if (otherBots.length) {
+            console.log('🤖 [META] Mensaje entre páginas con bot activo; se ignora para evitar loop.', {
+              tenantDestino: tenantId,
+              tenantOrigen: otherBots[0].id,
+              senderId,
+              pageId,
+            });
+            continue; // ⬅️ no seguimos pipeline para este evento
+          }
+        } catch (e) {
+          console.warn('⚠️ [META] Error verificando anti-loop entre páginas:', e);
+        }
+
         const isInstagram = tenant.instagram_page_id && tenant.instagram_page_id === pageId;
         const canalEnvio: CanalEnvio = isInstagram ? 'instagram' : 'facebook';
         const canalContenido = 'meta'; // FAQs se guardan como 'meta'
