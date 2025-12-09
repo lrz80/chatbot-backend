@@ -63,11 +63,10 @@ async function enviarMensajesProgramados() {
 
         // Enviar según canal
         if (m.canal === "whatsapp") {
-          if (!/^\+/.test(m.contacto)) {
-            throw new Error(`Número WhatsApp inválido: ${m.contacto}`);
-          }
+          // 👉 Deja que enviarWhatsApp decida cómo formatear según el proveedor (Twilio vs Cloud API)
           await enviarWhatsApp(m.contacto, contenido, m.tenant_id);
         } else if (m.canal === "instagram" || m.canal === "facebook") {
+
           // PSID esperado en contacto; el sender debe resolver access token por tenant_id
           await enviarMetaSeguro(m.canal, m.contacto, contenido, m.tenant_id);
         } else {

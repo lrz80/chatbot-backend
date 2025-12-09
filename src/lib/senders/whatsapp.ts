@@ -62,13 +62,31 @@ function chunkByLimit(text: string, limit = MAX_WHATSAPP): string[] {
   return chunks;
 }
 
-// normaliza número al formato internacional básico (EE.UU. por defecto)
+// normaliza número a SOLO dígitos E.164 (sin "whatsapp:" ni "+")
 function normalizarNumero(numero: string): string {
-  const limpio = (numero || "").replace(/\D/g, "");
-  if (limpio.length === 10) return `+1${limpio}`; // 10 dígitos → +1
-  if (limpio.length === 11 && limpio.startsWith("1")) return `+${limpio}`;
-  if ((numero || "").startsWith("+")) return numero; // ya viene E.164
-  return "";
+  if (!numero) return "";
+
+  let raw = numero.trim();
+
+  // Si viene de Twilio: "whatsapp:+1863..."
+  if (raw.toLowerCase().startsWith("whatsapp:")) {
+    raw = raw.slice("whatsapp:".length);
+  }
+
+  // Si viene con "+": "+1863..."
+  if (raw.startsWith("+")) {
+    raw = raw.slice(1);
+  }
+
+  // Nos quedamos sólo con dígitos
+  const digits = raw.replace(/\D/g, "");
+
+  // Rango típico E.164: 8–15 dígitos
+  if (digits.length < 8 || digits.length > 15) {
+    return "";
+  }
+
+  return digits; // ej: "18633171646"
 }
 
 // ---------- Utilidad Twilio: obtener número asignado al tenant (para campañas / fallback sesión) ----------
@@ -98,10 +116,11 @@ export async function sendWhatsApp(
 
   for (const contacto of contactos) {
     const telefonoRaw = contacto?.telefono?.trim();
-    const telefono = normalizarNumero(telefonoRaw || "");
-    if (!telefono) continue;
+    const digits = normalizarNumero(telefonoRaw || "");
+    if (!digits) continue;
 
-    const to = `whatsapp:${telefono}`;
+    const toE164 = `+${digits}`; // "+18633171646"
+    const to = `whatsapp:${toE164}`; // "whatsapp:+18633171646"
     console.log(`📤 Enviando plantilla ${templateSid} a ${to}`);
 
     try {
@@ -116,12 +135,12 @@ export async function sendWhatsApp(
         `INSERT INTO whatsapp_status_logs (
           tenant_id, campaign_id, message_sid, status, to_number, from_number, timestamp
         ) VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-        [tenantId, campaignId, message.sid, message.status, telefono, from]
+        [tenantId, campaignId, message.sid, message.status, toE164, from]
       );
 
-      console.log(`✅ WhatsApp (template) enviado a ${telefono}`);
+      console.log(`✅ WhatsApp (template) enviado a ${toE164}`);
     } catch (err: any) {
-      console.error(`❌ Error al enviar a ${telefono}: ${err.message}`);
+      console.error(`❌ Error al enviar a ${toE164}: ${err.message}`);
       await pool.query(
         `INSERT INTO whatsapp_status_logs (
           tenant_id, campaign_id, message_sid, status, to_number, from_number, error_code, error_message, timestamp
@@ -129,7 +148,7 @@ export async function sendWhatsApp(
         [
           tenantId,
           campaignId,
-          telefono,
+          toE164,
           from,
           err?.code || null,
           err?.message || "Error desconocido",
@@ -171,11 +190,14 @@ export async function enviarWhatsApp(
   mensaje: string,
   tenantId: string
 ) {
-  const numero = normalizarNumero(telefono);
-  if (!numero) {
+  const digits = normalizarNumero(telefono); // "18633171646"
+  if (!digits) {
     console.warn("❌ Número de destino inválido:", telefono);
     return;
   }
+
+  const numeroCloud = digits; // para Cloud API → "18633171646"
+  const numeroTwilio = `+${digits}`; // para Twilio   → "+18633171646"
 
   // dividimos el mensaje largo en trozos seguros para WhatsApp
   const parts = chunkByLimit(mensaje);
@@ -190,14 +212,14 @@ export async function enviarWhatsApp(
       "from phone_number_id:",
       creds.phoneNumberId,
       "to:",
-      numero
+      numeroCloud
     );
 
     try {
       for (const part of parts) {
         const payload = {
           messaging_product: "whatsapp",
-          to: numero,
+          to: numeroCloud, // "18633171646"
           type: "text",
           text: { body: part },
         };
@@ -223,7 +245,7 @@ export async function enviarWhatsApp(
             json || (await resp.text().catch(() => ""))
           );
         } else {
-          console.log(`✅ WhatsApp (Meta) enviado a ${numero}`, waId);
+          console.log(`✅ WhatsApp (Meta) enviado a ${numeroCloud}`, waId);
         }
 
         await pool.query(
@@ -234,7 +256,7 @@ export async function enviarWhatsApp(
             tenantId,
             waId,
             status,
-            numero,
+            numeroCloud,
             // usamos el número real si está, si no el phone_number_id
             creds.fromNumber || creds.phoneNumberId,
           ]
@@ -245,7 +267,7 @@ export async function enviarWhatsApp(
       return;
     } catch (err: any) {
       console.error(
-        `❌ Error enviando por Cloud API a ${numero}:`,
+        `❌ Error enviando por Cloud API a ${numeroCloud}:`,
         err?.message || err
       );
       await pool.query(
@@ -254,7 +276,7 @@ export async function enviarWhatsApp(
         ) VALUES ($1, null, 'failed', $2, $3, $4, $5, NOW())`,
         [
           tenantId,
-          numero,
+          numeroCloud,
           creds.fromNumber || creds.phoneNumberId,
           err?.code || null,
           err?.message || "Error desconocido",
@@ -280,14 +302,14 @@ export async function enviarWhatsApp(
     "from twilio_number:",
     fromTwilio,
     "to:",
-    numero
+    numeroTwilio
   );
 
   try {
     for (const part of parts) {
       const message = await client.messages.create({
         from: `whatsapp:${fromTwilio}`,
-        to: `whatsapp:${numero}`,
+        to: `whatsapp:${numeroTwilio}`, // "whatsapp:+18633171646"
         body: part,
       });
 
@@ -295,14 +317,14 @@ export async function enviarWhatsApp(
         `INSERT INTO whatsapp_status_logs (
           tenant_id, message_sid, status, to_number, from_number, timestamp
         ) VALUES ($1, $2, $3, $4, $5, NOW())`,
-        [tenantId, message.sid, message.status, numero, fromTwilio]
+        [tenantId, message.sid, message.status, numeroTwilio, fromTwilio]
       );
 
-      console.log(`✅ WhatsApp (Twilio) enviado a ${numero}`, message.sid);
+      console.log(`✅ WhatsApp (Twilio) enviado a ${numeroTwilio}`, message.sid);
     }
   } catch (err: any) {
     console.error(
-      `❌ Error enviando por Twilio a ${numero}:`,
+      `❌ Error enviando por Twilio a ${numeroTwilio}:`,
       err?.message || err
     );
     await pool.query(
@@ -311,7 +333,7 @@ export async function enviarWhatsApp(
       ) VALUES ($1, null, 'failed', $2, $3, $4, $5, NOW())`,
       [
         tenantId,
-        numero,
+        numeroTwilio,
         fromTwilio,
         err?.code || null,
         err?.message || "Error desconocido",
