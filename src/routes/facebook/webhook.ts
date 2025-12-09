@@ -764,8 +764,8 @@ Termina con esta pregunta EXACTA en español:
                 // CTA de texto base (igual que en WhatsApp)
                 const CTA_TXT =
                   idiomaDestino === 'en'
-                    ? 'Is there anything else I can help you with?'
-                    : '¿Hay algo más en lo que te pueda ayudar?';
+                    ? 'Tell me what you’d like to do next and I’ll help you.'
+                    : 'Cuéntame qué te gustaría hacer ahora y te ayudo.';
 
                 const out = tidyMultiAnswer(multiText, {
                   maxLines: MAX_WHATSAPP_LINES - 2, // deja espacio para CTA con link
@@ -803,7 +803,8 @@ Termina con esta pregunta EXACTA en español:
                 );
 
                 // De momento dejamos el follow-up igual que lo tenías
-                await scheduleFollowUp('interes_clases', 3);
+                const topIntent = (top?.[0]?.intent || '').toLowerCase().trim() || 'interes_clases';
+                await scheduleFollowUp(topIntent, 3);
 
                 // ⬅️ salir fast-path (no seguir pipeline normal)
                 continue;
@@ -993,6 +994,14 @@ Termina con esta pregunta EXACTA en español:
             try {
               const det = await detectarIntencionSafe(userInput, tenantId, canalEnvio);
               const nivel = det?.nivel_interes ?? 1;
+
+              let intFinal = normalizeIntentAlias((det?.intencion || '').toLowerCase());
+
+              if (intFinal === 'duda') intFinal = buildDudaSlug(userInput);
+              if (PRICE_REGEX.test(userInput)) intFinal = 'precio';
+              else if (/\b(?:online|en\s*linea|virtual(?:es|idad)?)\b/i.test(userInput)) intFinal = 'clases_online';
+
+              await scheduleFollowUp(intFinal, nivel);
             } catch (e) {
               console.warn('⚠️ [META] No se pudo programar follow-up en EARLY_RETURN:', e);
             }
