@@ -29,6 +29,7 @@ import { canUseChannel } from "../../lib/features";
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
 import { detectarCortesia } from '../../lib/detectarCortesia';
+import { isHealthConcern } from '../../lib/isHealthConcern';
 import {
   saludoPuroRegex,
   smallTalkRegex,
@@ -288,10 +289,11 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
       for (const messagingEvent of entry.messaging) {
         if (!messagingEvent.message) continue;
-        if (messagingEvent.message.is_echo === true) continue;
         if (!messagingEvent.message.text) continue;
 
-        const senderId = messagingEvent.sender.id;
+        const isEcho = messagingEvent.message.is_echo === true;
+        const senderId = messagingEvent.sender.id;              // quien envía este evento
+        const recipientId = messagingEvent.recipient?.id;       // el otro lado de la conversación
         const messageId = messagingEvent.message.mid;
         const userInput = messagingEvent.message.text || '';
 
@@ -350,31 +352,45 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         // ===============================
         // 🧑‍💼 COMANDOS DE CONTROL HUMANO POR DM
+        // Solo se ejecutan cuando el mensaje viene de la PÁGINA (is_echo = true)
         // ===============================
-        if (CMD_DISABLE.test(userInput)) {
-          await pool.query(
-            `INSERT INTO clientes (tenant_id, contacto, human_override)
-            VALUES ($1, $2, true)
-            ON CONFLICT (tenant_id, contacto)
-            DO UPDATE SET human_override = true, updated_at = now()`,
-            [tenantId, senderId]
-          );
+        if (isEcho) {
+          // En mensajes "echo", senderId suele ser la página y recipientId el cliente.
+          // Usamos recipientId como contacto; si por algún motivo no viene, usamos senderId.
+          const contactoId = recipientId || senderId;
 
-          console.log('🔕 [META] Bot desactivado por comando para contacto:', senderId);
-          continue; // ⛔️ NO responde nada
-        }
+          // Apagar bot para este contacto (tomar la conversación como humano)
+          if (CMD_DISABLE.test(userInput)) {
+            await pool.query(
+              `INSERT INTO clientes (tenant_id, contacto, human_override)
+              VALUES ($1, $2, true)
+              ON CONFLICT (tenant_id, contacto)
+              DO UPDATE SET human_override = true, updated_at = now()`,
+              [tenantId, contactoId]
+            );
 
-        if (CMD_ENABLE.test(userInput)) {
-          await pool.query(
-            `INSERT INTO clientes (tenant_id, contacto, human_override)
-            VALUES ($1, $2, false)
-            ON CONFLICT (tenant_id, contacto)
-            DO UPDATE SET human_override = false, updated_at = now()`,
-            [tenantId, senderId]
-          );
+            console.log('🔕 [META] Bot desactivado por comando del TENANT para contacto:', contactoId);
+            // No respondemos nada y salimos de este evento
+            continue;
+          }
 
-          console.log('🔔 [META] Bot activo nuevamente por comando para contacto:', senderId);
-          continue; // ⛔️ NO responde nada
+          // Encender bot nuevamente para este contacto
+          if (CMD_ENABLE.test(userInput)) {
+            await pool.query(
+              `INSERT INTO clientes (tenant_id, contacto, human_override)
+              VALUES ($1, $2, false)
+              ON CONFLICT (tenant_id, contacto)
+              DO UPDATE SET human_override = false, updated_at = now()`,
+              [tenantId, contactoId]
+            );
+
+            console.log('🔔 [META] Bot activado nuevamente por comando del TENANT para contacto:', contactoId);
+            // Tampoco respondemos nada (es solo control)
+            continue;
+          }
+
+          // Si es un mensaje enviado por la página y NO es comando, lo ignoramos (no procesar pipeline)
+          continue;
         }
 
         // 🚧 Gate unificado por plan/pausa/mantenimiento
@@ -508,7 +524,50 @@ router.post('/api/facebook/webhook', async (req, res) => {
           );
         } catch {}
 
-                // Helper para quitar saludos al inicio (igual que en WhatsApp)
+        // 🩺 BLOQUEO GLOBAL DE TEMAS DE SALUD (ANTES DE IA / FAQ / INTENTS)
+        if (isHealthConcern(userInput)) {
+          let reply: string;
+
+          if (idiomaDestino === 'en') {
+            reply =
+              "In this chat I can only help you with information about the business services and how they work. " +
+              "I can’t advise on health topics or specific medical conditions here. " +
+              "I recommend speaking directly with our team so they can help you properly.";
+          } else {
+            reply =
+              "En este chat solo puedo ayudarte con información sobre los servicios del negocio y cómo funcionan. " +
+              "Para temas de salud o condiciones médicas específicas no puedo orientarte por aquí. " +
+              "Te recomiendo hablar directamente con nuestro equipo para que puedan ayudarte de forma adecuada.";
+          }
+
+          // Enviar respuesta a Meta
+          await sendMetaContabilizando(reply);
+
+          // Guardar respuesta del bot
+          try {
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenantId, reply, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+            );
+          } catch {}
+
+          // Registrar interacción
+          try {
+            await pool.query(
+              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+              VALUES ($1, $2, $3, NOW())
+              ON CONFLICT DO NOTHING`,
+              [tenantId, canalEnvio, messageId]
+            );
+          } catch {}
+
+          // ⛔️ CORTA EL PIPELINE: no seguimos a FAQs, intents, IA, etc.
+          continue;
+        }
+
+        // Helper para quitar saludos al inicio (igual que en WhatsApp)
         function stripLeadGreetings(t: string) {
           return t
             .replace(/^\s*(hola+[\s!.,]*)?/i, '')
