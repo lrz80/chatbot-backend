@@ -69,15 +69,19 @@ router.get('/me', async (req: Request, res: Response) => {
     const tenantId = await getTenantIdFromCookie(req);
     const { rows } = await pool.query(
       `SELECT
-         id, name, slug, categoria, idioma,
-         COALESCE(plan, 'trial') AS plan,
-         COALESCE(membresia_activa, false) AS membresia_activa,
+         id,
+         name,
+         slug,
+         categoria,
+         idioma,
+         COALESCE(plan, 'trial')            AS plan,
+         COALESCE(membresia_activa, false)  AS membresia_activa,
          membresia_inicio,
          prompt,
          mensaje_bienvenida AS bienvenida,
-         plan,    
-         membresia_activa,  
-         settings, links
+         onboarding_completado,
+         settings,
+         links
        FROM tenants
        WHERE id = $1`,
       [tenantId]
@@ -161,11 +165,16 @@ router.post('/', async (req: Request, res: Response) => {
       if (typeof bienvenida !== 'undefined'){ sets.push(`mensaje_bienvenida = $${i++}`); vals.push(bienvenida); }
 
       if (sets.length) {
-        const sql = `UPDATE tenants SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${i}`;
+        const sql = `
+          UPDATE tenants
+             SET ${sets.join(', ')},
+                 onboarding_completado = true,   -- ⬅️ MARCA EL ONBOARDING
+                 updated_at = NOW()
+           WHERE id = $${i}
+        `;
         await pool.query(sql, [...vals, tenantId]);
       }
     }
-
     // 2) Timezone → settings.timezone
     if (isString(timezone) && isLikelyIana(timezone)) {
       await pool.query(
@@ -253,6 +262,7 @@ router.post('/', async (req: Request, res: Response) => {
               membresia_inicio,
               prompt,
               mensaje_bienvenida AS bienvenida,
+              onboarding_completado,
               settings, links
          FROM tenants
         WHERE id = $1`,
@@ -303,7 +313,8 @@ router.patch('/timezone', async (req: Request, res: Response) => {
   }
 });
 
- router.get('/me', async (req: Request, res: Response) => {
+// ✅ GET /api/tenants/features — qué canales puede usar el tenant
+router.get('/features', async (req: Request, res: Response) => {
    try {
      const tenantId = await getTenantIdFromCookie(req);
      const { rows } = await pool.query(
