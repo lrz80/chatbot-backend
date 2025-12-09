@@ -198,6 +198,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       email_negocio: tenant.email_negocio || '',
       telefono_negocio: tenant.telefono_negocio || '',
       direccion: tenant.direccion || '',
+      horario_atencion: tenant.horario_atencion || '',
       whatsapp_status: tenant.whatsapp_status ?? null,
       whatsapp_phone_number: tenant.whatsapp_phone_number ?? null,
 
