@@ -49,77 +49,44 @@ router.get(
         return res.status(401).json({ error: "No autenticado" });
       }
 
-      // 1) Leer info del tenant desde la base de datos
-      const { rows: tenantRows } = await pool.query(
-        `
-        SELECT
-          id,
-          whatsapp_business_id,
-          whatsapp_phone_number_id,
-          whatsapp_phone_number,
-          whatsapp_status
-        FROM tenants
-        WHERE id = $1
-        LIMIT 1
-        `,
+      // 1) Cargar whatsapp_business_id del tenant
+      const { rows } = await pool.query(
+        `SELECT whatsapp_business_id FROM tenants WHERE id = $1 LIMIT 1`,
         [tenantId]
       );
 
-      const tenant = tenantRows[0];
+      const tenant = rows[0];
 
-      if (!tenant) {
-        console.warn("[WA ACCOUNTS] Tenant no encontrado en BD:", tenantId);
-        return res.status(404).json({ error: "Tenant no encontrado" });
-      }
-
-      // Si el tenant YA tiene número asignado → devolvemos eso directamente
-      if (tenant.whatsapp_phone_number_id && tenant.whatsapp_phone_number) {
-        const accounts = [
-          {
-            business_id: tenant.whatsapp_business_id || null,
-            business_name: null,
-            waba_id: tenant.whatsapp_business_id || "",
-            waba_name: null,
-            phone_number_id: tenant.whatsapp_phone_number_id as string,
-            phone_number: tenant.whatsapp_phone_number as string,
-            verified_name: null,
-          },
-        ];
-
-        const phoneNumbers = accounts.map((a) => ({
-          waba_id: a.waba_id,
-          phone_number_id: a.phone_number_id,
-          phone_number: a.phone_number,
-          verified_name: a.verified_name,
-        }));
-
-        console.log(
-          "[WA ACCOUNTS] Tenant ya tiene número asignado. Devolviendo phoneNumbers:",
-          phoneNumbers
+      if (!tenant?.whatsapp_business_id) {
+        console.warn(
+          "[WA ACCOUNTS] Tenant sin whatsapp_business_id:",
+          tenantId
         );
-
-        return res.json({ accounts, phoneNumbers });
-      }
-
-      // 2) Si NO hay número en BD, consultamos a Meta para listar números disponibles
-      console.log(
-        "[WA ACCOUNTS] Tenant sin número asignado. Consultando números en WABA global…",
-        tenantId
-      );
-
-      const accessToken = process.env.META_WA_ACCESS_TOKEN;
-      const wabaId = tenant.whatsapp_business_id;
-
-      if (!accessToken || !wabaId) {
-        console.error(
-          "[WA ACCOUNTS] Falta META_WA_ACCESS_TOKEN o META_WABA_ID en env."
-        );
-        return res.status(500).json({
+        return res.status(400).json({
           error:
-            "Configuración del servidor incompleta (META_WA_ACCESS_TOKEN / META_WABA_ID).",
+            "Este negocio aún no tiene una cuenta de WhatsApp Business (WABA) asociada. Completa primero el registro.",
         });
       }
 
+      const wabaId: string = tenant.whatsapp_business_id;
+
+      console.log(
+        "[WA ACCOUNTS] Consultando números para WABA del tenant:",
+        { tenantId, wabaId }
+      );
+
+      // 2) Token maestro (system user)
+      const accessToken = process.env.META_WA_ACCESS_TOKEN;
+
+      if (!accessToken) {
+        console.error("[WA ACCOUNTS] Falta META_WA_ACCESS_TOKEN en env.");
+        return res.status(500).json({
+          error:
+            "Configuración del servidor incompleta (META_WA_ACCESS_TOKEN).",
+        });
+      }
+
+      // 3) Llamar a /{WABA_ID}/phone_numbers
       const url =
         "https://graph.facebook.com/v18.0/" +
         encodeURIComponent(wabaId) +
@@ -147,6 +114,16 @@ router.get(
 
       const phones = json.data ?? [];
 
+      type WaAccount = {
+        business_id: string | null;
+        business_name: string | null;
+        waba_id: string;
+        waba_name: string | null;
+        phone_number_id: string;
+        phone_number: string;
+        verified_name: string | null;
+      };
+
       const accounts: WaAccount[] = phones.map((ph: any): WaAccount => ({
         business_id: null,
         business_name: null,
@@ -165,15 +142,9 @@ router.get(
       }));
 
       console.log(
-        "[WA ACCOUNTS] Total cuentas/números encontrados (sin asignar aún):",
+        "[WA ACCOUNTS] Total cuentas/números encontrados:",
         accounts.length
       );
-
-      // OJO:
-      // - Aquí SOLO listamos opciones. La asignación real al tenant
-      //   se hace con POST /whatsapp/select-number.
-      // - Tu UI puede usar 'accounts' para que el usuario elija uno,
-      //   y luego hacer POST /select-number con waba_id + phone_number_id + phone_number.
 
       return res.json({ accounts, phoneNumbers });
     } catch (err) {
