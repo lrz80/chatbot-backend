@@ -108,7 +108,7 @@ router.get(
       );
 
       const accessToken = process.env.META_WA_ACCESS_TOKEN;
-      const wabaId = process.env.META_WABA_ID;
+      const wabaId = tenant.whatsapp_business_id;
 
       if (!accessToken || !wabaId) {
         console.error(
