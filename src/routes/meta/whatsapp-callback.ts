@@ -114,32 +114,23 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
     // Respondemos a Meta inmediatamente (como Twilio: no bloqueamos)
     res.sendStatus(200);
 
-    // Si no hay tenant, respondemos algo simple y salimos
+    // Si no hay tenant, NO respondemos nada (silencio total)
     if (!tenant) {
       console.warn(
-        "[META WEBHOOK] No se encontró tenant para este número de WhatsApp.",
+        "[META WEBHOOK] No se encontró tenant para este número de WhatsApp. No se enviará respuesta.",
         { phoneNumberId, displayNumber }
       );
-
-      try {
-        await enviarRespuestaMeta({
-          to: from,
-          phoneNumberId,
-          text:
-            body && body.trim().length > 0
-              ? `Hola 👋, recibí tu mensaje: "${body}". Aún no encuentro el negocio asociado a este número en Aamy.`
-              : "Hola 👋, soy Aamy. Recibí tu mensaje, pero aún no encuentro el negocio asociado a este número.",
-        });
-      } catch (e) {
-        console.error(
-          "❌ [META WEBHOOK] Error enviando respuesta genérica sin tenant:",
-          e
-        );
-      }
-
       return;
     }
 
+    // Si el canal WhatsApp está desconectado, tampoco respondemos
+    if (tenant.whatsapp_status !== "connected") {
+      console.log(
+        `[META WEBHOOK] WhatsApp está en estado "${tenant.whatsapp_status}" para el tenant ${tenant.name || tenant.id}. No se procesará el mensaje.`
+      );
+      return;
+    }
+    
     // 3️⃣ Si hay tenant pero membresía inactiva, no seguimos el flujo
     if (!tenant.membresia_activa) {
       console.log(
