@@ -29,7 +29,6 @@ import type { Canal } from '../../lib/detectarIntencion';
 import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
 import { requireChannelEnabled } from "../../middleware/requireChannelEnabled";
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
-import { cycleStartForNow } from '../../utils/billingCycle';
 import {
   saludoPuroRegex,
   smallTalkRegex,
@@ -41,6 +40,7 @@ import {
 import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
 import { getIO } from '../../lib/socket';
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
+import { createAppointment } from "../../services/booking";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -443,8 +443,74 @@ export async function procesarMensajeWhatsApp(
         console.warn('⚠️ [SOCKET] getIO() devolvió null, no se emitió message:new');
       }
     }
-  } catch (e) {
+    } catch (e) {
     console.warn('No se pudo registrar mensaje user:', e);
+  }
+
+  // ─────────────────────────────────────────────
+  // GATILLO TEMPORAL DE CITA (FASE 1)
+  // Solo si el tenant tiene booking habilitado
+  // y el canal es WhatsApp.
+  // ─────────────────────────────────────────────
+  try {
+    const bookingEnabled =
+      !!tenant.booking_enabled && !!tenant.booking_whatsapp_enabled;
+
+    const lowerMsg = (userInput || "").toLowerCase();
+
+    const wantsBooking =
+      bookingEnabled &&
+      (
+        /\b(cita|agendar|agenda|reservar|reservación|reservacion)\b/i.test(lowerMsg) ||
+        /\b(appointment|book\s+an?\s+appointment|book\s+now|schedule\s+a\s+visit)\b/i.test(lowerMsg)
+      );
+
+    if (wantsBooking) {
+      // Por ahora: cita 60 minutos después de la hora actual.
+      const startTime = new Date(Date.now() + 60 * 60 * 1000);
+
+      const appt = await createAppointment({
+        tenantId: tenant.id,
+        channel: "whatsapp",
+        customerName: fromNumber || "WhatsApp client",
+        customerPhone: fromNumber,
+        startTime,
+      });
+
+      const start = new Date(appt.start_time);
+      const formatted =
+        idiomaDestino === "en"
+          ? start.toLocaleString("en-US")
+          : start.toLocaleString("es-ES");
+
+      const reply =
+        idiomaDestino === "en"
+          ? `I have scheduled a provisional appointment for you on ${formatted}. If you need to change the time, just let me know here.`
+          : `Te he agendado una cita provisional para el ${formatted}. Si necesitas cambiar la hora, solo dime por aquí.`;
+
+      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+      await saveAssistantMessageAndEmit({
+        tenantId: tenant.id,
+        canal,
+        fromNumber: fromNumber || "anónimo",
+        messageId,
+        content: reply,
+      });
+
+      await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT DO NOTHING`,
+        [tenant.id, canal, messageId]
+      );
+
+      // En esta fase, cuando se crea la cita salimos del flujo.
+      return;
+    }
+  } catch (e) {
+    console.warn("⚠️ Error en gatillo de booking (WA):", e);
+    // si algo falla, seguimos el flujo normal
   }
 
   const idioma = await detectarIdioma(userInput);
