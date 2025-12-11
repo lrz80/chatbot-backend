@@ -41,7 +41,9 @@ router.get(
       }
 
       if (session.tenant_id !== tenantId) {
-        return res.status(403).json({ error: 'Sesión no pertenece a este tenant' });
+        return res
+          .status(403)
+          .json({ error: 'Sesión no pertenece a este tenant' });
       }
 
       const userAccessToken: string = session.user_access_token;
@@ -58,23 +60,40 @@ router.get(
         }
       );
 
-      const pages = pagesRes.data?.data || [];
+      // 🔍 LOG NUEVO: respuesta cruda de /me/accounts
+      console.log(
+        '🔍 [META] /me/accounts crudo:',
+        JSON.stringify(pagesRes.data, null, 2)
+      );
 
-      const simplified = pages.map((p: any) => ({
+    const pages = Array.isArray(pagesRes.data?.data)
+        ? pagesRes.data.data
+        : [];
+
+    interface FBPage {
+        id: string;
+        name: string;
+        picture?: { data?: { url?: string } };
+        instagram_business_account?: { id?: string; username?: string };
+        }
+
+    const simplified = pages.map((p: FBPage) => ({
         id: p.id,
         name: p.name,
         pictureUrl: p.picture?.data?.url || null,
         instagramBusinessId: p.instagram_business_account?.id || null,
         instagramUsername: p.instagram_business_account?.username || null,
-      }));
+        }));
 
-      console.log('📄 Páginas disponibles para selección:', {
+    console.log('📄 Páginas disponibles para selección:', {
         tenantId,
         sessionId,
         count: simplified.length,
-      });
+        pageIds: simplified.map((p: any) => p.id),
+        pageNames: simplified.map((p: any) => p.name),
+        });
 
-      return res.json({ pages: simplified });
+    return res.json({ pages: simplified });
     } catch (error: any) {
       console.error(
         '❌ Error en /api/facebook/oauth-pages:',
