@@ -447,23 +447,18 @@ export async function procesarMensajeWhatsApp(
     console.warn('No se pudo registrar mensaje user:', e);
   }
 
-  // ─────────────────────────────────────────────
+    // ─────────────────────────────────────────────
   // GATILLO TEMPORAL DE CITA (FASE 1)
-  // Solo si el tenant tiene booking habilitado
-  // y el canal es WhatsApp.
+  // SIN FLAGS todavía: se activa solo por texto.
   // ─────────────────────────────────────────────
   try {
-    const bookingEnabled =
-      !!tenant.booking_enabled && !!tenant.booking_whatsapp_enabled;
-
     const lowerMsg = (userInput || "").toLowerCase();
 
     const wantsBooking =
-      bookingEnabled &&
-      (
-        /\b(cita|agendar|agenda|reservar|reservación|reservacion)\b/i.test(lowerMsg) ||
-        /\b(appointment|book\s+an?\s+appointment|book\s+now|schedule\s+a\s+visit)\b/i.test(lowerMsg)
-      );
+      /\b(cita|agendar|agenda|reservar|reservación|reservacion)\b/i.test(lowerMsg) ||
+      /\b(appointment|book\s+an?\s+appointment|book\s+now|schedule\s+a\s+visit)\b/i.test(lowerMsg);
+
+    console.log("[BOOKING] lowerMsg=", lowerMsg, "wantsBooking=", wantsBooking);
 
     if (wantsBooking) {
       // Por ahora: cita 60 minutos después de la hora actual.
@@ -471,11 +466,13 @@ export async function procesarMensajeWhatsApp(
 
       const appt = await createAppointment({
         tenantId: tenant.id,
-        channel: "whatsapp",
+        channel: "whatsapp", // FASE 1: siempre marcamos como whatsapp
         customerName: fromNumber || "WhatsApp client",
         customerPhone: fromNumber,
         startTime,
       });
+
+      console.log("[BOOKING] cita creada:", appt.id, appt.start_time);
 
       const start = new Date(appt.start_time);
       const formatted =
@@ -485,7 +482,7 @@ export async function procesarMensajeWhatsApp(
 
       const reply =
         idiomaDestino === "en"
-          ? `I have scheduled a provisional appointment for you on ${formatted}. If you need to change the time, just let me know here.`
+          ? `Te he agendado una cita provisional para el ${formatted}. If you need to change the time, just let me know here.`
           : `Te he agendado una cita provisional para el ${formatted}. Si necesitas cambiar la hora, solo dime por aquí.`;
 
       await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
