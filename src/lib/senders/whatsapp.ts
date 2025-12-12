@@ -119,8 +119,8 @@ export async function sendWhatsApp(
     const digits = normalizarNumero(telefonoRaw || "");
     if (!digits) continue;
 
-    const toE164 = `+${digits}`; // "+18633171646"
-    const to = `whatsapp:${toE164}`; // "whatsapp:+18633171646"
+    const toE164 = `+${digits}`;                 // "+18633171646"
+    const to = `whatsapp:${toE164}`;            // "whatsapp:+18633171646"
     console.log(`📤 Enviando plantilla ${templateSid} a ${to}`);
 
     try {
@@ -154,6 +154,7 @@ export async function sendWhatsApp(
           err?.message || "Error desconocido",
         ]
       );
+
     }
   }
 }
@@ -189,18 +190,19 @@ export async function enviarWhatsApp(
   telefono: string,
   mensaje: string,
   tenantId: string
-) {
+): Promise<boolean> {
   const digits = normalizarNumero(telefono); // "18633171646"
   if (!digits) {
     console.warn("❌ Número de destino inválido:", telefono);
-    return;
+    return false;
   }
 
-  const numeroCloud = digits; // para Cloud API → "18633171646"
+  const numeroCloud = digits;        // para Cloud API → "18633171646"
   const numeroTwilio = `+${digits}`; // para Twilio   → "+18633171646"
 
   // dividimos el mensaje largo en trozos seguros para WhatsApp
   const parts = chunkByLimit(mensaje);
+  let sentOk = false;
 
   // 1️⃣ Intentar enviar por Cloud API si el tenant tiene credenciales
   const creds = await obtenerCredencialesMetaWhatsApp(tenantId);
@@ -214,6 +216,8 @@ export async function enviarWhatsApp(
       "to:",
       numeroCloud
     );
+
+    let cloudOk = false;
 
     try {
       for (const part of parts) {
@@ -246,6 +250,7 @@ export async function enviarWhatsApp(
           );
         } else {
           console.log(`✅ WhatsApp (Meta) enviado a ${numeroCloud}`, waId);
+          cloudOk = true;
         }
 
         await pool.query(
@@ -262,9 +267,6 @@ export async function enviarWhatsApp(
           ]
         );
       }
-
-      // si todo fue bien por Cloud, salimos
-      return;
     } catch (err: any) {
       console.error(
         `❌ Error enviando por Cloud API a ${numeroCloud}:`,
@@ -282,18 +284,26 @@ export async function enviarWhatsApp(
           err?.message || "Error desconocido",
         ]
       );
-      // no hacemos return: dejamos caer al fallback Twilio
     }
+
+    // Si al menos una parte se envió bien por Cloud, consideramos éxito y NO usamos fallback
+    if (cloudOk) {
+      return true;
+    }
+
+    console.warn(
+      "⚠️ Cloud API no pudo enviar el mensaje (ninguna parte OK). Intentando fallback Twilio..."
+    );
   }
 
-  // 2️⃣ Fallback: enviar por Twilio si NO hay Cloud o si Cloud falló
+  // 2️⃣ Fallback: enviar por Twilio si NO hubo éxito en Cloud
   const fromTwilio = await obtenerNumeroDeTenant(tenantId);
   if (!fromTwilio) {
     console.warn(
-      "❌ No se enviará mensaje: tenant sin Cloud y sin twilio_number configurado. tenantId=",
+      "❌ No se enviará mensaje: tenant sin Cloud exitoso y sin twilio_number configurado. tenantId=",
       tenantId
     );
-    return;
+    return false;
   }
 
   console.log(
@@ -321,6 +331,7 @@ export async function enviarWhatsApp(
       );
 
       console.log(`✅ WhatsApp (Twilio) enviado a ${numeroTwilio}`, message.sid);
+      sentOk = true;
     }
   } catch (err: any) {
     console.error(
@@ -339,5 +350,20 @@ export async function enviarWhatsApp(
         err?.message || "Error desconocido",
       ]
     );
+  }
+
+  return sentOk;
+}
+
+// 👇 Wrapper para el interceptor (firma Promise<void>)
+export async function enviarWhatsAppVoid(
+  telefono: string,
+  mensaje: string,
+  tenantId: string
+): Promise<void> {
+  try {
+    await enviarWhatsApp(telefono, mensaje, tenantId);
+  } catch (e) {
+    console.error("❌ enviarWhatsAppVoid error:", e);
   }
 }

@@ -9,7 +9,7 @@ import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPor
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { buscarRespuestaSimilitudFaqsTraducido } from '../../lib/respuestasTraducidas';
-import { enviarWhatsApp } from '../../lib/senders/whatsapp';
+import { enviarWhatsApp, enviarWhatsAppVoid } from "../../lib/senders/whatsapp";
 import {
   yaExisteComoFaqSugerida,
   yaExisteComoFaqAprobada,
@@ -208,15 +208,18 @@ async function safeEnviarWhatsApp(
   messageId: string | null,
   toNumber: string,
   text: string
-) {
+): Promise<boolean> {
   try {
-    // Caso sin messageId (por seguridad)
+    // Caso sin messageId: solo intentamos 1 vez
     if (!messageId) {
-      await enviarWhatsApp(toNumber, text, tenantId);
-      await incrementarUsoPorCanal(tenantId, canal); // ✅ cuenta SOLO respuesta del bot
-      return;
+      const ok = await enviarWhatsApp(toNumber, text, tenantId); // <- debe devolver boolean
+      if (ok) {
+        await incrementarUsoPorCanal(tenantId, canal);
+      }
+      return ok;
     }
 
+    // Evitar duplicados por reintentos de Twilio
     const { rows: sent } = await pool.query(
       `SELECT 1
          FROM interactions
@@ -227,20 +230,21 @@ async function safeEnviarWhatsApp(
       [tenantId, canal, messageId]
     );
 
-    if (!sent[0]) {
-      // 👉 Primera vez que respondemos este message_id
-      await enviarWhatsApp(toNumber, text, tenantId);
-      await incrementarUsoPorCanal(tenantId, canal); // ✅ suma 1 SOLO si realmente se envía
-    } else {
-      console.log('⏩ safeEnviarWhatsApp: ya se envió este message_id, no se duplica ni se cuenta.');
+    if (sent[0]) {
+      console.log(
+        '⏩ safeEnviarWhatsApp: ya se respondió este message_id, no se vuelve a enviar ni a contar.'
+      );
+      return true; // ya lo consideramos "enviado"
     }
+
+    const ok = await enviarWhatsApp(toNumber, text, tenantId);
+    if (ok) {
+      await incrementarUsoPorCanal(tenantId, canal);
+    }
+    return ok;
   } catch (e) {
     console.error('❌ safeEnviarWhatsApp error:', e);
-    // Último intento: enviar y contar (mejor sobrecontar un poco que no responder)
-    try {
-      await enviarWhatsApp(toNumber, text, tenantId);
-      await incrementarUsoPorCanal(tenantId, canal);
-    } catch {}
+    return false; // MUY importante: indica al caller que NO se envió
   }
 }
 
@@ -447,7 +451,7 @@ export async function procesarMensajeWhatsApp(
     console.warn('No se pudo registrar mensaje user:', e);
   }
 
-    // ─────────────────────────────────────────────
+  // ─────────────────────────────────────────────
   // GATILLO TEMPORAL DE CITA (FASE 1)
   // SIN FLAGS todavía: se activa solo por texto.
   // ─────────────────────────────────────────────
@@ -464,6 +468,35 @@ export async function procesarMensajeWhatsApp(
       // Por ahora: cita 60 minutos después de la hora actual.
       const startTime = new Date(Date.now() + 60 * 60 * 1000);
 
+      // Formateo de la hora para el mensaje
+      const startForMsg = new Date(startTime);
+      const formatted =
+        idiomaDestino === "en"
+          ? startForMsg.toLocaleString("en-US")
+          : startForMsg.toLocaleString("es-ES");
+
+      const reply =
+        idiomaDestino === "en"
+          ? `Te he agendado una cita provisional para el ${formatted}. If you need to change the time, just let me know here.`
+          : `Te he agendado una cita provisional para el ${formatted}. Si necesitas cambiar la hora, solo dime por aquí.`;
+
+      // 1️⃣ Intentar enviar el mensaje de confirmación
+      const sentOk = await safeEnviarWhatsApp(
+        tenant.id,
+        canal,
+        messageId,
+        fromNumber,
+        reply
+      );
+
+      if (!sentOk) {
+        console.log(
+          "[BOOKING] Mensaje de confirmación NO enviado (Cloud API/Twilio falló). No se crea la cita."
+        );
+        return; // ⛔ salimos sin crear cita ni interacción
+      }
+
+      // 2️⃣ Solo si el mensaje salió OK, creamos la cita en BD
       const appt = await createAppointment({
         tenantId: tenant.id,
         channel: "whatsapp", // FASE 1: siempre marcamos como whatsapp
@@ -474,19 +507,7 @@ export async function procesarMensajeWhatsApp(
 
       console.log("[BOOKING] cita creada:", appt.id, appt.start_time);
 
-      const start = new Date(appt.start_time);
-      const formatted =
-        idiomaDestino === "en"
-          ? start.toLocaleString("en-US")
-          : start.toLocaleString("es-ES");
-
-      const reply =
-        idiomaDestino === "en"
-          ? `Te he agendado una cita provisional para el ${formatted}. If you need to change the time, just let me know here.`
-          : `Te he agendado una cita provisional para el ${formatted}. Si necesitas cambiar la hora, solo dime por aquí.`;
-
-      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
+      // 3️⃣ Guardar mensaje del bot + interacción
       await saveAssistantMessageAndEmit({
         tenantId: tenant.id,
         canal,
@@ -497,8 +518,8 @@ export async function procesarMensajeWhatsApp(
 
       await pool.query(
         `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT DO NOTHING`,
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT DO NOTHING`,
         [tenant.id, canal, messageId]
       );
 
@@ -1577,7 +1598,7 @@ Termina con esta pregunta EXACTA en español:
     idiomaDestino,
     intencionParaFaq,
     promptBase,
-    enviarFn: enviarWhatsApp,
+    enviarFn: enviarWhatsAppVoid,
   });
 
   if (interceptado) {
