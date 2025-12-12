@@ -13,6 +13,7 @@ export interface CreateAppointmentInput {
   customerEmail?: string;
   startTime: Date;                  // fecha/hora ya elegida por el bot
   durationMin?: number;             // si no la pasas, se usa la del servicio o 60min
+  status?: "pending" | "confirmed" | "cancelled" | "attended"; // 👈 NUEVO
 }
 
 export async function createAppointment(input: CreateAppointmentInput) {
@@ -54,12 +55,15 @@ export async function createAppointment(input: CreateAppointmentInput) {
     const start = input.startTime;
     const end = new Date(start.getTime() + durationMin * 60 * 1000);
 
+    // 👇 status por defecto = pending
+    const status = input.status ?? "pending";
+
     // 2) Insertar appointment en la base de datos
-    const { rows: apptRows } = await client.query(
+        const { rows: apptRows } = await client.query(
       `INSERT INTO appointments
         (tenant_id, service_id, channel, customer_name, customer_phone, customer_email,
          start_time, end_time, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'confirmed')
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING *`,
       [
         input.tenantId,
@@ -70,6 +74,7 @@ export async function createAppointment(input: CreateAppointmentInput) {
         input.customerEmail ?? null,
         start.toISOString(),
         end.toISOString(),
+        status, // 👈 aquí usamos la constante
       ]
     );
 
