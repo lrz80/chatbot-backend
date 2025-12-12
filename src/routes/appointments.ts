@@ -69,4 +69,85 @@ router.get(
   }
 );
 
+/**
+ * PUT /api/appointments/:id/status
+ * Actualiza el estado de una cita del tenant autenticado.
+ * Estados permitidos: pending | confirmed | cancelled | attended
+ */
+router.put(
+  "/:id/status",
+  authenticateUser,
+  async (
+    req: Request & {
+      user?: { uid: string; tenant_id: string; email?: string };
+    },
+    res: Response
+  ) => {
+    try {
+      const user = req.user;
+
+      if (!user?.tenant_id) {
+        return res.status(401).json({
+          ok: false,
+          error: "TENANT_NOT_FOUND_IN_TOKEN",
+        });
+      }
+
+      const tenantId = user.tenant_id;
+      const { id } = req.params;
+      const { status } = req.body as { status?: string };
+
+      const allowed = ["pending", "confirmed", "cancelled", "attended"];
+
+      if (!status || !allowed.includes(status)) {
+        return res.status(400).json({
+          ok: false,
+          error: "INVALID_STATUS",
+          allowed,
+        });
+      }
+
+      const { rows } = await pool.query(
+        `
+        UPDATE appointments
+        SET status = $1, updated_at = NOW()
+        WHERE id = $2 AND tenant_id = $3
+        RETURNING
+          id,
+          tenant_id,
+          service_id,
+          channel,
+          customer_name,
+          customer_phone,
+          customer_email,
+          start_time,
+          end_time,
+          status,
+          created_at,
+          updated_at
+        `,
+        [status, id, tenantId]
+      );
+
+      if (!rows[0]) {
+        return res.status(404).json({
+          ok: false,
+          error: "APPOINTMENT_NOT_FOUND",
+        });
+      }
+
+      return res.json({
+        ok: true,
+        appointment: rows[0],
+      });
+    } catch (error) {
+      console.error("[PUT /api/appointments/:id/status] Error:", error);
+      return res.status(500).json({
+        ok: false,
+        error: "INTERNAL_SERVER_ERROR",
+      });
+    }
+  }
+);
+
 export default router;
