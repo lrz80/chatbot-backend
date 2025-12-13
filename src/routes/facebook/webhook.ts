@@ -38,6 +38,7 @@ import {
   graciasPuroRegex,
   buildGraciasRespuesta,
 } from '../../lib/saludosConversacionales';
+import { getIO } from '../../lib/socket';
 
 type CanalEnvio = 'facebook' | 'instagram';
 

@@ -1,6 +1,7 @@
 // src/services/booking.ts
 import pool from "../lib/db";
 import { sendAppointmentToGoogleViaZapier } from "../integrations/googleCalendar";
+import { getIO } from "../lib/socket";
 
 export type BookingChannel = "whatsapp" | "facebook" | "instagram" | "voice";
 
@@ -84,6 +85,15 @@ export async function createAppointment(input: CreateAppointmentInput) {
     await syncAppointmentToExternalCalendars(client, appointment);
 
     await client.query("COMMIT");
+
+    const io = getIO();
+    io.emit("appointment:new", {
+      tenantId: input.tenantId,
+      appointment,
+    });
+
+    console.log("📡 SOCKET EMIT -> appointment:new");
+
     return appointment;
   } catch (err) {
     await client.query("ROLLBACK");

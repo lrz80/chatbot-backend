@@ -507,6 +507,30 @@ export async function procesarMensajeWhatsApp(
 
       console.log("[BOOKING] cita creada:", appt.id, appt.start_time);
 
+      // 🔔 Emitir al dashboard en tiempo real
+      try {
+        const io = getIO();
+        if (io) {
+          io.emit("appointment:new", {
+            id: appt.id,
+            tenantId: tenant.id,
+            channel: appt.channel,
+            customerName: appt.customer_name ?? appt.customerName ?? fromNumber,
+            customerPhone: appt.customer_phone ?? fromNumber,
+            startTime: appt.start_time ?? startTime,
+            createdAt: appt.created_at ?? new Date(),
+          });
+          console.log("📡 [SOCKET] Emitted appointment:new", {
+            id: appt.id,
+            tenantId: tenant.id,
+          });
+        } else {
+          console.warn("⚠️ [SOCKET] getIO() devolvió null al crear cita.");
+        }
+      } catch (e) {
+        console.warn("⚠️ No se pudo emitir appointment:new:", e);
+      }
+      
       // 3️⃣ Guardar mensaje del bot + interacción
       await saveAssistantMessageAndEmit({
         tenantId: tenant.id,
