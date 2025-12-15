@@ -472,13 +472,27 @@ export async function procesarMensajeWhatsApp(
       const startForMsg = new Date(startTime);
       const formatted =
         idiomaDestino === "en"
-          ? startForMsg.toLocaleString("en-US")
-          : startForMsg.toLocaleString("es-ES");
+          ? startForMsg.toLocaleString("en-US", {
+              dateStyle: "medium",
+              timeStyle: "short",
+            })
+          : startForMsg.toLocaleString("es-ES", {
+              dateStyle: "medium",
+              timeStyle: "short",
+            });
 
       const reply =
         idiomaDestino === "en"
-          ? `Te he agendado una cita provisional para el ${formatted}. If you need to change the time, just let me know here.`
-          : `Te he agendado una cita provisional para el ${formatted}. Si necesitas cambiar la hora, solo dime por aquí.`;
+          ? `✅ Your appointment is CONFIRMED.
+
+      📅 Date & time: ${formatted}
+
+      If you need to reschedule or cancel, just let me know here.`
+          : `✅ Tu cita ha quedado CONFIRMADA.
+
+      📅 Fecha y hora: ${formatted}
+
+      Si necesitas cambiar la hora o cancelar, solo dime por aquí.`;
 
       // 1️⃣ Intentar enviar el mensaje de confirmación
       const sentOk = await safeEnviarWhatsApp(
