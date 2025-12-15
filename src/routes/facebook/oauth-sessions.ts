@@ -1,3 +1,4 @@
+//src/routes/facebook/oauth-sessions.ts
 import express from 'express';
 import axios from 'axios';
 import pool from '../../lib/db';
@@ -47,6 +48,19 @@ router.get(
       }
 
       const userAccessToken: string = session.user_access_token;
+
+      // ✅ Paso 1A: confirmar quién es el usuario del token
+      const meRes = await axios.get("https://graph.facebook.com/v19.0/me", {
+        params: { access_token: userAccessToken, fields: "id,name" },
+      });
+      console.log("👤 [META] /me:", JSON.stringify(meRes.data, null, 2));
+
+      // ✅ Paso 1B: confirmar permisos reales concedidos al token
+      const permsRes = await axios.get("https://graph.facebook.com/v19.0/me/permissions", {
+        params: { access_token: userAccessToken },
+      });
+      console.log("🔑 [META] /me/permissions:", JSON.stringify(permsRes.data, null, 2));
+
 
       // 2) Obtener páginas accesibles para este usuario
       const pagesRes = await axios.get(
