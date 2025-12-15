@@ -41,6 +41,7 @@ import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
 import { getIO } from '../../lib/socket';
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
 import { createAppointment } from "../../services/booking";
+import { getOrCreateBookingSession, updateBookingSession } from "../../services/bookingSession";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -465,82 +466,37 @@ export async function procesarMensajeWhatsApp(
     console.log("[BOOKING] lowerMsg=", lowerMsg, "wantsBooking=", wantsBooking);
 
     if (wantsBooking) {
-      // Por ahora: cita 60 minutos después de la hora actual.
-      const startTime = new Date(Date.now() + 60 * 60 * 1000);
+      // 1) Crear/abrir sesión de booking y pedir fecha/hora (NO crear cita aún)
+      await getOrCreateBookingSession({
+        tenantId: tenant.id,
+        channel: "whatsapp",
+        contact: fromNumber,
+      });
 
-      // Formateo de la hora para el mensaje
-      const startForMsg = new Date(startTime);
-
-      const formatted =
-        idiomaDestino === "en"
-          ? startForMsg.toLocaleString("en-US", {
-              timeZone: "America/New_York",
-              dateStyle: "medium",
-              timeStyle: "short",
-            })
-          : startForMsg.toLocaleString("es-ES", {
-              timeZone: "America/New_York",
-              dateStyle: "medium",
-              timeStyle: "short",
-            });
+      await updateBookingSession({
+        tenantId: tenant.id,
+        channel: "whatsapp",
+        contact: fromNumber,
+        patch: {
+          state: "WAITING_DATETIME",
+          customer_phone: fromNumber ?? null,
+          // limpiamos cualquier intento previo
+          desired_start_time: null,
+          desired_end_time: null,
+          customer_name: null,
+          customer_email: null,
+        },
+      });
 
       const reply =
         idiomaDestino === "en"
-          ? `✅ Your appointment is CONFIRMED.
+          ? "Perfect. What date and time would you like for your appointment? (Example: Dec 15 at 3pm)"
+          : "Perfecto. ¿Para qué fecha y hora quieres la cita? (Ejemplo: 15 dic a las 3pm)";
 
-      📅 Date & time: ${formatted}
+      // Enviar respuesta (usa el sender REAL que compila en tu proyecto)
+      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
-      If you need to reschedule or cancel, just let me know here.`
-          : `✅ Tu cita ha quedado CONFIRMADA.
-
-      📅 Fecha y hora: ${formatted}
-
-      Si necesitas cambiar la hora o cancelar, solo dime por aquí.`;
-
-      // 1️⃣ Intentar enviar el mensaje de confirmación
-      const sentOk = await safeEnviarWhatsApp(
-        tenant.id,
-        canal,
-        messageId,
-        fromNumber,
-        reply
-      );
-
-      if (!sentOk) {
-        console.log(
-          "[BOOKING] Mensaje de confirmación NO enviado (Cloud API/Twilio falló). No se crea la cita."
-        );
-        return; // ⛔ salimos sin crear cita ni interacción
-      }
-
-      // 2️⃣ Solo si el mensaje salió OK, creamos la cita en BD
-      const appt = await createAppointment({
-        tenantId: tenant.id,
-        channel: "whatsapp", // FASE 1: siempre marcamos como whatsapp
-        customerName: fromNumber || "WhatsApp client",
-        customerPhone: fromNumber,
-        startTime,
-      });
-
-      console.log("[BOOKING] cita creada:", appt.id, appt.start_time);
-
-      // 🔔 Emitir al dashboard en tiempo real
-      try {
-        const io = getIO();
-        if (io) {
-          io.emit("appointment:new", appt);  // 👈 EMITE EL ROW COMPLETO, SIN MAPEAR
-          console.log("📡 [SOCKET] Emitted appointment:new", {
-            id: appt.id,
-            tenantId: tenant.id,
-          });
-        } else {
-          console.warn("⚠️ [SOCKET] getIO() devolvió null al crear cita.");
-        }
-      } catch (e) {
-        console.warn("⚠️ No se pudo emitir appointment:new:", e);
-      }
-
-      // 3️⃣ Guardar mensaje del bot + interacción
+      // Guardar mensaje del bot (opcional pero recomendado, para history)
       await saveAssistantMessageAndEmit({
         tenantId: tenant.id,
         canal,
@@ -549,14 +505,6 @@ export async function procesarMensajeWhatsApp(
         content: reply,
       });
 
-      await pool.query(
-        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-        VALUES ($1, $2, $3, NOW())
-        ON CONFLICT DO NOTHING`,
-        [tenant.id, canal, messageId]
-      );
-
-      // En esta fase, cuando se crea la cita salimos del flujo.
       return;
     }
   } catch (e) {
