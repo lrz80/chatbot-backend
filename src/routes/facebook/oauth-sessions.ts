@@ -49,6 +49,15 @@ router.get(
 
       const userAccessToken: string = session.user_access_token;
 
+      console.log("🧾 [OAUTH_SESSION] token fingerprint:", {
+        sessionId,
+        tenantId,
+        token_len: userAccessToken?.length || 0,
+        token_head: userAccessToken ? userAccessToken.slice(0, 10) : null,
+        token_tail: userAccessToken ? userAccessToken.slice(-10) : null,
+        created_at: session.created_at,
+      });
+
       // 🧪 PASO 4 DEBUG: listar businesses/portfolios accesibles por el usuario
       const bizRes = await axios.get(
         "https://graph.facebook.com/v19.0/me/businesses",
