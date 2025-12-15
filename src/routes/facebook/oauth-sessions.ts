@@ -49,6 +49,22 @@ router.get(
 
       const userAccessToken: string = session.user_access_token;
 
+      // 🧪 PASO 4 DEBUG: listar businesses/portfolios accesibles por el usuario
+      const bizRes = await axios.get(
+        "https://graph.facebook.com/v19.0/me/businesses",
+        {
+            params: {
+            access_token: userAccessToken,
+            fields: "id,name",
+            },
+        }
+      );
+
+      console.log(
+        "🏢 [META] /me/businesses:",
+        JSON.stringify(bizRes.data, null, 2)
+      );
+
       // ✅ Paso 1A: confirmar quién es el usuario del token
       const meRes = await axios.get("https://graph.facebook.com/v19.0/me", {
         params: { access_token: userAccessToken, fields: "id,name" },
