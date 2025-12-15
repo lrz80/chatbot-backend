@@ -58,6 +58,15 @@ router.get(
         created_at: session.created_at,
       });
 
+      try {
+        const bizRes = await axios.get("https://graph.facebook.com/v19.0/me/businesses", {
+            params: { access_token: userAccessToken, fields: "id,name" },
+        });
+        console.log("🏢 [META] /me/businesses:", JSON.stringify(bizRes.data, null, 2));
+      } catch (e: any) {
+        console.log("⚠️ [META] /me/businesses failed:", e?.response?.data || e.message);
+      }
+
       // ✅ Paso 1A: confirmar quién es el usuario del token
       const meRes = await axios.get("https://graph.facebook.com/v19.0/me", {
         params: { access_token: userAccessToken, fields: "id,name" },

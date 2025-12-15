@@ -28,6 +28,7 @@ router.get(
           "pages_messaging",
           "instagram_basic",
           "instagram_manage_messages",
+          "business_management",
         ].join(","),
         state: "aamy_meta_state",
         // 👇 fuerza a Facebook a volver a pedir permisos si antes se negaron
