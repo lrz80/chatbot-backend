@@ -42,6 +42,8 @@ import { getIO } from '../../lib/socket';
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
 import { createAppointment } from "../../services/booking";
 import { getOrCreateBookingSession, updateBookingSession } from "../../services/bookingSession";
+import chrono from "chrono-node";
+import { DateTime } from "luxon";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -94,6 +96,57 @@ function getConfigDelayMinutes(cfg: any, fallbackMin = 60) {
   const m = Number(cfg?.minutos_espera);
   if (Number.isFinite(m) && m > 0) return m;
   return fallbackMin;
+}
+
+// ─────────────────────────────────────────────
+// BOOKING HELPERS
+// ─────────────────────────────────────────────
+const BOOKING_TZ = "America/New_York";
+
+// Parse robusto: convierte texto libre a Date en TZ NY
+function parseDateTimeFromText(
+  text: string,
+  idiomaDestino: "es" | "en"
+): Date | null {
+  const ref = new Date();
+  const results =
+    idiomaDestino === "es"
+      ? chrono.es.parse(text, ref)
+      : chrono.parse(text, ref);
+
+  if (!results?.length) return null;
+
+  const dt = results[0].start?.date();
+  if (!dt) return null;
+
+  const lux = DateTime.fromJSDate(dt, { zone: BOOKING_TZ });
+  if (!lux.isValid) return null;
+
+  return lux.toJSDate();
+}
+
+async function isSlotAvailable(opts: {
+  tenantId: string;
+  start: Date;
+  end: Date;
+}) {
+  const { tenantId, start, end } = opts;
+
+  // overlap: start < existing_end AND end > existing_start
+  const { rows } = await pool.query(
+    `
+    SELECT 1
+    FROM appointments
+    WHERE tenant_id = $1
+      AND status IN ('pending','confirmed','attended')
+      AND start_time < $3
+      AND end_time > $2
+    LIMIT 1
+    `,
+    [tenantId, start.toISOString(), end.toISOString()]
+  );
+
+  return rows.length === 0;
 }
 
 // Acceso a DB para idioma del contacto
@@ -450,6 +503,154 @@ export async function procesarMensajeWhatsApp(
     }
     } catch (e) {
     console.warn('No se pudo registrar mensaje user:', e);
+  }
+
+  // ─────────────────────────────────────────────
+  // BOOKING FLOW (FASE 1) - estado WAITING_DATETIME
+  // ─────────────────────────────────────────────
+  try {
+    const session = await getOrCreateBookingSession({
+      tenantId: tenant.id,
+      channel: "whatsapp",
+      contact: fromNumber,
+    });
+
+    if (session?.state === "WAITING_DATETIME") {
+      const parsed = parseDateTimeFromText(userInput, idiomaDestino);
+
+      if (!parsed) {
+        const reply =
+          idiomaDestino === "en"
+            ? "I didn’t catch the date and time. Please send it like: Dec 15 at 3pm."
+            : "No pude entender la fecha y hora. Envíamela así: 15 dic a las 3pm.";
+
+        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: fromNumber || "anónimo",
+          messageId,
+          content: reply,
+        });
+
+        await pool.query(
+          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+          VALUES ($1, $2, $3, NOW())
+          ON CONFLICT DO NOTHING`,
+          [tenant.id, canal, messageId]
+        );
+
+        return;
+      }
+
+      // Duración: por ahora 60min
+      const durationMin = 60;
+      const start = DateTime.fromJSDate(parsed, { zone: BOOKING_TZ });
+      const end = start.plus({ minutes: durationMin });
+
+      // No permitir pasado
+      if (start < DateTime.now().setZone(BOOKING_TZ)) {
+        const reply =
+          idiomaDestino === "en"
+            ? "That time is in the past. What date and time would you like instead?"
+            : "Esa hora ya pasó. ¿Qué fecha y hora quieres en su lugar?";
+
+        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: fromNumber || "anónimo",
+          messageId,
+          content: reply,
+        });
+
+        await pool.query(
+          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+          VALUES ($1, $2, $3, NOW())
+          ON CONFLICT DO NOTHING`,
+          [tenant.id, canal, messageId]
+        );
+
+        return;
+      }
+
+      const ok = await isSlotAvailable({
+        tenantId: tenant.id,
+        start: start.toJSDate(),
+        end: end.toJSDate(),
+      });
+
+      if (!ok) {
+        const reply =
+          idiomaDestino === "en"
+            ? "That time is not available. Please send another date and time."
+            : "Esa hora no está disponible. Envíame otra fecha y hora.";
+
+        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: fromNumber || "anónimo",
+          messageId,
+          content: reply,
+        });
+
+        await pool.query(
+          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+          VALUES ($1, $2, $3, NOW())
+          ON CONFLICT DO NOTHING`,
+          [tenant.id, canal, messageId]
+        );
+
+        return;
+      }
+
+      // Guardar en sesión y pasar a pedir datos del cliente
+      await updateBookingSession({
+        tenantId: tenant.id,
+        channel: "whatsapp",
+        contact: fromNumber,
+        patch: {
+          state: "WAITING_CONTACT",
+          desired_start_time: start.toJSDate(),
+          desired_end_time: end.toJSDate(),
+        },
+      });
+
+      const formatted =
+        idiomaDestino === "en"
+          ? start.toLocaleString(DateTime.DATETIME_MED)
+          : start.setLocale("es").toLocaleString(DateTime.DATETIME_MED);
+
+      const reply =
+        idiomaDestino === "en"
+          ? `Perfect. I have availability for ${formatted}. What's your full name and email?`
+          : `Perfecto. Hay disponibilidad para ${formatted}. ¿Cuál es tu nombre y tu email?`;
+
+      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+      await saveAssistantMessageAndEmit({
+        tenantId: tenant.id,
+        canal,
+        fromNumber: fromNumber || "anónimo",
+        messageId,
+        content: reply,
+      });
+
+      await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT DO NOTHING`,
+        [tenant.id, canal, messageId]
+      );
+
+      return;
+    }
+  } catch (e) {
+    console.warn("⚠️ Booking WAITING_DATETIME handler failed:", e);
   }
 
   // ─────────────────────────────────────────────
