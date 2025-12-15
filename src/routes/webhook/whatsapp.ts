@@ -41,7 +41,7 @@ import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
 import { getIO } from '../../lib/socket';
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
 import { createAppointment } from "../../services/booking";
-import { getOrCreateBookingSession, updateBookingSession } from "../../services/bookingSession";
+import { getOrCreateBookingSession, updateBookingSession, getBookingSession } from "../../services/bookingSession";
 import chrono from "chrono-node";
 import { DateTime } from "luxon";
 
@@ -651,6 +651,97 @@ export async function procesarMensajeWhatsApp(
     }
   } catch (e) {
     console.warn("⚠️ Booking WAITING_DATETIME handler failed:", e);
+  }
+
+  // ─────────────────────────────────────────────
+  // BOOKING PIPELINE: si ya hay sesión activa esperando fecha/hora
+  // ─────────────────────────────────────────────
+  try {
+    const session = await getBookingSession({
+      tenantId: tenant.id,
+      channel: "whatsapp",
+      contact: fromNumber,
+    });
+
+    if (session?.state === "WAITING_DATETIME") {
+      const text = (userInput || "").trim();
+
+      // Parsear fecha/hora con chrono
+      const parsed = chrono.parseDate(text, new Date(), { forwardDate: true });
+
+      if (!parsed) {
+        const retry =
+          idiomaDestino === "en"
+            ? "I didn’t catch the date/time. Please send it like: Dec 15 at 3pm."
+            : "No pude identificar la fecha y hora. Envíamela así: 15 dic a las 3pm.";
+
+        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, retry);
+
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: fromNumber || "anónimo",
+          messageId,
+          content: retry,
+        });
+
+        await pool.query(
+          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+          VALUES ($1, $2, $3, NOW())
+          ON CONFLICT DO NOTHING`,
+          [tenant.id, canal, messageId]
+        );
+
+        return;
+      }
+
+      // Ventana por defecto: 30 min
+      const start = DateTime.fromJSDate(parsed);
+      const end = start.plus({ minutes: 30 });
+
+      await updateBookingSession({
+        tenantId: tenant.id,
+        channel: "whatsapp",
+        contact: fromNumber,
+        patch: {
+          state: "WAITING_CONTACT",
+          desired_start_time: start.toJSDate(),
+          desired_end_time: end.toJSDate(),
+        },
+      });
+
+      const formatted =
+        idiomaDestino === "en"
+          ? start.toLocaleString(DateTime.DATETIME_MED)
+          : start.setLocale("es").toLocaleString(DateTime.DATETIME_MED);
+
+      const askContact =
+        idiomaDestino === "en"
+          ? `Perfect. I have you down for ${formatted}. What’s your full name and email?`
+          : `Perfecto. Te agendo para ${formatted}. ¿Cuál es tu nombre completo y tu email?`;
+
+      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, askContact);
+
+      await saveAssistantMessageAndEmit({
+        tenantId: tenant.id,
+        canal,
+        fromNumber: fromNumber || "anónimo",
+        messageId,
+        content: askContact,
+      });
+
+      await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+        VALUES ($1, $2, $3, NOW())
+        ON CONFLICT DO NOTHING`,
+        [tenant.id, canal, messageId]
+      );
+
+      return;
+    }
+  } catch (e) {
+    console.warn("⚠️ Booking WAITING_DATETIME handler falló (WA):", e);
+    // si falla, sigue pipeline normal
   }
 
   // ─────────────────────────────────────────────

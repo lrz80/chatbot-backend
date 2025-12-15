@@ -126,17 +126,24 @@ export async function closeBookingSession(params: {
 /**
  * Obtiene la sesión actual si existe, sin crearla.
  */
-export async function getBookingSession(params: {
+export async function getBookingSession(opts: {
   tenantId: string;
-  channel: BookingChannel;
+  channel: string;
   contact: string;
-}): Promise<BookingSession | null> {
-  const { tenantId, channel, contact } = params;
+}) {
+  const { tenantId, channel, contact } = opts;
 
-  const { rows } = await pool.query<BookingSession>(
-    `SELECT * FROM booking_sessions WHERE tenant_id = $1 AND channel = $2 AND contact = $3 LIMIT 1`,
+  const { rows } = await pool.query(
+    `SELECT *
+       FROM booking_sessions
+      WHERE tenant_id = $1
+        AND channel = $2
+        AND contact = $3
+      ORDER BY updated_at DESC
+      LIMIT 1`,
     [tenantId, channel, contact]
   );
 
-  return rows[0] ?? null;
+  return rows[0] || null;
 }
+
