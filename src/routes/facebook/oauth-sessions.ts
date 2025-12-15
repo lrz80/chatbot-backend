@@ -290,7 +290,13 @@ router.post(
         [session_id]
       );
 
-      return res.json({ success: true });
+      return res.json({
+        success: true,
+        facebook: { id: pageId, name: pageName },
+        instagram: instagramPageId
+            ? { id: instagramPageId, username: instagramPageUsername }
+            : null,
+      });
     } catch (error: any) {
       console.error(
         '❌ Error en /api/facebook/select-page:',
