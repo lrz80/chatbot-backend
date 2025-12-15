@@ -154,10 +154,11 @@ router.post('/disconnect', async (req: Request, res: Response) => {
           facebook_page_name = NULL, 
           instagram_page_id = NULL, 
           instagram_page_name = NULL,
+          instagram_business_account_id = NULL,
           facebook_access_token = NULL
         WHERE id = $1
       `, [tenantId]);
-  
+
       return res.status(200).json({ message: 'Cuentas desconectadas correctamente' });
     } catch (err) {
       console.error('❌ Error en POST /api/meta-config/disconnect:', err);

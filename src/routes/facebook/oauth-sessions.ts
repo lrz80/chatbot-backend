@@ -49,15 +49,6 @@ router.get(
 
       const userAccessToken: string = session.user_access_token;
 
-      console.log("🧾 [OAUTH_SESSION] token fingerprint:", {
-        sessionId,
-        tenantId,
-        token_len: userAccessToken?.length || 0,
-        token_head: userAccessToken ? userAccessToken.slice(0, 10) : null,
-        token_tail: userAccessToken ? userAccessToken.slice(-10) : null,
-        created_at: session.created_at,
-      });
-
       try {
         const bizRes = await axios.get("https://graph.facebook.com/v19.0/me/businesses", {
             params: { access_token: userAccessToken, fields: "id,name" },
@@ -77,8 +68,6 @@ router.get(
       const permsRes = await axios.get("https://graph.facebook.com/v19.0/me/permissions", {
         params: { access_token: userAccessToken },
       });
-      console.log("🔑 [META] /me/permissions:", JSON.stringify(permsRes.data, null, 2));
-
 
       // 2) Obtener páginas accesibles para este usuario
       const pagesRes = await axios.get(
@@ -90,8 +79,6 @@ router.get(
             },
         }
         );
-
-        console.log("🔍 [META] /me?fields=accounts crudo:", JSON.stringify(pagesRes.data, null, 2));
 
         const pages = Array.isArray(pagesRes.data?.accounts?.data)
         ? pagesRes.data.accounts.data
