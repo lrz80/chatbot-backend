@@ -470,13 +470,16 @@ export async function procesarMensajeWhatsApp(
 
       // Formateo de la hora para el mensaje
       const startForMsg = new Date(startTime);
+
       const formatted =
         idiomaDestino === "en"
           ? startForMsg.toLocaleString("en-US", {
+              timeZone: "America/New_York",
               dateStyle: "medium",
               timeStyle: "short",
             })
           : startForMsg.toLocaleString("es-ES", {
+              timeZone: "America/New_York",
               dateStyle: "medium",
               timeStyle: "short",
             });
