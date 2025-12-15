@@ -64,24 +64,19 @@ router.get(
 
       // 2) Obtener páginas accesibles para este usuario
       const pagesRes = await axios.get(
-        'https://graph.facebook.com/v19.0/me/accounts',
+        "https://graph.facebook.com/v19.0/me",
         {
-          params: {
+            params: {
             access_token: userAccessToken,
-            fields:
-              'id,name,picture{url},instagram_business_account{id,username}',
-          },
+            fields: "accounts{id,name,picture{url},instagram_business_account{id,username}}",
+            },
         }
-      );
+        );
 
-      // 🔍 LOG NUEVO: respuesta cruda de /me/accounts
-      console.log(
-        '🔍 [META] /me/accounts crudo:',
-        JSON.stringify(pagesRes.data, null, 2)
-      );
+        console.log("🔍 [META] /me?fields=accounts crudo:", JSON.stringify(pagesRes.data, null, 2));
 
-    const pages = Array.isArray(pagesRes.data?.data)
-        ? pagesRes.data.data
+        const pages = Array.isArray(pagesRes.data?.accounts?.data)
+        ? pagesRes.data.accounts.data
         : [];
 
     interface FBPage {
