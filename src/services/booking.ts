@@ -56,8 +56,8 @@ export async function createAppointment(input: CreateAppointmentInput) {
     const start = input.startTime;
     const end = new Date(start.getTime() + durationMin * 60 * 1000);
 
-    // 👇 status por defecto = pending
-    const status = input.status ?? "pending";
+    // 👇 status por defecto = confirmed (Fase 1: el bot ya asigna hora)
+    const status = input.status ?? "confirmed";
 
     // 2) Insertar appointment en la base de datos
         const { rows: apptRows } = await client.query(
