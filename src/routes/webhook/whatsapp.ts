@@ -511,15 +511,7 @@ export async function procesarMensajeWhatsApp(
       try {
         const io = getIO();
         if (io) {
-          io.emit("appointment:new", {
-            id: appt.id,
-            tenantId: tenant.id,
-            channel: appt.channel,
-            customerName: appt.customer_name ?? appt.customerName ?? fromNumber,
-            customerPhone: appt.customer_phone ?? fromNumber,
-            startTime: appt.start_time ?? startTime,
-            createdAt: appt.created_at ?? new Date(),
-          });
+          io.emit("appointment:new", appt);  // 👈 EMITE EL ROW COMPLETO, SIN MAPEAR
           console.log("📡 [SOCKET] Emitted appointment:new", {
             id: appt.id,
             tenantId: tenant.id,
@@ -530,7 +522,7 @@ export async function procesarMensajeWhatsApp(
       } catch (e) {
         console.warn("⚠️ No se pudo emitir appointment:new:", e);
       }
-      
+
       // 3️⃣ Guardar mensaje del bot + interacción
       await saveAssistantMessageAndEmit({
         tenantId: tenant.id,
