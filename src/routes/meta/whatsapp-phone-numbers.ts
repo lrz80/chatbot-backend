@@ -201,11 +201,14 @@ router.post(
         `
         UPDATE tenants
         SET
-          whatsapp_business_id     = $1,
-          whatsapp_phone_number_id = $2,
-          whatsapp_phone_number    = $3,
-          updated_at               = NOW()
-        WHERE id::text = $4
+          whatsapp_business_id      = $1,
+          whatsapp_phone_number_id  = $2,
+          whatsapp_phone_number     = $3,
+          whatsapp_status           = 'connected',
+          whatsapp_connected        = TRUE,
+          whatsapp_connected_at     = NOW(),
+          updated_at                = NOW()
+        WHERE id = $4
         `,
         [wabaId, phoneNumberId, displayPhoneNumber, tenantId]
       );
