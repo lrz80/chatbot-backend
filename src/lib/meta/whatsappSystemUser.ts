@@ -1,162 +1,171 @@
 // backend/src/lib/meta/whatsappSystemUser.ts
 import fetch from "node-fetch";
 
-/**
- * Helpers de Graph API para:
- * - Resolver business_id dueño de un WABA
- * - Crear System User en ese business
- * - Generar token del System User para tu APP (con scopes WA)
- * - Registrar phone_number_id (PIN 2-step) usando el system user token
- *
- * Nota: Meta devuelve respuestas con formas variables. Para no pelear con TS,
- * tipamos las respuestas como any y validamos en runtime.
- */
-
-const GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v18.0";
+const GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v21.0";
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
-type GraphError = { error?: { message?: string } };
-
-function must<T>(value: T, message: string): T {
-  if (value === undefined || value === null || (value as any) === "") {
-    throw new Error(message);
+function must<T>(value: T, msg: string): T {
+  if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {
+    throw new Error(msg);
   }
   return value;
 }
 
-async function graphPost(path: string, token: string, body: any): Promise<any> {
-  const url = `${GRAPH_BASE}/${path}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body ?? {}),
-  });
+type GraphError = {
+  message?: string;
+  type?: string;
+  code?: number;
+  error_subcode?: number;
+  fbtrace_id?: string;
+};
 
-  const json: any = await res.json().catch(() => ({} as any));
-  if (!res.ok) {
-    const msg = (json as GraphError)?.error?.message || res.statusText;
-    throw new Error(`[GRAPH POST ${path}] ${msg}`);
-  }
-  return json;
-}
+type GraphBaseResponse = {
+  error?: GraphError;
+  [k: string]: any;
+};
 
-async function graphGet(path: string, token: string): Promise<any> {
+async function graphGet(path: string, token: string): Promise<GraphBaseResponse> {
   const url = `${GRAPH_BASE}/${path}`;
   const res = await fetch(url, {
     method: "GET",
     headers: { Authorization: `Bearer ${token}` },
   });
 
-  const json: any = await res.json().catch(() => ({} as any));
+  const json = (await res.json().catch(() => ({}))) as GraphBaseResponse;
+
   if (!res.ok) {
-    const msg = (json as GraphError)?.error?.message || res.statusText;
-    throw new Error(`[GRAPH GET ${path}] ${msg}`);
+    throw new Error(`[GRAPH GET ${path}] ${json?.error?.message || res.statusText}`);
+  }
+  return json;
+}
+
+async function graphPost(path: string, token: string, body: Record<string, any>): Promise<GraphBaseResponse> {
+  const url = `${GRAPH_BASE}/${path}`;
+
+  const form = new URLSearchParams();
+  Object.entries(body || {}).forEach(([k, v]) => {
+    if (v === undefined || v === null) return;
+    form.append(k, String(v));
+  });
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: form.toString(),
+  });
+
+  const json = (await res.json().catch(() => ({}))) as GraphBaseResponse;
+
+  if (!res.ok) {
+    throw new Error(`[GRAPH POST ${path}] ${json?.error?.message || res.statusText}`);
   }
   return json;
 }
 
 /**
  * Intenta resolver el BUSINESS MANAGER ID dueño del WABA.
- * OJO: Meta a veces expone owner_business, otras business, otras on_behalf_of_business.
+ * Meta puede exponer owner_business o business o on_behalf_of_business (según el asset).
  */
 export async function resolveBusinessIdFromWaba(wabaId: string, userToken: string): Promise<string> {
   must(wabaId, "wabaId requerido");
   must(userToken, "userToken requerido");
 
-  // Intento A: owner_business
+  // A) owner_business
   try {
-    const a: any = await graphGet(`${wabaId}?fields=owner_business`, userToken);
+    const a = await graphGet(`${wabaId}?fields=owner_business`, userToken);
     const id = a?.owner_business?.id;
     if (id) return String(id);
   } catch {
-    // noop
+    // ignore
   }
 
-  // Intento B: business
+  // B) business
   try {
-    const b: any = await graphGet(`${wabaId}?fields=business`, userToken);
+    const b = await graphGet(`${wabaId}?fields=business`, userToken);
     const id = b?.business?.id;
     if (id) return String(id);
   } catch {
-    // noop
+    // ignore
   }
 
-  // Intento C: on_behalf_of_business (fallback)
+  // C) on_behalf_of_business
   try {
-    const c: any = await graphGet(`${wabaId}?fields=on_behalf_of_business`, userToken);
+    const c = await graphGet(`${wabaId}?fields=on_behalf_of_business`, userToken);
     const id = c?.on_behalf_of_business?.id;
     if (id) return String(id);
   } catch {
-    // noop
+    // ignore
   }
 
   throw new Error(
-    "No pude resolver el business_id dueño del WABA. " +
-      "El token no tiene permisos suficientes o el asset no expone el campo."
+    "No pude resolver el whatsapp_business_manager_id del WABA. Revisa permisos del token del tenant (business_management / whatsapp_business_management) o que el WABA exponga owner_business/business."
   );
 }
 
 /**
- * Crea un System User dentro del Business del tenant y genera un token para TU APP.
- * Requiere que userToken tenga permisos para administrar ese Business.
- *
- * Devuelve: { systemUserId, systemUserToken }
+ * Crea un System User dentro del Business (BM) del tenant.
+ * NOTA: Este system user queda creado dentro del BM del cliente.
  */
-export async function createSystemUserAndTokenForBusiness(params: {
+export async function createSystemUser(params: {
   businessId: string;
   userToken: string;
-  appId?: string;
-  systemUserName?: string;
-}): Promise<{ systemUserId: string; systemUserToken: string }> {
+  name?: string;
+  role?: "ADMIN" | "EMPLOYEE";
+}): Promise<string> {
   const { businessId, userToken } = params;
-  const appId = params.appId || process.env.META_APP_ID;
-  const systemUserName = params.systemUserName || "Aamy API System User";
-
   must(businessId, "businessId requerido");
   must(userToken, "userToken requerido");
-  must(appId, "META_APP_ID requerido (env o params.appId)");
 
-  // 1) Crear System User en el business
-  // Endpoint: POST /{businessId}/system_users
-  // Campos típicos: name, role
-  const su: any = await graphPost(`${businessId}/system_users`, userToken, {
-    name: systemUserName,
-    role: "ADMIN",
+  const name = params.name || "Aamy WhatsApp System User";
+  const role = params.role || "ADMIN";
+
+  // POST /{businessId}/system_users
+  const su = await graphPost(`${businessId}/system_users`, userToken, {
+    name,
+    role,
   });
 
-  const systemUserId = must(su?.id, "No se pudo crear system user (sin id)");
-
-  // 2) Generar token del System User para tu APP con scopes WA
-  // Endpoint: POST /{systemUserId}/access_tokens
-  // Campos: app_id, scope
-  // Meta acepta "scope" como string CSV o array.
-  const tokenRes: any = await graphPost(`${systemUserId}/access_tokens`, userToken, {
-    app_id: String(appId),
-    scope: [
-      "whatsapp_business_messaging",
-      "whatsapp_business_management",
-      // business_management a veces se requiere para administrar assets
-      "business_management",
-    ],
-  });
-
-  const systemUserToken = must(
-    tokenRes?.access_token,
-    "No se pudo generar access_token para system user"
-  );
-
-  return {
-    systemUserId: String(systemUserId),
-    systemUserToken: String(systemUserToken),
-  };
+  const systemUserId = su?.id;
+  return must(String(systemUserId), "No se pudo crear system user (sin id)");
 }
 
 /**
- * Registra el número (PIN 2-step) usando el SYSTEM USER TOKEN.
- * Endpoint: POST /{phoneNumberId}/register
+ * Genera token del System User para tu APP.
+ * IMPORTANTE:
+ * - app_id: ID de tu app
+ * - scope: CSV
+ */
+export async function createSystemUserToken(params: {
+  systemUserId: string;
+  userToken: string;
+  appId: string;
+  scopesCsv?: string; // ejemplo: "whatsapp_business_management,whatsapp_business_messaging,business_management"
+}): Promise<string> {
+  const { systemUserId, userToken, appId } = params;
+  must(systemUserId, "systemUserId requerido");
+  must(userToken, "userToken requerido");
+  must(appId, "appId requerido");
+
+  const scope =
+    params.scopesCsv ||
+    "whatsapp_business_management,whatsapp_business_messaging,business_management";
+
+  // POST /{systemUserId}/access_tokens
+  const tokenRes = await graphPost(`${systemUserId}/access_tokens`, userToken, {
+    app_id: appId,
+    scope,
+  });
+
+  const accessToken = tokenRes?.access_token;
+  return must(String(accessToken), "No se pudo generar access_token para system user");
+}
+
+/**
+ * Registra el phone_number_id con PIN usando SYSTEM USER TOKEN.
+ * Esto es lo que normalmente quita el “PENDING”.
  */
 export async function registerPhoneNumber(params: {
   phoneNumberId: string;
@@ -164,28 +173,13 @@ export async function registerPhoneNumber(params: {
   pin: string;
 }): Promise<any> {
   const { phoneNumberId, systemUserToken, pin } = params;
-
   must(phoneNumberId, "phoneNumberId requerido");
   must(systemUserToken, "systemUserToken requerido");
   must(pin, "pin requerido");
 
   // POST /{phoneNumberId}/register
-  return await graphPost(`${phoneNumberId}/register`, systemUserToken, {
+  return graphPost(`${phoneNumberId}/register`, systemUserToken, {
     messaging_product: "whatsapp",
-    pin: String(pin),
+    pin,
   });
-}
-
-/**
- * Utilidad: obtiene info del phone_number_id (útil para debug)
- */
-export async function getPhoneNumberInfo(params: {
-  phoneNumberId: string;
-  token: string;
-}): Promise<any> {
-  const { phoneNumberId, token } = params;
-  must(phoneNumberId, "phoneNumberId requerido");
-  must(token, "token requerido");
-
-  return await graphGet(`${phoneNumberId}?fields=verified_name,display_phone_number,quality_rating,code_verification_status`, token);
 }

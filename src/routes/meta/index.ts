@@ -7,6 +7,7 @@ import whatsappRedirect from "./whatsapp-redirect";
 import whatsappPhoneNumbersRouter from "../meta/whatsapp-phone-numbers";
 import whatsappOnboardStartRouter from "../../routes/meta/whatsapp-onboard-start";
 import whatsappAccountsRouter from "./whatsapp-accounts";
+import whatsappRegister from "./whatsapp-register";
 
 const router = Router();
 
@@ -533,5 +534,6 @@ router.use("/", whatsappRedirect);
 router.use("/", whatsappPhoneNumbersRouter);
 router.use("/whatsapp-onboard", whatsappOnboardStartRouter);
 router.use("/", whatsappAccountsRouter);
+router.use("/", whatsappRegister);
 
 export default router;
