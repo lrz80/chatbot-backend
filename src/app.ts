@@ -214,6 +214,7 @@ app.use('/api/stripe', stripeCheckoutRoutes);
 app.use('/api/stripe', stripePlansRoutes);
 app.use(twilioEmbeddedRouter);
 app.use("/api/meta", metaRoutes);
+console.log("✅ Meta router montado en /api/meta");
 app.use('/api/voice', telnyxForwardRouter);
 app.use(facebookOAuthSessionsRouter);
 app.use("/api/appointments", appointmentsRouter);

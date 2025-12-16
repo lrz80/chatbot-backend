@@ -439,6 +439,44 @@ router.get(
   }
 );
 
+router.post(
+  "/whatsapp/save-token",
+  authenticateUser,
+  async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const tenantId = user?.tenant_id;
+
+      const { whatsapp_access_token } = req.body;
+
+      console.log("[WA SAVE TOKEN] tenantId:", tenantId);
+      console.log("[WA SAVE TOKEN] token exists?:", !!whatsapp_access_token);
+
+      if (!tenantId || !whatsapp_access_token) {
+        return res.status(400).json({ error: "Datos incompletos" });
+      }
+
+      await pool.query(
+        `
+        UPDATE tenants
+        SET
+          whatsapp_access_token = $1,
+          updated_at = NOW()
+        WHERE id = $2
+        `,
+        [whatsapp_access_token, tenantId]
+      );
+
+      console.log("[WA SAVE TOKEN] Token guardado en tenants");
+
+      return res.json({ ok: true });
+    } catch (err) {
+      console.error("[WA SAVE TOKEN] Error:", err);
+      return res.status(500).json({ error: "Error guardando token" });
+    }
+  }
+);
+
 /**
  * Callback / webhook WhatsApp:
  * GET /api/meta/whatsapp/callback
