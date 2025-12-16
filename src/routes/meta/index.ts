@@ -477,6 +477,113 @@ router.post(
   }
 );
 
+// ✅ Descubre WABAs con el token del tenant y guarda whatsapp_business_id
+router.get(
+  "/whatsapp/resolve-waba",
+  authenticateUser,
+  async (req: Request, res: Response) => {
+    try {
+      const user = (req as any).user;
+      const tenantId = user?.tenant_id;
+
+      console.log("🧪 [WA RESOLVE WABA] tenantId:", tenantId);
+
+      if (!tenantId) {
+        return res.status(401).json({ error: "No autenticado" });
+      }
+
+      // 1) Leer token del tenant
+      const t = await pool.query(
+        `
+        SELECT whatsapp_access_token
+        FROM tenants
+        WHERE id::text = $1
+        LIMIT 1
+        `,
+        [tenantId]
+      );
+
+      const accessToken: string | null =
+        t.rows?.[0]?.whatsapp_access_token || null;
+
+      console.log("🧪 [WA RESOLVE WABA] has accessToken:", !!accessToken);
+
+      if (!accessToken) {
+        return res.status(400).json({ error: "Tenant no tiene whatsapp_access_token" });
+      }
+
+      // 2) Buscar negocios del usuario y sus WABAs
+      // Nota: Esto requiere business_management (ya lo estás pidiendo).
+      const url =
+        `https://graph.facebook.com/v18.0/me/businesses` +
+        `?fields=id,name,owned_whatsapp_business_accounts.limit(50){id,name}` +
+        `&access_token=${encodeURIComponent(accessToken)}`;
+
+      console.log("🧪 [WA RESOLVE WABA] GET:", url);
+
+      const resp = await fetch(url);
+      const json: any = await resp.json();
+
+      console.log("🧪 [WA RESOLVE WABA] Graph status:", resp.status);
+      console.log("🧪 [WA RESOLVE WABA] Graph json:", JSON.stringify(json, null, 2));
+
+      if (!resp.ok) {
+        return res.status(500).json({
+          error: "Graph error resolviendo businesses/WABAs",
+          detail: json,
+        });
+      }
+
+      const businesses = Array.isArray(json?.data) ? json.data : [];
+
+      const wabas: { business_id: string; business_name: string; waba_id: string; waba_name: string | null }[] = [];
+
+      for (const b of businesses) {
+        const owned = b?.owned_whatsapp_business_accounts?.data || [];
+        for (const w of owned) {
+          wabas.push({
+            business_id: String(b.id),
+            business_name: String(b.name || ""),
+            waba_id: String(w.id),
+            waba_name: (w.name as string) ?? null,
+          });
+        }
+      }
+
+      console.log("🧪 [WA RESOLVE WABA] total wabas encontrados:", wabas.length);
+
+      if (wabas.length === 0) {
+        return res.json({ ok: false, status: "no_wabas_found", wabas: [] });
+      }
+
+      // 3) Si solo hay 1 WABA, lo guardamos automáticamente
+      if (wabas.length === 1) {
+        const only = wabas[0];
+
+        await pool.query(
+          `
+          UPDATE tenants
+          SET whatsapp_business_id = $1,
+              updated_at = NOW()
+          WHERE id::text = $2
+          `,
+          [only.waba_id, tenantId]
+        );
+
+        console.log("✅ [WA RESOLVE WABA] Guardado whatsapp_business_id:", only.waba_id);
+
+        return res.json({ ok: true, status: "saved", waba: only, wabas });
+      }
+
+      // 4) Si hay múltiples, devolvemos lista para que el front elija
+      return res.json({ ok: true, status: "multiple", wabas });
+    } catch (err: any) {
+      console.error("❌ [WA RESOLVE WABA] Error:", err);
+      return res.status(500).json({ error: "Error interno resolve-waba", detail: String(err?.message || err) });
+    }
+  }
+);
+
 /**
  * Callback / webhook WhatsApp:
  * GET /api/meta/whatsapp/callback
