@@ -21,6 +21,9 @@ router.get(
       const tenantId =
         (req as any).user?.tenant_id || (req as any).user?.tenantId;
 
+      console.log("🧪 [WA PHONE NUMBERS] tenantId:", tenantId);
+      console.log("🧪 [WA PHONE NUMBERS] req.user:", (req as any).user);
+
       if (!tenantId) {
         return res.status(401).json({ error: "No autenticado" });
       }
@@ -32,10 +35,26 @@ router.get(
           whatsapp_access_token,
           whatsapp_business_id
         FROM tenants
-        WHERE id = $1
+        WHERE id::text = $1
         LIMIT 1
         `,
         [tenantId]
+      );
+
+      console.log("🧪 [WA PHONE NUMBERS] tenants rows length:", rows?.length || 0);
+
+      if (!rows || rows.length === 0) {
+        console.warn("[WA PHONE NUMBERS] Tenant no encontrado en DB:", tenantId);
+        return res.json({ accounts: [], status: "tenant_not_found" });
+      }
+
+      console.log(
+        "🧪 [WA PHONE NUMBERS] has accessToken:",
+        !!rows?.[0]?.whatsapp_access_token
+      );
+      console.log(
+        "🧪 [WA PHONE NUMBERS] has wabaId:",
+        !!rows?.[0]?.whatsapp_business_id
       );
 
       const accessToken = rows[0]?.whatsapp_access_token as string | undefined;
@@ -59,6 +78,7 @@ router.get(
         `?fields=id,name&access_token=${encodeURIComponent(accessToken)}`;
 
       console.log("[WA PHONE NUMBERS] Consultando info WABA:", wabaInfoUrl);
+
       const wabaInfoResp = await fetch(wabaInfoUrl);
       const wabaInfoJson: any = await wabaInfoResp.json();
 
@@ -76,6 +96,7 @@ router.get(
         `/phone_numbers?access_token=${encodeURIComponent(accessToken)}`;
 
       console.log("[WA PHONE NUMBERS] Consultando números:", phonesUrl);
+
       const phonesResp = await fetch(phonesUrl);
       const phonesJson: any = await phonesResp.json();
 
@@ -109,8 +130,7 @@ router.get(
         phone_number_id: String(p.id),
         display_phone_number: String(p.display_phone_number),
         verified_name: (p.verified_name as string) ?? null,
-        code_verification_status:
-          (p.code_verification_status as string) ?? null,
+        code_verification_status: (p.code_verification_status as string) ?? null,
       }));
 
       const accounts: Account[] = [];
@@ -132,7 +152,6 @@ router.get(
         return res.json({ accounts: [], status: "no_waba" });
       }
 
-      // Solo devolvemos; NO guardamos nada
       return res.json({ accounts, status: "ok" });
     } catch (error) {
       console.error("[WA PHONE NUMBERS] Error inesperado:", error);
@@ -156,6 +175,10 @@ router.post(
       const tenantId =
         (req as any).user?.tenant_id || (req as any).user?.tenantId;
 
+      console.log("🧪 [WA SELECT NUMBER] tenantId:", tenantId);
+      console.log("🧪 [WA SELECT NUMBER] req.user:", (req as any).user);
+      console.log("🧪 [WA SELECT NUMBER] body:", req.body);
+
       if (!tenantId) {
         return res
           .status(401)
@@ -178,11 +201,11 @@ router.post(
         `
         UPDATE tenants
         SET
-          whatsapp_business_id     = $1, -- aquí guardas el WABA ID
+          whatsapp_business_id     = $1,
           whatsapp_phone_number_id = $2,
           whatsapp_phone_number    = $3,
           updated_at               = NOW()
-        WHERE id = $4
+        WHERE id::text = $4
         `,
         [wabaId, phoneNumberId, displayPhoneNumber, tenantId]
       );

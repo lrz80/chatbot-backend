@@ -51,6 +51,9 @@ router.post(
         tenantId,
       });
 
+      console.log("🧪 [WA ONBOARD COMPLETE] req.body raw:", req.body);
+      console.log("🧪 [WA ONBOARD COMPLETE] req.user raw:", (req as any).user);
+
       if (!tenantId) {
         return res.status(401).json({ error: "Tenant no identificado" });
       }
@@ -72,6 +75,8 @@ router.post(
       );
 
       const tenantToken: string | null = t.rows?.[0]?.whatsapp_access_token || null;
+
+      console.log("🧪 [WA ONBOARD COMPLETE] tenant has whatsapp_access_token:", !!tenantToken);
 
       if (!tenantToken) {
         return res.status(400).json({
@@ -151,108 +156,6 @@ router.post(
         error: "Error interno guardando la conexión",
         detail: String(err?.message || err),
       });
-    }
-  }
-);
-
-/**
- * POST /api/meta/whatsapp/onboard-complete
- *
- * El frontend (página /meta/whatsapp-redirect) nos envía
- * wabaId + phoneNumberId cuando el Embedded Signup termina.
- * Aquí solo actualizamos el tenant.
- */
-router.post(
-  "/whatsapp/onboard-complete",
-  authenticateUser,
-  async (req: Request, res: Response) => {
-    try {
-      const user = (req as any).user;
-      const tenantId = user?.tenant_id as string | undefined;
-
-      const { wabaId, phoneNumberId } = req.body as {
-        wabaId?: string;
-        phoneNumberId?: string;
-      };
-
-      console.log("[WA ONBOARD COMPLETE] Body recibido:", {
-        wabaId,
-        phoneNumberId,
-        tenantId,
-      });
-
-      if (!tenantId) {
-        return res
-          .status(401)
-          .json({ error: "No se pudo determinar el tenant (falta tenantId)." });
-      }
-
-      if (!wabaId || !phoneNumberId) {
-        return res
-          .status(400)
-          .json({ error: "Faltan wabaId o phoneNumberId en el body." });
-      }
-
-      // Actualizar tenant en DB
-      try {
-        console.log(
-          "💾 [WA ONBOARD COMPLETE] Actualizando tenant...",
-          tenantId
-        );
-
-        const updateQuery = `
-          UPDATE tenants
-          SET
-            whatsapp_business_id      = $1,
-            whatsapp_phone_number_id  = $2,
-            whatsapp_status           = 'connected',
-            whatsapp_connected        = TRUE,
-            whatsapp_connected_at     = NOW(),
-            updated_at                = NOW()
-          WHERE id::text = $3
-          RETURNING id,
-                    whatsapp_business_id,
-                    whatsapp_phone_number_id,
-                    whatsapp_status,
-                    whatsapp_connected,
-                    whatsapp_connected_at;
-        `;
-
-        const result = await pool.query(updateQuery, [
-          wabaId,
-          phoneNumberId,
-          tenantId,
-        ]);
-
-        console.log(
-          "💾 [WA ONBOARD COMPLETE] UPDATE rowCount:",
-          result.rowCount,
-          "rows:",
-          result.rows
-        );
-
-        if (result.rowCount === 0) {
-          console.warn(
-            "⚠️ [WA ONBOARD COMPLETE] No se actualizó ningún tenant. " +
-              "Revisa que tenantId coincida EXACTAMENTE con tenants.id"
-          );
-        }
-
-        return res.json({ ok: true, tenant: result.rows[0] });
-      } catch (dbErr) {
-        console.error(
-          "❌ [WA ONBOARD COMPLETE] Error guardando datos de WhatsApp en tenants:",
-          dbErr
-        );
-        return res
-          .status(500)
-          .json({ error: "Error al guardar datos de WhatsApp en DB." });
-      }
-    } catch (err) {
-      console.error("❌ [WA ONBOARD COMPLETE] Error general:", err);
-      return res
-        .status(500)
-        .json({ error: "Error interno en onboard-complete." });
     }
   }
 );
