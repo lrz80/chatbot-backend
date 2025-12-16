@@ -8,130 +8,149 @@ import whatsappPhoneNumbersRouter from "../meta/whatsapp-phone-numbers";
 import whatsappOnboardStartRouter from "../../routes/meta/whatsapp-onboard-start";
 import whatsappAccountsRouter from "./whatsapp-accounts";
 import whatsappRegister from "./whatsapp-register";
+import {
+  resolveBusinessIdFromWaba,
+  createSystemUser,
+  createSystemUserToken,
+  // registerPhoneNumber, // (opcional) PIN step, no lo usamos aquí
+} from "../../lib/meta/whatsappSystemUser";
 
 const router = Router();
 
 /**
- * POST /api/meta/whatsapp/exchange-code
+ * POST /api/meta/whatsapp/onboard-complete
  *
- * El frontend nos envía el `code` devuelto por Embedded Signup.
- * Aquí lo intercambiamos por access_token y lo guardamos en tenants.
+ * Lo llama el frontend cuando Embedded Signup termina y devuelve:
+ * - wabaId
+ * - phoneNumberId
+ *
+ * Flujo:
+ * 1) Guardar wabaId + phoneNumberId en tenants
+ * 2) Tomar whatsapp_access_token del tenant (guardado en /exchange-code)
+ * 3) Resolver business_manager_id dueño del WABA
+ * 4) Crear system user en ese Business
+ * 5) Crear system user token con scopes WA
+ * 6) Guardar en tenants:
+ *    whatsapp_business_manager_id, whatsapp_system_user_id, whatsapp_system_user_token
  */
 router.post(
-  "/whatsapp/exchange-code",
+  "/whatsapp/onboard-complete",
   authenticateUser,
   async (req: Request, res: Response) => {
     try {
-      const user = (req as any).user;
-      const tenantId =
-        user?.tenant_id || (req as any).user?.tenantId;
+      const user: any = (req as any).user;
+      const tenantId: string | undefined = user?.tenant_id;
+
+      const wabaId: string | undefined = req.body?.wabaId;
+      const phoneNumberId: string | undefined =
+        req.body?.phoneNumberId || req.body?.phone_number_id;
+
+      console.log("[WA ONBOARD COMPLETE] Body recibido:", {
+        wabaId,
+        phoneNumberId,
+        tenantId,
+      });
 
       if (!tenantId) {
-        return res
-          .status(401)
-          .json({ error: "No autenticado: falta tenant_id en el token." });
+        return res.status(401).json({ error: "Tenant no identificado" });
       }
-
-      const { code } = req.body as { code?: string };
-
-      if (!code) {
-        return res.status(400).json({ error: "Falta `code` en el body." });
-      }
-
-      const APP_ID = process.env.META_APP_ID;
-      const APP_SECRET = process.env.META_APP_SECRET;
-
-      if (!APP_ID || !APP_SECRET) {
-        console.error(
-          "❌ [WA EXCHANGE CODE] Falta META_APP_ID o META_APP_SECRET en env."
-        );
-        return res.status(500).json({
-          error: "Configuración del servidor incompleta (APP_ID/SECRET).",
+      if (!wabaId || !phoneNumberId) {
+        return res.status(400).json({
+          error: "Faltan wabaId o phoneNumberId en el cuerpo",
         });
       }
 
-      console.log(
-        "🔁 [WA EXCHANGE CODE] Intercambiando code por access_token...",
-        { tenantId, code }
+      // 1) Leer token del tenant (guardado previamente en /exchange-code)
+      const t = await pool.query(
+        `
+        SELECT whatsapp_access_token
+        FROM tenants
+        WHERE id::text = $1
+        LIMIT 1
+        `,
+        [tenantId]
       );
 
-      const tokenUrl =
-        `https://graph.facebook.com/v18.0/oauth/access_token` +
-        `?client_id=${encodeURIComponent(APP_ID)}` +
-        `&client_secret=${encodeURIComponent(APP_SECRET)}` +
-        `&code=${encodeURIComponent(code)}`;
+      const tenantToken: string | null = t.rows?.[0]?.whatsapp_access_token || null;
 
-      console.log("🔁 [WA EXCHANGE CODE] URL:", tokenUrl);
-
-      const tokenResp = await fetch(tokenUrl);
-      const tokenJson: any = await tokenResp.json();
-
-      console.log(
-        "🔑 [WA EXCHANGE CODE] Respuesta token:",
-        tokenResp.status,
-        tokenJson
-      );
-
-      if (!tokenResp.ok || !tokenJson.access_token) {
-        console.error(
-          "❌ [WA EXCHANGE CODE] Error obteniendo access_token de Meta:",
-          tokenJson
-        );
-        return res.status(500).json({
-          error: "No se pudo obtener access_token de Meta.",
-          detail: tokenJson,
+      if (!tenantToken) {
+        return res.status(400).json({
+          error:
+            "Este tenant no tiene whatsapp_access_token guardado. Primero debe ejecutarse /whatsapp/exchange-code.",
         });
       }
 
-      const accessToken = tokenJson.access_token as string;
+      // 2) Resolver Business Manager ID dueño del WABA
+      const businessManagerId = await resolveBusinessIdFromWaba(wabaId, tenantToken);
 
-      try {
-        console.log(
-          "💾 [WA EXCHANGE CODE] Actualizando tenant con access_token...",
-          tenantId
-        );
+      // 3) Crear System User dentro del Business del tenant
+      const systemUserId = await createSystemUser({
+        businessId: businessManagerId,
+        userToken: tenantToken,
+        name: "Aamy WhatsApp System User",
+        role: "ADMIN",
+      });
 
-        const updateQuery = `
-          UPDATE tenants
-          SET
-            whatsapp_access_token = $1,
-            whatsapp_status       = 'connected',
-            updated_at            = NOW()
-          WHERE id::text = $2
-          RETURNING id, whatsapp_status;
-        `;
-
-        const result = await pool.query(updateQuery, [accessToken, tenantId]);
-
-        console.log(
-          "💾 [WA EXCHANGE CODE] UPDATE rowCount:",
-          result.rowCount,
-          "rows:",
-          result.rows
-        );
-
-        if (result.rowCount === 0) {
-          console.warn(
-            "⚠️ [WA EXCHANGE CODE] No se actualizó ningún tenant. " +
-              "Revisa que tenantId coincida EXACTAMENTE con tenants.id"
-          );
-        }
-      } catch (dbErr) {
-        console.error(
-          "❌ [WA EXCHANGE CODE] Error guardando access_token en tenants:",
-          dbErr
-        );
-        return res
-          .status(500)
-          .json({ error: "Error al guardar access_token en DB." });
+      // 4) Crear System User Token (scopes WA)
+      const appId = process.env.META_APP_ID;
+      if (!appId) {
+        return res.status(500).json({ error: "Falta META_APP_ID en env." });
       }
 
-      return res.json({ ok: true });
-    } catch (err) {
-      console.error("❌ [WA EXCHANGE CODE] Error general:", err);
-      return res
-        .status(500)
-        .json({ error: "Error interno intercambiando el code." });
+      const systemUserToken = await createSystemUserToken({
+        systemUserId,
+        userToken: tenantToken,
+        appId,
+        scopesCsv:
+          "whatsapp_business_management,whatsapp_business_messaging,business_management",
+      });
+
+      // 5) Guardar todo en DB
+      const update = await pool.query(
+        `
+        UPDATE tenants
+        SET
+          whatsapp_business_id          = $1,
+          whatsapp_phone_number_id      = $2,
+          whatsapp_business_manager_id  = $3,
+          whatsapp_system_user_id       = $4,
+          whatsapp_system_user_token    = $5,
+          whatsapp_status               = 'connected',
+          whatsapp_connected            = TRUE,
+          whatsapp_connected_at         = NOW(),
+          updated_at                    = NOW()
+        WHERE id::text = $6
+        RETURNING
+          id,
+          whatsapp_business_id,
+          whatsapp_phone_number_id,
+          whatsapp_business_manager_id,
+          whatsapp_system_user_id,
+          whatsapp_system_user_token,
+          whatsapp_status,
+          whatsapp_connected,
+          whatsapp_connected_at;
+        `,
+        [wabaId, phoneNumberId, businessManagerId, systemUserId, systemUserToken, tenantId]
+      );
+
+      console.log(
+        "💾 [WA ONBOARD COMPLETE] UPDATE rowCount:",
+        update.rowCount,
+        "rows:",
+        update.rows
+      );
+
+      return res.json({
+        ok: true,
+        tenant: update.rows?.[0],
+      });
+    } catch (err: any) {
+      console.error("❌ [WA ONBOARD COMPLETE] Error:", err);
+      return res.status(500).json({
+        error: "Error interno guardando la conexión",
+        detail: String(err?.message || err),
+      });
     }
   }
 );
