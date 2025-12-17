@@ -240,12 +240,25 @@ export async function registerPhoneNumber(params: {
   });
 }
 
-export async function subscribeAppToWaba(wabaId: string, userToken: string) {
-  must(wabaId, "wabaId requerido");
-  must(userToken, "userToken requerido");
+export async function subscribeAppToWaba(wabaId: string, accessToken: string) {
+  const url = `https://graph.facebook.com/v21.0/${wabaId}/subscribed_apps`;
 
-  // POST /{wabaId}/subscribed_apps
-  return graphPost(`${wabaId}/subscribed_apps`, userToken, {});
+  const body = new URLSearchParams({
+    subscribed_fields: "messages,message_deliveries,message_reads,message_echoes",
+  });
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
+
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(`subscribeAppToWaba failed ${resp.status}: ${JSON.stringify(json)}`);
+  return json;
 }
 
 export async function getSubscribedAppsFromWaba(wabaId: string, userToken: string) {

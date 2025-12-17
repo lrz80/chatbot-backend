@@ -73,7 +73,7 @@ router.get(
       );
 
       const subscribedApps = await graphGet(
-        `${wabaId}/subscribed_apps`,
+        `${wabaId}/subscribed_apps?fields=id,name,subscribed_fields`,
         providerToken
       );
 
