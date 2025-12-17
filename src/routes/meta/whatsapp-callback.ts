@@ -48,6 +48,11 @@ router.get("/whatsapp/callback", (req: Request, res: Response) => {
  * Aquí llegan TODOS los eventos de mensajes de WhatsApp Cloud API.
  * Ahora solo hace de "adaptador" y delega a procesarMensajeWhatsApp.
  */
+router.use((req, _res, next) => {
+  console.log("🔔 [WA CALLBACK HIT]", req.method, req.originalUrl);
+  next();
+});
+
 router.post("/whatsapp/callback", async (req: Request, res: Response) => {
   try {
     console.log(
