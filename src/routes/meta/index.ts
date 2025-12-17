@@ -72,6 +72,12 @@ router.get(
         tenantToken
       );
 
+      // 2.5) Verificar si el WABA está suscrito a esta App (CRÍTICO)
+      const subscribedApps = await graphGet(
+        `${wabaId}/subscribed_apps`,
+        tenantToken
+      );
+
       // 3) Llamada Graph: detalles del phoneNumberId guardado
       const detail = await graphGet(
         `${phoneNumberId}?fields=id,display_phone_number,verified_name,status,code_verification_status,quality_rating,platform_type`,
@@ -86,6 +92,7 @@ router.get(
         phoneNumberId,
         waba_phone_numbers: list,
         phone_number_detail: detail,
+        subscribed_apps: subscribedApps,
       });
     } catch (err: any) {
       console.error("❌ [WA DEBUG NUMBER] Error:", err);
