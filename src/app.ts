@@ -260,3 +260,11 @@ initSocket(server, WHITELIST);
 server.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
 });
+
+process.on("unhandledRejection", (reason: any) => {
+  console.error("💥 UNHANDLED REJECTION:", reason);
+});
+
+process.on("uncaughtException", (err: any) => {
+  console.error("💥 UNCAUGHT EXCEPTION:", err);
+});
