@@ -12,7 +12,8 @@ import {
   resolveBusinessIdFromWaba,
   createSystemUser,
   createSystemUserToken,
-  // registerPhoneNumber, // (opcional) PIN step, no lo usamos aquí
+  subscribeAppToWaba,
+  // getSubscribedAppsFromWaba,
 } from "../../lib/meta/whatsappSystemUser";
 
 const router = Router();
@@ -99,6 +100,14 @@ router.post(
         [wabaId, phoneNumberId, tenantId]
       );
 
+      // 1.2) Suscribir la app al WABA (clave para que lleguen webhooks inbound)
+      try {
+        const sub = await subscribeAppToWaba(wabaId, tenantToken);
+        console.log("✅ [WA ONBOARD COMPLETE] subscribed_apps OK:", sub);
+      } catch (e: any) {
+        console.warn("⚠️ [WA ONBOARD COMPLETE] subscribed_apps FAIL:", e?.message || e);
+      }
+
       // 2) Resolver Business Manager ID dueño del WABA
       const businessManagerId = await resolveBusinessIdFromWaba(wabaId, tenantToken);
 
@@ -130,6 +139,7 @@ router.post(
         [wabaId, phoneNumberId, tenantId]
       );
 
+      
       console.log(
         "💾 [WA ONBOARD COMPLETE] UPDATE rowCount:",
         update.rowCount,

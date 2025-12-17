@@ -239,3 +239,20 @@ export async function registerPhoneNumber(params: {
     pin,
   });
 }
+
+export async function subscribeAppToWaba(wabaId: string, userToken: string) {
+  must(wabaId, "wabaId requerido");
+  must(userToken, "userToken requerido");
+
+  // POST /{wabaId}/subscribed_apps
+  return graphPost(`${wabaId}/subscribed_apps`, userToken, {});
+}
+
+export async function getSubscribedAppsFromWaba(wabaId: string, userToken: string) {
+  must(wabaId, "wabaId requerido");
+  must(userToken, "userToken requerido");
+
+  // GET /{wabaId}/subscribed_apps
+  return graphGet(`${wabaId}/subscribed_apps`, userToken);
+}
+
