@@ -105,6 +105,84 @@ router.get(
 );
 
 /**
+ * POST /api/meta/whatsapp/test-send
+ * Envía un mensaje desde el phone_number_id del tenant hacia un número destino.
+ * Body: { to: "+1XXXXXXXXXX", text: "hola" }
+ */
+router.post(
+  "/whatsapp/test-send",
+  authenticateUser,
+  async (req: Request, res: Response) => {
+    try {
+      const user: any = (req as any).user;
+      const tenantId: string | undefined = user?.tenant_id;
+
+      if (!tenantId) return res.status(401).json({ error: "Tenant no identificado" });
+
+      const { to, text } = req.body || {};
+      if (!to) return res.status(400).json({ error: "Falta 'to' en body (E.164, ej: +1407...)" });
+
+      const messageText = String(text || "ping desde Aamy Cloud API");
+
+      // 1) Leer token + phoneNumberId del tenant
+      const t = await pool.query(
+        `
+        SELECT whatsapp_access_token, whatsapp_phone_number_id
+        FROM tenants
+        WHERE id::text = $1
+        LIMIT 1
+        `,
+        [tenantId]
+      );
+
+      const tenantToken: string | null = t.rows?.[0]?.whatsapp_access_token || null;
+      const phoneNumberId: string | null = t.rows?.[0]?.whatsapp_phone_number_id || null;
+
+      if (!tenantToken) return res.status(400).json({ error: "Tenant sin whatsapp_access_token" });
+      if (!phoneNumberId) return res.status(400).json({ error: "Tenant sin whatsapp_phone_number_id" });
+
+      // 2) Enviar mensaje por Cloud API
+      const payload = {
+        messaging_product: "whatsapp",
+        to,
+        type: "text",
+        text: { body: messageText },
+      };
+
+      const resp = await fetch(
+        `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${tenantToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      const json: any = await resp.json().catch(() => ({}));
+
+      console.log("🧪 [WA TEST SEND] status:", resp.status);
+      console.log("🧪 [WA TEST SEND] response:", JSON.stringify(json, null, 2));
+
+      if (!resp.ok) {
+        return res.status(500).json({
+          error: "Graph error enviando mensaje",
+          status: resp.status,
+          detail: json,
+        });
+      }
+
+      return res.json({ ok: true, result: json });
+    } catch (err: any) {
+      console.error("❌ [WA TEST SEND] Error:", err);
+      return res.status(500).json({ error: "Error interno test-send", detail: String(err?.message || err) });
+    }
+  }
+);
+
+/**
  * POST /api/meta/whatsapp/onboard-complete
  *
  * Lo llama el frontend cuando Embedded Signup termina y devuelve:
