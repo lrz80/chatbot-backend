@@ -64,6 +64,19 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
     const change = entry?.changes?.[0];
     const value = change?.value;
 
+    // ✅ 0) Capturar statuses (delivery receipts) aunque NO haya mensajes entrantes
+    const entry0 = req.body?.entry?.[0];
+    const change0 = entry0?.changes?.[0];
+    const value0 = change0?.value;
+
+    const statuses = value0?.statuses;
+
+    if (Array.isArray(statuses) && statuses.length > 0) {
+      console.log("📦 [META WEBHOOK] STATUSES recibido:", JSON.stringify(statuses, null, 2));
+      // Respondemos 200 rápido (no bloqueamos)
+      return res.sendStatus(200);
+    }
+
     const messages = value?.messages;
     const metadata = value?.metadata;
 
@@ -130,7 +143,7 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
       );
       return;
     }
-    
+
     // 3️⃣ Si hay tenant pero membresía inactiva, no seguimos el flujo
     if (!tenant.membresia_activa) {
       console.log(
