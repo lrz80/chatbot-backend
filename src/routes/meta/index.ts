@@ -16,6 +16,7 @@ import {
   getSubscribedAppsFromWaba,
   graphGet,
 } from "../../lib/meta/whatsappSystemUser";
+import { getProviderToken } from "../../lib/meta/getProviderToken";
 
 const router = Router();
 
@@ -56,9 +57,6 @@ router.get(
       const wabaId: string | null = t.rows?.[0]?.whatsapp_business_id || null;
       const phoneNumberId: string | null = t.rows?.[0]?.whatsapp_phone_number_id || null;
 
-      if (!tenantToken) {
-        return res.status(400).json({ error: "Falta whatsapp_access_token en tenant" });
-      }
       if (!wabaId) {
         return res.status(400).json({ error: "Falta whatsapp_business_id (wabaId) en tenant" });
       }
@@ -66,22 +64,22 @@ router.get(
         return res.status(400).json({ error: "Falta whatsapp_phone_number_id en tenant" });
       }
 
-      // 2) Llamadas Graph: lista números del WABA
+      // Para debug consistente tipo Tech Provider, usamos el token del proveedor
+      const providerToken = getProviderToken();
+
       const list = await graphGet(
         `${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,status,code_verification_status,quality_rating,platform_type&limit=200`,
-        tenantToken
+        providerToken
       );
 
-      // 2.5) Verificar si el WABA está suscrito a esta App (CRÍTICO)
       const subscribedApps = await graphGet(
         `${wabaId}/subscribed_apps`,
-        tenantToken
+        providerToken
       );
 
-      // 3) Llamada Graph: detalles del phoneNumberId guardado
       const detail = await graphGet(
         `${phoneNumberId}?fields=id,display_phone_number,verified_name,status,code_verification_status,quality_rating,platform_type`,
-        tenantToken
+        providerToken
       );
 
       // 4) Responder JSON completo
@@ -135,13 +133,18 @@ router.post(
         [tenantId]
       );
 
-      const tenantToken: string | null = t.rows?.[0]?.whatsapp_access_token || null;
+      // 2) Extraer el phoneNumberId del tenant (NECESARIO para el endpoint /{phoneNumberId}/messages)
       const phoneNumberId: string | null = t.rows?.[0]?.whatsapp_phone_number_id || null;
 
-      if (!tenantToken) return res.status(400).json({ error: "Tenant sin whatsapp_access_token" });
-      if (!phoneNumberId) return res.status(400).json({ error: "Tenant sin whatsapp_phone_number_id" });
+      if (!phoneNumberId) {
+        return res.status(400).json({ error: "Tenant sin whatsapp_phone_number_id" });
+      }
 
-      // 2) Enviar mensaje por Cloud API
+      // ⚠️ Para enviar mensajes NO uses el token del tenant.
+      // Usa el token del proveedor (System User / Tech Provider).
+      const providerToken = getProviderToken();
+
+      // 3) Payload del mensaje
       const payload = {
         messaging_product: "whatsapp",
         to,
@@ -154,7 +157,7 @@ router.post(
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${tenantToken}`,
+            Authorization: `Bearer ${providerToken}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(payload),
@@ -243,13 +246,6 @@ router.post(
 
       console.log("🧪 [WA ONBOARD COMPLETE] tenant has whatsapp_access_token:", !!tenantToken);
 
-      if (!tenantToken) {
-        return res.status(400).json({
-          error:
-            "Este tenant no tiene whatsapp_access_token guardado. Primero debe ejecutarse /whatsapp/exchange-code.",
-        });
-      }
-
       // 1.5) Guardar wabaId + phoneNumberId inmediatamente (aunque falle después)
       // Esto evita quedar “a medias” y te deja trazabilidad en DB.
       await pool.query(
@@ -266,7 +262,8 @@ router.post(
 
       // 1.2) Suscribir la app al WABA (clave para que lleguen webhooks inbound)
       try {
-        const sub = await subscribeAppToWaba(wabaId, tenantToken);
+        const providerToken = getProviderToken();
+        const sub = await subscribeAppToWaba(wabaId, providerToken);
         console.log("✅ [WA ONBOARD COMPLETE] subscribed_apps OK:", sub);
       } catch (e: any) {
         console.warn("⚠️ [WA ONBOARD COMPLETE] subscribed_apps FAIL:", e?.message || e);
@@ -274,27 +271,36 @@ router.post(
 
       // 1.3) Verificar que el WABA quedó realmente suscrito
       try {
-        const apps = await getSubscribedAppsFromWaba(wabaId, tenantToken);
+        const providerToken = getProviderToken();
+        const apps = await getSubscribedAppsFromWaba(wabaId, providerToken);
+
         console.log(
           "🔍 [WA ONBOARD COMPLETE] subscribed_apps LIST:",
           JSON.stringify(apps, null, 2)
         );
 
         const appId = process.env.META_APP_ID;
-        const isSubscribed = Array.isArray(apps?.data)
-          && apps.data.some((a: any) => String(a.id) === String(appId));
+
+        const isSubscribed =
+          Array.isArray(apps?.data) &&
+          apps.data.some((a: any) =>
+            String(a?.id || a?.whatsapp_business_api_data?.id) === String(appId)
+          );
 
         if (!isSubscribed) {
-          console.error("❌ [WA ONBOARD COMPLETE] App NO está suscrita al WABA");
+          console.error("❌ [WA ONBOARD COMPLETE] App NO está suscrita al WABA (o Graph devolvió shape distinto)");
         } else {
           console.log("✅ [WA ONBOARD COMPLETE] App confirmada en subscribed_apps");
         }
       } catch (e: any) {
-        console.error("❌ [WA ONBOARD COMPLETE] Error leyendo subscribed_apps:", e?.message || e);
+        console.error(
+          "❌ [WA ONBOARD COMPLETE] Error leyendo subscribed_apps:",
+          e?.message || e
+        );
       }
 
       // 2) Resolver Business Manager ID dueño del WABA
-      const businessManagerId = await resolveBusinessIdFromWaba(wabaId, tenantToken);
+      // const businessManagerId = await resolveBusinessIdFromWaba(wabaId, tenantToken);
 
       // 4) Crear System User Token (scopes WA)
       const appId = process.env.META_APP_ID;
