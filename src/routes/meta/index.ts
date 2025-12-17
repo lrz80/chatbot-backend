@@ -14,10 +14,88 @@ import {
   createSystemUserToken,
   subscribeAppToWaba,
   getSubscribedAppsFromWaba,
-  // getSubscribedAppsFromWaba,
+  graphGet,
 } from "../../lib/meta/whatsappSystemUser";
 
 const router = Router();
+
+/**
+ * GET /api/meta/whatsapp/debug-number
+ *
+ * Debug seguro (requiere cookie/login):
+ * - Lista phone_numbers del WABA guardado en DB
+ * - Lee detalles del phone_number_id guardado en DB
+ */
+router.get(
+  "/whatsapp/debug-number",
+  authenticateUser,
+  async (req: Request, res: Response) => {
+    try {
+      const user: any = (req as any).user;
+      const tenantId: string | undefined = user?.tenant_id;
+
+      if (!tenantId) {
+        return res.status(401).json({ error: "Tenant no identificado" });
+      }
+
+      // 1) Leer de DB: token + wabaId + phoneNumberId
+      const t = await pool.query(
+        `
+        SELECT
+          whatsapp_access_token,
+          whatsapp_business_id,
+          whatsapp_phone_number_id
+        FROM tenants
+        WHERE id::text = $1
+        LIMIT 1
+        `,
+        [tenantId]
+      );
+
+      const tenantToken: string | null = t.rows?.[0]?.whatsapp_access_token || null;
+      const wabaId: string | null = t.rows?.[0]?.whatsapp_business_id || null;
+      const phoneNumberId: string | null = t.rows?.[0]?.whatsapp_phone_number_id || null;
+
+      if (!tenantToken) {
+        return res.status(400).json({ error: "Falta whatsapp_access_token en tenant" });
+      }
+      if (!wabaId) {
+        return res.status(400).json({ error: "Falta whatsapp_business_id (wabaId) en tenant" });
+      }
+      if (!phoneNumberId) {
+        return res.status(400).json({ error: "Falta whatsapp_phone_number_id en tenant" });
+      }
+
+      // 2) Llamadas Graph: lista números del WABA
+      const list = await graphGet(
+        `${wabaId}/phone_numbers?fields=id,display_phone_number,verified_name,status,code_verification_status,quality_rating,platform_type&limit=200`,
+        tenantToken
+      );
+
+      // 3) Llamada Graph: detalles del phoneNumberId guardado
+      const detail = await graphGet(
+        `${phoneNumberId}?fields=id,display_phone_number,verified_name,status,code_verification_status,quality_rating,platform_type`,
+        tenantToken
+      );
+
+      // 4) Responder JSON completo
+      return res.json({
+        ok: true,
+        tenantId,
+        wabaId,
+        phoneNumberId,
+        waba_phone_numbers: list,
+        phone_number_detail: detail,
+      });
+    } catch (err: any) {
+      console.error("❌ [WA DEBUG NUMBER] Error:", err);
+      return res.status(500).json({
+        error: "Error interno debug-number",
+        detail: String(err?.message || err),
+      });
+    }
+  }
+);
 
 /**
  * POST /api/meta/whatsapp/onboard-complete

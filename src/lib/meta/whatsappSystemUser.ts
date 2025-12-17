@@ -31,7 +31,7 @@ type GraphBaseResponse = {
   [k: string]: any;
 };
 
-async function graphGet(path: string, token: string): Promise<GraphBaseResponse> {
+export async function graphGet(path: string, token: string): Promise<GraphBaseResponse> {
   const url = `${GRAPH_BASE}/${path}`;
   const res = await fetch(url, {
     method: "GET",
