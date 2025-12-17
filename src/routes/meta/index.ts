@@ -102,55 +102,32 @@ router.post(
       // 2) Resolver Business Manager ID dueño del WABA
       const businessManagerId = await resolveBusinessIdFromWaba(wabaId, tenantToken);
 
-      // 3) Crear System User dentro del Business del tenant
-      const systemUserId = await createSystemUser({
-        businessId: businessManagerId,
-        userToken: tenantToken,
-        name: "Aamy WhatsApp System User",
-        role: "ADMIN",
-      });
-
       // 4) Crear System User Token (scopes WA)
       const appId = process.env.META_APP_ID;
       if (!appId) {
         return res.status(500).json({ error: "Falta META_APP_ID en env." });
       }
 
-      const systemUserToken = await createSystemUserToken({
-        systemUserId,
-        userToken: tenantToken,
-        appId,
-        scopesCsv:
-          "whatsapp_business_management,whatsapp_business_messaging,business_management",
-      });
-
-      // 5) Guardar todo en DB
       const update = await pool.query(
         `
         UPDATE tenants
         SET
-          whatsapp_business_id          = $1,
-          whatsapp_phone_number_id      = $2,
-          whatsapp_business_manager_id  = $3,
-          whatsapp_system_user_id       = $4,
-          whatsapp_system_user_token    = $5,
-          whatsapp_status               = 'connected',
-          whatsapp_connected            = TRUE,
-          whatsapp_connected_at         = NOW(),
-          updated_at                    = NOW()
-        WHERE id::text = $6
+          whatsapp_business_id      = $1,
+          whatsapp_phone_number_id  = $2,
+          whatsapp_status           = 'connected',
+          whatsapp_connected        = TRUE,
+          whatsapp_connected_at     = NOW(),
+          updated_at                = NOW()
+        WHERE id::text = $3
         RETURNING
           id,
           whatsapp_business_id,
           whatsapp_phone_number_id,
-          whatsapp_business_manager_id,
-          whatsapp_system_user_id,
-          whatsapp_system_user_token,
           whatsapp_status,
           whatsapp_connected,
           whatsapp_connected_at;
         `,
-        [wabaId, phoneNumberId, businessManagerId, systemUserId, systemUserToken, tenantId]
+        [wabaId, phoneNumberId, tenantId]
       );
 
       console.log(
