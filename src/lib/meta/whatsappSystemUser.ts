@@ -4,8 +4,15 @@ import fetch from "node-fetch";
 const GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v21.0";
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
-function must<T>(value: T, msg: string): T {
-  if (value === undefined || value === null || (typeof value === "string" && !value.trim())) {
+function must<T>(
+  value: T,
+  msg: string
+): T {
+  if (
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" && !value.trim())
+  ) {
     throw new Error(msg);
   }
   return value;
@@ -39,7 +46,11 @@ async function graphGet(path: string, token: string): Promise<GraphBaseResponse>
   return json;
 }
 
-async function graphPost(path: string, token: string, body: Record<string, any>): Promise<GraphBaseResponse> {
+async function graphPost(
+  path: string,
+  token: string,
+  body: Record<string, any>
+): Promise<GraphBaseResponse> {
   const url = `${GRAPH_BASE}/${path}`;
 
   const form = new URLSearchParams();
@@ -67,9 +78,20 @@ async function graphPost(path: string, token: string, body: Record<string, any>)
 
 /**
  * Intenta resolver el BUSINESS MANAGER ID dueño del WABA.
- * Meta puede exponer owner_business o business o on_behalf_of_business (según el asset).
+ *
+ * Orden:
+ * A) owner_business
+ * B) business
+ * C) on_behalf_of_business
+ * D) Fallback robusto:
+ *    - /me/businesses
+ *    - /{businessId}/owned_whatsapp_business_accounts
+ *    - si aparece el wabaId => ese businessId es el owner BM
  */
-export async function resolveBusinessIdFromWaba(wabaId: string, userToken: string): Promise<string> {
+export async function resolveBusinessIdFromWaba(
+  wabaId: string,
+  userToken: string
+): Promise<string> {
   must(wabaId, "wabaId requerido");
   must(userToken, "userToken requerido");
 
@@ -100,8 +122,42 @@ export async function resolveBusinessIdFromWaba(wabaId: string, userToken: strin
     // ignore
   }
 
+  // D) Fallback robusto
+  // 1) Listar Businesses del usuario
+  const meBusinesses = await graphGet(`me/businesses?fields=id,name&limit=200`, userToken);
+  const businesses: Array<{ id: string; name?: string }> = Array.isArray(meBusinesses?.data)
+    ? meBusinesses.data
+    : [];
+
+  if (!businesses.length) {
+    throw new Error(
+      "No pude resolver business manager id: /me/businesses devolvió vacío. Revisa permisos business_management."
+    );
+  }
+
+  // 2) Para cada Business, ver sus WABAs owned
+  for (const b of businesses) {
+    try {
+      const owned = await graphGet(
+        `${b.id}/owned_whatsapp_business_accounts?fields=id,name&limit=200`,
+        userToken
+      );
+
+      const wabas: Array<{ id: string }> = Array.isArray(owned?.data) ? owned.data : [];
+      const match = wabas.some((x) => String(x.id) === String(wabaId));
+
+      if (match) {
+        return String(b.id); // ✅ ESTE ES el whatsapp_business_manager_id
+      }
+    } catch {
+      // si una business falla por permisos, seguimos con las demás
+      continue;
+    }
+  }
+
   throw new Error(
-    "No pude resolver el whatsapp_business_manager_id del WABA. Revisa permisos del token del tenant (business_management / whatsapp_business_management) o que el WABA exponga owner_business/business."
+    "No pude resolver el whatsapp_business_manager_id del WABA. " +
+      "Revisa permisos del token (business_management) y que el usuario sea admin/owner del Business que posee el WABA."
   );
 }
 
@@ -142,7 +198,7 @@ export async function createSystemUserToken(params: {
   systemUserId: string;
   userToken: string;
   appId: string;
-  scopesCsv?: string; // ejemplo: "whatsapp_business_management,whatsapp_business_messaging,business_management"
+  scopesCsv?: string;
 }): Promise<string> {
   const { systemUserId, userToken, appId } = params;
   must(systemUserId, "systemUserId requerido");

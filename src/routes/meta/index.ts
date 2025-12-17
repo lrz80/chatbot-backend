@@ -85,6 +85,20 @@ router.post(
         });
       }
 
+      // 1.5) Guardar wabaId + phoneNumberId inmediatamente (aunque falle después)
+      // Esto evita quedar “a medias” y te deja trazabilidad en DB.
+      await pool.query(
+        `
+        UPDATE tenants
+        SET
+          whatsapp_business_id     = $1,
+          whatsapp_phone_number_id = $2,
+          updated_at               = NOW()
+        WHERE id::text = $3
+        `,
+        [wabaId, phoneNumberId, tenantId]
+      );
+
       // 2) Resolver Business Manager ID dueño del WABA
       const businessManagerId = await resolveBusinessIdFromWaba(wabaId, tenantToken);
 
