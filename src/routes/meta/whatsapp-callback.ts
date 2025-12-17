@@ -93,6 +93,11 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
 
     // Puede ser solo un "status" de mensaje enviado, no un mensaje entrante
     if (!messages || !messages.length || !metadata) {
+      const statuses = value?.statuses;
+      if (statuses?.length) {
+        console.log("📬 [META WEBHOOK] STATUS:", JSON.stringify(statuses, null, 2));
+        return res.sendStatus(200);
+      }
       return res.sendStatus(200);
     }
 
