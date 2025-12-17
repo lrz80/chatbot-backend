@@ -13,6 +13,7 @@ import {
   createSystemUser,
   createSystemUserToken,
   subscribeAppToWaba,
+  getSubscribedAppsFromWaba,
   // getSubscribedAppsFromWaba,
 } from "../../lib/meta/whatsappSystemUser";
 
@@ -106,6 +107,27 @@ router.post(
         console.log("✅ [WA ONBOARD COMPLETE] subscribed_apps OK:", sub);
       } catch (e: any) {
         console.warn("⚠️ [WA ONBOARD COMPLETE] subscribed_apps FAIL:", e?.message || e);
+      }
+
+      // 1.3) Verificar que el WABA quedó realmente suscrito
+      try {
+        const apps = await getSubscribedAppsFromWaba(wabaId, tenantToken);
+        console.log(
+          "🔍 [WA ONBOARD COMPLETE] subscribed_apps LIST:",
+          JSON.stringify(apps, null, 2)
+        );
+
+        const appId = process.env.META_APP_ID;
+        const isSubscribed = Array.isArray(apps?.data)
+          && apps.data.some((a: any) => String(a.id) === String(appId));
+
+        if (!isSubscribed) {
+          console.error("❌ [WA ONBOARD COMPLETE] App NO está suscrita al WABA");
+        } else {
+          console.log("✅ [WA ONBOARD COMPLETE] App confirmada en subscribed_apps");
+        }
+      } catch (e: any) {
+        console.error("❌ [WA ONBOARD COMPLETE] Error leyendo subscribed_apps:", e?.message || e);
       }
 
       // 2) Resolver Business Manager ID dueño del WABA
