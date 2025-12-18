@@ -3,6 +3,8 @@ import axios from "axios";
 
 const router = Router();
 
+const redirectUri = process.env.NEXT_PUBLIC_WA_REDIRECT_URI!;
+
 router.get("/meta/whatsapp-redirect", async (req: Request, res: Response) => {
   const { code, state } = req.query;
 
@@ -19,7 +21,7 @@ router.get("/meta/whatsapp-redirect", async (req: Request, res: Response) => {
         params: {
           client_id: process.env.META_APP_ID,
           client_secret: process.env.META_APP_SECRET,
-          redirect_uri: "https://www.aamy.ai/meta/whatsapp-redirect",
+          redirect_uri: redirectUri,
           code,
         },
       }
