@@ -48,12 +48,18 @@ router.get(
       // 2) Pedir businesses del usuario + WABAs owned por business
       const url =
         "https://graph.facebook.com/v18.0/me/businesses" +
-        "?fields=id,name,owned_whatsapp_business_accounts{id,name}" +
-        `&access_token=${encodeURIComponent(accessToken)}`;
+        "?fields=id,name," +
+        "owned_whatsapp_business_accounts{id,name}," +
+        "client_whatsapp_business_accounts{id,name}";
 
       console.log("🧪 [WA RESOLVE WABA] GET:", url);
 
-      const r = await fetch(url);
+      const r = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
       const j: any = await r.json();
 
       console.log("🧪 [WA RESOLVE WABA] response:", r.status, JSON.stringify(j, null, 2));
@@ -74,8 +80,11 @@ router.get(
       let pickedWabaId: string | null = null;
 
       for (const b of businesses) {
-        const wabas = b?.owned_whatsapp_business_accounts?.data || [];
-        if (Array.isArray(wabas) && wabas.length > 0) {
+        const owned = b?.owned_whatsapp_business_accounts?.data || [];
+        const client = b?.client_whatsapp_business_accounts?.data || [];
+        const wabas = [...(Array.isArray(owned) ? owned : []), ...(Array.isArray(client) ? client : [])];
+
+        if (wabas.length > 0) {
           pickedBusinessId = String(b.id);
           pickedWabaId = String(wabas[0].id);
           break;
