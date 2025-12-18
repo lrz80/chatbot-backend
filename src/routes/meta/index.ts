@@ -18,6 +18,7 @@ import {
 } from "../../lib/meta/whatsappSystemUser";
 import { getProviderToken } from "../../lib/meta/getProviderToken";
 import whatsappSaveToken from "./whatsapp-save-token";
+import whatsappResolveWaba from "./whatsapp-resolve-waba";
 
 const router = Router();
 
@@ -796,5 +797,6 @@ router.use("/whatsapp-onboard", whatsappOnboardStartRouter);
 router.use("/", whatsappAccountsRouter);
 router.use("/", whatsappRegister);
 router.use("/", whatsappSaveToken);
+router.use("/", whatsappResolveWaba);
 
 export default router;
