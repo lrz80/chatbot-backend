@@ -53,6 +53,8 @@ router.post(
         gotRedirect: (redirectUri || "").trim(),
       });
 
+      console.log("🧪 [WA EXCHANGE CODE] using redirect:", finalRedirectUri);
+
       // 1) Intercambiar code -> access_token
       const tokenUrl =
         `https://graph.facebook.com/${GRAPH_VERSION}/oauth/access_token` +
