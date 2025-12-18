@@ -29,7 +29,17 @@ router.post(
       if (!tenantId) return res.status(401).json({ ok: false, error: "No autenticado" });
       if (!code) return res.status(400).json({ ok: false, error: "Falta code" });
 
-      const finalRedirectUri = (redirectUri || DEFAULT_REDIRECT_URI || "").trim();
+      const finalRedirectUri = (DEFAULT_REDIRECT_URI || "").trim();
+      const gotRedirect = (redirectUri || "").trim();
+      if (gotRedirect && gotRedirect !== finalRedirectUri) {
+        return res.status(400).json({
+          ok: false,
+          error: "redirect_uri mismatch",
+          expected: finalRedirectUri,
+          got: gotRedirect,
+        });
+      }
+
       if (!finalRedirectUri) {
         return res.status(500).json({ ok: false, error: "redirect_uri no configurado" });
       }
@@ -37,6 +47,11 @@ router.post(
       if (!META_APP_ID || !META_APP_SECRET) {
         return res.status(500).json({ ok: false, error: "META_APP_ID o META_APP_SECRET faltan" });
       }
+
+      console.log("🧪 [WA EXCHANGE CODE] redirect check:", {
+        finalRedirectUri,
+        gotRedirect: (redirectUri || "").trim(),
+      });
 
       // 1) Intercambiar code -> access_token
       const tokenUrl =
