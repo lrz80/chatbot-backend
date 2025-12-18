@@ -41,6 +41,12 @@ router.get(
         [tenantId]
       );
 
+      console.log("🧪 [WA PHONE NUMBERS] DB snapshot:", {
+        wabaId: rows?.[0]?.whatsapp_business_id,
+        hasToken: !!rows?.[0]?.whatsapp_access_token,
+        tokenPrefix: rows?.[0]?.whatsapp_access_token?.slice?.(0, 10),
+      });
+
       console.log("🧪 [WA PHONE NUMBERS] tenants rows length:", rows?.length || 0);
 
       if (!rows || rows.length === 0) {
@@ -114,6 +120,22 @@ router.get(
       }
 
       const phones = (phonesJson.data ?? []) as any[];
+
+      if (!phones.length) {
+        console.warn("[WA PHONE NUMBERS] Esta WABA no devolvió números. Probablemente whatsapp_business_id guardado no corresponde. Intentando discovery...");
+
+        const meUrl =
+          `https://graph.facebook.com/v18.0/me?fields=whatsapp_business_accounts{id,name}&access_token=${encodeURIComponent(accessToken)}`;
+
+        console.log("[WA PHONE NUMBERS] Discovery URL:", meUrl);
+
+        const meResp = await fetch(meUrl);
+        const meJson: any = await meResp.json();
+
+        console.log("[WA PHONE NUMBERS] Discovery response:", JSON.stringify(meJson, null, 2));
+
+        // aquí solo devolvemos lista de WABAs para que sepas cuál tiene números
+      }
 
       type Account = {
         waba_id: string;
