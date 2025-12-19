@@ -83,7 +83,7 @@ router.get(
         `https://graph.facebook.com/v18.0/${encodeURIComponent(wabaId)}` +
         `?fields=id,name&access_token=${encodeURIComponent(accessToken)}`;
 
-      console.log("[WA PHONE NUMBERS] Consultando info WABA:", wabaInfoUrl);
+      console.log("[WA PHONE NUMBERS] Consultando info WABA:", { wabaId });
 
       const wabaInfoResp = await fetch(wabaInfoUrl);
       const wabaInfoJson: any = await wabaInfoResp.json();
@@ -101,7 +101,7 @@ router.get(
         `https://graph.facebook.com/v18.0/${encodeURIComponent(wabaId)}` +
         `/phone_numbers?access_token=${encodeURIComponent(accessToken)}`;
 
-      console.log("[WA PHONE NUMBERS] Consultando números:", phonesUrl);
+      console.log("[WA PHONE NUMBERS] Consultando números:", { wabaId });
 
       const phonesResp = await fetch(phonesUrl);
       const phonesJson: any = await phonesResp.json();
