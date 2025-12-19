@@ -1,41 +1,70 @@
 import { Router, Request, Response } from "express";
-import axios from "axios";
 
 const router = Router();
 
-const redirectUri = process.env.NEXT_PUBLIC_WA_REDIRECT_URI!;
-
+/**
+ * GET /meta/whatsapp-redirect
+ *
+ * Este endpoint NO debe hacer exchange del code.
+ * Solo recibe code/state, los devuelve al frontend (window.opener) y cierra el popup.
+ *
+ * Motivo:
+ * - El exchange real se hace en tu backend con POST /api/meta/whatsapp/exchange-code
+ * - Evita redirect_uri mismatch y evita exponer access_token en URL
+ */
 router.get("/meta/whatsapp-redirect", async (req: Request, res: Response) => {
-  const { code, state } = req.query;
+  const code = typeof req.query.code === "string" ? req.query.code : "";
+  const state = typeof req.query.state === "string" ? req.query.state : "";
+  const error = typeof req.query.error === "string" ? req.query.error : "";
+  const errorReason =
+    typeof req.query.error_reason === "string" ? req.query.error_reason : "";
+  const errorDescription =
+    typeof req.query.error_description === "string"
+      ? req.query.error_description
+      : "";
 
-  console.log("📩 Recibido callback desde Meta:", { code, state });
+  console.log("📩 [WA REDIRECT] callback desde Meta:", {
+    hasCode: !!code,
+    state,
+    error,
+    errorReason,
+    errorDescription,
+  });
 
-  if (!code) {
-    return res.status(400).send("❌ Falta el parámetro code");
-  }
+  // Si no hay code, devolvemos HTML que notifica error al opener
+  const payload = code
+    ? { type: "WA_EMBEDDED_SIGNUP_CODE", code, state }
+    : {
+        type: "WA_EMBEDDED_SIGNUP_ERROR",
+        state,
+        error: error || "missing_code",
+        errorReason,
+        errorDescription,
+      };
 
-  try {
-    const tokenResponse = await axios.get(
-      `https://graph.facebook.com/v18.0/oauth/access_token`,
-      {
-        params: {
-          client_id: process.env.META_APP_ID,
-          client_secret: process.env.META_APP_SECRET,
-          redirect_uri: redirectUri,
-          code,
-        },
-      }
-    );
-
-    console.log("🔑 Token recibido desde Meta:", tokenResponse.data);
-
-    res.redirect(
-      `/meta/whatsapp-redirect-success?access_token=${tokenResponse.data.access_token}&state=${state}`
-    );
-  } catch (error: any) {
-    console.error("❌ Error al intercambiar token:", error.response?.data || error.message);
-    res.redirect("/meta/whatsapp-redirect?error=true");
-  }
+  // HTML mínimo: postMessage al opener y cerrar
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  return res.status(200).send(`<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>WhatsApp Redirect</title>
+  </head>
+  <body>
+    <script>
+      (function () {
+        try {
+          var payload = ${JSON.stringify(payload)};
+          if (window.opener && !window.opener.closed) {
+            window.opener.postMessage(payload, "*");
+          }
+        } catch (e) {}
+        window.close();
+      })();
+    </script>
+    <p>Finalizando conexión… Puedes cerrar esta ventana.</p>
+  </body>
+</html>`);
 });
 
 export default router;
