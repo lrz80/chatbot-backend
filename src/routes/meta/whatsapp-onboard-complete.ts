@@ -109,8 +109,26 @@ router.post(
           );
 
           const list = Array.isArray((apps as any)?.data) ? (apps as any).data : [];
+          console.log(
+            "🔎 [WA ONBOARD COMPLETE] APP_ID:",
+            APP_ID,
+            "parsed ids:",
+            list.map((a: any) => ({
+              id: a?.id,
+              nested: a?.whatsapp_business_api_data?.id,
+            }))
+          );
+
           const isSubscribed =
-            !!APP_ID && list.some((a: any) => String(a?.id) === String(APP_ID));
+            !!APP_ID &&
+            list.some((a: any) => {
+              const directId = a?.id; // por si Graph alguna vez lo trae plano
+              const nestedId = a?.whatsapp_business_api_data?.id; // tu caso actual
+              return (
+                String(directId || "") === String(APP_ID) ||
+                String(nestedId || "") === String(APP_ID)
+              );
+            });
 
           if (!APP_ID) {
             console.warn("⚠️ [WA ONBOARD COMPLETE] APP_ID no configurado; no se puede validar subscribed_apps contra tu app.");
