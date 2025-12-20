@@ -325,7 +325,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
         // 🛡️ Anti-loop: si el remitente es OTRA página/IG con bot en Aamy, ignorar para evitar ping-pong
         try {
           const { rows: otherBots } = await pool.query(
-            `SELECT id, nombre_negocio
+            `SELECT id
               FROM tenants
               WHERE facebook_page_id = $1
                 OR instagram_page_id = $1
