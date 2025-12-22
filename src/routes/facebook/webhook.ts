@@ -279,7 +279,17 @@ router.get('/api/facebook/webhook', requireChannel("meta"), (req, res) => {
 // POST: Meta (Facebook / Instagram) — igual a WhatsApp en flujo
 // ———————————————————————————————————————————————————————————
 router.post('/api/facebook/webhook', async (req, res) => {
-  console.log("🌐 [META WEBHOOK] POST recibido:", JSON.stringify(req.body, null, 2));
+  const entry0 = req.body?.entry?.[0];
+  const ev0 = entry0?.messaging?.[0];
+
+  if (ev0?.message?.text) {
+    console.log("🌐 [META] IN:", {
+      pageId: entry0?.id,
+      senderId: ev0?.sender?.id,
+      mid: ev0?.message?.mid,
+      text: ev0?.message?.text
+    });
+  }
   res.sendStatus(200);
   try {
     const body = req.body;
