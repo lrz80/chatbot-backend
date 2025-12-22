@@ -3,12 +3,10 @@
 import { Router, Request, Response } from "express";
 import jwt, { JwtPayload } from "jsonwebtoken";
 import pool from "../lib/db";
-import OpenAI from "openai";                 // (D) Cliente OpenAI al scope de módulo (sin import dinámico)
 import crypto from "crypto";                 // (B) Cache por checksum (sha256)
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" }); // (D)
 
 // ———————————————————————————————————————————————————
 // (B) Cache en memoria por proceso
@@ -129,57 +127,52 @@ router.post("/", async (req: Request, res: Response) => {
     // (A) URLs oficiales desde el propio contenido
     const enlacesOficiales = extractAllLinksFromText(`${funciones}\n\n${info}`, 24);
 
-    const completion = await openai.chat.completions.create({
-    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
-    temperature: 0.1,                 // menos “creativo”: copia fiel
-    max_tokens: 3200,                 // más espacio para textos largos
-    messages: [
-      {
-        role: "system",
-        content:
-    `Eres un formateador estricto de prompts del SISTEMA para un asistente llamado Amy.
-    Tu trabajo NO es resumir ni interpretar: debes REESCRIBIR en un solo texto cohesivo y profesional TODA la
-    información que te pasen sobre un negocio, copiando números, horarios, precios y políticas **exactamente**
-    como aparezcan. No agregues datos que no estén. No cambies montos ni horarios. No inventes.
+    // ———————————————————————————————————————————————————
+    // Generación determinística (sin OpenAI) para prompts consistentes
+    // descripcion -> reglas / comportamiento ("Qué debe hacer tu asistente")
+    // informacion -> hechos / memoria del negocio ("Información que el asistente debe conocer")
 
-    Formato de salida requerido (texto plano, sin JSON):
-    - Un párrafo (o varios) descriptivo(s) y natural(es) que contenga TODO lo provisto: ubicación, qué ofrece,
-      duración de clases, apto para principiantes, horarios por día, precios y planes, políticas, y cualquier detalle.
-    - Incluye dentro del cuerpo los enlaces si aparecen en la información. Mantén las URLs completas.
-    - No agregues despedidas ni emojis. No agregues títulos tipo "Información:" ni "Resumen:".
-    - El resultado debe ser un prompt de sistema listo para usar por Amy.
-    - Usa el idioma solicitado.`
-        },
-        {
-          role: "user",
-          content:
-    `Idioma de salida: ${idioma}
-    Nombre del negocio: ${nombreNegocio}
+    function normalizePlain(s: string) {
+      return compact((s || "").replace(/\\n/g, "\n").replace(/\r/g, ""));
+    }
 
-    Funciones del asistente (contexto, NO para listar por separado):
-    <<<FUNCIONES
-    ${funciones}
-    FUNCIONES>>>
+    function titleize(label: string) {
+      return label.trim();
+    }
 
-    Información del negocio. DEBES INCORPORAR **TODO** en el texto final, sin omitir nada:
-    <<<INFORMACION
-    ${info}
-    INFORMACION>>>
+    function asSection(title: string, body: string) {
+      const b = normalizePlain(body);
+      if (!b) return "";
+      return `${titleize(title)}:\n${b}`;
+    }
 
-    Requisitos obligatorios:
-    1) Incorpora **todo** lo que está entre <<<INFORMACION ... >>> (texto, precios, horarios, políticas, detalles).
-    2) Copia números, montos, horarios, nombres y textos tal cual.
-    3) Si hay enlaces (URLs), inclúyelos en el cuerpo donde correspondan, sin acortarlos.
-    4) No inventes secciones ni afirmaciones que no estén.
-    5) El resultado debe ser un prompt de sistema narrativo (no bullets, no JSON), claro y completo.
-    6) No incluyas comentarios ni explicaciones sobre lo que hiciste. Devuelve solo el texto final.
-    7) Devuelve un único texto plano profesional, listo para usarse como prompt del sistema. No incluyas JSON ni instrucciones técnicas.`
-      },
-    ],
-    });
+    // Opcional: si tu UI no mete bullets, puedes forzar bullets line-by-line:
+    // Aquí NO transformo, solo dejo lo que el usuario puso.
+    const funcionesBlock = asSection("Reglas y comportamiento del asistente", funciones);
+    const infoBlock      = asSection("Contexto y hechos del negocio", info);
 
-    const prompt = completion.choices[0]?.message?.content?.trim();
-    if (!prompt) return res.status(500).json({ error: "No se pudo generar el prompt" });
+    const promptCoreParts = [
+      "Debes seguir estrictamente el contexto y las reglas definidas abajo. No inventes información. Si falta un dato, dilo claramente y pide lo mínimo necesario.",
+      "",
+      `Negocio: ${nombreNegocio}`,
+      `Idioma: ${idioma}`,
+      "",
+      infoBlock ? infoBlock : "",
+      "",
+      funcionesBlock ? funcionesBlock : "",
+      "",
+      "Objetivo del chat:",
+      "- Responder de inmediato",
+      "- Resolver dudas frecuentes",
+      "- Mantener la conversación activa",
+      "- Guiar al usuario a la activación del servicio",
+      "",
+      "Activación del servicio:",
+      "- Solicitar: nombre del negocio y ciudad/país",
+      "- Confirmar interés en conectar WhatsApp, Instagram o Facebook",
+    ].filter(Boolean);
+
+    const prompt = compact(promptCoreParts.join("\n"));
 
     // (A) Anexar bloque de enlaces oficiales + política de uso (formato texto plano)
     const bloqueEnlaces = enlacesOficiales.length
