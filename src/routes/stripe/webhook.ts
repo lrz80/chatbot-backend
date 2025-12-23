@@ -57,13 +57,13 @@ const upsertChannelFlags = async (tenantId: string, flags: ChannelFlags) => {
 const flagsFromProduct = (product: Stripe.Product): ChannelFlags => {
   const md = (product.metadata || {}) as Record<string, string>;
 
-  const defaults: ChannelFlags = {
-    whatsapp_enabled: true,  // Starter incluye WhatsApp
-    meta_enabled:     false,
-    voice_enabled:    false,
-    sms_enabled:      false,
-    email_enabled:    false,
-  };
+const defaults: ChannelFlags = {
+  whatsapp_enabled: true,
+  meta_enabled:     true,   // ✅ tu plan incluye IG/FB
+  voice_enabled:    false,
+  sms_enabled:      false,
+  email_enabled:    false,
+};
 
   return {
     whatsapp_enabled: bool(md.whatsapp_enabled, defaults.whatsapp_enabled),
@@ -174,6 +174,132 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
     const email = session.customer_email;
+
+    // ==========================
+    // 0) NUEVO: Opción A (Setup $399 payment -> crea suscripción $199 con trial 30d)
+    // ==========================
+    if (
+      session.mode === 'payment' &&
+      session.metadata?.purpose === 'aamy_initial_399' &&
+      session.metadata?.tenant_id
+    ) {
+      const tenantId = session.metadata.tenant_id as string;
+      const customerId = typeof session.customer === 'string' ? session.customer : null;
+
+      if (!customerId) {
+        console.warn('⚠️ Opción A: Checkout $399 completado pero no hay customerId.');
+        return res.status(200).json({ received: true });
+      }
+
+      const PRICE_MONTHLY_199 = process.env.STRIPE_PRICE_MONTHLY_199;
+      if (!PRICE_MONTHLY_199) {
+        console.error('❌ Falta STRIPE_PRICE_MONTHLY_199 en env.');
+        return res.status(200).json({ received: true });
+      }
+
+      try {
+        // 1) Obtener PaymentMethod del payment intent del checkout y setearlo como default
+        const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : null;
+        if (paymentIntentId) {
+          const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
+          const paymentMethodId = typeof pi.payment_method === 'string' ? pi.payment_method : null;
+
+          if (paymentMethodId) {
+            await stripe.customers.update(customerId, {
+              invoice_settings: { default_payment_method: paymentMethodId },
+            });
+          }
+        }
+
+        // 2) Crear suscripción $199/mes con trial 30 días
+        const subscription = await stripe.subscriptions.create({
+          customer: customerId,
+          items: [{ price: PRICE_MONTHLY_199 }],
+          trial_period_days: 30,
+          metadata: { tenant_id: tenantId, plan: 'aamy_24_7' },
+        });
+
+        // 3) Vigencias (si está en trial, current_period_end igual viene bien como referencia)
+        const vigencia = new Date(subscription.current_period_end * 1000);
+        const inicio = new Date((subscription.start_date || Math.floor(Date.now() / 1000)) * 1000);
+        const esTrial = subscription.status === 'trialing';
+        const hasTrialFlag = Boolean(subscription.trial_end);
+
+        // 4) Guardar en DB (mismo esquema que ya usas)
+        await pool.query(
+          `
+          UPDATE tenants
+          SET membresia_activa     = true,
+              membresia_vigencia   = $2,
+              membresia_inicio     = $3,
+              plan                 = $4,
+              subscription_id      = $5,
+              es_trial             = $6,
+              trial_ever_claimed   = CASE WHEN $7 THEN true ELSE trial_ever_claimed END
+          WHERE id = $1
+          `,
+          [
+            tenantId,
+            vigencia,
+            inicio,
+            'pro',                 // o 'aamy_24_7' si prefieres fijo en tu sistema
+            subscription.id,
+            esTrial,
+            hasTrialFlag,
+          ]
+        );
+
+        // 5) Registrar trial por email (para bloquear trials futuros)
+        if (email && hasTrialFlag) {
+          try {
+            await markTrialUsedByEmail(email, customerId);
+          } catch (e) {
+            console.warn('⚠️ No se pudo marcar trial_registry (Opción A):', e);
+          }
+        }
+
+        // 6) Resetear usos (como ya haces)
+        await resetearCanales(tenantId);
+
+        // 7) Flags de canales (leer producto de la suscripción o fallback)
+        try {
+          const products = await getProductsFromSubscription(stripe, subscription);
+          if (products.length) {
+            const allFlags = products.map(p => flagsFromProduct(p));
+            const combined = combineFlags(allFlags);
+            await upsertChannelFlags(tenantId, combined);
+            console.log('✅ Channel flags (Opción A) desde productos:', combined, 'tenant:', tenantId);
+          } else {
+            await upsertChannelFlags(tenantId, {
+              whatsapp_enabled: true,
+              meta_enabled: true,
+              voice_enabled: false,
+              sms_enabled: false,
+              email_enabled: false,
+            });
+          }
+        } catch (e) {
+          console.error('❌ Error estableciendo channel flags (Opción A):', e);
+        }
+
+        // 8) Correo activación
+        if (email) {
+          const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [tenantId]);
+          const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
+          try {
+            await sendSubscriptionActivatedEmail(email, tenantName);
+          } catch (e) {
+            console.warn('✉️ Aviso: fallo enviando correo de activación (Opción A):', e);
+          }
+        }
+
+        console.log('✅ Opción A completada: $399 pagado y suscripción $199 creada:', subscription.id);
+      } catch (err) {
+        console.error('❌ Error en Opción A (crear suscripción $199 tras $399):', err);
+      }
+
+      return res.status(200).json({ received: true });
+    }
 
     // Modo "payment" con metadata para créditos unitarios (sms, contactos, etc.)
     if (
