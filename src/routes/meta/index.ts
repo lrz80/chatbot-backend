@@ -10,6 +10,7 @@ import whatsappRegister from "./whatsapp-register";
 import whatsappSaveToken from "./whatsapp-save-token";
 import whatsappResolveWaba from "./whatsapp-resolve-waba";
 import whatsappExchangeCode from "./whatsapp-exchange-code";
+import whatsappCloudApi from "./whatsapp-cloudapi";
 
 // si vas a separar onboard-complete/debug/test-send/connection:
 import whatsappOnboardComplete from "./whatsapp-onboard-complete";
@@ -28,6 +29,7 @@ router.use("/", whatsappRegister);
 router.use("/", whatsappSaveToken);
 router.use("/", whatsappResolveWaba);
 router.use("/", whatsappExchangeCode);
+router.use("/", whatsappCloudApi);
 
 // opcionales si los separas
 router.use("/", whatsappOnboardComplete);

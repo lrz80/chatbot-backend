@@ -406,7 +406,11 @@ export async function procesarMensajeWhatsApp(
   const to = body?.To || '';
   const from = body?.From || '';
   const userInput = body?.Body || '';
-  const messageId = body?.MessageSid || body?.SmsMessageSid || null;
+  const messageId =
+    body?.MessageSid ||
+    body?.SmsMessageSid ||
+    body?.MetaMessageId ||
+    null;
 
   const origen: "twilio" | "meta" =
     context?.origen ??
@@ -445,11 +449,10 @@ export async function procesarMensajeWhatsApp(
         `
         SELECT *
           FROM tenants
-        WHERE REPLACE(LOWER(whatsapp_phone_number),'whatsapp:','') = $1
-            OR REPLACE(LOWER(whatsapp_phone_number),'whatsapp:','') = $2
+        WHERE REPLACE(LOWER(whatsapp_phone_number_id::text),'whatsapp:','') = $1
         LIMIT 1
         `,
-        [numero.toLowerCase(), numeroSinMas.toLowerCase()]
+        [numero.toLowerCase()]
       );
 
       tenant = tenantRes.rows[0];
