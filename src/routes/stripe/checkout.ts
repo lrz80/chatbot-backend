@@ -25,7 +25,13 @@ router.post('/checkout', async (req, res) => {
     const tenantId: string = decoded.tenant_id || decoded.uid; // por compatibilidad
 
     // Email del usuario (Stripe lo usa para crear Customer + Receipt)
-    const u = await pool.query('SELECT email FROM users WHERE tenant_id = $1 OR uid = $1 LIMIT 1', [tenantId]);
+    const u = await pool.query(
+      `SELECT email
+      FROM users
+      WHERE tenant_id::text = $1 OR uid::text = $1
+      LIMIT 1`,
+      [tenantId]
+    );
     const email: string | undefined = u.rows[0]?.email;
     if (!email) return res.status(404).json({ error: 'Usuario no encontrado' });
 
