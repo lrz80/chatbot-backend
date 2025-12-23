@@ -98,6 +98,34 @@ async function obtenerNumeroDeTenant(tenantId: string): Promise<string | null> {
   return result.rows[0]?.twilio_number || null;
 }
 
+// ---------- WhatsApp: modo activo + estado del canal ----------
+async function obtenerModoYEstadoWhatsApp(tenantId: string): Promise<{
+  mode: "twilio" | "cloudapi";
+  status: "enabled" | "disabled";
+}> {
+  const result = await pool.query(
+    `SELECT whatsapp_mode, whatsapp_status
+     FROM tenants
+     WHERE id = $1
+     LIMIT 1`,
+    [tenantId]
+  );
+
+  const row = result.rows[0] || {};
+  const modeRaw = String(row.whatsapp_mode || "twilio").trim().toLowerCase();
+  const statusRaw = String(row.whatsapp_status || "disabled").trim().toLowerCase();
+
+  const mode: "twilio" | "cloudapi" =
+    modeRaw === "cloudapi" ? "cloudapi" : "twilio";
+
+  const status: "enabled" | "disabled" =
+  (statusRaw === "enabled" || statusRaw === "active" || statusRaw === "connected")
+    ? "enabled"
+    : "disabled";
+
+  return { mode, status };
+}
+
 // ---------- Envíos por TEMPLATE (Content API con Twilio) ----------
 export async function sendWhatsApp(
   templateSid: string,
@@ -108,6 +136,18 @@ export async function sendWhatsApp(
   templateVars: Record<string, string>
 ) {
   if (!Array.isArray(contactos) || contactos.length === 0) return;
+
+    const { mode, status } = await obtenerModoYEstadoWhatsApp(tenantId);
+
+  if (status !== "enabled") {
+    console.log("⛔ WhatsApp deshabilitado (campaña). tenantId=", tenantId);
+    return;
+  }
+
+  if (mode !== "twilio") {
+    console.log("⛔ Campañas WhatsApp por template solo soportan Twilio. whatsapp_mode=", mode, "tenantId=", tenantId);
+    return;
+  }
 
   // asegurar prefijo whatsapp:
   const from = fromNumber.startsWith("whatsapp:")
@@ -185,141 +225,122 @@ async function obtenerCredencialesMetaWhatsApp(tenantId: string): Promise<{
   };
 }
 
-// ---------- Envíos de SESIÓN (texto libre) unificados: Meta Cloud API → fallback Twilio ----------
-export async function enviarWhatsApp(
-  telefono: string,
-  mensaje: string,
-  tenantId: string
+async function enviarPorCloudApi(
+  tenantId: string,
+  numeroCloud: string,
+  parts: string[]
 ): Promise<boolean> {
-  const digits = normalizarNumero(telefono); // "18633171646"
-  if (!digits) {
-    console.warn("❌ Número de destino inválido:", telefono);
-    return false;
-  }
-
-  const numeroCloud = digits;        // para Cloud API → "18633171646"
-  const numeroTwilio = `+${digits}`; // para Twilio   → "+18633171646"
-
-  // dividimos el mensaje largo en trozos seguros para WhatsApp
-  const parts = chunkByLimit(mensaje);
-  let sentOk = false;
-
-  // 1️⃣ Intentar enviar por Cloud API si el tenant tiene credenciales
   const creds = await obtenerCredencialesMetaWhatsApp(tenantId);
-
-  if (creds) {
-    console.log(
-      "WHATSAPP ENVIAR (Meta) -> tenantId:",
-      tenantId,
-      "from phone_number_id:",
-      creds.phoneNumberId,
-      "to:",
-      numeroCloud
-    );
-
-    let cloudOk = false;
-
-    try {
-      for (const part of parts) {
-        const payload = {
-          messaging_product: "whatsapp",
-          to: numeroCloud, // "18633171646"
-          type: "text",
-          text: { body: part },
-        };
-
-        const url = `https://graph.facebook.com/v20.0/${creds.phoneNumberId}/messages`;
-
-        const resp = await fetch(url, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${creds.token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-
-        const json = (await resp.json().catch(() => ({} as any))) as any;
-        const waId = json?.messages?.[0]?.id || null;
-        const status = resp.ok ? "sent" : "failed";
-
-        if (!resp.ok) {
-          console.error(
-            "❌ Error Cloud API:",
-            json || (await resp.text().catch(() => ""))
-          );
-        } else {
-          console.log(`✅ WhatsApp (Meta) enviado a ${numeroCloud}`, waId);
-          cloudOk = true;
-        }
-
-        await pool.query(
-          `INSERT INTO whatsapp_status_logs (
-            tenant_id, message_sid, status, to_number, from_number, timestamp
-          ) VALUES ($1, $2, $3, $4, $5, NOW())`,
-          [
-            tenantId,
-            waId,
-            status,
-            numeroCloud,
-            // usamos el número real si está, si no el phone_number_id
-            creds.fromNumber || creds.phoneNumberId,
-          ]
-        );
-      }
-    } catch (err: any) {
-      console.error(
-        `❌ Error enviando por Cloud API a ${numeroCloud}:`,
-        err?.message || err
-      );
-      await pool.query(
-        `INSERT INTO whatsapp_status_logs (
-          tenant_id, message_sid, status, to_number, from_number, error_code, error_message, timestamp
-        ) VALUES ($1, null, 'failed', $2, $3, $4, $5, NOW())`,
-        [
-          tenantId,
-          numeroCloud,
-          creds.fromNumber || creds.phoneNumberId,
-          err?.code || null,
-          err?.message || "Error desconocido",
-        ]
-      );
-    }
-
-    // Si al menos una parte se envió bien por Cloud, consideramos éxito y NO usamos fallback
-    if (cloudOk) {
-      return true;
-    }
-
-    console.warn(
-      "⚠️ Cloud API no pudo enviar el mensaje (ninguna parte OK). Intentando fallback Twilio..."
-    );
-  }
-
-  // 2️⃣ Fallback: enviar por Twilio si NO hubo éxito en Cloud
-  const fromTwilio = await obtenerNumeroDeTenant(tenantId);
-  if (!fromTwilio) {
-    console.warn(
-      "❌ No se enviará mensaje: tenant sin Cloud exitoso y sin twilio_number configurado. tenantId=",
-      tenantId
-    );
+  if (!creds) {
+    console.warn("⚠️ Cloud API: tenant sin credenciales (phone_number_id/token). tenantId=", tenantId);
     return false;
   }
 
   console.log(
-    "WHATSAPP ENVIAR (Twilio fallback) -> tenantId:",
+    "WHATSAPP ENVIAR (Meta) -> tenantId:",
+    tenantId,
+    "from phone_number_id:",
+    creds.phoneNumberId,
+    "to:",
+    numeroCloud
+  );
+
+  let ok = false;
+
+  try {
+    for (const part of parts) {
+      const payload = {
+        messaging_product: "whatsapp",
+        to: numeroCloud,
+        type: "text",
+        text: { body: part },
+      };
+
+      const url = `https://graph.facebook.com/v20.0/${creds.phoneNumberId}/messages`;
+
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${creds.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const json = (await resp.json().catch(() => ({} as any))) as any;
+      const waId = json?.messages?.[0]?.id || null;
+      const status = resp.ok ? "sent" : "failed";
+
+      if (!resp.ok) {
+        console.error("❌ Error Cloud API:", json || (await resp.text().catch(() => "")));
+      } else {
+        console.log(`✅ WhatsApp (Meta) enviado a ${numeroCloud}`, waId);
+        ok = true;
+      }
+
+      await pool.query(
+        `INSERT INTO whatsapp_status_logs (
+          tenant_id, message_sid, status, to_number, from_number, timestamp
+        ) VALUES ($1, $2, $3, $4, $5, NOW())`,
+        [
+          tenantId,
+          waId,
+          status,
+          numeroCloud,
+          creds.fromNumber || creds.phoneNumberId,
+        ]
+      );
+    }
+  } catch (err: any) {
+    console.error(`❌ Error enviando por Cloud API a ${numeroCloud}:`, err?.message || err);
+    await pool.query(
+      `INSERT INTO whatsapp_status_logs (
+        tenant_id, message_sid, status, to_number, from_number, error_code, error_message, timestamp
+      ) VALUES ($1, null, 'failed', $2, $3, $4, $5, NOW())`,
+      [
+        tenantId,
+        numeroCloud,
+        creds.fromNumber || creds.phoneNumberId,
+        err?.code || null,
+        err?.message || "Error desconocido",
+      ]
+    );
+  }
+
+  return ok;
+}
+
+async function enviarPorTwilio(
+  tenantId: string,
+  numeroTwilioE164: string,
+  parts: string[]
+): Promise<boolean> {
+  const fromTwilio = await obtenerNumeroDeTenant(tenantId);
+  if (!fromTwilio) {
+    console.warn("⚠️ Twilio: tenant sin twilio_number configurado. tenantId=", tenantId);
+    return false;
+  }
+
+  console.log(
+    "WHATSAPP ENVIAR (Twilio) -> tenantId:",
     tenantId,
     "from twilio_number:",
     fromTwilio,
     "to:",
-    numeroTwilio
+    numeroTwilioE164
   );
+
+  let ok = false;
+
+  const fromFixed = fromTwilio.toLowerCase().startsWith("whatsapp:")
+  ? fromTwilio
+  : `whatsapp:${fromTwilio.startsWith("+") ? fromTwilio : `+${normalizarNumero(fromTwilio)}`}`;
 
   try {
     for (const part of parts) {
       const message = await client.messages.create({
-        from: `whatsapp:${fromTwilio}`,
-        to: `whatsapp:${numeroTwilio}`, // "whatsapp:+18633171646"
+        from: fromFixed,
+        to: `whatsapp:${numeroTwilioE164}`,
         body: part,
       });
 
@@ -327,24 +348,21 @@ export async function enviarWhatsApp(
         `INSERT INTO whatsapp_status_logs (
           tenant_id, message_sid, status, to_number, from_number, timestamp
         ) VALUES ($1, $2, $3, $4, $5, NOW())`,
-        [tenantId, message.sid, message.status, numeroTwilio, fromTwilio]
+        [tenantId, message.sid, message.status, numeroTwilioE164, fromTwilio]
       );
 
-      console.log(`✅ WhatsApp (Twilio) enviado a ${numeroTwilio}`, message.sid);
-      sentOk = true;
+      console.log(`✅ WhatsApp (Twilio) enviado a ${numeroTwilioE164}`, message.sid);
+      ok = true;
     }
   } catch (err: any) {
-    console.error(
-      `❌ Error enviando por Twilio a ${numeroTwilio}:`,
-      err?.message || err
-    );
+    console.error(`❌ Error enviando por Twilio a ${numeroTwilioE164}:`, err?.message || err);
     await pool.query(
       `INSERT INTO whatsapp_status_logs (
         tenant_id, message_sid, status, to_number, from_number, error_code, error_message, timestamp
       ) VALUES ($1, null, 'failed', $2, $3, $4, $5, NOW())`,
       [
         tenantId,
-        numeroTwilio,
+        numeroTwilioE164,
         fromTwilio,
         err?.code || null,
         err?.message || "Error desconocido",
@@ -352,7 +370,41 @@ export async function enviarWhatsApp(
     );
   }
 
-  return sentOk;
+  return ok;
+}
+
+export async function enviarWhatsApp(
+  telefono: string,
+  mensaje: string,
+  tenantId: string
+): Promise<boolean> {
+  const digits = normalizarNumero(telefono);
+  if (!digits) {
+    console.warn("❌ Número de destino inválido:", telefono);
+    return false;
+  }
+
+  // ✅ 1) respetar estado y proveedor activo
+  const { mode, status } = await obtenerModoYEstadoWhatsApp(tenantId);
+
+  if (status !== "enabled") {
+    console.log("⛔ WhatsApp deshabilitado para tenant. tenantId=", tenantId, "status=", status);
+    return false;
+  }
+
+  // ✅ 2) dividir mensaje
+  const parts = chunkByLimit(mensaje);
+
+  // ✅ 3) enviar SOLO por el proveedor activo
+  if (mode === "cloudapi") {
+    // Cloud API usa número SIN "+"
+    const numeroCloud = digits;
+    return await enviarPorCloudApi(tenantId, numeroCloud, parts);
+  }
+
+  // Twilio usa E.164 con "+"
+  const numeroTwilioE164 = `+${digits}`;
+  return await enviarPorTwilio(tenantId, numeroTwilioE164, parts);
 }
 
 // 👇 Wrapper para el interceptor (firma Promise<void>)

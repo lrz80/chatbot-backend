@@ -149,6 +149,33 @@ async function isSlotAvailable(opts: {
   return rows.length === 0;
 }
 
+async function getWhatsAppModeStatus(tenantId: string): Promise<{
+  mode: "twilio" | "cloudapi";
+  status: "enabled" | "disabled";
+}> {
+  const { rows } = await pool.query(
+    `SELECT whatsapp_mode, whatsapp_status
+       FROM tenants
+      WHERE id = $1
+      LIMIT 1`,
+    [tenantId]
+  );
+
+  const row = rows[0] || {};
+  const modeRaw = String(row.whatsapp_mode || "twilio").trim().toLowerCase();
+  const statusRaw = String(row.whatsapp_status || "disabled").trim().toLowerCase();
+
+  const mode: "twilio" | "cloudapi" = modeRaw === "cloudapi" ? "cloudapi" : "twilio";
+
+  // backward compatible si guardabas "connected/active"
+  const status: "enabled" | "disabled" =
+    (statusRaw === "enabled" || statusRaw === "active" || statusRaw === "connected")
+      ? "enabled"
+      : "disabled";
+
+  return { mode, status };
+}
+
 // Acceso a DB para idioma del contacto
 async function getIdiomaClienteDB(tenantId: string, contacto: string, fallback: 'es'|'en'): Promise<'es'|'en'> {
   try {
@@ -381,6 +408,11 @@ export async function procesarMensajeWhatsApp(
   const userInput = body?.Body || '';
   const messageId = body?.MessageSid || body?.SmsMessageSid || null;
 
+  const origen: "twilio" | "meta" =
+    context?.origen ??
+    (context?.canal && context.canal !== "whatsapp" ? "meta" : undefined) ??
+    (body?.MessageSid || body?.SmsMessageSid ? "twilio" : "meta");
+
   // Números “limpios”
   const numero      = to.replace('whatsapp:', '').replace('tel:', '');   // número del negocio
   const fromNumber  = from.replace('whatsapp:', '').replace('tel:', ''); // número del cliente
@@ -395,23 +427,56 @@ export async function procesarMensajeWhatsApp(
 
   // 👉 2) si no viene en el contexto (caso Twilio), haz el lookup por número
   if (!tenant) {
-    const tenantRes = await pool.query(
-      `
+    if (origen === "twilio") {
+      const tenantRes = await pool.query(
+        `
         SELECT *
-        FROM tenants
-        WHERE twilio_number = $1
-           OR whatsapp_phone_number = $1
-           OR twilio_number = $2
-           OR whatsapp_phone_number = $2
+          FROM tenants
+        WHERE REPLACE(LOWER(twilio_number),'whatsapp:','') = $1
+            OR REPLACE(LOWER(twilio_number),'whatsapp:','') = $2
         LIMIT 1
-      `,
-      [numero, numeroSinMas]
-    );
-    tenant = tenantRes.rows[0];
+        `,
+        [numero.toLowerCase(), numeroSinMas.toLowerCase()]
+      );
+
+      tenant = tenantRes.rows[0];
+    } else {
+      const tenantRes = await pool.query(
+        `
+        SELECT *
+          FROM tenants
+        WHERE REPLACE(LOWER(whatsapp_phone_number),'whatsapp:','') = $1
+            OR REPLACE(LOWER(whatsapp_phone_number),'whatsapp:','') = $2
+        LIMIT 1
+        `,
+        [numero.toLowerCase(), numeroSinMas.toLowerCase()]
+      );
+
+      tenant = tenantRes.rows[0];
+    }
   }
 
   if (!tenant) {
     console.log('⛔ No se encontró tenant para este número de WhatsApp.');
+    return;
+  }
+
+    const { mode, status } = await getWhatsAppModeStatus(tenant.id);
+
+  if (status !== "enabled") {
+    console.log("⛔ WhatsApp deshabilitado para tenant:", tenant.id, "status=", status);
+    return;
+  }
+
+  // Si llega por Twilio pero el tenant está en Cloud API → ignorar (evita doble respuesta)
+  if (origen === "twilio" && mode !== "twilio") {
+    console.log("⏭️ Ignoro webhook Twilio: tenant en cloudapi. tenantId=", tenant.id);
+    return;
+  }
+
+  // Si llega por Meta pero el tenant está en Twilio → ignorar
+  if (origen === "meta" && mode !== "cloudapi") {
+    console.log("⏭️ Ignoro webhook Meta: tenant en twilio. tenantId=", tenant.id);
     return;
   }
 
@@ -473,7 +538,7 @@ export async function procesarMensajeWhatsApp(
        VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
        ON CONFLICT (tenant_id, message_id) DO NOTHING
        RETURNING id, timestamp, role, content, canal, from_number`,
-      [tenant.id, userInput, 'whatsapp', fromNumber || 'anónimo', messageId]
+      [tenant.id, userInput, canal, fromNumber || 'anónimo', messageId]
     );
 
     const inserted = rows[0];
@@ -651,97 +716,6 @@ export async function procesarMensajeWhatsApp(
     }
   } catch (e) {
     console.warn("⚠️ Booking WAITING_DATETIME handler failed:", e);
-  }
-
-  // ─────────────────────────────────────────────
-  // BOOKING PIPELINE: si ya hay sesión activa esperando fecha/hora
-  // ─────────────────────────────────────────────
-  try {
-    const session = await getBookingSession({
-      tenantId: tenant.id,
-      channel: "whatsapp",
-      contact: fromNumber,
-    });
-
-    if (session?.state === "WAITING_DATETIME") {
-      const text = (userInput || "").trim();
-
-      // Parsear fecha/hora con chrono
-      const parsed = chrono.parseDate(text, new Date(), { forwardDate: true });
-
-      if (!parsed) {
-        const retry =
-          idiomaDestino === "en"
-            ? "I didn’t catch the date/time. Please send it like: Dec 15 at 3pm."
-            : "No pude identificar la fecha y hora. Envíamela así: 15 dic a las 3pm.";
-
-        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, retry);
-
-        await saveAssistantMessageAndEmit({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: fromNumber || "anónimo",
-          messageId,
-          content: retry,
-        });
-
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-          VALUES ($1, $2, $3, NOW())
-          ON CONFLICT DO NOTHING`,
-          [tenant.id, canal, messageId]
-        );
-
-        return;
-      }
-
-      // Ventana por defecto: 30 min
-      const start = DateTime.fromJSDate(parsed);
-      const end = start.plus({ minutes: 30 });
-
-      await updateBookingSession({
-        tenantId: tenant.id,
-        channel: "whatsapp",
-        contact: fromNumber,
-        patch: {
-          state: "WAITING_CONTACT",
-          desired_start_time: start.toJSDate(),
-          desired_end_time: end.toJSDate(),
-        },
-      });
-
-      const formatted =
-        idiomaDestino === "en"
-          ? start.toLocaleString(DateTime.DATETIME_MED)
-          : start.setLocale("es").toLocaleString(DateTime.DATETIME_MED);
-
-      const askContact =
-        idiomaDestino === "en"
-          ? `Perfect. I have you down for ${formatted}. What’s your full name and email?`
-          : `Perfecto. Te agendo para ${formatted}. ¿Cuál es tu nombre completo y tu email?`;
-
-      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, askContact);
-
-      await saveAssistantMessageAndEmit({
-        tenantId: tenant.id,
-        canal,
-        fromNumber: fromNumber || "anónimo",
-        messageId,
-        content: askContact,
-      });
-
-      await pool.query(
-        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-        VALUES ($1, $2, $3, NOW())
-        ON CONFLICT DO NOTHING`,
-        [tenant.id, canal, messageId]
-      );
-
-      return;
-    }
-  } catch (e) {
-    console.warn("⚠️ Booking WAITING_DATETIME handler falló (WA):", e);
-    // si falla, sigue pipeline normal
   }
 
   // ─────────────────────────────────────────────
@@ -1167,7 +1141,7 @@ Termina con esta pregunta EXACTA en español:
               .slice(0, 3)
               .join('\n');
             if (resumen) {
-              await enviarWhatsApp(fromNumber, resumen, tenant.id);
+              await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, resumen);
               alreadySent = true;
 
             }
