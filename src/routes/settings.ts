@@ -199,9 +199,19 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       telefono_negocio: tenant.telefono_negocio || '',
       direccion: tenant.direccion || '',
       horario_atencion: tenant.horario_atencion || '',
-      whatsapp_status: tenant.whatsapp_status ?? null,
+      // WhatsApp (control de canal + proveedor activo)
+      whatsapp_status: tenant.whatsapp_status ?? 'disabled', // 'enabled' | 'disabled'
+      whatsapp_mode: tenant.whatsapp_mode ?? 'twilio',       // 'twilio' | 'cloudapi'
+
+      // Cloud API
+      whatsapp_connected: Boolean(tenant.whatsapp_connected),
       whatsapp_phone_number_id: tenant.whatsapp_phone_number_id ?? null,
       whatsapp_phone_number: tenant.whatsapp_phone_number ?? null,
+
+      // Conveniencias para UI (conectado por proveedor)
+      whatsapp_cloud_connected: Boolean(tenant.whatsapp_connected && tenant.whatsapp_phone_number_id),
+      whatsapp_twilio_connected: Boolean(tenant.twilio_number),
+
 
       // Twilio
       twilio_number: tenant.twilio_number || null,
@@ -237,6 +247,23 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
 
     const { cta_text, cta_url, ...body } = req.body;
 
+    // ✅ Validación WhatsApp
+    if (body.whatsapp_mode !== undefined) {
+      const v = String(body.whatsapp_mode).trim().toLowerCase();
+      if (!['twilio', 'cloudapi'].includes(v)) {
+        return res.status(400).json({ error: "whatsapp_mode inválido. Use 'twilio' o 'cloudapi'." });
+      }
+      body.whatsapp_mode = v;
+    }
+
+    if (body.whatsapp_status !== undefined) {
+      const v = String(body.whatsapp_status).trim().toLowerCase();
+      if (!['enabled', 'disabled'].includes(v)) {
+        return res.status(400).json({ error: "whatsapp_status inválido. Use 'enabled' o 'disabled'." });
+      }
+      body.whatsapp_status = v;
+    }
+
     // 🔹 Guardar/actualizar CTA global (intent = 'global')
     if (cta_text !== undefined || cta_url !== undefined) {
       const cleanText = (cta_text ?? '').trim();
@@ -259,14 +286,18 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
     }
 
     // 🔹 Actualizar otros campos del tenant
-    const allowed = new Set([
+        const allowed = new Set([
       'nombre_negocio', 'categoria', 'idioma', 'prompt', 'bienvenida',
       'informacion_negocio', 'funciones_asistente', 'info_clave', 'logo_url',
       'prompt_meta', 'bienvenida_meta', 'facebook_page_id', 'facebook_page_name',
       'facebook_access_token', 'instagram_page_id', 'instagram_page_name',
       'instagram_business_account_id', 'email_negocio', 'telefono_negocio',
-      'direccion',                 // ⬅️ agregar
-      'horario_atencion',          // ⬅️ si tienes esa columna
+      'direccion',
+      'horario_atencion',
+
+      // ✅ WhatsApp provider + estado del canal
+      'whatsapp_mode',
+      'whatsapp_status',
     ]);
 
     const mapCol: Record<string, string> = {
@@ -291,6 +322,9 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
       telefono_negocio: 'telefono_negocio',
       direccion: 'direccion',                   // ⬅️ agregar
       horario_atencion: 'horario_atencion',     // ⬅️ si existe
+      // ✅ WhatsApp provider + estado del canal
+      whatsapp_mode: 'whatsapp_mode',
+      whatsapp_status: 'whatsapp_status',
     };
 
     const sets: string[] = [];
