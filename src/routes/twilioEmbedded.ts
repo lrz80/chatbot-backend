@@ -49,13 +49,24 @@ router.post(
         friendlyName: `Tenant ${tenant.id} - ${tenant.name || ''}`
       });
 
+      // ✅ Twilio devuelve authToken en la creación del subaccount (en este response)
+      // Guardarlo es lo que permite operar 100% dentro de la subcuenta
       subaccountSid = sub.sid;
+      const subAuthToken = (sub as any).authToken || (sub as any).auth_token || null;
+
+      if (!subAuthToken) {
+        return res.status(500).json({
+          error:
+            "No se recibió authToken al crear la subcuenta. No puedo garantizar aislamiento por tenant. Revisa permisos/SDK."
+        });
+      }
 
       await pool.query(
         `UPDATE tenants
-            SET twilio_subaccount_sid = $1
-          WHERE id = $2`,
-        [subaccountSid, tenant.id]
+            SET twilio_subaccount_sid = $1,
+                twilio_subaccount_auth_token = $2
+          WHERE id = $3`,
+        [subaccountSid, subAuthToken, tenant.id]
       );
     }
 
@@ -115,10 +126,16 @@ router.post(
       return res.status(400).json({ error: 'El tenant no tiene subcuenta Twilio' });
     }
 
-    // Cliente Twilio de la subcuenta
+    if (!tenant.twilio_subaccount_auth_token) {
+      return res.status(400).json({
+        error: "El tenant no tiene twilio_subaccount_auth_token guardado. Recorre start-embedded-signup nuevamente."
+      });
+    }
+
+    // ✅ Cliente Twilio REAL de la subcuenta (SID + auth token de la subcuenta)
     const subClient = twilio(
       tenant.twilio_subaccount_sid,
-      process.env.TWILIO_AUTH_TOKEN!
+      tenant.twilio_subaccount_auth_token
     );
 
     // Obtener los senders de WhatsApp en esa subcuenta
@@ -140,21 +157,32 @@ router.post(
     }
 
     // Guardar datos definitivos
+    const approvedPhoneRaw = String(approved.phoneNumber || "");
+    const approvedPhoneClean = approvedPhoneRaw.toLowerCase().startsWith("whatsapp:")
+      ? approvedPhoneRaw.slice("whatsapp:".length)
+      : approvedPhoneRaw;
+
+    // ✅ Garantizar +E164
+    const approvedE164 = approvedPhoneClean.startsWith("+")
+      ? approvedPhoneClean
+      : `+${approvedPhoneClean.replace(/\D/g, "")}`;
+
     await pool.query(
       `UPDATE tenants
           SET whatsapp_status = 'approved',
               whatsapp_sender_sid = $1,
               twilio_number = $2,
-              whatsapp_mode = 'client_waba'
+              whatsapp_mode = 'twilio'
         WHERE id = $3`,
-      [approved.sid, approved.phoneNumber.replace('whatsapp:', ''), tenant.id]
+      [approved.sid, approvedE164, tenant.id]
     );
 
     return res.json({
       status: 'approved',
       whatsapp_sender_sid: approved.sid,
-      twilio_number: approved.phoneNumber
+      twilio_number: approvedE164
     });
+
 
   } catch (err) {
     console.error('Error en sync-sender:', err);

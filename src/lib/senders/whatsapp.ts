@@ -98,6 +98,32 @@ async function obtenerNumeroDeTenant(tenantId: string): Promise<string | null> {
   return result.rows[0]?.twilio_number || null;
 }
 
+// ---------- Twilio: client por tenant (subaccount) ----------
+async function getTwilioClientForTenant(tenantId: string) {
+  const { rows } = await pool.query(
+    `SELECT twilio_subaccount_sid, twilio_subaccount_auth_token
+       FROM tenants
+      WHERE id = $1
+      LIMIT 1`,
+    [tenantId]
+  );
+
+  const sid = rows[0]?.twilio_subaccount_sid || null;
+  const token = rows[0]?.twilio_subaccount_auth_token || null;
+
+  // ✅ Si el tenant tiene subaccount real, usamos ese client
+  if (sid && token) {
+    return twilio(sid, token);
+  }
+
+  // ⚠️ Fallback: master (no recomendado, pero evita romper si un tenant aún no tiene token guardado)
+  console.warn(
+    "⚠️ Tenant sin twilio_subaccount_sid/auth_token -> usando client MASTER. tenantId=",
+    tenantId
+  );
+  return client;
+}
+
 // ---------- WhatsApp: modo activo + estado del canal ----------
 async function obtenerModoYEstadoWhatsApp(tenantId: string): Promise<{
   mode: "twilio" | "cloudapi";
@@ -164,12 +190,15 @@ export async function sendWhatsApp(
     console.log(`📤 Enviando plantilla ${templateSid} a ${to}`);
 
     try {
-      const message = await client.messages.create({
+      const twilioClient = await getTwilioClientForTenant(tenantId);
+
+      const message = await twilioClient.messages.create({
         from,
         to,
         contentSid: templateSid,
         contentVariables: JSON.stringify(templateVars),
       });
+
 
       await pool.query(
         `INSERT INTO whatsapp_status_logs (
@@ -336,9 +365,11 @@ async function enviarPorTwilio(
   ? fromTwilio
   : `whatsapp:${fromTwilio.startsWith("+") ? fromTwilio : `+${normalizarNumero(fromTwilio)}`}`;
 
+  const twilioClient = await getTwilioClientForTenant(tenantId);
+
   try {
     for (const part of parts) {
-      const message = await client.messages.create({
+      const message = await twilioClient.messages.create({
         from: fromFixed,
         to: `whatsapp:${numeroTwilioE164}`,
         body: part,
@@ -355,6 +386,7 @@ async function enviarPorTwilio(
       ok = true;
     }
   } catch (err: any) {
+
     console.error(`❌ Error enviando por Twilio a ${numeroTwilioE164}:`, err?.message || err);
     await pool.query(
       `INSERT INTO whatsapp_status_logs (
