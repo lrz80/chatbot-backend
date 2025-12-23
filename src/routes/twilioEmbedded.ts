@@ -70,18 +70,6 @@ router.post(
       );
     }
 
-    // Verificar que tengas la URL de Embedded Signup en .env
-    const base = process.env.TWILIO_WHATSAPP_EMBEDDED_SIGNUP_URL;
-    if (!base) {
-      return res.status(500).json({ error: 'Falta TWILIO_WHATSAPP_EMBEDDED_SIGNUP_URL en .env' });
-    }
-
-    // URL donde Twilio redirige al cliente al terminar el proceso
-    const redirectUrl = encodeURIComponent('https://www.aamy.ai/dashboard/whatsapp-connect');
-
-    // Twilio = signupUrl + subcuenta + redirectUrl
-    const signupUrl = `${base}?customerAccountSid=${subaccountSid}&redirectUrl=${redirectUrl}`;
-
     await pool.query(
       `UPDATE tenants
         SET whatsapp_mode = 'twilio',
@@ -90,7 +78,13 @@ router.post(
       [tenant.id]
     );
 
-    return res.json({ signupUrl });
+    return res.json({
+      ok: true,
+      status: "pending",
+      twilio_subaccount_sid: subaccountSid,
+      message:
+        "Subcuenta Twilio creada/validada. Falta comprar y asignar el número de WhatsApp. La activación puede tardar hasta 24 horas.",
+    });
 
   } catch (err) {
     console.error('Error en start-embedded-signup:', err);
