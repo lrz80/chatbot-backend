@@ -77,7 +77,7 @@ router.post(
     }
 
     // URL donde Twilio redirige al cliente al terminar el proceso
-    const redirectUrl = encodeURIComponent('https://www.aamy.ai/dashboard/whatsapp-connected');
+    const redirectUrl = encodeURIComponent('https://www.aamy.ai/dashboard/whatsapp-connect');
 
     // Twilio = signupUrl + subcuenta + redirectUrl
     const signupUrl = `${base}?customerAccountSid=${subaccountSid}&redirectUrl=${redirectUrl}`;
