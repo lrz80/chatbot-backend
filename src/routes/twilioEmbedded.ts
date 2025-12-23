@@ -82,6 +82,14 @@ router.post(
     // Twilio = signupUrl + subcuenta + redirectUrl
     const signupUrl = `${base}?customerAccountSid=${subaccountSid}&redirectUrl=${redirectUrl}`;
 
+    await pool.query(
+      `UPDATE tenants
+        SET whatsapp_mode = 'twilio',
+            whatsapp_status = 'pending'
+      WHERE id = $1`,
+      [tenant.id]
+    );
+
     return res.json({ signupUrl });
 
   } catch (err) {
@@ -167,15 +175,35 @@ router.post(
       ? approvedPhoneClean
       : `+${approvedPhoneClean.replace(/\D/g, "")}`;
 
+    // 1) Siempre guardamos sender SID
     await pool.query(
       `UPDATE tenants
-          SET whatsapp_status = 'approved',
-              whatsapp_sender_sid = $1,
-              twilio_number = $2,
+          SET whatsapp_sender_sid = $1,
               whatsapp_mode = 'twilio'
-        WHERE id = $3`,
-      [approved.sid, approvedE164, tenant.id]
+        WHERE id = $2`,
+      [approved.sid, tenant.id]
     );
+
+    // 2) Si ya existe twilio_number (comprado manual), marcamos connected.
+    //    Si NO existe, dejamos pending (hasta que admin asigne número).
+    const hasNumber = !!tenant.twilio_number;
+
+    await pool.query(
+      `UPDATE tenants
+          SET whatsapp_status = $1
+        WHERE id = $2`,
+      [hasNumber ? 'connected' : 'pending', tenant.id]
+    );
+
+    return res.json({
+      ok: true,
+      status: hasNumber ? 'connected' : 'pending',
+      whatsapp_sender_sid: approved.sid,
+      twilio_number: tenant.twilio_number ?? null,
+      message: hasNumber
+        ? 'WhatsApp conectado correctamente.'
+        : 'Sender aprobado. Falta asignar un número Twilio. Puede tardar hasta 24 horas.',
+    });
 
     return res.json({
       status: 'approved',
