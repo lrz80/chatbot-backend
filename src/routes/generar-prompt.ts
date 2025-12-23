@@ -147,8 +147,10 @@ router.post("/", async (req: Request, res: Response) => {
     }
 
     function stripModeLine(text: string) {
-      // remueve la línea MODO_PROMPT: ... para que no “ensucie” el prompt final
-      return (text || "").replace(/^MODO_PROMPT:\s*(ATENCION|ACTIVACION)\s*$/gmi, "").trim();
+      return (text || "")
+        .replace(/^#.*$/gm, "") // quita comentarios
+        .replace(/^MODO_PROMPT:\s*(ATENCION|ACTIVACION)\s*$/gmi, "")
+        .trim();
     }
 
     function detectPromptModeFromText(text: string) {
