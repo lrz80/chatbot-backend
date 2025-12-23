@@ -146,10 +146,27 @@ router.post("/", async (req: Request, res: Response) => {
       return `${titleize(title)}:\n${b}`;
     }
 
+    function stripModeLine(text: string) {
+      // remueve la línea MODO_PROMPT: ... para que no “ensucie” el prompt final
+      return (text || "").replace(/^MODO_PROMPT:\s*(ATENCION|ACTIVACION)\s*$/gmi, "").trim();
+    }
+
+    function detectPromptModeFromText(text: string) {
+      const m = (text || "").match(/MODO_PROMPT:\s*(ATENCION|ACTIVACION)/i);
+      return (m?.[1] || "ATENCION").toUpperCase();
+    }
+
+    // Detectar modo desde texto libre (Opción A)
+    const mode = detectPromptModeFromText(`${funciones}\n${info}`);
+
+    // Limpiar la línea MODO_PROMPT para que no aparezca en el prompt final
+    const funcionesClean = stripModeLine(funciones);
+    const infoClean = stripModeLine(info);
+
     // Opcional: si tu UI no mete bullets, puedes forzar bullets line-by-line:
     // Aquí NO transformo, solo dejo lo que el usuario puso.
-    const funcionesBlock = asSection("Reglas y comportamiento del asistente", funciones);
-    const infoBlock      = asSection("Contexto y hechos del negocio", info);
+    const funcionesBlock = asSection("Reglas y comportamiento del asistente", funcionesClean);
+    const infoBlock      = asSection("Contexto y hechos del negocio", infoClean);
 
     const promptCoreParts = [
       "Debes seguir estrictamente el contexto y las reglas definidas abajo. No inventes información. Si falta un dato, dilo claramente y pide lo mínimo necesario.",
@@ -161,15 +178,30 @@ router.post("/", async (req: Request, res: Response) => {
       "",
       funcionesBlock ? funcionesBlock : "",
       "",
-      "Objetivo del chat:",
-      "- Responder de inmediato",
-      "- Resolver dudas frecuentes",
-      "- Mantener la conversación activa",
-      "- Guiar al usuario a la activación del servicio",
-      "",
-      "Activación del servicio:",
-      "- Solicitar: nombre del negocio y ciudad/país",
-      "- Confirmar interés en conectar WhatsApp, Instagram o Facebook",
+      ...(mode === "ACTIVACION"
+        ? [
+            "Objetivo del chat:",
+            "- Explicar el servicio de forma simple",
+            "- Resolver dudas frecuentes",
+            "- Mantener la conversación activa",
+            "- Guiar al usuario a activar o contratar el servicio",
+            "",
+            "Activación del servicio:",
+            "- Solicitar: nombre del negocio y ciudad/país",
+            "- Confirmar qué canal desea activar (WhatsApp, Instagram o Facebook)",
+          ]
+        : [
+            "Objetivo del chat:",
+            "- Atender mensajes entrantes 24/7",
+            "- Resolver dudas frecuentes (servicios, horarios, ubicación, precios si existen)",
+            "- Facilitar reservas o el siguiente paso (enlace oficial o llamada)",
+            "- Capturar el motivo del cliente y los datos mínimos",
+            "",
+            "Seguimiento:",
+            "- Si el cliente no responde, realizar seguimiento (máximo 2 intentos) dentro de 23 horas",
+            "- Si el cliente responde, detener el seguimiento",
+          ]),
+
     ].filter(Boolean);
 
     const prompt = compact(promptCoreParts.join("\n"));
