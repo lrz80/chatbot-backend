@@ -23,7 +23,6 @@ router.post(
   async (req, res) => {
     try {
       const tenantId = (req as any).user?.tenant_id;
-
       if (!tenantId) {
         return res.status(401).json({ error: "Tenant no encontrado en req.user" });
       }
@@ -49,7 +48,7 @@ router.post(
           friendlyName: `Tenant ${tenant.id} - ${tenant.name || ""}`,
         });
 
-        // Twilio devuelve auth token en creación (solo en esa respuesta)
+        // Twilio devuelve auth token SOLO en la creación
         subaccountSid = sub.sid;
         const subAuthToken = (sub as any).authToken || (sub as any).auth_token || null;
 
@@ -93,9 +92,9 @@ router.post(
 
 /**
  * 2) Sincronizar sender de WhatsApp:
- *    - Lista Senders con API v2 (GET /v2/Channels/Senders)
+ *    - Lista Senders con API v2 (Channels/Senders)
  *    - Busca el sender ONLINE/APPROVED/ACTIVE
- *    - Guarda sender SID (XE...), y el número en twilio_number (+E164) desde sender_id
+ *    - Guarda sender SID (XE...), y el número en twilio_number (+E164)
  */
 router.post(
   "/api/twilio/whatsapp/sync-sender",
@@ -103,7 +102,6 @@ router.post(
   async (req, res) => {
     try {
       const tenantId = (req as any).user?.tenant_id;
-
       if (!tenantId) {
         return res.status(401).json({ error: "Tenant no encontrado en req.user" });
       }
@@ -133,23 +131,25 @@ router.post(
         });
       }
 
+      console.log("✅ SUBACCOUNT SID:", tenant.twilio_subaccount_sid);
+
       // Cliente Twilio REAL de la subcuenta
       const subClient = twilio(
         tenant.twilio_subaccount_sid,
         tenant.twilio_subaccount_auth_token
       );
 
-      // ✅ API correcta (Senders API v2)
+      // List Senders (API v2)
       const r = await (subClient as any).request({
         method: "GET",
         uri: "https://messaging.twilio.com/v2/Channels/Senders",
         params: {
           Channel: "whatsapp",
           PageSize: 50,
+          Page: 0,
         },
       });
 
-      console.log("✅ SUBACCOUNT SID:", tenant.twilio_subaccount_sid);
       console.log("📦 TWILIO senders raw body:", r.body);
 
       const senders = (r.body?.senders ?? r.body?.data ?? []) as any[];
@@ -176,29 +176,28 @@ router.post(
           senders: senders.map((s: any) => ({
             sid: s.sid,
             status: s.status,
-            sender_id: s.sender_id, // <-- importante
+            sender_id: s.sender_id,
           })),
           message:
-            "Aún no hay sender ONLINE/APPROVED/ACTIVE en esta subcuenta. Espera o revisa el Error Log del Sender en Twilio Console.",
+            "Aún no hay sender ONLINE/APPROVED/ACTIVE en esta subcuenta. Revisa Twilio > WhatsApp Senders.",
         });
       }
 
-      // ✅ EL NÚMERO VIENE EN sender_id, NO en phoneNumber
-      // Ej: sender_id = "whatsapp:+17166213574"
-      const senderIdRaw = String(approved.sender_id || "");
-      const approvedE164 = senderIdRaw.startsWith("whatsapp:")
-        ? senderIdRaw.replace("whatsapp:", "")
+      // ✅ En v2 el número viene en sender_id: "whatsapp:+1716..."
+      const senderIdRaw =
+        String(approved.sender_id || approved.senderId || approved.sender || "").trim();
+
+      const withoutPrefix = senderIdRaw.toLowerCase().startsWith("whatsapp:")
+        ? senderIdRaw.slice("whatsapp:".length)
         : senderIdRaw;
 
-      if (!approvedE164 || !approvedE164.startsWith("+")) {
-        return res.status(500).json({
-          error: "Twilio devolvió un sender aprobado pero sin sender_id válido",
-          approved: {
-            sid: approved.sid,
-            status: approved.status,
-            sender_id: approved.sender_id,
-          },
-        });
+      const approvedE164 = withoutPrefix.startsWith("+")
+        ? withoutPrefix
+        : `+${withoutPrefix.replace(/\D/g, "")}`;
+
+      if (!approvedE164 || approvedE164 === "+") {
+        // Si llega aquí, el sender está ONLINE pero no pudimos parsear número (raro)
+        console.log("⚠️ No pude parsear E164 desde sender_id:", senderIdRaw, approved);
       }
 
       // Guardar datos definitivos en tenants
