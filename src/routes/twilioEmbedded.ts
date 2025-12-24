@@ -93,9 +93,9 @@ router.post(
 
 /**
  * 2) Sincronizar sender de WhatsApp:
- *    - Lista Senders con API v2 (channelsSenders)
+ *    - Lista Senders con API v2 (GET /v2/Channels/Senders)
  *    - Busca el sender ONLINE/APPROVED/ACTIVE
- *    - Guarda sender SID (XE...), y el número en twilio_number (+E164)
+ *    - Guarda sender SID (XE...), y el número en twilio_number (+E164) desde sender_id
  */
 router.post(
   "/api/twilio/whatsapp/sync-sender",
@@ -140,7 +140,6 @@ router.post(
       );
 
       // ✅ API correcta (Senders API v2)
-      // Docs Twilio: GET /v2/Channels/Senders y en Node: client.messaging.v2.channelsSenders.list({ channel: "whatsapp" })
       const r = await (subClient as any).request({
         method: "GET",
         uri: "https://messaging.twilio.com/v2/Channels/Senders",
@@ -177,22 +176,30 @@ router.post(
           senders: senders.map((s: any) => ({
             sid: s.sid,
             status: s.status,
-            phoneNumber: s.phoneNumber,
+            sender_id: s.sender_id, // <-- importante
           })),
           message:
             "Aún no hay sender ONLINE/APPROVED/ACTIVE en esta subcuenta. Espera o revisa el Error Log del Sender en Twilio Console.",
         });
       }
 
-      // phoneNumber puede venir como "whatsapp:+1716..." o "+1716..."
-      const raw = String(approved.phoneNumber || "");
-      const clean = raw.toLowerCase().startsWith("whatsapp:")
-        ? raw.slice("whatsapp:".length)
-        : raw;
+      // ✅ EL NÚMERO VIENE EN sender_id, NO en phoneNumber
+      // Ej: sender_id = "whatsapp:+17166213574"
+      const senderIdRaw = String(approved.sender_id || "");
+      const approvedE164 = senderIdRaw.startsWith("whatsapp:")
+        ? senderIdRaw.replace("whatsapp:", "")
+        : senderIdRaw;
 
-      const approvedE164 = clean.startsWith("+")
-        ? clean
-        : `+${clean.replace(/\D/g, "")}`;
+      if (!approvedE164 || !approvedE164.startsWith("+")) {
+        return res.status(500).json({
+          error: "Twilio devolvió un sender aprobado pero sin sender_id válido",
+          approved: {
+            sid: approved.sid,
+            status: approved.status,
+            sender_id: approved.sender_id,
+          },
+        });
+      }
 
       // Guardar datos definitivos en tenants
       await pool.query(
