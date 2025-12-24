@@ -1,7 +1,7 @@
 // src/routes/twilioEmbedded.ts
 import { Router } from "express";
 import twilio from "twilio";
-import pool from "../lib/db"; // AJUSTA si tu DB está en otra ruta
+import pool from "../lib/db";
 import { authenticateUser } from "../middleware/auth";
 
 const router = Router();
@@ -13,10 +13,9 @@ const masterClient = twilio(
 );
 
 /**
- * 1) Iniciar (sin redirigir a Twilio):
+ * 1) Iniciar Embedded Signup:
  *    - Crea la subcuenta Twilio para el tenant si no existe
- *    - Deja whatsapp_mode='twilio' y whatsapp_status='pending'
- *    - Devuelve info para UI (sin signupUrl)
+ *    - Marca modo/estado en DB
  */
 router.post(
   "/api/twilio/whatsapp/start-embedded-signup",
@@ -31,9 +30,9 @@ router.post(
 
       const { rows } = await pool.query(
         `SELECT *
-           FROM tenants
-          WHERE id = $1
-          LIMIT 1`,
+         FROM tenants
+         WHERE id = $1
+         LIMIT 1`,
         [tenantId]
       );
 
@@ -50,32 +49,31 @@ router.post(
           friendlyName: `Tenant ${tenant.id} - ${tenant.name || ""}`,
         });
 
-        // Nota: Twilio devuelve authToken SOLO en create account (response).
+        // Twilio devuelve auth token en creación (solo en esa respuesta)
         subaccountSid = sub.sid;
         const subAuthToken = (sub as any).authToken || (sub as any).auth_token || null;
 
         if (!subAuthToken) {
           return res.status(500).json({
             error:
-              "No se recibió authToken al crear la subcuenta. Revisa permisos/SDK. No puedo operar dentro de la subcuenta sin ese token.",
+              "No se recibió authToken al crear la subcuenta. Revisa permisos/SDK (necesitas guardarlo para operar por subcuenta).",
           });
         }
 
         await pool.query(
           `UPDATE tenants
-              SET twilio_subaccount_sid = $1,
-                  twilio_subaccount_auth_token = $2
-            WHERE id = $3`,
+           SET twilio_subaccount_sid = $1,
+               twilio_subaccount_auth_token = $2
+           WHERE id = $3`,
           [subaccountSid, subAuthToken, tenant.id]
         );
       }
 
-      // Marcar modo y estado
       await pool.query(
         `UPDATE tenants
-            SET whatsapp_mode = 'twilio',
-                whatsapp_status = 'pending'
-          WHERE id = $1`,
+         SET whatsapp_mode = 'twilio',
+             whatsapp_status = 'pending'
+         WHERE id = $1`,
         [tenant.id]
       );
 
@@ -84,26 +82,20 @@ router.post(
         status: "pending",
         twilio_subaccount_sid: subaccountSid,
         message:
-          "Subcuenta Twilio creada/validada. Ahora debes crear/aprobar el WhatsApp Sender en Twilio y luego presionar 'Sincronizar' para guardar el número en Aamy. La activación puede tardar hasta 24 horas.",
+          "Subcuenta Twilio creada/validada. Completa el flujo en Twilio Console (WhatsApp Sender). Luego ejecuta sync-sender.",
       });
-    } catch (err: any) {
-      console.error("❌ Error en start-embedded-signup:", {
-        message: err?.message,
-        status: err?.status,
-        code: err?.code,
-        moreInfo: err?.moreInfo,
-      });
-      return res.status(500).json({ error: "Error iniciando proceso de WhatsApp (Twilio)" });
+    } catch (err) {
+      console.error("Error en start-embedded-signup:", err);
+      return res.status(500).json({ error: "Error iniciando proceso de WhatsApp" });
     }
   }
 );
 
 /**
  * 2) Sincronizar sender de WhatsApp:
- *    - Se llama cuando YA creaste/aprobaste el sender en Twilio (manual)
- *    - Lee Senders API v2 en la subcuenta
- *    - Si encuentra sender activo, guarda:
- *        whatsapp_sender_sid, twilio_number, whatsapp_status='connected', whatsapp_mode='twilio'
+ *    - Lista Senders con API v2 (channelsSenders)
+ *    - Busca el sender ONLINE/APPROVED/ACTIVE
+ *    - Guarda sender SID (XE...), y el número en twilio_number (+E164)
  */
 router.post(
   "/api/twilio/whatsapp/sync-sender",
@@ -111,73 +103,71 @@ router.post(
   async (req, res) => {
     try {
       const tenantId = (req as any).user?.tenant_id;
+
       if (!tenantId) {
         return res.status(401).json({ error: "Tenant no encontrado en req.user" });
       }
 
       const { rows } = await pool.query(
-        `SELECT * FROM tenants WHERE id = $1 LIMIT 1`,
+        `SELECT *
+         FROM tenants
+         WHERE id = $1
+         LIMIT 1`,
         [tenantId]
       );
 
-      if (!rows.length) return res.status(404).json({ error: "Tenant no encontrado" });
+      if (!rows.length) {
+        return res.status(404).json({ error: "Tenant no encontrado" });
+      }
 
       const tenant = rows[0];
 
-      if (!tenant.twilio_subaccount_sid || !tenant.twilio_subaccount_auth_token) {
+      if (!tenant.twilio_subaccount_sid) {
+        return res.status(400).json({ error: "El tenant no tiene subcuenta Twilio" });
+      }
+
+      if (!tenant.twilio_subaccount_auth_token) {
         return res.status(400).json({
           error:
-            "Falta twilio_subaccount_sid o twilio_subaccount_auth_token. Ejecuta start-embedded-signup nuevamente.",
+            "El tenant no tiene twilio_subaccount_auth_token guardado. Recorre start-embedded-signup nuevamente.",
         });
       }
 
-      // Cliente Twilio de la SUBCUENTA
+      // Cliente Twilio REAL de la subcuenta
       const subClient = twilio(
         tenant.twilio_subaccount_sid,
         tenant.twilio_subaccount_auth_token
       );
 
-      // Llamada DIRECTA al endpoint real de senders v2
+      // ✅ API correcta (Senders API v2)
+      // Docs Twilio: GET /v2/Channels/Senders y en Node: client.messaging.v2.channelsSenders.list({ channel: "whatsapp" })
       const r = await (subClient as any).request({
         method: "GET",
-        uri: "https://messaging.twilio.com/v2/Channels/Senders",
+        uri: "/v2/Channels/Senders",
+        params: {
+          Channel: "whatsapp",
+          PageSize: 50,
+        },
       });
 
-      const body = typeof r.body === "string" ? JSON.parse(r.body) : r.body;
-      const senders = Array.isArray(body?.senders) ? body.senders : [];
+      // r.body debería traer { senders: [...] } (y/o meta)
+      const senders = (r.body?.senders ?? r.body?.data ?? []) as any[];
 
+      console.log("✅ SUBACCOUNT SID:", tenant.twilio_subaccount_sid);
+      console.log("📦 RAW RESPONSE FROM TWILIO:", r.body);
       console.log("🌐 [TWILIO] Senders encontrados:", senders.length);
-      console.log("🌐 [TWILIO] Sample sender:", senders[0]);
 
-      // Detectar sender WhatsApp:
-      let waSender = null;
+      // Busca sender “vivo”
+      const approved = senders.find((s: any) => {
+        const st = String(s.status || "").toUpperCase();
+        return st === "ONLINE" || st === "APPROVED" || st === "ACTIVE";
+      });
 
-      for (const s of senders) {
-        const channel = String(s.channel || "").toLowerCase();
-        const senderId =
-          String(s.senderId || s.sender_id || s.address || "").toLowerCase();
-        const status = String(s.status || "").toUpperCase();
-
-        const isWhats = channel === "whatsapp" || senderId.startsWith("whatsapp:");
-
-        const usable =
-          status === "APPROVED" ||
-          status === "ACTIVE" ||
-          status === "ONLINE" ||
-          status === "OFFLINE";
-
-        if (isWhats && usable) {
-          waSender = s;
-          break;
-        }
-      }
-
-      if (!waSender) {
-        // Sender aún no está aprobado
+      if (!approved) {
         await pool.query(
           `UPDATE tenants
-             SET whatsapp_status = 'pending',
-                 whatsapp_mode = 'twilio'
+           SET whatsapp_status = 'pending',
+               whatsapp_mode = 'twilio'
            WHERE id = $1`,
           [tenant.id]
         );
@@ -185,58 +175,61 @@ router.post(
         return res.json({
           ok: true,
           status: "pending",
+          senders: senders.map((s: any) => ({
+            sid: s.sid,
+            status: s.status,
+            phoneNumber: s.phoneNumber,
+          })),
           message:
-            "No hay sender WhatsApp aprobado todavía. Puede demorar hasta 24 horas. Intenta sincronizar más tarde.",
-          senders,
+            "Aún no hay sender ONLINE/APPROVED/ACTIVE en esta subcuenta. Espera o revisa el Error Log del Sender en Twilio Console.",
         });
       }
 
-      // Extraer número WhatsApp del sender
-      const senderIdRaw =
-        waSender.senderId || waSender.sender_id || waSender.address || "";
+      // phoneNumber puede venir como "whatsapp:+1716..." o "+1716..."
+      const raw = String(approved.phoneNumber || "");
+      const clean = raw.toLowerCase().startsWith("whatsapp:")
+        ? raw.slice("whatsapp:".length)
+        : raw;
 
-      const phoneClean = senderIdRaw.toLowerCase().startsWith("whatsapp:")
-        ? senderIdRaw.slice("whatsapp:".length).trim()
-        : senderIdRaw;
+      const approvedE164 = clean.startsWith("+")
+        ? clean
+        : `+${clean.replace(/\D/g, "")}`;
 
-      const phoneE164 = phoneClean.startsWith("+")
-        ? phoneClean
-        : `+${phoneClean.replace(/\D/g, "")}`;
-
-      // Extraer el SID del sender (Twilio usa diferentes campos)
-      const senderSid =
-        waSender.sid ||
-        waSender.senderSid ||
-        waSender.sender_sid ||
-        waSender.id ||
-        senderIdRaw;
-
-      // Guardar DEFINITIVO
-      const upd = await pool.query(
+      // Guardar datos definitivos en tenants
+      await pool.query(
         `UPDATE tenants
-           SET whatsapp_sender_sid = $1,
-               twilio_number = $2,
-               whatsapp_mode = 'twilio',
-               whatsapp_status = 'connected'
-         WHERE id = $3
-         RETURNING whatsapp_sender_sid, twilio_number, whatsapp_status`,
-        [String(senderSid), phoneE164, tenant.id]
+         SET whatsapp_sender_sid = $1,
+             twilio_number = $2,
+             whatsapp_mode = 'twilio',
+             whatsapp_status = 'connected'
+         WHERE id = $3`,
+        [approved.sid, approvedE164, tenant.id]
       );
-
-      console.log("💾 [DB Updated] =>", upd.rows[0]);
 
       return res.json({
         ok: true,
         status: "connected",
-        whatsapp_sender_sid: upd.rows[0]?.whatsapp_sender_sid,
-        twilio_number: upd.rows[0]?.twilio_number,
-        message: "WhatsApp Twilio conectado correctamente.",
+        whatsapp_sender_sid: approved.sid, // XE...
+        twilio_number: approvedE164,       // +E164
+        message: "WhatsApp Twilio conectado y número guardado correctamente.",
       });
-    } catch (err: any) {
-      console.error("❌ Error en sync-sender:", err);
-      return res.status(500).json({
+    } catch (err) {
+      console.error("❌ Error en sync-sender:", {
+        message: (err as any)?.message,
+        status: (err as any)?.status,
+        code: (err as any)?.code,
+        moreInfo: (err as any)?.moreInfo,
+        details: (err as any)?.details,
+      });
+
+      return res.status((err as any)?.status || 500).json({
         error: "Error sincronizando sender (Twilio)",
-        details: err?.message,
+        twilio: {
+          message: (err as any)?.message,
+          status: (err as any)?.status,
+          code: (err as any)?.code,
+          moreInfo: (err as any)?.moreInfo,
+        },
       });
     }
   }
