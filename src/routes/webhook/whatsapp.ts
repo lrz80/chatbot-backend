@@ -62,6 +62,9 @@ const INTENT_THRESHOLD = Math.min(
   Math.max(0.30, Number(process.env.INTENT_MATCH_THRESHOLD ?? 0.55))
 );
 
+const BOOKING_ENABLED =
+  String(process.env.BOOKING_ENABLED || "false").toLowerCase() === "true";
+
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
@@ -589,9 +592,8 @@ export async function procesarMensajeWhatsApp(
     console.warn('No se pudo registrar mensaje user:', e);
   }
 
-  // ─────────────────────────────────────────────
+if (BOOKING_ENABLED) {
   // BOOKING FLOW (FASE 1) - estado WAITING_DATETIME
-  // ─────────────────────────────────────────────
   try {
     const session = await getOrCreateBookingSession({
       tenantId: tenant.id,
@@ -736,11 +738,10 @@ export async function procesarMensajeWhatsApp(
   } catch (e) {
     console.warn("⚠️ Booking WAITING_DATETIME handler failed:", e);
   }
+}
 
-  // ─────────────────────────────────────────────
+if (BOOKING_ENABLED) {
   // GATILLO TEMPORAL DE CITA (FASE 1)
-  // SIN FLAGS todavía: se activa solo por texto.
-  // ─────────────────────────────────────────────
   try {
     const lowerMsg = (userInput || "").toLowerCase();
 
@@ -796,7 +797,7 @@ export async function procesarMensajeWhatsApp(
     console.warn("⚠️ Error en gatillo de booking (WA):", e);
     // si algo falla, seguimos el flujo normal
   }
-
+}
   const idioma = await detectarIdioma(userInput);
   
   function stripLeadGreetings(t: string) {
