@@ -143,18 +143,17 @@ router.post(
       // Docs Twilio: GET /v2/Channels/Senders y en Node: client.messaging.v2.channelsSenders.list({ channel: "whatsapp" })
       const r = await (subClient as any).request({
         method: "GET",
-        uri: "/v2/Channels/Senders",
+        uri: "https://messaging.twilio.com/v2/Channels/Senders",
         params: {
           Channel: "whatsapp",
           PageSize: 50,
         },
       });
 
-      // r.body debería traer { senders: [...] } (y/o meta)
-      const senders = (r.body?.senders ?? r.body?.data ?? []) as any[];
-
       console.log("✅ SUBACCOUNT SID:", tenant.twilio_subaccount_sid);
-      console.log("📦 RAW RESPONSE FROM TWILIO:", r.body);
+      console.log("📦 TWILIO senders raw body:", r.body);
+
+      const senders = (r.body?.senders ?? r.body?.data ?? []) as any[];
       console.log("🌐 [TWILIO] Senders encontrados:", senders.length);
 
       // Busca sender “vivo”
