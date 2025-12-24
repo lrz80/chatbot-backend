@@ -42,7 +42,7 @@ import { getIO } from '../../lib/socket';
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
 import { createAppointment } from "../../services/booking";
 import { getOrCreateBookingSession, updateBookingSession, getBookingSession } from "../../services/bookingSession";
-import chrono from "chrono-node";
+import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
 
 // Puedes ponerlo debajo de los imports
@@ -98,31 +98,47 @@ function getConfigDelayMinutes(cfg: any, fallbackMin = 60) {
   return fallbackMin;
 }
 
-// ─────────────────────────────────────────────
 // BOOKING HELPERS
-// ─────────────────────────────────────────────
 const BOOKING_TZ = "America/New_York";
 
 // Parse robusto: convierte texto libre a Date en TZ NY
 function parseDateTimeFromText(
   text: string,
-  idiomaDestino: "es" | "en"
+  idiomaDestino: string
 ): Date | null {
-  const ref = new Date();
-  const results =
-    idiomaDestino === "es"
-      ? chrono.es.parse(text, ref)
-      : chrono.parse(text, ref);
+  try {
+    const ref = new Date();
 
-  if (!results?.length) return null;
+    // Normaliza idioma (por si llega "es-419", "en-US", etc.)
+    const lang = String(idiomaDestino || "es").toLowerCase().startsWith("es")
+      ? "es"
+      : "en";
 
-  const dt = results[0].start?.date();
-  if (!dt) return null;
+    // ✅ Si chrono.es no existe en runtime, hacemos fallback a chrono.parse
+    const parser =
+      lang === "es" && (chrono as any)?.es?.parse
+        ? (chrono as any).es
+        : chrono;
 
-  const lux = DateTime.fromJSDate(dt, { zone: BOOKING_TZ });
-  if (!lux.isValid) return null;
+    const results = parser.parse(text, ref);
 
-  return lux.toJSDate();
+    if (!results?.length) return null;
+
+    const dt = results[0].start?.date?.();
+    if (!dt) return null;
+
+    const lux = DateTime.fromJSDate(dt, { zone: BOOKING_TZ });
+    if (!lux.isValid) return null;
+
+    return lux.toJSDate();
+  } catch (e) {
+    console.warn("[BOOKING] parseDateTimeFromText failed:", {
+      text,
+      idiomaDestino,
+      err: (e as any)?.message,
+    });
+    return null;
+  }
 }
 
 async function isSlotAvailable(opts: {
