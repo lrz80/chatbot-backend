@@ -111,40 +111,33 @@ router.post(
   async (req, res) => {
     try {
       const tenantId = (req as any).user?.tenant_id;
-
       if (!tenantId) {
         return res.status(401).json({ error: "Tenant no encontrado en req.user" });
       }
 
       const { rows } = await pool.query(
-        `SELECT *
-           FROM tenants
-          WHERE id = $1
-          LIMIT 1`,
+        `SELECT * FROM tenants WHERE id = $1 LIMIT 1`,
         [tenantId]
       );
 
-      if (!rows.length) {
-        return res.status(404).json({ error: "Tenant no encontrado" });
-      }
+      if (!rows.length) return res.status(404).json({ error: "Tenant no encontrado" });
 
       const tenant = rows[0];
 
-      if (!tenant.twilio_subaccount_sid) {
-        return res.status(400).json({ error: "El tenant no tiene subcuenta Twilio" });
-      }
-
-      if (!tenant.twilio_subaccount_auth_token) {
+      if (!tenant.twilio_subaccount_sid || !tenant.twilio_subaccount_auth_token) {
         return res.status(400).json({
           error:
-            "El tenant no tiene twilio_subaccount_auth_token guardado. Ejecuta start-embedded-signup nuevamente.",
+            "Falta twilio_subaccount_sid o twilio_subaccount_auth_token. Ejecuta start-embedded-signup nuevamente.",
         });
       }
 
-      // Cliente Twilio REAL de la subcuenta
-      const subClient = twilio(tenant.twilio_subaccount_sid, tenant.twilio_subaccount_auth_token);
+      // Cliente Twilio de la SUBCUENTA
+      const subClient = twilio(
+        tenant.twilio_subaccount_sid,
+        tenant.twilio_subaccount_auth_token
+      );
 
-      // ✅ Senders API v2 (WhatsApp) - listar senders
+      // Llamada DIRECTA al endpoint real de senders v2
       const r = await (subClient as any).request({
         method: "GET",
         uri: "https://messaging.twilio.com/v2/Channels/Senders",
@@ -153,67 +146,97 @@ router.post(
       const body = typeof r.body === "string" ? JSON.parse(r.body) : r.body;
       const senders = Array.isArray(body?.senders) ? body.senders : [];
 
-      // Elegimos un sender WhatsApp usable.
-      // En la práctica: ONLINE = listo; OFFLINE puede existir si está pausado pero ya creado.
-      const approved = senders.find((s: any) => {
-        const senderId = String(s?.senderId || "");
-        const st = String(s?.status || "").toUpperCase();
-        return senderId.toLowerCase().startsWith("whatsapp:") && (st === "ONLINE" || st === "OFFLINE");
-      });
+      console.log("🌐 [TWILIO] Senders encontrados:", senders.length);
+      console.log("🌐 [TWILIO] Sample sender:", senders[0]);
 
-      if (!approved) {
-        await pool.query(`UPDATE tenants SET whatsapp_status = 'pending', whatsapp_mode='twilio' WHERE id = $1`, [
-          tenant.id,
-        ]);
+      // Detectar sender WhatsApp:
+      let waSender = null;
+
+      for (const s of senders) {
+        const channel = String(s.channel || "").toLowerCase();
+        const senderId =
+          String(s.senderId || s.sender_id || s.address || "").toLowerCase();
+        const status = String(s.status || "").toUpperCase();
+
+        const isWhats = channel === "whatsapp" || senderId.startsWith("whatsapp:");
+
+        const usable =
+          status === "APPROVED" ||
+          status === "ACTIVE" ||
+          status === "ONLINE" ||
+          status === "OFFLINE";
+
+        if (isWhats && usable) {
+          waSender = s;
+          break;
+        }
+      }
+
+      if (!waSender) {
+        // Sender aún no está aprobado
+        await pool.query(
+          `UPDATE tenants
+             SET whatsapp_status = 'pending',
+                 whatsapp_mode = 'twilio'
+           WHERE id = $1`,
+          [tenant.id]
+        );
 
         return res.json({
           ok: true,
           status: "pending",
-          senders,
           message:
-            "Aún no hay un WhatsApp Sender activo en esta subcuenta. Si acabas de crearlo, puede tardar hasta 24 horas. Vuelve a presionar 'Sincronizar'.",
+            "No hay sender WhatsApp aprobado todavía. Puede demorar hasta 24 horas. Intenta sincronizar más tarde.",
+          senders,
         });
       }
 
-      // senderId viene como: "whatsapp:+17166213574"
-      const senderId = String(approved.senderId || "");
-      const phone = senderId.toLowerCase().startsWith("whatsapp:") ? senderId.slice("whatsapp:".length).trim() : senderId.trim();
+      // Extraer número WhatsApp del sender
+      const senderIdRaw =
+        waSender.senderId || waSender.sender_id || waSender.address || "";
 
-      // Guardar todo en DB
-      await pool.query(
+      const phoneClean = senderIdRaw.toLowerCase().startsWith("whatsapp:")
+        ? senderIdRaw.slice("whatsapp:".length).trim()
+        : senderIdRaw;
+
+      const phoneE164 = phoneClean.startsWith("+")
+        ? phoneClean
+        : `+${phoneClean.replace(/\D/g, "")}`;
+
+      // Extraer el SID del sender (Twilio usa diferentes campos)
+      const senderSid =
+        waSender.sid ||
+        waSender.senderSid ||
+        waSender.sender_sid ||
+        waSender.id ||
+        senderIdRaw;
+
+      // Guardar DEFINITIVO
+      const upd = await pool.query(
         `UPDATE tenants
-            SET whatsapp_sender_sid = $1,
-                twilio_number = $2,
-                whatsapp_mode = 'twilio',
-                whatsapp_status = 'connected'
-          WHERE id = $3`,
-        [approved.sid, phone, tenant.id]
+           SET whatsapp_sender_sid = $1,
+               twilio_number = $2,
+               whatsapp_mode = 'twilio',
+               whatsapp_status = 'connected'
+         WHERE id = $3
+         RETURNING whatsapp_sender_sid, twilio_number, whatsapp_status`,
+        [String(senderSid), phoneE164, tenant.id]
       );
+
+      console.log("💾 [DB Updated] =>", upd.rows[0]);
 
       return res.json({
         ok: true,
         status: "connected",
-        whatsapp_sender_sid: approved.sid,
-        twilio_number: phone,
-        message: "WhatsApp (Twilio) conectado correctamente.",
+        whatsapp_sender_sid: upd.rows[0]?.whatsapp_sender_sid,
+        twilio_number: upd.rows[0]?.twilio_number,
+        message: "WhatsApp Twilio conectado correctamente.",
       });
     } catch (err: any) {
-      console.error("❌ Error en sync-sender:", {
-        message: err?.message,
-        status: err?.status,
-        code: err?.code,
-        moreInfo: err?.moreInfo,
-        details: err?.details,
-      });
-
-      return res.status(err?.status || 500).json({
+      console.error("❌ Error en sync-sender:", err);
+      return res.status(500).json({
         error: "Error sincronizando sender (Twilio)",
-        twilio: {
-          message: err?.message,
-          status: err?.status,
-          code: err?.code,
-          moreInfo: err?.moreInfo,
-        },
+        details: err?.message,
       });
     }
   }
