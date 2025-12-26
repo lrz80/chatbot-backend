@@ -68,24 +68,254 @@ router.post(
         );
       }
 
+      const { whatsapp_number_type } = req.body || {};
+      const numberType = whatsapp_number_type === "personal" ? "personal" : "twilio";
+
       await pool.query(
         `UPDATE tenants
-         SET whatsapp_mode = 'twilio',
-             whatsapp_status = 'pending'
-         WHERE id = $1`,
-        [tenant.id]
+        SET whatsapp_mode = 'twilio',
+            whatsapp_number_type = $1,
+            whatsapp_status = 'pending'
+        WHERE id = $2`,
+        [numberType, tenant.id]
       );
 
       return res.json({
         ok: true,
         status: "pending",
         twilio_subaccount_sid: subaccountSid,
+        whatsapp_number_type: numberType,
         message:
-          "Subcuenta Twilio creada/validada. Completa el flujo en Twilio Console (WhatsApp Sender). Luego ejecuta sync-sender.",
+          "Subcuenta lista. Abre el popup de Meta (Embedded Signup) para conectar la WABA. No se requiere Twilio Console.",
       });
+
     } catch (err) {
       console.error("Error en start-embedded-signup:", err);
       return res.status(500).json({ error: "Error iniciando proceso de WhatsApp" });
+    }
+  }
+);
+
+router.post(
+  "/api/twilio/whatsapp/embedded-signup/complete",
+  authenticateUser,
+  async (req, res) => {
+    try {
+      const tenantId = (req as any).user?.tenant_id;
+      if (!tenantId) return res.status(401).json({ error: "Tenant no encontrado en req.user" });
+
+      const { waba_id, business_id } = req.body || {};
+      if (!waba_id || !business_id) {
+        return res.status(400).json({ error: "Faltan waba_id o business_id del Embedded Signup" });
+      }
+
+      const { rows } = await pool.query(`SELECT * FROM tenants WHERE id = $1 LIMIT 1`, [tenantId]);
+      if (!rows.length) return res.status(404).json({ error: "Tenant no encontrado" });
+
+      const tenant = rows[0];
+
+      const numberType = tenant.whatsapp_number_type === "personal" ? "personal" : "twilio";
+
+      if (!tenant.twilio_subaccount_sid || !tenant.twilio_subaccount_auth_token) {
+        return res.status(400).json({
+          error: "Subcuenta Twilio no lista. Ejecuta start-embedded-signup primero.",
+        });
+      }
+
+      // Guardar WABA/Business en DB (para auditoría / debugging)
+      await pool.query(
+        `UPDATE tenants
+         SET whatsapp_business_id = $1,
+             meta_business_id = $2,
+             whatsapp_mode = 'twilio',
+             whatsapp_status = 'pending'
+         WHERE id = $3`,
+        [waba_id, business_id, tenant.id]
+      );
+
+      if (numberType === "personal") {
+        // En modo personal, Meta maneja el número y OTP dentro del popup.
+        // Tu app NO debe comprar número Twilio ni crear sender por Twilio.
+
+        await pool.query(
+          `UPDATE tenants
+          SET whatsapp_status = 'connected',
+              whatsapp_connected = true,
+              whatsapp_connected_at = NOW()
+          WHERE id = $1`,
+          [tenant.id]
+        );
+
+        return res.json({
+          ok: true,
+          mode: "personal",
+          status: "connected",
+          message: "WhatsApp conectado en modo número personal (Meta).",
+        });
+      }
+
+      // Cliente Twilio de subcuenta
+      const subClient = twilio(tenant.twilio_subaccount_sid, tenant.twilio_subaccount_auth_token);
+
+      // 1) Asegurar número Twilio asignado (mínimo para automación)
+      // Si ya manejas números manualmente, aquí puedes reutilizar tenant.twilio_number.
+      let e164 = tenant.twilio_number;
+
+      if (!e164) {
+        // Ejemplo: comprar un número SMS-capable en US
+        // IMPORTANTE: ajusta búsqueda a tu mercado
+        const available = await subClient.availablePhoneNumbers("US").local.list({
+          smsEnabled: true,
+          limit: 1,
+        });
+
+        if (!available.length) {
+          return res.status(400).json({
+            error: "No hay números Twilio SMS-capable disponibles para comprar automáticamente.",
+          });
+        }
+
+        const purchased = await subClient.incomingPhoneNumbers.create({
+          phoneNumber: available[0].phoneNumber,
+        });
+
+        e164 = purchased.phoneNumber;
+
+        await pool.query(
+          `UPDATE tenants
+           SET twilio_number = $1
+           WHERE id = $2`,
+          [e164, tenant.id]
+        );
+      }
+
+      // 2) Crear Sender vía Senders API (aquí está la magia)
+      // Endpoint v2 de Senders: POST /v2/Channels/Senders
+      // Vamos a usar request() como haces en sync-sender.
+      const webhookUrl = "https://api.aamy.ai/api/webhook/whatsapp"; // tu webhook real
+
+      const createResp = await (subClient as any).request({
+        method: "POST",
+        uri: "https://messaging.twilio.com/v2/Channels/Senders",
+        data: {
+          sender_id: `whatsapp:${e164}`,   // whatsapp:+1...
+          configuration: {
+            waba_id: waba_id,
+          },
+          profile: {
+            name: tenant.name || "Mi negocio", // display name
+          },
+          webhook: {
+            callback_url: "https://api.aamy.ai/api/webhook/whatsapp",
+            callback_method: "POST",
+          },
+        },
+      });
+
+      const sender = createResp.body;
+      const senderSid = sender?.sid;
+
+      if (!senderSid) {
+        return res.status(500).json({
+          error: "Twilio no devolvió sender sid al crear el sender.",
+          raw: sender,
+        });
+      }
+
+      // Guardar sender en DB
+      await pool.query(
+        `UPDATE tenants
+         SET whatsapp_sender_sid = $1,
+             whatsapp_status = 'pending'
+         WHERE id = $2`,
+        [senderSid, tenant.id]
+      );
+
+      return res.json({
+        ok: true,
+        status: sender?.status || "pending",
+        whatsapp_sender_sid: senderSid,
+        twilio_number: e164,
+        message: "Sender creado automáticamente. Puede tardar en pasar a ONLINE/APPROVED.",
+      });
+    } catch (err: any) {
+      console.error("❌ Error en embedded-signup/complete:", err);
+      return res.status(err?.status || 500).json({
+        error: "Error completando Embedded Signup (Twilio)",
+        twilio: {
+          message: err?.message,
+          status: err?.status,
+          code: err?.code,
+          moreInfo: err?.moreInfo,
+          details: err?.details,
+        },
+      });
+    }
+  }
+);
+
+router.post(
+  "/api/twilio/whatsapp/verify-sender",
+  authenticateUser,
+  async (req, res) => {
+    try {
+      const tenantId = (req as any).user?.tenant_id;
+      if (!tenantId) return res.status(401).json({ error: "Tenant no encontrado" });
+
+      const { code } = req.body || {};
+      if (!code) return res.status(400).json({ error: "Falta code" });
+
+      const { rows } = await pool.query(`SELECT * FROM tenants WHERE id = $1 LIMIT 1`, [tenantId]);
+      if (!rows.length) return res.status(404).json({ error: "Tenant no encontrado" });
+      const tenant = rows[0];
+
+      if (tenant.whatsapp_number_type === "personal") {
+        return res.status(400).json({
+          error: "Este tenant está en modo número personal. No aplica verify/sync de Twilio Sender.",
+        });
+      }
+
+      if (!tenant.twilio_subaccount_sid || !tenant.twilio_subaccount_auth_token) {
+        return res.status(400).json({ error: "Subcuenta Twilio no lista" });
+      }
+      if (!tenant.whatsapp_sender_sid) {
+        return res.status(400).json({ error: "No hay whatsapp_sender_sid para verificar" });
+      }
+
+      const subClient = twilio(tenant.twilio_subaccount_sid, tenant.twilio_subaccount_auth_token);
+
+      // Update sender con verification code
+      const upd = await (subClient as any).request({
+        method: "POST",
+        uri: `https://messaging.twilio.com/v2/Channels/Senders/${tenant.whatsapp_sender_sid}`,
+        data: {
+          configuration: {
+            verification_code: String(code).trim(),
+          },
+        },
+      });
+
+      return res.json({
+        ok: true,
+        status: upd?.body?.status || "pending",
+        sender: {
+          sid: upd?.body?.sid,
+          status: upd?.body?.status,
+        },
+        message: "Código enviado a Twilio. Espera a que pase a ONLINE.",
+      });
+    } catch (err: any) {
+      console.error("❌ Error verify-sender:", err);
+      return res.status(err?.status || 500).json({
+        error: "Error verificando sender (Twilio)",
+        twilio: {
+          message: err?.message,
+          status: err?.status,
+          code: err?.code,
+          moreInfo: err?.moreInfo,
+          details: err?.details,
+        },
+      });
     }
   }
 );
@@ -119,6 +349,12 @@ router.post(
       }
 
       const tenant = rows[0];
+
+      if (tenant.whatsapp_number_type === "personal") {
+        return res.status(400).json({
+          error: "Este tenant está en modo número personal. No aplica verify/sync de Twilio Sender.",
+        });
+      }
 
       if (!tenant.twilio_subaccount_sid) {
         return res.status(400).json({ error: "El tenant no tiene subcuenta Twilio" });
