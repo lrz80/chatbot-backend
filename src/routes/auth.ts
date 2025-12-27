@@ -179,13 +179,19 @@ router.post('/login', async (req: Request, res: Response) => {
 });
 
 router.post("/logout", (req: Request, res: Response) => {
-  res.clearCookie("token", {
+  const opts = {
     httpOnly: true,
     secure: true,
-    sameSite: "none",
+    sameSite: "none" as const,
     domain: ".aamy.ai",
     path: "/",
-  });
+  };
+
+  // Borra todo lo que podría estar autenticando
+  res.clearCookie("token", opts);
+  res.clearCookie("session", opts);
+  res.clearCookie("access_token", opts);
+  res.clearCookie("refresh_token", opts);
 
   return res.status(200).json({ ok: true });
 });
