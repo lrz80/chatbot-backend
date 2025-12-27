@@ -154,7 +154,7 @@ router.post(
         return res.status(401).json({ error: "Tenant no encontrado en req.user" });
       }
 
-      const { waba_id, business_id, phone_number_id } = req.body || {};
+      const { waba_id, business_id, phone_number_id, raw } = req.body || {};
 
       if (!waba_id) {
         return res.status(400).json({ error: "Falta waba_id del Embedded Signup" });
@@ -165,14 +165,10 @@ router.post(
         `SELECT * FROM tenants WHERE id = $1 LIMIT 1`,
         [tenantId]
       );
-      if (!rows.length) {
-        return res.status(404).json({ error: "Tenant no encontrado" });
-      }
+      if (!rows.length) return res.status(404).json({ error: "Tenant no encontrado" });
       const tenant = rows[0];
 
-      const numberType = tenant.whatsapp_number_type === "non_twilio" ? "non_twilio" : "twilio";
-
-      // 2) Guardar datos Meta + fijar modo Twilio
+      // 2) Guardar datos Meta + fijar modo Twilio (NO falla aunque Twilio falle luego)
       await pool.query(
         `UPDATE tenants
          SET whatsapp_business_id = $1,
@@ -197,72 +193,110 @@ router.post(
       );
 
       // 4) Determinar sender_id whatsapp:+E164
-      // Twilio-only recomendado: usar número Twilio comprado en start-embedded-signup.
       const e164 = tenant.twilio_number;
-
-      if (numberType === "twilio") {
-        if (!e164) {
-          return res.status(400).json({
-            error:
-              "No hay twilio_number guardado. Ejecuta start-embedded-signup nuevamente para asignar un número.",
-          });
-        }
-      } else {
-        // Si soportas non-twilio numbers en el futuro, aquí deberías traer el E164 del usuario desde UI.
-        // Por ahora, forzamos error para no quedar en un estado inconsistente.
+      if (!e164) {
+        // OJO: esto sí es un error real porque tu flujo Twilio-only depende del número comprado
         return res.status(400).json({
           error:
-            "whatsapp_number_type=non_twilio no está habilitado en Twilio-only. Usa número Twilio.",
+            "No hay twilio_number guardado. Ejecuta start-embedded-signup nuevamente para asignar un número.",
         });
       }
 
-      // 5) Crear Sender de WhatsApp en Twilio (Senders API)
-      const createResp = await (subClient as any).request({
-        method: "POST",
-        uri: "https://messaging.twilio.com/v2/Channels/Senders",
-        data: {
-          sender_id: `whatsapp:${e164}`,
-          configuration: {
-            waba_id: waba_id,
-          },
-          profile: {
-            name: tenant.name || "Mi negocio",
-          },
-          webhook: {
-            callback_url: WHATSAPP_CALLBACK_URL,
-            callback_method: WHATSAPP_CALLBACK_METHOD,
-          },
-        },
-      });
+      // 5) Crear Sender en Twilio (si falla, NO tumbamos el onboarding)
+      let senderSid: string | null = null;
+      let senderStatus: string | null = null;
+      let senderRaw: any = null;
 
-      const sender = createResp.body;
-      const senderSid = sender?.sid;
+      try {
+        const createResp = await (subClient as any).request({
+          method: "POST",
+          uri: "https://messaging.twilio.com/v2/Channels/Senders",
+          data: {
+            sender_id: `whatsapp:${e164}`,
+            configuration: {
+              waba_id: waba_id,
+            },
+            profile: {
+              name: tenant.name || "Mi negocio",
+            },
+            webhook: {
+              callback_url: WHATSAPP_CALLBACK_URL,
+              callback_method: WHATSAPP_CALLBACK_METHOD,
+            },
+          },
+        });
 
-      if (!senderSid) {
-        return res.status(500).json({
-          error: "Twilio no devolvió sender SID.",
-          raw: sender,
+        // A veces body viene string
+        const body =
+          typeof createResp?.body === "string"
+            ? JSON.parse(createResp.body)
+            : createResp?.body;
+
+        senderRaw = body;
+
+        // sid puede venir con nombres distintos (dependiendo del wrapper)
+        senderSid =
+          body?.sid ||
+          body?.sender_sid ||
+          body?.senderSid ||
+          null;
+
+        senderStatus =
+          body?.status ? String(body.status) : null;
+
+      } catch (e: any) {
+        // Caso MUY común: ya existe => 409
+        const status = e?.status || e?.statusCode;
+        const msg = e?.message || "";
+
+        console.error("⚠️ Twilio create sender error:", {
+          status,
+          msg,
+          code: e?.code,
+          moreInfo: e?.moreInfo,
+          details: e?.details,
+        });
+
+        // Si es 409, no lo tratamos como fatal. Lo resolverá sync-sender.
+        if (status === 409 || String(msg).toLowerCase().includes("already")) {
+          senderRaw = { warning: "Sender ya existe o conflicto 409", status, msg };
+        } else {
+          senderRaw = { warning: "Error creando sender (no fatal)", status, msg };
+        }
+      }
+
+      // 6) Persistir sender si lo tenemos; si no, dejamos pending (sin 500)
+      if (senderSid) {
+        await pool.query(
+          `UPDATE tenants
+           SET whatsapp_sender_sid = $1,
+               whatsapp_status = $2
+           WHERE id = $3`,
+          [senderSid, String(senderStatus || "pending"), tenant.id]
+        );
+
+        return res.json({
+          ok: true,
+          status: senderStatus || "pending",
+          whatsapp_sender_sid: senderSid,
+          twilio_number: e164,
+          message:
+            "Sender creado/registrado en Twilio. Puede tardar unos minutos en quedar ONLINE. Usa Sincronizar.",
+          sender_raw: senderRaw,
         });
       }
 
-      // 6) Guardar sender + status
-      await pool.query(
-        `UPDATE tenants
-         SET whatsapp_sender_sid = $1,
-             whatsapp_status = $2
-         WHERE id = $3`,
-        [senderSid, String(sender?.status || "pending"), tenant.id]
-      );
-
+      // ✅ NO FALLAR: devolver pending para que el usuario use Sync
       return res.json({
         ok: true,
-        mode: "twilio_only",
-        status: sender?.status || "pending",
-        whatsapp_sender_sid: senderSid,
+        status: "pending",
+        whatsapp_sender_sid: null,
         twilio_number: e164,
         message:
-          "Sender creado en Twilio (subcuenta). Puede tardar unos minutos en quedar ONLINE. Usa sync-sender para confirmar.",
+          "Embedded Signup OK, pero Twilio aún no devolvió sender SID (o hubo conflicto). Presiona Sincronizar en 1–3 minutos.",
+        sender_raw: senderRaw,
       });
+
     } catch (err: any) {
       console.error("❌ Error en embedded-signup/complete:", err);
       return res.status(500).json({
