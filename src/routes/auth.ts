@@ -179,19 +179,26 @@ router.post('/login', async (req: Request, res: Response) => {
 });
 
 router.post("/logout", (req: Request, res: Response) => {
-  const opts = {
+  const base = {
     httpOnly: true,
     secure: true,
     sameSite: "none" as const,
-    domain: ".aamy.ai",
     path: "/",
   };
 
-  // Borra todo lo que podría estar autenticando
-  res.clearCookie("token", opts);
-  res.clearCookie("session", opts);
-  res.clearCookie("access_token", opts);
-  res.clearCookie("refresh_token", opts);
+  // 1) Borra host-only (sin Domain)
+  res.clearCookie("token", { ...base });
+
+  // 2) Borra cookie compartida del root domain
+  res.clearCookie("token", { ...base, domain: ".aamy.ai" });
+
+  // 3) Por si alguna vez se seteó explícitamente en el subdominio
+  res.clearCookie("token", { ...base, domain: "api.aamy.ai" });
+
+  // Si usaste otros nombres en el pasado, bórralos también:
+  res.clearCookie("session", { ...base });
+  res.clearCookie("access_token", { ...base });
+  res.clearCookie("refresh_token", { ...base });
 
   return res.status(200).json({ ok: true });
 });
