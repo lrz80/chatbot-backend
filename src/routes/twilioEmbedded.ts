@@ -15,6 +15,17 @@ const masterClient = twilio(
 const WHATSAPP_CALLBACK_URL = "https://api.aamy.ai/api/webhook/whatsapp";
 const WHATSAPP_CALLBACK_METHOD = "POST";
 
+async function findSenderById(subClient: any, senderId: string) {
+  const r = await subClient.request({
+    method: "GET",
+    uri: "https://messaging.twilio.com/v2/Channels/Senders",
+    params: { PageSize: 1000, Page: 0 },
+  });
+
+  const senders = (r.body?.senders ?? r.body?.data ?? []) as any[];
+  return senders.find((s: any) => String(s.sender_id || "").toLowerCase() === senderId.toLowerCase()) || null;
+}
+
 /**
  * 1) Iniciar Embedded Signup (Twilio-only):
  *    - Asegura subcuenta Twilio por tenant (Modelo B)
@@ -214,11 +225,11 @@ router.post(
           data: {
             sender_id: `whatsapp:${e164}`,
             configuration: {
-              waba_id: waba_id,
+              waba_id,
+              ...(phone_number_id ? { phone_number_id } : {}),
+              ...(business_id ? { business_id } : {}),
             },
-            profile: {
-              name: tenant.name || "Mi negocio",
-            },
+            profile: { name: tenant.name || "Mi negocio" },
             webhook: {
               callback_url: WHATSAPP_CALLBACK_URL,
               callback_method: WHATSAPP_CALLBACK_METHOD,
@@ -226,40 +237,46 @@ router.post(
           },
         });
 
-        // A veces body viene string
+        const status = createResp?.statusCode || createResp?.status || 0;
         const body =
-          typeof createResp?.body === "string"
-            ? JSON.parse(createResp.body)
-            : createResp?.body;
+          typeof createResp?.body === "string" ? JSON.parse(createResp.body) : createResp?.body;
 
-        senderRaw = body;
+        senderRaw = { status, body };
 
-        // sid puede venir con nombres distintos (dependiendo del wrapper)
-        senderSid =
-          body?.sid ||
-          body?.sender_sid ||
-          body?.senderSid ||
-          null;
+        // 👇 si Twilio respondió error (4xx/5xx) NO lo trates como "no devolvió sid"
+        if (status < 200 || status >= 300) {
+          console.error("❌ Twilio Sender create non-2xx:", { status, body });
 
-        senderStatus =
-          body?.status ? String(body.status) : null;
-
+          // Intentar recuperar por si ya existe aunque Twilio responda raro
+          const existing = await findSenderById(subClient as any, `whatsapp:${e164}`);
+          if (existing?.sid) {
+            senderSid = existing.sid;
+            senderStatus = existing.status ? String(existing.status) : "pending";
+            senderRaw = { recovered: true, existing: { sid: senderSid, status: senderStatus }, status, body };
+          } else {
+            senderSid = null;
+            senderStatus = "pending";
+          }
+        }else {
+          senderSid = body?.sid || body?.sender_sid || body?.senderSid || null;
+          senderStatus = body?.status ? String(body.status) : null;
+        }
       } catch (e: any) {
-        // Caso MUY común: ya existe => 409
         const status = e?.status || e?.statusCode;
         const msg = e?.message || "";
 
-        console.error("⚠️ Twilio create sender error:", {
-          status,
-          msg,
-          code: e?.code,
-          moreInfo: e?.moreInfo,
-          details: e?.details,
-        });
+        console.error("⚠️ Twilio create sender error:", { status, msg });
 
-        // Si es 409, no lo tratamos como fatal. Lo resolverá sync-sender.
+        // ✅ Si ya existe (409), resolvemos el sender SID AHÍ MISMO
         if (status === 409 || String(msg).toLowerCase().includes("already")) {
-          senderRaw = { warning: "Sender ya existe o conflicto 409", status, msg };
+          const existing = await findSenderById(subClient as any, `whatsapp:${e164}`);
+          if (existing?.sid) {
+            senderSid = existing.sid;
+            senderStatus = existing.status ? String(existing.status) : "pending";
+            senderRaw = { recovered: true, existing: { sid: senderSid, status: senderStatus } };
+          } else {
+            senderRaw = { warning: "409 pero no se encontró sender en lista", status, msg };
+          }
         } else {
           senderRaw = { warning: "Error creando sender (no fatal)", status, msg };
         }
@@ -432,17 +449,18 @@ router.post(
 
       const senders = (r.body?.senders ?? r.body?.data ?? []) as any[];
 
-      const approved = senders.find((s: any) => {
-        const st = String(s.status || "").toUpperCase();
-        return st === "ONLINE" || st === "APPROVED" || st === "ACTIVE";
-      });
+      const expectedSenderId = tenant.twilio_number ? `whatsapp:${tenant.twilio_number}` : null;
 
-      if (!approved) {
+      const target = expectedSenderId
+        ? senders.find((s: any) => String(s.sender_id || "").toLowerCase() === expectedSenderId.toLowerCase())
+        : null;
+
+      if (!target) {
         await pool.query(
           `UPDATE tenants
-           SET whatsapp_status = 'pending',
-               whatsapp_mode = 'twilio'
-           WHERE id = $1`,
+          SET whatsapp_status = 'pending',
+              whatsapp_mode = 'twilio'
+          WHERE id = $1`,
           [tenant.id]
         );
 
@@ -455,13 +473,34 @@ router.post(
             sender_id: s.sender_id,
           })),
           message:
-            "Aún no hay sender ONLINE/APPROVED/ACTIVE en esta subcuenta. Reintenta en 1-3 minutos.",
+            "No se encontró el sender esperado para este tenant en la subcuenta. Verifica que el número coincida y reintenta.",
+        });
+      }
+
+      const st = String(target.status || "").toUpperCase();
+      const isApproved = st === "ONLINE" || st === "APPROVED" || st === "ACTIVE";
+
+      if (!isApproved) {
+        await pool.query(
+          `UPDATE tenants
+          SET whatsapp_status = 'pending',
+              whatsapp_mode = 'twilio',
+              whatsapp_sender_sid = COALESCE(whatsapp_sender_sid, $2)
+          WHERE id = $1`,
+          [tenant.id, target.sid]
+        );
+
+        return res.json({
+          ok: true,
+          status: "pending",
+          sender: { sid: target.sid, status: target.status, sender_id: target.sender_id },
+          message: "El sender correcto existe pero aún no está ONLINE/APPROVED/ACTIVE. Reintenta en 1–3 minutos.",
         });
       }
 
       // En v2 el número viene en sender_id: "whatsapp:+1716..."
       const senderIdRaw = String(
-        approved.sender_id || approved.senderId || approved.sender || ""
+        target.sender_id || target.senderId || target.sender || ""
       ).trim();
 
       const withoutPrefix = senderIdRaw.toLowerCase().startsWith("whatsapp:")
@@ -481,13 +520,13 @@ router.post(
              whatsapp_connected = true,
              whatsapp_connected_at = NOW()
          WHERE id = $3`,
-        [approved.sid, approvedE164, tenant.id]
+        [target.sid, approvedE164, tenant.id]
       );
 
       return res.json({
         ok: true,
         status: "connected",
-        whatsapp_sender_sid: approved.sid,
+        whatsapp_sender_sid: target.sid,
         twilio_number: tenant.twilio_number || approvedE164,
         message: "WhatsApp Twilio conectado (sender ONLINE/APPROVED/ACTIVE).",
       });
