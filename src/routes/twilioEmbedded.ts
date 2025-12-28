@@ -140,6 +140,7 @@ router.post(
         whatsapp_number_type: numberType,
         twilio_subaccount_sid: subaccountSid,
         twilio_number: e164 || null,
+        partner_solution_id: process.env.TWILIO_PARTNER_SOLUTION_ID || null, // 👈 agrega esto
         message:
           "Subcuenta lista. Número (si aplica) asignado. Ahora abre el popup de Meta (Embedded Signup) con Partner Solution ID.",
       });
