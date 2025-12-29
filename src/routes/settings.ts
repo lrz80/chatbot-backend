@@ -200,13 +200,16 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       direccion: tenant.direccion || '',
       horario_atencion: tenant.horario_atencion || '',
       // WhatsApp (control de canal + proveedor activo)
-      whatsapp_status: tenant.whatsapp_status ?? 'disabled', // 'enabled' | 'disabled'
+      whatsapp_status: tenant.whatsapp_status ?? 'disconnected', // 'enabled' | 'disabled'
       whatsapp_mode: tenant.whatsapp_mode ?? 'twilio',       // 'twilio' | 'cloudapi'
 
       // Cloud API
       whatsapp_connected: Boolean(tenant.whatsapp_connected),
       whatsapp_phone_number_id: tenant.whatsapp_phone_number_id ?? null,
       whatsapp_phone_number: tenant.whatsapp_phone_number ?? null,
+
+      // ✅ Twilio WhatsApp Sender SID (para UI)
+      whatsapp_sender_sid: tenant.whatsapp_sender_sid ?? null,
 
       // Conveniencias para UI (conectado por proveedor)
       whatsapp_cloud_connected: Boolean(tenant.whatsapp_connected && tenant.whatsapp_phone_number_id),
@@ -215,6 +218,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
 
       // Twilio
       twilio_number: tenant.twilio_number || null,
+      twilio_subaccount_sid: tenant.twilio_subaccount_sid ?? null,
       twilio_sms_number: tenant.twilio_sms_number || null,
       twilio_voice_number: tenant.twilio_voice_number || null,
 
@@ -258,8 +262,10 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
 
     if (body.whatsapp_status !== undefined) {
       const v = String(body.whatsapp_status).trim().toLowerCase();
-      if (!['enabled', 'disabled'].includes(v)) {
-        return res.status(400).json({ error: "whatsapp_status inválido. Use 'enabled' o 'disabled'." });
+      if (!['disconnected', 'pending', 'connected'].includes(v)) {
+        return res.status(400).json({
+          error: "whatsapp_status inválido. Use 'disconnected', 'pending' o 'connected'.",
+        });
       }
       body.whatsapp_status = v;
     }
