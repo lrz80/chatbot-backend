@@ -220,45 +220,54 @@ router.post(
       let senderRaw: any = null;
 
       try {
+        const payload = {
+          sender_id: `whatsapp:${e164}`,
+          profile: { name: tenant.name || "Mi negocio" },
+          configuration: {
+            waba_id: String(waba_id),
+          },
+          webhook: {
+            callback_url: WHATSAPP_CALLBACK_URL,
+            callback_method: WHATSAPP_CALLBACK_METHOD,
+          },
+        };
+
         const createResp = await (subClient as any).request({
           method: "POST",
           uri: "https://messaging.twilio.com/v2/Channels/Senders",
-          data: {
-            sender_id: `whatsapp:${e164}`,
-            configuration: {
-              waba_id,
-              ...(phone_number_id ? { phone_number_id } : {}),
-              ...(business_id ? { business_id } : {}),
-            },
-            profile: { name: tenant.name || "Mi negocio" },
-            webhook: {
-              callback_url: WHATSAPP_CALLBACK_URL,
-              callback_method: WHATSAPP_CALLBACK_METHOD,
-            },
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
           },
+          data: JSON.stringify(payload), // ✅ CLAVE: enviar JSON string
         });
 
         const status = createResp?.statusCode || createResp?.status || 0;
+
+        // Twilio a veces devuelve body string
         const body =
           typeof createResp?.body === "string" ? JSON.parse(createResp.body) : createResp?.body;
 
-        senderRaw = { status, body };
+        senderRaw = { status, body, sent: payload };
 
-        // 👇 si Twilio respondió error (4xx/5xx) NO lo trates como "no devolvió sid"
         if (status < 200 || status >= 300) {
           console.error("❌ Twilio Sender create non-2xx:", { status, body });
 
-          // Intentar recuperar por si ya existe aunque Twilio responda raro
           const existing = await findSenderById(subClient as any, `whatsapp:${e164}`);
           if (existing?.sid) {
             senderSid = existing.sid;
             senderStatus = existing.status ? String(existing.status) : "pending";
-            senderRaw = { recovered: true, existing: { sid: senderSid, status: senderStatus }, status, body };
+            senderRaw = {
+              recovered: true,
+              existing: { sid: senderSid, status: senderStatus },
+              status,
+              body,
+            };
           } else {
             senderSid = null;
             senderStatus = "pending";
           }
-        }else {
+        } else {
           senderSid = body?.sid || body?.sender_sid || body?.senderSid || null;
           senderStatus = body?.status ? String(body.status) : null;
         }
@@ -268,7 +277,6 @@ router.post(
 
         console.error("⚠️ Twilio create sender error:", { status, msg });
 
-        // ✅ Si ya existe (409), resolvemos el sender SID AHÍ MISMO
         if (status === 409 || String(msg).toLowerCase().includes("already")) {
           const existing = await findSenderById(subClient as any, `whatsapp:${e164}`);
           if (existing?.sid) {
