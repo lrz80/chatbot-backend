@@ -561,4 +561,36 @@ router.post(
   }
 );
 
+router.post(
+  "/api/twilio/whatsapp/disconnect",
+  authenticateUser,
+  async (req, res) => {
+    try {
+      const tenantId = (req as any).user?.tenant_id;
+      if (!tenantId) return res.status(401).json({ error: "No autorizado" });
+
+      // Importante: no necesitas “borrar” Twilio en Twilio aquí.
+      // Para el tenant, desconectar = Aamy deja de procesar mensajes
+      // y marca el canal como desconectado en DB.
+      await pool.query(
+        `
+        UPDATE tenants
+        SET
+          whatsapp_status = 'disconnected',
+          whatsapp_connected = false,
+          whatsapp_sender_sid = NULL,
+          whatsapp_connected_at = NULL
+        WHERE id = $1
+        `,
+        [tenantId]
+      );
+
+      return res.json({ ok: true, status: "disconnected" });
+    } catch (e) {
+      console.error("❌ /disconnect error:", e);
+      return res.status(500).json({ error: "Error desconectando WhatsApp" });
+    }
+  }
+);
+
 export default router;
