@@ -75,6 +75,150 @@ function extractAllLinksFromText(text: string, max = 24): string[] {
   return Array.from(uniq.values());
 }
 
+function toBullets(lines: string[], prefix = "- ") {
+  return lines
+    .map(l => l.trim())
+    .filter(Boolean)
+    .map(l => (l.startsWith("-") ? l : `${prefix}${l}`));
+}
+
+function splitLinesSmart(text: string) {
+  return (text || "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map(l => l.trimEnd());
+}
+
+// Parsea plantillas estilo:
+// "Nombre del negocio: X", "Servicios principales:", "- a", "- b", etc.
+function parseKeyValueTemplate(text: string) {
+  const lines = splitLinesSmart(text);
+  const kv: Record<string, string[]> = {};
+  let currentKey: string | null = null;
+
+  const push = (key: string, value: string) => {
+    const k = key.trim();
+    if (!kv[k]) kv[k] = [];
+    if (value.trim()) kv[k].push(value.trim());
+  };
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    // Key: Value
+    const m = line.match(/^([^:]{2,60}):\s*(.*)$/);
+    if (m) {
+      currentKey = m[1].trim();
+      const v = (m[2] || "").trim();
+      if (v) push(currentKey, v);
+      continue;
+    }
+
+    // List item under current key
+    if (currentKey) {
+      // permite "- item" o "• item"
+      const item = line.replace(/^[-•]\s*/, "").trim();
+      if (item) push(currentKey, item);
+    }
+  }
+
+  return kv;
+}
+
+// Si el texto parece prosa (párrafo largo), lo convierte a bullets por oraciones (sin inventar nada)
+function proseToBullets(text: string, maxItems = 10) {
+  const t = compact(text);
+  if (!t) return [];
+  // split básico por ". " y también por saltos
+  const parts = t
+    .replace(/\n+/g, " ")
+    .split(/(?<=[\.\!\?])\s+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  return parts.slice(0, maxItems).map(s => s.replace(/\s+/g, " "));
+}
+
+function buildOperationalBusinessContext(infoClean: string, nombreNegocio: string) {
+  const kv = parseKeyValueTemplate(infoClean);
+
+  // Detecta si realmente era una plantilla (tiene llaves tipo "Nombre del negocio", etc.)
+  const hasTemplateSignals =
+    Object.keys(kv).some(k =>
+      /nombre del negocio|tipo de negocio|ubicaci[oó]n|servicios|horarios|precios|reservas|contacto/i.test(k)
+    );
+
+  if (hasTemplateSignals) {
+    const nombre = (kv["Nombre del negocio"]?.[0] || nombreNegocio || "").trim();
+    const tipo = (kv["Tipo de negocio"]?.[0] || "").trim();
+    const ubic = (kv["Ubicación"]?.[0] || "").trim();
+    const tel  = (kv["Teléfono"]?.[0] || "").trim();
+
+    const servicios = kv["Servicios principales"] || kv["Servicios"] || [];
+    const horarios  = kv["Horarios"] || [];
+    const precios   = kv["Precios o cómo consultar precios"] || kv["Precios"] || [];
+    const reservas  = kv["Reservas / contacto"] || kv["Reservas"] || kv["Contacto"] || [];
+
+    const out: string[] = [];
+
+    out.push("NEGOCIO");
+    out.push(...toBullets([
+      nombre ? `Nombre: ${nombre}` : `Nombre: ${nombreNegocio}`,
+      tipo ? `Tipo: ${tipo}` : "",
+      ubic ? `Ubicación: ${ubic}` : "",
+      tel ? `Teléfono: ${tel}` : "",
+    ].filter(Boolean)));
+
+    if (servicios.length) {
+      out.push("");
+      out.push("SERVICIOS");
+      out.push(...toBullets(servicios));
+    }
+
+    if (horarios.length) {
+      out.push("");
+      out.push("HORARIOS");
+      out.push(...toBullets(horarios));
+    }
+
+    if (precios.length) {
+      out.push("");
+      out.push("PRECIOS");
+      out.push(...toBullets(precios));
+    }
+
+    if (reservas.length) {
+      out.push("");
+      out.push("RESERVAS / CONTACTO");
+      out.push(...toBullets(reservas));
+    }
+
+    return compact(out.join("\n"));
+  }
+
+  // Fallback: si no era plantilla, lo compacta como bullets (sin inventar)
+  const bullets = proseToBullets(infoClean, 12);
+  if (!bullets.length) return "";
+  return compact(["CONTEXTO (RESUMIDO)", ...toBullets(bullets)].join("\n"));
+}
+
+function buildOperationalRules(funcionesClean: string) {
+  const lines = splitLinesSmart(funcionesClean).map(l => l.trim()).filter(Boolean);
+
+  // Si ya tiene bullets o secciones, no lo “re-redactes”
+  const looksStructured = lines.some(l => l.startsWith("-") || l.startsWith("•") || /^[A-ZÁÉÍÓÚÑ _]{4,}$/.test(l));
+
+  if (looksStructured) {
+    return compact(["REGLAS Y COMPORTAMIENTO", ...lines.map(l => (l.startsWith("-") ? l : `- ${l}`))].join("\n"));
+  }
+
+  // Si viene en prosa, conviértelo a bullets por oraciones
+  const bullets = proseToBullets(funcionesClean, 14);
+  if (!bullets.length) return "";
+  return compact(["REGLAS Y COMPORTAMIENTO", ...toBullets(bullets)].join("\n"));
+}
+
 // ———————————————————————————————————————————————————
 
 router.post("/", async (req: Request, res: Response) => {
@@ -167,32 +311,46 @@ router.post("/", async (req: Request, res: Response) => {
 
     // Opcional: si tu UI no mete bullets, puedes forzar bullets line-by-line:
     // Aquí NO transformo, solo dejo lo que el usuario puso.
-    const funcionesBlock = asSection("Reglas y comportamiento del asistente", funcionesClean);
-    const infoBlock      = asSection("Contexto y hechos del negocio", infoClean);
+    const infoOperativo = buildOperationalBusinessContext(infoClean, nombreNegocio);
+    const reglasOperativas = buildOperationalRules(funcionesClean);
+
+    const infoBlock = infoOperativo ? infoOperativo : "";
+    const funcionesBlock = reglasOperativas ? reglasOperativas : "";
 
     const promptCoreParts = [
-      "Debes seguir estrictamente el contexto y las reglas definidas abajo. No inventes información. Si falta un dato, dilo claramente y pide lo mínimo necesario.",
+      "INSTRUCCIONES",
+      "- No inventes datos. Si falta un dato, dilo y pide SOLO lo mínimo.",
+      "- No repitas preguntas si el usuario ya dio ese dato.",
+      "- Responde corto. 1 pregunta a la vez.",
       "",
       `Negocio: ${nombreNegocio}`,
       `Idioma: ${idioma}`,
       "",
-      infoBlock ? infoBlock : "",
+      infoBlock,
       "",
-      funcionesBlock ? funcionesBlock : "",
+      funcionesBlock,
       "",
       ...(mode === "ACTIVACION"
         ? [
             "Objetivo del chat:",
-            "- Explicar el servicio de forma simple",
-            "- Resolver dudas frecuentes",
-            "- Mantener la conversación activa",
-            "- Guiar al usuario a activar o contratar el servicio",
+            "- Actuar como asesora: entender el problema del usuario antes de ofrecer el servicio (diagnóstico primero).",
+            "- Responder en mensajes cortos y humanos (máximo 2–4 líneas por mensaje).",
+            "- Hacer 1 pregunta a la vez. No hacer cuestionarios.",
+            "- Evitar repetir '24/7' y la lista de canales; menciónalos solo una vez si es necesario.",
+            "- No mencionar precios a menos que el usuario lo pregunte explícitamente.",
             "",
-            "Activación del servicio:",
-            "- Solicitar: nombre del negocio y ciudad/país",
-            "- Confirmar qué canal desea activar (WhatsApp, Instagram o Facebook)",
+            "Guía de conversación (orden obligatorio):",
+            "1) Empatiza y valida el problema en 1 frase.",
+            "2) Haz 1 pregunta de diagnóstico (ej: qué venden, qué preguntan los clientes, dónde se cae la venta).",
+            "3) Da una recomendación concreta y simple.",
+            "4) Solo si el usuario confirma interés en activar/contratar, pide datos mínimos para activación.",
+            "",
+            "Activación del servicio (SOLO si hay interés explícito):",
+            "- Solicitar: nombre del negocio y ciudad/país (solo si aún no lo dio).",
+            "- Confirmar qué canal desea activar (solo si aún no lo dijo).",
           ]
         : [
+
             "Objetivo del chat:",
             "- Atender mensajes entrantes 24/7",
             "- Resolver dudas frecuentes (servicios, horarios, ubicación, precios si existen)",
@@ -221,12 +379,17 @@ router.post("/", async (req: Request, res: Response) => {
       "- Si necesitas un enlace y no está en la lista, indica amablemente que no puedes confirmarlo desde aquí.",
     ].join("\n");
 
-    const promptFinal = [prompt, "", bloqueEnlaces, "", politicaEnlaces].join("\n");
+    // ✅ Prompt final SOLO operativo (sin política transversal de enlaces)
+    const promptFinal = prompt;
 
     // (B) Guarda en cache para futuras llamadas idénticas
     promptCache.set(cacheKey, { value: promptFinal, at: Date.now() });
 
-    res.status(200).json({ prompt: promptFinal });
+    // ✅ Devuelve enlaces separados para que los uses como wrapper global
+    res.status(200).json({
+      prompt: promptFinal,
+      enlacesOficiales,
+    });
   } catch (err) {
     console.error("❌ Error generando prompt:", err);
     res.status(500).json({ error: "Error interno del servidor" });
