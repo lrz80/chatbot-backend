@@ -586,6 +586,43 @@ router.post('/api/facebook/webhook', async (req, res) => {
           );
         } catch {}
 
+        // Prompt base y bienvenida por CANAL (prioriza meta_configs)
+        const promptBase =
+          (tenant.prompt_meta && String(tenant.prompt_meta).trim())
+          || getPromptPorCanal('meta', tenant, idiomaDestino);
+
+        const bienvenida =
+          (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
+          || getBienvenidaPorCanal(canalEnvio, tenant, idiomaDestino);
+
+        // ✅ BIENVENIDA SOLO AL INICIO O TRAS "REINICIO" (X horas sin mensajes)
+        // OJO: esto debe ejecutarse ANTES de insertar el mensaje 'user' en messages.
+        const RESET_HOURS = Number(process.env.META_SESSION_RESET_HOURS ?? 6);
+
+        const { rows: lastMsgBeforeInsert } = await pool.query(
+          `SELECT timestamp
+            FROM messages
+            WHERE tenant_id = $1
+              AND canal = $2
+              AND from_number = $3
+            ORDER BY timestamp DESC
+            LIMIT 1`,
+          [tenantId, canalEnvio, senderId]
+        );
+
+        const lastTs =
+          lastMsgBeforeInsert[0]?.timestamp
+            ? new Date(lastMsgBeforeInsert[0].timestamp).getTime()
+            : 0;
+
+        const nowTs = Date.now();
+        const msGap = lastTs ? (nowTs - lastTs) : Number.POSITIVE_INFINITY;
+
+        const isNewSession = !lastTs || msGap >= (RESET_HOURS * 60 * 60 * 1000);
+        const bienvenidaEfectiva = isNewSession ? bienvenida : '';
+
+        console.log("🧪 META session?", { senderId, canalEnvio, isNewSession, RESET_HOURS, lastTs: lastTs || null });
+
         // Guardar mensaje user (una vez)
         try {
           await pool.query(
@@ -663,31 +700,8 @@ router.post('/api/facebook/webhook', async (req, res) => {
           sendWelcome = false;
         }
 
-        // Prompt base y bienvenida por CANAL (prioriza meta_configs)
-        const promptBase =
-          (tenant.prompt_meta && String(tenant.prompt_meta).trim())
-          || getPromptPorCanal('meta', tenant, idiomaDestino);
-
-        const bienvenida =
-          (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
-          || getBienvenidaPorCanal(canalEnvio, tenant, idiomaDestino);
-
-        // ✅ PRIMER CONTACTO REAL (solo si el BOT no ha respondido antes a este contacto en este canal)
-        // OJO: el mensaje del usuario ya se guardó arriba, así que NO podemos buscar "cualquier mensaje".
-        const { rows: botPrev } = await pool.query(
-          `SELECT 1
-            FROM messages
-            WHERE tenant_id = $1
-              AND canal = $2
-              AND from_number = $3
-              AND role = 'assistant'
-            LIMIT 1`,
-          [tenantId, canalEnvio, senderId]
-        );
-
-        const isFirstContact = botPrev.length === 0;
-        const bienvenidaEfectiva = isFirstContact ? bienvenida : '';
-        console.log("🧪 META firstContact?", { senderId, canalEnvio, isFirstContact, bienvenidaEfectiva });
+        // (debug temporal)
+        console.log("🧪 META session?", { senderId, canalEnvio, isNewSession, RESET_HOURS, lastTs: lastTs || null });
 
         // ✅ Cortesía (saludos y agradecimientos) - reusable helper
         const { isGreeting, isThanks } = detectarCortesia(userInput);
@@ -856,8 +870,8 @@ Termina con esta pregunta EXACTA en español:
                 : '¿Sobre qué te gustaría saber más? ¿Servicios, precios u otra cosa?';
           }
 
-          if (sendWelcome && startsWithGreeting) {
-            reply = `${bienvenida}\n\n${reply}`;
+          if (startsWithGreeting && bienvenidaEfectiva) {
+            reply = `${bienvenidaEfectiva}\n\n${reply}`;
           }
 
           await sendMetaContabilizando(reply);
@@ -903,9 +917,9 @@ Termina con esta pregunta EXACTA en español:
             'and I will answer in your language.';
 
           const reply =
-            idiomaDestino === 'en'
-              ? `${bienvenida}\n\n${demoTextEn}`
-              : `${bienvenida}\n\n${demoTextEs}`;
+          idiomaDestino === 'en'
+            ? `${bienvenidaEfectiva ? bienvenidaEfectiva + "\n\n" : ""}${demoTextEn}`
+            : `${bienvenidaEfectiva ? bienvenidaEfectiva + "\n\n" : ""}${demoTextEs}`;
 
           await sendMetaContabilizando(reply);
 
