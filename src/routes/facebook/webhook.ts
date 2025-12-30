@@ -93,6 +93,25 @@ function getConfigDelayMinutes(cfg: any, fallbackMin = 60) {
   return Number.isFinite(m) && m > 0 ? m : fallbackMin;
 }
 
+// 👋 Bienvenida SOLO si es el primer mensaje del contacto en este canal
+async function shouldSendWelcome(
+  tenantId: string,
+  senderId: string,
+  canal: string
+) {
+  const { rows } = await pool.query(
+    `SELECT 1
+       FROM messages
+      WHERE tenant_id = $1
+        AND canal = $2
+        AND from_number = $3
+        AND role = 'user'
+      LIMIT 1`,
+    [tenantId, canal, senderId]
+  );
+  return rows.length === 0;
+}
+
 // Idioma persistente por contacto
 async function getIdiomaClienteDB(tenantId: string, contacto: string, fallback: 'es'|'en'): Promise<'es'|'en'> {
   try {
@@ -636,6 +655,14 @@ router.post('/api/facebook/webhook', async (req, res) => {
           continue;
         }
 
+        // 👋 ¿Debemos enviar bienvenida en ESTE mensaje?
+        let sendWelcome = false;
+        try {
+          sendWelcome = await shouldSendWelcome(tenantId, senderId, canalEnvio);
+        } catch {
+          sendWelcome = false;
+        }
+
         // Prompt base y bienvenida por CANAL (prioriza meta_configs)
         const promptBase =
           (tenant.prompt_meta && String(tenant.prompt_meta).trim())
@@ -643,7 +670,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         const bienvenida =
           (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
-          || getBienvenidaPorCanal('meta', tenant, idiomaDestino);
+          || getBienvenidaPorCanal(canalEnvio, tenant, idiomaDestino);
 
         // ✅ Cortesía (saludos y agradecimientos) - reusable helper
         const { isGreeting, isThanks } = detectarCortesia(userInput);
@@ -667,10 +694,10 @@ router.post('/api/facebook/webhook', async (req, res) => {
             out = buildGraciasRespuesta(idiomaDestino);
           } else if (esSmallTalk) {
             // Ej: "cómo estás", "qué tal", "buen día" sin pregunta concreta
-            out = buildSaludoSmallTalk(idiomaDestino, bienvenida);
+            out = buildSaludoSmallTalk(idiomaDestino, sendWelcome ? bienvenida : "");
           } else {
             // Saludo puro: "hola", "buenos días", etc.
-            out = buildSaludoConversacional(idiomaDestino, bienvenida);
+            out = buildSaludoConversacional(idiomaDestino, sendWelcome ? bienvenida : "");
           }
 
           try {
@@ -805,7 +832,7 @@ Termina con esta pregunta EXACTA en español:
                 : '¿Sobre qué te gustaría saber más? ¿Servicios, precios u otra cosa?';
           }
 
-          if (startsWithGreeting) {
+          if (sendWelcome && startsWithGreeting) {
             reply = `${bienvenida}\n\n${reply}`;
           }
 
@@ -1104,7 +1131,7 @@ Termina con esta pregunta EXACTA en español:
               'Responde usando solo los datos del prompt del negocio.'
             ].join('\n');
 
-            let out = fallbackBienvenida;
+            let out = sendWelcome ? fallbackBienvenida : "";
 
             try {
               const completion = await openai.chat.completions.create({
@@ -1128,7 +1155,12 @@ Termina con esta pregunta EXACTA en español:
                 );
               }
 
-              out = completion.choices[0]?.message?.content?.trim() || fallbackBienvenida;
+              out = completion.choices[0]?.message?.content?.trim() || out || fallbackBienvenida;
+              if (!out.trim()) {
+                out = idiomaDestino === 'en'
+                  ? "How can I help you?"
+                  : "¿En qué te puedo ayudar?";
+              }
             } catch (e) {
               console.warn('⚠️ [META] EARLY_RETURN LLM falló, usando bienvenida como fallback:', e);
             }

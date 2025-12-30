@@ -15,7 +15,21 @@ export function getPromptPorCanal(canal: string, tenant: any, idioma: string = '
 export function getBienvenidaPorCanal(canal: string, tenant: any, idioma: string = 'es'): string {
   const nombre = tenant.name || "nuestro negocio";
 
-  return generarBienvenidaPorIdioma(nombre, idioma);
+  // ✅ WhatsApp / default (columna real que tú tienes)
+  const wa = (tenant.mensaje_bienvenida || "").trim();
+
+  // ✅ Meta (puede venir del JOIN o de un objeto meta_config)
+  const meta =
+    (tenant.bienvenida_meta || "").trim() ||
+    (tenant.meta_config?.bienvenida_meta || "").trim();
+
+  // Prioridad por canal
+  if (canal === 'facebook' || canal === 'instagram' || canal === 'preview-meta') {
+    return meta || "";
+  }
+
+  // Otros canales (WhatsApp, etc.)
+  return wa || "";
 }
 
 function generarPromptPorIdioma(
