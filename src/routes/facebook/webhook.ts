@@ -672,6 +672,23 @@ router.post('/api/facebook/webhook', async (req, res) => {
           (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
           || getBienvenidaPorCanal(canalEnvio, tenant, idiomaDestino);
 
+        // ✅ PRIMER CONTACTO (evita repetir bienvenida en cada saludo)
+        const { rows: prevRows } = await pool.query(
+          `SELECT 1
+            FROM messages
+            WHERE tenant_id = $1
+              AND canal = $2
+              AND from_number = $3
+            LIMIT 1`,
+          [tenantId, canalEnvio, senderId]
+        );
+
+        // Si ya existe algún mensaje previo del user en este canal, NO es primer contacto
+        const isFirstContact = prevRows.length === 0;
+
+        // Bienvenida efectiva: solo en primer contacto
+        const bienvenidaEfectiva = isFirstContact ? bienvenida : '';
+
         // ✅ Cortesía (saludos y agradecimientos) - reusable helper
         const { isGreeting, isThanks } = detectarCortesia(userInput);
 
@@ -694,10 +711,10 @@ router.post('/api/facebook/webhook', async (req, res) => {
             out = buildGraciasRespuesta(idiomaDestino);
           } else if (esSmallTalk) {
             // Ej: "cómo estás", "qué tal", "buen día" sin pregunta concreta
-            out = buildSaludoSmallTalk(idiomaDestino, sendWelcome ? bienvenida : "");
+            out = buildSaludoSmallTalk(idiomaDestino, bienvenidaEfectiva);
           } else {
             // Saludo puro: "hola", "buenos días", etc.
-            out = buildSaludoConversacional(idiomaDestino, sendWelcome ? bienvenida : "");
+            out = buildSaludoConversacional(idiomaDestino, bienvenidaEfectiva);
           }
 
           try {
