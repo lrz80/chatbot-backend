@@ -106,8 +106,8 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       LIMIT 1`,
       [tenant_id]
     );
-
     const ch = chRes.rows[0] || {};
+
     const channel_flags = {
       whatsapp: !!ch?.whatsapp_enabled,
       meta:     !!ch?.meta_enabled,
