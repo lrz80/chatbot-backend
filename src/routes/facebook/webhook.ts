@@ -17,12 +17,9 @@ import { detectarIntencion } from '../../lib/detectarIntencion';
 import { runBeginnerRecoInterceptor } from '../../lib/recoPrincipiantes/interceptor';
 import { buscarRespuestaPorIntencion } from '../../services/intent-matcher';
 import { enviarMensajePorPartes } from '../../lib/enviarMensajePorPartes';
-import { extractEntitiesLite } from '../../utils/extractEntitiesLite';
 import { getFaqByIntent } from '../../utils/getFaqByIntent';
 import { answerMultiIntent, detectTopIntents } from '../../utils/multiIntent';
 import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
-import { Router, Request, Response } from 'express';
-import { buscarRespuestaSimilitudFaqsTraducido } from '../../lib/respuestasTraducidas';
 import type { Canal } from '../../lib/detectarIntencion';
 import { requireChannel } from "../../middleware/requireChannel";
 import { canUseChannel } from "../../lib/features";
@@ -412,6 +409,30 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
         const isInstagram = tenant.instagram_page_id && tenant.instagram_page_id === pageId;
         const canalEnvio: CanalEnvio = isInstagram ? 'instagram' : 'facebook';
+
+        // 🌐 Idioma destino (mismo que WA) — DEBE ir ANTES de promptBase/bienvenida
+        const tenantBase: 'es'|'en' = normalizeLang(tenant?.idioma || 'es');
+        let idiomaDestino: 'es'|'en';
+
+        if (isNumericOnly) {
+          idiomaDestino = await getIdiomaClienteDB(tenantId, senderId, tenantBase);
+        } else {
+          let detectado: string | null = null;
+          try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
+          const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
+          await upsertIdiomaClienteDB(tenantId, senderId, normalizado);
+          idiomaDestino = normalizado;
+        }
+
+        // ✅ Prompt base y bienvenida por CANAL (prioriza meta_configs)
+        const promptBase =
+          (tenant.prompt_meta && String(tenant.prompt_meta).trim())
+          || getPromptPorCanal('meta', tenant, idiomaDestino);
+
+        const bienvenida =
+          (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
+          || getBienvenidaPorCanal(canalEnvio, tenant, idiomaDestino);
+
         const canalContenido = 'meta'; // FAQs se guardan como 'meta'
         // 📴 Gate por subcanal (FB/IG) — SILENCIO TOTAL
         try {
@@ -558,19 +579,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
         );
         if (existingMsg.rows.length > 0) continue;
 
-        // 🌐 Idioma destino (mismo que WA) — MOVER AQUÍ
-        const tenantBase: 'es'|'en' = normalizeLang(tenant?.idioma || 'es');
-        let idiomaDestino: 'es'|'en';
-        if (isNumericOnly) {
-          idiomaDestino = await getIdiomaClienteDB(tenantId, senderId, tenantBase);
-        } else {
-          let detectado: string | null = null;
-          try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
-          const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
-          await upsertIdiomaClienteDB(tenantId, senderId, normalizado);
-          idiomaDestino = normalizado;
-        }
-
         // 🛡️ Anti-phishing reutilizable (EARLY EXIT)
         const handledPhishing = await antiPhishingGuard({
           pool,
@@ -596,15 +604,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
             [tenantId, canalEnvio, senderId]
           );
         } catch {}
-
-        // Prompt base y bienvenida por CANAL (prioriza meta_configs)
-        const promptBase =
-          (tenant.prompt_meta && String(tenant.prompt_meta).trim())
-          || getPromptPorCanal('meta', tenant, idiomaDestino);
-
-        const bienvenida =
-          (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
-          || getBienvenidaPorCanal(canalEnvio, tenant, idiomaDestino);
 
         // ✅ BIENVENIDA SOLO AL INICIO O TRAS "REINICIO" (X horas sin mensajes)
         // OJO: esto debe ejecutarse ANTES de insertar el mensaje 'user' en messages.
@@ -703,17 +702,6 @@ router.post('/api/facebook/webhook', async (req, res) => {
           console.log(`🚫 Tenant ${tenantId} sin membresía activa. No se responderá en Meta.`);
           continue;
         }
-
-        // 👋 ¿Debemos enviar bienvenida en ESTE mensaje?
-        let sendWelcome = false;
-        try {
-          sendWelcome = await shouldSendWelcome(tenantId, senderId, canalEnvio);
-        } catch {
-          sendWelcome = false;
-        }
-
-        // (debug temporal)
-        console.log("🧪 META session?", { senderId, canalEnvio, isNewSession, RESET_HOURS, lastTs: lastTs || null });
 
         // ✅ Cortesía (saludos y agradecimientos) - reusable helper
         const { isGreeting, isThanks } = detectarCortesia(userInput);
@@ -1148,11 +1136,6 @@ Termina con esta pregunta EXACTA en español:
         }
       }
 
-        // No empujar CTA si el mensaje es solo saludo / gracias / ok (small talk)
-        const isSmallTalkOrCourtesy =
-          /^(hola|hello|hi|hey|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|thank\s+you|ok|okay|vale|perfecto)\b/i
-            .test(userInput.trim());
-
         // 🔎 Intención antes del EARLY RETURN (no directas)
         const { intencion: intenTemp } = await detectarIntencionSafe(userInput, tenantId, canalEnvio);
         const intenCanon = normalizeIntentAlias((intenTemp || '').toLowerCase());
@@ -1164,7 +1147,7 @@ Termina con esta pregunta EXACTA en español:
           try {
             const fallbackBienvenida =
               (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
-              || getBienvenidaPorCanal('meta', tenant, idiomaDestino);
+              || getBienvenidaPorCanal(canalEnvio, tenant, idiomaDestino);
 
             const systemPrompt = [
               promptBase,
@@ -1181,7 +1164,7 @@ Termina con esta pregunta EXACTA en español:
               'Responde usando solo los datos del prompt del negocio.'
             ].join('\n');
 
-            let out = sendWelcome ? fallbackBienvenida : "";
+            let out = bienvenidaEfectiva ? bienvenidaEfectiva : "";
 
             try {
               const completion = await openai.chat.completions.create({
