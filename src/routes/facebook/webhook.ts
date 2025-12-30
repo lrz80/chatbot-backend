@@ -672,22 +672,22 @@ router.post('/api/facebook/webhook', async (req, res) => {
           (tenant.bienvenida_meta && String(tenant.bienvenida_meta).trim())
           || getBienvenidaPorCanal(canalEnvio, tenant, idiomaDestino);
 
-        // ✅ PRIMER CONTACTO (evita repetir bienvenida en cada saludo)
-        const { rows: prevRows } = await pool.query(
+        // ✅ PRIMER CONTACTO REAL (solo si el BOT no ha respondido antes a este contacto en este canal)
+        // OJO: el mensaje del usuario ya se guardó arriba, así que NO podemos buscar "cualquier mensaje".
+        const { rows: botPrev } = await pool.query(
           `SELECT 1
             FROM messages
             WHERE tenant_id = $1
               AND canal = $2
               AND from_number = $3
+              AND role = 'assistant'
             LIMIT 1`,
           [tenantId, canalEnvio, senderId]
         );
 
-        // Si ya existe algún mensaje previo del user en este canal, NO es primer contacto
-        const isFirstContact = prevRows.length === 0;
-
-        // Bienvenida efectiva: solo en primer contacto
+        const isFirstContact = botPrev.length === 0;
         const bienvenidaEfectiva = isFirstContact ? bienvenida : '';
+        console.log("🧪 META firstContact?", { senderId, canalEnvio, isFirstContact, bienvenidaEfectiva });
 
         // ✅ Cortesía (saludos y agradecimientos) - reusable helper
         const { isGreeting, isThanks } = detectarCortesia(userInput);
@@ -723,6 +723,13 @@ router.post('/api/facebook/webhook', async (req, res) => {
               out = await traducirMensaje(out, idiomaDestino);
             }
           } catch {}
+
+          if (!bienvenidaEfectiva) {
+            // Si no es primer contacto, respondemos corto sin "Soy Amy..."
+            out = idiomaDestino === 'en'
+              ? "Hi! How can I help you today?"
+              : "¡Hola! ¿En qué puedo ayudarte hoy?";
+          }
 
           await sendMetaContabilizando(out);
 
