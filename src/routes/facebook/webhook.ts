@@ -605,6 +605,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
             WHERE tenant_id = $1
               AND canal = $2
               AND from_number = $3
+              AND role = 'user'
             ORDER BY timestamp DESC
             LIMIT 1`,
           [tenantId, canalEnvio, senderId]
