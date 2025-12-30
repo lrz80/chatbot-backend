@@ -93,12 +93,20 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
 
     // ➕ Flags de canales que incluye el plan actual (se llenan en el webhook de Stripe)
     const chRes = await pool.query(
-      `SELECT whatsapp_enabled, meta_enabled, voice_enabled, sms_enabled, email_enabled
+      `SELECT
+          whatsapp_enabled,
+          meta_enabled,
+          voice_enabled,
+          sms_enabled,
+          email_enabled,
+          facebook_enabled,
+          instagram_enabled
       FROM channel_settings
       WHERE tenant_id = $1
       LIMIT 1`,
       [tenant_id]
     );
+
     const ch = chRes.rows[0] || {};
     const channel_flags = {
       whatsapp: !!ch?.whatsapp_enabled,
@@ -106,6 +114,11 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       voice:    !!ch?.voice_enabled,
       sms:      !!ch?.sms_enabled,
       email:    !!ch?.email_enabled,
+    };
+
+    const meta_subchannel_flags = {
+      facebook: ch?.facebook_enabled !== false,   // null/true => ON
+      instagram: ch?.instagram_enabled !== false, // null/true => ON
     };
 
     // Conveniencias: ¿puede editar/usar por canal? (plan lo incluye + plan activo o trial)
@@ -234,6 +247,8 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       // Flags de canales incluidos y permisos por canal
       channel_flags,
       can_edit_by_channel,
+
+      meta_subchannel_flags,
     });
     // ==================== FIN NUEVO BLOQUE ====================
 
@@ -250,6 +265,49 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
     if (!tenant_id) return res.status(401).json({ error: 'Tenant no autenticado' });
 
     const { cta_text, cta_url, ...body } = req.body;
+
+    // ✅ Meta subchannels (silencio total): facebook_enabled / instagram_enabled
+    // Se guardan en channel_settings (no en tenants)
+    const metaSubUpdates: Record<string, boolean> = {};
+
+    if (body.facebook_enabled !== undefined) {
+      metaSubUpdates.facebook_enabled = Boolean(body.facebook_enabled);
+      delete (body as any).facebook_enabled;
+    }
+
+    if (body.instagram_enabled !== undefined) {
+      metaSubUpdates.instagram_enabled = Boolean(body.instagram_enabled);
+      delete (body as any).instagram_enabled;
+    }
+
+    // Aplica update si hay algo
+    if (Object.keys(metaSubUpdates).length) {
+      // Asegura que exista fila en channel_settings
+      await pool.query(
+        `INSERT INTO channel_settings (tenant_id)
+        VALUES ($1)
+        ON CONFLICT (tenant_id) DO NOTHING`,
+        [tenant_id]
+      );
+
+      const sets: string[] = [];
+      const vals: any[] = [];
+
+      for (const [k, v] of Object.entries(metaSubUpdates)) {
+        sets.push(`${k} = $${sets.length + 1}`);
+        vals.push(v);
+      }
+
+      // opcional: updated_at si existe en esa tabla; si no existe, quítalo
+      sets.push(`updated_at = NOW()`);
+
+      await pool.query(
+        `UPDATE channel_settings
+            SET ${sets.join(', ')}
+          WHERE tenant_id = $${vals.length + 1}`,
+        [...vals, tenant_id]
+      );
+    }
 
     // ✅ Validación WhatsApp
     if (body.whatsapp_mode !== undefined) {

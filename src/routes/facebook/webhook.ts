@@ -252,6 +252,30 @@ async function isMetaChannelOpen(tenantId: string): Promise<boolean> {
   return enabled && !paused;
 }
 
+async function isMetaSubChannelEnabled(
+  tenantId: string,
+  canalEnvio: CanalEnvio
+): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT facebook_enabled, instagram_enabled
+       FROM channel_settings
+      WHERE tenant_id = $1 OR tenant_id = $2
+      ORDER BY CASE WHEN tenant_id = $1 THEN 0 ELSE 1 END
+      LIMIT 1`,
+    [tenantId, GLOBAL_ID]
+  );
+
+  const row = rows[0];
+
+  // Sin fila => permitido por defecto (no rompas tenants viejos)
+  if (!row) return true;
+
+  if (canalEnvio === 'facebook')  return row.facebook_enabled  !== false; // null/true => ON
+  if (canalEnvio === 'instagram') return row.instagram_enabled !== false;
+
+  return true;
+}
+
 // Evita loops por duplicados Meta mid
 const mensajesProcesados = new Set<string>();
 
@@ -359,6 +383,24 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const isInstagram = tenant.instagram_page_id && tenant.instagram_page_id === pageId;
         const canalEnvio: CanalEnvio = isInstagram ? 'instagram' : 'facebook';
         const canalContenido = 'meta'; // FAQs se guardan como 'meta'
+        // 📴 Gate por subcanal (FB/IG) — SILENCIO TOTAL
+        try {
+          const subEnabled = await isMetaSubChannelEnabled(tenantId, canalEnvio);
+          if (!subEnabled) {
+            console.log("🔇 [META] Subcanal desactivado; no se responderá.", {
+              tenantId,
+              canalEnvio,
+              pageId,
+              senderId,
+              messageId,
+            });
+            continue; // 200 ya se envió arriba
+          }
+        } catch (e) {
+          console.warn("⚠️ [META] Error leyendo flags subcanal; bloqueo por seguridad:", e);
+          continue;
+        }
+
         const accessToken = tenant.facebook_access_token as string;
 
         // ===============================
