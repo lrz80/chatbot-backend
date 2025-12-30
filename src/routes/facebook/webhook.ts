@@ -348,6 +348,17 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const isEcho = messagingEvent.message.is_echo === true;
         const senderId = messagingEvent.sender.id;              // quien envía este evento
         const recipientId = messagingEvent.recipient?.id;       // el otro lado de la conversación
+
+        // 🚫 Ignora eventos donde el emisor es la propia Page/IG (evita eco/loops)
+        if (String(senderId) === String(pageId)) {
+          console.log("🔁 [META] Ignorando evento donde senderId == pageId (eco propio)", {
+            pageId,
+            senderId,
+            mid: messagingEvent?.message?.mid,
+          });
+          continue;
+        }
+
         const messageId = messagingEvent.message.mid;
         const userInput = messagingEvent.message.text || '';
 
