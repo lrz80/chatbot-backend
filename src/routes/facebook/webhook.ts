@@ -678,7 +678,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
           if (estadoActual !== 'esperando_pago') {
             // ✅ Saca el link desde el prompt del canal (Meta)
-            const paymentLink = extractPaymentLinkFromPrompt(getPromptPorCanal(canalEnvio, tenant, idiomaDestino));
+            const paymentLink = extractPaymentLinkFromPrompt(promptBase);
 
             const mensajePago =
               idiomaDestino === 'en'
