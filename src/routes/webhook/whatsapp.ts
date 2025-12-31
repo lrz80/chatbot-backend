@@ -55,6 +55,40 @@ export type WhatsAppContext = {
 const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
 const MATCHER_MIN_OVERRIDE = 0.85; // exige score alto para sobreescribir una intención "directa"
 
+// 💳 Confirmación de pago (usuario)
+const PAGO_CONFIRM_REGEX = /\b(pago\s*realizado|listo\s*el\s*pago|ya\s*pagu[eé]|pagu[eé]|payment\s*(done|made|completed)|paid)\b/i;
+
+// 🧾 Detectores básicos de datos
+const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+const PHONE_REGEX = /(\+?\d[\d\s().-]{7,}\d)/;
+
+// Parse simple: soporta "Nombre Apellido email teléfono país"
+function parseDatosCliente(text: string) {
+  const raw = (text || '').trim();
+  if (!raw) return null;
+
+  const email = raw.match(EMAIL_REGEX)?.[0] || null;
+  const phoneRaw = raw.match(PHONE_REGEX)?.[0] || null;
+  const telefono = phoneRaw ? phoneRaw.replace(/[^\d+]/g, '') : null;
+
+  if (!email || !telefono) return null;
+
+  // Quita email y teléfono del texto y lo que quede lo usamos para nombre/pais
+  let rest = raw.replace(email, ' ').replace(phoneRaw || '', ' ');
+  rest = rest.replace(/\s+/g, ' ').trim();
+
+  // Si vienen en orden: nombre (2 primeras palabras) + país (resto)
+  const parts = rest.split(' ').filter(Boolean);
+  if (parts.length < 3) return null;
+
+  const nombre = parts.slice(0, 2).join(' ').trim();       // Nombre + Apellido
+  const pais = parts.slice(2).join(' ').trim();
+
+  if (!nombre || !pais) return null;
+
+  return { nombre, email, telefono, pais };
+}
+
 const MAX_WHATSAPP_LINES = 16; // 14–16 es el sweet spot
 
 const INTENT_THRESHOLD = Math.min(
@@ -195,26 +229,38 @@ async function getWhatsAppModeStatus(tenantId: string): Promise<{
   return { mode, status };
 }
 
-// Acceso a DB para idioma del contacto
-async function getIdiomaClienteDB(tenantId: string, contacto: string, fallback: 'es'|'en'): Promise<'es'|'en'> {
+async function getIdiomaClienteDB(
+  tenantId: string,
+  canal: string,
+  contacto: string,
+  fallback: 'es'|'en'
+): Promise<'es'|'en'> {
   try {
     const { rows } = await pool.query(
-      `SELECT idioma FROM clientes WHERE tenant_id = $1 AND contacto = $2 LIMIT 1`,
-      [tenantId, contacto]
+      `SELECT idioma
+         FROM clientes
+        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+        LIMIT 1`,
+      [tenantId, canal, contacto]
     );
     if (rows[0]?.idioma) return normalizeLang(rows[0].idioma);
   } catch {}
   return fallback;
 }
 
-async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma: 'es'|'en') {
+async function upsertIdiomaClienteDB(
+  tenantId: string,
+  canal: string,
+  contacto: string,
+  idioma: 'es'|'en'
+) {
   try {
     await pool.query(
-      `INSERT INTO clientes (tenant_id, contacto, idioma)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (tenant_id, contacto)
-       DO UPDATE SET idioma = EXCLUDED.idioma`,
-      [tenantId, contacto, idioma]
+      `INSERT INTO clientes (tenant_id, canal, contacto, idioma)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (tenant_id, canal, contacto)
+       DO UPDATE SET idioma = EXCLUDED.idioma, updated_at = now()`,
+      [tenantId, canal, contacto, idioma]
     );
   } catch (e) {
     console.warn('No se pudo guardar idioma del cliente:', e);
@@ -520,13 +566,16 @@ export async function procesarMensajeWhatsApp(
   let idiomaDestino: 'es'|'en';
 
   if (isNumericOnly) {
-    idiomaDestino = await getIdiomaClienteDB(tenant.id, fromNumber, tenantBase);
+    idiomaDestino = await getIdiomaClienteDB(tenant.id, canal, fromNumber, tenantBase);
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (solo número)`);
   } else {
     let detectado: string | null = null;
     try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
+
     const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
-    await upsertIdiomaClienteDB(tenant.id, fromNumber, normalizado);
+
+    await upsertIdiomaClienteDB(tenant.id, canal, fromNumber, normalizado);
+
     idiomaDestino = normalizado;
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
@@ -550,6 +599,126 @@ export async function procesarMensajeWhatsApp(
     if (handledPhishing) {
       // Ya respondió con mensaje seguro, marcó spam y cortó el flujo.
       return;
+    }
+  }
+
+  // ===============================
+  // ✅ CONTROL DE ESTADO (PAGO / HUMANO) - PRIORIDAD MÁXIMA (WHATSAPP)
+  // ===============================
+  {
+    const tenantId = tenant.id;
+    const canalEnvio = canal;      // 'whatsapp'
+    const senderId = fromNumber;   // número del cliente
+
+    const { rows: clienteRows } = await pool.query(
+      `SELECT estado, human_override, nombre, email, telefono, pais, segmento
+        FROM clientes
+        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+        LIMIT 1`,
+      [tenantId, canalEnvio, senderId]
+    );
+
+    const cliente = clienteRows[0] || null;
+
+    // 1) Si humano tomó la conversación → SILENCIO TOTAL
+    if (cliente?.human_override === true) {
+      console.log('🤝 [WA] Conversación tomada por humano. Bot NO responde:', senderId);
+      return;
+    }
+
+    // 2) Si está en pago_en_confirmacion → SILENCIO TOTAL
+    if ((cliente?.estado || '').toLowerCase() === 'pago_en_confirmacion') {
+      console.log('💳 [WA] Pago en confirmación. Bot en silencio:', senderId);
+      return;
+    }
+
+    // 3) Si usuario confirma pago → guardar estado + human_override y responder SOLO el mensaje fijo
+    if (PAGO_CONFIRM_REGEX.test(userInput)) {
+      await pool.query(
+        `INSERT INTO clientes (tenant_id, canal, contacto, estado, human_override, updated_at)
+        VALUES ($1, $2, $3, 'pago_en_confirmacion', true, now())
+        ON CONFLICT (tenant_id, canal, contacto)
+        DO UPDATE SET estado='pago_en_confirmacion', human_override=true, updated_at=now()`,
+        [tenantId, canalEnvio, senderId]
+      );
+
+      const msgPago =
+        idiomaDestino === 'en'
+          ? "Perfect 👍\nWe’ll confirm your payment and someone from the team will contact you to activate your account."
+          : "Perfecto 👍\nVamos a confirmar tu pago y una persona del equipo se pondrá en contacto contigo para la activación de tu cuenta.";
+
+      const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, senderId, msgPago);
+
+      if (ok) {
+        await saveAssistantMessageAndEmit({
+          tenantId,
+          canal: canalEnvio,
+          fromNumber: senderId || 'anónimo',
+          messageId,
+          content: msgPago,
+        });
+
+        await pool.query(
+          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+          VALUES ($1, $2, $3, NOW())
+          ON CONFLICT DO NOTHING`,
+          [tenantId, canalEnvio, messageId]
+        );
+      }
+
+      return; // ⬅️ corta TODO el pipeline
+    }
+
+    // 4) Si el usuario manda datos (email + telefono + nombre + pais) → guardar y enviar link UNA SOLA VEZ
+    const parsed = parseDatosCliente(userInput);
+    if (parsed) {
+      const estadoActual = (cliente?.estado || '').toLowerCase();
+
+      await pool.query(
+        `INSERT INTO clientes (tenant_id, canal, contacto, nombre, email, telefono, pais, segmento, estado, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'lead'), 'esperando_pago', now())
+        ON CONFLICT (tenant_id, canal, contacto)
+        DO UPDATE SET
+          nombre   = COALESCE(EXCLUDED.nombre, clientes.nombre),
+          email    = COALESCE(EXCLUDED.email,  clientes.email),
+          telefono = COALESCE(EXCLUDED.telefono, clientes.telefono),
+          pais     = COALESCE(EXCLUDED.pais, clientes.pais),
+          estado   = 'esperando_pago',
+          updated_at = now()`,
+        [tenantId, canalEnvio, senderId, parsed.nombre, parsed.email, parsed.telefono, parsed.pais, cliente?.segmento || null]
+      );
+
+      const pideLink = /\b(link|enlace|pago|stripe)\b/i.test(userInput);
+
+      if (estadoActual !== 'esperando_pago' || pideLink) {
+        const linkPago =
+          idiomaDestino === 'en'
+            ? "Thanks. I already have your details.\nYou can complete the payment here:\nhttps://buy.stripe.com/bJe3cneyN8VQ9WU73E3ZK01\nAfter you pay, text “PAGO REALIZADO” to continue."
+            : "Gracias. Ya tengo tus datos.\nPuedes completar el pago aquí:\nhttps://buy.stripe.com/bJe3cneyN8VQ9WU73E3ZK01\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar.";
+
+        const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, senderId, linkPago);
+
+        if (ok) {
+          await saveAssistantMessageAndEmit({
+            tenantId,
+            canal: canalEnvio,
+            fromNumber: senderId || 'anónimo',
+            messageId,
+            content: linkPago,
+          });
+
+          await pool.query(
+            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT DO NOTHING`,
+            [tenantId, canalEnvio, messageId]
+          );
+        }
+      } else {
+        console.log('💳 [WA] Datos recibidos pero ya estaba esperando pago; no repito link.', { senderId });
+      }
+
+      return; // ⬅️ corta TODO el pipeline
     }
   }
 
@@ -798,7 +967,7 @@ if (BOOKING_ENABLED) {
     // si algo falla, seguimos el flujo normal
   }
 }
-  const idioma = await detectarIdioma(userInput);
+  const idioma = idiomaDestino; // ✅ usa el idioma ya calculado
   
   function stripLeadGreetings(t: string) {
     return t
@@ -1189,7 +1358,7 @@ Termina con esta pregunta EXACTA en español:
           const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
           const intFinal = normalizeIntentAlias(det?.intencion || '');
           await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, det?.nivel_interes ?? 1, messageId);
-          await scheduleFollowUp(intFinal, det?.nivel_interes ?? 1);
+          await scheduleFollowUp(intFinal, det?.nivel_interes ?? 1, userInput);
         } catch (e) {
           console.warn('⚠️ No se pudo registrar sales_intelligence en fast-path:', e);
         }
@@ -1265,12 +1434,40 @@ Termina con esta pregunta EXACTA en español:
   return null;
 }
 
-  // ⏲️ Programador de follow-up (WhatsApp)
-  async function scheduleFollowUp(intFinal: string, nivel: number) {
+  // ⏲️ Programador de follow-up (WhatsApp) — FIX: hard-gate anti "gracias/ok/saludos"
+  async function scheduleFollowUp(intFinal: string, nivel: number, userTextRaw: string) {
     try {
-      const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
-      const condition = (nivel >= 3) || intencionesFollowUp.includes((intFinal || '').toLowerCase());
-      console.log('⏩ followup gate (WA)', { intFinal, nivel, condition });
+      const raw = (userTextRaw || "").trim();
+
+      // 0) Hard gates: nunca follow-up por cortesía o mensajes vacíos/cortos
+      const isCourtesy =
+        saludoPuroRegex.test(raw) ||
+        graciasPuroRegex.test(raw) ||
+        smallTalkRegex.test(raw) ||
+        /^(ok|okay|vale|perfecto|listo|gracias|thanks|thank\s*you)\b/i.test(raw);
+
+      const hasLetters = /\p{L}/u.test(raw);
+      const tooShort = normalizarTexto(raw).length < 4;
+      const numericOnly = /^\s*\d+\s*$/.test(raw);
+
+      if (isCourtesy || !hasLetters || tooShort || numericOnly) {
+        console.log("⛔ follow-up blocked (courtesy/short/numeric/no-letters)", {
+          raw,
+          isCourtesy,
+          hasLetters,
+          tooShort,
+          numericOnly,
+        });
+        return;
+      }
+
+      // 1) Lógica original de gate por intención/nivel
+      const intencionesFollowUp = ["interes_clases", "reservar", "precio", "comprar", "horario"];
+      const low = (intFinal || "").toLowerCase();
+
+      const condition = (nivel >= 3) || intencionesFollowUp.includes(low);
+      console.log("⏩ followup gate (WA)", { intFinal: low, nivel, condition });
+
       if (!condition) return;
 
       // Config tenant
@@ -1280,25 +1477,20 @@ Termina con esta pregunta EXACTA en español:
       );
       const cfg = cfgRows[0];
       if (!cfg) {
-        console.log('⚠️ Sin follow_up_settings; no se programa follow-up.');
+        console.log("⚠️ Sin follow_up_settings; no se programa follow-up.");
         return;
       }
 
       // Selección del mensaje por intención
       let msg = cfg.mensaje_general || "¡Hola! ¿Te gustaría que te ayudáramos a avanzar?";
-      const low = (intFinal || '').toLowerCase();
-      if (low.includes("precio") && cfg.mensaje_precio) {
-        msg = cfg.mensaje_precio;
-      } else if ((low.includes("agendar") || low.includes("reservar")) && cfg.mensaje_agendar) {
-        msg = cfg.mensaje_agendar;
-      } else if ((low.includes("ubicacion") || low.includes("location")) && cfg.mensaje_ubicacion) {
-        msg = cfg.mensaje_ubicacion;
-      }
+      if (low.includes("precio") && cfg.mensaje_precio) msg = cfg.mensaje_precio;
+      else if ((low.includes("agendar") || low.includes("reservar")) && cfg.mensaje_agendar) msg = cfg.mensaje_agendar;
+      else if ((low.includes("ubicacion") || low.includes("location")) && cfg.mensaje_ubicacion) msg = cfg.mensaje_ubicacion;
 
       // Asegura idioma del cliente
       try {
         const lang = await detectarIdioma(msg);
-        if (lang && lang !== 'zxx' && lang !== idiomaDestino) {
+        if (lang && lang !== "zxx" && lang !== idiomaDestino) {
           msg = await traducirMensaje(msg, idiomaDestino);
         }
       } catch {}
@@ -1306,8 +1498,8 @@ Termina con esta pregunta EXACTA en español:
       // Evita duplicados: borra pendientes no enviados
       await pool.query(
         `DELETE FROM mensajes_programados
-          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
-        [tenant.id, 'whatsapp', fromNumber]
+        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
+        [tenant.id, "whatsapp", fromNumber]
       );
 
       const delayMin = getConfigDelayMinutes(cfg, 60);
@@ -1316,13 +1508,13 @@ Termina con esta pregunta EXACTA en español:
 
       const { rows } = await pool.query(
         `INSERT INTO mensajes_programados
-          (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
+        (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
         VALUES ($1, $2, $3, $4, $5, false)
         RETURNING id`,
-        [tenant.id, 'whatsapp', fromNumber, msg, fechaEnvio]
+        [tenant.id, "whatsapp", fromNumber, msg, fechaEnvio]
       );
 
-      console.log('📅 Follow-up programado (WA)', {
+      console.log("📅 Follow-up programado (WA)", {
         id: rows[0]?.id,
         tenantId: tenant.id,
         contacto: fromNumber,
@@ -1330,9 +1522,9 @@ Termina con esta pregunta EXACTA en español:
         fechaEnvio: fechaEnvio.toISOString(),
       });
     } catch (e) {
-      console.warn('⚠️ No se pudo programar follow-up (WA):', e);
+      console.warn("⚠️ No se pudo programar follow-up (WA):", e);
     }
-  };
+  }
 
     // 💬 Small-talk tipo "hello how are you" / "hola como estas"
   if (smallTalkRegex.test(userInput.trim())) {
@@ -1471,7 +1663,7 @@ Termina con esta pregunta EXACTA en español:
         await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, nivel, messageId);
 
         if (nivel >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
-          await scheduleFollowUp(intFinal, nivel);
+          await scheduleFollowUp(intFinal, nivel, userInput);
         }
       } catch (e) {
         console.warn('⚠️ No se pudo registrar sales_intelligence en EARLY_RETURN (WA):', e);
@@ -1671,7 +1863,7 @@ Termina con esta pregunta EXACTA en español:
             const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
             const intFinal = normalizeIntentAlias(det?.intencion || 'precio');
             await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, det?.nivel_interes ?? 1, messageId);
-            await scheduleFollowUp(intFinal, det?.nivel_interes ?? 1);
+            await scheduleFollowUp(intFinal, det?.nivel_interes ?? 1, userInput);
           } catch {}
 
           return; // ⬅️ ya respondimos el combo; salimos
@@ -1843,7 +2035,7 @@ Termina con esta pregunta EXACTA en español:
           const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
           const nivel = det?.nivel_interes ?? 1;
           await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, nivel, messageId);
-          await scheduleFollowUp(intFinal, nivel);
+          await scheduleFollowUp(intFinal, nivel, userInput);
         } catch (e) {
           console.warn('⚠️ No se pudo programar follow-up post-intent (WA):', e);
         }
@@ -1882,7 +2074,7 @@ Termina con esta pregunta EXACTA en español:
 
       // registrar venta si aplica + follow up
       await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, nivel, messageId);
-      await scheduleFollowUp(intFinal, nivel);
+      await scheduleFollowUp(intFinal, nivel, userInput);
     } catch (e) {
       console.warn('⚠️ No se pudo programar follow-up tras interceptor (WA):', e);
     }  
@@ -2010,7 +2202,7 @@ Termina con esta pregunta EXACTA en español:
       await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, nivelFaq, messageId);
       const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
       if (nivelFaq >= 3 || intencionesFollowUp.includes(intFinal)) {
-        await scheduleFollowUp(intFinal, nivelFaq);
+        await scheduleFollowUp(intFinal, nivelFaq, userInput);
       }
     } catch (e) {
       console.warn('⚠️ No se pudo programar follow-up tras FAQ (WA):', e);
@@ -2322,7 +2514,7 @@ Termina con esta pregunta EXACTA en español:
 
     // 🚀 Follow-up con intención final
     if (nivel_interes >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
-      await scheduleFollowUp(intFinal, nivel_interes);
+      await scheduleFollowUp(intFinal, nivel_interes, userInput);
     }
     
   } catch (err) {

@@ -54,6 +54,40 @@ const MATCHER_MIN_OVERRIDE = 0.85;
 const CMD_DISABLE = /\b(aamy\s*disable|disable\s*aamy|modo\s*humano|human\s*mode|bot\s*off|desactivar\s*bot)\b/i;
 const CMD_ENABLE  = /\b(aamy\s*enable|enable\s*aamy|modo\s*bot|bot\s*on|activar\s*bot)\b/i;
 
+// 💳 Confirmación de pago (usuario)
+const PAGO_CONFIRM_REGEX = /\b(pago\s*realizado|listo\s*el\s*pago|ya\s*pagu[eé]|pagu[eé]|payment\s*(done|made|completed)|paid)\b/i;
+
+// 🧾 Detectores básicos de datos
+const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+const PHONE_REGEX = /(\+?\d[\d\s().-]{7,}\d)/;
+
+// Parse simple: soporta "Nombre Apellido email teléfono país"
+function parseDatosCliente(text: string) {
+  const raw = (text || '').trim();
+  if (!raw) return null;
+
+  const email = raw.match(EMAIL_REGEX)?.[0] || null;
+  const phoneRaw = raw.match(PHONE_REGEX)?.[0] || null;
+  const telefono = phoneRaw ? phoneRaw.replace(/[^\d+]/g, '') : null;
+
+  if (!email || !telefono) return null;
+
+  // Quita email y teléfono del texto y lo que quede lo usamos para nombre/pais
+  let rest = raw.replace(email, ' ').replace(phoneRaw || '', ' ');
+  rest = rest.replace(/\s+/g, ' ').trim();
+
+  // Si vienen en orden: nombre (2 primeras palabras) + país (resto)
+  const parts = rest.split(' ').filter(Boolean);
+  if (parts.length < 3) return null;
+
+  const nombre = parts.slice(0, 2).join(' ').trim();       // Nombre + Apellido
+  const pais = parts.slice(2).join(' ').trim();
+
+  if (!nombre || !pais) return null;
+
+  return { nombre, email, telefono, pais };
+}
+
 const INTENT_THRESHOLD = Math.min(
   0.95,
   Math.max(0.30, Number(process.env.INTENT_MATCH_THRESHOLD ?? 0.55))
@@ -109,26 +143,38 @@ async function shouldSendWelcome(
   return rows.length === 0;
 }
 
-// Idioma persistente por contacto
-async function getIdiomaClienteDB(tenantId: string, contacto: string, fallback: 'es'|'en'): Promise<'es'|'en'> {
+async function getIdiomaClienteDB(
+  tenantId: string,
+  canal: string,
+  contacto: string,
+  fallback: 'es'|'en'
+): Promise<'es'|'en'> {
   try {
     const { rows } = await pool.query(
-      `SELECT idioma FROM clientes WHERE tenant_id = $1 AND contacto = $2 LIMIT 1`,
-      [tenantId, contacto]
+      `SELECT idioma
+         FROM clientes
+        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+        LIMIT 1`,
+      [tenantId, canal, contacto]
     );
     if (rows[0]?.idioma) return normalizeLang(rows[0].idioma);
   } catch {}
   return fallback;
 }
 
-async function upsertIdiomaClienteDB(tenantId: string, contacto: string, idioma: 'es'|'en') {
+async function upsertIdiomaClienteDB(
+  tenantId: string,
+  canal: string,
+  contacto: string,
+  idioma: 'es'|'en'
+) {
   try {
     await pool.query(
-      `INSERT INTO clientes (tenant_id, contacto, idioma)
-      VALUES ($1, $2, $3)
-      ON CONFLICT (tenant_id, contacto)
-      DO UPDATE SET idioma = EXCLUDED.idioma, updated_at = now()`,
-      [tenantId, contacto, idioma]
+      `INSERT INTO clientes (tenant_id, canal, contacto, idioma)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (tenant_id, canal, contacto)
+       DO UPDATE SET idioma = EXCLUDED.idioma, updated_at = now()`,
+      [tenantId, canal, contacto, idioma]
     );
   } catch (e) {
     console.warn('No se pudo guardar idioma del cliente:', e);
@@ -415,12 +461,12 @@ router.post('/api/facebook/webhook', async (req, res) => {
         let idiomaDestino: 'es'|'en';
 
         if (isNumericOnly) {
-          idiomaDestino = await getIdiomaClienteDB(tenantId, senderId, tenantBase);
+          idiomaDestino = await getIdiomaClienteDB(tenantId, canalEnvio, senderId, tenantBase);
         } else {
           let detectado: string | null = null;
           try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
           const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
-          await upsertIdiomaClienteDB(tenantId, senderId, normalizado);
+          await upsertIdiomaClienteDB(tenantId, canalEnvio, senderId, normalizado);
           idiomaDestino = normalizado;
         }
 
@@ -535,18 +581,109 @@ router.post('/api/facebook/webhook', async (req, res) => {
         const enviarMetaSeguro = async (_to: string, text: string, _tenantId: string) =>
           sendMetaContabilizando(text);
 
-        // 📴 Si esta conversación está en modo humano, no responde el bot
-        const { rows: humanRows } = await pool.query(
-          `SELECT human_override
+        // ===============================
+        // ✅ CONTROL DE ESTADO (PAGO / HUMANO) - PRIORIDAD MÁXIMA
+        // ===============================
+        const { rows: clienteRows } = await pool.query(
+          `SELECT estado, human_override, nombre, email, telefono, pais
             FROM clientes
-            WHERE tenant_id = $1 AND contacto = $2
+            WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
             LIMIT 1`,
-          [tenantId, senderId]
+          [tenantId, canalEnvio, senderId]
         );
 
-        if (humanRows[0]?.human_override === true) {
+        const cliente = clienteRows[0] || null;
+
+        // 1) Si humano tomó la conversación → SILENCIO
+        if (cliente?.human_override === true) {
           console.log('🤝 [META] Conversación tomada por humano. Bot NO responde:', senderId);
           continue;
+        }
+
+        // 2) Si está en pago_en_confirmacion → SILENCIO TOTAL (evita "Hola ¿en qué puedo ayudarte?")
+        if ((cliente?.estado || '').toLowerCase() === 'pago_en_confirmacion') {
+          console.log('💳 [META] Pago en confirmación. Bot en silencio:', senderId);
+          continue;
+        }
+
+        // 3) Si usuario confirma pago → guardar estado + human_override y responder SOLO el mensaje fijo
+        if (PAGO_CONFIRM_REGEX.test(userInput)) {
+          await pool.query(
+            `INSERT INTO clientes (tenant_id, canal, contacto, estado, human_override, updated_at)
+            VALUES ($1, $2, $3, 'pago_en_confirmacion', true, now())
+            ON CONFLICT (tenant_id, canal, contacto)
+            DO UPDATE SET estado='pago_en_confirmacion', human_override=true, updated_at=now()`,
+            [tenantId, canalEnvio, senderId]
+          );
+
+          const msgPago = "Perfecto 👍\nVamos a confirmar tu pago y una persona del equipo se pondrá en contacto contigo para la activación de tu cuenta.";
+
+          await sendMetaContabilizando(msgPago);
+
+          // guardar mensaje bot
+          try {
+            await pool.query(
+              `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+              VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+              ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+              [tenantId, msgPago, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+            );
+            await pool.query(
+              `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+              VALUES ($1, $2, $3, NOW())
+              ON CONFLICT DO NOTHING`,
+              [tenantId, canalEnvio, messageId]
+            );
+          } catch {}
+
+          continue; // ⬅️ corta TODO el pipeline
+        }
+
+        // 4) Si el usuario manda datos (email + telefono + nombre + pais) → guardar y enviar link UNA SOLA VEZ
+        const parsed = parseDatosCliente(userInput);
+        if (parsed) {
+          // si ya estaba esperando pago, no repitas link salvo que lo pida explícito
+          const estadoActual = (cliente?.estado || '').toLowerCase();
+
+          await pool.query(
+            `INSERT INTO clientes (tenant_id, canal, contacto, nombre, email, telefono, pais, segmento, estado, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'lead'), 'esperando_pago', now())
+            ON CONFLICT (tenant_id, canal, contacto)
+            DO UPDATE SET
+              nombre   = COALESCE(EXCLUDED.nombre, clientes.nombre),
+              email    = COALESCE(EXCLUDED.email,  clientes.email),
+              telefono = COALESCE(EXCLUDED.telefono, clientes.telefono),
+              pais     = COALESCE(EXCLUDED.pais, clientes.pais),
+              estado   = 'esperando_pago',
+              updated_at = now()`,
+            [tenantId, canalEnvio, senderId, parsed.nombre, parsed.email, parsed.telefono, parsed.pais, cliente?.segmento || null]
+          );
+
+          const pideLink = /\b(link|enlace|pago|stripe)\b/i.test(userInput);
+
+          if (estadoActual !== 'esperando_pago' || pideLink) {
+            const linkPago = "Gracias. Ya tengo tus datos.\nPuedes completar el pago aquí:\n- https://buy.stripe.com/bJe3cneyN8VQ9WU73E3ZK01\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar.";
+            await sendMetaContabilizando(linkPago);
+
+            try {
+              await pool.query(
+                `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+                VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
+                ON CONFLICT (tenant_id, message_id) DO NOTHING`,
+                [tenantId, linkPago, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+              );
+              await pool.query(
+                `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT DO NOTHING`,
+                [tenantId, canalEnvio, messageId]
+              );
+            } catch {}
+          } else {
+            console.log('💳 [META] Datos recibidos pero ya estaba esperando pago; no repito link.', { senderId });
+          }
+
+          continue; // ⬅️ corta TODO el pipeline
         }
 
         // Helper seguro para detectarIntencion en META
