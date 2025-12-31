@@ -61,6 +61,18 @@ const PAGO_CONFIRM_REGEX = /\b(pago\s*realizado|listo\s*el\s*pago|ya\s*pagu[eé]
 const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 const PHONE_REGEX = /(\+?\d[\d\s().-]{7,}\d)/;
 
+function extractPaymentLinkFromPrompt(promptBase: string): string | null {
+  if (!promptBase) return null;
+
+  // 1) Preferido: marcador explícito en prompt: "LINK_PAGO: https://..."
+  const tagged = promptBase.match(/LINK_PAGO:\s*(https?:\/\/\S+)/i);
+  if (tagged?.[1]) return tagged[1].replace(/[),.]+$/g, '');
+
+  // 2) Fallback: primer URL en el prompt (incluye buy.stripe.com)
+  const any = promptBase.match(/https?:\/\/[^\s)]+/i);
+  return any?.[0] ? any[0].replace(/[),.]+$/g, '') : null;
+}
+
 // Parse simple: soporta "Nombre Apellido email teléfono país"
 function parseDatosCliente(text: string) {
   const raw = (text || '').trim();
@@ -664,11 +676,22 @@ router.post('/api/facebook/webhook', async (req, res) => {
 
           const pideLink = /\b(link|enlace|pago|stripe)\b/i.test(userInput);
 
-          if (estadoActual !== 'esperando_pago' || pideLink) {
+          if (estadoActual !== 'esperando_pago') {
+            // ✅ Saca el link desde el prompt del canal (Meta)
+            const paymentLink = extractPaymentLinkFromPrompt(getPromptPorCanal(canalEnvio, tenant, idiomaDestino));
+
             const mensajePago =
               idiomaDestino === 'en'
-                ? "Thanks. I already have your details.\nYou can complete the payment using the link I shared with you.\nAfter you pay, text “PAGO REALIZADO” to continue."
-                : "Gracias. Ya tengo tus datos.\nPuedes completar el pago usando el enlace que te compartí.\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar.";
+                ? (
+                    paymentLink
+                      ? `Thanks. I already have your details.\nYou can complete the payment here:\n${paymentLink}\nAfter you pay, text “PAGO REALIZADO” to continue.`
+                      : "Thanks. I already have your details.\nYou can complete the payment using the link I shared with you.\nAfter you pay, text “PAGO REALIZADO” to continue."
+                  )
+                : (
+                    paymentLink
+                      ? `Gracias. Ya tengo tus datos.\nPuedes completar el pago aquí:\n${paymentLink}\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar.`
+                      : "Gracias. Ya tengo tus datos.\nPuedes completar el pago usando el enlace que te compartí.\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar."
+                  );
 
             await sendMetaContabilizando(mensajePago);
 
@@ -679,6 +702,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
                 ON CONFLICT (tenant_id, message_id) DO NOTHING`,
                 [tenantId, mensajePago, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
               );
+
               await pool.query(
                 `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
                 VALUES ($1, $2, $3, NOW())
@@ -686,6 +710,7 @@ router.post('/api/facebook/webhook', async (req, res) => {
                 [tenantId, canalEnvio, messageId]
               );
             } catch {}
+
           } else {
             console.log('💳 [META] Datos recibidos pero ya estaba esperando pago; no repito link.', { senderId });
           }

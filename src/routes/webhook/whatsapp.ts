@@ -62,6 +62,18 @@ const PAGO_CONFIRM_REGEX = /\b(pago\s*realizado|listo\s*el\s*pago|ya\s*pagu[eé]
 const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 const PHONE_REGEX = /(\+?\d[\d\s().-]{7,}\d)/;
 
+function extractPaymentLinkFromPrompt(promptBase: string): string | null {
+  if (!promptBase) return null;
+
+  // 1) Preferido: marcador LINK_PAGO:
+  const tagged = promptBase.match(/LINK_PAGO:\s*(https?:\/\/\S+)/i);
+  if (tagged?.[1]) return tagged[1].replace(/[),.]+$/g, '');
+
+  // 2) Fallback: primer URL
+  const any = promptBase.match(/https?:\/\/[^\s)]+/i);
+  return any?.[0] ? any[0].replace(/[),.]+$/g, '') : null;
+}
+
 // Parse simple: soporta "Nombre Apellido email teléfono país"
 function parseDatosCliente(text: string) {
   const raw = (text || '').trim();
@@ -583,6 +595,9 @@ export async function procesarMensajeWhatsApp(
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
+  // ✅ Prompt base disponible para TODO el flujo (incluye la rama de pago)
+  const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
+
   // 🛡️ Anti-phishing (EARLY EXIT antes de guardar mensajes/uso/tokens)
   {
     const handledPhishing = await antiPhishingGuard({
@@ -693,11 +708,21 @@ export async function procesarMensajeWhatsApp(
 
       const pideLink = /\b(link|enlace|pago|stripe)\b/i.test(userInput);
 
-      if (estadoActual !== 'esperando_pago' || pideLink) {
+      if (estadoActual !== 'esperando_pago') {
+        const paymentLink = extractPaymentLinkFromPrompt(promptBase); // 👈 del prompt
+
         const mensajePago =
           idiomaDestino === 'en'
-            ? "Thanks. I already have your details.\nYou can complete the payment using the link I shared with you.\nAfter you pay, text “PAGO REALIZADO” to continue."
-            : "Gracias. Ya tengo tus datos.\nPuedes completar el pago usando el enlace que te compartí.\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar.";
+            ? (
+                paymentLink
+                  ? `Thanks. I already have your details.\nYou can complete the payment here:\n${paymentLink}\nAfter you pay, text “PAGO REALIZADO” to continue.`
+                  : "Thanks. I already have your details.\nYou can complete the payment using the link I shared with you.\nAfter you pay, text “PAGO REALIZADO” to continue."
+              )
+            : (
+                paymentLink
+                  ? `Gracias. Ya tengo tus datos.\nPuedes completar el pago aquí:\n${paymentLink}\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar.`
+                  : "Gracias. Ya tengo tus datos.\nPuedes completar el pago usando el enlace que te compartí.\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar."
+              );
 
         const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, senderId, mensajePago);
 
@@ -1052,8 +1077,6 @@ if (BOOKING_ENABLED) {
     /\b(demuéstramelo|demuestrame|demuestrame|hazme una demostracion|hazme un demo|prueba real|ejemplo real|muestrame como funciona|muestrame como responde|show me|prove it|give me a demo)\b/i
       .test(cleanedNorm);
 
-  // Prompt base del tenant para todo este flujo
-  const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
   let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
 
   // CTA multilenguaje para cierres consistentes
