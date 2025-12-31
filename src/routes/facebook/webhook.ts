@@ -662,15 +662,19 @@ router.post('/api/facebook/webhook', async (req, res) => {
           const pideLink = /\b(link|enlace|pago|stripe)\b/i.test(userInput);
 
           if (estadoActual !== 'esperando_pago' || pideLink) {
-            const linkPago = "Gracias. Ya tengo tus datos.\nPuedes completar el pago aquí:\n- https://buy.stripe.com/bJe3cneyN8VQ9WU73E3ZK01\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar.";
-            await sendMetaContabilizando(linkPago);
+            const mensajePago =
+              idiomaDestino === 'en'
+                ? "Thanks. I already have your details.\nYou can complete the payment using the link I shared with you.\nAfter you pay, text “PAGO REALIZADO” to continue."
+                : "Gracias. Ya tengo tus datos.\nPuedes completar el pago usando el enlace que te compartí.\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar.";
+
+            await sendMetaContabilizando(mensajePago);
 
             try {
               await pool.query(
                 `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
                 VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
                 ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-                [tenantId, linkPago, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
+                [tenantId, mensajePago, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
               );
               await pool.query(
                 `INSERT INTO interactions (tenant_id, canal, message_id, created_at)

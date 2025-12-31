@@ -691,12 +691,12 @@ export async function procesarMensajeWhatsApp(
       const pideLink = /\b(link|enlace|pago|stripe)\b/i.test(userInput);
 
       if (estadoActual !== 'esperando_pago' || pideLink) {
-        const linkPago =
+        const mensajePago =
           idiomaDestino === 'en'
-            ? "Thanks. I already have your details.\nYou can complete the payment here:\nhttps://buy.stripe.com/bJe3cneyN8VQ9WU73E3ZK01\nAfter you pay, text “PAGO REALIZADO” to continue."
-            : "Gracias. Ya tengo tus datos.\nPuedes completar el pago aquí:\nhttps://buy.stripe.com/bJe3cneyN8VQ9WU73E3ZK01\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar.";
+            ? "Thanks. I already have your details.\nYou can complete the payment using the link I shared with you.\nAfter you pay, text “PAGO REALIZADO” to continue."
+            : "Gracias. Ya tengo tus datos.\nPuedes completar el pago usando el enlace que te compartí.\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar.";
 
-        const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, senderId, linkPago);
+        const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, senderId, mensajePago);
 
         if (ok) {
           await saveAssistantMessageAndEmit({
@@ -704,7 +704,7 @@ export async function procesarMensajeWhatsApp(
             canal: canalEnvio,
             fromNumber: senderId || 'anónimo',
             messageId,
-            content: linkPago,
+            content: mensajePago,
           });
 
           await pool.query(
