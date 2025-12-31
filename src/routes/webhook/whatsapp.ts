@@ -238,10 +238,10 @@ async function getIdiomaClienteDB(
   try {
     const { rows } = await pool.query(
       `SELECT idioma
-         FROM clientes
-        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+        FROM clientes
+        WHERE tenant_id = $1 AND contacto = $2
         LIMIT 1`,
-      [tenantId, canal, contacto]
+      [tenantId, contacto]
     );
     if (rows[0]?.idioma) return normalizeLang(rows[0].idioma);
   } catch {}
@@ -258,8 +258,11 @@ async function upsertIdiomaClienteDB(
     await pool.query(
       `INSERT INTO clientes (tenant_id, canal, contacto, idioma)
        VALUES ($1, $2, $3, $4)
-       ON CONFLICT (tenant_id, canal, contacto)
-       DO UPDATE SET idioma = EXCLUDED.idioma, updated_at = now()`,
+       ON CONFLICT (tenant_id, contacto)
+       DO UPDATE SET
+         canal = EXCLUDED.canal,
+         idioma = EXCLUDED.idioma,
+         updated_at = now()`,
       [tenantId, canal, contacto, idioma]
     );
   } catch (e) {
