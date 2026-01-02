@@ -148,21 +148,24 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
     const planFeatures = await getFeaturesFromStripe(planName);
 
     // Por defecto, lo que diga Stripe
-    let enabledByPlan = !!planFeatures[canal];
+    const enabledByPlan = !!planFeatures[canal];
 
-    // 🟣 OVERRIDE limpio: tu tenant Starter con Meta “Pro”
-    if (canal === "meta" && extra.force_meta_pro === true) {
-      enabledByPlan = true;
-    }
+    // ✅ Override manual por tenant (admin)
+    const enabledByOverride = extra?.[`force_${canal}`] === true
+      || (canal === "meta" && extra?.force_meta_pro === true); // compatibilidad
+
+    // ✅ Resultado final: plan OR override
+    const enabledEffective = enabledByPlan || enabledByOverride;
 
     // 5) Gate final
-    const enabled = enabledByPlan && settingsEnabled && !maint.maintenance;
+    const enabled = enabledEffective && settingsEnabled && !maint.maintenance;
 
     res.setHeader("Cache-Control", "no-store");
+    // Si quieres que el frontend entienda mejor, devolvemos plan_enabled como "enabledEffective"
     return res.json({
       canal,
       enabled,
-      plan_enabled: enabledByPlan,
+      plan_enabled: enabledEffective, // <-- IMPORTANTE: aquí va el effective, no solo Stripe
       settings_enabled: settingsEnabled,
       maintenance: maint.maintenance,
       maintenance_message: maint.message,
