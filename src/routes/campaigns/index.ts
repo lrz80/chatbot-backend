@@ -173,6 +173,18 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
           return [];
         }
       })(),
+            segmentos: (() => {
+        try {
+          if (!row.segmentos) return [];
+          return typeof row.segmentos === "string"
+            ? JSON.parse(row.segmentos)
+            : Array.isArray(row.segmentos)
+            ? row.segmentos
+            : [];
+        } catch {
+          return [];
+        }
+      })(),
       programada_para: row.programada_para || row.fecha_envio || null,
       enviada: row.enviada ?? true,
       fecha_creacion: row.fecha_creacion || new Date().toISOString(),
@@ -197,7 +209,7 @@ router.post(
   manejarErroresMulter,
   async (req: Request, res: Response) => {
     try {
-      const { nombre, canal, contenido, fecha_envio, segmentos, template_sid, template_vars } = req.body;
+      const { nombre, canal, contenido, fecha_envio, segmentos, destinatarios, template_sid, template_vars } = req.body;
       const { tenant_id } = req.user as { uid: string; tenant_id: string };
       const asunto = req.body.asunto || "📣 Nueva campaña de tu negocio";
       const tituloVisual = req.body.titulo_visual || "";
@@ -216,6 +228,11 @@ router.post(
 
       if (!nombre || !canal || !fecha_envio || !segmentos) {
         return res.status(400).json({ error: "Faltan campos obligatorios." });
+      }
+
+      // Para SMS/WhatsApp, contenido es obligatorio
+      if ((canal === "sms" || canal === "whatsapp") && !contenido) {
+        return res.status(400).json({ error: "Contenido es obligatorio para SMS/WhatsApp." });
       }
 
       // ✅ Gate unificado: global + tenant + pausas
@@ -238,9 +255,58 @@ router.post(
         return res.status(400).json({ error: "El formato de los segmentos no es válido." });
       }
 
+      // Parse destinatarios (solo para sms/whatsapp)
+      let destinatariosParsed: string[] = [];
+
+      if (canal === "sms" || canal === "whatsapp") {
+        try {
+          const raw =
+            typeof destinatarios === "string"
+              ? JSON.parse(destinatarios)
+              : Array.isArray(destinatarios)
+              ? destinatarios
+              : [];
+
+          if (!Array.isArray(raw)) {
+            return res.status(400).json({ error: "Destinatarios no tienen formato de lista." });
+          }
+
+          // Normaliza y filtra
+          destinatariosParsed = raw
+            .map((x: any) => String(x || "").trim())
+            .filter((x: string) => x.length > 0);
+
+        } catch (err) {
+          console.error("❌ Error al parsear destinatarios:", err);
+          return res.status(400).json({ error: "El formato de los destinatarios no es válido." });
+        }
+
+        // Si NO llegaron destinatarios, los obtenemos desde la tabla contactos por segmentos
+        if (destinatariosParsed.length === 0) {
+          const contactosRes = await pool.query(
+            `SELECT telefono
+              FROM contactos
+              WHERE tenant_id = $1
+                AND segmento = ANY($2)`,
+            [tenant_id, segmentosParsed]
+          );
+
+          destinatariosParsed = (contactosRes.rows || [])
+            .map(r => String(r.telefono || "").trim())
+            .filter(Boolean);
+        }
+
+        if (destinatariosParsed.length === 0) {
+          return res.status(400).json({ error: "No hay destinatarios válidos para enviar." });
+        }
+      }
+
       // 🔐 Límite dinámico por canal
       const cap = await getCapacidadCanal(tenant_id, canal);
-      const solicitados = segmentosParsed.length;
+      const solicitados =
+        canal === "email"
+          ? segmentosParsed.length // (email lo estamos manejando luego con query de emails)
+          : (destinatariosParsed.length || 0);
 
       if (cap.limite <= 0) {
         return res.status(403).json({
@@ -275,21 +341,21 @@ router.post(
       const insertQuery =
         canal === "email"
           ? `INSERT INTO campanas (
-               tenant_id, titulo, contenido, imagen_url,
-               canal, destinatarios, programada_para, enviada, fecha_creacion,
-               link_url, template_sid, template_vars, asunto, titulo_visual
-             ) VALUES (
-               $1, $2, $3, $4,
-               $5, $6, $7, false, NOW(),
-               $8, $9, $10, $11, $12
-             ) RETURNING id`
+              tenant_id, titulo, contenido, imagen_url,
+              canal, segmentos, destinatarios, programada_para, enviada, fecha_creacion,
+              link_url, template_sid, template_vars, asunto, titulo_visual
+            ) VALUES (
+              $1, $2, $3, $4,
+              $5, $6, $7, $8, false, NOW(),
+              $9, $10, $11, $12, $13
+            ) RETURNING id`
           : `INSERT INTO campanas (
-               tenant_id, titulo, contenido, canal, destinatarios,
-               programada_para, enviada, fecha_creacion
-             ) VALUES (
-               $1, $2, $3, $4, $5,
-               $6, false, NOW()
-             ) RETURNING id`;
+              tenant_id, titulo, contenido, canal, segmentos, destinatarios,
+              programada_para, enviada, fecha_creacion
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6,
+              $7, false, NOW()
+            ) RETURNING id`;
 
       const insertValues =
         canal === "email"
@@ -299,7 +365,8 @@ router.post(
               contenido,
               imagen_url,
               canal,
-              JSON.stringify(segmentosParsed),
+              JSON.stringify(segmentosParsed),              // segmentos
+              JSON.stringify(segmentosParsed),              // destinatarios (para email mantenemos segmentos por ahora)
               fecha_envio,
               link_url,
               template_sid || null,
@@ -307,16 +374,31 @@ router.post(
               asunto,
               tituloVisual,
             ]
-          : [tenant_id, nombre, contenido, canal, JSON.stringify(segmentosParsed), fecha_envio];
+          : [
+              tenant_id,
+              nombre,
+              contenido,
+              canal,
+              JSON.stringify(segmentosParsed),              // segmentos
+              JSON.stringify(destinatariosParsed),          // ✅ telefonos reales
+              fecha_envio,
+            ];
 
       const campaignResult = await pool.query(insertQuery, insertValues);
       const campaignId = campaignResult.rows[0].id;
 
       // ========= Registrar uso del mes =========
-      await pool.query(
-        "INSERT INTO campaign_usage (tenant_id, canal, cantidad, fecha_envio) VALUES ($1, $2, $3, NOW())",
-        [tenant_id, canal, solicitados]
-      );
+      const cantidadUso =
+        canal === "email"
+          ? undefined // lo seteamos dentro del bloque email con solicitadosEmail
+          : solicitados;
+
+      if (canal !== "email") {
+        await pool.query(
+          "INSERT INTO campaign_usage (tenant_id, canal, cantidad, fecha_envio) VALUES ($1, $2, $3, NOW())",
+          [tenant_id, canal, solicitados]
+        );
+      }
 
       // ========= Envío inmediato para email (si aplica) =========
       if (canal === "email") {
@@ -326,6 +408,20 @@ router.post(
           [tenant_id, segmentosParsed]
         );
         const contactos = contactosRes.rows || [];
+
+        // Para email, el cupo debe ser por cantidad real de correos
+        const solicitadosEmail = contactos.length;
+
+        await pool.query(
+          "INSERT INTO campaign_usage (tenant_id, canal, cantidad, fecha_envio) VALUES ($1, $2, $3, NOW())",
+          [tenant_id, canal, solicitadosEmail]
+        );
+
+        if (solicitadosEmail > cap.restante) {
+          return res.status(403).json({
+            error: `Tu cupo disponible es ${cap.restante} emails este mes (límite ${cap.limite}, usados ${cap.usados}). Reduce la lista o compra más créditos.`,
+          });
+        }
 
         if (template_sid) {
           const parsedVars = template_vars ? JSON.parse(template_vars) : {};

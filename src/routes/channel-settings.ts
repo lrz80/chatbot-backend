@@ -152,7 +152,7 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
 
     // ✅ Override manual por tenant (admin)
     const enabledByOverride = extra?.[`force_${canal}`] === true
-      || (canal === "meta" && extra?.force_meta_pro === true); // compatibilidad
+      || (canal === "meta" && extra?.force_meta === true); // compatibilidad
 
     // ✅ Resultado final: plan OR override
     const enabledEffective = enabledByPlan || enabledByOverride;
