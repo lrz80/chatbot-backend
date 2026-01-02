@@ -114,7 +114,7 @@ router.get('/', async (req: Request, res: Response) => {
       };
     });
 
-    return res.status(200).json({ usos, plan: tenantPlan });
+    return res.status(200).json({ usos, plan: tenantPlan, ciclo });
 
   } catch (error) {
     console.error('❌ Error en /usage:', error);
