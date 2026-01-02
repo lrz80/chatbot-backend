@@ -46,7 +46,8 @@ router.get('/', async (req: Request, res: Response) => {
             WHEN canal IN ('facebook', 'instagram') THEN 'meta'
             ELSE canal
           END as canal,
-          SUM(usados) as usados
+          SUM(usados) as usados,
+          MAX(limite) as limite
         FROM uso_mensual
         WHERE tenant_id = $1 AND mes = $2::date
         GROUP BY 1
@@ -68,17 +69,36 @@ router.get('/', async (req: Request, res: Response) => {
     const usosMap = new Map(
       usoRes.rows.map((row: any) => [row.canal, parseInt(row.usados, 10)])
     );
+    const limitesDbMap = new Map(
+      usoRes.rows.map((row: any) => [row.canal, parseInt(row.limite ?? 0, 10)])
+    );
 
     // limites viene de getLimitesPorPlan(tenantPlan)
-    const usos = Object.entries(limites).map(([canal, limiteBase]) => {
+    // canales que vienen del plan + los que existan en DB (ej. contactos)
+    const canales = new Set<string>([
+      ...Object.keys(limites),
+      ...Array.from(usosMap.keys()),
+      ...Array.from(limitesDbMap.keys()),
+      ...Array.from(creditosMap.keys()),
+    ]);
+
+    const usos = Array.from(canales).map((canal) => {
       const usados = usosMap.get(canal) ?? 0;
       const creditosExtras = creditosMap.get(canal) ?? 0;
-      const totalLimite = (limiteBase ?? 0) + creditosExtras;
 
+      // ✅ prioridad: DB -> plan
+      const limiteBasePlan = (limites as any)[canal] ?? 0;
+      const limiteBaseDb = limitesDbMap.get(canal);
+
+      const limiteBase = (limiteBaseDb !== undefined && limiteBaseDb > 0)
+        ? limiteBaseDb
+        : limiteBasePlan;
+
+      const totalLimite = limiteBase + creditosExtras;
       const porcentaje = totalLimite > 0 ? (usados / totalLimite) * 100 : 0;
 
       let notificar: 'aviso' | 'limite' | null = null;
-      if (totalLimite) {
+      if (totalLimite > 0) {
         if (porcentaje >= 100) notificar = 'limite';
         else if (porcentaje >= 80) notificar = 'aviso';
       }
@@ -87,8 +107,8 @@ router.get('/', async (req: Request, res: Response) => {
         canal,
         usados,
         limite: totalLimite,
-        limite_base: limiteBase ?? 0,      // 👈 base del plan
-        creditos_extras: creditosExtras,   // 👈 de la tabla creditos_comprados
+        limite_base: limiteBase,
+        creditos_extras: creditosExtras,
         porcentaje,
         notificar,
       };

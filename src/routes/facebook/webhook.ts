@@ -64,11 +64,11 @@ const PHONE_REGEX = /(\+?\d[\d\s().-]{7,}\d)/;
 function extractPaymentLinkFromPrompt(promptBase: string): string | null {
   if (!promptBase) return null;
 
-  // 1) Preferido: marcador explícito en prompt: "LINK_PAGO: https://..."
+  // 1) Preferido: marcador LINK_PAGO:
   const tagged = promptBase.match(/LINK_PAGO:\s*(https?:\/\/\S+)/i);
   if (tagged?.[1]) return tagged[1].replace(/[),.]+$/g, '');
 
-  // 2) Fallback: primer URL en el prompt (incluye buy.stripe.com)
+  // 2) Fallback: primer URL
   const any = promptBase.match(/https?:\/\/[^\s)]+/i);
   return any?.[0] ? any[0].replace(/[),.]+$/g, '') : null;
 }
