@@ -159,6 +159,13 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
       .map((h) => h.replace(/"/g, "").trim().toLowerCase());
     const dataLines = lines.slice(1);
 
+    const forcedRaw = ((req.body as any)?.segmento_forzado || "").toString().toLowerCase().trim();
+
+    const segmentoForzado =
+      forcedRaw === "cliente" || forcedRaw === "leads" || forcedRaw === "otros"
+        ? (forcedRaw as "cliente" | "leads" | "otros")
+        : null;
+
     // 🔐 Capacidad dinámica
     const { total, limite, restante } = await getCapacidadContactos(tenant_id);
     if (restante <= 0) {
@@ -189,9 +196,12 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
       const telefono = pick(rawHeaders, cols, ["telefono", "phone", "tel"]);
       const email = pick(rawHeaders, cols, ["email", "correo"]);
 
-      // ✅ Segmento inferido sin depender de headers; si falla, usa segmento_default
-      let segmento = inferSegmentFromRow(line, rawHeaders, cols);
-      if (!segmento) segmento = segmentoDefault;
+      // ✅ Segmento FINAL: si viene forzado del front, manda eso.
+      // Si no viene forzado, intenta inferir. Si no, usa default.
+      let segmento: Segmento =
+        (segmentoForzado as Segmento) ??
+        inferSegmentFromRow(line, rawHeaders, cols) ??
+        segmentoDefault;
 
       // Reglas mínimas: al menos 1 identificador y teléfono válido si viene
       if (!telefono && !email) continue;
