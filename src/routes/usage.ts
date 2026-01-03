@@ -39,6 +39,9 @@ router.get('/', async (req: Request, res: Response) => {
     // 🔁 mismo cálculo que el webhook
     const ciclo = cycleStartForNow(membresiaInicio);
 
+    const cicloEnd = new Date(ciclo);
+    cicloEnd.setMonth(cicloEnd.getMonth() + 1);
+
     const usoRes = await pool.query(
       `
         SELECT 
@@ -53,6 +56,23 @@ router.get('/', async (req: Request, res: Response) => {
         GROUP BY 1
       `,
       [tenantId, ciclo]
+    );
+
+    // ✅ Usos reales por campañas (campaign_usage) para el ciclo actual
+    const campUsageRes = await pool.query(
+      `
+      SELECT canal, COALESCE(SUM(cantidad),0)::int AS usados
+      FROM campaign_usage
+      WHERE tenant_id = $1
+        AND fecha_envio >= $2
+        AND fecha_envio < $3
+      GROUP BY canal
+      `,
+      [tenantId, ciclo, cicloEnd]
+    );
+
+    const campUsageMap = new Map(
+      campUsageRes.rows.map((row: any) => [row.canal, parseInt(row.usados, 10)])
     );
 
     // 🔍 Obtener créditos extra válidos (no vencidos)
@@ -83,7 +103,12 @@ router.get('/', async (req: Request, res: Response) => {
     ]);
 
     const usos = Array.from(canales).map((canal) => {
-      const usados = usosMap.get(canal) ?? 0;
+    // ✅ Para SMS, el consumo real viene de campaign_usage (no de uso_mensual)
+    const usados =
+      canal === "sms"
+        ? (campUsageMap.get("sms") ?? 0)
+        : (usosMap.get(canal) ?? 0);
+
       const creditosExtras = creditosMap.get(canal) ?? 0;
 
       // ✅ prioridad: DB -> plan

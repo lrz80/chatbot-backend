@@ -193,7 +193,21 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
       const lastName = pick(rawHeaders, cols, ["last name", "lastname", "apellido"]);
       const nombre = `${firstName} ${lastName}`.trim() || "Sin nombre";
 
-      const telefono = pick(rawHeaders, cols, ["telefono", "phone", "tel"]);
+      function toE164(raw: string): string | null {
+        if (!raw) return null;
+        const d = raw.replace(/\D/g, "");
+
+        // USA por defecto
+        if (d.length === 10) return `+1${d}`;
+        if (d.length === 11 && d.startsWith("1")) return `+${d}`;
+        if (d.length >= 11 && d.length <= 15) return `+${d}`;
+
+        return null;
+      }
+
+      const telefonoRaw = pick(rawHeaders, cols, ["telefono", "phone", "tel"]);
+      const telefono = toE164(telefonoRaw);
+
       const email = pick(rawHeaders, cols, ["email", "correo"]);
 
       // ✅ Segmento FINAL: si viene forzado del front, manda eso.
@@ -205,7 +219,6 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
 
       // Reglas mínimas: al menos 1 identificador y teléfono válido si viene
       if (!telefono && !email) continue;
-      if (telefono && !PHONE_RE.test(telefono)) continue;
 
       // Evitar duplicados por (telefono) o (email)
       const existe = await pool.query(
