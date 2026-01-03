@@ -51,51 +51,87 @@ function pick(headers: string[], cols: string[], keys: string[]) {
   return "";
 }
 
-/** ==== NUEVO: helpers para detectar columna de segmento y mapear valores ==== */
-// Orden de búsqueda de columna de segmento (multi-tenant, tolerante)
-const SEGMENT_COLUMN_CANDIDATES = ["segmento", "segment", "lead status", "status", "tipo"];
+type Segmento = "cliente" | "leads" | "otros";
 
-function pickSegmentColumn(headers: string[]) {
-  // headers vienen ya en minúsculas
-  for (const c of SEGMENT_COLUMN_CANDIDATES) {
-    const i = headers.indexOf(c);
-    if (i >= 0) return i;
-  }
-  return -1; // no hay columna reconocible
+function normVal(v: any) {
+  return String(v ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 }
 
-function mapToSegment(raw: string) {
-  const s = (raw || "").trim().toLowerCase();
-  const map: Record<string, "cliente" | "leads" | "otros"> = {
-    // leads
-    "lead": "leads",
-    "leads": "leads",
-    "prospect": "leads",
-    "prospecto": "leads",
-    "potential": "leads",
-    "mql": "leads",
-    "sql": "leads",
-    // cliente
-    "cliente": "cliente",
-    "client": "cliente",
-    "customer": "cliente",
-    "member": "cliente",
-    "miembro": "cliente",
-    "activo": "cliente",
-    // otros
-    "otro": "otros",
-    "otros": "otros",
-    "other": "otros",
-    "none": "otros",
-    "na": "otros",
-    "n/a": "otros",
-    "desconocido": "otros",
-    // vacío → cliente
-    "": "cliente",
-  };
-  // Si ya viene exactamente uno de los 3, respétalo; si no, mapea o cae en 'cliente'
-  if (s === "cliente" || s === "leads" || s === "otros") return s as any;
-  return map[s] ?? "cliente";
+function isTruthy(v: any) {
+  const s = normVal(v);
+  return ["true", "yes", "y", "si", "sí", "1", "ok"].includes(s);
+}
+
+function parseNumberLoose(v: any): number | null {
+  const s = String(v ?? "").replace(/,/g, "").trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseDateLoose(v: any): number | null {
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+  const d = new Date(s);
+  const t = d.getTime();
+  return Number.isFinite(t) ? t : null;
+}
+
+// ✅ Inferir segmento sin depender de columnas (usa TODOS los valores de la fila)
+function inferSegmentFromRow(rawLine: string, headers: string[], cols: string[]): Segmento {
+  // 1) Señales fuertes por texto (en cualquier columna)
+  const joined = cols.map(normVal).join(" | ");
+
+  const strongOtros = ["cancel", "expired", "inactive", "blocked", "opt out", "unsub", "do not contact", "dnc"];
+  const strongCliente = ["active", "member", "subscribed", "paid", "vip", "premium", "gold", "platinum", "pro"];
+  const strongLeads = ["lead", "prospect", "trial", "new", "interested", "inquiry"];
+
+  if (strongOtros.some(w => joined.includes(w))) return "otros";
+  if (strongCliente.some(w => joined.includes(w))) return "cliente";
+  if (strongLeads.some(w => joined.includes(w))) return "leads";
+
+  // 2) Señales numéricas: si hay algún contador > 0 -> cliente
+  for (const c of cols) {
+    const n = parseNumberLoose(c);
+    if (n !== null && n > 0) return "cliente";
+  }
+
+  // 3) Señales de fechas: si hay una fecha FUTURA en la fila, normalmente indica vigencia/expiración/plan -> cliente
+  const now = Date.now();
+  for (const c of cols) {
+    const t = parseDateLoose(c);
+    if (t !== null && t > now + 24 * 60 * 60 * 1000) return "cliente";
+  }
+
+  // 4) Default conservador
+  return "leads";
+}
+
+// (Opcional) detectar si hay consentimiento SMS en cualquier parte (sin depender de header)
+// Si NO existe la señal, no bloquea (devuelve true).
+function inferSmsConsent(headers: string[], cols: string[]): boolean {
+  // intentamos detectar campos que mencionen sms/text + consent/opt/permission
+  const h = headers.map(h => h.toLowerCase());
+  const idxCandidates: number[] = [];
+  for (let i = 0; i < h.length; i++) {
+    const hk = h[i];
+    const hasSms = hk.includes("sms") || hk.includes("text");
+    const hasConsent = hk.includes("consent") || hk.includes("opt") || hk.includes("permission") || hk.includes("marketing");
+    if (hasSms && hasConsent) idxCandidates.push(i);
+  }
+  for (const idx of idxCandidates) {
+    if (idx >= 0 && idx < cols.length) {
+      const v = cols[idx];
+      const s = normVal(v);
+      if (["false", "no", "0", "deny", "denied", "declined", "reject"].includes(s)) return false;
+      if (isTruthy(v)) return true;
+    }
+  }
+  return true; // si no se detecta, no bloqueamos import
 }
 
 const PHONE_RE = /^\+?\d{10,15}$/;
@@ -132,7 +168,6 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
     }
 
     // NUEVO: detectar columna de segmento y leer 'segmento_default' opcional del request
-    const idxSegmento = pickSegmentColumn(rawHeaders);
     const reqDefault = ((req.body as any)?.segmento_default || "").toString().toLowerCase();
     const segmentoDefault =
       reqDefault === "cliente" || reqDefault === "leads" || reqDefault === "otros"
@@ -154,9 +189,9 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
       const telefono = pick(rawHeaders, cols, ["telefono", "phone", "tel"]);
       const email = pick(rawHeaders, cols, ["email", "correo"]);
 
-      // NUEVO: lee valor crudo de la columna detectada y mapea; si no hay, usa segmento_default
-      const rawSeg = idxSegmento >= 0 ? (cols[idxSegmento] ?? "") : "";
-      const segmento = rawSeg ? mapToSegment(rawSeg) : segmentoDefault;
+      // ✅ Segmento inferido sin depender de headers; si falla, usa segmento_default
+      let segmento = inferSegmentFromRow(line, rawHeaders, cols);
+      if (!segmento) segmento = segmentoDefault;
 
       // Reglas mínimas: al menos 1 identificador y teléfono válido si viene
       if (!telefono && !email) continue;
