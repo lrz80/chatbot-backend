@@ -172,7 +172,7 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
     const segmentoDefault =
       reqDefault === "cliente" || reqDefault === "leads" || reqDefault === "otros"
         ? (reqDefault as "cliente" | "leads" | "otros")
-        : ("cliente" as const);
+        : ("leads" as const);
 
     let nuevos = 0;
 
