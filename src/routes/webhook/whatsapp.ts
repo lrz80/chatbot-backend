@@ -903,7 +903,33 @@ export async function procesarMensajeWhatsApp(
 
     // Caso: esperando "canal"
     if (state?.awaiting_field === "canal") {
-      const msg = (userInput || "").toLowerCase().trim();
+      // Caso: el usuario hace una pregunta general mientras estamos esperando el canal
+      const raw = (userInput || "").trim();
+      const msg = raw.toLowerCase();
+
+      const isHowItWorks =
+        /\b(como funciona|cómo funciona|que hace|qué hace|info|informacion|información|detalles|how does it work|what does it do)\b/i.test(msg);
+
+      const negocio = (tenant?.nombre || "nuestro asistente").trim();
+
+      if (isHowItWorks) {
+        const expl =
+          idiomaDestino === "en"
+            ? `${negocio} replies to your customers 24/7 on WhatsApp/Facebook/Instagram, answers FAQs, and can follow up automatically if someone doesn’t respond. Now tell me: WhatsApp, Facebook, Instagram, or all three?`
+            : `${negocio} responde a tus clientes 24/7 en WhatsApp/Facebook/Instagram, contesta preguntas frecuentes y hace seguimiento automático si el cliente no responde. Ahora dime: WhatsApp, Facebook, Instagram, o los tres?`;
+
+        await sendWA({
+          tenantId,
+          canal: canalEnvio,
+          messageId,
+          to: senderId,
+          text: expl,
+          awaitingField: "canal",
+          awaitingPayload: state.awaiting_payload ?? {},
+        });
+
+        return;
+      }
 
       const wantsAll =
         /\b(los\s*tres|todas|todo|all|both|ambos|las\s*3|3)\b/i.test(msg);
