@@ -699,7 +699,7 @@ export async function procesarMensajeWhatsApp(
     const tenantId = tenant.id;
     const canalEnvio = canal;      // 'whatsapp'
     const rawFrom = String(fromNumber || "");
-    const senderId = rawFrom.replace("whatsapp:", "").replace(/\D/g, ""); // solo dígitos
+    const senderId = rawFrom.replace("whatsapp:", "").trim(); // mantiene +E164 (ej: +1863...)
 
     const { rows: clienteRows } = await pool.query(
       `SELECT estado, human_override, nombre, email, telefono, pais, segmento
@@ -815,7 +815,7 @@ export async function procesarMensajeWhatsApp(
   {
     const tenantId = tenant.id;
     const rawFrom = String(fromNumber || "");
-    const senderId = rawFrom.replace("whatsapp:", "").replace(/\D/g, ""); // solo dígitos
+    const senderId = rawFrom.replace("whatsapp:", "").trim(); // mantiene +E164 (ej: +1863...)
     const canalEnvio = canal;    // 'whatsapp'
 
     const state = await getAwaitingState(tenantId, canalEnvio, senderId);
