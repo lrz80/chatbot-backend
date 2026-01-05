@@ -1077,7 +1077,7 @@ if (BOOKING_ENABLED) {
     /\b(demuéstramelo|demuestrame|demuestrame|hazme una demostracion|hazme un demo|prueba real|ejemplo real|muestrame como funciona|muestrame como responde|show me|prove it|give me a demo)\b/i
       .test(cleanedNorm);
 
-  let respuesta: any = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+  let respuesta: string = "";
 
   // CTA multilenguaje para cierres consistentes
   const CTA_TXT =
@@ -2114,8 +2114,20 @@ Termina con esta pregunta EXACTA en español:
 
   const hit = await getFaqByIntent(tenant.id, canal, intencionParaFaq);
   if (hit) {
-    console.log('📚 FAQ encontrada →', hit.id, hit.intencion, 'canal:', hit.canal);
-    respuestaDesdeFaq = hit.respuesta;
+    const r = String(hit.respuesta ?? '').trim();
+
+    console.log(
+      '📚 FAQ encontrada →',
+      hit.id,
+      hit.intencion,
+      'canal:',
+      hit.canal,
+      'len=',
+      r.length
+    );
+
+    // ✅ si está vacía (len=0) NO la tratamos como respuesta válida
+    respuestaDesdeFaq = r.length > 0 ? r : null;
   } else {
     console.log('🚫 FAQ NO encontrada para intent:', intencionParaFaq);
   }
@@ -2126,8 +2138,18 @@ Termina con esta pregunta EXACTA en español:
     } else {
       const hit2 = await getFaqByIntent(tenant.id, canal, intencionParaFaq);
       if (hit2) {
-        respuestaDesdeFaq = hit2.respuesta;
-        console.log('📚 FAQ encontrada para intención:', hit2.intencion, 'canal:', hit2.canal);
+        const r2 = String(hit2.respuesta ?? '').trim();
+
+        console.log(
+          '📚 FAQ encontrada para intención:',
+          hit2.intencion,
+          'canal:',
+          hit2.canal,
+          'len=',
+          r2.length
+        );
+
+        respuestaDesdeFaq = r2.length > 0 ? r2 : null;
       }
     }
   }
@@ -2243,11 +2265,11 @@ Termina con esta pregunta EXACTA en español:
       ? await traducirMensaje(mensajeUsuario, 'es')
       : mensajeUsuario;
 
-    respuesta = await buscarRespuestaSimilitudFaqsTraducido(
+    respuesta = (await buscarRespuestaSimilitudFaqsTraducido(
       faqs,
       mensajeTraducido,
       idiomaDestino
-    );
+    )) || "";
   }
 
   // 🔒 Protección adicional: si ya respondió con FAQ oficial, no continuar
@@ -2452,17 +2474,6 @@ Termina con esta pregunta EXACTA en español:
     }    
   }  
 
-  // Insertar mensaje bot (esto no suma a uso)
-  if (!alreadySent) {
-    await saveAssistantMessageAndEmit({
-      tenantId: tenant.id,
-      canal,
-      fromNumber: fromNumber || 'anónimo',
-      messageId,
-      content: respuesta,
-    });
-  }
-
   // ⬇️ CTA por intención (fallback final/generativa)
   let intentForCTA: string | null = null;
   try {
@@ -2493,8 +2504,20 @@ Termina con esta pregunta EXACTA en español:
   }
 
   if (!alreadySent) {
-    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuestaFinal);
+    const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuestaFinal);
     console.log("📬 Respuesta enviada vía Twilio:", respuestaFinal);
+
+    if (ok) {
+      await saveAssistantMessageAndEmit({
+        tenantId: tenant.id,
+        canal,
+        fromNumber: fromNumber || 'anónimo',
+        messageId,
+        content: respuestaFinal,
+      });
+    }
+
+    alreadySent = true;
   }
 
   await pool.query(
