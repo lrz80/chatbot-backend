@@ -42,8 +42,6 @@ import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
 import { getOrCreateBookingSession, updateBookingSession } from "../../services/bookingSession";
 import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
-import { getAwaitingState, setAwaitingState, normalizeContacto } from "../../lib/awaiting";
-
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -56,7 +54,8 @@ const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifa
 const MATCHER_MIN_OVERRIDE = 0.85; // exige score alto para sobreescribir una intención "directa"
 
 // 💳 Confirmación de pago (usuario)
-const PAGO_CONFIRM_REGEX = /\b(pago\s*realizado|listo\s*el\s*pago|ya\s*pagu[eé]|pagu[eé]|payment\s*(done|made|completed)|paid)\b/i;
+const PAGO_CONFIRM_REGEX =
+  /^(?!.*\b(no|aun\s*no|todav[ií]a\s*no|not)\b).*?\b(pago\s*realizado|listo\s*el\s*pago|ya\s*pagu[eé]|he\s*paga(do|do)|payment\s*(done|made|completed)|i\s*paid|paid)\b/i;
 
 // 🧾 Detectores básicos de datos
 const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
@@ -465,70 +464,6 @@ async function saveAssistantMessageAndEmit(opts: {
   }
 }
 
-async function sendWA(opts: {
-  tenantId: string;
-  canal: string;
-  messageId: string | null;
-  to: string;
-  text: string;
-  awaitingField?: string;
-  awaitingPayload?: any;
-}) {
-  const { tenantId, canal, messageId, to, text, awaitingField, awaitingPayload } = opts;
-  const contacto = normalizeContacto(canal, to);
-
-  const ok = await safeEnviarWhatsApp(tenantId, canal, messageId, to, text);
-  console.log("[WA] ok?", ok);
-
-  // ✅ Guardar estado aunque el envío falle
-  if (awaitingField) {
-    console.log("[AWAITING] set", { tenantId, canal, contacto, awaitingField, awaitingPayload });
-    await setAwaitingState(tenantId, canal, contacto, awaitingField, awaitingPayload ?? {});
-  }
-
-  // ✅ Solo guardamos mensaje/interactions si realmente se envió
-  if (ok) {
-    await saveAssistantMessageAndEmit({
-      tenantId,
-      canal,
-      fromNumber: contacto || "anónimo",
-      messageId,
-      content: text,
-    });
-  }
-
-  return ok;
-}
-
-// ===============================
-// 🧠 MEMORIA CORTA (estado conversacional) por cliente/canal
-// ===============================
-type AwaitingState = {
-  awaiting_field: string | null;
-  awaiting_payload: any | null;
-  awaiting_updated_at: Date | null;
-};
-
-const AWAITING_TTL_MIN = 45;
-
-async function clearAwaitingState(tenantId: string, canal: string, contacto: string) {
-  const r = await pool.query(
-    `
-    INSERT INTO clientes (tenant_id, canal, contacto, awaiting_field, awaiting_payload, awaiting_updated_at, updated_at)
-    VALUES ($1, $2, $3, NULL, '{}'::jsonb, NULL, NOW())
-    ON CONFLICT (tenant_id, canal, contacto)
-    DO UPDATE SET
-      awaiting_field = NULL,
-      awaiting_payload = '{}'::jsonb,
-      awaiting_updated_at = NULL,
-      updated_at = NOW()
-    `,
-    [tenantId, canal, contacto]
-  );
-
-  console.log("🧹 clearAwaitingState ok:", { tenantId, canal, contacto, rowCount: r.rowCount });
-}
-
 router.post("/", async (req: Request, res: Response) => {
   try {
     // Responde a Twilio de inmediato
@@ -572,7 +507,7 @@ export async function procesarMensajeWhatsApp(
   const fromNumber  = from.replace('whatsapp:', '').replace('tel:', ''); // número del cliente
 
   // ✅ contacto NORMALIZADO ÚNICO para DB/estado/dedupe
-  const contactoNorm = normalizeContacto('whatsapp', String(fromNumber || ""));
+  const contactoNorm = String(fromNumber || "").replace(/[^\d+]/g, "");
 
   // Normaliza variantes con / sin "+" para que coincida aunque en DB esté "1555..." o "+1555..."
   const numeroSinMas = numero.replace(/^\+/, '');
@@ -711,6 +646,39 @@ export async function procesarMensajeWhatsApp(
 
     const cliente = clienteRows[0] || null;
 
+    const LINK_REQUEST_REGEX = /\b(link|enlace|pagar|pago|stripe|checkout|payment\s+link)\b/i;
+
+    // 0) Si ya tenemos datos y está esperando pago, y pide link → reenvía link (sin pedir datos otra vez)
+    if ((cliente?.estado || '').toLowerCase() === 'esperando_pago' && LINK_REQUEST_REGEX.test(userInput)) {
+      const paymentLink = extractPaymentLinkFromPrompt(promptBase);
+
+      const mensajePago =
+        idiomaDestino === 'en'
+          ? (
+              paymentLink
+                ? `Here’s the payment link:\n${paymentLink}\nAfter you pay, text “PAGO REALIZADO”.`
+                : `I don’t have the payment link configured. Please ask the team to share it with you.`
+            )
+          : (
+              paymentLink
+                ? `Aquí tienes el link de pago:\n${paymentLink}\nCuando pagues, escríbeme “PAGO REALIZADO”.`
+                : `No tengo el link de pago configurado. Pídeselo al equipo para enviártelo.`
+            );
+
+      const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, fromNumber, mensajePago);
+
+      if (ok) {
+        await saveAssistantMessageAndEmit({
+          tenantId,
+          canal: canalEnvio,
+          fromNumber: contactoNorm || 'anónimo',
+          messageId,
+          content: mensajePago,
+        });
+      }
+      return;
+    }
+
     // 1) Si humano tomó la conversación → SILENCIO TOTAL
     if (cliente?.human_override === true) {
       console.log('🤝 [WA] Conversación tomada por humano. Bot NO responde:', senderId);
@@ -738,7 +706,7 @@ export async function procesarMensajeWhatsApp(
           ? "Perfect 👍\nWe’ll confirm your payment and someone from the team will contact you to activate your account."
           : "Perfecto 👍\nVamos a confirmar tu pago y una persona del equipo se pondrá en contacto contigo para la activación de tu cuenta.";
 
-      const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, senderId, msgPago);
+      const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, fromNumber, msgPago);
 
       if (ok) {
         await saveAssistantMessageAndEmit({
@@ -817,85 +785,6 @@ export async function procesarMensajeWhatsApp(
     /\b(automatiz|bot|chatbot|aamy|crm|responder\s+mensajes|no\s+respondo|quiero\s+automatizar|need\s+automation|automation|ai\s+assistant)\b/i
       .test(userInput);
 
-  // ===============================
-  // 🧠 MEMORIA CORTA: si el bot estaba esperando un dato, manejarlo aquí
-  // ===============================
-  {
-    const tenantId = tenant.id;
-    const canalEnvio = canal; // ✅ define primero
-    const senderId = contactoNorm; // ✅ único
-
-    const state = await getAwaitingState(tenantId, canalEnvio, senderId);
-    const awaiting = state?.awaiting_field || null;
-    
-    // ✅ Si NO hay estado, iniciamos preguntando canal...
-    if (!awaiting) {
-      if (!isAamyTenant && !isAutomationLead) {
-        // No setees estado, sigue pipeline normal (FAQs/intents)
-      } else {
-        const reply = idiomaDestino === "en"
-          ? "Which channel do you want: WhatsApp, Facebook, Instagram, or all three?"
-          : "¿Qué canal quieres: WhatsApp, Facebook, Instagram, o los tres?";
-
-        await sendWA({
-          tenantId,
-          canal: canalEnvio,
-          messageId,
-          to: senderId,
-          text: reply,
-          awaitingField: "canal",
-          awaitingPayload: {},
-        });
-        return;
-      }
-    }
-
-    // ✅ Caso: esperando "canal" (ÚNICO)
-    if (awaiting === "canal") {
-      const raw = (userInput || "").trim();
-      const msg = raw.toLowerCase();
-
-      const elegido =
-        msg.includes("whats") ? "whatsapp" :
-        msg.includes("insta") ? "instagram" :
-        (msg.includes("face") || msg.includes("fb")) ? "facebook" :
-        null;
-
-      if (!elegido) {
-        const reply =
-          idiomaDestino === "en"
-            ? "Please reply with WhatsApp, Facebook, or Instagram."
-            : "Por favor dime: WhatsApp, Facebook o Instagram.";
-
-        await sendWA({
-          tenantId,
-          canal: canalEnvio,
-          messageId,
-          to: senderId,
-          text: reply,
-        });
-        return;
-      }
-
-      // ✅ ESTO ES LO QUE TE FALTABA
-      await clearAwaitingState(tenantId, canalEnvio, senderId);
-
-      const reply =
-        idiomaDestino === "en"
-          ? `Perfect. We'll continue with ${elegido}.`
-          : `Perfecto. Continuamos con ${elegido}.`;
-
-      await sendWA({
-        tenantId,
-        canal: canalEnvio,
-        messageId,
-        to: senderId,
-        text: reply,
-      });
-
-      return;
-    }
-  }
   // 2.a) Guardar el mensaje del usuario una sola vez (idempotente) + emitir por socket
   try {
     const { rows } = await pool.query(
