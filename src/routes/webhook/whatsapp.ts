@@ -44,6 +44,8 @@ import { createAppointment } from "../../services/booking";
 import { getOrCreateBookingSession, updateBookingSession, getBookingSession } from "../../services/bookingSession";
 import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
+import { getAwaitingState, setAwaitingState } from "../../lib/awaiting";
+
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -370,41 +372,42 @@ async function safeEnviarWhatsApp(
   text: string
 ): Promise<boolean> {
   try {
-    // Caso sin messageId: solo intentamos 1 vez
+    // Sin messageId: no podemos deduplicar confiable → enviamos 1 vez y NO insertamos interactions aquí.
     if (!messageId) {
-      const ok = await enviarWhatsApp(toNumber, text, tenantId); // <- debe devolver boolean
-      if (ok) {
-        await incrementarUsoPorCanal(tenantId, canal);
-      }
-      return ok;
+      const ok = await enviarWhatsApp(toNumber, text, tenantId);
+      if (ok) await incrementarUsoPorCanal(tenantId, canal);
+      return !!ok;
     }
 
-    // Evitar duplicados por reintentos de Twilio
-    const { rows: sent } = await pool.query(
-      `SELECT 1
-         FROM interactions
-        WHERE tenant_id = $1
-          AND canal = $2
-          AND message_id = $3
-        LIMIT 1`,
+    // ✅ RESERVA ATÓMICA: si ya existe, no envía
+    const ins = await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
+       RETURNING 1`,
       [tenantId, canal, messageId]
     );
 
-    if (sent[0]) {
-      console.log(
-        '⏩ safeEnviarWhatsApp: ya se respondió este message_id, no se vuelve a enviar ni a contar.'
-      );
-      return true; // ya lo consideramos "enviado"
+    if (ins.rowCount === 0) {
+      console.log('⏩ safeEnviarWhatsApp: ya reservado/enviado este message_id. No envío ni cuento.');
+      return true;
     }
 
     const ok = await enviarWhatsApp(toNumber, text, tenantId);
-    if (ok) {
-      await incrementarUsoPorCanal(tenantId, canal);
+    if (ok) await incrementarUsoPorCanal(tenantId, canal);
+
+    // Si falló el envío, libera la reserva para permitir retry real (opcional pero recomendado)
+    if (!ok) {
+      await pool.query(
+        `DELETE FROM interactions WHERE tenant_id=$1 AND canal=$2 AND message_id=$3`,
+        [tenantId, canal, messageId]
+      );
     }
-    return ok;
+
+    return !!ok;
   } catch (e) {
     console.error('❌ safeEnviarWhatsApp error:', e);
-    return false; // MUY importante: indica al caller que NO se envió
+    return false;
   }
 }
 
@@ -506,53 +509,16 @@ type AwaitingState = {
 
 const AWAITING_TTL_MIN = 45;
 
-async function getAwaitingState(tenantId: string, canal: string, contacto: string) {
-  const r = await pool.query(
-    `SELECT awaiting_field, awaiting_payload
-       FROM clientes
-      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
-      LIMIT 1`,
-    [tenantId, canal, contacto]
-  );
-  return r.rows[0] || null;
-}
-
-async function setAwaitingState(
-  tenantId: string,
-  canal: string,
-  contacto: string,
-  awaitingField: string,
-  awaitingPayload: any = {}
-) {
-  const r = await pool.query(
-    `
-    INSERT INTO clientes (tenant_id, canal, contacto, awaiting_field, awaiting_payload, updated_at)
-    VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
-    ON CONFLICT (tenant_id, canal, contacto)
-    DO UPDATE SET
-      awaiting_field = EXCLUDED.awaiting_field,
-      awaiting_payload = EXCLUDED.awaiting_payload,
-      updated_at = NOW()
-    RETURNING awaiting_field, awaiting_payload
-    `,
-    [tenantId, canal, contacto, awaitingField, JSON.stringify(awaitingPayload)]
-  );
-
-  // LOG de verificación (déjalo mientras pruebas)
-  console.log("✅ setAwaitingState saved:", { tenantId, canal, contacto, ...r.rows[0] });
-
-  return r.rows[0];
-}
-
 async function clearAwaitingState(tenantId: string, canal: string, contacto: string) {
   const r = await pool.query(
     `
-    INSERT INTO clientes (tenant_id, canal, contacto, awaiting_field, awaiting_payload, updated_at)
-    VALUES ($1, $2, $3, NULL, '{}'::jsonb, NOW())
+    INSERT INTO clientes (tenant_id, canal, contacto, awaiting_field, awaiting_payload, awaiting_updated_at, updated_at)
+    VALUES ($1, $2, $3, NULL, '{}'::jsonb, NULL, NOW())
     ON CONFLICT (tenant_id, canal, contacto)
     DO UPDATE SET
       awaiting_field = NULL,
       awaiting_payload = '{}'::jsonb,
+      awaiting_updated_at = NULL,
       updated_at = NOW()
     `,
     [tenantId, canal, contacto]
@@ -602,6 +568,7 @@ export async function procesarMensajeWhatsApp(
   // Números “limpios”
   const numero      = to.replace('whatsapp:', '').replace('tel:', '');   // número del negocio
   const fromNumber  = from.replace('whatsapp:', '').replace('tel:', ''); // número del cliente
+  const contacto = fromNumber.replace(/^whatsapp:/, "").trim();
 
   // Normaliza variantes con / sin "+" para que coincida aunque en DB esté "1555..." o "+1555..."
   const numeroSinMas = numero.replace(/^\+/, '');
