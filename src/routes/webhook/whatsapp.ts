@@ -251,9 +251,9 @@ async function getIdiomaClienteDB(
     const { rows } = await pool.query(
       `SELECT idioma
         FROM clientes
-        WHERE tenant_id = $1 AND contacto = $2
+        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
         LIMIT 1`,
-      [tenantId, contacto]
+      [tenantId, canal, contacto]
     );
     if (rows[0]?.idioma) return normalizeLang(rows[0].idioma);
   } catch {}
@@ -269,12 +269,11 @@ async function upsertIdiomaClienteDB(
   try {
     await pool.query(
       `INSERT INTO clientes (tenant_id, canal, contacto, idioma)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (tenant_id, contacto)
-       DO UPDATE SET
-         canal = EXCLUDED.canal,
-         idioma = EXCLUDED.idioma,
-         updated_at = now()`,
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (tenant_id, canal, contacto)
+      DO UPDATE SET
+        idioma = EXCLUDED.idioma,
+        updated_at = now()`,
       [tenantId, canal, contacto, idioma]
     );
   } catch (e) {
@@ -457,6 +456,116 @@ async function saveAssistantMessageAndEmit(opts: {
   } catch (e) {
     console.warn('⚠️ No se pudo registrar mensaje assistant + socket:', e);
   }
+}
+
+async function sendWA(opts: {
+  tenantId: string;
+  canal: string;
+  messageId: string | null;
+  to: string; // fromNumber del cliente
+  text: string;
+  awaitingField?: string;
+  awaitingPayload?: any;
+}) {
+  const { tenantId, canal, messageId, to, text, awaitingField, awaitingPayload } = opts;
+
+  const ok = await safeEnviarWhatsApp(tenantId, canal, messageId, to, text);
+
+  if (ok) {
+    await saveAssistantMessageAndEmit({
+      tenantId,
+      canal,
+      fromNumber: to || "anónimo",
+      messageId,
+      content: text,
+    });
+
+    await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT DO NOTHING`,
+      [tenantId, canal, messageId]
+    );
+
+    if (awaitingField) {
+      await setAwaitingState(tenantId, canal, to, awaitingField, awaitingPayload ?? {});
+    }
+  }
+
+  return ok;
+}
+
+// ===============================
+// 🧠 MEMORIA CORTA (estado conversacional) por cliente/canal
+// ===============================
+type AwaitingState = {
+  awaiting_field: string | null;
+  awaiting_payload: any | null;
+  awaiting_updated_at: Date | null;
+};
+
+const AWAITING_TTL_MIN = 45;
+
+async function getAwaitingState(
+  tenantId: string,
+  canal: string,
+  contacto: string
+): Promise<AwaitingState> {
+  const { rows } = await pool.query(
+    `SELECT awaiting_field, awaiting_payload, awaiting_updated_at
+       FROM clientes
+      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+      LIMIT 1`,
+    [tenantId, canal, contacto]
+  );
+
+  const s = rows[0] || { awaiting_field: null, awaiting_payload: null, awaiting_updated_at: null };
+
+  // TTL: si está vencido, lo limpiamos y devolvemos null
+  if (s.awaiting_updated_at) {
+    const ageMin = (Date.now() - new Date(s.awaiting_updated_at).getTime()) / 60000;
+    if (ageMin > AWAITING_TTL_MIN) {
+      await clearAwaitingState(tenantId, canal, contacto);
+      return { awaiting_field: null, awaiting_payload: null, awaiting_updated_at: null };
+    }
+  }
+
+  return s;
+}
+
+async function setAwaitingState(
+  tenantId: string,
+  canal: string,
+  contacto: string,
+  awaitingField: string,
+  awaitingPayload: any = null
+) {
+  await pool.query(
+    `INSERT INTO clientes (tenant_id, canal, contacto, awaiting_field, awaiting_payload, awaiting_updated_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5::jsonb, NOW(), NOW())
+     ON CONFLICT (tenant_id, canal, contacto)
+     DO UPDATE SET
+       awaiting_field = EXCLUDED.awaiting_field,
+       awaiting_payload = EXCLUDED.awaiting_payload,
+       awaiting_updated_at = NOW(),
+       updated_at = NOW()`,
+    [tenantId, canal, contacto, awaitingField, JSON.stringify(awaitingPayload ?? {})]
+  );
+}
+
+async function clearAwaitingState(
+  tenantId: string,
+  canal: string,
+  contacto: string
+) {
+  await pool.query(
+    `UPDATE clientes
+        SET awaiting_field = NULL,
+            awaiting_updated_at = NULL,
+            updated_at = NOW()
+      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
+    [tenantId, canal, contacto]
+  );
 }
 
 router.post("/", async (req: Request, res: Response) => {
@@ -747,6 +856,89 @@ export async function procesarMensajeWhatsApp(
       }
 
       return; // ⬅️ corta TODO el pipeline
+    }
+  }
+
+  // ===============================
+  // 🧠 MEMORIA CORTA: si el bot estaba esperando un dato, manejarlo aquí
+  // ===============================
+  {
+    const tenantId = tenant.id;
+    const senderId = fromNumber;
+    const canalEnvio = canal;
+
+    const state = await getAwaitingState(tenantId, canalEnvio, senderId);
+
+    if (state.awaiting_field === "canal") {
+      const msg = (userInput || "").toLowerCase().trim();
+
+      const wantsAll =
+        /\b(los\s*tres|todas|todo|all|both|ambos|las\s*3|3)\b/i.test(msg);
+
+      // Ajusta a tus nombres reales de canales/features
+      const selected = wantsAll
+        ? ["whatsapp", "facebook", "instagram"]
+        : (
+            [
+              /\b(whatsapp|wa)\b/i.test(msg) ? "whatsapp" : null,
+              /\b(facebook|fb)\b/i.test(msg) ? "facebook" : null,
+              /\b(instagram|ig)\b/i.test(msg) ? "instagram" : null,
+            ].filter(Boolean) as string[]
+          );
+
+      if (!selected.length) {
+        const reply =
+          idiomaDestino === "en"
+            ? "Got it. Which channel do you want: WhatsApp, Facebook, Instagram, or all three?"
+            : "Perfecto. ¿Qué canal quieres: WhatsApp, Facebook, Instagram, o los tres?";
+
+        await sendWA({
+          tenantId,
+          canal: canalEnvio,
+          messageId,
+          to: senderId,
+          text: reply,
+          awaitingField: "canal",
+          awaitingPayload: {
+            step: "pick_channels"
+          }
+        });
+
+        return;
+      }
+
+      // ✅ Guardar selección y limpiar memoria
+      await pool.query(
+        `UPDATE clientes
+            SET awaiting_payload = jsonb_set(COALESCE(awaiting_payload,'{}'::jsonb), '{selected_channels}', $4::jsonb, true),
+                updated_at = NOW()
+          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
+        [tenantId, canalEnvio, senderId, JSON.stringify(selected)]
+      );
+
+      await clearAwaitingState(tenantId, canalEnvio, senderId);
+
+      // ✅ Respuesta y avanza al siguiente paso (aquí tú decides qué sigue)
+      const reply =
+        idiomaDestino === "en"
+          ? `Perfect. I'll set up: ${selected.join(", ")}. What is your business name?`
+          : `Perfecto. Configuro: ${selected.join(", ")}. ¿Cuál es el nombre de tu negocio?`;
+
+      const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, senderId, reply);
+      if (ok) {
+        await saveAssistantMessageAndEmit({ tenantId, canal: canalEnvio, fromNumber: senderId, messageId, content: reply });
+        await pool.query(
+          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+          VALUES ($1, $2, $3, NOW())
+          ON CONFLICT DO NOTHING`,
+          [tenantId, canalEnvio, messageId]
+        );
+      }
+
+      // Si tu siguiente paso también necesita memoria:
+      // await setAwaitingState(tenantId, canalEnvio, senderId, "business_name", { selected });
+
+      return;
     }
   }
 
