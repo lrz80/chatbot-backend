@@ -64,6 +64,10 @@ const PAGO_CONFIRM_REGEX = /\b(pago\s*realizado|listo\s*el\s*pago|ya\s*pagu[eé]
 const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 const PHONE_REGEX = /(\+?\d[\d\s().-]{7,}\d)/;
 
+function outboundId(messageId: string | null) {
+  return messageId ? `${messageId}-out` : null;
+}
+
 function extractPaymentLinkFromPrompt(promptBase: string): string | null {
   if (!promptBase) return null;
 
@@ -372,8 +376,10 @@ async function safeEnviarWhatsApp(
   text: string
 ): Promise<boolean> {
   try {
-    // Sin messageId: no podemos deduplicar confiable → enviamos 1 vez y NO insertamos interactions aquí.
-    if (!messageId) {
+    const dedupeId = outboundId(messageId);
+
+    // Sin messageId: no podemos deduplicar confiable → enviamos 1 vez y contamos si ok.
+    if (!dedupeId) {
       const ok = await enviarWhatsApp(toNumber, text, tenantId);
       if (ok) await incrementarUsoPorCanal(tenantId, canal);
       return !!ok;
@@ -385,22 +391,22 @@ async function safeEnviarWhatsApp(
        VALUES ($1, $2, $3, NOW())
        ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
        RETURNING 1`,
-      [tenantId, canal, messageId]
+      [tenantId, canal, dedupeId]
     );
 
     if (ins.rowCount === 0) {
-      console.log('⏩ safeEnviarWhatsApp: ya reservado/enviado este message_id. No envío ni cuento.');
+      console.log('⏩ safeEnviarWhatsApp: ya reservado/enviado este outbound message_id. No envío ni cuento.');
       return true;
     }
 
     const ok = await enviarWhatsApp(toNumber, text, tenantId);
     if (ok) await incrementarUsoPorCanal(tenantId, canal);
 
-    // Si falló el envío, libera la reserva para permitir retry real (opcional pero recomendado)
+    // Si falló el envío, libera la reserva para permitir retry real
     if (!ok) {
       await pool.query(
         `DELETE FROM interactions WHERE tenant_id=$1 AND canal=$2 AND message_id=$3`,
-        [tenantId, canal, messageId]
+        [tenantId, canal, dedupeId]
       );
     }
 
@@ -490,13 +496,6 @@ async function sendWA(opts: {
       messageId,
       content: text,
     });
-
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
-      [tenantId, canal, messageId]
-    );
   }
 
   return ok;
@@ -748,13 +747,6 @@ export async function procesarMensajeWhatsApp(
           messageId,
           content: msgPago,
         });
-
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-          VALUES ($1, $2, $3, NOW())
-          ON CONFLICT DO NOTHING`,
-          [tenantId, canalEnvio, messageId]
-        );
       }
 
       return; // ⬅️ corta TODO el pipeline
@@ -807,13 +799,6 @@ export async function procesarMensajeWhatsApp(
             messageId,
             content: mensajePago,
           });
-
-          await pool.query(
-            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-            VALUES ($1, $2, $3, NOW())
-            ON CONFLICT DO NOTHING`,
-            [tenantId, canalEnvio, messageId]
-          );
         }
       } else {
         console.log('💳 [WA] Datos recibidos pero ya estaba esperando pago; no repito link.', { senderId });
@@ -1057,14 +1042,6 @@ if (BOOKING_ENABLED) {
           messageId,
           content: reply,
         });
-
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-          VALUES ($1, $2, $3, NOW())
-          ON CONFLICT DO NOTHING`,
-          [tenant.id, canal, messageId]
-        );
-
         return;
       }
 
@@ -1089,14 +1066,6 @@ if (BOOKING_ENABLED) {
           messageId,
           content: reply,
         });
-
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-          VALUES ($1, $2, $3, NOW())
-          ON CONFLICT DO NOTHING`,
-          [tenant.id, canal, messageId]
-        );
-
         return;
       }
 
@@ -1121,14 +1090,6 @@ if (BOOKING_ENABLED) {
           messageId,
           content: reply,
         });
-
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-          VALUES ($1, $2, $3, NOW())
-          ON CONFLICT DO NOTHING`,
-          [tenant.id, canal, messageId]
-        );
-
         return;
       }
 
@@ -1163,14 +1124,6 @@ if (BOOKING_ENABLED) {
         messageId,
         content: reply,
       });
-
-      await pool.query(
-        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-        VALUES ($1, $2, $3, NOW())
-        ON CONFLICT DO NOTHING`,
-        [tenant.id, canal, messageId]
-      );
-
       return;
     }
   } catch (e) {
@@ -1321,13 +1274,6 @@ if (BOOKING_ENABLED) {
           messageId,
           content: outWithCTA,
         });
-
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-           VALUES ($1, $2, $3, NOW())
-           ON CONFLICT DO NOTHING`,
-          [tenant.id, canal, messageId]
-        );
       }
 
       // 🔔 opcional: registrar intención + follow-up (sin forzar intent)
@@ -1492,14 +1438,6 @@ Termina con esta pregunta EXACTA en español:
       messageId,
       content: reply,
     });
-
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-
     try {
       await recordSalesIntent(
         tenant.id,
@@ -1546,13 +1484,6 @@ Termina con esta pregunta EXACTA en español:
       messageId,
       content: reply,
     });
-
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
 
     // Registramos intención "demo" como interés medio
     try {
@@ -1679,13 +1610,6 @@ Termina con esta pregunta EXACTA en español:
           messageId,
           content: outWithCTA,
         });
-
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-          VALUES ($1, $2, $3, NOW())
-          ON CONFLICT DO NOTHING`,
-          [tenant.id, canal, messageId]
-        );
 
         // 🔔 Registrar venta si aplica + follow-up
         try {
@@ -1875,15 +1799,6 @@ Termina con esta pregunta EXACTA en español:
       messageId,
       content: saludoSmall,
     });
-
-    // 3) Registrar interacción
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-
     return;
   }
 
@@ -1900,18 +1815,10 @@ Termina con esta pregunta EXACTA en español:
       messageId,
       content: saludo,
     });
-
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-
     return;
   }
 
-    // 🙏 Mensaje de solo "gracias / thank you / thanks"
+  // 🙏 Mensaje de solo "gracias / thank you / thanks"
   if (graciasPuroRegex.test(userInput.trim())) {
     const respuesta = buildGraciasRespuesta(idiomaDestino);
 
@@ -1924,14 +1831,6 @@ Termina con esta pregunta EXACTA en español:
       messageId,
       content: respuesta,
     });
-
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-
     return;
   }
 
@@ -1981,13 +1880,6 @@ Termina con esta pregunta EXACTA en español:
         messageId,
         content: outWithCTA,
       });
-
-      await pool.query(
-        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT DO NOTHING`,
-        [tenant.id, canal, messageId]
-      );
 
       // (Opcional) métricas / follow-up + registrar venta si aplica
       try {
@@ -2041,14 +1933,6 @@ Termina con esta pregunta EXACTA en español:
         messageId,
         content: respuesta,
       });
-
-      await pool.query(
-        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-        VALUES ($1, $2, $3, NOW())
-        ON CONFLICT DO NOTHING`,
-        [tenant.id, canal, messageId]
-      );
-
       return;
     } catch (err) {
       console.error("❌ Error enviando respuesta rápida de agradecimiento:", err);
@@ -2181,13 +2065,6 @@ Termina con esta pregunta EXACTA en español:
             messageId,
             content: out,
           });
-
-          await pool.query(
-            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-            VALUES ($1, $2, $3, NOW())
-            ON CONFLICT DO NOTHING`,
-            [tenant.id, canal, messageId]
-          );
 
           // registra intención/seguimiento con "precio" como señal de venta
           try {
@@ -2350,13 +2227,6 @@ Termina con esta pregunta EXACTA en español:
           messageId,
           content: outWithCTA,
         });
-
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-           VALUES ($1, $2, $3, NOW())
-           ON CONFLICT DO NOTHING`,
-          [tenant.id, canal, messageId]
-        );
 
         // 🔔 Registrar venta si aplica + follow-up
         try {
@@ -2540,13 +2410,6 @@ Termina con esta pregunta EXACTA en español:
       content: outWithCTA,
     });
 
-    await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT DO NOTHING`,
-      [tenant.id, canal, messageId]
-    );
-
     // 🔔 Registrar venta si aplica + follow-up
     try {
       const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
@@ -2611,13 +2474,6 @@ Termina con esta pregunta EXACTA en español:
         messageId,
         content: respuestaWithCTA,
       });
-
-      await pool.query(
-        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT DO NOTHING`,
-        [tenant.id, canal, messageId]
-      );
     }
     // registra venta si aplica
     try {
@@ -2824,13 +2680,6 @@ Termina con esta pregunta EXACTA en español:
 
     alreadySent = true;
   }
-
-  await pool.query(
-    `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-     VALUES ($1, $2, $3, NOW())
-     ON CONFLICT DO NOTHING`,
-    [tenant.id, canal, messageId]
-  );  
 
   try {
     const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
