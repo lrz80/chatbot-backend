@@ -27,7 +27,6 @@ import { getFaqByIntent } from "../../utils/getFaqByIntent";
 import { answerMultiIntent, detectTopIntents } from '../../utils/multiIntent';
 import type { Canal } from '../../lib/detectarIntencion';
 import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
-import { requireChannelEnabled } from "../../middleware/requireChannelEnabled";
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 import {
   saludoPuroRegex,
@@ -40,8 +39,7 @@ import {
 import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
 import { getIO } from '../../lib/socket';
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
-import { createAppointment } from "../../services/booking";
-import { getOrCreateBookingSession, updateBookingSession, getBookingSession } from "../../services/bookingSession";
+import { getOrCreateBookingSession, updateBookingSession } from "../../services/bookingSession";
 import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
 import { getAwaitingState, setAwaitingState, normalizeContacto } from "../../lib/awaiting";
@@ -572,7 +570,9 @@ export async function procesarMensajeWhatsApp(
   // Números “limpios”
   const numero      = to.replace('whatsapp:', '').replace('tel:', '');   // número del negocio
   const fromNumber  = from.replace('whatsapp:', '').replace('tel:', ''); // número del cliente
-  const contacto = fromNumber.replace(/^whatsapp:/, "").trim();
+
+  // ✅ contacto NORMALIZADO ÚNICO para DB/estado/dedupe
+  const contactoNorm = normalizeContacto('whatsapp', String(fromNumber || ""));
 
   // Normaliza variantes con / sin "+" para que coincida aunque en DB esté "1555..." o "+1555..."
   const numeroSinMas = numero.replace(/^\+/, '');
@@ -654,7 +654,7 @@ export async function procesarMensajeWhatsApp(
   let idiomaDestino: 'es'|'en';
 
   if (isNumericOnly) {
-    idiomaDestino = await getIdiomaClienteDB(tenant.id, canal, fromNumber, tenantBase);
+    idiomaDestino = await getIdiomaClienteDB(tenant.id, canal, contactoNorm, tenantBase);
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (solo número)`);
   } else {
     let detectado: string | null = null;
@@ -662,7 +662,7 @@ export async function procesarMensajeWhatsApp(
 
     const normalizado: 'es'|'en' = normalizeLang(detectado || tenantBase);
 
-    await upsertIdiomaClienteDB(tenant.id, canal, fromNumber, normalizado);
+    await upsertIdiomaClienteDB(tenant.id, canal, contactoNorm, normalizado);
 
     idiomaDestino = normalizado;
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
@@ -677,7 +677,7 @@ export async function procesarMensajeWhatsApp(
       pool,
       tenantId: tenant.id,
       channel: "whatsapp",
-      senderId: fromNumber,     // número del cliente
+      senderId: contactoNorm,     // número del cliente
       messageId,                // SID de Twilio
       userInput,                // texto recibido
       idiomaDestino,            // ✅ igual que en Meta
@@ -699,8 +699,7 @@ export async function procesarMensajeWhatsApp(
   {
     const tenantId = tenant.id;
     const canalEnvio = canal;      // 'whatsapp'
-    const rawFrom = String(fromNumber || "");
-    const senderId = normalizeContacto(canalEnvio, rawFrom);
+    const senderId = contactoNorm;
 
     const { rows: clienteRows } = await pool.query(
       `SELECT estado, human_override, nombre, email, telefono, pais, segmento
@@ -775,7 +774,7 @@ export async function procesarMensajeWhatsApp(
 
       const pideLink = /\b(link|enlace|pago|stripe)\b/i.test(userInput);
 
-      if (estadoActual !== 'esperando_pago') {
+      if (estadoActual !== 'esperando_pago' || pideLink) {
         const paymentLink = extractPaymentLinkFromPrompt(promptBase); // 👈 del prompt
 
         const mensajePago =
@@ -810,85 +809,33 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
+  const isAamyTenant =
+  String(tenant?.slug || '').toLowerCase() === 'aamy' ||
+  String(tenant?.name || tenant?.nombre || '').toLowerCase().includes('aamy');
+
+  const isAutomationLead =
+    /\b(automatiz|bot|chatbot|aamy|crm|responder\s+mensajes|no\s+respondo|quiero\s+automatizar|need\s+automation|automation|ai\s+assistant)\b/i
+      .test(userInput);
+
   // ===============================
   // 🧠 MEMORIA CORTA: si el bot estaba esperando un dato, manejarlo aquí
   // ===============================
   {
     const tenantId = tenant.id;
     const canalEnvio = canal; // ✅ define primero
-    const rawFrom = String(fromNumber || "");
-    const senderId = normalizeContacto(canalEnvio, rawFrom);
+    const senderId = contactoNorm; // ✅ único
 
     const state = await getAwaitingState(tenantId, canalEnvio, senderId);
-
-    // ✅ Si NO hay estado, iniciamos preguntando canal (y guardamos awaiting_field="canal")
-    if (!state?.awaiting_field) {
-      const reply =
-        idiomaDestino === "en"
+    const awaiting = state?.awaiting_field || null;
+    
+    // ✅ Si NO hay estado, iniciamos preguntando canal...
+    if (!awaiting) {
+      if (!isAamyTenant && !isAutomationLead) {
+        // No setees estado, sigue pipeline normal (FAQs/intents)
+      } else {
+        const reply = idiomaDestino === "en"
           ? "Which channel do you want: WhatsApp, Facebook, Instagram, or all three?"
           : "¿Qué canal quieres: WhatsApp, Facebook, Instagram, o los tres?";
-
-      await sendWA({
-        tenantId,
-        canal: canalEnvio,
-        messageId,
-        to: senderId,
-        text: reply,
-        awaitingField: "canal",
-        awaitingPayload: {},
-      });
-
-      return;
-    }
-
-    // ✅ Caso: esperando "canal" (ÚNICO)
-    if (state.awaiting_field === "canal") {
-      const raw = (userInput || "").trim();
-      const msg = raw.toLowerCase();
-
-      // Si el usuario pregunta "cómo funciona" mientras estamos esperando canal
-      const isHowItWorks =
-        /\b(como funciona|cómo funciona|que hace|qué hace|info|informacion|información|detalles|how does it work|what does it do)\b/i.test(
-          msg
-        );
-
-      const negocio = (tenant?.nombre || tenant?.name || "nuestro asistente").trim();
-
-      if (isHowItWorks) {
-        const expl =
-          idiomaDestino === "en"
-            ? `${negocio} replies to your customers 24/7 on WhatsApp/Facebook/Instagram, answers FAQs, and can follow up automatically if someone doesn’t respond. Now tell me: WhatsApp, Facebook, Instagram, or all three?`
-            : `${negocio} responde a tus clientes 24/7 en WhatsApp/Facebook/Instagram, contesta preguntas frecuentes y hace seguimiento automático si el cliente no responde. Ahora dime: WhatsApp, Facebook, Instagram, o los tres?`;
-
-        await sendWA({
-          tenantId,
-          canal: canalEnvio,
-          messageId,
-          to: senderId,
-          text: expl,
-          awaitingField: "canal",
-          awaitingPayload: state.awaiting_payload ?? {},
-        });
-
-        return;
-      }
-
-      const wantsAll =
-        /\b(los\s*tres|todas|todo|all|both|ambos|las\s*3|3)\b/i.test(msg);
-
-      const selected = wantsAll
-        ? ["whatsapp", "facebook", "instagram"]
-        : ([
-            /\b(whatsapp|wa)\b/i.test(msg) ? "whatsapp" : null,
-            /\b(facebook|fb)\b/i.test(msg) ? "facebook" : null,
-            /\b(instagram|ig)\b/i.test(msg) ? "instagram" : null,
-          ].filter(Boolean) as string[]);
-
-      if (!selected.length) {
-        const reply =
-          idiomaDestino === "en"
-            ? "Which channel do you want: WhatsApp, Facebook, Instagram, or all three?"
-            : "¿Qué canal quieres: WhatsApp, Facebook, Instagram, o los tres?";
 
         await sendWA({
           tenantId,
@@ -897,37 +844,18 @@ export async function procesarMensajeWhatsApp(
           to: senderId,
           text: reply,
           awaitingField: "canal",
-          awaitingPayload: state.awaiting_payload ?? {},
+          awaitingPayload: {},
         });
-
         return;
       }
-
-      // ✅ Guardar selección y avanzar al siguiente paso (ajusta este next field a tu flujo real)
-      await setAwaitingState(tenantId, canalEnvio, senderId, "nombre_negocio", {
-        ...(state.awaiting_payload ?? {}),
-        selected_channels: selected,
-      });
-
-      const reply =
-        idiomaDestino === "en"
-          ? `Perfect. I'll set up: ${selected.join(", ")}. What is your business name?`
-          : `Perfecto. Configuro: ${selected.join(", ")}. ¿Cuál es el nombre de tu negocio?`;
-
-      await sendWA({
-        tenantId,
-        canal: canalEnvio,
-        messageId,
-        to: senderId,
-        text: reply,
-        awaitingField: "nombre_negocio",
-        awaitingPayload: { ...(state.awaiting_payload ?? {}), selected_channels: selected },
-      });
-
-      return;
     }
-  }
 
+    // ✅ Caso: esperando "canal" (ÚNICO)
+    if (awaiting === "canal") {
+      const raw = (userInput || "").trim();
+      const msg = raw.toLowerCase();
+   }
+  }
   // 2.a) Guardar el mensaje del usuario una sola vez (idempotente) + emitir por socket
   try {
     const { rows } = await pool.query(
@@ -973,7 +901,7 @@ if (BOOKING_ENABLED) {
     const session = await getOrCreateBookingSession({
       tenantId: tenant.id,
       channel: "whatsapp",
-      contact: fromNumber,
+      contact: contactoNorm,
     });
 
     if (session?.state === "WAITING_DATETIME") {
@@ -1049,7 +977,7 @@ if (BOOKING_ENABLED) {
       await updateBookingSession({
         tenantId: tenant.id,
         channel: "whatsapp",
-        contact: fromNumber,
+        contact: contactoNorm,
         patch: {
           state: "WAITING_CONTACT",
           desired_start_time: start.toJSDate(),
@@ -1099,13 +1027,13 @@ if (BOOKING_ENABLED) {
       await getOrCreateBookingSession({
         tenantId: tenant.id,
         channel: "whatsapp",
-        contact: fromNumber,
+        contact: contactoNorm,
       });
 
       await updateBookingSession({
         tenantId: tenant.id,
         channel: "whatsapp",
-        contact: fromNumber,
+        contact: contactoNorm,
         patch: {
           state: "WAITING_DATETIME",
           customer_phone: fromNumber ?? null,
@@ -1156,7 +1084,7 @@ if (BOOKING_ENABLED) {
     await pool.query(
       `DELETE FROM mensajes_programados
         WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
-      [tenant.id, canal, fromNumber]
+      [tenant.id, canal, contactoNorm]
     );
     console.log('🧽 Follow-ups pendientes limpiados (WA):', { tenantId: tenant.id, fromNumber });
   } catch (e) {
@@ -1222,7 +1150,7 @@ if (BOOKING_ENABLED) {
         await saveAssistantMessageAndEmit({
           tenantId: tenant.id,
           canal,
-          fromNumber: fromNumber || 'anónimo',
+          fromNumber: contactoNorm || 'anónimo',
           messageId,
           content: outWithCTA,
         });
@@ -1233,7 +1161,7 @@ if (BOOKING_ENABLED) {
         const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
         const intFinal = normalizeIntentAlias((det?.intencion || '').toLowerCase());
         const nivel = det?.nivel_interes ?? 1;
-        await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, nivel, messageId);
+        await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel, messageId);
         await scheduleFollowUp(intFinal, nivel, userInput);
       } catch {}
 
@@ -1386,7 +1314,7 @@ Termina con esta pregunta EXACTA en español:
     await saveAssistantMessageAndEmit({
       tenantId: tenant.id,
       canal,
-      fromNumber: fromNumber || 'anónimo',
+      fromNumber: contactoNorm || 'anónimo',
       messageId,
       content: reply,
     });
@@ -1432,7 +1360,7 @@ Termina con esta pregunta EXACTA en español:
     await saveAssistantMessageAndEmit({
       tenantId: tenant.id,
       canal,
-      fromNumber: fromNumber || 'anónimo',
+      fromNumber: contactoNorm || 'anónimo',
       messageId,
       content: reply,
     });
@@ -1558,7 +1486,7 @@ Termina con esta pregunta EXACTA en español:
         await saveAssistantMessageAndEmit({
           tenantId: tenant.id,
           canal,
-          fromNumber: fromNumber || 'anónimo',
+          fromNumber: contactoNorm || 'anónimo',
           messageId,
           content: outWithCTA,
         });
@@ -1567,7 +1495,7 @@ Termina con esta pregunta EXACTA en español:
         try {
           const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
           const intFinal = normalizeIntentAlias(det?.intencion || '');
-          await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, det?.nivel_interes ?? 1, messageId);
+          await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, det?.nivel_interes ?? 1, messageId);
           await scheduleFollowUp(intFinal, det?.nivel_interes ?? 1, userInput);
         } catch (e) {
           console.warn('⚠️ No se pudo registrar sales_intelligence en fast-path:', e);
@@ -1709,7 +1637,7 @@ Termina con esta pregunta EXACTA en español:
       await pool.query(
         `DELETE FROM mensajes_programados
         WHERE tenant_id = $1 AND canal = $2 AND contacto = $3 AND enviado = false`,
-        [tenant.id, "whatsapp", fromNumber]
+        [tenant.id, "whatsapp", contactoNorm]
       );
 
       const delayMin = getConfigDelayMinutes(cfg, 60);
@@ -1721,7 +1649,7 @@ Termina con esta pregunta EXACTA en español:
         (tenant_id, canal, contacto, contenido, fecha_envio, enviado)
         VALUES ($1, $2, $3, $4, $5, false)
         RETURNING id`,
-        [tenant.id, "whatsapp", fromNumber, msg, fechaEnvio]
+        [tenant.id, "whatsapp", contactoNorm, msg, fechaEnvio]
       );
 
       console.log("📅 Follow-up programado (WA)", {
@@ -1747,7 +1675,7 @@ Termina con esta pregunta EXACTA en español:
     await saveAssistantMessageAndEmit({
       tenantId: tenant.id,
       canal,
-      fromNumber: fromNumber || 'anónimo',
+      fromNumber: contactoNorm || 'anónimo',
       messageId,
       content: saludoSmall,
     });
@@ -1763,7 +1691,7 @@ Termina con esta pregunta EXACTA en español:
     await saveAssistantMessageAndEmit({
       tenantId: tenant.id,
       canal,
-      fromNumber: fromNumber || 'anónimo',
+      fromNumber: contactoNorm || 'anónimo',
       messageId,
       content: saludo,
     });
@@ -1779,7 +1707,7 @@ Termina con esta pregunta EXACTA en español:
     await saveAssistantMessageAndEmit({
       tenantId: tenant.id,
       canal,
-      fromNumber: fromNumber || 'anónimo',
+      fromNumber: contactoNorm || 'anónimo',
       messageId,
       content: respuesta,
     });
@@ -1787,8 +1715,9 @@ Termina con esta pregunta EXACTA en español:
   }
 
   // 🔎 Intención antes del EARLY RETURN
-  const { intencion: intenTemp } = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-  const intenCanon = normalizeIntentAlias((intenTemp || '').toLowerCase());
+  const det0 = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+  const intenCanon = normalizeIntentAlias((det0?.intencion || '').toLowerCase());
+  const nivelCanon = det0?.nivel_interes ?? 1;
 
   // 👉 si es directa, NO hagas early return; deja que pase al pipeline de FAQ
   const esDirecta = INTENTS_DIRECT.has(intenCanon);
@@ -1828,7 +1757,7 @@ Termina con esta pregunta EXACTA en español:
       await saveAssistantMessageAndEmit({
         tenantId: tenant.id,
         canal, // aquí ya vale 'whatsapp'
-        fromNumber: fromNumber || 'anónimo',
+        fromNumber: contactoNorm || 'anónimo',
         messageId,
         content: outWithCTA,
       });
@@ -1838,7 +1767,7 @@ Termina con esta pregunta EXACTA en español:
         const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
         const nivel = det?.nivel_interes ?? 1;
         const intFinal = normalizeIntentAlias((det?.intencion || '').toLowerCase());
-        await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, nivel, messageId);
+        await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel, messageId);
 
         if (nivel >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
           await scheduleFollowUp(intFinal, nivel, userInput);
@@ -1881,7 +1810,7 @@ Termina con esta pregunta EXACTA en español:
       await saveAssistantMessageAndEmit({
         tenantId: tenant.id,
         canal,
-        fromNumber: fromNumber || 'anónimo',
+        fromNumber: contactoNorm || 'anónimo',
         messageId,
         content: respuesta,
       });
@@ -2013,7 +1942,7 @@ Termina con esta pregunta EXACTA en español:
           await saveAssistantMessageAndEmit({
             tenantId: tenant.id,
             canal,
-            fromNumber: fromNumber || 'anónimo',
+            fromNumber: contactoNorm || 'anónimo',
             messageId,
             content: out,
           });
@@ -2022,7 +1951,7 @@ Termina con esta pregunta EXACTA en español:
           try {
             const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
             const intFinal = normalizeIntentAlias(det?.intencion || 'precio');
-            await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, det?.nivel_interes ?? 1, messageId);
+            await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, det?.nivel_interes ?? 1, messageId);
             await scheduleFollowUp(intFinal, det?.nivel_interes ?? 1, userInput);
           } catch {}
 
@@ -2175,7 +2104,7 @@ Termina con esta pregunta EXACTA en español:
         await saveAssistantMessageAndEmit({
           tenantId: tenant.id,
           canal,
-          fromNumber: fromNumber || 'anónimo',
+          fromNumber: contactoNorm || 'anónimo',
           messageId,
           content: outWithCTA,
         });
@@ -2187,7 +2116,7 @@ Termina con esta pregunta EXACTA en español:
           intFinal = normalizeIntentAlias(intFinal);
           const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
           const nivel = det?.nivel_interes ?? 1;
-          await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, nivel, messageId);
+          await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel, messageId);
           await scheduleFollowUp(intFinal, nivel, userInput);
         } catch (e) {
           console.warn('⚠️ No se pudo programar follow-up post-intent (WA):', e);
@@ -2226,7 +2155,7 @@ Termina con esta pregunta EXACTA en español:
       const nivel = det?.nivel_interes ?? 1;
 
       // registrar venta si aplica + follow up
-      await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, nivel, messageId);
+      await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel, messageId);
       await scheduleFollowUp(intFinal, nivel, userInput);
     } catch (e) {
       console.warn('⚠️ No se pudo programar follow-up tras interceptor (WA):', e);
@@ -2357,7 +2286,7 @@ Termina con esta pregunta EXACTA en español:
     await saveAssistantMessageAndEmit({
       tenantId: tenant.id,
       canal,
-      fromNumber: fromNumber || 'anónimo',
+      fromNumber: contactoNorm || 'anónimo',
       messageId,
       content: outWithCTA,
     });
@@ -2367,7 +2296,7 @@ Termina con esta pregunta EXACTA en español:
       const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
       const nivelFaq = det?.nivel_interes ?? 1;
       const intFinal = (INTENCION_FINAL_CANONICA || '').toLowerCase();
-      await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, nivelFaq, messageId);
+      await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivelFaq, messageId);
       const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
       if (nivelFaq >= 3 || intencionesFollowUp.includes(intFinal)) {
         await scheduleFollowUp(intFinal, nivelFaq, userInput);
@@ -2422,7 +2351,7 @@ Termina con esta pregunta EXACTA en español:
       await saveAssistantMessageAndEmit({
         tenantId: tenant.id,
         canal,
-        fromNumber: fromNumber || 'anónimo',
+        fromNumber: contactoNorm || 'anónimo',
         messageId,
         content: respuestaWithCTA,
       });
@@ -2431,7 +2360,7 @@ Termina con esta pregunta EXACTA en español:
     try {
       const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
       const intFinal = normalizeIntentAlias(det?.intencion || '');
-      await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, det?.nivel_interes ?? 1, messageId);
+      await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, det?.nivel_interes ?? 1, messageId);
     } catch {}
     return;
   }
@@ -2624,7 +2553,7 @@ Termina con esta pregunta EXACTA en español:
       await saveAssistantMessageAndEmit({
         tenantId: tenant.id,
         canal,
-        fromNumber: fromNumber || 'anónimo',
+        fromNumber: contactoNorm || 'anónimo',
         messageId,
         content: respuestaFinal,
       });
@@ -2634,9 +2563,8 @@ Termina con esta pregunta EXACTA en español:
   }
 
   try {
-    const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-    const nivel_interes = det?.nivel_interes ?? 1;
-    let intFinal = normalizeIntentAlias((det?.intencion || '').toLowerCase());
+    const nivel_interes = nivelCanon;
+    let intFinal = intenCanon;
 
     const textoNormalizado = userInput.trim().toLowerCase();
     console.log(`🔎 Intención (final) = ${intFinal}, Nivel de interés: ${nivel_interes}`);
@@ -2660,12 +2588,12 @@ Termina con esta pregunta EXACTA en español:
           WHERE tenant_id = $1
             AND contacto = $2
             AND (segmento = 'lead' OR segmento IS NULL)`,
-        [tenant.id, fromNumber]
+        [tenant.id, canal, contactoNorm]
       );
     }
 
     // 🔥 Registrar en sales_intelligence **solo si es venta**
-    await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, nivel_interes, messageId);
+    await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel_interes, messageId);
 
     // 🚀 Follow-up con intención final
     if (nivel_interes >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
