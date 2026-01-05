@@ -15,16 +15,21 @@ function isExpired(dt: Date | null) {
   return ageMs > AWAITING_TTL_MIN * 60 * 1000;
 }
 
-function normalizeContacto(canal: string, contacto: string) {
-  const c = String(contacto || "").trim();
+export function normalizeContacto(canal: string, raw: string) {
+  let s = String(raw || "").trim();
 
-  // Para canales por teléfono: guardamos SOLO dígitos (llave estable)
-  if (["whatsapp", "sms", "voice"].includes(String(canal || "").toLowerCase())) {
-    return c.replace("whatsapp:", "").replace(/\D/g, "");
+  // Twilio WhatsApp suele venir como "whatsapp:+1775..."
+  if (s.startsWith("whatsapp:")) s = s.replace("whatsapp:", "");
+
+  // WhatsApp: queremos E.164 con "+"
+  if (canal === "whatsapp") {
+    // deja solo dígitos, pero conserva el + al frente
+    const digits = s.replace(/\D/g, "");
+    return digits ? `+${digits}` : "";
   }
 
-  // Para Meta u otros: no tocar a dígitos (porque puede ser PSID alfanumérico)
-  return c;
+  // Meta: normalmente es PSID, no tocarlo
+  return s;
 }
 
 export async function getAwaitingState(

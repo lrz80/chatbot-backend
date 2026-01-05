@@ -44,7 +44,7 @@ import { createAppointment } from "../../services/booking";
 import { getOrCreateBookingSession, updateBookingSession, getBookingSession } from "../../services/bookingSession";
 import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
-import { getAwaitingState, setAwaitingState } from "../../lib/awaiting";
+import { getAwaitingState, setAwaitingState, normalizeContacto } from "../../lib/awaiting";
 
 
 // Puedes ponerlo debajo de los imports
@@ -477,14 +477,15 @@ async function sendWA(opts: {
   awaitingPayload?: any;
 }) {
   const { tenantId, canal, messageId, to, text, awaitingField, awaitingPayload } = opts;
+  const contacto = normalizeContacto(canal, to);
 
   const ok = await safeEnviarWhatsApp(tenantId, canal, messageId, to, text);
   console.log("[WA] ok?", ok);
 
   // ✅ Guardar estado aunque el envío falle
   if (awaitingField) {
-    console.log("[AWAITING] set", { tenantId, canal, to, awaitingField, awaitingPayload });
-    await setAwaitingState(tenantId, canal, to, awaitingField, awaitingPayload ?? {});
+    console.log("[AWAITING] set", { tenantId, canal, contacto, awaitingField, awaitingPayload });
+    await setAwaitingState(tenantId, canal, contacto, awaitingField, awaitingPayload ?? {});
   }
 
   // ✅ Solo guardamos mensaje/interactions si realmente se envió
@@ -492,7 +493,7 @@ async function sendWA(opts: {
     await saveAssistantMessageAndEmit({
       tenantId,
       canal,
-      fromNumber: to || "anónimo",
+      fromNumber: contacto || "anónimo",
       messageId,
       content: text,
     });
@@ -699,7 +700,7 @@ export async function procesarMensajeWhatsApp(
     const tenantId = tenant.id;
     const canalEnvio = canal;      // 'whatsapp'
     const rawFrom = String(fromNumber || "");
-    const senderId = rawFrom.replace("whatsapp:", "").trim(); // mantiene +E164 (ej: +1863...)
+    const senderId = normalizeContacto(canalEnvio, rawFrom);
 
     const { rows: clienteRows } = await pool.query(
       `SELECT estado, human_override, nombre, email, telefono, pais, segmento
@@ -814,13 +815,13 @@ export async function procesarMensajeWhatsApp(
   // ===============================
   {
     const tenantId = tenant.id;
+    const canalEnvio = canal; // ✅ define primero
     const rawFrom = String(fromNumber || "");
-    const senderId = rawFrom.replace("whatsapp:", "").trim(); // mantiene +E164 (ej: +1863...)
-    const canalEnvio = canal;    // 'whatsapp'
+    const senderId = normalizeContacto(canalEnvio, rawFrom);
 
     const state = await getAwaitingState(tenantId, canalEnvio, senderId);
 
-    // ✅ Si no hay estado, iniciamos el flujo preguntando canal
+    // ✅ Si NO hay estado, iniciamos preguntando canal (y guardamos awaiting_field="canal")
     if (!state?.awaiting_field) {
       const reply =
         idiomaDestino === "en"
@@ -834,70 +835,24 @@ export async function procesarMensajeWhatsApp(
         to: senderId,
         text: reply,
         awaitingField: "canal",
-        awaitingPayload: {}, // o lo que quieras guardar
+        awaitingPayload: {},
       });
 
       return;
     }
 
-    // Caso: esperando "canal_a_automatizar"
-    if (state?.awaiting_field === "canal_a_automatizar") {
-      const respuesta = (userInput || "").trim().toLowerCase();
-
-      const elegido =
-        respuesta.includes("whats") ? "whatsapp" :
-        respuesta.includes("insta") ? "instagram" :
-        (respuesta.includes("face") || respuesta.includes("fb")) ? "facebook" :
-        null;
-
-      if (!elegido) {
-        const reply =
-          idiomaDestino === "en"
-            ? "Got it. Just tell me one: WhatsApp, Instagram, or Facebook."
-            : "Perfecto. Solo dime uno: WhatsApp, Instagram o Facebook.";
-
-        await sendWA({
-          tenantId,
-          canal: canalEnvio,
-          messageId,
-          to: senderId,
-          text: reply,
-          awaitingField: "canal_a_automatizar",
-          awaitingPayload: state.awaiting_payload ?? {},
-        });
-
-        return;
-      }
-
-      // Limpia estado (ya consumido)
-      await clearAwaitingState(tenantId, canalEnvio, senderId);
-
-      const reply =
-        idiomaDestino === "en"
-          ? `Perfect. Let's start with ${elegido.toUpperCase()}. Do you already receive messages there, or do you want to connect it first?`
-          : `Listo. Empecemos con ${elegido.toUpperCase()}. ¿Tu negocio ya recibe mensajes por ese canal o quieres conectarlo primero?`;
-
-      await sendWA({
-        tenantId,
-        canal: canalEnvio,
-        messageId,
-        to: senderId,
-        text: reply,
-      });
-
-      return;
-    }
-
-    // Caso: esperando "canal"
-    if (state?.awaiting_field === "canal") {
-      // Caso: el usuario hace una pregunta general mientras estamos esperando el canal
+    // ✅ Caso: esperando "canal" (ÚNICO)
+    if (state.awaiting_field === "canal") {
       const raw = (userInput || "").trim();
       const msg = raw.toLowerCase();
 
+      // Si el usuario pregunta "cómo funciona" mientras estamos esperando canal
       const isHowItWorks =
-        /\b(como funciona|cómo funciona|que hace|qué hace|info|informacion|información|detalles|how does it work|what does it do)\b/i.test(msg);
+        /\b(como funciona|cómo funciona|que hace|qué hace|info|informacion|información|detalles|how does it work|what does it do)\b/i.test(
+          msg
+        );
 
-      const negocio = (tenant?.nombre || "nuestro asistente").trim();
+      const negocio = (tenant?.nombre || tenant?.name || "nuestro asistente").trim();
 
       if (isHowItWorks) {
         const expl =
@@ -923,13 +878,11 @@ export async function procesarMensajeWhatsApp(
 
       const selected = wantsAll
         ? ["whatsapp", "facebook", "instagram"]
-        : (
-            [
-              /\b(whatsapp|wa)\b/i.test(msg) ? "whatsapp" : null,
-              /\b(facebook|fb)\b/i.test(msg) ? "facebook" : null,
-              /\b(instagram|ig)\b/i.test(msg) ? "instagram" : null,
-            ].filter(Boolean) as string[]
-          );
+        : ([
+            /\b(whatsapp|wa)\b/i.test(msg) ? "whatsapp" : null,
+            /\b(facebook|fb)\b/i.test(msg) ? "facebook" : null,
+            /\b(instagram|ig)\b/i.test(msg) ? "instagram" : null,
+          ].filter(Boolean) as string[]);
 
       if (!selected.length) {
         const reply =
@@ -950,7 +903,7 @@ export async function procesarMensajeWhatsApp(
         return;
       }
 
-      // Guardar selección en awaiting_payload y AVANZAR al siguiente paso
+      // ✅ Guardar selección y avanzar al siguiente paso (ajusta este next field a tu flujo real)
       await setAwaitingState(tenantId, canalEnvio, senderId, "nombre_negocio", {
         ...(state.awaiting_payload ?? {}),
         selected_channels: selected,
