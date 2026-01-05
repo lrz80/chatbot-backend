@@ -506,31 +506,15 @@ type AwaitingState = {
 
 const AWAITING_TTL_MIN = 45;
 
-async function getAwaitingState(
-  tenantId: string,
-  canal: string,
-  contacto: string
-): Promise<AwaitingState> {
-  const { rows } = await pool.query(
-    `SELECT awaiting_field, awaiting_payload, awaiting_updated_at
+async function getAwaitingState(tenantId: string, canal: string, contacto: string) {
+  const r = await pool.query(
+    `SELECT awaiting_field, awaiting_payload
        FROM clientes
       WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
       LIMIT 1`,
     [tenantId, canal, contacto]
   );
-
-  const s = rows[0] || { awaiting_field: null, awaiting_payload: null, awaiting_updated_at: null };
-
-  // TTL: si está vencido, lo limpiamos y devolvemos null
-  if (s.awaiting_updated_at) {
-    const ageMin = (Date.now() - new Date(s.awaiting_updated_at).getTime()) / 60000;
-    if (ageMin > AWAITING_TTL_MIN) {
-      await clearAwaitingState(tenantId, canal, contacto);
-      return { awaiting_field: null, awaiting_payload: null, awaiting_updated_at: null };
-    }
-  }
-
-  return s;
+  return r.rows[0] || null;
 }
 
 async function setAwaitingState(
@@ -538,34 +522,43 @@ async function setAwaitingState(
   canal: string,
   contacto: string,
   awaitingField: string,
-  awaitingPayload: any = null
+  awaitingPayload: any = {}
 ) {
-  await pool.query(
-    `INSERT INTO clientes (tenant_id, canal, contacto, awaiting_field, awaiting_payload, awaiting_updated_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5::jsonb, NOW(), NOW())
-     ON CONFLICT (tenant_id, canal, contacto)
-     DO UPDATE SET
-       awaiting_field = EXCLUDED.awaiting_field,
-       awaiting_payload = EXCLUDED.awaiting_payload,
-       awaiting_updated_at = NOW(),
-       updated_at = NOW()`,
-    [tenantId, canal, contacto, awaitingField, JSON.stringify(awaitingPayload ?? {})]
+  const r = await pool.query(
+    `
+    INSERT INTO clientes (tenant_id, canal, contacto, awaiting_field, awaiting_payload, updated_at)
+    VALUES ($1, $2, $3, $4, $5::jsonb, NOW())
+    ON CONFLICT (tenant_id, canal, contacto)
+    DO UPDATE SET
+      awaiting_field = EXCLUDED.awaiting_field,
+      awaiting_payload = EXCLUDED.awaiting_payload,
+      updated_at = NOW()
+    RETURNING awaiting_field, awaiting_payload
+    `,
+    [tenantId, canal, contacto, awaitingField, JSON.stringify(awaitingPayload)]
   );
+
+  // LOG de verificación (déjalo mientras pruebas)
+  console.log("✅ setAwaitingState saved:", { tenantId, canal, contacto, ...r.rows[0] });
+
+  return r.rows[0];
 }
 
-async function clearAwaitingState(
-  tenantId: string,
-  canal: string,
-  contacto: string
-) {
-  await pool.query(
-    `UPDATE clientes
-        SET awaiting_field = NULL,
-            awaiting_updated_at = NULL,
-            updated_at = NOW()
-      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
+async function clearAwaitingState(tenantId: string, canal: string, contacto: string) {
+  const r = await pool.query(
+    `
+    INSERT INTO clientes (tenant_id, canal, contacto, awaiting_field, awaiting_payload, updated_at)
+    VALUES ($1, $2, $3, NULL, '{}'::jsonb, NOW())
+    ON CONFLICT (tenant_id, canal, contacto)
+    DO UPDATE SET
+      awaiting_field = NULL,
+      awaiting_payload = '{}'::jsonb,
+      updated_at = NOW()
+    `,
     [tenantId, canal, contacto]
   );
+
+  console.log("🧹 clearAwaitingState ok:", { tenantId, canal, contacto, rowCount: r.rowCount });
 }
 
 router.post("/", async (req: Request, res: Response) => {
