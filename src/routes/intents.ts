@@ -1,3 +1,4 @@
+//src/routes/intents.ts
 import { Router, Request, Response } from 'express';
 import { authenticateUser } from '../middleware/auth';
 import pool from '../lib/db';
@@ -60,6 +61,40 @@ router.post('/', authenticateUser, async (req, res) => {
     res.json({ ok: true, message: 'Intenciones guardadas ✅' });
   } catch (err) {
     console.error('❌ POST /api/intents error:', err);
+    res.status(500).json({ error: 'Error interno al guardar' });
+  }
+});
+
+router.put('/', authenticateUser, async (req, res) => {
+  const tenantId = (req as any).user?.tenant_id;
+  if (!tenantId) return res.status(401).json({ error: 'Tenant no autenticado' });
+
+  const canal = (req.query.canal as string)?.toLowerCase() || 'whatsapp';
+  const intents = Array.isArray(req.body?.intents) ? req.body.intents : [];
+
+  if (!intents.length) return res.status(400).json({ error: 'Sin intenciones válidas' });
+
+  try {
+    for (const i of intents) {
+      const nombre = i.nombre?.trim();
+      const ejemplos = Array.isArray(i.ejemplos) ? i.ejemplos : [];
+      const respuesta = i.respuesta?.trim();
+      if (!nombre || !ejemplos.length || !respuesta) continue;
+
+      await pool.query(
+        `INSERT INTO intenciones (tenant_id, canal, nombre, ejemplos, respuesta, activo)
+         VALUES ($1,$2,$3,$4,$5,TRUE)
+         ON CONFLICT (tenant_id, canal, nombre)
+         DO UPDATE SET ejemplos = EXCLUDED.ejemplos,
+                       respuesta = EXCLUDED.respuesta,
+                       updated_at = NOW()`,
+        [tenantId, canal, nombre, ejemplos, respuesta]
+      );
+    }
+
+    res.json({ ok: true, message: 'Intenciones guardadas ✅' });
+  } catch (err) {
+    console.error('❌ PUT /api/intents error:', err);
     res.status(500).json({ error: 'Error interno al guardar' });
   }
 });
