@@ -56,9 +56,9 @@ export async function setAwaitingState(
   tenantId: string,
   canal: string,
   contacto: string,
-  awaitingField: string | null,
-  awaitingPayload: any = {}
-): Promise<void> {
+  awaitingField: string,
+  awaitingPayload: any
+) {
   await pool.query(
     `
     INSERT INTO clientes (tenant_id, canal, contacto, awaiting_field, awaiting_payload, awaiting_updated_at, updated_at)

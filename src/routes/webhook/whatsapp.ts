@@ -465,7 +465,7 @@ async function sendWA(opts: {
   tenantId: string;
   canal: string;
   messageId: string | null;
-  to: string; // fromNumber del cliente
+  to: string;
   text: string;
   awaitingField?: string;
   awaitingPayload?: any;
@@ -473,7 +473,15 @@ async function sendWA(opts: {
   const { tenantId, canal, messageId, to, text, awaitingField, awaitingPayload } = opts;
 
   const ok = await safeEnviarWhatsApp(tenantId, canal, messageId, to, text);
+  console.log("[WA] ok?", ok);
 
+  // ✅ Guardar estado aunque el envío falle
+  if (awaitingField) {
+    console.log("[AWAITING] set", { tenantId, canal, to, awaitingField, awaitingPayload });
+    await setAwaitingState(tenantId, canal, to, awaitingField, awaitingPayload ?? {});
+  }
+
+  // ✅ Solo guardamos mensaje/interactions si realmente se envió
   if (ok) {
     await saveAssistantMessageAndEmit({
       tenantId,
@@ -489,10 +497,6 @@ async function sendWA(opts: {
        ON CONFLICT DO NOTHING`,
       [tenantId, canal, messageId]
     );
-
-    if (awaitingField) {
-      await setAwaitingState(tenantId, canal, to, awaitingField, awaitingPayload ?? {});
-    }
   }
 
   return ok;
