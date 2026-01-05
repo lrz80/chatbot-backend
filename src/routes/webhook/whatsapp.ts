@@ -1052,6 +1052,10 @@ if (BOOKING_ENABLED) {
       mensajeEs,
       idiomaDestino
     );
+    console.log('[FAQ-SIM-FIRST] faqs=', faqs.length, 'idiomaDestino=', idiomaDestino);
+    console.log('[FAQ-SIM-FIRST] userInput=', userInput);
+    console.log('[FAQ-SIM-FIRST] mensajeEs=', mensajeEs);
+    console.log('[FAQ-SIM-FIRST] hitSim=', Boolean(hitSim), 'len=', (hitSim || '').length);
 
     if (hitSim && hitSim.trim()) {
       // ⬇️ CTA por intención: si el texto contiene precios, preferimos "precio"
