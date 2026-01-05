@@ -833,6 +833,26 @@ export async function procesarMensajeWhatsApp(
 
     const state = await getAwaitingState(tenantId, canalEnvio, senderId);
 
+    // ✅ Si no hay estado, iniciamos el flujo preguntando canal
+    if (!state?.awaiting_field) {
+      const reply =
+        idiomaDestino === "en"
+          ? "Which channel do you want: WhatsApp, Facebook, Instagram, or all three?"
+          : "¿Qué canal quieres: WhatsApp, Facebook, Instagram, o los tres?";
+
+      await sendWA({
+        tenantId,
+        canal: canalEnvio,
+        messageId,
+        to: senderId,
+        text: reply,
+        awaitingField: "canal",
+        awaitingPayload: {}, // o lo que quieras guardar
+      });
+
+      return;
+    }
+
     // Caso: esperando "canal_a_automatizar"
     if (state?.awaiting_field === "canal_a_automatizar") {
       const respuesta = (userInput || "").trim().toLowerCase();
