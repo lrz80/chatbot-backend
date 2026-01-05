@@ -854,7 +854,47 @@ export async function procesarMensajeWhatsApp(
     if (awaiting === "canal") {
       const raw = (userInput || "").trim();
       const msg = raw.toLowerCase();
-   }
+
+      const elegido =
+        msg.includes("whats") ? "whatsapp" :
+        msg.includes("insta") ? "instagram" :
+        (msg.includes("face") || msg.includes("fb")) ? "facebook" :
+        null;
+
+      if (!elegido) {
+        const reply =
+          idiomaDestino === "en"
+            ? "Please reply with WhatsApp, Facebook, or Instagram."
+            : "Por favor dime: WhatsApp, Facebook o Instagram.";
+
+        await sendWA({
+          tenantId,
+          canal: canalEnvio,
+          messageId,
+          to: senderId,
+          text: reply,
+        });
+        return;
+      }
+
+      // ✅ ESTO ES LO QUE TE FALTABA
+      await clearAwaitingState(tenantId, canalEnvio, senderId);
+
+      const reply =
+        idiomaDestino === "en"
+          ? `Perfect. We'll continue with ${elegido}.`
+          : `Perfecto. Continuamos con ${elegido}.`;
+
+      await sendWA({
+        tenantId,
+        canal: canalEnvio,
+        messageId,
+        to: senderId,
+        text: reply,
+      });
+
+      return;
+    }
   }
   // 2.a) Guardar el mensaje del usuario una sola vez (idempotente) + emitir por socket
   try {
