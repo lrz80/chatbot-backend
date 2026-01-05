@@ -1145,10 +1145,9 @@ if (BOOKING_ENABLED) {
 
   const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs || shortInfoOnly;
 
-  // 🔍 CASO ESPECIAL: usuario pide una DEMO / demostración
   const wantsDemo =
-    /\b(demuéstramelo|demuestrame|demuestrame|hazme una demostracion|hazme un demo|prueba real|ejemplo real|muestrame como funciona|muestrame como responde|show me|prove it|give me a demo)\b/i
-      .test(cleanedNorm);
+  /\b(demo|demostraci[oó]n|probar\s+(?:el\s+)?demo|quiero\s+probar\s+(?:el\s+)?demo|quiero\s+un\s+demo|hazme\s+un\s+demo|mu[eé]strame\s+(?:c[oó]mo\s+funciona|c[oó]mo\s+responde)|demu[eé]stramelo|show\s+me|give\s+me\s+a\s+demo|prove\s+it)\b/i
+    .test(cleanedForInfo);
 
   let respuesta: string = "";
 
