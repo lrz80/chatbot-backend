@@ -864,18 +864,66 @@ export async function procesarMensajeWhatsApp(
   // ===============================
   {
     const tenantId = tenant.id;
-    const senderId = fromNumber;
-    const canalEnvio = canal;
+    const senderId = fromNumber; // número del cliente
+    const canalEnvio = canal;    // 'whatsapp'
 
     const state = await getAwaitingState(tenantId, canalEnvio, senderId);
 
-    if (state.awaiting_field === "canal") {
+    // Caso: esperando "canal_a_automatizar"
+    if (state?.awaiting_field === "canal_a_automatizar") {
+      const respuesta = (userInput || "").trim().toLowerCase();
+
+      const elegido =
+        respuesta.includes("whats") ? "whatsapp" :
+        respuesta.includes("insta") ? "instagram" :
+        (respuesta.includes("face") || respuesta.includes("fb")) ? "facebook" :
+        null;
+
+      if (!elegido) {
+        const reply =
+          idiomaDestino === "en"
+            ? "Got it. Just tell me one: WhatsApp, Instagram, or Facebook."
+            : "Perfecto. Solo dime uno: WhatsApp, Instagram o Facebook.";
+
+        await sendWA({
+          tenantId,
+          canal: canalEnvio,
+          messageId,
+          to: senderId,
+          text: reply,
+          awaitingField: "canal_a_automatizar",
+          awaitingPayload: state.awaiting_payload ?? {},
+        });
+
+        return;
+      }
+
+      // Limpia estado (ya consumido)
+      await clearAwaitingState(tenantId, canalEnvio, senderId);
+
+      const reply =
+        idiomaDestino === "en"
+          ? `Perfect. Let's start with ${elegido.toUpperCase()}. Do you already receive messages there, or do you want to connect it first?`
+          : `Listo. Empecemos con ${elegido.toUpperCase()}. ¿Tu negocio ya recibe mensajes por ese canal o quieres conectarlo primero?`;
+
+      await sendWA({
+        tenantId,
+        canal: canalEnvio,
+        messageId,
+        to: senderId,
+        text: reply,
+      });
+
+      return;
+    }
+
+    // Caso: esperando "canal"
+    if (state?.awaiting_field === "canal") {
       const msg = (userInput || "").toLowerCase().trim();
 
       const wantsAll =
         /\b(los\s*tres|todas|todo|all|both|ambos|las\s*3|3)\b/i.test(msg);
 
-      // Ajusta a tus nombres reales de canales/features
       const selected = wantsAll
         ? ["whatsapp", "facebook", "instagram"]
         : (
@@ -889,8 +937,8 @@ export async function procesarMensajeWhatsApp(
       if (!selected.length) {
         const reply =
           idiomaDestino === "en"
-            ? "Got it. Which channel do you want: WhatsApp, Facebook, Instagram, or all three?"
-            : "Perfecto. ¿Qué canal quieres: WhatsApp, Facebook, Instagram, o los tres?";
+            ? "Which channel do you want: WhatsApp, Facebook, Instagram, or all three?"
+            : "¿Qué canal quieres: WhatsApp, Facebook, Instagram, o los tres?";
 
         await sendWA({
           tenantId,
@@ -899,15 +947,13 @@ export async function procesarMensajeWhatsApp(
           to: senderId,
           text: reply,
           awaitingField: "canal",
-          awaitingPayload: {
-            step: "pick_channels"
-          }
+          awaitingPayload: state.awaiting_payload ?? {},
         });
 
         return;
       }
 
-      // ✅ Guardar selección y limpiar memoria
+      // Guardar selección en awaiting_payload (opcional)
       await pool.query(
         `UPDATE clientes
             SET awaiting_payload = jsonb_set(COALESCE(awaiting_payload,'{}'::jsonb), '{selected_channels}', $4::jsonb, true),
@@ -918,25 +964,18 @@ export async function procesarMensajeWhatsApp(
 
       await clearAwaitingState(tenantId, canalEnvio, senderId);
 
-      // ✅ Respuesta y avanza al siguiente paso (aquí tú decides qué sigue)
       const reply =
         idiomaDestino === "en"
           ? `Perfect. I'll set up: ${selected.join(", ")}. What is your business name?`
           : `Perfecto. Configuro: ${selected.join(", ")}. ¿Cuál es el nombre de tu negocio?`;
 
-      const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, senderId, reply);
-      if (ok) {
-        await saveAssistantMessageAndEmit({ tenantId, canal: canalEnvio, fromNumber: senderId, messageId, content: reply });
-        await pool.query(
-          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-          VALUES ($1, $2, $3, NOW())
-          ON CONFLICT DO NOTHING`,
-          [tenantId, canalEnvio, messageId]
-        );
-      }
-
-      // Si tu siguiente paso también necesita memoria:
-      // await setAwaitingState(tenantId, canalEnvio, senderId, "business_name", { selected });
+      await sendWA({
+        tenantId,
+        canal: canalEnvio,
+        messageId,
+        to: senderId,
+        text: reply,
+      });
 
       return;
     }
