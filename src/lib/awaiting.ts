@@ -15,11 +15,27 @@ function isExpired(dt: Date | null) {
   return ageMs > AWAITING_TTL_MIN * 60 * 1000;
 }
 
+function normalizeContacto(canal: string, contacto: string) {
+  const c = String(contacto || "").trim();
+
+  // Para canales por teléfono: guardamos SOLO dígitos (llave estable)
+  if (["whatsapp", "sms", "voice"].includes(String(canal || "").toLowerCase())) {
+    return c.replace("whatsapp:", "").replace(/\D/g, "");
+  }
+
+  // Para Meta u otros: no tocar a dígitos (porque puede ser PSID alfanumérico)
+  return c;
+}
+
 export async function getAwaitingState(
+
   tenantId: string,
   canal: string,
   contacto: string
 ): Promise<AwaitingStateRow | null> {
+
+  const contactoKey = normalizeContacto(canal, contacto);
+
   const { rows } = await pool.query(
     `
     SELECT awaiting_field, awaiting_payload, awaiting_updated_at
@@ -44,7 +60,7 @@ export async function getAwaitingState(
           updated_at = NOW()
       WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
       `,
-      [tenantId, canal, contacto]
+      [tenantId, canal, contactoKey]
     );
     return null;
   }
@@ -59,6 +75,9 @@ export async function setAwaitingState(
   awaitingField: string,
   awaitingPayload: any
 ) {
+
+  const contactoKey = normalizeContacto(canal, contacto);
+
   await pool.query(
     `
     INSERT INTO clientes (tenant_id, canal, contacto, awaiting_field, awaiting_payload, awaiting_updated_at, updated_at)
@@ -70,6 +89,6 @@ export async function setAwaitingState(
       awaiting_updated_at = NOW(),
       updated_at = NOW()
     `,
-    [tenantId, canal, contacto, awaitingField, JSON.stringify(awaitingPayload ?? {})]
+    [tenantId, canal, contactoKey, awaitingField, JSON.stringify(awaitingPayload ?? {})]
   );
 }

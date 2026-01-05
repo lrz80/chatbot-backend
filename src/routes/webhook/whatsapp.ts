@@ -698,7 +698,8 @@ export async function procesarMensajeWhatsApp(
   {
     const tenantId = tenant.id;
     const canalEnvio = canal;      // 'whatsapp'
-    const senderId = fromNumber;   // número del cliente
+    const rawFrom = String(fromNumber || "");
+    const senderId = rawFrom.replace("whatsapp:", "").replace(/\D/g, ""); // solo dígitos
 
     const { rows: clienteRows } = await pool.query(
       `SELECT estado, human_override, nombre, email, telefono, pais, segmento
@@ -813,7 +814,8 @@ export async function procesarMensajeWhatsApp(
   // ===============================
   {
     const tenantId = tenant.id;
-    const senderId = fromNumber; // número del cliente
+    const rawFrom = String(fromNumber || "");
+    const senderId = rawFrom.replace("whatsapp:", "").replace(/\D/g, ""); // solo dígitos
     const canalEnvio = canal;    // 'whatsapp'
 
     const state = await getAwaitingState(tenantId, canalEnvio, senderId);
@@ -948,16 +950,11 @@ export async function procesarMensajeWhatsApp(
         return;
       }
 
-      // Guardar selección en awaiting_payload (opcional)
-      await pool.query(
-        `UPDATE clientes
-            SET awaiting_payload = jsonb_set(COALESCE(awaiting_payload,'{}'::jsonb), '{selected_channels}', $4::jsonb, true),
-                updated_at = NOW()
-          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
-        [tenantId, canalEnvio, senderId, JSON.stringify(selected)]
-      );
-
-      await clearAwaitingState(tenantId, canalEnvio, senderId);
+      // Guardar selección en awaiting_payload y AVANZAR al siguiente paso
+      await setAwaitingState(tenantId, canalEnvio, senderId, "nombre_negocio", {
+        ...(state.awaiting_payload ?? {}),
+        selected_channels: selected,
+      });
 
       const reply =
         idiomaDestino === "en"
@@ -970,6 +967,8 @@ export async function procesarMensajeWhatsApp(
         messageId,
         to: senderId,
         text: reply,
+        awaitingField: "nombre_negocio",
+        awaitingPayload: { ...(state.awaiting_payload ?? {}), selected_channels: selected },
       });
 
       return;
