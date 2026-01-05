@@ -1031,6 +1031,75 @@ if (BOOKING_ENABLED) {
 
   const mensajeUsuario = normalizarTexto(stripLeadGreetings(userInput));
 
+  const isSmallTalkOrCourtesy =
+    /^(hola|hello|hi|hey|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|thank\s+you|ok|okay|vale|perfecto)\b/i
+      .test(userInput.trim());
+
+  let INTENCION_FINAL_CANONICA = '';
+
+  // ============================================================
+  // (B) PRIORIDAD MÁXIMA: FAQ por similitud (texto) antes de intención
+  // - Esto asegura que preguntas tipo "quiero probar el demo" usen
+  //   la FAQ exacta guardada (por texto), sin caer en intent=interes_clases.
+  // ============================================================
+  try {
+    const mensajeEs = (idiomaDestino !== 'es')
+      ? await traducirMensaje(mensajeUsuario, 'es').catch(() => mensajeUsuario)
+      : mensajeUsuario;
+
+    const hitSim = await buscarRespuestaSimilitudFaqsTraducido(
+      faqs,
+      mensajeEs,
+      idiomaDestino
+    );
+
+    if (hitSim && hitSim.trim()) {
+      // ⬇️ CTA por intención: si el texto contiene precios, preferimos "precio"
+      const askedPrice = PRICE_REGEX.test(userInput);
+      const intentForCTA = pickIntentForCTA({
+        prefer: askedPrice ? 'precio' : null,
+        fallback: INTENCION_FINAL_CANONICA || null, // si aún no existe, es null y no pasa nada
+      });
+
+      const ctaRaw = await pickCTA(tenant, intentForCTA, canal);
+      const cta    = await translateCTAIfNeeded(ctaRaw, idiomaDestino);
+      const outWithCTA = isSmallTalkOrCourtesy ? hitSim : appendCTAWithCap(hitSim, cta);
+
+      const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
+      alreadySent = ok ? true : alreadySent;
+
+      if (ok) {
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: fromNumber || 'anónimo',
+          messageId,
+          content: outWithCTA,
+        });
+
+        await pool.query(
+          `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT DO NOTHING`,
+          [tenant.id, canal, messageId]
+        );
+      }
+
+      // 🔔 opcional: registrar intención + follow-up (sin forzar intent)
+      try {
+        const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+        const intFinal = normalizeIntentAlias((det?.intencion || '').toLowerCase());
+        const nivel = det?.nivel_interes ?? 1;
+        await recordSalesIntent(tenant.id, fromNumber, canal, userInput, intFinal, nivel, messageId);
+        await scheduleFollowUp(intFinal, nivel, userInput);
+      } catch {}
+
+      return; // ✅ IMPORTANTÍSIMO: corta el pipeline aquí
+    }
+  } catch (e) {
+    console.warn('⚠️ FAQ similitud (prioridad) falló; sigo pipeline normal:', e);
+  }
+
   // Texto sin saludos al inicio para detectar "más info" y "demo"
   const cleanedForInfo = stripLeadGreetings(userInput);
   const cleanedNorm    = normalizarTexto(cleanedForInfo);
@@ -1084,11 +1153,6 @@ if (BOOKING_ENABLED) {
     idiomaDestino === 'en'
       ? 'Is there anything else I can help you with?'
       : '¿Hay algo más en lo que te pueda ayudar?';
-
-  // ⬇️ No empujar CTA si el mensaje es solo saludo / gracias / ok
-  const isSmallTalkOrCourtesy =
-    /^(hola|hello|hi|hey|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|thank\s+you|ok|okay|vale|perfecto)\b/i
-      .test(userInput.trim());
 
   // 🧩 Bloque especial: "quiero más info / need more info"
   if (wantsMoreInfo) {
@@ -1703,9 +1767,6 @@ Termina con esta pregunta EXACTA en español:
   } else {
     console.log('🛣️ Ruta: FAQ/Intents (intención directa). Intención =', intenCanon);
   }
-
-  // después de calcular idiomaDestino...
-  let INTENCION_FINAL_CANONICA = '';
 
   // 3️⃣ Detectar intención
   const { intencion: intencionDetectada } = await detectarIntencion(mensajeUsuario, tenant.id, 'whatsapp');
