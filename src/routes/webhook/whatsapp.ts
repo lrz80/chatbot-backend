@@ -1035,21 +1035,21 @@ export async function procesarMensajeWhatsApp(
           senderId: contactoNorm,
           preferredLang: idiomaDestino,
         });
-        // DEBUG: re-lee inmediatamente lo que acabas de guardar
-        const memAfter = await getMemoryValue<string>({
-          tenantId: tenant.id,
-          canal: "whatsapp",
-          senderId: contactoNorm,
-          key: "facts_summary",
-        });
-        console.log("🧠 facts_summary (after rememberFacts) =", memAfter);
-
+      
         await refreshFactsSummary({
           tenantId: tenant.id,
           canal: "whatsapp",
           senderId: contactoNorm,
           idioma: idiomaDestino,
         });
+
+        const memAfter = await getMemoryValue<string>({
+          tenantId: tenant.id,
+          canal: "whatsapp",
+          senderId: contactoNorm,
+          key: "facts_summary",
+        });
+        console.log("🧠 facts_summary (after refreshFactsSummary) =", memAfter);
 
       // 3) SIEMPRE corta el pipeline normal si el engine manejó el turno
       return;

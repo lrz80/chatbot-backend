@@ -31,6 +31,15 @@ export async function setMemoryValue(params: {
 }): Promise<void> {
   const { tenantId, canal, senderId, key, value } = params;
 
+  // ✅ GUARD: no permitir overwrite con null / undefined / "" (string vacío)
+  if (
+    value === null ||
+    value === undefined ||
+    (typeof value === "string" && value.trim() === "")
+  ) {
+    return;
+  }
+
   await pool.query(
     `INSERT INTO client_memory (tenant_id, canal, sender_id, "key", value)
      VALUES ($1, $2, $3, $4, $5::jsonb)
