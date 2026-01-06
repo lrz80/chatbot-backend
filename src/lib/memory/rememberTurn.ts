@@ -1,14 +1,50 @@
 import { getMemoryValue, setMemoryValue } from "../clientMemory";
 
-export async function rememberTurn(params: {
-  tenantId: string;
-  canal: string;
-  senderId: string;
-  u: string;              // user input
-  a: string;              // assistant reply
-  maxTurns?: number;      // default 40
-}) {
-  const { tenantId, canal, senderId, u, a, maxTurns = 40 } = params;
+/**
+ * Soporta 2 firmas para evitar errores en WhatsApp y otros webhooks:
+ *  - Nueva: { u, a, maxTurns }
+ *  - Legacy: { userText, assistantText, keepLast }
+ */
+type RememberTurnParams =
+  | {
+      tenantId: string;
+      canal: string;
+      senderId: string;
+      u: string;          // user input
+      a: string;          // assistant reply
+      maxTurns?: number;  // default 40
+      // legacy opcionales (por si algún lugar los manda)
+      userText?: never;
+      assistantText?: never;
+      keepLast?: never;
+    }
+  | {
+      tenantId: string;
+      canal: string;
+      senderId: string;
+      userText: string;
+      assistantText: string;
+      keepLast?: number;  // default 40
+      // nuevos opcionales (por si algún lugar los manda)
+      u?: never;
+      a?: never;
+      maxTurns?: never;
+    };
+
+export async function rememberTurn(params: RememberTurnParams) {
+  const { tenantId, canal, senderId } = params;
+
+  // Normaliza inputs sin romper llamadas viejas
+  const u =
+    "u" in params ? params.u : params.userText;
+
+  const a =
+    "a" in params ? params.a : params.assistantText;
+
+  const maxTurns =
+    "maxTurns" in params
+      ? (params.maxTurns ?? 40)
+      : (params.keepLast ?? 40);
 
   // 1) carga turns existentes
   const prevTurns = await getMemoryValue<any[]>({
