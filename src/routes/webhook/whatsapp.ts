@@ -778,38 +778,63 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
-    // =====================================================
+ // =====================================================
   // ✅ FLOW ENGINE (Estado + Flujos DB + Memoria persistida)
   // =====================================================
   try {
+    console.log("🟡 [WA] Antes FlowEngine", {
+      senderId: contactoNorm,   // mismo senderId que le pasas al engine
+      rawFrom: fromNumber,
+      text: userInput,
+      messageId,
+    });
+
     const engineRes = await handleMessageWithFlowEngine({
       tenantId: tenant.id,
       canal: "whatsapp",
-      senderId: contactoNorm,              // usa tu contacto normalizado
+      senderId: contactoNorm,
       lang: (idiomaDestino === "en" ? "en" : "es"),
       userInput: userInput || "",
     });
 
-    // Si el motor contestó algo (ej: pregunta del onboarding), respondemos y cortamos.
-    if (engineRes?.didHandle && engineRes?.reply) {
-      const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, engineRes.reply);
+    console.log("🟢 [WA] FlowEngine result", {
+      didHandle: engineRes?.didHandle,
+      reply: engineRes?.reply,
+    });
 
-      if (ok) {
-        await saveAssistantMessageAndEmit({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: contactoNorm || "anónimo",
-          messageId,
-          content: engineRes.reply,
-        });
+    // ✅ Si el engine manejó el turno, SIEMPRE cortamos el pipeline normal
+    if (engineRes?.didHandle) {
+      if (engineRes.reply) {
+        console.log("🟣 [WA] Enviando reply del FlowEngine");
+        const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, engineRes.reply);
+
+        if (ok) {
+          await saveAssistantMessageAndEmit({
+            tenantId: tenant.id,
+            canal,
+            fromNumber: contactoNorm || "anónimo",
+            messageId,
+            content: engineRes.reply,
+          });
+        }
       }
 
-      return; // ⬅️ importantísimo: corta el pipeline normal
+      console.log("⛔ [WA] CORTANDO PIPELINE por FlowEngine");
+      return;
     }
   } catch (e) {
     console.error("FlowEngine error (WA):", e);
     // no rompemos el webhook; seguimos con el pipeline normal
   }
+  console.log("🔴 [WA] Entrando al pipeline NORMAL (no debería pasar si FlowEngine manejó)", {
+    tenantId: tenant.id,
+    canal,
+    contactoNorm,
+    messageId,
+    userInput,
+    origen,
+    mode,
+  });
 
   const isAamyTenant =
   String(tenant?.slug || '').toLowerCase() === 'aamy' ||
