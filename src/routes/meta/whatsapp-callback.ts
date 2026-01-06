@@ -1,10 +1,5 @@
 // src/routes/meta/whatsapp-callback.ts
 import express, { Request, Response } from "express";
-import pool from "../../lib/db";
-import {
-  procesarMensajeWhatsApp,
-  WhatsAppContext,
-} from "../webhook/whatsapp"; // 👈 reutilizamos tu flujo Twilio con contexto
 
 const router = express.Router();
 
@@ -43,16 +38,20 @@ router.get("/whatsapp/callback", (req: Request, res: Response) => {
 });
 
 /**
- * POST /api/meta/whatsapp/callback
- *
- * Aquí llegan TODOS los eventos de mensajes de WhatsApp Cloud API.
- * Ahora solo hace de "adaptador" y delega a procesarMensajeWhatsApp.
+ * Middleware solo para log del hit (no lógica)
  */
 router.use((req, _res, next) => {
   console.log("🔔 [WA CALLBACK HIT]", req.method, req.originalUrl);
   next();
 });
 
+/**
+ * POST /api/meta/whatsapp/callback
+ *
+ * En modo Twilio:
+ * - IGNORA messages (evita doble procesamiento)
+ * - SOLO acepta statuses (sent / delivered / read)
+ */
 router.post("/whatsapp/callback", async (req: Request, res: Response) => {
   try {
     console.log(
@@ -60,7 +59,7 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
       JSON.stringify(req.body, null, 2)
     );
 
-    // 1) Validación mínima
+    // Validación mínima
     if (req.body?.object !== "whatsapp_business_account") {
       return res.sendStatus(200);
     }
@@ -69,18 +68,19 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
     const change = entry?.changes?.[0];
     const value = change?.value;
 
-    // 2) En modo Twilio: NO procesamos messages aquí (evita duplicación)
+    // 🚫 IGNORAR mensajes entrantes (Twilio es el canal activo)
     if (Array.isArray(value?.messages) && value.messages.length > 0) {
-      console.log("[META WEBHOOK] Ignorando messages (Twilio es el canal activo).");
+      console.log(
+        "🚫 [META WEBHOOK] Messages ignorados (Twilio activo)."
+      );
       return res.sendStatus(200);
     }
 
-    // 3) Capturar statuses (delivery/read receipts)
-    const statuses = value?.statuses;
-    if (Array.isArray(statuses) && statuses.length > 0) {
+    // 📦 Aceptar SOLO statuses (sent / delivered / read)
+    if (Array.isArray(value?.statuses) && value.statuses.length > 0) {
       console.log(
-        "📦 [META WEBHOOK] STATUSES recibido:",
-        JSON.stringify(statuses, null, 2)
+        "📦 [META WEBHOOK] Status recibido:",
+        value.statuses[0]?.status
       );
       return res.sendStatus(200);
     }
@@ -88,60 +88,8 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
     return res.sendStatus(200);
   } catch (err) {
     console.error("❌ [META WEBHOOK] Error procesando evento:", err);
-    return res.sendStatus(200); // importante: Meta necesita 200
+    return res.sendStatus(200); // Meta SIEMPRE espera 200
   }
 });
-
-// Función helper para enviar mensaje por Meta (se sigue usando solo para el caso "sin tenant")
-async function enviarRespuestaMeta(params: {
-  to: string;
-  phoneNumberId: string;
-  text: string;
-}) {
-  const { to, phoneNumberId, text } = params;
-
-  const token = process.env.META_WA_ACCESS_TOKEN;
-  if (!token) {
-    console.error(
-      "❌ [META WEBHOOK] Falta META_WA_ACCESS_TOKEN para enviar mensajes."
-    );
-    return;
-  }
-
-  const url = `https://graph.facebook.com/v18.0/${encodeURIComponent(
-    phoneNumberId
-  )}/messages`;
-
-  const payload = {
-    messaging_product: "whatsapp",
-    to,
-    type: "text",
-    text: {
-      preview_url: false,
-      body: text,
-    },
-  };
-
-  console.log("[META WEBHOOK] Enviando respuesta a WhatsApp:", {
-    url,
-    payload,
-  });
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(payload),
-  });
-
-  const respJson = await resp.json();
-  console.log(
-    "📤 [META WEBHOOK] Respuesta de envío de mensaje:",
-    resp.status,
-    respJson
-  );
-}
 
 export default router;
