@@ -42,6 +42,7 @@ import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
 import { getOrCreateBookingSession, updateBookingSession } from "../../services/bookingSession";
 import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
+import { handleMessageWithFlowEngine } from "../../services/flowEngine";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -775,6 +776,39 @@ export async function procesarMensajeWhatsApp(
 
       return; // ⬅️ corta TODO el pipeline
     }
+  }
+
+    // =====================================================
+  // ✅ FLOW ENGINE (Estado + Flujos DB + Memoria persistida)
+  // =====================================================
+  try {
+    const engineRes = await handleMessageWithFlowEngine({
+      tenantId: tenant.id,
+      canal: "whatsapp",
+      senderId: contactoNorm,              // usa tu contacto normalizado
+      lang: (idiomaDestino === "en" ? "en" : "es"),
+      userInput: userInput || "",
+    });
+
+    // Si el motor contestó algo (ej: pregunta del onboarding), respondemos y cortamos.
+    if (engineRes?.didHandle && engineRes?.reply) {
+      const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, engineRes.reply);
+
+      if (ok) {
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: contactoNorm || "anónimo",
+          messageId,
+          content: engineRes.reply,
+        });
+      }
+
+      return; // ⬅️ importantísimo: corta el pipeline normal
+    }
+  } catch (e) {
+    console.error("FlowEngine error (WA):", e);
+    // no rompemos el webhook; seguimos con el pipeline normal
   }
 
   const isAamyTenant =
