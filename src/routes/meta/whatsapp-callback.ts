@@ -54,11 +54,6 @@ router.use((req, _res, next) => {
  */
 router.post("/whatsapp/callback", async (req: Request, res: Response) => {
   try {
-    console.log(
-      "📩 [META WEBHOOK] Evento recibido:",
-      JSON.stringify(req.body, null, 2)
-    );
-
     // Validación mínima
     if (req.body?.object !== "whatsapp_business_account") {
       return res.sendStatus(200);
@@ -78,10 +73,6 @@ router.post("/whatsapp/callback", async (req: Request, res: Response) => {
 
     // 📦 Aceptar SOLO statuses (sent / delivered / read)
     if (Array.isArray(value?.statuses) && value.statuses.length > 0) {
-      console.log(
-        "📦 [META WEBHOOK] Status recibido:",
-        value.statuses[0]?.status
-      );
       return res.sendStatus(200);
     }
 
