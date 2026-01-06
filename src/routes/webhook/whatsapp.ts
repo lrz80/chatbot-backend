@@ -469,6 +469,46 @@ async function saveAssistantMessageAndEmit(opts: {
   }
 }
 
+async function saveUserMessageAndEmit(opts: {
+  tenantId: string;
+  canal: Canal;
+  fromNumber: string;
+  messageId: string | null;
+  content: string;
+}) {
+  const { tenantId, canal, fromNumber, messageId, content } = opts;
+
+  if (!messageId) return; // sin messageId no deduplicas bien
+
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
+       VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
+       ON CONFLICT (tenant_id, message_id) DO NOTHING
+       RETURNING id, timestamp, role, content, canal, from_number`,
+      [tenantId, content, canal, fromNumber || 'anónimo', messageId]
+    );
+
+    const inserted = rows[0];
+    if (!inserted) return;
+
+    const io = getIO();
+    if (!io) return;
+
+    io.emit('message:new', {
+      id: inserted.id,
+      created_at: inserted.timestamp,
+      timestamp: inserted.timestamp,
+      role: inserted.role,
+      content: inserted.content,
+      canal: inserted.canal,
+      from_number: inserted.from_number,
+    });
+  } catch (e) {
+    console.warn('⚠️ No se pudo registrar mensaje user + socket:', e);
+  }
+}
+
 router.post("/", async (req: Request, res: Response) => {
   try {
     // Responde a Twilio de inmediato
@@ -584,6 +624,14 @@ export async function procesarMensajeWhatsApp(
   // // canal puede venir en el contexto (meta/preview) o por defecto 'whatsapp'
   const canal: Canal = (context?.canal as Canal) || 'whatsapp';
 
+  await saveUserMessageAndEmit({
+    tenantId: tenant.id,
+    canal,
+    fromNumber: contactoNorm || fromNumber || 'anónimo',
+    messageId,
+    content: userInput || '',
+  });
+
   // 👉 detectar si el mensaje es solo numérico (para usar idioma previo)
   const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
 
@@ -658,29 +706,70 @@ export async function procesarMensajeWhatsApp(
   // ✅ Prompt base disponible para TODO el flujo (incluye la rama de pago)
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
 
+  async function postAssistantMemory(opts: {
+    userText: string;
+    assistantText: string;
+    lastIntent?: string | null;
+  }) {
+    await rememberTurn({
+      tenantId: tenant.id,
+      canal: "whatsapp",
+      senderId: contactoNorm,
+      userText: opts.userText || "",
+      assistantText: opts.assistantText || "",
+      keepLast: 20,
+    });
+
+    await rememberFacts({
+      tenantId: tenant.id,
+      canal: "whatsapp",
+      senderId: contactoNorm,
+      preferredLang: idiomaDestino,
+      lastIntent: opts.lastIntent ?? null,
+    });
+
+    await refreshFactsSummary({
+      tenantId: tenant.id,
+      canal: "whatsapp",
+      senderId: contactoNorm,
+      idioma: idiomaDestino,
+      // recomendado: refresca cada 6 respuestas reales
+      refreshEveryTurns: 6,
+      maxTurnsToUse: 12,
+    });
+  }
+
   // ===============================
   // ✅ MEMORIA (3): Retrieval → inyectar memoria del cliente en el prompt
   // ===============================
   let promptBaseMem = promptBase;
 
   try {
-    const mem = await getMemoryValue<string>({
+    const memRaw = await getMemoryValue<any>({
       tenantId: tenant.id,
       canal: "whatsapp",
       senderId: contactoNorm,
-      key: "facts_summary", // <- usa la key REAL que estés guardando en tu memoria
+      key: "facts_summary",
     });
 
-    console.log("🧠 facts_summary =", mem);
+    const memText =
+      typeof memRaw === "string"
+        ? memRaw
+        : (memRaw && typeof memRaw === "object" && typeof memRaw.text === "string")
+          ? memRaw.text
+          : "";
 
-    if (mem && String(mem).trim()) {
+    console.log("🧠 facts_summary =", memText);
+
+    if (memText.trim()) {
       promptBaseMem = [
         promptBase,
         "",
         "MEMORIA_DEL_CLIENTE (usa esto solo si ayuda a responder mejor; no lo inventes):",
-        String(mem).trim(),
+        memText.trim(),
       ].join("\n");
     }
+
   } catch (e) {
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
   }
@@ -881,7 +970,9 @@ export async function procesarMensajeWhatsApp(
 
     // ✅ Normaliza "handled" / "completed" y también "state updated" (aunque reply sea null)
     const hasStateSignal =
-      Boolean((engineRes as any)?.state) ||
+      Boolean((engineRes as any)?.state?.awaiting_field) ||
+      Boolean((engineRes as any)?.state?.step) ||
+      Boolean((engineRes as any)?.state?.completed) ||
       Boolean((engineRes as any)?.state?.awaiting_field) ||
       Boolean((engineRes as any)?.state?.step) ||
       Boolean((engineRes as any)?.awaiting_field) ||
@@ -932,7 +1023,7 @@ export async function procesarMensajeWhatsApp(
           canal: "whatsapp",
           senderId: contactoNorm,
           userText: userInput || "",
-          assistantText: reply,
+          assistantText: reply || "", // ✅ ahora puede ir vacío
           keepLast: 20,
         });
       }
@@ -977,54 +1068,6 @@ export async function procesarMensajeWhatsApp(
     origen,
     mode,
   });
-
-  const isAamyTenant =
-  String(tenant?.slug || '').toLowerCase() === 'aamy' ||
-  String(tenant?.name || tenant?.nombre || '').toLowerCase().includes('aamy');
-
-  const isAutomationLead =
-    /\b(automatiz|bot|chatbot|aamy|crm|responder\s+mensajes|no\s+respondo|quiero\s+automatizar|need\s+automation|automation|ai\s+assistant)\b/i
-      .test(userInput);
-
-  // 2.a) Guardar el mensaje del usuario una sola vez (idempotente) + emitir por socket
-  try {
-    const { rows } = await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING
-       RETURNING id, timestamp, role, content, canal, from_number`,
-      [tenant.id, userInput, canal, fromNumber || 'anónimo', messageId]
-    );
-
-    const inserted = rows[0];
-
-    // Solo emitimos si realmente se insertó (no hubo conflicto ON CONFLICT)
-    if (inserted) {
-      const io = getIO();
-      if (io) {
-        const payload = {
-          id: inserted.id,
-          // mando ambas por si acaso: created_at y timestamp
-          created_at: inserted.timestamp,
-          timestamp: inserted.timestamp,
-          role: inserted.role,
-          content: inserted.content,
-          canal: inserted.canal,
-          from_number: inserted.from_number,
-        };
-
-        console.log('📡 [SOCKET] Emitting message:new', payload);
-
-        // 👇 GLOBAL (sin room) para que todos los sockets lo reciban
-        io.emit('message:new', payload);
-      } else {
-        console.warn('⚠️ [SOCKET] getIO() devolvió null, no se emitió message:new');
-      }
-    }
-
-    } catch (e) {
-    console.warn('No se pudo registrar mensaje user:', e);
-  }
 
 if (BOOKING_ENABLED) {
   // BOOKING FLOW (FASE 1) - estado WAITING_DATETIME
@@ -1242,11 +1285,6 @@ if (BOOKING_ENABLED) {
 
   let INTENCION_FINAL_CANONICA = '';
 
-  // ============================================================
-  // (B) PRIORIDAD MÁXIMA: FAQ por similitud (texto) antes de intención
-  // - Esto asegura que preguntas tipo "quiero probar el demo" usen
-  //   la FAQ exacta guardada (por texto), sin caer en intent=interes_clases.
-  // ============================================================
   try {
     const mensajeEs = (idiomaDestino !== 'es')
       ? await traducirMensaje(mensajeUsuario, 'es').catch(() => mensajeUsuario)
@@ -1342,10 +1380,6 @@ if (BOOKING_ENABLED) {
     trailing.test(msg);
 
   const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs || shortInfoOnly;
-
-  const wantsDemo =
-  /\b(demo|demostraci[oó]n|probar\s+(?:el\s+)?demo|quiero\s+probar\s+(?:el\s+)?demo|quiero\s+un\s+demo|hazme\s+un\s+demo|mu[eé]strame\s+(?:c[oó]mo\s+funciona|c[oó]mo\s+responde)|demu[eé]stramelo|show\s+me|give\s+me\s+a\s+demo|prove\s+it)\b/i
-    .test(cleanedForInfo);
 
   let respuesta: string = "";
 
@@ -1450,65 +1484,9 @@ Termina con esta pregunta EXACTA en español:
       content: reply,
     });
     try {
-      await recordSalesIntent(
-        tenant.id,
-        fromNumber,
-        canal,
-        userInput,
-        'pedir_info',
-        2,
-        messageId
-      );
+      await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, 'pedir_info', 2, messageId);
     } catch (e) {
       console.warn('⚠️ No se pudo registrar sales_intelligence (more info):', e);
-    }
-
-    return;
-  }
-
-  // 🧩 Bloque especial: DEMOSTRACIÓN ("demuéstramelo", "show me", etc.)
-  if (wantsDemo) {
-    // Saludo dinámico, ya multicanal/multitenant
-    const saludo = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-
-    const demoTextEs =
-      'Puedo responderte tanto en inglés como en español. ' +
-      'Pregúntame lo que quieras sobre nuestros servicios, precios u otra cosa ' +
-      'y te responderé en tu idioma.';
-
-    const demoTextEn =
-      'I can reply in both English and Spanish. ' +
-      'You can ask me anything about our services, prices or anything else, ' +
-      'and I will answer in your language.';
-
-    const reply =
-      idiomaDestino === 'en'
-        ? `${saludo}\n\n${demoTextEn}`
-        : `${saludo}\n\n${demoTextEs}`;
-
-    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-    await saveAssistantMessageAndEmit({
-      tenantId: tenant.id,
-      canal,
-      fromNumber: contactoNorm || 'anónimo',
-      messageId,
-      content: reply,
-    });
-
-    // Registramos intención "demo" como interés medio
-    try {
-      await recordSalesIntent(
-        tenant.id,
-        fromNumber,
-        canal,
-        userInput,
-        'demo',
-        2,
-        messageId
-      );
-    } catch (e) {
-      console.warn('⚠️ No se pudo registrar sales_intelligence (demo):', e);
     }
 
     return;

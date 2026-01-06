@@ -165,13 +165,18 @@ export async function handleMessageWithFlowEngine(params: {
   }
 
     // 2) Si NO hay state: decidir si iniciar onboarding
-    const completed = await getMemoryValue<boolean>({
-    tenantId,
-    canal,
-    senderId,
-    key: "onboarding_completed",
+    const onboardingCompleted = await getMemoryValue<boolean>({
+      tenantId,
+      canal,
+      senderId,
+      key: "onboarding_completed",
     });
-    console.log("🧠 [FlowEngine] completed?", { completed });
+
+    console.log("🧠 [FlowEngine] onboardingCompleted?", {
+      onboardingCompleted,
+      willStartFlow: !onboardingCompleted,
+      isChannelKeyword: isChannelKeyword(userInput),
+    });
 
     // ✅ Si el usuario dice un canal, iniciamos el flow igual (sirve para reconfigurar)
     // Esto evita caer al pipeline normal con inputs tipo "facebook".
@@ -196,7 +201,7 @@ export async function handleMessageWithFlowEngine(params: {
     }
 
     // Flujo “primera vez”
-    if (!completed) {
+    if (!onboardingCompleted) {
     const flow = await getFlowByKey({ tenantId, flowKey: "onboarding" });
     console.log("🧠 [FlowEngine] flow loaded", { flowExists: !!flow, enabled: flow?.enabled, flow });
     if (!flow || !flow.enabled) return { reply: null, didHandle: false };

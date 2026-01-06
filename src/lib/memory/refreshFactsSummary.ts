@@ -1,118 +1,123 @@
-// backend/src/lib/memory/refreshFactsSummary.ts
-import pool from "../db";
-import { setMemoryValue, getMemoryValue } from "../clientMemory";
+import OpenAI from "openai";
+import { getMemoryValue, setMemoryValue } from "../clientMemory";
 
-type Canal = "whatsapp" | "facebook" | "instagram" | "sms" | "voice";
-
-function safeLine(s: any) {
-  return String(s ?? "").replace(/\s+/g, " ").trim();
-}
-
-function yn(v: any) {
-  return v ? "sí" : "no";
-}
-
-/**
- * Construye un resumen corto y estable del cliente (memoria larga),
- * basado en DB + memoria ligera (last_intent / state_pago_humano).
- * No usa OpenAI (0 tokens). “ChatGPT-like” por coherencia y continuidad.
- */
 export async function refreshFactsSummary(opts: {
   tenantId: string;
-  canal: Canal;
-  senderId: string;        // contactoNorm
+  canal: string;
+  senderId: string;
   idioma: "es" | "en";
+  force?: boolean;
+  maxTurnsToUse?: number;        // default 12
+  refreshEveryTurns?: number;    // default 6
 }) {
-  const { tenantId, canal, senderId, idioma } = opts;
+  const {
+    tenantId,
+    canal,
+    senderId,
+    idioma,
+    force = false,
+    maxTurnsToUse = 12,
+    refreshEveryTurns = 6,
+  } = opts;
 
-  // 1) Lee DB “clientes”
-  let cliente: any = null;
-  try {
-    const { rows } = await pool.query(
-      `SELECT nombre, email, telefono, pais, segmento, estado, human_override, updated_at
-         FROM clientes
-        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
-        LIMIT 1`,
-      [tenantId, canal, senderId]
-    );
-    cliente = rows[0] || null;
-  } catch {}
+  // 1) throttling
+  const meta = await getMemoryValue<any>({ tenantId, canal, senderId, key: "summary_meta" });
+  const turnsSince = Number(meta?.turnsSinceRefresh ?? 0);
 
-  // 2) Lee memoria ligera
-  let preferredLang = await getMemoryValue<string>({
-    tenantId, canal, senderId, key: "preferred_lang",
-  }).catch(() => null);
-
-  let lastIntent = await getMemoryValue<string>({
-    tenantId, canal, senderId, key: "last_intent",
-  }).catch(() => null);
-
-  let pagoHumano = await getMemoryValue<"pago" | "humano">({
-    tenantId, canal, senderId, key: "state_pago_humano",
-  }).catch(() => null);
-
-  // Normaliza
-  preferredLang = (preferredLang === "en" ? "en" : "es");
-  lastIntent = safeLine(lastIntent).toLowerCase() || "";
-  const estado = safeLine(cliente?.estado).toLowerCase();
-  const segmento = safeLine(cliente?.segmento).toLowerCase();
-
-  // 3) Construye resumen (máx 8–10 líneas)
-  const lines: string[] = [];
-
-  if (idioma === "en") {
-    lines.push(`Language: ${preferredLang}`);
-    lines.push(`Contact: ${senderId}`);
-
-    if (cliente?.nombre) lines.push(`Name: ${safeLine(cliente.nombre)}`);
-    if (cliente?.pais) lines.push(`Country: ${safeLine(cliente.pais)}`);
-
-    if (segmento) lines.push(`Segment: ${segmento}`);
-    if (estado) lines.push(`State: ${estado}`);
-
-    if (cliente?.human_override === true || pagoHumano === "humano") {
-      lines.push(`Human takeover: yes`);
-    } else {
-      lines.push(`Human takeover: no`);
-    }
-
-    if (estado === "esperando_pago") lines.push(`Payment: link sent / awaiting payment`);
-    if (estado === "pago_en_confirmacion") lines.push(`Payment: confirming`);
-
-    if (lastIntent) lines.push(`Last intent: ${lastIntent}`);
-  } else {
-    lines.push(`Idioma: ${preferredLang}`);
-    lines.push(`Contacto: ${senderId}`);
-
-    if (cliente?.nombre) lines.push(`Nombre: ${safeLine(cliente.nombre)}`);
-    if (cliente?.pais) lines.push(`País: ${safeLine(cliente.pais)}`);
-
-    if (segmento) lines.push(`Segmento: ${segmento}`);
-    if (estado) lines.push(`Estado: ${estado}`);
-
-    const human = (cliente?.human_override === true || pagoHumano === "humano");
-    lines.push(`Humano tomado: ${human ? "sí" : "no"}`);
-
-    if (estado === "esperando_pago") lines.push(`Pago: link enviado / esperando pago`);
-    if (estado === "pago_en_confirmacion") lines.push(`Pago: en confirmación`);
-
-    if (lastIntent) lines.push(`Última intención: ${lastIntent}`);
+  if (!force && turnsSince > 0 && turnsSince < refreshEveryTurns) {
+    return; // no refrescar aún
   }
 
-  // 4) Compacta y guarda
-  const summary = lines
-    .map(safeLine)
-    .filter(Boolean)
-    .slice(0, 10)
-    .join("\n");
+  // 2) carga facts + summary previo + turns
+  const facts = await getMemoryValue<any>({ tenantId, canal, senderId, key: "facts" });
+  const prevSummaryRaw = await getMemoryValue<any>({ tenantId, canal, senderId, key: "facts_summary" });
+  const turns = await getMemoryValue<any[]>({ tenantId, canal, senderId, key: "turns" });
 
+  const prevSummary =
+    typeof prevSummaryRaw === "string"
+      ? prevSummaryRaw
+      : (prevSummaryRaw && typeof prevSummaryRaw === "object" && typeof prevSummaryRaw.text === "string")
+        ? prevSummaryRaw.text
+        : "";
+
+  const turnArr = Array.isArray(turns) ? turns : [];
+  const lastTurns = turnArr.slice(-maxTurnsToUse);
+
+  // Si no hay material, no inventes
+  if (!lastTurns.length && !facts) return;
+
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+
+  const system = (idioma === "en")
+    ? [
+        "You are a memory summarizer for a business WhatsApp assistant.",
+        "Write a compact rolling memory for this specific customer.",
+        "Rules:",
+        "- Never invent facts. If unknown, omit.",
+        "- Prefer stable facts: name, business type, preferences, constraints, stage (payment/booking), language.",
+        "- Output ONLY plain text, max 10 lines.",
+        "- No bullet characters, no markdown.",
+      ].join("\n")
+    : [
+        "Eres un resumidor de memoria para un asistente de WhatsApp de negocios.",
+        "Escribe una memoria compacta y continua de ESTE cliente.",
+        "Reglas:",
+        "- No inventes hechos. Si no se sabe, omítelo.",
+        "- Prioriza hechos estables: nombre, tipo de negocio, preferencias, restricciones, etapa (pago/cita), idioma.",
+        "- Salida SOLO texto plano, máximo 10 líneas.",
+        "- Sin viñetas, sin markdown.",
+      ].join("\n");
+
+  const user = [
+    `SUMMARY_ANTERIOR:\n${prevSummary || "(vacío)"}`,
+    "",
+    `FACTS_JSON:\n${JSON.stringify(facts || {}, null, 2)}`,
+    "",
+    "ULTIMOS_TURNOS:",
+    ...lastTurns.map((t, i) => {
+      const u = String(t?.u || "").slice(0, 800);
+      const a = String(t?.a || "").slice(0, 800);
+      return `T${i + 1} U: ${u}\nT${i + 1} A: ${a}`;
+    }),
+    "",
+    (idioma === "en")
+      ? "Return the updated rolling memory now."
+      : "Devuelve ahora la memoria actualizada.",
+  ].join("\n");
+
+  const completion = await openai.chat.completions.create({
+    model,
+    temperature: 0.2,
+    max_tokens: 220,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  });
+
+  const text = (completion.choices[0]?.message?.content || "").trim();
+  if (!text) return;
+
+  // 3) guarda como STRING en facts_summary
   await setMemoryValue({
     tenantId,
     canal,
     senderId,
     key: "facts_summary",
-    value: summary,
+    value: text, // <- string
   });
 
-  return summary;
+  // 4) reset counter
+  await setMemoryValue({
+    tenantId,
+    canal,
+    senderId,
+    key: "summary_meta",
+    value: {
+      ...(meta && typeof meta === "object" ? meta : {}),
+      turnsSinceRefresh: 0,
+      lastRefreshAt: new Date().toISOString(),
+    },
+  });
 }

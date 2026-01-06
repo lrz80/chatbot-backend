@@ -1,7 +1,7 @@
 // backend/src/lib/memory/rememberFacts.ts
-import { setMemoryValue } from "../clientMemory";
+import { getMemoryValue, setMemoryValue } from "../clientMemory";
 
-type Canal = "whatsapp" | "facebook" | "instagram" | "sms" | "voice";
+type Canal = "whatsapp" | "facebook" | "instagram" | "sms" | "voice" | "voz";
 
 export async function rememberFacts(params: {
   tenantId: string;
@@ -13,42 +13,33 @@ export async function rememberFacts(params: {
 }) {
   const { tenantId, canal, senderId } = params;
 
-  // Siempre actualiza last_seen_at
+  // 🔹 carga facts existentes
+  const prevFacts =
+    (await getMemoryValue<any>({
+      tenantId,
+      canal,
+      senderId,
+      key: "facts",
+    })) || {};
+
+  const facts = {
+    ...prevFacts,
+    preferred_lang: params.preferredLang ?? prevFacts.preferred_lang ?? null,
+    last_intent:
+      typeof params.lastIntent !== "undefined"
+        ? params.lastIntent
+        : prevFacts.last_intent ?? null,
+    state_pago_humano:
+      params.statePagoHumano ?? prevFacts.state_pago_humano ?? null,
+    last_seen_at: new Date().toISOString(),
+  };
+
+  // 🔹 guarda facts consolidados
   await setMemoryValue({
     tenantId,
     canal,
     senderId,
-    key: "last_seen_at",
-    value: new Date().toISOString(),
+    key: "facts",
+    value: facts,
   });
-
-  if (params.preferredLang) {
-    await setMemoryValue({
-      tenantId,
-      canal,
-      senderId,
-      key: "preferred_lang",
-      value: params.preferredLang,
-    });
-  }
-
-  if (typeof params.lastIntent !== "undefined") {
-    await setMemoryValue({
-      tenantId,
-      canal,
-      senderId,
-      key: "last_intent",
-      value: params.lastIntent,
-    });
-  }
-
-  if (params.statePagoHumano) {
-    await setMemoryValue({
-      tenantId,
-      canal,
-      senderId,
-      key: "state_pago_humano",
-      value: params.statePagoHumano,
-    });
-  }
 }

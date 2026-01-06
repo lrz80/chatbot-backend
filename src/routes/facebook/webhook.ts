@@ -1067,52 +1067,6 @@ Termina con esta pregunta EXACTA en español:
           continue; // ⬅️ ya respondimos "más info"
         }
 
-        // ============================================
-        // 🧩 CASO ESPECIAL: DEMOSTRACIÓN / DEMO
-        // ============================================
-        const wantsDemo =
-          /\b(demuéstramelo|demuestrame|demuestrame|hazme una demostracion|hazme un demo|prueba real|ejemplo real|muestrame como funciona|muestrame como responde|show me|prove it|give me a demo)\b/i
-            .test(cleanedNorm);
-
-        if (wantsDemo) {
-          const demoTextEs =
-            'Puedo responderte tanto en inglés como en español. ' +
-            'Pregúntame lo que quieras sobre nuestros servicios, precios u otra cosa ' +
-            'y te responderé en tu idioma.';
-
-          const demoTextEn =
-            'I can reply in both English and Spanish. ' +
-            'You can ask me anything about our services, prices or anything else, ' +
-            'and I will answer in your language.';
-
-          const reply =
-          idiomaDestino === 'en'
-            ? `${bienvenidaEfectiva ? bienvenidaEfectiva + "\n\n" : ""}${demoTextEn}`
-            : `${bienvenidaEfectiva ? bienvenidaEfectiva + "\n\n" : ""}${demoTextEs}`;
-
-          await sendMetaContabilizando(reply);
-
-          await pool.query(
-            `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-             VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-             ON CONFLICT (tenant_id, message_id) DO NOTHING`,
-            [tenantId, reply, canalEnvio, senderId || 'anónimo', `${messageId}-bot`]
-          );
-          await pool.query(
-            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-             VALUES ($1, $2, $3, NOW())
-             ON CONFLICT DO NOTHING`,
-            [tenantId, canalEnvio, messageId]
-          );
-
-          try {
-          } catch (e) {
-            console.warn('⚠️ No se pudo registrar sales_intelligence (demo META):', e);
-          }
-
-          continue; // ⬅️ ya respondimos demo
-        }
-
         // —————————————————————————
         // FAST-PATH MULTI-INTENCIÓN (META con CTA)
         // —————————————————————————

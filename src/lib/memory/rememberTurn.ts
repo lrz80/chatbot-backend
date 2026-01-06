@@ -4,6 +4,7 @@ type Canal =
   | "whatsapp"
   | "sms"
   | "email"
+  | "voice"
   | "voz"
   | "meta"
   | "facebook"
@@ -22,9 +23,10 @@ const clamp = (s: string, max = 700) => {
 };
 
 // Normaliza canal para evitar memorias partidas
-function normalizeCanal(canal: Canal): Canal {
+function normalizeCanal(canal: Canal): "whatsapp" | "sms" | "email" | "voice" | "meta" | "preview" {
   if (canal === "facebook" || canal === "instagram") return "meta";
-  return canal;
+  if (canal === "voz") return "voice";
+  return canal as any;
 }
 
 // --------------------------------------------------
@@ -37,22 +39,22 @@ export async function rememberTurn(params: {
   canal: Canal;
   senderId: string;
   userText: string;
-  assistantText: string;
-  keepLast?: number; // default 8
+  assistantText?: string;   // ✅ ahora es opcional
+  keepLast?: number;        // default 8
 }) {
   const {
     tenantId,
     canal,
     senderId,
     userText,
-    assistantText,
   } = params;
 
+  const assistantText = (params.assistantText || "").trim();
   const keepLast = params.keepLast ?? 8;
   const normalizedCanal = normalizeCanal(canal);
 
-  // 🚫 No guardamos turnos sin respuesta del asistente
-  if (!assistantText || !assistantText.trim()) {
+  // 🚫 Si no hay texto del usuario, no guardes nada
+  if (!userText || !userText.trim()) {
     return;
   }
 
@@ -68,6 +70,7 @@ export async function rememberTurn(params: {
   buffer.push({
     at: new Date().toISOString(),
     user: clamp(userText, 500),
+    // ✅ si no hubo respuesta del bot, igual guardamos el turno con assistant vacío
     assistant: clamp(assistantText, 700),
   });
 
