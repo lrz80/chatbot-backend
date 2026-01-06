@@ -146,7 +146,11 @@ export async function handleMessageWithFlowEngine(params: {
 
     // Preguntar el siguiente step
     const nextStep = await getStepByKey({ flowId: flow.id, stepKey: next });
-    if (!nextStep) return { reply: null, didHandle: false };
+    if (!nextStep) {
+    // Importante: cortamos pipeline para que NO caiga a FAQ/Intents
+    console.log("🛑 [FlowEngine] nextStep NOT FOUND", { flowId: flow.id, next });
+    return { reply: null, didHandle: true };
+    }
 
     return { reply: pickPrompt(nextStep, lang), didHandle: true };
   }
