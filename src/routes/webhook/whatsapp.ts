@@ -563,16 +563,6 @@ export async function procesarMensajeWhatsApp(
   // 👉 1) intenta usar el tenant que viene en el contexto (Meta / otros canales)
   let tenant = context?.tenant as any | undefined;
 
-  // 🔍 MEMORIA – inicio del turno (antes de cualquier lógica)
-  const memStart = await getMemoryValue<string>({
-    tenantId: tenant.id,
-    canal: "whatsapp",
-    senderId: contactoNorm,
-    key: "facts_summary",
-  });
-
-  console.log("🧠 facts_summary (start of turn) =", memStart);
-
   // 👉 2) si no viene en el contexto (caso Twilio), haz el lookup por número
   if (!tenant) {
     if (origen === "twilio") {
@@ -608,7 +598,17 @@ export async function procesarMensajeWhatsApp(
     return;
   }
 
-    const { mode, status } = await getWhatsAppModeStatus(tenant.id);
+  // 🔍 MEMORIA – inicio del turno (antes de cualquier lógica)
+  const memStart = await getMemoryValue<string>({
+    tenantId: tenant.id,
+    canal: "whatsapp",
+    senderId: contactoNorm,
+    key: "facts_summary",
+  });
+
+console.log("🧠 facts_summary (start of turn) =", memStart);
+
+  const { mode, status } = await getWhatsAppModeStatus(tenant.id);
 
   if (status !== "enabled") {
     console.log("⛔ WhatsApp deshabilitado para tenant:", tenant.id, "status=", status);
