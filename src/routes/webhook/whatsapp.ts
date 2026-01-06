@@ -788,6 +788,8 @@ export async function procesarMensajeWhatsApp(
       text: userInput,
       messageId,
     });
+    console.log("🧩 [WA] FlowEngine import =", typeof handleMessageWithFlowEngine);
+    console.log("🧩 [WA] FlowEngine file marker = V1");
 
     const engineRes = await handleMessageWithFlowEngine({
       tenantId: tenant.id,

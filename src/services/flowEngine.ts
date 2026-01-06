@@ -9,6 +9,7 @@ export type FlowResult = {
   didHandle: boolean; // true si el motor respondió algo (prompt o mensaje)
 };
 
+console.log("🧠 [FlowEngine] MODULE LOADED = V1");
 function pickPrompt(step: { prompt_es: string; prompt_en: string }, lang: "es" | "en") {
   return lang === "en" ? step.prompt_en : step.prompt_es;
 }
@@ -77,6 +78,7 @@ export async function handleMessageWithFlowEngine(params: {
   userInput: string;
 }): Promise<FlowResult> {
   const { tenantId, canal, senderId, lang, userInput } = params;
+  console.log("🧠 [FlowEngine] IN = V1", { tenantId, canal, senderId, userInput });
 
   // 1) Si hay state activo: resolver step actual
   const state = await getConversationState({ tenantId, canal, senderId });
@@ -156,9 +158,11 @@ export async function handleMessageWithFlowEngine(params: {
     senderId,
     key: "onboarding_completed",
   });
+  console.log("🧠 [FlowEngine] completed?", { completed });
 
   if (!completed) {
     const flow = await getFlowByKey({ tenantId, flowKey: "onboarding" });
+    console.log("🧠 [FlowEngine] flow loaded", { flowExists: !!flow, enabled: flow?.enabled, flow });
     if (!flow || !flow.enabled) return { reply: null, didHandle: false };
 
     // primer step lo guardamos en DB como el primero por orden: por ahora usamos el step que ya creaste.
@@ -175,6 +179,8 @@ export async function handleMessageWithFlowEngine(params: {
     });
 
     const step = await getStepByKey({ flowId: flow.id, stepKey: "select_channel" });
+    console.log("🧠 [FlowEngine] step select_channel", { flowId: flow?.id, stepExists: !!step });
+
     if (!step) return { reply: null, didHandle: false };
 
     return { reply: pickPrompt(step, lang), didHandle: true };
