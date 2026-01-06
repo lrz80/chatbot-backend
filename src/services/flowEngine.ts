@@ -139,7 +139,7 @@ export async function handleMessageWithFlowEngine(params: {
       }
 
     // ⛔ Cortamos el pipeline aunque no enviemos mensaje
-    return { reply: null, didHandle: true };
+    return { reply: null, didHandle: false };
     }
 
     // Avanzar al siguiente step
@@ -157,7 +157,7 @@ export async function handleMessageWithFlowEngine(params: {
     if (!nextStep) {
     // Importante: cortamos pipeline para que NO caiga a FAQ/Intents
     console.log("🛑 [FlowEngine] nextStep NOT FOUND", { flowId: flow.id, next });
-    return { reply: null, didHandle: true };
+    return { reply: null, didHandle: false };
     }
 
     return { reply: pickPrompt(nextStep, lang), didHandle: true };

@@ -14,7 +14,7 @@ export async function getMemoryValue<T = any>(params: {
       WHERE tenant_id = $1
         AND canal = $2
         AND sender_id = $3
-        AND key = $4
+        AND "key" = $4
       LIMIT 1`,
     [tenantId, canal, senderId, key]
   );
@@ -32,9 +32,9 @@ export async function setMemoryValue(params: {
   const { tenantId, canal, senderId, key, value } = params;
 
   await pool.query(
-    `INSERT INTO client_memory (tenant_id, canal, sender_id, key, value)
+    `INSERT INTO client_memory (tenant_id, canal, sender_id, "key", value)
      VALUES ($1, $2, $3, $4, $5::jsonb)
-     ON CONFLICT (tenant_id, canal, sender_id, key)
+     ON CONFLICT (tenant_id, canal, sender_id, "key")
      DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
     [tenantId, canal, senderId, key, JSON.stringify(value)]
   );

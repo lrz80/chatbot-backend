@@ -1,4 +1,3 @@
-// backend/src/lib/memory/rememberTurn.ts
 import { setMemoryValue, getMemoryValue } from "../clientMemory";
 
 type Canal =
@@ -11,13 +10,28 @@ type Canal =
   | "instagram"
   | "preview";
 
+// --------------------------------------------------
+// Helpers
+// --------------------------------------------------
+
 const clamp = (s: string, max = 700) => {
   const t = (s || "").trim();
+  if (!t) return "";
   if (t.length <= max) return t;
   return t.slice(0, max) + "…";
 };
 
-// Guarda un “historial corto” de N turns en una sola key: conversation_buffer
+// Normaliza canal para evitar memorias partidas
+function normalizeCanal(canal: Canal): Canal {
+  if (canal === "facebook" || canal === "instagram") return "meta";
+  return canal;
+}
+
+// --------------------------------------------------
+// Guarda un “historial corto” de N turns
+// key: conversation_buffer
+// --------------------------------------------------
+
 export async function rememberTurn(params: {
   tenantId: string;
   canal: Canal;
@@ -26,12 +40,25 @@ export async function rememberTurn(params: {
   assistantText: string;
   keepLast?: number; // default 8
 }) {
-  const { tenantId, canal, senderId, userText, assistantText } = params;
+  const {
+    tenantId,
+    canal,
+    senderId,
+    userText,
+    assistantText,
+  } = params;
+
   const keepLast = params.keepLast ?? 8;
+  const normalizedCanal = normalizeCanal(canal);
+
+  // 🚫 No guardamos turnos sin respuesta del asistente
+  if (!assistantText || !assistantText.trim()) {
+    return;
+  }
 
   const existing = await getMemoryValue<any[]>({
     tenantId,
-    canal,
+    canal: normalizedCanal,
     senderId,
     key: "conversation_buffer",
   });
@@ -40,15 +67,15 @@ export async function rememberTurn(params: {
 
   buffer.push({
     at: new Date().toISOString(),
-    u: clamp(userText, 500),
-    a: clamp(assistantText, 700),
+    user: clamp(userText, 500),
+    assistant: clamp(assistantText, 700),
   });
 
   const sliced = buffer.slice(-keepLast);
 
   await setMemoryValue({
     tenantId,
-    canal,
+    canal: normalizedCanal,
     senderId,
     key: "conversation_buffer",
     value: sliced,

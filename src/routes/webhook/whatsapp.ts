@@ -46,6 +46,7 @@ import { handleMessageWithFlowEngine } from "../../services/flowEngine";
 import { rememberTurn } from "../../lib/memory/rememberTurn";
 import { rememberFacts } from "../../lib/memory/rememberFacts";
 import { getMemoryValue } from "../../lib/clientMemory";
+import { refreshFactsSummary } from "../../lib/memory/refreshFactsSummary";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -670,6 +671,8 @@ export async function procesarMensajeWhatsApp(
       key: "facts_summary", // <- usa la key REAL que estés guardando en tu memoria
     });
 
+    console.log("🧠 facts_summary =", mem);
+    
     if (mem && String(mem).trim()) {
       promptBaseMem = [
         promptBase,
@@ -853,13 +856,6 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
-    await rememberFacts({
-    tenantId: tenant.id,
-    canal: "whatsapp",
-    senderId: contactoNorm,
-    preferredLang: idiomaDestino,
-  });
-
   // =====================================================
   // ✅ FLOW ENGINE (Estado + Flujos DB + Memoria persistida)
   // =====================================================
@@ -883,7 +879,7 @@ export async function procesarMensajeWhatsApp(
       userInput: userInput || "",
     });
 
-    // ✅ Compatibilidad: si el engine devuelve "completed" en vez de "didHandle"
+    // Compatibilidad: algunos engines devuelven completed
     const didHandleFinal =
       Boolean((engineRes as any)?.didHandle) || Boolean((engineRes as any)?.completed);
 
@@ -894,8 +890,9 @@ export async function procesarMensajeWhatsApp(
     });
 
     if (didHandleFinal) {
-      const reply = (engineRes as any)?.reply;
+      const reply = String((engineRes as any)?.reply || "").trim();
 
+      // 1) Si hay reply, se envía
       if (reply) {
         await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
@@ -907,7 +904,6 @@ export async function procesarMensajeWhatsApp(
           content: reply,
         });
 
-        // ✅ NUEVO: guardar turno en memoria SI el engine respondió
         await rememberTurn({
           tenantId: tenant.id,
           canal: "whatsapp",
@@ -918,35 +914,22 @@ export async function procesarMensajeWhatsApp(
         });
       }
 
-      return;
-    }
-
-    // ✅ Si el engine manejó el turno, SIEMPRE cortamos el pipeline normal
-    if (engineRes?.didHandle) {
-      const reply = engineRes.reply;
-
-      if (reply) {
-        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-        await saveAssistantMessageAndEmit({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: contactoNorm || "anónimo",
-          messageId,
-          content: reply,
-        });
-
-        // ✅ NUEVO
-        await rememberTurn({
+        // 2) SIEMPRE guarda facts si el engine “manejò” el turno (con o sin reply)
+        await rememberFacts({
           tenantId: tenant.id,
           canal: "whatsapp",
           senderId: contactoNorm,
-          userText: userInput || "",
-          assistantText: reply,
-          keepLast: 20,
+          preferredLang: idiomaDestino,
         });
-      }
 
+        await refreshFactsSummary({
+          tenantId: tenant.id,
+          canal: "whatsapp",
+          senderId: contactoNorm,
+          idioma: idiomaDestino,
+        });
+
+      // 3) SIEMPRE corta el pipeline normal si el engine manejó el turno
       return;
     }
 
@@ -2681,6 +2664,21 @@ Termina con esta pregunta EXACTA en español:
         senderId: contactoNorm,
         userText: userInput,
         assistantText: respuestaFinal,
+      });
+
+      await rememberFacts({
+        tenantId: tenant.id,
+        canal: "whatsapp",
+        senderId: contactoNorm,
+        preferredLang: idiomaDestino,
+        lastIntent: INTENCION_FINAL_CANONICA || intenCanon || null,
+      });
+
+      await refreshFactsSummary({
+        tenantId: tenant.id,
+        canal: "whatsapp",
+        senderId: contactoNorm,
+        idioma: idiomaDestino,
       });
     }
     alreadySent = true;
