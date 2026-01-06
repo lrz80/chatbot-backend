@@ -1,7 +1,15 @@
 // backend/src/lib/memory/rememberTurn.ts
 import { setMemoryValue, getMemoryValue } from "../clientMemory";
 
-type Canal = "whatsapp" | "facebook" | "instagram" | "sms" | "voice";
+type Canal =
+  | "whatsapp"
+  | "sms"
+  | "email"
+  | "voz"
+  | "meta"
+  | "facebook"
+  | "instagram"
+  | "preview";
 
 const clamp = (s: string, max = 700) => {
   const t = (s || "").trim();

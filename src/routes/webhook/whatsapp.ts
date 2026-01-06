@@ -421,7 +421,7 @@ async function safeEnviarWhatsApp(
 // ⬇️ AQUÍ VA EL HELPER NUEVO
 async function saveAssistantMessageAndEmit(opts: {
   tenantId: string;
-  canal: string;
+  canal: Canal;   // ✅ en vez de string
   fromNumber: string;
   messageId: string | null;
   content: string;
@@ -503,8 +503,8 @@ export async function procesarMensajeWhatsApp(
 
   const origen: "twilio" | "meta" =
     context?.origen ??
-    (context?.canal && context.canal !== "whatsapp" ? "meta" : undefined) ??
-    (body?.MessageSid || body?.SmsMessageSid ? "twilio" : "meta");
+    (context?.canal && context.canal !== "whatsapp" ? "meta" : null) ??
+    ((body?.MessageSid || body?.SmsMessageSid) ? "twilio" : "meta");
 
   // Números “limpios”
   const numero      = to.replace('whatsapp:', '').replace('tel:', '');   // número del negocio
@@ -515,7 +515,6 @@ export async function procesarMensajeWhatsApp(
 
   // Normaliza variantes con / sin "+" para que coincida aunque en DB esté "1555..." o "+1555..."
   const numeroSinMas = numero.replace(/^\+/, '');
-
   console.log('🔎 numero normalizado =', { numero, numeroSinMas });
 
   // 👉 1) intenta usar el tenant que viene en el contexto (Meta / otros canales)
@@ -607,7 +606,7 @@ export async function procesarMensajeWhatsApp(
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
-    // ===============================
+  // ===============================
   // ✅ OVERRIDE POR MEMORIA: HUMANO (corta TODO)
   // Debe ir DESPUÉS de calcular idiomaDestino
   // y ANTES de responder cualquier cosa
@@ -645,18 +644,43 @@ export async function procesarMensajeWhatsApp(
       // ✅ y guardar memoria del turno (opcional)
       await rememberTurn({
         tenantId,
-        canal: "whatsapp",
+        canal: canalEnvio,
         senderId: contactoNorm,
-        userText: userInput,
+        userText: userInput || "",
         assistantText: msg,
+        keepLast: 20, // o el número que quieras
       });
-
       return;
     }
   }
 
   // ✅ Prompt base disponible para TODO el flujo (incluye la rama de pago)
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
+
+  // ===============================
+  // ✅ MEMORIA (3): Retrieval → inyectar memoria del cliente en el prompt
+  // ===============================
+  let promptBaseMem = promptBase;
+
+  try {
+    const mem = await getMemoryValue<string>({
+      tenantId: tenant.id,
+      canal: "whatsapp",
+      senderId: contactoNorm,
+      key: "facts_summary", // <- usa la key REAL que estés guardando en tu memoria
+    });
+
+    if (mem && String(mem).trim()) {
+      promptBaseMem = [
+        promptBase,
+        "",
+        "MEMORIA_DEL_CLIENTE (usa esto solo si ayuda a responder mejor; no lo inventes):",
+        String(mem).trim(),
+      ].join("\n");
+    }
+  } catch (e) {
+    console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
+  }
 
   // 🛡️ Anti-phishing (EARLY EXIT antes de guardar mensajes/uso/tokens)
   {
@@ -810,7 +834,7 @@ export async function procesarMensajeWhatsApp(
                   : "Gracias. Ya tengo tus datos.\nPuedes completar el pago usando el enlace que te compartí.\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar."
               );
 
-        const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, senderId, mensajePago);
+        const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, fromNumber, mensajePago);
 
         if (ok) {
           await saveAssistantMessageAndEmit({
@@ -829,7 +853,7 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
-  await rememberFacts({
+    await rememberFacts({
     tenantId: tenant.id,
     canal: "whatsapp",
     senderId: contactoNorm,
@@ -839,6 +863,8 @@ export async function procesarMensajeWhatsApp(
   // =====================================================
   // ✅ FLOW ENGINE (Estado + Flujos DB + Memoria persistida)
   // =====================================================
+  type FlowInput = Parameters<typeof handleMessageWithFlowEngine>[0];
+
   try {
     console.log("🟡 [WA] Antes FlowEngine", {
       senderId: contactoNorm,   // mismo senderId que le pasas al engine
@@ -863,24 +889,24 @@ export async function procesarMensajeWhatsApp(
     });
 
     // ✅ Si el engine manejó el turno, SIEMPRE cortamos el pipeline normal
-    if (engineRes?.didHandle) {
-      if (engineRes.reply) {
-        console.log("🟣 [WA] Enviando reply del FlowEngine");
-        const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, engineRes.reply);
+    if (engineRes?.didHandle && engineRes?.reply) {
+      await safeEnviarWhatsApp(
+        tenant.id,
+        canal,
+        messageId,
+        fromNumber,
+        engineRes.reply
+      );
 
-        if (ok) {
-          await saveAssistantMessageAndEmit({
-            tenantId: tenant.id,
-            canal,
-            fromNumber: contactoNorm || "anónimo",
-            messageId,
-            content: engineRes.reply,
-          });
-        }
-      }
+      await saveAssistantMessageAndEmit({
+        tenantId: tenant.id,
+        canal,
+        fromNumber: contactoNorm || "anónimo",
+        messageId,
+        content: engineRes.reply,
+      });
 
-      console.log("⛔ [WA] CORTANDO PIPELINE por FlowEngine");
-      return;
+      return; // ⬅️ SOLO cortamos si hubo mensaje
     }
   } catch (e) {
     console.error("FlowEngine error (WA):", e);
@@ -939,6 +965,7 @@ export async function procesarMensajeWhatsApp(
         console.warn('⚠️ [SOCKET] getIO() devolvió null, no se emitió message:new');
       }
     }
+
     } catch (e) {
     console.warn('No se pudo registrar mensaje user:', e);
   }
@@ -1283,7 +1310,7 @@ if (BOOKING_ENABLED) {
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
       const systemPrompt = [
-        promptBase,
+        promptBaseMem,
         '',
         `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
         `Formato WhatsApp: mensajes MUY CORTOS (máx. 3-4 frases, 6-8 líneas como máximo), sin párrafos largos.`,
@@ -1938,7 +1965,7 @@ Termina con esta pregunta EXACTA en español:
 
           const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
           const systemPrompt = [
-            promptBase,
+            promptBaseMem,
             '',
             `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
             `Formato WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas en prosa (sin bullets).`,
@@ -2086,7 +2113,7 @@ Termina con esta pregunta EXACTA en español:
         // 🔸 Siempre pasa por LLM con tu promptBase
         const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
         const systemPrompt = [
-          promptBase,
+          promptBaseMem,
           '',
           `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
           `Formato WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas en PROSA. **Sin Markdown, sin viñetas, sin encabezados/###**.`,
@@ -2266,7 +2293,7 @@ Termina con esta pregunta EXACTA en español:
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
     const systemPrompt = [
-      promptBase,
+      promptBaseMem,
       '',
       `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
       `Formato WhatsApp: máx. ${MAX_WHATSAPP_LINES} líneas, claro y con bullets si hace falta.`,
@@ -2639,9 +2666,11 @@ Termina con esta pregunta EXACTA en español:
     if (intencionesCliente.some(p => intFinal.includes(p))) {
       await pool.query(
         `UPDATE clientes
-            SET segmento = 'cliente'
+            SET segmento = 'cliente',
+                updated_at = now()
           WHERE tenant_id = $1
-            AND contacto = $2
+            AND canal = $2
+            AND contacto = $3
             AND (segmento = 'lead' OR segmento IS NULL)`,
         [tenant.id, canal, contactoNorm]
       );
