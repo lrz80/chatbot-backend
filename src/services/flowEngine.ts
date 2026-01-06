@@ -138,8 +138,8 @@ export async function handleMessageWithFlowEngine(params: {
           });
       }
 
-    // ⛔ Cortamos el pipeline aunque no enviemos mensaje
-    return { reply: null, didHandle: false };
+      // ✅ Sí manejamos el turno: cortamos el pipeline aunque no haya reply
+      return { reply: null, didHandle: true };
     }
 
     // Avanzar al siguiente step
@@ -155,9 +155,10 @@ export async function handleMessageWithFlowEngine(params: {
     // Preguntar el siguiente step
     const nextStep = await getStepByKey({ flowId: flow.id, stepKey: next });
     if (!nextStep) {
-    // Importante: cortamos pipeline para que NO caiga a FAQ/Intents
-    console.log("🛑 [FlowEngine] nextStep NOT FOUND", { flowId: flow.id, next });
-    return { reply: null, didHandle: false };
+      console.log("🛑 [FlowEngine] nextStep NOT FOUND", { flowId: flow.id, next });
+      // ✅ Sí manejamos el turno (hay state activo), pero no podemos responder
+      // Cortamos pipeline para no caer a FAQ/Intents
+      return { reply: null, didHandle: true };
     }
 
     return { reply: pickPrompt(nextStep, lang), didHandle: true };

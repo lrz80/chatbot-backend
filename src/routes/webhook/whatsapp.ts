@@ -672,7 +672,7 @@ export async function procesarMensajeWhatsApp(
     });
 
     console.log("🧠 facts_summary =", mem);
-    
+
     if (mem && String(mem).trim()) {
       promptBaseMem = [
         promptBase,
@@ -879,13 +879,22 @@ export async function procesarMensajeWhatsApp(
       userInput: userInput || "",
     });
 
-    // Compatibilidad: algunos engines devuelven completed
+    // ✅ Normaliza "handled" / "completed" aunque venga anidado
     const didHandleFinal =
-      Boolean((engineRes as any)?.didHandle) || Boolean((engineRes as any)?.completed);
+      Boolean((engineRes as any)?.didHandle) ||
+      Boolean((engineRes as any)?.handled) ||
+      Boolean((engineRes as any)?.completed) ||
+      Boolean((engineRes as any)?.completed?.completed) ||
+      Boolean((engineRes as any)?.result?.completed) ||
+      Boolean((engineRes as any)?.state?.completed);
 
-    console.log("🟢 [WA] FlowEngine result", {
+
+    console.log("🟢 [WA] FlowEngine raw engineRes =", engineRes);
+    console.log("🟢 [WA] FlowEngine normalized", {
       didHandle: (engineRes as any)?.didHandle,
+      handled: (engineRes as any)?.handled,
       completed: (engineRes as any)?.completed,
+      completed_nested: (engineRes as any)?.completed?.completed,
       reply: (engineRes as any)?.reply,
     });
 
@@ -921,6 +930,14 @@ export async function procesarMensajeWhatsApp(
           senderId: contactoNorm,
           preferredLang: idiomaDestino,
         });
+        // DEBUG: re-lee inmediatamente lo que acabas de guardar
+        const memAfter = await getMemoryValue<string>({
+          tenantId: tenant.id,
+          canal: "whatsapp",
+          senderId: contactoNorm,
+          key: "facts_summary",
+        });
+        console.log("🧠 facts_summary (after rememberFacts) =", memAfter);
 
         await refreshFactsSummary({
           tenantId: tenant.id,
@@ -2673,6 +2690,14 @@ Termina con esta pregunta EXACTA en español:
         preferredLang: idiomaDestino,
         lastIntent: INTENCION_FINAL_CANONICA || intenCanon || null,
       });
+      // DEBUG: re-lee inmediatamente lo que acabas de guardar
+      const memAfter = await getMemoryValue<string>({
+        tenantId: tenant.id,
+        canal: "whatsapp",
+        senderId: contactoNorm,
+        key: "facts_summary",
+      });
+      console.log("🧠 facts_summary (after rememberFacts) =", memAfter);
 
       await refreshFactsSummary({
         tenantId: tenant.id,
