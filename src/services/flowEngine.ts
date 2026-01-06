@@ -14,6 +14,14 @@ function pickPrompt(step: { prompt_es: string; prompt_en: string }, lang: "es" |
   return lang === "en" ? step.prompt_en : step.prompt_es;
 }
 
+function isChannelKeyword(userInputRaw: string) {
+  const t = (userInputRaw || "").trim().toLowerCase();
+  return (
+    t === "facebook" || t === "instagram" || t === "whatsapp" ||
+    t.includes("face") || t.includes("fb") || t.includes("insta") || t.includes("whats")
+  );
+}
+
 // Validadores por "expected.type" (mínimos por ahora)
 function validateExpected(expected: any, userInputRaw: string): { ok: boolean; value?: any } {
   const text = (userInputRaw || "").trim();
@@ -155,31 +163,50 @@ export async function handleMessageWithFlowEngine(params: {
     return { reply: pickPrompt(nextStep, lang), didHandle: true };
   }
 
-  // 2) Si NO hay state: decidir si iniciar onboarding (por ahora: si no está completado)
-  const completed = await getMemoryValue<boolean>({
+    // 2) Si NO hay state: decidir si iniciar onboarding
+    const completed = await getMemoryValue<boolean>({
     tenantId,
     canal,
     senderId,
     key: "onboarding_completed",
-  });
-  console.log("🧠 [FlowEngine] completed?", { completed });
+    });
+    console.log("🧠 [FlowEngine] completed?", { completed });
 
-  if (!completed) {
+    // ✅ Si el usuario dice un canal, iniciamos el flow igual (sirve para reconfigurar)
+    // Esto evita caer al pipeline normal con inputs tipo "facebook".
+    if (isChannelKeyword(userInput)) {
+    const flow = await getFlowByKey({ tenantId, flowKey: "onboarding" });
+    if (!flow || !flow.enabled) return { reply: null, didHandle: false };
+
+    await setConversationState({
+        tenantId,
+        canal,
+        senderId,
+        activeFlow: flow.flow_key,
+        activeStep: "select_channel",
+        context: {},
+    });
+
+    const step = await getStepByKey({ flowId: flow.id, stepKey: "select_channel" });
+    if (!step) return { reply: null, didHandle: false };
+
+    // Importante: devolvemos el prompt del step, no el pipeline normal
+    return { reply: pickPrompt(step, lang), didHandle: true };
+    }
+
+    // Flujo “primera vez”
+    if (!completed) {
     const flow = await getFlowByKey({ tenantId, flowKey: "onboarding" });
     console.log("🧠 [FlowEngine] flow loaded", { flowExists: !!flow, enabled: flow?.enabled, flow });
     if (!flow || !flow.enabled) return { reply: null, didHandle: false };
 
-    // primer step lo guardamos en DB como el primero por orden: por ahora usamos el step que ya creaste.
-    // En este paso no hacemos query "ORDER BY order_index LIMIT 1" para evitar tocar más cosas.
-    // Usaremos el step_key inicial desde state: 'select_channel' (solo como bootstrap del flow).
-    // En el Paso 6 lo hacemos 100% DB-driven con first_step_key en flows o con order_index.
     await setConversationState({
-      tenantId,
-      canal,
-      senderId,
-      activeFlow: flow.flow_key,
-      activeStep: "select_channel",
-      context: {},
+        tenantId,
+        canal,
+        senderId,
+        activeFlow: flow.flow_key,
+        activeStep: "select_channel",
+        context: {},
     });
 
     const step = await getStepByKey({ flowId: flow.id, stepKey: "select_channel" });
@@ -188,7 +215,8 @@ export async function handleMessageWithFlowEngine(params: {
     if (!step) return { reply: null, didHandle: false };
 
     return { reply: pickPrompt(step, lang), didHandle: true };
-  }
+    }
 
-  return { reply: null, didHandle: false };
+    return { reply: null, didHandle: false };
+
 }

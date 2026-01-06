@@ -883,32 +883,71 @@ export async function procesarMensajeWhatsApp(
       userInput: userInput || "",
     });
 
+    // ✅ Compatibilidad: si el engine devuelve "completed" en vez de "didHandle"
+    const didHandleFinal =
+      Boolean((engineRes as any)?.didHandle) || Boolean((engineRes as any)?.completed);
+
     console.log("🟢 [WA] FlowEngine result", {
-      didHandle: engineRes?.didHandle,
-      reply: engineRes?.reply,
+      didHandle: (engineRes as any)?.didHandle,
+      completed: (engineRes as any)?.completed,
+      reply: (engineRes as any)?.reply,
     });
 
-    // ✅ Si el engine manejó el turno, SIEMPRE cortamos el pipeline normal
-    if (engineRes?.didHandle) {
-      if (engineRes.reply) {
-        await safeEnviarWhatsApp(
-          tenant.id,
-          canal,
-          messageId,
-          fromNumber,
-          engineRes.reply
-        );
+    if (didHandleFinal) {
+      const reply = (engineRes as any)?.reply;
+
+      if (reply) {
+        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
         await saveAssistantMessageAndEmit({
           tenantId: tenant.id,
           canal,
           fromNumber: contactoNorm || "anónimo",
           messageId,
-          content: engineRes.reply,
+          content: reply,
+        });
+
+        // ✅ NUEVO: guardar turno en memoria SI el engine respondió
+        await rememberTurn({
+          tenantId: tenant.id,
+          canal: "whatsapp",
+          senderId: contactoNorm,
+          userText: userInput || "",
+          assistantText: reply,
+          keepLast: 20,
         });
       }
 
-      return; // ⬅️ CLAVE: cortar SIEMPRE si didHandle=true (aunque reply sea null)
+      return;
+    }
+
+    // ✅ Si el engine manejó el turno, SIEMPRE cortamos el pipeline normal
+    if (engineRes?.didHandle) {
+      const reply = engineRes.reply;
+
+      if (reply) {
+        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: contactoNorm || "anónimo",
+          messageId,
+          content: reply,
+        });
+
+        // ✅ NUEVO
+        await rememberTurn({
+          tenantId: tenant.id,
+          canal: "whatsapp",
+          senderId: contactoNorm,
+          userText: userInput || "",
+          assistantText: reply,
+          keepLast: 20,
+        });
+      }
+
+      return;
     }
 
   } catch (e) {
