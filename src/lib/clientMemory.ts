@@ -84,11 +84,20 @@ export async function setMemoryValuesBulk(params: {
   const { tenantId, canal, senderId, items } = params;
   if (!items?.length) return;
 
-  // Inserta/actualiza en lote usando VALUES
+  // ✅ GUARD también en bulk
+  const safeItems = items.filter(it => {
+    const v = it.value;
+    if (v === null || v === undefined) return false;
+    if (typeof v === "string" && v.trim() === "") return false;
+    return true;
+  });
+
+  if (!safeItems.length) return;
+
   const values: any[] = [];
   const placeholders: string[] = [];
 
-  items.forEach((it, idx) => {
+  safeItems.forEach((it, idx) => {
     const base = idx * 5;
     placeholders.push(
       `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}::jsonb)`
