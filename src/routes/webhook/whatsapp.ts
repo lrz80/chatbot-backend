@@ -879,15 +879,24 @@ export async function procesarMensajeWhatsApp(
       userInput: userInput || "",
     });
 
-    // ✅ Normaliza "handled" / "completed" aunque venga anidado
+    // ✅ Normaliza "handled" / "completed" y también "state updated" (aunque reply sea null)
+    const hasStateSignal =
+      Boolean((engineRes as any)?.state) ||
+      Boolean((engineRes as any)?.state?.awaiting_field) ||
+      Boolean((engineRes as any)?.state?.step) ||
+      Boolean((engineRes as any)?.awaiting_field) ||
+      Boolean((engineRes as any)?.step) ||
+      Boolean((engineRes as any)?.updated) ||
+      Boolean((engineRes as any)?.state_updated);
+
     const didHandleFinal =
       Boolean((engineRes as any)?.didHandle) ||
       Boolean((engineRes as any)?.handled) ||
       Boolean((engineRes as any)?.completed) ||
       Boolean((engineRes as any)?.completed?.completed) ||
       Boolean((engineRes as any)?.result?.completed) ||
-      Boolean((engineRes as any)?.state?.completed);
-
+      Boolean((engineRes as any)?.state?.completed) ||
+      hasStateSignal;
 
     console.log("🟢 [WA] FlowEngine raw engineRes =", engineRes);
     console.log("🟢 [WA] FlowEngine normalized", {
@@ -896,6 +905,11 @@ export async function procesarMensajeWhatsApp(
       completed: (engineRes as any)?.completed,
       completed_nested: (engineRes as any)?.completed?.completed,
       reply: (engineRes as any)?.reply,
+    });
+    console.log("🟢 [WA] FlowEngine signals", {
+      hasStateSignal,
+      stateKeys: (engineRes as any)?.state ? Object.keys((engineRes as any).state) : null,
+      topKeys: engineRes && typeof engineRes === "object" ? Object.keys(engineRes as any) : null,
     });
 
     if (didHandleFinal) {
@@ -954,7 +968,7 @@ export async function procesarMensajeWhatsApp(
     console.error("FlowEngine error (WA):", e);
     // no rompemos el webhook; seguimos con el pipeline normal
   }
-  console.log("🔴 [WA] Entrando al pipeline NORMAL (no debería pasar si FlowEngine manejó)", {
+  console.log("🟠 [WA] Entrando al pipeline NORMAL (FlowEngine no manejó)", {
     tenantId: tenant.id,
     canal,
     contactoNorm,
