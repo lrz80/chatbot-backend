@@ -118,18 +118,18 @@ export async function handleMessageWithFlowEngine(params: {
     if (!next || next === "done") {
       await clearConversationState({ tenantId, canal, senderId });
 
-      // Si el step define expected.persist_complete = true => marcar onboarding_completed
       if (step.expected?.persist_complete_key) {
-        await setMemoryValue({
+          await setMemoryValue({
           tenantId,
           canal,
           senderId,
           key: step.expected.persist_complete_key,
           value: true,
-        });
+          });
       }
 
-      return { reply: null, didHandle: false }; // No respondemos aquí; el webhook responderá normal luego (Paso 5)
+    // ⛔ Cortamos el pipeline aunque no enviemos mensaje
+    return { reply: null, didHandle: true };
     }
 
     // Avanzar al siguiente step
