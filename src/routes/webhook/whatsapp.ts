@@ -889,25 +889,28 @@ export async function procesarMensajeWhatsApp(
     });
 
     // ✅ Si el engine manejó el turno, SIEMPRE cortamos el pipeline normal
-    if (engineRes?.didHandle && engineRes?.reply) {
-      await safeEnviarWhatsApp(
-        tenant.id,
-        canal,
-        messageId,
-        fromNumber,
-        engineRes.reply
-      );
+    if (engineRes?.didHandle) {
+      if (engineRes.reply) {
+        await safeEnviarWhatsApp(
+          tenant.id,
+          canal,
+          messageId,
+          fromNumber,
+          engineRes.reply
+        );
 
-      await saveAssistantMessageAndEmit({
-        tenantId: tenant.id,
-        canal,
-        fromNumber: contactoNorm || "anónimo",
-        messageId,
-        content: engineRes.reply,
-      });
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: contactoNorm || "anónimo",
+          messageId,
+          content: engineRes.reply,
+        });
+      }
 
-      return; // ⬅️ SOLO cortamos si hubo mensaje
+      return; // ⬅️ CLAVE: cortar SIEMPRE si didHandle=true (aunque reply sea null)
     }
+
   } catch (e) {
     console.error("FlowEngine error (WA):", e);
     // no rompemos el webhook; seguimos con el pipeline normal
