@@ -43,6 +43,9 @@ import { getOrCreateBookingSession, updateBookingSession } from "../../services/
 import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
 import { handleMessageWithFlowEngine } from "../../services/flowEngine";
+import { rememberTurn } from "../../lib/memory/rememberTurn";
+import { rememberFacts } from "../../lib/memory/rememberFacts";
+import { getMemoryValue } from "../../lib/clientMemory";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -604,6 +607,54 @@ export async function procesarMensajeWhatsApp(
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
+    // ===============================
+  // ✅ OVERRIDE POR MEMORIA: HUMANO (corta TODO)
+  // Debe ir DESPUÉS de calcular idiomaDestino
+  // y ANTES de responder cualquier cosa
+  // ===============================
+  {
+    const tenantId = tenant.id;
+    const canalEnvio: Canal = canal; // 'whatsapp'
+    const senderId = contactoNorm;   // ✅ usa el contacto normalizado (no fromNumber)
+
+    const pagoHumano = await getMemoryValue<"pago" | "humano">({
+      tenantId,
+      canal: canalEnvio,
+      senderId,
+      key: "state_pago_humano",
+    });
+
+    if (pagoHumano === "humano") {
+      const msg =
+        idiomaDestino === "en"
+          ? "Got it. A human will reply shortly."
+          : "Perfecto. Un humano te responde en breve.";
+
+      // ✅ en tu proyecto enviarWhatsApp se usa como: enviarWhatsApp(to, text, tenantId)
+      await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, fromNumber, msg);
+
+      // (Opcional pero recomendado) guardar en history/socket también:
+      await saveAssistantMessageAndEmit({
+        tenantId,
+        canal: canalEnvio,
+        fromNumber: contactoNorm || "anónimo",
+        messageId,
+        content: msg,
+      });
+
+      // ✅ y guardar memoria del turno (opcional)
+      await rememberTurn({
+        tenantId,
+        canal: "whatsapp",
+        senderId: contactoNorm,
+        userText: userInput,
+        assistantText: msg,
+      });
+
+      return;
+    }
+  }
+
   // ✅ Prompt base disponible para TODO el flujo (incluye la rama de pago)
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
 
@@ -778,7 +829,14 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
- // =====================================================
+  await rememberFacts({
+    tenantId: tenant.id,
+    canal: "whatsapp",
+    senderId: contactoNorm,
+    preferredLang: idiomaDestino,
+  });
+
+  // =====================================================
   // ✅ FLOW ENGINE (Estado + Flujos DB + Memoria persistida)
   // =====================================================
   try {
@@ -2547,8 +2605,15 @@ Termina con esta pregunta EXACTA en español:
         messageId,
         content: respuestaFinal,
       });
-    }
 
+      await rememberTurn({
+        tenantId: tenant.id,
+        canal: "whatsapp",
+        senderId: contactoNorm,
+        userText: userInput,
+        assistantText: respuestaFinal,
+      });
+    }
     alreadySent = true;
   }
 
