@@ -515,8 +515,10 @@ router.post("/", async (req: Request, res: Response) => {
     res.type("text/xml").send(new MessagingResponse().toString());
 
     // Procesa el mensaje aparte (no bloquea la respuesta a Twilio)
-    setTimeout(async () => {
-      await procesarMensajeWhatsApp(req.body);
+    setTimeout(() => {
+      procesarMensajeWhatsApp(req.body).catch((err) => {
+        console.error("❌ procesarMensajeWhatsApp failed (async):", err);
+      });
     }, 0);
   } catch (error) {
     console.error("❌ Error en webhook:", error);
