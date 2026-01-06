@@ -1,100 +1,77 @@
-import { getMemoryValue, setMemoryValue } from "../clientMemory";
+import { appendMemoryArrayItem } from "../clientMemory";
+import pool from "../db";
 
-/**
- * Soporta 2 firmas para evitar errores en WhatsApp y otros webhooks:
- *  - Nueva: { u, a, maxTurns }
- *  - Legacy: { userText, assistantText, keepLast }
- */
-type RememberTurnParams =
-  | {
-      tenantId: string;
-      canal: string;
-      senderId: string;
-      u: string;          // user input
-      a: string;          // assistant reply
-      maxTurns?: number;  // default 40
-      // legacy opcionales (por si algún lugar los manda)
-      userText?: never;
-      assistantText?: never;
-      keepLast?: never;
-    }
-  | {
-      tenantId: string;
-      canal: string;
-      senderId: string;
-      userText: string;
-      assistantText: string;
-      keepLast?: number;  // default 40
-      // nuevos opcionales (por si algún lugar los manda)
-      u?: never;
-      a?: never;
-      maxTurns?: never;
-    };
+export async function rememberTurn(opts: {
+  tenantId: string;
+  canal: string;
+  senderId: string;
+  userText: string;
+  assistantText: string;
+  keepLast?: number;
+}) {
+  const {
+    tenantId,
+    canal,
+    senderId,
+    userText,
+    assistantText,
+    keepLast = 20,
+  } = opts;
 
-export async function rememberTurn(params: RememberTurnParams) {
-  const { tenantId, canal, senderId } = params;
-
-  // Normaliza inputs sin romper llamadas viejas
-  const u =
-    "u" in params ? params.u : params.userText;
-
-  const a =
-    "a" in params ? params.a : params.assistantText;
-
-  const maxTurns =
-    "maxTurns" in params
-      ? (params.maxTurns ?? 40)
-      : (params.keepLast ?? 40);
-
-  // 1) carga turns existentes
-  const prevTurns = await getMemoryValue<any[]>({
+  // 1) Append atómico → NO se pierden turns aunque lleguen mensajes seguidos
+  await appendMemoryArrayItem({
     tenantId,
     canal,
     senderId,
     key: "turns",
-  });
-
-  const arr = Array.isArray(prevTurns) ? prevTurns : [];
-
-  // 2) append turno nuevo
-  const nextTurns = [
-    ...arr,
-    {
-      u: String(u || "").slice(0, 1500),
-      a: String(a || "").slice(0, 1500),
+    item: {
+      u: String(userText || "").slice(0, 1500),
+      a: String(assistantText || "").slice(0, 1500),
       at: new Date().toISOString(),
     },
-  ].slice(-maxTurns);
-
-  // 3) guarda turns
-  await setMemoryValue({
-    tenantId,
-    canal,
-    senderId,
-    key: "turns",
-    value: nextTurns,
   });
 
-  // 4) incrementa summary_meta.turnsSinceRefresh ✅
-  const meta = await getMemoryValue<any>({
-    tenantId,
-    canal,
-    senderId,
-    key: "summary_meta",
-  });
+  // 2) Incrementa summary_meta.turnsSinceRefresh
+  await pool.query(
+    `
+    INSERT INTO client_memory (tenant_id, canal, sender_id, "key", value)
+    VALUES ($1, $2, $3, 'summary_meta', jsonb_build_object(
+      'turnsSinceRefresh', 1,
+      'lastTurnAt', now()
+    ))
+    ON CONFLICT (tenant_id, canal, sender_id, "key")
+    DO UPDATE SET
+      value = jsonb_set(
+        client_memory.value,
+        '{turnsSinceRefresh}',
+        to_jsonb( COALESCE((client_memory.value->>'turnsSinceRefresh')::int, 0) + 1 )
+      )
+      || jsonb_build_object('lastTurnAt', now()),
+      updated_at = now()
+    `,
+    [tenantId, canal, senderId]
+  );
 
-  const prev = meta && typeof meta === "object" ? meta : {};
-  const next = Number(prev.turnsSinceRefresh ?? 0) + 1;
-
-  await setMemoryValue({
-    tenantId,
-    canal,
-    senderId,
-    key: "summary_meta",
-    value: {
-      ...prev,
-      turnsSinceRefresh: next,
-      lastTurnAt: new Date().toISOString(),
-    },
-  });
+  // 3) Trim a los últimos N turns (seguro, post-append)
+  await pool.query(
+    `
+    UPDATE client_memory
+    SET value = (
+      SELECT jsonb_agg(elem)
+      FROM (
+        SELECT elem
+        FROM jsonb_array_elements(value) WITH ORDINALITY t(elem, ord)
+        ORDER BY ord DESC
+        LIMIT $5
+      ) s
+    ),
+    updated_at = now()
+    WHERE tenant_id = $1
+      AND canal = $2
+      AND sender_id = $3
+      AND "key" = 'turns'
+      AND jsonb_array_length(value) > $5
+    `,
+    [tenantId, canal, senderId, "turns", keepLast]
+  );
 }

@@ -1029,16 +1029,17 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           messageId,
           content: reply,
         });
-
-        await rememberTurn({
-          tenantId: tenant.id,
-          canal: "whatsapp",
-          senderId: contactoNorm,
-          userText: userInput || "",
-          assistantText: reply || "", // ✅ ahora puede ir vacío
-          keepLast: 20,
-        });
       }
+
+      // 2) SIEMPRE guarda turn aunque reply venga vacío
+      await rememberTurn({
+        tenantId: tenant.id,
+        canal: "whatsapp",
+        senderId: contactoNorm,
+        userText: userInput || "",
+        assistantText: reply || "", // puede ir vacío y está bien
+        keepLast: 20,
+      });
 
         // 2) SIEMPRE guarda facts si el engine “manejò” el turno (con o sin reply)
         await rememberFacts({

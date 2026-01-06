@@ -10,6 +10,7 @@ export async function rememberFacts(params: {
   preferredLang?: "es" | "en";
   lastIntent?: string | null;
   statePagoHumano?: "pago" | "humano" | null;
+  businessType?: string | null;
 }) {
   const { tenantId, canal, senderId } = params;
 
@@ -32,6 +33,11 @@ export async function rememberFacts(params: {
     state_pago_humano:
       params.statePagoHumano ?? prevFacts.state_pago_humano ?? null,
     last_seen_at: new Date().toISOString(),
+    business_type:
+      typeof params.businessType !== "undefined"
+        ? params.businessType
+        : prevFacts.business_type ?? null,
+
   };
 
   // 🔹 guarda facts consolidados

@@ -115,3 +115,28 @@ export async function setMemoryValuesBulk(params: {
     values
   );
 }
+
+export async function appendMemoryArrayItem(params: {
+  tenantId: string;
+  canal: string;
+  senderId: string;
+  key: string;
+  item: any; // se insertará como elemento dentro de un array jsonb
+}): Promise<void> {
+  const { tenantId, canal, senderId, key, item } = params;
+
+  // ✅ Guard
+  if (item === null || item === undefined) return;
+  
+  await pool.query(
+    `
+    INSERT INTO client_memory (tenant_id, canal, sender_id, "key", value)
+    VALUES ($1, $2, $3, $4, $5::jsonb)
+    ON CONFLICT (tenant_id, canal, sender_id, "key")
+    DO UPDATE SET
+      value = COALESCE(client_memory.value, '[]'::jsonb) || EXCLUDED.value,
+      updated_at = now()
+    `,
+    [tenantId, canal, senderId, key, JSON.stringify([item])]
+  );
+}
