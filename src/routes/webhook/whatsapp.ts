@@ -806,11 +806,11 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       const reply =
         idiomaDestino === "en"
           ? (picked === "multi"
-              ? "Perfect. We can automate WhatsApp, Instagram, and Facebook. Do you want to start with WhatsApp first?"
-              : `Perfect. We’ll automate ${picked}. Do you want me to explain how it works (FAQs + automatic follow-up) or do you want to connect the account first?`)
+              ? "Perfect. We can automate WhatsApp, Instagram, and Facebook?"
+              : `Perfect. We’ll automate ${picked}. Do you want me to explain how it works?`)
           : (picked === "multi"
-              ? "Perfecto. Podemos automatizar WhatsApp, Instagram y Facebook. ¿Quieres que empecemos primero por WhatsApp?"
-              : `Perfecto. Vamos a automatizar ${picked}. ¿Quieres que te explique cómo funciona (FAQs + seguimiento automático) o prefieres conectar la cuenta primero?`);
+              ? "Perfecto. Podemos automatizar WhatsApp, Instagram y Facebook?"
+              : `Perfecto. Vamos a automatizar ${picked}. ¿Quieres que te explique cómo funciona?`);
 
       const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
@@ -845,8 +845,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     if (selected && isYes) {
       const reply =
         idiomaDestino === "en"
-          ? `Great. Here’s how it works on ${selected}: it answers common questions automatically and can follow up when a lead stops replying. What type of business is this (gym, salon, bakery, etc.)?`
-          : `Perfecto. Así funciona en ${selected}: responde preguntas frecuentes automáticamente y puede hacer seguimiento cuando el lead deja de responder. ¿Qué tipo de negocio es (gimnasio, salón, panadería, etc.)?`;
+          ? `Great. Here’s how it works on ${selected}: it answers common questions automatically and can follow up when a lead stops replying. What other information would you like to know?`
+          : `Perfecto. Así funciona en ${selected}: responde preguntas frecuentes automáticamente y puede hacer seguimiento cuando el lead deja de responder. ¿Qué otra informacion te gustaria saber?`;
 
       const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
@@ -920,7 +920,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     const senderId = contactoNorm;
 
     const { rows: clienteRows } = await pool.query(
-      `SELECT estado, human_override, nombre, email, telefono, pais, segmento
+      `SELECT estado, human_override, nombre, email, telefono, pais, segmento, info_explicada
         FROM clientes
         WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
         LIMIT 1`,
@@ -1400,6 +1400,24 @@ if (BOOKING_ENABLED) {
 
   // 🧩 Bloque especial: "quiero más info / need more info"
   if (wantsMoreInfo) {
+    // 🔒 GATE: si ya se explicó la info general, no repetir (evita loop infinito)
+    try {
+      const { rows } = await pool.query(
+        `SELECT info_explicada
+        FROM clientes
+        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+        LIMIT 1`,
+        [tenant.id, canal, contactoNorm]
+      );
+
+      if (rows[0]?.info_explicada === true) {
+        console.log("⛔ wantsMoreInfo bloqueado: info_explicada=true", { contactoNorm });
+        return;
+      }
+    } catch (e) {
+      console.warn("⚠️ No se pudo leer info_explicada; continúo igual:", e);
+    }
+
     const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
       .test(userInput);
 
@@ -1484,6 +1502,19 @@ Termina con esta pregunta EXACTA en español:
     }
 
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+    // ✅ Marcar que ya se explicó la info general (para no repetir y evitar loop)
+    try {
+      await pool.query(
+        `INSERT INTO clientes (tenant_id, canal, contacto, info_explicada, updated_at)
+        VALUES ($1, $2, $3, true, now())
+        ON CONFLICT (tenant_id, canal, contacto)
+        DO UPDATE SET info_explicada = true, updated_at = now()`,
+        [tenant.id, canal, contactoNorm]
+      );
+    } catch (e) {
+      console.warn("⚠️ No se pudo actualizar info_explicada:", e);
+    }
 
     await saveAssistantMessageAndEmit({
       tenantId: tenant.id,
