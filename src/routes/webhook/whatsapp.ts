@@ -42,7 +42,6 @@ import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
 import { getOrCreateBookingSession, updateBookingSession } from "../../services/bookingSession";
 import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
-import { handleMessageWithFlowEngine } from "../../services/flowEngine";
 import { rememberTurn } from "../../lib/memory/rememberTurn";
 import { rememberFacts } from "../../lib/memory/rememberFacts";
 import { getMemoryValue } from "../../lib/clientMemory";
@@ -369,45 +368,6 @@ function appendCTAWithCap(
   return text + extra;
 }
 
-function engineHandled(engineRes: any): boolean {
-  if (engineRes == null) return false;
-
-  // Si engine devolvió texto directamente, lo tratamos como reply implícito
-  if (typeof engineRes === "string") return true;
-
-  // Si devolvió un Map (algunos engines internos usan Map)
-  if (engineRes instanceof Map) return engineRes.size > 0;
-
-  // Si devolvió un objeto, cualquier señal explícita o “no vacío” => handled
-  if (typeof engineRes === "object") {
-    // Señales explícitas (si existen)
-    if (
-      engineRes.didHandle === true ||
-      engineRes.handled === true ||
-      engineRes.updated === true ||
-      engineRes.state_updated === true ||
-      engineRes.completed === true
-    ) return true;
-
-    // Si trae cualquiera de estas llaves, el engine “decidió algo”
-    // (reply puede ser null y AÚN así queremos cortar pipeline normal)
-    if (
-      ("reply" in engineRes) ||
-      ("state" in engineRes) ||
-      ("awaiting_field" in engineRes) ||
-      ("step" in engineRes) ||
-      ("facts_summary" in engineRes) ||
-      ("completed_nested" in engineRes)
-    ) return true;
-
-    // Fallback definitivo: si el objeto tiene llaves, lo consideramos manejado
-    // (esto evita que caigas al pipeline normal por diferencias de shape)
-    return Object.keys(engineRes).length > 0;
-  }
-
-  return false;
-}
-
 // Evita enviar duplicado si Twilio reintenta el webhook
 async function safeEnviarWhatsApp(
   tenantId: string,
@@ -706,54 +666,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
-  // ===============================
-  // ✅ OVERRIDE POR MEMORIA: HUMANO (corta TODO)
-  // Debe ir DESPUÉS de calcular idiomaDestino
-  // y ANTES de responder cualquier cosa
-  // ===============================
-  {
-    const tenantId = tenant.id;
-    const canalEnvio: Canal = canal; // 'whatsapp'
-    const senderId = contactoNorm;   // ✅ usa el contacto normalizado (no fromNumber)
-
-    const pagoHumano = await getMemoryValue<"pago" | "humano">({
-      tenantId,
-      canal: canalEnvio,
-      senderId,
-      key: "state_pago_humano",
-    });
-
-    if (pagoHumano === "humano") {
-      const msg =
-        idiomaDestino === "en"
-          ? "Got it. A human will reply shortly."
-          : "Perfecto. Un humano te responde en breve.";
-
-      // ✅ en tu proyecto enviarWhatsApp se usa como: enviarWhatsApp(to, text, tenantId)
-      await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, fromNumber, msg);
-
-      // (Opcional pero recomendado) guardar en history/socket también:
-      await saveAssistantMessageAndEmit({
-        tenantId,
-        canal: canalEnvio,
-        fromNumber: contactoNorm || "anónimo",
-        messageId,
-        content: msg,
-      });
-
-      // ✅ y guardar memoria del turno (opcional)
-      await rememberTurn({
-        tenantId,
-        canal: canalEnvio,
-        senderId: contactoNorm,
-        userText: userInput || "",
-        assistantText: msg,
-        keepLast: 20, // o el número que quieras
-      });
-      return;
-    }
-  }
-
   // ✅ Prompt base disponible para TODO el flujo (incluye la rama de pago)
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
 
@@ -996,166 +908,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
   }
 
-  // =====================================================
-  // ✅ FLOW ENGINE (Estado + Flujos DB + Memoria persistida)
-  // =====================================================
-  let engineRes: any = null;
-  let didHandleFinal = false;
-
-  try {
-    console.log("🟡 [WA] Antes FlowEngine", {
-      senderId: contactoNorm,
-      rawFrom: fromNumber,
-      text: userInput,
-      messageId,
-    });
-
-    engineRes = await handleMessageWithFlowEngine({
-      tenantId: tenant.id,
-      canal: "whatsapp",
-      senderId: contactoNorm,
-      lang: (idiomaDestino === "en" ? "en" : "es"),
-      userInput: userInput || "",
-    });
-
-    const stateObj = engineRes?.state;
-
-    const replyRaw = engineRes?.reply;
-    const replyText = (typeof replyRaw === "string" ? replyRaw : "").trim();
-    const hasNonEmptyReply = replyText.length > 0;
-
-    const hasStateSignal =
-      Boolean(stateObj?.awaiting_field) ||
-      Boolean(stateObj?.step) ||
-      Boolean(stateObj?.completed);
-
-    const hasAnyEngineMarker =
-      engineRes &&
-      typeof engineRes === "object" &&
-      (
-        Object.prototype.hasOwnProperty.call(engineRes, "completed") ||
-        Object.prototype.hasOwnProperty.call(engineRes, "completed_nested") ||
-        Object.prototype.hasOwnProperty.call(engineRes, "facts_summary") ||
-        Object.prototype.hasOwnProperty.call(engineRes, "awaiting_field") ||
-        Object.prototype.hasOwnProperty.call(engineRes, "step")
-      );
-
-    const flagHandled =
-      engineRes?.didHandle === true ||
-      engineRes?.handled === true ||
-      engineRes?.updated === true ||
-      engineRes?.state_updated === true ||
-      engineRes?.completed === true;
-
-    // ✅ Regla: si el engine marcó handled, SE RESPETA (corta doble cerebro).
-    didHandleFinal = Boolean(
-      hasNonEmptyReply || hasStateSignal || hasAnyEngineMarker || flagHandled
-    );
-
-    const reason = hasNonEmptyReply
-      ? "reply"
-      : hasStateSignal
-      ? "state"
-      : hasAnyEngineMarker
-      ? "marker"
-      : flagHandled
-      ? "flagHandled"
-      : "none";
-
-    // (Opcional) Log útil
-    if (flagHandled && !hasNonEmptyReply && !hasStateSignal && !hasAnyEngineMarker) {
-      console.warn("🟠 FlowEngine dijo handled pero no trajo reply/state. Corto pipeline igual para evitar doble cerebro.", {
-        topKeys: engineRes && typeof engineRes === "object" ? Object.keys(engineRes) : null,
-        state: stateObj || null,
-        reply: engineRes?.reply,
-      });
-    }
-
-    if (didHandleFinal) {
-      // si hay reply, enviamos
-      if (hasNonEmptyReply) {
-        try {
-          await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, replyText);
-
-          await saveAssistantMessageAndEmit({
-            tenantId: tenant.id,
-            canal,
-            fromNumber: contactoNorm || "anónimo",
-            messageId,
-            content: replyText,
-          });
-        } catch (e) {
-          console.warn("⚠️ FlowEngine side-effects (send/socket) failed:", e);
-        }
-      }
-
-      // memoria (siempre, con replyText posiblemente vacío)
-      try {
-        await rememberTurn({
-          tenantId: tenant.id,
-          canal: "whatsapp",
-          senderId: contactoNorm,
-          userText: userInput || "",
-          assistantText: replyText || "",
-          keepLast: 20,
-        });
-
-        await rememberFacts({
-          tenantId: tenant.id,
-          canal: "whatsapp",
-          senderId: contactoNorm,
-          preferredLang: idiomaDestino,
-        });
-
-        await refreshFactsSummary({
-          tenantId: tenant.id,
-          canal: "whatsapp",
-          senderId: contactoNorm,
-          idioma: idiomaDestino,
-        });
-      } catch (e) {
-        console.warn("⚠️ FlowEngine side-effects (memory) failed:", e);
-      }
-
-      // ✅ sagrado
-      return;
-    }
-
-    console.log("🟢 [WA] FlowEngine decision", {
-      didHandleFinal,
-      reason,
-      replyRawType: typeof replyRaw,
-      replyTextPreview: replyText ? replyText.slice(0, 120) : "",
-      flagHandled,
-      hasStateSignal,
-      hasAnyEngineMarker,
-      topKeys: engineRes && typeof engineRes === "object" ? Object.keys(engineRes) : null,
-      stateKeys: stateObj ? Object.keys(stateObj) : null,
-    });
-
-  } catch (e) {
-    console.error("FlowEngine error (WA):", e);
-
-    const hasHardHandledSignals = Boolean(
-      (typeof engineRes?.reply === "string" && engineRes.reply.trim().length > 0) ||
-      engineRes?.state?.awaiting_field ||
-      engineRes?.state?.step ||
-      engineRes?.state?.completed ||
-      engineRes?.completed ||
-      engineRes?.completed_nested ||
-      engineRes?.facts_summary ||
-      engineRes?.awaiting_field ||
-      engineRes?.step
-    );
-
-    if (didHandleFinal || hasHardHandledSignals) {
-      console.warn("🧯 FlowEngine falló después de manejar; corto pipeline normal igualmente.");
-      return;
-    }
-    // si NO hay señales de manejo, sí dejamos seguir al pipeline normal
-  }
-
-  console.log("🟠 [WA] Entrando al pipeline NORMAL (FlowEngine no manejó)", {
+  console.log("🟠 [WA] Entrando al pipeline NORMAL (sin FlowEngine)", {
     tenantId: tenant.id,
     canal,
     contactoNorm,
