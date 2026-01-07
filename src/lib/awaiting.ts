@@ -48,7 +48,7 @@ export async function getAwaitingState(
     WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
     LIMIT 1
     `,
-    [tenantId, canal, contacto]
+    [tenantId, canal, contactoKey]
   );
 
   const row: AwaitingStateRow | undefined = rows[0];
@@ -96,4 +96,154 @@ export async function setAwaitingState(
     `,
     [tenantId, canal, contactoKey, awaitingField, JSON.stringify(awaitingPayload ?? {})]
   );
+}
+
+export async function clearAwaitingState(
+  tenantId: string,
+  canal: string,
+  contacto: string
+) {
+  const contactoKey = normalizeContacto(canal, contacto);
+
+  await pool.query(
+    `
+    UPDATE clientes
+    SET awaiting_field = NULL,
+        awaiting_payload = '{}'::jsonb,
+        awaiting_updated_at = NULL,
+        updated_at = NOW()
+    WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+    `,
+    [tenantId, canal, contactoKey]
+  );
+}
+
+function norm(s: string) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+}
+
+function looksLikeGeneralQuestion(t: string) {
+  const x = norm(t);
+  return (
+    x.includes("info") ||
+    x.includes("informacion") ||
+    x.includes("como funciona") ||
+    x.includes("como es") ||
+    x.includes("precio") ||
+    x.includes("costo") ||
+    x.includes("cuanto") ||
+    x.includes("planes") ||
+    x.includes("quiero saber") ||
+    x.includes("dime mas") ||
+    x.includes("me interesa") ||
+    x === "hola" ||
+    x === "hello"
+  );
+}
+
+export function validateAwaitingInput(params: {
+  awaitingField: string;
+  userText: string;
+  awaitingPayload?: any;
+}):
+  | { ok: true; value: any }
+  | { ok: false; reason: "no_match" | "escape" } {
+  const { awaitingField, userText, awaitingPayload } = params;
+  const t = norm(userText);
+
+  // Escape universal: si el usuario hace una pregunta general,
+  // NO lo forces a contestar el wizard.
+  if (looksLikeGeneralQuestion(t)) {
+    return { ok: false, reason: "escape" };
+  }
+
+  switch (awaitingField) {
+    case "select_channel": {
+      // ✅ Sin hardcode: usa opciones permitidas desde payload si existen.
+      // fallback razonable si no hay payload:
+      const allowed: string[] = Array.isArray(awaitingPayload?.allowed)
+        ? awaitingPayload.allowed
+        : ["whatsapp", "instagram", "facebook"];
+
+      const map: Record<string, string> = {
+        wa: "whatsapp",
+        whats: "whatsapp",
+        whatsapp: "whatsapp",
+        ig: "instagram",
+        insta: "instagram",
+        instagram: "instagram",
+        fb: "facebook",
+        face: "facebook",
+        facebook: "facebook",
+      };
+
+      // detecta por palabras, pero valida contra allowed
+      let pick: string | null = null;
+      for (const k of Object.keys(map)) {
+        if (t.includes(k)) {
+          pick = map[k];
+          break;
+        }
+      }
+
+      if (!pick) return { ok: false, reason: "no_match" };
+      if (!allowed.includes(pick)) return { ok: false, reason: "no_match" };
+
+      return { ok: true, value: pick };
+    }
+
+    case "select_language": {
+      const allowed: string[] = Array.isArray(awaitingPayload?.allowed)
+        ? awaitingPayload.allowed
+        : ["es", "en"];
+
+      const pick =
+        t.includes("es") || t.includes("espanol") || t.includes("español")
+          ? "es"
+          : t.includes("en") || t.includes("ingles") || t.includes("inglés")
+          ? "en"
+          : null;
+
+      if (!pick) return { ok: false, reason: "no_match" };
+      if (!allowed.includes(pick)) return { ok: false, reason: "no_match" };
+
+      return { ok: true, value: pick };
+    }
+
+    // Para “collect_*”: normalmente aceptas cualquier texto no vacío,
+    // pero igual puedes escapar si viene otra cosa rara.
+    case "collect_business_name":
+    case "collect_services":
+    case "collect_hours":
+    case "collect_booking_link":
+    case "collect_contact_email":
+    case "select_business_category": {
+      if (!t) return { ok: false, reason: "no_match" };
+      return { ok: true, value: userText.trim() };
+    }
+
+    case "confirm_payment": {
+      // ejemplo: si esperas "listo/pagué/sí" o "no"
+      if (["si", "sí", "pague", "pagué", "listo", "hecho", "done", "yes"].some(w => t.includes(w))) {
+        return { ok: true, value: true };
+      }
+      if (["no", "aun no", "todavia no", "not yet"].some(w => t.includes(w))) {
+        return { ok: true, value: false };
+      }
+      return { ok: false, reason: "no_match" };
+    }
+
+    case "handoff_to_human_reason": {
+      if (!t) return { ok: false, reason: "no_match" };
+      return { ok: true, value: userText.trim() };
+    }
+
+    default:
+      // Si no reconocemos el campo, mejor escapar para no trabar la conversación
+      return { ok: false, reason: "escape" };
+  }
 }

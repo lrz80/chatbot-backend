@@ -980,40 +980,50 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       userInput: userInput || "",
     });
 
-    // ✅ Normaliza "handled" / "completed" y también "state updated" (aunque reply sea null)
+    // ✅ Normaliza "handled" de forma MÁS robusta:
+    // Tu engine a veces NO devuelve `state` ni `handled`, pero sí devuelve objetos como:
+    // { facts_summary: null, completed_nested: undefined, ... }
+    // En ese caso queremos cortar el pipeline NORMAL igualmente.
+    const stateObj = (engineRes as any)?.state;
+
+    const hasReplyKey =
+      engineRes &&
+      typeof engineRes === "object" &&
+      Object.prototype.hasOwnProperty.call(engineRes as any, "reply");
+
+    const hasAnyEngineMarker =
+      engineRes &&
+      typeof engineRes === "object" &&
+      (
+        Object.prototype.hasOwnProperty.call(engineRes as any, "completed") ||
+        Object.prototype.hasOwnProperty.call(engineRes as any, "completed_nested") ||
+        Object.prototype.hasOwnProperty.call(engineRes as any, "facts_summary") ||
+        Object.prototype.hasOwnProperty.call(engineRes as any, "awaiting_field") ||
+        Object.prototype.hasOwnProperty.call(engineRes as any, "step")
+      );
+
+    // Señales explícitas
+    const flagHandled =
+      (engineRes as any)?.didHandle === true ||
+      (engineRes as any)?.handled === true ||
+      (engineRes as any)?.updated === true ||
+      (engineRes as any)?.state_updated === true ||
+      (engineRes as any)?.completed === true; // por si tu engine usa "completed" boolean
+
+    // Señales por estado (si viene state)
     const hasStateSignal =
-      Boolean((engineRes as any)?.state?.awaiting_field) ||
-      Boolean((engineRes as any)?.state?.step) ||
-      Boolean((engineRes as any)?.state?.completed) ||
-      Boolean((engineRes as any)?.state?.awaiting_field) ||
-      Boolean((engineRes as any)?.state?.step) ||
-      Boolean((engineRes as any)?.awaiting_field) ||
-      Boolean((engineRes as any)?.step) ||
-      Boolean((engineRes as any)?.updated) ||
-      Boolean((engineRes as any)?.state_updated);
+      Boolean(stateObj?.awaiting_field) ||
+      Boolean(stateObj?.step) ||
+      Boolean(stateObj?.completed);
 
-    const didHandleFinal =
-      Boolean((engineRes as any)?.didHandle) ||
-      Boolean((engineRes as any)?.handled) ||
-      Boolean((engineRes as any)?.completed) ||
-      Boolean((engineRes as any)?.completed?.completed) ||
-      Boolean((engineRes as any)?.result?.completed) ||
-      Boolean((engineRes as any)?.state?.completed) ||
-      hasStateSignal;
+    // Si reply existe como key (aunque sea null), es una decisión del engine.
+    const replyIsExplicit =
+      hasReplyKey && ((engineRes as any).reply === null || typeof (engineRes as any).reply === "string");
 
-    console.log("🟢 [WA] FlowEngine raw engineRes =", engineRes);
-    console.log("🟢 [WA] FlowEngine normalized", {
-      didHandle: (engineRes as any)?.didHandle,
-      handled: (engineRes as any)?.handled,
-      completed: (engineRes as any)?.completed,
-      completed_nested: (engineRes as any)?.completed?.completed,
-      reply: (engineRes as any)?.reply,
-    });
-    console.log("🟢 [WA] FlowEngine signals", {
-      hasStateSignal,
-      stateKeys: (engineRes as any)?.state ? Object.keys((engineRes as any).state) : null,
-      topKeys: engineRes && typeof engineRes === "object" ? Object.keys(engineRes as any) : null,
-    });
+    // ✅ Regla final (la importante):
+    // - Si el engine devolvió CUALQUIER "marker" típico → lo consideramos manejado.
+    // - Así evitamos caer al pipeline NORMAL y duplicar / contradecir.
+    const didHandleFinal = flagHandled || hasStateSignal || replyIsExplicit || hasAnyEngineMarker;
 
     if (didHandleFinal) {
       const reply = String((engineRes as any)?.reply || "").trim();
@@ -1067,6 +1077,16 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       // 3) SIEMPRE corta el pipeline normal si el engine manejó el turno
       return;
     }
+        console.log("🟢 [WA] FlowEngine didHandleFinal =", didHandleFinal, {
+      flagHandled,
+      hasStateSignal,
+      replyIsExplicit,
+      hasAnyEngineMarker,
+      hasReplyKey,
+      topKeys: engineRes && typeof engineRes === "object" ? Object.keys(engineRes as any) : null,
+      stateKeys: stateObj ? Object.keys(stateObj) : null,
+      reply: (engineRes as any)?.reply,
+    });
 
   } catch (e) {
     console.error("FlowEngine error (WA):", e);
