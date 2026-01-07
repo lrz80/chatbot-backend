@@ -960,19 +960,18 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   // =====================================================
   // ✅ FLOW ENGINE (Estado + Flujos DB + Memoria persistida)
   // =====================================================
-  type FlowInput = Parameters<typeof handleMessageWithFlowEngine>[0];
+  let engineRes: any = null;
+  let didHandleFinal = false;
 
   try {
     console.log("🟡 [WA] Antes FlowEngine", {
-      senderId: contactoNorm,   // mismo senderId que le pasas al engine
+      senderId: contactoNorm,
       rawFrom: fromNumber,
       text: userInput,
       messageId,
     });
-    console.log("🧩 [WA] FlowEngine import =", typeof handleMessageWithFlowEngine);
-    console.log("🧩 [WA] FlowEngine file marker = V1");
 
-    const engineRes = await handleMessageWithFlowEngine({
+    engineRes = await handleMessageWithFlowEngine({
       tenantId: tenant.id,
       canal: "whatsapp",
       senderId: contactoNorm,
@@ -980,118 +979,127 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       userInput: userInput || "",
     });
 
-    // ✅ Normaliza "handled" de forma MÁS robusta:
-    // Tu engine a veces NO devuelve `state` ni `handled`, pero sí devuelve objetos como:
-    // { facts_summary: null, completed_nested: undefined, ... }
-    // En ese caso queremos cortar el pipeline NORMAL igualmente.
-    const stateObj = (engineRes as any)?.state;
+    const stateObj = engineRes?.state;
 
     const hasReplyKey =
       engineRes &&
       typeof engineRes === "object" &&
-      Object.prototype.hasOwnProperty.call(engineRes as any, "reply");
+      Object.prototype.hasOwnProperty.call(engineRes, "reply");
 
     const hasAnyEngineMarker =
       engineRes &&
       typeof engineRes === "object" &&
       (
-        Object.prototype.hasOwnProperty.call(engineRes as any, "completed") ||
-        Object.prototype.hasOwnProperty.call(engineRes as any, "completed_nested") ||
-        Object.prototype.hasOwnProperty.call(engineRes as any, "facts_summary") ||
-        Object.prototype.hasOwnProperty.call(engineRes as any, "awaiting_field") ||
-        Object.prototype.hasOwnProperty.call(engineRes as any, "step")
+        Object.prototype.hasOwnProperty.call(engineRes, "completed") ||
+        Object.prototype.hasOwnProperty.call(engineRes, "completed_nested") ||
+        Object.prototype.hasOwnProperty.call(engineRes, "facts_summary") ||
+        Object.prototype.hasOwnProperty.call(engineRes, "awaiting_field") ||
+        Object.prototype.hasOwnProperty.call(engineRes, "step")
       );
 
-    // Señales explícitas
     const flagHandled =
-      (engineRes as any)?.didHandle === true ||
-      (engineRes as any)?.handled === true ||
-      (engineRes as any)?.updated === true ||
-      (engineRes as any)?.state_updated === true ||
-      (engineRes as any)?.completed === true; // por si tu engine usa "completed" boolean
+      engineRes?.didHandle === true ||
+      engineRes?.handled === true ||
+      engineRes?.updated === true ||
+      engineRes?.state_updated === true ||
+      engineRes?.completed === true;
 
-    // Señales por estado (si viene state)
     const hasStateSignal =
       Boolean(stateObj?.awaiting_field) ||
       Boolean(stateObj?.step) ||
       Boolean(stateObj?.completed);
 
-    // Si reply existe como key (aunque sea null), es una decisión del engine.
     const replyIsExplicit =
-      hasReplyKey && ((engineRes as any).reply === null || typeof (engineRes as any).reply === "string");
+      hasReplyKey && (engineRes.reply === null || typeof engineRes.reply === "string");
 
-    // ✅ Regla final (la importante):
-    // - Si el engine devolvió CUALQUIER "marker" típico → lo consideramos manejado.
-    // - Así evitamos caer al pipeline NORMAL y duplicar / contradecir.
-    const didHandleFinal = flagHandled || hasStateSignal || replyIsExplicit || hasAnyEngineMarker;
+    didHandleFinal = Boolean(flagHandled || hasStateSignal || replyIsExplicit || hasAnyEngineMarker);
 
     if (didHandleFinal) {
-      const reply = String((engineRes as any)?.reply || "").trim();
+      const reply = String(engineRes?.reply || "").trim();
 
-      // 1) Si hay reply, se envía
-      if (reply) {
-        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+      // ⚠️ Side-effects protegidos: aunque fallen, NO pasas al pipeline normal
+      try {
+        if (reply) {
+          await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
-        await saveAssistantMessageAndEmit({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: contactoNorm || "anónimo",
-          messageId,
-          content: reply,
-        });
+          await saveAssistantMessageAndEmit({
+            tenantId: tenant.id,
+            canal,
+            fromNumber: contactoNorm || "anónimo",
+            messageId,
+            content: reply,
+          });
+        }
+      } catch (e) {
+        console.warn("⚠️ FlowEngine side-effects (send/socket) failed:", e);
       }
 
-      // 2) SIEMPRE guarda turn aunque reply venga vacío
-      await rememberTurn({
-        tenantId: tenant.id,
-        canal: "whatsapp",
-        senderId: contactoNorm,
-        userText: userInput || "",
-        assistantText: reply || "", // puede ir vacío y está bien
-        keepLast: 20,
-      });
+      try {
+        await rememberTurn({
+          tenantId: tenant.id,
+          canal: "whatsapp",
+          senderId: contactoNorm,
+          userText: userInput || "",
+          assistantText: reply || "",
+          keepLast: 20,
+        });
 
-        // 2) SIEMPRE guarda facts si el engine “manejò” el turno (con o sin reply)
         await rememberFacts({
           tenantId: tenant.id,
           canal: "whatsapp",
           senderId: contactoNorm,
           preferredLang: idiomaDestino,
         });
-      
+
         await refreshFactsSummary({
           tenantId: tenant.id,
           canal: "whatsapp",
           senderId: contactoNorm,
           idioma: idiomaDestino,
         });
+      } catch (e) {
+        console.warn("⚠️ FlowEngine side-effects (memory) failed:", e);
+      }
 
-        const memAfter = await getMemoryValue<string>({
-          tenantId: tenant.id,
-          canal: "whatsapp",
-          senderId: contactoNorm,
-          key: "facts_summary",
-        });
-        console.log("🧠 facts_summary (after refreshFactsSummary) =", memAfter);
-
-      // 3) SIEMPRE corta el pipeline normal si el engine manejó el turno
+      // ✅ ESTE return es sagrado: engine manejó → NO pipeline normal
       return;
     }
-        console.log("🟢 [WA] FlowEngine didHandleFinal =", didHandleFinal, {
+
+    console.log("🟢 [WA] FlowEngine didHandleFinal =", didHandleFinal, {
+      hasReplyKey,
+      hasAnyEngineMarker,
       flagHandled,
       hasStateSignal,
       replyIsExplicit,
-      hasAnyEngineMarker,
-      hasReplyKey,
-      topKeys: engineRes && typeof engineRes === "object" ? Object.keys(engineRes as any) : null,
+      topKeys: engineRes && typeof engineRes === "object" ? Object.keys(engineRes) : null,
       stateKeys: stateObj ? Object.keys(stateObj) : null,
-      reply: (engineRes as any)?.reply,
+      reply: engineRes?.reply,
     });
 
   } catch (e) {
     console.error("FlowEngine error (WA):", e);
-    // no rompemos el webhook; seguimos con el pipeline normal
+
+    // ✅ Si ya habíamos determinado “handled” o engineRes trae markers, cortamos igual.
+    const hasMarkers =
+      engineRes &&
+      typeof engineRes === "object" &&
+      (
+        Object.prototype.hasOwnProperty.call(engineRes, "facts_summary") ||
+        Object.prototype.hasOwnProperty.call(engineRes, "awaiting_field") ||
+        Object.prototype.hasOwnProperty.call(engineRes, "step") ||
+        Object.prototype.hasOwnProperty.call(engineRes, "completed") ||
+        Object.prototype.hasOwnProperty.call(engineRes, "completed_nested") ||
+        Object.prototype.hasOwnProperty.call(engineRes, "reply")
+      );
+
+    if (didHandleFinal || hasMarkers) {
+      console.warn("🧯 FlowEngine falló después de manejar; corto pipeline normal igualmente.");
+      return;
+    }
+
+    // si NO hay señales de manejo, sí dejamos seguir al pipeline normal
   }
+
   console.log("🟠 [WA] Entrando al pipeline NORMAL (FlowEngine no manejó)", {
     tenantId: tenant.id,
     canal,
