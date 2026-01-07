@@ -1049,7 +1049,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       Boolean(stateObj?.completed);
 
     const replyIsExplicit =
-      hasReplyKey && (engineRes.reply === null || typeof engineRes.reply === "string");
+      typeof engineRes?.reply === "string" && engineRes.reply.trim().length > 0;
 
     didHandleFinal = Boolean(flagHandled || hasStateSignal || replyIsExplicit || hasAnyEngineMarker);
 
