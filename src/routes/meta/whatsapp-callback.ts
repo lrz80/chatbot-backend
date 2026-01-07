@@ -13,6 +13,7 @@ const VERIFY_TOKEN =
  * Verificación del webhook (hub.challenge)
  */
 router.get("/whatsapp/callback", (req: Request, res: Response) => {
+  return res.sendStatus(200);
   try {
     console.log("🌐 [META WEBHOOK] GET verificación:", req.query);
 
