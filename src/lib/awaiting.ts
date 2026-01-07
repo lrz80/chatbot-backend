@@ -162,14 +162,14 @@ export function validateAwaitingInput(params: {
   }
 
   switch (awaitingField) {
+    case "canal":
     case "select_channel": {
-      // ✅ Sin hardcode: usa opciones permitidas desde payload si existen.
-      // fallback razonable si no hay payload:
-      const allowed: string[] = Array.isArray(awaitingPayload?.allowed)
+    // ✅ Sin hardcode: usa opciones permitidas desde payload si existen.
+    const allowed: string[] = Array.isArray(awaitingPayload?.allowed)
         ? awaitingPayload.allowed
         : ["whatsapp", "instagram", "facebook"];
 
-      const map: Record<string, string> = {
+    const map: Record<string, string> = {
         wa: "whatsapp",
         whats: "whatsapp",
         whatsapp: "whatsapp",
@@ -179,21 +179,20 @@ export function validateAwaitingInput(params: {
         fb: "facebook",
         face: "facebook",
         facebook: "facebook",
-      };
+    };
 
-      // detecta por palabras, pero valida contra allowed
-      let pick: string | null = null;
-      for (const k of Object.keys(map)) {
+    let pick: string | null = null;
+    for (const k of Object.keys(map)) {
         if (t.includes(k)) {
-          pick = map[k];
-          break;
+        pick = map[k];
+        break;
         }
-      }
+    }
 
-      if (!pick) return { ok: false, reason: "no_match" };
-      if (!allowed.includes(pick)) return { ok: false, reason: "no_match" };
+    if (!pick) return { ok: false, reason: "no_match" };
+    if (!allowed.includes(pick)) return { ok: false, reason: "no_match" };
 
-      return { ok: true, value: pick };
+    return { ok: true, value: pick };
     }
 
     case "select_language": {

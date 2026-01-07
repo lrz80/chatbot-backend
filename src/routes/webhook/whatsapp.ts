@@ -45,6 +45,11 @@ import { rememberTurn } from "../../lib/memory/rememberTurn";
 import { rememberFacts } from "../../lib/memory/rememberFacts";
 import { getMemoryValue } from "../../lib/clientMemory";
 import { refreshFactsSummary } from "../../lib/memory/refreshFactsSummary";
+import {
+  getAwaitingState,
+  validateAwaitingInput,
+  clearAwaitingState,
+} from "../../lib/awaiting"; // ajusta el path si tu archivo vive en otro lado
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -715,6 +720,92 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       // Ya respondió con mensaje seguro, marcó spam y cortó el flujo.
       return;
     }
+  }
+
+    // ===============================
+  // ✅ AWAITING (wizard viejo) — PRIORIDAD ALTA (sin FlowEngine)
+  // ===============================
+  try {
+    const state = await getAwaitingState(tenant.id, canal, contactoNorm);
+
+    if (state?.awaiting_field) {
+      // 1) Validar input contra el field actual
+      const v = validateAwaitingInput({
+        awaitingField: state.awaiting_field,
+        userText: userInput,
+        awaitingPayload: state.awaiting_payload,
+      });
+
+      // 2) ESCAPE: si el usuario escribe "cancelar / salir / stop", limpias y sigues normal
+      if (v?.ok === false && v?.reason === "escape") {
+        await clearAwaitingState(tenant.id, canal, contactoNorm);
+      }
+
+      // 3) NO MATCH: repregunta (NO sigas pipeline normal)
+      if (v?.ok === false && v?.reason === "no_match") {
+        const rep = (() => {
+          // Si tu payload trae prompt, úsalo. Si no, fallback corto.
+          const p = state.awaiting_payload?.prompt;
+          if (typeof p === "string" && p.trim()) return p.trim();
+
+          return idiomaDestino === "en"
+            ? "Got it. Please reply with one of the valid options."
+            : "Perfecto. Responde con una de las opciones válidas.";
+        })();
+
+        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, rep);
+
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: contactoNorm || "anónimo",
+          messageId,
+          content: rep,
+        });
+
+        return; // ⬅️ IMPORTANTÍSIMO: corta todo lo demás
+      }
+
+      // 4) OK: ya tenemos value, aplica acción y limpia estado
+      if (v?.ok === true) {
+        const value = v.value;
+
+        // ⚠️ Aquí ejecutas lo que tu wizard esperaba hacer.
+        // Ejemplo: si el field era canal/select_channel, guardas elección en DB o donde corresponda.
+        if (state.awaiting_field === "canal" || state.awaiting_field === "select_channel") {
+          // Ejemplo: guardar "canal_a_automatizar" en payload/DB (ajusta a tu modelo real)
+          await pool.query(
+            `UPDATE clientes
+               SET canal_a_automatizar = $4,
+                   updated_at = now()
+             WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
+            [tenant.id, canal, contactoNorm, String(value)]
+          );
+        }
+
+        // Limpia estado para no quedar pegado
+        await clearAwaitingState(tenant.id, canal, contactoNorm);
+
+        const rep =
+          idiomaDestino === "en"
+            ? "Perfect. Done."
+            : "Perfecto. Listo.";
+
+        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, rep);
+
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: contactoNorm || "anónimo",
+          messageId,
+          content: rep,
+        });
+
+        return; // ⬅️ corta el pipeline normal, ya manejaste el wizard
+      }
+    }
+  } catch (e) {
+    console.warn("⚠️ Awaiting handler failed; continúo pipeline normal:", e);
   }
 
   await saveUserMessageAndEmit({
