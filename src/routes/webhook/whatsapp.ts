@@ -725,7 +725,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     messageId,
     content: userInput || '',
   });
-  
+
   // ✅ Prompt base disponible para TODO el flujo (incluye la rama de pago)
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
 
@@ -2108,40 +2108,6 @@ Termina con esta pregunta EXACTA en español:
     } catch (e) {
       console.warn('⚠️ Matcher de intenciones no coincidió o falló:', e);
     }
-  
-
-  // 🔎 Interceptor canal-agnóstico (recomendación principiantes)
-  const interceptado = await runBeginnerRecoInterceptor({
-    tenantId: tenant.id,
-    canal: 'whatsapp',
-    fromNumber,
-    userInput,
-    idiomaDestino,
-    intencionParaFaq,
-    promptBase,
-    enviarFn: enviarWhatsAppVoid,
-  });
-
-  if (interceptado) {
-    console.log('✅ Interceptor principiantes respondió en WhatsApp.');
-
-    try {
-      let intFinal = (intencionParaFaq || '').toLowerCase().trim();
-      if (!intFinal) {
-        const detTmp = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-        intFinal = normalizeIntentAlias((detTmp?.intencion || '').toLowerCase());
-      }
-      const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-      const nivel = det?.nivel_interes ?? 1;
-
-      // registrar venta si aplica + follow up
-      await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel, messageId);
-      await scheduleFollowUp(intFinal, nivel, userInput);
-    } catch (e) {
-      console.warn('⚠️ No se pudo programar follow-up tras interceptor (WA):', e);
-    }  
-    return; // evita FAQ genérica
-  }
 
   // [REPLACE] lookup robusto
   let respuestaDesdeFaq: string | null = null;
