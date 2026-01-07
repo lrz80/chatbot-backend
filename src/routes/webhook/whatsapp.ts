@@ -1047,9 +1047,9 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       engineRes?.state_updated === true ||
       engineRes?.completed === true;
 
-    // ✅ Regla: solo “handled” si hay reply REAL o hay estado/markers reales.
+    // ✅ Regla: si el engine marcó handled, SE RESPETA (corta doble cerebro).
     didHandleFinal = Boolean(
-      hasNonEmptyReply || hasStateSignal || hasAnyEngineMarker
+      hasNonEmptyReply || hasStateSignal || hasAnyEngineMarker || flagHandled
     );
 
     const reason = hasNonEmptyReply
@@ -1059,12 +1059,12 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       : hasAnyEngineMarker
       ? "marker"
       : flagHandled
-      ? "flagHandled_only (IGNORED)"
+      ? "flagHandled"
       : "none";
-      
+
     // (Opcional) Log útil
-    if (flagHandled && !didHandleFinal) {
-      console.warn("🟠 FlowEngine dijo handled, pero NO hay reply ni estado → tratar como NO handled", {
+    if (flagHandled && !hasNonEmptyReply && !hasStateSignal && !hasAnyEngineMarker) {
+      console.warn("🟠 FlowEngine dijo handled pero no trajo reply/state. Corto pipeline igual para evitar doble cerebro.", {
         topKeys: engineRes && typeof engineRes === "object" ? Object.keys(engineRes) : null,
         state: stateObj || null,
         reply: engineRes?.reply,
