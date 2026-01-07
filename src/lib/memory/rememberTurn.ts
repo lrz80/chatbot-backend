@@ -52,7 +52,7 @@ export async function rememberTurn(opts: {
     [tenantId, canal, senderId]
   );
 
-  // 3) Trim a los últimos N turns (seguro, post-append)
+    // 3) Trim a los últimos N turns (seguro, post-append)
   await pool.query(
     `
     UPDATE client_memory
@@ -62,7 +62,7 @@ export async function rememberTurn(opts: {
         SELECT elem
         FROM jsonb_array_elements(value) WITH ORDINALITY t(elem, ord)
         ORDER BY ord DESC
-        LIMIT $5
+        LIMIT $4::int
       ) s
     ),
     updated_at = now()
@@ -70,8 +70,8 @@ export async function rememberTurn(opts: {
       AND canal = $2
       AND sender_id = $3
       AND "key" = 'turns'
-      AND jsonb_array_length(value) > $5
+      AND jsonb_array_length(value) > $4::int
     `,
-    [tenantId, canal, senderId, "turns", keepLast]
+    [tenantId, canal, senderId, keepLast]
   );
 }
