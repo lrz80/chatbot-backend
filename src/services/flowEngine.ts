@@ -294,34 +294,74 @@ export async function handleMessageWithFlowEngine(params: {
     // ✅ Si el usuario dice un canal, iniciamos el flow igual (sirve para reconfigurar)
     // Esto evita caer al pipeline normal con inputs tipo "facebook".
     if (isChannelKeyword(userInput)) {
-        const flow = await getFlowByKey({ tenantId, flowKey: "onboarding" });
-        if (!flow || !flow.enabled) return { reply: null, didHandle: false };
+    const flow = await getFlowByKey({ tenantId, flowKey: "onboarding" });
+    if (!flow || !flow.enabled) return { reply: null, didHandle: false };
 
-        await setConversationState({
+    // ponemos state en select_channel
+    await setConversationState({
+        tenantId,
+        canal,
+        senderId,
+        activeFlow: flow.flow_key,
+        activeStep: "select_channel",
+        context: {},
+    });
+
+    const step = await getStepByKey({ flowId: flow.id, stepKey: "select_channel" });
+    if (!step) return { reply: null, didHandle: false };
+
+    // ✅ PROCESAR EL INPUT ACTUAL COMO RESPUESTA DEL STEP (NO repetir prompt)
+    const parsed = validateExpected(step.expected, userInput);
+
+    if (!parsed.ok) {
+        // si por alguna razón no matchea, preguntamos normal
+        return { reply: pickPrompt(step, lang), didHandle: true };
+    }
+
+    // persistir channels_selected
+    await persistDecisionFromStep({
+        tenantId,
+        canal,
+        senderId,
+        stepKey: step.step_key,
+        expected: step.expected,
+        parsedValue: parsed.value,
+    });
+
+    const next = step.on_success_next_step;
+
+    // si termina
+    if (!next || next === "done") {
+        await clearConversationState({ tenantId, canal, senderId });
+
+        if (step.expected?.persist_complete_key) {
+        await setMemoryValue({
             tenantId,
             canal,
             senderId,
-            activeFlow: flow.flow_key,
-            activeStep: "select_channel",
-            context: {},
+            key: step.expected.persist_complete_key,
+            value: true,
         });
-
-        // ✅ Auto-advance: si ya hay memoria para este step, saltarlo
-        const auto = await autoAdvanceUsingMemory({
-            tenantId,
-            canal,
-            senderId,
-            lang,
-            flow,
-            state: { active_flow: flow.flow_key, active_step: "select_channel", context: {} },
-        });
-
-        if (!auto.stepToAsk) {
-            // el flow terminó o no hay nada que preguntar
-            return { reply: null, didHandle: true };
         }
 
-        return { reply: pickPrompt(auto.stepToAsk, lang), didHandle: true };
+        return { reply: null, didHandle: true };
+    }
+
+    // avanzar
+    await setConversationState({
+        tenantId,
+        canal,
+        senderId,
+        activeFlow: flow.flow_key,
+        activeStep: next,
+        context: {},
+    });
+
+    // preguntar el siguiente step
+    const nextStep = await getStepByKey({ flowId: flow.id, stepKey: next });
+    if (!nextStep) return { reply: null, didHandle: true };
+
+    return { reply: pickPrompt(nextStep, lang), didHandle: true };
     }
 
     // Flujo “primera vez”
