@@ -808,6 +808,27 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
   }
 
+  // ===============================
+  // 🔒 GATE GLOBAL: canal ya decidido
+  // ===============================
+  {
+    const alreadySelected = await getSelectedChannelDB(
+      tenant.id,
+      canal,
+      contactoNorm
+    );
+
+    if (alreadySelected) {
+      // 🔕 Backend entra en SILENCIO TOTAL
+      // El siguiente mensaje lo maneja:
+      // - FlowEngine
+      // - Prompt
+      // - Frontend
+      // - NO este webhook
+      return;
+    }
+  }
+
   // ✅ Prompt base disponible para TODO el flujo (incluye la rama de pago)
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
 
