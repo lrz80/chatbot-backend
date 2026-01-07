@@ -1355,27 +1355,84 @@ if (BOOKING_ENABLED) {
 
   // 🔍 CASO ESPECIAL: usuario pide "más info" de forma muy genérica
   const wantsMoreInfoEn =
-    /\b(need\s+more\s+in(?:f|fo|formation)|i\s+want\s+more\s+in(?:f|fo|formation)|more\s+in(?:f|fo|formation))\b/i
+    /^\s*(more\s+info|more\s+information|need\s+more\s+info(?:rmation)?|i\s+want\s+more\s+info(?:rmation)?|info\s+please|info\s+pls)\s*$/i
       .test(cleanedForInfo);
 
   const wantsMoreInfoEs =
-    /\b((necesito|quiero)\s+mas\s+in(?:f|fo|formacion)|mas\s+info|mas\s+informacion)\b/i
+    /^\s*((necesito|quiero)\s+m[aá]s\s+info(?:rmaci[oó]n)?|m[aá]s\s+info(?:rmaci[oó]n)?|info\s+por\s+favor|info\s+pls)\s*$/i
       .test(cleanedNorm);
+
+  const tokenCount = (cleanedNorm.trim().match(/\S+/g) || []).length;
+  const isShortGeneric = tokenCount <= 4; // ajusta a 5 si lo ves muy estricto
 
   // 🆕 Detector flexible de mensajes pidiendo "más info"
   const wantsMoreInfoDirect = [
-    "info",
-    "informacion",
-    "información",
+    // ES
     "mas info",
     "más info",
+    "mas informacion",
+    "más información",
+    "necesito mas info",
+    "necesito más info",
+    "quiero mas info",
+    "quiero más info",
+    "necesito mas informacion",
+    "necesito más información",
+    "quiero mas informacion",
+    "quiero más información",
+    "info por favor",
+    "info pls",
+
+    // EN
     "more info",
     "more information",
-    "more details",
-    "more detail",
-    "information",
-    "details"
+    "need more info",
+    "need more information",
+    "i want more info",
+    "i want more information",
+    "info please"
   ];
+
+  const TOPIC_HINTS = [
+    // precios
+    "precio","precios","cost","costs","pricing","rate","rates","quote","cotiz","cotización",
+
+    // horarios
+    "horario","horarios","schedule","hours","open","close",
+
+    // ubicación
+    "direccion","dirección","address","location","ubicacion","ubicación",
+
+    // reservas / citas
+    "cita","citas","appointment","book","booking","reserve","reservation",
+
+    // pedidos / menú
+    "menu","menú","order","pedido","delivery","pickup",
+
+    // servicios / productos
+    "clase","clases","class","classes",
+    "servicio","servicios","service","services",
+    "producto","productos","product","products"
+  ];
+
+  const hasTopicHint = TOPIC_HINTS.some(t =>
+    cleanedNorm.includes(t)
+  );
+
+  const normalizedInfo = cleanedNorm.trim();
+
+  // 1) match por regex (frases) o por lista exacta
+  const matchedByRegex =
+    wantsMoreInfoEn || wantsMoreInfoEs;
+
+  const matchedByDirect =
+    wantsMoreInfoDirect.includes(normalizedInfo);
+
+  // 2) “genérico real” = match + corto + NO trae tema
+  const wantsMoreInfo =
+    (matchedByRegex || matchedByDirect) &&
+    isShortGeneric &&
+    !hasTopicHint;
 
   // 🆕 Expresiones adicionales de cierre
   const trailing = /(pls?|please|por\s*fa(vor)?)/i;
@@ -1388,8 +1445,6 @@ if (BOOKING_ENABLED) {
     wantsMoreInfoDirect.some(k => msg.includes(k)) ||
     trailing.test(msg);
 
-  const wantsMoreInfo = wantsMoreInfoEn || wantsMoreInfoEs || shortInfoOnly;
-
   let respuesta: string = "";
 
   // CTA multilenguaje para cierres consistentes
@@ -1400,11 +1455,10 @@ if (BOOKING_ENABLED) {
 
   // 🧩 Bloque especial: "quiero más info / need more info"
   if (wantsMoreInfo) {
-    // 🔒 GATE: si ya se explicó la info general, no repetir (evita loop infinito)
+    // 🔒 GATE
     try {
       const { rows } = await pool.query(
-        `SELECT info_explicada
-        FROM clientes
+        `SELECT info_explicada FROM clientes
         WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
         LIMIT 1`,
         [tenant.id, canal, contactoNorm]
@@ -1412,124 +1466,115 @@ if (BOOKING_ENABLED) {
 
       if (rows[0]?.info_explicada === true) {
         console.log("⛔ wantsMoreInfo bloqueado: info_explicada=true", { contactoNorm });
-        return;
+        // ✅ No respondemos aquí. Dejamos que el pipeline normal maneje este mensaje.
+        // (Si quieres cortar totalmente, usa return, pero esto es mejor UX.)
+      } else {
+        const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
+          .test(userInput);
+
+        let reply: string | null = null;
+
+        try {
+          const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+          const systemPrompt = [
+            promptBaseMem,
+            '',
+            `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
+            `Formato WhatsApp: mensajes MUY CORTOS (máx. 3-4 frases, 6-8 líneas como máximo), sin párrafos largos.`,
+            `No uses viñetas, listas ni encabezados. Solo texto corrido, claro y directo.`,
+            'No menciones correos, páginas web ni enlaces (no escribas "http", "www" ni "@").',
+            'No des precios concretos, montos, ni duración exacta de pruebas (solo describe de forma general).',
+            'Usa exclusivamente la información del negocio.',
+            'No digas que eres un asistente, IA, bot, sistema o plataforma.',
+            'No expliques procesos internos ni "cómo funciona".'
+          ].join('\n');
+
+          const userPromptLLM =
+            idiomaDestino === 'en'
+              ? `The customer asked for more information. Reply as the business.
+  Write a very short message (2–3 sentences) using ONLY the business context you have.
+  Do not mention that you are an assistant, AI, bot, platform, automation, system, onboarding, or how it works.
+  Do not include any links, emails, or phone numbers.
+  End with ONE natural follow-up question that fits this business and helps you understand what the customer needs next.`
+              : `El cliente pidió más información. Responde como el negocio.
+  Escribe un mensaje muy corto (2–3 frases) usando SOLO el contexto del negocio disponible.
+  No menciones que eres asistente, IA, bot, plataforma, automatización, sistema, onboarding, ni expliques cómo funciona.
+  No incluyas links, correos ni números.
+  Termina con UNA sola pregunta natural que encaje con este negocio y te ayude a entender qué necesita el cliente.`;
+
+          const completion = await openai.chat.completions.create({
+            model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+            temperature: 0.2,
+            max_tokens: 220,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPromptLLM },
+            ],
+          });
+
+          reply = completion.choices[0]?.message?.content?.trim() || null;
+
+          // tokens
+          const used = completion.usage?.total_tokens || 0;
+          if (used > 0) {
+            await pool.query(
+              `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
+              VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
+              ON CONFLICT (tenant_id, canal, mes)
+              DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
+              [tenant.id, used]
+            );
+          }
+        } catch (e) {
+          console.warn('⚠️ LLM (more info) falló; NO respondo aquí (sin hardcode).', e);
+          reply = null;
+        }
+
+        if (reply) {
+          if (startsWithGreeting) {
+            const saludo = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
+            reply = `${saludo}\n\n${reply}`;
+          }
+
+          await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+          // ✅ marcar info_explicada
+          try {
+            await pool.query(
+              `INSERT INTO clientes (tenant_id, canal, contacto, info_explicada, updated_at)
+              VALUES ($1, $2, $3, true, now())
+              ON CONFLICT (tenant_id, canal, contacto)
+              DO UPDATE SET info_explicada = true, updated_at = now()`,
+              [tenant.id, canal, contactoNorm]
+            );
+          } catch (e) {
+            console.warn("⚠️ No se pudo actualizar info_explicada:", e);
+          }
+
+          await saveAssistantMessageAndEmit({
+            tenantId: tenant.id,
+            canal,
+            fromNumber: contactoNorm || 'anónimo',
+            messageId,
+            content: reply,
+          });
+
+          try {
+            await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, 'pedir_info', 2, messageId);
+          } catch (e) {
+            console.warn('⚠️ No se pudo registrar sales_intelligence (more info):', e);
+          }
+
+          return; // ✅ Solo retornamos si respondimos
+        }
+
+        // Si reply es null, NO retornamos: dejamos que el pipeline normal siga.
       }
     } catch (e) {
-      console.warn("⚠️ No se pudo leer info_explicada; continúo igual:", e);
+      console.warn("⚠️ No se pudo leer info_explicada; continúo pipeline normal:", e);
+      // No return
     }
-
-    const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
-      .test(userInput);
-
-    let reply: string;
-
-    try {
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
-
-      const systemPrompt = [
-        promptBaseMem,
-        '',
-        `Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.`,
-        `Formato WhatsApp: mensajes MUY CORTOS (máx. 3-4 frases, 6-8 líneas como máximo), sin párrafos largos.`,
-        `No uses viñetas, listas ni encabezados. Solo texto corrido, claro y directo.`,
-        // 🔴 NUEVO: nada de links ni correos ni precios exactos
-        'No menciones correos, páginas web ni enlaces (no escribas "http", "www" ni "@").',
-        'No des precios concretos, montos, ni duración exacta de pruebas (solo describe de forma general).',
-        'Usa exclusivamente la información del negocio (servicios, tipo de clientes, forma general de empezar).',
-        'No repitas siempre la misma presentación; responde adaptándote a lo que el cliente pide.'
-      ].join('\n');
-
-      const userPromptLLM =
-        idiomaDestino === 'en'
-          ? `The user is asking for general information (e.g. "I need more info", "I want more information", "more info pls").
-Using ONLY the business information in the prompt, write a VERY SHORT explanation (2-3 sentences) that says:
-- what this business does,
-- who it is for,
-Do NOT include prices, discounts, trial days, email addresses, websites or any links.
-Avoid marketing or hype. Be simple and clear.
-Avoid repeating these instructions or explaining what you are doing; just answer as if you were the business.
-End with this exact question in English:
-"What would you like to know more about? Our services, prices, or something else?"`
-          : `El usuario está pidiendo información general (por ejemplo "quiero más info", "necesito más información", "más info pls").
-Usando SOLO la información del negocio en el prompt, escribe una explicación MUY CORTA (2-3 frases) que diga:
-- qué hace este negocio,
-- para quién es,
-No incluyas precios, descuentos, días de prueba, correos electrónicos, páginas web ni ningún enlace.
-Evita sonar a anuncio o landing page; sé simple y claro.
-No repitas estas instrucciones ni expliques lo que estás haciendo; responde como si fueras el negocio.
-Termina con esta pregunta EXACTA en español:
-"¿Sobre qué te gustaría saber más? ¿Servicios, precios, u otra cosa?"`;
-
-      const completion = await openai.chat.completions.create({
-        model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
-        temperature: 0.2,
-        max_tokens: 400,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPromptLLM },
-        ],
-      });
-
-      reply =
-        completion.choices[0]?.message?.content?.trim() ??
-        (idiomaDestino === 'en'
-          ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
-          : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?');
-
-      // registra tokens
-      const used = completion.usage?.total_tokens || 0;
-      if (used > 0) {
-        await pool.query(
-          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-           VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-           ON CONFLICT (tenant_id, canal, mes)
-           DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-          [tenant.id, used]
-        );
-      }
-    } catch (e) {
-      console.warn('⚠️ LLM (more info) falló; uso fallback fijo:', e);
-      reply =
-        idiomaDestino === 'en'
-          ? 'What would you like to know more about? Our services, prices, schedule, or something else?'
-          : '¿Sobre qué te gustaría saber más? ¿Servicios, precios, horarios u otra cosa?';
-    }
-
-    // Si el mensaje venía CON saludo al inicio, antepone la bienvenida
-    if (startsWithGreeting) {
-      const saludo = getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
-      reply = `${saludo}\n\n${reply}`;
-    }
-
-    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-    // ✅ Marcar que ya se explicó la info general (para no repetir y evitar loop)
-    try {
-      await pool.query(
-        `INSERT INTO clientes (tenant_id, canal, contacto, info_explicada, updated_at)
-        VALUES ($1, $2, $3, true, now())
-        ON CONFLICT (tenant_id, canal, contacto)
-        DO UPDATE SET info_explicada = true, updated_at = now()`,
-        [tenant.id, canal, contactoNorm]
-      );
-    } catch (e) {
-      console.warn("⚠️ No se pudo actualizar info_explicada:", e);
-    }
-
-    await saveAssistantMessageAndEmit({
-      tenantId: tenant.id,
-      canal,
-      fromNumber: contactoNorm || 'anónimo',
-      messageId,
-      content: reply,
-    });
-    try {
-      await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, 'pedir_info', 2, messageId);
-    } catch (e) {
-      console.warn('⚠️ No se pudo registrar sales_intelligence (more info):', e);
-    }
-
-    return;
   }
 
   // === FAST-PATH MULTI-INTENCIÓN ===
