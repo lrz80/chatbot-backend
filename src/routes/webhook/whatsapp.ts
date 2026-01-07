@@ -45,11 +45,6 @@ import { rememberTurn } from "../../lib/memory/rememberTurn";
 import { rememberFacts } from "../../lib/memory/rememberFacts";
 import { getMemoryValue } from "../../lib/clientMemory";
 import { refreshFactsSummary } from "../../lib/memory/refreshFactsSummary";
-import {
-  getAwaitingState,
-  validateAwaitingInput,
-  clearAwaitingState,
-} from "../../lib/awaiting"; // ajusta el path si tu archivo vive en otro lado
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -83,6 +78,33 @@ function extractPaymentLinkFromPrompt(promptBase: string): string | null {
   // 2) Fallback: primer URL
   const any = promptBase.match(/https?:\/\/[^\s)]+/i);
   return any?.[0] ? any[0].replace(/[),.]+$/g, '') : null;
+}
+
+function pickSelectedChannelFromText(
+  text: string
+): "whatsapp" | "instagram" | "facebook" | "multi" | null {
+  const t = (text || "").trim().toLowerCase();
+
+  if (/\b(los\s+tres|las\s+tres|todos|todas|all\s+three)\b/i.test(t)) {
+    return "multi";
+  }
+
+  if (t === "whatsapp" || t === "wa") return "whatsapp";
+  if (t === "instagram" || t === "ig") return "instagram";
+  if (t === "facebook" || t === "fb") return "facebook";
+
+  const hasWhats = /\bwhats(app)?\b/i.test(t);
+  const hasInsta = /\binsta(gram)?\b/i.test(t);
+  const hasFace  = /\b(face(book)?|fb)\b/i.test(t);
+
+  const count = Number(hasWhats) + Number(hasInsta) + Number(hasFace);
+
+  if (count >= 2) return "multi";
+  if (hasWhats) return "whatsapp";
+  if (hasInsta) return "instagram";
+  if (hasFace) return "facebook";
+
+  return null;
 }
 
 // Parse simple: soporta "Nombre Apellido email teléfono país"
@@ -289,6 +311,47 @@ async function upsertIdiomaClienteDB(
     );
   } catch (e) {
     console.warn('No se pudo guardar idioma del cliente:', e);
+  }
+}
+
+async function getSelectedChannelDB(
+  tenantId: string,
+  canal: string,
+  contacto: string
+): Promise<"whatsapp" | "instagram" | "facebook" | "multi" | null> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT selected_channel
+       FROM clientes
+       WHERE tenant_id=$1 AND canal=$2 AND contacto=$3
+       LIMIT 1`,
+      [tenantId, canal, contacto]
+    );
+    const v = String(rows[0]?.selected_channel || "").trim().toLowerCase();
+    if (v === "whatsapp" || v === "instagram" || v === "facebook" || v === "multi") return v as any;
+  } catch {}
+  return null;
+}
+
+async function upsertSelectedChannelDB(
+  tenantId: string,
+  canal: string,
+  contacto: string,
+  selected: "whatsapp" | "instagram" | "facebook" | "multi"
+) {
+  try {
+    await pool.query(
+      `INSERT INTO clientes (tenant_id, canal, contacto, selected_channel, selected_channel_updated_at, updated_at)
+       VALUES ($1, $2, $3, $4, NOW(), NOW())
+       ON CONFLICT (tenant_id, canal, contacto)
+       DO UPDATE SET
+         selected_channel = EXCLUDED.selected_channel,
+         selected_channel_updated_at = NOW(),
+         updated_at = NOW()`,
+      [tenantId, canal, contacto, selected]
+    );
+  } catch (e) {
+    console.warn("⚠️ No se pudo guardar selected_channel:", e);
   }
 }
 
@@ -729,6 +792,86 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     messageId,
     content: userInput || '',
   });
+
+  // ===============================
+  // ✅ CANAL ELEGIDO (ANTI-LOOP DEMO)
+  // ===============================
+  {
+    const picked = pickSelectedChannelFromText(userInput);
+
+    // Si el user está contestando “whatsapp/instagram/facebook/los tres” => persistimos y respondemos determinístico
+    if (picked) {
+      await upsertSelectedChannelDB(tenant.id, canal, contactoNorm, picked);
+
+      const reply =
+        idiomaDestino === "en"
+          ? (picked === "multi"
+              ? "Perfect. We can automate WhatsApp, Instagram, and Facebook. Do you want to start with WhatsApp first?"
+              : `Perfect. We’ll automate ${picked}. Do you want me to explain how it works (FAQs + automatic follow-up) or do you want to connect the account first?`)
+          : (picked === "multi"
+              ? "Perfecto. Podemos automatizar WhatsApp, Instagram y Facebook. ¿Quieres que empecemos primero por WhatsApp?"
+              : `Perfecto. Vamos a automatizar ${picked}. ¿Quieres que te explique cómo funciona (FAQs + seguimiento automático) o prefieres conectar la cuenta primero?`);
+
+      const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+      if (ok) {
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: contactoNorm || "anónimo",
+          messageId,
+          content: reply,
+        });
+
+        await rememberAfterReply({
+          tenantId: tenant.id,
+          senderId: contactoNorm,
+          idiomaDestino,
+          userText: userInput,
+          assistantText: reply,
+          lastIntent: "seleccion_canal",
+        });
+      }
+
+      return; // ⬅️ CLAVE: corta el pipeline para evitar que el LLM vuelva a preguntar canal
+    }
+
+    // Si ya hay canal elegido y el user responde “sí/ok/dale” => NO preguntes canal de nuevo, explica.
+    const selected = await getSelectedChannelDB(tenant.id, canal, contactoNorm);
+
+    const t = (userInput || "").trim().toLowerCase();
+    const isYes = ["si", "sí", "yes", "y", "ok", "okay", "dale", "claro", "perfecto", "listo"].includes(t);
+
+    if (selected && isYes) {
+      const reply =
+        idiomaDestino === "en"
+          ? `Great. Here’s how it works on ${selected}: it answers common questions automatically and can follow up when a lead stops replying. What type of business is this (gym, salon, bakery, etc.)?`
+          : `Perfecto. Así funciona en ${selected}: responde preguntas frecuentes automáticamente y puede hacer seguimiento cuando el lead deja de responder. ¿Qué tipo de negocio es (gimnasio, salón, panadería, etc.)?`;
+
+      const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+      if (ok) {
+        await saveAssistantMessageAndEmit({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: contactoNorm || "anónimo",
+          messageId,
+          content: reply,
+        });
+
+        await rememberAfterReply({
+          tenantId: tenant.id,
+          senderId: contactoNorm,
+          idiomaDestino,
+          userText: userInput,
+          assistantText: reply,
+          lastIntent: "explicar_demo",
+        });
+      }
+
+      return; // ⬅️ CLAVE: corta el pipeline
+    }
+  }
 
   // ✅ Prompt base disponible para TODO el flujo (incluye la rama de pago)
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
