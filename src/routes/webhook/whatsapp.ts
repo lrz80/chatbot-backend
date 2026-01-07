@@ -1020,10 +1020,14 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
     const stateObj = engineRes?.state;
 
-    const hasReplyKey =
-      engineRes &&
-      typeof engineRes === "object" &&
-      Object.prototype.hasOwnProperty.call(engineRes, "reply");
+    const replyRaw = engineRes?.reply;
+    const replyText = (typeof replyRaw === "string" ? replyRaw : "").trim();
+    const hasNonEmptyReply = replyText.length > 0;
+
+    const hasStateSignal =
+      Boolean(stateObj?.awaiting_field) ||
+      Boolean(stateObj?.step) ||
+      Boolean(stateObj?.completed);
 
     const hasAnyEngineMarker =
       engineRes &&
@@ -1043,106 +1047,111 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       engineRes?.state_updated === true ||
       engineRes?.completed === true;
 
-    const hasStateSignal =
-      Boolean(stateObj?.awaiting_field) ||
-      Boolean(stateObj?.step) ||
-      Boolean(stateObj?.completed);
+    // ✅ Regla: solo “handled” si hay reply REAL o hay estado/markers reales.
+    didHandleFinal = Boolean(
+      hasNonEmptyReply || hasStateSignal || hasAnyEngineMarker
+    );
 
-    const replyIsExplicit =
-      typeof engineRes?.reply === "string" && engineRes.reply.trim().length > 0;
-
-    didHandleFinal = Boolean(flagHandled || hasStateSignal || replyIsExplicit || hasAnyEngineMarker);
+    const reason = hasNonEmptyReply
+      ? "reply"
+      : hasStateSignal
+      ? "state"
+      : hasAnyEngineMarker
+      ? "marker"
+      : flagHandled
+      ? "flagHandled_only (IGNORED)"
+      : "none";
+      
+    // (Opcional) Log útil
+    if (flagHandled && !didHandleFinal) {
+      console.warn("🟠 FlowEngine dijo handled, pero NO hay reply ni estado → tratar como NO handled", {
+        topKeys: engineRes && typeof engineRes === "object" ? Object.keys(engineRes) : null,
+        state: stateObj || null,
+        reply: engineRes?.reply,
+      });
+    }
 
     if (didHandleFinal) {
-      const reply = typeof engineRes?.reply === "string" ? engineRes.reply.trim() : "";
-
-      // ✅ Si el engine NO trae reply, NO cortamos.
-      // Deja que responda el pipeline NORMAL (evita silencio).
-      if (!reply) {
-        console.warn("🟠 FlowEngine marcó handled pero reply vacío. Dejo seguir al pipeline NORMAL.", {
-          topKeys: engineRes && typeof engineRes === "object" ? Object.keys(engineRes) : null,
-          state: engineRes?.state || null,
-        });
-      } else {
-        // ⚠️ Side-effects protegidos
+      // si hay reply, enviamos
+      if (hasNonEmptyReply) {
         try {
-          await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+          await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, replyText);
 
           await saveAssistantMessageAndEmit({
             tenantId: tenant.id,
             canal,
             fromNumber: contactoNorm || "anónimo",
             messageId,
-            content: reply,
+            content: replyText,
           });
         } catch (e) {
           console.warn("⚠️ FlowEngine side-effects (send/socket) failed:", e);
         }
-
-        try {
-          await rememberTurn({
-            tenantId: tenant.id,
-            canal: "whatsapp",
-            senderId: contactoNorm,
-            userText: userInput || "",
-            assistantText: reply || "",
-            keepLast: 20,
-          });
-
-          await rememberFacts({
-            tenantId: tenant.id,
-            canal: "whatsapp",
-            senderId: contactoNorm,
-            preferredLang: idiomaDestino,
-          });
-
-          await refreshFactsSummary({
-            tenantId: tenant.id,
-            canal: "whatsapp",
-            senderId: contactoNorm,
-            idioma: idiomaDestino,
-          });
-        } catch (e) {
-          console.warn("⚠️ FlowEngine side-effects (memory) failed:", e);
-        }
-
-        // ✅ Solo retornamos si realmente respondimos.
-        return;
       }
+
+      // memoria (siempre, con replyText posiblemente vacío)
+      try {
+        await rememberTurn({
+          tenantId: tenant.id,
+          canal: "whatsapp",
+          senderId: contactoNorm,
+          userText: userInput || "",
+          assistantText: replyText || "",
+          keepLast: 20,
+        });
+
+        await rememberFacts({
+          tenantId: tenant.id,
+          canal: "whatsapp",
+          senderId: contactoNorm,
+          preferredLang: idiomaDestino,
+        });
+
+        await refreshFactsSummary({
+          tenantId: tenant.id,
+          canal: "whatsapp",
+          senderId: contactoNorm,
+          idioma: idiomaDestino,
+        });
+      } catch (e) {
+        console.warn("⚠️ FlowEngine side-effects (memory) failed:", e);
+      }
+
+      // ✅ sagrado
+      return;
     }
 
-    console.log("🟢 [WA] FlowEngine didHandleFinal =", didHandleFinal, {
-      hasReplyKey,
-      hasAnyEngineMarker,
+    console.log("🟢 [WA] FlowEngine decision", {
+      didHandleFinal,
+      reason,
+      replyRawType: typeof replyRaw,
+      replyTextPreview: replyText ? replyText.slice(0, 120) : "",
       flagHandled,
       hasStateSignal,
-      replyIsExplicit,
+      hasAnyEngineMarker,
       topKeys: engineRes && typeof engineRes === "object" ? Object.keys(engineRes) : null,
       stateKeys: stateObj ? Object.keys(stateObj) : null,
-      reply: engineRes?.reply,
     });
 
   } catch (e) {
     console.error("FlowEngine error (WA):", e);
 
-    // ✅ Si ya habíamos determinado “handled” o engineRes trae markers, cortamos igual.
-    const hasMarkers =
-      engineRes &&
-      typeof engineRes === "object" &&
-      (
-        Object.prototype.hasOwnProperty.call(engineRes, "facts_summary") ||
-        Object.prototype.hasOwnProperty.call(engineRes, "awaiting_field") ||
-        Object.prototype.hasOwnProperty.call(engineRes, "step") ||
-        Object.prototype.hasOwnProperty.call(engineRes, "completed") ||
-        Object.prototype.hasOwnProperty.call(engineRes, "completed_nested") ||
-        Object.prototype.hasOwnProperty.call(engineRes, "reply")
-      );
+    const hasHardHandledSignals = Boolean(
+      (typeof engineRes?.reply === "string" && engineRes.reply.trim().length > 0) ||
+      engineRes?.state?.awaiting_field ||
+      engineRes?.state?.step ||
+      engineRes?.state?.completed ||
+      engineRes?.completed ||
+      engineRes?.completed_nested ||
+      engineRes?.facts_summary ||
+      engineRes?.awaiting_field ||
+      engineRes?.step
+    );
 
-    if (didHandleFinal || hasMarkers) {
+    if (didHandleFinal || hasHardHandledSignals) {
       console.warn("🧯 FlowEngine falló después de manejar; corto pipeline normal igualmente.");
       return;
     }
-
     // si NO hay señales de manejo, sí dejamos seguir al pipeline normal
   }
 
