@@ -794,82 +794,17 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   });
 
   // ===============================
-  // ✅ CANAL ELEGIDO (ANTI-LOOP DEMO)
+  // ✅ CANAL ELEGIDO (DECISION-ONLY)
   // ===============================
   {
     const picked = pickSelectedChannelFromText(userInput);
 
-    // Si el user está contestando “whatsapp/instagram/facebook/los tres” => persistimos y respondemos determinístico
     if (picked) {
       await upsertSelectedChannelDB(tenant.id, canal, contactoNorm, picked);
 
-      const reply =
-        idiomaDestino === "en"
-          ? (picked === "multi"
-              ? "Perfect. We can automate WhatsApp, Instagram, and Facebook?"
-              : `Perfect. We’ll automate ${picked}. Do you want me to explain how it works?`)
-          : (picked === "multi"
-              ? "Perfecto. Podemos automatizar WhatsApp, Instagram y Facebook?"
-              : `Perfecto. Vamos a automatizar ${picked}. ¿Quieres que te explique cómo funciona?`);
-
-      const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-      if (ok) {
-        await saveAssistantMessageAndEmit({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: contactoNorm || "anónimo",
-          messageId,
-          content: reply,
-        });
-
-        await rememberAfterReply({
-          tenantId: tenant.id,
-          senderId: contactoNorm,
-          idiomaDestino,
-          userText: userInput,
-          assistantText: reply,
-          lastIntent: "seleccion_canal",
-        });
-      }
-
-      return; // ⬅️ CLAVE: corta el pipeline para evitar que el LLM vuelva a preguntar canal
-    }
-
-    // Si ya hay canal elegido y el user responde “sí/ok/dale” => NO preguntes canal de nuevo, explica.
-    const selected = await getSelectedChannelDB(tenant.id, canal, contactoNorm);
-
-    const t = (userInput || "").trim().toLowerCase();
-    const isYes = ["si", "sí", "yes", "y", "ok", "okay", "dale", "claro", "perfecto", "listo"].includes(t);
-
-    if (selected && isYes) {
-      const reply =
-        idiomaDestino === "en"
-          ? `Great. Here’s how it works on ${selected}: it answers common questions automatically and can follow up when a lead stops replying. What other information would you like to know?`
-          : `Perfecto. Así funciona en ${selected}: responde preguntas frecuentes automáticamente y puede hacer seguimiento cuando el lead deja de responder. ¿Qué otra informacion te gustaria saber?`;
-
-      const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-      if (ok) {
-        await saveAssistantMessageAndEmit({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: contactoNorm || "anónimo",
-          messageId,
-          content: reply,
-        });
-
-        await rememberAfterReply({
-          tenantId: tenant.id,
-          senderId: contactoNorm,
-          idiomaDestino,
-          userText: userInput,
-          assistantText: reply,
-          lastIntent: "explicar_demo",
-        });
-      }
-
-      return; // ⬅️ CLAVE: corta el pipeline
+      // 🔕 Backend NO responde, NO explica, NO pregunta
+      // Solo guarda decisión y corta el pipeline
+      return;
     }
   }
 
