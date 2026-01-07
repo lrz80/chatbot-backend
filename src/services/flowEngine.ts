@@ -1,6 +1,6 @@
 import { getConversationState, setConversationState, clearConversationState } from "../lib/conversationState";
 import { getMemoryValue, setMemoryValue } from "../lib/clientMemory";
-import { getFlowByKey, getStepByKey } from "../lib/flowRepo";
+import { getFlowByKey, getStepByKey, getStartStepForFlow } from "../lib/flowRepo";
 
 type Canal = "whatsapp" | "facebook" | "instagram" | "sms" | "voice";
 
@@ -12,6 +12,12 @@ export type FlowResult = {
 console.log("🧠 [FlowEngine] MODULE LOADED = V1");
 function pickPrompt(step: { prompt_es: string; prompt_en: string }, lang: "es" | "en") {
   return lang === "en" ? step.prompt_en : step.prompt_es;
+}
+
+function defaultAck(lang: "es" | "en") {
+  return lang === "en"
+    ? "Perfect. One moment."
+    : "Perfecto. Un momento.";
 }
 
 function isChannelKeyword(userInputRaw: string) {
@@ -150,12 +156,24 @@ async function autoAdvanceUsingMemory(params: {
 
     // Si el flow termina, limpiamos state y salimos sin pregunta
     if (!next || next === "done") {
-      await clearConversationState({ tenantId, canal, senderId });
-      return {
+    // ✅ marcar onboarding_completed si el step lo define
+    const completeKey = step?.expected?.persist_complete_key;
+    if (completeKey) {
+        await setMemoryValue({
+        tenantId,
+        canal,
+        senderId,
+        key: completeKey,
+        value: true,
+        });
+    }
+
+    await clearConversationState({ tenantId, canal, senderId });
+    return {
         advanced: true,
         stepToAsk: null,
         finalState: null,
-      };
+    };
     }
 
     // Avanzamos
@@ -241,7 +259,7 @@ export async function handleMessageWithFlowEngine(params: {
       }
 
       // ✅ Sí manejamos el turno: cortamos el pipeline aunque no haya reply
-      return { reply: null, didHandle: true };
+      return { reply: defaultAck(lang), didHandle: true };
     }
 
     // Avanzar al siguiente step
@@ -271,7 +289,7 @@ export async function handleMessageWithFlowEngine(params: {
 
     if (!auto.stepToAsk) {
     // Flow terminó o no hay nada que preguntar
-    return { reply: null, didHandle: true };
+    return { reply: defaultAck(lang), didHandle: true };
     }
 
     return { reply: pickPrompt(auto.stepToAsk, lang), didHandle: true };
@@ -290,6 +308,37 @@ export async function handleMessageWithFlowEngine(params: {
       willStartFlow: !onboardingCompleted,
       isChannelKeyword: isChannelKeyword(userInput),
     });
+
+    // ✅ Interceptor demo: si dice "demo/probar" y ya tenemos canal guardado, NO reiniciar ni caer al pipeline normal
+    // ✅ Regla DB-driven: si ya completó onboarding, FlowEngine MANEJA el turno
+    // y evita caer al pipeline normal.
+    if (onboardingCompleted) {
+    // Si hay un flow definido como "post_onboarding", úsalo
+    const flow = await getFlowByKey({ tenantId, flowKey: "post_onboarding" });
+
+    if (flow && flow.enabled) {
+    const startStep = await getStartStepForFlow({ flowId: flow.id });
+
+    if (!startStep) {
+        // no hay steps definidos para ese flow
+        return { reply: defaultAck(lang), didHandle: true };
+    }
+
+    await setConversationState({
+        tenantId,
+        canal,
+        senderId,
+        activeFlow: flow.flow_key,
+        activeStep: startStep.step_key,
+        context: {},
+    });
+
+    return { reply: pickPrompt(startStep, lang), didHandle: true };
+    }
+
+    // Si no hay flow post_onboarding, igual CORTAMOS el pipeline
+    return { reply: defaultAck(lang), didHandle: true };
+    }
 
     // ✅ Si el usuario dice un canal, iniciamos el flow igual (sirve para reconfigurar)
     // Esto evita caer al pipeline normal con inputs tipo "facebook".
@@ -344,7 +393,7 @@ export async function handleMessageWithFlowEngine(params: {
         });
         }
 
-        return { reply: null, didHandle: true };
+        return { reply: defaultAck(lang), didHandle: true };
     }
 
     // avanzar
@@ -359,7 +408,7 @@ export async function handleMessageWithFlowEngine(params: {
 
     // preguntar el siguiente step
     const nextStep = await getStepByKey({ flowId: flow.id, stepKey: next });
-    if (!nextStep) return { reply: null, didHandle: true };
+    if (!nextStep) return { reply: defaultAck(lang), didHandle: true };
 
     return { reply: pickPrompt(nextStep, lang), didHandle: true };
     }
@@ -391,7 +440,7 @@ export async function handleMessageWithFlowEngine(params: {
 
     if (!auto.stepToAsk) {
         // el flow terminó o no hay nada que preguntar
-        return { reply: null, didHandle: true };
+        return { reply: defaultAck(lang), didHandle: true };
     }
 
     return { reply: pickPrompt(auto.stepToAsk, lang), didHandle: true };

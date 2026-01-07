@@ -50,3 +50,18 @@ export async function getStepByKey(params: {
   );
   return res.rows[0] ?? null;
 }
+
+export async function getStartStepForFlow(params: { flowId: number }) {
+  const { flowId } = params;
+
+  const res = await pool.query(
+    `SELECT *
+     FROM flow_steps
+     WHERE flow_id = $1
+     ORDER BY order_index ASC
+     LIMIT 1`,
+    [flowId]
+  );
+
+  return res.rows[0] || null;
+}
