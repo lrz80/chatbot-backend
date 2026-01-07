@@ -259,7 +259,7 @@ export async function handleMessageWithFlowEngine(params: {
       }
 
       // ✅ Sí manejamos el turno: cortamos el pipeline aunque no haya reply
-      return { reply: defaultAck(lang), didHandle: true };
+      return { reply: null, didHandle: true };
     }
 
     // Avanzar al siguiente step
@@ -393,7 +393,7 @@ export async function handleMessageWithFlowEngine(params: {
         });
         }
 
-        return { reply: defaultAck(lang), didHandle: true };
+        return { reply: null, didHandle: true };
     }
 
     // avanzar
