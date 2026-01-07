@@ -468,6 +468,44 @@ async function saveAssistantMessageAndEmit(opts: {
   }
 }
 
+async function rememberAfterReply(opts: {
+  tenantId: string;
+  senderId: string;          // contactoNorm
+  idiomaDestino: 'es'|'en';
+  userText: string;
+  assistantText: string;
+  lastIntent?: string | null;
+}) {
+  const { tenantId, senderId, idiomaDestino, userText, assistantText, lastIntent } = opts;
+
+  try {
+    await rememberTurn({
+      tenantId,
+      canal: "whatsapp",
+      senderId,
+      userText,
+      assistantText,
+    });
+
+    await rememberFacts({
+      tenantId,
+      canal: "whatsapp",
+      senderId,
+      preferredLang: idiomaDestino,
+      lastIntent: lastIntent || null,
+    });
+
+    await refreshFactsSummary({
+      tenantId,
+      canal: "whatsapp",
+      senderId,
+      idioma: idiomaDestino,
+    });
+  } catch (e) {
+    console.warn("⚠️ rememberAfterReply failed:", e);
+  }
+}
+
 async function saveUserMessageAndEmit(opts: {
   tenantId: string;
   canal: Canal;
@@ -635,14 +673,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   // // canal puede venir en el contexto (meta/preview) o por defecto 'whatsapp'
   const canal: Canal = (context?.canal as Canal) || 'whatsapp';
 
-  await saveUserMessageAndEmit({
-    tenantId: tenant.id,
-    canal,
-    fromNumber: contactoNorm || fromNumber || 'anónimo',
-    messageId,
-    content: userInput || '',
-  });
-
   // 👉 detectar si el mensaje es solo numérico (para usar idioma previo)
   const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
 
@@ -666,41 +696,38 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
+  // 🛡️ Anti-phishing (EARLY EXIT antes de guardar mensajes/uso/tokens)
+  {
+    const handledPhishing = await antiPhishingGuard({
+      pool,
+      tenantId: tenant.id,
+      channel: "whatsapp",
+      senderId: contactoNorm,     // número del cliente
+      messageId,                // SID de Twilio
+      userInput,                // texto recibido
+      idiomaDestino,            // ✅ igual que en Meta
+      send: async (text: string) => {
+        // ✅ usa el wrapper que también contabiliza uso_mensual
+        await safeEnviarWhatsApp(tenant.id, 'whatsapp', messageId, fromNumber, text);
+      },
+    });
+
+    if (handledPhishing) {
+      // Ya respondió con mensaje seguro, marcó spam y cortó el flujo.
+      return;
+    }
+  }
+
+  await saveUserMessageAndEmit({
+    tenantId: tenant.id,
+    canal,
+    fromNumber: contactoNorm || fromNumber || 'anónimo',
+    messageId,
+    content: userInput || '',
+  });
+  
   // ✅ Prompt base disponible para TODO el flujo (incluye la rama de pago)
   const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
-
-  async function postAssistantMemory(opts: {
-    userText: string;
-    assistantText: string;
-    lastIntent?: string | null;
-  }) {
-    await rememberTurn({
-      tenantId: tenant.id,
-      canal: "whatsapp",
-      senderId: contactoNorm,
-      userText: opts.userText || "",
-      assistantText: opts.assistantText || "",
-      keepLast: 20,
-    });
-
-    await rememberFacts({
-      tenantId: tenant.id,
-      canal: "whatsapp",
-      senderId: contactoNorm,
-      preferredLang: idiomaDestino,
-      lastIntent: opts.lastIntent ?? null,
-    });
-
-    await refreshFactsSummary({
-      tenantId: tenant.id,
-      canal: "whatsapp",
-      senderId: contactoNorm,
-      idioma: idiomaDestino,
-      // recomendado: refresca cada 6 respuestas reales
-      refreshEveryTurns: 6,
-      maxTurnsToUse: 12,
-    });
-  }
 
   // ===============================
   // ✅ MEMORIA (3): Retrieval → inyectar memoria del cliente en el prompt
@@ -735,28 +762,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
   } catch (e) {
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
-  }
-
-  // 🛡️ Anti-phishing (EARLY EXIT antes de guardar mensajes/uso/tokens)
-  {
-    const handledPhishing = await antiPhishingGuard({
-      pool,
-      tenantId: tenant.id,
-      channel: "whatsapp",
-      senderId: contactoNorm,     // número del cliente
-      messageId,                // SID de Twilio
-      userInput,                // texto recibido
-      idiomaDestino,            // ✅ igual que en Meta
-      send: async (text: string) => {
-        // ✅ usa el wrapper que también contabiliza uso_mensual
-        await safeEnviarWhatsApp(tenant.id, 'whatsapp', messageId, fromNumber, text);
-      },
-    });
-
-    if (handledPhishing) {
-      // Ya respondió con mensaje seguro, marcó spam y cortó el flujo.
-      return;
-    }
   }
 
   // ===============================
@@ -1171,6 +1176,14 @@ if (BOOKING_ENABLED) {
           fromNumber: contactoNorm || 'anónimo',
           messageId,
           content: outWithCTA,
+        });
+        await rememberAfterReply({
+          tenantId: tenant.id,
+          senderId: contactoNorm,
+          idiomaDestino,
+          userText: userInput,
+          assistantText: outWithCTA,
+          lastIntent: INTENCION_FINAL_CANONICA || null,
         });
       }
 
@@ -1626,17 +1639,26 @@ Termina con esta pregunta EXACTA en español:
   if (smallTalkRegex.test(userInput.trim())) {
     const saludoSmall = buildSaludoSmallTalk(tenant, idiomaDestino);
 
-    // 1) Enviar saludo corto y humano
-    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludoSmall);
+    const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludoSmall);
 
-    // 2) Registrar mensaje del bot
-    await saveAssistantMessageAndEmit({
-      tenantId: tenant.id,
-      canal,
-      fromNumber: contactoNorm || 'anónimo',
-      messageId,
-      content: saludoSmall,
-    });
+    if (ok) {
+      await saveAssistantMessageAndEmit({
+        tenantId: tenant.id,
+        canal,
+        fromNumber: contactoNorm || 'anónimo',
+        messageId,
+        content: saludoSmall,
+      });
+
+      await rememberAfterReply({
+        tenantId: tenant.id,
+        senderId: contactoNorm,
+        idiomaDestino,
+        userText: userInput,
+        assistantText: saludoSmall,
+        lastIntent: "saludo",
+      });
+    }
     return;
   }
 
@@ -1688,7 +1710,7 @@ Termina con esta pregunta EXACTA en español:
 
       const { text } = await answerWithPromptBase({
         tenantId: tenant.id,
-        promptBase,
+        promptBase: promptBaseMem,
         userInput,
         idiomaDestino,
         canal: 'whatsapp',
@@ -2332,7 +2354,7 @@ Termina con esta pregunta EXACTA en español:
       temperature: 0.2,
       max_tokens: 400,
       messages: [
-        { role: 'system', content: promptBase },
+        { role: 'system', content: promptBaseMem },
         { role: 'user', content: userInput },
       ],
     });
