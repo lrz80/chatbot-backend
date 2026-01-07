@@ -369,6 +369,45 @@ function appendCTAWithCap(
   return text + extra;
 }
 
+function engineHandled(engineRes: any): boolean {
+  if (engineRes == null) return false;
+
+  // Si engine devolvió texto directamente, lo tratamos como reply implícito
+  if (typeof engineRes === "string") return true;
+
+  // Si devolvió un Map (algunos engines internos usan Map)
+  if (engineRes instanceof Map) return engineRes.size > 0;
+
+  // Si devolvió un objeto, cualquier señal explícita o “no vacío” => handled
+  if (typeof engineRes === "object") {
+    // Señales explícitas (si existen)
+    if (
+      engineRes.didHandle === true ||
+      engineRes.handled === true ||
+      engineRes.updated === true ||
+      engineRes.state_updated === true ||
+      engineRes.completed === true
+    ) return true;
+
+    // Si trae cualquiera de estas llaves, el engine “decidió algo”
+    // (reply puede ser null y AÚN así queremos cortar pipeline normal)
+    if (
+      ("reply" in engineRes) ||
+      ("state" in engineRes) ||
+      ("awaiting_field" in engineRes) ||
+      ("step" in engineRes) ||
+      ("facts_summary" in engineRes) ||
+      ("completed_nested" in engineRes)
+    ) return true;
+
+    // Fallback definitivo: si el objeto tiene llaves, lo consideramos manejado
+    // (esto evita que caigas al pipeline normal por diferencias de shape)
+    return Object.keys(engineRes).length > 0;
+  }
+
+  return false;
+}
+
 // Evita enviar duplicado si Twilio reintenta el webhook
 async function safeEnviarWhatsApp(
   tenantId: string,
@@ -1015,11 +1054,18 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     didHandleFinal = Boolean(flagHandled || hasStateSignal || replyIsExplicit || hasAnyEngineMarker);
 
     if (didHandleFinal) {
-      const reply = String(engineRes?.reply || "").trim();
+      const reply = typeof engineRes?.reply === "string" ? engineRes.reply.trim() : "";
 
-      // ⚠️ Side-effects protegidos: aunque fallen, NO pasas al pipeline normal
-      try {
-        if (reply) {
+      // ✅ Si el engine NO trae reply, NO cortamos.
+      // Deja que responda el pipeline NORMAL (evita silencio).
+      if (!reply) {
+        console.warn("🟠 FlowEngine marcó handled pero reply vacío. Dejo seguir al pipeline NORMAL.", {
+          topKeys: engineRes && typeof engineRes === "object" ? Object.keys(engineRes) : null,
+          state: engineRes?.state || null,
+        });
+      } else {
+        // ⚠️ Side-effects protegidos
+        try {
           await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
           await saveAssistantMessageAndEmit({
@@ -1029,40 +1075,40 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
             messageId,
             content: reply,
           });
+        } catch (e) {
+          console.warn("⚠️ FlowEngine side-effects (send/socket) failed:", e);
         }
-      } catch (e) {
-        console.warn("⚠️ FlowEngine side-effects (send/socket) failed:", e);
+
+        try {
+          await rememberTurn({
+            tenantId: tenant.id,
+            canal: "whatsapp",
+            senderId: contactoNorm,
+            userText: userInput || "",
+            assistantText: reply || "",
+            keepLast: 20,
+          });
+
+          await rememberFacts({
+            tenantId: tenant.id,
+            canal: "whatsapp",
+            senderId: contactoNorm,
+            preferredLang: idiomaDestino,
+          });
+
+          await refreshFactsSummary({
+            tenantId: tenant.id,
+            canal: "whatsapp",
+            senderId: contactoNorm,
+            idioma: idiomaDestino,
+          });
+        } catch (e) {
+          console.warn("⚠️ FlowEngine side-effects (memory) failed:", e);
+        }
+
+        // ✅ Solo retornamos si realmente respondimos.
+        return;
       }
-
-      try {
-        await rememberTurn({
-          tenantId: tenant.id,
-          canal: "whatsapp",
-          senderId: contactoNorm,
-          userText: userInput || "",
-          assistantText: reply || "",
-          keepLast: 20,
-        });
-
-        await rememberFacts({
-          tenantId: tenant.id,
-          canal: "whatsapp",
-          senderId: contactoNorm,
-          preferredLang: idiomaDestino,
-        });
-
-        await refreshFactsSummary({
-          tenantId: tenant.id,
-          canal: "whatsapp",
-          senderId: contactoNorm,
-          idioma: idiomaDestino,
-        });
-      } catch (e) {
-        console.warn("⚠️ FlowEngine side-effects (memory) failed:", e);
-      }
-
-      // ✅ ESTE return es sagrado: engine manejó → NO pipeline normal
-      return;
     }
 
     console.log("🟢 [WA] FlowEngine didHandleFinal =", didHandleFinal, {
