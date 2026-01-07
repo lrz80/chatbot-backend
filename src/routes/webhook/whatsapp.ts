@@ -636,6 +636,11 @@ export async function procesarMensajeWhatsApp(
   body: any,
   context?: WhatsAppContext
 ): Promise<void> {
+
+  const decisionFlags = {
+    channelSelected: false,
+  };
+
   let alreadySent = false;
 
   // Datos básicos del webhook
@@ -702,6 +707,22 @@ export async function procesarMensajeWhatsApp(
     return;
   }
 
+  // // canal puede venir en el contexto (meta/preview) o por defecto 'whatsapp'
+  const canal: Canal = (context?.canal as Canal) || 'whatsapp';
+
+  // ===============================
+  // 🔎 Estado persistido (FIX 4)
+  // ===============================
+  const selectedChannel = await getSelectedChannelDB(
+    tenant.id,
+    canal,
+    contactoNorm
+  );
+
+  if (selectedChannel) {
+    decisionFlags.channelSelected = true;
+  }
+
   // 🔍 MEMORIA – inicio del turno (antes de cualquier lógica)
   const memStart = await getMemoryValue<string>({
     tenantId: tenant.id,
@@ -736,9 +757,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     console.log(`⛔ Membresía inactiva para tenant ${tenant.name || tenant.id}. No se responderá.`);
     return;
   }
-
-  // // canal puede venir en el contexto (meta/preview) o por defecto 'whatsapp'
-  const canal: Canal = (context?.canal as Canal) || 'whatsapp';
 
   // 👉 detectar si el mensaje es solo numérico (para usar idioma previo)
   const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
@@ -796,36 +814,12 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   // ===============================
   // ✅ CANAL ELEGIDO (DECISION-ONLY)
   // ===============================
-  {
+  if (!decisionFlags.channelSelected) {
     const picked = pickSelectedChannelFromText(userInput);
 
     if (picked) {
       await upsertSelectedChannelDB(tenant.id, canal, contactoNorm, picked);
-
-      // 🔕 Backend NO responde, NO explica, NO pregunta
-      // Solo guarda decisión y corta el pipeline
-      return;
-    }
-  }
-
-  // ===============================
-  // 🔒 GATE GLOBAL: canal ya decidido
-  // ===============================
-  {
-    const alreadySelected = await getSelectedChannelDB(
-      tenant.id,
-      canal,
-      contactoNorm
-    );
-
-    if (alreadySelected) {
-      // 🔕 Backend entra en SILENCIO TOTAL
-      // El siguiente mensaje lo maneja:
-      // - FlowEngine
-      // - Prompt
-      // - Frontend
-      // - NO este webhook
-      return;
+      decisionFlags.channelSelected = true;
     }
   }
 
@@ -1153,7 +1147,7 @@ if (BOOKING_ENABLED) {
 
     console.log("[BOOKING] lowerMsg=", lowerMsg, "wantsBooking=", wantsBooking);
 
-    if (wantsBooking) {
+    if (!decisionFlags.channelSelected && wantsBooking) {
       // 1) Crear/abrir sesión de booking y pedir fecha/hora (NO crear cita aún)
       await getOrCreateBookingSession({
         tenantId: tenant.id,
@@ -1410,7 +1404,7 @@ if (BOOKING_ENABLED) {
       : '¿Hay algo más en lo que te pueda ayudar?';
 
   // 🧩 Bloque especial: "quiero más info / need more info"
-  if (wantsMoreInfo) {
+  if (!decisionFlags.channelSelected && wantsMoreInfo) {
     // 🔒 GATE
     try {
       const { rows } = await pool.query(
@@ -1815,7 +1809,7 @@ if (BOOKING_ENABLED) {
   }
 
     // 💬 Small-talk tipo "hello how are you" / "hola como estas"
-  if (smallTalkRegex.test(userInput.trim())) {
+  if (!decisionFlags.channelSelected && smallTalkRegex.test(userInput.trim())) {
     const saludoSmall = buildSaludoSmallTalk(tenant, idiomaDestino);
 
     const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludoSmall);
@@ -1842,7 +1836,7 @@ if (BOOKING_ENABLED) {
   }
 
   // 💬 Saludo puro: "hola", "hello", "buenas", etc.
-  if (saludoPuroRegex.test(userInput.trim())) {
+  if (!decisionFlags.channelSelected && saludoPuroRegex.test(userInput.trim())) {
     const saludo = buildSaludoConversacional(tenant, idiomaDestino);
 
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludo);
