@@ -78,6 +78,108 @@ async function persistDecisionFromStep(params: {
   });
 }
 
+async function getPrefilledValueFromMemory(params: {
+  tenantId: string;
+  canal: Canal;
+  senderId: string;
+  step: any;
+}) {
+  const { tenantId, canal, senderId, step } = params;
+
+  // Regla: si el step define expected.persist.key, usamos esa key como “dato esperado”
+  const key = step?.expected?.persist?.key;
+  if (!key) return { has: false, value: null, key: null };
+
+  const val = await getMemoryValue<any>({ tenantId, canal, senderId, key });
+
+  const has =
+    val !== null &&
+    val !== undefined &&
+    !(typeof val === "string" && val.trim() === "") &&
+    !(Array.isArray(val) && val.length === 0);
+
+  return { has, value: val, key };
+}
+
+async function autoAdvanceUsingMemory(params: {
+  tenantId: string;
+  canal: Canal;
+  senderId: string;
+  lang: "es" | "en";
+  flow: any;
+  state: any;
+  maxHops?: number;
+}) {
+  const { tenantId, canal, senderId, lang, flow, state } = params;
+  const maxHops = params.maxHops ?? 5;
+
+  let currentStepKey = state.active_step;
+  let ctx = state.context ?? {};
+
+  for (let i = 0; i < maxHops; i++) {
+    const step = await getStepByKey({ flowId: flow.id, stepKey: currentStepKey });
+    if (!step) break;
+
+    const prefilled = await getPrefilledValueFromMemory({
+      tenantId,
+      canal,
+      senderId,
+      step,
+    });
+
+    // Si NO hay dato prellenado, paramos: este step sí hay que preguntarlo
+    if (!prefilled.has) {
+      return {
+        advanced: i > 0,
+        stepToAsk: step,
+        finalState: { ...state, active_step: currentStepKey, context: ctx },
+      };
+    }
+
+    // ✅ Si hay dato prellenado, persistimos “como si el usuario lo hubiera dicho”
+    await persistDecisionFromStep({
+      tenantId,
+      canal,
+      senderId,
+      stepKey: step.step_key,
+      expected: step.expected,
+      parsedValue: prefilled.value,
+    });
+
+    const next = step.on_success_next_step;
+
+    // Si el flow termina, limpiamos state y salimos sin pregunta
+    if (!next || next === "done") {
+      await clearConversationState({ tenantId, canal, senderId });
+      return {
+        advanced: true,
+        stepToAsk: null,
+        finalState: null,
+      };
+    }
+
+    // Avanzamos
+    currentStepKey = next;
+
+    await setConversationState({
+      tenantId,
+      canal,
+      senderId,
+      activeFlow: flow.flow_key,
+      activeStep: currentStepKey,
+      context: ctx,
+    });
+  }
+
+  // Si llegamos aquí, evitamos loops infinitos: preguntamos el step actual
+  const stepToAsk = await getStepByKey({ flowId: flow.id, stepKey: currentStepKey });
+  return {
+    advanced: true,
+    stepToAsk: stepToAsk || null,
+    finalState: { ...state, active_step: currentStepKey, context: ctx },
+  };
+}
+
 export async function handleMessageWithFlowEngine(params: {
   tenantId: string;
   canal: Canal;
@@ -152,16 +254,27 @@ export async function handleMessageWithFlowEngine(params: {
       context: state.context ?? {},
     });
 
-    // Preguntar el siguiente step
-    const nextStep = await getStepByKey({ flowId: flow.id, stepKey: next });
-    if (!nextStep) {
-      console.log("🛑 [FlowEngine] nextStep NOT FOUND", { flowId: flow.id, next });
-      // ✅ Sí manejamos el turno (hay state activo), pero no podemos responder
-      // Cortamos pipeline para no caer a FAQ/Intents
-      return { reply: null, didHandle: true };
+    // ✅ Antes de preguntar el siguiente step, intentamos auto-avanzar usando memoria
+    const auto = await autoAdvanceUsingMemory({
+    tenantId,
+    canal,
+    senderId,
+    lang,
+    flow,
+    state: {
+        ...state,
+        active_flow: flow.flow_key,
+        active_step: next,
+        context: state.context ?? {},
+    },
+    });
+
+    if (!auto.stepToAsk) {
+    // Flow terminó o no hay nada que preguntar
+    return { reply: null, didHandle: true };
     }
 
-    return { reply: pickPrompt(nextStep, lang), didHandle: true };
+    return { reply: pickPrompt(auto.stepToAsk, lang), didHandle: true };
   }
 
     // 2) Si NO hay state: decidir si iniciar onboarding
@@ -181,23 +294,34 @@ export async function handleMessageWithFlowEngine(params: {
     // ✅ Si el usuario dice un canal, iniciamos el flow igual (sirve para reconfigurar)
     // Esto evita caer al pipeline normal con inputs tipo "facebook".
     if (isChannelKeyword(userInput)) {
-    const flow = await getFlowByKey({ tenantId, flowKey: "onboarding" });
-    if (!flow || !flow.enabled) return { reply: null, didHandle: false };
+        const flow = await getFlowByKey({ tenantId, flowKey: "onboarding" });
+        if (!flow || !flow.enabled) return { reply: null, didHandle: false };
 
-    await setConversationState({
-        tenantId,
-        canal,
-        senderId,
-        activeFlow: flow.flow_key,
-        activeStep: "select_channel",
-        context: {},
-    });
+        await setConversationState({
+            tenantId,
+            canal,
+            senderId,
+            activeFlow: flow.flow_key,
+            activeStep: "select_channel",
+            context: {},
+        });
 
-    const step = await getStepByKey({ flowId: flow.id, stepKey: "select_channel" });
-    if (!step) return { reply: null, didHandle: false };
+        // ✅ Auto-advance: si ya hay memoria para este step, saltarlo
+        const auto = await autoAdvanceUsingMemory({
+            tenantId,
+            canal,
+            senderId,
+            lang,
+            flow,
+            state: { active_flow: flow.flow_key, active_step: "select_channel", context: {} },
+        });
 
-    // Importante: devolvemos el prompt del step, no el pipeline normal
-    return { reply: pickPrompt(step, lang), didHandle: true };
+        if (!auto.stepToAsk) {
+            // el flow terminó o no hay nada que preguntar
+            return { reply: null, didHandle: true };
+        }
+
+        return { reply: pickPrompt(auto.stepToAsk, lang), didHandle: true };
     }
 
     // Flujo “primera vez”
@@ -215,12 +339,22 @@ export async function handleMessageWithFlowEngine(params: {
         context: {},
     });
 
-    const step = await getStepByKey({ flowId: flow.id, stepKey: "select_channel" });
-    console.log("🧠 [FlowEngine] step select_channel", { flowId: flow?.id, stepExists: !!step });
+    // ✅ Auto-advance: si ya hay memoria para este step, saltarlo
+    const auto = await autoAdvanceUsingMemory({
+        tenantId,
+        canal,
+        senderId,
+        lang,
+        flow,
+        state: { active_flow: flow.flow_key, active_step: "select_channel", context: {} },
+    });
 
-    if (!step) return { reply: null, didHandle: false };
+    if (!auto.stepToAsk) {
+        // el flow terminó o no hay nada que preguntar
+        return { reply: null, didHandle: true };
+    }
 
-    return { reply: pickPrompt(step, lang), didHandle: true };
+    return { reply: pickPrompt(auto.stepToAsk, lang), didHandle: true };
     }
 
     return { reply: null, didHandle: false };
