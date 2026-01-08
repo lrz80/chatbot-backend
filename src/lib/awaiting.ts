@@ -155,11 +155,17 @@ export function validateAwaitingInput(params: {
   const { awaitingField, userText, awaitingPayload } = params;
   const t = norm(userText);
 
-  // Escape universal: si el usuario hace una pregunta general,
-  // NO lo forces a contestar el wizard.
-  if (looksLikeGeneralQuestion(t)) {
-    return { ok: false, reason: "escape" };
-  }
+  // Escape universal: solo aplica para campos de selección,
+// NO para campos de recolección donde "precio/horario/servicios" es válido.
+const escapeAllowed =
+  awaitingField === "select_channel" ||
+  awaitingField === "select_language" ||
+  awaitingField === "confirm_payment" ||
+  awaitingField === "handoff_to_human_reason";
+
+if (escapeAllowed && looksLikeGeneralQuestion(t)) {
+  return { ok: false, reason: "escape" };
+}
 
   switch (awaitingField) {
     case "canal_a_automatizar":
