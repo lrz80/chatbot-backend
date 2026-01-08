@@ -38,16 +38,15 @@ function generarPromptPorIdioma(
   funciones: string = '',
   info: string = ''
 ): string {
-  // Limpieza y reforzado de formato
   funciones = funciones.replace(/\\n/g, '\n').replace(/\r/g, '').trim();
   info      = info.replace(/\\n/g, '\n').replace(/\r/g, '').trim();
 
-  // 🔧 Normalizar texto para que no sea un bloque gigante
+  // 🔧 Normaliza sin forzar listas (evita que el modelo responda con bullets)
   const normalizarTexto = (txt: string): string => {
-    return txt
-      .replace(/([^\n])[-•]\s?/g, '$1\n- ') // fuerza formato de lista
-      .replace(/\. (?=[^\n])/g, '.\n')      // salto después de punto si no hay uno
-      .replace(/\n{2,}/g, '\n')            // evita saltos dobles
+    return (txt || '')
+      .replace(/\r/g, '')
+      .replace(/\n{3,}/g, '\n\n')         // evita saltos excesivos
+      .replace(/\. (?=[^\n])/g, '.\n')    // salto después de punto si no hay uno
       .trim();
   };
 
@@ -65,20 +64,18 @@ OBJETIVO:
 ESTILO DE RESPUESTA (MUY IMPORTANTE):
 - Mensajes CORTOS, tipo WhatsApp (máx. 8–10 líneas, sin párrafos largos).
 - Tono cercano y profesional, sin sonar a anuncio ni landing page.
-- 1 emoji máximo cuando aporte.
 - No repitas la misma presentación en cada mensaje.
 - Si algo no está en la información del negocio, dilo y ofrece la mejor alternativa real.
 
-🧠 Funciones principales del negocio:
+FUNCIONES DEL NEGOCIO (contexto):
 ${funciones || 'Información general sobre los servicios ofrecidos.'}
 
-📌 Información detallada del negocio (usa solo esto para responder):
+INFORMACIÓN DEL NEGOCIO (fuente de verdad para responder):
 ${info || 'No se proporcionó información adicional.'}
 
-⚠️ Importante:
+IMPORTANTE:
 - No inventes precios, horarios, ubicaciones o promociones.
-- Siempre responde en español.`,
-
+- Responde siempre en español.`,
     en: `You are Amy, the AI assistant for the business ${nombre}. You speak to customers as a real person would through WhatsApp, Facebook, Instagram or phone.
 
 GOAL:
@@ -89,17 +86,16 @@ GOAL:
 RESPONSE STYLE (VERY IMPORTANT):
 - SHORT WhatsApp-style messages (max 8–10 lines, no long paragraphs).
 - Friendly and professional tone, not like an ad or landing page.
-- At most 1 emoji if it truly helps.
 - Do NOT repeat the same introduction every time.
 - If the information is missing, be honest and offer the closest valid option.
 
-🧠 Main business functions:
+BUSINESS FUNCTIONS (context):
 ${funciones || 'General information about the services offered.'}
 
-📌 Business details (only use this as your source of truth):
+BUSINESS DETAILS (source of truth for answering):
 ${info || 'No additional info provided.'}
 
-⚠️ Important:
+IMPORTANT:
 - Do not invent prices, schedules, locations or promotions.
 - Always respond in English.`
   };
@@ -111,6 +107,7 @@ ${info || 'No additional info provided.'}
   return prompt;
 }
 
+// Nota: esta función no se usa en este archivo; la dejo intacta por compatibilidad.
 function generarBienvenidaPorIdioma(nombre: string, idioma: string): string {
   const mensajes: Record<string, string> = {
     es: `Hola 👋 Soy Amy, bienvenida a ${nombre}. ¿En qué puedo ayudarte hoy?`,

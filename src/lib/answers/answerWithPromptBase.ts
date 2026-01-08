@@ -1,5 +1,3 @@
-// backend/src/lib/answers/answerWithPromptBase.ts
-
 import OpenAI from 'openai';
 import pool from '../db';
 import { detectarIdioma } from '../detectarIdioma';
@@ -15,6 +13,48 @@ type AnswerWithPromptBaseParams = {
   fallbackText?: string;    // por si el LLM falla
 };
 
+/* =========================
+   Helpers defensivos
+========================= */
+
+function sanitizeChatOutput(text: string) {
+  if (!text) return '';
+
+  let t = text
+    .replace(/```[\s\S]*?```/g, '')         // bloques de código
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')     // headers markdown
+    .replace(/^\s*[-*•]\s+/gm, '')          // bullets
+    .replace(/^\s*\d+\)\s+/gm, '')          // 1)
+    .replace(/^\s*\d+\.\s+/gm, '')          // 1.
+    .replace(/\r\n/g, '\n');
+
+  // Normaliza saltos de línea
+  t = t.replace(/\n{3,}/g, '\n\n').trim();
+
+  return t;
+}
+
+function capLines(text: string, maxLines: number) {
+  if (!text) return '';
+  const lines = text.split('\n');
+  if (lines.length <= maxLines) return text;
+  return lines.slice(0, maxLines).join('\n').trim();
+}
+
+function stripUrlsIfPromptHasNone(out: string, promptBase: string) {
+  const promptHasUrl = /https?:\/\/\S+/i.test(promptBase);
+  if (promptHasUrl) return out;
+
+  return out
+    .replace(/https?:\/\/\S+/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/* =========================
+   Main function
+========================= */
+
 export async function answerWithPromptBase(
   params: AnswerWithPromptBaseParams
 ): Promise<{ text: string }> {
@@ -28,10 +68,14 @@ export async function answerWithPromptBase(
     fallbackText = '',
   } = params;
 
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+  const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY || '',
+  });
 
   const systemPrompt = [
     promptBase,
+    '',
+    `Canal: ${canal}. Ajusta el tono al canal (WhatsApp = breve, claro y directo).`,
     '',
     `Reglas generales:
 - Usa EXCLUSIVAMENTE la información explícita en este prompt del negocio. Si algo no está, dilo sin inventar.
@@ -43,7 +87,7 @@ export async function answerWithPromptBase(
     `Modo vendedor (aplicable a cualquier tipo de negocio):
 - Entiende primero qué necesita la persona.
 - Propón 1–2 opciones claras del negocio que puedan ayudarle.
-- Cierra con una invitación concreta al siguiente paso (por ejemplo: agendar, comprar, escribir, llamar, registrarse, etc.), SI esa acción existe en el prompt del negocio.
+- Cierra con una invitación concreta al siguiente paso (agendar, comprar, escribir, llamar, registrarse, etc.), SOLO si esa acción existe en el prompt del negocio.
 - No inventes beneficios, precios, plazos ni condiciones que no estén en el prompt del negocio.
 - Si el usuario pide algo que el negocio NO ofrece, dilo claramente y redirige a la opción disponible más parecida, siempre basada en los datos del prompt.`,
     '',
@@ -57,7 +101,7 @@ export async function answerWithPromptBase(
     'Responde usando solo los datos del prompt del negocio.'
   ].join('\n');
 
-  let out: string;
+  let out = '';
 
   try {
     const completion = await openai.chat.completions.create({
@@ -70,7 +114,7 @@ export async function answerWithPromptBase(
       ],
     });
 
-    // registrar tokens en uso_mensual (tokens_openai)
+    // Registrar tokens en uso_mensual (tokens_openai)
     const used = completion.usage?.total_tokens ?? 0;
     if (used > 0) {
       await pool.query(
@@ -88,7 +132,7 @@ export async function answerWithPromptBase(
     out = fallbackText || '';
   }
 
-  // Fallback ultra defensivo si todo falla
+  // Fallback ultra defensivo final
   if (!out) {
     out =
       idiomaDestino === 'en'
@@ -96,11 +140,18 @@ export async function answerWithPromptBase(
         : 'Cuéntame en qué puedo ayudarte con los servicios del negocio.';
   }
 
+  // Sanitizar y limitar formato
+  out = sanitizeChatOutput(out);
+  out = stripUrlsIfPromptHasNone(out, promptBase);
+  out = capLines(out, maxLines);
+
   // Asegurar idioma de salida
   try {
     const langOut = await detectarIdioma(out);
     if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
       out = await traducirMensaje(out, idiomaDestino);
+      out = sanitizeChatOutput(out);
+      out = capLines(out, maxLines);
     }
   } catch (e) {
     console.warn('⚠️ No se pudo ajustar el idioma en answerWithPromptBase:', e);

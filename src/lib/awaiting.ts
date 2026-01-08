@@ -162,9 +162,9 @@ export function validateAwaitingInput(params: {
   }
 
   switch (awaitingField) {
+    case "canal_a_automatizar":
     case "canal":
     case "select_channel": {
-    // ✅ Sin hardcode: usa opciones permitidas desde payload si existen.
     const allowed: string[] = Array.isArray(awaitingPayload?.allowed)
         ? awaitingPayload.allowed
         : ["whatsapp", "instagram", "facebook"];
