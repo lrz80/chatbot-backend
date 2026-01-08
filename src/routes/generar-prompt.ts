@@ -8,12 +8,17 @@ import crypto from "crypto";                 // (B) Cache por checksum (sha256)
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
-// ———————————————————————————————————————————————————
 // (B) Cache en memoria por proceso
-// Clave = sha256(tenant_id + idioma + funciones + info)
+// Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
+const PROMPT_GEN_VERSION = "v3"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+
 const promptCache = new Map<string, { value: string; at: number }>();
+
 const keyOf = (tenantId: string, funciones: string, info: string, idioma: string) =>
-  crypto.createHash("sha256").update(`${tenantId}::${idioma}::${funciones}::${info}`).digest("hex");
+  crypto
+    .createHash("sha256")
+    .update(`${PROMPT_GEN_VERSION}::${tenantId}::${idioma}::${funciones}::${info}`)
+    .digest("hex");
 
 // ———————————————————————————————————————————————————
 // (F) Compactador simple para reducir tokens
@@ -41,6 +46,7 @@ function normalizeUrl(u: string) {
 }
 
 function extractAllLinksFromText(text: string, max = 24): string[] {
+  MD_LINK.lastIndex = 0;
   const found: string[] = [];
   let m: RegExpExecArray | null;
 
@@ -198,25 +204,16 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
   }
 
   // Fallback: si no era plantilla, lo compacta como bullets (sin inventar)
-  const bullets = proseToBullets(infoClean, 12);
-  if (!bullets.length) return "";
-  return compact(["CONTEXTO (RESUMIDO)", ...toBullets(bullets)].join("\n"));
+  const t = compact(infoClean || "");
+  if (!t) return "";
+  return compact(["CONOCIMIENTO DEL NEGOCIO", t].join("\n"));
 }
 
 function buildOperationalRules(funcionesClean: string) {
-  const lines = splitLinesSmart(funcionesClean).map(l => l.trim()).filter(Boolean);
-
-  // Si ya tiene bullets o secciones, no lo “re-redactes”
-  const looksStructured = lines.some(l => l.startsWith("-") || l.startsWith("•") || /^[A-ZÁÉÍÓÚÑ _]{4,}$/.test(l));
-
-  if (looksStructured) {
-    return compact(["REGLAS Y COMPORTAMIENTO", ...lines.map(l => (l.startsWith("-") ? l : `- ${l}`))].join("\n"));
-  }
-
-  // Si viene en prosa, conviértelo a bullets por oraciones
-  const bullets = proseToBullets(funcionesClean, 14);
-  if (!bullets.length) return "";
-  return compact(["REGLAS Y COMPORTAMIENTO", ...toBullets(bullets)].join("\n"));
+  const t = compact(funcionesClean || "");
+  if (!t) return "";
+  // Respeta el formato que escribió el usuario (prosa o bullets)
+  return compact(["REGLAS Y COMPORTAMIENTO", t].join("\n"));
 }
 
 // ———————————————————————————————————————————————————
@@ -239,7 +236,7 @@ router.post("/", async (req: Request, res: Response) => {
     const funciones = compact(descripcionCapped.replace(/\\n/g, "\n").replace(/\r/g, ""));
     const info      = compact(informacionCapped.replace(/\\n/g, "\n").replace(/\r/g, ""));
 
-    if (!descripcion || !informacion || !idioma) {
+    if (!funciones || !info || !idioma) {
       return res.status(400).json({ error: "Faltan campos requeridos" });
     }
 
@@ -276,34 +273,12 @@ router.post("/", async (req: Request, res: Response) => {
     // descripcion -> reglas / comportamiento ("Qué debe hacer tu asistente")
     // informacion -> hechos / memoria del negocio ("Información que el asistente debe conocer")
 
-    function normalizePlain(s: string) {
-      return compact((s || "").replace(/\\n/g, "\n").replace(/\r/g, ""));
-    }
-
-    function titleize(label: string) {
-      return label.trim();
-    }
-
-    function asSection(title: string, body: string) {
-      const b = normalizePlain(body);
-      if (!b) return "";
-      return `${titleize(title)}:\n${b}`;
-    }
-
     function stripModeLine(text: string) {
       return (text || "")
-        .replace(/^#.*$/gm, "") // quita comentarios
+        .replace(/^#\s+.*$/gm, "") // quita comentarios
         .replace(/^MODO_PROMPT:\s*(ATENCION|ACTIVACION)\s*$/gmi, "")
         .trim();
     }
-
-    function detectPromptModeFromText(text: string) {
-      const m = (text || "").match(/MODO_PROMPT:\s*(ATENCION|ACTIVACION)/i);
-      return (m?.[1] || "ATENCION").toUpperCase();
-    }
-
-    // Detectar modo desde texto libre (Opción A)
-    const mode = detectPromptModeFromText(`${funciones}\n${info}`);
 
     // Limpiar la línea MODO_PROMPT para que no aparezca en el prompt final
     const funcionesClean = stripModeLine(funciones);
@@ -317,67 +292,35 @@ router.post("/", async (req: Request, res: Response) => {
     const infoBlock = infoOperativo ? infoOperativo : "";
     const funcionesBlock = reglasOperativas ? reglasOperativas : "";
 
+    const linksBlock = enlacesOficiales.length
+      ? ["ENLACES_OFICIALES", ...enlacesOficiales.map(u => `- ${u}`)].join("\n")
+      : "ENLACES_OFICIALES\n- (Sin URLs detectadas)";
+
+    const linksPolicy = [
+      "POLITICA_DE_ENLACES",
+      "- Comparte ÚNICAMENTE URLs listadas en ENLACES_OFICIALES.",
+      "- No inventes links ni uses acortadores.",
+    ].join("\n");
+
     const promptCoreParts = [
-      "INSTRUCCIONES",
-      "- No inventes datos. Si falta un dato, dilo y pide SOLO lo mínimo.",
-      "- No repitas preguntas si el usuario ya dio ese dato.",
-      "- Responde corto. 1 pregunta a la vez.",
+      "REGLAS UNIVERSALES",
+      "- No inventes datos. Si falta un dato importante, dilo y pide SOLO lo mínimo.",
+      "- Evita repetir textos literalmente; si necesitas confirmar un dato, hazlo en una frase distinta y breve.",
+      "- Mantén las respuestas breves y claras. Haz 1 pregunta a la vez.",
       "",
-      `Negocio: ${nombreNegocio}`,
       `Idioma: ${idioma}`,
       "",
+      // IMPORTANTE: NO pongas `Negocio: ${nombreNegocio}` aquí si ya viene en infoBlock.
       infoBlock,
       "",
       funcionesBlock,
       "",
-      ...(mode === "ACTIVACION"
-        ? [
-            "Objetivo del chat:",
-            "- Actuar como asesora: entender el problema del usuario antes de ofrecer el servicio (diagnóstico primero).",
-            "- Responder en mensajes cortos y humanos (máximo 2–4 líneas por mensaje).",
-            "- Hacer 1 pregunta a la vez. No hacer cuestionarios.",
-            "- Evitar repetir '24/7' y la lista de canales; menciónalos solo una vez si es necesario.",
-            "- No mencionar precios a menos que el usuario lo pregunte explícitamente.",
-            "",
-            "Guía de conversación (orden obligatorio):",
-            "1) Empatiza y valida el problema en 1 frase.",
-            "2) Haz 1 pregunta de diagnóstico (ej: qué venden, qué preguntan los clientes, dónde se cae la venta).",
-            "3) Da una recomendación concreta y simple.",
-            "4) Solo si el usuario confirma interés en activar/contratar, pide datos mínimos para activación.",
-            "",
-            "Activación del servicio (SOLO si hay interés explícito):",
-            "- Solicitar: nombre del negocio y ciudad/país (solo si aún no lo dio).",
-            "- Confirmar qué canal desea activar (solo si aún no lo dijo).",
-          ]
-        : [
-
-            "Objetivo del chat:",
-            "- Atender mensajes entrantes 24/7",
-            "- Resolver dudas frecuentes (servicios, horarios, ubicación, precios si existen)",
-            "- Facilitar reservas o el siguiente paso (enlace oficial o llamada)",
-            "- Capturar el motivo del cliente y los datos mínimos",
-            "",
-            "Seguimiento:",
-            "- Si el cliente no responde, realizar seguimiento (máximo 2 intentos) dentro de 23 horas",
-            "- Si el cliente responde, detener el seguimiento",
-          ]),
-
+      linksPolicy,
+      "",
+      linksBlock,
     ].filter(Boolean);
 
     const prompt = compact(promptCoreParts.join("\n"));
-
-    // (A) Anexar bloque de enlaces oficiales + política de uso (formato texto plano)
-    const bloqueEnlaces = enlacesOficiales.length
-      ? ["=== ENLACES_OFICIALES ===", ...enlacesOficiales.map((u) => `- ${u}`)].join("\n")
-      : "=== ENLACES_OFICIALES ===\n(Sin URLs detectadas en la información del negocio).";
-
-    const politicaEnlaces = [
-      "=== POLITICA_DE_ENLACES ===",
-      '- Comparte ÚNICAMENTE URLs listadas en "ENLACES_OFICIALES".',
-      "- Si mencionas precios, horarios, reservas o políticas, incluye 1 URL pertinente del listado (si existe).",
-      "- No inventes, no uses acortadores, y pega la URL completa (formato texto plano).",
-      "- Si necesitas un enlace y no está en la lista, indica amablemente que no puedes confirmarlo desde aquí.",
-    ].join("\n");
 
     // ✅ Prompt final SOLO operativo (sin política transversal de enlaces)
     const promptFinal = prompt;
