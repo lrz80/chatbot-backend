@@ -280,14 +280,33 @@ async function ensureClienteBase(
   contacto: string
 ) {
   try {
-    await pool.query(
-      `INSERT INTO clientes (tenant_id, canal, contacto, created_at, updated_at)
-       VALUES ($1, $2, $3, NOW(), NOW())
-       ON CONFLICT (tenant_id, canal, contacto) DO NOTHING`,
+    const r = await pool.query(
+      `
+      INSERT INTO clientes (tenant_id, canal, contacto, created_at, updated_at)
+      VALUES ($1, $2, $3, NOW(), NOW())
+      ON CONFLICT (tenant_id, canal, contacto)
+      DO UPDATE SET updated_at = NOW()
+      RETURNING id
+      `,
       [tenantId, canal, contacto]
     );
-  } catch (e) {
-    console.warn("⚠️ No se pudo asegurar cliente base:", e);
+
+    console.log("✅ ensureClienteBase ok", {
+      tenantId,
+      canal,
+      contacto,
+      clienteId: r.rows?.[0]?.id,
+    });
+  } catch (e: any) {
+    console.warn("⚠️ ensureClienteBase FAILED", {
+      tenantId,
+      canal,
+      contacto,
+      msg: e?.message,
+      code: e?.code,
+      detail: e?.detail,
+      constraint: e?.constraint,
+    });
   }
 }
 
@@ -729,7 +748,7 @@ export async function procesarMensajeWhatsApp(
 
   // 🧱 FIX CRÍTICO: crea la fila base del cliente si no existe
   await ensureClienteBase(tenant.id, canal, contactoNorm);
-  
+
   // ===============================
   // 🔎 Estado persistido (FIX 4)
   // ===============================
