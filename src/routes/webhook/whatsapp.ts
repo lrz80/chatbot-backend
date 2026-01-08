@@ -45,6 +45,7 @@ import { rememberTurn } from "../../lib/memory/rememberTurn";
 import { rememberFacts } from "../../lib/memory/rememberFacts";
 import { getMemoryValue } from "../../lib/clientMemory";
 import { refreshFactsSummary } from "../../lib/memory/refreshFactsSummary";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -381,7 +382,7 @@ async function upsertSelectedChannelDB(
        VALUES ($1, $2, $3, $4, NOW(), NOW())
        ON CONFLICT (tenant_id, canal, contacto)
        DO UPDATE SET
-         selected_channel = COALESCE(clientes.selected_channel, EXCLUDED.selected_channel),
+         selected_channel = EXCLUDED.selected_channel,
          selected_channel_updated_at = NOW(),
          updated_at = NOW()`,
       [tenantId, canal, contacto, selected]
@@ -646,6 +647,50 @@ async function saveUserMessageAndEmit(opts: {
     });
   } catch (e) {
     console.warn('⚠️ No se pudo registrar mensaje user + socket:', e);
+  }
+}
+
+// ✅ HISTORIAL CORTO PARA OPENAI (últimos turnos)
+// PÉGALO debajo de saveUserMessageAndEmit y antes de router.post(...)
+async function getRecentHistoryForModel(opts: {
+  tenantId: string;
+  canal: Canal;
+  fromNumber: string;
+  excludeMessageId?: string | null;
+  limit?: number;
+}): Promise<ChatCompletionMessageParam[]> {
+  const { tenantId, canal, fromNumber, excludeMessageId = null, limit = 12 } = opts;
+
+  try {
+    const params: any[] = [tenantId, canal, fromNumber, limit];
+
+    const excludeSql = excludeMessageId ? `AND message_id <> $5` : '';
+    if (excludeMessageId) params.push(excludeMessageId);
+
+    const { rows } = await pool.query(
+      `
+      SELECT role, content
+      FROM messages
+      WHERE tenant_id = $1
+        AND canal = $2
+        AND from_number = $3
+        ${excludeSql}
+        AND role IN ('user','assistant')
+      ORDER BY timestamp DESC
+      LIMIT $4
+      `,
+      params
+    );
+
+    return rows.reverse().map((m: any) => {
+      const content = String(m.content || "");
+      return m.role === "assistant"
+        ? ({ role: "assistant" as const, content })
+        : ({ role: "user" as const, content });
+    });
+  } catch (e) {
+    console.warn("⚠️ getRecentHistoryForModel failed:", e);
+    return [];
   }
 }
 
@@ -1211,7 +1256,7 @@ if (BOOKING_ENABLED) {
 
     console.log("[BOOKING] lowerMsg=", lowerMsg, "wantsBooking=", wantsBooking);
 
-    if (!decisionFlags.channelSelected && wantsBooking) {
+    if (wantsBooking) {
       // 1) Crear/abrir sesión de booking y pedir fecha/hora (NO crear cita aún)
       await getOrCreateBookingSession({
         tenantId: tenant.id,
@@ -1517,14 +1562,23 @@ if (BOOKING_ENABLED) {
   No incluyas links, correos ni números.
   Termina con UNA sola pregunta natural que encaje con este negocio y te ayude a entender qué necesita el cliente.`;
 
+          const history = await getRecentHistoryForModel({
+            tenantId: tenant.id,
+            canal,
+            fromNumber: contactoNorm,
+            excludeMessageId: messageId,  // 👈 evita duplicar el input actual
+            limit: 12,
+          });
+
           const completion = await openai.chat.completions.create({
             model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
             temperature: 0.2,
             max_tokens: 220,
             messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userPromptLLM },
-            ],
+            { role: 'system', content: systemPrompt },
+            ...history,
+            { role: 'user', content: `MENSAJE_USUARIO:\n${userInput}\n\nINSTRUCCION:\n${userPromptLLM}` },
+          ],
           });
 
           reply = completion.choices[0]?.message?.content?.trim() || null;
@@ -1873,7 +1927,7 @@ if (BOOKING_ENABLED) {
   }
 
     // 💬 Small-talk tipo "hello how are you" / "hola como estas"
-  if (!decisionFlags.channelSelected && smallTalkRegex.test(userInput.trim())) {
+  if (smallTalkRegex.test(userInput.trim())) {
     const saludoSmall = buildSaludoSmallTalk(tenant, idiomaDestino);
 
     const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludoSmall);
@@ -1900,7 +1954,7 @@ if (BOOKING_ENABLED) {
   }
 
   // 💬 Saludo puro: "hola", "hello", "buenas", etc.
-  if (!decisionFlags.channelSelected && saludoPuroRegex.test(userInput.trim())) {
+  if (saludoPuroRegex.test(userInput.trim())) {
     const saludo = buildSaludoConversacional(tenant, idiomaDestino);
 
     await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludo);
@@ -2123,13 +2177,22 @@ if (BOOKING_ENABLED) {
 
           let out = '';
           try {
+            const history = await getRecentHistoryForModel({
+              tenantId: tenant.id,
+              canal,
+              fromNumber: contactoNorm,
+              excludeMessageId: messageId,
+              limit: 12,
+            });
+
             const completion = await openai.chat.completions.create({
               model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
               temperature: 0.2,
               max_tokens: 400,
               messages: [
-                { role: 'system', content: systemPrompt },
-                { role: 'user', content: userPrompt },
+                { role: "system" as const, content: systemPrompt },
+                ...history,
+                { role: "user" as const, content: userPrompt },
               ],
             });
             out = (completion.choices[0]?.message?.content || '').trim();
@@ -2273,13 +2336,22 @@ if (BOOKING_ENABLED) {
 
         let out = facts;
         try {
+          const history = await getRecentHistoryForModel({
+            tenantId: tenant.id,
+            canal,
+            fromNumber: contactoNorm,
+            excludeMessageId: messageId,
+            limit: 12,
+          });
+
           const completion = await openai.chat.completions.create({
             model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
             temperature: 0.2,
             max_tokens: 400,
             messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userPrompt },
+              { role: "system" as const, content: systemPrompt },
+              ...history,
+              { role: "user" as const, content: userPrompt },
             ],
           });
           // registrar tokens
@@ -2420,13 +2492,22 @@ if (BOOKING_ENABLED) {
     let out = facts; // fallback si el LLM falla
     let tokens = 0;
     try {
+      const history = await getRecentHistoryForModel({
+        tenantId: tenant.id,
+        canal,
+        fromNumber: contactoNorm,
+        excludeMessageId: messageId,
+        limit: 12,
+      });
+
       const completion = await openai.chat.completions.create({
         model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
         temperature: 0.2,
         max_tokens: 400,
         messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user',   content: userPrompt }
+          { role: "system" as const, content: systemPrompt },
+          ...history,
+          { role: "user" as const, content: userPrompt },
         ],
       });
       // registrar tokens
@@ -2551,6 +2632,14 @@ if (BOOKING_ENABLED) {
   // 🧠 Si no hay respuesta aún, generar con OpenAI y registrar como FAQ sugerida
   if (!respuestaDesdeFaq && !respuesta) {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
+
+    const history = await getRecentHistoryForModel({
+      tenantId: tenant.id,
+      canal,
+      fromNumber: contactoNorm,
+      excludeMessageId: messageId,
+      limit: 12,
+    });
 
     const completion = await openai.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
