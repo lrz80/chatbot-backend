@@ -274,6 +274,23 @@ async function getWhatsAppModeStatus(tenantId: string): Promise<{
   return { mode, status };
 }
 
+async function ensureClienteBase(
+  tenantId: string,
+  canal: string,
+  contacto: string
+) {
+  try {
+    await pool.query(
+      `INSERT INTO clientes (tenant_id, canal, contacto, created_at, updated_at)
+       VALUES ($1, $2, $3, NOW(), NOW())
+       ON CONFLICT (tenant_id, canal, contacto) DO NOTHING`,
+      [tenantId, canal, contacto]
+    );
+  } catch (e) {
+    console.warn("⚠️ No se pudo asegurar cliente base:", e);
+  }
+}
+
 async function getIdiomaClienteDB(
   tenantId: string,
   canal: string,
@@ -710,6 +727,9 @@ export async function procesarMensajeWhatsApp(
   // // canal puede venir en el contexto (meta/preview) o por defecto 'whatsapp'
   const canal: Canal = (context?.canal as Canal) || 'whatsapp';
 
+  // 🧱 FIX CRÍTICO: crea la fila base del cliente si no existe
+  await ensureClienteBase(tenant.id, canal, contactoNorm);
+  
   // ===============================
   // 🔎 Estado persistido (FIX 4)
   // ===============================
