@@ -381,7 +381,7 @@ async function upsertSelectedChannelDB(
        VALUES ($1, $2, $3, $4, NOW(), NOW())
        ON CONFLICT (tenant_id, canal, contacto)
        DO UPDATE SET
-         selected_channel = EXCLUDED.selected_channel,
+         selected_channel = COALESCE(clientes.selected_channel, EXCLUDED.selected_channel),
          selected_channel_updated_at = NOW(),
          updated_at = NOW()`,
       [tenantId, canal, contacto, selected]
