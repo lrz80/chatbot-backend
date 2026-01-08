@@ -2700,7 +2700,9 @@ if (BOOKING_ENABLED) {
     respuestaFinal = respuesta;
   } else {
     const withDefaultCta = cta5 ? respuesta : `${respuesta}\n\n${CTA_TXT}`;
-    respuestaFinal = appendCTAWithCap(withDefaultCta, cta5);
+    respuestaFinal = isSmallTalkOrCourtesy
+      ? respuesta
+      : appendCTAWithCap(respuesta, cta5); // si no hay cta5, no agrega nada
   }
 
   if (!alreadySent) {
