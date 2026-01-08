@@ -326,7 +326,9 @@ router.post("/", async (req: Request, res: Response) => {
       "REGLAS",
       "- No inventes información.",
       "- Si falta un dato importante, pide solo lo mínimo.",
-      "- Mantén respuestas breves y claras; haz una sola pregunta a la vez.",
+      "- Mantén las respuestas breves y claras.",
+      "- No hagas preguntas si el usuario ya hizo una pregunta directa; primero responde.",
+      "- Haz como máximo una pregunta y solo si es necesaria para avanzar.",
       "- Evita repetir textos literalmente; si necesitas confirmar un dato, hazlo en una frase distinta y breve.",
       "",
 

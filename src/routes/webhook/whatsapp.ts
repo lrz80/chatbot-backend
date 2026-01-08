@@ -750,6 +750,31 @@ export async function procesarMensajeWhatsApp(
   await ensureClienteBase(tenant.id, canal, contactoNorm);
 
   // ===============================
+  // 🔎 DEBUG: estado de flujo (clientes)
+  // ===============================
+  try {
+    const { rows } = await pool.query(
+      `SELECT estado, human_override, info_explicada, selected_channel
+      FROM clientes
+      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+      LIMIT 1`,
+      [tenant.id, canal, contactoNorm]
+    );
+
+    console.log("🧩 CLIENTE STATE (pre-flow) =", {
+      tenantId: tenant.id,
+      canal,
+      contacto: contactoNorm,
+      estado: rows[0]?.estado ?? null,
+      human_override: rows[0]?.human_override ?? null,
+      info_explicada: rows[0]?.info_explicada ?? null,
+      selected_channel: rows[0]?.selected_channel ?? null,
+    });
+  } catch (e: any) {
+    console.warn("⚠️ No se pudo leer state de clientes:", e?.message);
+  }
+
+  // ===============================
   // 🔎 Estado persistido (FIX 4)
   // ===============================
   const selectedChannel = await getSelectedChannelDB(
