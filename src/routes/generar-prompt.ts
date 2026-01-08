@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v3"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v4"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -168,7 +168,7 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
 
     const out: string[] = [];
 
-    out.push("NEGOCIO");
+    out.push("DATOS DEL NEGOCIO");
     out.push(...toBullets([
       nombre ? `Nombre: ${nombre}` : `Nombre: ${nombreNegocio}`,
       tipo ? `Tipo: ${tipo}` : "",
@@ -292,33 +292,49 @@ router.post("/", async (req: Request, res: Response) => {
     const infoBlock = infoOperativo ? infoOperativo : "";
     const funcionesBlock = reglasOperativas ? reglasOperativas : "";
 
-    const linksBlock = enlacesOficiales.length
-      ? ["ENLACES_OFICIALES", ...enlacesOficiales.map(u => `- ${u}`)].join("\n")
-      : "ENLACES_OFICIALES\n- (Sin URLs detectadas)";
+    const linksPolicy = enlacesOficiales.length
+      ? [
+          "POLITICA_DE_ENLACES",
+          "- Comparte únicamente URLs listadas en ENLACES_OFICIALES.",
+          "- No inventes links ni uses acortadores.",
+        ].join("\n")
+      : "";
 
-    const linksPolicy = [
-      "POLITICA_DE_ENLACES",
-      "- Comparte ÚNICAMENTE URLs listadas en ENLACES_OFICIALES.",
-      "- No inventes links ni uses acortadores.",
-    ].join("\n");
+    const linksBlock = enlacesOficiales.length
+      ? ["ENLACES_OFICIALES", ...enlacesOficiales.map((u) => `- ${u}`)].join("\n")
+      : "";
 
     const promptCoreParts = [
-      "REGLAS UNIVERSALES",
-      "- No inventes datos. Si falta un dato importante, dilo y pide SOLO lo mínimo.",
-      "- Evita repetir textos literalmente; si necesitas confirmar un dato, hazlo en una frase distinta y breve.",
-      "- Mantén las respuestas breves y claras. Haz 1 pregunta a la vez.",
+      // Identidad primero (siempre)
+      `Eres Amy, el asistente virtual de ${nombreNegocio}.`,
+      "Atiendes conversaciones con clientes reales y respondes de forma profesional, clara y humana.",
       "",
       `Idioma: ${idioma}`,
       "",
-      // IMPORTANTE: NO pongas `Negocio: ${nombreNegocio}` aquí si ya viene en infoBlock.
-      infoBlock,
+
+      // Contexto del negocio (lo que “sabe”)
+      infoBlock ? "CONTEXTO DEL NEGOCIO" : "",
+      infoBlock ? infoBlock : "",
       "",
-      funcionesBlock,
+
+      // Comportamiento (lo que “hace”)
+      funcionesBlock ? "COMPORTAMIENTO Y ESTILO" : "",
+      funcionesBlock ? funcionesBlock : "",
       "",
-      linksPolicy,
+
+      // Reglas universales (pero en tono natural, no “manual interno”)
+      "REGLAS",
+      "- No inventes información.",
+      "- Si falta un dato importante, pide solo lo mínimo.",
+      "- Mantén respuestas breves y claras; haz una sola pregunta a la vez.",
+      "- Evita repetir textos literalmente; si necesitas confirmar un dato, hazlo en una frase distinta y breve.",
       "",
-      linksBlock,
+
+      // Links solo si existen
+      linksPolicy ? linksPolicy : "",
+      linksBlock ? linksBlock : "",
     ].filter(Boolean);
+
 
     const prompt = compact(promptCoreParts.join("\n"));
 
