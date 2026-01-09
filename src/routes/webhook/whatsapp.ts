@@ -1017,6 +1017,14 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           messageId,
           content: mensajePago,
         });
+        await rememberAfterReply({
+          tenantId,
+          senderId: contactoNorm || "anónimo",
+          idiomaDestino,
+          userText: userInput,
+          assistantText: mensajePago,
+          lastIntent: "pago",
+        });
       }
       return;
     }
@@ -1057,6 +1065,14 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           fromNumber: senderId || 'anónimo',
           messageId,
           content: msgPago,
+        });
+        await rememberAfterReply({
+          tenantId,
+          senderId: senderId || 'anónimo',
+          idiomaDestino,
+          userText: userInput,
+          assistantText: msgPago,
+          lastIntent: 'pago', // o la variable de intención que tengas en esta rama
         });
       }
 
@@ -1110,6 +1126,15 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
             messageId,
             content: mensajePago,
           });
+          // 🧠 GUARDA MEMORIA DE ESTE TURNO (CRÍTICO)
+          await rememberAfterReply({
+            tenantId,
+            senderId: senderId || 'anónimo',
+            idiomaDestino,
+            userText: userInput,
+            assistantText: mensajePago,
+            lastIntent: 'pago', // o la intención real de esta rama
+          });
         }
       } else {
         console.log('💳 [WA] Datos recibidos pero ya estaba esperando pago; no repito link.', { senderId });
@@ -1128,6 +1153,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     origen,
     mode,
   });
+
+let INTENCION_FINAL_CANONICA = '';
 
 if (BOOKING_ENABLED) {
   // BOOKING FLOW (FASE 1) - estado WAITING_DATETIME
@@ -1156,6 +1183,14 @@ if (BOOKING_ENABLED) {
           messageId,
           content: reply,
         });
+        await rememberAfterReply({
+          tenantId: tenant.id,
+          senderId: contactoNorm || fromNumber || "anónimo",
+          idiomaDestino,
+          userText: userInput,
+          assistantText: reply,
+          lastIntent: INTENCION_FINAL_CANONICA || null,
+        });
         return;
       }
 
@@ -1180,6 +1215,14 @@ if (BOOKING_ENABLED) {
           messageId,
           content: reply,
         });
+        await rememberAfterReply({
+          tenantId: tenant.id,
+          senderId: contactoNorm || fromNumber || "anónimo",
+          idiomaDestino,
+          userText: userInput,
+          assistantText: reply,
+          lastIntent: INTENCION_FINAL_CANONICA || null,
+        });
         return;
       }
 
@@ -1203,6 +1246,15 @@ if (BOOKING_ENABLED) {
           fromNumber: fromNumber || "anónimo",
           messageId,
           content: reply,
+        });
+        // 🧠 MEMORIA — ESTO ES LO QUE TE FALTABA
+        await rememberAfterReply({
+          tenantId: tenant.id,
+          senderId: contactoNorm,     // número normalizado
+          idiomaDestino,
+          userText: userInput,        // lo que el cliente dijo
+          assistantText: reply,       // lo que Amy respondió
+          lastIntent: "agendar",      // o el intent real que uses
         });
         return;
       }
@@ -1237,6 +1289,14 @@ if (BOOKING_ENABLED) {
         fromNumber: fromNumber || "anónimo",
         messageId,
         content: reply,
+      });
+      await rememberAfterReply({
+        tenantId: tenant.id,
+        senderId: contactoNorm || fromNumber || "anónimo",
+        idiomaDestino,
+        userText: userInput,
+        assistantText: reply,
+        lastIntent: INTENCION_FINAL_CANONICA || null,
       });
       return;
     }
@@ -1295,7 +1355,15 @@ if (BOOKING_ENABLED) {
         messageId,
         content: reply,
       });
-
+      // 🧠 ACTUALIZAR MEMORIA CONVERSACIONAL
+      await rememberAfterReply({
+        tenantId: tenant.id,
+        senderId: contactoNorm || fromNumber || "anónimo",
+        idiomaDestino,
+        userText: userInput,
+        assistantText: reply,
+        lastIntent: INTENCION_FINAL_CANONICA || null,
+      });
       return;
     }
   } catch (e) {
@@ -1342,8 +1410,6 @@ if (BOOKING_ENABLED) {
   const isSmallTalkOrCourtesy =
     /^(hola|hello|hi|hey|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|thank\s+you|ok|okay|vale|perfecto)\b/i
       .test(userInput.trim());
-
-  let INTENCION_FINAL_CANONICA = '';
 
   try {
     const mensajeEs = (idiomaDestino !== 'es')
@@ -1513,7 +1579,7 @@ if (BOOKING_ENABLED) {
       : '¿Hay algo más en lo que te pueda ayudar?';
 
   // 🧩 Bloque especial: "quiero más info / need more info"
-  if (!decisionFlags.channelSelected && wantsMoreInfo) {
+  if (wantsMoreInfo) {
     // 🔒 GATE
     try {
       const { rows } = await pool.query(
@@ -1524,9 +1590,30 @@ if (BOOKING_ENABLED) {
       );
 
       if (rows[0]?.info_explicada === true) {
-        console.log("⛔ wantsMoreInfo bloqueado: info_explicada=true", { contactoNorm });
-        // ✅ No respondemos aquí. Dejamos que el pipeline normal maneje este mensaje.
-        // (Si quieres cortar totalmente, usa return, pero esto es mejor UX.)
+        const reply =
+          idiomaDestino === "en"
+            ? "Got it. What exactly do you want: pricing, schedule, or location?"
+            : "Perfecto. ¿Qué necesitas exactamente: precios, horarios o ubicación?";
+        const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+        if (ok) {
+          await saveAssistantMessageAndEmit({
+            tenantId: tenant.id,
+            canal,
+            fromNumber: contactoNorm || "anónimo",
+            messageId,
+            content: reply,
+          });
+          // 🧠 MEMORIA CONVERSACIONAL (OBLIGATORIO)
+          await rememberAfterReply({
+            tenantId: tenant.id,
+            senderId: contactoNorm || fromNumber || "anónimo",
+            idiomaDestino,
+            userText: userInput,
+            assistantText: reply,
+            lastIntent: INTENCION_FINAL_CANONICA || null,
+          });
+        }
+        return;
       } else {
         const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
           .test(userInput);
@@ -1567,7 +1654,7 @@ if (BOOKING_ENABLED) {
             canal,
             fromNumber: contactoNorm,
             excludeMessageId: messageId,  // 👈 evita duplicar el input actual
-            limit: 12,
+            limit: 18,
           });
 
           const completion = await openai.chat.completions.create({
@@ -1626,6 +1713,15 @@ if (BOOKING_ENABLED) {
             fromNumber: contactoNorm || 'anónimo',
             messageId,
             content: reply,
+          });
+          // 🔴 ESTO ES LO QUE FALTABA (MEMORIA)
+          await rememberAfterReply({
+            tenantId: tenant.id,
+            senderId: contactoNorm || fromNumber || "anónimo",
+            idiomaDestino,
+            userText: userInput,
+            assistantText: reply,
+            lastIntent: INTENCION_FINAL_CANONICA || null,
           });
 
           try {
@@ -1751,6 +1847,15 @@ if (BOOKING_ENABLED) {
           fromNumber: contactoNorm || 'anónimo',
           messageId,
           content: outWithCTA,
+        });
+        // 🧠 Memoria: SIEMPRE después de enviar/guardar respuesta
+        await rememberAfterReply({
+          tenantId: tenant.id,
+          senderId: contactoNorm || "anónimo",
+          idiomaDestino,
+          userText: userInput,
+          assistantText: outWithCTA,
+          lastIntent: top?.[0]?.intent || "multi", // usa aquí la variable real que ya tengas
         });
 
         // 🔔 Registrar venta si aplica + follow-up
@@ -1966,6 +2071,15 @@ if (BOOKING_ENABLED) {
       messageId,
       content: saludo,
     });
+    // 🧠 MEMORIA: guarda el turno (usuario -> saludo del bot)
+    await rememberAfterReply({
+      tenantId: tenant.id,
+      senderId: contactoNorm || fromNumber || "anónimo",
+      idiomaDestino,
+      userText: userInput,
+      assistantText: saludo,
+      lastIntent: "saludo",
+    });
     return;
   }
 
@@ -1981,6 +2095,15 @@ if (BOOKING_ENABLED) {
       fromNumber: contactoNorm || 'anónimo',
       messageId,
       content: respuesta,
+    });
+    // 🧠 CERRAR TURNO EN MEMORIA (OBLIGATORIO)
+    await rememberAfterReply({
+      tenantId: tenant.id,
+      senderId: contactoNorm || fromNumber || 'anónimo',
+      idiomaDestino,
+      userText: userInput,
+      assistantText: respuesta,
+      lastIntent: 'agradecimiento',
     });
     return;
   }
@@ -2031,6 +2154,15 @@ if (BOOKING_ENABLED) {
         fromNumber: contactoNorm || 'anónimo',
         messageId,
         content: outWithCTA,
+      });
+      // 🧠 MEMORIA — OBLIGATORIO
+      await rememberAfterReply({
+        tenantId: tenant.id,
+        senderId: contactoNorm,
+        idiomaDestino,
+        userText: userInput,
+        assistantText: outWithCTA,
+        lastIntent: INTENCION_FINAL_CANONICA || null,
       });
 
       // (Opcional) métricas / follow-up + registrar venta si aplica
@@ -2084,6 +2216,15 @@ if (BOOKING_ENABLED) {
         fromNumber: contactoNorm || 'anónimo',
         messageId,
         content: respuesta,
+      });
+      // 🧠 MEMORIA — OBLIGATORIO
+      await rememberAfterReply({
+        tenantId: tenant.id,
+        senderId: contactoNorm || fromNumber || "anónimo",
+        idiomaDestino,
+        userText: userInput,
+        assistantText: respuesta,
+        lastIntent: "agradecimiento",
       });
       return;
     } catch (err) {
@@ -2182,7 +2323,7 @@ if (BOOKING_ENABLED) {
               canal,
               fromNumber: contactoNorm,
               excludeMessageId: messageId,
-              limit: 12,
+              limit: 18,
             });
 
             const completion = await openai.chat.completions.create({
@@ -2225,6 +2366,15 @@ if (BOOKING_ENABLED) {
             fromNumber: contactoNorm || 'anónimo',
             messageId,
             content: out,
+          });
+          // 🧠 MEMORIA — OBLIGATORIO
+          await rememberAfterReply({
+            tenantId: tenant.id,
+            senderId: contactoNorm || fromNumber || "anónimo",
+            idiomaDestino,
+            userText: userInput,
+            assistantText: out,
+            lastIntent: INTENCION_FINAL_CANONICA || null,
           });
 
           // registra intención/seguimiento con "precio" como señal de venta
@@ -2341,7 +2491,7 @@ if (BOOKING_ENABLED) {
             canal,
             fromNumber: contactoNorm,
             excludeMessageId: messageId,
-            limit: 12,
+            limit: 18,
           });
 
           const completion = await openai.chat.completions.create({
@@ -2396,6 +2546,15 @@ if (BOOKING_ENABLED) {
           fromNumber: contactoNorm || 'anónimo',
           messageId,
           content: outWithCTA,
+        });
+        // 🧠 MEMORIA — OBLIGATORIO
+        await rememberAfterReply({
+          tenantId: tenant.id,
+          senderId: contactoNorm,
+          idiomaDestino,
+          userText: userInput,
+          assistantText: outWithCTA,
+          lastIntent: INTENCION_FINAL_CANONICA || null,
         });
 
         // 🔔 Registrar venta si aplica + follow-up
@@ -2497,7 +2656,7 @@ if (BOOKING_ENABLED) {
         canal,
         fromNumber: contactoNorm,
         excludeMessageId: messageId,
-        limit: 12,
+        limit: 18,
       });
 
       const completion = await openai.chat.completions.create({
@@ -2553,6 +2712,15 @@ if (BOOKING_ENABLED) {
       fromNumber: contactoNorm || 'anónimo',
       messageId,
       content: outWithCTA,
+    });
+    // 🧠 MEMORIA — OBLIGATORIO
+    await rememberAfterReply({
+      tenantId: tenant.id,
+      senderId: contactoNorm,
+      idiomaDestino,
+      userText: userInput,
+      assistantText: outWithCTA,
+      lastIntent: INTENCION_FINAL_CANONICA || null,
     });
 
     // 🔔 Registrar venta si aplica + follow-up
@@ -2619,6 +2787,15 @@ if (BOOKING_ENABLED) {
         messageId,
         content: respuestaWithCTA,
       });
+      // 🧠 MEMORIA (OBLIGATORIO)
+      await rememberAfterReply({
+        tenantId: tenant.id,
+        senderId: contactoNorm,
+        idiomaDestino,
+        userText: userInput,
+        assistantText: respuestaWithCTA,
+        lastIntent: INTENCION_FINAL_CANONICA || null,
+      });
     }
     // registra venta si aplica
     try {
@@ -2638,7 +2815,7 @@ if (BOOKING_ENABLED) {
       canal,
       fromNumber: contactoNorm,
       excludeMessageId: messageId,
-      limit: 12,
+      limit: 18,
     });
 
     const completion = await openai.chat.completions.create({
@@ -2647,6 +2824,7 @@ if (BOOKING_ENABLED) {
       max_tokens: 400,
       messages: [
         { role: 'system', content: promptBaseMem },
+        ...history, // ✅ AQUÍ
         { role: 'user', content: userInput },
       ],
     });
@@ -2775,17 +2953,6 @@ if (BOOKING_ENABLED) {
         }
       }
     }
-
-    const tokensConsumidos = completion.usage?.total_tokens || 0;
-    if (tokensConsumidos > 0) {
-      await pool.query(
-        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-         VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-         ON CONFLICT (tenant_id, canal, mes)
-         DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-        [tenant.id, tokensConsumidos]
-      );
-    }    
   }  
 
   // ⬇️ CTA por intención (fallback final/generativa)
