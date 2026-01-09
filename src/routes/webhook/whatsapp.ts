@@ -2062,24 +2062,26 @@ if (BOOKING_ENABLED) {
   if (saludoPuroRegex.test(userInput.trim())) {
     const saludo = buildSaludoConversacional(tenant, idiomaDestino);
 
-    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludo);
+    const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludo);
 
-    await saveAssistantMessageAndEmit({
-      tenantId: tenant.id,
-      canal,
-      fromNumber: contactoNorm || 'anónimo',
-      messageId,
-      content: saludo,
-    });
-    // 🧠 MEMORIA: guarda el turno (usuario -> saludo del bot)
-    await rememberAfterReply({
-      tenantId: tenant.id,
-      senderId: contactoNorm || fromNumber || "anónimo",
-      idiomaDestino,
-      userText: userInput,
-      assistantText: saludo,
-      lastIntent: "saludo",
-    });
+    if (ok) {
+      await saveAssistantMessageAndEmit({
+        tenantId: tenant.id,
+        canal,
+        fromNumber: contactoNorm || "anónimo",
+        messageId,
+        content: saludo,
+      });
+
+      await rememberAfterReply({
+        tenantId: tenant.id,
+        senderId: contactoNorm || fromNumber || "anónimo",
+        idiomaDestino,
+        userText: userInput,
+        assistantText: saludo,
+        lastIntent: "saludo",
+      });
+    }
     return;
   }
 
@@ -2988,92 +2990,74 @@ if (BOOKING_ENABLED) {
 
   if (!alreadySent) {
     const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuestaFinal);
-    console.log("📬 Respuesta enviada vía Twilio:", respuestaFinal);
 
     if (ok) {
+      alreadySent = true;
+
       await saveAssistantMessageAndEmit({
         tenantId: tenant.id,
         canal,
-        fromNumber: contactoNorm || 'anónimo',
+        fromNumber: contactoNorm || fromNumber || "anónimo",
         messageId,
         content: respuestaFinal,
       });
 
-      await rememberTurn({
+      await rememberAfterReply({
         tenantId: tenant.id,
-        canal: "whatsapp",
-        senderId: contactoNorm,
+        senderId: contactoNorm || fromNumber || "anónimo",
+        idiomaDestino,
         userText: userInput,
         assistantText: respuestaFinal,
+        lastIntent: INTENCION_FINAL_CANONICA || null,
       });
 
-      await rememberFacts({
-        tenantId: tenant.id,
-        canal: "whatsapp",
-        senderId: contactoNorm,
-        preferredLang: idiomaDestino,
-        lastIntent: INTENCION_FINAL_CANONICA || intenCanon || null,
-      });
-      // DEBUG: re-lee inmediatamente lo que acabas de guardar
-      const memAfter = await getMemoryValue<string>({
-        tenantId: tenant.id,
-        canal: "whatsapp",
-        senderId: contactoNorm,
-        key: "facts_summary",
-      });
-      console.log("🧠 facts_summary (after rememberFacts) =", memAfter);
+      // ✅ POST-REPLY: ventas/segmentación/followup (solo si se envió OK)
+      try {
+        const nivel_interes = nivelCanon;
+        let intFinal = intenCanon;
 
-      await refreshFactsSummary({
-        tenantId: tenant.id,
-        canal: "whatsapp",
-        senderId: contactoNorm,
-        idioma: idiomaDestino,
-      });
+        const textoNormalizado = (userInput || "").trim().toLowerCase();
+        console.log(`🔎 Intención (final) = ${intFinal}, Nivel de interés: ${nivel_interes}`);
+
+        // 🛑 No registrar si es saludo puro
+        const saludos = ["hola", "buenas", "buenos días", "buenas tardes", "buenas noches", "hello", "hi", "hey"];
+        if (saludos.includes(textoNormalizado)) {
+          console.log("⚠️ Mensaje ignorado por ser saludo.");
+          return;
+        }
+
+        // Segmentación con intención final
+        const intencionesCliente = [
+          "comprar", "compra", "pagar", "agendar", "reservar", "confirmar",
+          "interes_clases", "precio"
+        ];
+        if (intencionesCliente.some(p => (intFinal || "").includes(p))) {
+          await pool.query(
+            `UPDATE clientes
+                SET segmento = 'cliente',
+                    updated_at = now()
+              WHERE tenant_id = $1
+                AND canal = $2
+                AND contacto = $3
+                AND (segmento = 'lead' OR segmento IS NULL)`,
+            [tenant.id, canal, contactoNorm]
+          );
+        }
+
+        // 🔥 Registrar en sales_intelligence **solo si es venta**
+        await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel_interes, messageId);
+
+        // 🚀 Follow-up con intención final
+        if (nivel_interes >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
+          await scheduleFollowUp(intFinal, nivel_interes, userInput);
+        }
+      } catch (err) {
+        console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
+      }
+    } else {
+      console.warn("⚠️ safeEnviarWhatsApp falló en fallback final; no guardo memoria/assistant.");
     }
-    alreadySent = true;
+
+    return;
   }
-
-  try {
-    const nivel_interes = nivelCanon;
-    let intFinal = intenCanon;
-
-    const textoNormalizado = userInput.trim().toLowerCase();
-    console.log(`🔎 Intención (final) = ${intFinal}, Nivel de interés: ${nivel_interes}`);
-
-    // 🛑 No registrar si es saludo puro
-    const saludos = ["hola", "buenas", "buenos días", "buenas tardes", "buenas noches", "hello", "hi", "hey"];
-    if (saludos.includes(textoNormalizado)) {
-      console.log("⚠️ Mensaje ignorado por ser saludo.");
-      return;
-    }
-
-    // Segmentación con intención final
-    const intencionesCliente = [
-      "comprar", "compra", "pagar", "agendar", "reservar", "confirmar",
-      "interes_clases", "precio"
-    ];
-    if (intencionesCliente.some(p => intFinal.includes(p))) {
-      await pool.query(
-        `UPDATE clientes
-            SET segmento = 'cliente',
-                updated_at = now()
-          WHERE tenant_id = $1
-            AND canal = $2
-            AND contacto = $3
-            AND (segmento = 'lead' OR segmento IS NULL)`,
-        [tenant.id, canal, contactoNorm]
-      );
-    }
-
-    // 🔥 Registrar en sales_intelligence **solo si es venta**
-    await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel_interes, messageId);
-
-    // 🚀 Follow-up con intención final
-    if (nivel_interes >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
-      await scheduleFollowUp(intFinal, nivel_interes, userInput);
-    }
-    
-  } catch (err) {
-    console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
-  }   
 }
