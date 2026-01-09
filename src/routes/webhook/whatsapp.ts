@@ -46,8 +46,12 @@ import { rememberFacts } from "../../lib/memory/rememberFacts";
 import { getMemoryValue } from "../../lib/clientMemory";
 import { refreshFactsSummary } from "../../lib/memory/refreshFactsSummary";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
-import { getConversationState } from "../../lib/conversationState";
-
+import {
+  getConversationState,
+  setConversationState,
+  patchConversationState,
+  clearConversationState
+} from "../../lib/conversationState";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -685,11 +689,11 @@ async function getRecentHistoryForModel(opts: {
     );
 
     return rows.reverse().map((m: any) => {
-      const content = String(m.content || "");
-      return m.role === "assistant"
-        ? ({ role: "assistant" as const, content })
-        : ({ role: "user" as const, content });
-    });
+    const content = String(m.content || "");
+    return m.role === "assistant"
+      ? ({ role: "assistant" as const, content })
+      : ({ role: "user" as const, content });
+  });
   } catch (e) {
     console.warn("⚠️ getRecentHistoryForModel failed:", e);
     return [];
@@ -898,6 +902,14 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   let replySource: string | null = null;
   let lastIntent: string | null = null;
 
+  // ✅ Decision metadata (backend NO habla, solo decide)
+  let nextAction: {
+    type: string;
+    decision?: "yes" | "no";
+    kind?: string | null;
+    intent?: string | null;
+  } | null = null;
+
   function setReply(text: string, source: string, intent?: string | null) {
     handled = true;
     reply = text;
@@ -1025,7 +1037,11 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     const canalEnvio = canal;      // 'whatsapp'
     const senderId = contactoNorm;
 
-    const state = await getConversationState(tenant.id, canalEnvio, senderId);
+    const state = await getConversationState(
+      tenant.id,
+      canalEnvio,
+      senderId
+    );
     console.log("🧩 conversation_state =", state);
 
     const { rows: clienteRows } = await pool.query(
@@ -1139,6 +1155,42 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   } // ✅ cierra el bloque CONTROL DE ESTADO
 
   if (handled) { await finalizeReply(); return; }
+
+  // ========================================
+  // ✅ STATE GATE (YES / NO)
+  // backend NO responde, SOLO decide
+  // ========================================
+  const state = await getConversationState(
+    tenant.id,
+    canal,
+    contactoNorm
+  );
+
+  if (
+    state?.active_flow === "yesno" &&
+    state?.active_step === "awaiting_confirmation"
+  ) {
+    const t = (userInput || "").trim().toLowerCase();
+
+    const isYes = /^(si|sí|ok|dale|claro|yes|yep|sure)$/i.test(t);
+    const isNo = /^(no|nope|nah)$/i.test(t);
+
+    if (isYes || isNo) {
+      nextAction = {
+        type: "yesno_resolved",
+        decision: isYes ? "yes" : "no",
+        kind: (state.context as any)?.kind || null,
+        intent: (state.context as any)?.intent || null,
+      };
+
+      // limpiamos el estado para no quedar pegados
+      await clearConversationState(
+        tenant.id,
+        canal,
+        contactoNorm
+      );
+    }
+  }
 
   console.log("🟠 [WA] Entrando al pipeline NORMAL (sin FlowEngine)", {
     tenantId: tenant.id,
@@ -1546,9 +1598,38 @@ if (BOOKING_ENABLED) {
             temperature: 0.2,
             max_tokens: 220,
             messages: [
-            { role: 'system', content: systemPrompt },
+            // Prompt base del tenant (NO se toca)
+            { role: "system" as const, content: systemPrompt },
+
+            // 👇 Metadata de decisión (backend SOLO decide)
+            ...(nextAction?.type === "yesno_resolved"
+              ? [{
+                  role: "system" as const,
+                  content: `CONVERSATION_DECISION:
+          type: yesno_resolved
+          decision: ${nextAction.decision}
+          kind: ${nextAction.kind || "null"}
+          intent: ${nextAction.intent || "null"}
+
+          RULES:
+          - Do NOT explain infrastructure.
+          - Respond naturally using the tenant business prompt.
+          - Keep it short.`
+                }]
+              : []),
+
+            // Historial reciente
             ...history,
-            { role: 'user', content: `MENSAJE_USUARIO:\n${userInput}\n\nINSTRUCCION:\n${userPromptLLM}` },
+
+            // Mensaje del usuario + instrucción ya existente
+            {
+              role: 'user',
+              content: `MENSAJE_USUARIO:
+          ${userInput}
+
+          INSTRUCCION:
+          ${userPromptLLM}`
+            },
           ],
           });
 
@@ -1954,6 +2035,33 @@ if (BOOKING_ENABLED) {
         ? out                         // ❌ NO CTA si es saludo / gracias / ok
         : appendCTAWithCap(out, ctaX); // ✅ CTA normal en el resto de casos
 
+      // ========================================
+      // ✅ Guardar estado YES/NO si el mensaje termina en pregunta
+      // ========================================
+      const endsAsQuestion = /\?\s*$/.test((outWithCTA || "").trim());
+      const looksLikeYesNo =
+        /(te\s+gustar[ií]a|quieres|deseas|would\s+you\s+like|do\s+you\s+want)/i.test(outWithCTA || "");
+
+      if (endsAsQuestion && looksLikeYesNo) {
+        await setConversationState({
+          tenantId: tenant.id,
+          canal,
+          senderId: contactoNorm,
+          activeFlow: "yesno",
+          activeStep: "awaiting_confirmation",
+          context: {
+            kind: "followup",
+            intent: intenCanon || null,
+          },
+        });
+      } else {
+        await clearConversationState(
+          tenant.id,
+          canal,
+          contactoNorm
+        );
+      }
+
       setReply(outWithCTA, "early-return", intenCanon || null);
 
       // (Opcional) métricas / follow-up + registrar venta si aplica
@@ -2087,10 +2195,35 @@ if (BOOKING_ENABLED) {
               temperature: 0.2,
               max_tokens: 400,
               messages: [
-                { role: "system" as const, content: systemPrompt },
-                ...history,
-                { role: "user" as const, content: userPrompt },
-              ],
+              // Prompt base del negocio (NO se toca)
+              { role: "system" as const, content: systemPrompt },
+
+              // 👇 DECISIÓN DEL BACKEND (backend decide, NO habla)
+              ...(nextAction?.type === "yesno_resolved"
+                ? [
+                    {
+                      role: "system" as const,
+                      content: `CONVERSATION_DECISION:
+            type: yesno_resolved
+            decision: ${nextAction.decision}
+            kind: ${nextAction.kind ?? "null"}
+            intent: ${nextAction.intent ?? "null"}
+
+            RULES:
+            - Do NOT explain infrastructure
+            - Do NOT explain how it works
+            - Respond only as the business
+            - Keep the message short`,
+                    },
+                  ]
+                : []),
+
+              // Historial real
+              ...history,
+
+              // Mensaje del usuario
+              { role: "user" as const, content: userPrompt },
+            ],
             });
             out = (completion.choices[0]?.message?.content || '').trim();
             // Asegura idioma por si acaso
@@ -2232,10 +2365,35 @@ if (BOOKING_ENABLED) {
             temperature: 0.2,
             max_tokens: 400,
             messages: [
-              { role: "system" as const, content: systemPrompt },
-              ...history,
-              { role: "user" as const, content: userPrompt },
-            ],
+            // Prompt base del negocio (NO habla el backend)
+            { role: "system" as const, content: systemPrompt },
+
+            // ⬇️ DECISIÓN TÉCNICA DEL BACKEND (sin copy, sin explicación)
+            ...(nextAction?.type === "yesno_resolved"
+              ? [
+                  {
+                    role: "system" as const,
+                    content: `CONVERSATION_DECISION:
+          type: yesno_resolved
+          decision: ${nextAction.decision}
+          kind: ${nextAction.kind ?? "null"}
+          intent: ${nextAction.intent ?? "null"}
+
+          RULES:
+          - Do NOT explain how it works
+          - Do NOT explain infrastructure
+          - Respond only as the business
+          - Keep the response short`,
+                  },
+                ]
+              : []),
+
+            // Historial real
+            ...history,
+
+            // Mensaje del usuario
+            { role: "user" as const, content: userPrompt },
+          ],
           });
           // registrar tokens
           const used = completion.usage?.total_tokens || 0;
@@ -2380,10 +2538,33 @@ if (BOOKING_ENABLED) {
         temperature: 0.2,
         max_tokens: 400,
         messages: [
-          { role: "system" as const, content: systemPrompt },
-          ...history,
-          { role: "user" as const, content: userPrompt },
-        ],
+        // Prompt del negocio (NO habla backend)
+        { role: "system" as const, content: systemPrompt },
+
+        // 🔒 DECISIÓN DEL BACKEND (solo si existe)
+        ...(nextAction?.type === "yesno_resolved"
+          ? [{
+              role: "system" as const,
+              content: `CONVERSATION_DECISION
+      type: yesno_resolved
+      decision: ${nextAction.decision}
+      kind: ${nextAction.kind ?? "null"}
+      intent: ${nextAction.intent ?? "null"}
+
+      RULES:
+      - Do NOT explain how it works
+      - Do NOT mention systems or automation
+      - Respond only as the business
+      - Keep it short`
+            }]
+          : []),
+
+        // Historial real
+        ...history,
+
+        // Mensaje del usuario
+        { role: "user" as const, content: userPrompt },
+      ],
       });
       // registrar tokens
       const used = completion.usage?.total_tokens || 0;
@@ -2508,10 +2689,33 @@ if (BOOKING_ENABLED) {
       temperature: 0.2,
       max_tokens: 400,
       messages: [
-        { role: 'system', content: promptBaseMem },
-        ...history, // ✅ AQUÍ
-        { role: 'user', content: userInput },
-      ],
+      // Prompt del negocio (no se toca)
+      { role: 'system', content: promptBaseMem },
+
+      // ⬇️ DECISIÓN DEL BACKEND (NO TEXTO DE NEGOCIO)
+      ...(nextAction
+        ? [{
+            role: "system" as const,
+            content: `CONVERSATION_DECISION:
+    type: ${nextAction.type}
+    decision: ${nextAction.decision ?? 'null'}
+    kind: ${nextAction.kind ?? 'null'}
+    intent: ${nextAction.intent ?? 'null'}
+
+    RULES:
+    - Do NOT explain how the system works.
+    - Do NOT describe infrastructure.
+    - Respond naturally as the business.
+    - Keep the answer short.`
+          }]
+        : []),
+
+      // Historial reciente
+      ...history,
+
+      // Mensaje real del usuario (sin copy agregado)
+      { role: 'user', content: userInput },
+    ],
     });
 
     // registrar tokens
