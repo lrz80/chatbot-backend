@@ -1166,10 +1166,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     contactoNorm
   );
 
-  if (
-    state?.active_flow === "yesno" &&
-    state?.active_step === "awaiting_confirmation"
-  ) {
+  if (state?.active_flow === "yesno" && state?.active_step === "awaiting_confirmation") {
     const t = (userInput || "").trim().toLowerCase();
 
     const isYes = /^(si|sí|ok|dale|claro|yes|yep|sure)$/i.test(t);
@@ -1407,6 +1404,22 @@ if (BOOKING_ENABLED) {
       const outWithCTA = isSmallTalkOrCourtesy ? hitSim : appendCTAWithCap(hitSim, cta);
 
       setReply(outWithCTA, "faq-sim-first", intentForCTA || "faq");
+      // ✅ YES / NO STATE (DEBE IR AQUÍ)
+      const endsAsQuestion = /\?\s*$/.test((outWithCTA || "").trim());
+      const looksLikeYesNo =
+        endsAsQuestion &&
+        /(te\s+gustar[ií]a|quieres|deseas|would\s+you\s+like|do\s+you\s+want)/i.test(outWithCTA || "");
+
+      if (looksLikeYesNo) {
+        await setConversationState(tenant.id, canal, contactoNorm, {
+          activeFlow: "yesno",
+          activeStep: "awaiting_confirmation",
+          context: { kind: "followup" },
+        });
+      } else {
+        await clearConversationState(tenant.id, canal, contactoNorm);
+      }
+
       await finalizeReply();
 
       // 🔔 opcional: registrar intención + follow-up (sin forzar intent)
@@ -2043,17 +2056,19 @@ if (BOOKING_ENABLED) {
         /(te\s+gustar[ií]a|quieres|deseas|would\s+you\s+like|do\s+you\s+want)/i.test(outWithCTA || "");
 
       if (endsAsQuestion && looksLikeYesNo) {
-        await setConversationState({
-          tenantId: tenant.id,
+        await setConversationState(
+          tenant.id,
           canal,
-          senderId: contactoNorm,
-          activeFlow: "yesno",
-          activeStep: "awaiting_confirmation",
-          context: {
-            kind: "followup",
-            intent: intenCanon || null,
-          },
-        });
+          contactoNorm,
+          {
+            activeFlow: "yesno",
+            activeStep: "awaiting_confirmation",
+            context: {
+              kind: "followup",
+              intent: intenCanon || null,
+            },
+          }
+        );
       } else {
         await clearConversationState(
           tenant.id,

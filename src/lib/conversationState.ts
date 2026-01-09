@@ -29,20 +29,16 @@ export async function getConversationState(
   return rows[0] || null;
 }
 
-export async function setConversationState(params: {
-  tenantId: string;
-  canal: string;
-  senderId: string;
-  activeFlow?: string | null;
-  activeStep?: string | null;
-  context?: any; // JSON
-}): Promise<void> {
-  const { tenantId, canal, senderId, activeFlow = null, activeStep = null, context = {} } = params;
-
+export async function setConversationState(
+  tenantId: string,
+  canal: string,
+  senderId: string,
+  state: { activeFlow: string; activeStep: string; context?: any }
+) {
   await pool.query(
     `
     INSERT INTO conversation_state (tenant_id, canal, sender_id, active_flow, active_step, context, updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6::jsonb, NOW())
+    VALUES ($1, $2, $3, $4, $5, $6, NOW())
     ON CONFLICT (tenant_id, canal, sender_id)
     DO UPDATE SET
       active_flow = EXCLUDED.active_flow,
@@ -50,7 +46,7 @@ export async function setConversationState(params: {
       context = EXCLUDED.context,
       updated_at = NOW()
     `,
-    [tenantId, canal, senderId, activeFlow, activeStep, JSON.stringify(context ?? {})]
+    [tenantId, canal, senderId, state.activeFlow, state.activeStep, state.context ?? null]
   );
 }
 
