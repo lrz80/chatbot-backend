@@ -46,6 +46,8 @@ import { rememberFacts } from "../../lib/memory/rememberFacts";
 import { getMemoryValue } from "../../lib/clientMemory";
 import { refreshFactsSummary } from "../../lib/memory/refreshFactsSummary";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { getConversationState } from "../../lib/conversationState";
+
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -890,24 +892,69 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
 
-  // 🛡️ Anti-phishing (EARLY EXIT antes de guardar mensajes/uso/tokens)
+  // ✅ OPTION 1 (Single Exit): una sola salida para enviar/guardar/memoria
+  let handled = false;
+  let reply: string | null = null;
+  let replySource: string | null = null;
+  let lastIntent: string | null = null;
+
+  function setReply(text: string, source: string, intent?: string | null) {
+    handled = true;
+    reply = text;
+    replySource = source;
+    if (intent !== undefined) lastIntent = intent;
+  }
+
+  // ✅ DECLÁRALO AQUÍ ARRIBA (antes de finalizeReply)
+  let INTENCION_FINAL_CANONICA: string | null = null;
+
+  async function finalizeReply() {
+    if (!handled || !reply) return;
+
+    const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
+
+    if (ok) {
+      await saveAssistantMessageAndEmit({
+        tenantId: tenant.id,
+        canal,
+        fromNumber: contactoNorm || fromNumber || "anónimo",
+        messageId,
+        content: reply,
+      });
+
+      await rememberAfterReply({
+        tenantId: tenant.id,
+        senderId: contactoNorm || fromNumber || "anónimo",
+        idiomaDestino,
+        userText: userInput,
+        assistantText: reply,
+        lastIntent: lastIntent || INTENCION_FINAL_CANONICA || null,
+      });
+    } else {
+      console.warn("⚠️ finalizeReply: safeEnviarWhatsApp falló; no guardo assistant/memoria.", { replySource });
+    }
+  }
+
+  // 🛡️ Anti-phishing (Single Exit): NO enviar aquí; capturar y salir por finalize
   {
+    let phishingReply: string | null = null;
+
     const handledPhishing = await antiPhishingGuard({
       pool,
       tenantId: tenant.id,
       channel: "whatsapp",
-      senderId: contactoNorm,     // número del cliente
-      messageId,                // SID de Twilio
-      userInput,                // texto recibido
-      idiomaDestino,            // ✅ igual que en Meta
+      senderId: contactoNorm,
+      messageId,
+      userInput,
+      idiomaDestino,
       send: async (text: string) => {
-        // ✅ usa el wrapper que también contabiliza uso_mensual
-        await safeEnviarWhatsApp(tenant.id, 'whatsapp', messageId, fromNumber, text);
+        phishingReply = text; // ✅ solo capturo
       },
     });
 
     if (handledPhishing) {
-      // Ya respondió con mensaje seguro, marcó spam y cortó el flujo.
+      setReply(phishingReply || (idiomaDestino === "en" ? "Got it." : "Perfecto."), "phishing", "seguridad");
+      await finalizeReply();
       return;
     }
   }
@@ -978,6 +1025,9 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     const canalEnvio = canal;      // 'whatsapp'
     const senderId = contactoNorm;
 
+    const state = await getConversationState(tenant.id, canalEnvio, senderId);
+    console.log("🧩 conversation_state =", state);
+
     const { rows: clienteRows } = await pool.query(
       `SELECT estado, human_override, nombre, email, telefono, pais, segmento, info_explicada
         FROM clientes
@@ -1007,25 +1057,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
                 : `No tengo el link de pago configurado. Pídeselo al equipo para enviártelo.`
             );
 
-      const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, fromNumber, mensajePago);
-
-      if (ok) {
-        await saveAssistantMessageAndEmit({
-          tenantId,
-          canal: canalEnvio,
-          fromNumber: contactoNorm || 'anónimo',
-          messageId,
-          content: mensajePago,
-        });
-        await rememberAfterReply({
-          tenantId,
-          senderId: contactoNorm || "anónimo",
-          idiomaDestino,
-          userText: userInput,
-          assistantText: mensajePago,
-          lastIntent: "pago",
-        });
-      }
+      setReply(mensajePago, "pago-link", "pago");
+      await finalizeReply();
       return;
     }
 
@@ -1056,27 +1089,9 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           ? "Perfect 👍\nWe’ll confirm your payment and someone from the team will contact you to activate your account."
           : "Perfecto 👍\nVamos a confirmar tu pago y una persona del equipo se pondrá en contacto contigo para la activación de tu cuenta.";
 
-      const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, fromNumber, msgPago);
-
-      if (ok) {
-        await saveAssistantMessageAndEmit({
-          tenantId,
-          canal: canalEnvio,
-          fromNumber: senderId || 'anónimo',
-          messageId,
-          content: msgPago,
-        });
-        await rememberAfterReply({
-          tenantId,
-          senderId: senderId || 'anónimo',
-          idiomaDestino,
-          userText: userInput,
-          assistantText: msgPago,
-          lastIntent: 'pago', // o la variable de intención que tengas en esta rama
-        });
-      }
-
-      return; // ⬅️ corta TODO el pipeline
+      setReply(msgPago, "pago-confirm", "pago");
+      await finalizeReply();
+      return;
     }
 
     // 4) Si el usuario manda datos (email + telefono + nombre + pais) → guardar y enviar link UNA SOLA VEZ
@@ -1116,33 +1131,14 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
                   : "Gracias. Ya tengo tus datos.\nPuedes completar el pago usando el enlace que te compartí.\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar."
               );
 
-        const ok = await safeEnviarWhatsApp(tenantId, canalEnvio, messageId, fromNumber, mensajePago);
+        setReply(mensajePago, "pago-datos", "pago");
+        await finalizeReply();
+        return;
+      } // ✅ cierra if (estadoActual...)
+    } // ✅ cierra if (parsed)
+  } // ✅ cierra el bloque CONTROL DE ESTADO
 
-        if (ok) {
-          await saveAssistantMessageAndEmit({
-            tenantId,
-            canal: canalEnvio,
-            fromNumber: senderId || 'anónimo',
-            messageId,
-            content: mensajePago,
-          });
-          // 🧠 GUARDA MEMORIA DE ESTE TURNO (CRÍTICO)
-          await rememberAfterReply({
-            tenantId,
-            senderId: senderId || 'anónimo',
-            idiomaDestino,
-            userText: userInput,
-            assistantText: mensajePago,
-            lastIntent: 'pago', // o la intención real de esta rama
-          });
-        }
-      } else {
-        console.log('💳 [WA] Datos recibidos pero ya estaba esperando pago; no repito link.', { senderId });
-      }
-
-      return; // ⬅️ corta TODO el pipeline
-    }
-  }
+  if (handled) { await finalizeReply(); return; }
 
   console.log("🟠 [WA] Entrando al pipeline NORMAL (sin FlowEngine)", {
     tenantId: tenant.id,
@@ -1153,8 +1149,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     origen,
     mode,
   });
-
-let INTENCION_FINAL_CANONICA = '';
 
 if (BOOKING_ENABLED) {
   // BOOKING FLOW (FASE 1) - estado WAITING_DATETIME
@@ -1174,23 +1168,8 @@ if (BOOKING_ENABLED) {
             ? "I didn’t catch the date and time. Please send it like: Dec 15 at 3pm."
             : "No pude entender la fecha y hora. Envíamela así: 15 dic a las 3pm.";
 
-        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-        await saveAssistantMessageAndEmit({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: fromNumber || "anónimo",
-          messageId,
-          content: reply,
-        });
-        await rememberAfterReply({
-          tenantId: tenant.id,
-          senderId: contactoNorm || fromNumber || "anónimo",
-          idiomaDestino,
-          userText: userInput,
-          assistantText: reply,
-          lastIntent: INTENCION_FINAL_CANONICA || null,
-        });
+        setReply(reply, "booking-waiting-datetime-no-parse", "agendar");
+        await finalizeReply();
         return;
       }
 
@@ -1206,23 +1185,8 @@ if (BOOKING_ENABLED) {
             ? "That time is in the past. What date and time would you like instead?"
             : "Esa hora ya pasó. ¿Qué fecha y hora quieres en su lugar?";
 
-        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-        await saveAssistantMessageAndEmit({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: fromNumber || "anónimo",
-          messageId,
-          content: reply,
-        });
-        await rememberAfterReply({
-          tenantId: tenant.id,
-          senderId: contactoNorm || fromNumber || "anónimo",
-          idiomaDestino,
-          userText: userInput,
-          assistantText: reply,
-          lastIntent: INTENCION_FINAL_CANONICA || null,
-        });
+        setReply(reply, "booking-waiting-datetime-past", "agendar");
+        await finalizeReply();
         return;
       }
 
@@ -1238,24 +1202,8 @@ if (BOOKING_ENABLED) {
             ? "That time is not available. Please send another date and time."
             : "Esa hora no está disponible. Envíame otra fecha y hora.";
 
-        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-        await saveAssistantMessageAndEmit({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: fromNumber || "anónimo",
-          messageId,
-          content: reply,
-        });
-        // 🧠 MEMORIA — ESTO ES LO QUE TE FALTABA
-        await rememberAfterReply({
-          tenantId: tenant.id,
-          senderId: contactoNorm,     // número normalizado
-          idiomaDestino,
-          userText: userInput,        // lo que el cliente dijo
-          assistantText: reply,       // lo que Amy respondió
-          lastIntent: "agendar",      // o el intent real que uses
-        });
+        setReply(reply, "booking-waiting-datetime-not-available", "agendar");
+        await finalizeReply();
         return;
       }
 
@@ -1281,23 +1229,8 @@ if (BOOKING_ENABLED) {
           ? `Perfect. I have availability for ${formatted}. What's your full name and email?`
           : `Perfecto. Hay disponibilidad para ${formatted}. ¿Cuál es tu nombre y tu email?`;
 
-      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-      await saveAssistantMessageAndEmit({
-        tenantId: tenant.id,
-        canal,
-        fromNumber: fromNumber || "anónimo",
-        messageId,
-        content: reply,
-      });
-      await rememberAfterReply({
-        tenantId: tenant.id,
-        senderId: contactoNorm || fromNumber || "anónimo",
-        idiomaDestino,
-        userText: userInput,
-        assistantText: reply,
-        lastIntent: INTENCION_FINAL_CANONICA || null,
-      });
+      setReply(reply, "booking-waiting-datetime-available", "agendar");
+      await finalizeReply();
       return;
     }
   } catch (e) {
@@ -1345,25 +1278,8 @@ if (BOOKING_ENABLED) {
           : "Perfecto. ¿Para qué fecha y hora quieres la cita? (Ejemplo: 15 dic a las 3pm)";
 
       // Enviar respuesta (usa el sender REAL que compila en tu proyecto)
-      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-      // Guardar mensaje del bot (opcional pero recomendado, para history)
-      await saveAssistantMessageAndEmit({
-        tenantId: tenant.id,
-        canal,
-        fromNumber: fromNumber || "anónimo",
-        messageId,
-        content: reply,
-      });
-      // 🧠 ACTUALIZAR MEMORIA CONVERSACIONAL
-      await rememberAfterReply({
-        tenantId: tenant.id,
-        senderId: contactoNorm || fromNumber || "anónimo",
-        idiomaDestino,
-        userText: userInput,
-        assistantText: reply,
-        lastIntent: INTENCION_FINAL_CANONICA || null,
-      });
+      setReply(reply, "booking-trigger", "agendar");
+      await finalizeReply();
       return;
     }
   } catch (e) {
@@ -1438,26 +1354,8 @@ if (BOOKING_ENABLED) {
       const cta    = await translateCTAIfNeeded(ctaRaw, idiomaDestino);
       const outWithCTA = isSmallTalkOrCourtesy ? hitSim : appendCTAWithCap(hitSim, cta);
 
-      const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
-      alreadySent = ok ? true : alreadySent;
-
-      if (ok) {
-        await saveAssistantMessageAndEmit({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: contactoNorm || 'anónimo',
-          messageId,
-          content: outWithCTA,
-        });
-        await rememberAfterReply({
-          tenantId: tenant.id,
-          senderId: contactoNorm,
-          idiomaDestino,
-          userText: userInput,
-          assistantText: outWithCTA,
-          lastIntent: INTENCION_FINAL_CANONICA || null,
-        });
-      }
+      setReply(outWithCTA, "faq-sim-first", intentForCTA || "faq");
+      await finalizeReply();
 
       // 🔔 opcional: registrar intención + follow-up (sin forzar intent)
       try {
@@ -1468,7 +1366,7 @@ if (BOOKING_ENABLED) {
         await scheduleFollowUp(intFinal, nivel, userInput);
       } catch {}
 
-      return; // ✅ IMPORTANTÍSIMO: corta el pipeline aquí
+      return;
     }
   } catch (e) {
     console.warn('⚠️ FAQ similitud (prioridad) falló; sigo pipeline normal:', e);
@@ -1578,6 +1476,8 @@ if (BOOKING_ENABLED) {
       ? 'Is there anything else I can help you with?'
       : '¿Hay algo más en lo que te pueda ayudar?';
 
+  if (handled) { await finalizeReply(); return; }
+
   // 🧩 Bloque especial: "quiero más info / need more info"
   if (wantsMoreInfo) {
     // 🔒 GATE
@@ -1594,25 +1494,9 @@ if (BOOKING_ENABLED) {
           idiomaDestino === "en"
             ? "Got it. What exactly do you want: pricing, schedule, or location?"
             : "Perfecto. ¿Qué necesitas exactamente: precios, horarios o ubicación?";
-        const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-        if (ok) {
-          await saveAssistantMessageAndEmit({
-            tenantId: tenant.id,
-            canal,
-            fromNumber: contactoNorm || "anónimo",
-            messageId,
-            content: reply,
-          });
-          // 🧠 MEMORIA CONVERSACIONAL (OBLIGATORIO)
-          await rememberAfterReply({
-            tenantId: tenant.id,
-            senderId: contactoNorm || fromNumber || "anónimo",
-            idiomaDestino,
-            userText: userInput,
-            assistantText: reply,
-            lastIntent: INTENCION_FINAL_CANONICA || null,
-          });
-        }
+
+        setReply(reply, "more-info-already-explained", "pedir_info");
+        await finalizeReply();
         return;
       } else {
         const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
@@ -1692,9 +1576,7 @@ if (BOOKING_ENABLED) {
             reply = `${saludo}\n\n${reply}`;
           }
 
-          await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-          // ✅ marcar info_explicada
+          // ✅ marcar info_explicada ANTES de responder (para que quede consistente aunque falle send)
           try {
             await pool.query(
               `INSERT INTO clientes (tenant_id, canal, contacto, info_explicada, updated_at)
@@ -1707,22 +1589,8 @@ if (BOOKING_ENABLED) {
             console.warn("⚠️ No se pudo actualizar info_explicada:", e);
           }
 
-          await saveAssistantMessageAndEmit({
-            tenantId: tenant.id,
-            canal,
-            fromNumber: contactoNorm || 'anónimo',
-            messageId,
-            content: reply,
-          });
-          // 🔴 ESTO ES LO QUE FALTABA (MEMORIA)
-          await rememberAfterReply({
-            tenantId: tenant.id,
-            senderId: contactoNorm || fromNumber || "anónimo",
-            idiomaDestino,
-            userText: userInput,
-            assistantText: reply,
-            lastIntent: INTENCION_FINAL_CANONICA || null,
-          });
+          setReply(reply, "more-info-llm", "pedir_info");
+          await finalizeReply();
 
           try {
             await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, 'pedir_info', 2, messageId);
@@ -1730,7 +1598,7 @@ if (BOOKING_ENABLED) {
             console.warn('⚠️ No se pudo registrar sales_intelligence (more info):', e);
           }
 
-          return; // ✅ Solo retornamos si respondimos
+          return;
         }
 
         // Si reply es null, NO retornamos: dejamos que el pipeline normal siga.
@@ -1817,58 +1685,52 @@ if (BOOKING_ENABLED) {
       const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
       const outWithCTA = appendCTAWithCap(out, ctaX);
 
-      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
-
-      alreadySent = true;
-
-      // ⬇️ Fallback: si pidió precios y el mensaje final no los trae, manda un resumen breve
-      if (askedPrice && !(/\$|S\/\.?\s?|\b\d{1,3}(?:[.,]\d{2})\b/.test(out))) {
+      // ✅ Fallback: si pidió precios y el texto final no trae montos, PREPEND una línea/resumen (sin enviar aparte)
+      if (askedPrice && !(/\$|S\/\.?\s?|\b\d{1,3}(?:[.,]\d{2})\b/.test(outWithCTA))) {
         try {
           const precioFAQ = await fetchFaqPrecio(tenant.id, canal);
           if (precioFAQ?.trim()) {
-            // Tomar 2–3 líneas con montos
             const resumen = precioFAQ
               .split('\n')
               .filter(l => /\$|S\/\.?\s?|\b\d{1,3}(?:[.,]\d{2})\b/.test(l))
               .slice(0, 3)
-              .join('\n');
-            if (resumen) {
-              await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, resumen);
-              alreadySent = true;
+              .join('\n')
+              .trim();
 
+            if (resumen) {
+              // lo metemos al principio del mismo mensaje
+              const merged = [resumen, "", outWithCTA].join("\n\n").trim();
+              setReply(
+                merged,
+                "fast-path-multi",
+                intentForCTA || top?.[0]?.intent || INTENCION_FINAL_CANONICA || null
+              );
+              await finalizeReply();
+              return;
             }
           }
         } catch {}
       }
-      
-        await saveAssistantMessageAndEmit({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: contactoNorm || 'anónimo',
-          messageId,
-          content: outWithCTA,
-        });
-        // 🧠 Memoria: SIEMPRE después de enviar/guardar respuesta
-        await rememberAfterReply({
-          tenantId: tenant.id,
-          senderId: contactoNorm || "anónimo",
-          idiomaDestino,
-          userText: userInput,
-          assistantText: outWithCTA,
-          lastIntent: top?.[0]?.intent || "multi", // usa aquí la variable real que ya tengas
-        });
 
-        // 🔔 Registrar venta si aplica + follow-up
-        try {
-          const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-          const intFinal = normalizeIntentAlias(det?.intencion || '');
-          await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, det?.nivel_interes ?? 1, messageId);
-          await scheduleFollowUp(intFinal, det?.nivel_interes ?? 1, userInput);
-        } catch (e) {
-          console.warn('⚠️ No se pudo registrar sales_intelligence en fast-path:', e);
-        }
+      setReply(
+        outWithCTA,
+        "fast-path-multi",
+        intentForCTA || top?.[0]?.intent || INTENCION_FINAL_CANONICA || null
+      );
 
-        return; // ⬅️ salida fast-path
+      // 🔔 Registrar venta si aplica + follow-up (ANTES del finalize no importa; no depende del send)
+      try {
+        const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+        const intFinal = normalizeIntentAlias((det?.intencion || '').toLowerCase());
+        const nivel = det?.nivel_interes ?? 1;
+        await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel, messageId);
+        await scheduleFollowUp(intFinal, nivel, userInput);
+      } catch (e) {
+        console.warn('⚠️ No se pudo registrar sales_intelligence en fast-path:', e);
+      }
+
+      await finalizeReply();
+      return;
       }
     }
   } catch (e) {
@@ -2032,81 +1894,26 @@ if (BOOKING_ENABLED) {
   }
 
     // 💬 Small-talk tipo "hello how are you" / "hola como estas"
-  if (smallTalkRegex.test(userInput.trim())) {
+  if (!handled && smallTalkRegex.test(userInput.trim())) {
     const saludoSmall = buildSaludoSmallTalk(tenant, idiomaDestino);
-
-    const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludoSmall);
-
-    if (ok) {
-      await saveAssistantMessageAndEmit({
-        tenantId: tenant.id,
-        canal,
-        fromNumber: contactoNorm || 'anónimo',
-        messageId,
-        content: saludoSmall,
-      });
-
-      await rememberAfterReply({
-        tenantId: tenant.id,
-        senderId: contactoNorm,
-        idiomaDestino,
-        userText: userInput,
-        assistantText: saludoSmall,
-        lastIntent: "saludo",
-      });
-    }
+    setReply(saludoSmall, "smalltalk", "saludo");
+    await finalizeReply();
     return;
   }
 
   // 💬 Saludo puro: "hola", "hello", "buenas", etc.
-  if (saludoPuroRegex.test(userInput.trim())) {
+  if (!handled && saludoPuroRegex.test(userInput.trim())) {
     const saludo = buildSaludoConversacional(tenant, idiomaDestino);
-
-    const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, saludo);
-
-    if (ok) {
-      await saveAssistantMessageAndEmit({
-        tenantId: tenant.id,
-        canal,
-        fromNumber: contactoNorm || "anónimo",
-        messageId,
-        content: saludo,
-      });
-
-      await rememberAfterReply({
-        tenantId: tenant.id,
-        senderId: contactoNorm || fromNumber || "anónimo",
-        idiomaDestino,
-        userText: userInput,
-        assistantText: saludo,
-        lastIntent: "saludo",
-      });
-    }
+    setReply(saludo, "saludo", "saludo");
+    await finalizeReply();
     return;
   }
 
   // 🙏 Mensaje de solo "gracias / thank you / thanks"
-  if (graciasPuroRegex.test(userInput.trim())) {
+  if (!handled && graciasPuroRegex.test(userInput.trim())) {
     const respuesta = buildGraciasRespuesta(idiomaDestino);
-
-    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuesta);
-
-    await saveAssistantMessageAndEmit({
-      tenantId: tenant.id,
-      canal,
-      fromNumber: contactoNorm || 'anónimo',
-      messageId,
-      content: respuesta,
-    });
-    // 🧠 CERRAR TURNO EN MEMORIA (OBLIGATORIO)
-    await rememberAfterReply({
-      tenantId: tenant.id,
-      senderId: contactoNorm || fromNumber || 'anónimo',
-      idiomaDestino,
-      userText: userInput,
-      assistantText: respuesta,
-      lastIntent: 'agradecimiento',
-    });
+    setReply(respuesta, "gracias", "agradecimiento");
+    await finalizeReply();
     return;
   }
 
@@ -2147,25 +1954,7 @@ if (BOOKING_ENABLED) {
         ? out                         // ❌ NO CTA si es saludo / gracias / ok
         : appendCTAWithCap(out, ctaX); // ✅ CTA normal en el resto de casos
 
-      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
-      alreadySent = true;
-
-      await saveAssistantMessageAndEmit({
-        tenantId: tenant.id,
-        canal, // aquí ya vale 'whatsapp'
-        fromNumber: contactoNorm || 'anónimo',
-        messageId,
-        content: outWithCTA,
-      });
-      // 🧠 MEMORIA — OBLIGATORIO
-      await rememberAfterReply({
-        tenantId: tenant.id,
-        senderId: contactoNorm,
-        idiomaDestino,
-        userText: userInput,
-        assistantText: outWithCTA,
-        lastIntent: INTENCION_FINAL_CANONICA || null,
-      });
+      setReply(outWithCTA, "early-return", intenCanon || null);
 
       // (Opcional) métricas / follow-up + registrar venta si aplica
       try {
@@ -2181,7 +1970,9 @@ if (BOOKING_ENABLED) {
         console.warn('⚠️ No se pudo registrar sales_intelligence en EARLY_RETURN (WA):', e);
       }
 
-      return; // ✅ Solo retornas si hiciste EARLY RETURN OK
+      await finalizeReply();
+      return;
+
     } catch (e) {
       console.warn('❌ EARLY_RETURN helper falló; sigo con pipeline FAQ/intents:', e);
       // ⛔️ Sin return aquí: continúa al pipeline de FAQ / intents
@@ -2197,43 +1988,6 @@ if (BOOKING_ENABLED) {
 
   let intencionProc = intencionLower; // se actualizará tras traducir (si aplica)
   let intencionParaFaq = intencionLower; // esta será la que usemos para consultar FAQ
-
-  // 🔄 INTENCIÓN: Solo "agradecimiento"
-  // (Los saludos ya están manejados arriba con regex → DO NOT DUPLICATE)
-  if (intencionLower === "agradecimiento" && graciasPuroRegex.test(userInput.trim())) {
-    let respuesta = "";
-
-    if (idiomaDestino === 'en') {
-      respuesta = "You're welcome! If you need anything else, just let me know.";
-    } else {
-      respuesta = "¡Con gusto! Si necesitas algo más, solo dime.";
-    }
-
-    try {
-      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuesta);
-
-      await saveAssistantMessageAndEmit({
-        tenantId: tenant.id,
-        canal,
-        fromNumber: contactoNorm || 'anónimo',
-        messageId,
-        content: respuesta,
-      });
-      // 🧠 MEMORIA — OBLIGATORIO
-      await rememberAfterReply({
-        tenantId: tenant.id,
-        senderId: contactoNorm || fromNumber || "anónimo",
-        idiomaDestino,
-        userText: userInput,
-        assistantText: respuesta,
-        lastIntent: "agradecimiento",
-      });
-      return;
-    } catch (err) {
-      console.error("❌ Error enviando respuesta rápida de agradecimiento:", err);
-      // Continuar al flujo normal si hay error
-    }
-  }
 
     // Paso 1: Detectar idioma y traducir para evaluar intención
     const textoTraducido = idiomaDestino !== 'es'
@@ -2351,33 +2105,10 @@ if (BOOKING_ENABLED) {
             out = `${faqHorario}\n\n${faqPrecio}`;
           }
 
-          // CTA consistente con el idioma
-          const CTA_TXT =
-            idiomaDestino === 'en'
-              ? 'Is there anything else I can help you with?'
-              : '¿Hay algo más en lo que te pueda ayudar?';
-
           out = `${out}\n\n${CTA_TXT}`;
 
-          await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, out);
-          alreadySent = true;
-
-          await saveAssistantMessageAndEmit({
-            tenantId: tenant.id,
-            canal,
-            fromNumber: contactoNorm || 'anónimo',
-            messageId,
-            content: out,
-          });
-          // 🧠 MEMORIA — OBLIGATORIO
-          await rememberAfterReply({
-            tenantId: tenant.id,
-            senderId: contactoNorm || fromNumber || "anónimo",
-            idiomaDestino,
-            userText: userInput,
-            assistantText: out,
-            lastIntent: INTENCION_FINAL_CANONICA || null,
-          });
+          setReply(out, "combo-precio-horario", "precio");
+          await finalizeReply();
 
           // registra intención/seguimiento con "precio" como señal de venta
           try {
@@ -2387,7 +2118,7 @@ if (BOOKING_ENABLED) {
             await scheduleFollowUp(intFinal, det?.nivel_interes ?? 1, userInput);
           } catch {}
 
-          return; // ⬅️ ya respondimos el combo; salimos
+          return;
         }
       } catch (e) {
         console.warn('⚠️ Heurística precio+horario falló; sigo pipeline normal:', e);
@@ -2539,25 +2270,8 @@ if (BOOKING_ENABLED) {
         const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
         const outWithCTA = appendCTAWithCap(out, ctaX);
 
-        await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
-        alreadySent = true;
-
-        await saveAssistantMessageAndEmit({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: contactoNorm || 'anónimo',
-          messageId,
-          content: outWithCTA,
-        });
-        // 🧠 MEMORIA — OBLIGATORIO
-        await rememberAfterReply({
-          tenantId: tenant.id,
-          senderId: contactoNorm,
-          idiomaDestino,
-          userText: userInput,
-          assistantText: outWithCTA,
-          lastIntent: INTENCION_FINAL_CANONICA || null,
-        });
+        setReply(outWithCTA, "intent-matcher", respIntent?.intent || INTENCION_FINAL_CANONICA || null);
+        await finalizeReply();
 
         // 🔔 Registrar venta si aplica + follow-up
         try {
@@ -2572,7 +2286,7 @@ if (BOOKING_ENABLED) {
           console.warn('⚠️ No se pudo programar follow-up post-intent (WA):', e);
         }
 
-        return; // <- sales registrado; salir
+        return;
       }
 
     } catch (e) {
@@ -2705,25 +2419,8 @@ if (BOOKING_ENABLED) {
     const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
     const outWithCTA = appendCTAWithCap(out, ctaX);
 
-    await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, outWithCTA);
-    alreadySent = true;
-
-    await saveAssistantMessageAndEmit({
-      tenantId: tenant.id,
-      canal,
-      fromNumber: contactoNorm || 'anónimo',
-      messageId,
-      content: outWithCTA,
-    });
-    // 🧠 MEMORIA — OBLIGATORIO
-    await rememberAfterReply({
-      tenantId: tenant.id,
-      senderId: contactoNorm,
-      idiomaDestino,
-      userText: userInput,
-      assistantText: outWithCTA,
-      lastIntent: INTENCION_FINAL_CANONICA || null,
-    });
+    setReply(outWithCTA, "faq-direct", INTENCION_FINAL_CANONICA || intencionParaFaq || null);
+    await finalizeReply();
 
     // 🔔 Registrar venta si aplica + follow-up
     try {
@@ -2739,7 +2436,7 @@ if (BOOKING_ENABLED) {
       console.warn('⚠️ No se pudo programar follow-up tras FAQ (WA):', e);
     }
 
-    return; // 🔚 importante para no caer a los bloques de abajo
+    return;
   }
 
   // Si NO hubo FAQ directa → similaridad
@@ -2780,24 +2477,8 @@ if (BOOKING_ENABLED) {
       const withDefaultCta = cta5 ? respuesta : `${respuesta}\n\n${CTA_TXT}`;
       const respuestaWithCTA = appendCTAWithCap(withDefaultCta, cta5);
 
-      await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuestaWithCTA);
-
-      await saveAssistantMessageAndEmit({
-        tenantId: tenant.id,
-        canal,
-        fromNumber: contactoNorm || 'anónimo',
-        messageId,
-        content: respuestaWithCTA,
-      });
-      // 🧠 MEMORIA (OBLIGATORIO)
-      await rememberAfterReply({
-        tenantId: tenant.id,
-        senderId: contactoNorm,
-        idiomaDestino,
-        userText: userInput,
-        assistantText: respuestaWithCTA,
-        lastIntent: INTENCION_FINAL_CANONICA || null,
-      });
+      setReply(respuestaWithCTA, "short-or-nonletters", INTENCION_FINAL_CANONICA || null);
+      await finalizeReply();
     }
     // registra venta si aplica
     try {
@@ -2807,6 +2488,8 @@ if (BOOKING_ENABLED) {
     } catch {}
     return;
   }
+
+  if (handled) { await finalizeReply(); return; }
 
   // 🧠 Si no hay respuesta aún, generar con OpenAI y registrar como FAQ sugerida
   if (!respuestaDesdeFaq && !respuesta) {
@@ -2979,85 +2662,19 @@ if (BOOKING_ENABLED) {
   let respuestaFinal: string;
 
   if (isSmallTalkOrCourtesy) {
-    // 🙅‍♂️ Si el usuario solo dijo "hola", "buenos días", "thanks", etc. → SIN CTA
+    // 🙅‍♂️ Cortesía/saludo: SIN CTA
     respuestaFinal = respuesta;
   } else {
-    const withDefaultCta = cta5 ? respuesta : `${respuesta}\n\n${CTA_TXT}`;
-    respuestaFinal = isSmallTalkOrCourtesy
-      ? respuesta
-      : appendCTAWithCap(respuesta, cta5); // si no hay cta5, no agrega nada
+    // ✅ Si existe CTA configurado, lo anexas; si no, usas CTA por defecto
+    respuestaFinal = cta5
+      ? appendCTAWithCap(respuesta, cta5)
+      : `${respuesta}\n\n${CTA_TXT}`;
   }
 
-  if (!alreadySent) {
-    const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, respuestaFinal);
+  if (!handled) {
+    setReply(respuestaFinal, "fallback-final", INTENCION_FINAL_CANONICA || intenCanon || null);
+  }
 
-    if (ok) {
-      alreadySent = true;
-
-      await saveAssistantMessageAndEmit({
-        tenantId: tenant.id,
-        canal,
-        fromNumber: contactoNorm || fromNumber || "anónimo",
-        messageId,
-        content: respuestaFinal,
-      });
-
-      await rememberAfterReply({
-        tenantId: tenant.id,
-        senderId: contactoNorm || fromNumber || "anónimo",
-        idiomaDestino,
-        userText: userInput,
-        assistantText: respuestaFinal,
-        lastIntent: INTENCION_FINAL_CANONICA || null,
-      });
-
-      // ✅ POST-REPLY: ventas/segmentación/followup (solo si se envió OK)
-      try {
-        const nivel_interes = nivelCanon;
-        let intFinal = intenCanon;
-
-        const textoNormalizado = (userInput || "").trim().toLowerCase();
-        console.log(`🔎 Intención (final) = ${intFinal}, Nivel de interés: ${nivel_interes}`);
-
-        // 🛑 No registrar si es saludo puro
-        const saludos = ["hola", "buenas", "buenos días", "buenas tardes", "buenas noches", "hello", "hi", "hey"];
-        if (saludos.includes(textoNormalizado)) {
-          console.log("⚠️ Mensaje ignorado por ser saludo.");
-          return;
-        }
-
-        // Segmentación con intención final
-        const intencionesCliente = [
-          "comprar", "compra", "pagar", "agendar", "reservar", "confirmar",
-          "interes_clases", "precio"
-        ];
-        if (intencionesCliente.some(p => (intFinal || "").includes(p))) {
-          await pool.query(
-            `UPDATE clientes
-                SET segmento = 'cliente',
-                    updated_at = now()
-              WHERE tenant_id = $1
-                AND canal = $2
-                AND contacto = $3
-                AND (segmento = 'lead' OR segmento IS NULL)`,
-            [tenant.id, canal, contactoNorm]
-          );
-        }
-
-        // 🔥 Registrar en sales_intelligence **solo si es venta**
-        await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel_interes, messageId);
-
-        // 🚀 Follow-up con intención final
-        if (nivel_interes >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
-          await scheduleFollowUp(intFinal, nivel_interes, userInput);
-        }
-      } catch (err) {
-        console.error("⚠️ Error en inteligencia de ventas o seguimiento:", err);
-      }
-    } else {
-      console.warn("⚠️ safeEnviarWhatsApp falló en fallback final; no guardo memoria/assistant.");
+  await finalizeReply();
+  return;
     }
-
-    return;
-  }
-}
