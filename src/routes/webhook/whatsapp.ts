@@ -823,6 +823,64 @@ export async function procesarMensajeWhatsApp(
   });
 
   // ===============================
+  // 🔁 Helpers de decisión (BACKEND SOLO DECIDE)
+  // ===============================
+  function transition(params: {
+    flow?: string;
+    step?: string;
+    patchCtx?: any;
+  }) {
+    if (params.flow !== undefined) activeFlow = params.flow;
+    if (params.step !== undefined) activeStep = params.step;
+    if (params.patchCtx && typeof params.patchCtx === "object") {
+      convoCtx = { ...(convoCtx || {}), ...params.patchCtx };
+    }
+  }
+
+  async function replyAndExit(text: string, source: string, intent?: string | null) {
+    setReply(text, source, intent);
+    await finalizeReply();
+    return;
+  }
+
+  // ===============================
+  // 🧭 ROUTER POR STEP (mínimo, backend solo decide)
+  // ===============================
+  if (activeFlow === "generic_sales") {
+    switch (activeStep) {
+
+      case "start": {
+        transition({ step: "need" });
+        return await replyAndExit(
+          "",                 // backend mudo
+          "start-greeting",
+          "saludo"
+        );
+      }
+
+      case "need": {
+        transition({
+          step: "details",
+          patchCtx: {
+            last_bot_action: "ask_need",
+            expected_input: "user_goal",
+          },
+        });
+
+        return await replyAndExit(
+          "",
+          "need-ask",
+          "lead"
+        );
+      }
+
+      // ⬇️ Si no coincide ningún step, NO decides aquí
+      default:
+        break;
+    }
+  }
+
+  // ===============================
   // 🔄 RESET DE FLUJO EN SALUDO (SIN idiomaDestino)
   // ===============================
   const normalizedInput = (userInput || "").trim().toLowerCase();
@@ -852,6 +910,17 @@ export async function procesarMensajeWhatsApp(
     };
   }
 
+  // ===============================
+  // 🧹 Neutralizar memoria larga tras saludo
+  // ===============================
+  if (convoCtx?.reset_reason === "greeting") {
+    convoCtx = {
+      last_bot_action: "handled_greeting",
+    };
+
+    console.log("🧹 facts_summary ignorado por nuevo turno");
+  }
+
   const LEGACY_FLOWS = ["yesno", "followup", "legacy_confirmation"];
 
   if (LEGACY_FLOWS.includes(activeFlow)) {
@@ -862,27 +931,6 @@ export async function procesarMensajeWhatsApp(
     convoCtx = {
       migrated_from: activeFlow,
     };
-  }
-
-  // ===============================
-  // 🔁 Helpers de transición (un solo patrón)
-  // ===============================
-  function transition(params: {
-    flow?: string;
-    step?: string;
-    patchCtx?: any; // merge en convoCtx
-  }) {
-    if (params.flow !== undefined) activeFlow = params.flow!;
-    if (params.step !== undefined) activeStep = params.step!;
-    if (params.patchCtx && typeof params.patchCtx === "object") {
-      convoCtx = { ...(convoCtx || {}), ...params.patchCtx };
-    }
-  }
-
-  async function replyAndExit(text: string, source: string, intent?: string | null) {
-    setReply(text, source, intent);
-    await finalizeReply();
-    return;
   }
 
   // ===============================
