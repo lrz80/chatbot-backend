@@ -1278,6 +1278,21 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     contactoNorm
   );
 
+  // 🔒 GATE: si esta misma entrada ya fue manejada por saludo/flow, no vuelvas a responder
+  const ctx = (state?.context as any) || {};
+  const alreadyHandledThisTurn =
+    ctx.last_bot_action === "handled_greeting" &&
+    (ctx.last_user_text || "").trim().toLowerCase() === (userInput || "").trim().toLowerCase();
+
+  if (alreadyHandledThisTurn) {
+    console.log("⛔ Skipping NORMAL pipeline: already handled greeting", {
+      last_user_text: ctx.last_user_text,
+      userInput,
+    });
+    return;
+  }
+
+  // 👇 después de esto ya puedes hacer yesno/clear sin problema
   if (state?.active_flow === "yesno" && state?.active_step === "awaiting_confirmation") {
     const t = (userInput || "").trim().toLowerCase();
 
@@ -1292,12 +1307,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         intent: (state.context as any)?.intent || null,
       };
 
-      // limpiamos el estado para no quedar pegados
-      await clearConversationState(
-        tenant.id,
-        canal,
-        contactoNorm
-      );
+      await clearConversationState(tenant.id, canal, contactoNorm);
     }
   }
 
