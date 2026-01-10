@@ -823,6 +823,48 @@ export async function procesarMensajeWhatsApp(
   });
 
   // ===============================
+  // 🔄 RESET DE FLUJO EN SALUDO (SIN idiomaDestino)
+  // ===============================
+  const normalizedInput = (userInput || "").trim().toLowerCase();
+
+  const isGreeting =
+    normalizedInput === "hola" ||
+    normalizedInput === "hello" ||
+    normalizedInput === "hi" ||
+    normalizedInput === "hey" ||
+    normalizedInput === "buenas" ||
+    normalizedInput === "buenos dias" ||
+    normalizedInput === "buenas tardes" ||
+    normalizedInput === "buenas noches";
+
+  const canReset =
+    activeFlow !== "handoff" &&
+    activeFlow !== "payment" &&
+    activeStep !== "awaiting_payment";
+
+  if (isGreeting && canReset) {
+    console.log("🔄 Reset de flujo por saludo");
+
+    activeFlow = "generic_sales";
+    activeStep = "start";
+    convoCtx = {
+      reset_reason: "greeting",
+    };
+  }
+
+  const LEGACY_FLOWS = ["yesno", "followup", "legacy_confirmation"];
+
+  if (LEGACY_FLOWS.includes(activeFlow)) {
+    console.log("🧹 Flow legacy detectado, migrando a generic_sales");
+
+    activeFlow = "generic_sales";
+    activeStep = "start";
+    convoCtx = {
+      migrated_from: activeFlow,
+    };
+  }
+
+  // ===============================
   // 🔁 Helpers de transición (un solo patrón)
   // ===============================
   function transition(params: {
