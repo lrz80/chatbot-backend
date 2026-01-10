@@ -895,7 +895,7 @@ export async function procesarMensajeWhatsApp(
   }
 
   // ===============================
-  // 🔄 RESET DE FLUJO EN SALUDO (SIN idiomaDestino)
+  // 🔄 SALUDO – detección, guard y decisión (backend NO habla)
   // ===============================
   const normalizedInput = (userInput || "").trim().toLowerCase();
 
@@ -909,14 +909,7 @@ export async function procesarMensajeWhatsApp(
     normalizedInput === "buenas tardes" ||
     normalizedInput === "buenas noches";
 
-  const canReset =
-    activeFlow !== "handoff" &&
-    activeFlow !== "payment" &&
-    activeStep !== "awaiting_payment";
-
-  // ===============================
-  // 🚫 Guard: ignorar saludo SOLO si es repetido inmediato
-  // ===============================
+  // 🚫 Guard: ignorar SOLO si es saludo repetido inmediato (no loops)
   if (
     isGreeting &&
     convoCtx?.last_bot_action === "handled_greeting" &&
@@ -926,27 +919,23 @@ export async function procesarMensajeWhatsApp(
     return;
   }
 
-  // ===============================
-  // 🧹 Neutralizar memoria larga tras saludo
-  // ===============================
-  if (convoCtx?.reset_reason === "greeting") {
-    convoCtx = {
-      last_bot_action: "handled_greeting",
-    };
+  // 👋 Caso: saludo válido → SOLO DECIDIR (mover estado), backend mudo
+  if (isGreeting) {
+    console.log("👋 Saludo detectado → reset/transition (backend mudo)");
 
-    console.log("🧹 facts_summary ignorado por nuevo turno");
-  }
+    transition({
+      flow: "generic_sales",
+      step: "need",
+      patchCtx: {
+        reset_reason: "greeting",
+        last_bot_action: "handled_greeting",
+        last_user_text: normalizedInput,
+        last_reply_source: "saludo",
+      },
+    });
 
-  const LEGACY_FLOWS = ["yesno", "followup", "legacy_confirmation"];
-
-  if (LEGACY_FLOWS.includes(activeFlow)) {
-    console.log("🧹 Flow legacy detectado, migrando a generic_sales");
-
-    activeFlow = "generic_sales";
-    activeStep = "start";
-    convoCtx = {
-      migrated_from: activeFlow,
-    };
+    // backend mudo: el copy lo debe renderizar tu capa de UI por replySource/step
+    return await replyAndExit("", "saludo", "saludo");
   }
 
   // ===============================
