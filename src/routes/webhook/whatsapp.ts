@@ -52,6 +52,7 @@ import {
   getOrInitConversationState,
   clearConversationState
 } from "../../lib/conversationState";
+import { handleActiveFlow } from "../../lib/flows/handleActiveFlow";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -1309,6 +1310,26 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
       await clearConversationState(tenant.id, canal, contactoNorm);
     }
+  }
+
+  // ✅ FLOW GATE: si hay flow activo, se maneja aquí y NO cae al pipeline NORMAL
+  if (state?.active_flow && state?.active_step) {
+    const handled = await handleActiveFlow({
+      pool,
+      tenantId: tenant.id,
+      canal,
+      senderId: contactoNorm,
+      userInput,
+      idiomaDestino,
+      state,
+
+      // Inyectamos el envío real de WhatsApp (ajusta firma si aplica)
+      sendText: async (to, text) => {
+        await enviarWhatsAppVoid(tenant.twilio_number, to, text);
+      },
+    });
+
+    if (handled) return;
   }
 
   console.log("🟠 [WA] Entrando al pipeline NORMAL (sin FlowEngine)", {
