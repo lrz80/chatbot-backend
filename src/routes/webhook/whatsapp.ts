@@ -730,6 +730,20 @@ export async function procesarMensajeWhatsApp(
 
   let alreadySent = false;
 
+  // ✅ OPTION 1 (Single Exit): una sola salida para enviar/guardar/memoria
+  let handled = false;
+  let reply: string | null = null;
+  let replySource: string | null = null;
+  let lastIntent: string | null = null;
+
+  // ✅ Decision metadata (backend NO habla, solo decide)
+  let nextAction: {
+    type: string;
+    decision?: "yes" | "no";
+    kind?: string | null;
+    intent?: string | null;
+  } | null = null;
+  
   // Datos básicos del webhook
   const to = body?.To || '';
   const from = body?.From || '';
@@ -1028,20 +1042,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     idiomaDestino = normalizado;
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
   }
-
-  // ✅ OPTION 1 (Single Exit): una sola salida para enviar/guardar/memoria
-  let handled = false;
-  let reply: string | null = null;
-  let replySource: string | null = null;
-  let lastIntent: string | null = null;
-
-  // ✅ Decision metadata (backend NO habla, solo decide)
-  let nextAction: {
-    type: string;
-    decision?: "yes" | "no";
-    kind?: string | null;
-    intent?: string | null;
-  } | null = null;
 
   function setReply(text: string, source: string, intent?: string | null) {
     handled = true;
