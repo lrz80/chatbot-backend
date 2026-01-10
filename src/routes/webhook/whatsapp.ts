@@ -52,7 +52,9 @@ import {
   getOrInitConversationState,
   clearConversationState
 } from "../../lib/conversationState";
-import { handleActiveFlow } from "../../lib/flows/handleActiveFlow";
+import { getTenantCTA, isValidUrl, getGlobalCTAFromTenant, pickCTA } from "../../lib/cta/ctaEngine";
+import { createReplyController } from "../../lib/reply/replyController";
+
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -1312,26 +1314,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
   }
 
-  // ✅ FLOW GATE: si hay flow activo, se maneja aquí y NO cae al pipeline NORMAL
-  if (state?.active_flow && state?.active_step) {
-    const handled = await handleActiveFlow({
-      pool,
-      tenantId: tenant.id,
-      canal,
-      senderId: contactoNorm,
-      userInput,
-      idiomaDestino,
-      state,
-
-      // Inyectamos el envío real de WhatsApp (ajusta firma si aplica)
-      sendText: async (to, text) => {
-        await enviarWhatsAppVoid(tenant.twilio_number, to, text);
-      },
-    });
-
-    if (handled) return;
-  }
-
   console.log("🟠 [WA] Entrando al pipeline NORMAL (sin FlowEngine)", {
     tenantId: tenant.id,
     canal,
@@ -2072,70 +2054,6 @@ if (BOOKING_ENABLED) {
   } catch (e) {
     console.warn('⚠️ Multi-intent fast-path falló; sigo pipeline normal:', e);
   }
-
-  // CTA por intención (usa tenant_ctas.intent_slug en TEXT, no UUID)
-  async function getTenantCTA(tenantId: string, intent: string, channel: string) {
-    const inten = normalizeIntentAlias((intent || '').trim().toLowerCase());
-
-    // 1) Coincidencia exacta por canal o comodín '*'
-    let q = await pool.query(
-      `SELECT cta_text, cta_url
-      FROM tenant_ctas
-      WHERE tenant_id = $1
-        AND intent_slug = $2
-        AND (canal = $3 OR canal = '*')
-      ORDER BY CASE WHEN canal=$3 THEN 0 ELSE 1 END
-      LIMIT 1`,
-      [tenantId, inten, channel]
-    );
-    if (q.rows[0]) return q.rows[0];
-
-    // 2) Fallback 'global' del mismo canal (o '*')
-    q = await pool.query(
-      `SELECT cta_text, cta_url
-      FROM tenant_ctas
-      WHERE tenant_id = $1
-        AND intent_slug = 'global'
-        AND (canal = $2 OR canal = '*')
-      ORDER BY CASE WHEN canal=$2 THEN 0 ELSE 1 END
-      LIMIT 1`,
-      [tenantId, channel]
-    );
-    return q.rows[0] || null;
-  }
-
-  // ✅ Valida URL simple
-  function isValidUrl(u?: string) {
-    try {
-      if (!u) return false;
-      if (!/^https?:\/\//i.test(u)) return false;
-      new URL(u);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  // ✅ CTA “global” guardada en las columnas del tenant (no en tenant_ctas)
-  function getGlobalCTAFromTenant(tenant: any) {
-    const t = (tenant?.cta_text || '').trim();
-    const u = (tenant?.cta_url  || '').trim();
-    if (t && isValidUrl(u)) return { cta_text: t, cta_url: u };
-    return null;
-  }
-
-  // Selecciona CTA por intención; si no hay, usa CTA global del tenant
-  async function pickCTA(tenant: any, intent: string | null, channel: string) {
-  if (intent) {
-    const byIntent = await getTenantCTA(tenant.id, intent, channel);
-    if (byIntent) return byIntent;
-  }
-  // fallback opcional desde columnas del tenant (si las usas)
-  const t = (tenant?.cta_text || '').trim();
-  const u = (tenant?.cta_url  || '').trim();
-  if (t && isValidUrl(u)) return { cta_text: t, cta_url: u };
-  return null;
-}
 
   // ⏲️ Programador de follow-up (WhatsApp) — FIX: hard-gate anti "gracias/ok/saludos"
   async function scheduleFollowUp(intFinal: string, nivel: number, userTextRaw: string) {
