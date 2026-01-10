@@ -743,7 +743,7 @@ export async function procesarMensajeWhatsApp(
     kind?: string | null;
     intent?: string | null;
   } | null = null;
-  
+
   // Datos básicos del webhook
   const to = body?.To || '';
   const from = body?.From || '';
@@ -914,14 +914,16 @@ export async function procesarMensajeWhatsApp(
     activeFlow !== "payment" &&
     activeStep !== "awaiting_payment";
 
-  if (isGreeting && canReset) {
-    console.log("🔄 Reset de flujo por saludo");
-
-    activeFlow = "generic_sales";
-    activeStep = "start";
-    convoCtx = {
-      reset_reason: "greeting",
-    };
+  // ===============================
+  // 🚫 Guard: ignorar saludo SOLO si es repetido inmediato
+  // ===============================
+  if (
+    isGreeting &&
+    convoCtx?.last_bot_action === "handled_greeting" &&
+    convoCtx?.last_user_text === normalizedInput
+  ) {
+    console.log("🚫 Saludo repetido inmediato ignorado");
+    return;
   }
 
   // ===============================
