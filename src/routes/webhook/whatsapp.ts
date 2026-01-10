@@ -49,7 +49,7 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import {
   getConversationState,
   setConversationState,
-  patchConversationState,
+  getOrInitConversationState,
   clearConversationState
 } from "../../lib/conversationState";
 
@@ -801,6 +801,49 @@ export async function procesarMensajeWhatsApp(
   await ensureClienteBase(tenant.id, canal, contactoNorm);
 
   // ===============================
+  // 🧠 conversation_state – inicio del turno (Flow/Step/Context)
+  // ===============================
+  const st = await getOrInitConversationState({
+    tenantId: tenant.id,
+    canal,
+    senderId: contactoNorm,
+    defaultFlow: "generic_sales",
+    defaultStep: "start",
+  });
+
+  // Estado “autoritativo” del hilo
+  let activeFlow = st.active_flow || "generic_sales";
+  let activeStep = st.active_step || "start";
+  let convoCtx = (st.context && typeof st.context === "object") ? st.context : {};
+
+  console.log("🧠 convo_state (start) =", {
+    activeFlow,
+    activeStep,
+    convoCtx,
+  });
+
+  // ===============================
+  // 🔁 Helpers de transición (un solo patrón)
+  // ===============================
+  function transition(params: {
+    flow?: string;
+    step?: string;
+    patchCtx?: any; // merge en convoCtx
+  }) {
+    if (params.flow !== undefined) activeFlow = params.flow!;
+    if (params.step !== undefined) activeStep = params.step!;
+    if (params.patchCtx && typeof params.patchCtx === "object") {
+      convoCtx = { ...(convoCtx || {}), ...params.patchCtx };
+    }
+  }
+
+  async function replyAndExit(text: string, source: string, intent?: string | null) {
+    setReply(text, source, intent);
+    await finalizeReply();
+    return;
+  }
+
+  // ===============================
   // 🔎 DEBUG: estado de flujo (clientes)
   // ===============================
   try {
@@ -923,27 +966,62 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   async function finalizeReply() {
     if (!handled || !reply) return;
 
+    // ✅ Sender único para estado/memoria (usa el mismo criterio siempre)
+    const senderKey = contactoNorm || fromNumber || "anónimo";
+
+    // (Opcional pero recomendado) Guarda “qué se respondió” en el contexto
+    // para anti-loop y trazabilidad.
+    const nextCtx = {
+      ...(convoCtx && typeof convoCtx === "object" ? convoCtx : {}),
+      last_reply_source: replySource || null,
+      last_intent: (lastIntent || INTENCION_FINAL_CANONICA || null),
+      last_assistant_text: reply,
+      last_user_text: userInput,
+      last_turn_at: new Date().toISOString(),
+    };
+
+    // ⚠️ DECISIÓN IMPORTANTE:
+    // Guarda el estado SOLO si se envió ok.
+    // (Si falla el envío, no avances el hilo para no desincronizar conversación real vs DB.)
     const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
 
     if (ok) {
+      // ===============================
+      // 🧠 1) Guardar conversation_state (UNA SOLA VEZ)
+      // ===============================
+      await setConversationState(tenant.id, canal, senderKey, {
+        activeFlow: activeFlow || "generic_sales",
+        activeStep: activeStep || "start",
+        context: nextCtx,
+      });
+
+      // ===============================
+      // 💾 2) Guardar mensaje + emitir
+      // ===============================
       await saveAssistantMessageAndEmit({
         tenantId: tenant.id,
         canal,
-        fromNumber: contactoNorm || fromNumber || "anónimo",
+        fromNumber: senderKey,
         messageId,
         content: reply,
       });
 
+      // ===============================
+      // 🧠 3) Memoria LLM (si aplica)
+      // ===============================
       await rememberAfterReply({
         tenantId: tenant.id,
-        senderId: contactoNorm || fromNumber || "anónimo",
+        senderId: senderKey,
         idiomaDestino,
         userText: userInput,
         assistantText: reply,
         lastIntent: lastIntent || INTENCION_FINAL_CANONICA || null,
       });
+
+      // ✅ Mantén tus variables en sync
+      convoCtx = nextCtx;
     } else {
-      console.warn("⚠️ finalizeReply: safeEnviarWhatsApp falló; no guardo assistant/memoria.", { replySource });
+      console.warn("⚠️ finalizeReply: safeEnviarWhatsApp falló; no guardo assistant/memoria/estado.", { replySource });
     }
   }
 
@@ -965,9 +1043,20 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     });
 
     if (handledPhishing) {
-      setReply(phishingReply || (idiomaDestino === "en" ? "Got it." : "Perfecto."), "phishing", "seguridad");
-      await finalizeReply();
-      return;
+      transition({
+        flow: "generic_sales",
+        step: "close",
+        patchCtx: {
+          guard: "phishing",
+          last_bot_action: "blocked_phishing",
+        },
+      });
+
+      return await replyAndExit(
+        phishingReply || (idiomaDestino === "en" ? "Got it." : "Perfecto."),
+        "phishing",
+        "seguridad"
+      );
     }
   }
 
@@ -1073,9 +1162,16 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
                 : `No tengo el link de pago configurado. Pídeselo al equipo para enviártelo.`
             );
 
-      setReply(mensajePago, "pago-link", "pago");
-      await finalizeReply();
-      return;
+      transition({
+        flow: "generic_sales",
+        step: "close",
+        patchCtx: {
+          last_bot_action: "sent_payment_link",
+          payment_link_sent: true,
+        },
+      });
+
+      return await replyAndExit(mensajePago, "pago-link", "pago");
     }
 
     // 1) Si humano tomó la conversación → SILENCIO TOTAL
@@ -1105,9 +1201,17 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           ? "Perfect 👍\nWe’ll confirm your payment and someone from the team will contact you to activate your account."
           : "Perfecto 👍\nVamos a confirmar tu pago y una persona del equipo se pondrá en contacto contigo para la activación de tu cuenta.";
 
-      setReply(msgPago, "pago-confirm", "pago");
-      await finalizeReply();
-      return;
+      transition({
+        flow: "generic_sales",
+        step: "close",
+        patchCtx: {
+          guard: "payment",
+          payment_status: "confirmed",
+          last_bot_action: "sent_payment_confirmation",
+        },
+      });
+
+      return await replyAndExit(msgPago, "pago-confirm", "pago");
     }
 
     // 4) Si el usuario manda datos (email + telefono + nombre + pais) → guardar y enviar link UNA SOLA VEZ
@@ -1147,9 +1251,17 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
                   : "Gracias. Ya tengo tus datos.\nPuedes completar el pago usando el enlace que te compartí.\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar."
               );
 
-        setReply(mensajePago, "pago-datos", "pago");
-        await finalizeReply();
-        return;
+        transition({
+          flow: "generic_sales",
+          step: "details",
+          patchCtx: {
+            guard: "payment",
+            awaiting_field: "payment_details", // o el campo específico que pidas en mensajePago
+            last_bot_action: "requested_payment_details",
+          },
+        });
+
+        return await replyAndExit(mensajePago, "pago-datos", "pago");
       } // ✅ cierra if (estadoActual...)
     } // ✅ cierra if (parsed)
   } // ✅ cierra el bloque CONTROL DE ESTADO
@@ -1217,9 +1329,20 @@ if (BOOKING_ENABLED) {
             ? "I didn’t catch the date and time. Please send it like: Dec 15 at 3pm."
             : "No pude entender la fecha y hora. Envíamela así: 15 dic a las 3pm.";
 
-        setReply(reply, "booking-waiting-datetime-no-parse", "agendar");
-        await finalizeReply();
-        return;
+        transition({
+          flow: "generic_booking",
+          step: "awaiting_datetime",
+          patchCtx: {
+            last_bot_action: "asked_datetime",
+            awaiting_field: "datetime",
+            booking: {
+              ...(convoCtx?.booking || {}),
+              datetime: null,
+            },
+          },
+        });
+
+        return await replyAndExit(reply, "booking-waiting-datetime-no-parse", "agendar");
       }
 
       // Duración: por ahora 60min
@@ -1234,9 +1357,17 @@ if (BOOKING_ENABLED) {
             ? "That time is in the past. What date and time would you like instead?"
             : "Esa hora ya pasó. ¿Qué fecha y hora quieres en su lugar?";
 
-        setReply(reply, "booking-waiting-datetime-past", "agendar");
-        await finalizeReply();
-        return;
+        transition({
+          flow: "generic_booking",
+          step: "awaiting_datetime",
+          patchCtx: {
+            booking_status: "waiting_datetime",
+            last_bot_action: "asked_datetime_again",
+            last_datetime_invalid_reason: "past",
+          },
+        });
+
+        return await replyAndExit(reply, "booking-waiting-datetime-past", "agendar");
       }
 
       const ok = await isSlotAvailable({
@@ -1251,9 +1382,17 @@ if (BOOKING_ENABLED) {
             ? "That time is not available. Please send another date and time."
             : "Esa hora no está disponible. Envíame otra fecha y hora.";
 
-        setReply(reply, "booking-waiting-datetime-not-available", "agendar");
-        await finalizeReply();
-        return;
+        transition({
+          flow: "generic_booking",
+          step: "awaiting_datetime",
+          patchCtx: {
+            awaiting_field: "date_time",
+            last_bot_action: "asked_date_time",
+            booking_status: "datetime_not_available",
+          },
+        });
+
+        return await replyAndExit(reply, "booking-waiting-datetime-not-available", "agendar");
       }
 
       // Guardar en sesión y pasar a pedir datos del cliente
@@ -1278,9 +1417,17 @@ if (BOOKING_ENABLED) {
           ? `Perfect. I have availability for ${formatted}. What's your full name and email?`
           : `Perfecto. Hay disponibilidad para ${formatted}. ¿Cuál es tu nombre y tu email?`;
 
-      setReply(reply, "booking-waiting-datetime-available", "agendar");
-      await finalizeReply();
-      return;
+      transition({
+        flow: "generic_sales",
+        step: "collecting_details",
+        patchCtx: {
+          awaiting_field: "date_time",
+          booking_status: "waiting_datetime",
+          last_bot_action: "asked_datetime_available",
+        },
+      });
+
+      return await replyAndExit(reply, "booking-waiting-datetime-available", "agendar");
     }
   } catch (e) {
     console.warn("⚠️ Booking WAITING_DATETIME handler failed:", e);
@@ -1327,9 +1474,19 @@ if (BOOKING_ENABLED) {
           : "Perfecto. ¿Para qué fecha y hora quieres la cita? (Ejemplo: 15 dic a las 3pm)";
 
       // Enviar respuesta (usa el sender REAL que compila en tu proyecto)
-      setReply(reply, "booking-trigger", "agendar");
-      await finalizeReply();
-      return;
+      transition({
+        flow: "generic_sales",
+        step: "booking_details",
+        patchCtx: {
+          last_bot_action: "booking_triggered",
+          booking: {
+            status: "initiated",
+            missing: ["date", "time"], // genérico; luego puedes personalizar por negocio
+          },
+        },
+      });
+
+      return await replyAndExit(reply, "booking-trigger", "agendar");
     }
   } catch (e) {
     console.warn("⚠️ Error en gatillo de booking (WA):", e);
@@ -1403,7 +1560,14 @@ if (BOOKING_ENABLED) {
       const cta    = await translateCTAIfNeeded(ctaRaw, idiomaDestino);
       const outWithCTA = isSmallTalkOrCourtesy ? hitSim : appendCTAWithCap(hitSim, cta);
 
-      setReply(outWithCTA, "faq-sim-first", intentForCTA || "faq");
+      transition({
+        flow: "generic_sales",
+        step: "answer",
+        patchCtx: {
+          last_bot_action: "answered_faq",
+          last_faq_intent: intentForCTA || "faq",
+        },
+      });
       // ✅ YES / NO STATE (DEBE IR AQUÍ)
       const endsAsQuestion = /\?\s*$/.test((outWithCTA || "").trim());
       const looksLikeYesNo =
@@ -1560,9 +1724,16 @@ if (BOOKING_ENABLED) {
             ? "Got it. What exactly do you want: pricing, schedule, or location?"
             : "Perfecto. ¿Qué necesitas exactamente: precios, horarios o ubicación?";
 
-        setReply(reply, "more-info-already-explained", "pedir_info");
-        await finalizeReply();
-        return;
+        transition({
+          flow: "generic_sales",
+          step: "close",
+          patchCtx: {
+            info_explicada: true,
+            last_bot_action: "more_info_blocked",
+          },
+        });
+
+        return await replyAndExit(reply, "more-info-already-explained", "pedir_info");
       } else {
         const startsWithGreeting = /^\s*(hola|hello|hi|hey|buenas(?:\s+(tardes|noches|dias|días))?|buenas|buenos\s+(dias|días))/i
           .test(userInput);
@@ -1683,9 +1854,18 @@ if (BOOKING_ENABLED) {
             console.warn("⚠️ No se pudo actualizar info_explicada:", e);
           }
 
-          setReply(reply, "more-info-llm", "pedir_info");
-          await finalizeReply();
+          transition({
+            flow: "generic_sales",
+            step: "details",
+            patchCtx: {
+              last_bot_action: "asked_missing_info",
+              awaiting_field: "service_or_details",
+              last_intent: "pedir_info",
+            },
+          });
 
+          await replyAndExit(reply, "more-info-llm", "pedir_info");
+        
           try {
             await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, 'pedir_info', 2, messageId);
           } catch (e) {
@@ -1794,17 +1974,48 @@ if (BOOKING_ENABLED) {
             if (resumen) {
               // lo metemos al principio del mismo mensaje
               const merged = [resumen, "", outWithCTA].join("\n\n").trim();
+
+              // ✅ estado: dejamos claro que ya respondimos por fast-path con resumen
+              transition({
+                flow: "generic_sales",
+                step: "answer",
+                patchCtx: {
+                  last_bot_action: "answered_fast_path_summary",
+                  fast_path_intent: intentForCTA || top?.[0]?.intent || INTENCION_FINAL_CANONICA || null,
+                },
+              });
+
               setReply(
                 merged,
                 "fast-path-multi",
                 intentForCTA || top?.[0]?.intent || INTENCION_FINAL_CANONICA || null
               );
+
               await finalizeReply();
               return;
             }
           }
         } catch {}
       }
+
+      // ✅ anti-loop simple: si ya respondimos por fast-path hace 1 turno, evita repetir el mismo patrón
+      if (convoCtx?.last_reply_source === "fast-path-multi" && convoCtx?.last_user_text === userInput) {
+        transition({ step: "close" });
+        return await replyAndExit(
+          idiomaDestino === "en" ? "Got it. Anything else you need?" : "Perfecto. ¿Te ayudo con algo más?",
+          "fast-path-repeat-guard",
+          intentForCTA || top?.[0]?.intent || INTENCION_FINAL_CANONICA || null
+        );
+      }
+
+      transition({
+        flow: "generic_sales",
+        step: "answer",
+        patchCtx: {
+          last_bot_action: "answered_fast_path",
+          fast_path_intent: intentForCTA || top?.[0]?.intent || INTENCION_FINAL_CANONICA || null,
+        },
+      });
 
       setReply(
         outWithCTA,
@@ -1814,13 +2025,13 @@ if (BOOKING_ENABLED) {
 
       // 🔔 Registrar venta si aplica + follow-up (ANTES del finalize no importa; no depende del send)
       try {
-        const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-        const intFinal = normalizeIntentAlias((det?.intencion || '').toLowerCase());
+        const det = await detectarIntencion(userInput, tenant.id, "whatsapp");
+        const intFinal = normalizeIntentAlias((det?.intencion || "").toLowerCase());
         const nivel = det?.nivel_interes ?? 1;
         await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel, messageId);
         await scheduleFollowUp(intFinal, nivel, userInput);
       } catch (e) {
-        console.warn('⚠️ No se pudo registrar sales_intelligence en fast-path:', e);
+        console.warn("⚠️ No se pudo registrar sales_intelligence en fast-path:", e);
       }
 
       await finalizeReply();
@@ -1987,28 +2198,55 @@ if (BOOKING_ENABLED) {
     }
   }
 
-    // 💬 Small-talk tipo "hello how are you" / "hola como estas"
+  // 💬 Small-talk tipo "hello how are you" / "hola como estas"
   if (!handled && smallTalkRegex.test(userInput.trim())) {
-    const saludoSmall = buildSaludoSmallTalk(tenant, idiomaDestino);
-    setReply(saludoSmall, "smalltalk", "saludo");
-    await finalizeReply();
-    return;
+    transition({
+      flow: "generic_sales",
+      step: "need", // después del smalltalk, vuelve a descubrir necesidad
+      patchCtx: {
+        last_bot_action: "handled_smalltalk",
+      },
+    });
+
+    return await replyAndExit(
+      buildSaludoSmallTalk(tenant, idiomaDestino),
+      "smalltalk",
+      "saludo"
+    );
   }
 
   // 💬 Saludo puro: "hola", "hello", "buenas", etc.
   if (!handled && saludoPuroRegex.test(userInput.trim())) {
-    const saludo = buildSaludoConversacional(tenant, idiomaDestino);
-    setReply(saludo, "saludo", "saludo");
-    await finalizeReply();
-    return;
+    transition({
+      flow: "generic_sales",
+      step: "need",
+      patchCtx: {
+        last_bot_action: "handled_greeting",
+      },
+    });
+
+    return await replyAndExit(
+      buildSaludoConversacional(tenant, idiomaDestino),
+      "saludo",
+      "saludo"
+    );
   }
 
   // 🙏 Mensaje de solo "gracias / thank you / thanks"
   if (!handled && graciasPuroRegex.test(userInput.trim())) {
-    const respuesta = buildGraciasRespuesta(idiomaDestino);
-    setReply(respuesta, "gracias", "agradecimiento");
-    await finalizeReply();
-    return;
+    transition({
+      flow: "generic_sales",
+      step: "close", // gracias es cierre, no discovery
+      patchCtx: {
+        last_bot_action: "handled_thanks",
+      },
+    });
+
+    return await replyAndExit(
+      buildGraciasRespuesta(idiomaDestino),
+      "gracias",
+      "agradecimiento"
+    );
   }
 
   // 🔎 Intención antes del EARLY RETURN
@@ -2056,41 +2294,46 @@ if (BOOKING_ENABLED) {
         /(te\s+gustar[ií]a|quieres|deseas|would\s+you\s+like|do\s+you\s+want)/i.test(outWithCTA || "");
 
       if (endsAsQuestion && looksLikeYesNo) {
-        await setConversationState(
-          tenant.id,
-          canal,
-          contactoNorm,
-          {
-            activeFlow: "yesno",
-            activeStep: "awaiting_confirmation",
-            context: {
-              kind: "followup",
-              intent: intenCanon || null,
-            },
-          }
-        );
+        // ✅ Entramos a un mini-flow de confirmación (sí/no) para el próximo turno
+        transition({
+          flow: "yesno",
+          step: "awaiting_confirmation",
+          patchCtx: {
+            kind: "followup",
+            intent: intenCanon || null,
+            last_bot_action: "asked_yesno",
+          },
+        });
       } else {
-        await clearConversationState(
-          tenant.id,
-          canal,
-          contactoNorm
-        );
+        // ✅ No necesitamos yes/no; volvemos al flow genérico (sin borrar fila)
+        transition({
+          flow: "generic_sales",
+          step: "answer",
+          patchCtx: {
+            kind: null,
+            intent: intenCanon || null,
+            last_bot_action: "answered_early_return",
+          },
+        });
+
+        // (Opcional) si quieres “limpiar” algunas llaves del contexto para no arrastrarlas:
+        // convoCtx = { ...convoCtx, kind: null, intent: intenCanon || null };
       }
 
       setReply(outWithCTA, "early-return", intenCanon || null);
 
       // (Opcional) métricas / follow-up + registrar venta si aplica
       try {
-        const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+        const det = await detectarIntencion(userInput, tenant.id, "whatsapp");
         const nivel = det?.nivel_interes ?? 1;
-        const intFinal = normalizeIntentAlias((det?.intencion || '').toLowerCase());
+        const intFinal = normalizeIntentAlias((det?.intencion || "").toLowerCase());
         await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel, messageId);
 
         if (nivel >= 3 || ["interes_clases","reservar","precio","comprar","horario"].includes(intFinal)) {
           await scheduleFollowUp(intFinal, nivel, userInput);
         }
       } catch (e) {
-        console.warn('⚠️ No se pudo registrar sales_intelligence en EARLY_RETURN (WA):', e);
+        console.warn("⚠️ No se pudo registrar sales_intelligence en EARLY_RETURN (WA):", e);
       }
 
       await finalizeReply();
@@ -2255,18 +2498,37 @@ if (BOOKING_ENABLED) {
 
           out = `${out}\n\n${CTA_TXT}`;
 
-          setReply(out, "combo-precio-horario", "precio");
-          await finalizeReply();
+          transition({
+            flow: "generic_sales",
+            step: "answer",
+            patchCtx: {
+              last_bot_action: "answered_price_hours",
+              last_intent_hint: "precio",
+            },
+          });
 
           // registra intención/seguimiento con "precio" como señal de venta
           try {
-            const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
-            const intFinal = normalizeIntentAlias(det?.intencion || 'precio');
-            await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, det?.nivel_interes ?? 1, messageId);
-            await scheduleFollowUp(intFinal, det?.nivel_interes ?? 1, userInput);
-          } catch {}
+            const det = await detectarIntencion(userInput, tenant.id, "whatsapp");
+            const intFinal = normalizeIntentAlias(det?.intencion || "precio");
+            const nivel = det?.nivel_interes ?? 1;
 
-          return;
+            await recordSalesIntent(
+              tenant.id,
+              contactoNorm,
+              canal,
+              userInput,
+              intFinal,
+              nivel,
+              messageId
+            );
+
+            await scheduleFollowUp(intFinal, nivel, userInput);
+          } catch (e) {
+            console.warn("⚠️ No se pudo registrar sales_intelligence en combo-precio-horario:", e);
+          }
+
+          return await replyAndExit(out, "combo-precio-horario", "precio");
         }
       } catch (e) {
         console.warn('⚠️ Heurística precio+horario falló; sigo pipeline normal:', e);
@@ -2443,22 +2705,45 @@ if (BOOKING_ENABLED) {
         const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
         const outWithCTA = appendCTAWithCap(out, ctaX);
 
-        setReply(outWithCTA, "intent-matcher", respIntent?.intent || INTENCION_FINAL_CANONICA || null);
-        await finalizeReply();
+        transition({
+          flow: "generic_sales",
+          step: "answer",
+          patchCtx: {
+            last_bot_action: "answered_intent",
+            matched_intent: respIntent?.intent || INTENCION_FINAL_CANONICA || null,
+          },
+        });
+
+        setReply(
+          outWithCTA,
+          "intent-matcher",
+          respIntent?.intent || INTENCION_FINAL_CANONICA || null
+        );
 
         // 🔔 Registrar venta si aplica + follow-up
         try {
-          let intFinal = (respIntent.intent || '').toLowerCase().trim();
-          if (intFinal === 'duda') intFinal = buildDudaSlug(userInput);
+          let intFinal = (respIntent?.intent || "").toLowerCase().trim();
+          if (intFinal === "duda") intFinal = buildDudaSlug(userInput);
           intFinal = normalizeIntentAlias(intFinal);
-          const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+
+          const det = await detectarIntencion(userInput, tenant.id, "whatsapp");
           const nivel = det?.nivel_interes ?? 1;
+
           await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivel, messageId);
           await scheduleFollowUp(intFinal, nivel, userInput);
+
+          // (Opcional) deja evidencia en convoCtx para debugging y anti-loop
+          transition({
+            patchCtx: {
+              last_sales_intent: intFinal,
+              last_sales_level: nivel,
+            },
+          });
         } catch (e) {
-          console.warn('⚠️ No se pudo programar follow-up post-intent (WA):', e);
+          console.warn("⚠️ No se pudo programar follow-up post-intent (WA):", e);
         }
 
+        await finalizeReply();
         return;
       }
 
@@ -2615,23 +2900,43 @@ if (BOOKING_ENABLED) {
     const ctaX    = await translateCTAIfNeeded(ctaXraw, idiomaDestino);
     const outWithCTA = appendCTAWithCap(out, ctaX);
 
+    transition({
+      flow: "generic_sales",
+      step: "answer",
+      patchCtx: {
+        last_bot_action: "answered_faq_direct",
+        last_faq_intent: INTENCION_FINAL_CANONICA || intencionParaFaq || null,
+      },
+    });
+
     setReply(outWithCTA, "faq-direct", INTENCION_FINAL_CANONICA || intencionParaFaq || null);
-    await finalizeReply();
 
     // 🔔 Registrar venta si aplica + follow-up
     try {
-      const det = await detectarIntencion(userInput, tenant.id, 'whatsapp');
+      const det = await detectarIntencion(userInput, tenant.id, "whatsapp");
       const nivelFaq = det?.nivel_interes ?? 1;
-      const intFinal = (INTENCION_FINAL_CANONICA || '').toLowerCase();
+
+      const intFinal = ((INTENCION_FINAL_CANONICA || intencionParaFaq || "") + "").toLowerCase().trim();
+
       await recordSalesIntent(tenant.id, contactoNorm, canal, userInput, intFinal, nivelFaq, messageId);
-      const intencionesFollowUp = ["interes_clases","reservar","precio","comprar","horario"];
+
+      const intencionesFollowUp = ["interes_clases", "reservar", "precio", "comprar", "horario"];
       if (nivelFaq >= 3 || intencionesFollowUp.includes(intFinal)) {
         await scheduleFollowUp(intFinal, nivelFaq, userInput);
       }
+
+      // (Opcional) evidencia en contexto
+      transition({
+        patchCtx: {
+          last_sales_intent: intFinal,
+          last_sales_level: nivelFaq,
+        },
+      });
     } catch (e) {
-      console.warn('⚠️ No se pudo programar follow-up tras FAQ (WA):', e);
+      console.warn("⚠️ No se pudo programar follow-up tras FAQ (WA):", e);
     }
 
+    await finalizeReply();
     return;
   }
 
@@ -2673,6 +2978,16 @@ if (BOOKING_ENABLED) {
       const withDefaultCta = cta5 ? respuesta : `${respuesta}\n\n${CTA_TXT}`;
       const respuestaWithCTA = appendCTAWithCap(withDefaultCta, cta5);
 
+      transition({
+        flow: "generic_sales",
+        step: "answer",
+        patchCtx: {
+          last_bot_action: "answered_short_input",
+          last_intent: INTENCION_FINAL_CANONICA || null,
+          short_input: true,
+        },
+      });
+
       setReply(respuestaWithCTA, "short-or-nonletters", INTENCION_FINAL_CANONICA || null);
       await finalizeReply();
     }
@@ -2685,7 +3000,18 @@ if (BOOKING_ENABLED) {
     return;
   }
 
-  if (handled) { await finalizeReply(); return; }
+  if (handled) {
+    transition({
+      flow: activeFlow || "generic_sales",
+      step: activeStep || "answer",
+      patchCtx: {
+        last_bot_action: convoCtx?.last_bot_action || "handled_generic",
+      },
+    });
+
+    await finalizeReply();
+    return;
+  }
 
   // 🧠 Si no hay respuesta aún, generar con OpenAI y registrar como FAQ sugerida
   if (!respuestaDesdeFaq && !respuesta) {
@@ -2881,19 +3207,56 @@ if (BOOKING_ENABLED) {
   let respuestaFinal: string;
 
   if (isSmallTalkOrCourtesy) {
-    // 🙅‍♂️ Cortesía/saludo: SIN CTA
+    // 🙅‍♂️ Cortesía: sin CTA, sin empujar flujo
     respuestaFinal = respuesta;
   } else {
-    // ✅ Si existe CTA configurado, lo anexas; si no, usas CTA por defecto
+    // ✅ CTA solo si existe configuración (nunca texto fijo backend)
     respuestaFinal = cta5
       ? appendCTAWithCap(respuesta, cta5)
-      : `${respuesta}\n\n${CTA_TXT}`;
+      : respuesta;
   }
 
+  // 🧠 Anti-loop: si ya caíste en fallback-final con el mismo input,
+  // NO hables otra vez. Solo cierra el turno.
+  if (
+    convoCtx?.last_reply_source === "fallback-final" &&
+    convoCtx?.last_user_text === userInput
+  ) {
+    transition({
+      flow: "generic_sales",
+      step: "close",
+      patchCtx: {
+        last_bot_action: "fallback_repeat_guard",
+      },
+    });
+
+    // ❗ Backend NO habla
+    // ❗ No setReply
+    await finalizeReply();
+    return;
+  }
+
+  // 🧠 Decisión de estado (el backend decide, no redacta)
+  transition({
+    flow: "generic_sales",
+    step: isSmallTalkOrCourtesy ? "close" : "answer",
+    patchCtx: {
+      last_bot_action: isSmallTalkOrCourtesy
+        ? "smalltalk"
+        : "fallback_answered",
+    },
+  });
+
+  // 📤 Enviar SOLO lo que ya fue generado arriba
   if (!handled) {
-    setReply(respuestaFinal, "fallback-final", INTENCION_FINAL_CANONICA || intenCanon || null);
+    setReply(
+      respuestaFinal,
+      "fallback-final",
+      INTENCION_FINAL_CANONICA || intenCanon || null
+    );
   }
 
   await finalizeReply();
   return;
+
     }

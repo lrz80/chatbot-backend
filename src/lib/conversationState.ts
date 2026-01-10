@@ -33,7 +33,7 @@ export async function setConversationState(
   tenantId: string,
   canal: string,
   senderId: string,
-  state: { activeFlow: string; activeStep: string; context?: any }
+  state: { activeFlow?: string | null; activeStep?: string | null; context?: any }
 ) {
   await pool.query(
     `
@@ -41,12 +41,19 @@ export async function setConversationState(
     VALUES ($1, $2, $3, $4, $5, $6, NOW())
     ON CONFLICT (tenant_id, canal, sender_id)
     DO UPDATE SET
-      active_flow = EXCLUDED.active_flow,
-      active_step = EXCLUDED.active_step,
+      active_flow = COALESCE(EXCLUDED.active_flow, conversation_state.active_flow),
+      active_step = COALESCE(EXCLUDED.active_step, conversation_state.active_step),
       context = EXCLUDED.context,
       updated_at = NOW()
     `,
-    [tenantId, canal, senderId, state.activeFlow, state.activeStep, state.context ?? null]
+    [
+      tenantId,
+      canal,
+      senderId,
+      state.activeFlow ?? null,
+      state.activeStep ?? null,
+      state.context ?? null,
+    ]
   );
 }
 
@@ -83,4 +90,42 @@ export async function clearConversationState(
     `,
     [tenantId, canal, senderId]
   );
+}
+
+export async function getOrInitConversationState(params: {
+  tenantId: string;
+  canal: string;
+  senderId: string;
+  defaultFlow?: string;
+  defaultStep?: string;
+}): Promise<ConversationState> {
+  const { tenantId, canal, senderId } = params;
+  const defaultFlow = params.defaultFlow ?? "generic_sales";
+  const defaultStep = params.defaultStep ?? "start";
+
+  const existing = await getConversationState(tenantId, canal, senderId);
+
+  if (existing) {
+    return {
+      ...existing,
+      active_flow: existing.active_flow ?? defaultFlow,
+      active_step: existing.active_step ?? defaultStep,
+      context: (existing.context && typeof existing.context === "object") ? existing.context : {},
+    };
+  }
+
+  await setConversationState(tenantId, canal, senderId, {
+    activeFlow: defaultFlow,
+    activeStep: defaultStep,
+    context: {},
+  });
+
+  // re-lee para devolver consistente
+  const created = await getConversationState(tenantId, canal, senderId);
+  return {
+    ...(created as ConversationState),
+    active_flow: defaultFlow,
+    active_step: defaultStep,
+    context: {},
+  };
 }
