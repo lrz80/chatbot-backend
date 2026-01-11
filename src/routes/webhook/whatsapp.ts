@@ -58,6 +58,7 @@ import { finalizeReply as finalizeReplyLib } from "../../lib/conversation/finali
 import { whatsappModeMembershipGuard } from "../../lib/guards/whatsappModeMembershipGuard";
 import { paymentHumanGuard } from "../../lib/guards/paymentHumanGuard";
 import { yesNoStateGate } from "../../lib/guards/yesNoStateGate";
+import { awaitingFieldGate } from "../../lib/guards/awaitingFieldGate";
 
 
 // Puedes ponerlo debajo de los imports
@@ -1087,6 +1088,69 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
   } catch (e) {
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
+  }
+
+  // ===============================
+  // ✅ AWAITING FIELD GATE (clientes.awaiting_field)
+  // ===============================
+  {
+    const g = await awaitingFieldGate({
+      pool,
+      tenantId: tenant.id,
+      canal,
+      contacto: contactoNorm,
+      userInput,
+      idiomaDestino,
+    });
+
+    if (g.action === "silence") {
+      console.log("🧱 [WA] awaitingFieldGate -> SILENCE:", g.reason);
+      return;
+    }
+
+    if (g.action === "transition" && g.transition?.patchCliente) {
+      await pool.query(
+        `UPDATE clientes SET ${Object.keys(g.transition.patchCliente)
+          .map((k, i) => `${k} = $${i + 4}`)
+          .join(", ")}, updated_at = now()
+        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
+        [tenant.id, canal, contactoNorm, ...Object.values(g.transition.patchCliente)]
+      );
+      // sigue
+    }
+
+    if (g.action === "reply") {
+      // aplica patch opcional
+      if (g.transition?.patchCliente) {
+        await pool.query(
+          `UPDATE clientes SET ${Object.keys(g.transition.patchCliente)
+            .map((k, i) => `${k} = $${i + 4}`)
+            .join(", ")}, updated_at = now()
+          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
+          [tenant.id, canal, contactoNorm, ...Object.values(g.transition.patchCliente)]
+        );
+      }
+
+      const composed = await answerWithPromptBase({
+        tenantId: tenant.id,
+        promptBase: promptBaseMem,
+        userInput: [
+          "SYSTEM_EVENT_FACTS (use to respond; do not mention systems; keep it short):",
+          JSON.stringify(g.facts),
+          "",
+          "USER_MESSAGE:",
+          userInput,
+        ].join("\n"),
+        idiomaDestino,
+        canal: "whatsapp",
+        maxLines: MAX_WHATSAPP_LINES,
+        fallbackText: getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
+      });
+
+      return await replyAndExit(composed.text, g.replySource, g.intent);
+    }
+
+    // continue -> sigue el pipeline normal
   }
 
   // ===============================
