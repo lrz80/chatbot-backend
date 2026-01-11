@@ -70,6 +70,7 @@ import {
   stripLeadGreetings,
   isNumericOnly,
 } from "../../lib/whatsapp/normalize";
+import { resolveTenantFromInbound } from "../../lib/tenants/resolveTenantFromInbound";
 
 
 // Puedes ponerlo debajo de los imports
@@ -784,42 +785,15 @@ export async function procesarMensajeWhatsApp(
 
   console.log('🔎 numero normalizado =', { numero, numeroSinMas });
 
-
-  // 👉 1) intenta usar el tenant que viene en el contexto (Meta / otros canales)
-  let tenant = context?.tenant as any | undefined;
-
-  // 👉 2) si no viene en el contexto (caso Twilio), haz el lookup por número
-  if (!tenant) {
-    if (origen === "twilio") {
-      const tenantRes = await pool.query(
-        `
-        SELECT *
-          FROM tenants
-        WHERE REPLACE(LOWER(twilio_number),'whatsapp:','') = $1
-            OR REPLACE(LOWER(twilio_number),'whatsapp:','') = $2
-        LIMIT 1
-        `,
-        [numero.toLowerCase(), numeroSinMas.toLowerCase()]
-      );
-
-      tenant = tenantRes.rows[0];
-    } else {
-      const tenantRes = await pool.query(
-        `
-        SELECT *
-          FROM tenants
-        WHERE REPLACE(LOWER(whatsapp_phone_number_id::text),'whatsapp:','') = $1
-        LIMIT 1
-        `,
-        [numero.toLowerCase()]
-      );
-
-      tenant = tenantRes.rows[0];
-    }
-  }
+  const tenant = await resolveTenantFromInbound({
+    pool,
+    toRaw: to,
+    origen,
+    context,
+  });
 
   if (!tenant) {
-    console.log('⛔ No se encontró tenant para este número de WhatsApp.');
+    console.log("⛔ No se encontró tenant para este inbound (resolveTenantFromInbound).");
     return;
   }
 
