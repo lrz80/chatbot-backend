@@ -60,7 +60,7 @@ export async function getAwaitingState(
       `
       UPDATE clientes
       SET awaiting_field = NULL,
-          awaiting_payload = '{}'::jsonb,
+          awaiting_payload = '{}',
           awaiting_updated_at = NULL,
           updated_at = NOW()
       WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
@@ -86,7 +86,7 @@ export async function setAwaitingState(
   await pool.query(
     `
     INSERT INTO clientes (tenant_id, canal, contacto, awaiting_field, awaiting_payload, awaiting_updated_at, updated_at)
-    VALUES ($1, $2, $3, $4, $5::jsonb, NOW(), NOW())
+    VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
     ON CONFLICT (tenant_id, canal, contacto)
     DO UPDATE SET
       awaiting_field = EXCLUDED.awaiting_field,
@@ -109,7 +109,7 @@ export async function clearAwaitingState(
     `
     UPDATE clientes
     SET awaiting_field = NULL,
-        awaiting_payload = '{}'::jsonb,
+        awaiting_payload = '{}',
         awaiting_updated_at = NULL,
         updated_at = NOW()
     WHERE tenant_id = $1 AND canal = $2 AND contacto = $3

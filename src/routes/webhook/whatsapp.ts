@@ -58,7 +58,12 @@ import { finalizeReply as finalizeReplyLib } from "../../lib/conversation/finali
 import { whatsappModeMembershipGuard } from "../../lib/guards/whatsappModeMembershipGuard";
 import { paymentHumanGuard } from "../../lib/guards/paymentHumanGuard";
 import { yesNoStateGate } from "../../lib/guards/yesNoStateGate";
-import { awaitingFieldGate } from "../../lib/guards/awaitingFieldGate";
+import {
+  getAwaitingState,
+  validateAwaitingInput,
+  clearAwaitingState,
+  setAwaitingState, // solo donde prepares preguntas
+} from "../../lib/awaiting";
 
 
 // Puedes ponerlo debajo de los imports
@@ -1041,6 +1046,74 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   });
 
   // ===============================
+  // ✅ AWAITING_FIELD GATE (decision-only)
+  // ===============================
+  try {
+    const aw = await getAwaitingState(tenant.id, canal, contactoNorm);
+
+    if (aw?.awaiting_field) {
+      const vr = validateAwaitingInput({
+        awaitingField: aw.awaiting_field,
+        userText: userInput,
+        awaitingPayload: aw.awaiting_payload,
+      });
+
+      if (vr.ok) {
+        // ✅ aplica decisión según el field
+        if (aw.awaiting_field === "select_channel" || aw.awaiting_field === "canal_a_automatizar") {
+          await upsertSelectedChannelDB(
+            tenant.id,
+            canal,
+            contactoNorm,
+            vr.value as "whatsapp" | "instagram" | "facebook" | "multi"
+          );
+
+          decisionFlags.channelSelected = true;
+        }
+
+        if (aw.awaiting_field === "select_language") {
+          await upsertIdiomaClienteDB(tenant.id, canal, contactoNorm, String(vr.value) as any);
+        }
+
+        // ⚠️ collect_* aquí tú decides a qué columnas van.
+        // Por ahora, no hardcodees: si quieres, solo lo guardas en awaiting_payload y lo consumes en el siguiente paso.
+        // (Si ya tienes columnas, las mapeamos luego.)
+
+        await clearAwaitingState(tenant.id, canal, contactoNorm);
+
+        transition({
+          flow: "generic_sales",
+          step: "answer",
+          patchCtx: {
+            last_bot_action: "awaiting_resolved",
+            awaiting_field_resolved: aw.awaiting_field,
+          },
+        });
+
+        // ✅ Respuesta mínima (no hardcode de negocio; solo confirmación genérica)
+        const ack =
+          idiomaDestino === "en"
+            ? "Perfect."
+            : "Perfecto.";
+
+        return await replyAndExit(ack, "awaiting-field", "awaiting");
+      }
+
+      if (!vr.ok && vr.reason === "escape") {
+        // ✅ no respondemos aquí; dejamos seguir el pipeline normal
+        transition({
+          patchCtx: {
+            last_bot_action: "awaiting_escape",
+            awaiting_field: aw.awaiting_field,
+          },
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("⚠️ awaiting_field gate failed:", e);
+  }
+
+  // ===============================
   // ✅ CANAL ELEGIDO (DECISION-ONLY)
   // ===============================
   if (!decisionFlags.channelSelected) {
@@ -1088,69 +1161,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
   } catch (e) {
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
-  }
-
-  // ===============================
-  // ✅ AWAITING FIELD GATE (clientes.awaiting_field)
-  // ===============================
-  {
-    const g = await awaitingFieldGate({
-      pool,
-      tenantId: tenant.id,
-      canal,
-      contacto: contactoNorm,
-      userInput,
-      idiomaDestino,
-    });
-
-    if (g.action === "silence") {
-      console.log("🧱 [WA] awaitingFieldGate -> SILENCE:", g.reason);
-      return;
-    }
-
-    if (g.action === "transition" && g.transition?.patchCliente) {
-      await pool.query(
-        `UPDATE clientes SET ${Object.keys(g.transition.patchCliente)
-          .map((k, i) => `${k} = $${i + 4}`)
-          .join(", ")}, updated_at = now()
-        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
-        [tenant.id, canal, contactoNorm, ...Object.values(g.transition.patchCliente)]
-      );
-      // sigue
-    }
-
-    if (g.action === "reply") {
-      // aplica patch opcional
-      if (g.transition?.patchCliente) {
-        await pool.query(
-          `UPDATE clientes SET ${Object.keys(g.transition.patchCliente)
-            .map((k, i) => `${k} = $${i + 4}`)
-            .join(", ")}, updated_at = now()
-          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
-          [tenant.id, canal, contactoNorm, ...Object.values(g.transition.patchCliente)]
-        );
-      }
-
-      const composed = await answerWithPromptBase({
-        tenantId: tenant.id,
-        promptBase: promptBaseMem,
-        userInput: [
-          "SYSTEM_EVENT_FACTS (use to respond; do not mention systems; keep it short):",
-          JSON.stringify(g.facts),
-          "",
-          "USER_MESSAGE:",
-          userInput,
-        ].join("\n"),
-        idiomaDestino,
-        canal: "whatsapp",
-        maxLines: MAX_WHATSAPP_LINES,
-        fallbackText: getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
-      });
-
-      return await replyAndExit(composed.text, g.replySource, g.intent);
-    }
-
-    // continue -> sigue el pipeline normal
   }
 
   // ===============================
