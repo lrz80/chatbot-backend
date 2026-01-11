@@ -57,6 +57,7 @@ import { recordOpenAITokens } from "../../lib/usage/recordOpenAITokens";
 import { finalizeReply as finalizeReplyLib } from "../../lib/conversation/finalizeReply";
 import { whatsappModeMembershipGuard } from "../../lib/guards/whatsappModeMembershipGuard";
 import { paymentHumanGuard } from "../../lib/guards/paymentHumanGuard";
+import { yesNoStateGate } from "../../lib/guards/yesNoStateGate";
 
 
 // Puedes ponerlo debajo de los imports
@@ -1086,6 +1087,69 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
   } catch (e) {
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
+  }
+
+  // ===============================
+  // ✅ YES/NO STATE GATE (decision-only)
+  // ===============================
+  {
+    const ynGate = await yesNoStateGate({
+      pool,
+      tenantId: tenant.id,
+      canal,
+      contacto: contactoNorm,
+      userInput,
+      idiomaDestino,
+      // Si tu tabla es otra, cámbialo aquí:
+      // stateTable: "conversation_state",
+      // ctxColumn: "ctx",
+      // awaitingKey: "awaiting_yesno",
+    });
+
+    if (ynGate.action === "silence") {
+      console.log("🧱 [WA] yesNoGate -> SILENCE:", ynGate.reason);
+      return;
+    }
+
+    if (ynGate.action === "transition") {
+      transition({
+        flow: ynGate.transition.flow,
+        step: ynGate.transition.step,
+        patchCtx: ynGate.transition.patchCtx,
+      });
+      // Ojo: transition-only normalmente continúa el pipeline
+      // Si quieres que “corte” aquí, entonces return;
+    }
+
+    if (ynGate.action === "reply") {
+      if (ynGate.transition) {
+        transition({
+          flow: ynGate.transition.flow,
+          step: ynGate.transition.step,
+          patchCtx: ynGate.transition.patchCtx,
+        });
+      }
+
+      const composed = await answerWithPromptBase({
+        tenantId: tenant.id,
+        promptBase: promptBaseMem,
+        userInput: [
+          "SYSTEM_EVENT_FACTS (use to respond; do not mention systems; keep it short):",
+          JSON.stringify(ynGate.facts),
+          "",
+          "USER_MESSAGE:",
+          userInput,
+        ].join("\n"),
+        idiomaDestino,
+        canal: "whatsapp",
+        maxLines: MAX_WHATSAPP_LINES,
+        fallbackText: getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
+      });
+
+      return await replyAndExit(composed.text, ynGate.replySource, ynGate.intent);
+    }
+
+    // action === "continue" -> sigue normal
   }
 
   // ===============================
