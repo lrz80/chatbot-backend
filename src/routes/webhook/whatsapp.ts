@@ -54,6 +54,8 @@ import {
 } from "../../lib/conversationState";
 import { getTenantCTA, isValidUrl, getGlobalCTAFromTenant, pickCTA } from "../../lib/cta/ctaEngine";
 import { recordOpenAITokens } from "../../lib/usage/recordOpenAITokens";
+import { finalizeReply as finalizeReplyLib } from "../../lib/conversation/finalizeReply";
+
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -966,65 +968,40 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   let INTENCION_FINAL_CANONICA: string | null = null;
 
   async function finalizeReply() {
-    if (!handled || !reply) return;
+    await finalizeReplyLib(
+      {
+        handled,
+        reply,
+        replySource,
+        lastIntent,
 
-    // ✅ Sender único para estado/memoria (usa el mismo criterio siempre)
-    const senderKey = contactoNorm || fromNumber || "anónimo";
-
-    // (Opcional pero recomendado) Guarda “qué se respondió” en el contexto
-    // para anti-loop y trazabilidad.
-    const nextCtx = {
-      ...(convoCtx && typeof convoCtx === "object" ? convoCtx : {}),
-      last_reply_source: replySource || null,
-      last_intent: (lastIntent || INTENCION_FINAL_CANONICA || null),
-      last_assistant_text: reply,
-      last_user_text: userInput,
-      last_turn_at: new Date().toISOString(),
-    };
-
-    // ⚠️ DECISIÓN IMPORTANTE:
-    // Guarda el estado SOLO si se envió ok.
-    // (Si falla el envío, no avances el hilo para no desincronizar conversación real vs DB.)
-    const ok = await safeEnviarWhatsApp(tenant.id, canal, messageId, fromNumber, reply);
-
-    if (ok) {
-      // ===============================
-      // 🧠 1) Guardar conversation_state (UNA SOLA VEZ)
-      // ===============================
-      await setConversationState(tenant.id, canal, senderKey, {
-        activeFlow: activeFlow || "generic_sales",
-        activeStep: activeStep || "start",
-        context: nextCtx,
-      });
-
-      // ===============================
-      // 💾 2) Guardar mensaje + emitir
-      // ===============================
-      await saveAssistantMessageAndEmit({
         tenantId: tenant.id,
         canal,
-        fromNumber: senderKey,
         messageId,
-        content: reply,
-      });
+        fromNumber,
+        contactoNorm,
+        userInput,
 
-      // ===============================
-      // 🧠 3) Memoria LLM (si aplica)
-      // ===============================
-      await rememberAfterReply({
-        tenantId: tenant.id,
-        senderId: senderKey,
         idiomaDestino,
-        userText: userInput,
-        assistantText: reply,
-        lastIntent: lastIntent || INTENCION_FINAL_CANONICA || null,
-      });
 
-      // ✅ Mantén tus variables en sync
-      convoCtx = nextCtx;
-    } else {
-      console.warn("⚠️ finalizeReply: safeEnviarWhatsApp falló; no guardo assistant/memoria/estado.", { replySource });
-    }
+        activeFlow,
+        activeStep,
+        convoCtx,
+
+        intentFallback: INTENCION_FINAL_CANONICA || null,
+
+        onAfterOk: (nextCtx) => {
+          // ✅ mantener tus variables en sync
+          convoCtx = nextCtx;
+        },
+      },
+      {
+        safeEnviarWhatsApp,
+        setConversationState,
+        saveAssistantMessageAndEmit,
+        rememberAfterReply,
+      }
+    );
   }
 
   // 🛡️ Anti-phishing (Single Exit): NO enviar aquí; capturar y salir por finalize
