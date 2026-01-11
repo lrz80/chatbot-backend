@@ -54,18 +54,17 @@ function parseYesNo(text: string): "yes" | "no" | "unknown" {
  * Importante: NO asume flows específicos; se guía por ctx.
  */
 export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
-  const {
+    const {
     pool,
     tenantId,
     canal,
-    contacto,
+    senderId,
     userInput,
     idiomaDestino,
-    stateTable = "conversation_state",
-    ctxColumn = "ctx",
-    awaitingKey = "awaiting_yesno",
     clearAwaiting,
-  } = event as any; 
+    } = event as any;
+
+  const awaitingKey = "awaiting_yesno";
 
   const inputNorm = normalize(userInput);
   if (!inputNorm) {
@@ -77,14 +76,17 @@ export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
   let ctx: any = null;
 
   try {
-    const { rows } = await pool.query(
-      `SELECT ${ctxColumn} AS ctx
-       FROM ${stateTable}
-       WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
-       LIMIT 1`,
-      [tenantId, canal, contacto]
+        const { rows } = await pool.query(
+      `
+      SELECT context
+      FROM conversation_state
+      WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
+      LIMIT 1
+      `,
+      [tenantId, canal, senderId]
     );
-    ctx = rows[0]?.ctx ?? null;
+
+    ctx = rows[0]?.context ?? null;
   } catch {
     // Si no existe tabla en algún entorno, no bloqueamos el pipeline
     return { action: "continue" };
@@ -128,16 +130,18 @@ export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
 
   // Limpiar awaiting si tienes helper, o lo dejamos para tu transition()
   if (clearAwaiting) {
-    await clearAwaiting({ tenantId, canal, contacto });
+    await clearAwaiting({ tenantId, canal, senderId });
   } else {
     // Intento best-effort: patch ctx para apagar awaiting
     try {
       await pool.query(
-        `UPDATE ${stateTable}
-         SET ${ctxColumn} = COALESCE(${ctxColumn}, '{}'::jsonb) || jsonb_build_object($4, false),
-             updated_at = now()
-         WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
-        [tenantId, canal, contacto, awaitingKey]
+        `
+        UPDATE conversation_state
+        SET context = COALESCE(context, '{}'::jsonb) || jsonb_build_object($4, false),
+            updated_at = now()
+        WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
+        `,
+        [tenantId, canal, senderId, awaitingKey]
       );
     } catch {
       // no bloquea

@@ -11,17 +11,14 @@ export type TurnContext = {
   // Identidad del turno
   tenantId: string;
   canal: Canal;            // "whatsapp" | "facebook" | "instagram" | etc (tu union real)
-  contacto: string;        // contactoKey / senderId normalizado
+  senderId: string;        // ✅ clave única para conversation_state.sender_id
+  contacto?: string;       // (opcional) alias legacy para compatibilidad temporal
   userInput: string;
   messageId: string | null;
 
   // Idioma + prompts
   idiomaDestino: Idioma;
   promptBase: string;
-
-  // Estado conversacional (si lo usas en gates)
-  stateTable?: string;     // opcional si algunos gates lo usan
-  ctxColumn?: string;      // opcional
 
   // Utilidades que gates puedan necesitar (sin hardcode)
   parseDatosCliente: (text: string) => { nombre: string; email: string; telefono: string; pais: string } | null;

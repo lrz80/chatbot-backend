@@ -13,9 +13,9 @@ export type AwaitingGateResult =
     };
 
 export async function awaitingGate(event: TurnEvent): Promise<AwaitingGateResult> {
-  const { tenantId, canal, contacto, userInput } = event;
+  const { tenantId, canal, senderId, userInput } = event;
 
-  const row = await getAwaitingState(tenantId, canal, contacto);
+  const row = await getAwaitingState(tenantId, canal, senderId);
   if (!row?.awaiting_field) return { action: "continue" };
 
   const awaitingField = String(row.awaiting_field);

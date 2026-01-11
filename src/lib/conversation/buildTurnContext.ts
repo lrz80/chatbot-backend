@@ -21,6 +21,9 @@ export type TurnContext = {
   fromNumber: string;    // número cliente (sin whatsapp:/tel:)
   contactoNorm: string;  // normalizado para DB (solo dígitos/+)
 
+  // ✅ CLAVE ÚNICA PARA conversation_state.sender_id
+  senderId: string;
+
   // Tenant
   tenant: any | null;
 
@@ -90,22 +93,11 @@ export async function buildTurnContext(opts: {
     numeroSinMas,
     fromNumber,
     contactoNorm,
+    // ✅ FIX CRÍTICO
+    senderId: contactoNorm,
     tenant,
     canal: context?.canal,
     context,
   };
 }
 
-export type NextAction =
-  | { type: "yesno_resolved"; decision: string; kind?: string | null; intent?: string | null }
-  | { type: string; [k: string]: any };
-
-export type GateResult = {
-  action: "reply" | "silence" | "pass";
-  reason?: string;
-  reply?: string;
-  transition?: {
-    effects?: any;
-    nextAction?: NextAction | null;
-  };
-};

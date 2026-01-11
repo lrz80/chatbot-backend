@@ -1,7 +1,9 @@
 // backend/src/lib/conversation/stateMachine.ts
 
-import type { Canal } from '../../lib/detectarIntencion';
 import type { TurnContext } from "./turnContext";
+
+// Tu evento del SM es el contexto completo del turno (pool, promptBase, helpers, etc.)
+export type TurnEvent = TurnContext;
 
 export type GateResult =
   | { action: "continue"; intent?: string; transition?: any }
@@ -15,21 +17,8 @@ export type GateResult =
       transition?: any;
     };
 
-export type Gate = (ctx: TurnContext) => Promise<GateResult>;
-
-/**
- * Evento de entrada (un turno del usuario)
- */
-export type TurnEvent = {
-  tenantId: string;
-  canal: Canal;
-  contacto: string;
-
-  userInput: string;
-  idiomaDestino: "es" | "en";
-
-  messageId: string | null;
-};
+// Gate SIEMPRE recibe TurnEvent (no TurnContext “aparte”)
+export type Gate = (event: TurnEvent) => Promise<GateResult>;
 
 /**
  * Resultado de la state machine
@@ -39,7 +28,7 @@ export type StateResult =
   | { type: "silence"; reason: string }
   | {
       type: "reply";
-      text?: string;            // si ya viene armado
+      text?: string;               // si ya viene armado
       facts?: Record<string, any>; // si hay que generar respuesta con prompt
       intent?: string | null;
       source?: string;
@@ -70,7 +59,6 @@ export type StateTransition = {
 };
 
 export type StateMachineDeps = {
-  // Guards (decision-only)
   paymentHumanGuard: (event: TurnEvent) => Promise<
     | { action: "continue" }
     | { action: "silence"; reason: string }
@@ -100,9 +88,9 @@ export type StateMachineDeps = {
 };
 
 export function createStateMachine(gates: Gate[]) {
-  return async function run(ctx: TurnContext): Promise<GateResult> {
+  return async function run(event: TurnEvent): Promise<GateResult> {
     for (const gate of gates) {
-      const r = await gate(ctx);
+      const r = await gate(event);
       if (r.action !== "continue") return r;
     }
     return { action: "continue" };

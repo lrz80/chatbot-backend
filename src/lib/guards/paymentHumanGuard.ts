@@ -1,6 +1,9 @@
 // backend/src/lib/guards/paymentHumanGuard.ts
 import type { Pool } from "pg";
 import type { Canal } from '../../lib/detectarIntencion';
+import type { TurnEvent } from "../conversation/stateMachine";
+import type { GateResult } from "../conversation/stateMachine";
+
 
 type Idioma = "es" | "en";
 
@@ -224,4 +227,38 @@ export async function paymentHumanGuard(opts: {
 
   // 7) No aplica → sigue el pipeline
   return { action: "continue" };
+}
+
+export async function paymentHumanGate(event: TurnEvent): Promise<GateResult> {
+  const e = event as any;
+
+  const result = await paymentHumanGuard({
+    pool: e.pool,
+    tenantId: e.tenantId,
+    canal: e.canal,
+    contacto: e.senderId || e.contacto, // ✅ usa senderId (nuevo estándar)
+    userInput: e.userInput,
+    idiomaDestino: e.idiomaDestino,
+    promptBase: e.promptBase,
+
+    parseDatosCliente: e.parseDatosCliente,
+    extractPaymentLinkFromPrompt: e.extractPaymentLinkFromPrompt,
+  });
+
+  if (result.action === "continue") return { action: "continue" };
+
+  if (result.action === "silence") {
+    return { action: "silence", reason: result.reason };
+  }
+
+  // result.action === "reply"
+  return {
+    action: "reply",
+    replySource: result.replySource,
+    intent: result.intent,
+    facts: result.facts,
+    transition: result.transition
+      ? { effects: null, nextAction: null, ...result.transition }
+      : undefined,
+  } as any;
 }

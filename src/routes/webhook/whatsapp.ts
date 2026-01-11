@@ -56,7 +56,7 @@ import { getTenantCTA, isValidUrl, getGlobalCTAFromTenant, pickCTA } from "../..
 import { recordOpenAITokens } from "../../lib/usage/recordOpenAITokens";
 import { finalizeReply as finalizeReplyLib } from "../../lib/conversation/finalizeReply";
 import { whatsappModeMembershipGuard } from "../../lib/guards/whatsappModeMembershipGuard";
-import { paymentHumanGuard } from "../../lib/guards/paymentHumanGuard";
+import { paymentHumanGate } from "../../lib/guards/paymentHumanGuard";
 import { yesNoStateGate } from "../../lib/guards/yesNoStateGate";
 import {
   getAwaitingState,
@@ -766,7 +766,7 @@ async function getRecentHistoryForModel(opts: {
 // 🧠 STATE MACHINE (conversational brain)
 // ===============================
 const sm = createStateMachine([
-  paymentHumanGuard,
+  paymentHumanGate,
   yesNoStateGate,
   awaitingGate,
 ]);
@@ -1044,10 +1044,17 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   });
 
   const smResult = await sm({
-    ...event,
-    promptBase,                 // para extraer link
-    parseDatosCliente,          // para detectar datos
-    extractPaymentLinkFromPrompt
+    pool,
+    tenantId: tenant.id,
+    canal,
+    contacto: contactoNorm,
+    userInput,
+    messageId,
+    idiomaDestino,
+    promptBase, // el base SIN memoria (para payment link)
+    parseDatosCliente,
+    extractPaymentLinkFromPrompt,
+    PAGO_CONFIRM_REGEX, // si lo quieres inyectar
   } as any);
 
   if (smResult.action === "silence") {
