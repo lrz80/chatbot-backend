@@ -71,6 +71,7 @@ import {
   isNumericOnly,
 } from "../../lib/whatsapp/normalize";
 import { resolveTenantFromInbound } from "../../lib/tenants/resolveTenantFromInbound";
+import { buildTurnContext } from "../../lib/conversation/buildTurnContext";
 
 
 // Puedes ponerlo debajo de los imports
@@ -764,38 +765,27 @@ export async function procesarMensajeWhatsApp(
     intent?: string | null;
   } | null = null;
 
-  // Datos básicos del webhook
-  const to = body?.To || '';
-  const from = body?.From || '';
-  const userInput = body?.Body || '';
-  const messageId =
-    body?.MessageSid ||
-    body?.SmsMessageSid ||
-    body?.MetaMessageId ||
-    null;
+  const turn = await buildTurnContext({ pool, body, context });
 
-  const origen: "twilio" | "meta" =
-    context?.origen ??
-    (context?.canal && context.canal !== "whatsapp" ? "meta" : null) ??
-    ((body?.MessageSid || body?.SmsMessageSid) ? "twilio" : "meta");
+  const userInput = turn.userInputRaw;
+  const messageId = turn.messageId;
 
-  // Números normalizados (helpers)
-  const { numero, numeroSinMas } = normalizeToNumber(String(to || ""));
-  const { fromNumber, contactoNorm } = normalizeFromNumber(String(from || ""));
+  const origen = turn.origen;
 
-  console.log('🔎 numero normalizado =', { numero, numeroSinMas });
+  const numero = turn.numero;
+  const numeroSinMas = turn.numeroSinMas;
 
-  const tenant = await resolveTenantFromInbound({
-    pool,
-    toRaw: to,
-    origen,
-    context,
-  });
+  const fromNumber = turn.fromNumber;
+  const contactoNorm = turn.contactoNorm;
+
+  const tenant = turn.tenant;
 
   if (!tenant) {
-    console.log("⛔ No se encontró tenant para este inbound (resolveTenantFromInbound).");
+    console.log("⛔ No se encontró tenant para este inbound (buildTurnContext).");
     return;
   }
+
+  console.log("🔎 numero normalizado =", { numero, numeroSinMas });
 
   // // canal puede venir en el contexto (meta/preview) o por defecto 'whatsapp'
   const canal: Canal = (context?.canal as Canal) || 'whatsapp';

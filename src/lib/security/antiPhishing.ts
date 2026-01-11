@@ -6,7 +6,7 @@ export type GuardParams = {
   tenantId: string;
   channel: string;                   // "meta" | "instagram" | "facebook" | "whatsapp" | ...
   senderId: string;                  // id externo del usuario
-  messageId: string;                 // mid/meta o sid/wa
+  messageId: string | null;                // mid/meta o sid/wa
   userInput: string;                 // texto recibido
   idiomaDestino?: "es" | "en";       // opcional; si no, responde en ES
   send: (text: string) => Promise<void>; // función de envío ya existente
