@@ -53,6 +53,7 @@ import {
   clearConversationState
 } from "../../lib/conversationState";
 import { getTenantCTA, isValidUrl, getGlobalCTAFromTenant, pickCTA } from "../../lib/cta/ctaEngine";
+import { recordOpenAITokens } from "../../lib/usage/recordOpenAITokens";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -1830,17 +1831,8 @@ if (BOOKING_ENABLED) {
 
           reply = completion.choices[0]?.message?.content?.trim() || null;
 
-          // tokens
-          const used = completion.usage?.total_tokens || 0;
-          if (used > 0) {
-            await pool.query(
-              `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-              VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-              ON CONFLICT (tenant_id, canal, mes)
-              DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-              [tenant.id, used]
-            );
-          }
+          await recordOpenAITokens(tenant.id, completion.usage?.total_tokens || 0);
+
         } catch (e) {
           console.warn('⚠️ LLM (more info) falló; NO respondo aquí (sin hardcode).', e);
           reply = null;
@@ -2619,17 +2611,8 @@ if (BOOKING_ENABLED) {
             { role: "user" as const, content: userPrompt },
           ],
           });
-          // registrar tokens
-          const used = completion.usage?.total_tokens || 0;
-          if (used > 0) {
-            await pool.query(
-              `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-              VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-              ON CONFLICT (tenant_id, canal, mes)
-              DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-              [tenant.id, used]
-            );
-          }
+          await recordOpenAITokens(tenant.id, completion.usage?.total_tokens || 0);
+
           out = completion.choices[0]?.message?.content?.trim() || out;
         } catch (e) {
           console.warn('LLM compose falló; uso facts crudos:', e);
@@ -2813,17 +2796,8 @@ if (BOOKING_ENABLED) {
         { role: "user" as const, content: userPrompt },
       ],
       });
-      // registrar tokens
-      const used = completion.usage?.total_tokens || 0;
-      if (used > 0) {
-        await pool.query(
-          `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-          VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-          ON CONFLICT (tenant_id, canal, mes)
-          DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-          [tenant.id, used]
-        );
-      }
+      await recordOpenAITokens(tenant.id, completion.usage?.total_tokens || 0);
+
       out = completion.choices[0]?.message?.content?.trim() || out;
       tokens = completion.usage?.total_tokens || 0;
     } catch (e) {
@@ -3006,17 +2980,8 @@ if (BOOKING_ENABLED) {
     ],
     });
 
-    // registrar tokens
-    const used = completion.usage?.total_tokens || 0;
-    if (used > 0) {
-      await pool.query(
-        `INSERT INTO uso_mensual (tenant_id, canal, mes, usados)
-        VALUES ($1, 'tokens_openai', date_trunc('month', CURRENT_DATE), $2)
-        ON CONFLICT (tenant_id, canal, mes)
-        DO UPDATE SET usados = uso_mensual.usados + EXCLUDED.usados`,
-        [tenant.id, used]
-      );
-    }
+    await recordOpenAITokens(tenant.id, completion.usage?.total_tokens || 0);
+
     respuesta = completion.choices[0]?.message?.content?.trim()
             || getBienvenidaPorCanal('whatsapp', tenant, idiomaDestino);
 
