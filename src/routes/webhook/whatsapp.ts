@@ -56,6 +56,8 @@ import { getTenantCTA, isValidUrl, getGlobalCTAFromTenant, pickCTA } from "../..
 import { recordOpenAITokens } from "../../lib/usage/recordOpenAITokens";
 import { finalizeReply as finalizeReplyLib } from "../../lib/conversation/finalizeReply";
 import { whatsappModeMembershipGuard } from "../../lib/guards/whatsappModeMembershipGuard";
+import { paymentHumanGuard } from "../../lib/guards/paymentHumanGuard";
+
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -1087,152 +1089,93 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   }
 
   // ===============================
-  // ✅ CONTROL DE ESTADO (PAGO / HUMANO) - PRIORIDAD MÁXIMA (WHATSAPP)
+  // ✅ PAYMENT/HUMAN GUARD (decision-only, SIN hardcode)
   // ===============================
   {
-    const tenantId = tenant.id;
-    const canalEnvio = canal;      // 'whatsapp'
-    const senderId = contactoNorm;
+    const guard = await paymentHumanGuard({
+      pool,
+      tenantId: tenant.id,
+      canal,
+      contacto: contactoNorm,
+      userInput,
+      idiomaDestino,
+      promptBase, // 👈 importante: usa promptBase sin memoria
 
-    const state = await getConversationState(
-      tenant.id,
-      canalEnvio,
-      senderId
-    );
-    console.log("🧩 conversation_state =", state);
+      // helpers existentes en tu archivo
+      parseDatosCliente,
+      extractPaymentLinkFromPrompt,
+      PAGO_CONFIRM_REGEX,
+    });
 
-    const { rows: clienteRows } = await pool.query(
-      `SELECT estado, human_override, nombre, email, telefono, pais, segmento, info_explicada
-        FROM clientes
-        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
-        LIMIT 1`,
-      [tenantId, canalEnvio, senderId]
-    );
-
-    const cliente = clienteRows[0] || null;
-
-    const LINK_REQUEST_REGEX = /\b(link|enlace|pagar|pago|stripe|checkout|payment\s+link)\b/i;
-
-    // 0) Si ya tenemos datos y está esperando pago, y pide link → reenvía link (sin pedir datos otra vez)
-    if ((cliente?.estado || '').toLowerCase() === 'esperando_pago' && LINK_REQUEST_REGEX.test(userInput)) {
-      const paymentLink = extractPaymentLinkFromPrompt(promptBase);
-
-      const mensajePago =
-        idiomaDestino === 'en'
-          ? (
-              paymentLink
-                ? `Here’s the payment link:\n${paymentLink}\nAfter you pay, text “PAGO REALIZADO”.`
-                : `I don’t have the payment link configured. Please ask the team to share it with you.`
-            )
-          : (
-              paymentLink
-                ? `Aquí tienes el link de pago:\n${paymentLink}\nCuando pagues, escríbeme “PAGO REALIZADO”.`
-                : `No tengo el link de pago configurado. Pídeselo al equipo para enviártelo.`
-            );
-
-      transition({
-        flow: "generic_sales",
-        step: "close",
-        patchCtx: {
-          last_bot_action: "sent_payment_link",
-          payment_link_sent: true,
-        },
-      });
-
-      return await replyAndExit(mensajePago, "pago-link", "pago");
+    if (guard.action === "silence") {
+      console.log("🤝 [WA] Payment/Human guard -> SILENCE:", guard.reason, contactoNorm);
+      return; // silencio total
     }
 
-    // 1) Si humano tomó la conversación → SILENCIO TOTAL
-    if (cliente?.human_override === true) {
-      console.log('🤝 [WA] Conversación tomada por humano. Bot NO responde:', senderId);
-      return;
-    }
-
-    // 2) Si está en pago_en_confirmacion → SILENCIO TOTAL
-    if ((cliente?.estado || '').toLowerCase() === 'pago_en_confirmacion') {
-      console.log('💳 [WA] Pago en confirmación. Bot en silencio:', senderId);
-      return;
-    }
-
-    // 3) Si usuario confirma pago → guardar estado + human_override y responder SOLO el mensaje fijo
-    if (PAGO_CONFIRM_REGEX.test(userInput)) {
-      await pool.query(
-        `INSERT INTO clientes (tenant_id, canal, contacto, estado, human_override, updated_at)
-        VALUES ($1, $2, $3, 'pago_en_confirmacion', true, now())
-        ON CONFLICT (tenant_id, canal, contacto)
-        DO UPDATE SET estado='pago_en_confirmacion', human_override=true, updated_at=now()`,
-        [tenantId, canalEnvio, senderId]
-      );
-
-      const msgPago =
-        idiomaDestino === 'en'
-          ? "Perfect 👍\nWe’ll confirm your payment and someone from the team will contact you to activate your account."
-          : "Perfecto 👍\nVamos a confirmar tu pago y una persona del equipo se pondrá en contacto contigo para la activación de tu cuenta.";
-
-      transition({
-        flow: "generic_sales",
-        step: "close",
-        patchCtx: {
-          guard: "payment",
-          payment_status: "confirmed",
-          last_bot_action: "sent_payment_confirmation",
-        },
-      });
-
-      return await replyAndExit(msgPago, "pago-confirm", "pago");
-    }
-
-    // 4) Si el usuario manda datos (email + telefono + nombre + pais) → guardar y enviar link UNA SOLA VEZ
-    const parsed = parseDatosCliente(userInput);
-    if (parsed) {
-      const estadoActual = (cliente?.estado || '').toLowerCase();
-
-      await pool.query(
-        `INSERT INTO clientes (tenant_id, canal, contacto, nombre, email, telefono, pais, segmento, estado, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'lead'), 'esperando_pago', now())
-        ON CONFLICT (tenant_id, canal, contacto)
-        DO UPDATE SET
-          nombre   = COALESCE(EXCLUDED.nombre, clientes.nombre),
-          email    = COALESCE(EXCLUDED.email,  clientes.email),
-          telefono = COALESCE(EXCLUDED.telefono, clientes.telefono),
-          pais     = COALESCE(EXCLUDED.pais, clientes.pais),
-          estado   = 'esperando_pago',
-          updated_at = now()`,
-        [tenantId, canalEnvio, senderId, parsed.nombre, parsed.email, parsed.telefono, parsed.pais, cliente?.segmento || null]
-      );
-
-      const pideLink = /\b(link|enlace|pago|stripe)\b/i.test(userInput);
-
-      if (estadoActual !== 'esperando_pago' || pideLink) {
-        const paymentLink = extractPaymentLinkFromPrompt(promptBase); // 👈 del prompt
-
-        const mensajePago =
-          idiomaDestino === 'en'
-            ? (
-                paymentLink
-                  ? `Thanks. I already have your details.\nYou can complete the payment here:\n${paymentLink}\nAfter you pay, text “PAGO REALIZADO” to continue.`
-                  : "Thanks. I already have your details.\nYou can complete the payment using the link I shared with you.\nAfter you pay, text “PAGO REALIZADO” to continue."
-              )
-            : (
-                paymentLink
-                  ? `Gracias. Ya tengo tus datos.\nPuedes completar el pago aquí:\n${paymentLink}\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar.`
-                  : "Gracias. Ya tengo tus datos.\nPuedes completar el pago usando el enlace que te compartí.\nCuando realices el pago, escríbeme “PAGO REALIZADO” para continuar."
-              );
-
+    if (guard.action === "reply") {
+      // aplicar transition sugerida (si vino)
+      if (guard.transition) {
         transition({
-          flow: "generic_sales",
-          step: "details",
-          patchCtx: {
-            guard: "payment",
-            awaiting_field: "payment_details", // o el campo específico que pidas en mensajePago
-            last_bot_action: "requested_payment_details",
-          },
+          flow: guard.transition.flow,
+          step: guard.transition.step,
+          patchCtx: guard.transition.patchCtx,
         });
+      }
 
-        return await replyAndExit(mensajePago, "pago-datos", "pago");
-      } // ✅ cierra if (estadoActual...)
-    } // ✅ cierra if (parsed)
-  } // ✅ cierra el bloque CONTROL DE ESTADO
+      // 🔥 SIN hardcode: redacta usando promptBaseMem + HECHOS
+      // Nota: aquí NO inventamos copy; solo instrucciones técnicas.
+      const { text } = await answerWithPromptBase({
+        tenantId: tenant.id,
+        promptBase: promptBaseMem,
+        userInput,
+        idiomaDestino,
+        canal: "whatsapp",
+        maxLines: MAX_WHATSAPP_LINES,
+        fallbackText: getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
+        // Si tu helper soporta "extraSystem" o "facts", úsalo.
+        // Si no, lo hacemos como userInput extendido (sin hardcode visible).
+      });
+
+      // Si tu answerWithPromptBase NO acepta facts, entonces reemplaza por esto:
+      // const { text } = await answerWithPromptBase({
+      //   tenantId: tenant.id,
+      //   promptBase: promptBaseMem,
+      //   userInput: [
+      //     "EVENT_FACTS (do not show as JSON; use only to respond):",
+      //     JSON.stringify(guard.facts),
+      //     "",
+      //     "USER_MESSAGE:",
+      //     userInput
+      //   ].join("\n"),
+      //   idiomaDestino,
+      //   canal: "whatsapp",
+      //   maxLines: MAX_WHATSAPP_LINES,
+      //   fallbackText: getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
+      // });
+
+      // ✅ Recomendado: fuerza redacción basada en facts (sin copy hardcode)
+      const composed = await answerWithPromptBase({
+        tenantId: tenant.id,
+        promptBase: promptBaseMem,
+        userInput: [
+          "SYSTEM_EVENT_FACTS (use to respond; do not mention systems; keep it short):",
+          JSON.stringify(guard.facts),
+          "",
+          "USER_MESSAGE:",
+          userInput,
+        ].join("\n"),
+        idiomaDestino,
+        canal: "whatsapp",
+        maxLines: MAX_WHATSAPP_LINES,
+        fallbackText: getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
+      });
+
+      // Respuesta final (sin hardcode)
+      return await replyAndExit(composed.text, guard.replySource, guard.intent);
+    }
+
+    // guard.action === "continue" -> sigue normal
+  }
 
   if (handled) { await finalizeReply(); return; }
 
