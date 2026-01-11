@@ -55,7 +55,7 @@ import {
 import { getTenantCTA, isValidUrl, getGlobalCTAFromTenant, pickCTA } from "../../lib/cta/ctaEngine";
 import { recordOpenAITokens } from "../../lib/usage/recordOpenAITokens";
 import { finalizeReply as finalizeReplyLib } from "../../lib/conversation/finalizeReply";
-
+import { whatsappModeMembershipGuard } from "../../lib/guards/whatsappModeMembershipGuard";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -911,28 +911,17 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
   const { mode, status } = await getWhatsAppModeStatus(tenant.id);
 
-  if (status !== "enabled") {
-    console.log("⛔ WhatsApp deshabilitado para tenant:", tenant.id, "status=", status);
-    return;
-  }
+  const guard = await whatsappModeMembershipGuard({
+    tenant,
+    tenantId: tenant.id,
+    canal,
+    origen,
+    mode,
+    status,
+    // requireMembershipActive: true, // (default)
+  });
 
-  // Si llega por Twilio pero el tenant está en Cloud API → ignorar (evita doble respuesta)
-  if (origen === "twilio" && mode !== "twilio") {
-    console.log("⏭️ Ignoro webhook Twilio: tenant en cloudapi. tenantId=", tenant.id);
-    return;
-  }
-
-  // Si llega por Meta pero el tenant está en Twilio → ignorar
-  if (origen === "meta" && mode !== "cloudapi") {
-    console.log("⏭️ Ignoro webhook Meta: tenant en twilio. tenantId=", tenant.id);
-    return;
-  }
-
-  // Si no hay membresía activa: no respondas
-  if (!tenant.membresia_activa) {
-    console.log(`⛔ Membresía inactiva para tenant ${tenant.name || tenant.id}. No se responderá.`);
-    return;
-  }
+  if (!guard.ok) return;
 
   // 👉 detectar si el mensaje es solo numérico (para usar idioma previo)
   const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
