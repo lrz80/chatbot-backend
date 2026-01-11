@@ -64,6 +64,12 @@ import {
   clearAwaitingState,
   setAwaitingState, // solo donde prepares preguntas
 } from "../../lib/awaiting";
+import {
+  normalizeToNumber,
+  normalizeFromNumber,
+  stripLeadGreetings,
+  isNumericOnly,
+} from "../../lib/whatsapp/normalize";
 
 
 // Puedes ponerlo debajo de los imports
@@ -772,16 +778,12 @@ export async function procesarMensajeWhatsApp(
     (context?.canal && context.canal !== "whatsapp" ? "meta" : null) ??
     ((body?.MessageSid || body?.SmsMessageSid) ? "twilio" : "meta");
 
-  // Números “limpios”
-  const numero      = to.replace('whatsapp:', '').replace('tel:', '');   // número del negocio
-  const fromNumber  = from.replace('whatsapp:', '').replace('tel:', ''); // número del cliente
+  // Números normalizados (helpers)
+  const { numero, numeroSinMas } = normalizeToNumber(String(to || ""));
+  const { fromNumber, contactoNorm } = normalizeFromNumber(String(from || ""));
 
-  // ✅ contacto NORMALIZADO ÚNICO para DB/estado/dedupe
-  const contactoNorm = String(fromNumber || "").replace(/[^\d+]/g, "");
-
-  // Normaliza variantes con / sin "+" para que coincida aunque en DB esté "1555..." o "+1555..."
-  const numeroSinMas = numero.replace(/^\+/, '');
   console.log('🔎 numero normalizado =', { numero, numeroSinMas });
+
 
   // 👉 1) intenta usar el tenant que viene en el contexto (Meta / otros canales)
   let tenant = context?.tenant as any | undefined;
