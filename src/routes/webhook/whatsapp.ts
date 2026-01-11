@@ -988,7 +988,10 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
   if (!guard.ok) return;
 
+  let replied = false;
+
   function setReply(text: string, source: string, intent?: string | null) {
+    replied = true;
     handled = true;
     reply = text;
     replySource = source;
@@ -1177,10 +1180,10 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
   }
 
- // ===============================
-  // ✅ FALLBACK ÚNICO (si SM no respondió)
   // ===============================
-  {
+  // ✅ FALLBACK ÚNICO (solo si SM no respondió)
+  // ===============================
+  if (!replied) {
     const composed = await answerWithPromptBase({
       tenantId: tenant.id,
       promptBase: promptBaseMem,
