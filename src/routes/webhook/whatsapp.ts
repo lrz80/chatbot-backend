@@ -864,12 +864,14 @@ export async function procesarMensajeWhatsApp(
 
   const event = {
     pool,
+    tenant,
     tenantId: tenant.id,
-    canal: "whatsapp" as Canal,
-    contacto: turn.contactoNorm,
+    canal: canal as Canal,
+    contacto: contactoNorm,
     userInput,
     idiomaDestino,
     messageId,
+    origen,
   };
 
   // ✅ Prompt base disponible temprano (para SM y gates)
@@ -1041,7 +1043,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     content: userInput || '',
   });
 
-  const smResult = await sm(turn as any);
+  const smResult = await sm(event as any);
 
   if (smResult.action === "silence") {
     console.log("🧱 [SM] silence:", smResult.reason);
