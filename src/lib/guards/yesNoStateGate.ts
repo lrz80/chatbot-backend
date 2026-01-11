@@ -1,6 +1,8 @@
 // backend/src/lib/guards/yesNoStateGate.ts
 import type { Pool } from "pg";
 import type { Canal } from '../../lib/detectarIntencion';
+import type { GateResult } from "../conversation/stateMachine";
+import type { TurnEvent } from "../conversation/stateMachine"; // si TurnEvent está exportado ahí
 
 type Idioma = "es" | "en";
 
@@ -51,31 +53,7 @@ function parseYesNo(text: string): "yes" | "no" | "unknown" {
  *
  * Importante: NO asume flows específicos; se guía por ctx.
  */
-export async function yesNoStateGate(opts: {
-  pool: Pool;
-  tenantId: string;
-  canal: Canal;
-  contacto: string; // contactoNorm
-  userInput: string;
-  idiomaDestino: Idioma;
-
-  // Tabla/shape de estado: ajusta aquí si tu tabla es otra
-  // (yo asumo conversation_state con ctx JSONB)
-  stateTable?: string; // default "conversation_state"
-
-  // Si tu state tiene otra columna para ctx, cámbiala aquí
-  ctxColumn?: string; // default "ctx"
-
-  // Si tu state usa otra llave para "awaiting", cámbiala aquí
-  awaitingKey?: string; // default "awaiting_yesno"
-
-  // helper para limpiar awaiting después de manejarlo
-  clearAwaiting?: (args: {
-    tenantId: string;
-    canal: Canal;
-    contacto: string;
-  }) => Promise<void>;
-}): Promise<YesNoGateResult> {
+export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
   const {
     pool,
     tenantId,
@@ -87,7 +65,7 @@ export async function yesNoStateGate(opts: {
     ctxColumn = "ctx",
     awaitingKey = "awaiting_yesno",
     clearAwaiting,
-  } = opts;
+  } = event as any; 
 
   const inputNorm = normalize(userInput);
   if (!inputNorm) {
