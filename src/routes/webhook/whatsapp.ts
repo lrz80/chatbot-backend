@@ -1043,7 +1043,12 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     content: userInput || '',
   });
 
-  const smResult = await sm(event as any);
+  const smResult = await sm({
+    ...event,
+    promptBase,                 // para extraer link
+    parseDatosCliente,          // para detectar datos
+    extractPaymentLinkFromPrompt
+  } as any);
 
   if (smResult.action === "silence") {
     console.log("🧱 [SM] silence:", smResult.reason);

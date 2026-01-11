@@ -95,3 +95,17 @@ export async function buildTurnContext(opts: {
     context,
   };
 }
+
+export type NextAction =
+  | { type: "yesno_resolved"; decision: string; kind?: string | null; intent?: string | null }
+  | { type: string; [k: string]: any };
+
+export type GateResult = {
+  action: "reply" | "silence" | "pass";
+  reason?: string;
+  reply?: string;
+  transition?: {
+    effects?: any;
+    nextAction?: NextAction | null;
+  };
+};

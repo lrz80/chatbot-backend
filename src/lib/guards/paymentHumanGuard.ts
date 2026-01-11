@@ -4,6 +4,9 @@ import type { Canal } from '../../lib/detectarIntencion';
 
 type Idioma = "es" | "en";
 
+const PAGO_CONFIRM_REGEX =
+  /^(?!.*\b(no|aun\s*no|todav[ií]a\s*no|not)\b).*?\b(pago\s*realizado|listo\s*el\s*pago|ya\s*pagu[eé]|he\s*paga(do|do)|payment\s*(done|made|completed)|i\s*paid|paid)\b/i;
+
 export type PaymentGuardResult =
   | { action: "continue" } // no aplica, sigue pipeline normal
   | { action: "silence"; reason: "human_override" | "pago_en_confirmacion" } // bot NO habla
@@ -46,7 +49,6 @@ export async function paymentHumanGuard(opts: {
     pais?: string | null;
   };
   extractPaymentLinkFromPrompt: (prompt: string) => string | null;
-  PAGO_CONFIRM_REGEX: RegExp;
 }): Promise<PaymentGuardResult> {
   const {
     pool,
@@ -58,7 +60,6 @@ export async function paymentHumanGuard(opts: {
     promptBase,
     parseDatosCliente,
     extractPaymentLinkFromPrompt,
-    PAGO_CONFIRM_REGEX,
   } = opts;
 
   // 1) Leer estado cliente
