@@ -48,7 +48,7 @@ import { refreshFactsSummary } from "../../lib/memory/refreshFactsSummary";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import {
   getConversationState,
-  setConversationState,
+  setConversationState as setConversationStateDB,
   getOrInitConversationState,
   clearConversationState
 } from "../../lib/conversationState";
@@ -899,6 +899,8 @@ export async function procesarMensajeWhatsApp(
   let activeStep = st.active_step || "start";
   let convoCtx = (st.context && typeof st.context === "object") ? st.context : {};
 
+  const awaiting = (convoCtx as any)?.awaiting || activeStep || null;
+
   console.log("🧠 convo_state (start) =", {
     activeFlow,
     activeStep,
@@ -1001,6 +1003,22 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   // ✅ DECLÁRALO AQUÍ ARRIBA (antes de finalizeReply)
   let INTENCION_FINAL_CANONICA: string | null = null;
 
+  const setConversationStateCompat = async (
+  tenantId: string,
+  canal: any,          // o Canal si lo tienes importado
+  senderKey: string,
+  state: { activeFlow: string | null; activeStep: string | null; context?: any }
+) => {
+  await setConversationStateDB({
+    tenantId,
+    canal,
+    senderId: senderKey,
+    activeFlow: state.activeFlow ?? null,
+    activeStep: state.activeStep ?? null,
+    contextPatch: state.context ?? {},
+  });
+};
+
   async function finalizeReply() {
     await finalizeReplyLib(
       {
@@ -1031,7 +1049,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       },
       {
         safeEnviarWhatsApp,
-        setConversationState,
+        setConversationState: setConversationStateCompat,
         saveAssistantMessageAndEmit,
         rememberAfterReply,
       }
@@ -1178,6 +1196,78 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
   } catch (e) {
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
+  }
+
+  // ===============================
+  // ✅ AWAITING RESOLVER (anti-perdida)
+  // ===============================
+  const isYes = /^\s*(si|sí|s|ok|dale|claro|yes|yep)\s*$/i.test(userInput || "");
+  const isNo  = /^\s*(no|nop|nah)\s*$/i.test(userInput || "");
+
+  if (awaiting === "ask_prices") {
+    if (isYes) {
+      const text = "Perfecto. Te paso precios y opciones rápido. ¿Qué canal quieres automatizar primero: WhatsApp, Instagram o Facebook?";
+
+      await setConversationStateDB({
+        tenantId: tenant.id,
+        canal,
+        senderId: contactoNorm,
+        activeFlow: "capturing_need",
+        activeStep: "ask_channel",
+        contextPatch: {
+          awaiting: "ask_channel",
+          last_bot_action: "asked_channel",
+          last_user_text: userInput,
+          last_assistant_text: text,
+        },
+      });
+
+      setReply(text, "awaiting-ask-prices-yes", null);
+      await finalizeReply();
+      return;
+    }
+
+    if (isNo) {
+      const text = "Listo. Entonces dime qué canal quieres automatizar primero: WhatsApp, Instagram o Facebook.";
+
+      await setConversationStateDB({
+        tenantId: tenant.id,
+        canal,
+        senderId: contactoNorm,
+        activeFlow: "capturing_need",
+        activeStep: "ask_channel",
+        contextPatch: {
+          awaiting: "ask_channel",
+          last_bot_action: "asked_channel",
+          last_user_text: userInput,
+          last_assistant_text: text,
+        },
+      });
+
+      setReply(text, "awaiting-ask-prices-no", null);
+      await finalizeReply();
+      return;
+    }
+
+    const text = "Para confirmar: ¿quieres que te muestre precios? Responde sí o no.";
+
+    await setConversationStateDB({
+      tenantId: tenant.id,
+      canal,
+      senderId: contactoNorm,
+      activeFlow: convoCtx?.active_flow || "answering",
+      activeStep: "ask_prices",
+      contextPatch: {
+        awaiting: "ask_prices",
+        last_bot_action: "reprompt_prices",
+        last_user_text: userInput,
+        last_assistant_text: text,
+      },
+    });
+
+    setReply(text, "awaiting-ask-prices-reprompt", null);
+    await finalizeReply();
+    return;
   }
 
   // ===============================

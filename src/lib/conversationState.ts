@@ -17,43 +17,47 @@ export async function getConversationState(
   senderId: string
 ): Promise<ConversationState | null> {
   const { rows } = await pool.query(
-    `
-    SELECT tenant_id, canal, sender_id, active_flow, active_step, context, updated_at, created_at
-    FROM conversation_state
-    WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
-    LIMIT 1
-    `,
+    `SELECT *
+     FROM conversation_state
+     WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
+     LIMIT 1`,
     [tenantId, canal, senderId]
   );
 
-  return rows[0] || null;
+  if (!rows[0]) return null;
+
+  const row = rows[0] as ConversationState;
+  return {
+    ...row,
+    context: row.context || {},
+  };
 }
 
-export async function setConversationState(
-  tenantId: string,
-  canal: string,
-  senderId: string,
-  state: { activeFlow?: string | null; activeStep?: string | null; context?: any }
-) {
+export async function setConversationState(params: {
+  tenantId: string;
+  canal: string;
+  senderId: string;
+  activeFlow: string | null;
+  activeStep: string | null;
+  contextPatch?: Record<string, any>;
+}) {
+  const { tenantId, canal, senderId, activeFlow, activeStep, contextPatch } = params;
+
+  const existing = await getConversationState(tenantId, canal, senderId);
+  const mergedContext = { ...(existing?.context || {}), ...(contextPatch || {}) };
+
   await pool.query(
     `
-    INSERT INTO conversation_state (tenant_id, canal, sender_id, active_flow, active_step, context, updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, NOW())
+    INSERT INTO conversation_state (tenant_id, canal, sender_id, active_flow, active_step, context)
+    VALUES ($1, $2, $3, $4, $5, $6)
     ON CONFLICT (tenant_id, canal, sender_id)
     DO UPDATE SET
-      active_flow = COALESCE(EXCLUDED.active_flow, conversation_state.active_flow),
-      active_step = COALESCE(EXCLUDED.active_step, conversation_state.active_step),
+      active_flow = EXCLUDED.active_flow,
+      active_step = EXCLUDED.active_step,
       context = EXCLUDED.context,
       updated_at = NOW()
     `,
-    [
-      tenantId,
-      canal,
-      senderId,
-      state.activeFlow ?? null,
-      state.activeStep ?? null,
-      state.context ?? null,
-    ]
+    [tenantId, canal, senderId, activeFlow, activeStep, mergedContext]
   );
 }
 
@@ -114,10 +118,13 @@ export async function getOrInitConversationState(params: {
     };
   }
 
-  await setConversationState(tenantId, canal, senderId, {
+  await setConversationState({
+    tenantId,
+    canal,
+    senderId,
     activeFlow: defaultFlow,
     activeStep: defaultStep,
-    context: {},
+    contextPatch: {},
   });
 
   // re-lee para devolver consistente
