@@ -730,32 +730,42 @@ async function getRecentHistoryForModel(opts: {
   const { tenantId, canal, fromNumber, excludeMessageId = null, limit = 12 } = opts;
 
   try {
-    const params: any[] = [tenantId, canal, fromNumber, limit];
+    const whereExclude = excludeMessageId ? `AND message_id <> $4` : '';
+    const params = excludeMessageId
+      ? [tenantId, canal, fromNumber, excludeMessageId, limit]
+      : [tenantId, canal, fromNumber, limit];
 
-    const excludeSql = excludeMessageId ? `AND message_id <> $5` : '';
-    if (excludeMessageId) params.push(excludeMessageId);
-
-    const { rows } = await pool.query(
+    const sql = excludeMessageId
+      ? `
+        SELECT role, content
+        FROM messages
+        WHERE tenant_id = $1
+          AND canal = $2
+          AND from_number = $3
+          ${whereExclude}
+          AND role IN ('user','assistant')
+        ORDER BY timestamp DESC
+        LIMIT $5
       `
-      SELECT role, content
-      FROM messages
-      WHERE tenant_id = $1
-        AND canal = $2
-        AND from_number = $3
-        ${excludeSql}
-        AND role IN ('user','assistant')
-      ORDER BY timestamp DESC
-      LIMIT $4
-      `,
-      params
-    );
+      : `
+        SELECT role, content
+        FROM messages
+        WHERE tenant_id = $1
+          AND canal = $2
+          AND from_number = $3
+          AND role IN ('user','assistant')
+        ORDER BY timestamp DESC
+        LIMIT $4
+      `;
+
+    const { rows } = await pool.query(sql, params);
 
     return rows.reverse().map((m: any) => {
-    const content = String(m.content || "");
-    return m.role === "assistant"
-      ? ({ role: "assistant" as const, content })
-      : ({ role: "user" as const, content });
-  });
+      const content = String(m.content || "");
+      return m.role === "assistant"
+        ? ({ role: "assistant" as const, content })
+        : ({ role: "user" as const, content });
+    });
   } catch (e) {
     console.warn("⚠️ getRecentHistoryForModel failed:", e);
     return [];
@@ -1064,6 +1074,40 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     content: userInput || '',
   });
 
+  // ===============================
+  // ✅ MEMORIA (3): Retrieval → inyectar memoria del cliente en el prompt
+  // ===============================
+
+  try {
+    const memRaw = await getMemoryValue<any>({
+      tenantId: tenant.id,
+      canal: "whatsapp",
+      senderId: contactoNorm,
+      key: "facts_summary",
+    });
+
+    const memText =
+      typeof memRaw === "string"
+        ? memRaw
+        : (memRaw && typeof memRaw === "object" && typeof memRaw.text === "string")
+          ? memRaw.text
+          : "";
+
+    console.log("🧠 facts_summary =", memText);
+
+    if (memText.trim()) {
+      promptBaseMem = [
+        promptBase,
+        "",
+        "MEMORIA_DEL_CLIENTE (usa esto solo si ayuda a responder mejor; no lo inventes):",
+        memText.trim(),
+      ].join("\n");
+    }
+
+  } catch (e) {
+    console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
+  }
+
   const smResult = await sm({
     pool,
     tenantId: tenant.id,
@@ -1171,40 +1215,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       await upsertSelectedChannelDB(tenant.id, canal, contactoNorm, picked);
       decisionFlags.channelSelected = true;
     }
-  }
-
-  // ===============================
-  // ✅ MEMORIA (3): Retrieval → inyectar memoria del cliente en el prompt
-  // ===============================
-
-  try {
-    const memRaw = await getMemoryValue<any>({
-      tenantId: tenant.id,
-      canal: "whatsapp",
-      senderId: contactoNorm,
-      key: "facts_summary",
-    });
-
-    const memText =
-      typeof memRaw === "string"
-        ? memRaw
-        : (memRaw && typeof memRaw === "object" && typeof memRaw.text === "string")
-          ? memRaw.text
-          : "";
-
-    console.log("🧠 facts_summary =", memText);
-
-    if (memText.trim()) {
-      promptBaseMem = [
-        promptBase,
-        "",
-        "MEMORIA_DEL_CLIENTE (usa esto solo si ayuda a responder mejor; no lo inventes):",
-        memText.trim(),
-      ].join("\n");
-    }
-
-  } catch (e) {
-    console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
   }
 
   const history = await getRecentHistoryForModel({
