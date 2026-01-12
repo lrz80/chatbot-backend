@@ -2,43 +2,21 @@
 
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
-import OpenAI from 'openai';
 import twilio from 'twilio';
-import { buildDudaSlug, isDirectIntent, normalizeIntentAlias } from '../../lib/intentSlug';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { traducirMensaje } from '../../lib/traducirMensaje';
-import { buscarRespuestaSimilitudFaqsTraducido } from '../../lib/respuestasTraducidas';
-import { enviarWhatsApp, enviarWhatsAppVoid } from "../../lib/senders/whatsapp";
-import {
-  yaExisteComoFaqSugerida,
-  yaExisteComoFaqAprobada,
-  normalizarTexto
-} from '../../lib/faq/similaridadFaq';
+import { enviarWhatsApp } from "../../lib/senders/whatsapp";
 
 // ⬇️ Importa también esIntencionDeVenta para contar ventas correctamente
-import { detectarIntencion, esIntencionDeVenta } from '../../lib/detectarIntencion';
+import { esIntencionDeVenta } from '../../lib/detectarIntencion';
 
-import { fetchFaqPrecio } from '../../lib/faq/fetchFaqPrecio';
-import { buscarRespuestaPorIntencion } from "../../services/intent-matcher";
-import { extractEntitiesLite } from '../../utils/extractEntitiesLite';
-import { getFaqByIntent } from "../../utils/getFaqByIntent";
-import { answerMultiIntent, detectTopIntents } from '../../utils/multiIntent';
 import type { Canal } from '../../lib/detectarIntencion';
-import { tidyMultiAnswer } from '../../utils/tidyMultiAnswer';
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
-import {
-  saludoPuroRegex,
-  smallTalkRegex,
-  buildSaludoConversacional,
-  buildSaludoSmallTalk,
-  graciasPuroRegex,
-  buildGraciasRespuesta,
-} from '../../lib/saludosConversacionales';
+import { saludoPuroRegex } from '../../lib/saludosConversacionales';
 import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
 import { getIO } from '../../lib/socket';
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
-import { getOrCreateBookingSession, updateBookingSession } from "../../services/bookingSession";
 import * as chrono from "chrono-node";
 import { DateTime } from "luxon";
 import { rememberTurn } from "../../lib/memory/rememberTurn";
@@ -47,30 +25,14 @@ import { getMemoryValue } from "../../lib/clientMemory";
 import { refreshFactsSummary } from "../../lib/memory/refreshFactsSummary";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import {
-  getConversationState,
   setConversationState as setConversationStateDB,
   getOrInitConversationState,
-  clearConversationState
 } from "../../lib/conversationState";
-import { getTenantCTA, isValidUrl, getGlobalCTAFromTenant, pickCTA } from "../../lib/cta/ctaEngine";
-import { recordOpenAITokens } from "../../lib/usage/recordOpenAITokens";
 import { finalizeReply as finalizeReplyLib } from "../../lib/conversation/finalizeReply";
 import { whatsappModeMembershipGuard } from "../../lib/guards/whatsappModeMembershipGuard";
 import { paymentHumanGate } from "../../lib/guards/paymentHumanGuard";
 import { yesNoStateGate } from "../../lib/guards/yesNoStateGate";
-import {
-  getAwaitingState,
-  validateAwaitingInput,
-  clearAwaitingState,
-  setAwaitingState, // solo donde prepares preguntas
-} from "../../lib/awaiting";
-import {
-  normalizeToNumber,
-  normalizeFromNumber,
-  stripLeadGreetings,
-  isNumericOnly,
-} from "../../lib/whatsapp/normalize";
-import { resolveTenantFromInbound } from "../../lib/tenants/resolveTenantFromInbound";
+import { clearAwaitingState } from "../../lib/awaiting";
 import { buildTurnContext } from "../../lib/conversation/buildTurnContext";
 import { awaitingGate } from "../../lib/guards/awaitingGate";
 import { createStateMachine } from "../../lib/conversation/stateMachine";
@@ -81,9 +43,6 @@ export type WhatsAppContext = {
   canal?: string;
   origen?: "twilio" | "meta";
 };
-
-const PRICE_REGEX = /\b(precio|precios|costo|costos|cuesta|cuestan|tarifa|tarifas|cuota|mensualidad|membres[ií]a|membership|price|prices|cost|fee|fees)\b/i;
-const MATCHER_MIN_OVERRIDE = 0.85; // exige score alto para sobreescribir una intención "directa"
 
 // 💳 Confirmación de pago (usuario)
 const PAGO_CONFIRM_REGEX =
@@ -165,34 +124,8 @@ function parseDatosCliente(text: string) {
 
 const MAX_WHATSAPP_LINES = 16; // 14–16 es el sweet spot
 
-const INTENT_THRESHOLD = Math.min(
-  0.95,
-  Math.max(0.30, Number(process.env.INTENT_MATCH_THRESHOLD ?? 0.55))
-);
-
-const BOOKING_ENABLED =
-  String(process.env.BOOKING_ENABLED || "false").toLowerCase() === "true";
-
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
-
-const INTENTS_DIRECT = new Set([
-  'interes_clases',
-  'precio',
-  'horario',
-  'ubicacion',
-  'reservar',
-  'comprar',
-  'confirmar',
-  'clases_online',
-  'saludo',          // 👈 NUEVO
-  'agradecimiento',  // 👈 NUEVO
-]);
-
-// Intenciones que deben ser únicas por tenant/canal
-const INTENT_UNIQUE = new Set([
-  'precio','horario','ubicacion','reservar','comprar','confirmar','interes_clases','clases_online'
-]);
 
 // Normalizadores
 const normLang = (code?: string | null) => {
@@ -203,78 +136,8 @@ const normLang = (code?: string | null) => {
 const normalizeLang = (code?: string | null): 'es' | 'en' =>
   (code || '').toLowerCase().startsWith('en') ? 'en' : 'es';
 
-function getConfigDelayMinutes(cfg: any, fallbackMin = 60) {
-  const m = Number(cfg?.minutos_espera);
-  if (Number.isFinite(m) && m > 0) return m;
-  return fallbackMin;
-}
-
 // BOOKING HELPERS
 const BOOKING_TZ = "America/New_York";
-
-// Parse robusto: convierte texto libre a Date en TZ NY
-function parseDateTimeFromText(
-  text: string,
-  idiomaDestino: string
-): Date | null {
-  try {
-    const ref = new Date();
-
-    // Normaliza idioma (por si llega "es-419", "en-US", etc.)
-    const lang = String(idiomaDestino || "es").toLowerCase().startsWith("es")
-      ? "es"
-      : "en";
-
-    // ✅ Si chrono.es no existe en runtime, hacemos fallback a chrono.parse
-    const parser =
-      lang === "es" && (chrono as any)?.es?.parse
-        ? (chrono as any).es
-        : chrono;
-
-    const results = parser.parse(text, ref);
-
-    if (!results?.length) return null;
-
-    const dt = results[0].start?.date?.();
-    if (!dt) return null;
-
-    const lux = DateTime.fromJSDate(dt, { zone: BOOKING_TZ });
-    if (!lux.isValid) return null;
-
-    return lux.toJSDate();
-  } catch (e) {
-    console.warn("[BOOKING] parseDateTimeFromText failed:", {
-      text,
-      idiomaDestino,
-      err: (e as any)?.message,
-    });
-    return null;
-  }
-}
-
-async function isSlotAvailable(opts: {
-  tenantId: string;
-  start: Date;
-  end: Date;
-}) {
-  const { tenantId, start, end } = opts;
-
-  // overlap: start < existing_end AND end > existing_start
-  const { rows } = await pool.query(
-    `
-    SELECT 1
-    FROM appointments
-    WHERE tenant_id = $1
-      AND status IN ('pending','confirmed','attended')
-      AND start_time < $3
-      AND end_time > $2
-    LIMIT 1
-    `,
-    [tenantId, start.toISOString(), end.toISOString()]
-  );
-
-  return rows.length === 0;
-}
 
 async function getWhatsAppModeStatus(tenantId: string): Promise<{
   mode: "twilio" | "cloudapi";
@@ -458,86 +321,6 @@ async function applyAwaitingEffects(opts: {
   // Para collect_* por ahora no hacemos nada aquí (porque depende de tu schema),
   // pero dejamos el hook listo para cuando decidas dónde guardarlo.
   // Ejemplo: collect_contact_email -> clientes.email, etc.
-}
-
-async function translateCTAIfNeeded(
-  cta: { cta_text: string; cta_url: string } | null,
-  idiomaDestino: 'es'|'en'
-) {
-  if (!cta) return null;
-  let txt = (cta.cta_text || '').trim();
-  try {
-    // si el idioma destino es EN y el CTA no parece inglés, tradúcelo;
-    // (o traduce siempre a idiomaDestino si prefieres)
-    const lang = await detectarIdioma(txt).catch(() => null);
-    if (lang && lang !== 'zxx' && ((idiomaDestino === 'en' && !/^en/i.test(lang)) ||
-                                   (idiomaDestino === 'es' && !/^es/i.test(lang)))) {
-      txt = await traducirMensaje(txt, idiomaDestino);
-    } else if (!lang) {
-      // sin detección: fuerza a idiomaDestino por seguridad
-      txt = await traducirMensaje(txt, idiomaDestino);
-    }
-  } catch {}
-  return { cta_text: txt, cta_url: cta.cta_url };
-}
-
-// ⬇️ Helper único para registrar INTENCIÓN DE VENTA (evita duplicar lógica)
-async function recordSalesIntent(
-  tenantId: string,
-  contacto: string,
-  canal: string,
-  mensaje: string,
-  intencion: string,
-  nivel_interes: number,
-  messageId: string | null
-) {
-  if (!messageId) return;
-  if (!esIntencionDeVenta(intencion)) return; // solo cuenta si es venta
-  try {
-    await pool.query(
-      `INSERT INTO sales_intelligence
-        (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, message_id, fecha)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-      ON CONFLICT (tenant_id, contacto, canal, message_id) DO NOTHING`,
-      [tenantId, contacto, canal, mensaje, intencion, nivel_interes, messageId]
-    );
-
-  } catch (e) {
-    console.warn('⚠️ No se pudo insertar en sales_intelligence (WA):', e);
-  }
-}
-
-function pickIntentForCTA(
-  opts: {
-    canonical?: string | null;     // INTENCION_FINAL_CANONICA
-    matcher?: string | null;       // respIntent.intent
-    firstOfTop?: string | null;    // top[0]?.intent en multi-intent
-    fallback?: string | null;      // intenCanon u otras
-    prefer?: string | null;        // fuerza (ej. 'precio' si el user pidió precios)
-  }
-) {
-  const cand = [
-    opts.prefer?.trim().toLowerCase(),
-    opts.matcher?.trim().toLowerCase(),
-    opts.firstOfTop?.trim().toLowerCase(),
-    opts.canonical?.trim().toLowerCase(),
-    opts.fallback?.trim().toLowerCase()
-  ];
-  return cand.find(Boolean) || null;
-}
-
-function appendCTAWithCap(
-  text: string,
-  cta: { cta_text: string; cta_url: string } | null
-) {
-  if (!cta) return text;
-  const extra = `\n\n${cta.cta_text}: ${cta.cta_url}`;
-  const lines = text.split('\n'); // ❗️ no filtramos vacías
-  const limit = Math.max(0, MAX_WHATSAPP_LINES - 2); // deja 2 líneas para CTA
-  if (lines.length > limit) {
-    return lines.slice(0, limit).join('\n') + extra;
-  }
-  return text + extra;
 }
 
 // Evita enviar duplicado si Twilio reintenta el webhook
