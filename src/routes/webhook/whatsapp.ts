@@ -1094,6 +1094,14 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       });
     }
 
+    const history = await getRecentHistoryForModel({
+      tenantId: tenant.id,
+      canal,
+      fromNumber: contactoNorm,
+      excludeMessageId: messageId,
+      limit: 12,
+    });
+
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
       promptBase: promptBaseMem,
@@ -1104,6 +1112,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         "USER_MESSAGE:",
         event.userInput,
       ].join("\n"),
+      history, // ✅ aquí
       idiomaDestino,
       canal: "whatsapp",
       maxLines: MAX_WHATSAPP_LINES,
@@ -1198,77 +1207,13 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
   }
 
-  // ===============================
-  // ✅ AWAITING RESOLVER (anti-perdida)
-  // ===============================
-  const isYes = /^\s*(si|sí|s|ok|dale|claro|yes|yep)\s*$/i.test(userInput || "");
-  const isNo  = /^\s*(no|nop|nah)\s*$/i.test(userInput || "");
-
-  if (awaiting === "ask_prices") {
-    if (isYes) {
-      const text = "Perfecto. Te paso precios y opciones rápido. ¿Qué canal quieres automatizar primero: WhatsApp, Instagram o Facebook?";
-
-      await setConversationStateDB({
-        tenantId: tenant.id,
-        canal,
-        senderId: contactoNorm,
-        activeFlow: "capturing_need",
-        activeStep: "ask_channel",
-        contextPatch: {
-          awaiting: "ask_channel",
-          last_bot_action: "asked_channel",
-          last_user_text: userInput,
-          last_assistant_text: text,
-        },
-      });
-
-      setReply(text, "awaiting-ask-prices-yes", null);
-      await finalizeReply();
-      return;
-    }
-
-    if (isNo) {
-      const text = "Listo. Entonces dime qué canal quieres automatizar primero: WhatsApp, Instagram o Facebook.";
-
-      await setConversationStateDB({
-        tenantId: tenant.id,
-        canal,
-        senderId: contactoNorm,
-        activeFlow: "capturing_need",
-        activeStep: "ask_channel",
-        contextPatch: {
-          awaiting: "ask_channel",
-          last_bot_action: "asked_channel",
-          last_user_text: userInput,
-          last_assistant_text: text,
-        },
-      });
-
-      setReply(text, "awaiting-ask-prices-no", null);
-      await finalizeReply();
-      return;
-    }
-
-    const text = "Para confirmar: ¿quieres que te muestre precios? Responde sí o no.";
-
-    await setConversationStateDB({
-      tenantId: tenant.id,
-      canal,
-      senderId: contactoNorm,
-      activeFlow: convoCtx?.active_flow || "answering",
-      activeStep: "ask_prices",
-      contextPatch: {
-        awaiting: "ask_prices",
-        last_bot_action: "reprompt_prices",
-        last_user_text: userInput,
-        last_assistant_text: text,
-      },
-    });
-
-    setReply(text, "awaiting-ask-prices-reprompt", null);
-    await finalizeReply();
-    return;
-  }
+  const history = await getRecentHistoryForModel({
+    tenantId: tenant.id,
+    canal,
+    fromNumber: contactoNorm,
+    excludeMessageId: messageId,
+    limit: 12,
+  });
 
   // ===============================
   // ✅ FALLBACK ÚNICO (solo si SM no respondió)
@@ -1278,6 +1223,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       tenantId: tenant.id,
       promptBase: promptBaseMem,
       userInput,
+      history, // ✅ aquí
       idiomaDestino,
       canal: "whatsapp",
       maxLines: MAX_WHATSAPP_LINES,

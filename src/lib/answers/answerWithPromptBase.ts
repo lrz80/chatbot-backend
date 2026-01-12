@@ -2,11 +2,13 @@ import OpenAI from 'openai';
 import pool from '../db';
 import { detectarIdioma } from '../detectarIdioma';
 import { traducirMensaje } from '../traducirMensaje';
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
 type AnswerWithPromptBaseParams = {
   tenantId: string;
   promptBase: string;
   userInput: string;
+  history?: ChatCompletionMessageParam[]; // ✅ últimos turnos (user/assistant)
   idiomaDestino: 'es' | 'en';
   canal: string;            // ej: 'whatsapp', 'meta', 'sms'
   maxLines?: number;        // límite de líneas para formato chat
@@ -62,6 +64,7 @@ export async function answerWithPromptBase(
     tenantId,
     promptBase,
     userInput,
+    history = [],
     idiomaDestino,
     canal,
     maxLines = 16,
@@ -109,8 +112,9 @@ export async function answerWithPromptBase(
       temperature: 0.2,
       max_tokens: 400,
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
+        { role: "system", content: systemPrompt },
+        ...(Array.isArray(history) ? history : []),
+        { role: "user", content: userPrompt },
       ],
     });
 
