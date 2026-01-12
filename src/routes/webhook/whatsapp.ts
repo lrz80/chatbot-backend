@@ -1108,6 +1108,28 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
   }
 
+  // ===============================
+  // 👋 GREETING GATE: si es saludo puro, responde con la bienvenida del tenant
+  // ===============================
+  if (saludoPuroRegex.test(userInput)) {
+    const bienvenida = getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+
+    // (Opcional) actualiza estado para que quede registrado que saludó
+    transition({
+      flow: activeFlow,
+      step: "answer",
+      patchCtx: {
+        reset_reason: "greeting",
+        last_user_text: userInput,
+        last_bot_action: "welcome_sent",
+        last_reply_source: "welcome_gate",
+        last_assistant_text: bienvenida,
+      },
+    });
+
+    return await replyAndExit(bienvenida, "welcome_gate", "saludo");
+  }
+
   const smResult = await sm({
     pool,
     tenantId: tenant.id,
