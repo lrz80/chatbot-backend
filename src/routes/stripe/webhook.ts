@@ -74,6 +74,23 @@ const defaults: ChannelFlags = {
   };
 };
 
+type PlanLimits = Record<string, number>;
+
+const limitsFromProduct = (product: Stripe.Product): PlanLimits => {
+  const raw = (product.metadata || {}).plan_limits;
+  if (!raw) return {};
+  try {
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object') return {};
+    // fuerza valores numéricos
+    const out: PlanLimits = {};
+    for (const [k, v] of Object.entries(obj)) out[k] = Number(v) || 0;
+    return out;
+  } catch {
+    return {};
+  }
+};
+
 // 🔎 Obtiene el product de Stripe desde la Checkout Session (modo subscription)
 const getProductFromCheckoutSession = async (stripe: Stripe, sessionId: string) => {
   const items = await stripe.checkout.sessions.listLineItems(sessionId, { limit: 1 });
@@ -135,17 +152,20 @@ function initStripe() {
   }
 }
 
-const resetearCanales = async (tenantId: string) => {
+const resetearCanales = async (tenantId: string, planLimits: Record<string, number>) => {
   const canales = ['contactos', 'whatsapp', 'sms', 'email', 'voz', 'meta', 'followup', 'tokens_openai'];
+
   for (const canal of canales) {
+    const limite = Number(planLimits?.[canal] ?? 0);
+
     await pool.query(
       `
       INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
-      VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 0, 500)
+      VALUES ($1, $2, date_trunc('month', CURRENT_DATE), 0, $3)
       ON CONFLICT (tenant_id, canal, mes)
-      DO UPDATE SET usados = 0, limite = 500
+      DO UPDATE SET usados = 0, limite = EXCLUDED.limite
       `,
-      [tenantId, canal]
+      [tenantId, canal, limite]
     );
   }
 };
@@ -219,6 +239,19 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           metadata: { tenant_id: tenantId, plan: 'aamy_24_7' },
         });
 
+        const productsA = await getProductsFromSubscription(stripe, subscription);
+
+        // ✅ Plan limits desde productos (si hay varios, combina por MAX por canal)
+        let planLimits: Record<string, number> = {};
+        if (productsA.length) {
+          for (const p of productsA) {
+            const lim = limitsFromProduct(p);
+            for (const [k, v] of Object.entries(lim)) {
+              planLimits[k] = Math.max(Number(planLimits[k] ?? 0), Number(v ?? 0));
+            }
+          }
+        }
+
         // 3) Vigencias (si está en trial, current_period_end igual viene bien como referencia)
         const vigencia = new Date(subscription.current_period_end * 1000);
         const inicio = new Date((subscription.start_date || Math.floor(Date.now() / 1000)) * 1000);
@@ -235,7 +268,8 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
               plan                 = $4,
               subscription_id      = $5,
               es_trial             = $6,
-              trial_ever_claimed   = CASE WHEN $7 THEN true ELSE trial_ever_claimed END
+              trial_ever_claimed   = CASE WHEN $7 THEN true ELSE trial_ever_claimed END,
+              plan_limits          = $8
           WHERE id = $1
           `,
           [
@@ -246,6 +280,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             subscription.id,
             esTrial,
             hasTrialFlag,
+            planLimits,
           ]
         );
 
@@ -259,13 +294,12 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         }
 
         // 6) Resetear usos (como ya haces)
-        await resetearCanales(tenantId);
+        await resetearCanales(tenantId, planLimits);
 
         // 7) Flags de canales (leer producto de la suscripción o fallback)
         try {
-          const products = await getProductsFromSubscription(stripe, subscription);
-          if (products.length) {
-            const allFlags = products.map(p => flagsFromProduct(p));
+          if (productsA.length) {
+            const allFlags = productsA.map(p => flagsFromProduct(p));
             const combined = combineFlags(allFlags);
             await upsertChannelFlags(tenantId, combined);
             console.log('✅ Channel flags (Opción A) desde productos:', combined, 'tenant:', tenantId);
@@ -411,17 +445,29 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           }
         }
 
+        // ✅ Plan limits desde Stripe product (source of truth)
+        let planLimits: Record<string, number> = {};
+        if (typeof product === 'string') {
+          try {
+            const stripeProduct = await stripe.products.retrieve(product);
+            planLimits = limitsFromProduct(stripeProduct);
+          } catch (e) {
+            console.warn('⚠️ No se pudo leer plan_limits del producto:', e);
+          }
+        }
+
         // 3) Activa membresía y guarda subscription_id (+ marca trial_ever_claimed si aplicó)
         await pool.query(
           `
           UPDATE tenants
-          SET membresia_activa     = true,
-              membresia_vigencia   = $2,
-              membresia_inicio     = $3,
-              plan                 = $4,
-              subscription_id      = $5,
-              es_trial             = $6,
-              trial_ever_claimed   = CASE WHEN $7 THEN true ELSE trial_ever_claimed END
+            SET membresia_activa     = true,
+            membresia_vigencia   = $2,
+            membresia_inicio     = $3,
+            plan                 = $4,
+            subscription_id      = $5,
+            es_trial             = $6,
+            trial_ever_claimed   = CASE WHEN $7 THEN true ELSE trial_ever_claimed END,
+            plan_limits          = $8
           WHERE id = $1
           `,
           [
@@ -431,12 +477,13 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             planValue,
             subscriptionId,
             esTrial,
-            hasTrialFlag, // 👈 si hubo trial, queda marcado para siempre
+            hasTrialFlag,
+            planLimits,
           ]
         );
 
         // 4) Reinicia usos
-        await resetearCanales(tenantId);
+        await resetearCanales(tenantId, planLimits);
 
         // 5) Lee el producto y aplica flags de canales
         try {
@@ -511,6 +558,17 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         }
       }
 
+      // ✅ Plan limits desde Stripe product
+      let planLimits: Record<string, number> = {};
+      if (typeof product === 'string') {
+        try {
+          const stripeProduct = await stripe.products.retrieve(product);
+          planLimits = limitsFromProduct(stripeProduct);
+        } catch (e) {
+          console.warn('⚠️ No se pudo leer plan_limits del producto (sub.updated):', e);
+        }
+      }
+
       await pool.query(
         `
         UPDATE tenants
@@ -518,23 +576,25 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             plan                 = $2,
             membresia_inicio     = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END,
             membresia_vigencia   = $4,
-            trial_ever_claimed   = CASE WHEN $5 THEN true ELSE trial_ever_claimed END
-        WHERE id = $6
+            trial_ever_claimed   = CASE WHEN $5 THEN true ELSE trial_ever_claimed END,
+            plan_limits          = $6
+        WHERE id = $7
         `,
         [
           esTrial,
           planValue,
-          new Date(subscription.current_period_start * 1000), // si sale del trial
+          new Date(subscription.current_period_start * 1000),
           new Date(subscription.current_period_end * 1000),
           hasTrialFlag,
+          planLimits,
           tenant_id,
         ]
       );
 
       try {
-        const products = await getProductsFromSubscription(stripe, subscription);
-        if (products.length && tenant_id) {
-          const allFlags = products.map(p => flagsFromProduct(p));
+        const productsUpdated = await getProductsFromSubscription(stripe, subscription);
+        if (productsUpdated.length && tenant_id) {
+          const allFlags = productsUpdated.map(p => flagsFromProduct(p));
           const combined = combineFlags(allFlags);
           await upsertChannelFlags(tenant_id, combined);
           console.log('🔄 Channel flags actualizados (multi-product):', combined, 'tenant:', tenant_id);
@@ -599,6 +659,17 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         }
       }
 
+      // ✅ Plan limits desde Stripe product (invoice)
+      let planLimits: Record<string, number> = {};
+      if (typeof priceProd === 'string') {
+        try {
+          const stripeProduct = await stripe.products.retrieve(priceProd);
+          planLimits = limitsFromProduct(stripeProduct);
+        } catch (e) {
+          console.warn('⚠️ No se pudo leer plan_limits del producto (invoice):', e);
+        }
+      }
+
       const userRes = await pool.query('SELECT tenant_id FROM users WHERE email = $1 LIMIT 1', [customerEmail]);
       const user = userRes.rows[0];
       if (!user?.tenant_id) return res.status(200).json({ received: true });
@@ -609,17 +680,18 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         SET membresia_activa   = true,
             membresia_vigencia = $2,
             membresia_inicio   = NOW(),
-            plan               = $3
+            plan               = $3,
+            plan_limits        = $4
         WHERE id = $1
         `,
-        [user.tenant_id, nuevaVigencia, planValue]
+        [user.tenant_id, nuevaVigencia, planValue, planLimits]
       );
 
       // 🔁 Sincroniza flags de canales al renovar (por si cambió de plan)
       try {
-        const products = await getProductsFromSubscription(stripe, subscription);
-        if (products.length) {
-          const allFlags = products.map(p => flagsFromProduct(p));
+        const productsInvoice = await getProductsFromSubscription(stripe, subscription);
+        if (productsInvoice.length) {
+          const allFlags = productsInvoice.map(p => flagsFromProduct(p));
           const combined = combineFlags(allFlags);
           await upsertChannelFlags(user.tenant_id, combined);
           console.log('🔁 Channel flags actualizados (invoice.payment_succeeded):', combined, 'tenant:', user.tenant_id);
@@ -629,7 +701,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       }
 
       console.log('🔁 Membresía renovada para', customerEmail, 'tenant', user.tenant_id);
-      await resetearCanales(user.tenant_id);
+      await resetearCanales(user.tenant_id, planLimits);
 
       const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [user.tenant_id]);
       const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
@@ -695,9 +767,9 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       await pool.query(
         `
         INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
-        VALUES ($1, 'contactos', date_trunc('month', CURRENT_DATE), 0, 500)
+        VALUES ($1, 'contactos', date_trunc('month', CURRENT_DATE), 0, 0)
         ON CONFLICT (tenant_id, canal, mes)
-        DO UPDATE SET limite = 500
+        DO UPDATE SET limite = 0
         `,
         [user.tenant_id]
       );

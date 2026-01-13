@@ -3,8 +3,6 @@ import { Router, Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
 import pool from '../lib/db';
 import { cycleStartForNow } from '../utils/billingCycle';
-import { getLimitesPorPlan } from '../lib/usageLimits';
-
 
 const router: Router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'secret-key';
@@ -23,7 +21,7 @@ router.get('/', async (req: Request, res: Response) => {
 
     // 🔍 Obtenemos membresia_inicio del tenant
     const tenantRes = await pool.query(
-      'SELECT membresia_inicio, plan FROM tenants WHERE id = $1',
+      'SELECT membresia_inicio, plan, plan_limits FROM tenants WHERE id = $1',
       [tenantId]
     );
     const tenantRow = tenantRes.rows[0];
@@ -34,7 +32,7 @@ router.get('/', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Membresía no configurada' });
     }
 
-    const limites = getLimitesPorPlan(tenantPlan);
+    const limites = tenantRow?.plan_limits || {};
 
     // 🔁 mismo cálculo que el webhook
     const ciclo = cycleStartForNow(membresiaInicio);
@@ -111,13 +109,7 @@ router.get('/', async (req: Request, res: Response) => {
 
       const creditosExtras = creditosMap.get(canal) ?? 0;
 
-      // ✅ prioridad: DB -> plan
-      const limiteBasePlan = (limites as any)[canal] ?? 0;
-      const limiteBaseDb = limitesDbMap.get(canal);
-
-      const limiteBase = (limiteBaseDb !== undefined && limiteBaseDb > 0)
-        ? limiteBaseDb
-        : limiteBasePlan;
+      const limiteBase = (limites as any)[canal] ?? 0;
 
       const totalLimite = limiteBase + creditosExtras;
       const porcentaje = totalLimite > 0 ? (usados / totalLimite) * 100 : 0;
@@ -139,7 +131,7 @@ router.get('/', async (req: Request, res: Response) => {
       };
     });
 
-    return res.status(200).json({ usos, plan: tenantPlan, ciclo });
+    return res.status(200).json({ usos, plan: tenantRow?.plan || 'starter', ciclo });
 
   } catch (error) {
     console.error('❌ Error en /usage:', error);
