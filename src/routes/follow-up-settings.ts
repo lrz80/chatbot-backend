@@ -105,4 +105,73 @@ router.post('/', authenticateUser, async (req: any, res) => {
   }
 });
 
+// ========================================
+// 🔘 GET: Follow-up ON/OFF por canal
+// ========================================
+router.get('/settings', authenticateUser, async (req: any, res) => {
+  const tenant_id = req.user?.tenant_id;
+
+  try {
+    const result = await pool.query(
+      `SELECT
+        followup_whatsapp_enabled,
+        followup_facebook_enabled,
+        followup_instagram_enabled
+       FROM channel_settings
+       WHERE tenant_id = $1
+       LIMIT 1`,
+      [tenant_id]
+    );
+
+    // Si no existe registro, defaults seguros (no romper producción)
+    if (result.rows.length === 0) {
+      return res.json({
+        followup_whatsapp_enabled: true,
+        followup_facebook_enabled: true,
+        followup_instagram_enabled: true,
+      });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('❌ Error obteniendo followup channel settings:', error);
+    res.status(500).json({ error: 'Error al obtener settings de follow-up' });
+  }
+});
+
+// ========================================
+// 🔘 POST: Toggle Follow-up por canal
+// ========================================
+router.post('/settings', authenticateUser, async (req: any, res) => {
+  const tenant_id = req.user?.tenant_id;
+  const { canal, enabled } = req.body;
+
+  const column =
+    canal === 'whatsapp'
+      ? 'followup_whatsapp_enabled'
+      : canal === 'facebook'
+      ? 'followup_facebook_enabled'
+      : canal === 'instagram'
+      ? 'followup_instagram_enabled'
+      : null;
+
+  if (!column) {
+    return res.status(400).json({ error: 'Canal inválido' });
+  }
+
+  try {
+    await pool.query(
+      `UPDATE channel_settings
+       SET ${column} = $1
+       WHERE tenant_id = $2`,
+      [enabled, tenant_id]
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('❌ Error actualizando followup channel settings:', error);
+    res.status(500).json({ error: 'Error al actualizar settings de follow-up' });
+  }
+});
+
 export default router;

@@ -40,6 +40,32 @@ export async function sendScheduledMessages(
           continue;
         }
 
+                // 🛑 GUARD: Follow-up WhatsApp por canal (decisión backend)
+        const { rows: settingsRows } = await pool.query(
+          `SELECT followup_whatsapp_enabled
+             FROM channel_settings
+            WHERE tenant_id = $1
+            LIMIT 1`,
+          [mensaje.tenant_id]
+        );
+
+        const followupWhatsappEnabled =
+          settingsRows[0]?.followup_whatsapp_enabled ?? true;
+
+        if (!followupWhatsappEnabled) {
+          console.log(
+            `[Worker] ⛔ Follow-up WhatsApp OFF para tenant ${mensaje.tenant_id}. Saltando mensaje ${mensaje.id}.`
+          );
+
+          // 👉 IMPORTANTE: marcar como enviado para que no quede en loop
+          await pool.query(
+            `UPDATE mensajes_programados SET enviado = true WHERE id = $1`,
+            [mensaje.id]
+          );
+
+          continue;
+        }
+
         // ✅ Validar número internacional
         if (!mensaje.contacto || !mensaje.contacto.startsWith('+')) {
           console.warn(`❌ Número inválido para Twilio: ${mensaje.contacto}`);
