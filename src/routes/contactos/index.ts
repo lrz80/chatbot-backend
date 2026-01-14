@@ -161,6 +161,10 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
 
     const forcedRaw = ((req.body as any)?.segmento_forzado || "").toString().toLowerCase().trim();
 
+    // ✅ NUEVO: el front debe mandar "declara_opt_in" (checkbox)
+    // Valores aceptados: true/false, "1"/"0", "yes"/"no", "si"/"no"
+    const declaraOptIn = isTruthy((req.body as any)?.declara_opt_in);
+
     const segmentoForzado =
       forcedRaw === "cliente" || forcedRaw === "leads" || forcedRaw === "otros"
         ? (forcedRaw as "cliente" | "leads" | "otros")
@@ -220,28 +224,130 @@ router.post("/", authenticateUser, upload.single("file"), async (req, res) => {
       // Reglas mínimas: al menos 1 identificador y teléfono válido si viene
       if (!telefono && !email) continue;
 
-      // Evitar duplicados por (telefono) o (email)
-      const existe = await pool.query(
-        `SELECT id FROM contactos
-         WHERE tenant_id = $1
-           AND ( ($2 <> '' AND telefono = $2) OR ($3 <> '' AND email = $3) )`,
-        [tenant_id, telefono, email]
-      );
+      // ✅ UPSERT: si hay teléfono, upsert por (tenant_id, telefono)
+      // si NO hay teléfono pero sí email, upsert por (tenant_id, email)
+      // Regla: nunca bajar opt-in por CSV; solo subir a true si el tenant lo declara
 
-      if ((existe.rows?.length ?? 0) > 0) {
-        const id = existe.rows[0].id;
-        await pool.query(
-          "UPDATE contactos SET nombre = $1, segmento = $2 WHERE id = $3",
-          [nombre, segmento, id]
+      const marketingOptIn = declaraOptIn;
+      const optInSource = declaraOptIn ? "csv_upload" : "csv_upload_no_consent";
+      const optInAt = declaraOptIn ? new Date() : null;
+      const optInDeclaredBy = declaraOptIn ? tenant_id : null;
+
+      let insertRes;
+
+      if (telefono) {
+        insertRes = await pool.query(
+          `
+          INSERT INTO contactos (
+            tenant_id, nombre, telefono, email, segmento, fecha_creacion,
+            marketing_opt_in, opt_in_source, opt_in_at, opt_in_declared_by
+          )
+          VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8, $9)
+          ON CONFLICT (tenant_id, telefono)
+          DO UPDATE SET
+            nombre = EXCLUDED.nombre,
+            email = COALESCE(NULLIF(EXCLUDED.email, ''), contactos.email),
+            segmento = EXCLUDED.segmento,
+
+            marketing_opt_in =
+              CASE
+                WHEN contactos.marketing_opt_in = true THEN true
+                WHEN EXCLUDED.marketing_opt_in = true THEN true
+                ELSE false
+              END,
+
+            opt_in_source =
+              CASE
+                WHEN contactos.marketing_opt_in = true THEN contactos.opt_in_source
+                WHEN EXCLUDED.marketing_opt_in = true THEN EXCLUDED.opt_in_source
+                ELSE COALESCE(contactos.opt_in_source, EXCLUDED.opt_in_source)
+              END,
+
+            opt_in_at =
+              CASE
+                WHEN contactos.marketing_opt_in = true THEN contactos.opt_in_at
+                WHEN EXCLUDED.marketing_opt_in = true THEN EXCLUDED.opt_in_at
+                ELSE contactos.opt_in_at
+              END,
+
+            opt_in_declared_by =
+              CASE
+                WHEN contactos.marketing_opt_in = true THEN contactos.opt_in_declared_by
+                WHEN EXCLUDED.marketing_opt_in = true THEN EXCLUDED.opt_in_declared_by
+                ELSE contactos.opt_in_declared_by
+              END
+          RETURNING (xmax = 0) AS inserted
+          `,
+          [
+            tenant_id,
+            nombre,
+            telefono,
+            email ?? "",
+            segmento,
+            marketingOptIn,
+            optInSource,
+            optInAt,
+            optInDeclaredBy,
+          ]
+        );
+      } else if (email) {
+        insertRes = await pool.query(
+          `
+          INSERT INTO contactos (
+            tenant_id, nombre, telefono, email, segmento, fecha_creacion,
+            marketing_opt_in, opt_in_source, opt_in_at, opt_in_declared_by
+          )
+          VALUES ($1, $2, NULL, $3, $4, NOW(), $5, $6, $7, $8)
+          ON CONFLICT (tenant_id, email)
+          DO UPDATE SET
+            nombre = EXCLUDED.nombre,
+            telefono = COALESCE(NULLIF(EXCLUDED.telefono, ''), contactos.telefono),
+            segmento = EXCLUDED.segmento,
+
+            marketing_opt_in =
+              CASE
+                WHEN contactos.marketing_opt_in = true THEN true
+                WHEN EXCLUDED.marketing_opt_in = true THEN true
+                ELSE false
+              END,
+
+            opt_in_source =
+              CASE
+                WHEN contactos.marketing_opt_in = true THEN contactos.opt_in_source
+                WHEN EXCLUDED.marketing_opt_in = true THEN EXCLUDED.opt_in_source
+                ELSE COALESCE(contactos.opt_in_source, EXCLUDED.opt_in_source)
+              END,
+
+            opt_in_at =
+              CASE
+                WHEN contactos.marketing_opt_in = true THEN contactos.opt_in_at
+                WHEN EXCLUDED.marketing_opt_in = true THEN EXCLUDED.opt_in_at
+                ELSE contactos.opt_in_at
+              END,
+
+            opt_in_declared_by =
+              CASE
+                WHEN contactos.marketing_opt_in = true THEN contactos.opt_in_declared_by
+                WHEN EXCLUDED.marketing_opt_in = true THEN EXCLUDED.opt_in_declared_by
+                ELSE contactos.opt_in_declared_by
+              END
+          RETURNING (xmax = 0) AS inserted
+          `,
+          [
+            tenant_id,
+            nombre,
+            email,
+            segmento,
+            marketingOptIn,
+            optInSource,
+            optInAt,
+            optInDeclaredBy,
+          ]
         );
       } else {
-        await pool.query(
-          `INSERT INTO contactos (tenant_id, nombre, telefono, email, segmento, fecha_creacion)
-           VALUES ($1, $2, $3, $4, $5, NOW())`,
-          [tenant_id, nombre, telefono, email, segmento]
-        );
-        nuevos++;
+        continue;
       }
+      if (insertRes.rows?.[0]?.inserted) nuevos++;
     }
 
     // (Opcional) Mantener un registro en uso_mensual (informativo)
@@ -293,7 +399,7 @@ router.get("/", authenticateUser, async (req, res) => {
 
   try {
     const result = await pool.query(
-      "SELECT nombre, telefono, email, segmento FROM contactos WHERE tenant_id = $1",
+      "SELECT nombre, telefono, email, segmento, marketing_opt_in, opt_in_source, opt_in_at FROM contactos WHERE tenant_id = $1 ORDER BY fecha_creacion DESC",
       [tenant_id]
     );
     res.json(result.rows);

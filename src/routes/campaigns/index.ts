@@ -287,7 +287,10 @@ router.post(
             `SELECT telefono
               FROM contactos
               WHERE tenant_id = $1
-                AND segmento = ANY($2)`,
+                AND segmento = ANY($2)
+                AND marketing_opt_in = true
+                AND telefono IS NOT NULL
+                AND telefono <> ''`,
             [tenant_id, segmentosParsed]
           );
 
@@ -299,14 +302,38 @@ router.post(
         if (destinatariosParsed.length === 0) {
           return res.status(400).json({ error: "No hay destinatarios válidos para enviar." });
         }
+        
+        // ✅ ENFORCE OPT-IN: si el front envía teléfonos manuales, validar contra contactos con opt-in
+        // Nota: esto obliga a que el teléfono exista en contactos y tenga marketing_opt_in=true
+        const checkOptin = await pool.query(
+          `SELECT telefono
+             FROM contactos
+            WHERE tenant_id = $1
+              AND marketing_opt_in = true
+              AND telefono = ANY($2)`,
+          [tenant_id, destinatariosParsed]
+        );
+
+        const allowedSet = new Set((checkOptin.rows || []).map(r => String(r.telefono || "").trim()));
+        const filtered = destinatariosParsed.filter(t => allowedSet.has(String(t).trim()));
+
+        if (filtered.length === 0) {
+          return res.status(403).json({
+            error: "No puedes enviar campañas a números sin consentimiento (opt-in).",
+            code: "no_opt_in_recipients",
+          });
+        }
+
+        // Si quieres, opcional: reemplazar lista por la filtrada (recomendado)
+        destinatariosParsed = filtered;
+
       }
 
       // 🔐 Límite dinámico por canal
       const cap = await getCapacidadCanal(tenant_id, canal);
-      const solicitados =
-        canal === "email"
-          ? segmentosParsed.length // (email lo estamos manejando luego con query de emails)
-          : (destinatariosParsed.length || 0);
+      const solicitados = (canal === "sms" || canal === "whatsapp")
+        ? (destinatariosParsed.length || 0)
+        : 0; // email se calcula después con contactos.length
 
       if (cap.limite <= 0) {
         return res.status(403).json({
@@ -404,9 +431,16 @@ router.post(
       if (canal === "email") {
         // `segmentosParsed` son etiquetas de segmentación → obtener emails
         const contactosRes = await pool.query(
-          `SELECT email, nombre FROM contactos WHERE tenant_id = $1 AND segmento = ANY($2)`,
+          `SELECT email, nombre
+            FROM contactos
+            WHERE tenant_id = $1
+              AND segmento = ANY($2)
+              AND marketing_opt_in = true
+              AND email IS NOT NULL
+              AND email <> ''`,
           [tenant_id, segmentosParsed]
         );
+
         const contactos = contactosRes.rows || [];
 
         // Para email, el cupo debe ser por cantidad real de correos
@@ -455,6 +489,16 @@ router.post(
         }
       }
 
+      const usadosMesFinal =
+      canal === "email"
+        ? cap.usados // no sabemos exacto aquí si no guardaste solicitadosEmail fuera del bloque
+        : cap.usados + solicitados;
+
+      const restanteMesFinal =
+        canal === "email"
+          ? cap.restante
+          : cap.limite - (cap.usados + solicitados);
+
       return res.status(200).json({
         ok: true,
         message: "✅ Campaña programada correctamente. Se enviará en el horario indicado.",
@@ -470,8 +514,8 @@ router.post(
         enviada: false,
         fecha_creacion: new Date().toISOString(),
         limite_mes: cap.limite,
-        usados_mes: cap.usados + solicitados,
-        restante_mes: cap.limite - (cap.usados + solicitados),
+        usados_mes: usadosMesFinal,
+        restante_mes: restanteMesFinal,
       });
     } catch (error) {
       console.error("❌ Error al programar campaña:", error);
