@@ -34,6 +34,7 @@ import { buildTurnContext } from "../../lib/conversation/buildTurnContext";
 import { awaitingGate } from "../../lib/guards/awaitingGate";
 import { createStateMachine } from "../../lib/conversation/stateMachine";
 import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
+import { detectarEmocion } from "../../lib/detectarEmocion";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -479,28 +480,31 @@ async function saveUserMessageAndEmit(opts: {
   content: string;
   intent?: string | null;
   interest_level?: number | null;
+  emotion?: string | null; // ✅ NUEVO
 }) {
-  const { tenantId, canal, fromNumber, messageId, content } = opts;
+  const { tenantId, canal, fromNumber, messageId, content, emotion } = opts;
 
-  if (!messageId) return; // sin messageId no deduplicas bien
+  if (!messageId) return;
 
   try {
     const { rows } = await pool.query(
       `INSERT INTO messages (
-      tenant_id, role, content, timestamp, canal, from_number, message_id, intent, interest_level
-    )
-    VALUES ($1, 'user', $2, NOW(), $3, $4, $5, $6, $7)
-    ON CONFLICT (tenant_id, message_id) DO NOTHING
-    RETURNING id, timestamp, role, content, canal, from_number`,
-    [
-      tenantId,
-      content,
-      canal,
-      fromNumber || 'anónimo',
-      messageId,
-      opts.intent || null,
-      (typeof opts.interest_level === 'number' ? opts.interest_level : null),
-    ]);
+        tenant_id, role, content, timestamp, canal, from_number, message_id, intent, interest_level, emotion
+      )
+      VALUES ($1, 'user', $2, NOW(), $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (tenant_id, message_id) DO NOTHING
+      RETURNING id, timestamp, role, content, canal, from_number, intent, interest_level, emotion`,
+      [
+        tenantId,
+        content,
+        canal,
+        fromNumber || "anónimo",
+        messageId,
+        opts.intent || null,
+        (typeof opts.interest_level === "number" ? opts.interest_level : null),
+        (typeof emotion === "string" && emotion.trim() ? emotion.trim() : null), // ✅ $8
+      ]
+    );
 
     const inserted = rows[0];
     if (!inserted) return;
@@ -508,7 +512,7 @@ async function saveUserMessageAndEmit(opts: {
     const io = getIO();
     if (!io) return;
 
-    io.emit('message:new', {
+    io.emit("message:new", {
       id: inserted.id,
       created_at: inserted.timestamp,
       timestamp: inserted.timestamp,
@@ -516,9 +520,12 @@ async function saveUserMessageAndEmit(opts: {
       content: inserted.content,
       canal: inserted.canal,
       from_number: inserted.from_number,
+      intent: inserted.intent,
+      interest_level: inserted.interest_level,
+      emotion: inserted.emotion, // ✅
     });
   } catch (e) {
-    console.warn('⚠️ No se pudo registrar mensaje user + socket:', e);
+    console.warn("⚠️ No se pudo registrar mensaje user + socket:", e);
   }
 }
 
@@ -928,14 +935,31 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     console.warn("⚠️ detectarIntencion failed:", e?.message, e?.code, e?.detail);
   }
 
+  let emotion: string | null = null;
+  try {
+    const emoRaw: any = await detectarEmocion(userInput, idiomaDestino);
+
+    emotion =
+      typeof emoRaw === "string"
+        ? emoRaw
+        : (emoRaw?.emotion || emoRaw?.emocion || emoRaw?.label || null);
+
+    emotion = typeof emotion === "string" ? emotion.trim().toLowerCase() : null;
+  } catch {}
+
+  if (typeof emotion === "string" && emotion.trim()) {
+    transition({ patchCtx: { last_emotion: emotion.trim().toLowerCase() } });
+  }
+
   await saveUserMessageAndEmit({
     tenantId: tenant.id,
     canal,
-    fromNumber: contactoNorm || fromNumber || 'anónimo',
+    fromNumber: contactoNorm, // ✅ SIEMPRE
     messageId,
     content: userInput || '',
     intent: detectedIntent,
     interest_level: detectedInterest,
+    emotion,
   });
 
   // ===============================
