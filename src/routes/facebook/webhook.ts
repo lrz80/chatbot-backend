@@ -36,6 +36,7 @@ import { yesNoStateGate } from "../../lib/guards/yesNoStateGate";
 import { awaitingGate } from "../../lib/guards/awaitingGate";
 import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
 import { detectarEmocion } from "../../lib/detectarEmocion";
+import { applyEmotionTriggers } from "../../lib/guards/emotionTriggers";
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -753,6 +754,158 @@ router.post("/api/facebook/webhook", async (req, res) => {
         }
 
         // ===============================
+        // ✅ MEMORIA: inyectar facts_summary al promptBaseMem (igual WA)
+        // ===============================
+        try {
+          const memRaw = await getMemoryValue<any>({
+            tenantId,
+            canal: String(canalEnvio) as any,  // facebook / instagram
+            senderId,
+            key: "facts_summary",
+          });
+
+          const memText =
+            typeof memRaw === "string"
+              ? memRaw
+              : (memRaw && typeof memRaw === "object" && typeof memRaw.text === "string")
+                ? memRaw.text
+                : "";
+
+          if (memText.trim()) {
+            promptBaseMem = [
+              promptBase,
+              "",
+              "MEMORIA_DEL_CLIENTE (usa esto solo si ayuda a responder mejor; no lo inventes):",
+              memText.trim(),
+            ].join("\n");
+          }
+
+          // (Opcional recomendado) mismo comportamiento que WA
+          if ((convoCtx as any)?.needs_clarify) {
+            promptBaseMem +=
+              "\n\nINSTRUCCION: El usuario está frustrado. Responde con 2 bullets y haz 1 sola pregunta para aclarar.";
+          }
+        } catch (e) {
+          console.warn("⚠️ [META] No se pudo cargar memoria:", e);
+        }
+
+        // ===============================
+        // Single-exit variables + helpers (DEBEN existir antes de triggers)
+        // ===============================
+        let handled = false;
+        let reply: string | null = null;
+        let replySource: string | null = null;
+        let replied = false;
+        let sentOk = false;
+
+        function setReply(text: string, source: string, intent?: string | null) {
+          replied = true;
+          handled = true;
+          reply = text;
+          replySource = source;
+          if (intent !== undefined) lastIntent = intent;
+        }
+
+        const setConversationStateCompat = async (
+          tId: string,
+          c: any,
+          senderKey: string,
+          state: { activeFlow: string | null; activeStep: string | null; context?: any }
+        ) => {
+          await setConversationStateDB({
+            tenantId: tId,
+            canal: c,
+            senderId: senderKey,
+            activeFlow: state.activeFlow ?? null,
+            activeStep: state.activeStep ?? null,
+            contextPatch: state.context ?? {},
+          });
+        };
+
+        async function finalizeReply() {
+          await finalizeReplyLib(
+            {
+              handled,
+              reply,
+              replySource,
+              lastIntent,
+
+              tenantId,
+              canal,
+              messageId,
+              fromNumber: senderId,
+              contactoNorm: senderId,
+              userInput,
+
+              idiomaDestino,
+
+              activeFlow,
+              activeStep,
+              convoCtx,
+
+              intentFallback: INTENCION_FINAL_CANONICA || null,
+
+              onAfterOk: (nextCtx) => {
+                convoCtx = nextCtx;
+              },
+            },
+            {
+              safeEnviarWhatsApp: async (tId, c2, mId, toNumber, text) => {
+                const ok = await safeEnviarMeta(tId, c2, mId, toNumber, text, accessToken);
+                sentOk = ok;
+                return ok;
+              },
+              setConversationState: setConversationStateCompat,
+
+              saveAssistantMessageAndEmit: async (opts: any) =>
+                saveAssistantMessageAndEmit({
+                  ...opts,
+                  canal,
+                  intent: (lastIntent || INTENCION_FINAL_CANONICA || null),
+                  interestLevel: (typeof nivelInteres === "number" ? nivelInteres : null),
+                }),
+
+              rememberAfterReply: async (opts: any) =>
+                rememberAfterReply({ ...opts, canal, senderId }),
+            }
+          );
+
+          // ✅ evento de ventas solo si realmente se envió
+          try {
+            if (!handled || !reply || !sentOk) return;
+
+            const finalIntent = (lastIntent || INTENCION_FINAL_CANONICA || "")
+              .toString()
+              .trim()
+              .toLowerCase();
+
+            const finalNivel =
+              typeof nivelInteres === "number"
+                ? Math.min(3, Math.max(1, nivelInteres))
+                : 2;
+
+            if (messageId && finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 2) {
+              await recordSalesIntent({
+                tenantId,
+                contacto: senderId,
+                canal: canalEnvio as any,
+                mensaje: userInput,
+                intencion: finalIntent,
+                nivelInteres: finalNivel,
+                messageId,
+              });
+            }
+          } catch (e: any) {
+            console.warn("⚠️ recordSalesIntent(final) failed:", e?.message);
+          }
+        }
+
+        async function replyAndExit(text: string, source: string, intent?: string | null) {
+          setReply(text, source, intent);
+          await finalizeReply();
+        }
+
+        // ===============================
         // 🎯 Intent detection (evento por mensaje)
         // ===============================
         let lastIntent: string | null = null;
@@ -792,8 +945,16 @@ router.post("/api/facebook/webhook", async (req, res) => {
 
         // ✅ Emotion detection (antes de guardar inbound)
         let emotion: string | null = null;
+      
         try {
-          emotion = await detectarEmocion(userInput, idiomaDestino);
+          const emoRaw: any = await detectarEmocion(userInput, idiomaDestino);
+
+          emotion =
+            typeof emoRaw === "string"
+              ? emoRaw
+              : (emoRaw?.emotion || emoRaw?.emocion || emoRaw?.label || null);
+
+          emotion = typeof emotion === "string" ? emotion.trim().toLowerCase() : null;
         } catch (e) {
           console.warn("⚠️ detectarEmocion failed:", e);
         }
@@ -811,148 +972,30 @@ router.post("/api/facebook/webhook", async (req, res) => {
         });
 
         // ===============================
-        // Single-exit variables (igual WA)
+        // 🎭 EMOTION TRIGGERS (acciones, no config) — META
         // ===============================
-        let handled = false;
-        let reply: string | null = null;
-        let replySource: string | null = null;
-        let replied = false;
-
-        function setReply(text: string, source: string, intent?: string | null) {
-          replied = true;
-          handled = true;
-          reply = text;
-          replySource = source;
-          if (intent !== undefined) lastIntent = intent; // usa la variable ya declarada arriba
-        }
-
-        // Inyectar facts_summary a prompt (igual WA)
         try {
-          const memRaw = await getMemoryValue<any>({
+          // Normaliza emotion por si detectarEmocion devuelve objeto
+          const trig = await applyEmotionTriggers({
             tenantId,
-            canal: String(canalEnvio) as any,
-            senderId,
-            key: "facts_summary",
+            canal: canalEnvio as any,
+            contacto: senderId,
+            emotion, // ✅ ya viene normalizado
+            intent: lastIntent,
+            interestLevel: nivelInteres,
           });
 
-          const memText =
-            typeof memRaw === "string"
-              ? memRaw
-              : memRaw && typeof memRaw === "object" && typeof memRaw.text === "string"
-                ? memRaw.text
-                : "";
-
-          if (memText.trim()) {
-            promptBaseMem = [
-              promptBase,
-              "",
-              "MEMORIA_DEL_CLIENTE (usa esto solo si ayuda a responder mejor; no lo inventes):",
-              memText.trim(),
-            ].join("\n");
+          if (trig?.ctxPatch) {
+            transition({ patchCtx: trig.ctxPatch });
           }
-        } catch (e) {
-          console.warn("⚠️ [META] No se pudo cargar memoria:", e);
-        }
 
-        const setConversationStateCompat = async (
-          tId: string,
-          c: any,
-          senderKey: string,
-          state: { activeFlow: string | null; activeStep: string | null; context?: any }
-        ) => {
-          await setConversationStateDB({
-            tenantId: tId,
-            canal: c,
-            senderId: senderKey,
-            activeFlow: state.activeFlow ?? null,
-            activeStep: state.activeStep ?? null,
-            contextPatch: state.context ?? {},
-          });
-        };
-
-        let sentOk = false;
-
-        async function finalizeReply() {
-          await finalizeReplyLib(
-            {
-              handled,
-              reply,
-              replySource,
-              lastIntent,
-
-              tenantId,
-              canal,
-              messageId,
-              fromNumber: senderId,
-              contactoNorm: senderId,
-              userInput,
-
-              idiomaDestino,
-
-              activeFlow,
-              activeStep,
-              convoCtx,
-
-              intentFallback: INTENCION_FINAL_CANONICA || null,
-
-              onAfterOk: (nextCtx) => {
-                convoCtx = nextCtx;
-              },
-            },
-            {
-              safeEnviarWhatsApp: async (tId, c2, mId, toNumber, text) => {
-                const ok = await safeEnviarMeta(tId, c2, mId, toNumber, text, accessToken);
-                sentOk = ok;
-                return ok;
-              },
-
-              setConversationState: setConversationStateCompat,
-
-              saveAssistantMessageAndEmit: async (opts: any) =>
-                saveAssistantMessageAndEmit({
-                  ...opts,
-                  canal,
-                  intent: (lastIntent || INTENCION_FINAL_CANONICA || null),
-                  interestLevel: (typeof nivelInteres === "number" ? nivelInteres : null),
-                }),
-
-              rememberAfterReply: async (opts: any) =>
-                rememberAfterReply({ ...opts, canal, senderId }),
-            }
-          );
-          try {
-            // Solo registra eventos si realmente hubo reply enviado/guardado
-            if (!handled || !reply || !sentOk) return;
-
-            const finalIntent = (lastIntent || INTENCION_FINAL_CANONICA || "")
-              .toString()
-              .trim()
-              .toLowerCase();
-
-            const finalNivel =
-              typeof nivelInteres === "number"
-                ? Math.min(3, Math.max(1, nivelInteres))
-                : 2;
-
-            if (messageId && finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 2) {
-              await recordSalesIntent({
-                tenantId,
-                contacto: senderId,
-                canal: canalEnvio as any,      // o canal (ambos te sirven, pero sé consistente)
-                mensaje: userInput,
-                intencion: finalIntent,
-                nivelInteres: finalNivel,
-                messageId,
-              });
-            }
-          } catch (e: any) {
-            console.warn("⚠️ recordSalesIntent(final) failed:", e?.message);
+          // Si requiere handoff, responde 1 vez y sale por Single Exit
+          if (trig?.action === "handoff_human" && trig.replyOverride) {
+            await replyAndExit(trig.replyOverride, "emotion_trigger", lastIntent);
+            continue; // 👈 importante en Meta (loop)
           }
-        }
-
-        async function replyAndExit(text: string, source: string, intent?: string | null) {
-          setReply(text, source, intent);
-          await finalizeReply();
+        } catch (e: any) {
+          console.warn("⚠️ [META] applyEmotionTriggers failed:", e?.message);
         }
 
         // ===============================

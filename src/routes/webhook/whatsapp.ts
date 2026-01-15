@@ -35,6 +35,8 @@ import { awaitingGate } from "../../lib/guards/awaitingGate";
 import { createStateMachine } from "../../lib/conversation/stateMachine";
 import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
 import { detectarEmocion } from "../../lib/detectarEmocion";
+import { applyEmotionTriggers } from "../../lib/guards/emotionTriggers";
+
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -954,13 +956,39 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   await saveUserMessageAndEmit({
     tenantId: tenant.id,
     canal,
-    fromNumber: contactoNorm, // ✅ SIEMPRE
+    fromNumber: fromNumber || contactoNorm, // ✅ usa fromNumber real
     messageId,
     content: userInput || '',
     intent: detectedIntent,
     interest_level: detectedInterest,
     emotion,
   });
+
+  // ===============================
+  // 🎭 EMOTION TRIGGERS (acciones, no config)
+  // ===============================
+  try {
+    const trig = await applyEmotionTriggers({
+      tenantId: tenant.id,
+      canal,
+      contacto: contactoNorm,
+      emotion,                 // <- tu variable actual
+      intent: detectedIntent,  // <- ya calculada arriba
+      interestLevel: detectedInterest,
+    });
+
+    // Persistimos señales para SM/LLM/Debug
+    if (trig?.ctxPatch) {
+      transition({ patchCtx: trig.ctxPatch });
+    }
+
+    // Si requiere handoff, respondemos y salimos (Single Exit)
+    if (trig?.action === "handoff_human" && trig.replyOverride) {
+      return await replyAndExit(trig.replyOverride, "emotion_trigger", detectedIntent);
+    }
+  } catch (e: any) {
+    console.warn("⚠️ applyEmotionTriggers failed:", e?.message);
+  }
 
   // ===============================
   // ✅ MEMORIA (3): Retrieval → inyectar memoria del cliente en el prompt
@@ -990,6 +1018,11 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         "MEMORIA_DEL_CLIENTE (usa esto solo si ayuda a responder mejor; no lo inventes):",
         memText.trim(),
       ].join("\n");
+    }
+
+    if ((convoCtx as any)?.needs_clarify) {
+      promptBaseMem +=
+        "\n\nINSTRUCCION: El usuario está frustrado. Responde con 2 bullets y haz 1 sola pregunta para aclarar.";
     }
 
   } catch (e) {
@@ -1051,7 +1084,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     const history = await getRecentHistoryForModel({
       tenantId: tenant.id,
       canal,
-      fromNumber: contactoNorm,
+      fromNumber: fromNumber || contactoNorm, // ✅ usa fromNumber real
       excludeMessageId: messageId,
       limit: 12,
     });
@@ -1130,7 +1163,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   const history = await getRecentHistoryForModel({
     tenantId: tenant.id,
     canal,
-    fromNumber: contactoNorm,
+    fromNumber: fromNumber || contactoNorm, // ✅ usa fromNumber real
     excludeMessageId: messageId,
     limit: 12,
   });
