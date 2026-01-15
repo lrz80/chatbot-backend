@@ -1,15 +1,15 @@
-// backend/src/lib/sales/recordSalesIntent.ts
 import pool from "../db";
+import type { Canal } from "../detectarIntencion";
 
 export async function recordSalesIntent(opts: {
   tenantId: string;
   contacto: string;
-  canal: string;
+  canal: Canal | string;
   mensaje: string;
   intencion: string;
   nivelInteres: number;
-  messageId?: string | null;
-}) {
+  messageId: string | null;
+}): Promise<{ inserted: boolean; rowCount: number }> {
   const {
     tenantId,
     contacto,
@@ -17,20 +17,23 @@ export async function recordSalesIntent(opts: {
     mensaje,
     intencion,
     nivelInteres,
-    messageId = null,
+    messageId,
   } = opts;
 
-  if (!tenantId || !contacto || !canal || !intencion) return;
+  const intent = (intencion || "").trim().toLowerCase();
+  const lvl = Math.min(3, Math.max(1, Number(nivelInteres) || 1));
+
+  // Si no hay intención real, no guardes basura
+  if (!intent) return { inserted: false, rowCount: 0 };
 
   try {
-    await pool.query(
+    const r = await pool.query(
       `
       INSERT INTO sales_intelligence
         (tenant_id, contacto, canal, mensaje, intencion, nivel_interes, fecha, message_id)
       VALUES
-        ($1,$2,$3,$4,$5,$6,NOW(),$7)
+        ($1, $2, $3, $4, $5, $6, NOW(), $7)
       ON CONFLICT (tenant_id, canal, message_id)
-      WHERE $7 IS NOT NULL
       DO NOTHING
       `,
       [
@@ -43,11 +46,14 @@ export async function recordSalesIntent(opts: {
         messageId,
       ]
     );
+    return { inserted: true, rowCount: r.rowCount || 0 };
   } catch (e: any) {
-    console.warn("⚠️ recordSalesIntent error:", {
+    console.warn("❌ recordSalesIntent SQL failed:", {
       msg: e?.message,
       code: e?.code,
       detail: e?.detail,
+      constraint: e?.constraint,
     });
+    throw e;
   }
 }

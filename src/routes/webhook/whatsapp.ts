@@ -871,24 +871,34 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     const levelRaw = Number(det?.nivel_interes);
     const nivel = Number.isFinite(levelRaw) ? Math.min(3, Math.max(1, levelRaw)) : 1;
 
-    // Guarda evento solo si hay intención válida
-    if (intent) {
-      // Registra SOLO si es venta (tu regla)
-      if (messageId && esIntencionDeVenta(intent)) {
-        await recordSalesIntent({
-          tenantId: tenant.id,
-          contacto: contactoNorm,
-          canal,
-          mensaje: userInput,
-          intencion: intent,
-          nivelInteres: nivel,
-          messageId,
-        });
-      }
+    console.log("🎯 detectarIntencion =>", {
+      intent,
+      nivel,
+      canal,
+      tenantId: tenant.id,
+      messageId,
+    });
 
+    const isVenta = intent ? esIntencionDeVenta(intent) : false;
+    console.log("💰 esIntencionDeVenta =>", { intent, isVenta });
+
+    if (isVenta) {
+      const ok = await recordSalesIntent({
+        tenantId: tenant.id,
+        contacto: contactoNorm,
+        canal,
+        mensaje: userInput,
+        intencion: intent,
+        nivelInteres: nivel,
+        messageId,
+      });
+
+      console.log("✅ recordSalesIntent result =>", ok);
+    }
+
+    if (intent) {
       detectedIntent = intent;
       detectedInterest = nivel;
-
       INTENCION_FINAL_CANONICA = intent;
       lastIntent = intent;
 
@@ -899,8 +909,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         },
       });
     }
-  } catch (e) {
-    console.warn("⚠️ detectarIntencion failed:", e);
+  } catch (e: any) {
+    console.warn("⚠️ detectarIntencion/recordSalesIntent failed:", e?.message, e?.code, e?.detail);
   }
 
   await saveUserMessageAndEmit({
