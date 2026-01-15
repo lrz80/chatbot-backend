@@ -5,11 +5,10 @@ import pool from '../../lib/db';
 import twilio from 'twilio';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { detectarIdioma } from '../../lib/detectarIdioma';
-import { traducirMensaje } from '../../lib/traducirMensaje';
 import { enviarWhatsApp } from "../../lib/senders/whatsapp";
 
 // ⬇️ Importa también esIntencionDeVenta para contar ventas correctamente
-import { esIntencionDeVenta } from '../../lib/detectarIntencion';
+import { detectarIntencion, esIntencionDeVenta } from '../../lib/detectarIntencion';
 
 import type { Canal } from '../../lib/detectarIntencion';
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
@@ -17,8 +16,6 @@ import { saludoPuroRegex } from '../../lib/saludosConversacionales';
 import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
 import { getIO } from '../../lib/socket';
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
-import * as chrono from "chrono-node";
-import { DateTime } from "luxon";
 import { rememberTurn } from "../../lib/memory/rememberTurn";
 import { rememberFacts } from "../../lib/memory/rememberFacts";
 import { getMemoryValue } from "../../lib/clientMemory";
@@ -380,6 +377,8 @@ async function saveAssistantMessageAndEmit(opts: {
   fromNumber: string;
   messageId: string | null;
   content: string;
+  intent?: string | null;
+  interest_level?: number | null;
 }) {
   const { tenantId, canal, fromNumber, messageId, content } = opts;
 
@@ -467,6 +466,8 @@ async function saveUserMessageAndEmit(opts: {
   fromNumber: string;
   messageId: string | null;
   content: string;
+  intent?: string | null;
+  interest_level?: number | null;
 }) {
   const { tenantId, canal, fromNumber, messageId, content } = opts;
 
@@ -474,12 +475,21 @@ async function saveUserMessageAndEmit(opts: {
 
   try {
     const { rows } = await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING
-       RETURNING id, timestamp, role, content, canal, from_number`,
-      [tenantId, content, canal, fromNumber || 'anónimo', messageId]
-    );
+      `INSERT INTO messages (
+      tenant_id, role, content, timestamp, canal, from_number, message_id, intent, interest_level
+    )
+    VALUES ($1, 'user', $2, NOW(), $3, $4, $5, $6, $7)
+    ON CONFLICT (tenant_id, message_id) DO NOTHING
+    RETURNING id, timestamp, role, content, canal, from_number`,
+    [
+      tenantId,
+      content,
+      canal,
+      fromNumber || 'anónimo',
+      messageId,
+      opts.intent || null,
+      (typeof opts.interest_level === 'number' ? opts.interest_level : null),
+    ]);
 
     const inserted = rows[0];
     if (!inserted) return;
@@ -599,6 +609,7 @@ export async function procesarMensajeWhatsApp(
   let reply: string | null = null;
   let replySource: string | null = null;
   let lastIntent: string | null = null;
+  let INTENCION_FINAL_CANONICA: string | null = null;
 
   // ✅ Decision metadata (backend NO habla, solo decide)
   let nextAction: {
@@ -793,9 +804,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     if (intent !== undefined) lastIntent = intent;
   }
 
-  // ✅ DECLÁRALO AQUÍ ARRIBA (antes de finalizeReply)
-  let INTENCION_FINAL_CANONICA: string | null = null;
-
   const setConversationStateCompat = async (
   tenantId: string,
   canal: any,          // o Canal si lo tienes importado
@@ -849,12 +857,40 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     );
   }
 
+  // ===============================
+  // 🎯 Intent detection (evento)
+  // ===============================
+  let detectedIntent: string | null = null;
+  let detectedInterest: number | null = null;
+
+  try {
+    const det = await detectarIntencion(userInput, tenant.id, canal);
+    detectedIntent = det?.intencion || null;
+    detectedInterest = typeof det?.nivel_interes === "number" ? det.nivel_interes : null;
+
+    // Mantén tus variables de pipeline sincronizadas
+    INTENCION_FINAL_CANONICA = detectedIntent;
+    lastIntent = detectedIntent;
+
+    // Opcional: guardar en context para debug/flows
+    transition({
+      patchCtx: {
+        last_intent: detectedIntent,
+        last_interest_level: detectedInterest,
+      },
+    });
+  } catch (e) {
+    console.warn("⚠️ detectarIntencion failed:", e);
+  }
+
   await saveUserMessageAndEmit({
     tenantId: tenant.id,
     canal,
     fromNumber: contactoNorm || fromNumber || 'anónimo',
     messageId,
     content: userInput || '',
+    intent: detectedIntent,
+    interest_level: detectedInterest,
   });
 
   // ===============================
