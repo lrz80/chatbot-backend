@@ -35,7 +35,7 @@ import { paymentHumanGate } from "../../lib/guards/paymentHumanGuard";
 import { yesNoStateGate } from "../../lib/guards/yesNoStateGate";
 import { awaitingGate } from "../../lib/guards/awaitingGate";
 import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
-
+import { detectarEmocion } from "../../lib/detectarEmocion";
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -305,19 +305,29 @@ async function saveUserMessageAndEmit(opts: {
   content: string;
   intent?: string | null;
   interestLevel?: number | null;
+  emotion?: string | null;
 }) {
-  const { tenantId, canal, fromNumber, messageId, content, intent, interestLevel } = opts;
+  const { tenantId, canal, fromNumber, messageId, content, intent, interestLevel, emotion } = opts;
   if (!messageId) return;
 
   try {
     const { rows } = await pool.query(
       `INSERT INTO messages (
-        tenant_id, role, content, timestamp, canal, from_number, message_id, intent, interest_level
+        tenant_id, role, content, timestamp, canal, from_number, message_id, intent, interest_level, emotion
       )
-      VALUES ($1,'user',$2,NOW(),$3,$4,$5,$6,$7)
+      VALUES ($1,'user',$2,NOW(),$3,$4,$5,$6,$7,$8)
       ON CONFLICT (tenant_id, message_id) DO NOTHING
-      RETURNING id, timestamp, role, content, canal, from_number, intent, interest_level`,
-      [tenantId, content, canal, fromNumber || "anónimo", messageId, intent ?? null, interestLevel ?? null]
+      RETURNING id, timestamp, role, content, canal, from_number, intent, interest_level, emotion`,
+      [
+        tenantId,
+        content,
+        canal,
+        fromNumber || "anónimo",
+        messageId,
+        intent ?? null,
+        (typeof interestLevel === "number" ? interestLevel : null),
+        emotion ?? null,
+      ]
     );
 
     const inserted = rows[0];
@@ -336,6 +346,7 @@ async function saveUserMessageAndEmit(opts: {
       from_number: inserted.from_number,
       intent: inserted.intent,
       interest_level: inserted.interest_level,
+      emotion: inserted.emotion,
     });
   } catch (e) {
     console.warn("⚠️ No se pudo registrar mensaje user + socket:", e);
@@ -502,31 +513,33 @@ async function safeEnviarMeta(
   tenantId: string,
   canal: string,
   messageId: string | null,
-  toNumber: string, // senderId
+  toNumber: string,
   text: string,
   accessToken: string
 ): Promise<boolean> {
-  try {
-    const dedupeId = outboundId(messageId);
+  const dedupeId = outboundId(messageId);
 
-    const messageIdSeguro =
-      (typeof messageId === 'string' && messageId.trim() ? messageId : null) ||
-      (typeof dedupeId === 'string' && dedupeId.trim() ? dedupeId : null) ||
-      `out_${tenantId}_${canal}_${Date.now()}`;
-
-    if (!dedupeId) {
+  // Sin messageId confiable: envía y cuenta si ok.
+  if (!dedupeId) {
+    try {
       await enviarMensajePorPartes({
         respuesta: text,
         senderId: toNumber,
         tenantId,
         canal: canal as any,
-        messageId: messageIdSeguro,
+        messageId: `out_${tenantId}_${canal}_${Date.now()}`,
         accessToken,
       });
       await incrementarUsoPorCanal(tenantId, canal);
       return true;
+    } catch (e) {
+      console.error("❌ safeEnviarMeta send failed (no dedupeId):", e);
+      return false;
     }
+  }
 
+  try {
+    // ✅ RESERVA ATÓMICA
     const ins = await pool.query(
       `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
        VALUES ($1, $2, $3, NOW())
@@ -540,17 +553,28 @@ async function safeEnviarMeta(
       return true;
     }
 
-    await enviarMensajePorPartes({
-      respuesta: text,
-      senderId: toNumber,
-      tenantId,
-      canal: canal as any,
-      messageId: messageIdSeguro,
-      accessToken,
-    });
+    // ✅ Intentar envío real
+    try {
+      await enviarMensajePorPartes({
+        respuesta: text,
+        senderId: toNumber,
+        tenantId,
+        canal: canal as any,
+        messageId: dedupeId,
+        accessToken,
+      });
 
-    await incrementarUsoPorCanal(tenantId, canal);
-    return true;
+      await incrementarUsoPorCanal(tenantId, canal);
+      return true;
+    } catch (sendErr) {
+      // ✅ rollback: libera la reserva para permitir retry real
+      await pool.query(
+        `DELETE FROM interactions WHERE tenant_id=$1 AND canal=$2 AND message_id=$3`,
+        [tenantId, canal, dedupeId]
+      );
+      console.error("❌ safeEnviarMeta send failed; rolled back reservation:", sendErr);
+      return false;
+    }
   } catch (e) {
     console.error("❌ safeEnviarMeta error:", e);
     return false;
@@ -610,7 +634,6 @@ router.post("/api/facebook/webhook", async (req, res) => {
 
         const isEcho = messagingEvent.message.is_echo === true;
         const senderId = String(messagingEvent.sender?.id || "");
-        const recipientId = String(messagingEvent.recipient?.id || "");
 
         // Evita eco propio (senderId == pageId)
         if (String(senderId) === String(pageId)) continue;
@@ -767,6 +790,14 @@ router.post("/api/facebook/webhook", async (req, res) => {
         });
         console.log("🧠 [META] facts_summary (start of turn) =", memStart);
 
+        // ✅ Emotion detection (antes de guardar inbound)
+        let emotion: string | null = null;
+        try {
+          emotion = await detectarEmocion(userInput, idiomaDestino);
+        } catch (e) {
+          console.warn("⚠️ detectarEmocion failed:", e);
+        }
+
         // Save inbound user message (igual WA)
         await saveUserMessageAndEmit({
           tenantId,
@@ -776,6 +807,7 @@ router.post("/api/facebook/webhook", async (req, res) => {
           content: userInput,
           intent: lastIntent,
           interestLevel: nivelInteres,
+          emotion, // ✅ aquí
         });
 
         // ===============================
