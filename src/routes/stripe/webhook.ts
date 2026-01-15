@@ -7,6 +7,7 @@ import { sendSubscriptionActivatedEmail } from '../../lib/mailer';
 import { sendRenewalSuccessEmail } from '../../lib/mailer';
 import { sendCancelationEmail } from '../../lib/mailer';
 import { markTrialUsedByEmail } from '../../lib/trial';
+import twilio from 'twilio';
 
 const router = express.Router();
 
@@ -149,6 +150,86 @@ function initStripe() {
     STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET!;
     if (!STRIPE_WEBHOOK_SECRET) throw new Error('❌ STRIPE_WEBHOOK_SECRET no está definida.');
     stripe = new Stripe(key, { apiVersion: '2022-11-15' });
+  }
+}
+
+function getTwilioClient() {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  if (!sid || !token) return null;
+  return twilio(sid, token);
+}
+
+async function notifyAdminPaymentSMS(params: {
+  eventId: string;
+  tenantId?: string | null;
+  kind: 'setup' | 'subscription_checkout';
+  amountCents?: number | null;
+  currency?: string | null;
+  email?: string | null;
+  plan?: string | null;
+  canal?: string | null;
+  cantidad?: number | null;
+}) {
+  try {
+    const adminPhone = process.env.ADMIN_PHONE;
+    if (!adminPhone) return;
+
+    // Idempotencia: si ya notificamos este event_id, no enviar SMS
+    const ins = await pool.query(
+      `INSERT INTO stripe_sms_notifications(event_id)
+       VALUES ($1)
+       ON CONFLICT (event_id) DO NOTHING
+       RETURNING event_id`,
+      [params.eventId]
+    );
+    if (ins.rowCount === 0) return; // ya notificado
+
+    const client = getTwilioClient();
+    if (!client) return;
+
+    // From: preferimos twilio_sms_number del tenant si existe, sino un número global
+    let fromNumber = process.env.TWILIO_SMS_NUMBER || '';
+    let tenantName: string | null = null;
+
+    if (params.tenantId) {
+      const t = await pool.query(
+        `SELECT name, twilio_sms_number FROM tenants WHERE id = $1 LIMIT 1`,
+        [params.tenantId]
+      );
+      tenantName = t.rows[0]?.name ?? null;
+      const tenantFrom = t.rows[0]?.twilio_sms_number ?? null;
+      if (tenantFrom) fromNumber = tenantFrom;
+    }
+
+    if (!fromNumber) return;
+
+    const amount =
+      params.amountCents != null
+        ? (params.amountCents / 100).toFixed(2)
+        : null;
+
+    const cur = (params.currency || '').toUpperCase() || 'USD';
+
+    const lines: string[] = [];
+    lines.push('Pago recibido (Aamy)');
+    if (tenantName) lines.push(`Negocio: ${tenantName}`);
+    if (params.email) lines.push(`Email: ${params.email}`);
+    if (params.plan) lines.push(`Plan: ${params.plan}`);
+    if (params.canal && params.cantidad) lines.push(`Créditos: ${params.cantidad} ${params.canal}`);
+    if (amount) lines.push(`Monto: ${amount} ${cur}`);
+    lines.push(`Tipo: ${params.kind}`);
+
+    const body = lines.join('\n');
+
+    await client.messages.create({
+      to: adminPhone,
+      from: fromNumber,
+      body,
+    });
+  } catch (e) {
+    // Nunca romper el webhook por fallo de SMS
+    console.warn('⚠️ SMS admin no enviado (se ignora):', e);
   }
 }
 
@@ -328,6 +409,16 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         }
 
         console.log('✅ Opción A completada: $399 pagado y suscripción $199 creada:', subscription.id);
+        await notifyAdminPaymentSMS({
+          eventId: event.id,
+          tenantId,
+          kind: 'setup',
+          amountCents: session.amount_total ?? null,
+          currency: session.currency ?? null,
+          email: email ?? null,
+          plan: 'pro',
+        });
+
       } catch (err) {
         console.error('❌ Error en Opción A (crear suscripción $199 tras $399):', err);
       }
@@ -502,10 +593,21 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
               email_enabled: true,
             });
             console.log('ℹ️ No se obtuvo product; activados todos los canales por defecto.');
+
           }
         } catch (e) {
           console.error('❌ Error estableciendo channel flags post-checkout:', e);
         }
+
+           await notifyAdminPaymentSMS({
+              eventId: event.id,
+              tenantId,
+              kind: 'subscription_checkout',
+              amountCents: session.amount_total ?? null,
+              currency: session.currency ?? null,
+              email,
+              plan: planValue,
+            });
 
         // 6) Email de bienvenida/activación
         const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [tenantId]);
@@ -701,6 +803,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       }
 
       console.log('🔁 Membresía renovada para', customerEmail, 'tenant', user.tenant_id);
+
       await resetearCanales(user.tenant_id, planLimits);
 
       const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [user.tenant_id]);
