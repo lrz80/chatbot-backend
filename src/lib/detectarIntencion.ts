@@ -243,6 +243,16 @@ export async function detectarIntencion(
   const texto = norm(original);
   const textoCore = norm(stripLeadingGreeting(original)) || texto;
 
+  // ✅ FAST-PATH: intención de activar/suscribirse (ES/EN) — antes de flagVenta fallbacks
+  const NEG_RE = /\b(no|aun\s*no|todav[ií]a\s*no|not)\b/i;
+
+  const SUBSCRIBE_RE =
+    /\b(suscrib(ir(me)?|irse)|suscripci[oó]n|subscrib(e|ing)|subscription|sign\s*up|enroll|activar(\s+mi)?\s+(membres[ií]a|plan)|activate(\s+my)?\s+(plan|membership)|start(\s+my)?\s+(plan|membership)|quiero\s+(empezar|iniciar))\b/i;
+
+  if (SUBSCRIBE_RE.test(original) && !NEG_RE.test(original)) {
+    return { intencion: "pago", nivel_interes: 3 };
+  }
+
   // 1) Heurísticas universales (solo lo obvio)
   // Prioridad: NO devolver saludo si hay pedido real.
   const flagInfo =
@@ -271,7 +281,12 @@ export async function detectarIntencion(
     if (["agendar", "reservar", "appointment", "book", "cita"].some((w) => textoCore.includes(norm(w)))) {
       return { intencion: "agendar", nivel_interes: 3 };
     }
-    if (["pagar", "payment", "checkout", "link"].some((w) => textoCore.includes(norm(w)))) {
+    const pagoWords = ["pagar","payment","checkout","link","stripe","buy"];
+    const pagoHits =
+      pagoWords.some((w) => hasWord(textoCore, norm(w)) || textoCore.includes(norm(w))) ||
+      SUBSCRIBE_RE.test(original);
+
+    if (pagoHits && !NEG_RE.test(original)) {
       return { intencion: "pago", nivel_interes: 3 };
     }
     // si hay intención de compra genérica, pero no cae en nada: info_servicio con interés alto
@@ -331,6 +346,7 @@ Reglas:
 - "info_servicio" es para preguntas generales tipo: qué ofrecen, cómo funciona, detalles, catálogo, etc.
 - "agendar" es para citas/reservas/booking/visita.
 - "disponibilidad" es para stock/cupos/disponibilidad de fechas sin confirmar cita.
+- Si el usuario dice "quiero suscribirme / suscripción / activar membresía / sign up / subscribe", clasifica como "pago" con nivel_interes 3.
 - Devuelve también nivel_interes (1 bajo, 2 medio, 3 alto) basado en cercanía a compra:
   3: quiere agendar, pagar, comprar, link, cotización directa.
   2: pregunta precio, disponibilidad, detalles para decidir.

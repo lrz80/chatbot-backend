@@ -1,19 +1,20 @@
 import OpenAI from "openai";
+import { EMOCIONES_PERMITIDAS, Emocion } from "./emotion/categories";
 
-export type Emocion =
-  | "enfado"
-  | "frustracion"
-  | "neutral"
-  | "interes"
-  | "entusiasmo";
+export async function detectarEmocion(
+  texto: string,
+  idioma: "es" | "en" = "es"
+): Promise<Emocion> {
 
-export async function detectarEmocion(texto: string, idioma: "es" | "en" = "es"): Promise<Emocion> {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
+
+  // Lista dinámica
+  const lista = EMOCIONES_PERMITIDAS.join(", ");
 
   const prompt = `
 Clasifica la emoción principal del mensaje del cliente.
-Devuelve SOLO una palabra de esta lista:
-enfado, frustracion, neutral, interes, entusiasmo
+Debes responder con UNA SOLA palabra. 
+Estas son las categorías disponibles: ${lista}
 
 Idioma: ${idioma}
 Mensaje: """${texto}"""
@@ -25,8 +26,12 @@ Mensaje: """${texto}"""
     temperature: 0,
   });
 
-  const out = (r.choices[0]?.message?.content || "").trim().toLowerCase();
+  const out = (r.choices[0]?.message?.content || "")
+    .trim()
+    .toLowerCase();
 
-  const allowed = new Set<Emocion>(["enfado","frustracion","neutral","interes","entusiasmo"]);
-  return (allowed.has(out as Emocion) ? (out as Emocion) : "neutral");
+  // Valida contra la lista centralizada
+  return (EMOCIONES_PERMITIDAS as readonly string[]).includes(out)
+    ? (out as Emocion)
+    : "neutral";
 }
