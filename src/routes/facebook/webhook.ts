@@ -301,17 +301,21 @@ async function saveUserMessageAndEmit(opts: {
   fromNumber: string;
   messageId: string | null;
   content: string;
+  intent?: string | null;
+  interestLevel?: number | null;
 }) {
-  const { tenantId, canal, fromNumber, messageId, content } = opts;
+  const { tenantId, canal, fromNumber, messageId, content, intent, interestLevel } = opts;
   if (!messageId) return;
 
   try {
     const { rows } = await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'user', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING
-       RETURNING id, timestamp, role, content, canal, from_number`,
-      [tenantId, content, canal, fromNumber || "anónimo", messageId]
+      `INSERT INTO messages (
+        tenant_id, role, content, timestamp, canal, from_number, message_id, intent, interest_level
+      )
+      VALUES ($1,'user',$2,NOW(),$3,$4,$5,$6,$7)
+      ON CONFLICT (tenant_id, message_id) DO NOTHING
+      RETURNING id, timestamp, role, content, canal, from_number, intent, interest_level`,
+      [tenantId, content, canal, fromNumber || "anónimo", messageId, intent ?? null, interestLevel ?? null]
     );
 
     const inserted = rows[0];
@@ -328,6 +332,8 @@ async function saveUserMessageAndEmit(opts: {
       content: inserted.content,
       canal: inserted.canal,
       from_number: inserted.from_number,
+      intent: inserted.intent,
+      interest_level: inserted.interest_level,
     });
   } catch (e) {
     console.warn("⚠️ No se pudo registrar mensaje user + socket:", e);
@@ -705,6 +711,30 @@ router.post("/api/facebook/webhook", async (req, res) => {
           }
         }
 
+        // ===============================
+        // 🎯 Intent detection (evento por mensaje)
+        // ===============================
+        let lastIntent: string | null = null;
+        let nivelInteres: number | null = null;
+        let INTENCION_FINAL_CANONICA: string | null = null;
+
+        try {
+          const det = await detectarIntencion(userInput, tenantId, canalEnvio as any);
+          INTENCION_FINAL_CANONICA = det?.intencion ? String(det.intencion) : null;
+          lastIntent = INTENCION_FINAL_CANONICA;
+          const ni = Number(det?.nivel_interes);
+          nivelInteres = Number.isFinite(ni) ? Math.max(1, Math.min(3, ni)) : null;
+
+          transition({
+            patchCtx: {
+              last_intent: INTENCION_FINAL_CANONICA,
+              last_interest_level: nivelInteres,
+            },
+          });
+        } catch (e) {
+          console.warn("⚠️ detectarIntencion failed:", e);
+        }
+
         // selected_channel flag (igual WA)
         const decisionFlags = { channelSelected: false };
         const selectedChannel = await getSelectedChannelDB(tenantId, canalEnvio, senderId);
@@ -726,6 +756,8 @@ router.post("/api/facebook/webhook", async (req, res) => {
           fromNumber: senderId,
           messageId,
           content: userInput,
+          intent: lastIntent,
+          interestLevel: nivelInteres,
         });
 
         // ===============================
@@ -734,16 +766,14 @@ router.post("/api/facebook/webhook", async (req, res) => {
         let handled = false;
         let reply: string | null = null;
         let replySource: string | null = null;
-        let lastIntent: string | null = null;
         let replied = false;
-        let INTENCION_FINAL_CANONICA: string | null = null;
 
         function setReply(text: string, source: string, intent?: string | null) {
           replied = true;
           handled = true;
           reply = text;
           replySource = source;
-          if (intent !== undefined) lastIntent = intent;
+          if (intent !== undefined) lastIntent = intent; // usa la variable ya declarada arriba
         }
 
         // ===============================
