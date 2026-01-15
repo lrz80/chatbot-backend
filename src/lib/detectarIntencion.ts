@@ -243,6 +243,14 @@ export async function detectarIntencion(
   const texto = norm(original);
   const textoCore = norm(stripLeadingGreeting(original)) || texto;
 
+  // ✅ “más info” (ES/EN) debe ganar contra "pago" si NO hay señales explícitas de checkout/pago
+  const MORE_INFO_RE =
+    /\b(mas\s*inf(o(rmacion)?)?|m[aá]s\s*inf(o(rmaci[oó]n)?)?|informaci[oó]n\s*adicional|more\s*info|more\s*information|more\s*details|tell\s*me\s*more)\b/i;
+
+  if (MORE_INFO_RE.test(original)) {
+    return { intencion: "info_servicio", nivel_interes: 2 };
+  }
+
   // ✅ FAST-PATH: intención de activar/suscribirse (ES/EN) — antes de flagVenta fallbacks
   const NEG_RE = /\b(no|aun\s*no|todav[ií]a\s*no|not)\b/i;
 
@@ -275,21 +283,25 @@ export async function detectarIntencion(
 
   // 2) Si pide info y además hay señal de venta, prioriza algo más cercano a decisión
   if (flagVenta) {
-    if (["precio", "precios", "price", "cost", "cotizacion", "cotización", "quote"].some((w) => textoCore.includes(norm(w)))) {
+    if (["precio", "precios", "price", "cost", "cotizacion", "cotización", "quote"]
+        .some((w) => textoCore.includes(norm(w)))) {
       return { intencion: "precio", nivel_interes: 2 };
     }
-    if (["agendar", "reservar", "appointment", "book", "cita"].some((w) => textoCore.includes(norm(w)))) {
+
+    if (["agendar", "reservar", "appointment", "book", "cita"]
+        .some((w) => textoCore.includes(norm(w)))) {
       return { intencion: "agendar", nivel_interes: 3 };
     }
-    const pagoWords = ["pagar","payment","checkout","link","stripe","buy"];
-    const pagoHits =
-      pagoWords.some((w) => hasWord(textoCore, norm(w)) || textoCore.includes(norm(w))) ||
-      SUBSCRIBE_RE.test(original);
 
-    if (pagoHits && !NEG_RE.test(original)) {
+    // ✅ Pago: SOLO si hay señal explícita (pagar/checkout/link/stripe/paid/suscripción)
+    const pagoExplicitRe =
+      /\b(pagar|pago|payment|checkout|stripe|buy|paid|i\s*paid|ya\s*pague|link\s+de\s+pago|enlace\s+de\s+pago|suscrib(ir(me)?|irse)|suscripci[oó]n|subscrib(e|ing)|subscription|sign\s*up)\b/i;
+
+    if (pagoExplicitRe.test(original)) {
       return { intencion: "pago", nivel_interes: 3 };
     }
-    // si hay intención de compra genérica, pero no cae en nada: info_servicio con interés alto
+
+    // si hay señal de compra genérica pero nada explícito, mejor info_servicio con interés alto
     return { intencion: "info_servicio", nivel_interes: 3 };
   }
 
