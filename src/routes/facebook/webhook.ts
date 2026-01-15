@@ -3,9 +3,9 @@
 import express from "express";
 import pool from "../../lib/db";
 import { detectarIdioma } from "../../lib/detectarIdioma";
-import { traducirMensaje } from "../../lib/traducirMensaje";
 import { getPromptPorCanal, getBienvenidaPorCanal } from "../../lib/getPromptPorCanal";
 import type { Canal } from "../../lib/detectarIntencion";
+import { detectarIntencion, esIntencionDeVenta } from "../../lib/detectarIntencion";
 
 import { requireChannel } from "../../middleware/requireChannel";
 import { canUseChannel } from "../../lib/features";
@@ -728,6 +728,46 @@ router.post("/api/facebook/webhook", async (req, res) => {
           content: userInput,
         });
 
+        // ===============================
+        // Single-exit variables (igual WA)
+        // ===============================
+        let handled = false;
+        let reply: string | null = null;
+        let replySource: string | null = null;
+        let lastIntent: string | null = null;
+        let replied = false;
+        let INTENCION_FINAL_CANONICA: string | null = null;
+
+        function setReply(text: string, source: string, intent?: string | null) {
+          replied = true;
+          handled = true;
+          reply = text;
+          replySource = source;
+          if (intent !== undefined) lastIntent = intent;
+        }
+
+        // ===============================
+        // 🎯 Intent detection (DB + LLM fallback)
+        // ===============================
+        try {
+          const det = await detectarIntencion(userInput, tenantId, canalEnvio as any);
+          INTENCION_FINAL_CANONICA = det.intencion;
+          lastIntent = det.intencion;
+
+          // Si quieres usar el nivel para lógica adicional:
+          // const nivelInteres = det.nivel_interes;
+
+          // Guarda en contexto para debugging/flows si quieres
+          transition({
+            patchCtx: {
+              last_intent: det.intencion,
+              last_interest_level: det.nivel_interes,
+            },
+          });
+        } catch (e) {
+          console.warn("⚠️ detectarIntencion failed:", e);
+        }
+
         // Inyectar facts_summary a prompt (igual WA)
         try {
           const memRaw = await getMemoryValue<any>({
@@ -754,22 +794,6 @@ router.post("/api/facebook/webhook", async (req, res) => {
           }
         } catch (e) {
           console.warn("⚠️ [META] No se pudo cargar memoria:", e);
-        }
-
-        // Single-exit variables (igual WA)
-        let handled = false;
-        let reply: string | null = null;
-        let replySource: string | null = null;
-        let lastIntent: string | null = null;
-        let replied = false;
-        let INTENCION_FINAL_CANONICA: string | null = null;
-
-        function setReply(text: string, source: string, intent?: string | null) {
-          replied = true;
-          handled = true;
-          reply = text;
-          replySource = source;
-          if (intent !== undefined) lastIntent = intent;
         }
 
         const setConversationStateCompat = async (
@@ -874,6 +898,7 @@ router.post("/api/facebook/webhook", async (req, res) => {
           parseDatosCliente,
           extractPaymentLinkFromPrompt,
           PAGO_CONFIRM_REGEX,
+          detectedIntent: INTENCION_FINAL_CANONICA,
         } as any);
 
         if (smResult.action === "silence") {
@@ -981,7 +1006,10 @@ router.post("/api/facebook/webhook", async (req, res) => {
           const composed = await answerWithPromptBase({
             tenantId,
             promptBase: promptBaseMem,
-            userInput,
+            userInput: [
+              INTENCION_FINAL_CANONICA ? `INTENCION_DETECTADA: ${INTENCION_FINAL_CANONICA}` : "",
+              userInput
+            ].filter(Boolean).join("\n"),
             history,
             idiomaDestino,
             canal: canalEnvio as any,
