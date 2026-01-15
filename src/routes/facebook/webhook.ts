@@ -34,6 +34,8 @@ import { createStateMachine } from "../../lib/conversation/stateMachine";
 import { paymentHumanGate } from "../../lib/guards/paymentHumanGuard";
 import { yesNoStateGate } from "../../lib/guards/yesNoStateGate";
 import { awaitingGate } from "../../lib/guards/awaitingGate";
+import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
+
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -346,18 +348,32 @@ async function saveAssistantMessageAndEmit(opts: {
   fromNumber: string;
   messageId: string | null;
   content: string;
+  intent?: string | null;
+  interestLevel?: number | null;
 }) {
   const { tenantId, canal, fromNumber, messageId, content } = opts;
+
+  if (!messageId) return;
 
   try {
     const finalMessageId = messageId ? `${messageId}-bot` : null;
 
     const { rows } = await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING
-       RETURNING id, timestamp, role, content, canal, from_number`,
-      [tenantId, content, canal, fromNumber || "anónimo", finalMessageId]
+      `INSERT INTO messages (
+        tenant_id, role, content, timestamp, canal, from_number, message_id, intent, interest_level
+      )
+      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5, $6, $7)
+      ON CONFLICT (tenant_id, message_id) DO NOTHING
+      RETURNING id, timestamp, role, content, canal, from_number, intent, interest_level`,
+      [
+        tenantId,
+        content,
+        canal,
+        fromNumber || "anónimo",
+        finalMessageId,
+        opts.intent ?? null,
+        (typeof opts.interestLevel === "number" ? opts.interestLevel : null),
+      ]
     );
 
     const inserted = rows[0];
@@ -374,6 +390,8 @@ async function saveAssistantMessageAndEmit(opts: {
       content: inserted.content,
       canal: inserted.canal,
       from_number: inserted.from_number,
+      intent: inserted.intent,
+      interest_level: inserted.interest_level,
     });
   } catch (e) {
     console.warn("⚠️ No se pudo registrar mensaje assistant + socket:", e);
@@ -776,28 +794,6 @@ router.post("/api/facebook/webhook", async (req, res) => {
           if (intent !== undefined) lastIntent = intent; // usa la variable ya declarada arriba
         }
 
-        // ===============================
-        // 🎯 Intent detection (DB + LLM fallback)
-        // ===============================
-        try {
-          const det = await detectarIntencion(userInput, tenantId, canalEnvio as any);
-          INTENCION_FINAL_CANONICA = det.intencion;
-          lastIntent = det.intencion;
-
-          // Si quieres usar el nivel para lógica adicional:
-          // const nivelInteres = det.nivel_interes;
-
-          // Guarda en contexto para debugging/flows si quieres
-          transition({
-            patchCtx: {
-              last_intent: det.intencion,
-              last_interest_level: det.nivel_interes,
-            },
-          });
-        } catch (e) {
-          console.warn("⚠️ detectarIntencion failed:", e);
-        }
-
         // Inyectar facts_summary a prompt (igual WA)
         try {
           const memRaw = await getMemoryValue<any>({
@@ -842,6 +838,8 @@ router.post("/api/facebook/webhook", async (req, res) => {
           });
         };
 
+        let sentOk = false;
+
         async function finalizeReply() {
           await finalizeReplyLib(
             {
@@ -870,23 +868,54 @@ router.post("/api/facebook/webhook", async (req, res) => {
               },
             },
             {
-              safeEnviarWhatsApp: async (
-                tId: string,
-                c2: string,
-                mId: string | null,
-                toNumber: string,
-                text: string
-              ) => safeEnviarMeta(tId, c2, mId, toNumber, text, accessToken),
+              safeEnviarWhatsApp: async (tId, c2, mId, toNumber, text) => {
+                const ok = await safeEnviarMeta(tId, c2, mId, toNumber, text, accessToken);
+                sentOk = ok;
+                return ok;
+              },
 
               setConversationState: setConversationStateCompat,
 
               saveAssistantMessageAndEmit: async (opts: any) =>
-                saveAssistantMessageAndEmit({ ...opts, canal }),
+                saveAssistantMessageAndEmit({
+                  ...opts,
+                  canal,
+                  intent: (lastIntent || INTENCION_FINAL_CANONICA || null),
+                  interestLevel: (typeof nivelInteres === "number" ? nivelInteres : null),
+                }),
 
               rememberAfterReply: async (opts: any) =>
                 rememberAfterReply({ ...opts, canal, senderId }),
             }
           );
+          try {
+            // Solo registra eventos si realmente hubo reply enviado/guardado
+            if (!handled || !reply || !sentOk) return;
+
+            const finalIntent = (lastIntent || INTENCION_FINAL_CANONICA || "")
+              .toString()
+              .trim()
+              .toLowerCase();
+
+            const finalNivel =
+              typeof nivelInteres === "number"
+                ? Math.min(3, Math.max(1, nivelInteres))
+                : 2;
+
+            if (messageId && finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 2) {
+              await recordSalesIntent({
+                tenantId,
+                contacto: senderId,
+                canal: canalEnvio as any,      // o canal (ambos te sirven, pero sé consistente)
+                mensaje: userInput,
+                intencion: finalIntent,
+                nivelInteres: finalNivel,
+                messageId,
+              });
+            }
+          } catch (e: any) {
+            console.warn("⚠️ recordSalesIntent(final) failed:", e?.message);
+          }
         }
 
         async function replyAndExit(text: string, source: string, intent?: string | null) {
@@ -909,7 +938,7 @@ router.post("/api/facebook/webhook", async (req, res) => {
             },
           });
 
-          await replyAndExit(bienvenida, "welcome_gate", "saludo");
+          await replyAndExit(bienvenida, "welcome_gate", null);
           continue;
         }
 

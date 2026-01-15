@@ -381,17 +381,27 @@ async function saveAssistantMessageAndEmit(opts: {
   intent?: string | null;
   interest_level?: number | null;
 }) {
-  const { tenantId, canal, fromNumber, messageId, content } = opts;
+  const { tenantId, canal, fromNumber, messageId, content, intent, interest_level } = opts;
 
   try {
     const finalMessageId = messageId ? `${messageId}-bot` : null;
 
     const { rows } = await pool.query(
-      `INSERT INTO messages (tenant_id, role, content, timestamp, canal, from_number, message_id)
-       VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5)
-       ON CONFLICT (tenant_id, message_id) DO NOTHING
-       RETURNING id, timestamp, role, content, canal, from_number`,
-      [tenantId, content, canal, fromNumber || 'anónimo', finalMessageId]
+      `INSERT INTO messages (
+        tenant_id, role, content, timestamp, canal, from_number, message_id, intent, interest_level
+      )
+      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5, $6, $7)
+      ON CONFLICT (tenant_id, message_id) DO NOTHING
+      RETURNING id, timestamp, role, content, canal, from_number`,
+      [
+        tenantId,
+        content,
+        canal,
+        fromNumber || "anónimo",
+        finalMessageId,
+        opts.intent || null,
+        (typeof opts.interest_level === "number" ? opts.interest_level : null),
+      ]
     );
 
     const inserted = rows[0];
@@ -611,6 +621,10 @@ export async function procesarMensajeWhatsApp(
   let replySource: string | null = null;
   let lastIntent: string | null = null;
   let INTENCION_FINAL_CANONICA: string | null = null;
+
+  // 🎯 Intent detection (evento)
+  let detectedIntent: string | null = null;
+  let detectedInterest: number | null = null;
 
   // ✅ Decision metadata (backend NO habla, solo decide)
   let nextAction: {
@@ -852,18 +866,45 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       {
         safeEnviarWhatsApp,
         setConversationState: setConversationStateCompat,
-        saveAssistantMessageAndEmit,
+        saveAssistantMessageAndEmit: async (opts: any) =>
+        saveAssistantMessageAndEmit({
+          ...opts,
+          canal,
+          intent: (lastIntent || INTENCION_FINAL_CANONICA || null),
+          interest_level: (typeof detectedInterest === "number" ? detectedInterest : null),
+        }),
         rememberAfterReply,
       }
     );
+
+    try {
+      if (!handled || !reply) return;
+
+      const finalIntent = (lastIntent || INTENCION_FINAL_CANONICA || "").toString().trim().toLowerCase();
+      const finalNivel =
+        typeof detectedInterest === "number"
+          ? Math.min(3, Math.max(1, detectedInterest))
+          : 2;
+
+      if (messageId && finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 2) {
+        await recordSalesIntent({
+          tenantId: tenant.id,
+          contacto: contactoNorm,
+          canal,
+          mensaje: userInput,
+          intencion: finalIntent,
+          nivelInteres: finalNivel,
+          messageId,
+        });
+      }
+    } catch (e: any) {
+      console.warn("⚠️ recordSalesIntent(final) failed:", e?.message);
+    }
   }
 
   // ===============================
   // 🎯 Intent detection (evento)
   // ===============================
-  let detectedIntent: string | null = null;
-  let detectedInterest: number | null = null;
-
   try {
     const det = await detectarIntencion(userInput, tenant.id, canal);
 
@@ -871,30 +912,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     const levelRaw = Number(det?.nivel_interes);
     const nivel = Number.isFinite(levelRaw) ? Math.min(3, Math.max(1, levelRaw)) : 1;
 
-    console.log("🎯 detectarIntencion =>", {
-      intent,
-      nivel,
-      canal,
-      tenantId: tenant.id,
-      messageId,
-    });
-
-    const isVenta = intent ? esIntencionDeVenta(intent) : false;
-    console.log("💰 esIntencionDeVenta =>", { intent, isVenta });
-
-    if (isVenta) {
-      const ok = await recordSalesIntent({
-        tenantId: tenant.id,
-        contacto: contactoNorm,
-        canal,
-        mensaje: userInput,
-        intencion: intent,
-        nivelInteres: nivel,
-        messageId,
-      });
-
-      console.log("✅ recordSalesIntent result =>", ok);
-    }
+    console.log("🎯 detectarIntencion =>", { intent, nivel, canal, tenantId: tenant.id, messageId });
 
     if (intent) {
       detectedIntent = intent;
@@ -903,14 +921,11 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       lastIntent = intent;
 
       transition({
-        patchCtx: {
-          last_intent: intent,
-          last_interest_level: nivel,
-        },
+        patchCtx: { last_intent: intent, last_interest_level: nivel },
       });
     }
   } catch (e: any) {
-    console.warn("⚠️ detectarIntencion/recordSalesIntent failed:", e?.message, e?.code, e?.detail);
+    console.warn("⚠️ detectarIntencion failed:", e?.message, e?.code, e?.detail);
   }
 
   await saveUserMessageAndEmit({
