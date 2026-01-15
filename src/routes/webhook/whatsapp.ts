@@ -33,6 +33,7 @@ import { clearAwaitingState } from "../../lib/awaiting";
 import { buildTurnContext } from "../../lib/conversation/buildTurnContext";
 import { awaitingGate } from "../../lib/guards/awaitingGate";
 import { createStateMachine } from "../../lib/conversation/stateMachine";
+import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -865,20 +866,39 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
   try {
     const det = await detectarIntencion(userInput, tenant.id, canal);
-    detectedIntent = det?.intencion || null;
-    detectedInterest = typeof det?.nivel_interes === "number" ? det.nivel_interes : null;
 
-    // Mantén tus variables de pipeline sincronizadas
-    INTENCION_FINAL_CANONICA = detectedIntent;
-    lastIntent = detectedIntent;
+    const intent = (det?.intencion || "").toString().trim().toLowerCase();
+    const levelRaw = Number(det?.nivel_interes);
+    const nivel = Number.isFinite(levelRaw) ? Math.min(3, Math.max(1, levelRaw)) : 1;
 
-    // Opcional: guardar en context para debug/flows
-    transition({
-      patchCtx: {
-        last_intent: detectedIntent,
-        last_interest_level: detectedInterest,
-      },
-    });
+    // Guarda evento solo si hay intención válida
+    if (intent) {
+      // Registra SOLO si es venta (tu regla)
+      if (messageId && esIntencionDeVenta(intent)) {
+        await recordSalesIntent({
+          tenantId: tenant.id,
+          contacto: contactoNorm,
+          canal,
+          mensaje: userInput,
+          intencion: intent,
+          nivelInteres: nivel,
+          messageId,
+        });
+      }
+
+      detectedIntent = intent;
+      detectedInterest = nivel;
+
+      INTENCION_FINAL_CANONICA = intent;
+      lastIntent = intent;
+
+      transition({
+        patchCtx: {
+          last_intent: intent,
+          last_interest_level: nivel,
+        },
+      });
+    }
   } catch (e) {
     console.warn("⚠️ detectarIntencion failed:", e);
   }
