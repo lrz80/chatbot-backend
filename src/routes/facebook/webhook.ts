@@ -1080,7 +1080,7 @@ router.post("/api/facebook/webhook", async (req, res) => {
             },
           });
 
-          await replyAndExit(bienvenida, "welcome_gate", null);
+          await replyAndExit(bienvenida, "welcome_gate", "saludo");
           continue;
         }
 
@@ -1218,7 +1218,7 @@ router.post("/api/facebook/webhook", async (req, res) => {
             fallbackText: bienvenida,
           });
 
-          setReply(composed.text, "sm-fallback", null);
+          setReply(composed.text, "sm-fallback");
           await finalizeReply();
         }
       }

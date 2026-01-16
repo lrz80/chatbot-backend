@@ -1183,7 +1183,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       fallbackText: getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
     });
 
-    setReply(composed.text, "sm-fallback", null);
+    setReply(composed.text, "sm-fallback");
     await finalizeReply();
     return;
   }
