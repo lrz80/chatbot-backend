@@ -37,6 +37,8 @@ import { awaitingGate } from "../../lib/guards/awaitingGate";
 import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
 import { detectarEmocion } from "../../lib/detectarEmocion";
 import { applyEmotionTriggers } from "../../lib/guards/emotionTriggers";
+import { scheduleFollowUpIfEligible } from "../../lib/followups/followUpScheduler";
+
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -988,6 +990,20 @@ router.post("/api/facebook/webhook", async (req, res) => {
                 nivelInteres: finalNivel,
                 messageId,
               });
+            }
+            // ✅ FOLLOW-UP (programar 1 pendiente si aplica) — SOLO WA/FB/IG
+            try {
+              await scheduleFollowUpIfEligible({
+                tenant,                 // el objeto tenant que ya tienes arriba
+                canal: canalEnvio,       // "facebook" | "instagram" (compat con tu scheduler)
+                contactoNorm: senderId,  // PSID/IGSID
+                idiomaDestino,
+                intFinal: finalIntent || null,
+                nivel: finalNivel,
+                userText: userInput,
+              });
+            } catch (e: any) {
+              console.warn("⚠️ scheduleFollowUpIfEligible failed:", e?.message);
             }
           } catch (e: any) {
             console.warn("⚠️ recordSalesIntent(final) failed:", e?.message);
