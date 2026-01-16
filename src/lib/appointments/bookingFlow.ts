@@ -1,3 +1,4 @@
+// src/lib/appointments/bookingFlow.ts
 import pool from "../db";
 import { canUseChannel } from "../features";
 import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
