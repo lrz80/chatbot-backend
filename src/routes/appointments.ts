@@ -4,6 +4,9 @@ import pool from "../lib/db";
 import { authenticateUser } from "../middleware/auth";
 import axios from "axios";
 import { enviarMensajePorPartes } from "../lib/enviarMensajePorPartes";
+import { canUseChannel } from "../lib/features";
+import { googleFreeBusy, googleCreateEvent } from "../services/googleCalendar";
+
 
 const router = express.Router();
 
@@ -256,6 +259,138 @@ router.put(
         ok: false,
         error: "INTERNAL_SERVER_ERROR",
       });
+    }
+  }
+);
+
+/**
+ * POST /api/appointments/book
+ * Crea una cita en DB y (si está habilitado + conectado) también en Google Calendar.
+ */
+router.post(
+  "/book",
+  authenticateUser,
+  async (
+    req: Request & { user?: { uid: string; tenant_id: string; email?: string } },
+    res: Response
+  ) => {
+    try {
+      const user = req.user;
+      if (!user?.tenant_id) {
+        return res.status(401).json({ ok: false, error: "TENANT_NOT_FOUND_IN_TOKEN" });
+      }
+
+      const tenantId = user.tenant_id;
+
+      const {
+        service_id,
+        channel, // opcional: "whatsapp" | "meta" | "voice" | etc
+        customer_name,
+        customer_phone,
+        customer_email,
+        start_time, // ISO string
+        end_time,   // ISO string
+        notes,
+        timeZone,   // ej: "America/New_York"
+      } = req.body || {};
+
+      if (!customer_name || !start_time || !end_time || !timeZone) {
+        return res.status(400).json({
+          ok: false,
+          error: "MISSING_FIELDS",
+          required: ["customer_name", "start_time", "end_time", "timeZone"],
+        });
+      }
+
+      // 1) Si Google Calendar está habilitado, validamos slot con FreeBusy
+      const gate = await canUseChannel(tenantId, "google_calendar");
+      let googleEventId: string | null = null;
+      let googleEventLink: string | null = null;
+
+      if (gate.settings_enabled) {
+        // Verifica que esté conectado y que el slot esté libre
+        const fb = await googleFreeBusy({
+          tenantId,
+          timeMin: String(start_time),
+          timeMax: String(end_time),
+          calendarId: "primary",
+        });
+
+        const busy = fb?.calendars?.primary?.busy || [];
+        if (busy.length > 0) {
+          return res.status(409).json({ ok: false, error: "SLOT_BUSY", busy });
+        }
+
+        // 2) Crear evento en Google
+        const summary = `Cita: ${customer_name}${service_id ? ` (servicio ${service_id})` : ""}`;
+        const description =
+          `Cliente: ${customer_name}\n` +
+          (customer_phone ? `Tel: ${customer_phone}\n` : "") +
+          (customer_email ? `Email: ${customer_email}\n` : "") +
+          (notes ? `Notas: ${notes}\n` : "") +
+          (channel ? `Canal: ${channel}\n` : "");
+
+        const event = await googleCreateEvent({
+          tenantId,
+          calendarId: "primary",
+          summary,
+          description,
+          startISO: String(start_time),
+          endISO: String(end_time),
+          timeZone: String(timeZone),
+        });
+
+        googleEventId = event?.id || null;
+        googleEventLink = event?.htmlLink || null;
+      }
+
+      // 3) Insertar cita en DB
+      const { rows } = await pool.query(
+        `
+        INSERT INTO appointments (
+          tenant_id,
+          service_id,
+          channel,
+          customer_name,
+          customer_phone,
+          customer_email,
+          start_time,
+          end_time,
+          status,
+          google_event_id,
+          google_event_link
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'pending',$9,$10)
+        RETURNING *
+        `,
+        [
+          tenantId,
+          service_id || null,
+          channel || "google_calendar",
+          customer_name,
+          customer_phone || null,
+          customer_email || null,
+          start_time,
+          end_time,
+          googleEventId,
+          googleEventLink,
+        ]
+      );
+
+      return res.json({
+        ok: true,
+        appointment: rows[0],
+        google: gate.settings_enabled
+          ? { created: true, event_id: googleEventId, htmlLink: googleEventLink }
+          : { created: false, reason: "google_calendar_disabled" },
+      });
+    } catch (error: any) {
+      const msg = String(error?.message || "");
+      if (msg === "google_not_connected") {
+        return res.status(409).json({ ok: false, error: "GOOGLE_NOT_CONNECTED" });
+      }
+      console.error("[POST /api/appointments/book] Error:", error);
+      return res.status(500).json({ ok: false, error: "INTERNAL_SERVER_ERROR" });
     }
   }
 );
