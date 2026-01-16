@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import pool from "../lib/db";
 
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
+const DEBUG_AUTH_LOGS = process.env.DEBUG_AUTH_LOGS === "true";
 
 interface AuthenticatedRequest extends Request {
   user?: {
@@ -23,13 +24,13 @@ export const authenticateUser = async (
     return res.sendStatus(204); // o next(); si ya respondes OPTIONS globalmente
   }
 
-  // 2) Logs seguros
-  console.log("🔐 [AUTH] Ruta solicitada:", req.method, req.originalUrl);
-  console.log("🔐 [AUTH] Cookie recibida:", req.cookies?.token ? "✅ Sí" : "❌ No");
-
-  // 3) NUNCA asumas que headers existe en compilados viejos → usa optional chaining
   const rawAuth = req.headers?.authorization ?? "";
-  console.log("🔐 [AUTH] Header Authorization:", rawAuth || "❌ No header");
+
+  if (DEBUG_AUTH_LOGS) {
+    console.log("🔐 [AUTH]", req.method, req.originalUrl);
+    console.log("🔐 [AUTH] Cookie token:", req.cookies?.token ? "✅ Sí" : "❌ No");
+    console.log("🔐 [AUTH] Has Authorization:", rawAuth ? "✅ Sí" : "❌ No");
+  }
 
   // 4) Soporta Bearer (case-insensitive)
   const lower = rawAuth.toLowerCase();
@@ -39,13 +40,13 @@ export const authenticateUser = async (
   const token = req.cookies?.token || headerToken;
 
   if (!token) {
-    console.warn("⚠️ Token no encontrado en cookies ni headers");
+    console.warn(`⚠️ [AUTH] Token requerido (${req.method} ${req.originalUrl})`);
     return res.status(401).json({ error: "Token requerido" });
   }
 
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as any;
-    console.log("✅ TOKEN DECODIFICADO:", decoded);
+    if (DEBUG_AUTH_LOGS) console.log("✅ [AUTH] Token verificado");
 
     // 6) Busca tenant_id
     const result = await pool.query(
@@ -54,7 +55,7 @@ export const authenticateUser = async (
     );
     const userRow = result.rows[0];
     if (!userRow) {
-      console.error("❌ Usuario no encontrado en la base de datos");
+      console.warn(`⚠️ [AUTH] Usuario no encontrado (uid=${decoded?.uid ?? "?"})`);
       return res.status(401).json({ error: "Usuario no encontrado" });
     }
 
@@ -64,10 +65,11 @@ export const authenticateUser = async (
       email: decoded.email,
     };
 
-    console.log("👤 req.user asignado:", req.user);
+    if (DEBUG_AUTH_LOGS) console.log("👤 [AUTH] req.user asignado");
     return next();
   } catch (err) {
-    console.error("❌ Error al verificar token:", err);
+    console.warn(`❌ [AUTH] Token inválido/expirado (${req.method} ${req.originalUrl})`);
+    if (DEBUG_AUTH_LOGS) console.error(err);
     return res.status(403).json({ error: "Token inválido" });
   }
 };
