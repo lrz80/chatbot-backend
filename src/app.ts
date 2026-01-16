@@ -83,6 +83,8 @@ import metaRoutes from "./routes/meta";
 import telnyxForwardRouter from './routes/voice/telnyx-forward';
 import facebookOAuthSessionsRouter from './routes/facebook/oauth-sessions';
 import appointmentsRouter from "./routes/appointments";
+import googleCalendarIntegrationRouter from "./routes/integrations/google-calendar";
+
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -216,6 +218,8 @@ console.log("✅ Meta router montado en /api/meta");
 app.use('/api/voice', telnyxForwardRouter);
 app.use(facebookOAuthSessionsRouter);
 app.use("/api/appointments", appointmentsRouter);
+app.use("/api/integrations/google-calendar", googleCalendarIntegrationRouter);
+
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
