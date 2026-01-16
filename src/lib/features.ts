@@ -251,7 +251,8 @@ export async function canUseChannel(
     canal === "voice"    ? f.plan.voice_enabled :
     canal === "sms"      ? f.plan.sms_enabled :
     canal === "email"    ? f.plan.email_enabled : false;
-    canal === "google_calendar" ? true : false;
+    canal === "google_calendar" ? true :
+    false;
 
   // settings (toggle por-tenant / global)
   const settings_enabled =
@@ -260,7 +261,8 @@ export async function canUseChannel(
     canal === "voice"    ? f.settings.voice_enabled :
     canal === "sms"      ? f.settings.sms_enabled :
     canal === "email"    ? f.settings.email_enabled : false;
-    canal === "google_calendar" ? f.settings.google_calendar_enabled : false;
+    canal === "google_calendar" ? true :
+    false;
 
   const paused =
     canal === "whatsapp" ? pausedFor("whatsapp", f.settings) :
