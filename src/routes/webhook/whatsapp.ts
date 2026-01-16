@@ -36,6 +36,7 @@ import { createStateMachine } from "../../lib/conversation/stateMachine";
 import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
 import { detectarEmocion } from "../../lib/detectarEmocion";
 import { applyEmotionTriggers } from "../../lib/guards/emotionTriggers";
+import { scheduleFollowUpIfEligible } from "../../lib/followups/followUpScheduler";
 
 
 // Puedes ponerlo debajo de los imports
@@ -905,6 +906,20 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           nivelInteres: finalNivel,
           messageId,
         });
+      }
+      // ✅ FOLLOW-UP (programar 1 pendiente si aplica)
+      try {
+        await scheduleFollowUpIfEligible({
+          tenant,
+          canal,                 // "whatsapp"
+          contactoNorm,
+          idiomaDestino,
+          intFinal: finalIntent || null,
+          nivel: finalNivel,
+          userText: userInput,
+        });
+      } catch (e: any) {
+        console.warn("⚠️ scheduleFollowUpIfEligible failed:", e?.message);
       }
     } catch (e: any) {
       console.warn("⚠️ recordSalesIntent(final) failed:", e?.message);
