@@ -37,6 +37,8 @@ import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
 import { detectarEmocion } from "../../lib/detectarEmocion";
 import { applyEmotionTriggers } from "../../lib/guards/emotionTriggers";
 import { scheduleFollowUpIfEligible, cancelPendingFollowUps } from "../../lib/followups/followUpScheduler";
+import { bookingFlowMvp } from "../../lib/appointments/bookingFlow";
+
 
 
 // Puedes ponerlo debajo de los imports
@@ -1085,6 +1087,28 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     });
 
     return await replyAndExit(bienvenida, "welcome_gate", "saludo");
+  }
+
+  // ===============================
+  // 📅 BOOKING GATE (Google Calendar) - ANTES del SM/LLM
+  // ===============================
+  {
+    const bk = await bookingFlowMvp({
+      tenantId: tenant.id,
+      canal: "whatsapp",
+      contacto: contactoNorm,
+      idioma: idiomaDestino,
+      userText: userInput,
+      ctx: convoCtx,
+    });
+
+    if (bk?.ctxPatch) {
+      transition({ patchCtx: bk.ctxPatch });
+    }
+
+    if (bk.handled && bk.reply) {
+      return await replyAndExit(bk.reply, "booking_gate", "agendar_cita");
+    }
   }
 
   const smResult = await sm({
