@@ -4,9 +4,13 @@ import pool from "../lib/db";
 
 const router = Router();
 
+/**
+ * GET /api/booking-settings
+ * Devuelve booking_enabled y booking_link desde tenants.hints
+ */
 router.get("/", authenticateUser, async (req: Request, res: Response) => {
   const tenantId = (req as any).user?.tenant_id;
-  if (!tenantId) return res.status(401).json({ ok: false, error: "unauthorized" });
+  if (!tenantId) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
 
   const { rows } = await pool.query(
     `SELECT hints FROM tenants WHERE id = $1 LIMIT 1`,
@@ -26,16 +30,19 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
   return res.json({ ok: true, booking_enabled, booking_link });
 });
 
+/**
+ * PUT /api/booking-settings
+ * Actualiza hints.booking_enabled
+ */
 router.put("/", authenticateUser, async (req: Request, res: Response) => {
   const tenantId = (req as any).user?.tenant_id;
-  if (!tenantId) return res.status(401).json({ ok: false, error: "unauthorized" });
+  if (!tenantId) return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
 
   const { booking_enabled } = req.body as { booking_enabled?: boolean };
   if (typeof booking_enabled !== "boolean") {
-    return res.status(400).json({ ok: false, error: "booking_enabled_required_boolean" });
+    return res.status(400).json({ ok: false, error: "booking_enabled_must_be_boolean" });
   }
 
-  // 1) leer hints actuales
   const { rows } = await pool.query(
     `SELECT hints FROM tenants WHERE id = $1 LIMIT 1`,
     [tenantId]
@@ -49,10 +56,8 @@ router.put("/", authenticateUser, async (req: Request, res: Response) => {
     obj = {};
   }
 
-  // 2) set flag
   obj.booking_enabled = booking_enabled;
 
-  // 3) guardar
   await pool.query(
     `UPDATE tenants SET hints = $1, updated_at = NOW() WHERE id = $2`,
     [JSON.stringify(obj), tenantId]

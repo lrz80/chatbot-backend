@@ -13,6 +13,19 @@ type BookingCtx = {
   };
 };
 
+async function loadBookingEnabled(tenantId: string): Promise<boolean> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT hints FROM tenants WHERE id = $1 LIMIT 1`,
+      [tenantId]
+    );
+    const hints = rows[0]?.hints;
+    const obj = typeof hints === "string" ? JSON.parse(hints) : (hints || {});
+    if (typeof obj.booking_enabled === "boolean") return obj.booking_enabled;
+  } catch {}
+  return true; // default ON
+}
+
 async function loadBookingTerms(tenantId: string): Promise<string[]> {
   try {
     const { rows } = await pool.query(
