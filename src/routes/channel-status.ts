@@ -8,7 +8,7 @@ import pool from "../lib/db";
 const router = Router();
 router.use(authenticateUser);
 
-const ALLOWED: ReadonlyArray<Canal> = ["sms", "email", "whatsapp", "meta", "voice"] as const;
+const ALLOWED: ReadonlyArray<Canal> = ["sms", "email", "whatsapp", "meta", "voice", "google_calendar"] as const;
 
 /**
  * GET /api/channel/status?canal=sms|email|whatsapp|meta|voice

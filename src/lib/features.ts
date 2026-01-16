@@ -1,7 +1,7 @@
 // src/lib/features.ts
 import pool from "../lib/db";
 
-export type Canal = "whatsapp" | "meta" | "voice" | "sms" | "email";
+export type Canal = "whatsapp" | "meta" | "voice" | "sms" | "email" | "google_calendar";
 
 type Features = {
   // ← SETTINGS (channel_settings por-tenant y/o global)
@@ -11,6 +11,7 @@ type Features = {
     voice_enabled: boolean;
     sms_enabled: boolean;
     email_enabled: boolean;
+    google_calendar_enabled: boolean;
     paused_until: Date | null;
     paused_until_whatsapp: Date | null;
     paused_until_meta: Date | null;
@@ -41,6 +42,7 @@ const EMPTY_SETTINGS: Features["settings"] = {
   voice_enabled: false,
   sms_enabled: false,
   email_enabled: false,
+  google_calendar_enabled: false,
   paused_until: null,
   paused_until_whatsapp: null,
   paused_until_meta: null,
@@ -92,6 +94,7 @@ async function loadSettings(tenantId: string): Promise<Features["settings"]> {
       COALESCE(voice_enabled,false)     AS voice_enabled,
       COALESCE(sms_enabled,false)       AS sms_enabled,
       COALESCE(email_enabled,false)     AS email_enabled,
+      COALESCE(google_calendar_enabled,false) AS google_calendar_enabled,
       paused_until,
       paused_until_whatsapp,
       paused_until_meta,
@@ -124,6 +127,7 @@ async function loadSettings(tenantId: string): Promise<Features["settings"]> {
     out.paused_until_voice    = r.paused_until_voice ?? out.paused_until_voice;
     out.paused_until_sms      = r.paused_until_sms ?? out.paused_until_sms;
     out.paused_until_email    = r.paused_until_email ?? out.paused_until_email;
+    out.google_calendar_enabled = !!r.google_calendar_enabled || out.google_calendar_enabled;
   }
   return out;
 }
@@ -247,6 +251,7 @@ export async function canUseChannel(
     canal === "voice"    ? f.plan.voice_enabled :
     canal === "sms"      ? f.plan.sms_enabled :
     canal === "email"    ? f.plan.email_enabled : false;
+    canal === "google_calendar" ? true : false;
 
   // settings (toggle por-tenant / global)
   const settings_enabled =
@@ -255,6 +260,7 @@ export async function canUseChannel(
     canal === "voice"    ? f.settings.voice_enabled :
     canal === "sms"      ? f.settings.sms_enabled :
     canal === "email"    ? f.settings.email_enabled : false;
+    canal === "google_calendar" ? f.settings.google_calendar_enabled : false;
 
   const paused =
     canal === "whatsapp" ? pausedFor("whatsapp", f.settings) :

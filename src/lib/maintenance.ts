@@ -8,7 +8,7 @@ const GLOBAL_TENANT_ID = "00000000-0000-0000-0000-000000000001";
  * Busca primero por tenant_id y luego por un registro global (tenant_id IS NULL).
  */
 export async function getMaintenance(
-  canal: "sms" | "email" | "whatsapp" | "meta" | "voice",
+  canal: "sms" | "email" | "whatsapp" | "meta" | "voice" | "google_calendar",
   tenantId?: string
 ) {
   const { rows } = await pool.query(
@@ -62,11 +62,17 @@ export async function getMaintenance(
  */
 export async function getChannelEnabledBySettings(
   tenantId: string,
-  canal: "sms" | "email" | "whatsapp" | "meta" | "voice"
+  canal: "sms" | "email" | "whatsapp" | "meta" | "voice" | "google_calendar"
 ) {
   const { rows } = await pool.query(
     `
-    SELECT whatsapp_enabled, sms_enabled, email_enabled, meta_enabled, voice_enabled
+    SELECT
+      whatsapp_enabled,
+      sms_enabled,
+      email_enabled,
+      meta_enabled,
+      voice_enabled,
+      google_calendar_enabled
     FROM channel_settings
     WHERE tenant_id = $1
        OR tenant_id = $2
@@ -78,12 +84,13 @@ export async function getChannelEnabledBySettings(
 
   const flags = rows[0] || {};
 
-  const map = {
+  const map: Record<string, boolean> = {
     whatsapp: !!flags.whatsapp_enabled,
     sms: !!flags.sms_enabled,
     email: !!flags.email_enabled,
     meta: !!flags.meta_enabled,
     voice: !!flags.voice_enabled,
+    google_calendar: !!flags.google_calendar_enabled,
   };
 
   return map[canal] ?? false;

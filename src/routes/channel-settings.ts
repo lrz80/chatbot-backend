@@ -8,7 +8,7 @@ import pool from "../lib/db";
 
 const router = express.Router();
 
-type Canal = "sms" | "email" | "whatsapp" | "meta" | "voice";
+type Canal = "sms" | "email" | "whatsapp" | "meta" | "voice" | "google_calendar";
 
 // ⚠️ Ya NO usamos un mapa hardcodeado de features.
 // En su lugar, leemos del Product de Stripe (metadata).
@@ -111,7 +111,7 @@ function resolveEffectivePlan(row: any): { planName: string; trialActive: boolea
 router.get("/", authenticateUser, async (req: Request, res: Response) => {
   try {
     const canal = String(req.query.canal || "").toLowerCase() as Canal;
-    if (!["sms", "email", "whatsapp", "meta", "voice"].includes(canal)) {
+    if (!["sms", "email", "whatsapp", "meta", "voice", "google_calendar"].includes(canal)) {
       return res.status(400).json({ error: "canal inválido" });
     }
 
@@ -144,15 +144,18 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
     // 👇 Leemos extra_features (puede ser null)
     const extra = (tenant.extra_features as any) || {};
 
-    // 4) Features del plan desde Stripe
+    // 4) Features del plan desde Stripe (solo aplica a canales existentes)
     const planFeatures = await getFeaturesFromStripe(planName);
 
-    // Por defecto, lo que diga Stripe
-    const enabledByPlan = !!planFeatures[canal];
+    // Por defecto, lo que diga Stripe (para google_calendar lo dejamos true por ahora)
+    const enabledByPlan =
+      canal === "google_calendar" ? true : !!planFeatures[canal];
 
     // ✅ Override manual por tenant (admin)
-    const enabledByOverride = extra?.[`force_${canal}`] === true
-      || (canal === "meta" && extra?.force_meta === true); // compatibilidad
+    // Nota: para google_calendar soportamos force_google_calendar si quieres usarlo luego
+    const enabledByOverride =
+      extra?.[`force_${canal}`] === true ||
+      (canal === "meta" && extra?.force_meta === true);
 
     // ✅ Resultado final: plan OR override
     const enabledEffective = enabledByPlan || enabledByOverride;
