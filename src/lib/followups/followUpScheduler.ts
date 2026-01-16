@@ -60,13 +60,21 @@ async function getFollowUpSettings(tenantId: string): Promise<FollowUpSettingsRo
 }
 
 function pickTemplateByLevel(settings: FollowUpSettingsRow, level: 1 | 2 | 3): string | null {
-  const bajo = (settings.mensaje_nivel_bajo || "").trim();
+  const bajo  = (settings.mensaje_nivel_bajo  || "").trim();
   const medio = (settings.mensaje_nivel_medio || "").trim();
-  const alto = (settings.mensaje_nivel_alto || "").trim();
+  const alto  = (settings.mensaje_nivel_alto  || "").trim();
 
-  if (level === 1) return bajo || null;
-  if (level === 2) return medio || null;
-  return alto || null;
+  const picked = level === 1 ? bajo : level === 2 ? medio : alto;
+  if (picked) return picked;
+
+  // fallback legacy temporal
+  const legacyPrecio = (settings.mensaje_precio || "").trim();
+  const legacyGeneral = (settings.mensaje_general || "").trim();
+
+  if (level === 3 && legacyPrecio) return legacyPrecio;
+  if (legacyGeneral) return legacyGeneral;
+
+  return null;
 }
 
 /**
