@@ -2,6 +2,7 @@ import pool from '../lib/db';
 import { sendEmailSendgrid } from '../lib/senders/email-sendgrid';
 import { sendSMSNotificacion } from '../lib/senders/smsNotificacion';
 import express from 'express';
+const VERBOSE_USAGE_LOGS = process.env.VERBOSE_USAGE_LOGS === 'true';
 
 function toISODate(d: Date) {
   return d.toISOString().substring(0, 10);
@@ -135,17 +136,22 @@ async function verificarNotificaciones() {
         const porcentaje = (usadosNormalizados / limiteSeguro) * 100;
 
         if (porcentaje < 80) {
-          console.log(`🔕 ${tenant.tenant_name} (${canal}) consumo bajo (${porcentaje.toFixed(1)}%), no se notificará.`);
+          if (VERBOSE_USAGE_LOGS) {
+            console.log(`🔕 ${tenant.tenant_name} (${canal}) consumo bajo (${porcentaje.toFixed(1)}%), no se notificará.`);
+          }
           continue;
         }
 
-        // No repetir notificaciones
         if (porcentaje >= 100 && notificado_100) {
-          console.log(`🔕 ${tenant.tenant_name} (${canal}) ya notificado por 100%.`);
+          if (VERBOSE_USAGE_LOGS) {
+            console.log(`🔕 ${tenant.tenant_name} (${canal}) ya notificado por 100%.`);
+          }
           continue;
         }
         if (porcentaje >= 80 && porcentaje < 100 && notificado_80) {
-          console.log(`🔕 ${tenant.tenant_name} (${canal}) ya notificado por 80%.`);
+          if (VERBOSE_USAGE_LOGS) {
+            console.log(`🔕 ${tenant.tenant_name} (${canal}) ya notificado por 80%.`);
+          }
           continue;
         }
 
