@@ -85,7 +85,7 @@ import facebookOAuthSessionsRouter from './routes/facebook/oauth-sessions';
 import appointmentsRouter from "./routes/appointments";
 import googleCalendarIntegrationRouter from "./routes/integrations/google-calendar";
 import appointmentsGoogleRoutes from "./routes/appointments-google";
-
+import bookingSettingsRoutes from "./routes/booking-settings";
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -221,7 +221,7 @@ app.use(facebookOAuthSessionsRouter);
 app.use("/api/appointments", appointmentsRouter);
 app.use("/api/integrations/google-calendar", googleCalendarIntegrationRouter);
 app.use("/api/appointments/google", appointmentsGoogleRoutes);
-
+app.use("/api/booking-settings", bookingSettingsRoutes);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
