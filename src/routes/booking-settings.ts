@@ -6,7 +6,6 @@ const router = Router();
 
 /**
  * GET /api/booking-settings
- * Devuelve booking_enabled y booking_link desde tenants.hints
  */
 router.get("/", authenticateUser, async (req: Request, res: Response) => {
   const tenantId = (req as any).user?.tenant_id;
@@ -17,22 +16,20 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
     [tenantId]
   );
 
-  let booking_enabled = true;
-  let booking_link: string | null = null;
+  let booking_enabled = true; // default ON
 
   try {
     const hints = rows[0]?.hints;
     const obj = typeof hints === "string" ? JSON.parse(hints) : (hints || {});
     if (typeof obj.booking_enabled === "boolean") booking_enabled = obj.booking_enabled;
-    if (obj.booking_link) booking_link = String(obj.booking_link).trim() || null;
   } catch {}
 
-  return res.json({ ok: true, booking_enabled, booking_link });
+  return res.json({ ok: true, booking_enabled });
 });
 
 /**
  * PUT /api/booking-settings
- * Actualiza hints.booking_enabled
+ * Body: { booking_enabled: boolean }
  */
 router.put("/", authenticateUser, async (req: Request, res: Response) => {
   const tenantId = (req as any).user?.tenant_id;
