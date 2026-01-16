@@ -79,7 +79,7 @@ router.get("/connect", async (req: Request, res: Response) => {
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: "code",
-      scope: "https://www.googleapis.com/auth/calendar.events",
+      scope: "https://www.googleapis.com/auth/calendar",
       access_type: "offline",
       prompt: "consent",
       include_granted_scopes: "true",
