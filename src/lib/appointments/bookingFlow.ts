@@ -173,20 +173,52 @@ export async function bookingFlowMvp(opts: {
   const terms = await loadBookingTerms(tenantId);
   const wantsBooking = matchesBookingIntent(userText, terms);
 
-  // Gate de canal (desde dashboard)
-  const gate = await canUseChannel(tenantId, "google_calendar" as any);
-  if (!gate.settings_enabled) {
-    // Si el usuario pide cita pero canal está apagado, respondemos y salimos
-    if (wantsBooking) {
-      return {
-        handled: true,
-        reply: idioma === "en"
-          ? "Appointments are currently disabled for this business."
-          : "Las citas están desactivadas en este momento para este negocio.",
-      };
-    }
-    return { handled: false };
-  }
+// ✅ Booking settings (independiente de canales)
+const { rows: trows } = await pool.query(
+  `SELECT hints FROM tenants WHERE id = $1 LIMIT 1`,
+  [tenantId]
+);
+
+let booking_link: string | null = null;
+try {
+  const hints = trows[0]?.hints;
+  const obj = typeof hints === "string" ? JSON.parse(hints) : (hints || {});
+  booking_link = (obj?.booking_link && String(obj.booking_link).trim()) ? String(obj.booking_link).trim() : null;
+} catch {}
+
+// ✅ Google Calendar connection (según tu endpoint devuelve connected/enabled)
+const { rows: grows } = await pool.query(
+  `SELECT enabled, connected
+     FROM google_calendar_integrations
+    WHERE tenant_id = $1
+    LIMIT 1`,
+  [tenantId]
+);
+
+const googleConnected = !!grows[0]?.connected;
+const googleEnabled   = grows[0]?.enabled !== false; // default true si es null
+
+ const bookingEnabled = (googleConnected && googleEnabled) || !!booking_link;
+
+// Si el usuario quiere agendar y NO hay nada habilitado (ni google ni link)
+if (wantsBooking && !bookingEnabled) {
+  return {
+    handled: true,
+    reply: idioma === "en"
+      ? "Scheduling isn’t available for this business right now."
+      : "El agendamiento no está disponible en este momento para este negocio.",
+  };
+}
+
+// Si NO hay Google conectado pero SÍ hay link, responde con el link (sin bloquear)
+if (wantsBooking && (!googleConnected || !googleEnabled) && booking_link) {
+  return {
+    handled: true,
+    reply: idioma === "en"
+      ? `You can book here: ${booking_link}`
+      : `Puedes agendar aquí: ${booking_link}`,
+  };
+}
 
   // 1) Arranque: detecta intención y pide fecha/hora
   if (booking.step === "idle") {
@@ -264,6 +296,16 @@ export async function bookingFlowMvp(opts: {
     const startISO = booking.start_time!;
     const endISO = booking.end_time!;
 
+    if (!googleConnected || !googleEnabled) {
+      return {
+        handled: true,
+        reply: idioma === "en"
+        ? "I can’t access the calendar for this business right now."
+        : "Ahora mismo no puedo acceder al calendario de este negocio.",
+        ctxPatch: { booking: { step: "idle" } },
+      };
+    }
+
     const g = await bookInGoogle({
       tenantId,
       customer_name,
@@ -297,7 +339,7 @@ export async function bookingFlowMvp(opts: {
       handled: true,
       reply: idioma === "en"
         ? `Booked. Event created. ${g.htmlLink || ""}`.trim()
-        : `Listo, tu cita fue agendada. ${g.htmlLink || ""}`.trim(),
+        : `Listo, quedó agendado. Aquí está el enlace: ${g.htmlLink || ""}`.trim(),
       ctxPatch: { booking: { step: "idle" }, last_appointment_id: apptId },
     };
   }
