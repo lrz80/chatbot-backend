@@ -37,7 +37,7 @@ import { awaitingGate } from "../../lib/guards/awaitingGate";
 import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
 import { detectarEmocion } from "../../lib/detectarEmocion";
 import { applyEmotionTriggers } from "../../lib/guards/emotionTriggers";
-import { scheduleFollowUpIfEligible } from "../../lib/followups/followUpScheduler";
+import { scheduleFollowUpIfEligible, cancelPendingFollowUps } from "../../lib/followups/followUpScheduler";
 
 
 type CanalEnvio = "facebook" | "instagram";
@@ -747,6 +747,27 @@ router.post("/api/facebook/webhook", async (req, res) => {
         let idiomaDestino: "es" | "en" = tenantBase;
 
         await ensureClienteBase(tenantId, canalEnvio, senderId);
+
+        // ✅ FOLLOW-UP RESET: si el cliente volvió a escribir, cancela cualquier follow-up pendiente
+        try {
+          const deleted = await cancelPendingFollowUps({
+            tenantId,
+            canal: canalEnvio,   // "facebook" | "instagram"
+            contacto: senderId,  // PSID/IGSID
+          });
+
+          if (deleted > 0) {
+            console.log("🧹 [META] follow-ups pendientes cancelados por nuevo inbound:", {
+              tenantId,
+              canalEnvio,
+              senderId,
+              deleted,
+              messageId,
+            });
+          }
+        } catch (e: any) {
+          console.warn("⚠️ [META] cancelPendingFollowUps failed:", e?.message);
+        }
 
         if (isNumericOnly) {
           idiomaDestino = await getIdiomaClienteDB(tenantId, canalEnvio, senderId, tenantBase);

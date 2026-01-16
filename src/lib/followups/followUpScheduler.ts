@@ -16,12 +16,12 @@ type FollowUpSettingsRow = {
   tenant_id: string;
   minutos_espera: number | null;
 
-  // ✅ nuevos (por niveles)
-  mensaje_nivel_1?: string | null;
-  mensaje_nivel_2?: string | null;
-  mensaje_nivel_3?: string | null;
+  // ✅ reales en tu DB
+  mensaje_nivel_bajo?: string | null;
+  mensaje_nivel_medio?: string | null;
+  mensaje_nivel_alto?: string | null;
 
-  // legacy (por si aún existe en DB)
+  // legacy
   mensaje_precio?: string | null;
   mensaje_agendar?: string | null;
   mensaje_ubicacion?: string | null;
@@ -60,23 +60,13 @@ async function getFollowUpSettings(tenantId: string): Promise<FollowUpSettingsRo
 }
 
 function pickTemplateByLevel(settings: FollowUpSettingsRow, level: 1 | 2 | 3): string | null {
-  const n1 = (settings.mensaje_nivel_1 || "").trim();
-  const n2 = (settings.mensaje_nivel_2 || "").trim();
-  const n3 = (settings.mensaje_nivel_3 || "").trim();
+  const bajo = (settings.mensaje_nivel_bajo || "").trim();
+  const medio = (settings.mensaje_nivel_medio || "").trim();
+  const alto = (settings.mensaje_nivel_alto || "").trim();
 
-  const picked = level === 1 ? n1 : level === 2 ? n2 : n3;
-  if (picked) return picked;
-
-  // 🔁 fallback legacy mientras migras:
-  const legacyPrecio = (settings.mensaje_precio || "").trim();
-  const legacyGeneral = (settings.mensaje_general || "").trim();
-  const legacyAgendar = (settings.mensaje_agendar || "").trim();
-
-  if (level === 3 && legacyPrecio) return legacyPrecio;
-  if (legacyGeneral) return legacyGeneral;
-  if (legacyAgendar) return legacyAgendar;
-
-  return null;
+  if (level === 1) return bajo || null;
+  if (level === 2) return medio || null;
+  return alto || null;
 }
 
 /**
