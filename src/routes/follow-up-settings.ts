@@ -141,9 +141,12 @@ router.post('/', authenticateUser, async (req: any, res) => {
     }
 
     return res.status(200).json({ success: true });
-  } catch (error) {
+  } catch (error: any) {
     console.error('❌ Error guardando follow_up_settings:', error);
-    return res.status(500).json({ error: 'Error al guardar configuración' });
+    return res.status(500).json({
+      error: 'Error al guardar configuración',
+      detail: error?.message,
+    });
   }
 });
 
