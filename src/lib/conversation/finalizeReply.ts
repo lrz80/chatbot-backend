@@ -3,7 +3,7 @@ import type { Canal } from '../../lib/detectarIntencion';
 
 type FinalizeDeps = {
   // Sender/transport
-  safeEnviarWhatsApp: (
+  safeSend: (
     tenantId: string,
     canal: Canal,
     messageId: string | null,
@@ -101,10 +101,10 @@ export async function finalizeReply(
     last_turn_at: new Date().toISOString(),
   };
 
-  const ok = await deps.safeEnviarWhatsApp(tenantId, canal, messageId, fromNumber, reply);
+  const ok = await deps.safeSend(tenantId, canal, messageId, fromNumber, reply);
 
   if (!ok) {
-    console.warn("⚠️ finalizeReply: safeEnviarWhatsApp falló; no guardo assistant/memoria/estado.", {
+    console.warn("⚠️ finalizeReply: safeSend falló; no guardo assistant/memoria/estado.", {
       replySource,
     });
     return;

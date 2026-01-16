@@ -753,13 +753,11 @@ router.post("/api/facebook/webhook", async (req, res) => {
           }
         }
 
-        // ===============================
         // ✅ MEMORIA: inyectar facts_summary al promptBaseMem (igual WA)
-        // ===============================
         try {
           const memRaw = await getMemoryValue<any>({
             tenantId,
-            canal: String(canalEnvio) as any,  // facebook / instagram
+            canal: String(canalEnvio) as any,
             senderId,
             key: "facts_summary",
           });
@@ -780,13 +778,37 @@ router.post("/api/facebook/webhook", async (req, res) => {
             ].join("\n");
           }
 
-          // (Opcional recomendado) mismo comportamiento que WA
           if ((convoCtx as any)?.needs_clarify) {
             promptBaseMem +=
               "\n\nINSTRUCCION: El usuario está frustrado. Responde con 2 bullets y haz 1 sola pregunta para aclarar.";
           }
         } catch (e) {
           console.warn("⚠️ [META] No se pudo cargar memoria:", e);
+        }
+
+        let lastIntent: string | null = null;
+        let nivelInteres: number | null = null;
+        let INTENCION_FINAL_CANONICA: string | null = null;
+
+        // ===============================
+        // 🎯 Intent detection (evento por mensaje) — MOVER AQUÍ
+        // ===============================
+        try {
+          const det = await detectarIntencion(userInput, tenantId, canalEnvio as any);
+          INTENCION_FINAL_CANONICA = det?.intencion ? String(det.intencion) : null;
+          lastIntent = INTENCION_FINAL_CANONICA;
+
+          const ni = Number(det?.nivel_interes);
+          nivelInteres = Number.isFinite(ni) ? Math.max(1, Math.min(3, ni)) : null;
+
+          transition({
+            patchCtx: {
+              last_intent: INTENCION_FINAL_CANONICA,
+              last_interest_level: nivelInteres,
+            },
+          });
+        } catch (e) {
+          console.warn("⚠️ detectarIntencion failed:", e);
         }
 
         // ===============================
@@ -850,8 +872,8 @@ router.post("/api/facebook/webhook", async (req, res) => {
               },
             },
             {
-              safeEnviarWhatsApp: async (tId, c2, mId, toNumber, text) => {
-                const ok = await safeEnviarMeta(tId, c2, mId, toNumber, text, accessToken);
+              safeSend: async (tId, _c2, mId, toNumber, text) => {
+                const ok = await safeEnviarMeta(tId, canalEnvio, mId, toNumber, text, accessToken);
                 sentOk = ok;
                 return ok;
               },
@@ -905,43 +927,10 @@ router.post("/api/facebook/webhook", async (req, res) => {
           await finalizeReply();
         }
 
-        // ===============================
-        // 🎯 Intent detection (evento por mensaje)
-        // ===============================
-        let lastIntent: string | null = null;
-        let nivelInteres: number | null = null;
-        let INTENCION_FINAL_CANONICA: string | null = null;
-
-        try {
-          const det = await detectarIntencion(userInput, tenantId, canalEnvio as any);
-          INTENCION_FINAL_CANONICA = det?.intencion ? String(det.intencion) : null;
-          lastIntent = INTENCION_FINAL_CANONICA;
-          const ni = Number(det?.nivel_interes);
-          nivelInteres = Number.isFinite(ni) ? Math.max(1, Math.min(3, ni)) : null;
-
-          transition({
-            patchCtx: {
-              last_intent: INTENCION_FINAL_CANONICA,
-              last_interest_level: nivelInteres,
-            },
-          });
-        } catch (e) {
-          console.warn("⚠️ detectarIntencion failed:", e);
-        }
-
         // selected_channel flag (igual WA)
         const decisionFlags = { channelSelected: false };
         const selectedChannel = await getSelectedChannelDB(tenantId, canalEnvio, senderId);
         if (selectedChannel) decisionFlags.channelSelected = true;
-
-        // Memoria start
-        const memStart = await getMemoryValue<string>({
-          tenantId,
-          canal: String(canalEnvio) as any,
-          senderId,
-          key: "facts_summary",
-        });
-        console.log("🧠 [META] facts_summary (start of turn) =", memStart);
 
         // ✅ Emotion detection (antes de guardar inbound)
         let emotion: string | null = null;

@@ -325,7 +325,7 @@ async function applyAwaitingEffects(opts: {
 }
 
 // Evita enviar duplicado si Twilio reintenta el webhook
-async function safeEnviarWhatsApp(
+async function safeSend(
   tenantId: string,
   canal: string,
   messageId: string | null,
@@ -352,7 +352,7 @@ async function safeEnviarWhatsApp(
     );
 
     if (ins.rowCount === 0) {
-      console.log('⏩ safeEnviarWhatsApp: ya reservado/enviado este outbound message_id. No envío ni cuento.');
+      console.log('⏩ safesend: ya reservado/enviado este outbound message_id. No envío ni cuento.');
       return true;
     }
 
@@ -369,7 +369,7 @@ async function safeEnviarWhatsApp(
 
     return !!ok;
   } catch (e) {
-    console.error('❌ safeEnviarWhatsApp error:', e);
+    console.error('❌ safesend error:', e);
     return false;
   }
 }
@@ -873,7 +873,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         },
       },
       {
-        safeEnviarWhatsApp,
+        safeSend,
         setConversationState: setConversationStateCompat,
         saveAssistantMessageAndEmit: async (opts: any) =>
         saveAssistantMessageAndEmit({
