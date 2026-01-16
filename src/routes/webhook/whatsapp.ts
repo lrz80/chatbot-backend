@@ -36,7 +36,7 @@ import { createStateMachine } from "../../lib/conversation/stateMachine";
 import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
 import { detectarEmocion } from "../../lib/detectarEmocion";
 import { applyEmotionTriggers } from "../../lib/guards/emotionTriggers";
-import { scheduleFollowUpIfEligible } from "../../lib/followups/followUpScheduler";
+import { scheduleFollowUpIfEligible, cancelPendingFollowUps } from "../../lib/followups/followUpScheduler";
 
 
 // Puedes ponerlo debajo de los imports
@@ -711,6 +711,27 @@ export async function procesarMensajeWhatsApp(
 
   // 🧱 FIX CRÍTICO: crea la fila base del cliente si no existe
   await ensureClienteBase(tenant.id, canal, contactoNorm);
+
+  // ✅ FOLLOW-UP RESET: si el cliente volvió a escribir, cancela cualquier follow-up pendiente
+  try {
+    const deleted = await cancelPendingFollowUps({
+      tenantId: tenant.id,
+      canal: canal as any,         // 'whatsapp'
+      contacto: contactoNorm,
+    });
+
+    if (deleted > 0) {
+      console.log("🧹 follow-ups pendientes cancelados por nuevo inbound:", {
+        tenantId: tenant.id,
+        canal,
+        contacto: contactoNorm,
+        deleted,
+        messageId,
+      });
+    }
+  } catch (e: any) {
+    console.warn("⚠️ cancelPendingFollowUps failed:", e?.message);
+  }
 
   // ===============================
   // 🧠 conversation_state – inicio del turno (Flow/Step/Context)

@@ -39,15 +39,12 @@ function computeDelayMinutes(opts: {
   baseMinutes: number;
   interestLevel: 1 | 2 | 3;
 }): number {
-  // ✅ Un solo follow-up; delay “según nivel”
-  // Ajusta si quieres: 1=base, 2=base*2, 3=base*3
+  // 1=base, 2=base*2, 3=base*3
   const { baseMinutes, interestLevel } = opts;
   return Math.max(1, Math.round(baseMinutes * interestLevel));
 }
 
 async function getFollowUpSettings(tenantId: string): Promise<FollowUpSettingsRow | null> {
-  // Si solo tienes por-tenant, esto basta.
-  // Si manejas un GLOBAL_ID fallback, aquí puedes hacer COALESCE.
   try {
     const { rows } = await pool.query(
       `SELECT *
@@ -63,22 +60,14 @@ async function getFollowUpSettings(tenantId: string): Promise<FollowUpSettingsRo
 }
 
 function pickTemplateByLevel(settings: FollowUpSettingsRow, level: 1 | 2 | 3): string | null {
-  // ✅ nuevo esquema
   const n1 = (settings.mensaje_nivel_1 || "").trim();
   const n2 = (settings.mensaje_nivel_2 || "").trim();
   const n3 = (settings.mensaje_nivel_3 || "").trim();
 
-  const picked =
-    level === 1 ? n1 :
-    level === 2 ? n2 :
-    n3;
-
+  const picked = level === 1 ? n1 : level === 2 ? n2 : n3;
   if (picked) return picked;
 
-  // 🔁 fallback legacy para no romper producción mientras migras UI/DB:
-  // - nivel 3 ~ precio
-  // - nivel 2 ~ general
-  // - nivel 1 ~ general (o agendar si así lo prefieres)
+  // 🔁 fallback legacy mientras migras:
   const legacyPrecio = (settings.mensaje_precio || "").trim();
   const legacyGeneral = (settings.mensaje_general || "").trim();
   const legacyAgendar = (settings.mensaje_agendar || "").trim();
@@ -90,31 +79,33 @@ function pickTemplateByLevel(settings: FollowUpSettingsRow, level: 1 | 2 | 3): s
   return null;
 }
 
-async function hasPendingFollowUp(opts: {
+/**
+ * ✅ Cancela (elimina) follow-ups pendientes de este contacto antes de reprogramar.
+ * Solo borra los que aún NO se han enviado y todavía no vencen (fecha_envio > NOW()).
+ */
+export async function cancelPendingFollowUps(opts: {
   tenantId: string;
-  canal: string;
+  canal: FollowUpChannel;
   contacto: string;
-}): Promise<boolean> {
+}): Promise<number> {
   const { tenantId, canal, contacto } = opts;
 
-  const { rows } = await pool.query(
-    `SELECT 1
-       FROM mensajes_programados
+  const { rowCount } = await pool.query(
+    `DELETE FROM mensajes_programados
       WHERE tenant_id = $1
         AND canal = $2
         AND contacto = $3
         AND enviado = FALSE
-        AND fecha_envio > NOW()
-      LIMIT 1`,
+        AND fecha_envio > NOW()`,
     [tenantId, canal, contacto]
   );
 
-  return rows.length > 0;
+  return rowCount || 0;
 }
 
 async function insertScheduledMessage(opts: {
   tenantId: string;
-  canal: string;
+  canal: FollowUpChannel;
   contacto: string;
   contenido: string;
   delayMinutes: number;
@@ -134,7 +125,10 @@ async function insertScheduledMessage(opts: {
 
 /**
  * ✅ API pública: un solo follow-up (NO secuencias) con delay según nivel.
- * No usa “precio/agendar/ubicación/general”.
+ *
+ * NUEVO comportamiento:
+ * - Si existe follow-up pendiente, lo elimina y reprograma uno nuevo.
+ * - Esto permite: “si el cliente vuelve a escribir, resetear el follow-up”.
  */
 export async function scheduleFollowUpIfEligible(opts: {
   tenant: any;
@@ -153,35 +147,28 @@ export async function scheduleFollowUpIfEligible(opts: {
   // nunca en preview
   if (canal === "preview") return;
 
-  // si quieres bloquear por membresía, habilítalo:
-  // const active =
-  //   tenant.membresia_activa === true ||
-  //   tenant.membresia_activa === "true" ||
-  //   tenant.membresia_activa === 1;
-  // if (!active) return;
-
   const level = clampLevel(nivel);
 
   const settings = await getFollowUpSettings(tenant.id);
   if (!settings) return;
 
-  // ✅ 1 follow-up pendiente máximo por contacto/canal
-  const pending = await hasPendingFollowUp({
-    tenantId: tenant.id,
-    canal,
-    contacto: contactoNorm,
-  });
-  if (pending) return;
-
   const template = pickTemplateByLevel(settings, level);
   if (!template) return;
 
-  // ✅ baseMinutes viene de DB; si UI pone 1-23 hrs, debes convertir a minutos al guardar.
+  // ✅ baseMinutes viene de DB; si tu UI configura 1–23 horas,
+  // asegúrate de guardar minutos_espera en minutos (horas*60) en el endpoint.
   const baseMinutes = Math.max(1, Number(settings.minutos_espera || 60));
 
   const delayMinutes = computeDelayMinutes({
     baseMinutes,
     interestLevel: level,
+  });
+
+  // ✅ clave: borrar pending antes de reprogramar
+  await cancelPendingFollowUps({
+    tenantId: tenant.id,
+    canal,
+    contacto: contactoNorm,
   });
 
   await insertScheduledMessage({
