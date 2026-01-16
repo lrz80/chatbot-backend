@@ -84,6 +84,7 @@ import telnyxForwardRouter from './routes/voice/telnyx-forward';
 import facebookOAuthSessionsRouter from './routes/facebook/oauth-sessions';
 import appointmentsRouter from "./routes/appointments";
 import googleCalendarIntegrationRouter from "./routes/integrations/google-calendar";
+import appointmentsGoogleRoutes from "./routes/appointments-google";
 
 
 if (process.env.NODE_ENV !== 'production') {
@@ -219,6 +220,7 @@ app.use('/api/voice', telnyxForwardRouter);
 app.use(facebookOAuthSessionsRouter);
 app.use("/api/appointments", appointmentsRouter);
 app.use("/api/integrations/google-calendar", googleCalendarIntegrationRouter);
+app.use("/api/appointments/google", appointmentsGoogleRoutes);
 
 
 // —— Ruta base ————————————————————————————————
