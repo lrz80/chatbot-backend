@@ -246,22 +246,22 @@ export async function canUseChannel(
 
   // plan
   const plan_enabled =
-    canal === "whatsapp" ? f.plan.whatsapp_enabled :
-    canal === "meta"     ? f.plan.meta_enabled :
-    canal === "voice"    ? f.plan.voice_enabled :
-    canal === "sms"      ? f.plan.sms_enabled :
-    canal === "email"    ? f.plan.email_enabled : false;
+    canal === "whatsapp"        ? f.plan.whatsapp_enabled :
+    canal === "meta"            ? f.plan.meta_enabled :
+    canal === "voice"           ? f.plan.voice_enabled :
+    canal === "sms"             ? f.plan.sms_enabled :
+    canal === "email"           ? f.plan.email_enabled :
     canal === "google_calendar" ? true :
     false;
 
   // settings (toggle por-tenant / global)
   const settings_enabled =
-    canal === "whatsapp" ? f.settings.whatsapp_enabled :
-    canal === "meta"     ? f.settings.meta_enabled :
-    canal === "voice"    ? f.settings.voice_enabled :
-    canal === "sms"      ? f.settings.sms_enabled :
-    canal === "email"    ? f.settings.email_enabled : false;
-    canal === "google_calendar" ? true :
+    canal === "whatsapp"        ? f.settings.whatsapp_enabled :
+    canal === "meta"            ? f.settings.meta_enabled :
+    canal === "voice"           ? f.settings.voice_enabled :
+    canal === "sms"             ? f.settings.sms_enabled :
+    canal === "email"           ? f.settings.email_enabled :
+    canal === "google_calendar" ? f.settings.google_calendar_enabled :
     false;
 
   const paused =
