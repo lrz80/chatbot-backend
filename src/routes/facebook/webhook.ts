@@ -332,6 +332,12 @@ async function saveUserMessageAndEmit(opts: {
     );
 
     const inserted = rows[0];
+    console.log("💾 [DB messages user]", {
+      messageId,
+      inserted: !!inserted,
+      canal,
+      fromNumber,
+    });
     if (!inserted) return;
 
     const io = getIO();
@@ -389,6 +395,13 @@ async function saveAssistantMessageAndEmit(opts: {
     );
 
     const inserted = rows[0];
+    console.log("💾 [DB messages assistant]", {
+      messageId: finalMessageId,
+      inserted: !!inserted,
+      canal,
+      fromNumber,
+    });
+
     if (!inserted) return;
 
     const io = getIO();
@@ -549,6 +562,13 @@ async function safeEnviarMeta(
       [tenantId, canal, dedupeId]
     );
 
+    console.log("🧾 [META OUT RESERVE]", {
+      dedupeId,
+      reserved: ins.rowCount === 1,
+      canal,
+      tenantId,
+    });
+
     if (ins.rowCount === 0) {
       console.log("⏩ safeEnviarMeta: ya reservado/enviado outbound. No re-envío ni cuento.");
       return true;
@@ -646,9 +666,19 @@ router.post("/api/facebook/webhook", async (req, res) => {
         const userInput: string = messagingEvent.message.text || "";
 
         if (!messageId || !senderId) continue;
+        console.log("📥 [META INBOUND]", {
+          object: body.object,
+          pageId,
+          senderId,
+          messageId,
+          textLen: userInput?.length || 0,
+        });
 
         // Dedupe inbound
-        if (mensajesProcesados.has(messageId)) continue;
+        if (mensajesProcesados.has(messageId)) {
+          console.log("⏩ [META DEDUPE IN]", { messageId });
+          continue;
+        }
         mensajesProcesados.add(messageId);
         setTimeout(() => mensajesProcesados.delete(messageId), 60_000);
 
@@ -672,6 +702,13 @@ router.post("/api/facebook/webhook", async (req, res) => {
         const isInstagram = tenant.instagram_page_id && String(tenant.instagram_page_id) === String(pageId);
         const canalEnvio: CanalEnvio = isInstagram ? "instagram" : "facebook";
         const canal: Canal = canalEnvio as any; // para messages/estado
+        console.log("🏷️ [META TENANT RESOLVED]", {
+          tenantId,
+          canalEnvio,
+          pageId,
+          senderId,
+          messageId,
+        });
 
         const accessToken = String(tenant.facebook_access_token || "");
         if (!accessToken) {
@@ -753,6 +790,12 @@ router.post("/api/facebook/webhook", async (req, res) => {
           }
         }
 
+        console.log("🧠 [META] facts_summary (start of turn) -> about to fetch", {
+          tenantId,
+          canalEnvio,
+          senderId,
+        });
+
         // ✅ MEMORIA: inyectar facts_summary al promptBaseMem (igual WA)
         try {
           const memRaw = await getMemoryValue<any>({
@@ -768,6 +811,7 @@ router.post("/api/facebook/webhook", async (req, res) => {
               : (memRaw && typeof memRaw === "object" && typeof memRaw.text === "string")
                 ? memRaw.text
                 : "";
+          console.log("🧠 [META] facts_summary =", memText);
 
           if (memText.trim()) {
             promptBaseMem = [
@@ -800,6 +844,14 @@ router.post("/api/facebook/webhook", async (req, res) => {
 
           const ni = Number(det?.nivel_interes);
           nivelInteres = Number.isFinite(ni) ? Math.max(1, Math.min(3, ni)) : null;
+
+          console.log("🎯 [META] detectarIntencion =>", {
+            intent: INTENCION_FINAL_CANONICA,
+            nivelInteres,
+            canalEnvio,
+            tenantId,
+            messageId,
+          });
 
           transition({
             patchCtx: {
@@ -845,6 +897,17 @@ router.post("/api/facebook/webhook", async (req, res) => {
         };
 
         async function finalizeReply() {
+          console.log("✅ [FINALIZE START]", {
+            handled,
+            hasReply: !!reply,
+            replySource,
+            lastIntent,
+            nivelInteres,
+            messageId,
+            senderId,
+            canalEnvio,
+          });
+
           await finalizeReplyLib(
             {
               handled,
@@ -891,6 +954,15 @@ router.post("/api/facebook/webhook", async (req, res) => {
                 rememberAfterReply({ ...opts, canal, senderId }),
             }
           );
+          console.log("✅ [FINALIZE DONE]", {
+            sentOk,
+            replySource,
+            lastIntent,
+            nivelInteres,
+            messageId,
+            senderId,
+            canalEnvio,
+          });
 
           // ✅ evento de ventas solo si realmente se envió
           try {
@@ -944,6 +1016,12 @@ router.post("/api/facebook/webhook", async (req, res) => {
               : (emoRaw?.emotion || emoRaw?.emocion || emoRaw?.label || null);
 
           emotion = typeof emotion === "string" ? emotion.trim().toLowerCase() : null;
+          console.log("🎭 [META] detectarEmocion =>", {
+            emotion,
+            canalEnvio,
+            tenantId,
+            messageId,
+          });
         } catch (e) {
           console.warn("⚠️ detectarEmocion failed:", e);
         }
