@@ -56,6 +56,49 @@ router.get("/status", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * PUT /api/integrations/google-calendar/enabled
+ * Body: { enabled: boolean }
+ * Persiste el switch real: channel_settings.google_calendar_enabled
+ */
+router.put("/enabled", async (req: Request, res: Response) => {
+  try {
+    const tenantId = (req as any).user?.tenant_id;
+    if (!tenantId) return res.status(401).json({ error: "unauthorized" });
+
+    const enabled = (req as any).body?.enabled;
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "enabled must be boolean" });
+    }
+
+    // Upsert por tenant: si no existe row, la crea
+    await pool.query(
+      `
+      INSERT INTO channel_settings (tenant_id, google_calendar_enabled, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (tenant_id)
+      DO UPDATE SET
+        google_calendar_enabled = EXCLUDED.google_calendar_enabled,
+        updated_at = NOW()
+      `,
+      [tenantId, enabled]
+    );
+
+    // devuelve status actualizado (incluye gate)
+    const gate = await canUseChannel(tenantId, "google_calendar");
+    return res.json({
+      ok: true,
+      enabled: gate.settings_enabled,
+      blocked: !gate.settings_enabled,
+      plan_enabled: gate.plan_enabled,
+      paused_until: gate.paused_until,
+    });
+  } catch (e) {
+    console.error("google-calendar enabled error:", e);
+    return res.status(500).json({ error: "internal" });
+  }
+});
+
 router.get("/connect", async (req: Request, res: Response) => {
   try {
     const tenantId = (req as any).user?.tenant_id;
