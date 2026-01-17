@@ -1100,12 +1100,37 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     return await replyAndExit(bienvenida, "welcome_gate", "saludo");
   }
 
+  // ✅ booking_enabled flag (source of truth)
+  let bookingEnabled = false;
+  try {
+    const { rows } = await pool.query(
+      `SELECT google_calendar_enabled
+      FROM channel_settings
+      WHERE tenant_id = $1
+      LIMIT 1`,
+      [tenant.id]
+    );
+    bookingEnabled = rows[0]?.google_calendar_enabled === true;
+  } catch (e: any) {
+    console.warn("⚠️ No se pudo leer google_calendar_enabled:", e?.message);
+  }
+
   // ===============================
   // 📅 BOOKING GATE (Google Calendar) - ANTES del SM/LLM
   // ===============================
   const bookingLink = extractBookingLinkFromPrompt(promptBase);
 
-  {
+  // ✅ Si el toggle está OFF, nunca ejecutes bookingFlowMvp (y limpia estados viejos)
+  if (!bookingEnabled) {
+    if ((convoCtx as any)?.booking) {
+      transition({ patchCtx: { booking: null } }); // limpia en memoria del turno
+      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+        activeFlow,
+        activeStep,
+        context: { booking: null },
+      });
+    }
+  } else {
     const bk = await bookingFlowMvp({
       tenantId: tenant.id,
       canal: "whatsapp",
