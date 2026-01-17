@@ -2,6 +2,7 @@
 import pool from "../db";
 import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
 
+
 type BookingCtx = {
   booking?: {
     step?: "idle" | "ask_datetime" | "confirm";
@@ -15,18 +16,19 @@ type BookingCtx = {
 async function loadBookingEnabled(tenantId: string): Promise<boolean> {
   try {
     const { rows } = await pool.query(
-      `SELECT google_calendar_enabled
-         FROM channel_settings
-        WHERE tenant_id = $1
-        LIMIT 1`,
+      `
+      SELECT booking_enabled
+      FROM booking_settings
+      WHERE tenant_id = $1
+      LIMIT 1
+      `,
       [tenantId]
     );
 
-    // default: ON si no existe fila (o si viene null)
-    const v = rows[0]?.google_calendar_enabled;
+    // default ON si no existe fila
+    const v = rows[0]?.booking_enabled;
     return v === false ? false : true;
   } catch {
-    // si algo falla, no tumbes el bot: deja ON por defecto
     return true;
   }
 }
@@ -45,36 +47,6 @@ async function isGoogleConnected(tenantId: string): Promise<boolean> {
     return rows.length > 0;
   } catch {
     return false;
-  }
-}
-
-async function loadGoogleIntegration(tenantId: string): Promise<{
-  connected: boolean;
-  enabled: boolean;
-  calendar_id: string;
-}> {
-  try {
-    const { rows } = await pool.query(
-      `SELECT
-         COALESCE(connected,false) AS connected,
-         COALESCE(enabled,false)   AS enabled,
-         COALESCE(calendar_id,'primary') AS calendar_id
-      FROM google_calendar_integrations
-      WHERE tenant_id = $1
-      LIMIT 1;`,
-      [tenantId]
-    );
-
-    const r = rows[0];
-    if (!r) return { connected: false, enabled: true, calendar_id: "primary" };
-
-    return {
-      connected: !!r.connected,
-      enabled: r.enabled !== false,
-      calendar_id: r.calendar_id || "primary",
-    };
-  } catch {
-    return { connected: false, enabled: true, calendar_id: "primary" };
   }
 }
 
@@ -240,10 +212,9 @@ export async function bookingFlowMvp(opts: {
   const wantsBooking = matchesBookingIntent(userText, terms);
 
 const bookingEnabled = await loadBookingEnabled(tenantId);
-const gcal = await loadGoogleIntegration(tenantId);
-const bookingLink = opts.bookingLink ? String(opts.bookingLink).trim() : null;
-
 const googleConnected = await isGoogleConnected(tenantId);
+
+const bookingLink = opts.bookingLink ? String(opts.bookingLink).trim() : null;
 
 // 1) Si el tenant apagó agendamiento: bloquea todo
 if (!bookingEnabled) {
@@ -270,8 +241,8 @@ if (wantsBooking && bookingLink) {
   };
 }
 
-// 3) Si NO hay link y Google no está conectado (o está disabled): no inicies flujo
-if (wantsBooking && (!gcal.connected || !gcal.enabled)) {
+// 3) Si NO hay link y Google NO está conectado: no inicies flujo
+if (wantsBooking && !bookingLink && !googleConnected) {
   return {
     handled: true,
     reply: idioma === "en"
