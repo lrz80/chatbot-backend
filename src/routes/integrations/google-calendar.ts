@@ -243,9 +243,12 @@ router.get("/connect", authenticateUser, async (req: Request, res: Response) => 
     if (!tenantId) return res.status(401).json({ error: "unauthorized" });
 
     const gate = await canUseChannel(tenantId, "google_calendar");
-    if (!gate.settings_enabled) {
-      return res.status(403).json({ error: "google_calendar_disabled" });
-    }
+    console.log("🧪 [GC CONNECT] tenantId:", tenantId);
+    console.log("🧪 [GC CONNECT] gate:", gate);
+
+    //if (!gate.settings_enabled) {
+    //  return res.status(403).json({ error: "google_calendar_disabled" });
+    // }
 
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const redirectUri = process.env.GOOGLE_OAUTH_REDIRECT_URL;
