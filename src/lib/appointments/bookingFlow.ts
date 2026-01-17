@@ -158,6 +158,13 @@ async function bookInGoogle(opts: {
   });
 
   const busy = fb?.calendars?.primary?.busy || [];
+  console.log("📅 [BOOKING] freebusy", {
+    tenantId,
+    timeMin: startISO,
+    timeMax: endISO,
+    busyCount: busy.length,
+    busy,
+  });
   if (busy.length > 0) {
     return { ok: false as const, error: "SLOT_BUSY" as const, busy };
   }
