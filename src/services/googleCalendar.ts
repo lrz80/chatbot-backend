@@ -6,14 +6,14 @@ type GoogleTokens = { access_token: string; expires_in?: number; token_type?: st
 async function getRefreshTokenEnc(tenantId: string): Promise<string> {
   const { rows } = await pool.query(
     `
-    SELECT refresh_token_enc
-    FROM calendar_integrations
-    WHERE tenant_id = $1 AND provider = 'google' AND status = 'connected'
+    SELECT refresh_token
+    FROM google_calendar_integrations
+    WHERE tenant_id = $1 AND connected = TRUE
     LIMIT 1
     `,
     [tenantId]
   );
-  const enc = rows[0]?.refresh_token_enc;
+  const enc = rows[0]?.refresh_token;
   if (!enc) throw new Error("google_not_connected");
   return enc;
 }
@@ -21,6 +21,7 @@ async function getRefreshTokenEnc(tenantId: string): Promise<string> {
 export async function getGoogleAccessToken(tenantId: string): Promise<string> {
   const enc = await getRefreshTokenEnc(tenantId);
   const refresh_token = decryptToken(enc);
+  if (!refresh_token) throw new Error("google_refresh_token_invalid");
 
   const client_id = process.env.GOOGLE_CLIENT_ID;
   const client_secret = process.env.GOOGLE_CLIENT_SECRET;
@@ -39,7 +40,7 @@ export async function getGoogleAccessToken(tenantId: string): Promise<string> {
 
   const json = (await resp.json()) as GoogleTokens & { error?: string; error_description?: string };
   if (!resp.ok || !json.access_token) {
-    console.error("Google refresh failed:", json);
+    console.error("Google refresh failed:", resp.status, json);
     throw new Error("google_refresh_failed");
   }
   return json.access_token;

@@ -439,6 +439,17 @@ async function saveAssistantMessageAndEmit(opts: {
   }
 }
 
+function extractBookingLinkFromPrompt(promptBase: string): string | null {
+  if (!promptBase) return null;
+
+  // Preferido: marcador LINK_RESERVA:
+  const tagged = promptBase.match(/LINK_RESERVA:\s*(https?:\/\/\S+)/i);
+  if (tagged?.[1]) return tagged[1].replace(/[),.]+$/g, "");
+
+  // fallback: nada (no adivines)
+  return null;
+}
+
 async function rememberAfterReply(opts: {
   tenantId: string;
   senderId: string;          // contactoNorm
@@ -1092,6 +1103,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   // ===============================
   // 📅 BOOKING GATE (Google Calendar) - ANTES del SM/LLM
   // ===============================
+  const bookingLink = extractBookingLinkFromPrompt(promptBase);
+
   {
     const bk = await bookingFlowMvp({
       tenantId: tenant.id,
@@ -1100,10 +1113,12 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       idioma: idiomaDestino,
       userText: userInput,
       ctx: convoCtx,
+      bookingLink,
     });
 
     if (bk?.ctxPatch) {
       transition({ patchCtx: bk.ctxPatch });
+      return await replyAndExit(bk.reply || "", "booking_flow", detectedIntent);
     }
 
     if (bk.handled && bk.reply) {

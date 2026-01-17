@@ -15,14 +15,67 @@ type BookingCtx = {
 async function loadBookingEnabled(tenantId: string): Promise<boolean> {
   try {
     const { rows } = await pool.query(
-      `SELECT hints FROM tenants WHERE id = $1 LIMIT 1`,
+      `SELECT google_calendar_enabled
+         FROM channel_settings
+        WHERE tenant_id = $1
+        LIMIT 1`,
       [tenantId]
     );
-    const hints = rows[0]?.hints;
-    const obj = typeof hints === "string" ? JSON.parse(hints) : (hints || {});
-    if (typeof obj.booking_enabled === "boolean") return obj.booking_enabled;
-  } catch {}
-  return true; // default ON
+
+    // default: ON si no existe fila (o si viene null)
+    const v = rows[0]?.google_calendar_enabled;
+    return v === false ? false : true;
+  } catch {
+    // si algo falla, no tumbes el bot: deja ON por defecto
+    return true;
+  }
+}
+
+async function isGoogleConnected(tenantId: string): Promise<boolean> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT 1
+         FROM calendar_integrations
+        WHERE tenant_id = $1
+          AND provider = 'google'
+          AND status = 'connected'
+        LIMIT 1`,
+      [tenantId]
+    );
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function loadGoogleIntegration(tenantId: string): Promise<{
+  connected: boolean;
+  enabled: boolean;
+  calendar_id: string;
+}> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         COALESCE(connected,false) AS connected,
+         COALESCE(enabled,true)    AS enabled,
+         COALESCE(calendar_id,'primary') AS calendar_id
+       FROM google_calendar_integrations
+       WHERE tenant_id = $1
+       LIMIT 1`,
+      [tenantId]
+    );
+
+    const r = rows[0];
+    if (!r) return { connected: false, enabled: true, calendar_id: "primary" };
+
+    return {
+      connected: !!r.connected,
+      enabled: r.enabled !== false,
+      calendar_id: r.calendar_id || "primary",
+    };
+  } catch {
+    return { connected: false, enabled: true, calendar_id: "primary" };
+  }
 }
 
 async function loadBookingTerms(tenantId: string): Promise<string[]> {
@@ -171,6 +224,7 @@ export async function bookingFlowMvp(opts: {
   idioma: "es" | "en";
   userText: string;
   ctx: any; // convoCtx (object)
+  bookingLink?: string | null; // ✅ viene del prompt
 }): Promise<{
   handled: boolean;
   reply?: string;
@@ -185,50 +239,45 @@ export async function bookingFlowMvp(opts: {
   const terms = await loadBookingTerms(tenantId);
   const wantsBooking = matchesBookingIntent(userText, terms);
 
-// ✅ Booking settings (independiente de canales)
-const { rows: trows } = await pool.query(
-  `SELECT hints FROM tenants WHERE id = $1 LIMIT 1`,
-  [tenantId]
-);
+const bookingEnabled = await loadBookingEnabled(tenantId);
+const gcal = await loadGoogleIntegration(tenantId);
+const bookingLink = opts.bookingLink ? String(opts.bookingLink).trim() : null;
 
-let booking_link: string | null = null;
-try {
-  const hints = trows[0]?.hints;
-  const obj = typeof hints === "string" ? JSON.parse(hints) : (hints || {});
-  booking_link = (obj?.booking_link && String(obj.booking_link).trim()) ? String(obj.booking_link).trim() : null;
-} catch {}
+const googleConnected = await isGoogleConnected(tenantId);
 
-// ✅ Google Calendar enabled (desde channel_settings)
-const { rows: grows } = await pool.query(
-  `SELECT google_calendar_enabled
-     FROM channel_settings
-    WHERE tenant_id = $1
-    LIMIT 1`,
-  [tenantId]
-);
+// 1) Si el tenant apagó agendamiento: bloquea todo
+if (!bookingEnabled) {
+  if (wantsBooking || booking?.step !== "idle") {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "Scheduling is currently disabled for this business."
+        : "El agendamiento está desactivado en este momento para este negocio.",
+      ctxPatch: { booking: { step: "idle" } },
+    };
+  }
+  return { handled: false };
+}
 
-const googleEnabled = grows[0]?.google_calendar_enabled === true;
-const googleConnected = googleEnabled; // para no reescribir tu lógica abajo
+// 2) Si hay link, responde con el link (y NO uses Google)
+if (wantsBooking && bookingLink) {
+  return {
+    handled: true,
+    reply: idioma === "en"
+      ? `You can book here: ${bookingLink}`
+      : `Puedes agendar aquí: ${bookingLink}`,
+    ctxPatch: { booking: { step: "idle" } },
+  };
+}
 
-const bookingEnabled = (googleConnected && googleEnabled) || !!booking_link;
-
-// Si el usuario quiere agendar y NO hay nada habilitado (ni google ni link)
-if (wantsBooking && !bookingEnabled) {
+// 3) Si NO hay link y Google no está conectado (o está disabled): no inicies flujo
+if (wantsBooking && (!gcal.connected || !gcal.enabled)) {
   return {
     handled: true,
     reply: idioma === "en"
       ? "Scheduling isn’t available for this business right now."
       : "El agendamiento no está disponible en este momento para este negocio.",
-  };
-}
-
-// Si NO hay Google conectado pero SÍ hay link, responde con el link (sin bloquear)
-if (wantsBooking && (!googleConnected || !googleEnabled) && booking_link) {
-  return {
-    handled: true,
-    reply: idioma === "en"
-      ? `You can book here: ${booking_link}`
-      : `Puedes agendar aquí: ${booking_link}`,
+    ctxPatch: { booking: { step: "idle" } },
   };
 }
 
@@ -308,12 +357,12 @@ if (wantsBooking && (!googleConnected || !googleEnabled) && booking_link) {
     const startISO = booking.start_time!;
     const endISO = booking.end_time!;
 
-    if (!googleEnabled) {
+    if (!googleConnected) {
       return {
         handled: true,
         reply: idioma === "en"
-        ? "Scheduling is disabled for this business right now."
-        : "El agendamiento está desactivado en este momento para este negocio.",
+        ? "Scheduling isn’t available for this business right now."
+        : "El agendamiento no está disponible en este momento para este negocio.",
         ctxPatch: { booking: { step: "idle" } },
       };
     }
