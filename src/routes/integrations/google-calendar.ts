@@ -8,7 +8,6 @@ import { encryptToken } from "../../services/googleCrypto";
 
 
 const router = Router();
-router.use(authenticateUser);
 
 /**
  * GET /api/integrations/google-calendar/status
