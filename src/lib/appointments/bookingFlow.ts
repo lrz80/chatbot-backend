@@ -16,20 +16,18 @@ type BookingCtx = {
 async function loadBookingEnabled(tenantId: string): Promise<boolean> {
   try {
     const { rows } = await pool.query(
-      `
-      SELECT booking_enabled
-      FROM booking_settings
-      WHERE tenant_id = $1
-      LIMIT 1
-      `,
+      `SELECT google_calendar_enabled
+         FROM channel_settings
+        WHERE tenant_id = $1
+        LIMIT 1`,
       [tenantId]
     );
 
-    // default ON si no existe fila
-    const v = rows[0]?.booking_enabled;
-    return v === false ? false : true;
+    // ✅ Default OFF si no existe fila (más seguro)
+    return rows[0]?.google_calendar_enabled === true;
   } catch {
-    return true;
+    // ✅ Si hay error de DB, también OFF (fail-closed)
+    return false;
   }
 }
 
