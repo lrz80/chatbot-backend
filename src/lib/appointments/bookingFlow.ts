@@ -46,6 +46,19 @@ async function loadBookingTerms(tenantId: string): Promise<string[]> {
   return ["cita","consulta","reservar","reserva","turno","agendar","appointment","book","booking","schedule"];
 }
 
+function wantsToChangeTopic(text: string) {
+  const t = String(text || "").toLowerCase();
+
+  // señales típicas de “no estoy dando fecha”
+  return (
+    /\b(precio|precios|cost|costs|price|prices|cuanto|cuánto|tarifa|rates)\b/i.test(t) ||
+    /\b(horario|horarios|hours|open|close|abren|cierran)\b/i.test(t) ||
+    /\b(ubicacion|ubicación|direccion|dirección|address|where)\b/i.test(t) ||
+    /\b(info|informacion|información|details|mas informacion|más información)\b/i.test(t) ||
+    /\b(cancelar|cancela|olvida|stop|salir|exit)\b/i.test(t)
+  );
+}
+
 function matchesBookingIntent(text: string, terms: string[]) {
   const t = String(text || "").toLowerCase();
   return terms.some(term => term && new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(t));
@@ -253,31 +266,38 @@ if (wantsBooking && !bookingLink && !googleConnected) {
 
   // 2) Esperando fecha/hora
   if (booking.step === "ask_datetime") {
-    const parsed = parseDateTimeExplicit(userText, timeZone);
-    if (!parsed) {
-      return {
-        handled: true,
-        reply: idioma === "en"
-          ? "I couldn’t read that. Please use: YYYY-MM-DD HH:mm (example: 2026-01-17 15:00)."
-          : "No pude leer esa fecha/hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-17 15:00).",
-        ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
-      };
+    // ✅ ESCAPE: si el usuario cambió de tema, salimos del flow
+    if (wantsToChangeTopic(userText)) {
+        return {
+        handled: false,                 // deja que el SM/LLM responda
+        ctxPatch: { booking: { step: "idle" } }, // resetea el wizard
+        };
     }
 
-    // Guardamos y pedimos confirmación
+    const parsed = parseDateTimeExplicit(userText, timeZone);
+    if (!parsed) {
+        return {
+        handled: true,
+        reply: idioma === "en"
+            ? "I couldn’t read that. Please use: YYYY-MM-DD HH:mm (example: 2026-01-17 15:00)."
+            : "No pude leer esa fecha/hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-17 15:00).",
+        ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
+        };
+    }
+
     return {
-      handled: true,
-      reply: idioma === "en"
+        handled: true,
+        reply: idioma === "en"
         ? `Confirm booking for ${parsed.startISO}? Reply YES to confirm or NO to cancel.`
         : `Confirmo: ${parsed.startISO}. Responde SI para confirmar o NO para cancelar.`,
-      ctxPatch: {
+        ctxPatch: {
         booking: {
-          step: "confirm",
-          start_time: parsed.startISO,
-          end_time: parsed.endISO,
-          timeZone,
+            step: "confirm",
+            start_time: parsed.startISO,
+            end_time: parsed.endISO,
+            timeZone,
         },
-      },
+        },
     };
   }
 
