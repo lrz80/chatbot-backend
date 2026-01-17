@@ -1100,7 +1100,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     return await replyAndExit(bienvenida, "welcome_gate", "saludo");
   }
 
-  // ✅ booking_enabled flag (source of truth)
+  // ✅ google_calendar_enabled flag (source of truth)
   let bookingEnabled = false;
   try {
     const { rows } = await pool.query(
