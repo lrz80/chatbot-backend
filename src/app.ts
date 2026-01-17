@@ -136,9 +136,10 @@ app.use(
 );
 
 // —— Parsers / cookies ————————————————————————————
+app.use(cookieParser());
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: false }));
-app.use(cookieParser());
+
 
 // —— Healthcheck (útil para 502) ————————————————
 app.get('/health', (_req, res) => {

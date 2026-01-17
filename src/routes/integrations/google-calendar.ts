@@ -14,6 +14,8 @@ const router = Router();
  * Devuelve estado de conexión (sin tokens) + gating del switch
  */
 router.get("/status", async (req: Request, res: Response) => {
+  console.log("🧪 [GC STATUS] cookies token?", !!(req as any).cookies?.token);
+  console.log("🧪 [GC STATUS] auth header?", !!req.headers?.authorization);
   try {
     const tenantId =
       (req as any).user?.tenant_id ??
