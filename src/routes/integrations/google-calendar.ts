@@ -293,8 +293,6 @@ router.post("/disconnect", authenticateUser, async (req, res) => {
       UPDATE calendar_integrations
       SET
         status = 'disconnected',
-        refresh_token_enc = NULL,
-        connected_email = NULL,
         updated_at = NOW()
       WHERE tenant_id = $1
         AND provider = 'google'
