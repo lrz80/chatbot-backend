@@ -146,7 +146,7 @@ app.get('/health', (_req, res) => {
 });
 
 // —— Rutas (mismo orden que tenías) ——————————————
-app.use('/auth', authRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/tenants', tenantRoutes);
 app.use('/api/prompt', promptRoutes);
