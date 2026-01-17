@@ -123,6 +123,9 @@ router.get("/oauth/callback", async (req, res) => {
   });
 
   const tokenJson: any = await tokenRes.json();
+  console.log("🟣 [GCAL CALLBACK] tokenJson:", tokenJson);
+  console.log("🟣 [GCAL CALLBACK] has refresh_token:", !!tokenJson?.refresh_token);
+
   if (!tokenRes.ok) {
     return res.status(400).send("Token exchange failed");
   }
