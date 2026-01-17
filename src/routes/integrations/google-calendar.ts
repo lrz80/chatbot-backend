@@ -5,23 +5,48 @@ import pool from "../../lib/db";
 import { canUseChannel } from "../../lib/features";
 import fetch from "node-fetch"; // si estás en Node 18 y TS lo permite, puedes usar fetch global sin importar
 import { encryptToken, decryptToken } from "../../services/googleCrypto";
+import crypto from "crypto";
 
 
 const router = Router();
+
+function signState(payload: any) {
+  const secret = process.env.GOOGLE_STATE_SECRET;
+  if (!secret) throw new Error("GOOGLE_STATE_SECRET missing");
+
+  const raw = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const sig = crypto.createHmac("sha256", secret).update(raw).digest("base64url");
+  return `${raw}.${sig}`;
+}
+
+function verifyState(state: string) {
+  const secret = process.env.GOOGLE_STATE_SECRET;
+  if (!secret) throw new Error("GOOGLE_STATE_SECRET missing");
+
+  const [raw, sig] = state.split(".");
+  const expected = crypto.createHmac("sha256", secret).update(raw).digest("base64url");
+  if (!raw || !sig || sig !== expected) throw new Error("invalid_state");
+
+  return JSON.parse(Buffer.from(raw, "base64url").toString("utf8"));
+}
+
 
 type GoogleTokens = { access_token: string; expires_in?: number; token_type?: string };
 
 async function getRefreshTokenEnc(tenantId: string): Promise<string> {
   const { rows } = await pool.query(
     `
-    SELECT refresh_token
-    FROM google_calendar_integrations
-    WHERE tenant_id = $1 AND connected = TRUE
+    SELECT refresh_token_enc
+    FROM calendar_integrations
+    WHERE tenant_id = $1
+      AND provider = 'google'
+      AND status = 'connected'
     LIMIT 1
     `,
     [tenantId]
   );
-  const enc = rows[0]?.refresh_token;
+
+  const enc = rows[0]?.refresh_token_enc;
   if (!enc) throw new Error("google_not_connected");
   return enc;
 }
@@ -125,7 +150,7 @@ export async function googleCreateEvent(params: {
  * GET /api/integrations/google-calendar/status
  * Devuelve estado de conexión (sin tokens) + gating del switch
  */
-router.get("/status", async (req: Request, res: Response) => {
+router.get("/status", authenticateUser, async (req, res) => {
   console.log("🧪 [GC STATUS] cookies token?", !!(req as any).cookies?.token);
   console.log("🧪 [GC STATUS] auth header?", !!req.headers?.authorization);
   try {
@@ -174,7 +199,7 @@ router.get("/status", async (req: Request, res: Response) => {
  * Body: { enabled: boolean }
  * Persiste el switch real: channel_settings.google_calendar_enabled
  */
-router.put("/enabled", async (req: Request, res: Response) => {
+router.put("/enabled", authenticateUser, async (req: Request, res: Response) => {
   try {
     const tenantId = (req as any).user?.tenant_id;
     if (!tenantId) return res.status(401).json({ error: "unauthorized" });
@@ -212,7 +237,7 @@ router.put("/enabled", async (req: Request, res: Response) => {
   }
 });
 
-router.get("/connect", async (req: Request, res: Response) => {
+router.get("/connect", authenticateUser, async (req: Request, res: Response) => {
   try {
     const tenantId = (req as any).user?.tenant_id;
     if (!tenantId) return res.status(401).json({ error: "unauthorized" });
@@ -229,7 +254,7 @@ router.get("/connect", async (req: Request, res: Response) => {
     }
 
     // state firmado simple (tenantId + timestamp). Si prefieres JWT, lo hacemos luego.
-    const state = Buffer.from(JSON.stringify({ tenantId, t: Date.now() })).toString("base64url");
+    const state = signState({ tenantId, t: Date.now() });
 
     const params = new URLSearchParams({
       client_id: clientId,
@@ -250,20 +275,51 @@ router.get("/connect", async (req: Request, res: Response) => {
   }
 });
 
+// 🔌 POST /api/integrations/google-calendar/disconnect
+// Desconecta Google Calendar para el tenant (NO borra el switch de booking)
+router.post("/disconnect", authenticateUser, async (req, res) => {
+  try {
+    const tenantId = (req as any).user?.tenant_id;
+    if (!tenantId) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
+    }
+
+    // Marcar integración como desconectada (no borramos la fila para historial)
+    await pool.query(
+      `
+      UPDATE calendar_integrations
+      SET
+        status = 'disconnected',
+        refresh_token_enc = NULL,
+        connected_email = NULL,
+        updated_at = NOW()
+      WHERE tenant_id = $1
+        AND provider = 'google'
+      `,
+      [tenantId]
+    );
+
+    return res.json({
+      ok: true,
+      connected: false,
+    });
+  } catch (err) {
+    console.error("❌ google-calendar disconnect error:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "internal_error",
+    });
+  }
+});
+
 router.get("/callback", async (req: Request, res: Response) => {
   try {
     const { code, state } = req.query as any;
     if (!code || !state) return res.status(400).send("Missing code/state");
 
-    const decoded = JSON.parse(Buffer.from(String(state), "base64url").toString("utf8"));
+    const decoded = verifyState(String(state));
     const tenantId = decoded?.tenantId;
     if (!tenantId) return res.status(400).send("Invalid state");
-
-    // Gate de seguridad adicional: el usuario autenticado debe ser del mismo tenant
-    const authTenantId = (req as any).user?.tenant_id;
-    if (!authTenantId || authTenantId !== tenantId) {
-      return res.status(403).send("Tenant mismatch");
-    }
 
     const gate = await canUseChannel(tenantId, "google_calendar");
     if (!gate.settings_enabled) {
