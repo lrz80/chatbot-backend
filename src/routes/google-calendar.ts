@@ -20,26 +20,46 @@ function mustEnv() {
 // 1) Estado actual
 router.get("/status", authenticateUser, async (req: any, res) => {
   const tenantId = req.user?.tenant_id;
+
   const { rows } = await pool.query(
-    `SELECT connected, calendar_id, refresh_token
-        FROM google_calendar_integrations
-        WHERE tenant_id = $1
-        LIMIT 1`,
+    `SELECT connected, calendar_id, refresh_token, enabled
+       FROM google_calendar_integrations
+      WHERE tenant_id = $1
+      LIMIT 1`,
     [tenantId]
   );
 
   const row = rows[0];
 
-  const connected =
-    !!row &&
-    row.connected === true &&
-    !!row.refresh_token;
+  const connected = !!row && row.connected === true && !!row.refresh_token;
 
   return res.json({
     ok: true,
     connected,
+    enabled: row?.enabled ?? false,
     calendar_id: row?.calendar_id || "primary",
   });
+});
+
+// 1.5) Prender / apagar agendamiento (NO es conectar OAuth)
+router.put("/enabled", authenticateUser, async (req: any, res) => {
+  const tenantId = req.user?.tenant_id;
+  const enabled = req.body?.enabled;
+
+  if (typeof enabled !== "boolean") {
+    return res.status(400).json({ ok: false, error: "enabled must be boolean" });
+  }
+
+  const { rows } = await pool.query(
+    `INSERT INTO google_calendar_integrations (tenant_id, enabled, connected, calendar_id)
+     VALUES ($1, $2, FALSE, 'primary')
+     ON CONFLICT (tenant_id)
+     DO UPDATE SET enabled = EXCLUDED.enabled
+     RETURNING tenant_id, enabled, connected, calendar_id`,
+    [tenantId, enabled]
+  );
+
+  return res.json({ ok: true, ...rows[0] });
 });
 
 // 2) Iniciar OAuth (devuelve authUrl)
@@ -138,6 +158,7 @@ router.post("/disconnect", authenticateUser, async (req: any, res) => {
   await pool.query(
     `UPDATE google_calendar_integrations
         SET connected = FALSE,
+            enabled = FALSE,
             access_token = NULL,
             refresh_token = NULL,
             token_expiry = NULL,

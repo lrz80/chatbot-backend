@@ -57,11 +57,11 @@ async function loadGoogleIntegration(tenantId: string): Promise<{
     const { rows } = await pool.query(
       `SELECT
          COALESCE(connected,false) AS connected,
-         COALESCE(enabled,true)    AS enabled,
+         COALESCE(enabled,false)   AS enabled,
          COALESCE(calendar_id,'primary') AS calendar_id
-       FROM google_calendar_integrations
-       WHERE tenant_id = $1
-       LIMIT 1`,
+      FROM google_calendar_integrations
+      WHERE tenant_id = $1
+      LIMIT 1;`,
       [tenantId]
     );
 
