@@ -128,7 +128,20 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
     };
 
     // 2) Toggle por tenant
-    const settingsEnabled = !!(await getChannelEnabledBySettings(tenant_id, canal));
+    let settingsEnabled = false;
+
+    if (canal === "google_calendar") {
+      const { rows: csRows } = await pool.query(
+        `SELECT google_calendar_enabled
+          FROM channel_settings
+          WHERE tenant_id = $1
+          LIMIT 1`,
+        [tenant_id]
+      );
+      settingsEnabled = csRows[0]?.google_calendar_enabled === true;
+    } else {
+      settingsEnabled = !!(await getChannelEnabledBySettings(tenant_id, canal));
+    }
 
     // 3) Plan del tenant
     const { rows } = await pool.query(
@@ -181,6 +194,40 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
   } catch (e) {
     console.error("channel-settings error:", e);
     return res.status(500).json({ error: "Error obteniendo estado de canal" });
+  }
+});
+
+/**
+ * PATCH /api/channel-settings
+ * Body: { canal: "google_calendar", enabled: boolean }
+ */
+router.patch("/", authenticateUser, async (req: Request, res: Response) => {
+  try {
+    const { tenant_id } = req.user as { tenant_id: string };
+    if (!tenant_id) return res.status(401).json({ error: "unauthorized" });
+
+    const canal = String(req.body?.canal || "").toLowerCase() as Canal;
+    const enabled = req.body?.enabled;
+
+    if (canal !== "google_calendar") {
+      return res.status(400).json({ error: "Solo se permite actualizar google_calendar aquí" });
+    }
+    if (typeof enabled !== "boolean") {
+      return res.status(400).json({ error: "enabled must be boolean" });
+    }
+
+    await pool.query(
+      `INSERT INTO channel_settings (tenant_id, google_calendar_enabled, created_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (tenant_id)
+       DO UPDATE SET google_calendar_enabled = EXCLUDED.google_calendar_enabled`,
+      [tenant_id, enabled]
+    );
+
+    return res.json({ ok: true, canal, google_calendar_enabled: enabled });
+  } catch (e) {
+    console.error("channel-settings PATCH error:", e);
+    return res.status(500).json({ error: "Error actualizando estado de canal" });
   }
 });
 
