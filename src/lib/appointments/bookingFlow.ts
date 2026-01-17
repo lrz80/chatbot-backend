@@ -1,6 +1,5 @@
 // src/lib/appointments/bookingFlow.ts
 import pool from "../db";
-import { canUseChannel } from "../features";
 import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
 
 type BookingCtx = {
@@ -199,19 +198,19 @@ try {
   booking_link = (obj?.booking_link && String(obj.booking_link).trim()) ? String(obj.booking_link).trim() : null;
 } catch {}
 
-// ✅ Google Calendar connection (según tu endpoint devuelve connected/enabled)
+// ✅ Google Calendar enabled (desde channel_settings)
 const { rows: grows } = await pool.query(
-  `SELECT enabled, connected
-     FROM google_calendar_integrations
+  `SELECT google_calendar_enabled
+     FROM channel_settings
     WHERE tenant_id = $1
     LIMIT 1`,
   [tenantId]
 );
 
-const googleConnected = !!grows[0]?.connected;
-const googleEnabled   = grows[0]?.enabled !== false; // default true si es null
+const googleEnabled = grows[0]?.google_calendar_enabled === true;
+const googleConnected = googleEnabled; // para no reescribir tu lógica abajo
 
- const bookingEnabled = (googleConnected && googleEnabled) || !!booking_link;
+const bookingEnabled = (googleConnected && googleEnabled) || !!booking_link;
 
 // Si el usuario quiere agendar y NO hay nada habilitado (ni google ni link)
 if (wantsBooking && !bookingEnabled) {
@@ -309,12 +308,12 @@ if (wantsBooking && (!googleConnected || !googleEnabled) && booking_link) {
     const startISO = booking.start_time!;
     const endISO = booking.end_time!;
 
-    if (!googleConnected || !googleEnabled) {
+    if (!googleEnabled) {
       return {
         handled: true,
         reply: idioma === "en"
-        ? "I can’t access the calendar for this business right now."
-        : "Ahora mismo no puedo acceder al calendario de este negocio.",
+        ? "Scheduling is disabled for this business right now."
+        : "El agendamiento está desactivado en este momento para este negocio.",
         ctxPatch: { booking: { step: "idle" } },
       };
     }
