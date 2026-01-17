@@ -95,6 +95,7 @@ router.post("/oauth/start", authenticateUser, async (req: any, res) => {
 
 // 3) Callback OAuth (Google redirige aquí)
 router.get("/oauth/callback", async (req, res) => {
+  console.log("🟣 [GCAL CALLBACK] hit", { hasCode: !!req.query.code, hasState: !!req.query.state });
   mustEnv();
   const code = String(req.query.code || "");
   const state = String(req.query.state || "");
@@ -105,6 +106,7 @@ router.get("/oauth/callback", async (req, res) => {
   try {
     const parsed = JSON.parse(Buffer.from(state, "base64url").toString("utf8"));
     tenantId = parsed?.tenantId;
+    console.log("🟣 [GCAL CALLBACK] tenantId:", tenantId);
   } catch {
     return res.status(400).send("Invalid state");
   }
