@@ -1,6 +1,7 @@
 // src/lib/appointments/bookingFlow.ts
 import pool from "../db";
 import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
+import { canUseChannel } from "../../lib/features";
 
 
 type BookingCtx = {
@@ -12,24 +13,6 @@ type BookingCtx = {
     customer_name?: string;
   };
 };
-
-async function loadBookingEnabled(tenantId: string): Promise<boolean> {
-  try {
-    const { rows } = await pool.query(
-      `SELECT google_calendar_enabled
-         FROM channel_settings
-        WHERE tenant_id = $1
-        LIMIT 1`,
-      [tenantId]
-    );
-
-    // ✅ Default OFF si no existe fila (más seguro)
-    return rows[0]?.google_calendar_enabled === true;
-  } catch {
-    // ✅ Si hay error de DB, también OFF (fail-closed)
-    return false;
-  }
-}
 
 async function isGoogleConnected(tenantId: string): Promise<boolean> {
   try {
@@ -209,20 +192,23 @@ export async function bookingFlowMvp(opts: {
   const terms = await loadBookingTerms(tenantId);
   const wantsBooking = matchesBookingIntent(userText, terms);
 
-const bookingEnabled = await loadBookingEnabled(tenantId);
-const googleConnected = await isGoogleConnected(tenantId);
+  const gate = await canUseChannel(tenantId, "google_calendar");
+  const bookingEnabled = !!gate.settings_enabled;
+  console.log("📅 [BOOKING] gate:", { settings_enabled: gate.settings_enabled, plan_enabled: gate.plan_enabled, enabled: gate.enabled });
 
-const bookingLink = opts.bookingLink ? String(opts.bookingLink).trim() : null;
+  const googleConnected = await isGoogleConnected(tenantId);
 
-// 1) Si el tenant apagó agendamiento: bloquea todo
-if (!bookingEnabled) {
-  if (wantsBooking || booking?.step !== "idle") {
-    return {
-      handled: true,
-      reply: idioma === "en"
-        ? "Scheduling is currently disabled for this business."
-        : "El agendamiento está desactivado en este momento para este negocio.",
-      ctxPatch: { booking: { step: "idle" } },
+  const bookingLink = opts.bookingLink ? String(opts.bookingLink).trim() : null;
+
+  // 1) Si el tenant apagó agendamiento: bloquea todo
+  if (!bookingEnabled) {
+    if (wantsBooking || booking?.step !== "idle") {
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? "Scheduling is currently disabled for this business."
+          : "El agendamiento está desactivado en este momento para este negocio.",
+        ctxPatch: { booking: { step: "idle" } },
     };
   }
   return { handled: false };
