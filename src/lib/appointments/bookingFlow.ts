@@ -49,12 +49,14 @@ async function loadBookingTerms(tenantId: string): Promise<string[]> {
 function wantsToChangeTopic(text: string) {
   const t = String(text || "").toLowerCase();
 
-  // señales típicas de “no estoy dando fecha”
   return (
-    /\b(precio|precios|cost|costs|price|prices|cuanto|cuánto|tarifa|rates)\b/i.test(t) ||
+    /\b(precio|precios|cuanto|cuánto|tarifa|costo|costos)\b/i.test(t) ||
+    /\b(price|prices|pricing|cost|costs|rate|rates|fee|fees)\b/i.test(t) ||
+    /\b(how\s*much|what'?s\s+the\s+price|what\s+is\s+the\s+price)\b/i.test(t) ||
     /\b(horario|horarios|hours|open|close|abren|cierran)\b/i.test(t) ||
     /\b(ubicacion|ubicación|direccion|dirección|address|where)\b/i.test(t) ||
     /\b(info|informacion|información|details|mas informacion|más información)\b/i.test(t) ||
+    /\b(como funciona|cómo funciona|how does it work|how it works)\b/i.test(t) ||   // ✅ NUEVO
     /\b(cancelar|cancela|olvida|stop|salir|exit)\b/i.test(t)
   );
 }
