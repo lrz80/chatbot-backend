@@ -1141,13 +1141,18 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       bookingLink,
     });
 
+    // 1) Siempre aplica patch si existe (pero NO respondas por eso)
     if (bk?.ctxPatch) {
       transition({ patchCtx: bk.ctxPatch });
-      return await replyAndExit(bk.reply || "", "booking_flow", detectedIntent);
     }
 
-    if (bk.handled && bk.reply) {
-      return await replyAndExit(bk.reply, "booking_gate", "agendar_cita");
+    // 2) Solo responde si realmente handled=true
+    if (bk?.handled) {
+      return await replyAndExit(
+        bk.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
+        "booking_flow",
+        detectedIntent
+      );
     }
   }
 
