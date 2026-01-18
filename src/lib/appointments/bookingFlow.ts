@@ -6,13 +6,25 @@ import { DateTime } from "luxon";
 
 type BookingCtx = {
   booking?: {
-    step?: "idle" | "ask_datetime" | "confirm";
-    start_time?: string; // ISO
-    end_time?: string;   // ISO
+    step?: "idle" | "ask_name" | "ask_email" | "ask_datetime" | "confirm";
+    start_time?: string;
+    end_time?: string;
     timeZone?: string;
-    customer_name?: string;
+    name?: string;
+    email?: string;
   };
 };
+
+const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+
+function parseEmail(input: string) {
+  const raw = String(input || "").trim().toLowerCase();
+  if (!raw) return null;
+
+  // Simple y robusto para MVP
+  const ok = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(raw);
+  return ok ? raw : null;
+}
 
 async function isGoogleConnected(tenantId: string): Promise<boolean> {
   try {
@@ -87,12 +99,54 @@ function parseDateTimeExplicit(input: string, timeZone: string) {
   return { startISO, endISO, timeZone };
 }
 
+function parseFullName(input: string) {
+  const raw = String(input || "").trim().replace(/\s+/g, " ");
+  if (!raw) return null;
+
+  // Evita que pongan solo 1 palabra
+  const parts = raw.split(" ").filter(Boolean);
+  if (parts.length < 2) return null;
+
+  // (Opcional) filtro mínimo para evitar basura tipo "aa"
+  const letters = raw.replace(/[^a-zA-ZáéíóúüñÁÉÍÓÚÜÑ\s'-]/g, "").trim();
+  if (letters.split(" ").filter(Boolean).length < 2) return null;
+
+  return raw;
+}
+
+async function upsertClienteBookingData(opts: {
+  tenantId: string;
+  canal: string;
+  contacto: string;
+  nombre?: string | null;
+  email?: string | null;
+}) {
+  const { tenantId, canal, contacto, nombre, email } = opts;
+
+  try {
+    await pool.query(
+      `
+      INSERT INTO clientes (tenant_id, canal, contacto, nombre, email, updated_at, created_at)
+      VALUES ($1,$2,$3,$4,$5, NOW(), NOW())
+      ON CONFLICT (tenant_id, canal, contacto)
+      DO UPDATE SET
+        nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
+        email  = COALESCE(EXCLUDED.email,  clientes.email),
+        updated_at = NOW()
+      `,
+      [tenantId, canal, contacto, nombre || null, email || null]
+    );
+  } catch (e: any) {
+    console.warn("⚠️ upsertClienteBookingData failed:", e?.message);
+  }
+}
+
 async function insertAppointment(opts: {
   tenantId: string;
   channel: string;
   customer_name: string;
-  customer_phone?: string | null;
-  customer_email?: string | null;
+  customer_phone?: string;
+  customer_email?: string;
   start_time: string;
   end_time: string;
   google_event_id?: string | null;
@@ -287,20 +341,108 @@ if (wantsBooking && !bookingLink && !googleConnected) {
   };
 }
 
-  // 1) Arranque: detecta intención y pide fecha/hora
-  if (booking.step === "idle") {
-    if (!wantsBooking) return { handled: false };
+// 1) Arranque: detecta intención y pide fecha/hora
+if (booking.step === "idle") {
+  if (!wantsBooking) return { handled: false };
 
+  return {
+    handled: true,
+    reply: idioma === "en"
+      ? "Sure. What is your first and last name?"
+      : "Perfecto. ¿Cuál es tu nombre y apellido?",
+    ctxPatch: {
+      booking: { step: "ask_name", timeZone },
+    },
+  };
+}
+
+// 1.1) Esperando nombre y apellido
+if (booking.step === "ask_name") {
+  // Escape si cambió de tema -> salimos del flow
+  if (wantsToChangeTopic(userText)) {
+    return {
+      handled: false,
+      ctxPatch: { booking: { step: "idle" } },
+    };
+  }
+
+  const name = parseFullName(userText);
+  if (!name) {
     return {
       handled: true,
       reply: idioma === "en"
-        ? "Sure. Send the date and time in this format: YYYY-MM-DD HH:mm (example: 2026-01-17 15:00)."
-        : "Perfecto. Envíame la fecha y hora en este formato: YYYY-MM-DD HH:mm (ej: 2026-01-17 15:00).",
-      ctxPatch: {
-        booking: { step: "ask_datetime", timeZone },
-      },
+        ? "Please send your first and last name (example: John Smith)."
+        : "Envíame tu nombre y apellido (ej: Juan Pérez).",
+      ctxPatch: { booking: { ...booking, step: "ask_name", timeZone } },
     };
   }
+
+  await upsertClienteBookingData({
+    tenantId,
+    canal,
+    contacto,
+    nombre: name,
+  });
+
+  return {
+    handled: true,
+    reply: idioma === "en"
+      ? "Thanks. Now send your email."
+      : "Gracias. Ahora envíame tu email.",
+    ctxPatch: {
+      booking: {
+        step: "ask_email",
+        timeZone,
+        name,
+      },
+    },
+  };
+}
+
+// 1.2) Esperando email (OBLIGATORIO)
+if (booking.step === "ask_email") {
+  // Escape si cambió de tema -> salimos del flow
+  if (wantsToChangeTopic(userText)) {
+    return {
+      handled: false,
+      ctxPatch: { booking: { step: "idle" } },
+    };
+  }
+
+  const email = parseEmail(userText);
+  if (!email) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "Please send a valid email (example: name@email.com)."
+        : "Envíame un email válido (ej: nombre@email.com).",
+      ctxPatch: { booking: { ...booking, step: "ask_email", timeZone } },
+    };
+  }
+
+  await upsertClienteBookingData({
+    tenantId,
+    canal,
+    contacto,
+    nombre: (booking as any)?.name || null,
+    email,
+  });
+
+  return {
+    handled: true,
+    reply: idioma === "en"
+      ? "Great. Now send the date and time in this format: YYYY-MM-DD HH:mm (example: 2026-01-17 15:00)."
+      : "Perfecto. Ahora envíame la fecha y hora en este formato: YYYY-MM-DD HH:mm (ej: 2026-01-17 15:00).",
+    ctxPatch: {
+      booking: {
+        step: "ask_datetime",
+        timeZone,
+        name: (booking as any)?.name, // preserva lo capturado
+        email,
+      },
+    },
+  };
+}
 
   // 2) Esperando fecha/hora
   if (booking.step === "ask_datetime") {
@@ -329,12 +471,13 @@ if (wantsBooking && !bookingLink && !googleConnected) {
         ? `Confirm booking for ${parsed.startISO}? Reply YES to confirm or NO to cancel.`
         : `Confirmo: ${parsed.startISO}. Responde SI para confirmar o NO para cancelar.`,
         ctxPatch: {
-        booking: {
+          booking: {
+            ...booking,            // ✅ preserva name/email
             step: "confirm",
             start_time: parsed.startISO,
             end_time: parsed.endISO,
             timeZone,
-        },
+          },
         },
     };
   }
@@ -366,7 +509,8 @@ if (wantsBooking && !bookingLink && !googleConnected) {
     }
 
     // YES -> agenda en Google + guarda en DB
-    const customer_name = "Cliente"; // MVP: luego lo sacamos de clientes o lo pedimos
+    const customer_name = booking.name || "Cliente";
+    const customer_email = booking.email; // ya no debería ser null
     const startISO = booking.start_time!;
     const endISO = booking.end_time!;
 
@@ -379,7 +523,7 @@ if (wantsBooking && !bookingLink && !googleConnected) {
         VALUES ($1, $2, $3, NOW())
         ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
         RETURNING 1`,
-        [tenantId, canal, lockId]
+        [tenantId, "booking", lockId]
       );
 
       if (ins.rowCount === 0) {
@@ -440,6 +584,7 @@ if (wantsBooking && !bookingLink && !googleConnected) {
       channel: canal,
       customer_name,
       customer_phone: contacto,
+      customer_email: booking.email,
       start_time: startISO,
       end_time: endISO,
       google_event_id: g.event_id,
