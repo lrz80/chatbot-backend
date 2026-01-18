@@ -53,7 +53,7 @@ function buildAskAllMessage(idioma: "es" | "en", purpose?: string | null) {
 
   if (idioma === "en") {
     return (
-      `Sure${p}! I can help you with that.\n` +
+      `Sure! I can help you with that.\n` +
       `Please send me everything together in ONE message:\n` +
       `Your full name, email, and the date & time you’d like.\n` +
       `Example: John Smith, john@email.com, 2026-01-21 14:00`
@@ -61,7 +61,7 @@ function buildAskAllMessage(idioma: "es" | "en", purpose?: string | null) {
   }
 
   return (
-    `¡Claro${p}! Te ayudo con eso.\n` +
+    `¡Claro! Te ayudo con eso.\n` +
     `Solo envíame todo junto en **un solo mensaje**:\n` +
     `Tu nombre completo, email y la fecha y hora que te gustaría.\n` +
     `Ejemplo: Juan Pérez, juan@email.com, 2026-01-21 14:00`
