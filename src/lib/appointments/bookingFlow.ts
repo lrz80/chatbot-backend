@@ -451,7 +451,11 @@ if (wantsBooking && !bookingLink && !googleConnected) {
       reply: idioma === "en"
         ? `Booked. Event created. ${g.htmlLink || ""}`.trim()
         : `Listo, quedó agendado. Aquí está el enlace: ${g.htmlLink || ""}`.trim(),
-      ctxPatch: { booking: { step: "idle" }, last_appointment_id: apptId },
+      ctxPatch: {
+        booking: { step: "idle" },
+        last_appointment_id: apptId,
+        booking_completed: true,   // 👈 FLAG FINAL
+      },
     };
   }
 
