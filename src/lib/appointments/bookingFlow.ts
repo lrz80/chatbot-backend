@@ -6,16 +6,67 @@ import { DateTime } from "luxon";
 
 type BookingCtx = {
   booking?: {
-    step?: "idle" | "ask_all" | "ask_name" | "ask_email" | "ask_datetime" | "confirm";
+    step?: "idle" | "ask_purpose" | "ask_all" | "ask_name" | "ask_email" | "ask_datetime" | "confirm";
     start_time?: string;
     end_time?: string;
     timeZone?: string;
     name?: string;
     email?: string;
+    purpose?: string;
   };
 };
 
 const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+
+function normalizeText(s: string) {
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // quita acentos
+    .replace(/[^\w\s:@.-]/g, " ")    // quita signos raros
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isDemoRequest(text: string) {
+  const t = normalizeText(text);
+  return /\b(demo|demostracion|demostración|prueba|trial)\b/.test(t);
+}
+
+function hasExplicitDateTime(text: string) {
+  return /(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})/.test(String(text || ""));
+}
+
+function hasAppointmentContext(text: string) {
+  const t = normalizeText(text);
+
+  // ✅ agend + (para agendar, agendarrr, agendarr, agendar., agendando, agendame, etc.)
+  const agendLike = /\bagend+a+\w*\b/; // captura "agendar", "agendarrr", "agendame", "agendando"
+  const bookLike =
+    /\b(cita|consulta|reservar|reserva|turno|appointment|booking|schedule)\b/;
+
+  return agendLike.test(t) || bookLike.test(t);
+}
+
+function buildAskAllMessage(idioma: "es" | "en", purpose?: string | null) {
+  const p = purpose ? ` (${purpose})` : "";
+
+  return idioma === "en"
+    ? `To schedule${p}, send in ONE message:\nFull name, Email, Date & time (YYYY-MM-DD HH:mm).\nExample: John Smith, john@email.com, 2026-01-21 14:00`
+    : `Para agendar${p}, envía en UN solo mensaje:\nNombre y apellido, Email, Fecha y hora (YYYY-MM-DD HH:mm).\nEj: Juan Pérez, juan@email.com, 2026-01-21 14:00`;
+}
+
+function detectPurpose(text: string): string | null {
+  const t = normalizeText(text); // asumo que ya existe en tu proyecto
+
+  if (/\b(demo|demostracion|demostración|demonstration)\b/.test(t)) return "demo";
+  if (/\b(clase|class|trial)\b/.test(t)) return "clase";
+  if (/\b(consulta|consultation|asesoria|asesoría)\b/.test(t)) return "consulta";
+  if (/\b(llamada|call|phone)\b/.test(t)) return "llamada";
+  if (/\b(visita|visit|presencial|in person)\b/.test(t)) return "visita";
+
+  return null;
+}
 
 function extractDateTimeToken(input: string): string | null {
   const m = String(input || "").match(/(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})/);
@@ -61,7 +112,13 @@ function parseAllInOne(input: string, timeZone: string): {
 
   nameCandidate = cleanNameCandidate(nameCandidate);
 
-  // Quita palabras “de relleno” comunes (opcional pero útil)
+  // ✅ NUEVO: limpia “ruido” cuando viene en párrafos largos
+  nameCandidate = nameCandidate
+    .replace(/\b(quiero|quisiera|me gustaria|hola|buenas|buenos|agendar|agenda|cita|consulta|demo|clase|reservar|reserva|turno|appointment|booking|schedule|para|por favor|pls|please)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // ya lo tenías (puedes dejarlo o unirlo arriba)
   nameCandidate = nameCandidate
     .replace(/\b(mi nombre es|soy|me llamo|name is|i am)\b/gi, "")
     .replace(/\s+/g, " ")
@@ -129,8 +186,14 @@ function wantsToChangeTopic(text: string) {
 }
 
 function matchesBookingIntent(text: string, terms: string[]) {
-  const t = String(text || "").toLowerCase();
-  return terms.some(term => term && new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(t));
+  const t = normalizeText(text);
+  return terms.some((term) => {
+    const x = normalizeText(term);
+    if (!x) return false;
+    // match por palabra o frase (si la term tiene espacio, usamos includes)
+    if (x.includes(" ")) return t.includes(x);
+    return new RegExp(`\\b${x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(t);
+  });
 }
 
 /**
@@ -167,6 +230,34 @@ function parseFullName(input: string) {
   if (letters.split(" ").filter(Boolean).length < 2) return null;
 
   return raw;
+}
+
+function parseAskAll(input: string, timeZone: string) {
+  const raw = String(input || "").trim();
+
+  // extrae email donde sea
+  const email = parseEmail(raw);
+  if (!email) return null;
+
+  // extrae fecha/hora donde sea
+  const m = raw.match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/);
+  if (!m) return null;
+
+  const dt = parseDateTimeExplicit(`${m[1]} ${m[2]}`, timeZone);
+  if (!dt) return null;
+
+  // nombre: quita email y fecha/hora y separadores comunes
+  const nameCandidate = raw
+    .replace(email, " ")
+    .replace(m[0], " ")
+    .replace(/[,;|]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const name = parseFullName(nameCandidate);
+  if (!name) return null;
+
+  return { name, email, startISO: dt.startISO!, endISO: dt.endISO!, timeZone };
 }
 
 async function upsertClienteBookingData(opts: {
@@ -350,7 +441,13 @@ export async function bookingFlowMvp(opts: {
   }
 
   const terms = await loadBookingTerms(tenantId);
-  const wantsBooking = matchesBookingIntent(userText, terms);
+  const rawWants = matchesBookingIntent(userText, terms);
+
+  // ✅ gating fuerte
+  const wantsBooking =
+    hasAppointmentContext(userText) ||
+    hasExplicitDateTime(userText) ||
+    rawWants;
 
   const gate = await canUseChannel(tenantId, "google_calendar");
   const bookingEnabled = !!gate.settings_enabled;
@@ -362,17 +459,17 @@ export async function bookingFlowMvp(opts: {
 
   // 1) Si el tenant apagó agendamiento: bloquea todo
   if (!bookingEnabled) {
-    if (wantsBooking || booking?.step !== "idle") {
+    if (wantsBooking || booking.step !== "idle") {
       return {
         handled: true,
         reply: idioma === "en"
-          ? "Scheduling is currently disabled for this business."
-          : "El agendamiento está desactivado en este momento para este negocio.",
+            ? "Scheduling is currently disabled for this business."
+            : "El agendamiento está desactivado en este momento para este negocio.",
         ctxPatch: { booking: { step: "idle" } },
-    };
+      };
+    }
+    return { handled: false };
   }
-  return { handled: false };
-}
 
 // 2) Si hay link, responde con el link (y NO uses Google)
 if (wantsBooking && bookingLink) {
@@ -400,24 +497,55 @@ if (wantsBooking && !bookingLink && !googleConnected) {
 if (booking.step === "idle") {
   if (!wantsBooking) return { handled: false };
 
+  const purpose = detectPurpose(userText);
+
+  // ✅ solo si NO detecta propósito -> pregunta
+  if (!purpose) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "Sure — what would you like to schedule? (appointment, class, consultation, call)"
+        : "Perfecto — ¿qué quieres agendar? (cita, clase, consulta o llamada)",
+      ctxPatch: { booking: { step: "ask_purpose", timeZone } },
+    };
+  }
+
+  // ✅ ya hay propósito -> pide todos los datos en 1 mensaje
   return {
     handled: true,
-    reply: idioma === "en"
-      ? "Perfect. To book, send in ONE message: First & last name + Email + Date & time (YYYY-MM-DD HH:mm). Example: John Smith, john@email.com, 2026-01-21 14:00"
-      : "Perfecto. Para agendar, envíame en UN solo mensaje: Nombre y apellido + Email + Fecha y hora (YYYY-MM-DD HH:mm). Ej: Juan Pérez, juan@email.com, 2026-01-21 14:00",
-    ctxPatch: {
-      booking: { step: "ask_all", timeZone },
-    },
+    reply: buildAskAllMessage(idioma, purpose),
+    ctxPatch: { booking: { step: "ask_all", timeZone, purpose } },
+  };
+}
+
+if (booking.step === "ask_purpose") {
+  if (wantsToChangeTopic(userText)) {
+    return { handled: false, ctxPatch: { booking: { step: "idle" } } };
+  }
+
+  const purpose = detectPurpose(userText);
+
+  // Si aún no lo detecta, no lo trances: dale opciones otra vez
+  if (!purpose) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "Got it. Is it a appointment, class, consultation, or a call?"
+        : "Entiendo. ¿Es una cita, clase, consulta o llamada?",
+      ctxPatch: { booking: { ...booking, step: "ask_purpose", timeZone } },
+    };
+  }
+
+  return {
+    handled: true,
+    reply: buildAskAllMessage(idioma, purpose),
+    ctxPatch: { booking: { step: "ask_all", timeZone, purpose } },
   };
 }
 
 if (booking.step === "ask_all") {
-  // Escape si cambió de tema -> salimos del flow
   if (wantsToChangeTopic(userText)) {
-    return {
-      handled: false,
-      ctxPatch: { booking: { step: "idle" } },
-    };
+    return { handled: false, ctxPatch: { booking: { step: "idle" } } };
   }
 
   const parsed = parseAllInOne(userText, timeZone);
@@ -659,7 +787,7 @@ if (booking.step === "ask_email") {
         VALUES ($1, $2, $3, NOW())
         ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
         RETURNING 1`,
-        [tenantId, "booking", lockId]
+        [tenantId, canal, lockId]
       );
 
       if (ins.rowCount === 0) {
