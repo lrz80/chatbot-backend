@@ -86,6 +86,19 @@ function cleanNameCandidate(raw: string): string {
     .trim();
 }
 
+function wantsToCancel(text: string) {
+  const t = normalizeText(text);
+  return /\b(cancelar|cancela|olvida|stop|salir|exit|no gracias|nah|nope|ya no|dejalo|dejalo asi|deja eso|after|later)\b/i.test(t);
+}
+
+function extractDateOnlyToken(input: string): string | null {
+  const m = String(input || "").match(/\b(\d{4}-\d{2}-\d{2})\b/);
+  // evita colisionar con date+time
+  const hasDateTime = /\b\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\b/.test(String(input || ""));
+  if (hasDateTime) return null;
+  return m?.[1] || null;
+}
+
 // ✅ Parser “todo en uno”: "Juan Perez, juan@email.com, 2026-01-21 14:00"
 function parseAllInOne(input: string, timeZone: string): {
   name: string | null;
@@ -548,7 +561,37 @@ if (booking.step === "ask_all") {
     return { handled: false, ctxPatch: { booking: { step: "idle" } } };
   }
 
+  if (wantsToCancel(userText)) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "No problem — I won’t schedule anything. If you want later, just tell me you want to book."
+        : "Perfecto, no agendo nada. Cuando quieras retomar, solo dime que quieres agendar.",
+      ctxPatch: { booking: { step: "idle" } },
+    };
+  }
+
   const parsed = parseAllInOne(userText, timeZone);
+
+  const dateOnly = extractDateOnlyToken(userText);
+  if (dateOnly && parsed.name && parsed.email && !parsed.startISO) {
+    return {
+        handled: true,
+        reply: idioma === "en"
+        ? `Got it. What time on ${dateOnly}? Use HH:mm (example: 14:00).`
+        : `Perfecto. ¿A qué hora el ${dateOnly}? Usa HH:mm (ej: 14:00).`,
+        ctxPatch: {
+        booking: {
+            step: "ask_datetime",
+            timeZone,
+            name: parsed.name,
+            email: parsed.email,
+            // guarda la fecha para combinar luego si quieres
+            date_only: dateOnly,
+        },
+      },
+    };
+  }
 
   // Si vino completo, vamos directo a confirm
   if (parsed.name && parsed.email && parsed.startISO && parsed.endISO) {
@@ -630,6 +673,16 @@ if (booking.step === "ask_name") {
     };
   }
 
+  if (wantsToCancel(userText)) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "No problem — I won’t schedule anything. If you want later, just tell me you want to book."
+        : "Perfecto, no agendo nada. Cuando quieras retomar, solo dime que quieres agendar.",
+      ctxPatch: { booking: { step: "idle" } },
+    };
+  }
+
   const name = parseFullName(userText);
   if (!name) {
     return {
@@ -669,6 +722,16 @@ if (booking.step === "ask_email") {
   if (wantsToChangeTopic(userText)) {
     return {
       handled: false,
+      ctxPatch: { booking: { step: "idle" } },
+    };
+  }
+
+  if (wantsToCancel(userText)) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "No problem — I won’t schedule anything. If you want later, just tell me you want to book."
+        : "Perfecto, no agendo nada. Cuando quieras retomar, solo dime que quieres agendar.",
       ctxPatch: { booking: { step: "idle" } },
     };
   }
@@ -718,7 +781,43 @@ if (booking.step === "ask_email") {
         };
     }
 
+    if (wantsToCancel(userText)) {
+      return {
+        handled: true,
+        reply: idioma === "en"
+            ? "No problem — I won’t schedule anything. If you want later, just tell me you want to book."
+            : "Perfecto, no agendo nada. Cuando quieras retomar, solo dime que quieres agendar.",
+        ctxPatch: { booking: { step: "idle" } },
+      };
+    }
+
     const parsed = parseDateTimeExplicit(userText, timeZone);
+
+    const b: any = booking;
+    const hhmm = String(userText || "").trim().match(/^(\d{2}:\d{2})$/);
+
+    if (b?.date_only && hhmm) {
+      const parsed = parseDateTimeExplicit(`${b.date_only} ${hhmm[1]}`, timeZone);
+      if (parsed) {
+        return {
+          handled: true,
+          reply: idioma === "en"
+            ? `Confirm booking for ${parsed.startISO}? Reply YES to confirm or NO to cancel.`
+            : `Confirmo: ${parsed.startISO}. Responde SI para confirmar o NO para cancelar.`,
+          ctxPatch: {
+            booking: {
+              ...booking,
+              step: "confirm",
+              start_time: parsed.startISO,
+              end_time: parsed.endISO,
+              timeZone,
+              date_only: null,
+            },
+          },
+        };
+      }
+    }
+
     if (!parsed) {
         return {
         handled: true,
