@@ -6,7 +6,7 @@ import { DateTime } from "luxon";
 
 type BookingCtx = {
   booking?: {
-    step?: "idle" | "ask_name" | "ask_email" | "ask_datetime" | "confirm";
+    step?: "idle" | "ask_all" | "ask_name" | "ask_email" | "ask_datetime" | "confirm";
     start_time?: string;
     end_time?: string;
     timeZone?: string;
@@ -16,6 +16,61 @@ type BookingCtx = {
 };
 
 const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+
+function extractDateTimeToken(input: string): string | null {
+  const m = String(input || "").match(/(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})/);
+  return m?.[1] || null;
+}
+
+function removeOnce(haystack: string, needle: string) {
+  const idx = haystack.toLowerCase().indexOf(needle.toLowerCase());
+  if (idx === -1) return haystack;
+  return (haystack.slice(0, idx) + " " + haystack.slice(idx + needle.length)).trim();
+}
+
+function cleanNameCandidate(raw: string): string {
+  return String(raw || "")
+    .replace(/[,\|;]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// ✅ Parser “todo en uno”: "Juan Perez, juan@email.com, 2026-01-21 14:00"
+function parseAllInOne(input: string, timeZone: string): {
+  name: string | null;
+  email: string | null;
+  startISO: string | null;
+  endISO: string | null;
+} {
+  const raw = String(input || "").trim();
+
+  // 1) Email
+  const email = raw.match(EMAIL_REGEX)?.[0]?.toLowerCase() || null;
+
+  // 2) Fecha token (YYYY-MM-DD HH:mm) en cualquier parte del mensaje
+  const dtToken = extractDateTimeToken(raw);
+  const dtParsed = dtToken ? parseDateTimeExplicit(dtToken, timeZone) : null;
+
+  const startISO = dtParsed?.startISO || null;
+  const endISO = dtParsed?.endISO || null;
+
+  // 3) Nombre: resto del texto sin email ni fecha
+  let nameCandidate = raw;
+  if (email) nameCandidate = removeOnce(nameCandidate, email);
+  if (dtToken) nameCandidate = removeOnce(nameCandidate, dtToken);
+
+  nameCandidate = cleanNameCandidate(nameCandidate);
+
+  // Quita palabras “de relleno” comunes (opcional pero útil)
+  nameCandidate = nameCandidate
+    .replace(/\b(mi nombre es|soy|me llamo|name is|i am)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const name = nameCandidate ? parseFullName(nameCandidate) : null;
+
+  return { name, email, startISO, endISO };
+}
 
 function parseEmail(input: string) {
   const raw = String(input || "").trim().toLowerCase();
@@ -348,10 +403,91 @@ if (booking.step === "idle") {
   return {
     handled: true,
     reply: idioma === "en"
-      ? "Sure. What is your first and last name?"
-      : "Perfecto. ¿Cuál es tu nombre y apellido?",
+      ? "Perfect. To book, send in ONE message: First & last name + Email + Date & time (YYYY-MM-DD HH:mm). Example: John Smith, john@email.com, 2026-01-21 14:00"
+      : "Perfecto. Para agendar, envíame en UN solo mensaje: Nombre y apellido + Email + Fecha y hora (YYYY-MM-DD HH:mm). Ej: Juan Pérez, juan@email.com, 2026-01-21 14:00",
     ctxPatch: {
-      booking: { step: "ask_name", timeZone },
+      booking: { step: "ask_all", timeZone },
+    },
+  };
+}
+
+if (booking.step === "ask_all") {
+  // Escape si cambió de tema -> salimos del flow
+  if (wantsToChangeTopic(userText)) {
+    return {
+      handled: false,
+      ctxPatch: { booking: { step: "idle" } },
+    };
+  }
+
+  const parsed = parseAllInOne(userText, timeZone);
+
+  // Si vino completo, vamos directo a confirm
+  if (parsed.name && parsed.email && parsed.startISO && parsed.endISO) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? `Confirm booking for ${parsed.startISO}? Reply YES to confirm or NO to cancel.`
+        : `Confirmo: ${parsed.startISO}. Responde SI para confirmar o NO para cancelar.`,
+      ctxPatch: {
+        booking: {
+          step: "confirm",
+          timeZone,
+          name: parsed.name,
+          email: parsed.email,       // ✅ obligatorio
+          start_time: parsed.startISO,
+          end_time: parsed.endISO,
+        },
+      },
+    };
+  }
+
+  // Si falta algo, hacemos fallback pidiendo SOLO lo faltante (en orden)
+  if (!parsed.name) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "I’m missing your first and last name (example: John Smith)."
+        : "Me falta tu nombre y apellido (ej: Juan Pérez).",
+      ctxPatch: {
+        booking: {
+          step: "ask_name",
+          timeZone,
+          email: parsed.email || (booking as any)?.email || null,
+        },
+      },
+    };
+  }
+
+  if (!parsed.email) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "I’m missing your email (example: name@email.com)."
+        : "Me falta tu email (ej: nombre@email.com).",
+      ctxPatch: {
+        booking: {
+          step: "ask_email",
+          timeZone,
+          name: parsed.name || (booking as any)?.name || null,
+        },
+      },
+    };
+  }
+
+  // Falta fecha/hora
+  return {
+    handled: true,
+    reply: idioma === "en"
+      ? "I’m missing the date/time. Please use: YYYY-MM-DD HH:mm (example: 2026-01-21 14:00)."
+      : "Me falta la fecha y hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-21 14:00).",
+    ctxPatch: {
+      booking: {
+        step: "ask_datetime",
+        timeZone,
+        name: parsed.name || (booking as any)?.name || null,
+        email: parsed.email || (booking as any)?.email || null, // ✅ si ya lo tenía
+      },
     },
   };
 }
