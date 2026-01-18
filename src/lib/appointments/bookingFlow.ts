@@ -213,6 +213,37 @@ export async function bookingFlowMvp(opts: {
   const booking = ctx.booking || { step: "idle" as const };
   const timeZone = booking.timeZone || "America/New_York";
 
+  // ✅ POST-BOOKING GUARD: si ya quedó agendado y el usuario manda "SI" otra vez,
+  // respondemos con el link existente (sin pasar por SM/LLM)
+  const t0 = String(userText || "").trim().toLowerCase();
+  const isYesNo = /^(si|sí|yes|y|no|n)$/i.test(t0);
+
+  if ((booking.step === "idle") && isYesNo) {
+    const lastApptId = (opts.ctx && typeof opts.ctx === "object")
+      ? (opts.ctx as any)?.last_appointment_id
+      : null;
+
+    if (lastApptId) {
+      const { rows } = await pool.query(
+        `SELECT google_event_link
+           FROM appointments
+          WHERE id = $1 AND tenant_id = $2
+          LIMIT 1`,
+        [lastApptId, tenantId]
+      );
+
+      const link = rows[0]?.google_event_link || "";
+
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? `Already booked. ${link}`.trim()
+          : `Ya quedó agendado. ${link}`.trim(),
+        ctxPatch: { booking: { step: "idle" } },
+      };
+    }
+  }
+
   const terms = await loadBookingTerms(tenantId);
   const wantsBooking = matchesBookingIntent(userText, terms);
 
