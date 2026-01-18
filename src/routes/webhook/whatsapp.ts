@@ -689,6 +689,20 @@ export async function procesarMensajeWhatsApp(
   const fromNumber = turn.fromNumber;
   const contactoNorm = turn.contactoNorm;
 
+  if (messageId) {
+    const r = await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
+      RETURNING 1`,
+      [tenant.id, canal, messageId]
+    );
+    if (r.rowCount === 0) {
+      console.log("⏩ inbound dedupe: ya procesado messageId", messageId);
+      return;
+    }
+  }
+
   if (isNumericOnly) {
     idiomaDestino = await getIdiomaClienteDB(tenant.id, canal, turn.contactoNorm, tenantBase);
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (solo número)`);
@@ -761,6 +775,9 @@ export async function procesarMensajeWhatsApp(
   let activeFlow = st.active_flow || "generic_sales";
   let activeStep = st.active_step || "start";
   let convoCtx = (st.context && typeof st.context === "object") ? st.context : {};
+
+  const bookingStep0 = (convoCtx as any)?.booking?.step;
+  const inBooking0 = bookingStep0 && bookingStep0 !== "idle";
 
   const awaiting = (convoCtx as any)?.awaiting || activeStep || null;
 
@@ -1078,13 +1095,10 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
   }
 
-  // ===============================
-  // 👋 GREETING GATE: si es saludo puro, responde con la bienvenida del tenant
-  // ===============================
-  if (saludoPuroRegex.test(userInput)) {
+  // 👋 GREETING GATE: SOLO si NO estamos en booking
+  if (!inBooking0 && (saludoPuroRegex.test(userInput) || detectedIntent === "saludo")) {
     const bienvenida = getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
 
-    // (Opcional) actualiza estado para que quede registrado que saludó
     transition({
       flow: activeFlow,
       step: "answer",
@@ -1131,6 +1145,9 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       });
     }
   } else {
+    const bookingStep = (convoCtx as any)?.booking?.step;
+    const inBooking = bookingStep && bookingStep !== "idle";
+
     const bk = await bookingFlowMvp({
       tenantId: tenant.id,
       canal: "whatsapp",
@@ -1139,20 +1156,19 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       userText: userInput,
       ctx: convoCtx,
       bookingLink,
-      messageId, // ✅ NUEVO
+      messageId,
     });
 
-    // 1) Siempre aplica patch si existe (pero NO respondas por eso)
-    if (bk?.ctxPatch) {
-      transition({ patchCtx: bk.ctxPatch });
-    }
+    if (bk?.ctxPatch) transition({ patchCtx: bk.ctxPatch });
 
-    // 2) Solo responde si realmente handled=true
+    // ✅ clave: si estabas en booking y el flow decide handled=false, igual NO dejes el ctx sucio
+    // (ya lo limpiaste vía ctxPatch en wantsToChangeTopic, perfecto)
+
     if (bk?.handled) {
       return await replyAndExit(
         bk.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
         "booking_flow",
-        detectedIntent
+        "agendar_cita"
       );
     }
   }
