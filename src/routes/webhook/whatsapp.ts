@@ -1139,6 +1139,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       userText: userInput,
       ctx: convoCtx,
       bookingLink,
+      messageId, // ✅ NUEVO
     });
 
     // 1) Siempre aplica patch si existe (pero NO respondas por eso)

@@ -1,8 +1,7 @@
 // src/lib/appointments/bookingFlow.ts
 import pool from "../db";
 import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
-import { canUseChannel } from "../../lib/features";
-
+import { canUseChannel } from "../features";
 
 type BookingCtx = {
   booking?: {
@@ -121,7 +120,7 @@ async function insertAppointment(opts: {
       tenant_id, service_id, channel, customer_name, customer_phone, customer_email,
       start_time, end_time, status, google_event_id, google_event_link
     )
-    VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, 'pending', $8, $9)
+    VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, 'confirmed', $8, $9)
     RETURNING id
     `,
     [
@@ -163,8 +162,8 @@ async function bookInGoogle(opts: {
     timeMin: startISO,
     timeMax: endISO,
     busyCount: busy.length,
-    busy,
   });
+
   if (busy.length > 0) {
     return { ok: false as const, error: "SLOT_BUSY" as const, busy };
   }
@@ -200,12 +199,15 @@ export async function bookingFlowMvp(opts: {
   userText: string;
   ctx: any; // convoCtx (object)
   bookingLink?: string | null; // ✅ viene del prompt
+  messageId?: string | null; // ✅ NUEVO
 }): Promise<{
   handled: boolean;
   reply?: string;
   ctxPatch?: any;
 }> {
   const { tenantId, canal, contacto, idioma, userText } = opts;
+
+  const messageId = opts.messageId ? String(opts.messageId) : null;
 
   const ctx = (opts.ctx && typeof opts.ctx === "object") ? (opts.ctx as BookingCtx) : {};
   const booking = ctx.booking || { step: "idle" as const };
@@ -340,6 +342,43 @@ if (wantsBooking && !bookingLink && !googleConnected) {
     const customer_name = "Cliente"; // MVP: luego lo sacamos de clientes o lo pedimos
     const startISO = booking.start_time!;
     const endISO = booking.end_time!;
+
+    // ✅ DEDUPE: si Twilio reintenta el mismo inbound o el usuario manda "SI" repetido
+    // Usamos interactions como lock atómico (ya tienes UNIQUE tenant_id+canal+message_id).
+    if (yes && messageId) {
+      const lockId = `booking:${messageId}`;
+      const ins = await pool.query(
+        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+        VALUES ($1, 'whatsapp', $2, NOW())
+        ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
+        RETURNING 1`,
+        [tenantId, "whatsapp", lockId]
+      );
+
+      if (ins.rowCount === 0) {
+        // Ya se procesó este "SI" antes → devuelve el link si existe en DB
+        const startISO = booking.start_time!;
+        const { rows } = await pool.query(
+        `SELECT google_event_link
+            FROM appointments
+            WHERE tenant_id=$1
+            AND customer_phone=$2
+            AND start_time=$3
+            ORDER BY created_at DESC
+            LIMIT 1`,
+        [tenantId, contacto, startISO]
+        );
+
+        const link = rows[0]?.google_event_link || "";
+        return {
+        handled: true,
+        reply: idioma === "en"
+            ? `Already booked. ${link}`.trim()
+            : `Ya quedó agendado. ${link}`.trim(),
+        ctxPatch: { booking: { step: "idle" } },
+        };
+      }
+    }
 
     if (!googleConnected) {
       return {
