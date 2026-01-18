@@ -349,10 +349,10 @@ if (wantsBooking && !bookingLink && !googleConnected) {
       const lockId = `booking:${messageId}`;
       const ins = await pool.query(
         `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-        VALUES ($1, 'whatsapp', $2, NOW())
+        VALUES ($1, $2, $3, NOW())
         ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
         RETURNING 1`,
-        [tenantId, "whatsapp", lockId]
+        [tenantId, canal, lockId]
       );
 
       if (ins.rowCount === 0) {
