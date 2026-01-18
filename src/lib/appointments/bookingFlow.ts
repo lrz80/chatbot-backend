@@ -43,7 +43,7 @@ async function loadBookingTerms(tenantId: string): Promise<string[]> {
     if (terms && terms.length) return terms.map((t: any) => String(t).toLowerCase().trim()).filter(Boolean);
   } catch {}
   // defaults genéricos multi-nicho
-  return ["cita","consulta","reservar","reserva","turno","agendar","appointment","book","booking","schedule"];
+  return ["cita","consulta","reservar","reserva","turno","agendar","appointment","book","booking","schedule", "agedar", "agendar cita", "agendarme", "agenda", "agend","bok", "scheduel"];
 }
 
 function wantsToChangeTopic(text: string) {
