@@ -610,8 +610,8 @@ if (booking.step === "ask_all") {
     return {
       handled: true,
       reply: idioma === "en"
-        ? `Confirm booking for ${parsed.startISO}? Reply YES to confirm or NO to cancel.`
-        : `Confirmo: ${parsed.startISO}. Responde SI para confirmar o NO para cancelar.`,
+        ? `To confirm booking for ${parsed.startISO}? Reply YES to confirm or NO to cancel.`
+        : `Para confirmar: ${parsed.startISO}. Responde SI para confirmar o NO para cancelar.`,
       ctxPatch: {
         booking: {
           step: "confirm",
