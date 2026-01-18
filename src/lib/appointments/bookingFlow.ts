@@ -13,6 +13,7 @@ type BookingCtx = {
     name?: string;
     email?: string;
     purpose?: string;
+    date_only?: string | null;
   };
 };
 
@@ -240,6 +241,25 @@ function parseDateTimeExplicit(input: string, timeZone: string) {
   const endISO = dt.plus({ minutes: 30 }).toISO();
 
   return { startISO, endISO, timeZone };
+}
+
+function formatSlotHuman(opts: {
+  startISO: string;
+  timeZone: string;
+  idioma: "es" | "en";
+}) {
+  const { startISO, timeZone, idioma } = opts;
+
+  const dt = DateTime.fromISO(startISO, { zone: timeZone });
+  if (!dt.isValid) return startISO;
+
+  if (idioma === "en") {
+    // Example: Mar 20, 2026 at 4:00 PM
+    return dt.setLocale("en").toFormat("LLL d, yyyy 'at' h:mm a");
+  }
+
+  // Example: 20 Mar 2026, 4:00 PM  (si prefieres 16:00, te lo ajusto)
+  return dt.setLocale("es").toFormat("d LLL yyyy, h:mm a");
 }
 
 function parseFullName(input: string) {
@@ -607,11 +627,12 @@ if (booking.step === "ask_all") {
 
   // Si vino completo, vamos directo a confirm
   if (parsed.name && parsed.email && parsed.startISO && parsed.endISO) {
+    const whenTxt = formatSlotHuman({ startISO: parsed.startISO, timeZone, idioma });
     return {
       handled: true,
       reply: idioma === "en"
-        ? `To confirm booking for ${parsed.startISO}? Reply YES to confirm or NO to cancel.`
-        : `Para confirmar: ${parsed.startISO}. Responde SI para confirmar o NO para cancelar.`,
+        ? `To confirm booking for ${whenTxt}? Reply YES to confirm or NO to cancel.`
+        : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
       ctxPatch: {
         booking: {
           step: "confirm",
@@ -809,25 +830,36 @@ if (booking.step === "ask_email") {
     const hhmm = String(userText || "").trim().match(/^(\d{2}:\d{2})$/);
 
     if (b?.date_only && hhmm) {
-      const parsed = parseDateTimeExplicit(`${b.date_only} ${hhmm[1]}`, timeZone);
-      if (parsed) {
+      const parsed2 = parseDateTimeExplicit(`${b.date_only} ${hhmm[1]}`, timeZone);
+
+      if (!parsed2) {
         return {
           handled: true,
           reply: idioma === "en"
-            ? `Confirm booking for ${parsed.startISO}? Reply YES to confirm or NO to cancel.`
-            : `Confirmo: ${parsed.startISO}. Responde SI para confirmar o NO para cancelar.`,
-          ctxPatch: {
-            booking: {
-              ...booking,
-              step: "confirm",
-              start_time: parsed.startISO,
-              end_time: parsed.endISO,
-              timeZone,
-              date_only: null,
-            },
-          },
+            ? `I couldn’t read that time. Please use HH:mm (example: 14:00).`
+            : `No pude leer esa hora. Usa HH:mm (ej: 14:00).`,
+          ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
         };
       }
+
+      const whenTxt = formatSlotHuman({ startISO: parsed2.startISO, timeZone, idioma });
+
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? `To confirm booking for ${whenTxt}? Reply YES to confirm or NO to cancel.`
+          : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
+        ctxPatch: {
+          booking: {
+            ...booking,
+            step: "confirm",
+            start_time: parsed2.startISO,
+            end_time: parsed2.endISO,
+            timeZone,
+            date_only: null,
+          },
+        },
+      };
     }
 
     if (!parsed) {
@@ -840,12 +872,13 @@ if (booking.step === "ask_email") {
         };
     }
 
+    const whenTxt = formatSlotHuman({ startISO: parsed.startISO, timeZone, idioma });
     return {
-        handled: true,
-        reply: idioma === "en"
-        ? `Confirm booking for ${parsed.startISO}? Reply YES to confirm or NO to cancel.`
-        : `Confirmo: ${parsed.startISO}. Responde SI para confirmar o NO para cancelar.`,
-        ctxPatch: {
+      handled: true,
+      reply: idioma === "en"
+        ? `To confirm booking for ${whenTxt}? Reply YES to confirm or NO to cancel.`
+        : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
+      ctxPatch: {
           booking: {
             ...booking,            // ✅ preserva name/email
             step: "confirm",
@@ -853,7 +886,7 @@ if (booking.step === "ask_email") {
             end_time: parsed.endISO,
             timeZone,
           },
-        },
+      },
     };
   }
 
@@ -979,12 +1012,15 @@ if (booking.step === "ask_email") {
     return {
       handled: true,
       reply: idioma === "en"
-        ? `Booked. Event created. ${g.htmlLink || ""}`.trim()
-        : `Listo, quedó agendado. Aquí está el enlace: ${g.htmlLink || ""}`.trim(),
+        ? `You're all set — your appointment is confirmed. ${g.htmlLink || ""}`.trim()
+        : `Perfecto, tu cita quedó confirmada. ${g.htmlLink || ""}`.trim(),
       ctxPatch: {
         booking: { step: "idle" },
         last_appointment_id: apptId,
-        booking_completed: true,   // 👈 FLAG FINAL
+        booking_completed: true,
+        booking_completed_at: new Date().toISOString(),
+        booking_last_done_at: Date.now(),
+        booking_last_event_link: g.htmlLink || null,
       },
     };
   }

@@ -1095,6 +1095,43 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
   }
 
+  // ===============================
+  // ✅ POST-BOOKING COURTESY GUARD
+  // Evita que después de agendar, un "gracias" dispare el saludo inicial.
+  // ===============================
+  {
+    const lastDoneAt = (convoCtx as any)?.booking_last_done_at;
+    const completedAtISO = (convoCtx as any)?.booking_completed_at;
+
+    // soporta epoch (number) o ISO
+    const lastMs =
+      typeof lastDoneAt === "number"
+        ? lastDoneAt
+        : (typeof completedAtISO === "string" ? Date.parse(completedAtISO) : null);
+
+    if (lastMs && Number.isFinite(lastMs)) {
+      const seconds = (Date.now() - lastMs) / 1000;
+
+      // ventana: 10 minutos (ajústala)
+      if (seconds >= 0 && seconds < 10 * 60) {
+        const t = (userInput || "").toString().trim().toLowerCase();
+
+        const courtesy =
+          /^(gracias|muchas gracias|thank you|thanks|ok|okay|perfecto|listo|vale|dale|bien|genial|super|cool)$/i.test(t);
+
+        // Si solo fue cortesía, no saludes, no reinicies, responde breve y humano.
+        if (courtesy) {
+          const replyText =
+            idiomaDestino === "en"
+              ? "You’re welcome."
+              : "A la orden.";
+
+          return await replyAndExit(replyText, "post_booking_courtesy", "cortesia");
+        }
+      }
+    }
+  }
+
   // 👋 GREETING GATE: SOLO si NO estamos en booking
   if (!inBooking0 && (saludoPuroRegex.test(userInput) || detectedIntent === "saludo")) {
     const bienvenida = getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
