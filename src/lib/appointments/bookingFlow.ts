@@ -51,9 +51,21 @@ function hasAppointmentContext(text: string) {
 function buildAskAllMessage(idioma: "es" | "en", purpose?: string | null) {
   const p = purpose ? ` (${purpose})` : "";
 
-  return idioma === "en"
-    ? `To schedule${p}, send in ONE message:\nFull name, Email, Date & time (YYYY-MM-DD HH:mm).\nExample: John Smith, john@email.com, 2026-01-21 14:00`
-    : `Para agendar${p}, envía en UN solo mensaje:\nNombre y apellido, Email, Fecha y hora (YYYY-MM-DD HH:mm).\nEj: Juan Pérez, juan@email.com, 2026-01-21 14:00`;
+  if (idioma === "en") {
+    return (
+      `Sure${p}! I can help you with that.\n` +
+      `Please send me everything together in ONE message:\n` +
+      `Your full name, email, and the date & time you’d like.\n` +
+      `Example: John Smith, john@email.com, 2026-01-21 14:00`
+    );
+  }
+
+  return (
+    `¡Claro${p}! Te ayudo con eso.\n` +
+    `Solo envíame todo junto en **un solo mensaje**:\n` +
+    `Tu nombre completo, email y la fecha y hora que te gustaría.\n` +
+    `Ejemplo: Juan Pérez, juan@email.com, 2026-01-21 14:00`
+  );
 }
 
 function detectPurpose(text: string): string | null {
@@ -476,8 +488,8 @@ export async function bookingFlowMvp(opts: {
       return {
         handled: true,
         reply: idioma === "en"
-            ? "Scheduling is currently disabled for this business."
-            : "El agendamiento está desactivado en este momento para este negocio.",
+            ? "Scheduling is unavailable right now."
+            : "El agendamiento no está disponible en este momento.",
         ctxPatch: { booking: { step: "idle" } },
       };
     }
@@ -500,8 +512,8 @@ if (wantsBooking && !bookingLink && !googleConnected) {
   return {
     handled: true,
     reply: idioma === "en"
-      ? "Scheduling isn’t available for this business right now."
-      : "El agendamiento no está disponible en este momento para este negocio.",
+      ? "Scheduling is unavailable right now."
+      : "El agendamiento no está disponible en este momento.",
     ctxPatch: { booking: { step: "idle" } },
   };
 }
@@ -565,8 +577,8 @@ if (booking.step === "ask_all") {
     return {
       handled: true,
       reply: idioma === "en"
-        ? "No problem — I won’t schedule anything. If you want later, just tell me you want to book."
-        : "Perfecto, no agendo nada. Cuando quieras retomar, solo dime que quieres agendar.",
+        ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
+        : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
       ctxPatch: { booking: { step: "idle" } },
     };
   }
@@ -677,8 +689,8 @@ if (booking.step === "ask_name") {
     return {
       handled: true,
       reply: idioma === "en"
-        ? "No problem — I won’t schedule anything. If you want later, just tell me you want to book."
-        : "Perfecto, no agendo nada. Cuando quieras retomar, solo dime que quieres agendar.",
+        ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
+        : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
       ctxPatch: { booking: { step: "idle" } },
     };
   }
@@ -730,8 +742,8 @@ if (booking.step === "ask_email") {
     return {
       handled: true,
       reply: idioma === "en"
-        ? "No problem — I won’t schedule anything. If you want later, just tell me you want to book."
-        : "Perfecto, no agendo nada. Cuando quieras retomar, solo dime que quieres agendar.",
+        ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
+        : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
       ctxPatch: { booking: { step: "idle" } },
     };
   }
@@ -785,8 +797,8 @@ if (booking.step === "ask_email") {
       return {
         handled: true,
         reply: idioma === "en"
-            ? "No problem — I won’t schedule anything. If you want later, just tell me you want to book."
-            : "Perfecto, no agendo nada. Cuando quieras retomar, solo dime que quieres agendar.",
+          ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
+          : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
         ctxPatch: { booking: { step: "idle" } },
       };
     }
@@ -871,6 +883,16 @@ if (booking.step === "ask_email") {
       };
     }
 
+    if (wantsToCancel(userText)) {
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
+          : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
+        ctxPatch: { booking: { step: "idle" } },
+      };
+    }
+
     // YES -> agenda en Google + guarda en DB
     const customer_name = booking.name || "Cliente";
     const customer_email = booking.email; // ya no debería ser null
@@ -936,8 +958,8 @@ if (booking.step === "ask_email") {
       return {
         handled: true,
         reply: idioma === "en"
-          ? "That slot is not available. Send another date/time (YYYY-MM-DD HH:mm)."
-          : "Ese horario no está disponible. Envíame otra fecha/hora (YYYY-MM-DD HH:mm).",
+          ? "That time doesn’t seem to be available. Could you send me another date and time? (YYYY-MM-DD HH:mm)"
+          : "Ese horario ya no está disponible. ¿Me compartes otra fecha y hora? (YYYY-MM-DD HH:mm)",
         ctxPatch: { booking: { step: "ask_datetime", timeZone } },
       };
     }
