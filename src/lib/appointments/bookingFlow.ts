@@ -2,6 +2,7 @@
 import pool from "../db";
 import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
 import { canUseChannel } from "../features";
+import { DateTime } from "luxon";
 
 type BookingCtx = {
   booking?: {
@@ -74,20 +75,15 @@ function parseDateTimeExplicit(input: string, timeZone: string) {
   const m = String(input || "").trim().match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})$/);
   if (!m) return null;
 
-  const date = m[1];
-  const hhmm = m[2];
+  const [_, date, hhmm] = m;
 
-  // Construimos ISO local con offset fijo -05:00 (MVP).
-  // Luego lo perfeccionamos con TZ real si quieres.
-  const startISO = `${date}T${hhmm}:00-05:00`;
+  // Construye en TZ real
+  const dt = DateTime.fromFormat(`${date} ${hhmm}`, "yyyy-MM-dd HH:mm", { zone: timeZone });
+  if (!dt.isValid) return null;
 
-  // 30 min default
-  const start = new Date(startISO);
-  if (Number.isNaN(start.getTime())) return null;
-  const end = new Date(start.getTime() + 30 * 60 * 1000);
+  const startISO = dt.toISO(); // incluye offset correcto -05 o -04
+  const endISO = dt.plus({ minutes: 30 }).toISO();
 
-  const endISO = end.toISOString(); // ojo: esto queda en Z, pero Google acepta ISO.
-  // Para mantener simetría, devolvemos startISO como quedó.
   return { startISO, endISO, timeZone };
 }
 
