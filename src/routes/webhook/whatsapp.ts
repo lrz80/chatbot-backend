@@ -888,16 +888,27 @@ export async function procesarMensajeWhatsApp(
           messageId,
         });
       }
-      // ✅ FOLLOW-UP (programar 1 pendiente si aplica)
+      const bookingStep = (convoCtx as any)?.booking?.step;
+      const inBooking = bookingStep && bookingStep !== "idle";
+
+      // opcional: si confirmaste booking este turno
+      const bookingJustCompleted = !!(convoCtx as any)?.booking_completed;
+
+      const skipFollowUp =
+        inBooking ||
+        bookingJustCompleted ||
+        finalIntent === "agendar_cita";
+
       try {
         await scheduleFollowUpIfEligible({
           tenant,
-          canal,                 // "whatsapp"
+          canal,
           contactoNorm,
           idiomaDestino,
           intFinal: finalIntent || null,
           nivel: finalNivel,
           userText: userInput,
+          skip: skipFollowUp, // ✅ AQUÍ
         });
       } catch (e: any) {
         console.warn("⚠️ scheduleFollowUpIfEligible failed:", e?.message);
