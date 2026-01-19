@@ -78,9 +78,15 @@ function detectPurpose(text: string): string | null {
   // ✅ NUEVO: appointment
   if (/\b(appointment|appt)\b/.test(t)) return "cita";
 
+  // ✅ cita / appointment (ESTO RESUELVE TU BUG)
+  if (/\b(cita|appointment|appt)\b/.test(t)) return "cita";
+
   if (/\b(consulta|consultation|asesoria|asesoría)\b/.test(t)) return "consulta";
   if (/\b(llamada|call|phone)\b/.test(t)) return "llamada";
   if (/\b(visita|visit|presencial|in person)\b/.test(t)) return "visita";
+
+  // (opcional) si dicen "reservar/reserva/turno" sin más, trátalo como cita
+  if (/\b(reservar|reserva|turno|agendar|agenda)\b/.test(t)) return "cita";
 
   return null;
 }
