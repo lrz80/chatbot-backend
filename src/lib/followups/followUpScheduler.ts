@@ -116,7 +116,13 @@ async function insertScheduledMessage(opts: {
      )
      VALUES (
         $1, $2, $3, $4, NOW() + ($5 || ' minutes')::interval, FALSE, NULL
-     )`,
+     )
+     ON CONFLICT (tenant_id, canal, contacto)
+     DO UPDATE SET
+       contenido = EXCLUDED.contenido,
+       fecha_envio = EXCLUDED.fecha_envio,
+       enviado = FALSE,
+       sent_at = NULL`,
     [tenantId, canal, contacto, contenido, String(delayMinutes)]
   );
 }
@@ -136,6 +142,7 @@ export async function scheduleFollowUpIfEligible(opts: {
   intFinal: string | null;      // ya NO decide plantilla (solo debug/analytics)
   nivel: number | null;         // ✅ esto decide el mensaje
   userText: string;
+  skip?: boolean;        // si es true, no programa nada
 }): Promise<void> {
   const { tenant, canal, contactoNorm, nivel } = opts;
 
