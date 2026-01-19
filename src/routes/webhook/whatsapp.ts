@@ -658,6 +658,8 @@ export async function procesarMensajeWhatsApp(
   let detectedIntent: string | null = null;
   let detectedInterest: number | null = null;
 
+  let replied = false;
+
   // ✅ Decision metadata (backend NO habla, solo decide)
   let nextAction: {
     type: string;
@@ -816,146 +818,6 @@ export async function procesarMensajeWhatsApp(
     console.warn("⚠️ No se pudo leer google_calendar_enabled:", e?.message);
   }
 
-  // ===============================
-  // 📅 BOOKING GATE (Google Calendar) - ANTES del SM/LLM
-  // ===============================
-  const bookingLink = extractBookingLinkFromPrompt(promptBase);
-
-  // ✅ Si el toggle está OFF, nunca ejecutes bookingFlowMvp (y limpia estados viejos)
-  if (!bookingEnabled) {
-    if ((convoCtx as any)?.booking) {
-      transition({ patchCtx: { booking: null } }); // limpia en memoria del turno
-      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-        activeFlow,
-        activeStep,
-        context: { booking: null },
-      });
-    }
-  } else {
-    const bookingStep = (convoCtx as any)?.booking?.step;
-    const inBooking = bookingStep && bookingStep !== "idle";
-
-    const bk = await bookingFlowMvp({
-      tenantId: tenant.id,
-      canal: "whatsapp",
-      contacto: contactoNorm,
-      idioma: idiomaDestino,
-      userText: userInput,
-      ctx: convoCtx,
-      bookingLink,
-      messageId,
-    });
-
-    if (bk?.ctxPatch) transition({ patchCtx: bk.ctxPatch });
-
-    // ✅ clave: si estabas en booking y el flow decide handled=false, igual NO dejes el ctx sucio
-    // (ya lo limpiaste vía ctxPatch en wantsToChangeTopic, perfecto)
-
-    if (bk?.handled) {
-      return await replyAndExit(
-        bk.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
-        "booking_flow",
-        "agendar_cita"
-      );
-    }
-  }
-
-  const bookingStep0 = (convoCtx as any)?.booking?.step;
-  const inBooking0 = bookingStep0 && bookingStep0 !== "idle";
-
-  const awaiting = (convoCtx as any)?.awaiting || activeStep || null;
-
-  console.log("🧠 convo_state (start) =", {
-    activeFlow,
-    activeStep,
-    convoCtx,
-  });
-
-  // ===============================
-  // 🔁 Helpers de decisión (BACKEND SOLO DECIDE)
-  // ===============================
-  function transition(params: {
-    flow?: string;
-    step?: string;
-    patchCtx?: any;
-  }) {
-    if (params.flow !== undefined) activeFlow = params.flow;
-    if (params.step !== undefined) activeStep = params.step;
-    if (params.patchCtx && typeof params.patchCtx === "object") {
-      convoCtx = { ...(convoCtx || {}), ...params.patchCtx };
-    }
-  }
-
-  async function replyAndExit(text: string, source: string, intent?: string | null) {
-    setReply(text, source, intent);
-    await finalizeReply();
-    return;
-  }
-
-  // ===============================
-  // 🔎 DEBUG: estado de flujo (clientes)
-  // ===============================
-  try {
-    const { rows } = await pool.query(
-      `SELECT estado, human_override, info_explicada, selected_channel
-      FROM clientes
-      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
-      LIMIT 1`,
-      [tenant.id, canal, contactoNorm]
-    );
-
-    console.log("🧩 CLIENTE STATE (pre-flow) =", {
-      tenantId: tenant.id,
-      canal,
-      contacto: contactoNorm,
-      estado: rows[0]?.estado ?? null,
-      human_override: rows[0]?.human_override ?? null,
-      info_explicada: rows[0]?.info_explicada ?? null,
-      selected_channel: rows[0]?.selected_channel ?? null,
-    });
-  } catch (e: any) {
-    console.warn("⚠️ No se pudo leer state de clientes:", e?.message);
-  }
-
-  // ===============================
-  // 🔎 Estado persistido (FIX 4)
-  // ===============================
-  const selectedChannel = await getSelectedChannelDB(
-    tenant.id,
-    canal,
-    contactoNorm
-  );
-
-  if (selectedChannel) {
-    decisionFlags.channelSelected = true;
-  }
-
-  // 🔍 MEMORIA – inicio del turno (antes de cualquier lógica)
-  const memStart = await getMemoryValue<string>({
-    tenantId: tenant.id,
-    canal: "whatsapp",
-    senderId: contactoNorm,
-    key: "facts_summary",
-  });
-
-console.log("🧠 facts_summary (start of turn) =", memStart);
-
-  const { mode, status } = await getWhatsAppModeStatus(tenant.id);
-
-  const guard = await whatsappModeMembershipGuard({
-    tenant,
-    tenantId: tenant.id,
-    canal,
-    origen,
-    mode,
-    status,
-    // requireMembershipActive: true, // (default)
-  });
-
-  if (!guard.ok) return;
-
-  let replied = false;
-
   function setReply(text: string, source: string, intent?: string | null) {
     replied = true;
     handled = true;
@@ -1044,6 +906,144 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       console.warn("⚠️ recordSalesIntent(final) failed:", e?.message);
     }
   }
+
+  async function replyAndExit(text: string, source: string, intent?: string | null) {
+    setReply(text, source, intent);
+    await finalizeReply();
+    return;
+  }
+
+  // ===============================
+  // 📅 BOOKING GATE (Google Calendar) - ANTES del SM/LLM
+  // ===============================
+  const bookingLink = extractBookingLinkFromPrompt(promptBase);
+
+  // ✅ Si el toggle está OFF, nunca ejecutes bookingFlowMvp (y limpia estados viejos)
+  if (!bookingEnabled) {
+    if ((convoCtx as any)?.booking) {
+      transition({ patchCtx: { booking: null } }); // limpia en memoria del turno
+      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+        activeFlow,
+        activeStep,
+        context: { booking: null },
+      });
+    }
+  } else {
+    const bookingStep = (convoCtx as any)?.booking?.step;
+    const inBooking = bookingStep && bookingStep !== "idle";
+
+    const bk = await bookingFlowMvp({
+      tenantId: tenant.id,
+      canal: "whatsapp",
+      contacto: contactoNorm,
+      idioma: idiomaDestino,
+      userText: userInput,
+      ctx: convoCtx,
+      bookingLink,
+      messageId,
+    });
+
+    if (bk?.ctxPatch) transition({ patchCtx: bk.ctxPatch });
+
+    // ✅ clave: si estabas en booking y el flow decide handled=false, igual NO dejes el ctx sucio
+    // (ya lo limpiaste vía ctxPatch en wantsToChangeTopic, perfecto)
+
+    if (bk?.handled) {
+      return await replyAndExit(
+        bk.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
+        "booking_flow",
+        "agendar_cita"
+      );
+    }
+  }
+
+  const bookingStep0 = (convoCtx as any)?.booking?.step;
+  const inBooking0 = bookingStep0 && bookingStep0 !== "idle";
+
+  const awaiting = (convoCtx as any)?.awaiting || activeStep || null;
+
+  console.log("🧠 convo_state (start) =", {
+    activeFlow,
+    activeStep,
+    convoCtx,
+  });
+
+  // ===============================
+  // 🔁 Helpers de decisión (BACKEND SOLO DECIDE)
+  // ===============================
+  function transition(params: {
+    flow?: string;
+    step?: string;
+    patchCtx?: any;
+  }) {
+    if (params.flow !== undefined) activeFlow = params.flow;
+    if (params.step !== undefined) activeStep = params.step;
+    if (params.patchCtx && typeof params.patchCtx === "object") {
+      convoCtx = { ...(convoCtx || {}), ...params.patchCtx };
+    }
+  }
+
+  // ===============================
+  // 🔎 DEBUG: estado de flujo (clientes)
+  // ===============================
+  try {
+    const { rows } = await pool.query(
+      `SELECT estado, human_override, info_explicada, selected_channel
+      FROM clientes
+      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+      LIMIT 1`,
+      [tenant.id, canal, contactoNorm]
+    );
+
+    console.log("🧩 CLIENTE STATE (pre-flow) =", {
+      tenantId: tenant.id,
+      canal,
+      contacto: contactoNorm,
+      estado: rows[0]?.estado ?? null,
+      human_override: rows[0]?.human_override ?? null,
+      info_explicada: rows[0]?.info_explicada ?? null,
+      selected_channel: rows[0]?.selected_channel ?? null,
+    });
+  } catch (e: any) {
+    console.warn("⚠️ No se pudo leer state de clientes:", e?.message);
+  }
+
+  // ===============================
+  // 🔎 Estado persistido (FIX 4)
+  // ===============================
+  const selectedChannel = await getSelectedChannelDB(
+    tenant.id,
+    canal,
+    contactoNorm
+  );
+
+  if (selectedChannel) {
+    decisionFlags.channelSelected = true;
+  }
+
+  // 🔍 MEMORIA – inicio del turno (antes de cualquier lógica)
+  const memStart = await getMemoryValue<string>({
+    tenantId: tenant.id,
+    canal: "whatsapp",
+    senderId: contactoNorm,
+    key: "facts_summary",
+  });
+
+console.log("🧠 facts_summary (start of turn) =", memStart);
+
+  const { mode, status } = await getWhatsAppModeStatus(tenant.id);
+
+  const guard = await whatsappModeMembershipGuard({
+    tenant,
+    tenantId: tenant.id,
+    canal,
+    origen,
+    mode,
+    status,
+    // requireMembershipActive: true, // (default)
+  });
+
+  if (!guard.ok) return;
 
   // ===============================
   // 🎯 Intent detection (evento)
