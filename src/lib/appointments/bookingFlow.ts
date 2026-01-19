@@ -49,6 +49,23 @@ function hasAppointmentContext(text: string) {
   return agendLike.test(t) || bookLike.test(t);
 }
 
+async function getAppointmentSettings(tenantId: string) {
+  const { rows } = await pool.query(
+    `SELECT default_duration_min, buffer_min, timezone, enabled
+       FROM appointment_settings
+      WHERE tenant_id = $1
+      LIMIT 1`,
+    [tenantId]
+  );
+
+  return {
+    default_duration_min: rows[0]?.default_duration_min ?? 30,
+    buffer_min: rows[0]?.buffer_min ?? 10,
+    timezone: rows[0]?.timezone ?? "America/New_York",
+    enabled: rows[0]?.enabled ?? true,
+  };
+}
+
 function buildAskAllMessage(idioma: "es" | "en", purpose?: string | null) {
   const p = purpose ? ` (${purpose})` : "";
 
@@ -74,9 +91,6 @@ function detectPurpose(text: string): string | null {
 
   if (/\b(demo|demostracion|demostración|demonstration)\b/.test(t)) return "demo";
   if (/\b(clase|class|trial)\b/.test(t)) return "clase";
-
-  // ✅ NUEVO: appointment
-  if (/\b(appointment|appt)\b/.test(t)) return "cita";
 
   // ✅ cita / appointment (ESTO RESUELVE TU BUG)
   if (/\b(cita|appointment|appt)\b/.test(t)) return "cita";
@@ -123,7 +137,7 @@ function extractDateOnlyToken(input: string): string | null {
 }
 
 // ✅ Parser “todo en uno”: "Juan Perez, juan@email.com, 2026-01-21 14:00"
-function parseAllInOne(input: string, timeZone: string): {
+function parseAllInOne(input: string, timeZone: string, durationMin: number): {
   name: string | null;
   email: string | null;
   startISO: string | null;
@@ -136,7 +150,7 @@ function parseAllInOne(input: string, timeZone: string): {
 
   // 2) Fecha token (YYYY-MM-DD HH:mm) en cualquier parte del mensaje
   const dtToken = extractDateTimeToken(raw);
-  const dtParsed = dtToken ? parseDateTimeExplicit(dtToken, timeZone) : null;
+  const dtParsed = dtToken ? parseDateTimeExplicit(dtToken, timeZone, durationMin) : null;
 
   const startISO = dtParsed?.startISO || null;
   const endISO = dtParsed?.endISO || null;
@@ -237,18 +251,17 @@ function matchesBookingIntent(text: string, terms: string[]) {
  *   YYYY-MM-DD HH:mm (hora local del negocio)
  * Ej: 2026-01-17 15:00
  */
-function parseDateTimeExplicit(input: string, timeZone: string) {
+function parseDateTimeExplicit(input: string, timeZone: string, durationMin: number) {
   const m = String(input || "").trim().match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})$/);
   if (!m) return null;
 
   const [_, date, hhmm] = m;
 
-  // Construye en TZ real
   const dt = DateTime.fromFormat(`${date} ${hhmm}`, "yyyy-MM-dd HH:mm", { zone: timeZone });
   if (!dt.isValid) return null;
 
-  const startISO = dt.toISO(); // incluye offset correcto -05 o -04
-  const endISO = dt.plus({ minutes: 30 }).toISO();
+  const startISO = dt.toISO();
+  const endISO = dt.plus({ minutes: durationMin }).toISO();
 
   return { startISO, endISO, timeZone };
 }
@@ -287,21 +300,18 @@ function parseFullName(input: string) {
   return raw;
 }
 
-function parseAskAll(input: string, timeZone: string) {
+function parseAskAll(input: string, timeZone: string, durationMin: number) {
   const raw = String(input || "").trim();
 
-  // extrae email donde sea
   const email = parseEmail(raw);
   if (!email) return null;
 
-  // extrae fecha/hora donde sea
   const m = raw.match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/);
   if (!m) return null;
 
-  const dt = parseDateTimeExplicit(`${m[1]} ${m[2]}`, timeZone);
+  const dt = parseDateTimeExplicit(`${m[1]} ${m[2]}`, timeZone, durationMin);
   if (!dt) return null;
 
-  // nombre: quita email y fecha/hora y separadores comunes
   const nameCandidate = raw
     .replace(email, " ")
     .replace(m[0], " ")
@@ -396,22 +406,38 @@ async function bookInGoogle(opts: {
   startISO: string;
   endISO: string;
   timeZone: string;
+  bufferMin: number;
 }) {
-  const { tenantId, customer_name, startISO, endISO, timeZone } = opts;
+  const { tenantId, customer_name, startISO, endISO, timeZone, bufferMin } = opts;
 
-  // 1) freebusy
+  const start = DateTime.fromISO(startISO, { zone: timeZone });
+  const end = DateTime.fromISO(endISO, { zone: timeZone });
+
+  if (!start.isValid || !end.isValid) {
+    return { ok: false as const, error: "INVALID_DATETIME" as const, busy: [] as any[] };
+  }
+
+  const timeMin = start.minus({ minutes: bufferMin }).toISO();
+  const timeMax = end.plus({ minutes: bufferMin }).toISO();
+
+  if (!timeMin || !timeMax) {
+    return { ok: false as const, error: "INVALID_DATETIME" as const, busy: [] as any[] };
+  }
+
+  // ✅ aquí ya son string seguros
   const fb = await googleFreeBusy({
     tenantId,
-    timeMin: startISO,
-    timeMax: endISO,
+    timeMin,
+    timeMax,
     calendarId: "primary",
   });
+
 
   const busy = fb?.calendars?.primary?.busy || [];
   console.log("📅 [BOOKING] freebusy", {
     tenantId,
-    timeMin: startISO,
-    timeMax: endISO,
+    timeMin,
+    timeMax,
     busyCount: busy.length,
   });
 
@@ -419,7 +445,6 @@ async function bookInGoogle(opts: {
     return { ok: false as const, error: "SLOT_BUSY" as const, busy };
   }
 
-  // 2) create event
   const event = await googleCreateEvent({
     tenantId,
     calendarId: "primary",
@@ -462,7 +487,35 @@ export async function bookingFlowMvp(opts: {
 
   const ctx = (opts.ctx && typeof opts.ctx === "object") ? (opts.ctx as BookingCtx) : {};
   const booking = ctx.booking || { step: "idle" as const };
-  const timeZone = booking.timeZone || "America/New_York";
+
+  // ✅ carga settings del tenant (MVP)
+  const apptSettings = await getAppointmentSettings(tenantId);
+
+  if (apptSettings.enabled === false) {
+    const quickWants =
+      booking.step !== "idle" ||
+      hasExplicitDateTime(userText) ||
+      hasAppointmentContext(userText);
+
+    if (quickWants) {
+      return {
+      handled: true,
+      reply: idioma === "en"
+        ? "Scheduling is unavailable right now."
+        : "El agendamiento no está disponible en este momento.",
+      ctxPatch: { booking: { step: "idle" } },
+      };
+    }
+
+    return { handled: false };
+  }
+
+  // ✅ timezone real del negocio (prioridad: ctx > settings > fallback)
+  const timeZone = booking.timeZone || apptSettings.timezone || "America/New_York";
+
+  // ✅ valores MVP
+  const durationMin = apptSettings.default_duration_min ?? 30;
+  const bufferMin = apptSettings.buffer_min ?? 10;
 
   // ✅ POST-BOOKING GUARD: si ya quedó agendado y el usuario manda "SI" otra vez,
   // respondemos con el link existente (sin pasar por SM/LLM)
@@ -613,7 +666,7 @@ if (booking.step === "ask_all") {
     };
   }
 
-  const parsed = parseAllInOne(userText, timeZone);
+  const parsed = parseAllInOne(userText, timeZone, durationMin);
 
   const dateOnly = extractDateOnlyToken(userText);
   if (dateOnly && parsed.name && parsed.email && !parsed.startISO) {
@@ -834,13 +887,13 @@ if (booking.step === "ask_email") {
       };
     }
 
-    const parsed = parseDateTimeExplicit(userText, timeZone);
+    const parsed = parseDateTimeExplicit(userText, timeZone, durationMin);
 
     const b: any = booking;
     const hhmm = String(userText || "").trim().match(/^(\d{2}:\d{2})$/);
 
     if (b?.date_only && hhmm) {
-      const parsed2 = parseDateTimeExplicit(`${b.date_only} ${hhmm[1]}`, timeZone);
+      const parsed2 = parseDateTimeExplicit(`${b.date_only} ${hhmm[1]}`, timeZone, durationMin);
 
       if (!parsed2) {
         return {
@@ -995,6 +1048,7 @@ if (booking.step === "ask_email") {
       startISO,
       endISO,
       timeZone,
+      bufferMin,
     });
 
     if (!g.ok) {
