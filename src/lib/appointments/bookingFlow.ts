@@ -662,7 +662,7 @@ if (booking.step === "ask_all") {
       reply: idioma === "en"
         ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
         : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
-      ctxPatch: { booking: { step: "idle" } },
+      ctxPatch: { booking: { step: "idle", start_time: null, end_time: null, timeZone, name: null, email: null, purpose: null, date_only: null } },
     };
   }
 
@@ -973,9 +973,25 @@ if (booking.step === "ask_email") {
       return {
         handled: true,
         reply: idioma === "en"
-          ? "Cancelled. If you want, tell me another date/time."
-          : "Listo, cancelado. Si quieres, dime otra fecha/hora.",
-        ctxPatch: { booking: { step: "idle" } },
+          ? "No problem. Send me another date and time (YYYY-MM-DD HH:mm)."
+          : "Perfecto. Envíame otra fecha y hora (YYYY-MM-DD HH:mm).",
+        ctxPatch: {
+          booking: {
+            ...booking, // ✅ preserva name/email/purpose/lo que exista
+            step: "ask_datetime", // 🔑 OBLIGATORIO
+            timeZone: booking.timeZone || timeZone,
+
+            // preservamos datos válidos
+            name: booking.name || null,
+            email: booking.email || null,
+            purpose: booking.purpose || null,
+
+            // limpiamos COMPLETAMENTE el slot anterior
+            start_time: null,
+            end_time: null,
+            date_only: null,
+          },
+        },
       };
     }
 
@@ -992,6 +1008,17 @@ if (booking.step === "ask_email") {
     // YES -> agenda en Google + guarda en DB
     const customer_name = booking.name || "Cliente";
     const customer_email = booking.email; // ya no debería ser null
+
+    if (!booking.start_time || !booking.end_time) {
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? "Send me the date and time (YYYY-MM-DD HH:mm)."
+          : "Envíame la fecha y hora (YYYY-MM-DD HH:mm).",
+        ctxPatch: { booking: { ...booking, step: "ask_datetime" } },
+      };
+    }
+
     const startISO = booking.start_time!;
     const endISO = booking.end_time!;
 

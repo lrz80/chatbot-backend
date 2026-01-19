@@ -72,6 +72,15 @@ function extractPaymentLinkFromPrompt(promptBase: string): string | null {
   return any?.[0] ? any[0].replace(/[),.]+$/g, '') : null;
 }
 
+function looksLikeBookingPayload(text: string) {
+  const t = String(text || "");
+  const hasEmail = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(t);
+  const hasDateTime = /\b\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\b/.test(t);
+  const hasDateOnly = /\b\d{4}-\d{2}-\d{2}\b/.test(t);
+  const hasTimeOnly = /^\s*\d{2}:\d{2}\s*$/.test(t);
+  return hasEmail || hasDateTime || hasDateOnly || hasTimeOnly;
+}
+
 function pickSelectedChannelFromText(
   text: string
 ): "whatsapp" | "instagram" | "facebook" | "multi" | null {
@@ -760,6 +769,22 @@ export async function procesarMensajeWhatsApp(
     console.warn("⚠️ cancelPendingFollowUps failed:", e?.message);
   }
 
+  const setConversationStateCompat = async (
+    tenantId: string,
+    canal: any,          // o Canal si lo tienes importado
+    senderKey: string,
+    state: { activeFlow: string | null; activeStep: string | null; context?: any }
+  ) => {
+    await setConversationStateDB({
+      tenantId,
+      canal,
+      senderId: senderKey,
+      activeFlow: state.activeFlow ?? null,
+      activeStep: state.activeStep ?? null,
+      contextPatch: state.context ?? {},
+    });
+  };
+
   // ===============================
   // 🧠 conversation_state – inicio del turno (Flow/Step/Context)
   // ===============================
@@ -775,6 +800,65 @@ export async function procesarMensajeWhatsApp(
   let activeFlow = st.active_flow || "generic_sales";
   let activeStep = st.active_step || "start";
   let convoCtx = (st.context && typeof st.context === "object") ? st.context : {};
+
+  // ✅ google_calendar_enabled flag (source of truth)
+  let bookingEnabled = false;
+  try {
+    const { rows } = await pool.query(
+      `SELECT google_calendar_enabled
+      FROM channel_settings
+      WHERE tenant_id = $1
+      LIMIT 1`,
+      [tenant.id]
+    );
+    bookingEnabled = rows[0]?.google_calendar_enabled === true;
+  } catch (e: any) {
+    console.warn("⚠️ No se pudo leer google_calendar_enabled:", e?.message);
+  }
+
+  // ===============================
+  // 📅 BOOKING GATE (Google Calendar) - ANTES del SM/LLM
+  // ===============================
+  const bookingLink = extractBookingLinkFromPrompt(promptBase);
+
+  // ✅ Si el toggle está OFF, nunca ejecutes bookingFlowMvp (y limpia estados viejos)
+  if (!bookingEnabled) {
+    if ((convoCtx as any)?.booking) {
+      transition({ patchCtx: { booking: null } }); // limpia en memoria del turno
+      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+        activeFlow,
+        activeStep,
+        context: { booking: null },
+      });
+    }
+  } else {
+    const bookingStep = (convoCtx as any)?.booking?.step;
+    const inBooking = bookingStep && bookingStep !== "idle";
+
+    const bk = await bookingFlowMvp({
+      tenantId: tenant.id,
+      canal: "whatsapp",
+      contacto: contactoNorm,
+      idioma: idiomaDestino,
+      userText: userInput,
+      ctx: convoCtx,
+      bookingLink,
+      messageId,
+    });
+
+    if (bk?.ctxPatch) transition({ patchCtx: bk.ctxPatch });
+
+    // ✅ clave: si estabas en booking y el flow decide handled=false, igual NO dejes el ctx sucio
+    // (ya lo limpiaste vía ctxPatch en wantsToChangeTopic, perfecto)
+
+    if (bk?.handled) {
+      return await replyAndExit(
+        bk.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
+        "booking_flow",
+        "agendar_cita"
+      );
+    }
+  }
 
   const bookingStep0 = (convoCtx as any)?.booking?.step;
   const inBooking0 = bookingStep0 && bookingStep0 !== "idle";
@@ -879,22 +963,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     replySource = source;
     if (intent !== undefined) lastIntent = intent;
   }
-
-  const setConversationStateCompat = async (
-  tenantId: string,
-  canal: any,          // o Canal si lo tienes importado
-  senderKey: string,
-  state: { activeFlow: string | null; activeStep: string | null; context?: any }
-) => {
-  await setConversationStateDB({
-    tenantId,
-    canal,
-    senderId: senderKey,
-    activeFlow: state.activeFlow ?? null,
-    activeStep: state.activeStep ?? null,
-    contextPatch: state.context ?? {},
-  });
-};
 
   async function finalizeReply() {
     await finalizeReplyLib(
@@ -1133,7 +1201,11 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   }
 
   // 👋 GREETING GATE: SOLO si NO estamos en booking
-  if (!inBooking0 && (saludoPuroRegex.test(userInput) || detectedIntent === "saludo")) {
+  if (
+    !inBooking0 &&
+    saludoPuroRegex.test(userInput) &&
+    !looksLikeBookingPayload(userInput) // ✅ evita “Hola soy Amy” cuando mandan nombre/email/fecha
+  ) {
     const bienvenida = getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
 
     transition({
@@ -1149,65 +1221,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     });
 
     return await replyAndExit(bienvenida, "welcome_gate", "saludo");
-  }
-
-  // ✅ google_calendar_enabled flag (source of truth)
-  let bookingEnabled = false;
-  try {
-    const { rows } = await pool.query(
-      `SELECT google_calendar_enabled
-      FROM channel_settings
-      WHERE tenant_id = $1
-      LIMIT 1`,
-      [tenant.id]
-    );
-    bookingEnabled = rows[0]?.google_calendar_enabled === true;
-  } catch (e: any) {
-    console.warn("⚠️ No se pudo leer google_calendar_enabled:", e?.message);
-  }
-
-  // ===============================
-  // 📅 BOOKING GATE (Google Calendar) - ANTES del SM/LLM
-  // ===============================
-  const bookingLink = extractBookingLinkFromPrompt(promptBase);
-
-  // ✅ Si el toggle está OFF, nunca ejecutes bookingFlowMvp (y limpia estados viejos)
-  if (!bookingEnabled) {
-    if ((convoCtx as any)?.booking) {
-      transition({ patchCtx: { booking: null } }); // limpia en memoria del turno
-      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-        activeFlow,
-        activeStep,
-        context: { booking: null },
-      });
-    }
-  } else {
-    const bookingStep = (convoCtx as any)?.booking?.step;
-    const inBooking = bookingStep && bookingStep !== "idle";
-
-    const bk = await bookingFlowMvp({
-      tenantId: tenant.id,
-      canal: "whatsapp",
-      contacto: contactoNorm,
-      idioma: idiomaDestino,
-      userText: userInput,
-      ctx: convoCtx,
-      bookingLink,
-      messageId,
-    });
-
-    if (bk?.ctxPatch) transition({ patchCtx: bk.ctxPatch });
-
-    // ✅ clave: si estabas en booking y el flow decide handled=false, igual NO dejes el ctx sucio
-    // (ya lo limpiaste vía ctxPatch en wantsToChangeTopic, perfecto)
-
-    if (bk?.handled) {
-      return await replyAndExit(
-        bk.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
-        "booking_flow",
-        "agendar_cita"
-      );
-    }
   }
 
   const smResult = await sm({
