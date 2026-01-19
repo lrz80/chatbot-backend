@@ -70,10 +70,14 @@ function buildAskAllMessage(idioma: "es" | "en", purpose?: string | null) {
 }
 
 function detectPurpose(text: string): string | null {
-  const t = normalizeText(text); // asumo que ya existe en tu proyecto
+  const t = normalizeText(text);
 
   if (/\b(demo|demostracion|demostración|demonstration)\b/.test(t)) return "demo";
   if (/\b(clase|class|trial)\b/.test(t)) return "clase";
+
+  // ✅ NUEVO: appointment
+  if (/\b(appointment|appt)\b/.test(t)) return "cita";
+
   if (/\b(consulta|consultation|asesoria|asesoría)\b/.test(t)) return "consulta";
   if (/\b(llamada|call|phone)\b/.test(t)) return "llamada";
   if (/\b(visita|visit|presencial|in person)\b/.test(t)) return "visita";
@@ -549,8 +553,8 @@ if (booking.step === "idle") {
     return {
       handled: true,
       reply: idioma === "en"
-        ? "Sure — what would you like to schedule? (appointment, class, consultation, call)"
-        : "Perfecto — ¿qué quieres agendar? (cita, clase, consulta o llamada)",
+        ? "Sure! What would you like to schedule — an appointment, a consultation, or a call?"
+        : "¡Claro! ¿Qué te gustaría agendar? Una cita, una consulta o una llamada.",
       ctxPatch: { booking: { step: "ask_purpose", timeZone } },
     };
   }
