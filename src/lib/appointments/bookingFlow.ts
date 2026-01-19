@@ -517,33 +517,43 @@ export async function bookingFlowMvp(opts: {
   const durationMin = apptSettings.default_duration_min ?? 30;
   const bufferMin = apptSettings.buffer_min ?? 10;
 
-  // ✅ POST-BOOKING GUARD: si ya quedó agendado y el usuario manda "SI" otra vez,
-  // respondemos con el link existente (sin pasar por SM/LLM)
+  // ✅ POST-BOOKING GUARD (SAFE):
+  // NO usar last_appointment_id como gatillo global.
+  // Solo responde con link si el booking se completó RECIENTEMENTE.
   const t0 = String(userText || "").trim().toLowerCase();
   const isYesNo = /^(si|sí|yes|y|no|n)$/i.test(t0);
 
-  if ((booking.step === "idle") && isYesNo) {
-    const lastApptId = (opts.ctx && typeof opts.ctx === "object")
-      ? (opts.ctx as any)?.last_appointment_id
-      : null;
+  if (booking.step === "idle" && isYesNo) {
+    const lastDoneAt =
+      (opts.ctx && typeof opts.ctx === "object") ? (opts.ctx as any)?.booking_last_done_at : null;
 
-    if (lastApptId) {
-      const { rows } = await pool.query(
-        `SELECT google_event_link
-           FROM appointments
-          WHERE id = $1 AND tenant_id = $2
-          LIMIT 1`,
-        [lastApptId, tenantId]
-      );
+    const lastMs = typeof lastDoneAt === "number" ? lastDoneAt : null;
 
-      const link = rows[0]?.google_event_link || "";
+    // ventana corta: 10 minutos
+    const withinWindow =
+      lastMs && Number.isFinite(lastMs)
+        ? ((Date.now() - lastMs) >= 0 && (Date.now() - lastMs) < 5 * 60 * 1000)
+        : false;
+
+    if (withinWindow) {
+      const lastLink =
+        (opts.ctx && typeof opts.ctx === "object") ? (opts.ctx as any)?.booking_last_event_link : null;
+
+      const link = typeof lastLink === "string" ? lastLink.trim() : "";
+
+      // si no hay link, no interceptes (deja que el SM responda)
+      if (!link) return { handled: false };
 
       return {
         handled: true,
         reply: idioma === "en"
           ? `Already booked. ${link}`.trim()
           : `Ya quedó agendado. ${link}`.trim(),
-        ctxPatch: { booking: { step: "idle" } },
+        ctxPatch: {
+          booking: { step: "idle" },
+          // ✅ opcional: limpia ids viejos para que nunca se usen como gatillo
+          last_appointment_id: null,
+        },
       };
     }
   }
@@ -1022,39 +1032,41 @@ if (booking.step === "ask_email") {
     const startISO = booking.start_time!;
     const endISO = booking.end_time!;
 
-    // ✅ DEDUPE: si Twilio reintenta el mismo inbound o el usuario manda "SI" repetido
-    // Usamos interactions como lock atómico (ya tienes UNIQUE tenant_id+canal+message_id).
-    if (yes && messageId) {
-      const lockId = `booking:${messageId}`;
+        // ✅ DEDUPE fuerte por SLOT (no por messageId)
+    // Evita doble booking si el usuario manda "SI" 2 veces o hay carreras.
+    if (yes) {
+      const slotKey = `${tenantId}:${canal}:${contacto}:${startISO}`; // slot único
+      const lockId = `booking_slot:${slotKey}`;
+
       const ins = await pool.query(
         `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-        VALUES ($1, $2, $3, NOW())
-        ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
-        RETURNING 1`,
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
+         RETURNING 1`,
         [tenantId, canal, lockId]
       );
 
       if (ins.rowCount === 0) {
-        // Ya se procesó este "SI" antes → devuelve el link si existe en DB
-        const startISO = booking.start_time!;
+        // Ya se procesó este slot → devuelve link del último appointment para ese slot
         const { rows } = await pool.query(
-        `SELECT google_event_link
-            FROM appointments
+          `SELECT google_event_link
+             FROM appointments
             WHERE tenant_id=$1
-            AND customer_phone=$2
-            AND start_time=$3
+              AND customer_phone=$2
+              AND start_time=$3
             ORDER BY created_at DESC
             LIMIT 1`,
-        [tenantId, contacto, startISO]
+          [tenantId, contacto, startISO]
         );
 
         const link = rows[0]?.google_event_link || "";
+
         return {
-        handled: true,
-        reply: idioma === "en"
+          handled: true,
+          reply: idioma === "en"
             ? `Already booked. ${link}`.trim()
             : `Ya quedó agendado. ${link}`.trim(),
-        ctxPatch: { booking: { step: "idle" } },
+          ctxPatch: { booking: { step: "idle" } },
         };
       }
     }
@@ -1078,7 +1090,17 @@ if (booking.step === "ask_email") {
       bufferMin,
     });
 
-    if (!g.ok) {
+      if (!g.ok) {
+      // libera lock del slot para permitir reintento real
+      try {
+        const slotKey = `${tenantId}:${canal}:${contacto}:${startISO}`;
+        const lockId = `booking_slot:${slotKey}`;
+        await pool.query(
+          `DELETE FROM interactions WHERE tenant_id=$1 AND canal=$2 AND message_id=$3`,
+          [tenantId, canal, lockId]
+        );
+      } catch {}
+
       return {
         handled: true,
         reply: idioma === "en"
