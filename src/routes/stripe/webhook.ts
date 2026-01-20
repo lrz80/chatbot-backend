@@ -8,8 +8,11 @@ import { sendRenewalSuccessEmail } from '../../lib/mailer';
 import { sendCancelationEmail } from '../../lib/mailer';
 import { markTrialUsedByEmail } from '../../lib/trial';
 import twilio from 'twilio';
+import { sendMetaPurchase } from "../../services/metaCapi";
 
 const router = express.Router();
+
+const META_EVENT_SOURCE_URL = "https://aamy.ai/upgrade";
 
 let stripe: Stripe;
 let STRIPE_WEBHOOK_SECRET: string;
@@ -409,6 +412,21 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         }
 
         console.log('✅ Opción A completada: $399 pagado y suscripción $199 creada:', subscription.id);
+        // ✅ META CAPI: Purchase por setup $399
+        try {
+          await sendMetaPurchase({
+            pixelId: process.env.META_PIXEL_ID!,
+            accessToken: process.env.META_CAPI_TOKEN!,
+            eventId: session.id, // dedup
+            eventSourceUrl: META_EVENT_SOURCE_URL,
+            email: email ?? null,
+            value: (session.amount_total ?? 0) / 100,
+            currency: (session.currency ?? "usd").toUpperCase(),
+          });
+        } catch (e) {
+          console.warn("⚠️ Meta CAPI Purchase (setup $399) falló (se ignora):", e);
+        }
+
         await notifyAdminPaymentSMS({
           eventId: event.id,
           tenantId,
@@ -460,6 +478,21 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           [tenant_id, canal, cantidadInt, session.id] // session.id = external_id idempotente
         );
 
+        // ✅ META CAPI: Purchase por compra de créditos
+        try {
+          await sendMetaPurchase({
+            pixelId: process.env.META_PIXEL_ID!,
+            accessToken: process.env.META_CAPI_TOKEN!,
+            eventId: session.id, // dedup
+            eventSourceUrl: META_EVENT_SOURCE_URL,
+            email: email ?? null,
+            value: (session.amount_total ?? 0) / 100,
+            currency: (session.currency ?? "usd").toUpperCase(),
+          });
+        } catch (e) {
+          console.warn("⚠️ Meta CAPI Purchase (créditos) falló (se ignora):", e);
+        }
+
         if (email) {
           const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [tenant_id]);
           const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
@@ -505,6 +538,21 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         if (!tenantId) {
           console.warn('⚠️ No se encontró tenantId para la suscripción (ni por metadata ni por email).');
           return res.status(200).json({ received: true });
+        }
+
+        // ✅ META CAPI: Purchase por checkout de suscripción (si hubo cobro en el checkout)
+        try {
+          await sendMetaPurchase({
+            pixelId: process.env.META_PIXEL_ID!,
+            accessToken: process.env.META_CAPI_TOKEN!,
+            eventId: session.id, // dedup
+            eventSourceUrl: META_EVENT_SOURCE_URL,
+            email: email ?? null,
+            value: (session.amount_total ?? 0) / 100,
+            currency: (session.currency ?? "usd").toUpperCase(),
+          });
+        } catch (e) {
+          console.warn("⚠️ Meta CAPI Purchase (subscription checkout) falló (se ignora):", e);
         }
 
         // 2) Datos de la suscripción
@@ -740,6 +788,21 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     if (!subscriptionId) {
       console.warn('⚠️ Subscription ID no encontrado en invoice.');
       return res.status(200).json({ received: true });
+    }
+
+    // ✅ META CAPI: Purchase por renovación (invoice)
+    try {
+      await sendMetaPurchase({
+        pixelId: process.env.META_PIXEL_ID!,
+        accessToken: process.env.META_CAPI_TOKEN!,
+        eventId: invoice.id, // dedup por invoice
+        eventSourceUrl: META_EVENT_SOURCE_URL,
+        email: customerEmail ?? null,
+        value: (invoice.amount_paid ?? 0) / 100,
+        currency: (invoice.currency ?? "usd").toUpperCase(),
+      });
+    } catch (e) {
+      console.warn("⚠️ Meta CAPI Purchase (invoice renewal) falló (se ignora):", e);
     }
 
     try {
