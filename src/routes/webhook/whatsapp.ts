@@ -44,6 +44,30 @@ import { sendCapiEvent } from "../../services/metaCapi";
 const sha256 = (s: string) =>
   crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
 
+// ✅ DEDUPE 7 días (bucket estable). No depende de timezone.
+function bucket7DaysUTC(d = new Date()) {
+  const ms = d.getTime();
+  const windowMs = 7 * 24 * 60 * 60 * 1000;
+  return `b7:${Math.floor(ms / windowMs)}`;
+}
+
+// ✅ Reserva dedupe en DB usando interactions (ya tienes unique tenant+canal+message_id)
+async function reserveCapiEvent(tenantId: string, eventId: string): Promise<boolean> {
+  try {
+    const r = await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, 'meta_capi', $2, NOW())
+       ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
+       RETURNING 1`,
+      [tenantId, eventId]
+    );
+    return (r.rowCount ?? 0) > 0;
+  } catch (e: any) {
+    console.warn("⚠️ reserveCapiEvent failed:", e?.message);
+    return false;
+  }
+}
+
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
   tenant?: any;
@@ -962,6 +986,86 @@ export async function procesarMensajeWhatsApp(
 
       // opcional: si confirmaste booking este turno
       const bookingJustCompleted = !!(convoCtx as any)?.booking_completed;
+
+      // ===============================
+      // 📡 META CAPI — EVENTO #3 (PRO): Schedule (si booking) o InitiateCheckout (si NO booking)
+      // Dedupe: 1 vez por contacto por 7 días
+      // ===============================
+      try {
+        const finalIntent = (lastIntent || INTENCION_FINAL_CANONICA || "").toString().trim().toLowerCase();
+        const finalNivel =
+          typeof detectedInterest === "number"
+            ? Math.min(3, Math.max(1, detectedInterest))
+            : 2;
+
+        // Normaliza + hashea contacto (igual que haces en Lead/Contact)
+        const raw = String(fromNumber || contactoNorm || "").trim();
+        const phoneE164 = raw.replace(/^whatsapp:/i, "").replace(/[^\d+]/g, "").trim();
+        const contactHash = sha256(phoneE164 || contactoNorm);
+
+        // Señal de “hubo link de pago enviado”
+        const paymentLink = extractPaymentLinkFromPrompt(promptBase); // tu helper ya existe arriba
+        const replyHasPaymentLink =
+          !!paymentLink && typeof reply === "string" && reply.includes(paymentLink);
+
+        // A) Schedule SOLO si booking está habilitado y se confirmó este turno
+        if (bookingEnabled && bookingJustCompleted) {
+          const eventId = `schedule:${tenant.id}:${contactHash}:${bucket7DaysUTC()}`;
+          const ok = await reserveCapiEvent(tenant.id, eventId);
+          if (ok) {
+            await sendCapiEvent({
+              tenantId: tenant.id,
+              eventName: "Schedule",
+              eventId,
+              userData: {
+                external_id: sha256(`${tenant.id}:${contactoNorm}`),
+                ...(phoneE164 ? { ph: sha256(phoneE164) } : {}),
+              },
+              customData: {
+                channel: "whatsapp",
+                source: "booking_confirmed",
+                intent: finalIntent || undefined,
+                interest_level: finalNivel,
+                inbound_message_id: messageId || undefined,
+              },
+            });
+            console.log("✅ CAPI Schedule enviado:", { tenantId: tenant.id, contactoNorm, eventId });
+          } else {
+            console.log("⏭️ CAPI Schedule deduped:", { tenantId: tenant.id, contactoNorm, eventId });
+          }
+        }
+
+        // B) InitiateCheckout SOLO si NO booking y es intención fuerte
+        else if (finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 2) {
+          const eventId = `init_checkout:${tenant.id}:${contactHash}:${bucket7DaysUTC()}`;
+          const ok = await reserveCapiEvent(tenant.id, eventId);
+
+          if (ok) {
+            await sendCapiEvent({
+              tenantId: tenant.id,
+              eventName: "InitiateCheckout",
+              eventId,
+              userData: {
+                external_id: sha256(`${tenant.id}:${contactoNorm}`),
+                ...(phoneE164 ? { ph: sha256(phoneE164) } : {}),
+              },
+              customData: {
+                channel: "whatsapp",
+                source: "sales_intent_strong",
+                intent: finalIntent,
+                interest_level: finalNivel,
+                inbound_message_id: messageId || undefined,
+              },
+            });
+
+            console.log("✅ CAPI InitiateCheckout enviado:", { tenantId: tenant.id, contactoNorm, finalIntent, finalNivel, eventId });
+          } else {
+            console.log("⏭️ CAPI InitiateCheckout deduped:", { tenantId: tenant.id, contactoNorm, eventId });
+          }
+        }
+      } catch (e: any) {
+        console.warn("⚠️ Error enviando CAPI evento #3:", e?.message);
+      }
 
       const skipFollowUp =
         inBooking ||
