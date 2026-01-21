@@ -57,6 +57,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     const meta_pixel_enabled = Boolean(settingsObj?.meta?.pixel_enabled);
 
     const meta_capi_token = String(settingsObj?.meta?.capi_token || '');
+    const meta_capi_token_configured = Boolean(meta_capi_token && meta_capi_token.length > 0);
 
     const canal = req.query.canal || 'whatsapp';
 
@@ -265,6 +266,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       meta_pixel_id,
       meta_pixel_enabled,
       meta_capi_token,
+      meta_capi_token_configured,
     });
     // ==================== FIN NUEVO BLOQUE ====================
 
@@ -366,7 +368,9 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
       // capi_token
       if (meta_capi_token !== undefined) {
         const token = String(meta_capi_token || '').trim();
-        metaPatch.capi_token = token; // '' permitido para borrar
+        if (token !== '__KEEP__') {
+          metaPatch.capi_token = token; // '' borra; string guarda
+        }
       }
 
       await pool.query(
