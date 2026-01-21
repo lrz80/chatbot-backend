@@ -1,6 +1,7 @@
 // src/services/metaCapi.ts
 import fetch from "node-fetch";
 import pool from "../lib/db";
+import crypto from "crypto";
 
 type CapiEvent = {
   tenantId: string;
@@ -9,6 +10,9 @@ type CapiEvent = {
   userData?: Record<string, any>;
   customData?: Record<string, any>;
 };
+
+const sha256 = (s: string) =>
+  crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
 
 export async function sendCapiEvent({
   tenantId,
@@ -42,18 +46,20 @@ export async function sendCapiEvent({
 
     // 2) Construir payload para Meta CAPI
     const payload = {
-      data: [
-        {
-        event_name: eventName,
-        event_time: eventTime,
-        action_source: "system_generated",
-        user_data: userData,
-        custom_data: customData,
-        },
-      ],
-      // 👇 SOLO PARA PRUEBA (lo quitas luego)
-      test_event_code: process.env.META_TEST_EVENT_CODE,
-    };
+        data: [
+            {
+            event_name: eventName,
+            event_time: eventTime,
+            action_source: "chat",
+            user_data: {
+                external_id: userData?.external_id || sha256(`${tenantId}:${eventName}:${eventTime}`),
+                ...userData,
+            },
+            custom_data: customData,
+            },
+        ],
+        test_event_code: process.env.META_TEST_EVENT_CODE,
+        };
 
     // 3) Enviar evento CAPI
     const url = `https://graph.facebook.com/v19.0/${pixelId}/events?access_token=${accessToken}`;

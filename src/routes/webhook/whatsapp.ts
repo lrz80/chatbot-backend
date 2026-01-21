@@ -38,8 +38,11 @@ import { detectarEmocion } from "../../lib/detectarEmocion";
 import { applyEmotionTriggers } from "../../lib/guards/emotionTriggers";
 import { scheduleFollowUpIfEligible, cancelPendingFollowUps } from "../../lib/followups/followUpScheduler";
 import { bookingFlowMvp } from "../../lib/appointments/bookingFlow";
+import crypto from "crypto";
+import { sendCapiEvent } from "../../services/metaCapi";
 
-
+const sha256 = (s: string) =>
+  crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -749,6 +752,30 @@ export async function procesarMensajeWhatsApp(
 
   // 🧱 FIX CRÍTICO: crea la fila base del cliente si no existe
   await ensureClienteBase(tenant.id, canal, contactoNorm);
+
+  // ===============================
+  // 🧪 TEST CAPI en vivo (WhatsApp inbound)
+  // Solo para probar que llega a Meta en Test Events.
+  // ===============================
+  try {
+    await sendCapiEvent({
+      tenantId: tenant.id,
+      eventName: "Lead", // prueba (luego puedes cambiar a Contact / Purchase etc)
+      userData: {
+        // Identificador consistente por usuario (NO expone el teléfono en claro)
+        external_id: sha256(`${tenant.id}:${fromNumber || contactoNorm}`),
+        // Opcional: si quieres incluir phone hash para mejor match (solo dígitos)
+        // ph: sha256(String(fromNumber || contactoNorm).replace(/[^\d+]/g, "")),
+      },
+      customData: {
+        channel: "whatsapp",
+        inbound_message_id: messageId || undefined,
+        preview: String(userInput || "").slice(0, 60),
+      },
+    });
+  } catch (e: any) {
+    console.warn("⚠️ CAPI test send failed:", e?.message);
+  }
 
   // ✅ FOLLOW-UP RESET: si el cliente volvió a escribir, cancela cualquier follow-up pendiente
   try {
