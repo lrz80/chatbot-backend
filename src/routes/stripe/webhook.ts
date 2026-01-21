@@ -8,7 +8,7 @@ import { sendRenewalSuccessEmail } from '../../lib/mailer';
 import { sendCancelationEmail } from '../../lib/mailer';
 import { markTrialUsedByEmail } from '../../lib/trial';
 import twilio from 'twilio';
-import { sendMetaPurchase } from "../../services/metaCapi";
+import { sendCapiEvent } from "../../services/metaCapi"; 
 
 const router = express.Router();
 
@@ -414,14 +414,20 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         console.log('✅ Opción A completada: $399 pagado y suscripción $199 creada:', subscription.id);
         // ✅ META CAPI: Purchase por setup $399
         try {
-          await sendMetaPurchase({
-            pixelId: process.env.META_PIXEL_ID!,
-            accessToken: process.env.META_CAPI_TOKEN!,
-            eventId: session.id, // dedup
-            eventSourceUrl: META_EVENT_SOURCE_URL,
-            email: email ?? null,
-            value: (session.amount_total ?? 0) / 100,
-            currency: (session.currency ?? "usd").toUpperCase(),
+          await sendCapiEvent({
+            tenantId,
+            eventName: "Purchase",
+            // opcional: eventTime
+            userData: {
+              // si tienes email, ideal enviar hashed; por ahora mínimo:
+              ...(email ? { em: [email] } : {}),
+            },
+            customData: {
+              value: (session.amount_total ?? 0) / 100,
+              currency: (session.currency ?? "usd").toUpperCase(),
+              event_id: session.id,                 // dedup (lo usarás en metaCapi.ts)
+              event_source_url: META_EVENT_SOURCE_URL,
+            },
           });
         } catch (e) {
           console.warn("⚠️ Meta CAPI Purchase (setup $399) falló (se ignora):", e);
@@ -480,14 +486,18 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
         // ✅ META CAPI: Purchase por compra de créditos
         try {
-          await sendMetaPurchase({
-            pixelId: process.env.META_PIXEL_ID!,
-            accessToken: process.env.META_CAPI_TOKEN!,
-            eventId: session.id, // dedup
-            eventSourceUrl: META_EVENT_SOURCE_URL,
-            email: email ?? null,
-            value: (session.amount_total ?? 0) / 100,
-            currency: (session.currency ?? "usd").toUpperCase(),
+          await sendCapiEvent({
+            tenantId: tenant_id,
+            eventName: "Purchase",
+            userData: { ...(email ? { em: [email] } : {}) },
+            customData: {
+              value: (session.amount_total ?? 0) / 100,
+              currency: (session.currency ?? "usd").toUpperCase(),
+              event_id: session.id,
+              event_source_url: META_EVENT_SOURCE_URL,
+              canal,
+              cantidad: cantidadInt,
+            },
           });
         } catch (e) {
           console.warn("⚠️ Meta CAPI Purchase (créditos) falló (se ignora):", e);
@@ -542,14 +552,16 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
         // ✅ META CAPI: Purchase por checkout de suscripción (si hubo cobro en el checkout)
         try {
-          await sendMetaPurchase({
-            pixelId: process.env.META_PIXEL_ID!,
-            accessToken: process.env.META_CAPI_TOKEN!,
-            eventId: session.id, // dedup
-            eventSourceUrl: META_EVENT_SOURCE_URL,
-            email: email ?? null,
-            value: (session.amount_total ?? 0) / 100,
-            currency: (session.currency ?? "usd").toUpperCase(),
+          await sendCapiEvent({
+            tenantId,
+            eventName: "Purchase",
+            userData: { ...(email ? { em: [email] } : {}) },
+            customData: {
+              value: (session.amount_total ?? 0) / 100,
+              currency: (session.currency ?? "usd").toUpperCase(),
+              event_id: session.id,
+              event_source_url: META_EVENT_SOURCE_URL,
+            },
           });
         } catch (e) {
           console.warn("⚠️ Meta CAPI Purchase (subscription checkout) falló (se ignora):", e);
@@ -792,14 +804,16 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
     // ✅ META CAPI: Purchase por renovación (invoice)
     try {
-      await sendMetaPurchase({
-        pixelId: process.env.META_PIXEL_ID!,
-        accessToken: process.env.META_CAPI_TOKEN!,
-        eventId: invoice.id, // dedup por invoice
-        eventSourceUrl: META_EVENT_SOURCE_URL,
-        email: customerEmail ?? null,
-        value: (invoice.amount_paid ?? 0) / 100,
-        currency: (invoice.currency ?? "usd").toUpperCase(),
+      await sendCapiEvent({
+        tenantId: (await getTenantIdBySubscriptionId(subscriptionId)) || "",
+        eventName: "Purchase",
+        userData: { ...(customerEmail ? { em: [customerEmail] } : {}) },
+        customData: {
+          value: (invoice.amount_paid ?? 0) / 100,
+          currency: (invoice.currency ?? "usd").toUpperCase(),
+          event_id: invoice.id,
+          event_source_url: META_EVENT_SOURCE_URL,
+        },
       });
     } catch (e) {
       console.warn("⚠️ Meta CAPI Purchase (invoice renewal) falló (se ignora):", e);

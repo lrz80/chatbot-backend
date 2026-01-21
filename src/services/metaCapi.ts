@@ -1,4 +1,4 @@
-// src/lib/metaCapi.ts
+// src/services/metaCapi.ts
 import fetch from "node-fetch";
 import pool from "../lib/db";
 
@@ -33,7 +33,7 @@ export async function sendCapiEvent({
 
     const pixelId = settings?.meta?.pixel_id || null;
     const pixelEnabled = settings?.meta?.pixel_enabled || false;
-    const accessToken = process.env.META_CAPI_ACCESS_TOKEN;
+    const accessToken = settings?.meta?.capi_token || null;
 
     if (!pixelId || !pixelEnabled || !accessToken) {
       console.log("CAPI OPCIONAL: Pixel no configurado para tenant:", tenantId);
