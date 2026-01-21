@@ -56,7 +56,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     const meta_pixel_id = String(settingsObj?.meta?.pixel_id || '');
     const meta_pixel_enabled = Boolean(settingsObj?.meta?.pixel_enabled);
 
-    const meta_capi_token_configured = Boolean(settingsObj?.meta?.capi_token);
+    const meta_capi_token = String(settingsObj?.meta?.capi_token || '');
 
     const canal = req.query.canal || 'whatsapp';
 
@@ -264,7 +264,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       meta_subchannel_flags,
       meta_pixel_id,
       meta_pixel_enabled,
-      meta_capi_token_configured,
+      meta_capi_token,
     });
     // ==================== FIN NUEVO BLOQUE ====================
 
@@ -286,9 +286,7 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
     const meta_pixel_id_raw = (body as any).meta_pixel_id;
     const meta_pixel_enabled_raw = (body as any).meta_pixel_enabled;
 
-    // ✅ CAPI token (opcional, recomendado para CAPI)
-    // OJO: no lo devuelvas luego en GET
-    const meta_capi_token_raw = (body as any).meta_capi_token;
+    const meta_capi_token = (body as any).meta_capi_token;
 
     // quítalos del body para que no caigan en el "allowed fields" del tenant
     delete (body as any).meta_pixel_id;
@@ -338,38 +336,37 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
       );
     }
 
-    // ✅ Guardar Meta Pixel / CAPI en tenants.settings.meta (UNA sola query)
+    // ✅ Guardar Meta (Pixel + CAPI) en tenants.settings.meta
     if (
       meta_pixel_id_raw !== undefined ||
       meta_pixel_enabled_raw !== undefined ||
-      meta_capi_token_raw !== undefined
+      meta_capi_token !== undefined
     ) {
       const metaPatch: any = {};
 
       // pixel_id
       if (meta_pixel_id_raw !== undefined) {
-        const pid = String(meta_pixel_id_raw || "").trim();
+        const pid = String(meta_pixel_id_raw || '').trim();
         if (pid && !/^\d{10,20}$/.test(pid)) {
-          return res.status(400).json({ error: "meta_pixel_id inválido (debe ser numérico)" });
+          return res.status(400).json({ error: 'meta_pixel_id inválido (debe ser numérico)' });
         }
-        metaPatch.pixel_id = pid || null;
+        metaPatch.pixel_id = pid; // si quieres permitir borrar: pid || ''
       }
 
       // pixel_enabled
       if (meta_pixel_enabled_raw !== undefined) {
         const enabled =
           meta_pixel_enabled_raw === true ||
-          meta_pixel_enabled_raw === "true" ||
+          meta_pixel_enabled_raw === 'true' ||
           meta_pixel_enabled_raw === 1 ||
-          meta_pixel_enabled_raw === "1";
+          meta_pixel_enabled_raw === '1';
         metaPatch.pixel_enabled = enabled;
       }
 
-      // capi_token (para server-side CAPI)
-      if (meta_capi_token_raw !== undefined) {
-        const token = String(meta_capi_token_raw || "").trim();
-        // token vacío => lo limpias
-        metaPatch.capi_token = token || null;
+      // capi_token
+      if (meta_capi_token !== undefined) {
+        const token = String(meta_capi_token || '').trim();
+        metaPatch.capi_token = token; // '' permitido para borrar
       }
 
       await pool.query(
