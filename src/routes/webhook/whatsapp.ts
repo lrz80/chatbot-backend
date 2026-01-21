@@ -705,38 +705,45 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
+  const isNewLead = await ensureClienteBase(tenant.id, canal, contactoNorm);
+
   // ===============================
-  // 📡 META CAPI — Evento LEAD (Producción real, solo 1 vez por sender por día)
+  // 📡 META CAPI — LEAD (OPCIÓN PRO): solo primer mensaje del contacto
   // ===============================
   try {
-    // Normaliza teléfono
-    const raw = String(fromNumber || contactoNorm || "").trim();
-    const phoneE164 = raw
-      .replace(/^whatsapp:/i, "")   // ✅ clave
-      .replace(/[^\d+]/g, "")
-      .trim();
+    if (isNewLead) {
+      const raw = String(fromNumber || contactoNorm || "").trim();
+      const phoneE164 = raw
+        .replace(/^whatsapp:/i, "")
+        .replace(/[^\d+]/g, "")
+        .trim();
 
-    // Deduplicación por día → evita múltiples “Lead” si la persona envía 10 mensajes
-    const day = new Date().toISOString().slice(0, 10);
-    const eventId = `lead:${tenant.id}:${phoneE164}:${new Date().toISOString().slice(0,10)}`;
+      // event_id: único por contacto (y estable)
+      const phoneHash = sha256(phoneE164 || contactoNorm);
+      const eventId = `lead:${tenant.id}:${phoneHash}`;
 
-    await sendCapiEvent({
-      tenantId: tenant.id,
-      eventName: "Lead",
-      eventId, // ✅ ahora sí lo usa el servicio
-      userData: {
-        external_id: sha256(`${tenant.id}:${phoneE164}`), // ✅ yo lo mandaría string, no array
-        ph: sha256(phoneE164),                            // ✅ string
-      },
-      customData: {
-        channel: "whatsapp",
-        source: "inbound_message",
-        preview: (userInput || "").slice(0, 80),
-      },
-    });
+      await sendCapiEvent({
+        tenantId: tenant.id,
+        eventName: "Lead",
+        eventId,
+        userData: {
+          external_id: sha256(`${tenant.id}:${contactoNorm}`),
+          ...(phoneE164 ? { ph: sha256(phoneE164) } : {}),
+        },
+        customData: {
+          channel: "whatsapp",
+          source: "first_inbound_message",
+          inbound_message_id: messageId || undefined,
+          preview: (userInput || "").slice(0, 80),
+        },
+      });
 
+      console.log("✅ CAPI Lead enviado (primer mensaje):", { tenantId: tenant.id, contactoNorm });
+    } else {
+      console.log("⏭️ CAPI Lead omitido (ya existía cliente):", { tenantId: tenant.id, contactoNorm });
+    }
   } catch (e: any) {
-    console.warn("⚠️ Error enviando CAPI Lead:", e?.message);
+    console.warn("⚠️ Error enviando CAPI Lead PRO:", e?.message);
   }
 
   if (isNumericOnly) {
@@ -771,9 +778,6 @@ export async function procesarMensajeWhatsApp(
   let promptBaseMem = promptBase;
 
   console.log("🔎 numero normalizado =", { numero, numeroSinMas });
-
-  // 🧱 FIX CRÍTICO: crea la fila base del cliente si no existe
-  const isNewLead = await ensureClienteBase(tenant.id, canal, contactoNorm);
 
   // ✅ FOLLOW-UP RESET: si el cliente volvió a escribir, cancela cualquier follow-up pendiente
   try {

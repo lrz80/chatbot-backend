@@ -6,10 +6,8 @@ import crypto from "crypto";
 type CapiEvent = {
   tenantId: string;
   eventName: string;
+  eventId?: string;              // ✅ para dedupe de Meta (reintentos)
   eventTime?: number;
-  eventId?: string;                // ✅ dedupe real
-  actionSource?: string;           // ✅ por defecto "chat"
-  eventSourceUrl?: string;         // ✅ opcional
   userData?: Record<string, any>;
   customData?: Record<string, any>;
 };
@@ -20,14 +18,13 @@ const sha256 = (s: string) =>
 export async function sendCapiEvent({
   tenantId,
   eventName,
-  eventTime = Math.floor(Date.now() / 1000),
   eventId,
-  actionSource = "chat",
-  eventSourceUrl,
+  eventTime = Math.floor(Date.now() / 1000),
   userData = {},
   customData = {},
 }: CapiEvent) {
   try {
+    // 1) Leer pixel/token del tenant (✅ multi-tenant)
     const res = await pool.query(
       `SELECT settings FROM tenants WHERE id = $1 LIMIT 1`,
       [tenantId]
@@ -44,27 +41,21 @@ export async function sendCapiEvent({
     const accessToken = settings?.meta?.capi_token || null;
 
     if (!pixelId || !pixelEnabled || !accessToken) {
-      console.log("CAPI OPCIONAL: Pixel no configurado para tenant:", tenantId);
+      console.log("CAPI: Pixel no configurado para tenant:", tenantId);
       return;
     }
 
-    // ✅ Importante: external_id debe ser hasheado y preferiblemente en array
-    // Si ya te pasan external_id, respétalo; si no, genera uno estable.
-    const externalId =
-      userData?.external_id ||
-      sha256(`${tenantId}:${eventName}:${String(userData?.ph || userData?.email || "")}`);
-
-    const payload: any = {
+    // 2) Payload PRODUCCIÓN (sin META_TEST_EVENT_CODE)
+    const payload = {
       data: [
         {
           event_name: eventName,
           event_time: eventTime,
-          action_source: actionSource,
-          event_id: eventId, // ✅ dedupe real
-          event_source_url: eventSourceUrl,
+          action_source: "chat",
+          ...(eventId ? { event_id: eventId } : {}), // ✅ dedupe
           user_data: {
-            // Meta acepta external_id como string o array; array suele ser más consistente
-            external_id: Array.isArray(externalId) ? externalId : [externalId],
+            external_id:
+              userData?.external_id || sha256(`${tenantId}:${eventName}:${eventTime}`),
             ...userData,
           },
           custom_data: customData,
@@ -72,6 +63,7 @@ export async function sendCapiEvent({
       ],
     };
 
+    // 3) Enviar evento
     const url = `https://graph.facebook.com/v19.0/${pixelId}/events?access_token=${accessToken}`;
     const resp = await fetch(url, {
       method: "POST",
@@ -80,7 +72,7 @@ export async function sendCapiEvent({
     });
 
     const result = await resp.json();
-    console.log("[CAPI] Meta resp =", JSON.stringify(result));
+    console.log("CAPI → Meta resp:", result);
     return result;
   } catch (e) {
     console.error("❌ Error en sendCapiEvent:", e);
