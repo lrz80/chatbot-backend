@@ -186,7 +186,7 @@ async function ensureClienteBase(
   tenantId: string,
   canal: string,
   contacto: string
-) {
+): Promise<boolean> {
   try {
     const r = await pool.query(
       `
@@ -194,27 +194,15 @@ async function ensureClienteBase(
       VALUES ($1, $2, $3, NOW(), NOW())
       ON CONFLICT (tenant_id, canal, contacto)
       DO UPDATE SET updated_at = NOW()
-      RETURNING id
+      RETURNING (xmax = 0) AS inserted
       `,
       [tenantId, canal, contacto]
     );
 
-    console.log("✅ ensureClienteBase ok", {
-      tenantId,
-      canal,
-      contacto,
-      clienteId: r.rows?.[0]?.id,
-    });
+    return r.rows?.[0]?.inserted === true; // ✅ true = primer mensaje de ese contacto
   } catch (e: any) {
-    console.warn("⚠️ ensureClienteBase FAILED", {
-      tenantId,
-      canal,
-      contacto,
-      msg: e?.message,
-      code: e?.code,
-      detail: e?.detail,
-      constraint: e?.constraint,
-    });
+    console.warn("⚠️ ensureClienteBase FAILED", e?.message);
+    return false;
   }
 }
 
@@ -722,34 +710,31 @@ export async function procesarMensajeWhatsApp(
   // ===============================
   try {
     // Normaliza teléfono
-    const phoneE164 = String(fromNumber || contactoNorm)
+    const raw = String(fromNumber || contactoNorm || "").trim();
+    const phoneE164 = raw
+      .replace(/^whatsapp:/i, "")   // ✅ clave
       .replace(/[^\d+]/g, "")
       .trim();
 
     // Deduplicación por día → evita múltiples “Lead” si la persona envía 10 mensajes
+    const day = new Date().toISOString().slice(0, 10);
     const eventId = `lead:${tenant.id}:${phoneE164}:${new Date().toISOString().slice(0,10)}`;
 
     await sendCapiEvent({
       tenantId: tenant.id,
       eventName: "Lead",
-      eventId,
+      eventId, // ✅ ahora sí lo usa el servicio
       userData: {
-        // Hash para matching sin revelar datos
-        external_id: [
-          sha256(`${tenant.id}:${phoneE164}`)
-        ],
-
-        // Hash recomendado por Meta para mejor match
-        ph: [
-          sha256(phoneE164)
-        ],
+        external_id: sha256(`${tenant.id}:${phoneE164}`), // ✅ yo lo mandaría string, no array
+        ph: sha256(phoneE164),                            // ✅ string
       },
       customData: {
         channel: "whatsapp",
-        source: "inbound_first_message",
-        preview: (userInput || "").slice(0, 80)
-      }
+        source: "inbound_message",
+        preview: (userInput || "").slice(0, 80),
+      },
     });
+
   } catch (e: any) {
     console.warn("⚠️ Error enviando CAPI Lead:", e?.message);
   }
@@ -788,7 +773,7 @@ export async function procesarMensajeWhatsApp(
   console.log("🔎 numero normalizado =", { numero, numeroSinMas });
 
   // 🧱 FIX CRÍTICO: crea la fila base del cliente si no existe
-  await ensureClienteBase(tenant.id, canal, contactoNorm);
+  const isNewLead = await ensureClienteBase(tenant.id, canal, contactoNorm);
 
   // ✅ FOLLOW-UP RESET: si el cliente volvió a escribir, cancela cualquier follow-up pendiente
   try {

@@ -72,10 +72,6 @@ export async function sendCapiEvent({
       ],
     };
 
-    // ❌ Nada de test en vivo: NO mandes test_event_code
-    // Si algún día quieres habilitarlo, hazlo condicional:
-    // if (process.env.META_TEST_EVENT_CODE) payload.test_event_code = process.env.META_TEST_EVENT_CODE;
-
     const url = `https://graph.facebook.com/v19.0/${pixelId}/events?access_token=${accessToken}`;
     const resp = await fetch(url, {
       method: "POST",
