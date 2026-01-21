@@ -717,6 +717,43 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
+  // ===============================
+  // 📡 META CAPI — Evento LEAD (Producción real, solo 1 vez por sender por día)
+  // ===============================
+  try {
+    // Normaliza teléfono
+    const phoneE164 = String(fromNumber || contactoNorm)
+      .replace(/[^\d+]/g, "")
+      .trim();
+
+    // Deduplicación por día → evita múltiples “Lead” si la persona envía 10 mensajes
+    const eventId = `lead:${tenant.id}:${phoneE164}:${new Date().toISOString().slice(0,10)}`;
+
+    await sendCapiEvent({
+      tenantId: tenant.id,
+      eventName: "Lead",
+      eventId,
+      userData: {
+        // Hash para matching sin revelar datos
+        external_id: [
+          sha256(`${tenant.id}:${phoneE164}`)
+        ],
+
+        // Hash recomendado por Meta para mejor match
+        ph: [
+          sha256(phoneE164)
+        ],
+      },
+      customData: {
+        channel: "whatsapp",
+        source: "inbound_first_message",
+        preview: (userInput || "").slice(0, 80)
+      }
+    });
+  } catch (e: any) {
+    console.warn("⚠️ Error enviando CAPI Lead:", e?.message);
+  }
+
   if (isNumericOnly) {
     idiomaDestino = await getIdiomaClienteDB(tenant.id, canal, turn.contactoNorm, tenantBase);
     console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (solo número)`);
@@ -752,30 +789,6 @@ export async function procesarMensajeWhatsApp(
 
   // 🧱 FIX CRÍTICO: crea la fila base del cliente si no existe
   await ensureClienteBase(tenant.id, canal, contactoNorm);
-
-  // ===============================
-  // 🧪 TEST CAPI en vivo (WhatsApp inbound)
-  // Solo para probar que llega a Meta en Test Events.
-  // ===============================
-  try {
-    await sendCapiEvent({
-      tenantId: tenant.id,
-      eventName: "Lead", // prueba (luego puedes cambiar a Contact / Purchase etc)
-      userData: {
-        // Identificador consistente por usuario (NO expone el teléfono en claro)
-        external_id: sha256(`${tenant.id}:${fromNumber || contactoNorm}`),
-        // Opcional: si quieres incluir phone hash para mejor match (solo dígitos)
-        // ph: sha256(String(fromNumber || contactoNorm).replace(/[^\d+]/g, "")),
-      },
-      customData: {
-        channel: "whatsapp",
-        inbound_message_id: messageId || undefined,
-        preview: String(userInput || "").slice(0, 60),
-      },
-    });
-  } catch (e: any) {
-    console.warn("⚠️ CAPI test send failed:", e?.message);
-  }
 
   // ✅ FOLLOW-UP RESET: si el cliente volvió a escribir, cancela cualquier follow-up pendiente
   try {
