@@ -9,10 +9,14 @@ import { sendCancelationEmail } from '../../lib/mailer';
 import { markTrialUsedByEmail } from '../../lib/trial';
 import twilio from 'twilio';
 import { sendCapiEvent } from "../../services/metaCapi"; 
+import crypto from "crypto";
 
 const router = express.Router();
 
 const META_EVENT_SOURCE_URL = "https://aamy.ai/upgrade";
+
+const sha256 = (s: string) =>
+  crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
 
 let stripe: Stripe;
 let STRIPE_WEBHOOK_SECRET: string;
@@ -27,6 +31,19 @@ type ChannelFlags = {
 
 const bool = (v: any, fallback = false) =>
   String(v ?? '').toLowerCase() === 'true' ? true : (v === true ? true : fallback);
+
+function buildCapiUserData(params: { tenantId: string; email?: string | null; phoneE164?: string | null }) {
+  const { tenantId, email, phoneE164 } = params;
+
+  const ud: any = {
+    external_id: sha256(`${tenantId}:${email || phoneE164 || "unknown"}`),
+  };
+
+  if (email) ud.em = sha256(email);
+  if (phoneE164) ud.ph = sha256(phoneE164);
+
+  return ud;
+}
 
 // ✅ UPsert a channel_settings
 const upsertChannelFlags = async (tenantId: string, flags: ChannelFlags) => {
@@ -412,20 +429,22 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         }
 
         console.log('✅ Opción A completada: $399 pagado y suscripción $199 creada:', subscription.id);
-        // ✅ META CAPI: Purchase por setup $399
+
+        // ✅ META CAPI: Purchase por setup $399 (dedupe por session.id)
         try {
+          const phoneE164 = (session.customer_details?.phone || "")
+            .replace(/[^\d+]/g, "")
+            .trim();
+
           await sendCapiEvent({
             tenantId,
             eventName: "Purchase",
-            // opcional: eventTime
-            userData: {
-              // si tienes email, ideal enviar hashed; por ahora mínimo:
-              ...(email ? { em: [email] } : {}),
-            },
+            eventId: `purchase:${tenantId}:${session.id}`, // ✅ dedupe real
+            userData: buildCapiUserData({ tenantId, email: email || null, phoneE164: phoneE164 || null }),
             customData: {
               value: (session.amount_total ?? 0) / 100,
               currency: (session.currency ?? "usd").toUpperCase(),
-              event_id: session.id,                 // dedup (lo usarás en metaCapi.ts)
+              source: "stripe_setup_399",
               event_source_url: META_EVENT_SOURCE_URL,
             },
           });
@@ -486,17 +505,22 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
         // ✅ META CAPI: Purchase por compra de créditos
         try {
+          const phoneE164 = (session.customer_details?.phone || "")
+            .replace(/[^\d+]/g, "")
+            .trim();
+
           await sendCapiEvent({
             tenantId: tenant_id,
             eventName: "Purchase",
-            userData: { ...(email ? { em: [email] } : {}) },
+            eventId: `purchase:${tenant_id}:${session.id}`, // ✅ dedupe real
+            userData: buildCapiUserData({ tenantId: tenant_id, email: email || null, phoneE164: phoneE164 || null }),
             customData: {
               value: (session.amount_total ?? 0) / 100,
               currency: (session.currency ?? "usd").toUpperCase(),
-              event_id: session.id,
-              event_source_url: META_EVENT_SOURCE_URL,
+              source: "stripe_credits",
               canal,
               cantidad: cantidadInt,
+              event_source_url: META_EVENT_SOURCE_URL,
             },
           });
         } catch (e) {
@@ -551,20 +575,28 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         }
 
         // ✅ META CAPI: Purchase por checkout de suscripción (si hubo cobro en el checkout)
-        try {
-          await sendCapiEvent({
-            tenantId,
-            eventName: "Purchase",
-            userData: { ...(email ? { em: [email] } : {}) },
-            customData: {
-              value: (session.amount_total ?? 0) / 100,
-              currency: (session.currency ?? "usd").toUpperCase(),
-              event_id: session.id,
-              event_source_url: META_EVENT_SOURCE_URL,
-            },
-          });
-        } catch (e) {
-          console.warn("⚠️ Meta CAPI Purchase (subscription checkout) falló (se ignora):", e);
+        const value = (session.amount_total ?? 0) / 100;
+        if (value > 0) {
+          try {
+            const phoneE164 = (session.customer_details?.phone || "")
+              .replace(/[^\d+]/g, "")
+              .trim();
+
+            await sendCapiEvent({
+              tenantId,
+              eventName: "Purchase",
+              eventId: `purchase:${tenantId}:${session.id}`, // ✅ dedupe real
+              userData: buildCapiUserData({ tenantId, email: email || null, phoneE164: phoneE164 || null }),
+              customData: {
+                value,
+                currency: (session.currency ?? "usd").toUpperCase(),
+                source: "stripe_subscription_checkout",
+                event_source_url: META_EVENT_SOURCE_URL,
+              },
+            });
+          } catch (e) {
+            console.warn("⚠️ Meta CAPI Purchase (subscription checkout) falló (se ignora):", e);
+          }
         }
 
         // 2) Datos de la suscripción
@@ -803,15 +835,21 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
     }
 
     // ✅ META CAPI: Purchase por renovación (invoice)
+    const tenantId = await getTenantIdBySubscriptionId(subscriptionId);
+    if (!tenantId) {
+      console.warn("⚠️ invoice.payment_succeeded: no tenantId para subscriptionId", subscriptionId);
+      return res.status(200).json({ received: true });
+    }
     try {
       await sendCapiEvent({
-        tenantId: (await getTenantIdBySubscriptionId(subscriptionId)) || "",
+        tenantId,
         eventName: "Purchase",
-        userData: { ...(customerEmail ? { em: [customerEmail] } : {}) },
+        eventId: `purchase:${tenantId}:${invoice.id}`, // ✅ dedupe por invoice.id
+        userData: buildCapiUserData({ tenantId, email: customerEmail || null, phoneE164: null }),
         customData: {
           value: (invoice.amount_paid ?? 0) / 100,
           currency: (invoice.currency ?? "usd").toUpperCase(),
-          event_id: invoice.id,
+          source: "stripe_invoice_renewal",
           event_source_url: META_EVENT_SOURCE_URL,
         },
       });
