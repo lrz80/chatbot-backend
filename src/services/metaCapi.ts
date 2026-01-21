@@ -44,13 +44,15 @@ export async function sendCapiEvent({
     const payload = {
       data: [
         {
-          event_name: eventName,
-          event_time: eventTime,
-          action_source: "system_generated",
-          user_data: userData,
-          custom_data: customData,
+        event_name: eventName,
+        event_time: eventTime,
+        action_source: "system_generated",
+        user_data: userData,
+        custom_data: customData,
         },
       ],
+      // 👇 SOLO PARA PRUEBA (lo quitas luego)
+      test_event_code: process.env.META_TEST_EVENT_CODE,
     };
 
     // 3) Enviar evento CAPI
