@@ -917,6 +917,46 @@ export async function procesarMensajeWhatsApp(
           messageId,
         });
       }
+
+      // ===============================
+      // 📡 META CAPI — QUALIFIED LEAD (OPCIÓN PRO): 1 vez por contacto evento 2
+      // ===============================
+      try {
+        const finalIntent = (lastIntent || INTENCION_FINAL_CANONICA || "").toString().trim().toLowerCase();
+        const finalNivel =
+          typeof detectedInterest === "number"
+            ? Math.min(3, Math.max(1, detectedInterest))
+            : 2;
+
+        if (messageId && finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 2) {
+          const raw = String(fromNumber || contactoNorm || "").trim();
+          const phoneE164 = raw.replace(/^whatsapp:/i, "").replace(/[^\d+]/g, "").trim();
+          const phoneHash = sha256(phoneE164 || contactoNorm);
+
+          const eventId = `ql:${tenant.id}:${phoneHash}`; // ✅ 1 vez en la vida
+
+          await sendCapiEvent({
+            tenantId: tenant.id,
+            eventName: "Contact",
+            eventId,
+            userData: {
+              external_id: sha256(`${tenant.id}:${contactoNorm}`),
+              ...(phoneE164 ? { ph: sha256(phoneE164) } : {}),
+            },
+            customData: {
+              channel: "whatsapp",
+              intent: finalIntent,
+              interest_level: finalNivel,
+              inbound_message_id: messageId,
+            },
+          });
+
+          console.log("✅ CAPI Contact enviado:", { tenantId: tenant.id, contactoNorm, finalIntent, finalNivel });
+        }
+      } catch (e: any) {
+        console.warn("⚠️ Error enviando CAPI Contact:", e?.message);
+      }
+
       const bookingStep = (convoCtx as any)?.booking?.step;
       const inBooking = bookingStep && bookingStep !== "idle";
 
