@@ -80,7 +80,7 @@ export async function sendCapiEvent({
     });
 
     const result = await resp.json();
-    console.log("CAPI → Meta resp:", result);
+    console.log("[CAPI] Meta resp =", JSON.stringify(result));
     return result;
   } catch (e) {
     console.error("❌ Error en sendCapiEvent:", e);
