@@ -56,8 +56,12 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     const meta_pixel_id = String(settingsObj?.meta?.pixel_id || '');
     const meta_pixel_enabled = Boolean(settingsObj?.meta?.pixel_enabled);
 
-    const meta_capi_token = String(settingsObj?.meta?.capi_token || '');
-    const meta_capi_token_configured = Boolean(meta_capi_token && meta_capi_token.length > 0);
+    const meta_capi_token_full = String(settingsObj?.meta?.capi_token || '');
+    const meta_capi_token_configured = meta_capi_token_full.length > 0;
+
+    const meta_capi_token_preview = meta_capi_token_full
+      ? `${meta_capi_token_full.slice(0, 6)}...${meta_capi_token_full.slice(-4)}`
+      : '';
 
     const canal = req.query.canal || 'whatsapp';
 
@@ -265,8 +269,8 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       meta_subchannel_flags,
       meta_pixel_id,
       meta_pixel_enabled,
-      meta_capi_token,
       meta_capi_token_configured,
+      meta_capi_token_preview,
     });
     // ==================== FIN NUEVO BLOQUE ====================
 
