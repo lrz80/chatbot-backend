@@ -46,6 +46,18 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: 'Tenant no encontrado' });
 
+    // ✅ Meta Pixel (por tenant) desde tenants.settings (JSONB)
+    let settingsObj: any = tenant.settings;
+    if (typeof settingsObj === 'string') {
+      try { settingsObj = JSON.parse(settingsObj); } catch { settingsObj = {}; }
+    }
+    settingsObj = settingsObj && typeof settingsObj === 'object' ? settingsObj : {};
+
+    const meta_pixel_id = String(settingsObj?.meta?.pixel_id || '');
+    const meta_pixel_enabled = Boolean(settingsObj?.meta?.pixel_enabled);
+
+    const meta_capi_token_configured = Boolean(settingsObj?.meta?.capi_token);
+
     const canal = req.query.canal || 'whatsapp';
 
     const faqsRes = await pool.query(
@@ -172,6 +184,7 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
     const plan: string | null = plan_name;
     const registered_at: string | null = tenant.created_at ?? null;
     const fecha_registro: string | null = registered_at;
+
     // ==================== FIN BLOQUE ====================
 
     return res.status(200).json({
@@ -249,6 +262,9 @@ router.get('/', authenticateUser, async (req: any, res: Response) => {
       can_edit_by_channel,
 
       meta_subchannel_flags,
+      meta_pixel_id,
+      meta_pixel_enabled,
+      meta_capi_token_configured,
     });
     // ==================== FIN NUEVO BLOQUE ====================
 
@@ -265,6 +281,19 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
     if (!tenant_id) return res.status(401).json({ error: 'Tenant no autenticado' });
 
     const { cta_text, cta_url, ...body } = req.body;
+
+    // ✅ Meta Pixel inputs (del front) -> se guardan en tenants.settings.meta
+    const meta_pixel_id_raw = (body as any).meta_pixel_id;
+    const meta_pixel_enabled_raw = (body as any).meta_pixel_enabled;
+
+    // ✅ CAPI token (opcional, recomendado para CAPI)
+    // OJO: no lo devuelvas luego en GET
+    const meta_capi_token_raw = (body as any).meta_capi_token;
+
+    // quítalos del body para que no caigan en el "allowed fields" del tenant
+    delete (body as any).meta_pixel_id;
+    delete (body as any).meta_pixel_enabled;
+    delete (body as any).meta_capi_token;
 
     // ✅ Meta subchannels (silencio total): facebook_enabled / instagram_enabled
     // Se guardan en channel_settings (no en tenants)
@@ -306,6 +335,54 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
             SET ${sets.join(', ')}
           WHERE tenant_id = $${vals.length + 1}`,
         [...vals, tenant_id]
+      );
+    }
+
+    // ✅ Guardar Meta Pixel / CAPI en tenants.settings.meta (UNA sola query)
+    if (
+      meta_pixel_id_raw !== undefined ||
+      meta_pixel_enabled_raw !== undefined ||
+      meta_capi_token_raw !== undefined
+    ) {
+      const metaPatch: any = {};
+
+      // pixel_id
+      if (meta_pixel_id_raw !== undefined) {
+        const pid = String(meta_pixel_id_raw || "").trim();
+        if (pid && !/^\d{10,20}$/.test(pid)) {
+          return res.status(400).json({ error: "meta_pixel_id inválido (debe ser numérico)" });
+        }
+        metaPatch.pixel_id = pid || null;
+      }
+
+      // pixel_enabled
+      if (meta_pixel_enabled_raw !== undefined) {
+        const enabled =
+          meta_pixel_enabled_raw === true ||
+          meta_pixel_enabled_raw === "true" ||
+          meta_pixel_enabled_raw === 1 ||
+          meta_pixel_enabled_raw === "1";
+        metaPatch.pixel_enabled = enabled;
+      }
+
+      // capi_token (para server-side CAPI)
+      if (meta_capi_token_raw !== undefined) {
+        const token = String(meta_capi_token_raw || "").trim();
+        // token vacío => lo limpias
+        metaPatch.capi_token = token || null;
+      }
+
+      await pool.query(
+        `UPDATE tenants
+            SET settings = jsonb_set(
+                  COALESCE(settings, '{}'::jsonb),
+                  '{meta}',
+                  COALESCE(settings->'meta','{}'::jsonb) || $2::jsonb,
+                  true
+                ),
+                updated_at = NOW()
+          WHERE id = $1`,
+        [tenant_id, JSON.stringify(metaPatch)]
       );
     }
 

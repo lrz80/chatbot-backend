@@ -69,21 +69,23 @@ router.get('/me', async (req: Request, res: Response) => {
     const tenantId = await getTenantIdFromCookie(req);
     const { rows } = await pool.query(
       `SELECT
-         id,
-         name,
-         slug,
-         categoria,
-         idioma,
-         COALESCE(plan, 'trial')            AS plan,
-         COALESCE(membresia_activa, false)  AS membresia_activa,
-         membresia_inicio,
-         prompt,
-         mensaje_bienvenida AS bienvenida,
-         onboarding_completado,
-         settings,
-         links
-       FROM tenants
-       WHERE id = $1`,
+        id,
+        name,
+        slug,
+        categoria,
+        idioma,
+        COALESCE(plan, 'trial')            AS plan,
+        COALESCE(membresia_activa, false)  AS membresia_activa,
+        membresia_inicio,
+        prompt,
+        mensaje_bienvenida AS bienvenida,
+        onboarding_completado,
+        settings,
+        links,
+        COALESCE(settings->'meta'->>'pixel_id', '') AS meta_pixel_id,
+        COALESCE((settings->'meta'->>'pixel_enabled')::boolean, false) AS meta_pixel_enabled
+      FROM tenants
+      WHERE id = $1`,
       [tenantId]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Tenant no encontrado' });
@@ -131,6 +133,9 @@ router.post('/', async (req: Request, res: Response) => {
       availability_api_url,
       booking_api_url,
       availability_headers,   // objeto o string JSON
+
+      meta_pixel_id,
+      meta_pixel_enabled,
     } = req.body || {};
 
     // 0) Normalizadores
@@ -256,18 +261,70 @@ router.post('/', async (req: Request, res: Response) => {
 
     // 6) Devuelve estado actual
     const { rows } = await pool.query(
-      `SELECT id, name, slug, categoria, idioma,
-              COALESCE(plan, 'trial') AS plan,
-              COALESCE(membresia_activa, false) AS membresia_activa,
-              membresia_inicio,
-              prompt,
-              mensaje_bienvenida AS bienvenida,
-              onboarding_completado,
-              settings, links
-         FROM tenants
-        WHERE id = $1`,
+      `SELECT
+        id,
+        name,
+        slug,
+        categoria,
+        idioma,
+        COALESCE(plan, 'trial')            AS plan,
+        COALESCE(membresia_activa, false)  AS membresia_activa,
+        membresia_inicio,
+        prompt,
+        mensaje_bienvenida AS bienvenida,
+        onboarding_completado,
+        settings,
+        links,
+
+        -- CAMPOS PLANOS DEL PIXEL PARA QUE EL FRONT NO TENGA QUE NAVEGAR settings.json
+        COALESCE(settings->'meta'->>'pixel_id', '') AS meta_pixel_id,
+        COALESCE((settings->'meta'->>'pixel_enabled')::boolean, false) AS meta_pixel_enabled
+
+      FROM tenants
+      WHERE id = $1`,
       [tenantId]
     );
+
+    // 7) Meta Pixel → settings.meta.pixel_id y settings.meta.pixel_enabled
+    if (typeof meta_pixel_id !== 'undefined' || typeof meta_pixel_enabled !== 'undefined') {
+      // Validación simple del Pixel ID (números)
+      if (typeof meta_pixel_id !== 'undefined') {
+        const pid = String(meta_pixel_id).trim();
+        if (pid && !/^\d{10,20}$/.test(pid)) {
+          return res.status(400).json({ error: 'Pixel ID inválido' });
+        }
+
+        await pool.query(
+          `UPDATE tenants
+            SET settings = jsonb_set(
+                  COALESCE(settings, '{}'::jsonb),
+                  '{meta,pixel_id}',
+                  to_jsonb($2::text),
+                  true
+                ),
+                updated_at = NOW()
+          WHERE id = $1`,
+          [tenantId, pid]
+        );
+      }
+
+      if (typeof meta_pixel_enabled !== 'undefined') {
+        const enabled = !!meta_pixel_enabled;
+
+        await pool.query(
+          `UPDATE tenants
+            SET settings = jsonb_set(
+                  COALESCE(settings, '{}'::jsonb),
+                  '{meta,pixel_enabled}',
+                  to_jsonb($2::boolean),
+                  true
+                ),
+                updated_at = NOW()
+          WHERE id = $1`,
+          [tenantId, enabled]
+        );
+      }
+    }
 
     res.status(200).json({ success: true, tenant: rows[0] });
   } catch (error) {
