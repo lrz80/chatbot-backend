@@ -49,6 +49,31 @@ function hasAppointmentContext(text: string) {
   return agendLike.test(t) || bookLike.test(t);
 }
 
+function isCapabilityQuestion(text: string) {
+  const t = normalizeText(text);
+
+  // Preguntas tipo: "puede...?", "se puede...?", "puedes...?", "does it...?", "can you...?"
+  const q =
+    /\b(puede|pueden|se puede|puedes|podria|podrían|capaz|permite|permiten|hace|hacen|incluye|incluyen)\b/.test(t) ||
+    /\b(can you|can it|does it|do you|is it able to|are you able to)\b/.test(t);
+
+  // Debe estar preguntando (signo ? o estructura interrogativa)
+  const looksLikeQuestion = /\?/.test(text) || /\b(que|qué|como|cómo|cuál|cual)\b/.test(t);
+
+  return q && looksLikeQuestion;
+}
+
+function isDirectBookingRequest(text: string) {
+  const t = normalizeText(text);
+
+  // Petición directa: "quiero agendar", "agéndame", "resérvame", "book me", etc.
+  return (
+    /\b(quiero|quisiera|necesito|me gustaria|me gustaría|vamos a|podemos)\s+(agendar|reservar|programar)\b/.test(t) ||
+    /\b(agendame|agéndame|reservame|resérvame|programame|prográmame)\b/.test(t) ||
+    /\b(book me|schedule me|reserve)\b/.test(t)
+  );
+}
+
 async function getAppointmentSettings(tenantId: string) {
   const { rows } = await pool.query(
     `SELECT default_duration_min, buffer_min, timezone, enabled
@@ -561,11 +586,24 @@ export async function bookingFlowMvp(opts: {
   const terms = await loadBookingTerms(tenantId);
   const rawWants = matchesBookingIntent(userText, terms);
 
-  // ✅ gating fuerte
+  const capability = isCapabilityQuestion(userText);
+  const directReq = isDirectBookingRequest(userText);
+
   const wantsBooking =
-    hasAppointmentContext(userText) ||
     hasExplicitDateTime(userText) ||
-    rawWants;
+    directReq ||
+    (rawWants && !capability) ||
+    (hasAppointmentContext(userText) && !capability);
+
+  if (booking.step === "idle" && capability && hasAppointmentContext(userText) && !hasExplicitDateTime(userText) && !directReq) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+  ? "Yes — Aamy can schedule your business appointments using Google Calendar. Would you like to schedule a call with our team to learn more? Reply: 'I want to schedule'."
+  : "Sí — Aamy puede agendar las citas de tu negocio usando Google Calendar. ¿Te gustaría programar una llamada con nuestro equipo para saber más? Escribe: 'Quiero agendar'.",
+      ctxPatch: { booking: { step: "idle" } },
+    };
+  }
 
   const gate = await canUseChannel(tenantId, "google_calendar");
   const bookingEnabled = !!gate.settings_enabled;
