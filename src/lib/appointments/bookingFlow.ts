@@ -1185,8 +1185,8 @@ if (booking.step === "idle") {
   return {
     handled: true,
     reply: idioma === "en"
-      ? "Great — do you prefer morning or afternoon?"
-      : "Perfecto — ¿prefieres en la mañana o en la tarde?",
+      ? "Sure, I can help you schedule it. Does morning or afternoon work better for you?"
+      : "Claro, puedo ayudarte a agendar. ¿Te funciona más en la mañana o en la tarde?",
     ctxPatch: { booking: { step: "ask_daypart", timeZone, purpose } },
   };
 }
@@ -1212,8 +1212,8 @@ if (booking.step === "ask_purpose") {
   return {
     handled: true,
     reply: idioma === "en"
-      ? "Great — do you prefer morning or afternoon?"
-      : "Perfecto — ¿prefieres en la mañana o en la tarde?",
+      ? "Sure, I can help you schedule it. Does morning or afternoon work better for you?"
+      : "Claro, puedo ayudarte a agendar. ¿Te funciona más en la mañana o en la tarde?",
     ctxPatch: { booking: { step: "ask_daypart", timeZone, purpose } },
   };
 }
