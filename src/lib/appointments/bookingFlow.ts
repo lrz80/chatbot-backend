@@ -141,6 +141,28 @@ async function getBusinessHours(tenantId: string): Promise<HoursByWeekday | null
     const raw = rows[0]?.horario_atencion;
     if (!raw) return null;
 
+        // ✅ BACKUP: si viene como texto "09:00-17:00", conviértelo a JSON por días
+    if (typeof raw === "string") {
+      const s = raw.trim();
+
+      // acepta "09:00-17:00" o "09:00 - 17:00"
+      const m = s.match(/^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/);
+      if (m) {
+        const start = m[1];
+        const end = m[2];
+
+        return {
+          mon: { start, end },
+          tue: { start, end },
+          wed: { start, end },
+          thu: { start, end },
+          fri: { start, end },
+          sat: null,
+          sun: null,
+        };
+      }
+    }
+
     const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
     if (!obj || typeof obj !== "object") return null;
 
