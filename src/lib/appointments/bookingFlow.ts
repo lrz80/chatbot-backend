@@ -19,6 +19,20 @@ type BookingCtx = {
 
 const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 
+const MIN_LEAD_MINUTES = 5; // o 0 si quieres permitir "ahora mismo"
+
+function isPastSlot(startISO: string, timeZone: string) {
+  const start = DateTime.fromISO(startISO, { zone: timeZone });
+  const now = DateTime.now().setZone(timeZone);
+
+  if (!start.isValid) return true;
+
+  // Requerimos que el start sea >= now + MIN_LEAD_MINUTES
+  const minStart = now.plus({ minutes: MIN_LEAD_MINUTES });
+
+  return start < minStart;
+}
+
 function normalizeText(s: string) {
   return String(s || "")
     .toLowerCase()
@@ -27,11 +41,6 @@ function normalizeText(s: string) {
     .replace(/[^\w\s:@.-]/g, " ")    // quita signos raros
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function isDemoRequest(text: string) {
-  const t = normalizeText(text);
-  return /\b(demo|demostracion|demostración|prueba|trial)\b/.test(t);
 }
 
 function hasExplicitDateTime(text: string) {
@@ -131,7 +140,7 @@ function detectPurpose(text: string): string | null {
 }
 
 function extractDateTimeToken(input: string): string | null {
-  const m = String(input || "").match(/(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})/);
+  const m = String(input || "").match(/\b(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\b/);
   return m?.[1] || null;
 }
 
@@ -177,8 +186,11 @@ function parseAllInOne(input: string, timeZone: string, durationMin: number): {
   const dtToken = extractDateTimeToken(raw);
   const dtParsed = dtToken ? parseDateTimeExplicit(dtToken, timeZone, durationMin) : null;
 
-  const startISO = dtParsed?.startISO || null;
-  const endISO = dtParsed?.endISO || null;
+  const startISO =
+    (dtParsed as any)?.error === "PAST_SLOT" ? null : (dtParsed as any)?.startISO || null;
+
+  const endISO =
+    (dtParsed as any)?.error === "PAST_SLOT" ? null : (dtParsed as any)?.endISO || null;
 
   // 3) Nombre: resto del texto sin email ni fecha
   let nameCandidate = raw;
@@ -287,6 +299,12 @@ function parseDateTimeExplicit(input: string, timeZone: string, durationMin: num
 
   const startISO = dt.toISO();
   const endISO = dt.plus({ minutes: durationMin }).toISO();
+  if (!startISO || !endISO) return null;
+
+  // ✅ BLOQUEO PASADO (usa tu helper)
+  if (isPastSlot(startISO, timeZone)) {
+    return { startISO: null, endISO: null, timeZone, error: "PAST_SLOT" as const };
+  }
 
   return { startISO, endISO, timeZone };
 }
@@ -440,6 +458,12 @@ async function bookInGoogle(opts: {
 
   if (!start.isValid || !end.isValid) {
     return { ok: false as const, error: "INVALID_DATETIME" as const, busy: [] as any[] };
+  }
+
+  // ✅ BLOQUEO FINAL: NO permitir eventos en el pasado
+  const now = DateTime.now().setZone(timeZone);
+  if (start < now.plus({ minutes: MIN_LEAD_MINUTES })) {
+    return { ok: false as const, error: "PAST_SLOT" as const, busy: [] as any[] };
   }
 
   const timeMin = start.minus({ minutes: bufferMin }).toISO();
@@ -716,8 +740,52 @@ if (booking.step === "ask_all") {
 
   const parsed = parseAllInOne(userText, timeZone, durationMin);
 
+  // ✅ Si vino fecha/hora pero era en el pasado, dilo explícitamente
+  const dtToken = extractDateTimeToken(userText);
+  if (dtToken) {
+    const chk: any = parseDateTimeExplicit(dtToken, timeZone, durationMin);
+    if (chk?.error === "PAST_SLOT") {
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? "That date/time is in the past. Please send a future date and time (YYYY-MM-DD HH:mm)."
+          : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
+        ctxPatch: {
+          booking: {
+            step: "ask_datetime",
+            timeZone,
+            name: parsed.name || (booking as any)?.name || null,
+            email: parsed.email || (booking as any)?.email || null,
+            date_only: null,
+          },
+        },
+      };
+    }
+  }
+
   const dateOnly = extractDateOnlyToken(userText);
   if (dateOnly && parsed.name && parsed.email && !parsed.startISO) {
+    // ✅ BLOQUEO: si la fecha (sin hora) ya es pasada, no pidas hora
+    const dateOnlyDt = DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: timeZone });
+    const todayStart = DateTime.now().setZone(timeZone).startOf("day");
+    if (dateOnlyDt.isValid && dateOnlyDt < todayStart) {
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? "That date is in the past. Please send a future date (YYYY-MM-DD)."
+          : "Esa fecha ya pasó. Envíame una fecha futura (YYYY-MM-DD).",
+        ctxPatch: {
+          booking: {
+            step: "ask_datetime",
+            timeZone,
+            name: parsed.name,
+            email: parsed.email,
+            date_only: null,
+          },
+        },
+      };
+    }
+
     return {
         handled: true,
         reply: idioma === "en"
@@ -935,13 +1003,13 @@ if (booking.step === "ask_email") {
       };
     }
 
-    const parsed = parseDateTimeExplicit(userText, timeZone, durationMin);
+    const parsed: any = parseDateTimeExplicit(userText, timeZone, durationMin);
 
     const b: any = booking;
     const hhmm = String(userText || "").trim().match(/^(\d{2}:\d{2})$/);
 
     if (b?.date_only && hhmm) {
-      const parsed2 = parseDateTimeExplicit(`${b.date_only} ${hhmm[1]}`, timeZone, durationMin);
+      const parsed2: any = parseDateTimeExplicit(`${b.date_only} ${hhmm[1]}`, timeZone, durationMin);
 
       if (!parsed2) {
         return {
@@ -953,7 +1021,18 @@ if (booking.step === "ask_email") {
         };
       }
 
-      const whenTxt = formatSlotHuman({ startISO: parsed2.startISO, timeZone, idioma });
+      // ✅ BLOQUEO: hora en el pasado (cuando ya tenemos date_only)
+      if (parsed2?.error === "PAST_SLOT") {
+        return {
+          handled: true,
+          reply: idioma === "en"
+            ? "That time is in the past. Please send a future time (HH:mm)."
+            : "Esa hora ya pasó. Envíame una hora futura (HH:mm).",
+          ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
+        };
+      }
+
+      const whenTxt = formatSlotHuman({ startISO: parsed2.startISO!, timeZone, idioma });
 
       return {
         handled: true,
@@ -974,16 +1053,27 @@ if (booking.step === "ask_email") {
     }
 
     if (!parsed) {
-        return {
+      return {
         handled: true,
         reply: idioma === "en"
-            ? "I couldn’t read that. Please use: YYYY-MM-DD HH:mm (example: 2026-01-17 15:00)."
-            : "No pude leer esa fecha/hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-17 15:00).",
+          ? "I couldn’t read that. Please use: YYYY-MM-DD HH:mm (example: 2026-01-17 15:00)."
+          : "No pude leer esa fecha/hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-17 15:00).",
         ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
-        };
+      };
     }
 
-    const whenTxt = formatSlotHuman({ startISO: parsed.startISO, timeZone, idioma });
+    // ✅ BLOQUEO: fecha/hora en el pasado
+    if (parsed?.error === "PAST_SLOT") {
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? "That date/time is in the past. Please send a future date and time (YYYY-MM-DD HH:mm)."
+          : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
+        ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
+      };
+    }
+
+    const whenTxt = formatSlotHuman({ startISO: parsed.startISO!, timeZone, idioma });
     return {
       handled: true,
       reply: idioma === "en"
@@ -1138,6 +1228,16 @@ if (booking.step === "ask_email") {
           [tenantId, canal, lockId]
         );
       } catch {}
+
+      if ((g as any)?.error === "PAST_SLOT") {
+        return {
+          handled: true,
+          reply: idioma === "en"
+            ? "That date/time is in the past. Please send a future date and time (YYYY-MM-DD HH:mm)."
+            : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
+          ctxPatch: { booking: { step: "ask_datetime", timeZone } },
+        };
+      }
 
       return {
         handled: true,
