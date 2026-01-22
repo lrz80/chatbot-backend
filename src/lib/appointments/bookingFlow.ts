@@ -684,23 +684,19 @@ function parseEmail(input: string) {
 
 async function isGoogleConnected(tenantId: string): Promise<boolean> {
   try {
-    // Soporta esquemas donde exista "connected" boolean y/o "status" string
     const { rows } = await pool.query(
       `
       SELECT 1
-        FROM calendar_integrations
-       WHERE tenant_id = $1
-         AND provider = 'google'
-         AND (
-              (connected IS TRUE)
-              OR (status = 'connected')
-         )
-       LIMIT 1
+      FROM calendar_integrations
+      WHERE tenant_id = $1
+        AND status = 'connected'
+      LIMIT 1
       `,
       [tenantId]
     );
     return rows.length > 0;
-  } catch {
+  } catch (e: any) {
+    console.log("❌ isGoogleConnected error:", e.message);
     return false;
   }
 }
