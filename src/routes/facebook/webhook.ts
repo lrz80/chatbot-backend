@@ -38,6 +38,9 @@ import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
 import { detectarEmocion } from "../../lib/detectarEmocion";
 import { applyEmotionTriggers } from "../../lib/guards/emotionTriggers";
 import { scheduleFollowUpIfEligible, cancelPendingFollowUps } from "../../lib/followups/followUpScheduler";
+import crypto from "crypto";
+import { sendCapiEvent } from "../../services/metaCapi";
+import { bookingFlowMvp } from "../../lib/appointments/bookingFlow";
 
 
 type CanalEnvio = "facebook" | "instagram";
@@ -47,6 +50,33 @@ const router = express.Router();
 const GLOBAL_ID =
   process.env.GLOBAL_CHANNEL_TENANT_ID ||
   "00000000-0000-0000-0000-000000000001"; // fallback seguro
+
+const sha256 = (s: string) =>
+  crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
+
+// ✅ DEDUPE 7 días (bucket estable). No depende de timezone.
+function bucket7DaysUTC(d = new Date()) {
+  const ms = d.getTime();
+  const windowMs = 7 * 24 * 60 * 60 * 1000;
+  return `b7:${Math.floor(ms / windowMs)}`;
+}
+
+// ✅ Reserva dedupe en DB usando interactions (unique tenant+canal+message_id)
+async function reserveCapiEvent(tenantId: string, eventId: string): Promise<boolean> {
+  try {
+    const r = await pool.query(
+      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+       VALUES ($1, 'meta_capi', $2, NOW())
+       ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
+       RETURNING 1`,
+      [tenantId, eventId]
+    );
+    return (r?.rowCount ?? 0) > 0;
+  } catch (e: any) {
+    console.warn("⚠️ reserveCapiEvent failed:", e?.message);
+    return false;
+  }
+}
 
 // ===============================
 // Regex / Parse helpers (igual WA)
@@ -123,6 +153,15 @@ function parseDatosCliente(text: string) {
   return { nombre, email, telefono, pais };
 }
 
+function looksLikeBookingPayload(text: string) {
+  const t = String(text || "");
+  const hasEmail = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(t);
+  const hasDateTime = /\b\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\b/.test(t);
+  const hasDateOnly = /\b\d{4}-\d{2}-\d{2}\b/.test(t);
+  const hasTimeOnly = /^\s*\d{2}:\d{2}\s*$/.test(t);
+  return hasEmail || hasDateTime || hasDateOnly || hasTimeOnly;
+}
+
 // ===============================
 // Normalizadores de idioma (igual WA)
 // ===============================
@@ -138,17 +177,24 @@ const normalizeLang = (code?: string | null): "es" | "en" =>
 // ===============================
 // DB helpers (alineados a WA)
 // ===============================
-async function ensureClienteBase(tenantId: string, canal: string, contacto: string) {
+async function ensureClienteBase(
+  tenantId: string,
+  canal: string,
+  contacto: string
+): Promise<boolean> {
   try {
-    await pool.query(
+    const r = await pool.query(
       `
       INSERT INTO clientes (tenant_id, canal, contacto, created_at, updated_at)
       VALUES ($1, $2, $3, NOW(), NOW())
       ON CONFLICT (tenant_id, canal, contacto)
       DO UPDATE SET updated_at = NOW()
+      RETURNING (xmax = 0) AS inserted
       `,
       [tenantId, canal, contacto]
     );
+
+    return r.rows?.[0]?.inserted === true; // ✅ true = primer mensaje de ese contacto
   } catch (e: any) {
     console.warn("⚠️ ensureClienteBase FAILED", {
       tenantId,
@@ -159,6 +205,7 @@ async function ensureClienteBase(tenantId: string, canal: string, contacto: stri
       detail: e?.detail,
       constraint: e?.constraint,
     });
+    return false;
   }
 }
 
@@ -218,6 +265,13 @@ async function getSelectedChannelDB(
     const v = String(rows[0]?.selected_channel || "").trim().toLowerCase();
     if (v === "whatsapp" || v === "instagram" || v === "facebook" || v === "multi") return v as any;
   } catch {}
+  return null;
+}
+
+function extractBookingLinkFromPrompt(promptBase: string): string | null {
+  if (!promptBase) return null;
+  const tagged = promptBase.match(/LINK_RESERVA:\s*(https?:\/\/\S+)/i);
+  if (tagged?.[1]) return tagged[1].replace(/[),.]+$/g, "");
   return null;
 }
 
@@ -635,9 +689,6 @@ router.get("/api/facebook/webhook", requireChannel("meta"), (req, res) => {
   res.sendStatus(400);
 });
 
-// Dedupe por MID (inbound)
-const mensajesProcesados = new Set<string>();
-
 // ===============================
 // POST Meta (Facebook / Instagram) — pipeline estilo WA
 // ===============================
@@ -676,14 +727,6 @@ router.post("/api/facebook/webhook", async (req, res) => {
           textLen: userInput?.length || 0,
         });
 
-        // Dedupe inbound
-        if (mensajesProcesados.has(messageId)) {
-          console.log("⏩ [META DEDUPE IN]", { messageId });
-          continue;
-        }
-        mensajesProcesados.add(messageId);
-        setTimeout(() => mensajesProcesados.delete(messageId), 60_000);
-
         // Resolver tenant por pageId
         const { rows } = await pool.query(
           `SELECT t.*
@@ -704,6 +747,27 @@ router.post("/api/facebook/webhook", async (req, res) => {
         const isInstagram = tenant.instagram_page_id && String(tenant.instagram_page_id) === String(pageId);
         const canalEnvio: CanalEnvio = isInstagram ? "instagram" : "facebook";
         const canal: Canal = canalEnvio as any; // para messages/estado
+
+        // ✅ DEDUPE INBOUND (DB) — 1 vez por messageId por tenant+canal
+        {
+          const r = await pool.query(
+            `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
+            RETURNING 1`,
+            [tenantId, canalEnvio, messageId]
+          );
+
+          if ((r.rowCount ?? 0) === 0) {
+            console.log("⏩ [META] inbound dedupe: ya procesado messageId", {
+              tenantId,
+              canalEnvio,
+              messageId,
+            });
+            continue;
+          }
+        }
+
         console.log("🏷️ [META TENANT RESOLVED]", {
           tenantId,
           canalEnvio,
@@ -746,7 +810,40 @@ router.post("/api/facebook/webhook", async (req, res) => {
 
         let idiomaDestino: "es" | "en" = tenantBase;
 
-        await ensureClienteBase(tenantId, canalEnvio, senderId);
+        const isNewLead = await ensureClienteBase(tenantId, canalEnvio, senderId);
+
+        // ===============================
+        // 📡 META CAPI — LEAD (OPCIÓN PRO): solo primer mensaje del contacto
+        // ===============================
+        try {
+          if (isNewLead) {
+            const contactHash = sha256(senderId); // PSID/IGSID estable
+
+            const eventId = `lead:${tenantId}:${contactHash}`; // ✅ 1 vez en la vida
+
+            await sendCapiEvent({
+              tenantId,
+              eventName: "Lead",
+              eventId,
+              userData: {
+                external_id: sha256(`${tenantId}:${senderId}`),
+              },
+              customData: {
+                channel: canalEnvio, // "facebook" | "instagram"
+                source: "first_inbound_message",
+                inbound_message_id: messageId,
+                preview: (userInput || "").slice(0, 80),
+                page_id: String(pageId || ""),
+              },
+            });
+
+            console.log("✅ CAPI Lead enviado (primer mensaje):", { tenantId, canalEnvio, senderId });
+          } else {
+            console.log("⏭️ CAPI Lead omitido (ya existía cliente):", { tenantId, canalEnvio, senderId });
+          }
+        } catch (e: any) {
+          console.warn("⚠️ Error enviando CAPI Lead PRO:", e?.message);
+        }
 
         // ✅ FOLLOW-UP RESET: si el cliente volvió a escribir, cancela cualquier follow-up pendiente
         try {
@@ -811,6 +908,21 @@ router.post("/api/facebook/webhook", async (req, res) => {
           if (params.patchCtx && typeof params.patchCtx === "object") {
             convoCtx = { ...(convoCtx || {}), ...params.patchCtx };
           }
+        }
+
+        // ✅ google_calendar_enabled flag (source of truth)
+        let bookingEnabled = false;
+        try {
+          const { rows } = await pool.query(
+            `SELECT google_calendar_enabled
+            FROM channel_settings
+            WHERE tenant_id = $1
+            LIMIT 1`,
+            [tenantId]
+          );
+          bookingEnabled = rows[0]?.google_calendar_enabled === true;
+        } catch (e: any) {
+          console.warn("⚠️ [META] No se pudo leer google_calendar_enabled:", e?.message);
         }
 
         console.log("🧠 [META] facts_summary (start of turn) -> about to fetch", {
@@ -1012,6 +1124,108 @@ router.post("/api/facebook/webhook", async (req, res) => {
                 messageId,
               });
             }
+
+            // ===============================
+            // 📡 META CAPI — QUALIFIED LEAD (#2): Contact (1 vez por contacto)
+            // ===============================
+            try {
+              if (!handled || !reply || !sentOk) return;
+
+              const finalIntent = (lastIntent || INTENCION_FINAL_CANONICA || "")
+                .toString()
+                .trim()
+                .toLowerCase();
+
+              const finalNivel =
+                typeof nivelInteres === "number"
+                  ? Math.min(3, Math.max(1, nivelInteres))
+                  : 2;
+
+              if (messageId && finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 2) {
+                const contactHash = sha256(senderId); // PSID/IGSID estable
+                const eventId = `ql:${tenantId}:${contactHash}`; // ✅ 1 vez en la vida
+
+                await sendCapiEvent({
+                  tenantId,
+                  eventName: "Contact",
+                  eventId,
+                  userData: {
+                    external_id: sha256(`${tenantId}:${senderId}`),
+                  },
+                  customData: {
+                    channel: canalEnvio,
+                    intent: finalIntent,
+                    interest_level: finalNivel,
+                    inbound_message_id: messageId,
+                    page_id: String(pageId || ""),
+                  },
+                });
+
+                console.log("✅ [META] CAPI Contact (#2) enviado:", {
+                  tenantId,
+                  canalEnvio,
+                  senderId,
+                  finalIntent,
+                  finalNivel,
+                  eventId,
+                });
+              }
+            } catch (e: any) {
+              console.warn("⚠️ [META] Error enviando CAPI Contact (#2):", e?.message);
+            }
+
+            // ===============================
+            // 📡 META CAPI — EVENTO #3 (ULTRA-UNIVERSAL): Lead (solo intención FUERTE)
+            // Dedupe: 1 vez por contacto cada 7 días
+            // ===============================
+            try {
+              if (!handled || !reply || !sentOk) return;
+
+              const finalIntent = (lastIntent || INTENCION_FINAL_CANONICA || "")
+                .toString()
+                .trim()
+                .toLowerCase();
+
+              const finalNivel =
+                typeof nivelInteres === "number"
+                  ? Math.min(3, Math.max(1, nivelInteres))
+                  : 1;
+
+              // SOLO intención fuerte
+              if (messageId && finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 3) {
+                // En Meta no siempre tienes teléfono. Usa senderId como identificador estable del contacto.
+                const contactHash = sha256(senderId);
+
+                const eventId = `leadstrong:${tenantId}:${contactHash}:${bucket7DaysUTC()}`;
+                const ok = await reserveCapiEvent(tenantId, eventId);
+
+                if (ok) {
+                  await sendCapiEvent({
+                    tenantId,
+                    eventName: "Lead", // ✅ "cliente potencial" en inglés
+                    eventId,
+                    userData: {
+                      external_id: sha256(`${tenantId}:${senderId}`),
+                    },
+                    customData: {
+                      channel: canalEnvio, // "facebook" | "instagram"
+                      source: "sales_intent_strong",
+                      intent: finalIntent,
+                      interest_level: finalNivel,
+                      inbound_message_id: messageId,
+                      page_id: pageId,
+                    },
+                  });
+
+                  console.log("✅ [META] CAPI Lead (#3 fuerte) enviado:", { tenantId, canalEnvio, senderId, finalIntent, finalNivel, eventId });
+                } else {
+                  console.log("⏭️ [META] CAPI Lead (#3 fuerte) deduped:", { tenantId, canalEnvio, senderId, eventId });
+                }
+              }
+            } catch (e: any) {
+              console.warn("⚠️ [META] Error enviando CAPI evento #3 Lead fuerte:", e?.message);
+            }
+
             // ✅ FOLLOW-UP (programar 1 pendiente si aplica) — SOLO WA/FB/IG
             try {
               await scheduleFollowUpIfEligible({
@@ -1102,10 +1316,11 @@ router.post("/api/facebook/webhook", async (req, res) => {
           console.warn("⚠️ [META] applyEmotionTriggers failed:", e?.message);
         }
 
-        // ===============================
-        // 👋 GREETING GATE (igual WA)
-        // ===============================
-        if (saludoPuroRegex.test(userInput)) {
+        // 👋 GREETING GATE (igual WA defensivo)
+        if (
+          saludoPuroRegex.test(userInput) &&
+          !looksLikeBookingPayload(userInput) // ✅ evita bienvenida si mandan datos
+        ) {
           transition({
             step: "answer",
             patchCtx: {
@@ -1119,6 +1334,48 @@ router.post("/api/facebook/webhook", async (req, res) => {
 
           await replyAndExit(bienvenida, "welcome_gate", "saludo");
           continue;
+        }
+
+        // ===============================
+        // 📅 BOOKING GATE (Google Calendar) — ANTES del SM/LLM
+        // ===============================
+        const bookingLink = extractBookingLinkFromPrompt(promptBase);
+
+        // ✅ Si el toggle está OFF, nunca ejecutes bookingFlowMvp (y limpia estados viejos)
+        if (!bookingEnabled) {
+          if ((convoCtx as any)?.booking) {
+            transition({ patchCtx: { booking: null } });
+            await setConversationStateCompat(tenantId, canal, senderId, {
+              activeFlow,
+              activeStep,
+              context: { booking: null },
+            });
+          }
+        } else {
+          const bookingStep = (convoCtx as any)?.booking?.step;
+          const inBooking = bookingStep && bookingStep !== "idle";
+
+          const bk = await bookingFlowMvp({
+            tenantId,
+            canal: canalEnvio,     // ✅ "facebook" | "instagram"
+            contacto: senderId,    // PSID/IGSID
+            idioma: idiomaDestino,
+            userText: userInput,
+            ctx: convoCtx,
+            bookingLink,
+            messageId,
+          });
+
+          if (bk?.ctxPatch) transition({ patchCtx: bk.ctxPatch });
+
+          if (bk?.handled) {
+            await replyAndExit(
+              bk.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
+              "booking_flow",
+              "agendar_cita"
+            );
+            continue; // 👈 importantísimo en el loop Meta
+          }
         }
 
         // ===============================

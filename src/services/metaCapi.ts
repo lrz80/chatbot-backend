@@ -3,6 +3,8 @@ import fetch from "node-fetch";
 import pool from "../lib/db";
 import crypto from "crypto";
 
+const GRAPH_VERSION = process.env.META_GRAPH_VERSION || "v21.0";
+
 type CapiEvent = {
   tenantId: string;
   eventName: string;
@@ -64,7 +66,7 @@ export async function sendCapiEvent({
     };
 
     // 3) Enviar evento
-    const url = `https://graph.facebook.com/v19.0/${pixelId}/events?access_token=${accessToken}`;
+    const url = `https://graph.facebook.com/${GRAPH_VERSION}/${pixelId}/events?access_token=${accessToken}`;
     const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

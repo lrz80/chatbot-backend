@@ -988,62 +988,30 @@ export async function procesarMensajeWhatsApp(
       const bookingJustCompleted = !!(convoCtx as any)?.booking_completed;
 
       // ===============================
-      // 📡 META CAPI — EVENTO #3 (PRO): Schedule (si booking) o InitiateCheckout (si NO booking)
-      // Dedupe: 1 vez por contacto por 7 días
+      // 📡 META CAPI — EVENTO #3 (ULTRA-UNIVERSAL): Lead (solo intención FUERTE)
+      // Dedupe: 1 vez por contacto cada 7 días (bucket)
       // ===============================
       try {
         const finalIntent = (lastIntent || INTENCION_FINAL_CANONICA || "").toString().trim().toLowerCase();
         const finalNivel =
           typeof detectedInterest === "number"
             ? Math.min(3, Math.max(1, detectedInterest))
-            : 2;
+            : 1;
 
-        // Normaliza + hashea contacto (igual que haces en Lead/Contact)
-        const raw = String(fromNumber || contactoNorm || "").trim();
-        const phoneE164 = raw.replace(/^whatsapp:/i, "").replace(/[^\d+]/g, "").trim();
-        const contactHash = sha256(phoneE164 || contactoNorm);
+        // SOLO intención fuerte
+        if (messageId && finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 3) {
+          const raw = String(fromNumber || contactoNorm || "").trim();
+          const phoneE164 = raw.replace(/^whatsapp:/i, "").replace(/[^\d+]/g, "").trim();
+          const contactHash = sha256(phoneE164 || contactoNorm);
 
-        // Señal de “hubo link de pago enviado”
-        const paymentLink = extractPaymentLinkFromPrompt(promptBase); // tu helper ya existe arriba
-        const replyHasPaymentLink =
-          !!paymentLink && typeof reply === "string" && reply.includes(paymentLink);
-
-        // A) Schedule SOLO si booking está habilitado y se confirmó este turno
-        if (bookingEnabled && bookingJustCompleted) {
-          const eventId = `schedule:${tenant.id}:${contactHash}:${bucket7DaysUTC()}`;
-          const ok = await reserveCapiEvent(tenant.id, eventId);
-          if (ok) {
-            await sendCapiEvent({
-              tenantId: tenant.id,
-              eventName: "Schedule",
-              eventId,
-              userData: {
-                external_id: sha256(`${tenant.id}:${contactoNorm}`),
-                ...(phoneE164 ? { ph: sha256(phoneE164) } : {}),
-              },
-              customData: {
-                channel: "whatsapp",
-                source: "booking_confirmed",
-                intent: finalIntent || undefined,
-                interest_level: finalNivel,
-                inbound_message_id: messageId || undefined,
-              },
-            });
-            console.log("✅ CAPI Schedule enviado:", { tenantId: tenant.id, contactoNorm, eventId });
-          } else {
-            console.log("⏭️ CAPI Schedule deduped:", { tenantId: tenant.id, contactoNorm, eventId });
-          }
-        }
-
-        // B) InitiateCheckout SOLO si NO booking y es intención fuerte
-        else if (finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 2) {
-          const eventId = `init_checkout:${tenant.id}:${contactHash}:${bucket7DaysUTC()}`;
+          // 1 vez cada 7 días por contacto
+          const eventId = `leadstrong:${tenant.id}:${contactHash}:${bucket7DaysUTC()}`;
           const ok = await reserveCapiEvent(tenant.id, eventId);
 
           if (ok) {
             await sendCapiEvent({
               tenantId: tenant.id,
-              eventName: "InitiateCheckout",
+              eventName: "Lead", // ✅ "cliente potencial" en inglés (standard event)
               eventId,
               userData: {
                 external_id: sha256(`${tenant.id}:${contactoNorm}`),
@@ -1058,13 +1026,13 @@ export async function procesarMensajeWhatsApp(
               },
             });
 
-            console.log("✅ CAPI InitiateCheckout enviado:", { tenantId: tenant.id, contactoNorm, finalIntent, finalNivel, eventId });
+            console.log("✅ CAPI Lead (#3 fuerte) enviado:", { tenantId: tenant.id, contactoNorm, finalIntent, finalNivel, eventId });
           } else {
-            console.log("⏭️ CAPI InitiateCheckout deduped:", { tenantId: tenant.id, contactoNorm, eventId });
+            console.log("⏭️ CAPI Lead (#3 fuerte) deduped:", { tenantId: tenant.id, contactoNorm, eventId });
           }
         }
       } catch (e: any) {
-        console.warn("⚠️ Error enviando CAPI evento #3:", e?.message);
+        console.warn("⚠️ Error enviando CAPI evento #3 Lead fuerte:", e?.message);
       }
 
       const skipFollowUp =
