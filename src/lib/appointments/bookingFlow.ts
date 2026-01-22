@@ -61,13 +61,28 @@ function hasAppointmentContext(text: string) {
 function isCapabilityQuestion(text: string) {
   const t = normalizeText(text);
 
-  // Preguntas tipo: "puede...?", "se puede...?", "puedes...?", "does it...?", "can you...?"
+  // Debe estar preguntando (signo ? o estructura interrogativa)
+  const looksLikeQuestion =
+    /\?/.test(text) || /\b(que|qué|como|cómo|cuál|cual)\b/.test(t);
+
+  // Preguntas típicas de capacidad (las que ya tenías)
   const q =
     /\b(puede|pueden|se puede|puedes|podria|podrían|capaz|permite|permiten|hace|hacen|incluye|incluyen)\b/.test(t) ||
     /\b(can you|can it|does it|do you|is it able to|are you able to)\b/.test(t);
 
-  // Debe estar preguntando (signo ? o estructura interrogativa)
-  const looksLikeQuestion = /\?/.test(text) || /\b(que|qué|como|cómo|cuál|cual)\b/.test(t);
+  // ✅ NUEVO: preguntas de capacidad “directas” sin verbos tipo "puede"
+  // Ej: "¿reserva citas?", "¿agenda?", "¿book appointments?"
+  const bookingCapability =
+    /\b(reserva|reservas|reservar|agenda|agendas|agendar|agendame|agéndame|programa|programas|programar)\b/.test(t) ||
+    /\b(schedule|schedules|book|books|booking)\b/.test(t);
+
+  const shortNoQuestionMark =
+    t.length <= 30 && /\b(reserva|agenda|agendar|reservar|schedule|book|booking)\b/.test(t);
+
+  if (shortNoQuestionMark) return true;
+
+  // Si es una pregunta y menciona agenda/reserva => es capacidad
+  if (looksLikeQuestion && bookingCapability) return true;
 
   return q && looksLikeQuestion;
 }
