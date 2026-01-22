@@ -479,8 +479,41 @@ router.patch('/', authenticateUser, async (req: any, res: Response) => {
     for (const [k, v] of Object.entries(body)) {
       if (!allowed.has(k)) continue;
       if (v === undefined || v === null) continue;
-      const val = typeof v === 'string' ? v.trim() : v;
-      if (typeof val === 'string' && val === '') continue;
+
+      // ✅ caso especial: horario_atencion (JSON)
+      if (k === "horario_atencion") {
+        // acepta objeto o string JSON; ignora si viene vacío
+        let horarioVal: any = v;
+
+        if (typeof horarioVal === "string") {
+          const s = horarioVal.trim();
+          if (!s) continue;
+          try { horarioVal = JSON.parse(s); } catch { continue; }
+        }
+
+        // si no es objeto, no guardes
+        if (!horarioVal || typeof horarioVal !== "object") continue;
+
+        const allowedDays = new Set(["mon","tue","wed","thu","fri","sat","sun"]);
+        for (const key of Object.keys(horarioVal)) {
+          if (!allowedDays.has(key)) delete horarioVal[key];
+        }
+
+        for (const d of ["mon","tue","wed","thu","fri","sat","sun"]) {
+          const x = horarioVal[d];
+          if (x === null) continue;
+          if (!x || typeof x !== "object" || !x.start || !x.end) horarioVal[d] = null;
+        }
+
+        sets.push(`${mapCol[k]} = $${sets.length + 1}::jsonb`);
+        values.push(JSON.stringify(horarioVal));
+        continue;
+      }
+
+      // ✅ normal: strings y otros tipos
+      const val = typeof v === "string" ? v.trim() : v;
+      if (typeof val === "string" && val === "") continue;
+
       sets.push(`${mapCol[k]} = $${sets.length + 1}`);
       values.push(val);
     }
