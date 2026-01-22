@@ -2,6 +2,12 @@
 import pool from "../lib/db";
 import { decryptToken } from "./googleCrypto";
 
+export type GoogleBusyBlock = { start: string; end: string };
+
+export type GoogleFreeBusyResponse = {
+  calendars?: Record<string, { busy?: GoogleBusyBlock[] }>;
+};
+
 type GoogleTokens = { access_token: string; expires_in?: number; token_type?: string };
 
 async function getRefreshTokenEnc(tenantId: string): Promise<string> {
@@ -55,7 +61,7 @@ export async function googleFreeBusy(params: {
   timeMin: string; // ISO
   timeMax: string; // ISO
   calendarId?: string; // default primary
-}) {
+}): Promise<GoogleFreeBusyResponse> {
   const accessToken = await getGoogleAccessToken(params.tenantId);
   const calendarId = params.calendarId || "primary";
 
@@ -72,7 +78,7 @@ export async function googleFreeBusy(params: {
     }),
   });
 
-  const json = await resp.json();
+  const json = (await resp.json()) as GoogleFreeBusyResponse;
   if (!resp.ok) {
     console.error("Google freebusy failed:", json);
     throw new Error("google_freebusy_failed");

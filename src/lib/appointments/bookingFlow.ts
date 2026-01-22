@@ -3,10 +3,12 @@ import pool from "../db";
 import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
 import { canUseChannel } from "../features";
 import { DateTime } from "luxon";
+import type { GoogleFreeBusyResponse, GoogleBusyBlock } from "../../services/googleCalendar";
+
 
 type BookingCtx = {
   booking?: {
-    step?: "idle" | "ask_purpose" | "ask_all" | "ask_name" | "ask_email" | "ask_datetime" | "confirm";
+    step?: "idle" | "ask_purpose" | "ask_all" | "ask_name" | "ask_email" | "ask_datetime" | "offer_slots" | "confirm";
     start_time?: string;
     end_time?: string;
     timeZone?: string;
@@ -14,6 +16,7 @@ type BookingCtx = {
     email?: string;
     purpose?: string;
     date_only?: string | null;
+    slots?: Array<{ startISO: string; endISO: string }>;
   };
 };
 
@@ -115,6 +118,284 @@ async function getAppointmentSettings(tenantId: string) {
   };
 }
 
+type DayHours = { start: string; end: string }; // "09:00" - "18:00"
+type HoursByWeekday = {
+  mon?: DayHours | null;
+  tue?: DayHours | null;
+  wed?: DayHours | null;
+  thu?: DayHours | null;
+  fri?: DayHours | null;
+  sat?: DayHours | null;
+  sun?: DayHours | null;
+};
+
+async function getBusinessHours(tenantId: string): Promise<HoursByWeekday | null> {
+  try {
+    const { rows } = await pool.query(
+      `SELECT horario_atencion FROM tenants WHERE id = $1 LIMIT 1`,
+      [tenantId]
+    );
+    const raw = rows[0]?.horario_atencion;
+    if (!raw) return null;
+
+    const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!obj || typeof obj !== "object") return null;
+
+    // Soporta llaves: mon/tue..., monday..., lunes..., etc.
+    const mapKey = (k: string) => {
+      const x = String(k || "").toLowerCase().trim();
+      if (["mon","monday","lunes"].includes(x)) return "mon";
+      if (["tue","tues","tuesday","martes"].includes(x)) return "tue";
+      if (["wed","weds","wednesday","miercoles","miércoles"].includes(x)) return "wed";
+      if (["thu","thur","thurs","thursday","jueves"].includes(x)) return "thu";
+      if (["fri","friday","viernes"].includes(x)) return "fri";
+      if (["sat","saturday","sabado","sábado"].includes(x)) return "sat";
+      if (["sun","sunday","domingo"].includes(x)) return "sun";
+      return null;
+    };
+
+    const normalizeDay = (v: any): DayHours | null => {
+      if (!v) return null;
+
+      // Caso 1: {start,end}
+      if (typeof v === "object" && (v.start || v.end)) {
+        const start = String(v.start || "").trim();
+        const end = String(v.end || "").trim();
+        return start && end ? { start, end } : null;
+      }
+
+      // Caso 2: {open,close}
+      if (typeof v === "object" && (v.open || v.close)) {
+        const start = String(v.open || "").trim();
+        const end = String(v.close || "").trim();
+        return start && end ? { start, end } : null;
+      }
+
+      // Caso 3: ["09:00","18:00"]
+      if (Array.isArray(v) && v.length >= 2) {
+        const start = String(v[0] || "").trim();
+        const end = String(v[1] || "").trim();
+        return start && end ? { start, end } : null;
+      }
+
+      return null;
+    };
+
+    const out: HoursByWeekday = {};
+
+    for (const [k, v] of Object.entries(obj as Record<string, any>)) {
+      const wk = mapKey(k);
+      if (!wk) continue;
+      (out as any)[wk] = normalizeDay(v);
+    }
+
+    // si no pudimos mapear nada, devuelve null
+    const anyDay = Object.values(out).some(Boolean);
+    return anyDay ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+function weekdayKey(dt: DateTime): keyof HoursByWeekday {
+  // Luxon: 1=Mon ... 7=Sun
+  const w = dt.weekday;
+  return (w === 1 ? "mon" :
+          w === 2 ? "tue" :
+          w === 3 ? "wed" :
+          w === 4 ? "thu" :
+          w === 5 ? "fri" :
+          w === 6 ? "sat" : "sun");
+}
+
+function parseHHmm(hhmm: string) {
+  const m = String(hhmm || "").match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
+  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
+  return { h, min };
+}
+
+function subtractBusyFromWindow(opts: {
+  windowStart: DateTime;
+  windowEnd: DateTime;
+  busy: Array<{ start: string; end: string }>;
+  timeZone: string;
+}): Array<{ start: DateTime; end: DateTime }> {
+  const { windowStart, windowEnd, busy, timeZone } = opts;
+
+  // Normaliza busy a DateTime y ordena
+  const busyBlocks = (busy || [])
+    .map(b => ({
+      start: DateTime.fromISO(b.start, { zone: timeZone }),
+      end: DateTime.fromISO(b.end, { zone: timeZone }),
+    }))
+    .filter(b => b.start.isValid && b.end.isValid)
+    .sort((a, b) => a.start.toMillis() - b.start.toMillis());
+
+  // Merge overlaps
+  const merged: Array<{ start: DateTime; end: DateTime }> = [];
+  for (const b of busyBlocks) {
+    const last = merged[merged.length - 1];
+    if (!last) merged.push(b);
+    else if (b.start <= last.end) last.end = DateTime.max(last.end, b.end);
+    else merged.push(b);
+  }
+
+  // Restar de la ventana
+  let cursor = windowStart;
+  const free: Array<{ start: DateTime; end: DateTime }> = [];
+
+  for (const b of merged) {
+    const bs = DateTime.max(b.start, windowStart);
+    const be = DateTime.min(b.end, windowEnd);
+    if (be <= windowStart || bs >= windowEnd) continue;
+
+    if (bs > cursor) free.push({ start: cursor, end: bs });
+    cursor = DateTime.max(cursor, be);
+  }
+
+  if (cursor < windowEnd) free.push({ start: cursor, end: windowEnd });
+
+  return free;
+}
+
+function sliceIntoSlots(opts: {
+  freeRanges: Array<{ start: DateTime; end: DateTime }>;
+  durationMin: number;
+  bufferMin: number;
+  timeZone: string;
+}): Array<{ startISO: string; endISO: string }> {
+  const { freeRanges, durationMin, bufferMin, timeZone } = opts;
+
+  const slots: Array<{ startISO: string; endISO: string }> = [];
+
+  for (const r of freeRanges) {
+    // respeta lead time
+    let start = r.start;
+    const now = DateTime.now().setZone(timeZone).plus({ minutes: MIN_LEAD_MINUTES });
+    if (start < now) start = now;
+
+    // redondeo opcional a 5 min
+    start = start.set({ second: 0, millisecond: 0 });
+
+    // iterar slots
+    while (start.plus({ minutes: durationMin }) <= r.end) {
+      const end = start.plus({ minutes: durationMin });
+
+      // aplica buffer: evita que el slot “pegue” con el siguiente
+      // (si no quieres, puedes quitar esto)
+      const endWithBuffer = end.plus({ minutes: bufferMin });
+      if (endWithBuffer <= r.end.plus({ minutes: 0 })) {
+        const sISO = start.toISO();
+        const eISO = end.toISO();
+        if (sISO && eISO) slots.push({ startISO: sISO, endISO: eISO });
+      }
+
+      // saltar en incrementos de 15 min (ajusta si quieres)
+      start = start.plus({ minutes: 15 });
+    }
+  }
+
+  return slots;
+}
+
+async function getSlotsForDate(opts: {
+  tenantId: string;
+  timeZone: string;
+  dateISO: string; // "YYYY-MM-DD"
+  durationMin: number;
+  bufferMin: number;
+  hours: HoursByWeekday | null;
+}): Promise<Array<{ startISO: string; endISO: string }>> {
+  const { tenantId, timeZone, dateISO, durationMin, bufferMin, hours } = opts;
+
+  const day = DateTime.fromFormat(dateISO, "yyyy-MM-dd", { zone: timeZone });
+  if (!hours) return [];
+  if (!day.isValid) return [];
+
+  const key = weekdayKey(day);
+  const dayHours = hours?.[key];
+
+  // si ese día está cerrado
+  if (!dayHours || !dayHours.start || !dayHours.end) return [];
+
+  const st = parseHHmm(dayHours.start);
+  const en = parseHHmm(dayHours.end);
+  if (!st || !en) return [];
+
+  const windowStart = day.set({ hour: st.h, minute: st.min, second: 0, millisecond: 0 });
+  const windowEnd = day.set({ hour: en.h, minute: en.min, second: 0, millisecond: 0 });
+
+  if (!windowStart.isValid || !windowEnd.isValid || windowEnd <= windowStart) return [];
+
+  // Pedimos freebusy para TODA la ventana del día
+  const fb: GoogleFreeBusyResponse = await googleFreeBusy({
+    tenantId,
+    timeMin: windowStart.toISO()!,
+    timeMax: windowEnd.toISO()!,
+    calendarId: "primary",
+  });
+
+  const busy =
+    fb?.calendars?.primary?.busy ||
+    fb?.calendars?.["primary"]?.busy ||
+    (fb?.calendars && Object.values(fb.calendars)[0]?.busy) ||
+    [];
+
+  const freeRanges = subtractBusyFromWindow({
+    windowStart,
+    windowEnd,
+    busy,
+    timeZone,
+  });
+
+  // crea slots
+  const slots = sliceIntoSlots({
+    freeRanges,
+    durationMin,
+    bufferMin,
+    timeZone,
+  });
+
+  // máximo 5 (para chat)
+  return slots.slice(0, 5);
+}
+
+function renderSlotsMessage(opts: {
+  idioma: "es" | "en";
+  timeZone: string;
+  slots: Array<{ startISO: string; endISO: string }>;
+}): string {
+  const { idioma, timeZone, slots } = opts;
+
+  if (!slots.length) {
+    return idioma === "en"
+      ? "I couldn’t find available times for that date. Please choose another date."
+      : "No encontré horarios disponibles para esa fecha. ¿Me dices otra fecha?";
+  }
+
+  const lines = slots.map((s, i) => {
+    const human = formatSlotHuman({ startISO: s.startISO, timeZone, idioma });
+    return `${i + 1}) ${human}`;
+  });
+
+  return idioma === "en"
+    ? `These times are available:\n${lines.join("\n")}\nReply with the number (1-${slots.length}).`
+    : `Tengo estos horarios disponibles:\n${lines.join("\n")}\nResponde con el número (1-${slots.length}).`;
+}
+
+function parseSlotChoice(text: string, max: number): number | null {
+  const t = String(text || "").trim();
+  const m = t.match(/^(\d{1,2})$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n < 1 || n > max) return null;
+  return n;
+}
+
 function buildAskAllMessage(idioma: "es" | "en", purpose?: string | null) {
   const p = purpose ? ` (${purpose})` : "";
 
@@ -174,7 +455,7 @@ function cleanNameCandidate(raw: string): string {
 
 function wantsToCancel(text: string) {
   const t = normalizeText(text);
-  return /\b(cancelar|cancela|olvida|stop|salir|exit|no gracias|nah|nope|ya no|dejalo|dejalo asi|deja eso|after|later)\b/i.test(t);
+  return /\b(cancelar|cancela|olvida|stop|salir|exit|no gracias|nah|nope|ya no|dejalo|dejalo asi|deja eso|later)\b/i.test(t);
 }
 
 function extractDateOnlyToken(input: string): string | null {
@@ -410,6 +691,82 @@ async function upsertClienteBookingData(opts: {
   }
 }
 
+async function markAppointmentConfirmed(opts: {
+  apptId: string;
+  google_event_id: string | null;
+  google_event_link: string | null;
+}) {
+  const { apptId, google_event_id, google_event_link } = opts;
+  await pool.query(
+    `
+    UPDATE appointments
+       SET status='confirmed',
+           google_event_id=$2,
+           google_event_link=$3
+     WHERE id=$1
+    `,
+    [apptId, google_event_id, google_event_link]
+  );
+}
+
+async function markAppointmentFailed(opts: {
+  apptId: string;
+  error_reason: string;
+}) {
+  const { apptId, error_reason } = opts;
+  await pool.query(
+    `
+    UPDATE appointments
+       SET status='failed',
+           error_reason=$2
+     WHERE id=$1
+    `,
+    [apptId, error_reason]
+  );
+}
+
+async function createPendingAppointmentOrGetExisting(opts: {
+  tenantId: string;
+  channel: string;
+  customer_name: string;
+  customer_phone?: string;
+  customer_email?: string;
+  start_time: string;
+  end_time: string;
+}) {
+  const {
+    tenantId, channel, customer_name, customer_phone, customer_email, start_time, end_time,
+  } = opts;
+
+  // Inserta pending, si ya existe el mismo slot para ese cliente, trae el existente
+  const { rows } = await pool.query(
+    `
+    INSERT INTO appointments (
+      tenant_id, service_id, channel, customer_name, customer_phone, customer_email,
+      start_time, end_time, status, google_event_id, google_event_link
+    )
+    VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, 'pending', NULL, NULL)
+    ON CONFLICT (tenant_id, channel, customer_phone, start_time)
+    DO UPDATE SET
+      customer_name = COALESCE(EXCLUDED.customer_name, appointments.customer_name),
+      customer_email = COALESCE(EXCLUDED.customer_email, appointments.customer_email),
+      end_time = EXCLUDED.end_time
+    RETURNING id, status, google_event_link, google_event_id
+    `,
+    [
+      tenantId,
+      channel,
+      customer_name,
+      customer_phone || null,
+      customer_email || null,
+      start_time,
+      end_time,
+    ]
+  );
+
+  return rows[0] || null;
+}
+
 async function insertAppointment(opts: {
   tenantId: string;
   channel: string;
@@ -580,6 +937,8 @@ export async function bookingFlowMvp(opts: {
   // ✅ valores MVP
   const durationMin = apptSettings.default_duration_min ?? 30;
   const bufferMin = apptSettings.buffer_min ?? 10;
+
+  const hours = await getBusinessHours(tenantId);
 
   // ✅ POST-BOOKING GUARD (SAFE):
   // NO usar last_appointment_id como gatillo global.
@@ -780,40 +1139,62 @@ if (booking.step === "ask_all") {
 
   const dateOnly = extractDateOnlyToken(userText);
   if (dateOnly && parsed.name && parsed.email && !parsed.startISO) {
-    // ✅ BLOQUEO: si la fecha (sin hora) ya es pasada, no pidas hora
+    // bloquea fecha pasada (lo dejas igual que ya lo tienes)
     const dateOnlyDt = DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: timeZone });
     const todayStart = DateTime.now().setZone(timeZone).startOf("day");
     if (dateOnlyDt.isValid && dateOnlyDt < todayStart) {
       return {
         handled: true,
         reply: idioma === "en"
-          ? "That date is in the past. Please send a future date (YYYY-MM-DD)."
-          : "Esa fecha ya pasó. Envíame una fecha futura (YYYY-MM-DD).",
+            ? "That date is in the past. Please send a future date (YYYY-MM-DD)."
+            : "Esa fecha ya pasó. Envíame una fecha futura (YYYY-MM-DD).",
         ctxPatch: {
-          booking: {
-            step: "ask_datetime",
-            timeZone,
-            name: parsed.name,
-            email: parsed.email,
-            date_only: null,
-          },
+            booking: { step: "ask_datetime", timeZone, name: parsed.name, email: parsed.email, date_only: null, slots: [] },
         },
       };
     }
 
+    if (!hours) {
     return {
-        handled: true,
-        reply: idioma === "en"
-        ? `Got it. What time on ${dateOnly}? Use HH:mm (example: 14:00).`
-        : `Perfecto. ¿A qué hora el ${dateOnly}? Usa HH:mm (ej: 14:00).`,
-        ctxPatch: {
+      handled: true,
+      reply: idioma === "en"
+        ? "This business hasn’t set business hours yet. Please send the exact date & time (YYYY-MM-DD HH:mm)."
+        : "Este negocio aún no tiene horario de atención configurado. Envíame fecha y hora exacta (YYYY-MM-DD HH:mm).",
+      ctxPatch: {
         booking: {
-            step: "ask_datetime",
-            timeZone,
-            name: parsed.name,
-            email: parsed.email,
-            // guarda la fecha para combinar luego si quieres
-            date_only: dateOnly,
+          step: "ask_datetime",
+          timeZone,
+          name: parsed.name,
+          email: parsed.email,
+          date_only: null,
+          slots: [],
+        },
+      },
+    };
+  }
+
+    // ✅ NUEVO: generar slots para ese día
+    const slots = await getSlotsForDate({
+      tenantId,
+      timeZone,
+      dateISO: dateOnly,
+      durationMin,
+      bufferMin,
+      hours,
+    });
+
+    return {
+      handled: true,
+      reply: renderSlotsMessage({ idioma, timeZone, slots }),
+      ctxPatch: {
+        booking: {
+          step: "offer_slots",
+          timeZone,
+          name: parsed.name,
+          email: parsed.email,
+          purpose: booking.purpose || null,
+          date_only: dateOnly,
+          slots,
         },
       },
     };
@@ -998,6 +1379,96 @@ if (booking.step === "ask_email") {
   };
 }
 
+if (booking.step === "offer_slots") {
+  const t = normalizeText(userText);
+
+    // Si pregunta por horarios estando en offer_slots, simplemente re-muestra opciones
+    if (/\b(horario|horarios|hours|available)\b/i.test(t)) {
+    const slots = Array.isArray((booking as any)?.slots) ? (booking as any).slots : [];
+
+    if (!slots.length) {
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? "I don’t have available times saved for that date. Please send another date (YYYY-MM-DD)."
+          : "No tengo horarios disponibles guardados para esa fecha. Envíame otra fecha (YYYY-MM-DD).",
+        ctxPatch: { booking: { step: "ask_datetime", timeZone, date_only: null, slots: [] } },
+      };
+    }
+
+    if (!slots.length) {
+      return {
+        handled: true,
+        reply: idioma === "en"
+        ? "I don’t have available times saved for that date. Please send another date (YYYY-MM-DD)."
+        : "No tengo horarios disponibles para esa fecha. Envíame otra fecha (YYYY-MM-DD).",
+        ctxPatch: {
+        booking: {
+            ...booking,
+            step: "ask_datetime",
+            date_only: null,
+            slots: [],
+        },
+        },
+      };
+    }
+
+    return {
+        handled: true,
+        reply: renderSlotsMessage({ idioma, timeZone: booking.timeZone || timeZone, slots }),
+        ctxPatch: { booking },
+    };
+    }
+
+    // Ahora sí, cualquier otro cambio de tema
+    if (wantsToChangeTopic(userText)) {
+    return { handled: false, ctxPatch: { booking: { step: "idle" } } };
+    }
+
+  if (wantsToCancel(userText)) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "Of course. I’ll stop the scheduling process for now."
+        : "Claro. Detengo el proceso de agendamiento por ahora.",
+      ctxPatch: { booking: { step: "idle" } },
+    };
+  }
+
+  const slots = Array.isArray((booking as any)?.slots) ? (booking as any).slots : [];
+  const choice = parseSlotChoice(userText, slots.length);
+
+  if (!choice) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? `Please reply with a number (1-${slots.length}).`
+        : `Responde con un número (1-${slots.length}).`,
+      ctxPatch: { booking },
+    };
+  }
+
+  const picked = slots[choice - 1];
+  const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone, idioma });
+
+  return {
+    handled: true,
+    reply: idioma === "en"
+      ? `To confirm booking for ${whenTxt}? Reply YES to confirm or NO to cancel.`
+      : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
+    ctxPatch: {
+      booking: {
+        ...booking,
+        step: "confirm",
+        start_time: picked.startISO,
+        end_time: picked.endISO,
+        slots: [],        // limpia
+        date_only: null,  // limpia
+      },
+    },
+  };
+}
+
   // 2) Esperando fecha/hora
   if (booking.step === "ask_datetime") {
     // ✅ ESCAPE: si el usuario cambió de tema, salimos del flow
@@ -1175,43 +1646,36 @@ if (booking.step === "ask_email") {
     const startISO = booking.start_time!;
     const endISO = booking.end_time!;
 
-        // ✅ DEDUPE fuerte por SLOT (no por messageId)
-    // Evita doble booking si el usuario manda "SI" 2 veces o hay carreras.
-    if (yes) {
-      const slotKey = `${tenantId}:${canal}:${contacto}:${startISO}`; // slot único
-      const lockId = `booking_slot:${slotKey}`;
+    // ✅ DEDUPE REAL: crea/obtén un appointment PENDING con UNIQUE en DB
+    const pending = await createPendingAppointmentOrGetExisting({
+    tenantId,
+    channel: canal,
+    customer_name,
+    customer_phone: contacto,
+    customer_email: booking.email,
+    start_time: startISO,
+    end_time: endISO,
+    });
 
-      const ins = await pool.query(
-        `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
-         RETURNING 1`,
-        [tenantId, canal, lockId]
-      );
+    if (!pending) {
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? "Something went wrong creating your booking. Please try again."
+          : "Ocurrió un problema creando la reserva. Por favor intenta de nuevo.",
+        ctxPatch: { booking: { step: "ask_datetime", timeZone } },
+      };
+    }
 
-      if (ins.rowCount === 0) {
-        // Ya se procesó este slot → devuelve link del último appointment para ese slot
-        const { rows } = await pool.query(
-          `SELECT google_event_link
-             FROM appointments
-            WHERE tenant_id=$1
-              AND customer_phone=$2
-              AND start_time=$3
-            ORDER BY created_at DESC
-            LIMIT 1`,
-          [tenantId, contacto, startISO]
-        );
-
-        const link = rows[0]?.google_event_link || "";
-
-        return {
-          handled: true,
-          reply: idioma === "en"
-            ? `Already booked. ${link}`.trim()
-            : `Ya quedó agendado. ${link}`.trim(),
-          ctxPatch: { booking: { step: "idle" } },
-        };
-      }
+    // Si ya estaba confirmado, responde idempotente con el link
+    if (pending.status === "confirmed" && pending.google_event_link) {
+      return {
+        handled: true,
+        reply: idioma === "en"
+        ? `Already booked. ${pending.google_event_link}`.trim()
+        : `Ya quedó agendado. ${pending.google_event_link}`.trim(),
+        ctxPatch: { booking: { step: "idle" } },
+      };
     }
 
     if (!googleConnected) {
@@ -1233,16 +1697,43 @@ if (booking.step === "ask_email") {
       bufferMin,
     });
 
-      if (!g.ok) {
-      // libera lock del slot para permitir reintento real
-      try {
-        const slotKey = `${tenantId}:${canal}:${contacto}:${startISO}`;
-        const lockId = `booking_slot:${slotKey}`;
-        await pool.query(
-          `DELETE FROM interactions WHERE tenant_id=$1 AND canal=$2 AND message_id=$3`,
-          [tenantId, canal, lockId]
-        );
-      } catch {}
+    if (!g.ok) {
+      await markAppointmentFailed({
+        apptId: pending.id,
+        error_reason: String((g as any)?.error || "GOOGLE_ERROR"),
+      });
+
+      if ((g as any)?.error === "SLOT_BUSY") {
+        // intentar proponer alternativas del MISMO día (si tenemos fecha)
+        const day = DateTime.fromISO(startISO, { zone: timeZone });
+        const dateISO = day.isValid ? day.toFormat("yyyy-MM-dd") : null;
+
+        if (dateISO) {
+          const slots = await getSlotsForDate({
+            tenantId,
+            timeZone,
+            dateISO,
+            durationMin,
+            bufferMin,
+            hours,
+          });
+
+          if (slots.length) {
+            return {
+              handled: true,
+              reply: renderSlotsMessage({ idioma, timeZone, slots }),
+              ctxPatch: {
+                booking: {
+                  ...booking,
+                  step: "offer_slots",
+                  timeZone,
+                  slots,
+                },
+              },
+            };
+          }
+        }
+      }
 
       if ((g as any)?.error === "PAST_SLOT") {
         return {
@@ -1263,17 +1754,13 @@ if (booking.step === "ask_email") {
       };
     }
 
-    const apptId = await insertAppointment({
-      tenantId,
-      channel: canal,
-      customer_name,
-      customer_phone: contacto,
-      customer_email: booking.email,
-      start_time: startISO,
-      end_time: endISO,
+    await markAppointmentConfirmed({
+      apptId: pending.id,
       google_event_id: g.event_id,
       google_event_link: g.htmlLink,
     });
+
+    const apptId = pending.id;
 
     return {
       handled: true,
