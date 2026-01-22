@@ -1244,14 +1244,19 @@ if (booking.step === "ask_daypart") {
     };
   }
 
-  // Si no hay horario configurado, no podemos filtrar por daypart con slots → fallback
+  // Si no hay horario configurado
   if (!hours) {
     return {
-      handled: true,
-      reply: idioma === "en"
-        ? "This business hasn’t set business hours yet. Please send the exact date & time (YYYY-MM-DD HH:mm)."
-        : "Este negocio aún no tiene horario de atención configurado. Envíame fecha y hora exacta (YYYY-MM-DD HH:mm).",
-      ctxPatch: { booking: { step: "ask_datetime", timeZone, daypart: dp } },
+        handled: true,
+        reply: buildAskAllMessage(idioma, booking.purpose || null),
+        ctxPatch: {
+        booking: {
+            ...booking,
+            step: "ask_all",
+            timeZone,
+            daypart: dp,
+        },
+        },
     };
   }
 
@@ -1339,23 +1344,23 @@ if (booking.step === "ask_all") {
     }
 
     if (!hours) {
-    return {
-      handled: true,
-      reply: idioma === "en"
-        ? "This business hasn’t set business hours yet. Please send the exact date & time (YYYY-MM-DD HH:mm)."
-        : "Este negocio aún no tiene horario de atención configurado. Envíame fecha y hora exacta (YYYY-MM-DD HH:mm).",
-      ctxPatch: {
-        booking: {
-          step: "ask_datetime",
-          timeZone,
-          name: parsed.name,
-          email: parsed.email,
-          date_only: null,
-          slots: [],
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? `Got it — what time works for you on ${dateOnly}? Reply with HH:mm (example: 14:00).`
+          : `Perfecto — ¿a qué hora te gustaría el ${dateOnly}? Respóndeme con HH:mm (ej: 14:00).`,
+        ctxPatch: {
+          booking: {
+            step: "ask_datetime",
+            timeZone,
+            name: parsed.name,
+            email: parsed.email,
+            date_only: dateOnly, // ✅ CLAVE: guarda la fecha para que acepte "HH:mm"
+            slots: [],
+          },
         },
-      },
-    };
-  }
+      };
+    }
 
     // ✅ NUEVO: generar slots para ese día
     const slots = await getSlotsForDate({
@@ -1872,6 +1877,16 @@ if (booking.step === "ask_contact") {
     const t = String(userText || "").trim().toLowerCase();
     const yes = /^(si|sí|yes|y)$/i.test(t);
     const no = /^(no|n)$/i.test(t);
+
+    if (!booking.email) {
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? "Before confirming, please send your email (example: name@email.com)."
+          : "Antes de confirmar, envíame tu email (ej: nombre@email.com).",
+        ctxPatch: { booking: { ...booking, step: "ask_email", timeZone: booking.timeZone || timeZone } },
+      };
+    }
 
     if (!yes && !no) {
       return {
