@@ -1254,8 +1254,8 @@ if (booking.step === "ask_daypart") {
     return {
       handled: true,
       reply: idioma === "en"
-        ? "Of course. I’ll stop the scheduling process for now."
-        : "Claro. Detengo el proceso de agendamiento por ahora.",
+        ? "No worries, whenever you’re ready to schedule, I’ll be here to help."
+        : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
       ctxPatch: { booking: { step: "idle" } },
     };
   }
@@ -1691,8 +1691,8 @@ if (booking.step === "offer_slots") {
     return {
       handled: true,
       reply: idioma === "en"
-        ? "Of course. I’ll stop the scheduling process for now."
-        : "Claro. Detengo el proceso de agendamiento por ahora.",
+        ? "No worries, whenever you’re ready to schedule, I’ll be here to help."
+        : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
       ctxPatch: { booking: { step: "idle" } },
     };
   }
@@ -1755,8 +1755,8 @@ if (booking.step === "ask_contact") {
     return {
       handled: true,
       reply: idioma === "en"
-        ? "Of course. I’ll stop the scheduling process for now."
-        : "Claro. Detengo el proceso de agendamiento por ahora.",
+        ? "No worries, whenever you’re ready to schedule, I’ll be here to help."
+        : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
       ctxPatch: { booking: { step: "idle" } },
     };
   }
