@@ -8,7 +8,7 @@ import type { GoogleFreeBusyResponse, GoogleBusyBlock } from "../../services/goo
 
 type BookingCtx = {
   booking?: {
-    step?: "idle" | "ask_purpose" | "ask_all" | "ask_name" | "ask_email" | "ask_datetime" | "offer_slots" | "confirm";
+    step?: "idle" | "ask_purpose" | "ask_daypart" | "offer_slots" | "ask_contact" | "confirm" | "ask_all" | "ask_name" | "ask_email" | "ask_datetime";
     start_time?: string;
     end_time?: string;
     timeZone?: string;
@@ -17,6 +17,9 @@ type BookingCtx = {
     purpose?: string;
     date_only?: string | null;
     slots?: Array<{ startISO: string; endISO: string }>;
+    daypart?: "morning" | "afternoon" | null;
+    picked_start?: string | null;
+    picked_end?: string | null;
   };
 };
 
@@ -208,6 +211,45 @@ function weekdayKey(dt: DateTime): keyof HoursByWeekday {
           w === 6 ? "sat" : "sun");
 }
 
+function isWithinBusinessHours(opts: {
+  hours: HoursByWeekday | null;
+  startISO: string;
+  endISO: string;
+  timeZone: string;
+}) {
+  const { hours, startISO, endISO, timeZone } = opts;
+  if (!hours) return { ok: true as const }; // si no hay horario, no bloquees aquí (tu flow ya hace fallback)
+
+  const start = DateTime.fromISO(startISO, { zone: timeZone });
+  const end = DateTime.fromISO(endISO, { zone: timeZone });
+  if (!start.isValid || !end.isValid) return { ok: false as const, reason: "invalid" as const };
+
+  const key = weekdayKey(start);
+  const dayHours = hours[key];
+  if (!dayHours || !dayHours.start || !dayHours.end) {
+    return { ok: false as const, reason: "closed" as const, key };
+  }
+
+  const st = parseHHmm(dayHours.start);
+  const en = parseHHmm(dayHours.end);
+  if (!st || !en) return { ok: false as const, reason: "invalid_hours" as const, key };
+
+  const bizStart = start.set({ hour: st.h, minute: st.min, second: 0, millisecond: 0 });
+  const bizEnd = start.set({ hour: en.h, minute: en.min, second: 0, millisecond: 0 });
+  if (bizEnd <= bizStart) return { ok: false as const, reason: "invalid_hours" as const, key };
+
+  // ✅ debe estar completamente dentro
+  const ok = start >= bizStart && end <= bizEnd;
+  return ok
+    ? { ok: true as const }
+    : { ok: false as const, reason: "outside" as const, bizStart, bizEnd, key };
+}
+
+function formatBizWindow(idioma: "es" | "en", bizStart: DateTime, bizEnd: DateTime) {
+  const fmt = idioma === "en" ? "h:mm a" : "HH:mm";
+  return `${bizStart.toFormat(fmt)} - ${bizEnd.toFormat(fmt)}`;
+}
+
 function parseHHmm(hhmm: string) {
   const m = String(hhmm || "").match(/^(\d{1,2}):(\d{2})$/);
   if (!m) return null;
@@ -216,6 +258,16 @@ function parseHHmm(hhmm: string) {
   if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
   if (h < 0 || h > 23 || min < 0 || min > 59) return null;
   return { h, min };
+}
+
+function extractBusyBlocks(fb: GoogleFreeBusyResponse | any): Array<{ start: string; end: string }> {
+  if (!fb?.calendars) return [];
+  // intenta 'primary', luego cualquier calendario
+  const primary = fb.calendars.primary || fb.calendars["primary"];
+  if (primary?.busy) return primary.busy;
+
+  const anyCal = Object.values(fb.calendars)[0] as any;
+  return Array.isArray(anyCal?.busy) ? anyCal.busy : [];
 }
 
 function subtractBusyFromWindow(opts: {
@@ -302,6 +354,119 @@ function sliceIntoSlots(opts: {
   return slots;
 }
 
+function detectDaypart(text: string): "morning" | "afternoon" | null {
+  const t = normalizeText(text);
+
+  // mañana / morning
+  if (/\b(manana|mañana|morning|am|a\.m\.|temprano)\b/i.test(t)) return "morning";
+
+  // tarde / afternoon
+  if (/\b(tarde|afternoon|pm|p\.m\.|despues del mediodia|después del mediodía)\b/i.test(t)) return "afternoon";
+
+  return null;
+}
+
+function daypartWindowFromBusinessHours(opts: {
+  day: DateTime;
+  bizStart: DateTime;
+  bizEnd: DateTime;
+  daypart: "morning" | "afternoon";
+}) {
+  const { day, bizStart, bizEnd, daypart } = opts;
+
+  // corte al mediodía del mismo día
+  const noon = day.set({ hour: 12, minute: 0, second: 0, millisecond: 0 });
+
+  // morning: [bizStart, min(bizEnd, noon)]
+  // afternoon: [max(bizStart, noon), bizEnd]
+  const start = daypart === "morning" ? bizStart : DateTime.max(bizStart, noon);
+  const end = daypart === "morning" ? DateTime.min(bizEnd, noon) : bizEnd;
+
+  if (!start.isValid || !end.isValid || end <= start) return null;
+  return { start, end };
+}
+
+function intersectWindows(aStart: DateTime, aEnd: DateTime, bStart: DateTime, bEnd: DateTime) {
+  const s = DateTime.max(aStart, bStart);
+  const e = DateTime.min(aEnd, bEnd);
+  if (!s.isValid || !e.isValid || e <= s) return null;
+  return { start: s, end: e };
+}
+
+async function getNextSlotsByDaypart(opts: {
+  tenantId: string;
+  timeZone: string;
+  durationMin: number;
+  bufferMin: number;
+  hours: HoursByWeekday | null;
+  daypart: "morning" | "afternoon";
+  daysAhead?: number; // default 7
+}): Promise<Array<{ startISO: string; endISO: string }>> {
+  const { tenantId, timeZone, durationMin, bufferMin, hours, daypart } = opts;
+  const daysAhead = opts.daysAhead ?? 7;
+
+  if (!hours) return [];
+
+  const out: Array<{ startISO: string; endISO: string }> = [];
+
+  const now = DateTime.now().setZone(timeZone).startOf("day");
+
+  for (let i = 0; i < daysAhead; i++) {
+    const day = now.plus({ days: i });
+
+    const key = weekdayKey(day);
+    const dayHours = hours?.[key];
+    if (!dayHours || !dayHours.start || !dayHours.end) continue;
+
+    const st = parseHHmm(dayHours.start);
+    const en = parseHHmm(dayHours.end);
+    if (!st || !en) continue;
+
+    const bizStart = day.set({ hour: st.h, minute: st.min, second: 0, millisecond: 0 });
+    const bizEnd = day.set({ hour: en.h, minute: en.min, second: 0, millisecond: 0 });
+    if (bizEnd <= bizStart) continue;
+
+    const win = daypartWindowFromBusinessHours({
+      day,
+      bizStart,
+      bizEnd,
+      daypart,
+    });
+    if (!win) continue;
+
+    // Freebusy de esa ventana
+    const fb = await googleFreeBusy({
+      tenantId,
+      timeMin: win.start.toISO()!,
+      timeMax: win.end.toISO()!,
+      calendarId: "primary",
+    });
+
+    const busy = extractBusyBlocks(fb);
+
+    const freeRanges = subtractBusyFromWindow({
+      windowStart: win.start,
+      windowEnd: win.end,
+      busy,
+      timeZone,
+    });
+
+    const slots = sliceIntoSlots({
+      freeRanges,
+      durationMin,
+      bufferMin,
+      timeZone,
+    });
+
+    for (const s of slots) {
+      out.push(s);
+      if (out.length >= 5) return out;
+    }
+  }
+
+  return out.slice(0, 5);
+}
+
 async function getSlotsForDate(opts: {
   tenantId: string;
   timeZone: string;
@@ -339,11 +504,7 @@ async function getSlotsForDate(opts: {
     calendarId: "primary",
   });
 
-  const busy =
-    fb?.calendars?.primary?.busy ||
-    fb?.calendars?.["primary"]?.busy ||
-    (fb?.calendars && Object.values(fb.calendars)[0]?.busy) ||
-    [];
+  const busy = extractBusyBlocks(fb);
 
   const freeRanges = subtractBusyFromWindow({
     windowStart,
@@ -523,13 +684,19 @@ function parseEmail(input: string) {
 
 async function isGoogleConnected(tenantId: string): Promise<boolean> {
   try {
+    // Soporta esquemas donde exista "connected" boolean y/o "status" string
     const { rows } = await pool.query(
-      `SELECT 1
-         FROM calendar_integrations
-        WHERE tenant_id = $1
-          AND provider = 'google'
-          AND status = 'connected'
-        LIMIT 1`,
+      `
+      SELECT 1
+        FROM calendar_integrations
+       WHERE tenant_id = $1
+         AND provider = 'google'
+         AND (
+              (connected IS TRUE)
+              OR (status = 'connected')
+         )
+       LIMIT 1
+      `,
       [tenantId]
     );
     return rows.length > 0;
@@ -639,31 +806,6 @@ function parseFullName(input: string) {
   return raw;
 }
 
-function parseAskAll(input: string, timeZone: string, durationMin: number) {
-  const raw = String(input || "").trim();
-
-  const email = parseEmail(raw);
-  if (!email) return null;
-
-  const m = raw.match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/);
-  if (!m) return null;
-
-  const dt = parseDateTimeExplicit(`${m[1]} ${m[2]}`, timeZone, durationMin);
-  if (!dt) return null;
-
-  const nameCandidate = raw
-    .replace(email, " ")
-    .replace(m[0], " ")
-    .replace(/[,;|]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const name = parseFullName(nameCandidate);
-  if (!name) return null;
-
-  return { name, email, startISO: dt.startISO!, endISO: dt.endISO!, timeZone };
-}
-
 async function upsertClienteBookingData(opts: {
   tenantId: string;
   canal: string;
@@ -767,57 +909,11 @@ async function createPendingAppointmentOrGetExisting(opts: {
   return rows[0] || null;
 }
 
-async function insertAppointment(opts: {
-  tenantId: string;
-  channel: string;
-  customer_name: string;
-  customer_phone?: string;
-  customer_email?: string;
-  start_time: string;
-  end_time: string;
-  google_event_id?: string | null;
-  google_event_link?: string | null;
-}) {
-  const {
-    tenantId,
-    channel,
-    customer_name,
-    customer_phone,
-    customer_email,
-    start_time,
-    end_time,
-    google_event_id,
-    google_event_link,
-  } = opts;
-
-  const { rows } = await pool.query(
-    `
-    INSERT INTO appointments (
-      tenant_id, service_id, channel, customer_name, customer_phone, customer_email,
-      start_time, end_time, status, google_event_id, google_event_link
-    )
-    VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, 'confirmed', $8, $9)
-    RETURNING id
-    `,
-    [
-      tenantId,
-      channel,
-      customer_name,
-      customer_phone || null,
-      customer_email || null,
-      start_time,
-      end_time,
-      google_event_id || null,
-      google_event_link || null,
-    ]
-  );
-
-  return rows[0]?.id || null;
-}
-
 async function bookInGoogle(opts: {
   tenantId: string;
   customer_name: string;
+  customer_phone?: string | null;
+  customer_email?: string | null;
   startISO: string;
   endISO: string;
   timeZone: string;
@@ -838,6 +934,22 @@ async function bookInGoogle(opts: {
     return { ok: false as const, error: "PAST_SLOT" as const, busy: [] as any[] };
   }
 
+  // ✅ NUEVO: valida contra horario del negocio (si existe)
+  try {
+    const hours = await getBusinessHours(tenantId);
+    if (hours) {
+      const check = isWithinBusinessHours({
+        hours,
+        startISO,
+        endISO,
+        timeZone,
+      });
+      if (!check.ok) {
+        return { ok: false as const, error: "OUTSIDE_BUSINESS_HOURS" as const, busy: [] as any[] };
+      }
+    }
+  } catch {}
+
   const timeMin = start.minus({ minutes: bufferMin }).toISO();
   const timeMax = end.plus({ minutes: bufferMin }).toISO();
 
@@ -853,8 +965,7 @@ async function bookInGoogle(opts: {
     calendarId: "primary",
   });
 
-
-  const busy = fb?.calendars?.primary?.busy || [];
+  const busy = extractBusyBlocks(fb);
   console.log("📅 [BOOKING] freebusy", {
     tenantId,
     timeMin,
@@ -866,15 +977,25 @@ async function bookInGoogle(opts: {
     return { ok: false as const, error: "SLOT_BUSY" as const, busy };
   }
 
-  const event = await googleCreateEvent({
-    tenantId,
-    calendarId: "primary",
-    summary: `Reserva: ${customer_name}`,
-    description: `Agendado por Aamy\nCliente: ${customer_name}`,
-    startISO,
-    endISO,
-    timeZone,
-  });
+    const phone = (opts.customer_phone || "").trim();
+    const email = (opts.customer_email || "").trim();
+
+    const descriptionLines = [
+        "Agendado por Aamy",
+        `Cliente: ${customer_name}`,
+        phone ? `Teléfono: ${phone}` : null,
+        email ? `Email: ${email}` : null,
+    ].filter(Boolean);
+
+    const event = await googleCreateEvent({
+        tenantId,
+        calendarId: "primary",
+        summary: `Reserva: ${customer_name}`,
+        description: descriptionLines.join("\n"),
+        startISO,
+        endISO,
+        timeZone,
+    });
 
   return {
     ok: true as const,
@@ -952,7 +1073,7 @@ export async function bookingFlowMvp(opts: {
 
     const lastMs = typeof lastDoneAt === "number" ? lastDoneAt : null;
 
-    // ventana corta: 10 minutos
+    // ventana corta: 5 minutos
     const withinWindow =
       lastMs && Number.isFinite(lastMs)
         ? ((Date.now() - lastMs) >= 0 && (Date.now() - lastMs) < 5 * 60 * 1000)
@@ -1064,11 +1185,13 @@ if (booking.step === "idle") {
     };
   }
 
-  // ✅ ya hay propósito -> pide todos los datos en 1 mensaje
+  // ✅ ya hay propósito -> primero pregunta mañana o tarde
   return {
     handled: true,
-    reply: buildAskAllMessage(idioma, purpose),
-    ctxPatch: { booking: { step: "ask_all", timeZone, purpose } },
+    reply: idioma === "en"
+      ? "Great — do you prefer morning or afternoon?"
+      : "Perfecto — ¿prefieres en la mañana o en la tarde?",
+    ctxPatch: { booking: { step: "ask_daypart", timeZone, purpose } },
   };
 }
 
@@ -1079,21 +1202,86 @@ if (booking.step === "ask_purpose") {
 
   const purpose = detectPurpose(userText);
 
-  // Si aún no lo detecta, no lo trances: dale opciones otra vez
   if (!purpose) {
     return {
       handled: true,
       reply: idioma === "en"
-        ? "Got it. Is it a appointment, class, consultation, or a call?"
+        ? "Got it. Is it an appointment, class, consultation, or a call?"
         : "Entiendo. ¿Es una cita, clase, consulta o llamada?",
       ctxPatch: { booking: { ...booking, step: "ask_purpose", timeZone } },
     };
   }
 
+  // ✅ AQUI: primero daypart
   return {
     handled: true,
-    reply: buildAskAllMessage(idioma, purpose),
-    ctxPatch: { booking: { step: "ask_all", timeZone, purpose } },
+    reply: idioma === "en"
+      ? "Great — do you prefer morning or afternoon?"
+      : "Perfecto — ¿prefieres en la mañana o en la tarde?",
+    ctxPatch: { booking: { step: "ask_daypart", timeZone, purpose } },
+  };
+}
+
+if (booking.step === "ask_daypart") {
+  if (wantsToChangeTopic(userText)) {
+    return { handled: false, ctxPatch: { booking: { step: "idle" } } };
+  }
+
+  if (wantsToCancel(userText)) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "Of course. I’ll stop the scheduling process for now."
+        : "Claro. Detengo el proceso de agendamiento por ahora.",
+      ctxPatch: { booking: { step: "idle" } },
+    };
+  }
+
+  const dp = detectDaypart(userText);
+  if (!dp) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "Please reply: morning or afternoon."
+        : "Respóndeme: mañana o tarde.",
+      ctxPatch: { booking: { ...booking, step: "ask_daypart", timeZone } },
+    };
+  }
+
+  // Si no hay horario configurado, no podemos filtrar por daypart con slots → fallback
+  if (!hours) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "This business hasn’t set business hours yet. Please send the exact date & time (YYYY-MM-DD HH:mm)."
+        : "Este negocio aún no tiene horario de atención configurado. Envíame fecha y hora exacta (YYYY-MM-DD HH:mm).",
+      ctxPatch: { booking: { step: "ask_datetime", timeZone, daypart: dp } },
+    };
+  }
+
+  const slots = await getNextSlotsByDaypart({
+    tenantId,
+    timeZone,
+    durationMin,
+    bufferMin,
+    hours,
+    daypart: dp,
+    daysAhead: 7,
+  });
+
+  return {
+    handled: true,
+    reply: renderSlotsMessage({ idioma, timeZone, slots }),
+    ctxPatch: {
+      booking: {
+        step: "offer_slots",
+        timeZone,
+        purpose: booking.purpose || null,
+        daypart: dp,
+        slots,
+        date_only: null,
+      },
+    },
   };
 }
 
@@ -1381,37 +1569,27 @@ if (booking.step === "ask_email") {
 
 if (booking.step === "offer_slots") {
   const t = normalizeText(userText);
-
-    // Si pregunta por horarios estando en offer_slots, simplemente re-muestra opciones
-    if (/\b(horario|horarios|hours|available)\b/i.test(t)) {
-    const slots = Array.isArray((booking as any)?.slots) ? (booking as any).slots : [];
+  const slots = Array.isArray((booking as any)?.slots) ? (booking as any).slots : [];
 
     if (!slots.length) {
       return {
         handled: true,
         reply: idioma === "en"
           ? "I don’t have available times saved for that date. Please send another date (YYYY-MM-DD)."
-          : "No tengo horarios disponibles guardados para esa fecha. Envíame otra fecha (YYYY-MM-DD).",
-        ctxPatch: { booking: { step: "ask_datetime", timeZone, date_only: null, slots: [] } },
-      };
-    }
-
-    if (!slots.length) {
-      return {
-        handled: true,
-        reply: idioma === "en"
-        ? "I don’t have available times saved for that date. Please send another date (YYYY-MM-DD)."
-        : "No tengo horarios disponibles para esa fecha. Envíame otra fecha (YYYY-MM-DD).",
+          : "No tengo horarios disponibles para esa fecha. Envíame otra fecha (YYYY-MM-DD).",
         ctxPatch: {
         booking: {
-            ...booking,
+          ...booking,
             step: "ask_datetime",
             date_only: null,
             slots: [],
-        },
+          },
         },
       };
     }
+
+    // Si pregunta por horarios estando en offer_slots, simplemente re-muestra opciones
+    if (/\b(horario|horarios|hours|available)\b/i.test(t)) {
 
     return {
         handled: true,
@@ -1435,7 +1613,6 @@ if (booking.step === "offer_slots") {
     };
   }
 
-  const slots = Array.isArray((booking as any)?.slots) ? (booking as any).slots : [];
   const choice = parseSlotChoice(userText, slots.length);
 
   if (!choice) {
@@ -1454,16 +1631,100 @@ if (booking.step === "offer_slots") {
   return {
     handled: true,
     reply: idioma === "en"
+      ? "Perfect. Please send your full name and email in ONE message (example: John Smith, john@email.com)."
+      : "Perfecto. Envíame tu nombre completo y email en **un solo mensaje** (ej: Juan Pérez, juan@email.com).",
+    ctxPatch: {
+      booking: {
+        ...booking,
+        step: "ask_contact",
+        picked_start: picked.startISO,
+        picked_end: picked.endISO,
+        slots: [],
+        date_only: null,
+      },
+    },
+  };
+}
+
+function parseNameEmailOnly(input: string): { name: string | null; email: string | null } {
+  const raw = String(input || "").trim();
+  const email = raw.match(EMAIL_REGEX)?.[0]?.toLowerCase() || null;
+
+  let nameCandidate = raw;
+  if (email) nameCandidate = removeOnce(nameCandidate, email);
+
+  nameCandidate = cleanNameCandidate(nameCandidate)
+    .replace(/\b(mi nombre es|soy|me llamo|name is|i am|hola|buenas|buenos|por favor|pls|please)\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const name = nameCandidate ? parseFullName(nameCandidate) : null;
+  return { name, email };
+}
+
+if (booking.step === "ask_contact") {
+  if (wantsToChangeTopic(userText)) {
+    return { handled: false, ctxPatch: { booking: { step: "idle" } } };
+  }
+
+  if (wantsToCancel(userText)) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "Of course. I’ll stop the scheduling process for now."
+        : "Claro. Detengo el proceso de agendamiento por ahora.",
+      ctxPatch: { booking: { step: "idle" } },
+    };
+  }
+
+  const { name, email } = parseNameEmailOnly(userText);
+
+  if (!name) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "I’m missing your first and last name (example: John Smith)."
+        : "Me falta tu nombre y apellido (ej: Juan Pérez).",
+      ctxPatch: { booking: { ...booking, step: "ask_contact" } },
+    };
+  }
+
+  if (!email || !parseEmail(email)) {
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "I’m missing a valid email (example: name@email.com)."
+        : "Me falta un email válido (ej: nombre@email.com).",
+      ctxPatch: { booking: { ...booking, step: "ask_contact" } },
+    };
+  }
+
+  const startISO = (booking as any)?.picked_start || null;
+  const endISO = (booking as any)?.picked_end || null;
+
+  if (!startISO || !endISO) {
+    return { handled: false, ctxPatch: { booking: { step: "idle" } } };
+  }
+
+  await upsertClienteBookingData({ tenantId, canal, contacto, nombre: name, email });
+
+  const whenTxt = formatSlotHuman({ startISO, timeZone, idioma });
+
+  return {
+    handled: true,
+    reply: idioma === "en"
       ? `To confirm booking for ${whenTxt}? Reply YES to confirm or NO to cancel.`
       : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
     ctxPatch: {
       booking: {
-        ...booking,
         step: "confirm",
-        start_time: picked.startISO,
-        end_time: picked.endISO,
-        slots: [],        // limpia
-        date_only: null,  // limpia
+        timeZone,
+        name,
+        email,
+        start_time: startISO,
+        end_time: endISO,
+        picked_start: null,
+        picked_end: null,
       },
     },
   };
@@ -1557,6 +1818,39 @@ if (booking.step === "offer_slots") {
           : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
         ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
       };
+    }
+
+    // ✅ NUEVO: valida contra horario del negocio
+    if (hours && parsed?.startISO && parsed?.endISO) {
+      const check = isWithinBusinessHours({
+        hours,
+        startISO: parsed.startISO,
+        endISO: parsed.endISO,
+        timeZone,
+    });
+
+      if (!check.ok) {
+        if (check.reason === "closed") {
+          return {
+            handled: true,
+            reply: idioma === "en"
+            ? "We’re closed that day. Please choose another date."
+            : "Ese día estamos cerrados. Envíame otra fecha.",
+            ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
+          };
+        }
+
+        if (check.reason === "outside" && (check as any).bizStart && (check as any).bizEnd) {
+          const windowTxt = formatBizWindow(idioma, (check as any).bizStart, (check as any).bizEnd);
+          return {
+            handled: true,
+            reply: idioma === "en"
+              ? `That time is outside business hours (${windowTxt}). Please send a time within that range.`
+              : `Esa hora está fuera del horario (${windowTxt}). Envíame una hora dentro de ese rango.`,
+            ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
+          };
+        }
+      }
     }
 
     const whenTxt = formatSlotHuman({ startISO: parsed.startISO!, timeZone, idioma });
@@ -1691,6 +1985,8 @@ if (booking.step === "offer_slots") {
     const g = await bookInGoogle({
       tenantId,
       customer_name,
+      customer_phone: contacto,      // ✅ WhatsApp/Messenger sender id / phone
+      customer_email: booking.email, // ✅ el email que capturaste
       startISO,
       endISO,
       timeZone,
@@ -1741,6 +2037,16 @@ if (booking.step === "offer_slots") {
           reply: idioma === "en"
             ? "That date/time is in the past. Please send a future date and time (YYYY-MM-DD HH:mm)."
             : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
+          ctxPatch: { booking: { step: "ask_datetime", timeZone } },
+        };
+      }
+
+      if ((g as any)?.error === "OUTSIDE_BUSINESS_HOURS") {
+        return {
+          handled: true,
+          reply: idioma === "en"
+            ? "That time is outside business hours. Please choose a different time."
+            : "Ese horario está fuera del horario de atención. Elige otro horario.",
           ctxPatch: { booking: { step: "ask_datetime", timeZone } },
         };
       }
