@@ -422,7 +422,8 @@ async function getNextSlotsByDaypart(opts: {
   bufferMin: number;
   hours: HoursByWeekday | null;
   daypart: "morning" | "afternoon";
-  daysAhead?: number; // default 7
+  daysAhead?: number;
+  afterISO?: string | null; // ✅ NUEVO
 }): Promise<Array<{ startISO: string; endISO: string }>> {
   const { tenantId, timeZone, durationMin, bufferMin, hours, daypart } = opts;
   const daysAhead = opts.daysAhead ?? 7;
@@ -479,6 +480,24 @@ async function getNextSlotsByDaypart(opts: {
       bufferMin,
       timeZone,
     });
+
+  const after = opts.afterISO
+    ? DateTime.fromISO(opts.afterISO, { zone: timeZone })
+    : null;
+
+  // ...
+
+    for (const s of slots) {
+      // ✅ NUEVO: si ya dimos slots antes, solo devolver los que sean “después”
+      if (after) {
+        const sdt = DateTime.fromISO(s.startISO, { zone: timeZone });
+        if (!sdt.isValid) continue;
+        if (sdt <= after) continue;
+      }
+
+      out.push(s);
+      if (out.length >= 5) return out;
+    }
 
     for (const s of slots) {
       out.push(s);
@@ -1622,6 +1641,8 @@ if (booking.step === "offer_slots") {
     // ✅ NUEVO: si pide "otros" / "más opciones" => regenera y re-muestra
     if (wantsMoreSlots(userText)) {
         // si no hay horario configurado, no podemos generar slots
+        const lastStartISO = slots.length ? slots[slots.length - 1].startISO : null;
+
         if (!hours) {
         return {
             handled: true,
@@ -1638,29 +1659,30 @@ if (booking.step === "offer_slots") {
         const daypartToUse: "morning" | "afternoon" = dp || "morning";
 
         const newSlots = await getNextSlotsByDaypart({
-        tenantId,
-        timeZone: booking.timeZone || timeZone,
-        durationMin,
-        bufferMin,
-        hours,
-        daypart: daypartToUse,
-        daysAhead: 14, // un poco más para encontrar opciones
+          tenantId,
+          timeZone: booking.timeZone || timeZone,
+          durationMin,
+          bufferMin,
+          hours,
+          daypart: daypartToUse,
+          daysAhead: 14,
+          afterISO: lastStartISO, // ✅ CLAVE: “dame los siguientes”
         });
 
         if (!newSlots.length) {
-        return {
+            return {
             handled: true,
             reply: idioma === "en"
-            ? "I couldn’t find more available times. Please tell me another date (YYYY-MM-DD)."
-            : "No encontré más horarios disponibles. Envíame otra fecha (YYYY-MM-DD).",
+                ? "I couldn’t find more available times. Please tell me another date (YYYY-MM-DD)."
+                : "No encontré más horarios disponibles. Envíame otra fecha (YYYY-MM-DD).",
             ctxPatch: { booking: { ...booking, step: "ask_datetime", date_only: null, slots: [] } },
-        };
+            };
         }
 
         return {
-        handled: true,
-        reply: renderSlotsMessage({ idioma, timeZone: booking.timeZone || timeZone, slots: newSlots }),
-        ctxPatch: {
+          handled: true,
+          reply: renderSlotsMessage({ idioma, timeZone: booking.timeZone || timeZone, slots: newSlots }),
+          ctxPatch: {
             booking: {
             ...booking,
             step: "offer_slots",
@@ -1671,9 +1693,9 @@ if (booking.step === "offer_slots") {
             slots: newSlots,
             date_only: null,
             },
-        },
+          },
         };
-    }
+      }
 
     return {
         handled: true,
