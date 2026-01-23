@@ -498,11 +498,6 @@ async function getNextSlotsByDaypart(opts: {
       out.push(s);
       if (out.length >= 5) return out;
     }
-
-    for (const s of slots) {
-      out.push(s);
-      if (out.length >= 5) return out;
-    }
   }
 
   return out.slice(0, 5);
@@ -662,7 +657,7 @@ function wantsToCancel(text: string) {
 
 function wantsMoreSlots(text: string) {
   const t = normalizeText(text);
-  return /\b(otros|otras|mas|más|otro|otra|alternativas|siguientes|más tarde|cambiar|dame mas|ver mas|ver más)\b/i.test(t);
+  return /\b(otro|otra|otros|otras|mas|más|siguientes|alternativas|otra hora|otras horas|otro horario|otros horarios|mas opciones|más opciones|dame mas|dame más|ver mas|ver más)\b/i.test(t);
 }
 
 function extractDateOnlyToken(input: string): string | null {
@@ -1634,6 +1629,59 @@ if (booking.step === "offer_slots") {
         },
       };
     }
+
+    // ✅ NUEVO: pide más opciones aunque no escriba "horario"
+    if (wantsMoreSlots(userText)) {
+    const lastStartISO = slots.length ? slots[slots.length - 1].startISO : null;
+
+    if (!hours) {
+        return {
+        handled: true,
+        reply: idioma === "en"
+            ? "Please send a date and time (YYYY-MM-DD HH:mm)."
+            : "Por favor envíame fecha y hora (YYYY-MM-DD HH:mm).",
+        ctxPatch: { booking: { ...booking, step: "ask_datetime", date_only: null, slots: [] } },
+        };
+    }
+
+    const dp = (booking as any)?.daypart as ("morning" | "afternoon" | null) || null;
+    const daypartToUse: "morning" | "afternoon" = dp || "morning";
+
+    const newSlots = await getNextSlotsByDaypart({
+        tenantId,
+        timeZone: booking.timeZone || timeZone,
+        durationMin,
+        bufferMin,
+        hours,
+        daypart: daypartToUse,
+        daysAhead: 14,
+        afterISO: lastStartISO,
+    });
+
+    if (!newSlots.length) {
+        return {
+        handled: true,
+        reply: idioma === "en"
+            ? "I couldn’t find more available times. Please tell me another date (YYYY-MM-DD)."
+            : "No encontré más horarios disponibles. Envíame otra fecha (YYYY-MM-DD).",
+        ctxPatch: { booking: { ...booking, step: "ask_datetime", date_only: null, slots: [] } },
+        };
+    }
+
+    return {
+      handled: true,
+      reply: renderSlotsMessage({ idioma, timeZone: booking.timeZone || timeZone, slots: newSlots }),
+      ctxPatch: {
+        booking: {
+          ...booking,
+          step: "offer_slots",
+          timeZone: booking.timeZone || timeZone,
+          slots: newSlots,
+          date_only: null,
+        },
+      },
+    };
+  }
 
     // Si pregunta por horarios estando en offer_slots, simplemente re-muestra opciones
     if (/\b(horario|horarios|hours|available)\b/i.test(t)) {
