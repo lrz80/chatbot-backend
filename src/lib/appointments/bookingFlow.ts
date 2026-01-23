@@ -35,6 +35,7 @@ import {
   parseAllInOne,
   parseNameEmailOnly,
   buildAskAllMessage,
+  wantsAnotherDay,
 } from "./booking/text";
 import type { TimeConstraint } from "./booking/text";
 import {
@@ -820,6 +821,60 @@ if (booking.step === "offer_slots") {
                 slots: [],},
           booking_last_touch_at: Date.now(),
         },
+      };
+    }
+
+    // 0) CAMBIO DE DÍA (antes que wantsMoreSlots)
+    if (wantsAnotherDay(userText) && hours) {
+      const tz = booking.timeZone || timeZone;
+
+      const ctxDate =
+        (booking as any)?.date_only ||
+        (booking as any)?.last_offered_date ||
+        (slots?.[0]?.startISO
+          ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
+          : null);
+
+      if (ctxDate) {
+        // siguiente día
+        const nextDate = DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz })
+          .plus({ days: 1 })
+          .toFormat("yyyy-MM-dd");
+
+        const nextSlots = await getSlotsForDate({
+          tenantId,
+          timeZone: tz,
+          dateISO: nextDate,
+          durationMin,
+          bufferMin,
+          hours,
+        });
+
+        if (nextSlots.length) {
+          return {
+            handled: true,
+            reply: renderSlotsMessage({ idioma, timeZone: tz, slots: nextSlots.slice(0, 5) }),
+            ctxPatch: {
+              booking: {
+                ...booking,
+                step: "offer_slots",
+                timeZone: tz,
+                slots: nextSlots.slice(0, 5),
+                last_offered_date: nextDate,
+                date_only: nextDate,
+              },
+              booking_last_touch_at: Date.now(),
+            },
+          };
+        }
+      }
+
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? "I don’t see availability on the next day. Would you like to try a different date?"
+          : "No veo disponibilidad para el próximo día. ¿Quieres que probemos otra fecha?",
+        ctxPatch: { booking, booking_last_touch_at: Date.now() },
       };
     }
 

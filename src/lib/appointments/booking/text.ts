@@ -109,6 +109,11 @@ export function wantsMoreSlots(text: string) {
   return /\b(otro|otra|otros|otras|mas|más|siguientes|alternativas|otra hora|otras horas|otro horario|otros horarios|mas opciones|más opciones|dame mas|dame más|ver mas|ver más)\b/i.test(t);
 }
 
+export function wantsAnotherDay(s: string) {
+  const t = String(s || "").toLowerCase();
+  return /\b(otro dia|otro día|otro dia\?|otro día\?|otro día\*|mañana|pasado mañana|otro día diferente|another day|different day|next day)\b/i.test(t);
+}
+
 export function wantsToChangeTopic(text: string) {
   const t = String(text || "").toLowerCase();
   return (
