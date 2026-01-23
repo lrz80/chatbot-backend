@@ -1,953 +1,58 @@
 // src/lib/appointments/bookingFlow.ts
-import pool from "../db";
 import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
 import { canUseChannel } from "../features";
 import { DateTime } from "luxon";
-import type { GoogleFreeBusyResponse, GoogleBusyBlock } from "../../services/googleCalendar";
+import type { BookingCtx } from "./booking/types";
+import {
+  getAppointmentSettings,
+  getBusinessHours,
+  isGoogleConnected,
+  loadBookingTerms,
+  upsertClienteBookingData,
+  markAppointmentConfirmed,
+  markAppointmentFailed,
+  createPendingAppointmentOrGetExisting,
+} from "./booking/db";
+import {
+  EMAIL_REGEX,
+  normalizeText,
+  hasExplicitDateTime,
+  hasAppointmentContext,
+  isCapabilityQuestion,
+  isDirectBookingRequest,
+  detectDaypart,
+  detectPurpose,
+  wantsToCancel,
+  wantsMoreSlots,
+  wantsToChangeTopic,
+  matchesBookingIntent,
+  extractDateTimeToken,
+  extractDateOnlyToken,
+  parseEmail,
+  parseFullName,
+  parseAllInOne,
+  parseNameEmailOnly,
+  buildAskAllMessage,
+} from "./booking/text";
+
+import {
+  MIN_LEAD_MINUTES,
+  isPastSlot,
+  parseDateTimeExplicit,
+  isWithinBusinessHours,
+  formatBizWindow,
+  formatSlotHuman,
+  renderSlotsMessage,
+  parseSlotChoice,
+  weekdayKey,
+} from "./booking/time";
+import { getNextSlotsByDaypart, getSlotsForDate } from "./booking/slots";
+import { extractTimeOnlyToken } from "./booking/text";
+import { filterSlotsNearTime } from "./booking/time";
+import { extractBusyBlocks } from "./booking/freebusy";
+import { extractTimeConstraint } from "./booking/text";
+import { filterSlotsByConstraint } from "./booking/time";
 
-
-type BookingCtx = {
-  booking?: {
-    step?: "idle" | "ask_purpose" | "ask_daypart" | "offer_slots" | "ask_contact" | "confirm" | "ask_all" | "ask_name" | "ask_email" | "ask_datetime";
-    start_time?: string | null;
-    end_time?: string | null;
-    timeZone?: string | null;
-    name?: string | null;
-    email?: string | null;
-    purpose?: string | null;
-    date_only?: string | null;
-    slots?: Array<{ startISO: string; endISO: string }>;
-    daypart?: "morning" | "afternoon" | null;
-    picked_start?: string | null;
-    picked_end?: string | null;
-  };
-};
-
-const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
-
-const MIN_LEAD_MINUTES = 5; // o 0 si quieres permitir "ahora mismo"
-
-function isPastSlot(startISO: string, timeZone: string) {
-  const start = DateTime.fromISO(startISO, { zone: timeZone });
-  const now = DateTime.now().setZone(timeZone);
-
-  if (!start.isValid) return true;
-
-  // Requerimos que el start sea >= now + MIN_LEAD_MINUTES
-  const minStart = now.plus({ minutes: MIN_LEAD_MINUTES });
-
-  return start < minStart;
-}
-
-function normalizeText(s: string) {
-  return String(s || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // quita acentos
-    .replace(/[^\w\s:@.-]/g, " ")    // quita signos raros
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function hasExplicitDateTime(text: string) {
-  return /(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})/.test(String(text || ""));
-}
-
-function hasAppointmentContext(text: string) {
-  const t = normalizeText(text);
-
-  // ✅ agend + (para agendar, agendarrr, agendarr, agendar., agendando, agendame, etc.)
-  const agendLike = /\bagend+a+\w*\b/; // captura "agendar", "agendarrr", "agendame", "agendando"
-  const bookLike =
-    /\b(cita|consulta|reservar|reserva|turno|appointment|booking|schedule)\b/;
-
-  return agendLike.test(t) || bookLike.test(t);
-}
-
-function isCapabilityQuestion(text: string) {
-  const t = normalizeText(text);
-
-  // Debe estar preguntando (signo ? o estructura interrogativa)
-  const looksLikeQuestion =
-    /\?/.test(text) || /\b(que|qué|como|cómo|cuál|cual)\b/.test(t);
-
-  // Preguntas típicas de capacidad (las que ya tenías)
-  const q =
-    /\b(puede|pueden|se puede|puedes|podria|podrían|capaz|permite|permiten|hace|hacen|incluye|incluyen)\b/.test(t) ||
-    /\b(can you|can it|does it|do you|is it able to|are you able to)\b/.test(t);
-
-  // ✅ NUEVO: preguntas de capacidad “directas” sin verbos tipo "puede"
-  // Ej: "¿reserva citas?", "¿agenda?", "¿book appointments?"
-  const bookingCapability =
-    /\b(reserva|reservas|reservar|agenda|agendas|agendar|agendame|agéndame|programa|programas|programar)\b/.test(t) ||
-    /\b(schedule|schedules|book|books|booking)\b/.test(t);
-
-  const shortNoQuestionMark =
-    t.length <= 30 && /\b(reserva|agenda|agendar|reservar|schedule|book|booking)\b/.test(t);
-
-  if (shortNoQuestionMark) return true;
-
-  // Si es una pregunta y menciona agenda/reserva => es capacidad
-  if (looksLikeQuestion && bookingCapability) return true;
-
-  return q && looksLikeQuestion;
-}
-
-function isDirectBookingRequest(text: string) {
-  const t = normalizeText(text);
-
-  // Petición directa: "quiero agendar", "agéndame", "resérvame", "book me", etc.
-  return (
-    /\b(quiero|quisiera|necesito|me gustaria|me gustaría|vamos a|podemos)\s+(agendar|reservar|programar)\b/.test(t) ||
-    /\b(agendame|agéndame|reservame|resérvame|programame|prográmame)\b/.test(t) ||
-    /\b(book me|schedule me|reserve)\b/.test(t)
-  );
-}
-
-async function getAppointmentSettings(tenantId: string) {
-  const { rows } = await pool.query(
-    `SELECT default_duration_min, buffer_min, timezone, enabled
-       FROM appointment_settings
-      WHERE tenant_id = $1
-      LIMIT 1`,
-    [tenantId]
-  );
-
-  return {
-    default_duration_min: rows[0]?.default_duration_min ?? 30,
-    buffer_min: rows[0]?.buffer_min ?? 10,
-    timezone: rows[0]?.timezone ?? "America/New_York",
-    enabled: rows[0]?.enabled ?? true,
-  };
-}
-
-type DayHours = { start: string; end: string }; // "09:00" - "18:00"
-type HoursByWeekday = {
-  mon?: DayHours | null;
-  tue?: DayHours | null;
-  wed?: DayHours | null;
-  thu?: DayHours | null;
-  fri?: DayHours | null;
-  sat?: DayHours | null;
-  sun?: DayHours | null;
-};
-
-async function getBusinessHours(tenantId: string): Promise<HoursByWeekday | null> {
-  try {
-    const { rows } = await pool.query(
-      `SELECT horario_atencion FROM tenants WHERE id = $1 LIMIT 1`,
-      [tenantId]
-    );
-    const raw = rows[0]?.horario_atencion;
-    if (!raw) return null;
-
-        // ✅ BACKUP: si viene como texto "09:00-17:00", conviértelo a JSON por días
-    if (typeof raw === "string") {
-      const s = raw.trim();
-
-      // acepta "09:00-17:00" o "09:00 - 17:00"
-      const m = s.match(/^(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$/);
-      if (m) {
-        const start = m[1];
-        const end = m[2];
-
-        return {
-          mon: { start, end },
-          tue: { start, end },
-          wed: { start, end },
-          thu: { start, end },
-          fri: { start, end },
-          sat: null,
-          sun: null,
-        };
-      }
-    }
-
-    const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-    if (!obj || typeof obj !== "object") return null;
-
-    // Soporta llaves: mon/tue..., monday..., lunes..., etc.
-    const mapKey = (k: string) => {
-      const x = String(k || "").toLowerCase().trim();
-      if (["mon","monday","lunes"].includes(x)) return "mon";
-      if (["tue","tues","tuesday","martes"].includes(x)) return "tue";
-      if (["wed","weds","wednesday","miercoles","miércoles"].includes(x)) return "wed";
-      if (["thu","thur","thurs","thursday","jueves"].includes(x)) return "thu";
-      if (["fri","friday","viernes"].includes(x)) return "fri";
-      if (["sat","saturday","sabado","sábado"].includes(x)) return "sat";
-      if (["sun","sunday","domingo"].includes(x)) return "sun";
-      return null;
-    };
-
-    const normalizeDay = (v: any): DayHours | null => {
-      if (!v) return null;
-
-      // Caso 1: {start,end}
-      if (typeof v === "object" && (v.start || v.end)) {
-        const start = String(v.start || "").trim();
-        const end = String(v.end || "").trim();
-        return start && end ? { start, end } : null;
-      }
-
-      // Caso 2: {open,close}
-      if (typeof v === "object" && (v.open || v.close)) {
-        const start = String(v.open || "").trim();
-        const end = String(v.close || "").trim();
-        return start && end ? { start, end } : null;
-      }
-
-      // Caso 3: ["09:00","18:00"]
-      if (Array.isArray(v) && v.length >= 2) {
-        const start = String(v[0] || "").trim();
-        const end = String(v[1] || "").trim();
-        return start && end ? { start, end } : null;
-      }
-
-      return null;
-    };
-
-    const out: HoursByWeekday = {};
-
-    for (const [k, v] of Object.entries(obj as Record<string, any>)) {
-      const wk = mapKey(k);
-      if (!wk) continue;
-      (out as any)[wk] = normalizeDay(v);
-    }
-
-    // si no pudimos mapear nada, devuelve null
-    const anyDay = Object.values(out).some(Boolean);
-    return anyDay ? out : null;
-  } catch {
-    return null;
-  }
-}
-
-function weekdayKey(dt: DateTime): keyof HoursByWeekday {
-  // Luxon: 1=Mon ... 7=Sun
-  const w = dt.weekday;
-  return (w === 1 ? "mon" :
-          w === 2 ? "tue" :
-          w === 3 ? "wed" :
-          w === 4 ? "thu" :
-          w === 5 ? "fri" :
-          w === 6 ? "sat" : "sun");
-}
-
-function isWithinBusinessHours(opts: {
-  hours: HoursByWeekday | null;
-  startISO: string;
-  endISO: string;
-  timeZone: string;
-}) {
-  const { hours, startISO, endISO, timeZone } = opts;
-  if (!hours) return { ok: true as const }; // si no hay horario, no bloquees aquí (tu flow ya hace fallback)
-
-  const start = DateTime.fromISO(startISO, { zone: timeZone });
-  const end = DateTime.fromISO(endISO, { zone: timeZone });
-  if (!start.isValid || !end.isValid) return { ok: false as const, reason: "invalid" as const };
-
-  const key = weekdayKey(start);
-  const dayHours = hours[key];
-  if (!dayHours || !dayHours.start || !dayHours.end) {
-    return { ok: false as const, reason: "closed" as const, key };
-  }
-
-  const st = parseHHmm(dayHours.start);
-  const en = parseHHmm(dayHours.end);
-  if (!st || !en) return { ok: false as const, reason: "invalid_hours" as const, key };
-
-  const bizStart = start.set({ hour: st.h, minute: st.min, second: 0, millisecond: 0 });
-  const bizEnd = start.set({ hour: en.h, minute: en.min, second: 0, millisecond: 0 });
-  if (bizEnd <= bizStart) return { ok: false as const, reason: "invalid_hours" as const, key };
-
-  // ✅ debe estar completamente dentro
-  const ok = start >= bizStart && end <= bizEnd;
-  return ok
-    ? { ok: true as const }
-    : { ok: false as const, reason: "outside" as const, bizStart, bizEnd, key };
-}
-
-function formatBizWindow(idioma: "es" | "en", bizStart: DateTime, bizEnd: DateTime) {
-  const fmt = idioma === "en" ? "h:mm a" : "HH:mm";
-  return `${bizStart.toFormat(fmt)} - ${bizEnd.toFormat(fmt)}`;
-}
-
-function parseHHmm(hhmm: string) {
-  const m = String(hhmm || "").match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-  if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
-  if (h < 0 || h > 23 || min < 0 || min > 59) return null;
-  return { h, min };
-}
-
-function extractBusyBlocks(fb: GoogleFreeBusyResponse | any): Array<{ start: string; end: string }> {
-  if (!fb?.calendars) return [];
-  // intenta 'primary', luego cualquier calendario
-  const primary = fb.calendars.primary || fb.calendars["primary"];
-  if (primary?.busy) return primary.busy;
-
-  const anyCal = Object.values(fb.calendars)[0] as any;
-  return Array.isArray(anyCal?.busy) ? anyCal.busy : [];
-}
-
-function subtractBusyFromWindow(opts: {
-  windowStart: DateTime;
-  windowEnd: DateTime;
-  busy: Array<{ start: string; end: string }>;
-  timeZone: string;
-}): Array<{ start: DateTime; end: DateTime }> {
-  const { windowStart, windowEnd, busy, timeZone } = opts;
-
-  // Normaliza busy a DateTime y ordena
-  const busyBlocks = (busy || [])
-    .map(b => ({
-      start: DateTime.fromISO(b.start, { zone: timeZone }),
-      end: DateTime.fromISO(b.end, { zone: timeZone }),
-    }))
-    .filter(b => b.start.isValid && b.end.isValid)
-    .sort((a, b) => a.start.toMillis() - b.start.toMillis());
-
-  // Merge overlaps
-  const merged: Array<{ start: DateTime; end: DateTime }> = [];
-  for (const b of busyBlocks) {
-    const last = merged[merged.length - 1];
-    if (!last) merged.push(b);
-    else if (b.start <= last.end) last.end = DateTime.max(last.end, b.end);
-    else merged.push(b);
-  }
-
-  // Restar de la ventana
-  let cursor = windowStart;
-  const free: Array<{ start: DateTime; end: DateTime }> = [];
-
-  for (const b of merged) {
-    const bs = DateTime.max(b.start, windowStart);
-    const be = DateTime.min(b.end, windowEnd);
-    if (be <= windowStart || bs >= windowEnd) continue;
-
-    if (bs > cursor) free.push({ start: cursor, end: bs });
-    cursor = DateTime.max(cursor, be);
-  }
-
-  if (cursor < windowEnd) free.push({ start: cursor, end: windowEnd });
-
-  return free;
-}
-
-function sliceIntoSlots(opts: {
-  freeRanges: Array<{ start: DateTime; end: DateTime }>;
-  durationMin: number;
-  bufferMin: number;
-  timeZone: string;
-}): Array<{ startISO: string; endISO: string }> {
-  const { freeRanges, durationMin, bufferMin, timeZone } = opts;
-
-  const slots: Array<{ startISO: string; endISO: string }> = [];
-
-  for (const r of freeRanges) {
-    // respeta lead time
-    let start = r.start;
-    const now = DateTime.now().setZone(timeZone).plus({ minutes: MIN_LEAD_MINUTES });
-    if (start < now) start = now;
-
-    // redondeo opcional a 5 min
-    start = start.set({ second: 0, millisecond: 0 });
-
-    // iterar slots
-    while (start.plus({ minutes: durationMin }) <= r.end) {
-      const end = start.plus({ minutes: durationMin });
-
-      // aplica buffer: evita que el slot “pegue” con el siguiente
-      // (si no quieres, puedes quitar esto)
-      const endWithBuffer = end.plus({ minutes: bufferMin });
-      if (endWithBuffer <= r.end.plus({ minutes: 0 })) {
-        const sISO = start.toISO();
-        const eISO = end.toISO();
-        if (sISO && eISO) slots.push({ startISO: sISO, endISO: eISO });
-      }
-
-      // saltar en incrementos de 15 min (ajusta si quieres)
-      start = start.plus({ minutes: 15 });
-    }
-  }
-
-  return slots;
-}
-
-function detectDaypart(text: string): "morning" | "afternoon" | null {
-  const t = normalizeText(text);
-
-  // mañana / morning
-  if (/\b(manana|mañana|morning|am|a\.m\.|temprano)\b/i.test(t)) return "morning";
-
-  // tarde / afternoon
-  if (/\b(tarde|afternoon|pm|p\.m\.|despues del mediodia|después del mediodía)\b/i.test(t)) return "afternoon";
-
-  return null;
-}
-
-function daypartWindowFromBusinessHours(opts: {
-  day: DateTime;
-  bizStart: DateTime;
-  bizEnd: DateTime;
-  daypart: "morning" | "afternoon";
-}) {
-  const { day, bizStart, bizEnd, daypart } = opts;
-
-  // corte al mediodía del mismo día
-  const noon = day.set({ hour: 12, minute: 0, second: 0, millisecond: 0 });
-
-  // morning: [bizStart, min(bizEnd, noon)]
-  // afternoon: [max(bizStart, noon), bizEnd]
-  const start = daypart === "morning" ? bizStart : DateTime.max(bizStart, noon);
-  const end = daypart === "morning" ? DateTime.min(bizEnd, noon) : bizEnd;
-
-  if (!start.isValid || !end.isValid || end <= start) return null;
-  return { start, end };
-}
-
-function intersectWindows(aStart: DateTime, aEnd: DateTime, bStart: DateTime, bEnd: DateTime) {
-  const s = DateTime.max(aStart, bStart);
-  const e = DateTime.min(aEnd, bEnd);
-  if (!s.isValid || !e.isValid || e <= s) return null;
-  return { start: s, end: e };
-}
-
-async function getNextSlotsByDaypart(opts: {
-  tenantId: string;
-  timeZone: string;
-  durationMin: number;
-  bufferMin: number;
-  hours: HoursByWeekday | null;
-  daypart: "morning" | "afternoon";
-  daysAhead?: number;
-  afterISO?: string | null; // ✅ NUEVO
-}): Promise<Array<{ startISO: string; endISO: string }>> {
-  const { tenantId, timeZone, durationMin, bufferMin, hours, daypart } = opts;
-  const daysAhead = opts.daysAhead ?? 7;
-
-  if (!hours) return [];
-
-  const out: Array<{ startISO: string; endISO: string }> = [];
-
-  const now = DateTime.now().setZone(timeZone).startOf("day");
-
-  const after = opts.afterISO
-    ? DateTime.fromISO(opts.afterISO, { zone: timeZone })
-    : null;
-
-  // ✅ startDay: si after existe, arranca desde el día de after; si no, desde hoy
-  const startDay = (after && after.isValid)
-    ? after.startOf("day")
-    : DateTime.now().setZone(timeZone).startOf("day");
-
-  for (let i = 0; i < daysAhead; i++) {
-    const day = now.plus({ days: i });
-
-    const key = weekdayKey(day);
-    const dayHours = hours?.[key];
-    if (!dayHours || !dayHours.start || !dayHours.end) continue;
-
-    const st = parseHHmm(dayHours.start);
-    const en = parseHHmm(dayHours.end);
-    if (!st || !en) continue;
-
-    const bizStart = day.set({ hour: st.h, minute: st.min, second: 0, millisecond: 0 });
-    const bizEnd = day.set({ hour: en.h, minute: en.min, second: 0, millisecond: 0 });
-    if (bizEnd <= bizStart) continue;
-
-    const win = daypartWindowFromBusinessHours({
-      day,
-      bizStart,
-      bizEnd,
-      daypart,
-    });
-    if (!win) continue;
-
-    // Freebusy de esa ventana
-    const fb = await googleFreeBusy({
-      tenantId,
-      timeMin: win.start.toISO()!,
-      timeMax: win.end.toISO()!,
-      calendarId: "primary",
-    });
-
-    const busy = extractBusyBlocks(fb);
-
-    const freeRanges = subtractBusyFromWindow({
-      windowStart: win.start,
-      windowEnd: win.end,
-      busy,
-      timeZone,
-    });
-
-    const slots = sliceIntoSlots({
-      freeRanges,
-      durationMin,
-      bufferMin,
-      timeZone,
-    });
-
-    for (const s of slots) {
-      // ✅ NUEVO: si ya dimos slots antes, solo devolver los que sean “después”
-      if (after) {
-        const sdt = DateTime.fromISO(s.startISO, { zone: timeZone });
-        if (!sdt.isValid) continue;
-        if (sdt <= after) continue;
-      }
-
-      out.push(s);
-      if (out.length >= 5) return out;
-    }
-  }
-
-  return out.slice(0, 5);
-}
-
-async function getSlotsForDate(opts: {
-  tenantId: string;
-  timeZone: string;
-  dateISO: string; // "YYYY-MM-DD"
-  durationMin: number;
-  bufferMin: number;
-  hours: HoursByWeekday | null;
-}): Promise<Array<{ startISO: string; endISO: string }>> {
-  const { tenantId, timeZone, dateISO, durationMin, bufferMin, hours } = opts;
-
-  const day = DateTime.fromFormat(dateISO, "yyyy-MM-dd", { zone: timeZone });
-  if (!hours) return [];
-  if (!day.isValid) return [];
-
-  const key = weekdayKey(day);
-  const dayHours = hours?.[key];
-
-  // si ese día está cerrado
-  if (!dayHours || !dayHours.start || !dayHours.end) return [];
-
-  const st = parseHHmm(dayHours.start);
-  const en = parseHHmm(dayHours.end);
-  if (!st || !en) return [];
-
-  const windowStart = day.set({ hour: st.h, minute: st.min, second: 0, millisecond: 0 });
-  const windowEnd = day.set({ hour: en.h, minute: en.min, second: 0, millisecond: 0 });
-
-  if (!windowStart.isValid || !windowEnd.isValid || windowEnd <= windowStart) return [];
-
-  // Pedimos freebusy para TODA la ventana del día
-  const fb: GoogleFreeBusyResponse = await googleFreeBusy({
-    tenantId,
-    timeMin: windowStart.toISO()!,
-    timeMax: windowEnd.toISO()!,
-    calendarId: "primary",
-  });
-
-  const busy = extractBusyBlocks(fb);
-
-  const freeRanges = subtractBusyFromWindow({
-    windowStart,
-    windowEnd,
-    busy,
-    timeZone,
-  });
-
-  // crea slots
-  const slots = sliceIntoSlots({
-    freeRanges,
-    durationMin,
-    bufferMin,
-    timeZone,
-  });
-
-  // máximo 5 (para chat)
-  return slots.slice(0, 5);
-}
-
-function renderSlotsMessage(opts: {
-  idioma: "es" | "en";
-  timeZone: string;
-  slots: Array<{ startISO: string; endISO: string }>;
-}): string {
-  const { idioma, timeZone, slots } = opts;
-
-  if (!slots.length) {
-    return idioma === "en"
-      ? "I couldn’t find available times for that date. Please choose another date."
-      : "No encontré horarios disponibles para esa fecha. ¿Me dices otra fecha?";
-  }
-
-  const lines = slots.map((s, i) => {
-    const human = formatSlotHuman({ startISO: s.startISO, timeZone, idioma });
-    return `${i + 1}) ${human}`;
-  });
-
-  return idioma === "en"
-    ? `These times are available:\n${lines.join("\n")}\nReply with the number (1-${slots.length}).`
-    : `Tengo estos horarios disponibles:\n${lines.join("\n")}\nResponde con el número (1-${slots.length}).`;
-}
-
-function parseSlotChoice(text: string, max: number): number | null {
-  const t = String(text || "").trim();
-  const m = t.match(/^(\d{1,2})$/);
-  if (!m) return null;
-  const n = Number(m[1]);
-  if (!Number.isFinite(n) || n < 1 || n > max) return null;
-  return n;
-}
-
-function buildAskAllMessage(idioma: "es" | "en", purpose?: string | null) {
-  const p = purpose ? ` (${purpose})` : "";
-
-  if (idioma === "en") {
-    return (
-      `Sure! I can help you with that.\n` +
-      `Please send me everything together in ONE message:\n` +
-      `Your full name, email, and the date & time you’d like.\n` +
-      `Example: John Smith, john@email.com, 2026-01-21 14:00`
-    );
-  }
-
-  return (
-    `¡Claro! Te ayudo con eso.\n` +
-    `Solo envíame todo junto en **un solo mensaje**:\n` +
-    `Tu nombre completo, email y la fecha y hora que te gustaría.\n` +
-    `Ejemplo: Juan Pérez, juan@email.com, 2026-01-21 14:00`
-  );
-}
-
-function detectPurpose(text: string): string | null {
-  const t = normalizeText(text);
-
-  if (/\b(demo|demostracion|demostración|demonstration)\b/.test(t)) return "demo";
-  if (/\b(clase|class|trial)\b/.test(t)) return "clase";
-
-  // ✅ cita / appointment (ESTO RESUELVE TU BUG)
-  if (/\b(cita|appointment|appt)\b/.test(t)) return "cita";
-
-  if (/\b(consulta|consultation|asesoria|asesoría)\b/.test(t)) return "consulta";
-  if (/\b(llamada|call|phone)\b/.test(t)) return "llamada";
-  if (/\b(visita|visit|presencial|in person)\b/.test(t)) return "visita";
-
-  // (opcional) si dicen "reservar/reserva/turno" sin más, trátalo como cita
-  if (/\b(reservar|reserva|turno|agendar|agenda)\b/.test(t)) return "cita";
-
-  return null;
-}
-
-function extractDateTimeToken(input: string): string | null {
-  const m = String(input || "").match(/\b(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\b/);
-  return m?.[1] || null;
-}
-
-function removeOnce(haystack: string, needle: string) {
-  const idx = haystack.toLowerCase().indexOf(needle.toLowerCase());
-  if (idx === -1) return haystack;
-  return (haystack.slice(0, idx) + " " + haystack.slice(idx + needle.length)).trim();
-}
-
-function cleanNameCandidate(raw: string): string {
-  return String(raw || "")
-    .replace(/[,\|;]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function wantsToCancel(text: string) {
-  const t = normalizeText(text);
-  return /\b(cancelar|cancela|olvida|stop|salir|exit|no gracias|nah|nope|ya no|dejalo|dejalo asi|deja eso|later)\b/i.test(t);
-}
-
-function wantsMoreSlots(text: string) {
-  const t = normalizeText(text);
-  return /\b(otro|otra|otros|otras|mas|más|siguientes|alternativas|otra hora|otras horas|otro horario|otros horarios|mas opciones|más opciones|dame mas|dame más|ver mas|ver más)\b/i.test(t);
-}
-
-function extractDateOnlyToken(input: string): string | null {
-  const m = String(input || "").match(/\b(\d{4}-\d{2}-\d{2})\b/);
-  // evita colisionar con date+time
-  const hasDateTime = /\b\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\b/.test(String(input || ""));
-  if (hasDateTime) return null;
-  return m?.[1] || null;
-}
-
-// ✅ Parser “todo en uno”: "Juan Perez, juan@email.com, 2026-01-21 14:00"
-function parseAllInOne(input: string, timeZone: string, durationMin: number): {
-  name: string | null;
-  email: string | null;
-  startISO: string | null;
-  endISO: string | null;
-} {
-  const raw = String(input || "").trim();
-
-  // 1) Email
-  const email = raw.match(EMAIL_REGEX)?.[0]?.toLowerCase() || null;
-
-  // 2) Fecha token (YYYY-MM-DD HH:mm) en cualquier parte del mensaje
-  const dtToken = extractDateTimeToken(raw);
-  const dtParsed = dtToken ? parseDateTimeExplicit(dtToken, timeZone, durationMin) : null;
-
-  const startISO =
-    (dtParsed as any)?.error === "PAST_SLOT" ? null : (dtParsed as any)?.startISO || null;
-
-  const endISO =
-    (dtParsed as any)?.error === "PAST_SLOT" ? null : (dtParsed as any)?.endISO || null;
-
-  // 3) Nombre: resto del texto sin email ni fecha
-  let nameCandidate = raw;
-  if (email) nameCandidate = removeOnce(nameCandidate, email);
-  if (dtToken) nameCandidate = removeOnce(nameCandidate, dtToken);
-
-  nameCandidate = cleanNameCandidate(nameCandidate);
-
-  // ✅ NUEVO: limpia “ruido” cuando viene en párrafos largos
-  nameCandidate = nameCandidate
-    .replace(/\b(quiero|quisiera|me gustaria|hola|buenas|buenos|agendar|agenda|cita|consulta|demo|clase|reservar|reserva|turno|appointment|booking|schedule|para|por favor|pls|please)\b/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  // ya lo tenías (puedes dejarlo o unirlo arriba)
-  nameCandidate = nameCandidate
-    .replace(/\b(mi nombre es|soy|me llamo|name is|i am)\b/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const name = nameCandidate ? parseFullName(nameCandidate) : null;
-
-  return { name, email, startISO, endISO };
-}
-
-function parseEmail(input: string) {
-  const raw = String(input || "").trim().toLowerCase();
-  if (!raw) return null;
-
-  // Simple y robusto para MVP
-  const ok = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(raw);
-  return ok ? raw : null;
-}
-
-async function isGoogleConnected(tenantId: string): Promise<boolean> {
-  try {
-    const { rows } = await pool.query(
-      `
-      SELECT 1
-      FROM calendar_integrations
-      WHERE tenant_id = $1
-        AND status = 'connected'
-      LIMIT 1
-      `,
-      [tenantId]
-    );
-    return rows.length > 0;
-  } catch (e: any) {
-    console.log("❌ isGoogleConnected error:", e.message);
-    return false;
-  }
-}
-
-async function loadBookingTerms(tenantId: string): Promise<string[]> {
-  try {
-    const { rows } = await pool.query(
-      `SELECT hints FROM tenants WHERE id = $1 LIMIT 1`,
-      [tenantId]
-    );
-    const hints = rows[0]?.hints;
-    const obj = typeof hints === "string" ? JSON.parse(hints) : (hints || {});
-    const terms = Array.isArray(obj?.booking_terms) ? obj.booking_terms : null;
-    if (terms && terms.length) return terms.map((t: any) => String(t).toLowerCase().trim()).filter(Boolean);
-  } catch {}
-  // defaults genéricos multi-nicho
-  return ["cita","consulta","reservar","reserva","turno","agendar","appointment","book","booking","schedule", "agedar", "agendar cita", "agendarme", "agenda", "agend","bok", "scheduel"];
-}
-
-function wantsToChangeTopic(text: string) {
-  const t = String(text || "").toLowerCase();
-
-  return (
-    /\b(precio|precios|cuanto|cuánto|tarifa|costo|costos)\b/i.test(t) ||
-    /\b(price|prices|pricing|cost|costs|rate|rates|fee|fees)\b/i.test(t) ||
-    /\b(how\s*much|what'?s\s+the\s+price|what\s+is\s+the\s+price)\b/i.test(t) ||
-    /\b(horario|horarios|hours|open|close|abren|cierran)\b/i.test(t) ||
-    /\b(ubicacion|ubicación|direccion|dirección|address|where)\b/i.test(t) ||
-    /\b(info|informacion|información|details|mas informacion|más información)\b/i.test(t) ||
-    /\b(como funciona|cómo funciona|how does it work|how it works)\b/i.test(t) ||   // ✅ NUEVO
-    /\b(cancelar|cancela|olvida|stop|salir|exit)\b/i.test(t)
-  );
-}
-
-function matchesBookingIntent(text: string, terms: string[]) {
-  const t = normalizeText(text);
-  return terms.some((term) => {
-    const x = normalizeText(term);
-    if (!x) return false;
-    // match por palabra o frase (si la term tiene espacio, usamos includes)
-    if (x.includes(" ")) return t.includes(x);
-    return new RegExp(`\\b${x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(t);
-  });
-}
-
-/**
- * MVP: Pedimos fecha/hora en formato explícito:
- *   YYYY-MM-DD HH:mm (hora local del negocio)
- * Ej: 2026-01-17 15:00
- */
-function parseDateTimeExplicit(input: string, timeZone: string, durationMin: number) {
-  const m = String(input || "").trim().match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})$/);
-  if (!m) return null;
-
-  const [_, date, hhmm] = m;
-
-  const dt = DateTime.fromFormat(`${date} ${hhmm}`, "yyyy-MM-dd HH:mm", { zone: timeZone });
-  if (!dt.isValid) return null;
-
-  const startISO = dt.toISO();
-  const endISO = dt.plus({ minutes: durationMin }).toISO();
-  if (!startISO || !endISO) return null;
-
-  // ✅ BLOQUEO PASADO (usa tu helper)
-  if (isPastSlot(startISO, timeZone)) {
-    return { startISO: null, endISO: null, timeZone, error: "PAST_SLOT" as const };
-  }
-
-  return { startISO, endISO, timeZone };
-}
-
-function formatSlotHuman(opts: {
-  startISO: string;
-  timeZone: string;
-  idioma: "es" | "en";
-}) {
-  const { startISO, timeZone, idioma } = opts;
-
-  const dt = DateTime.fromISO(startISO, { zone: timeZone });
-  if (!dt.isValid) return startISO;
-
-  if (idioma === "en") {
-    // Example: Mar 20, 2026 at 4:00 PM
-    return dt.setLocale("en").toFormat("LLL d, yyyy 'at' h:mm a");
-  }
-
-  // Example: 20 Mar 2026, 4:00 PM  (si prefieres 16:00, te lo ajusto)
-  return dt.setLocale("es").toFormat("d LLL yyyy, h:mm a");
-}
-
-function parseFullName(input: string) {
-  const raw = String(input || "").trim().replace(/\s+/g, " ");
-  if (!raw) return null;
-
-  // Evita que pongan solo 1 palabra
-  const parts = raw.split(" ").filter(Boolean);
-  if (parts.length < 2) return null;
-
-  // (Opcional) filtro mínimo para evitar basura tipo "aa"
-  const letters = raw.replace(/[^a-zA-ZáéíóúüñÁÉÍÓÚÜÑ\s'-]/g, "").trim();
-  if (letters.split(" ").filter(Boolean).length < 2) return null;
-
-  return raw;
-}
-
-async function upsertClienteBookingData(opts: {
-  tenantId: string;
-  canal: string;
-  contacto: string;
-  nombre?: string | null;
-  email?: string | null;
-}) {
-  const { tenantId, canal, contacto, nombre, email } = opts;
-
-  try {
-    await pool.query(
-      `
-      INSERT INTO clientes (tenant_id, canal, contacto, nombre, email, updated_at, created_at)
-      VALUES ($1,$2,$3,$4,$5, NOW(), NOW())
-      ON CONFLICT (tenant_id, canal, contacto)
-      DO UPDATE SET
-        nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
-        email  = COALESCE(EXCLUDED.email,  clientes.email),
-        updated_at = NOW()
-      `,
-      [tenantId, canal, contacto, nombre || null, email || null]
-    );
-  } catch (e: any) {
-    console.warn("⚠️ upsertClienteBookingData failed:", e?.message);
-  }
-}
-
-async function markAppointmentConfirmed(opts: {
-  apptId: string;
-  google_event_id: string | null;
-  google_event_link: string | null;
-}) {
-  const { apptId, google_event_id, google_event_link } = opts;
-  await pool.query(
-    `
-    UPDATE appointments
-       SET status='confirmed',
-           google_event_id=$2,
-           google_event_link=$3
-     WHERE id=$1
-    `,
-    [apptId, google_event_id, google_event_link]
-  );
-}
-
-async function markAppointmentFailed(opts: {
-  apptId: string;
-  error_reason: string;
-}) {
-  const { apptId, error_reason } = opts;
-  await pool.query(
-    `
-    UPDATE appointments
-       SET status='failed',
-           error_reason=$2
-     WHERE id=$1
-    `,
-    [apptId, error_reason]
-  );
-}
-
-async function createPendingAppointmentOrGetExisting(opts: {
-  tenantId: string;
-  channel: string;
-  customer_name: string;
-  customer_phone?: string;
-  customer_email?: string;
-  start_time: string;
-  end_time: string;
-}) {
-  const {
-    tenantId, channel, customer_name, customer_phone, customer_email, start_time, end_time,
-  } = opts;
-
-  // Inserta pending, si ya existe el mismo slot para ese cliente, trae el existente
-  const { rows } = await pool.query(
-    `
-    INSERT INTO appointments (
-      tenant_id, service_id, channel, customer_name, customer_phone, customer_email,
-      start_time, end_time, status, google_event_id, google_event_link
-    )
-    VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, 'pending', NULL, NULL)
-    ON CONFLICT (tenant_id, channel, customer_phone, start_time)
-    DO UPDATE SET
-      customer_name = COALESCE(EXCLUDED.customer_name, appointments.customer_name),
-      customer_email = COALESCE(EXCLUDED.customer_email, appointments.customer_email),
-      end_time = EXCLUDED.end_time
-    RETURNING id, status, google_event_link, google_event_id
-    `,
-    [
-      tenantId,
-      channel,
-      customer_name,
-      customer_phone || null,
-      customer_email || null,
-      start_time,
-      end_time,
-    ]
-  );
-
-  return rows[0] || null;
-}
 
 async function bookInGoogle(opts: {
   tenantId: string;
@@ -1044,11 +149,6 @@ async function bookInGoogle(opts: {
   };
 }
 
-/**
- * Booking flow MVP (sin LLM):
- * - Si detecta intención de cita -> pide fecha/hora (formato explícito)
- * - Si usuario manda fecha/hora -> confirma y agenda
- */
 export async function bookingFlowMvp(opts: {
   tenantId: string;
   canal: string; // "whatsapp"
@@ -1314,6 +414,10 @@ if (booking.step === "ask_daypart") {
     daysAhead: 7,
   });
 
+  const dateOnlyFromFirst = slots?.[0]?.startISO
+  ? DateTime.fromISO(slots[0].startISO, { zone: timeZone }).toFormat("yyyy-MM-dd")
+  : null;
+
   return {
     handled: true,
     reply: renderSlotsMessage({ idioma, timeZone, slots }),
@@ -1325,6 +429,7 @@ if (booking.step === "ask_daypart") {
         daypart: dp,
         slots,
         date_only: null,
+        last_offered_date: dateOnlyFromFirst, // ✅ NUEVO
       },
     },
   };
@@ -1345,7 +450,7 @@ if (booking.step === "ask_all") {
     };
   }
 
-  const parsed = parseAllInOne(userText, timeZone, durationMin);
+  const parsed = parseAllInOne(userText, timeZone, durationMin, parseDateTimeExplicit);
 
   // ✅ Si vino fecha/hora pero era en el pasado, dilo explícitamente
   const dtToken = extractDateTimeToken(userText);
@@ -1740,14 +845,112 @@ if (booking.step === "offer_slots") {
     };
   }
 
+  // ✅ 1) Si el usuario pide una hora específica (ej: "5pm", "17:00", "a las 5")
+  const hhmm = extractTimeOnlyToken(userText);
+
+  if (hhmm) {
+    const near = filterSlotsNearTime({
+      slots,
+      timeZone: booking.timeZone || timeZone,
+      hhmm,
+      windowMinutes: 150, // ±2.5h
+      max: 5,
+    });
+
+    if (near.length) {
+      return {
+        handled: true,
+        reply: renderSlotsMessage({ idioma, timeZone: booking.timeZone || timeZone, slots: near }),
+        ctxPatch: {
+          booking: {
+            ...booking,
+            step: "offer_slots",
+            timeZone: booking.timeZone || timeZone,
+            slots: near,
+            // preserva la fecha contexto para que luego acepte "HH:mm" sin fecha
+            last_offered_date: (booking as any)?.last_offered_date || null,
+          },
+        },
+      };
+    }
+  }
+
+  // ✅ 2) Si el usuario pide "otras horas / otro horario / más tarde / más temprano"
+  if (wantsMoreSlots(userText) && hours) {
+    // intenta misma fecha si la tienes
+    const ctxDate =
+      (booking as any)?.date_only ||
+      (booking as any)?.last_offered_date ||
+      (slots?.[0]?.startISO
+        ? DateTime.fromISO(slots[0].startISO, { zone: booking.timeZone || timeZone }).toFormat("yyyy-MM-dd")
+        : null);
+
+    if (ctxDate) {
+      const allDaySlots = await getSlotsForDate({
+        tenantId,
+        timeZone: booking.timeZone || timeZone,
+        dateISO: ctxDate,
+        durationMin,
+        bufferMin,
+        hours,
+      });
+
+      // Si el día tiene más opciones que las actuales, reemplaza por las del día
+      if (allDaySlots.length) {
+        return {
+          handled: true,
+          reply: renderSlotsMessage({ idioma, timeZone: booking.timeZone || timeZone, slots: allDaySlots.slice(0, 5) }),
+          ctxPatch: {
+            booking: {
+              ...booking,
+              step: "offer_slots",
+              timeZone: booking.timeZone || timeZone,
+              slots: allDaySlots.slice(0, 5),
+              last_offered_date: ctxDate,
+              date_only: ctxDate, // ✅ así luego acepta "HH:mm"
+            },
+          },
+        };
+      }
+    }
+  }
+
+  // ✅ NUEVO: interpretar frases vagas ("después de las 4", "lo más temprano", "tipo 5 y algo", "cuando puedas por la tarde")
+  const constraint = extractTimeConstraint(userText);
+
+  if (constraint) {
+    const filtered = filterSlotsByConstraint({
+      slots,
+      timeZone: booking.timeZone || timeZone,
+      constraint,
+      max: 5,
+    });
+
+    // Si no filtró nada (raro), vuelve a mostrar los slots actuales
+    const useSlots = filtered.length ? filtered : slots;
+
+    return {
+      handled: true,
+      reply: renderSlotsMessage({ idioma, timeZone: booking.timeZone || timeZone, slots: useSlots }),
+      ctxPatch: {
+        booking: {
+          ...booking,
+          step: "offer_slots",
+          timeZone: booking.timeZone || timeZone,
+          slots: useSlots,
+        },
+      },
+    };
+  }
+
   const choice = parseSlotChoice(userText, slots.length);
 
   if (!choice) {
     return {
       handled: true,
       reply: idioma === "en"
-        ? `Please reply with a number (1-${slots.length}).`
-        : `Responde con un número (1-${slots.length}).`,
+        ? `Please, Reply with a number (1-${slots.length}) or ask for another time (example: "5pm").`
+        : `Por favor Responde con un número (1-${slots.length}) o dime una hora (ej: "5pm" o "17:00").`,
       ctxPatch: { booking },
     };
   }
@@ -1771,22 +974,6 @@ if (booking.step === "offer_slots") {
       },
     },
   };
-}
-
-function parseNameEmailOnly(input: string): { name: string | null; email: string | null } {
-  const raw = String(input || "").trim();
-  const email = raw.match(EMAIL_REGEX)?.[0]?.toLowerCase() || null;
-
-  let nameCandidate = raw;
-  if (email) nameCandidate = removeOnce(nameCandidate, email);
-
-  nameCandidate = cleanNameCandidate(nameCandidate)
-    .replace(/\b(mi nombre es|soy|me llamo|name is|i am|hola|buenas|buenos|por favor|pls|please)\b/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const name = nameCandidate ? parseFullName(nameCandidate) : null;
-  return { name, email };
 }
 
 if (booking.step === "ask_contact") {
@@ -1880,51 +1067,54 @@ if (booking.step === "ask_contact") {
     const parsed: any = parseDateTimeExplicit(userText, timeZone, durationMin);
 
     const b: any = booking;
-    const hhmm = String(userText || "").trim().match(/^(\d{2}:\d{2})$/);
+    const hhmmOnly = String(userText || "").trim().match(/^(\d{1,2}:\d{2})$/);
+    const flex = extractTimeOnlyToken(userText); // ✅ nuevo: acepta 5pm, a las 5, etc.
 
-    if (b?.date_only && hhmm) {
-      const parsed2: any = parseDateTimeExplicit(`${b.date_only} ${hhmm[1]}`, timeZone, durationMin);
+    const dateCtx = b?.date_only || b?.last_offered_date || null;
 
-      if (!parsed2) {
-        return {
-          handled: true,
-          reply: idioma === "en"
-            ? `I couldn’t read that time. Please use HH:mm (example: 14:00).`
-            : `No pude leer esa hora. Usa HH:mm (ej: 14:00).`,
-          ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
-        };
-      }
+    if (dateCtx && (hhmmOnly || flex)) {
+    const hhmmVal = hhmmOnly ? hhmmOnly[1].padStart(5, "0") : (flex as string);
+    const parsed2: any = parseDateTimeExplicit(`${dateCtx} ${hhmmVal}`, timeZone, durationMin);
 
-      // ✅ BLOQUEO: hora en el pasado (cuando ya tenemos date_only)
-      if (parsed2?.error === "PAST_SLOT") {
-        return {
-          handled: true,
-          reply: idioma === "en"
-            ? "That time is in the past. Please send a future time (HH:mm)."
-            : "Esa hora ya pasó. Envíame una hora futura (HH:mm).",
-          ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
-        };
-      }
-
-      const whenTxt = formatSlotHuman({ startISO: parsed2.startISO!, timeZone, idioma });
-
+    if (!parsed2) {
       return {
         handled: true,
         reply: idioma === "en"
-          ? `To confirm booking for ${whenTxt}? Reply YES to confirm or NO to cancel.`
-          : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
-        ctxPatch: {
-          booking: {
-            ...booking,
-            step: "confirm",
-            start_time: parsed2.startISO,
-            end_time: parsed2.endISO,
-            timeZone,
-            date_only: null,
-          },
-        },
+            ? `I couldn’t read that time. Please use HH:mm (example: 14:00).`
+            : `No pude leer esa hora. Usa HH:mm (ej: 14:00).`,
+        ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
       };
     }
+
+    if (parsed2?.error === "PAST_SLOT") {
+      return {
+        handled: true,
+        reply: idioma === "en"
+            ? "That time is in the past. Please send a future time."
+            : "Esa hora ya pasó. Envíame una hora futura.",
+        ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
+      };
+    }
+
+    const whenTxt = formatSlotHuman({ startISO: parsed2.startISO!, timeZone, idioma });
+
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? `To confirm booking for ${whenTxt}? Reply YES to confirm or NO to cancel.`
+        : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
+      ctxPatch: {
+        booking: {
+          ...booking,
+          step: "confirm",
+          start_time: parsed2.startISO,
+          end_time: parsed2.endISO,
+          timeZone,
+          date_only: null,
+        },
+      },
+    };
+  }
 
     if (!parsed) {
       return {
