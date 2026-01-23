@@ -4,6 +4,8 @@ import { googleFreeBusy } from "../../../services/googleCalendar";
 import type { GoogleFreeBusyResponse } from "../../../services/googleCalendar";
 import type { HoursByWeekday, Slot } from "./types";
 import { MIN_LEAD_MINUTES, parseHHmm, weekdayKey } from "./time";
+import type { TimeConstraint } from "./text";
+
 
 export function extractBusyBlocks(fb: GoogleFreeBusyResponse | any): Array<{ start: string; end: string }> {
   if (!fb?.calendars) return [];
@@ -123,6 +125,78 @@ export function intersectWindows(aStart: DateTime, aEnd: DateTime, bStart: DateT
   return { start: s, end: e };
 }
 
+function toMinutes(hhmm: string) {
+  const [h, m] = hhmm.split(":").map((x) => Number(x));
+  return (h || 0) * 60 + (m || 0);
+}
+
+function slotStartMinutes(s: Slot, timeZone: string) {
+  const dt = DateTime.fromISO(s.startISO, { zone: timeZone });
+  if (!dt.isValid) return null;
+  return dt.hour * 60 + dt.minute;
+}
+
+function applyTimeConstraintToSlots(opts: {
+  slots: Slot[];
+  timeZone: string;
+  constraint?: TimeConstraint | null;
+}) {
+  const { slots, timeZone, constraint } = opts;
+  if (!constraint) return slots;
+
+  if (constraint.kind === "earliest") {
+    // ya vienen ordenados cronológicamente normalmente
+    return slots;
+  }
+
+  if (constraint.kind === "any_morning") {
+    return slots.filter((s) => {
+      const m = slotStartMinutes(s, timeZone);
+      return m !== null && m < 12 * 60;
+    });
+  }
+
+  if (constraint.kind === "any_afternoon") {
+    return slots.filter((s) => {
+      const m = slotStartMinutes(s, timeZone);
+      return m !== null && m >= 12 * 60;
+    });
+  }
+
+  if (constraint.kind === "after") {
+    const min = toMinutes(constraint.hhmm);
+    return slots.filter((s) => {
+      const m = slotStartMinutes(s, timeZone);
+      return m !== null && m >= min;
+    });
+  }
+
+  if (constraint.kind === "before") {
+    const min = toMinutes(constraint.hhmm);
+    return slots.filter((s) => {
+      const m = slotStartMinutes(s, timeZone);
+      return m !== null && m <= min;
+    });
+  }
+
+  if (constraint.kind === "around") {
+    const target = toMinutes(constraint.hhmm);
+    const window = 90; // minutos +/- alrededor de la hora pedida
+    return slots
+      .map((s) => {
+        const m = slotStartMinutes(s, timeZone);
+        if (m === null) return null;
+        return { s, d: Math.abs(m - target) };
+      })
+      .filter(Boolean)
+      .filter((x: any) => x.d <= window)
+      .sort((a: any, b: any) => a.d - b.d)
+      .map((x: any) => x.s);
+  }
+
+  return slots;
+}
+
 export async function getSlotsForDate(opts: {
   tenantId: string;
   timeZone: string;
@@ -181,7 +255,36 @@ export async function getSlotsForDate(opts: {
     timeZone,
   });
 
-  return slots.slice(0, 5);
+  return slots; // NO cortes aquí
+}
+
+export async function getSlotsForDateWithConstraint(opts: {
+  tenantId: string;
+  timeZone: string;
+  dateISO: string; // YYYY-MM-DD
+  durationMin: number;
+  bufferMin: number;
+  hours: HoursByWeekday | null;
+  constraint?: TimeConstraint | null;
+  limit?: number;
+}): Promise<Slot[]> {
+  const base = await getSlotsForDate({
+    tenantId: opts.tenantId,
+    timeZone: opts.timeZone,
+    dateISO: opts.dateISO,
+    durationMin: opts.durationMin,
+    bufferMin: opts.bufferMin,
+    hours: opts.hours,
+  });
+
+  const filtered = applyTimeConstraintToSlots({
+    slots: base,
+    timeZone: opts.timeZone,
+    constraint: opts.constraint,
+  });
+
+  const limit = opts.limit ?? 5;
+  return filtered.slice(0, limit);
 }
 
 export async function getNextSlotsByDaypart(opts: {
@@ -283,4 +386,77 @@ export async function isRangeBusy(opts: {
   });
   const busy = extractBusyBlocks(fb);
   return { busy, isBusy: busy.length > 0 };
+}
+
+export async function getSlotsForDateWindow(opts: {
+  tenantId: string;
+  timeZone: string;
+  dateISO: string; // "YYYY-MM-DD"
+  durationMin: number;
+  bufferMin: number;
+  hours: HoursByWeekday | null;
+
+  // NUEVO: ventana dentro del día (HH:mm)
+  windowStartHHmm: string; // "17:00"
+  windowEndHHmm: string;   // "20:00"
+}): Promise<Slot[]> {
+  const { tenantId, timeZone, dateISO, durationMin, bufferMin, hours, windowStartHHmm, windowEndHHmm } = opts;
+
+  const day = DateTime.fromFormat(dateISO, "yyyy-MM-dd", { zone: timeZone });
+  if (!hours) return [];
+  if (!day.isValid) return [];
+
+  const key = weekdayKey(day);
+  const dayHours = hours?.[key];
+  if (!dayHours || !dayHours.start || !dayHours.end) return [];
+
+  const businessSt = parseHHmm(dayHours.start);
+  const businessEn = parseHHmm(dayHours.end);
+  const winSt = parseHHmm(windowStartHHmm);
+  const winEn = parseHHmm(windowEndHHmm);
+  if (!businessSt || !businessEn || !winSt || !winEn) return [];
+
+  // Ventana pedida
+  let windowStart = day.set({ hour: winSt.h, minute: winSt.min, second: 0, millisecond: 0 });
+  let windowEnd = day.set({ hour: winEn.h, minute: winEn.min, second: 0, millisecond: 0 });
+
+  // Clip al horario del negocio (no salirse)
+  const businessStart = day.set({ hour: businessSt.h, minute: businessSt.min, second: 0, millisecond: 0 });
+  const businessEnd = day.set({ hour: businessEn.h, minute: businessEn.min, second: 0, millisecond: 0 });
+
+  if (windowStart < businessStart) windowStart = businessStart;
+  if (windowEnd > businessEnd) windowEnd = businessEnd;
+
+  // Lead time si es hoy
+  const nowLead = DateTime.now().setZone(timeZone).plus({ minutes: MIN_LEAD_MINUTES });
+  if (windowStart < nowLead && nowLead < windowEnd) {
+    (windowStart as any) = nowLead.set({ second: 0, millisecond: 0 });
+  }
+
+  if (!windowStart.isValid || !windowEnd.isValid || windowEnd <= windowStart) return [];
+
+  const fb: GoogleFreeBusyResponse = await googleFreeBusy({
+    tenantId,
+    timeMin: windowStart.toISO()!,
+    timeMax: windowEnd.toISO()!,
+    calendarId: "primary",
+  });
+
+  const busy = extractBusyBlocks(fb);
+
+  const freeRanges = subtractBusyFromWindow({
+    windowStart,
+    windowEnd,
+    busy,
+    timeZone,
+  });
+
+  const slots = sliceIntoSlots({
+    freeRanges,
+    durationMin,
+    bufferMin,
+    timeZone,
+  });
+
+  return slots;
 }

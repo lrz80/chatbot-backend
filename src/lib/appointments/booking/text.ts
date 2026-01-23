@@ -217,18 +217,21 @@ export function extractTimeOnlyToken(raw: string): string | null {
   let m = s.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
   if (m) return `${m[1].padStart(2, "0")}:${m[2]}`;
 
-  // 2) HH (24h) solo (ej: "17", "3").
-  // ✅ Solo evitamos capturar cuando el mensaje ES una selección (1-5) y nada más.
-  m = s.match(/\b([01]?\d|2[0-3])\b/);
+  // 2) HH solo (ambiguo). Solo lo usamos si NO parece pregunta de hora ("a las", "tienes", "?")
+// porque esas frases ya se cubren mejor con las otras reglas.
+m = s.match(/\b([01]?\d|2[0-3])\b/);
 
-  const isPureChoice =
-    /^\s*[1-5]\s*$/.test(s) ||
-    /^\s*(opcion|opción)\s*[1-5]\s*$/.test(s);
+const isPureChoice =
+  /^\s*[1-5]\s*$/.test(s) ||
+  /^\s*(opcion|opción)\s*[1-5]\s*$/.test(s);
 
-  if (m && !isPureChoice) {
-    const hh = Number(m[1]);
-    if (hh >= 0 && hh <= 23) return `${String(hh).padStart(2, "0")}:00`;
-  }
+const looksLikeTimeQuestion =
+  /\b(a\s+las|a\s+la|para\s+las|para\s+la|tienes|hay|puedes|podemos)\b/.test(s) || /\?/.test(raw);
+
+if (m && !isPureChoice && !looksLikeTimeQuestion) {
+  const hh = Number(m[1]);
+  if (hh >= 0 && hh <= 23) return `${String(hh).padStart(2, "0")}:00`;
+}
 
   // 3) 5pm / 5 pm / 5:30pm / 5:30 pm
   m = s.match(/\b(1[0-2]|[1-9])(?::([0-5]\d))?\s*(am|pm)\b/);
@@ -408,4 +411,25 @@ export function buildAskAllMessage(idioma: "es" | "en", purpose?: string | null)
     `Tu nombre completo, email y la fecha y hora que te gustaría.\n` +
     `Ejemplo: Juan Pérez, juan@email.com, 2026-01-21 14:00`
   );
+}
+
+export function wantsSpecificTime(text: string) {
+  const t = normalizeText(text);
+
+  // si el usuario solo manda "1"..."5" es selección, no hora
+  if (/^\s*[1-5]\s*$/.test(String(text || "").trim())) return false;
+
+  // señales típicas de pedir una hora
+  const asking =
+    /\b(tienes|tiene|hay|habra|habrá|puedes|puede|podemos|puedo)\b/.test(t) ||
+    /\?/.test(text);
+
+  // contiene hora en cualquier formato
+  const hasTime = !!extractTimeOnlyToken(text);
+
+  // ejemplos: "tienes a las 5?", "a las 5pm", "5pm?"
+  const hasAt =
+    /\b(a\s+las|a\s+la|para\s+las|para\s+la|at)\b/.test(t);
+
+  return hasTime && (asking || hasAt);
 }

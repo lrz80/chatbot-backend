@@ -52,6 +52,9 @@ import {
 } from "./booking/time";
 import { getNextSlotsByDaypart, getSlotsForDate } from "./booking/slots";
 import { extractBusyBlocks } from "./booking/freebusy";
+import { getSlotsForDateWindow } from "./booking/slots"; // ajusta path si aplica
+
+
 
 const BOOKING_FLOW_TTL_MS = 30 * 60 * 1000; // 30 minutos (ajústalo a 15/60 si quieres)
 
@@ -1069,20 +1072,142 @@ if (booking.step === "offer_slots") {
   };
 }
 
-  const choice = parseSlotChoice(userText, slots.length);
+const choice = parseSlotChoice(userText, slots.length);
 
-  if (!choice) {
+if (!choice) {
+  // 0) seguridad: sin fecha no podemos buscar ventanas
+  if (!booking.date_only) {
     return {
       handled: true,
       reply: idioma === "en"
-        ? `Please, Reply with a number (1-${slots.length}) or ask for another time (example: "5pm").`
-        : `Por favor Responde con un número (1-${slots.length}) o dime una hora (ej: "5pm" o "17:00").`,
-      ctxPatch: { 
-        booking,
-        booking_last_touch_at: Date.now(),
-      },
+        ? "What day would you like to book? (today or tomorrow)"
+        : "¿Para qué día quieres agendar? (hoy o mañana)",
+      ctxPatch: { booking, booking_last_touch_at: Date.now() },
     };
   }
+
+  // 1) Hora específica => re-buscar cerca
+  const constraint2 = extractTimeConstraint(userText);
+
+  if (constraint2 && hasHHMM(constraint2)) {
+    const tz = booking.timeZone || timeZone;
+
+    const h = Number(constraint2.hhmm.slice(0, 2));
+    const m = Number(constraint2.hhmm.slice(3, 5));
+
+    const base = DateTime.fromFormat(booking.date_only, "yyyy-MM-dd", { zone: tz })
+      .set({ hour: h, minute: m, second: 0, millisecond: 0 });
+
+    const windowStartHHmm = base.minus({ hours: 2 }).toFormat("HH:mm");
+    const windowEndHHmm = base.plus({ hours: 3 }).toFormat("HH:mm");
+
+    const newSlots = await getSlotsForDateWindow({
+      tenantId,
+      timeZone: tz,
+      dateISO: booking.date_only,
+      durationMin,
+      bufferMin,
+      hours,
+      windowStartHHmm,
+      windowEndHHmm,
+    });
+
+    if (newSlots.length) {
+      return {
+        handled: true,
+        reply: renderSlotsMessage({
+          idioma,
+          timeZone: tz,
+          slots: newSlots.slice(0, 5),
+        }),
+        ctxPatch: {
+          booking: {
+            ...booking,
+            step: "offer_slots",
+            timeZone: tz,
+            slots: newSlots.slice(0, 5),
+          },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "I don’t see availability near that time. Would you like something earlier or later?"
+        : "No veo disponibilidad cerca de esa hora. ¿Te sirve más temprano o más tarde?",
+      ctxPatch: { booking, booking_last_touch_at: Date.now() },
+    };
+  }
+
+  // 2) “Otro horario / más tarde” => buscar después del último slot ofrecido
+  if (/\b(otro|otra|mas|más|luego|tarde|despues|después)\b/i.test(userText)) {
+    const tz = booking.timeZone || timeZone;
+
+    const offered = booking.slots || slots || [];
+    const last = offered[offered.length - 1];
+    const lastEnd = last?.endISO ? DateTime.fromISO(last.endISO, { zone: tz }) : null;
+
+    const baseStart = lastEnd
+      ? lastEnd.plus({ minutes: 1 })
+      : DateTime.now().setZone(tz).plus({ minutes: 15 });
+
+    const windowStartHHmm = baseStart.toFormat("HH:mm");
+    const windowEndHHmm = "23:59";
+
+    const newSlots = await getSlotsForDateWindow({
+      tenantId,
+      timeZone: tz,
+      dateISO: booking.date_only,
+      durationMin,
+      bufferMin,
+      hours,
+      windowStartHHmm,
+      windowEndHHmm,
+    });
+
+    if (newSlots.length) {
+      return {
+        handled: true,
+        reply: renderSlotsMessage({
+          idioma,
+          timeZone: tz,
+          slots: newSlots.slice(0, 5),
+        }),
+        ctxPatch: {
+          booking: {
+            ...booking,
+            step: "offer_slots",
+            timeZone: tz,
+            slots: newSlots.slice(0, 5),
+          },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "No more times available that day. Would you like to check tomorrow?"
+        : "No veo más horarios disponibles ese día. ¿Quieres que revise mañana?",
+      ctxPatch: { booking, booking_last_touch_at: Date.now() },
+    };
+  }
+
+  // 3) fallback
+  return {
+    handled: true,
+    reply: idioma === "en"
+      ? `Please, Reply with a number (1-${slots.length}) or ask for another time (example: "5pm").`
+      : `Por favor responde con un número (1-${slots.length}) o dime una hora (ej: "5pm" o "17:00").`,
+    ctxPatch: {
+      booking,
+      booking_last_touch_at: Date.now(),
+    },
+  };
+}
 
   const picked = slots[choice - 1];
   const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone, idioma });

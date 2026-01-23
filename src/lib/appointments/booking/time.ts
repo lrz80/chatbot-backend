@@ -228,3 +228,26 @@ export function filterSlotsByConstraint(opts: {
 
   return slots.slice(0, max);
 }
+
+export function makeConstraintFromUserRequest(opts: {
+  hhmm?: string | null;
+  explicitConstraint?:
+    | { kind: "after"; hhmm: string }
+    | { kind: "before"; hhmm: string }
+    | { kind: "around"; hhmm: string }
+    | { kind: "earliest" }
+    | { kind: "any_afternoon" }
+    | { kind: "any_morning" }
+    | null;
+}) {
+  const { hhmm, explicitConstraint } = opts;
+
+  // si ya viene "after/before/around/earliest/any_*", úsalo tal cual
+  if (explicitConstraint) return explicitConstraint;
+
+  // si el usuario solo dijo una hora ("tienes a las 5pm?"), lo tratamos como "around"
+  if (hhmm) return { kind: "around" as const, hhmm };
+
+  return null;
+}
+
