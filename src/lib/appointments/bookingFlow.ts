@@ -53,6 +53,7 @@ import { extractBusyBlocks } from "./booking/freebusy";
 import { extractTimeConstraint } from "./booking/text";
 import { filterSlotsByConstraint } from "./booking/time";
 
+const BOOKING_FLOW_TTL_MS = 30 * 60 * 1000; // 30 minutos (ajústalo a 15/60 si quieres)
 
 async function bookInGoogle(opts: {
   tenantId: string;
@@ -170,6 +171,42 @@ export async function bookingFlowMvp(opts: {
   const ctx = (opts.ctx && typeof opts.ctx === "object") ? (opts.ctx as BookingCtx) : {};
   const booking = ctx.booking || { step: "idle" as const };
 
+  const nowMs = Date.now();
+
+  // ✅ timestamp del último mensaje relacionado con booking
+  const lastTouch = (ctx as any)?.booking_last_touch_at;
+  const lastTouchMs = typeof lastTouch === "number" ? lastTouch : null;
+
+  const bookingActive = booking?.step && booking.step !== "idle";
+
+  // ✅ Expira si: estaba activo y pasó el TTL
+  const bookingExpired =
+    bookingActive &&
+    lastTouchMs &&
+    Number.isFinite(lastTouchMs) &&
+    (nowMs - lastTouchMs) > BOOKING_FLOW_TTL_MS;
+
+  if (bookingExpired) {
+    console.log("📅 [BOOKING] expired -> reset", {
+      tenantId,
+      canal,
+      contacto,
+      prevStep: booking.step,
+      minutes: Math.round((nowMs - lastTouchMs) / 60000),
+    });
+
+    // resetea wizard y deja pasar el mensaje actual al LLM
+    return {
+      handled: false,
+      ctxPatch: {
+        booking: { step: "idle" },
+        booking_last_touch_at: null,
+        // opcional: limpia rastros para evitar efectos raros
+        last_appointment_id: null,
+      },
+    };
+  }
+
   // ✅ carga settings del tenant (MVP)
   const apptSettings = await getAppointmentSettings(tenantId);
 
@@ -235,7 +272,7 @@ export async function bookingFlowMvp(opts: {
           : `Ya quedó agendado. ${link}`.trim(),
         ctxPatch: {
           booking: { step: "idle" },
-          // ✅ opcional: limpia ids viejos para que nunca se usen como gatillo
+          booking_last_touch_at: Date.now(),
           last_appointment_id: null,
         },
       };
