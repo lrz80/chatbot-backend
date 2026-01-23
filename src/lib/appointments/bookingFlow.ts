@@ -28,13 +28,15 @@ import {
   matchesBookingIntent,
   extractDateTimeToken,
   extractDateOnlyToken,
+  extractTimeOnlyToken,
+  extractTimeConstraint,
   parseEmail,
   parseFullName,
   parseAllInOne,
   parseNameEmailOnly,
   buildAskAllMessage,
 } from "./booking/text";
-
+import type { TimeConstraint } from "./booking/text";
 import {
   MIN_LEAD_MINUTES,
   isPastSlot,
@@ -45,13 +47,11 @@ import {
   renderSlotsMessage,
   parseSlotChoice,
   weekdayKey,
+  filterSlotsByConstraint,
+  filterSlotsNearTime,
 } from "./booking/time";
 import { getNextSlotsByDaypart, getSlotsForDate } from "./booking/slots";
-import { extractTimeOnlyToken } from "./booking/text";
-import { filterSlotsNearTime } from "./booking/time";
 import { extractBusyBlocks } from "./booking/freebusy";
-import { extractTimeConstraint } from "./booking/text";
-import { filterSlotsByConstraint } from "./booking/time";
 
 const BOOKING_FLOW_TTL_MS = 30 * 60 * 1000; // 30 minutos (ajústalo a 15/60 si quieres)
 
@@ -150,6 +150,10 @@ async function bookInGoogle(opts: {
   };
 }
 
+function hasHHMM(c: TimeConstraint): c is Extract<TimeConstraint, { hhmm: string }> {
+  return typeof (c as any)?.hhmm === "string";
+}
+
 export async function bookingFlowMvp(opts: {
   tenantId: string;
   canal: string; // "whatsapp"
@@ -167,6 +171,7 @@ export async function bookingFlowMvp(opts: {
   const { tenantId, canal, contacto, idioma, userText } = opts;
 
   const messageId = opts.messageId ? String(opts.messageId) : null;
+  console.log("📅 [BOOKING] in", { tenantId, canal, contacto, messageId });
 
   const ctx = (opts.ctx && typeof opts.ctx === "object") ? (opts.ctx as BookingCtx) : {};
   const booking = ctx.booking || { step: "idle" as const };
@@ -222,9 +227,12 @@ export async function bookingFlowMvp(opts: {
       reply: idioma === "en"
         ? "Scheduling is unavailable right now."
         : "El agendamiento no está disponible en este momento.",
-      ctxPatch: { booking: { step: "idle" } },
-      };
-    }
+      ctxPatch: { 
+        booking: { step: "idle" }, 
+        booking_last_touch_at: Date.now(),
+      },
+   };
+}
 
     return { handled: false };
   }
@@ -297,9 +305,11 @@ export async function bookingFlowMvp(opts: {
       reply: idioma === "en"
   ? "Yes — Aamy can schedule your business appointments using Google Calendar. Would you like to schedule a call with our team to learn more? Reply: 'I want to schedule'."
   : "Sí — Aamy puede agendar las citas de tu negocio usando Google Calendar. ¿Te gustaría programar una llamada con nuestro equipo para saber más? Escribe: 'Quiero agendar'.",
-      ctxPatch: { booking: { step: "idle" } },
-    };
-  }
+      ctxPatch: { 
+        booking: { step: "idle" }, 
+        booking_last_touch_at: Date.now(), },
+      };
+    }
 
   const gate = await canUseChannel(tenantId, "google_calendar");
   const bookingEnabled = !!gate.settings_enabled;
@@ -317,7 +327,9 @@ export async function bookingFlowMvp(opts: {
         reply: idioma === "en"
             ? "Scheduling is unavailable right now."
             : "El agendamiento no está disponible en este momento.",
-        ctxPatch: { booking: { step: "idle" } },
+        ctxPatch: { 
+        booking: { step: "idle" }, 
+        booking_last_touch_at: Date.now(), },
       };
     }
     return { handled: false };
@@ -330,8 +342,10 @@ if (wantsBooking && bookingLink) {
     reply: idioma === "en"
       ? `You can book here: ${bookingLink}`
       : `Puedes agendar aquí: ${bookingLink}`,
-    ctxPatch: { booking: { step: "idle" } },
-  };
+    ctxPatch: { 
+        booking: { step: "idle" }, 
+        booking_last_touch_at: Date.now(), },
+    };
 }
 
 // 3) Si NO hay link y Google NO está conectado: no inicies flujo
@@ -341,7 +355,9 @@ if (wantsBooking && !bookingLink && !googleConnected) {
     reply: idioma === "en"
       ? "Scheduling is unavailable right now."
       : "El agendamiento no está disponible en este momento.",
-    ctxPatch: { booking: { step: "idle" } },
+    ctxPatch: { 
+        booking: { step: "idle" }, 
+        booking_last_touch_at: Date.now(), },
   };
 }
 
@@ -358,7 +374,10 @@ if (booking.step === "idle") {
       reply: idioma === "en"
         ? "Sure! What would you like to schedule — an appointment, a consultation, or a call?"
         : "¡Claro! ¿Qué te gustaría agendar? Una cita, una consulta o una llamada.",
-      ctxPatch: { booking: { step: "ask_purpose", timeZone } },
+      ctxPatch: { 
+        booking: { step: "ask_purpose", timeZone },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -385,7 +404,10 @@ if (booking.step === "ask_purpose") {
       reply: idioma === "en"
         ? "Got it. Is it an appointment, class, consultation, or a call?"
         : "Entiendo. ¿Es una cita, clase, consulta o llamada?",
-      ctxPatch: { booking: { ...booking, step: "ask_purpose", timeZone } },
+      ctxPatch: { 
+        booking: { ...booking, step: "ask_purpose", timeZone },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -395,7 +417,10 @@ if (booking.step === "ask_purpose") {
     reply: idioma === "en"
       ? "Sure, I can help you schedule it. Does morning or afternoon work better for you?"
       : "Claro, puedo ayudarte a agendar. ¿Te funciona más en la mañana o en la tarde?",
-    ctxPatch: { booking: { step: "ask_daypart", timeZone, purpose } },
+    ctxPatch: { 
+        booking: { step: "ask_daypart", timeZone, purpose },
+        booking_last_touch_at: Date.now(),
+    },
   };
 }
 
@@ -410,7 +435,10 @@ if (booking.step === "ask_daypart") {
       reply: idioma === "en"
         ? "No worries, whenever you’re ready to schedule, I’ll be here to help."
         : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
-      ctxPatch: { booking: { step: "idle" } },
+      ctxPatch: { 
+        booking: { step: "idle" },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -421,7 +449,10 @@ if (booking.step === "ask_daypart") {
       reply: idioma === "en"
         ? "Please reply: morning or afternoon."
         : "Respóndeme: mañana o tarde.",
-      ctxPatch: { booking: { ...booking, step: "ask_daypart", timeZone } },
+      ctxPatch: { 
+        booking: { ...booking, step: "ask_daypart", timeZone },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -435,8 +466,8 @@ if (booking.step === "ask_daypart") {
             ...booking,
             step: "ask_all",
             timeZone,
-            daypart: dp,
-        },
+            daypart: dp,},
+        booking_last_touch_at: Date.now(),
         },
     };
   }
@@ -466,8 +497,8 @@ if (booking.step === "ask_daypart") {
         daypart: dp,
         slots,
         date_only: null,
-        last_offered_date: dateOnlyFromFirst, // ✅ NUEVO
-      },
+        last_offered_date: dateOnlyFromFirst,},
+      booking_last_touch_at: Date.now(),
     },
   };
 }
@@ -483,7 +514,10 @@ if (booking.step === "ask_all") {
       reply: idioma === "en"
         ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
         : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
-      ctxPatch: { booking: { step: "idle", start_time: null, end_time: null, timeZone, name: null, email: null, purpose: null, date_only: null } },
+      ctxPatch: { 
+        booking: { step: "idle", start_time: null, end_time: null, timeZone, name: null, email: null, purpose: null, date_only: null },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -505,8 +539,8 @@ if (booking.step === "ask_all") {
             timeZone,
             name: parsed.name || (booking as any)?.name || null,
             email: parsed.email || (booking as any)?.email || null,
-            date_only: null,
-          },
+            date_only: null,},
+          booking_last_touch_at: Date.now(),
         },
       };
     }
@@ -524,7 +558,9 @@ if (booking.step === "ask_all") {
             ? "That date is in the past. Please send a future date (YYYY-MM-DD)."
             : "Esa fecha ya pasó. Envíame una fecha futura (YYYY-MM-DD).",
         ctxPatch: {
-            booking: { step: "ask_datetime", timeZone, name: parsed.name, email: parsed.email, date_only: null, slots: [] },
+          booking: { 
+            step: "ask_datetime", timeZone, name: parsed.name, email: parsed.email, date_only: null, slots: [],},
+          booking_last_touch_at: Date.now(),
         },
       };
     }
@@ -542,8 +578,8 @@ if (booking.step === "ask_all") {
             name: parsed.name,
             email: parsed.email,
             date_only: dateOnly, // ✅ CLAVE: guarda la fecha para que acepte "HH:mm"
-            slots: [],
-          },
+            slots: [],},
+          booking_last_touch_at: Date.now(),
         },
       };
     }
@@ -569,8 +605,8 @@ if (booking.step === "ask_all") {
           email: parsed.email,
           purpose: booking.purpose || null,
           date_only: dateOnly,
-          slots,
-        },
+          slots,},
+        booking_last_touch_at: Date.now(),
       },
     };
   }
@@ -590,8 +626,8 @@ if (booking.step === "ask_all") {
           name: parsed.name,
           email: parsed.email,       // ✅ obligatorio
           start_time: parsed.startISO,
-          end_time: parsed.endISO,
-        },
+          end_time: parsed.endISO,},
+        booking_last_touch_at: Date.now(),
       },
     };
   }
@@ -607,8 +643,8 @@ if (booking.step === "ask_all") {
         booking: {
           step: "ask_name",
           timeZone,
-          email: parsed.email || (booking as any)?.email || null,
-        },
+          email: parsed.email || (booking as any)?.email || null,},
+        booking_last_touch_at: Date.now(),
       },
     };
   }
@@ -623,8 +659,8 @@ if (booking.step === "ask_all") {
         booking: {
           step: "ask_email",
           timeZone,
-          name: parsed.name || (booking as any)?.name || null,
-        },
+          name: parsed.name || (booking as any)?.name || null,},
+        booking_last_touch_at: Date.now(),
       },
     };
   }
@@ -640,8 +676,8 @@ if (booking.step === "ask_all") {
         step: "ask_datetime",
         timeZone,
         name: parsed.name || (booking as any)?.name || null,
-        email: parsed.email || (booking as any)?.email || null, // ✅ si ya lo tenía
-      },
+        email: parsed.email || (booking as any)?.email || null,},
+      booking_last_touch_at: Date.now(),
     },
   };
 }
@@ -662,7 +698,10 @@ if (booking.step === "ask_name") {
       reply: idioma === "en"
         ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
         : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
-      ctxPatch: { booking: { step: "idle" } },
+      ctxPatch: { 
+        booking: { step: "idle" },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -673,7 +712,10 @@ if (booking.step === "ask_name") {
       reply: idioma === "en"
         ? "Please send your first and last name (example: John Smith)."
         : "Envíame tu nombre y apellido (ej: Juan Pérez).",
-      ctxPatch: { booking: { ...booking, step: "ask_name", timeZone } },
+      ctxPatch: { 
+        booking: { ...booking, step: "ask_name", timeZone },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -693,8 +735,8 @@ if (booking.step === "ask_name") {
       booking: {
         step: "ask_email",
         timeZone,
-        name,
-      },
+        name,},
+      booking_last_touch_at: Date.now(),
     },
   };
 }
@@ -715,7 +757,10 @@ if (booking.step === "ask_email") {
       reply: idioma === "en"
         ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
         : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
-      ctxPatch: { booking: { step: "idle" } },
+      ctxPatch: { 
+        booking: { step: "idle" },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -726,7 +771,10 @@ if (booking.step === "ask_email") {
       reply: idioma === "en"
         ? "Please send a valid email (example: name@email.com)."
         : "Envíame un email válido (ej: nombre@email.com).",
-      ctxPatch: { booking: { ...booking, step: "ask_email", timeZone } },
+      ctxPatch: { 
+        booking: { ...booking, step: "ask_email", timeZone },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -748,8 +796,8 @@ if (booking.step === "ask_email") {
         step: "ask_datetime",
         timeZone,
         name: (booking as any)?.name, // preserva lo capturado
-        email,
-      },
+        email,},
+      booking_last_touch_at: Date.now(),
     },
   };
 }
@@ -765,12 +813,12 @@ if (booking.step === "offer_slots") {
           ? "I don’t have available times saved for that date. Please send another date (YYYY-MM-DD)."
           : "No tengo horarios disponibles para esa fecha. Envíame otra fecha (YYYY-MM-DD).",
         ctxPatch: {
-        booking: {
-          ...booking,
-            step: "ask_datetime",
-            date_only: null,
-            slots: [],
-          },
+            booking: {
+            ...booking,
+                step: "ask_datetime",
+                date_only: null,
+                slots: [],},
+          booking_last_touch_at: Date.now(),
         },
       };
     }
@@ -785,7 +833,10 @@ if (booking.step === "offer_slots") {
         reply: idioma === "en"
             ? "Please send a date and time (YYYY-MM-DD HH:mm)."
             : "Por favor envíame fecha y hora (YYYY-MM-DD HH:mm).",
-        ctxPatch: { booking: { ...booking, step: "ask_datetime", date_only: null, slots: [] } },
+        ctxPatch: { 
+            booking: { ...booking, step: "ask_datetime", date_only: null, slots: [] },
+            booking_last_touch_at: Date.now(),
+          },
         };
     }
 
@@ -851,8 +902,8 @@ if (booking.step === "offer_slots") {
           step: "offer_slots",
           timeZone: booking.timeZone || timeZone,
           slots: newSlots,
-          date_only: null,
-        },
+          date_only: null,},
+        booking_last_touch_at: Date.now(),
       },
     };
   }
@@ -863,8 +914,11 @@ if (booking.step === "offer_slots") {
     return {
         handled: true,
         reply: renderSlotsMessage({ idioma, timeZone: booking.timeZone || timeZone, slots }),
-        ctxPatch: { booking },
-    };
+        ctxPatch: { 
+            booking,
+            booking_last_touch_at: Date.now(), 
+        },
+      };
     }
 
     // Ahora sí, cualquier otro cambio de tema
@@ -878,7 +932,10 @@ if (booking.step === "offer_slots") {
       reply: idioma === "en"
         ? "No worries, whenever you’re ready to schedule, I’ll be here to help."
         : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
-      ctxPatch: { booking: { step: "idle" } },
+      ctxPatch: { 
+        booking: { step: "idle" },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -905,8 +962,8 @@ if (booking.step === "offer_slots") {
             timeZone: booking.timeZone || timeZone,
             slots: near,
             // preserva la fecha contexto para que luego acepte "HH:mm" sin fecha
-            last_offered_date: (booking as any)?.last_offered_date || null,
-          },
+            last_offered_date: (booking as any)?.last_offered_date || null,},
+          booking_last_touch_at: Date.now(),
         },
       };
     }
@@ -944,41 +1001,73 @@ if (booking.step === "offer_slots") {
               timeZone: booking.timeZone || timeZone,
               slots: allDaySlots.slice(0, 5),
               last_offered_date: ctxDate,
-              date_only: ctxDate, // ✅ así luego acepta "HH:mm"
-            },
+              date_only: ctxDate, },
+            booking_last_touch_at: Date.now(),
           },
         };
       }
     }
   }
 
-  // ✅ NUEVO: interpretar frases vagas ("después de las 4", "lo más temprano", "tipo 5 y algo", "cuando puedas por la tarde")
-  const constraint = extractTimeConstraint(userText);
+  // -----------------------------------------
+  // Interpretar frases vagas ("después de las 4", etc.)
+  // -----------------------------------------
+  const rawConstraint = extractTimeConstraint(userText);
 
-  if (constraint) {
-    const filtered = filterSlotsByConstraint({
-      slots,
-      timeZone: booking.timeZone || timeZone,
-      constraint,
-      max: 5,
-    });
+  if (rawConstraint) {
+    let constraint: TimeConstraint = rawConstraint;
 
-    // Si no filtró nada (raro), vuelve a mostrar los slots actuales
-    const useSlots = filtered.length ? filtered : slots;
+    const dp = (booking as any)?.daypart || null;
 
-    return {
-      handled: true,
-      reply: renderSlotsMessage({ idioma, timeZone: booking.timeZone || timeZone, slots: useSlots }),
-      ctxPatch: {
-        booking: {
-          ...booking,
-          step: "offer_slots",
-          timeZone: booking.timeZone || timeZone,
-          slots: useSlots,
-        },
-      },
-    };
+  const missingAmPm = !/\b(am|a\.m\.|pm|p\.m\.)\b/i.test(userText);
+
+  if (
+    dp === "afternoon" &&
+    missingAmPm &&
+    (constraint.kind === "after" ||
+      constraint.kind === "before" ||
+      constraint.kind === "around") &&
+    hasHHMM(constraint) // ✅ aquí TS SÍ estrecha el tipo en este scope
+  ) {
+    const h = Number(constraint.hhmm.slice(0, 2));
+    const m = Number(constraint.hhmm.slice(3, 5));
+
+    if (h >= 1 && h <= 11) {
+      const hh = h + 12;
+      constraint = {
+        ...constraint,
+        hhmm: `${String(hh).padStart(2, "0")}:${String(m).padStart(2, "0")}`,
+      };
+    }
   }
+
+  const filtered = filterSlotsByConstraint({
+    slots,
+    timeZone: booking.timeZone || timeZone,
+    constraint,
+    max: 5,
+  });
+
+  const useSlots = filtered.length ? filtered : slots;
+
+  return {
+    handled: true,
+    reply: renderSlotsMessage({
+      idioma,
+      timeZone: booking.timeZone || timeZone,
+      slots: useSlots,
+    }),
+    ctxPatch: {
+      booking: {
+        ...booking,
+        step: "offer_slots",
+        timeZone: booking.timeZone || timeZone,
+        slots: useSlots,
+      },
+      booking_last_touch_at: Date.now(),
+    },
+  };
+}
 
   const choice = parseSlotChoice(userText, slots.length);
 
@@ -988,7 +1077,10 @@ if (booking.step === "offer_slots") {
       reply: idioma === "en"
         ? `Please, Reply with a number (1-${slots.length}) or ask for another time (example: "5pm").`
         : `Por favor Responde con un número (1-${slots.length}) o dime una hora (ej: "5pm" o "17:00").`,
-      ctxPatch: { booking },
+      ctxPatch: { 
+        booking,
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -1007,8 +1099,8 @@ if (booking.step === "offer_slots") {
         picked_start: picked.startISO,
         picked_end: picked.endISO,
         slots: [],
-        date_only: null,
-      },
+        date_only: null,},
+      booking_last_touch_at: Date.now(),
     },
   };
 }
@@ -1024,7 +1116,10 @@ if (booking.step === "ask_contact") {
       reply: idioma === "en"
         ? "No worries, whenever you’re ready to schedule, I’ll be here to help."
         : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
-      ctxPatch: { booking: { step: "idle" } },
+      ctxPatch: { 
+        booking: { step: "idle" },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -1036,7 +1131,10 @@ if (booking.step === "ask_contact") {
       reply: idioma === "en"
         ? "I’m missing your first and last name (example: John Smith)."
         : "Me falta tu nombre y apellido (ej: Juan Pérez).",
-      ctxPatch: { booking: { ...booking, step: "ask_contact" } },
+      ctxPatch: { 
+        booking: { ...booking, step: "ask_contact" },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -1046,7 +1144,10 @@ if (booking.step === "ask_contact") {
       reply: idioma === "en"
         ? "I’m missing a valid email (example: name@email.com)."
         : "Me falta un email válido (ej: nombre@email.com).",
-      ctxPatch: { booking: { ...booking, step: "ask_contact" } },
+      ctxPatch: { 
+        booking: { ...booking, step: "ask_contact" },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -1075,8 +1176,8 @@ if (booking.step === "ask_contact") {
         start_time: startISO,
         end_time: endISO,
         picked_start: null,
-        picked_end: null,
-      },
+        picked_end: null, },
+      booking_last_touch_at: Date.now(),
     },
   };
 }
@@ -1097,7 +1198,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
           ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
           : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
-        ctxPatch: { booking: { step: "idle" } },
+        ctxPatch: { 
+            booking: { step: "idle" },
+            booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -1119,7 +1223,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
             ? `I couldn’t read that time. Please use HH:mm (example: 14:00).`
             : `No pude leer esa hora. Usa HH:mm (ej: 14:00).`,
-        ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
+        ctxPatch: { 
+            booking: { ...booking, step: "ask_datetime", timeZone },
+            booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -1129,7 +1236,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
             ? "That time is in the past. Please send a future time."
             : "Esa hora ya pasó. Envíame una hora futura.",
-        ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
+        ctxPatch: { 
+            booking: { ...booking, step: "ask_datetime", timeZone },
+            booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -1147,8 +1257,8 @@ if (booking.step === "ask_contact") {
           start_time: parsed2.startISO,
           end_time: parsed2.endISO,
           timeZone,
-          date_only: null,
-        },
+          date_only: null, },
+        booking_last_touch_at: Date.now(),
       },
     };
   }
@@ -1159,7 +1269,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
           ? "I couldn’t read that. Please use: YYYY-MM-DD HH:mm (example: 2026-01-17 15:00)."
           : "No pude leer esa fecha/hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-17 15:00).",
-        ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
+        ctxPatch: { 
+            booking: { ...booking, step: "ask_datetime", timeZone },
+            booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -1170,7 +1283,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
           ? "That date/time is in the past. Please send a future date and time (YYYY-MM-DD HH:mm)."
           : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
-        ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
+        ctxPatch: { 
+            booking: { ...booking, step: "ask_datetime", timeZone },
+            booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -1190,7 +1306,10 @@ if (booking.step === "ask_contact") {
             reply: idioma === "en"
             ? "We’re closed that day. Please choose another date."
             : "Ese día estamos cerrados. Envíame otra fecha.",
-            ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
+            ctxPatch: { 
+                booking: { ...booking, step: "ask_datetime", timeZone },
+                booking_last_touch_at: Date.now(),
+            },
           };
         }
 
@@ -1201,7 +1320,10 @@ if (booking.step === "ask_contact") {
             reply: idioma === "en"
               ? `That time is outside business hours (${windowTxt}). Please send a time within that range.`
               : `Esa hora está fuera del horario (${windowTxt}). Envíame una hora dentro de ese rango.`,
-            ctxPatch: { booking: { ...booking, step: "ask_datetime", timeZone } },
+            ctxPatch: { 
+                booking: { ...booking, step: "ask_datetime", timeZone },
+                booking_last_touch_at: Date.now(),
+            },
           };
         }
       }
@@ -1219,8 +1341,8 @@ if (booking.step === "ask_contact") {
             step: "confirm",
             start_time: parsed.startISO,
             end_time: parsed.endISO,
-            timeZone,
-          },
+            timeZone, },
+          booking_last_touch_at: Date.now(),
       },
     };
   }
@@ -1237,7 +1359,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
           ? "Before confirming, please send your email (example: name@email.com)."
           : "Antes de confirmar, envíame tu email (ej: nombre@email.com).",
-        ctxPatch: { booking: { ...booking, step: "ask_email", timeZone: booking.timeZone || timeZone } },
+        ctxPatch: { 
+            booking: { ...booking, step: "ask_email", timeZone: booking.timeZone || timeZone },
+            booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -1247,7 +1372,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
           ? "Please reply YES to confirm or NO to cancel."
           : "Responde SI para confirmar o NO para cancelar.",
-        ctxPatch: { booking },
+        ctxPatch: { 
+            booking,
+            booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -1271,8 +1399,8 @@ if (booking.step === "ask_contact") {
             // limpiamos COMPLETAMENTE el slot anterior
             start_time: null,
             end_time: null,
-            date_only: null,
-          },
+            date_only: null, },
+          booking_last_touch_at: Date.now(),
         },
       };
     }
@@ -1283,7 +1411,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
           ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
           : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
-        ctxPatch: { booking: { step: "idle" } },
+        ctxPatch: { 
+            booking: { step: "idle" },
+            booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -1297,7 +1428,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
           ? "Send me the date and time (YYYY-MM-DD HH:mm)."
           : "Envíame la fecha y hora (YYYY-MM-DD HH:mm).",
-        ctxPatch: { booking: { ...booking, step: "ask_datetime" } },
+        ctxPatch: { 
+            booking: { ...booking, step: "ask_datetime" },
+            booking_last_touch_at: Date.now(), 
+        },
       };
     }
 
@@ -1321,7 +1455,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
           ? "Something went wrong creating your booking. Please try again."
           : "Ocurrió un problema creando la reserva. Por favor intenta de nuevo.",
-        ctxPatch: { booking: { step: "ask_datetime", timeZone } },
+        ctxPatch: { 
+            booking: { step: "ask_datetime", timeZone },
+            booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -1332,7 +1469,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
         ? `Already booked. ${pending.google_event_link}`.trim()
         : `Ya quedó agendado. ${pending.google_event_link}`.trim(),
-        ctxPatch: { booking: { step: "idle" } },
+        ctxPatch: { 
+            booking: { step: "idle" },
+            booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -1342,7 +1482,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
         ? "Scheduling isn’t available for this business right now."
         : "El agendamiento no está disponible en este momento para este negocio.",
-        ctxPatch: { booking: { step: "idle" } },
+        ctxPatch: { 
+            booking: { step: "idle" },
+            booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -1387,8 +1530,8 @@ if (booking.step === "ask_contact") {
                   ...booking,
                   step: "offer_slots",
                   timeZone,
-                  slots,
-                },
+                  slots, },
+                booking_last_touch_at: Date.now(),
               },
             };
           }
@@ -1401,7 +1544,10 @@ if (booking.step === "ask_contact") {
           reply: idioma === "en"
             ? "That date/time is in the past. Please send a future date and time (YYYY-MM-DD HH:mm)."
             : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
-          ctxPatch: { booking: { step: "ask_datetime", timeZone } },
+          ctxPatch: { 
+            booking: { step: "ask_datetime", timeZone },
+            booking_last_touch_at: Date.now(),
+          },
         };
       }
 
@@ -1411,7 +1557,10 @@ if (booking.step === "ask_contact") {
           reply: idioma === "en"
             ? "That time is outside business hours. Please choose a different time."
             : "Ese horario está fuera del horario de atención. Elige otro horario.",
-          ctxPatch: { booking: { step: "ask_datetime", timeZone } },
+          ctxPatch: { 
+            booking: { step: "ask_datetime", timeZone },
+            booking_last_touch_at: Date.now(),
+          },
         };
       }
 
@@ -1420,7 +1569,10 @@ if (booking.step === "ask_contact") {
         reply: idioma === "en"
           ? "That time doesn’t seem to be available. Could you send me another date and time? (YYYY-MM-DD HH:mm)"
           : "Ese horario ya no está disponible. ¿Me compartes otra fecha y hora? (YYYY-MM-DD HH:mm)",
-        ctxPatch: { booking: { step: "ask_datetime", timeZone } },
+        ctxPatch: { 
+            booking: { step: "ask_datetime", timeZone },
+            booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -1444,6 +1596,7 @@ if (booking.step === "ask_contact") {
         booking_completed_at: new Date().toISOString(),
         booking_last_done_at: Date.now(),
         booking_last_event_link: g.htmlLink || null,
+        booking_last_touch_at: Date.now(),
       },
     };
   }

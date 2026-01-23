@@ -217,10 +217,15 @@ export function extractTimeOnlyToken(raw: string): string | null {
   let m = s.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
   if (m) return `${m[1].padStart(2, "0")}:${m[2]}`;
 
-  // 2) HH (24h) solo (ej: "17")
+  // 2) HH (24h) solo (ej: "17", "3").
+  // ✅ Solo evitamos capturar cuando el mensaje ES una selección (1-5) y nada más.
   m = s.match(/\b([01]?\d|2[0-3])\b/);
-  // OJO: evita capturar números que parecen "1-5" de selección
-  if (m && !/\b(1|2|3|4|5)\b/.test(s)) {
+
+  const isPureChoice =
+    /^\s*[1-5]\s*$/.test(s) ||
+    /^\s*(opcion|opción)\s*[1-5]\s*$/.test(s);
+
+  if (m && !isPureChoice) {
     const hh = Number(m[1]);
     if (hh >= 0 && hh <= 23) return `${String(hh).padStart(2, "0")}:00`;
   }
