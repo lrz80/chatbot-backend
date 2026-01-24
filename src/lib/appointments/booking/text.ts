@@ -48,11 +48,37 @@ export function isCapabilityQuestion(text: string) {
 
 export function isDirectBookingRequest(text: string) {
   const t = normalizeText(text);
-  return (
-    /\b(quiero|quisiera|necesito|me gustaria|me gustaría|vamos a|podemos)\s+(agendar|reservar|programar)\b/.test(t) ||
-    /\b(agendame|agéndame|reservame|resérvame|programame|prográmame)\b/.test(t) ||
-    /\b(book me|schedule me|reserve)\b/.test(t)
-  );
+
+  // 1) Imperativos directos (ES)
+  if (/\b(agenda|agendame|reservame|reserva|programa|programame)\b/.test(t)) return true;
+
+  // 2) “Quiero/puedo/necesito + verbo” (ES)
+  if (/\b(quiero|quisiera|necesito|me gustaria|podemos|podria|puedes|puede|vamos a)\s+(agendar|reservar|programar)\b/.test(t)) {
+    return true;
+  }
+
+  // 3) “Cita / turno / consulta” como intención explícita (ES)
+  // (Incluye “sacar una cita”, “hacer una cita”, “separar cita”, “turno”, “consulta”)
+  if (
+    /\b(sacar|hacer|separar|reservar|agendar|programar)\s+(una\s+)?(cita|turno|consulta)\b/.test(t) ||
+    /\b(cita|turno|consulta)\s+(para|pa|con)\b/.test(t) ||
+    /\bquiero\s+(una\s+)?(cita|turno|consulta)\b/.test(t)
+  ) {
+    return true;
+  }
+
+  // 4) Inglés: booking / appointment
+  if (
+    /\b(book|booking|schedule|reserve)\b/.test(t) &&
+    /\b(me|an appointment|appointment|a call|a consultation|a session)\b/.test(t)
+  ) {
+    return true;
+  }
+
+  // 5) Inglés “book me / schedule me” (tu caso original)
+  if (/\b(book me|schedule me|reserve)\b/.test(t)) return true;
+
+  return false;
 }
 
 export function detectDaypart(text: string): "morning" | "afternoon" | null {
@@ -88,43 +114,183 @@ export function detectDaypart(text: string): "morning" | "afternoon" | null {
 export function detectPurpose(text: string): string | null {
   const t = normalizeText(text);
 
-  if (/\b(demo|demostracion|demostración|demonstration)\b/.test(t)) return "demo";
-  if (/\b(clase|class|trial)\b/.test(t)) return "clase";
-  if (/\b(cita|appointment|appt)\b/.test(t)) return "cita";
-  if (/\b(consulta|consultation|asesoria|asesoría)\b/.test(t)) return "consulta";
-  if (/\b(llamada|call|phone)\b/.test(t)) return "llamada";
-  if (/\b(visita|visit|presencial|in person)\b/.test(t)) return "visita";
-  if (/\b(reservar|reserva|turno|agendar|agenda)\b/.test(t)) return "cita";
+  const has = (pattern: RegExp) => pattern.test(t);
+
+  // CITA / AGENDAR / RESERVAR
+  if (
+    has(/\b(cita|agendar|agenda|agendacion|reservar|reserva|turno|appointment|book|schedule|appt)\b/)
+  ) {
+    return "cita";
+  }
+
+  // CLASE / TRIAL CLASS
+  if (
+    has(/\b(clase|class|trial|session|sesion|workout|training)\b/)
+  ) {
+    return "clase";
+  }
+
+  // CONSULTA / ASESORÍA
+  if (
+    has(/\b(consulta|consultar|consultation|asesoria|asesoría|assessment|evaluation)\b/)
+  ) {
+    return "consulta";
+  }
+
+  // LLAMADA / PHONE CALL
+  if (
+    has(/\b(llamada|call|phone|telefono|teléfono|videollamada|video call)\b/)
+  ) {
+    return "llamada";
+  }
+
+  // VISITA / PRESENCIAL
+  if (
+    has(/\b(visita|visit|presencial|in person|walk in)\b/)
+  ) {
+    return "visita";
+  }
+
+  // DEMO
+  if (
+    has(/\b(demo|demostracion|demostración|demonstration|presentation)\b/)
+  ) {
+    return "demo";
+  }
 
   return null;
 }
 
 export function wantsToCancel(text: string) {
   const t = normalizeText(text);
-  return /\b(cancelar|cancela|olvida|stop|salir|exit|no gracias|nah|nope|ya no|dejalo|dejalo asi|deja eso|later)\b/i.test(t);
+
+  // 1) Cancelación DIRECTA (más fuerte)
+  if (
+    /\b(cancelar|cancela|cancelacion|cancelación|anular|anula)\b/.test(t) ||
+    /\b(cancel|cancel it|stop booking|stop scheduling)\b/.test(t)
+  ) {
+    return true;
+  }
+
+  // 2) Cancelación IMPLÍCITA (neutra pero clara)
+  if (
+    /\b(olvida|olvidalo|olvidalo|mejor no|ya no|ya no quiero|prefiero no)\b/.test(t) ||
+    /\b(stop|deten|detener|para|parar|exit|quit)\b/.test(t) ||
+    /\b(nevermind|never mind|forget it)\b/.test(t) ||
+    /\b(no gracias|no thank(s)?)\b/.test(t) ||
+    /\b(nah|nope)\b/.test(t)
+  ) {
+    return true;
+  }
+
+  // 3) ESTAS FRASES YA NO DEBEN CANCELAR (ANULADO)
+  // "otro día / mañana / más tarde / después"
+  // se interpretan como CAMBIO DE FECHA, NO cancelación.
+  // Por eso se eliminan del detector de cancelación.
+  //
+  // Antes los tenías aquí:
+  //
+  //   /\b(luego|despues|más tarde|otro dia|mañana|later)\b/
+  //
+  // Esto causaba cancelaciones falsas.
+  // Ahora NO están incluidas.
+
+  return false;
 }
 
 export function wantsMoreSlots(text: string) {
-  const t = normalizeText(text);
-  return /\b(otro|otra|otros|otras|mas|más|siguientes|alternativas|otra hora|otras horas|otro horario|otros horarios|mas opciones|más opciones|dame mas|dame más|ver mas|ver más)\b/i.test(t);
+  const t = normalizeText(text); // ya convierte a minúsculas y limpia acentos
+
+  // --------------------------
+  // 1) Frases explícitas ES
+  // --------------------------
+  if (/\b(otra|otras|otro|otros)\s+(hora|horas|horario|horarios|opcion|opciones)\b/.test(t)) return true;
+  if (/\bmas\s+(hora|horas|horario|horarios|opcion|opciones)\b/.test(t)) return true;
+  if (/\b(ver|mostrar|dame|manda)\s+mas\b/.test(t)) return true;
+
+  // --------------------------
+  // 2) Variantes sueltas ES
+  // --------------------------
+  if (/\b(siguientes|alternativas|mas|otra|otras|otro|otros)\b/.test(t)) {
+    // Evita falso positivo: cambio de día (handled por wantsAnotherDay)
+    if (/\botro\s+d[ií]a\b/.test(t)) return false;
+    return true;
+  }
+
+  // --------------------------
+  // 3) Frases de rango temporal ES
+  // --------------------------
+  if (/\b(mas\s+tarde|mas\s+temprano|despues|antes)\b/.test(t)) return true;
+
+  // --------------------------
+  // 4) Inglés: frases explícitas
+  // --------------------------
+  if (/\b(more|other|another)\s+(time|times|slot|slots|option|options)\b/.test(t)) return true;
+  if (/\b(show|see|send)\s+more\b/.test(t)) return true;
+
+  // --------------------------
+  // 5) Inglés: individuales
+  // --------------------------
+  if (/\b(more|other|another)\b/.test(t)) {
+    if (/\banother\s+day\b/.test(t)) return false; // evita conflicto con cambiar día
+    return true;
+  }
+
+  // --------------------------
+  // 6) Inglés: rangos temporales
+  // --------------------------
+  if (/\b(later|earlier|after|before)\b/.test(t)) return true;
+
+  return false;
 }
 
 export function wantsAnotherDay(s: string) {
-  const t = String(s || "").toLowerCase();
-  return /\b(otro dia|otro día|otro dia\?|otro día\?|otro día\*|mañana|pasado mañana|otro día diferente|another day|different day|next day)\b/i.test(t);
+  const t = String(s || "").toLowerCase().trim();
+
+  return (
+    // Español (todas las variaciones reales)
+    /\botro\s+d[ií]a\b/.test(t) ||                      // "otro día"
+    /\b(otro|otra)\b.*\bd[ií]a\b/.test(t) ||            // "tienes otro día?" / "otra día" / "otro día porfa"
+    /\bhay\s+otro\s+d[ií]a\b/.test(t) ||                // "hay otro día?"
+    /\bmas\s+d[ií]as\b/.test(t) ||                      // "más días"
+    /\bdisponible[s]?\s+otro\s+d[ií]a\b/.test(t) ||     // "disponibles otro día"
+    /\bpasado\s+mañana\b/.test(t) ||                    // "pasado mañana"
+
+    // Inglés
+    /\banother\s+day\b/.test(t) ||                      // "another day"
+    /\bnext\s+day\b/.test(t) ||                         // "next day"
+    /\bother\s+day\b/.test(t)                           // "other day"
+  );
 }
 
 export function wantsToChangeTopic(text: string) {
-  const t = String(text || "").toLowerCase();
+  const t = String(text || "").toLowerCase().trim();
+
+  // Palabras que suelen indicar cambio de tema (ES/EN)
   return (
-    /\b(precio|precios|cuanto|cuánto|tarifa|costo|costos)\b/i.test(t) ||
-    /\b(price|prices|pricing|cost|costs|rate|rates|fee|fees)\b/i.test(t) ||
-    /\b(how\s*much|what'?s\s+the\s+price|what\s+is\s+the\s+price)\b/i.test(t) ||
-    /\b(horario|horarios|hours|open|close|abren|cierran)\b/i.test(t) ||
-    /\b(ubicacion|ubicación|direccion|dirección|address|where)\b/i.test(t) ||
-    /\b(info|informacion|información|details|mas informacion|más información)\b/i.test(t) ||
-    /\b(como funciona|cómo funciona|how does it work|how it works)\b/i.test(t) ||
-    /\b(cancelar|cancela|olvida|stop|salir|exit)\b/i.test(t)
+    // Precio / Costos
+    /\b(precio|precios|cuanto|cuánto|tarifa|costo|costos|cuanto sale|cuánto sale)\b/.test(t) ||
+    /\b(price|prices|pricing|cost|costs|rate|rates|fee|fees)\b/.test(t) ||
+    /\b(how\s*much|what'?s\s+the\s+price|what\s+is\s+the\s+price)\b/.test(t) ||
+
+    // Ubicación
+    /\b(ubicacion|ubicación|direccion|dirección)\b/.test(t) ||
+    /\b(address|location|where\s+is)\b/.test(t) ||
+
+    // Información general
+    /\b(info|informacion|información|detalles|mas informacion|más información)\b/.test(t) ||
+    /\b(details|more\s+info|information)\b/.test(t) ||
+    /\b(what\s+is\s+this|explain\s+this)\b/.test(t) ||
+
+    // Funcionamiento / explicación
+    /\b(como\s+funciona|cómo\s+funciona|como\s+trabaja|cómo\s+trabaja)\b/.test(t) ||
+    /\b(how\s+does\s+it\s+work|how\s+it\s+works)\b/.test(t) ||
+
+    // Consultas de disponibilidad general (NO específicas de agendar hora)
+    /\b(estan abiertos|abren|cierran|open|close|opening\s+hours|hours\s+of\s+operation)\b/.test(t) ||
+
+    // Cancelar flujo
+    /\b(cancelar|cancela|olvida|olvídalo|stop|salir|exit|never\s+mind|nvm)\b/.test(t)
   );
 }
 
@@ -272,41 +438,105 @@ export type TimeConstraint =
   | { kind: "any_morning" };             // "cuando puedas por la mañana"
 
 export function extractTimeConstraint(raw: string): TimeConstraint | null {
-  const t = String(raw || "").toLowerCase();
+  const t = String(raw || "").toLowerCase().trim();
 
-  // 1) "lo más temprano", "tempranito", "earliest"
-  if (/\b(lo mas temprano|lo más temprano|tempranito|earliest|as early as possible)\b/i.test(t)) {
+  // Helpers
+  const has = (re: RegExp) => re.test(t);
+
+  // =========================
+  // 1) EARLIEST / AS SOON AS POSSIBLE
+  // ES: "lo más temprano", "tempranito", "lo más pronto", "a primera hora"
+  // EN: "earliest", "as early as possible", "as soon as possible", "first thing"
+  // =========================
+  if (
+    has(/\b(lo\s+m[aá]s\s+temprano|tempranito|lo\s+m[aá]s\s+pronto|a\s+primera\s+hora|lo\s+antes\s+posible)\b/i) ||
+    has(/\b(earliest|as\s+early\s+as\s+possible|as\s+soon\s+as\s+possible|first\s+thing|asap)\b/i)
+  ) {
     return { kind: "earliest" };
   }
 
-  // 2) "cuando puedas por la tarde / mañana"
-  if (/\b(cuando puedas|cuando puedas)\b/i.test(t) && /\b(tarde|afternoon|noche|evening)\b/i.test(t)) {
-    return { kind: "any_afternoon" };
-  }
-  if (/\b(cuando puedas|when you can|whenever)\b/i.test(t) && /\b(manana|mañana|morning|temprano)\b/i.test(t)) {
+  // =========================
+  // 2) ANY MORNING / ANY AFTERNOON / ANY EVENING
+  // Trigger words:
+  // ES: "cuando puedas", "cuando se pueda", "cualquier hora", "me da igual"
+  // EN: "when you can", "whenever", "any time", "doesn't matter", "no preference"
+  // =========================
+  const anyTimePref =
+    has(/\b(cuando\s+puedas|cuando\s+se\s+pueda|cualquier\s+hora|cuando\s+sea|me\s+da\s+igual|sin\s+preferencia|como\s+sea)\b/i) ||
+    has(/\b(when\s+you\s+can|whenever|any\s+time|no\s+preference|doesn'?t\s+matter|whatever\s+works)\b/i);
+
+  // Morning
+  if (
+    anyTimePref &&
+    has(/\b(ma[nñ]ana|morning|temprano|early)\b/i)
+  ) {
     return { kind: "any_morning" };
   }
 
-  // 3) "después de las 4", "after 4"
-  if (/\b(despu(e|é)s de (las|la)?\s*\d{1,2}(:\d{2})?)\b/i.test(t) || /\bafter\s+\d{1,2}(:\d{2})?\b/i.test(t)) {
+  // Afternoon
+  if (
+    anyTimePref &&
+    has(/\b(tarde|afternoon)\b/i)
+  ) {
+    return { kind: "any_afternoon" };
+  }
+
+  // Evening (opcional, por si luego lo soportas; si NO lo soportas, puedes quitarlo)
+  // if (anyTimePref && has(/\b(noche|evening|tonight|late)\b/i)) {
+  //   return { kind: "any_evening" as any };
+  // }
+
+  // =========================
+  // 3) AFTER HH:mm
+  // ES: "después de las 4", "despues de 4", "después de las 4:30", "a partir de las 4"
+  // EN: "after 4", "after 4:30", "from 4pm", "after 4pm"
+  // =========================
+  if (
+    has(/\b(despu[eé]s\s+de\s+(las|la)?\s*\d{1,2}(:\d{2})?)\b/i) ||
+    has(/\b(a\s+partir\s+de\s+(las|la)?\s*\d{1,2}(:\d{2})?)\b/i) ||
+    has(/\b(after|from)\s+\d{1,2}(:\d{2})?\s*(am|a\.m\.|pm|p\.m\.)?\b/i)
+  ) {
     const hhmm = extractTimeOnlyToken(t);
     if (hhmm) return { kind: "after", hhmm };
   }
 
-  // 4) "antes de las 4", "before 4"
-  if (/\b(antes de (las|la)?\s*\d{1,2}(:\d{2})?)\b/i.test(t) || /\bbefore\s+\d{1,2}(:\d{2})?\b/i.test(t)) {
+  // =========================
+  // 4) BEFORE HH:mm
+  // ES: "antes de las 4", "antes de 4:30", "no más tarde de las 4"
+  // EN: "before 4", "before 4:30", "no later than 4"
+  // =========================
+  if (
+    has(/\b(antes\s+de\s+(las|la)?\s*\d{1,2}(:\d{2})?)\b/i) ||
+    has(/\b(no\s+m[aá]s\s+tarde\s+de\s+(las|la)?\s*\d{1,2}(:\d{2})?)\b/i) ||
+    has(/\b(before|no\s+later\s+than)\s+\d{1,2}(:\d{2})?\s*(am|a\.m\.|pm|p\.m\.)?\b/i)
+  ) {
     const hhmm = extractTimeOnlyToken(t);
     if (hhmm) return { kind: "before", hhmm };
   }
 
-  // 5) "tipo 5", "tipo 5 y algo", "around 5"
-  if (/\b(tipo|como|around|about)\b/i.test(t)) {
+  // =========================
+  // 5) AROUND HH:mm (with markers)
+  // ES: "tipo 5", "como a las 5", "aprox 5", "alrededor de las 5"
+  // EN: "around 5", "about 5", "approx 5", "roughly 5"
+  // =========================
+  if (
+    has(/\b(tipo|como|aprox(?:\.|imadamente)?|aproximad(?:amente)?|alrededor\s+de|por\s+ah[ií])\b/i) ||
+    has(/\b(around|about|approx(?:\.|imately)?|roughly)\b/i)
+  ) {
     const hhmm = extractTimeOnlyToken(t);
     if (hhmm) return { kind: "around", hhmm };
   }
 
-  // 6) "5 y algo" (sin decir "tipo")
-  if (/\b(\d{1,2})\s*y\s+algo\b/i.test(t)) {
+  // =========================
+  // 6) "X y algo" / "X-ish" (without explicit markers)
+  // ES: "5 y algo", "5 y pico"
+  // EN: "5ish", "5-ish"
+  // =========================
+  if (
+    has(/\b(\d{1,2})\s+y\s+(algo|pico)\b/i) ||
+    has(/\b(\d{1,2})\s*-\s*ish\b/i) ||
+    has(/\b(\d{1,2})ish\b/i)
+  ) {
     const hhmm = extractTimeOnlyToken(t);
     if (hhmm) return { kind: "around", hhmm };
   }
@@ -403,38 +633,45 @@ export function buildAskAllMessage(idioma: "es" | "en", purpose?: string | null)
 
   if (idioma === "en") {
     return (
-      `Sure! I can help you with that.\n` +
-      `Please send me everything together in ONE message:\n` +
-      `Your full name, email, and the date & time you’d like.\n` +
-      `Example: John Smith, john@email.com, 2026-01-21 14:00`
+      `Perfect, I can help you with that.\n` +
+      `Do me a favor — send me everything in one single message:\n` +
+      `your full name, your email, and the date and time you want.\n` +
+      `Something like: John Smith, john@email.com, 2026-01-21 14:00`
     );
   }
 
   return (
-    `¡Claro! Te ayudo con eso.\n` +
-    `Solo envíame todo junto en **un solo mensaje**:\n` +
-    `Tu nombre completo, email y la fecha y hora que te gustaría.\n` +
-    `Ejemplo: Juan Pérez, juan@email.com, 2026-01-21 14:00`
+    `Perfecto, te ayudo con eso.\n` +
+    `Hazme un favor: mándame todo junto en **un solo mensaje**.\n` +
+    `Tu nombre completo, tu email, y la fecha y hora que te gustaría.\n` +
+    `Algo así como: Juan Pérez, juan@email.com, 2026-01-21 14:00`
   );
 }
 
 export function wantsSpecificTime(text: string) {
-  const t = normalizeText(text);
+  const raw = String(text || "").trim();
+  const t = normalizeText(raw);
 
-  // si el usuario solo manda "1"..."5" es selección, no hora
-  if (/^\s*[1-5]\s*$/.test(String(text || "").trim())) return false;
+  // 1) Si el usuario solo manda “1-5”, es elección de slot, NO una hora.
+  if (/^\s*[1-5]\s*$/.test(raw)) return false;
 
-  // señales típicas de pedir una hora
+  // 2) Detecta si el usuario está preguntando por disponibilidad
+  // Español e inglés: "tienes", "hay", "puedes", "is", "are", "do you have"
   const asking =
-    /\b(tienes|tiene|hay|habra|habrá|puedes|puede|podemos|puedo)\b/.test(t) ||
-    /\?/.test(text);
+    /\b(tienes|tiene|hay|habra|habrá|puedes|puede|podemos|puedo|disponible|disponibilidad)\b/.test(t) ||
+    /\b(is|are|do\s+you\s+have|can\s+you|available)\b/.test(t) ||
+    /\?/.test(raw);
 
-  // contiene hora en cualquier formato
-  const hasTime = !!extractTimeOnlyToken(text);
+  // 3) Detecta hora explícita en cualquier formato reconocido
+  const hasTime = !!extractTimeOnlyToken(raw);
 
-  // ejemplos: "tienes a las 5?", "a las 5pm", "5pm?"
+  // 4) Detecta expresiones que señalan una hora específica
+  // Español: "a las 5", "para las 4", "a la 1"
+  // Inglés: "at 5pm", "at 4", "for 3pm"
   const hasAt =
-    /\b(a\s+las|a\s+la|para\s+las|para\s+la|at)\b/.test(t);
+    /\b(a\s+las|a\s+la|para\s+las|para\s+la)\b/.test(t) ||
+    /\b(at|for)\b/.test(t);
 
+  // Lógica final: debe haber hora + intención de preguntar por un horario
   return hasTime && (asking || hasAt);
 }
