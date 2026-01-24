@@ -10,6 +10,25 @@ export type GoogleFreeBusyResponse = {
 
 type GoogleTokens = { access_token: string; expires_in?: number; token_type?: string };
 
+async function markGoogleDisconnected(tenantId: string, reason: string) {
+  try {
+    await pool.query(
+      `
+      UPDATE calendar_integrations
+         SET status = 'disconnected',
+             last_error = $2,
+             updated_at = NOW()
+       WHERE tenant_id = $1
+         AND provider = 'google'
+      `,
+      [tenantId, reason]
+    );
+  } catch (e) {
+    // Nunca dejes que esto tumbe el flujo
+    console.error("markGoogleDisconnected failed:", e);
+  }
+}
+
 async function getRefreshTokenEnc(tenantId: string): Promise<string> {
   const { rows } = await pool.query(
     `
@@ -49,8 +68,16 @@ export async function getGoogleAccessToken(tenantId: string): Promise<string> {
   });
 
   const json = (await resp.json()) as GoogleTokens & { error?: string; error_description?: string };
+
   if (!resp.ok || !json.access_token) {
     console.error("Google refresh failed:", resp.status, json);
+
+    // ✅ Caso típico: invalid_grant (revocado/expirado)
+    if (json?.error === "invalid_grant") {
+      await markGoogleDisconnected(tenantId, "invalid_grant");
+      throw new Error("google_not_connected"); // fuerza UI a reconectar
+    }
+
     throw new Error("google_refresh_failed");
   }
   return json.access_token;
@@ -61,8 +88,21 @@ export async function googleFreeBusy(params: {
   timeMin: string; // ISO
   timeMax: string; // ISO
   calendarId?: string; // default primary
-}): Promise<GoogleFreeBusyResponse> {
-  const accessToken = await getGoogleAccessToken(params.tenantId);
+}): Promise<GoogleFreeBusyResponse & { degraded?: boolean }> {
+  let accessToken: string;
+
+  try {
+    accessToken = await getGoogleAccessToken(params.tenantId);
+  } catch (e: any) {
+    const msg = String(e?.message || "");
+
+    // ✅ Si no hay conexión o refresh murió, degradar: sin busy blocks
+    if (msg === "google_not_connected" || msg === "google_refresh_failed") {
+      return { calendars: { primary: { busy: [] } }, degraded: true };
+    }
+    throw e;
+  }
+
   const calendarId = params.calendarId || "primary";
 
   const resp = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
@@ -78,11 +118,21 @@ export async function googleFreeBusy(params: {
     }),
   });
 
-  const json = (await resp.json()) as GoogleFreeBusyResponse;
+  const json = (await resp.json()) as GoogleFreeBusyResponse & { error?: any };
+
   if (!resp.ok) {
     console.error("Google freebusy failed:", json);
-    throw new Error("google_freebusy_failed");
+
+    // ✅ Si Google responde 401/403 por token inválido, desconecta y degrada
+    if (resp.status === 401 || resp.status === 403) {
+      await markGoogleDisconnected(params.tenantId, `freebusy_${resp.status}`);
+      return { calendars: { primary: { busy: [] } }, degraded: true };
+    }
+
+    // Otros errores sí pueden ser relevantes, pero para booking es mejor degradar también:
+    return { calendars: { primary: { busy: [] } }, degraded: true };
   }
+
   return json;
 }
 
@@ -95,7 +145,17 @@ export async function googleCreateEvent(params: {
   endISO: string;
   timeZone: string;
 }) {
-  const accessToken = await getGoogleAccessToken(params.tenantId);
+    let accessToken: string;
+    try {
+      accessToken = await getGoogleAccessToken(params.tenantId);
+    } catch (e: any) {
+      const msg = String(e?.message || "");
+      if (msg === "google_not_connected" || msg === "google_refresh_failed") {
+        throw new Error("google_not_connected");
+      }
+      throw e;
+    }
+
   const calendarId = encodeURIComponent(params.calendarId || "primary");
 
   const resp = await fetch(
@@ -116,8 +176,14 @@ export async function googleCreateEvent(params: {
   );
 
   const json = await resp.json();
-  if (!resp.ok) {
-    console.error("Google create event failed:", json);
+    if (!resp.ok) {
+      console.error("Google create event failed:", json);
+
+      if (resp.status === 401 || resp.status === 403) {
+        await markGoogleDisconnected(params.tenantId, `create_${resp.status}`);
+        throw new Error("google_not_connected");
+      }
+
     throw new Error("google_create_event_failed");
   }
   return json;
