@@ -172,28 +172,22 @@ export function wantsToCancel(text: string) {
     return true;
   }
 
-  // 2) Cancelación IMPLÍCITA (neutra pero clara)
+  // 2a) "para" ESPECIAL: solo si es un comando (mensaje casi completo)
+  // Evita falsos positivos como: "para las 2pm", "para mañana", "para el martes"
+  const isParaCommand = /^(para|para ya|para por favor|para pls|para porfa|deten|alto|stop|quit|exit)$/.test(t);
+
+  if (isParaCommand) return true;
+
+  // 2b) Cancelación IMPLÍCITA (neutra pero clara) - SIN "para/parar"
   if (
-    /\b(olvida|olvidalo|olvidalo|mejor no|ya no|ya no quiero|prefiero no)\b/.test(t) ||
-    /\b(stop|deten|detener|para|parar|exit|quit)\b/.test(t) ||
+    /\b(olvida|olvidalo|olvídalo|mejor no|ya no|ya no quiero|prefiero no)\b/.test(t) ||
+    /\b(stop|deten|detener|exit|quit)\b/.test(t) ||
     /\b(nevermind|never mind|forget it)\b/.test(t) ||
     /\b(no gracias|no thank(s)?)\b/.test(t) ||
     /\b(nah|nope)\b/.test(t)
   ) {
     return true;
   }
-
-  // 3) ESTAS FRASES YA NO DEBEN CANCELAR (ANULADO)
-  // "otro día / mañana / más tarde / después"
-  // se interpretan como CAMBIO DE FECHA, NO cancelación.
-  // Por eso se eliminan del detector de cancelación.
-  //
-  // Antes los tenías aquí:
-  //
-  //   /\b(luego|despues|más tarde|otro dia|mañana|later)\b/
-  //
-  // Esto causaba cancelaciones falsas.
-  // Ahora NO están incluidas.
 
   return false;
 }
