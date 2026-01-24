@@ -132,91 +132,6 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         };
       }
   
-      // ✅ NUEVO: pide más opciones aunque no escriba "horario"
-      if (wantsMoreSlots(userText)) {
-      const lastStartISO = slots.length ? slots[slots.length - 1].startISO : null;
-  
-      if (!hours) {
-          return {
-          handled: true,
-          reply: idioma === "en"
-              ? "Please send a date and time (YYYY-MM-DD HH:mm)."
-              : "Por favor envíame fecha y hora (YYYY-MM-DD HH:mm).",
-          ctxPatch: { 
-              booking: { ...booking, step: "ask_datetime", date_only: null, slots: [] },
-              booking_last_touch_at: Date.now(),
-            },
-          };
-      }
-  
-      const dp = (booking as any)?.daypart as ("morning" | "afternoon" | null) || null;
-  
-      let newSlots: Array<{ startISO: string; endISO: string }> = [];
-  
-      if (dp) {
-      newSlots = await getNextSlotsByDaypart({
-          tenantId,
-          timeZone,
-          durationMin,
-          bufferMin,
-          hours,
-          daypart: dp,
-          daysAhead: 14,
-          afterISO: lastStartISO,
-      });
-      } else {
-      // 1) intenta morning
-      newSlots = await getNextSlotsByDaypart({
-          tenantId,
-          timeZone,
-          durationMin,
-          bufferMin,
-          hours,
-          daypart: "morning",
-          daysAhead: 14,
-          afterISO: lastStartISO,
-      });
-  
-      // 2) si no hay, intenta afternoon
-      if (!newSlots.length) {
-          newSlots = await getNextSlotsByDaypart({
-          tenantId,
-          timeZone,
-          durationMin,
-          bufferMin,
-          hours,
-          daypart: "afternoon",
-          daysAhead: 14,
-          afterISO: lastStartISO,
-          });
-        }
-      }
-  
-      if (!newSlots.length) {
-          return {
-          handled: true,
-          reply: idioma === "en"
-              ? "I couldn’t find more available times. Please tell me another date (YYYY-MM-DD)."
-              : "No encontré más horarios disponibles. Envíame otra fecha (YYYY-MM-DD).",
-          ctxPatch: { booking: { ...booking, step: "ask_datetime", date_only: null, slots: [] } },
-          };
-      }
-  
-      return {
-        handled: true,
-        reply: renderSlotsMessage({ idioma, timeZone: booking.timeZone || timeZone, slots: newSlots }),
-        ctxPatch: {
-          booking: {
-            ...booking,
-            step: "offer_slots",
-            timeZone: booking.timeZone || timeZone,
-            slots: newSlots,
-            date_only: null,},
-          booking_last_touch_at: Date.now(),
-        },
-      };
-    }
-  
       // Si pregunta por horarios estando en offer_slots, simplemente re-muestra opciones
       if (/\b(horario|horarios|hours|available)\b/i.test(t)) {
   
@@ -441,160 +356,37 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     };
   }
   
+  // ✅ Selección por número (1-5)
   const choice = parseSlotChoice(userText, slots.length);
-  
+
   if (!choice) {
-    // 0) seguridad: sin fecha no podemos buscar ventanas
-    if (!booking.date_only) {
-      return {
-        handled: true,
-        reply: idioma === "en"
-          ? "What day would you like to book? (today or tomorrow)"
-          : "¿Para qué día quieres agendar? (hoy o mañana)",
-        ctxPatch: { booking, booking_last_touch_at: Date.now() },
-      };
-    }
-  
-    // 1) Hora específica => re-buscar cerca
-    const constraint2 = extractTimeConstraint(userText);
-  
-    if (constraint2 && hasHHMM(constraint2)) {
-      const tz = booking.timeZone || timeZone;
-  
-      const h = Number(constraint2.hhmm.slice(0, 2));
-      const m = Number(constraint2.hhmm.slice(3, 5));
-  
-      const base = DateTime.fromFormat(booking.date_only, "yyyy-MM-dd", { zone: tz })
-        .set({ hour: h, minute: m, second: 0, millisecond: 0 });
-  
-      const windowStartHHmm = base.minus({ hours: 2 }).toFormat("HH:mm");
-      const windowEndHHmm = base.plus({ hours: 3 }).toFormat("HH:mm");
-  
-      const newSlots = await getSlotsForDateWindow({
-        tenantId,
-        timeZone: tz,
-        dateISO: booking.date_only,
-        durationMin,
-        bufferMin,
-        hours,
-        windowStartHHmm,
-        windowEndHHmm,
-      });
-  
-      if (newSlots.length) {
-        return {
-          handled: true,
-          reply: renderSlotsMessage({
-            idioma,
-            timeZone: tz,
-            slots: newSlots.slice(0, 5),
-          }),
-          ctxPatch: {
-            booking: {
-              ...booking,
-              step: "offer_slots",
-              timeZone: tz,
-              slots: newSlots.slice(0, 5),
-            },
-            booking_last_touch_at: Date.now(),
-          },
-        };
-      }
-  
-      return {
-        handled: true,
-        reply: idioma === "en"
-          ? "I don’t see availability near that time. Would you like something earlier or later?"
-          : "No veo disponibilidad cerca de esa hora. ¿Te sirve más temprano o más tarde?",
-        ctxPatch: { booking, booking_last_touch_at: Date.now() },
-      };
-    }
-  
-    // 2) “Otro horario / más tarde” => buscar después del último slot ofrecido
-    if (/\b(otro|otra|mas|más|luego|tarde|despues|después)\b/i.test(userText)) {
-      const tz = booking.timeZone || timeZone;
-  
-      const offered = booking.slots || slots || [];
-      const last = offered[offered.length - 1];
-      const lastEnd = last?.endISO ? DateTime.fromISO(last.endISO, { zone: tz }) : null;
-  
-      const baseStart = lastEnd
-        ? lastEnd.plus({ minutes: 1 })
-        : DateTime.now().setZone(tz).plus({ minutes: 15 });
-  
-      const windowStartHHmm = baseStart.toFormat("HH:mm");
-      const windowEndHHmm = "23:59";
-  
-      const newSlots = await getSlotsForDateWindow({
-        tenantId,
-        timeZone: tz,
-        dateISO: booking.date_only,
-        durationMin,
-        bufferMin,
-        hours,
-        windowStartHHmm,
-        windowEndHHmm,
-      });
-  
-      if (newSlots.length) {
-        return {
-          handled: true,
-          reply: renderSlotsMessage({
-            idioma,
-            timeZone: tz,
-            slots: newSlots.slice(0, 5),
-          }),
-          ctxPatch: {
-            booking: {
-              ...booking,
-              step: "offer_slots",
-              timeZone: tz,
-              slots: newSlots.slice(0, 5),
-            },
-            booking_last_touch_at: Date.now(),
-          },
-        };
-      }
-  
-      return {
-        handled: true,
-        reply: idioma === "en"
-          ? "No more times available that day. Would you like to check tomorrow?"
-          : "No veo más horarios disponibles ese día. ¿Quieres que revise mañana?",
-        ctxPatch: { booking, booking_last_touch_at: Date.now() },
-      };
-    }
-  
-    // 3) fallback
     return {
       handled: true,
       reply: idioma === "en"
-        ? `Please, Reply with a number (1-${slots.length}) or ask for another time (example: "5pm").`
+        ? `Please, reply with a number (1-${slots.length}) or ask for another time (example: "5pm").`
         : `Por favor responde con un número (1-${slots.length}) o dime una hora (ej: "5pm" o "17:00").`,
-      ctxPatch: {
-        booking,
-        booking_last_touch_at: Date.now(),
-      },
+      ctxPatch: { booking, booking_last_touch_at: Date.now() },
     };
   }
-  
-    const picked = slots[choice - 1];
-    const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone, idioma });
-  
-    return {
-      handled: true,
-      reply: idioma === "en"
-        ? "Perfect. Please send your full name and email in ONE message (example: John Smith, john@email.com)."
-        : "Perfecto. Envíame tu nombre completo y email en **un solo mensaje** (ej: Juan Pérez, juan@email.com).",
-      ctxPatch: {
-        booking: {
-          ...booking,
-          step: "ask_contact",
-          picked_start: picked.startISO,
-          picked_end: picked.endISO,
-          slots: [],
-          date_only: null,},
-        booking_last_touch_at: Date.now(),
+
+  const picked = slots[choice - 1];
+  const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone, idioma });
+
+  return {
+    handled: true,
+    reply: idioma === "en"
+      ? "Perfect. Please send your full name and email in ONE message (example: John Smith, john@email.com)."
+      : "Perfecto. Envíame tu nombre completo y email en **un solo mensaje** (ej: Juan Pérez, juan@email.com).",
+    ctxPatch: {
+      booking: {
+        ...booking,
+        step: "ask_contact",
+        picked_start: picked.startISO,
+        picked_end: picked.endISO,
+        slots: [],
+        date_only: null,
       },
-    };
+      booking_last_touch_at: Date.now(),
+    },
+  };
 }
