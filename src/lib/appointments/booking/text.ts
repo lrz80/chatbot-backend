@@ -309,30 +309,39 @@ export function extractDateTimeToken(input: string): string | null {
   return m?.[1] || null;
 }
 
-export function extractDateOnlyToken(input: string): string | null {
+export function extractDateOnlyToken(input: string, timeZone?: string): string | null {
   const raw = String(input || "").toLowerCase().trim();
+  const today = (timeZone ? DateTime.now().setZone(timeZone) : DateTime.now()).startOf("day");
 
   // ----------------------------------------
-  // 1) Detecta fecha exacta YYYY-MM-DD (la tuya)
+  // 0) Evitar capturar rangos tipo "1-5" (menú de opciones)
+  // ----------------------------------------
+  if (/\b\d{1,2}\s*-\s*\d{1,2}\b/.test(raw)) {
+    // no es una fecha, es un rango/opciones
+    // seguimos, pero SIN usar el matcher simple de día suelto más abajo
+  }
+
+  // ----------------------------------------
+  // 1) Detecta fecha exacta YYYY-MM-DD (sin hora)
   // ----------------------------------------
   const explicit = raw.match(/\b(\d{4}-\d{2}-\d{2})\b/);
   const hasDateTime = /\b\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\b/.test(raw);
   if (explicit && !hasDateTime) return explicit[1];
 
   // ----------------------------------------
-  // 2) Palabras relativas: hoy, mañana, pasado mañana
+  // 2) Palabras relativas: hoy, pasado mañana, mañana
+  //    (IMPORTANTE: pasado mañana antes que mañana)
   // ----------------------------------------
-  const today = DateTime.now();
   if (/\bhoy\b/.test(raw)) {
     return today.toFormat("yyyy-MM-dd");
   }
 
-  if (/\bmañana\b/.test(raw)) {
-    return today.plus({ days: 1 }).toFormat("yyyy-MM-dd");
-  }
-
   if (/\bpasado\s+mañana\b/.test(raw)) {
     return today.plus({ days: 2 }).toFormat("yyyy-MM-dd");
+  }
+
+  if (/\bmañana\b/.test(raw)) {
+    return today.plus({ days: 1 }).toFormat("yyyy-MM-dd");
   }
 
   // ----------------------------------------
@@ -361,19 +370,37 @@ export function extractDateOnlyToken(input: string): string | null {
   }
 
   // ----------------------------------------
-  // 4) Fechas como: "el 15", "15", "para el 23"
-  //    NO meses, solo día del mes actual
+  // 4) Patrones de día del mes:
+  //    "para el 25", "el 25", "día 25", "este 25", "25"
   // ----------------------------------------
-  const mDia = raw.match(/\b(?:el\s+)?(\d{1,2})\b/);
-  if (mDia) {
-    const dia = Number(mDia[1]);
+
+  // 4a) Prioridad: frases explícitas (para evitar capturar números irrelevantes)
+  const mDiaExplicito = raw.match(/\b(?:para\s+el|para|el|dia|día|este)\s+(\d{1,2})\b/);
+  if (mDiaExplicito) {
+    const dia = Number(mDiaExplicito[1]);
     if (dia >= 1 && dia <= 31) {
-      const tentative = today.set({ day: dia });
-      // Si ya pasó este mes, usar el siguiente mes
-      if (tentative < today.startOf("day")) {
-        return tentative.plus({ months: 1 }).toFormat("yyyy-MM-dd");
+      let tentative = today.set({ day: dia });
+      // si el día no existe en este mes (ej: 31 en febrero) Luxon ajusta; validamos
+      if (tentative.day !== dia) {
+        // usa el próximo mes donde exista el día (simple: suma 1 mes y vuelve a setear)
+        tentative = today.plus({ months: 1 }).set({ day: dia });
       }
+      if (tentative < today) tentative = tentative.plus({ months: 1 });
       return tentative.toFormat("yyyy-MM-dd");
+    }
+  }
+
+  // 4b) Día suelto: SOLO si NO hay rango tipo 1-5
+  if (!/\b\d{1,2}\s*-\s*\d{1,2}\b/.test(raw)) {
+    const mDia = raw.match(/\b(\d{1,2})\b/);
+    if (mDia) {
+      const dia = Number(mDia[1]);
+      if (dia >= 1 && dia <= 31) {
+        let tentative = today.set({ day: dia });
+        if (tentative.day !== dia) tentative = today.plus({ months: 1 }).set({ day: dia });
+        if (tentative < today) tentative = tentative.plus({ months: 1 });
+        return tentative.toFormat("yyyy-MM-dd");
+      }
     }
   }
 

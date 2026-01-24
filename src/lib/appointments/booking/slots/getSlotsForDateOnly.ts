@@ -1,0 +1,79 @@
+import { DateTime } from "luxon";
+import type { Slot } from "../types";           // ajusta si tu tipo Slot vive en otro lado
+import type { HoursByWeekday } from "../types"; // ajusta si está en otro archivo
+
+import { weekdayKey, parseHHmm } from "../time"; // ajusta imports según tu proyecto
+import { googleFreeBusy } from "../../../../services/googleCalendar"; // ajusta ruta real
+import { extractBusyBlocks, subtractBusyFromWindow, sliceIntoSlots } from "../slots"; // ajusta ruta real
+
+export async function getSlotsForDateOnly(opts: {
+  tenantId: string;
+  timeZone: string;
+  durationMin: number;
+  bufferMin: number;
+  hours: HoursByWeekday | null;
+  dateOnly: string;      // yyyy-MM-dd
+  afterISO?: string | null;
+}): Promise<Slot[]> {
+  const { tenantId, timeZone, durationMin, bufferMin, hours, dateOnly } = opts;
+
+  if (!hours) return [];
+
+  const after = opts.afterISO
+    ? DateTime.fromISO(opts.afterISO, { zone: timeZone })
+    : null;
+
+  const day = DateTime.fromISO(dateOnly, { zone: timeZone }).startOf("day");
+  if (!day.isValid) return [];
+
+  const key = weekdayKey(day);
+  const dayHours = hours?.[key];
+  if (!dayHours || !dayHours.start || !dayHours.end) return [];
+
+  const st = parseHHmm(dayHours.start);
+  const en = parseHHmm(dayHours.end);
+  if (!st || !en) return [];
+
+  const bizStart = day.set({ hour: st.h, minute: st.min, second: 0, millisecond: 0 });
+  const bizEnd = day.set({ hour: en.h, minute: en.min, second: 0, millisecond: 0 });
+  if (bizEnd <= bizStart) return [];
+
+  // ✅ FreeBusy solo para ese día dentro del horario del negocio
+  const fb = await googleFreeBusy({
+    tenantId,
+    timeMin: bizStart.toISO()!,
+    timeMax: bizEnd.toISO()!,
+    calendarId: "primary",
+  });
+
+  const busy = extractBusyBlocks(fb);
+
+  const freeRanges = subtractBusyFromWindow({
+    windowStart: bizStart,
+    windowEnd: bizEnd,
+    busy,
+    timeZone,
+  });
+
+  const slots = sliceIntoSlots({
+    freeRanges,
+    durationMin,
+    bufferMin,
+    timeZone,
+  });
+
+  const out: Slot[] = [];
+
+  for (const s of slots) {
+    if (after) {
+      const sdt = DateTime.fromISO(s.startISO, { zone: timeZone });
+      if (!sdt.isValid) continue;
+      if (sdt <= after) continue;
+    }
+
+    out.push(s);
+    if (out.length >= 5) break;
+  }
+
+  return out.slice(0, 5);
+}

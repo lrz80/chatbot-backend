@@ -1,15 +1,16 @@
 // src/lib/appointments/booking/handlers/askDaypart.ts
 import { DateTime } from "luxon";
-
 import {
   wantsToCancel,
   wantsToChangeTopic,
   detectDaypart,
   buildAskAllMessage,
 } from "../text";
-
 import { renderSlotsMessage } from "../time";
 import { getNextSlotsByDaypart } from "../slots";
+import { extractDateOnlyToken } from "../text";
+import { getSlotsForDateOnly } from "../slots/getSlotsForDateOnly";
+
 
 export type AskDaypartDeps = {
   tenantId: string;
@@ -52,6 +53,70 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
           : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
       ctxPatch: {
         booking: { step: "idle" },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
+    // ✅ Si el usuario menciona una fecha ("para el 25", "martes", "mañana", etc.)
+  // en vez de daypart, debemos continuar el flujo ofreciendo slots para esa fecha.
+  const dateOnly = extractDateOnlyToken(userText, timeZone);
+
+  if (dateOnly) {
+    // Si no hay horario configurado: pedir todo manualmente, pero guardando date_only
+    if (!hours) {
+      return {
+        handled: true,
+        reply: buildAskAllMessage(idioma, booking?.purpose || null),
+        ctxPatch: {
+          booking: {
+            ...booking,
+            step: "ask_all",
+            timeZone,
+            date_only: dateOnly,
+          },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    // Si hay horario: ofrecer slots de ESE día (sin preguntar mañana/tarde)
+    const slotsForDay = await getSlotsForDateOnly({
+      tenantId,
+      timeZone,
+      durationMin,
+      bufferMin,
+      hours,
+      dateOnly, // yyyy-MM-dd
+    });
+
+    if (!slotsForDay?.length) {
+      return {
+        handled: true,
+        reply:
+          idioma === "en"
+            ? "I don’t have openings that day. Would morning or afternoon on another day work for you?"
+            : "Ese día no tengo disponibilidad. ¿Te funciona más en la mañana o en la tarde en otro día?",
+        ctxPatch: {
+          booking: { ...booking, step: "ask_daypart", timeZone },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    return {
+      handled: true,
+      reply: renderSlotsMessage({ idioma, timeZone, slots: slotsForDay }),
+      ctxPatch: {
+        booking: {
+          step: "offer_slots",
+          timeZone,
+          purpose: booking?.purpose || null,
+          daypart: null,
+          slots: slotsForDay,
+          date_only: dateOnly,
+          last_offered_date: dateOnly,
+        },
         booking_last_touch_at: Date.now(),
       },
     };
