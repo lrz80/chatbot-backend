@@ -172,6 +172,10 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     const windowStartHHmm = base.minus({ hours: 2 }).toFormat("HH:mm");
     const windowEndHHmm = base.plus({ hours: 3 }).toFormat("HH:mm");
 
+    console.log("[DEBUG HOURS]", {
+      hours,
+    });
+
     const windowSlots = await getSlotsForDateWindow({
       tenantId,
       timeZone: tz,
@@ -205,6 +209,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
         },
       };
     }
+    console.log("[DEBUG HOURS offerSlots]", hours);
 
     // Fallback: si no hay en ventana, ofrece el día completo
     const allDaySlots = await getSlotsForDate({
