@@ -78,8 +78,18 @@ export async function getGoogleAccessToken(tenantId: string): Promise<string> {
       throw new Error("google_not_connected"); // fuerza UI a reconectar
     }
 
+    await pool.query(
+      `
+      UPDATE calendar_integrations
+        SET last_error = $2,
+            updated_at = NOW()
+      WHERE tenant_id = $1 AND provider='google'
+      `,
+      [tenantId, `refresh_${resp.status}_${json?.error || "unknown"}`]
+    );
     throw new Error("google_refresh_failed");
   }
+
   return json.access_token;
 }
 
