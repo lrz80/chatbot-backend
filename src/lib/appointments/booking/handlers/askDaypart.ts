@@ -43,6 +43,31 @@ function isOpenOnDate(hours: any, dt: DateTime) {
   return day && day.start && day.end; // tu JSON es {start,end} o null
 }
 
+function pickClosestSlotsToHHMM(opts: {
+  slots: Array<{ startISO: string; endISO: string }>;
+  timeZone: string;
+  dateISO: string;  // yyyy-MM-dd
+  hhmm: string;     // HH:mm
+  max: number;
+}) {
+  const { slots, timeZone, dateISO, hhmm, max } = opts;
+
+  const h = Number(hhmm.slice(0, 2));
+  const m = Number(hhmm.slice(3, 5));
+
+  const target = DateTime.fromFormat(dateISO, "yyyy-MM-dd", { zone: timeZone })
+    .set({ hour: h, minute: m, second: 0, millisecond: 0 })
+    .toMillis();
+
+  return [...slots]
+    .sort((a, b) => {
+      const am = DateTime.fromISO(a.startISO, { zone: timeZone }).toMillis();
+      const bm = DateTime.fromISO(b.startISO, { zone: timeZone }).toMillis();
+      return Math.abs(am - target) - Math.abs(bm - target);
+    })
+    .slice(0, max);
+}
+
 export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
   handled: boolean;
   reply?: string;
@@ -175,7 +200,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     // Si hoy está cerrado, busca el próximo día abierto (máx 14 días)
     let dt = now.startOf("day");
     if (!isOpenOnDate(hours, dt)) {
-    for (let i = 0; i < 14; i++) {
+    for (let i = 1; i < 14; i++) {
         const cand = dt.plus({ days: i });
         if (isOpenOnDate(hours, cand)) {
         dt = cand;
@@ -243,7 +268,6 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
         },
       };
     }
-    console.log("[DEBUG HOURS offerSlots]", hours);
 
     // Fallback: si no hay en ventana, ofrece el día completo
     const allDaySlots = await getSlotsForDate({
@@ -256,19 +280,37 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     });
 
     if (allDaySlots?.length) {
-      const take = [...allDaySlots]
-        .sort((a, b) => a.startISO.localeCompare(b.startISO))
-        .slice(0, 5);
+      const take = pickClosestSlotsToHHMM({
+        slots: allDaySlots,
+        timeZone: tz,
+        dateISO: ctxDate,
+        hhmm,
+        max: 5,
+    });
+
+      const todayISO = now.toFormat("yyyy-MM-dd");
+      const datePrefix =
+        ctxDate !== todayISO
+        ? (idioma === "en"
+            ? `I’m seeing the next availability on ${ctxDate}. `
+            : `Veo la próxima disponibilidad el ${ctxDate}. `)
+        : "";
+
+      const askedHuman =
+        idioma === "en"
+        ? hhmm
+        : hhmm; // si quieres, luego lo convertimos a "3:00 p. m." (no es necesario ahora)
+
+      const msg =
+        idioma === "en"
+        ? `${datePrefix}I don’t have openings near ${askedHuman}. Here are the closest options:`
+        : `${datePrefix}No tengo disponibilidad cerca de las ${askedHuman}. Estas son las opciones más cercanas:`;
 
       return {
         handled: true,
-        reply:
-          idioma === "en"
-            ? "I don’t have availability at that exact time. Here are the closest options:"
-            : "No tengo disponibilidad a esa hora exacta. Estas son las opciones más cercanas:\n\n" +
-              renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
+        reply: msg + "\n\n" + renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
         ctxPatch: {
-          booking: {
+        booking: {
             step: "offer_slots",
             timeZone: tz,
             purpose: booking?.purpose || null,
@@ -276,8 +318,8 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
             slots: take,
             date_only: ctxDate,
             last_offered_date: ctxDate,
-          },
-          booking_last_touch_at: Date.now(),
+        },
+        booking_last_touch_at: Date.now(),
         },
       };
     }
