@@ -10,6 +10,8 @@ import { renderSlotsMessage } from "../time";
 import { getNextSlotsByDaypart } from "../slots";
 import { extractDateOnlyToken } from "../text";
 import { getSlotsForDateOnly } from "../slots/getSlotsForDateOnly";
+import { extractTimeOnlyToken, extractTimeConstraint } from "../text";
+import { getSlotsForDateWindow, getSlotsForDate } from "../slots";
 
 
 export type AskDaypartDeps = {
@@ -23,6 +25,11 @@ export type AskDaypartDeps = {
   bufferMin: number;
   hours: any | null; // HoursByWeekday | null
 };
+
+function inferDaypartFromHHMM(hhmm: string): "morning" | "afternoon" {
+  const h = Number(hhmm.slice(0, 2));
+  return h >= 12 ? "afternoon" : "morning";
+}
 
 export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
   handled: boolean;
@@ -117,6 +124,133 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
           date_only: dateOnly,
           last_offered_date: dateOnly,
         },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
+  // ✅ Si el usuario responde con una HORA ("3pm", "15:00", "a las 3")
+  // en vez de "mañana/tarde", inferimos daypart y buscamos una ventana real alrededor de esa hora.
+  const hhmm =
+    extractTimeOnlyToken(userText) ||
+    (() => {
+      const c: any = extractTimeConstraint(userText);
+      return typeof c?.hhmm === "string" ? c.hhmm : null;
+    })();
+
+  if (hhmm) {
+    // Si no hay horario configurado, pasamos a ask_all y guardamos lo que podamos
+    if (!hours) {
+      return {
+        handled: true,
+        reply: buildAskAllMessage(idioma, booking?.purpose || null),
+        ctxPatch: {
+          booking: {
+            ...booking,
+            step: "ask_all",
+            timeZone,
+            daypart: inferDaypartFromHHMM(hhmm),
+          },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    // Determina fecha contexto: si ya hay date_only úsala; si no, usa hoy (o mañana si ya es tarde)
+    const tz = timeZone;
+    const ctxDate =
+      booking?.date_only ||
+      booking?.last_offered_date ||
+      DateTime.now().setZone(tz).toFormat("yyyy-MM-dd");
+
+    const h = Number(hhmm.slice(0, 2));
+    const m = Number(hhmm.slice(3, 5));
+
+    const base = DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz })
+      .set({ hour: h, minute: m, second: 0, millisecond: 0 });
+
+    const windowStartHHmm = base.minus({ hours: 2 }).toFormat("HH:mm");
+    const windowEndHHmm = base.plus({ hours: 3 }).toFormat("HH:mm");
+
+    const windowSlots = await getSlotsForDateWindow({
+      tenantId,
+      timeZone: tz,
+      dateISO: ctxDate,
+      durationMin,
+      bufferMin,
+      hours,
+      windowStartHHmm,
+      windowEndHHmm,
+    });
+
+    if (windowSlots?.length) {
+      const take = [...windowSlots]
+        .sort((a, b) => a.startISO.localeCompare(b.startISO))
+        .slice(0, 5);
+
+      return {
+        handled: true,
+        reply: renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
+        ctxPatch: {
+          booking: {
+            step: "offer_slots",
+            timeZone: tz,
+            purpose: booking?.purpose || null,
+            daypart: inferDaypartFromHHMM(hhmm),
+            slots: take,
+            date_only: ctxDate,
+            last_offered_date: ctxDate,
+          },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    // Fallback: si no hay en ventana, ofrece el día completo
+    const allDaySlots = await getSlotsForDate({
+      tenantId,
+      timeZone: tz,
+      dateISO: ctxDate,
+      durationMin,
+      bufferMin,
+      hours,
+    });
+
+    if (allDaySlots?.length) {
+      const take = [...allDaySlots]
+        .sort((a, b) => a.startISO.localeCompare(b.startISO))
+        .slice(0, 5);
+
+      return {
+        handled: true,
+        reply:
+          idioma === "en"
+            ? "I don’t have availability at that exact time. Here are the closest options:"
+            : "No tengo disponibilidad a esa hora exacta. Estas son las opciones más cercanas:\n\n" +
+              renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
+        ctxPatch: {
+          booking: {
+            step: "offer_slots",
+            timeZone: tz,
+            purpose: booking?.purpose || null,
+            daypart: inferDaypartFromHHMM(hhmm),
+            slots: take,
+            date_only: ctxDate,
+            last_offered_date: ctxDate,
+          },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    return {
+      handled: true,
+      reply:
+        idioma === "en"
+          ? "I don’t see availability near that time. Would morning or afternoon work better?"
+          : "No veo disponibilidad cerca de esa hora. ¿Te funciona más en la mañana o en la tarde?",
+      ctxPatch: {
+        booking: { ...booking, step: "ask_daypart", timeZone },
         booking_last_touch_at: Date.now(),
       },
     };
