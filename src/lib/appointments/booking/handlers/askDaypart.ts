@@ -31,6 +31,18 @@ function inferDaypartFromHHMM(hhmm: string): "morning" | "afternoon" {
   return h >= 12 ? "afternoon" : "morning";
 }
 
+function weekdayKeyFromDate(dt: DateTime) {
+  // Luxon weekday: 1=Mon ... 7=Sun
+  const map = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+  return map[dt.weekday - 1];
+}
+
+function isOpenOnDate(hours: any, dt: DateTime) {
+  const k = weekdayKeyFromDate(dt);
+  const day = hours?.[k];
+  return day && day.start && day.end; // tu JSON es {start,end} o null
+}
+
 export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
   handled: boolean;
   reply?: string;
@@ -158,10 +170,24 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
     // Determina fecha contexto: si ya hay date_only úsala; si no, usa hoy (o mañana si ya es tarde)
     const tz = timeZone;
+    const now = DateTime.now().setZone(tz);
+
+    // Si hoy está cerrado, busca el próximo día abierto (máx 14 días)
+    let dt = now.startOf("day");
+    if (!isOpenOnDate(hours, dt)) {
+    for (let i = 0; i < 14; i++) {
+        const cand = dt.plus({ days: i });
+        if (isOpenOnDate(hours, cand)) {
+        dt = cand;
+        break;
+        }
+    }
+    }
+
     const ctxDate =
-      booking?.date_only ||
-      booking?.last_offered_date ||
-      DateTime.now().setZone(tz).toFormat("yyyy-MM-dd");
+    booking?.date_only ||
+    booking?.last_offered_date ||
+    dt.toFormat("yyyy-MM-dd");
 
     const h = Number(hhmm.slice(0, 2));
     const m = Number(hhmm.slice(3, 5));
@@ -192,9 +218,17 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
         .sort((a, b) => a.startISO.localeCompare(b.startISO))
         .slice(0, 5);
 
+    const todayISO = now.toFormat("yyyy-MM-dd");
+    const datePrefix =
+    ctxDate !== todayISO
+        ? (idioma === "en"
+            ? `I’m seeing the next availability on ${ctxDate}. `
+            : `Veo la próxima disponibilidad el ${ctxDate}. `)
+        : "";
+
       return {
         handled: true,
-        reply: renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
+        reply: datePrefix + renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
         ctxPatch: {
           booking: {
             step: "offer_slots",
