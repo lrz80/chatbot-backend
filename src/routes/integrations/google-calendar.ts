@@ -209,6 +209,19 @@ router.post("/disconnect", authenticateUser, async (req, res) => {
   }
 });
 
+async function getExistingRefreshEnc(tenantId: string): Promise<string | null> {
+  const { rows } = await pool.query(
+    `
+    SELECT refresh_token_enc
+    FROM calendar_integrations
+    WHERE tenant_id = $1 AND provider = 'google'
+    LIMIT 1
+    `,
+    [tenantId]
+  );
+  return rows[0]?.refresh_token_enc || null;
+}
+
 router.get("/callback", async (req: Request, res: Response) => {
   try {
     const { code, state } = req.query as any;
@@ -245,14 +258,26 @@ router.get("/callback", async (req: Request, res: Response) => {
       return res.status(400).send("Token exchange failed");
     }
 
-    const refreshToken = tokenJson.refresh_token;
+    const refreshToken = tokenJson.refresh_token; // puede venir undefined
     const accessToken = tokenJson.access_token;
 
-    if (!refreshToken) {
-      // Esto pasa si ya lo autorizó antes sin prompt=consent o Google no lo re-entrega
-      return res.status(400).send("No refresh_token returned. Revoke access and try again.");
-    }
+    let refreshEncToStore: string | null = null;
 
+    if (refreshToken) {
+      refreshEncToStore = encryptToken(String(refreshToken));
+    } else {
+      // ✅ Google no siempre re-entrega refresh_token.
+      // Si ya tenemos uno guardado, lo conservamos.
+      refreshEncToStore = await getExistingRefreshEnc(tenantId);
+
+      // Si no hay uno previo, entonces sí no podemos seguir
+      if (!refreshEncToStore) {
+        return res
+          .status(400)
+          .send("No refresh_token returned and no existing token on file. Revoke access and try again.");
+      }
+    }
+    
     // Obtener email del usuario conectado (opcional pero útil)
     let connectedEmail: string | null = null;
     try {
@@ -263,8 +288,6 @@ router.get("/callback", async (req: Request, res: Response) => {
       connectedEmail = infoJson?.email || null;
     } catch (_) {}
 
-    const enc = encryptToken(String(refreshToken));
-
     await pool.query(
       `
       INSERT INTO calendar_integrations
@@ -273,13 +296,13 @@ router.get("/callback", async (req: Request, res: Response) => {
         ($1, 'google', $2, $3, 'primary', 'connected', now())
       ON CONFLICT (tenant_id, provider)
       DO UPDATE SET
-        refresh_token_enc = EXCLUDED.refresh_token_enc,
+        refresh_token_enc = COALESCE(EXCLUDED.refresh_token_enc, calendar_integrations.refresh_token_enc),
         connected_email   = EXCLUDED.connected_email,
         calendar_id       = EXCLUDED.calendar_id,
         status            = 'connected',
         updated_at        = now()
       `,
-      [tenantId, enc, connectedEmail]
+      [tenantId, refreshEncToStore, connectedEmail]
     );
 
     // Redirige al dashboard donde muestras el status

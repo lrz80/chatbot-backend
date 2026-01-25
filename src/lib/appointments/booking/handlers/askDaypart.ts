@@ -267,8 +267,8 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       const datePrefix =
         ctxDate !== todayISO
           ? (idioma === "en"
-              ? `I’m seeing the next availability on ${ctxDate}. `
-              : `Veo la próxima disponibilidad el ${ctxDate}. `)
+              ? `The next availability date on: ${ctxDate}. `
+              : `La próxima fecha disponible es: ${ctxDate}. `)
           : "";
 
       if (exact) {
@@ -369,8 +369,8 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     const datePrefix =
         ctxDate !== todayISO
         ? (idioma === "en"
-            ? `I’m seeing the next availability on ${ctxDate}. `
-            : `Veo la próxima disponibilidad el ${ctxDate}. `)
+            ? `The next availability date on: ${ctxDate}. `
+            : `La próxima fecha disponible es: ${ctxDate}. `)
         : "";
 
     // ✅ SI EXISTE EXACTO → CONFIRMAR DIRECTO (NO LISTA)
