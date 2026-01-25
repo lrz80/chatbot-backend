@@ -459,49 +459,56 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
 
       const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone: tz, idioma });
 
+      const requirePhone = deps.canal === "facebook" || deps.canal === "instagram"; // IG/FB sí; WA normalmente no
       const missingName = !nextBooking?.name;
+
+      // Email/phone faltantes
       const missingEmail = !nextBooking?.email;
 
-      if (missingName && missingEmail) {
-        return {
-          handled: true,
-          reply:
-            idioma === "en"
-            ? `Perfect — I can do ${whenTxt}. Before I confirm, send your full name and email in ONE message (example: John Smith, john@email.com).`
-            : `Perfecto — puedo ${whenTxt}. Antes de confirmarla, envíame tu nombre completo y tu email en *un solo mensaje* (ej: Juan Pérez, juan@email.com).`,
-          ctxPatch: { booking: { ...nextBooking, step: "ask_all" }, booking_last_touch_at: Date.now() },
-        };
-      }
+      // Si quieres SIEMPRE pedir teléfono también en WhatsApp para mejorar lead quality,
+      // cambia esta línea a: const missingPhone = !nextBooking?.phone;
+      const missingPhone = requirePhone && !nextBooking?.phone;
 
       if (missingName) {
         return {
           handled: true,
           reply:
             idioma === "en"
-            ? `Perfect — I can do ${whenTxt}. What’s your full name?`
-            : `Perfecto — puedo ${whenTxt}. ¿Cuál es tu nombre completo?`,
-          ctxPatch: { booking: { ...nextBooking, step: "ask_name" }, booking_last_touch_at: Date.now() },
+              ? `Perfect — I can do ${whenTxt}. What’s your full name?`
+              : `Perfecto — puedo ${whenTxt}. ¿Cuál es tu nombre completo?`,
+          ctxPatch: {
+            booking: { ...nextBooking, step: "ask_name" },
+            booking_last_touch_at: Date.now(),
+          },
         };
       }
 
-      if (missingEmail) {
+      // ✅ Si falta email o phone -> UN SOLO PASO
+      if (missingEmail || missingPhone) {
         return {
           handled: true,
           reply:
             idioma === "en"
-            ? `Perfect — I can do ${whenTxt}. What’s your email? (example: name@email.com)`
-            : `Perfecto — puedo ${whenTxt}. ¿Cuál es tu email? (ej: nombre@email.com)`,
-          ctxPatch: { booking: { ...nextBooking, step: "ask_email" }, booking_last_touch_at: Date.now() },
+              ? `Perfect — I can do ${whenTxt}. Send your email ${missingPhone ? "and phone" : ""} in ONE message (example: john@email.com${missingPhone ? ", +13055551234" : ""}).`
+              : `Perfecto — puedo ${whenTxt}. Envíame tu email${missingPhone ? " y tu teléfono" : ""} en *un solo mensaje* (ej: nombre@email.com${missingPhone ? ", +13055551234" : ""}).`,
+          ctxPatch: {
+            booking: { ...nextBooking, step: "ask_email_phone" },
+            booking_last_touch_at: Date.now(),
+          },
         };
       }
 
+      // ✅ Ya tengo todo -> confirmar
       return {
         handled: true,
         reply:
           idioma === "en"
             ? `Perfect — to confirm ${whenTxt}, reply YES or NO.`
             : `Perfecto — para confirmar ${whenTxt}, responde SI o NO.`,
-        ctxPatch: { booking: { ...nextBooking, step: "confirm" }, booking_last_touch_at: Date.now() },
+        ctxPatch: {
+          booking: { ...nextBooking, step: "confirm" },
+          booking_last_touch_at: Date.now(),
+        },
       };
     }
 

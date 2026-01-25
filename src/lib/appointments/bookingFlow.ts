@@ -22,11 +22,9 @@ import {
   wantsToCancel,
   wantsToChangeTopic,
   matchesBookingIntent,
-  parseEmail,
   parseFullName,
-  parseNameEmailOnly,
 } from "./booking/text";
-import { parsePhone } from "./booking/text";
+import { handleAskEmailPhone } from "./booking/handlers/askEmailPhone";
 
 import {
   MIN_LEAD_MINUTES,
@@ -40,9 +38,7 @@ import { handleAskDaypart } from "./booking/handlers/askDaypart";
 import { handleAskAll } from "./booking/handlers/askAll";
 import { handleConfirm } from "./booking/handlers/confirm";
 import { handleAskName } from "./booking/handlers/askName";
-import { handleAskEmail } from "./booking/handlers/askEmail";
 import { handleAskPurpose } from "./booking/handlers/askPurpose";
-import { handleAskContact } from "./booking/handlers/askContact";
 import { handleStartBooking } from "./booking/handlers/start";
 
 
@@ -418,22 +414,6 @@ if (booking.step === "ask_name") {
   });
 }
 
-if (booking.step === "ask_email") {
-  return handleAskEmail({
-    tenantId,
-    canal,
-    contacto,
-    idioma,
-    userText,
-    booking,
-    timeZone,
-    wantsToChangeTopic,
-    wantsToCancel,
-    parseEmail,
-    upsertClienteBookingData,
-  });
-}
-
 if (booking.step === "offer_slots") {
   return handleOfferSlots({
     tenantId,
@@ -449,9 +429,9 @@ if (booking.step === "offer_slots") {
   });
 }
 
-if (booking.step === "ask_contact") {
-  const requirePhone = canal === "facebook" || canal === "instagram"; // ✅ IG/FB sí
-  return handleAskContact({
+if (booking.step === "ask_email_phone") {
+  const requirePhone = canal === "facebook" || canal === "instagram"; // IG/FB sí
+  return handleAskEmailPhone({
     tenantId,
     canal,
     contacto,
@@ -461,9 +441,7 @@ if (booking.step === "ask_contact") {
     timeZone,
     wantsToChangeTopic,
     wantsToCancel,
-    requirePhone, // ✅ NUEVO
-    parseNameEmailOnly,
-    parseEmail,
+    requirePhone,
     upsertClienteBookingData,
   });
 }

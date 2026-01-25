@@ -7,11 +7,10 @@ export type BookingCtx = {
       | "ask_purpose"
       | "ask_daypart"
       | "offer_slots"
-      | "ask_contact"
       | "confirm"
       | "ask_all"
       | "ask_name"
-      | "ask_email"
+      | "ask_email_phone"
       | "ask_datetime"
 
     start_time?: string | null;
