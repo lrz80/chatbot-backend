@@ -431,7 +431,7 @@ export function extractTimeOnlyToken(raw: string): string | null {
 
   if (!hasExplicitTimeSignal) {
     const looksLikeChoice =
-      /\b(ok|okay|vale|listo|perfecto|opcion|opción|option|elige|escojo|pick|choose|la|el|nro|num|numero|número|#)\s*(\d)\b/.test(s) ||
+      /\b(opcion|opción|option|elige|escojo|pick|choose|nro|num|numero|número|#)\s*(\d)\b/.test(s) ||
       /^\s*(\d)\s*$/.test(s);
 
     if (looksLikeChoice) {
@@ -443,7 +443,7 @@ export function extractTimeOnlyToken(raw: string): string | null {
   // ✅ 0) Si parece selección de opción (ok 3, opción 3, la 3, #3, etc) -> NO es hora
   // Nota: aquí deliberadamente solo tomamos 1-5 porque tu UI muestra 1-5
   const looksLikeChoice =
-    /\b(ok|okay|vale|listo|perfecto|opcion|opción|option|elige|escojo|pick|choose|la|el|nro|num|numero|número|#)\s*(\d)\b/.test(s) ||
+    /\b(opcion|opción|option|elige|escojo|pick|choose|nro|num|numero|número|#)\s*(\d)\b/.test(s) ||
     /^\s*(\d)\s*$/.test(s);
 
   if (looksLikeChoice) {
