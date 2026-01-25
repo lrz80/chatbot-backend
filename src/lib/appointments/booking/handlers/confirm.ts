@@ -1,7 +1,6 @@
 // src/lib/appointments/booking/handlers/confirm.ts
 import { DateTime } from "luxon";
-
-import { wantsToCancel } from "../text";
+import { wantsToCancel, buildAskAllMessage } from "../text";
 import { renderSlotsMessage } from "../time";
 import { getSlotsForDate } from "../slots";
 
@@ -78,21 +77,6 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
   const yes = /^(si|sí|yes|y)$/i.test(t);
   const no = /^(no|n)$/i.test(t);
 
-  // 0) seguridad: email obligatorio
-  if (!booking?.email) {
-    return {
-      handled: true,
-      reply:
-        idioma === "en"
-          ? "Before confirming, please send your email (example: name@email.com)."
-          : "Antes de confirmar, envíame tu email (ej: nombre@email.com).",
-      ctxPatch: {
-        booking: { ...booking, step: "ask_email", timeZone: booking?.timeZone || timeZone },
-        booking_last_touch_at: Date.now(),
-      },
-    };
-  }
-
   // 1) cancelación explícita (aunque no haya respondido yes/no)
   if (wantsToCancel(userText)) {
     return {
@@ -139,19 +123,71 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     };
   }
 
-  // 4) YES pero sin start/end
-  if (!booking?.start_time || !booking?.end_time) {
+  // ✅ 4) YES -> antes de reservar, pedir datos faltantes (nombre/email)
+if (yes) {
+  const missingName = !booking?.name;
+  const missingEmail = !booking?.email;
+
+  // Si faltan ambos, pide TODO en un solo mensaje
+  if (missingName && missingEmail) {
     return {
       handled: true,
-      reply: idioma === "en" ? "Send me the date and time (YYYY-MM-DD HH:mm)." : "Envíame la fecha y hora (YYYY-MM-DD HH:mm).",
-      ctxPatch: { booking: { ...booking, step: "ask_datetime" }, booking_last_touch_at: Date.now() },
+      reply: buildAskAllMessage(idioma, booking?.purpose || null),
+      ctxPatch: {
+        booking: { ...booking, step: "ask_all", timeZone: booking?.timeZone || timeZone },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
-  // 5) crear appointment pending idempotente (dedupe real)
+  // Si falta solo nombre
+  if (missingName) {
+    return {
+      handled: true,
+      reply:
+        idioma === "en"
+          ? "Great. What’s your full name?"
+          : "Perfecto. ¿Cuál es tu nombre completo?",
+      ctxPatch: {
+        booking: { ...booking, step: "ask_name", timeZone: booking?.timeZone || timeZone },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
+  // Si falta solo email
+  if (missingEmail) {
+    return {
+      handled: true,
+      reply:
+        idioma === "en"
+          ? "Great. What’s your email? (example: name@email.com)"
+          : "Perfecto. ¿Cuál es tu email? (ej: nombre@email.com)",
+      ctxPatch: {
+        booking: { ...booking, step: "ask_email", timeZone: booking?.timeZone || timeZone },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+}
+
+  // 5) YES pero sin start/end
+const startISO = booking?.start_time || booking?.picked_start;
+const endISO = booking?.end_time || booking?.picked_end;
+
+if (!startISO || !endISO) {
+  return {
+    handled: true,
+    reply:
+      idioma === "en"
+        ? "Send me the date and time (YYYY-MM-DD HH:mm)."
+        : "Envíame la fecha y hora (YYYY-MM-DD HH:mm).",
+    ctxPatch: { booking: { ...booking, step: "ask_datetime" }, booking_last_touch_at: Date.now() },
+  };
+}
+
+  // 6) crear appointment pending idempotente (dedupe real)
   const customer_name = booking?.name || "Cliente";
-  const startISO = booking.start_time;
-  const endISO = booking.end_time;
 
   const pending = await createPendingAppointmentOrGetExisting({
     tenantId,

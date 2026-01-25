@@ -280,8 +280,8 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
           handled: true,
           reply:
             idioma === "en"
-              ? `${datePrefix}Perfect — I have ${pretty}. Do you want to confirm this time? (yes/no)`
-              : `${datePrefix}Perfecto — tengo ${pretty}. ¿Confirmas ese horario? (sí/no)`,
+              ? `Perfect, I have available ${pretty}. Do you want to confirm this time? (yes/no)`
+              : `Perfecto, tengo disponible ${pretty}. ¿Confirmas ese horario? (sí/no)`,
           ctxPatch: {
             booking: {
               ...booking,
