@@ -130,49 +130,43 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     };
   }
 
-  // ✅ 4) YES -> antes de reservar, pedir datos faltantes (nombre/email)
-if (yes) {
-  const missingName = !hydratedBooking?.name;
-  const missingEmail = !hydratedBooking?.email;
+  const isMeta = canal === "facebook" || canal === "instagram";
 
-  // Si falta el nombre, pídelo primero (aunque también falte email)
-  if (missingName) {
-    return {
-      handled: true,
-      reply:
-        idioma === "en"
-          ? "Perfect. Before I confirm it, what’s your full name?"
-          : "Perfecto. Antes de confirmarla, ¿cuál es tu nombre completo?",
-      ctxPatch: {
-        booking: {
-          ...hydratedBooking,
-          step: "ask_name",
-          timeZone: hydratedBooking?.timeZone || timeZone,
-        },
-        booking_last_touch_at: Date.now(),
-      },
-    };
-  }
+  // ✅ 4) YES -> si faltan datos, SIEMPRE manda a ask_all (1 solo paso)
+  if (yes) {
+    const missingName = !String(hydratedBooking?.name || "").trim();
+    const missingEmail = !String(hydratedBooking?.email || "").trim();
 
-  // Si ya hay nombre pero falta email
-  if (missingEmail) {
-    return {
-      handled: true,
-      reply:
-        idioma === "en"
-          ? "Thanks. What’s your email? (example: name@email.com)"
-          : "Gracias. ¿Cuál es tu email? (ej: nombre@email.com)",
-      ctxPatch: {
-        booking: {
-          ...hydratedBooking,
-          step: "ask_email",
-          timeZone: hydratedBooking?.timeZone || timeZone,
+    // WhatsApp NO necesita phone (ya lo tienes en `contacto`)
+    const missingPhone = isMeta && !String(hydratedBooking?.phone || "").trim();
+
+    if (missingName || missingEmail || missingPhone) {
+      // Mensaje: 1 solo paso. Ejemplos distintos para WA vs Meta
+      const example = isMeta
+        ? (idioma === "en"
+            ? "John Smith, john@email.com, +13055551234"
+            : "Juan Pérez, juan@email.com, +13055551234")
+        : (idioma === "en"
+            ? "John Smith, john@email.com"
+            : "Juan Pérez, juan@email.com");
+
+      return {
+        handled: true,
+        reply:
+          idioma === "en"
+            ? `Perfect. Before I book it, send ${isMeta ? "your full name, email, and phone" : "your full name and email"} in ONE message. Example: ${example}`
+            : `Perfecto. Antes de agendarla, envíame ${isMeta ? "tu nombre completo, email y teléfono" : "tu nombre completo y tu email"} en *un solo mensaje*. Ej: ${example}`,
+        ctxPatch: {
+          booking: {
+            ...hydratedBooking,
+            step: "ask_all",
+            timeZone: hydratedBooking?.timeZone || timeZone,
+          },
+          booking_last_touch_at: Date.now(),
         },
-        booking_last_touch_at: Date.now(),
-      },
-    };
+      };
+    }
   }
-}
 
   // 5) YES pero sin start/end
 const startISO = hydratedBooking?.start_time;
@@ -189,33 +183,14 @@ if (!startISO || !endISO) {
   };
 }
 
-  const isMeta = canal === "facebook" || canal === "instagram";
-
-  // ✅ Phone correcto:
-  // - WA: contacto (número real de WhatsApp)
-  // - IG/FB: booking.phone (capturado en ask_contact)
-  const customerPhone =
-    isMeta ? String(hydratedBooking?.phone || "").trim() : String(contacto || "").trim();
+  // ✅ Teléfono definitivo por canal:
+  // - WhatsApp: `contacto` ya ES el teléfono
+  // - IG/FB: `booking.phone` (capturado en ask_all)
+  const customerPhone = isMeta
+    ? String(hydratedBooking?.phone || "").trim()
+    : String(contacto || "").trim();
 
   const customerEmail = String(hydratedBooking?.email || "").trim() || null;
-
-  if (isMeta && !customerPhone) {
-    return {
-      handled: true,
-      reply:
-        idioma === "en"
-          ? "Before I confirm it, please send your phone number (include country code). Example: +1 305 555 1234"
-          : "Antes de confirmarla, envíame tu número de teléfono (con código de país). Ej: +1 305 555 1234",
-      ctxPatch: {
-        booking: {
-          ...hydratedBooking,
-          step: "ask_contact",
-          timeZone: hydratedBooking?.timeZone || timeZone,
-        },
-        booking_last_touch_at: Date.now(),
-      },
-    };
-  }
 
   // 6) crear appointment pending idempotente (dedupe real)
   const customer_name = hydratedBooking?.name || "Cliente";
@@ -223,8 +198,6 @@ if (!startISO || !endISO) {
     // ✅ Teléfono real:
   // - WhatsApp: contacto ES el teléfono
   // - IG/FB: contacto es senderId, el teléfono viene de booking.phone
-  const customer_phone =
-    canal === "whatsapp" ? contacto : (hydratedBooking?.phone || null);
 
   const pending = await createPendingAppointmentOrGetExisting({
     tenantId,

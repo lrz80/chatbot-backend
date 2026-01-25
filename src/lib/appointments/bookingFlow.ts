@@ -393,6 +393,7 @@ if (booking.step === "ask_daypart") {
 if (booking.step === "ask_all") {
   return handleAskAll({
     tenantId,
+    canal,
     idioma,
     userText,
     booking,

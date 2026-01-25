@@ -688,12 +688,19 @@ export function parseFullName(input: string) {
   return raw;
 }
 
-// "Juan Perez, juan@email.com, 2026-01-21 14:00"
-export function parseAllInOne(input: string, timeZone: string, durationMin: number, parseDateTimeExplicit: any) {
+// "Juan Perez, juan@email.com, +13055551234, 2026-01-21 14:00"
+export function parseAllInOne(
+  input: string,
+  timeZone: string,
+  durationMin: number,
+  parseDateTimeExplicit: any
+) {
   const raw = String(input || "").trim();
 
+  // 1) Email
   const email = raw.match(EMAIL_REGEX)?.[0]?.toLowerCase() || null;
 
+  // 2) DateTime explícito (YYYY-MM-DD HH:mm)
   const dtToken = extractDateTimeToken(raw);
   const dtParsed = dtToken ? parseDateTimeExplicit(dtToken, timeZone, durationMin) : null;
 
@@ -702,14 +709,25 @@ export function parseAllInOne(input: string, timeZone: string, durationMin: numb
   const endISO =
     (dtParsed as any)?.error === "PAST_SLOT" ? null : (dtParsed as any)?.endISO || null;
 
+  // 3) Phone (IMPORTANTE: antes de limpiar el nombre)
+  // Evita que parte del teléfono termine siendo "nombre"
+  const phone = parsePhone(raw);
+
+  // 4) Construir candidato de nombre removiendo tokens conocidos
   let nameCandidate = raw;
+
   if (email) nameCandidate = removeOnce(nameCandidate, email);
   if (dtToken) nameCandidate = removeOnce(nameCandidate, dtToken);
+  if (phone) nameCandidate = removeOnce(nameCandidate, phone);
 
   nameCandidate = cleanNameCandidate(nameCandidate);
 
+  // Limpieza de frases comunes / intención / ruido
   nameCandidate = nameCandidate
-    .replace(/\b(quiero|quisiera|me gustaria|hola|buenas|buenos|agendar|agenda|cita|consulta|demo|clase|reservar|reserva|turno|appointment|booking|schedule|para|por favor|pls|please)\b/gi, "")
+    .replace(
+      /\b(quiero|quisiera|me gustaria|hola|buenas|buenos|agendar|agenda|cita|consulta|demo|clase|reservar|reserva|turno|appointment|booking|schedule|para|por favor|pls|please)\b/gi,
+      ""
+    )
     .replace(/\s+/g, " ")
     .trim();
 
@@ -720,15 +738,18 @@ export function parseAllInOne(input: string, timeZone: string, durationMin: numb
 
   const name = nameCandidate ? parseFullName(nameCandidate) : null;
 
-  return { name, email, startISO, endISO };
+  return { name, email, phone, startISO, endISO };
 }
 
 export function parseNameEmailOnly(input: string) {
   const raw = String(input || "").trim();
+
   const email = raw.match(EMAIL_REGEX)?.[0]?.toLowerCase() || null;
+  const phone = parsePhone(raw);
 
   let nameCandidate = raw;
   if (email) nameCandidate = removeOnce(nameCandidate, email);
+  if (phone) nameCandidate = removeOnce(nameCandidate, phone);
 
   nameCandidate = cleanNameCandidate(nameCandidate)
     .replace(/\b(mi nombre es|soy|me llamo|name is|i am|hola|buenas|buenos|por favor|pls|please)\b/gi, "")
@@ -736,7 +757,7 @@ export function parseNameEmailOnly(input: string) {
     .trim();
 
   const name = nameCandidate ? parseFullName(nameCandidate) : null;
-  return { name, email };
+  return { name, email, phone };
 }
 
 export function buildAskAllMessage(idioma: "es" | "en", purpose?: string | null) {

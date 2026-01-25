@@ -22,6 +22,7 @@ type ParseDateTimeExplicitFn = (
 
 export type AskAllDeps = {
   tenantId: string;
+  canal: string;
   idioma: "es" | "en";
   userText: string;
 
@@ -41,6 +42,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
 }> {
   const {
     tenantId,
+    canal,
     idioma,
     userText,
     booking,
@@ -51,12 +53,14 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
     parseDateTimeExplicit,
   } = deps;
 
+  const isMeta = canal === "facebook" || canal === "instagram";
   // ✅ Hydrate: preservar slot elegido aunque venga en picked_*
   const hydratedBooking = {
     ...booking,
     timeZone,
     start_time: booking?.start_time || booking?.picked_start || null,
     end_time: booking?.end_time || booking?.picked_end || null,
+    phone: booking?.phone || null,
   };
 
   const hasChosenSlot = !!hydratedBooking.start_time && !!hydratedBooking.end_time;
@@ -89,6 +93,16 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
   }
 
   const parsed = parseAllInOne(userText, timeZone, durationMin, parseDateTimeExplicit);
+
+  // ✅ Merge: lo que llega del usuario + lo que ya teníamos
+  const name = (parsed?.name || hydratedBooking?.name || "").trim() || null;
+  const email = (parsed?.email || hydratedBooking?.email || "").trim() || null;
+
+  // phone solo aplica a Meta (IG/FB). En WhatsApp no lo pedimos aquí.
+  const phone =
+    isMeta
+      ? ((parsed?.phone || hydratedBooking?.phone || "").trim() || null)
+      : (hydratedBooking?.phone || null);
 
   // ✅ Si vino fecha/hora pero era en el pasado, dilo explícitamente
   const dtToken = extractDateTimeToken(userText);
@@ -198,7 +212,42 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
 
   // ✅ Caso CLAVE: ya existe slot elegido (start/end), pero el usuario mandó nombre+email
   // (por ejemplo viene de confirm -> ask_all). No debemos pedir fecha/hora otra vez.
-  if (hasChosenSlot && parsed?.name && parsed?.email && !parsed?.startISO) {
+  if (hasChosenSlot && (name || email || phone) && !parsed?.startISO) {
+    const missingName = !name;
+    const missingEmail = !email;
+    const missingPhone = isMeta && !phone;
+
+    // Si aún falta algo, pide SOLO el faltante y TE QUEDAS EN ask_all
+    if (missingName || missingEmail || missingPhone) {
+      const want =
+        missingName ? (idioma === "en" ? "your full name" : "tu nombre completo")
+        : missingEmail ? (idioma === "en" ? "your email" : "tu email")
+        : (idioma === "en" ? "your phone number (with country code)" : "tu teléfono (con código de país)");
+
+      const ex =
+        missingName ? (idioma === "en" ? "John Smith" : "Juan Pérez")
+        : missingEmail ? "name@email.com"
+        : "+13055551234";
+
+      return {
+        handled: true,
+        reply: idioma === "en"
+          ? `I’m just missing ${want}. Example: ${ex}`
+          : `Solo me falta ${want}. Ej: ${ex}`,
+        ctxPatch: {
+          booking: {
+            ...hydratedBooking,
+            step: "ask_all",
+            name,
+            email,
+            phone,
+          },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    // ✅ Ya tengo todo lo necesario -> vuelve a confirm sin fricción
     const whenTxt = formatSlotHuman({ startISO: hydratedBooking.start_time, timeZone, idioma });
 
     return {
@@ -207,23 +256,23 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
         idioma === "en"
           ? `Perfect — I’ve got your details. To confirm ${whenTxt}, reply YES or NO.`
           : `Perfecto — ya tengo tus datos. Para confirmar ${whenTxt}, responde SI o NO.`,
-      ctxPatch: {
-        booking: {
-          ...hydratedBooking,
-          step: "confirm",
-          name: parsed.name,
-          email: parsed.email,
-          // conservar start/end ya elegidos
-          start_time: hydratedBooking.start_time,
-          end_time: hydratedBooking.end_time,
+        ctxPatch: {
+          booking: {
+            ...hydratedBooking,
+            step: "confirm",
+            name,
+            email,
+            phone,
+            start_time: hydratedBooking.start_time,
+            end_time: hydratedBooking.end_time,
+          },
+          booking_last_touch_at: Date.now(),
         },
-        booking_last_touch_at: Date.now(),
-      },
-    };
-  }
+      };
+    }
 
   // ✅ Si vino completo, vamos directo a confirm
-  if (parsed?.name && parsed?.email && parsed?.startISO && parsed?.endISO) {
+  if (name && email && parsed?.startISO && parsed?.endISO && (!isMeta || phone)) {
     const whenTxt = formatSlotHuman({ startISO: parsed.startISO, timeZone, idioma });
     return {
       handled: true,
@@ -238,6 +287,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
           timeZone,
           name: parsed.name,
           email: parsed.email,
+          phone,
           start_time: parsed.startISO,
           end_time: parsed.endISO,
         },
@@ -247,43 +297,39 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
   }
 
   // ✅ Fallbacks: pedir SOLO lo que falta (en orden)
-  if (!parsed?.name) {
-    return {
-      handled: true,
-      reply:
-        idioma === "en"
-          ? "I’m missing your first and last name (example: John Smith)."
-          : "Me falta tu nombre y apellido (ej: Juan Pérez).",
-      ctxPatch: {
-        booking: {
-          ...hydratedBooking,
-          step: "ask_name",
-          timeZone,
-          email: parsed?.email || hydratedBooking?.email || null,
-        },
-        booking_last_touch_at: Date.now(),
-      },
-    };
-  }
+  // ✅ Fallbacks: pedir SOLO lo que falta, pero SIEMPRE en ask_all
+const missingName = !name;
+const missingEmail = !email;
+const missingPhone = isMeta && !phone;
 
-  if (!parsed?.email) {
-    return {
-      handled: true,
-      reply:
-        idioma === "en"
-          ? "I’m missing your email (example: name@email.com)."
-          : "Me falta tu email (ej: nombre@email.com).",
-      ctxPatch: {
-        booking: {
-          ...hydratedBooking,
-          step: "ask_email",
-          timeZone,
-          name: parsed?.name || hydratedBooking?.name || null,
-        },
-        booking_last_touch_at: Date.now(),
+if (missingName || missingEmail || missingPhone) {
+  const want =
+    missingName ? (idioma === "en" ? "your full name" : "tu nombre completo")
+    : missingEmail ? (idioma === "en" ? "your email" : "tu email")
+    : (idioma === "en" ? "your phone number (with country code)" : "tu teléfono (con código de país)");
+
+  const ex =
+    missingName ? (idioma === "en" ? "John Smith" : "Juan Pérez")
+    : missingEmail ? "name@email.com"
+    : "+13055551234";
+
+  return {
+    handled: true,
+    reply: idioma === "en"
+      ? `I’m just missing ${want}. Example: ${ex}`
+      : `Solo me falta ${want}. Ej: ${ex}`,
+    ctxPatch: {
+      booking: {
+        ...hydratedBooking,
+        step: "ask_all",
+        name,
+        email,
+        phone,
       },
-    };
-  }
+      booking_last_touch_at: Date.now(),
+    },
+  };
+}
 
   // Falta fecha/hora
   return {
@@ -297,8 +343,9 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
         ...hydratedBooking,
         step: "ask_datetime",
         timeZone,
-        name: parsed?.name || hydratedBooking?.name || null,
-        email: parsed?.email || hydratedBooking?.email || null,
+        name,
+        email,
+        phone,
       },
       booking_last_touch_at: Date.now(),
     },

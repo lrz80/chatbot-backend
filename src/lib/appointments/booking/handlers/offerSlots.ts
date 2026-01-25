@@ -461,38 +461,18 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
 
       const requirePhone = deps.canal === "facebook" || deps.canal === "instagram"; // IG/FB sí; WA normalmente no
       const missingName = !nextBooking?.name;
-
-      // Email/phone faltantes
       const missingEmail = !nextBooking?.email;
+      const missingPhone = !nextBooking?.phone; // si no estás usando booking.phone todavía, lo agregamos en ask_all
 
-      // Si quieres SIEMPRE pedir teléfono también en WhatsApp para mejorar lead quality,
-      // cambia esta línea a: const missingPhone = !nextBooking?.phone;
-      const missingPhone = requirePhone && !nextBooking?.phone;
-
-      if (missingName) {
+      if (missingName || missingEmail || missingPhone) {
         return {
           handled: true,
           reply:
             idioma === "en"
-              ? `Perfect — I can do ${whenTxt}. What’s your full name?`
-              : `Perfecto — puedo ${whenTxt}. ¿Cuál es tu nombre completo?`,
+              ? `Perfect — I can do ${whenTxt}. Before I book it, send everything in ONE message: full name, email, and phone. Example: John Smith, john@email.com, +13055551234`
+              : `Perfecto — puedo ${whenTxt}. Antes de agendarla, envíame todo en *un solo mensaje*: nombre completo, email y teléfono. Ej: Juan Pérez, juan@email.com, +13055551234`,
           ctxPatch: {
-            booking: { ...nextBooking, step: "ask_name" },
-            booking_last_touch_at: Date.now(),
-          },
-        };
-      }
-
-      // ✅ Si falta email o phone -> UN SOLO PASO
-      if (missingEmail || missingPhone) {
-        return {
-          handled: true,
-          reply:
-            idioma === "en"
-              ? `Perfect — I can do ${whenTxt}. Send your email ${missingPhone ? "and phone" : ""} in ONE message (example: john@email.com${missingPhone ? ", +13055551234" : ""}).`
-              : `Perfecto — puedo ${whenTxt}. Envíame tu email${missingPhone ? " y tu teléfono" : ""} en *un solo mensaje* (ej: nombre@email.com${missingPhone ? ", +13055551234" : ""}).`,
-          ctxPatch: {
-            booking: { ...nextBooking, step: "ask_email_phone" },
+            booking: { ...nextBooking, step: "ask_all" },
             booking_last_touch_at: Date.now(),
           },
         };
