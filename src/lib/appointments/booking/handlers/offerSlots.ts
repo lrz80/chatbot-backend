@@ -10,6 +10,7 @@ import {
   wantsToChangeTopic,
   extractTimeOnlyToken,
   extractTimeConstraint,
+  extractDateOnlyToken,
 } from "../text";
 
 import {
@@ -186,39 +187,14 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     if (hhmm) {
     const tz = booking.timeZone || timeZone;
 
-    // 1) intenta con los slots actuales (rápido)
-    const nearLocal = sortSlotsAsc(
-        filterSlotsNearTime({
-        slots,
-        timeZone: tz,
-        hhmm,
-        windowMinutes: 150, // ±2.5h
-        max: 5,
-        })
-    );
-
-    if (nearLocal.length) {
-        const ctxDate = getCtxDateFromBookingOrSlots(slots, booking, tz);
-        return {
-        handled: true,
-        reply: renderSlotsMessage({ idioma, timeZone: tz, slots: nearLocal }),
-        ctxPatch: {
-            booking: {
-            ...booking,
-            step: "offer_slots",
-            timeZone: tz,
-            slots: nearLocal,
-            last_offered_date: ctxDate || (booking as any)?.last_offered_date || null,
-            date_only: ctxDate || (booking as any)?.date_only || null,
-            },
-            booking_last_touch_at: Date.now(),
-        },
-        };
-    }
-
     // 2) si no apareció (porque booking.slots está recortado), re-consulta una ventana real
     if (hours) {
-        const ctxDate = getCtxDateFromBookingOrSlots(slots, booking, tz);
+        // ✅ si el usuario escribió una fecha ("lunes", "mañana", "26 ene"), úsala por encima del ctx
+        const dateFromText = extractDateOnlyToken(userText, tz);
+
+        const ctxDate =
+        dateFromText ||
+        getCtxDateFromBookingOrSlots(slots, booking, tz);
 
         if (ctxDate) {
         const h = Number(hhmm.slice(0, 2));
