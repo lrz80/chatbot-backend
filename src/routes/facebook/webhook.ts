@@ -41,6 +41,7 @@ import { scheduleFollowUpIfEligible, cancelPendingFollowUps } from "../../lib/fo
 import crypto from "crypto";
 import { sendCapiEvent } from "../../services/metaCapi";
 import { bookingFlowMvp } from "../../lib/appointments/bookingFlow";
+import { isAmbiguousLangText } from "../../lib/appointments/booking/text";
 
 
 type CanalEnvio = "facebook" | "instagram";
@@ -804,12 +805,6 @@ router.post("/api/facebook/webhook", async (req, res) => {
 
         if (!estaActiva) continue;
 
-        // Idioma (igual WA)
-        const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
-        const tenantBase: "es" | "en" = normalizeLang(tenant?.idioma || "es");
-
-        let idiomaDestino: "es" | "en" = tenantBase;
-
         const isNewLead = await ensureClienteBase(tenantId, canalEnvio, senderId);
 
         // ===============================
@@ -866,8 +861,16 @@ router.post("/api/facebook/webhook", async (req, res) => {
           console.warn("⚠️ [META] cancelPendingFollowUps failed:", e?.message);
         }
 
-        if (isNumericOnly) {
+        const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
+        const isAmbiguous = isNumericOnly || isAmbiguousLangText(userInput);
+
+        const tenantBase: "es" | "en" = normalizeLang(tenant?.idioma || "es");
+        let idiomaDestino: "es" | "en" = tenantBase;
+
+        if (isAmbiguous) {
+          // ✅ NO detectar idioma con "ok 3", "2pm", "👍", etc.
           idiomaDestino = await getIdiomaClienteDB(tenantId, canalEnvio, senderId, tenantBase);
+          console.log(`🌍 [META] idiomaDestino= ${idiomaDestino} fuente= DB (ambiguous)`);
         } else {
           let detectado: string | null = null;
           try {
@@ -876,6 +879,7 @@ router.post("/api/facebook/webhook", async (req, res) => {
           const normalizado: "es" | "en" = normalizeLang(detectado || tenantBase);
           await upsertIdiomaClienteDB(tenantId, canalEnvio, senderId, normalizado);
           idiomaDestino = normalizado;
+          console.log(`🌍 [META] idiomaDestino= ${idiomaDestino} fuente= userInput`);
         }
 
         // Prompt base + bienvenida (prioriza meta_configs)
@@ -1226,16 +1230,25 @@ router.post("/api/facebook/webhook", async (req, res) => {
               console.warn("⚠️ [META] Error enviando CAPI evento #3 Lead fuerte:", e?.message);
             }
 
-            // ✅ FOLLOW-UP (programar 1 pendiente si aplica) — SOLO WA/FB/IG
+            const bookingStep = (convoCtx as any)?.booking?.step;
+            const inBooking = bookingStep && bookingStep !== "idle";
+            const bookingJustCompleted = !!(convoCtx as any)?.booking_completed;
+
+            const skipFollowUp =
+              inBooking ||
+              bookingJustCompleted ||
+              finalIntent === "agendar_cita";
+
             try {
               await scheduleFollowUpIfEligible({
-                tenant,                 // el objeto tenant que ya tienes arriba
-                canal: canalEnvio,       // "facebook" | "instagram" (compat con tu scheduler)
-                contactoNorm: senderId,  // PSID/IGSID
+                tenant,
+                canal: canalEnvio,
+                contactoNorm: senderId,
                 idiomaDestino,
                 intFinal: finalIntent || null,
                 nivel: finalNivel,
                 userText: userInput,
+                skip: skipFollowUp, // ✅ IGUAL WA
               });
             } catch (e: any) {
               console.warn("⚠️ scheduleFollowUpIfEligible failed:", e?.message);
@@ -1316,26 +1329,6 @@ router.post("/api/facebook/webhook", async (req, res) => {
           console.warn("⚠️ [META] applyEmotionTriggers failed:", e?.message);
         }
 
-        // 👋 GREETING GATE (igual WA defensivo)
-        if (
-          saludoPuroRegex.test(userInput) &&
-          !looksLikeBookingPayload(userInput) // ✅ evita bienvenida si mandan datos
-        ) {
-          transition({
-            step: "answer",
-            patchCtx: {
-              reset_reason: "greeting",
-              last_user_text: userInput,
-              last_bot_action: "welcome_sent",
-              last_reply_source: "welcome_gate",
-              last_assistant_text: bienvenida,
-            },
-          });
-
-          await replyAndExit(bienvenida, "welcome_gate", "saludo");
-          continue;
-        }
-
         // ===============================
         // 📅 BOOKING GATE (Google Calendar) — ANTES del SM/LLM
         // ===============================
@@ -1376,6 +1369,60 @@ router.post("/api/facebook/webhook", async (req, res) => {
             );
             continue; // 👈 importantísimo en el loop Meta
           }
+        }
+
+        // ===============================
+        // ✅ POST-BOOKING COURTESY GUARD (igual WA)
+        // ===============================
+        {
+          const lastDoneAt = (convoCtx as any)?.booking_last_done_at;
+          const completedAtISO = (convoCtx as any)?.booking_completed_at;
+
+          const lastMs =
+            typeof lastDoneAt === "number"
+              ? lastDoneAt
+              : (typeof completedAtISO === "string" ? Date.parse(completedAtISO) : null);
+
+          if (lastMs && Number.isFinite(lastMs)) {
+            const seconds = (Date.now() - lastMs) / 1000;
+
+            if (seconds >= 0 && seconds < 10 * 60) {
+              const t = (userInput || "").toString().trim().toLowerCase();
+
+              const courtesy =
+                /^(gracias|muchas gracias|thank you|thanks|ok|okay|perfecto|listo|vale|dale|bien|genial|super|cool)$/i.test(t);
+
+              if (courtesy) {
+                const replyText = idiomaDestino === "en" ? "You’re welcome." : "A la orden.";
+                await replyAndExit(replyText, "post_booking_courtesy", "cortesia");
+                continue;
+              }
+            }
+          }
+        }
+
+        const bookingStep0 = (convoCtx as any)?.booking?.step;
+        const inBooking0 = bookingStep0 && bookingStep0 !== "idle";
+
+        // 👋 GREETING GATE (igual WA defensivo)
+        if (
+          !inBooking0 &&
+          saludoPuroRegex.test(userInput) &&
+          !looksLikeBookingPayload(userInput)
+        ) {
+          transition({
+            step: "answer",
+            patchCtx: {
+              reset_reason: "greeting",
+              last_user_text: userInput,
+              last_bot_action: "welcome_sent",
+              last_reply_source: "welcome_gate",
+              last_assistant_text: bienvenida,
+            },
+          });
+
+          await replyAndExit(bienvenida, "welcome_gate", "saludo");
+          continue;
         }
 
         // ===============================
