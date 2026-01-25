@@ -30,7 +30,6 @@ import {
   MIN_LEAD_MINUTES,
   parseDateTimeExplicit,
   isWithinBusinessHours,
-  formatSlotHuman,
 } from "./booking/time";
 import { extractBusyBlocks } from "./booking/freebusy";
 import { handleOfferSlots } from "./booking/handlers/offerSlots";
@@ -356,6 +355,7 @@ if (booking.step === "idle") {
     timeZone,
     wantsBooking,
     detectPurpose,
+    durationMin,
   });
 }
 

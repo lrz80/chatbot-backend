@@ -31,6 +31,35 @@ function inferDaypartFromHHMM(hhmm: string): "morning" | "afternoon" {
   return h >= 12 ? "afternoon" : "morning";
 }
 
+function normalizeHHMMNatural(userText: string, hhmm: string | null): string | null {
+  if (!hhmm) return null;
+
+  const s = String(userText || "").toLowerCase();
+
+  // Si el usuario ya especificó am/pm o "pm" o "a.m/p.m", NO tocamos nada
+  const hasAmPm = /\b(am|pm|a\.m\.|p\.m\.)\b/.test(s);
+  if (hasAmPm) return hhmm;
+
+  // Si el usuario da señales de mañana, NO convertir a PM
+  const morningCue = /\b(ma[nñ]ana|temprano|morning|a\s+primera\s+hora)\b/.test(s);
+  if (morningCue) return hhmm;
+
+  // Si el usuario usa "a las / para las / at / for" y la hora es 1..7,
+  // en español casi siempre significa PM (3 -> 15:00)
+  const atCue = /\b(a\s+las|a\s+la|para\s+las|para\s+la|at|for)\b/.test(s);
+  if (!atCue) return hhmm;
+
+  const h = Number(hhmm.slice(0, 2));
+  const m = hhmm.slice(3, 5);
+
+  if (h >= 1 && h <= 7) {
+    const hh = String(h + 12).padStart(2, "0");
+    return `${hh}:${m}`;
+  }
+
+  return hhmm;
+}
+
 function weekdayKeyFromDate(dt: DateTime) {
   // Luxon weekday: 1=Mon ... 7=Sun
   const map = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
@@ -103,37 +132,41 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
   }
 
   // ✅ Precalcular hhmm desde el texto (para que dateOnly no se trague la hora)
-let hhmm =
-  extractTimeOnlyToken(userText) ||
-  (() => {
-    const c: any = extractTimeConstraint(userText);
-    return typeof c?.hhmm === "string" ? c.hhmm : null;
-  })();
+  let hhmm =
+    extractTimeOnlyToken(userText) ||
+    (() => {
+      const c: any = extractTimeConstraint(userText);
+      return typeof c?.hhmm === "string" ? c.hhmm : null;
+    })();
+
+    // ✅ NUEVO: normaliza "a las 3" -> 15:00 cuando aplica
+    hhmm = normalizeHHMMNatural(userText, hhmm);
+    console.log("[ASK_DAYPART hhmm normalized]", { userText, hhmm });
 
     // ✅ Si el usuario menciona una fecha ("para el 25", "martes", "mañana", etc.)
-  // en vez de daypart, debemos continuar el flujo ofreciendo slots para esa fecha.
-  const dateOnly = extractDateOnlyToken(userText, timeZone);
+    // en vez de daypart, debemos continuar el flujo ofreciendo slots para esa fecha.
+    const dateOnly = extractDateOnlyToken(userText, timeZone);
 
     // ✅ Opción B: si el usuario trae FECHA + HORA (ej "lunes a las 2pm"),
-  // intentamos esa hora exacta primero; si no existe, damos las más cercanas.
-  if (dateOnly && hhmm) {
-    // Si no hay horario configurado, pedir todo manualmente pero guardar date_only
-    if (!hours) {
-      return {
-        handled: true,
-        reply: buildAskAllMessage(idioma, booking?.purpose || null),
-        ctxPatch: {
-          booking: {
-            ...booking,
-            step: "ask_all",
-            timeZone,
-            date_only: dateOnly,
-            daypart: inferDaypartFromHHMM(hhmm),
+    // intentamos esa hora exacta primero; si no existe, damos las más cercanas.
+    if (dateOnly && hhmm) {
+      // Si no hay horario configurado, pedir todo manualmente pero guardar date_only
+      if (!hours) {
+        return {
+          handled: true,
+          reply: buildAskAllMessage(idioma, booking?.purpose || null),
+          ctxPatch: {
+            booking: {
+              ...booking,
+              step: "ask_all",
+              timeZone,
+              date_only: dateOnly,
+              daypart: inferDaypartFromHHMM(hhmm),
+            },
+            booking_last_touch_at: Date.now(),
           },
-          booking_last_touch_at: Date.now(),
-        },
-      };
-    }
+        };
+      }
 
     const tz = timeZone;
     const now = DateTime.now().setZone(tz);

@@ -489,6 +489,43 @@ export function extractTimeOnlyToken(raw: string): string | null {
   return null;
 }
 
+export function buildDateTimeFromText(
+  text: string,
+  timeZone: string,
+  durationMin: number
+): { startISO: string; endISO: string } | null {
+  const dateISO = extractDateOnlyToken(text, timeZone);
+  const hhmm = extractTimeOnlyToken(text);
+
+  if (!dateISO || !hhmm) return null;
+
+  // Parse hh:mm
+  const [hStr, mStr] = hhmm.split(":");
+  let hh = Number(hStr);
+  const mm = Number(mStr);
+
+  // Heurística AM/PM cuando NO hay señal explícita:
+  // Si el texto NO tiene am/pm y el usuario dijo "a las/para las" con 1-7 -> asumir PM (15:00-19:00)
+  const s = String(text || "").toLowerCase();
+  const hasAmPm = /\b(am|pm|a\.m\.|p\.m\.)\b/.test(s);
+  const hasAtCue = /\b(a\s+las|a\s+la|para\s+las|para\s+la)\b/.test(s);
+
+  if (!hasAmPm && hasAtCue && hh >= 1 && hh <= 7) {
+    hh += 12; // 3 -> 15
+  }
+
+  const start = DateTime.fromISO(`${dateISO}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00`, { zone: timeZone });
+
+  if (!start.isValid) return null;
+
+  // (Opcional) evita slots en el pasado
+  const now = DateTime.now().setZone(timeZone);
+  if (start < now.minus({ minutes: 1 })) return null;
+
+  const end = start.plus({ minutes: durationMin });
+  return { startISO: start.toISO()!, endISO: end.toISO()! };
+}
+
 export type TimeConstraint =
   | { kind: "after"; hhmm: string }      // "después de las 4"
   | { kind: "before"; hhmm: string }     // "antes de las 4"
