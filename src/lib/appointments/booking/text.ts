@@ -468,11 +468,11 @@ export function extractTimeOnlyToken(raw: string): string | null {
     return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
   }
 
-  // ✅ 3) "a las 5" / "a las 5:30"
-  m = s.match(/\ba\s+las\s+(1[0-2]|[1-9]|1\d|2[0-3])(?::([0-5]\d))?\b/);
+  // 3) "a la 1", "a las 5", "a la 1:30", "a las 5:30"
+  m = s.match(/\ba\s+la(s)?\s+(1[0-2]|[1-9]|1\d|2[0-3])(?::([0-5]\d))?\b/);
   if (m) {
-    const hh = Number(m[1]);
-    const mm = m[2] ? Number(m[2]) : 0;
+    const hh = Number(m[2]);
+    const mm = m[3] ? Number(m[3]) : 0;
     return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
   }
 
@@ -509,7 +509,7 @@ export function buildDateTimeFromText(
   // Si el texto NO tiene am/pm y el usuario dijo "a las/para las" con 1-7 -> asumir PM (15:00-19:00)
   const s = String(text || "").toLowerCase();
   const hasAmPm = /\b(am|pm|a\.m\.|p\.m\.)\b/.test(s);
-  const hasAtCue = /\b(a\s+las|a\s+la|para\s+las|para\s+la)\b/.test(s);
+  const hasAtCue = /\b(a\s+la(s)?|para\s+la(s)?)\b/.test(s);
 
   if (!hasAmPm && hasAtCue && hh >= 1 && hh <= 7) {
     hh += 12; // 3 -> 15
