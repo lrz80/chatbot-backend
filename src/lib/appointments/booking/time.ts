@@ -171,11 +171,17 @@ export function renderSlotsMessage(opts: {
 }
 
 export function parseSlotChoice(text: string, max: number): number | null {
-  const t = String(text || "").trim();
-  const m = t.match(/^(\d{1,2})$/);
+  const raw = String(text || "").trim();
+
+  // Aseguramos que sea SOLO un número aislado.
+  // No debe contener letras, "pm", "am", "a las", etc.
+  // Limpia espacios, puntos o paréntesis, pero nada más.
+  const m = raw.match(/^(?:opci[oó]n|option)?\s*([1-9])\s*[).]?\s*$/i);
   if (!m) return null;
+
   const n = Number(m[1]);
   if (!Number.isFinite(n) || n < 1 || n > max) return null;
+
   return n;
 }
 

@@ -424,6 +424,21 @@ export function extractDateOnlyToken(input: string, timeZone?: string): string |
 export function extractTimeOnlyToken(raw: string): string | null {
   const s = String(raw || "").toLowerCase().trim();
 
+  // ✅ Si ya hay señal clara de hora (am/pm o HH:mm), no corras el filtro de choice
+  const hasExplicitTimeSignal =
+    /\b(am|pm|a\.m\.|p\.m\.)\b/i.test(s) || /\b([01]?\d|2[0-3]):([0-5]\d)\b/.test(s);
+
+  if (!hasExplicitTimeSignal) {
+    const looksLikeChoice =
+      /\b(ok|okay|vale|listo|perfecto|opcion|opción|option|elige|escojo|pick|choose|la|el|nro|num|numero|número|#)\s*(\d)\b/.test(s) ||
+      /^\s*(\d)\s*$/.test(s);
+
+    if (looksLikeChoice) {
+      const n = Number((s.match(/\b(\d)\b/) || [])[1]);
+      if (n >= 1 && n <= 5) return null;
+    }
+  }
+
   // ✅ 0) Si parece selección de opción (ok 3, opción 3, la 3, #3, etc) -> NO es hora
   // Nota: aquí deliberadamente solo tomamos 1-5 porque tu UI muestra 1-5
   const looksLikeChoice =
