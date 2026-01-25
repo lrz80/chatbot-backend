@@ -101,6 +101,42 @@ export function parseDateTimeExplicit(input: string, timeZone: string, durationM
   return { startISO, endISO, timeZone };
 }
 
+function isSameLocalDay(aISO: string, bISO: string, tz: string) {
+  const a = DateTime.fromISO(aISO, { zone: tz });
+  const b = DateTime.fromISO(bISO, { zone: tz });
+  if (!a.isValid || !b.isValid) return false;
+  return a.toFormat("yyyy-LL-dd") === b.toFormat("yyyy-LL-dd");
+}
+
+function allSlotsSameDay(slots: Array<{ startISO: string }>, tz: string) {
+  if (!slots.length) return false;
+  const first = slots[0].startISO;
+  return slots.every((s) => isSameLocalDay(first, s.startISO, tz));
+}
+
+function formatTimeOnly(opts: { startISO: string; timeZone: string; idioma: "es" | "en" }) {
+  const { startISO, timeZone, idioma } = opts;
+  const dt = DateTime.fromISO(startISO, { zone: timeZone });
+  if (!dt.isValid) return startISO;
+
+  // 12h con am/pm (EN) y "p. m." (ES) como en tu screenshot
+  const fmt = "h:mm a";
+  return dt.setLocale(idioma === "en" ? "en" : "es").toFormat(fmt);
+}
+
+function formatDayLabelNoYear(opts: { startISO: string; timeZone: string; idioma: "es" | "en" }) {
+  const { startISO, timeZone, idioma } = opts;
+  const dt = DateTime.fromISO(startISO, { zone: timeZone });
+  if (!dt.isValid) return "";
+
+  if (idioma === "en") {
+    // Wed, Jan 28
+    return dt.setLocale("en").toFormat("ccc, LLL d");
+  }
+  // mié 28 ene
+  return dt.setLocale("es").toFormat("ccc d LLL");
+}
+
 export function formatSlotHuman(opts: {
   startISO: string;
   timeZone: string;
@@ -112,10 +148,10 @@ export function formatSlotHuman(opts: {
   if (!dt.isValid) return startISO;
 
   if (idioma === "en") {
-    return dt.setLocale("en").toFormat("LLL d, yyyy 'at' h:mm a");
+    return dt.setLocale("en").toFormat("LLL d 'at' h:mm a"); // sin año
   }
 
-  return dt.setLocale("es").toFormat("d LLL yyyy, h:mm a");
+  return dt.setLocale("es").toFormat("d LLL, h:mm a"); // sin año
 }
 
 export function renderSlotsMessage(opts: {
@@ -123,10 +159,9 @@ export function renderSlotsMessage(opts: {
   timeZone: string;
   slots: Array<{ startISO: string; endISO: string }>;
 
-  // ✅ nuevos
-  intro?: boolean; // default true
+  intro?: boolean;
   style?: "default" | "closest" | "more" | "sameDay" | "neutral";
-  ask?: "number" | "anything"; // default number
+  ask?: "number" | "anything";
 }): string {
   const {
     idioma,
@@ -143,17 +178,22 @@ export function renderSlotsMessage(opts: {
       : "Lo siento! No encontré disponibilidad para esa fecha. ¿Qué otro día te funciona?";
   }
 
+  const sameDay = allSlotsSameDay(slots, timeZone);
+  const dayLabel = sameDay ? formatDayLabelNoYear({ startISO: slots[0].startISO, timeZone, idioma }) : "";
+
   const lines = slots.map((s, i) => {
-    const human = formatSlotHuman({ startISO: s.startISO, timeZone, idioma });
+    const human = sameDay
+      ? formatTimeOnly({ startISO: s.startISO, timeZone, idioma }) // ✅ solo hora
+      : formatSlotHuman({ startISO: s.startISO, timeZone, idioma }); // ✅ fecha+hora (sin año)
     return `${i + 1}) ${human}`;
   });
 
-  // ✅ intros más humanos (y opcionales)
+  // ✅ Copy más humano
   const introEnMap: Record<string, string> = {
-    default: "Sure — here are a few times that are available:",
-    closest: "I'm sorry! That exact time isn’t available. These are the closest options:",
+    default: "Sure — here are a few available times:",
+    closest: "I'm sorry! That exact time isn’t available. Here are the closest options:",
     more: "No problem — here are a few more options:",
-    sameDay: "Here are the available times for that day:",
+    sameDay: dayLabel ? `Here are the available times for ${dayLabel}:` : "Here are the available times for that day:",
     neutral: "",
   };
 
@@ -161,7 +201,7 @@ export function renderSlotsMessage(opts: {
     default: "Claro — aquí tienes algunos horarios disponibles:",
     closest: "Lo siento! Esa hora exacta no está disponible. Estas son las opciones más cercanas:",
     more: "Perfecto — aquí van más opciones:",
-    sameDay: "Estos son los horarios disponibles para ese día:",
+    sameDay: dayLabel ? `Estos son los horarios disponibles para ${dayLabel}:` : "Estos son los horarios disponibles para ese día:",
     neutral: "",
   };
 
@@ -174,7 +214,7 @@ export function renderSlotsMessage(opts: {
     ask === "anything"
       ? idioma === "en"
         ? `Please Reply with a number (1-${slots.length}) or tell me a time (like "2pm" / "14:00").`
-        : `Por favor Responde con un número (1-${slots.length}) o dime una hora (como "2pm" / "14:00").`
+        : `Por favorResponde con un número (1-${slots.length}) o dime una hora (como "2pm" / "14:00").`
       : idioma === "en"
         ? `Please Reply with the number you prefer (1-${slots.length}).`
         : `Por favor Responde con el número que prefieras (1-${slots.length}).`;
