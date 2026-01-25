@@ -150,16 +150,20 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         };
       }
   
-      // Si pregunta por horarios estando en offer_slots, simplemente re-muestra opciones
-      if (/\b(horario|horarios|hours|available)\b/i.test(t)) {
-  
-      return {
+      // ⚠️ Solo repetir lista si NO está pidiendo una hora específica (2pm, 14:00, 3pm)
+      const hasExplicitHour =
+      extractTimeOnlyToken(userText) ||
+      extractTimeConstraint(userText);
+
+      if (!hasExplicitHour && /\b(horario|horarios|hours|available|disponible|disponibles)\b/i.test(t)) {
+        return {
           handled: true,
-          reply: renderSlotsMessage({ idioma, timeZone: booking.timeZone || timeZone, slots }),
-          ctxPatch: { 
-              booking,
-              booking_last_touch_at: Date.now(), 
-          },
+          reply: renderSlotsMessage({
+            idioma,
+            timeZone: booking.timeZone || timeZone,
+            slots
+          }),
+          ctxPatch: { booking, booking_last_touch_at: Date.now() },
         };
       }
   
