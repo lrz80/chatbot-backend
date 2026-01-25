@@ -253,8 +253,25 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   
     const hhmm = extractTimeOnlyToken(userText);
 
-    if (hhmm) {
+    // Detectar horas sin am/pm ("a las 3", "las 4", "para las 11")
+    let hhmmFallback = null;
+    const mSimple = userText.match(/\b(?:a\s*las|a\s*la|las)\s*(\d{1,2})(?:[:.](\d{2}))?\b/i);
 
+    if (mSimple) {
+    let h = Number(mSimple[1]);
+    let mm = Number(mSimple[2] || "0");
+
+    // Si existe daypart -> infiere AM/PM
+    if (daypart === "afternoon" && h >= 1 && h <= 11) h += 12;
+    if (daypart === "morning" && h === 12) h = 0;
+
+    hhmmFallback = `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+    }
+
+    // final
+    const hhmmFixed = hhmm || hhmmFallback;
+
+    if (hhmmFixed) {
       if (!hours) {
         return {
           handled: true,
@@ -313,7 +330,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
 
       const exact = allDaySlots.find((s) => {
         const start = DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm");
-        return start === hhmm;
+        return start === hhmmFixed;
       });
 
       // ✅ Si existe EXACTO -> CONFIRM (opción B)
@@ -350,7 +367,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         filterSlotsNearTime({
         slots: allDaySlots,     // ✅ usa TODO el día, no booking.slots recortado
         timeZone: tz,
-        hhmm,
+        hhmm: hhmmFixed, 
         windowMinutes: 180,     // ±3h
         max: 5,
         })
@@ -382,17 +399,16 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     }
     
     // ✅ Solo interpretamos "número de opción" si NO hay hora explícita
-    const hasExplicitTime =
-      !!extractTimeOnlyToken(userText) || !!extractTimeConstraint(userText);
+    const hasExplicitTime = !!hhmmFixed || !!extractTimeConstraint(userText);
 
     // ✅ Solo interpretamos "número de opción" si NO hay hora explícita
     if (!hasExplicitTime) {
-      const choice = parseSlotChoice(userText, slotsShown.length);
+      const mChoice = String(userText || "").match(new RegExp(`\\b([1-${slotsShown.length}])\\b`));
+      const choice = mChoice ? Number(mChoice[1]) : parseSlotChoice(userText, slotsShown.length);
 
-      // ✅ Si NO eligió una opción válida, aquí mismo le pides 1-5
       if (!choice) {
         return {
-          handled: true,
+        handled: true,
           reply:
             idioma === "en"
             ? `Reply with a number (1-${slotsShown.length}). You can also say a time like "2pm" or "14:00".`
