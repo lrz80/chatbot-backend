@@ -1362,6 +1362,12 @@ router.post("/api/facebook/webhook", async (req, res) => {
           if (bk?.ctxPatch) transition({ patchCtx: bk.ctxPatch });
 
           if (bk?.handled) {
+            // ✅ FIX CRÍTICO: persiste el ctx del booking ANTES de salir
+            await setConversationStateCompat(tenantId, canal, senderId, {
+              activeFlow,
+              activeStep,
+              context: convoCtx,
+            });
             await replyAndExit(
               bk.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
               "booking_flow",

@@ -860,6 +860,21 @@ export async function procesarMensajeWhatsApp(
   let activeStep = st.active_step || "start";
   let convoCtx = (st.context && typeof st.context === "object") ? st.context : {};
 
+  // ===============================
+  // 🔁 Helpers de decisión (BACKEND SOLO DECIDE)
+  // ===============================
+  function transition(params: {
+    flow?: string;
+    step?: string;
+    patchCtx?: any;
+  }) {
+    if (params.flow !== undefined) activeFlow = params.flow;
+    if (params.step !== undefined) activeStep = params.step;
+    if (params.patchCtx && typeof params.patchCtx === "object") {
+      convoCtx = { ...(convoCtx || {}), ...params.patchCtx };
+    }
+  }
+
   // ✅ google_calendar_enabled flag (source of truth)
   let bookingEnabled = false;
   try {
@@ -1103,8 +1118,14 @@ export async function procesarMensajeWhatsApp(
 
     // ✅ clave: si estabas en booking y el flow decide handled=false, igual NO dejes el ctx sucio
     // (ya lo limpiaste vía ctxPatch en wantsToChangeTopic, perfecto)
-
     if (bk?.handled) {
+      // ✅ asegura persistencia del paso antes de salir
+      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+        activeFlow,
+        activeStep,
+        context: convoCtx, // ya incluye bk.ctxPatch por transition()
+      });
+
       return await replyAndExit(
         bk.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
         "booking_flow",
@@ -1123,21 +1144,6 @@ export async function procesarMensajeWhatsApp(
     activeStep,
     convoCtx,
   });
-
-  // ===============================
-  // 🔁 Helpers de decisión (BACKEND SOLO DECIDE)
-  // ===============================
-  function transition(params: {
-    flow?: string;
-    step?: string;
-    patchCtx?: any;
-  }) {
-    if (params.flow !== undefined) activeFlow = params.flow;
-    if (params.step !== undefined) activeStep = params.step;
-    if (params.patchCtx && typeof params.patchCtx === "object") {
-      convoCtx = { ...(convoCtx || {}), ...params.patchCtx };
-    }
-  }
 
   // ===============================
   // 🔎 DEBUG: estado de flujo (clientes)
