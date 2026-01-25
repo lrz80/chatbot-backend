@@ -77,6 +77,13 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
   const yes = /^(si|sí|yes|y)$/i.test(t);
   const no = /^(no|n)$/i.test(t);
 
+  // ✅ Hydrate start/end desde picked_* por seguridad
+  const hydratedBooking = {
+    ...booking,
+    start_time: booking?.start_time || booking?.picked_start || null,
+    end_time: booking?.end_time || booking?.picked_end || null,
+  };
+
   // 1) cancelación explícita (aunque no haya respondido yes/no)
   if (wantsToCancel(userText)) {
     return {
@@ -94,7 +101,7 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     return {
       handled: true,
       reply: idioma === "en" ? "Please reply YES to confirm or NO to cancel." : "Responde SI para confirmar o NO para cancelar.",
-      ctxPatch: { booking, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: hydratedBooking, booking_last_touch_at: Date.now() },
     };
   }
 
@@ -110,7 +117,7 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
         booking: {
           ...booking,
           step: "ask_datetime",
-          timeZone: booking?.timeZone || timeZone,
+          timeZone: hydratedBooking?.timeZone || timeZone,
           name: booking?.name || null,
           email: booking?.email || null,
           purpose: booking?.purpose || null,
@@ -125,37 +132,31 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
 
   // ✅ 4) YES -> antes de reservar, pedir datos faltantes (nombre/email)
 if (yes) {
-  const missingName = !booking?.name;
-  const missingEmail = !booking?.email;
+  const missingName = !hydratedBooking?.name;
+  const missingEmail = !hydratedBooking?.email;
 
-  // Si faltan ambos, pide TODO en un solo mensaje
   if (missingName && missingEmail) {
     return {
       handled: true,
-      reply: buildAskAllMessage(idioma, booking?.purpose || null),
+      reply: buildAskAllMessage(idioma, hydratedBooking?.purpose || null),
       ctxPatch: {
-        booking: { ...booking, step: "ask_all", timeZone: booking?.timeZone || timeZone },
+        booking: { ...hydratedBooking, step: "ask_all", timeZone: hydratedBooking?.timeZone || timeZone },
         booking_last_touch_at: Date.now(),
       },
     };
   }
 
-  // Si falta solo nombre
   if (missingName) {
     return {
       handled: true,
-      reply:
-        idioma === "en"
-          ? "Great. What’s your full name?"
-          : "Perfecto. ¿Cuál es tu nombre completo?",
+      reply: idioma === "en" ? "Great. What’s your full name?" : "Perfecto. ¿Cuál es tu nombre completo?",
       ctxPatch: {
-        booking: { ...booking, step: "ask_name", timeZone: booking?.timeZone || timeZone },
+        booking: { ...hydratedBooking, step: "ask_name", timeZone: hydratedBooking?.timeZone || timeZone },
         booking_last_touch_at: Date.now(),
       },
     };
   }
 
-  // Si falta solo email
   if (missingEmail) {
     return {
       handled: true,
@@ -164,7 +165,7 @@ if (yes) {
           ? "Great. What’s your email? (example: name@email.com)"
           : "Perfecto. ¿Cuál es tu email? (ej: nombre@email.com)",
       ctxPatch: {
-        booking: { ...booking, step: "ask_email", timeZone: booking?.timeZone || timeZone },
+        booking: { ...hydratedBooking, step: "ask_email", timeZone: hydratedBooking?.timeZone || timeZone },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -172,8 +173,8 @@ if (yes) {
 }
 
   // 5) YES pero sin start/end
-const startISO = booking?.start_time || booking?.picked_start;
-const endISO = booking?.end_time || booking?.picked_end;
+const startISO = hydratedBooking?.start_time;
+const endISO = hydratedBooking?.end_time;
 
 if (!startISO || !endISO) {
   return {
@@ -182,19 +183,19 @@ if (!startISO || !endISO) {
       idioma === "en"
         ? "Send me the date and time (YYYY-MM-DD HH:mm)."
         : "Envíame la fecha y hora (YYYY-MM-DD HH:mm).",
-    ctxPatch: { booking: { ...booking, step: "ask_datetime" }, booking_last_touch_at: Date.now() },
+    ctxPatch: { booking: { ...hydratedBooking, step: "ask_datetime" }, booking_last_touch_at: Date.now() },
   };
 }
 
   // 6) crear appointment pending idempotente (dedupe real)
-  const customer_name = booking?.name || "Cliente";
+  const customer_name = hydratedBooking?.name || "Cliente";
 
   const pending = await createPendingAppointmentOrGetExisting({
     tenantId,
     channel: canal,
     customer_name,
     customer_phone: contacto,
-    customer_email: booking.email,
+    customer_email: hydratedBooking.email,
     start_time: startISO,
     end_time: endISO,
   });
@@ -230,7 +231,7 @@ if (!startISO || !endISO) {
     tenantId,
     customer_name,
     customer_phone: contacto,
-    customer_email: booking.email,
+    customer_email: hydratedBooking.email,
     startISO,
     endISO,
     timeZone,
@@ -265,7 +266,7 @@ if (!startISO || !endISO) {
             handled: true,
             reply: renderSlotsMessage({ idioma, timeZone, slots }),
             ctxPatch: {
-              booking: { ...booking, step: "offer_slots", timeZone, slots },
+              booking: { ...hydratedBooking, step: "offer_slots", timeZone, slots },
               booking_last_touch_at: Date.now(),
             },
           };

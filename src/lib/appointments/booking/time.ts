@@ -125,8 +125,8 @@ export function renderSlotsMessage(opts: {
   });
 
   return idioma === "en"
-    ? `These times are available:\n${lines.join("\n")}\nReply with the number (1-${slots.length}).`
-    : `Tengo estos horarios disponibles:\n${lines.join("\n")}\nResponde con el número (1-${slots.length}).`;
+    ? `Perfect. Here are the available times:\n${lines.join("\n")}\nReply with the number you prefer (1-${slots.length}).`
+    : `Perfecto. Estos son los horarios disponibles:\n${lines.join("\n")}\nResponde con el número que prefieras (1-${slots.length}).`;
 }
 
 export function parseSlotChoice(text: string, max: number): number | null {

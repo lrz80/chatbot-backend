@@ -265,11 +265,11 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
       const todayISO = now.toFormat("yyyy-MM-dd");
       const datePrefix =
-        ctxDate !== todayISO
-          ? (idioma === "en"
-              ? `The next availability date on: ${ctxDate}. `
-              : `La próxima fecha disponible es: ${ctxDate}. `)
-          : "";
+      ctxDate !== todayISO
+        ? (idioma === "en"
+            ? `For ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("EEE, LLL dd")}, `
+            : `Para ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `)
+        : "";
 
       if (exact) {
         const pretty = DateTime.fromISO(exact.startISO, { zone: tz })
@@ -289,6 +289,8 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
               timeZone: tz,
               purpose: booking?.purpose || null,
               daypart: inferDaypartFromHHMM(hhmm),
+              start_time: exact.startISO,
+              end_time: exact.endISO,
               picked_start: exact.startISO,
               picked_end: exact.endISO,
               date_only: ctxDate,
@@ -383,8 +385,8 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
         handled: true,
         reply:
             idioma === "en"
-            ? `${datePrefix}Perfect — I have ${pretty}. Do you want to confirm this time? (yes/no)`
-            : `${datePrefix}Perfecto — tengo ${pretty}. ¿Confirmas ese horario? (sí/no)`,
+              ? `Perfect, I have available ${pretty}. Do you want to confirm this time? (yes/no)`
+              : `Perfecto, tengo disponible ${pretty}. ¿Confirmas ese horario? (sí/no)`,
         ctxPatch: {
             booking: {
             ...booking,
@@ -392,6 +394,8 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
             timeZone: tz,
             purpose: booking?.purpose || null,
             daypart: inferDaypartFromHHMM(hhmm),
+            start_time: exact.startISO,
+            end_time: exact.endISO,
             picked_start: exact.startISO,
             picked_end: exact.endISO,
             date_only: ctxDate,
