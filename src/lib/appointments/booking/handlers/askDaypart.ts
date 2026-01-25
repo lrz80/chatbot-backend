@@ -176,6 +176,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     })();
 
   if (hhmm) {
+    console.log("[ASK_DAYPART hhmm]", { userText, hhmm });
     // Si no hay horario configurado, pasamos a ask_all y guardamos lo que podamos
     if (!hours) {
       return {
@@ -227,6 +228,16 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       hours,
     });
 
+    console.log("[ASK_DAYPART preWindow]", {
+      ctxDate,
+      tz,
+      now: now.toISO(),
+      windowStartHHmm,
+      windowEndHHmm,
+      durationMin,
+      bufferMin,
+    });
+
     const windowSlots = await getSlotsForDateWindow({
       tenantId,
       timeZone: tz,
@@ -237,6 +248,13 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       windowStartHHmm,
       windowEndHHmm,
     });
+
+    console.log(
+      "[ASK_DAYPART windowSlots HH:mm]",
+      (windowSlots || []).map(s =>
+        DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm")
+      )
+    );
 
     if (windowSlots?.length) {
       const take = [...windowSlots]
@@ -279,33 +297,18 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       hours,
     });
 
-    // ======================================================
-    // DEBUG LOGS EXACTOS PARA SABER POR QUÉ NO SALE 2PM
-    // ======================================================
-    console.log("[ASK_DAYPART hhmm]", {
-      userText,
-      hhmm,
-    });
-
-    console.log("[ASK_DAYPART allDaySlots count]", allDaySlots.length);
-
-    console.log("[ASK_DAYPART allDaySlots sample]", {
-      first: allDaySlots[0]?.startISO,
-      last: allDaySlots[allDaySlots.length - 1]?.startISO,
-    });
-
     console.log(
-      "[ASK_DAYPART allDay HHmm List]",
-      allDaySlots.map(s =>
+      "[ASK_DAYPART allDay HH:mm]",
+      (allDaySlots || []).map(s =>
         DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm")
       )
     );
 
-    console.log("[ASK_DAYPART has14]", {
-      has14: allDaySlots.some(s =>
+    console.log("[ASK_DAYPART allDay checks]", {
+      has1400: (allDaySlots || []).some(s =>
         DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm") === "14:00"
       ),
-      hasRequested: allDaySlots.some(s =>
+      hasRequested: (allDaySlots || []).some(s =>
         DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm") === hhmm
       ),
     });
