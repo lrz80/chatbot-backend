@@ -192,6 +192,25 @@ export function wantsToCancel(text: string) {
   return false;
 }
 
+export function isAmbiguousLangText(txt: string) {
+  const t = String(txt || "").trim().toLowerCase();
+  if (!t) return true;
+
+  // Solo números / signos / espacios
+  if (/^[\d\s.,;:!?()+\-/_]*$/.test(t)) return true;
+
+  // Respuestas cortas típicas (incluye con número)
+  if (/^(ok|okay|yes|no|si|sí|dale|listo|vale|perfecto|gracias|thanks)\s*\d*$/.test(t)) return true;
+
+  // Hora sola o “2pm” (sin señal real de idioma)
+  if (/^\s*\d{1,2}(:\d{2})?\s*(am|pm)?\s*$/.test(t)) return true;
+
+  // Muy corto
+  if (t.length <= 3) return true;
+
+  return false;
+}
+
 export function wantsMoreSlots(text: string) {
   const t = normalizeText(text); // ya convierte a minúsculas y limpia acentos
 

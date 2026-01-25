@@ -40,6 +40,7 @@ import { scheduleFollowUpIfEligible, cancelPendingFollowUps } from "../../lib/fo
 import { bookingFlowMvp } from "../../lib/appointments/bookingFlow";
 import crypto from "crypto";
 import { sendCapiEvent } from "../../services/metaCapi";
+import { isAmbiguousLangText } from "../../lib/appointments/booking/text";
 
 const sha256 = (s: string) =>
   crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
@@ -698,9 +699,6 @@ export async function procesarMensajeWhatsApp(
     return;
   }
 
-  // 👉 detectar si el mensaje es solo numérico (para usar idioma previo)
-  const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
-
   // 👉 idioma base del tenant (fallback)
   const tenantBase: "es" | "en" = normalizeLang(tenant?.idioma || "es");
 
@@ -770,10 +768,16 @@ export async function procesarMensajeWhatsApp(
     console.warn("⚠️ Error enviando CAPI Lead PRO:", e?.message);
   }
 
-  if (isNumericOnly) {
+  const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
+  const isAmbiguous = isNumericOnly || isAmbiguousLangText(userInput);
+
+  if (isAmbiguous) {
+    // ✅ NO detectar idioma con "ok 3", "2pm", "👍", etc.
+    // ✅ Solo reusar el idioma guardado del cliente
     idiomaDestino = await getIdiomaClienteDB(tenant.id, canal, turn.contactoNorm, tenantBase);
-    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (solo número)`);
+    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (ambiguous)`);
   } else {
+    // ✅ Texto con señal suficiente -> detectar y persistir
     let detectado: string | null = null;
     try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
 

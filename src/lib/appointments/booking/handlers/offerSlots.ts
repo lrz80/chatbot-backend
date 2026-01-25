@@ -283,9 +283,9 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     return {
         handled: true,
         reply: idioma === "en"
-        ? `That exact time isn’t available. Here are the closest options:\n\n` +
+        ? `Im sorry, That exact time isn’t available. Here are the closest options:\n\n` +
             renderSlotsMessage({ idioma, timeZone: tz, slots: take })
-        : `Esa hora exacta no está disponible. Estas son las opciones más cercanas:\n\n` +
+        : `Lo siento, Esa hora exacta no está disponible. Estas son las opciones más cercanas:\n\n` +
             renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
         ctxPatch: {
         booking: {
