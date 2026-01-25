@@ -110,13 +110,25 @@ export function renderSlotsMessage(opts: {
   idioma: "es" | "en";
   timeZone: string;
   slots: Array<{ startISO: string; endISO: string }>;
+
+  // ✅ nuevos
+  intro?: boolean; // default true
+  style?: "default" | "closest" | "more" | "sameDay" | "neutral";
+  ask?: "number" | "anything"; // default number
 }): string {
-  const { idioma, timeZone, slots } = opts;
+  const {
+    idioma,
+    timeZone,
+    slots,
+    intro = true,
+    style = "default",
+    ask = "number",
+  } = opts;
 
   if (!slots.length) {
     return idioma === "en"
-      ? "I couldn’t find available times for that date. Please choose another date."
-      : "No encontré horarios disponibles para esa fecha. ¿Me dices otra fecha?";
+      ? "I'm sorry! I couldn’t find availability for that date. What other day works for you?"
+      : "Lo siento! No encontré disponibilidad para esa fecha. ¿Qué otro día te funciona?";
   }
 
   const lines = slots.map((s, i) => {
@@ -124,9 +136,38 @@ export function renderSlotsMessage(opts: {
     return `${i + 1}) ${human}`;
   });
 
-  return idioma === "en"
-    ? `Perfect. Here are the available times:\n${lines.join("\n")}\nReply with the number you prefer (1-${slots.length}).`
-    : `Perfecto. Estos son los horarios disponibles:\n${lines.join("\n")}\nResponde con el número que prefieras (1-${slots.length}).`;
+  // ✅ intros más humanos (y opcionales)
+  const introEnMap: Record<string, string> = {
+    default: "Sure — here are a few times that are available:",
+    closest: "I'm sorry! That exact time isn’t available. These are the closest options:",
+    more: "No problem — here are a few more options:",
+    sameDay: "Here are the available times for that day:",
+    neutral: "",
+  };
+
+  const introEsMap: Record<string, string> = {
+    default: "Claro — aquí tienes algunos horarios disponibles:",
+    closest: "Lo siento! Esa hora exacta no está disponible. Estas son las opciones más cercanas:",
+    more: "Perfecto — aquí van más opciones:",
+    sameDay: "Estos son los horarios disponibles para ese día:",
+    neutral: "",
+  };
+
+  const introLine =
+    !intro || style === "neutral"
+      ? ""
+      : (idioma === "en" ? introEnMap[style] : introEsMap[style]) + "\n";
+
+  const askLine =
+    ask === "anything"
+      ? idioma === "en"
+        ? `Please Reply with a number (1-${slots.length}) or tell me a time (like "2pm" / "14:00").`
+        : `Por favor Responde con un número (1-${slots.length}) o dime una hora (como "2pm" / "14:00").`
+      : idioma === "en"
+        ? `Please Reply with the number you prefer (1-${slots.length}).`
+        : `Por favor Responde con el número que prefieras (1-${slots.length}).`;
+
+  return `${introLine}${lines.join("\n")}\n${askLine}`.trim();
 }
 
 export function parseSlotChoice(text: string, max: number): number | null {

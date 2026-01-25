@@ -424,27 +424,22 @@ export function extractDateOnlyToken(input: string, timeZone?: string): string |
 export function extractTimeOnlyToken(raw: string): string | null {
   const s = String(raw || "").toLowerCase().trim();
 
-  // 1) HH:mm (24h)
+  // ✅ 0) Si parece selección de opción (ok 3, opción 3, la 3, #3, etc) -> NO es hora
+  // Nota: aquí deliberadamente solo tomamos 1-5 porque tu UI muestra 1-5
+  const looksLikeChoice =
+    /\b(ok|okay|vale|listo|perfecto|opcion|opción|option|elige|escojo|pick|choose|la|el|nro|num|numero|número|#)\s*(\d)\b/.test(s) ||
+    /^\s*(\d)\s*$/.test(s);
+
+  if (looksLikeChoice) {
+    const n = Number((s.match(/\b(\d)\b/) || [])[1]);
+    if (n >= 1 && n <= 5) return null;
+  }
+
+  // ✅ 1) HH:mm (24h)
   let m = s.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/);
   if (m) return `${m[1].padStart(2, "0")}:${m[2]}`;
 
-  // 2) HH solo (ambiguo). Solo lo usamos si NO parece pregunta de hora ("a las", "tienes", "?")
-// porque esas frases ya se cubren mejor con las otras reglas.
-m = s.match(/\b([01]?\d|2[0-3])\b/);
-
-const isPureChoice =
-  /^\s*[1-5]\s*$/.test(s) ||
-  /^\s*(opcion|opción)\s*[1-5]\s*$/.test(s);
-
-const looksLikeTimeQuestion =
-  /\b(a\s+las|a\s+la|para\s+las|para\s+la|tienes|hay|puedes|podemos)\b/.test(s) || /\?/.test(raw);
-
-if (m && !isPureChoice && !looksLikeTimeQuestion) {
-  const hh = Number(m[1]);
-  if (hh >= 0 && hh <= 23) return `${String(hh).padStart(2, "0")}:00`;
-}
-
-  // 3) 5pm / 5 pm / 5:30pm / 5:30 pm
+  // ✅ 2) 5pm / 5 pm / 5:30pm / 5:30 pm
   m = s.match(/\b(1[0-2]|[1-9])(?::([0-5]\d))?\s*(am|pm)\b/);
   if (m) {
     let hh = Number(m[1]);
@@ -457,13 +452,23 @@ if (m && !isPureChoice && !looksLikeTimeQuestion) {
     return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
   }
 
-  // 4) "a las 5" / "a las 5:30"
+  // ✅ 3) "a las 5" / "a las 5:30"
   m = s.match(/\ba\s+las\s+(1[0-2]|[1-9]|1\d|2[0-3])(?::([0-5]\d))?\b/);
   if (m) {
     const hh = Number(m[1]);
     const mm = m[2] ? Number(m[2]) : 0;
-    // sin am/pm asumimos formato 24h si hh>=13, si no es ambiguo
     return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+  }
+
+  // ✅ 4) HH solo (ambiguo) -> SOLO si hay “time cue” claro
+  // Esto evita que "ok 3" se convierta en 03:00
+  const hasTimeCue = /\b(at|a\s+las|a\s+la|para\s+las|para\s+la|around|sobre|aprox|aproximadamente)\b/.test(s);
+  if (hasTimeCue) {
+    m = s.match(/\b([01]?\d|2[0-3])\b/);
+    if (m) {
+      const hh = Number(m[1]);
+      return `${String(hh).padStart(2, "0")}:00`;
+    }
   }
 
   return null;
