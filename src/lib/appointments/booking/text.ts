@@ -477,16 +477,29 @@ export function extractTimeOnlyToken(raw: string): string | null {
     return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
   }
 
-  // ✅ 4) HH solo (ambiguo) -> SOLO si hay “time cue” claro
-  // Esto evita que "ok 3" se convierta en 03:00
-  const hasTimeCue = /\b(at|a\s+las|a\s+la|para\s+las|para\s+la|around|sobre|aprox|aproximadamente)\b/.test(s);
-  if (hasTimeCue) {
-    m = s.match(/\b([01]?\d|2[0-3])\b/);
-    if (m) {
-      const hh = Number(m[1]);
-      return `${String(hh).padStart(2, "0")}:00`;
+// ✅ 4) HH solo (ambiguo) -> SOLO si hay “time cue” claro
+// Esto evita que "ok 3" se convierta en 03:00
+const hasTimeCue =
+  /\b(at|a\s+las|a\s+la|para\s+las|para\s+la|around|about|roughly|approx|aprox|aproximadamente|sobre|tipo|como|alrededor)\b/.test(s);
+
+if (hasTimeCue) {
+  m = s.match(/\b([01]?\d|2[0-3])\b/);
+  if (m) {
+    let hh = Number(m[1]);
+
+    // ✅ Heurística AM/PM para expresiones aproximadas:
+    // "tipo 2", "around 2", "como 2" normalmente significa 2pm (14:00)
+    const hasAmPm = /\b(am|pm|a\.m\.|p\.m\.)\b/.test(s);
+    const hasMorningWord = /\b(manana|mañana|morning|temprano)\b/.test(s);
+    const approxCue = /\b(tipo|como|alrededor|around|about|roughly|approx|aprox|aproximadamente)\b/.test(s);
+
+    if (!hasAmPm && !hasMorningWord && approxCue && hh >= 1 && hh <= 7) {
+      hh += 12; // 2 -> 14
     }
+
+    return `${String(hh).padStart(2, "0")}:00`;
   }
+}
 
   return null;
 }
