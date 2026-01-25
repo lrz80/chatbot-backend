@@ -39,10 +39,11 @@ export function isCapabilityQuestion(text: string) {
     /\b(reserva|reservas|reservar|agenda|agendas|agendar|agendame|agéndame|programa|programas|programar)\b/.test(t) ||
     /\b(schedule|schedules|book|books|booking)\b/.test(t);
 
-  const shortNoQuestionMark =
-    t.length <= 30 && /\b(reserva|agenda|agendar|reservar|schedule|book|booking)\b/.test(t);
+  const shortBare =
+    t.length <= 12 && /^(agenda|agendar|reserva|reservar|booking|schedule)$/.test(t);
 
-  if (shortNoQuestionMark) return true;
+  if (shortBare) return true;
+
   if (looksLikeQuestion && bookingCapability) return true;
   return q && looksLikeQuestion;
 }

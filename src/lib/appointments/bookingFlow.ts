@@ -23,6 +23,7 @@ import {
   wantsToChangeTopic,
   matchesBookingIntent,
   parseFullName,
+  normalizeText,
 } from "./booking/text";
 import { handleAskEmailPhone } from "./booking/handlers/askEmailPhone";
 
@@ -284,17 +285,22 @@ export async function bookingFlowMvp(opts: {
     (rawWants && !capability) ||
     (hasAppointmentContext(userText) && !capability);
 
-  if (booking.step === "idle" && capability && hasAppointmentContext(userText) && !hasExplicitDateTime(userText) && !directReq) {
+  if (
+    booking.step === "idle" &&
+    capability &&
+    hasAppointmentContext(userText) &&
+    !hasExplicitDateTime(userText) &&
+    !directReq
+  ) {
+    // ✅ No hardcode aquí. Que responda el LLM con el prompt del tenant.
     return {
-      handled: true,
-      reply: idioma === "en"
-  ? "Yes — Aamy can schedule your business appointments using Google Calendar. Would you like to schedule a call with our team to learn more? Reply: 'I want to schedule'."
-  : "Sí — Aamy puede agendar las citas de tu negocio usando Google Calendar. ¿Te gustaría programar una llamada con nuestro equipo para saber más? Escribe: 'Quiero agendar'.",
-      ctxPatch: { 
-        booking: { step: "idle" }, 
-        booking_last_touch_at: Date.now(), },
-      };
-    }
+      handled: false,
+      ctxPatch: {
+        booking: { step: "idle" },
+        booking_last_touch_at: Date.now(),
+      },
+    }; 
+  }
 
   const gate = await canUseChannel(tenantId, "google_calendar");
   const bookingEnabled = !!gate.settings_enabled;
