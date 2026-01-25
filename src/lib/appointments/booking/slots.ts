@@ -65,6 +65,7 @@ export function sliceIntoSlots(opts: {
   const { freeRanges, durationMin, bufferMin, timeZone } = opts;
 
   const slots: Slot[] = [];
+  const stepMin = Math.max(1, Number(durationMin || 0) + Number(bufferMin || 0));
 
   for (const r of freeRanges) {
     let start = r.start;
@@ -75,11 +76,12 @@ export function sliceIntoSlots(opts: {
 
     start = start.set({ second: 0, millisecond: 0 });
 
-    // ✅ redondea hacia arriba a múltiplos de 15 minutos
-    const m = start.minute;
-    const mod = m % 15;
+    // ✅ redondea hacia arriba al "grid" del tenant: (duration + buffer)
+    // Ej: duration=45, buffer=15 => step=60 => 9:00, 10:00, 11:00...
+    const totalMin = start.hour * 60 + start.minute;
+    const mod = totalMin % stepMin;
     if (mod !== 0) {
-      start = start.plus({ minutes: 15 - mod }).set({ second: 0, millisecond: 0 });
+      start = start.plus({ minutes: stepMin - mod }).set({ second: 0, millisecond: 0 });
     }
 
     while (start.plus({ minutes: durationMin }) <= r.end) {
@@ -93,8 +95,8 @@ export function sliceIntoSlots(opts: {
         if (sISO && eISO) slots.push({ startISO: sISO, endISO: eISO });
       }
 
-      // incrementos de 15 minutos
-      start = start.plus({ minutes: 15 });
+      // ✅ siguiente inicio permitido: duración + buffer (por tenant)
+      start = start.plus({ minutes: stepMin });
     }
   }
 
