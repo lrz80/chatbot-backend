@@ -21,7 +21,7 @@ import {
   formatSlotHuman,
 } from "../time";
 
-import { getNextSlotsByDaypart, getSlotsForDate, getSlotsForDateWindow } from "../slots";
+import { getSlotsForDate, getSlotsForDateWindow } from "../slots";
 
 type Slot = { startISO: string; endISO: string };
 
@@ -185,106 +185,119 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
       };
     }
   
-    // ✅ 1) Si el usuario pide una hora específica (ej: "5pm", "17:00", "a las 5")
     const hhmm = extractTimeOnlyToken(userText);
 
     if (hhmm) {
     const tz = booking.timeZone || timeZone;
 
-    // 2) si no apareció (porque booking.slots está recortado), re-consulta una ventana real
-    if (hours) {
-        // ✅ si el usuario escribió una fecha ("lunes", "mañana", "26 ene"), úsala por encima del ctx
-        const dateFromText = extractDateOnlyToken(userText, tz);
-
-        const ctxDate =
-        dateFromText ||
-        getCtxDateFromBookingOrSlots(slots, booking, tz);
-
-        if (ctxDate) {
-        const h = Number(hhmm.slice(0, 2));
-        const m = Number(hhmm.slice(3, 5));
-
-        const base = DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz })
-            .set({ hour: h, minute: m, second: 0, millisecond: 0 });
-
-        const windowStartHHmm = base.minus({ hours: 2 }).toFormat("HH:mm");
-        const windowEndHHmm = base.plus({ hours: 3 }).toFormat("HH:mm");
-
-        const windowSlots = sortSlotsAsc(
-            await getSlotsForDateWindow({
-            tenantId,
-            timeZone: tz,
-            dateISO: ctxDate,
-            durationMin,
-            bufferMin,
-            hours,
-            windowStartHHmm,
-            windowEndHHmm,
-            })
-        );
-
-        if (windowSlots.length) {
-            const take = windowSlots.slice(0, 5);
-            return {
-            handled: true,
-            reply: renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
-            ctxPatch: {
-                booking: {
-                ...booking,
-                step: "offer_slots",
-                timeZone: tz,
-                slots: take,
-                last_offered_date: ctxDate,
-                date_only: ctxDate,
-                },
-                booking_last_touch_at: Date.now(),
-            },
-            };
-        }
-
-        // (Opcional pero recomendado) si no hay en ventana, ofrece cercanos del día completo
-        const allDaySlots = sortSlotsAsc(
-            await getSlotsForDate({
-            tenantId,
-            timeZone: tz,
-            dateISO: ctxDate,
-            durationMin,
-            bufferMin,
-            hours,
-            })
-        );
-
-        if (allDaySlots.length) {
-            return {
-            handled: true,
-            reply:
-                idioma === "en"
-                ? "I don’t have availability at that exact time. Here are the closest options:"
-                : "No tengo disponibilidad a esa hora exacta. Estas son las opciones más cercanas:\n\n" +
-                    renderSlotsMessage({ idioma, timeZone: tz, slots: allDaySlots.slice(0, 5) }),
-            ctxPatch: {
-                booking: {
-                ...booking,
-                step: "offer_slots",
-                timeZone: tz,
-                slots: allDaySlots.slice(0, 5),
-                last_offered_date: ctxDate,
-                date_only: ctxDate,
-                },
-                booking_last_touch_at: Date.now(),
-            },
-            };
-        }
-        }
+    if (!hours) {
+        return {
+        handled: true,
+        reply: idioma === "en"
+            ? "What date is that for? (example: 2026-01-26)"
+            : "¿Para qué fecha sería? (ej: 2026-01-26)",
+        ctxPatch: { booking, booking_last_touch_at: Date.now() },
+        };
     }
 
-    // fallback si no se pudo re-buscar
+    // ✅ si el usuario escribió una fecha ("lunes", "mañana", "26 ene"), úsala por encima del ctx
+    const dateFromText = extractDateOnlyToken(userText, tz);
+
+    const ctxDate =
+        dateFromText ||
+        (booking as any)?.date_only ||
+        (booking as any)?.last_offered_date ||
+        (slots?.[0]?.startISO
+        ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
+        : null);
+
+    if (!ctxDate) {
+        return {
+        handled: true,
+        reply: idioma === "en"
+            ? "What date should I check? (example: 2026-01-26)"
+            : "¿Qué fecha debo revisar? (ej: 2026-01-26)",
+        ctxPatch: { booking, booking_last_touch_at: Date.now() },
+        };
+    }
+
+    // ✅ 1) Siempre calcula el día completo para saber si existe EXACTO (2pm)
+    const allDaySlots = sortSlotsAsc(
+        await getSlotsForDate({
+        tenantId,
+        timeZone: tz,
+        dateISO: ctxDate,
+        durationMin,
+        bufferMin,
+        hours,
+        })
+    );
+
+    const exact = allDaySlots.find((s) => {
+        const start = DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm");
+        return start === hhmm;
+    });
+
+    // ✅ Si existe EXACTO -> CONFIRM (opción B)
+    if (exact) {
+        const pretty = DateTime.fromISO(exact.startISO, { zone: tz })
+        .setLocale(idioma === "en" ? "en" : "es")
+        .toFormat(idioma === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+
+        return {
+        handled: true,
+        reply: idioma === "en"
+            ? `Perfect, I have ${pretty}. Do you want to confirm? (yes/no)`
+            : `Perfecto, tengo ${pretty}. ¿Confirmas ese horario? (sí/no)`,
+        ctxPatch: {
+            booking: {
+            ...booking,
+            step: "confirm",
+            timeZone: tz,
+            picked_start: exact.startISO,
+            picked_end: exact.endISO,
+            start_time: exact.startISO,
+            end_time: exact.endISO,
+            last_offered_date: ctxDate,
+            date_only: ctxDate,
+            slots: [], // ✅ sin lista
+            },
+            booking_last_touch_at: Date.now(),
+        },
+        };
+    }
+
+    // ✅ Si NO existe exacto -> decirlo explícitamente + ofrecer cercanos
+    const near = sortSlotsAsc(
+        filterSlotsNearTime({
+        slots: allDaySlots,     // ✅ usa TODO el día, no booking.slots recortado
+        timeZone: tz,
+        hhmm,
+        windowMinutes: 180,     // ±3h
+        max: 5,
+        })
+    );
+
+    const take = near.length ? near : allDaySlots.slice(0, 5);
+
     return {
         handled: true,
         reply: idioma === "en"
-        ? "I don’t see availability near that time. Would you like something earlier or later?"
-        : "No veo disponibilidad cerca de esa hora. ¿Te sirve más temprano o más tarde?",
-        ctxPatch: { booking, booking_last_touch_at: Date.now() },
+        ? `That exact time isn’t available. Here are the closest options:\n\n` +
+            renderSlotsMessage({ idioma, timeZone: tz, slots: take })
+        : `Esa hora exacta no está disponible. Estas son las opciones más cercanas:\n\n` +
+            renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
+        ctxPatch: {
+        booking: {
+            ...booking,
+            step: "offer_slots",
+            timeZone: tz,
+            slots: take,
+            last_offered_date: ctxDate,
+            date_only: ctxDate,
+        },
+        booking_last_touch_at: Date.now(),
+        },
     };
     }
   
