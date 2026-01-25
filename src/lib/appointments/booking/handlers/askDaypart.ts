@@ -257,17 +257,44 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     );
 
     if (windowSlots?.length) {
-      const take = [...windowSlots]
-        .sort((a, b) => a.startISO.localeCompare(b.startISO))
-        .slice(0, 5);
+      // 1) Priorizamos hora exacta dentro de la ventana (14:00)
+      let take: Array<{ startISO: string; endISO: string }> = [];
 
-    const todayISO = now.toFormat("yyyy-MM-dd");
-    const datePrefix =
-    ctxDate !== todayISO
-        ? (idioma === "en"
-            ? `I’m seeing the next availability on ${ctxDate}. `
-            : `Veo la próxima disponibilidad el ${ctxDate}. `)
-        : "";
+      const exact = windowSlots.find((s) => {
+        const start = DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm");
+        return start === hhmm;
+      });
+
+      if (exact) {
+        const rest = windowSlots.filter((s) => s !== exact);
+
+        const closest = pickClosestSlotsToHHMM({
+          slots: rest,
+          timeZone: tz,
+          dateISO: ctxDate,
+          hhmm,
+          max: 4,
+        });
+
+        take = [exact, ...closest];
+      } else {
+        // si no existe exacto, devolvemos los más cercanos a la hora pedida
+        take = pickClosestSlotsToHHMM({
+          slots: windowSlots,
+          timeZone: tz,
+          dateISO: ctxDate,
+          hhmm,
+          max: 5,
+        });
+      }
+
+      const todayISO = now.toFormat("yyyy-MM-dd");
+      const datePrefix =
+        ctxDate !== todayISO
+          ? (idioma === "en"
+              ? `I’m seeing the next availability on ${ctxDate}. `
+              : `Veo la próxima disponibilidad el ${ctxDate}. `)
+          : "";
 
       return {
         handled: true,
