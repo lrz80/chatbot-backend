@@ -86,14 +86,23 @@ export async function handleAskName(deps: AskNameDeps): Promise<{
     nombre: name,
   });
 
+  const nextNeedsEmail = !booking?.email;
+
   return {
     handled: true,
-    reply: idioma === "en" ? "Thanks. Now send your email." : "Gracias. Ahora envíame tu email.",
+    reply: nextNeedsEmail
+      ? (idioma === "en"
+          ? "Thanks. What’s your email? (example: name@email.com)"
+          : "Gracias. ¿Cuál es tu email? (ej: nombre@email.com)")
+      : (idioma === "en"
+          ? "Perfect — I have everything. Do you want me to confirm the appointment now? (yes/no)"
+          : "Perfecto — ya tengo todo. ¿Confirmo la cita ahora? (sí/no)"),
     ctxPatch: {
       booking: {
-        step: "ask_email",
+        ...booking,                 // ✅ NO pierdas picked_start/picked_end, date_only, etc.
+        step: nextNeedsEmail ? "ask_email" : "confirm",
         timeZone,
-        name,
+        name,                       // ✅ actualiza nombre
       },
       booking_last_touch_at: Date.now(),
     },

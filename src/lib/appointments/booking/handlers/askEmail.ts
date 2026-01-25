@@ -87,18 +87,32 @@ export async function handleAskEmail(deps: AskEmailDeps): Promise<{
     email,
   });
 
+  const hydrated = {
+    ...booking,
+    email,
+    name: (booking as any)?.name || null,
+    timeZone,
+    // ✅ por seguridad: si tienes picked_* pero no start/end aún
+    start_time: (booking as any)?.start_time || (booking as any)?.picked_start || null,
+    end_time: (booking as any)?.end_time || (booking as any)?.picked_end || null,
+  };
+
+  const hasChosenSlot = !!hydrated.start_time && !!hydrated.end_time;
+
+  // Si ya tenemos slot elegido, volvemos a confirm para reservar (NO pedir fecha otra vez)
   return {
     handled: true,
-    reply:
-      idioma === "en"
-        ? "Great. Now send the date and time in this format: YYYY-MM-DD HH:mm (example: 2026-01-17 15:00)."
-        : "Perfecto. Ahora envíame la fecha y hora en este formato: YYYY-MM-DD HH:mm (ej: 2026-01-17 15:00).",
+    reply: hasChosenSlot
+      ? (idioma === "en"
+          ? "Perfect — I have everything. Please reply YES to confirm or NO to cancel."
+          : "Perfecto — ya tengo todo. Responde SI para confirmar o NO para cancelar.")
+      : (idioma === "en"
+          ? "Great. Now send the date and time in this format: YYYY-MM-DD HH:mm (example: 2026-01-17 15:00)."
+          : "Perfecto. Ahora envíame la fecha y hora en este formato: YYYY-MM-DD HH:mm (ej: 2026-01-17 15:00)."),
     ctxPatch: {
       booking: {
-        step: "ask_datetime",
-        timeZone,
-        name: (booking as any)?.name || null, // preserva lo capturado
-        email,
+        ...hydrated,
+        step: hasChosenSlot ? "confirm" : "ask_datetime",
       },
       booking_last_touch_at: Date.now(),
     },

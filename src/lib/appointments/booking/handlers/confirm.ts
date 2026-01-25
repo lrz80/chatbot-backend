@@ -1,6 +1,6 @@
 // src/lib/appointments/booking/handlers/confirm.ts
 import { DateTime } from "luxon";
-import { wantsToCancel, buildAskAllMessage } from "../text";
+import { wantsToCancel } from "../text";
 import { renderSlotsMessage } from "../time";
 import { getSlotsForDate } from "../slots";
 
@@ -135,37 +135,39 @@ if (yes) {
   const missingName = !hydratedBooking?.name;
   const missingEmail = !hydratedBooking?.email;
 
-  if (missingName && missingEmail) {
-    return {
-      handled: true,
-      reply: buildAskAllMessage(idioma, hydratedBooking?.purpose || null),
-      ctxPatch: {
-        booking: { ...hydratedBooking, step: "ask_all", timeZone: hydratedBooking?.timeZone || timeZone },
-        booking_last_touch_at: Date.now(),
-      },
-    };
-  }
-
+  // Si falta el nombre, pídelo primero (aunque también falte email)
   if (missingName) {
     return {
       handled: true,
-      reply: idioma === "en" ? "Great. What’s your full name?" : "Perfecto. ¿Cuál es tu nombre completo?",
+      reply:
+        idioma === "en"
+          ? "Perfect. Before I confirm it, what’s your full name?"
+          : "Perfecto. Antes de confirmarla, ¿cuál es tu nombre completo?",
       ctxPatch: {
-        booking: { ...hydratedBooking, step: "ask_name", timeZone: hydratedBooking?.timeZone || timeZone },
+        booking: {
+          ...hydratedBooking,
+          step: "ask_name",
+          timeZone: hydratedBooking?.timeZone || timeZone,
+        },
         booking_last_touch_at: Date.now(),
       },
     };
   }
 
+  // Si ya hay nombre pero falta email
   if (missingEmail) {
     return {
       handled: true,
       reply:
         idioma === "en"
-          ? "Great. What’s your email? (example: name@email.com)"
-          : "Perfecto. ¿Cuál es tu email? (ej: nombre@email.com)",
+          ? "Thanks. What’s your email? (example: name@email.com)"
+          : "Gracias. ¿Cuál es tu email? (ej: nombre@email.com)",
       ctxPatch: {
-        booking: { ...hydratedBooking, step: "ask_email", timeZone: hydratedBooking?.timeZone || timeZone },
+        booking: {
+          ...hydratedBooking,
+          step: "ask_email",
+          timeZone: hydratedBooking?.timeZone || timeZone,
+        },
         booking_last_touch_at: Date.now(),
       },
     };
