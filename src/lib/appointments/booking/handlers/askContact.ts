@@ -15,6 +15,8 @@ export type AskContactDeps = {
   wantsToChangeTopic: (s: string) => boolean;
   wantsToCancel: (s: string) => boolean;
 
+  requirePhone: boolean; // ✅ NUEVO (IG/FB true, WhatsApp false)
+
   parseNameEmailOnly: (s: string) => { name?: string | null; email?: string | null };
   parseEmail: (s: string) => string | null;
 
@@ -43,12 +45,11 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
     timeZone,
     wantsToChangeTopic,
     wantsToCancel,
+    requirePhone,
     parseNameEmailOnly,
     parseEmail,
     upsertClienteBookingData,
   } = deps;
-
-  const isMeta = canal === "facebook" || canal === "instagram"; // ✅ IG/FB requiere teléfono
 
   if (wantsToChangeTopic(userText)) {
     return { handled: false, ctxPatch: { booking: { step: "idle" } } };
@@ -69,6 +70,7 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
   }
 
   const { name, email } = parseNameEmailOnly(userText);
+  const phone = parsePhone(userText); // ✅ toma el teléfono de cualquier parte del mensaje
 
   if (!name) {
     return {
@@ -77,10 +79,7 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
         idioma === "en"
           ? "I’m missing your first and last name (example: John Smith)."
           : "Me falta tu nombre y apellido (ej: Juan Pérez).",
-      ctxPatch: {
-        booking: { ...booking, step: "ask_contact" },
-        booking_last_touch_at: Date.now(),
-      },
+      ctxPatch: { booking: { ...booking, step: "ask_contact" }, booking_last_touch_at: Date.now() },
     };
   }
 
@@ -91,26 +90,19 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
         idioma === "en"
           ? "I’m missing a valid email (example: name@email.com)."
           : "Me falta un email válido (ej: nombre@email.com).",
-      ctxPatch: {
-        booking: { ...booking, step: "ask_contact" },
-        booking_last_touch_at: Date.now(),
-      },
+      ctxPatch: { booking: { ...booking, step: "ask_contact" }, booking_last_touch_at: Date.now() },
     };
   }
 
-  const phone = parsePhone(userText); // ✅ intenta extraer teléfono del mismo mensaje
-
-  if (isMeta && !phone) {
+  // ✅ NUEVO: exigir teléfono en IG/FB
+  if (requirePhone && !phone) {
     return {
       handled: true,
       reply:
         idioma === "en"
-          ? "I’m missing your phone number (include country code). Example: +1 305 555 1234"
-          : "Me falta tu número de teléfono (con código de país). Ej: +1 305 555 1234",
-      ctxPatch: {
-        booking: { ...booking, step: "ask_contact" },
-        booking_last_touch_at: Date.now(),
-      },
+          ? "I’m missing your phone number (example: +1 305 555 1234). Please send it."
+          : "Me falta tu número de teléfono (ej: +1 305 555 1234). Envíamelo por favor.",
+      ctxPatch: { booking: { ...booking, step: "ask_contact" }, booking_last_touch_at: Date.now() },
     };
   }
 
@@ -144,7 +136,7 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
         timeZone,
         name,
         email,
-        phone: phone || null,
+        phone: phone || (booking as any)?.phone || null,
         start_time: startISO,
         end_time: endISO,
         picked_start: null,

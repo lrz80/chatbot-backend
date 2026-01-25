@@ -26,6 +26,8 @@ import {
   parseFullName,
   parseNameEmailOnly,
 } from "./booking/text";
+import { parsePhone } from "./booking/text";
+
 import {
   MIN_LEAD_MINUTES,
   parseDateTimeExplicit,
@@ -448,6 +450,7 @@ if (booking.step === "offer_slots") {
 }
 
 if (booking.step === "ask_contact") {
+  const requirePhone = canal === "facebook" || canal === "instagram"; // ✅ IG/FB sí
   return handleAskContact({
     tenantId,
     canal,
@@ -458,6 +461,7 @@ if (booking.step === "ask_contact") {
     timeZone,
     wantsToChangeTopic,
     wantsToCancel,
+    requirePhone, // ✅ NUEVO
     parseNameEmailOnly,
     parseEmail,
     upsertClienteBookingData,

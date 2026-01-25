@@ -13,7 +13,6 @@ export type BookingCtx = {
       | "ask_name"
       | "ask_email"
       | "ask_datetime"
-      | "ask_phone";
 
     start_time?: string | null;
     end_time?: string | null;

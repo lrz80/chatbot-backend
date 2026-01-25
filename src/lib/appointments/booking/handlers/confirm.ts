@@ -220,6 +220,12 @@ if (!startISO || !endISO) {
   // 6) crear appointment pending idempotente (dedupe real)
   const customer_name = hydratedBooking?.name || "Cliente";
 
+    // ✅ Teléfono real:
+  // - WhatsApp: contacto ES el teléfono
+  // - IG/FB: contacto es senderId, el teléfono viene de booking.phone
+  const customer_phone =
+    canal === "whatsapp" ? contacto : (hydratedBooking?.phone || null);
+
   const pending = await createPendingAppointmentOrGetExisting({
     tenantId,
     channel: canal,
