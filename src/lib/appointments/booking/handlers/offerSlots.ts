@@ -58,6 +58,63 @@ function getCtxDateFromBookingOrSlots(slots: Slot[], booking: any, tz: string) {
   );
 }
 
+function resolveWeekdayDateISO(userText: string, tz: string, baseISO?: string | null) {
+  const s = normalizeText(userText);
+
+  // Luxon weekday: 1=Mon ... 7=Sun
+  const map: Record<string, number> = {
+    // ES
+    lunes: 1,
+    martes: 2,
+    miercoles: 3,
+    miércoles: 3,
+    jueves: 4,
+    viernes: 5,
+    sabado: 6,
+    sábado: 6,
+    domingo: 7,
+
+    // EN (abreviaciones y full)
+    mon: 1,
+    monday: 1,
+    tue: 2,
+    tues: 2,
+    tuesday: 2,
+    wed: 3,
+    weds: 3,
+    wednesday: 3,
+    thu: 4,
+    thur: 4,
+    thurs: 4,
+    thursday: 4,
+    fri: 5,
+    friday: 5,
+    sat: 6,
+    saturday: 6,
+    sun: 7,
+    sunday: 7,
+  };
+
+  // busca si el texto contiene algún día
+  let target: number | null = null;
+  for (const k of Object.keys(map)) {
+    if (new RegExp(`\\b${k}\\b`, "i").test(s)) {
+      target = map[k];
+      break;
+    }
+  }
+  if (!target) return null;
+
+  const base = baseISO
+    ? DateTime.fromFormat(baseISO, "yyyy-MM-dd", { zone: tz })
+    : DateTime.now().setZone(tz).startOf("day");
+
+  const diff = (target - base.weekday + 7) % 7; // 0..6
+  const picked = base.plus({ days: diff });
+
+  return picked.toFormat("yyyy-MM-dd");
+}
+
 export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   handled: boolean;
   reply?: string;
@@ -194,120 +251,54 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
       };
     }
   
-    // ✅ 1) Si hay slots ofrecidos, prioriza selección por número aunque venga con texto ("ok 3", "la 2", etc.)
-    if (slotsShown.length) {
-    const m = String(userText || "")
-        .replace(/[^\d]/g, " ")  // deja solo dígitos separados
-        .trim()
-        .match(/\b(\d{1,2})\b/);
-
-    if (m) {
-        const n = Number(m[1]);
-        if (Number.isFinite(n) && n >= 1 && n <= slotsShown.length) {
-          const picked = slotsShown[n - 1];
-
-        const nextBooking = {
-            ...booking,
-            timeZone: tz,
-            picked_start: picked.startISO,
-            picked_end: picked.endISO,
-            start_time: picked.startISO,     // ✅ clave: hidrata también start/end
-            end_time: picked.endISO,
-            slots: [],                       // ✅ limpia lista
-            // preserva fecha contexto para que no se pierda
-            date_only: getCtxDateFromBookingOrSlots(slotsShown, booking, tz),
-            last_offered_date: getCtxDateFromBookingOrSlots(slotsShown, booking, tz),
-        };
-
-        const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone: tz, idioma });
-
-        // ✅ Decide siguiente paso según datos faltantes
-        const missingName = !nextBooking?.name;
-        const missingEmail = !nextBooking?.email;
-
-        if (missingName && missingEmail) {
-            return {
-            handled: true,
-            reply:
-                idioma === "en"
-                ? `Perfect — I can do ${whenTxt}. Before I confirm, send your full name and email in ONE message (example: John Smith, john@email.com).`
-                : `Perfecto — puedo ${whenTxt}. Antes de confirmarla, envíame tu nombre completo y tu email en *un solo mensaje* (ej: Juan Pérez, juan@email.com).`,
-            ctxPatch: { booking: { ...nextBooking, step: "ask_all" }, booking_last_touch_at: Date.now() },
-            };
-        }
-
-        if (missingName) {
-            return {
-            handled: true,
-            reply:
-                idioma === "en"
-                ? `Perfect — I can do ${whenTxt}. What’s your full name?`
-                : `Perfecto — puedo ${whenTxt}. ¿Cuál es tu nombre completo?`,
-            ctxPatch: { booking: { ...nextBooking, step: "ask_name" }, booking_last_touch_at: Date.now() },
-            };
-        }
-
-        if (missingEmail) {
-            return {
-            handled: true,
-            reply:
-                idioma === "en"
-                ? `Perfect — I can do ${whenTxt}. What’s your email? (example: name@email.com)`
-                : `Perfecto — puedo ${whenTxt}. ¿Cuál es tu email? (ej: nombre@email.com)`,
-            ctxPatch: { booking: { ...nextBooking, step: "ask_email" }, booking_last_touch_at: Date.now() },
-            };
-        }
-
-        // ✅ Ya tiene nombre + email -> confirm directo
-        return {
-            handled: true,
-            reply:
-            idioma === "en"
-                ? `Perfect — to confirm ${whenTxt}, reply YES or NO.`
-                : `Perfecto — para confirmar ${whenTxt}, responde SI o NO.`,
-            ctxPatch: { booking: { ...nextBooking, step: "confirm" }, booking_last_touch_at: Date.now() },
-        };
-        }
-    }
-    }
-
     const hhmm = extractTimeOnlyToken(userText);
 
     if (hhmm) {
 
-    if (!hours) {
+      if (!hours) {
         return {
-        handled: true,
-        reply: idioma === "en"
+          handled: true,
+          reply: idioma === "en"
             ? "What date is that for? (example: 2026-01-26)"
             : "¿Para qué fecha sería? (ej: 2026-01-26)",
-        ctxPatch: { booking, booking_last_touch_at: Date.now() },
+          ctxPatch: { booking, booking_last_touch_at: Date.now() },
         };
-    }
+      }
 
-    // ✅ si el usuario escribió una fecha ("lunes", "mañana", "26 ene"), úsala por encima del ctx
-    const dateFromText = extractDateOnlyToken(userText, tz);
+      // ✅ si el usuario escribió una fecha ("lunes", "mañana", "26 ene"), úsala por encima del ctx
+      const dateFromText = extractDateOnlyToken(userText, tz);
 
-    const ctxDate =
-        dateFromText ||
+      // ✅ NUEVO: si escribió "miércoles / wed", conviértelo a yyyy-MM-dd
+      const baseForWeekday =
         (booking as any)?.date_only ||
         (booking as any)?.last_offered_date ||
         (slots?.[0]?.startISO
-        ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
-        : null);
+          ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
+          : null);
 
-    if (!ctxDate) {
+      const weekdayDate = resolveWeekdayDateISO(userText, tz, baseForWeekday);
+
+      const ctxDate =
+        dateFromText ||
+        weekdayDate ||
+        (booking as any)?.date_only ||
+        (booking as any)?.last_offered_date ||
+        (slots?.[0]?.startISO
+          ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
+          : null);
+
+      if (!ctxDate) {
         return {
-        handled: true,
-        reply: idioma === "en"
+          handled: true,
+          reply: idioma === "en"
             ? "What date should I check? (example: 2026-01-26)"
             : "¿Qué fecha debo revisar? (ej: 2026-01-26)",
-        ctxPatch: { booking, booking_last_touch_at: Date.now() },
+          ctxPatch: { booking, booking_last_touch_at: Date.now() },
         };
-    }
+      }
 
-    // ✅ 1) Siempre calcula el día completo para saber si existe EXACTO (2pm)
-    let allDaySlots = sortSlotsAsc(
+      // ✅ 1) Siempre calcula el día completo para saber si existe EXACTO (2pm)
+      let allDaySlots = sortSlotsAsc(
         await getSlotsForDate({
         tenantId,
         timeZone: tz,
@@ -316,46 +307,46 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         bufferMin,
         hours,
         })
-    );
+      );
 
-    if (daypart) allDaySlots = filterSlotsByDaypart(allDaySlots, tz, daypart);
+      if (daypart) allDaySlots = filterSlotsByDaypart(allDaySlots, tz, daypart);
 
-    const exact = allDaySlots.find((s) => {
+      const exact = allDaySlots.find((s) => {
         const start = DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm");
         return start === hhmm;
-    });
+      });
 
-    // ✅ Si existe EXACTO -> CONFIRM (opción B)
-    if (exact) {
+      // ✅ Si existe EXACTO -> CONFIRM (opción B)
+      if (exact) {
         const pretty = DateTime.fromISO(exact.startISO, { zone: tz })
         .setLocale(idioma === "en" ? "en" : "es")
         .toFormat(idioma === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
 
         return {
-        handled: true,
-        reply: idioma === "en"
+          handled: true,
+          reply: idioma === "en"
             ? `Perfect, I have ${pretty}. Do you want to confirm? (yes/no)`
             : `Perfecto, tengo ${pretty}. ¿Confirmas ese horario? (sí/no)`,
-        ctxPatch: {
+          ctxPatch: {
             booking: {
-            ...booking,
-            step: "confirm",
-            timeZone: tz,
-            picked_start: exact.startISO,
-            picked_end: exact.endISO,
-            start_time: exact.startISO,
-            end_time: exact.endISO,
-            last_offered_date: ctxDate,
-            date_only: ctxDate,
-            slots: [], // ✅ sin lista
-            },
+              ...booking,
+              step: "confirm",
+              timeZone: tz,
+              picked_start: exact.startISO,
+              picked_end: exact.endISO,
+              start_time: exact.startISO,
+              end_time: exact.endISO,
+              last_offered_date: ctxDate,
+              date_only: ctxDate,
+              slots: [], // ✅ sin lista
+              },
             booking_last_touch_at: Date.now(),
-        },
+          },
         };
-    }
+      }
 
-    // ✅ Si NO existe exacto -> decirlo explícitamente + ofrecer cercanos
-    const near = sortSlotsAsc(
+      // ✅ Si NO existe exacto -> decirlo explícitamente + ofrecer cercanos
+      const near = sortSlotsAsc(
         filterSlotsNearTime({
         slots: allDaySlots,     // ✅ usa TODO el día, no booking.slots recortado
         timeZone: tz,
@@ -363,11 +354,11 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         windowMinutes: 180,     // ±3h
         max: 5,
         })
-    );
+      );
 
-    const take = near.length ? near : allDaySlots.slice(0, 5);
+      const take = near.length ? near : allDaySlots.slice(0, 5);
 
-    return {
+      return {
         handled: true,
         reply: renderSlotsMessage({
           idioma,
@@ -387,9 +378,91 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         },
         booking_last_touch_at: Date.now(),
         },
-    };
+      };
     }
-  
+    
+    // ✅ Solo interpretamos "número de opción" si NO hay hora explícita
+    const hasExplicitTime =
+      !!extractTimeOnlyToken(userText) || !!extractTimeConstraint(userText);
+
+    // ✅ Solo interpretamos "número de opción" si NO hay hora explícita
+    if (!hasExplicitTime) {
+      const choice = parseSlotChoice(userText, slotsShown.length);
+
+      // ✅ Si NO eligió una opción válida, aquí mismo le pides 1-5
+      if (!choice) {
+        return {
+          handled: true,
+          reply:
+            idioma === "en"
+            ? `Reply with a number (1-${slotsShown.length}). You can also say a time like "2pm" or "14:00".`
+            : `Responde con un número (1-${slotsShown.length}). También puedes decir una hora como "2pm" o "14:00".`,
+          ctxPatch: { booking, booking_last_touch_at: Date.now() },
+        };
+      }
+
+      const picked = slotsShown[choice - 1];
+
+      const nextBooking = {
+        ...booking,
+        timeZone: tz,
+        picked_start: picked.startISO,
+        picked_end: picked.endISO,
+        start_time: picked.startISO,
+        end_time: picked.endISO,
+        slots: [],
+        date_only: getCtxDateFromBookingOrSlots(slotsShown, booking, tz),
+        last_offered_date: getCtxDateFromBookingOrSlots(slotsShown, booking, tz),
+      };
+
+      const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone: tz, idioma });
+
+      const missingName = !nextBooking?.name;
+      const missingEmail = !nextBooking?.email;
+
+      if (missingName && missingEmail) {
+        return {
+          handled: true,
+          reply:
+            idioma === "en"
+            ? `Perfect — I can do ${whenTxt}. Before I confirm, send your full name and email in ONE message (example: John Smith, john@email.com).`
+            : `Perfecto — puedo ${whenTxt}. Antes de confirmarla, envíame tu nombre completo y tu email en *un solo mensaje* (ej: Juan Pérez, juan@email.com).`,
+          ctxPatch: { booking: { ...nextBooking, step: "ask_all" }, booking_last_touch_at: Date.now() },
+        };
+      }
+
+      if (missingName) {
+        return {
+          handled: true,
+          reply:
+            idioma === "en"
+            ? `Perfect — I can do ${whenTxt}. What’s your full name?`
+            : `Perfecto — puedo ${whenTxt}. ¿Cuál es tu nombre completo?`,
+          ctxPatch: { booking: { ...nextBooking, step: "ask_name" }, booking_last_touch_at: Date.now() },
+        };
+      }
+
+      if (missingEmail) {
+        return {
+          handled: true,
+          reply:
+            idioma === "en"
+            ? `Perfect — I can do ${whenTxt}. What’s your email? (example: name@email.com)`
+            : `Perfecto — puedo ${whenTxt}. ¿Cuál es tu email? (ej: nombre@email.com)`,
+          ctxPatch: { booking: { ...nextBooking, step: "ask_email" }, booking_last_touch_at: Date.now() },
+        };
+      }
+
+      return {
+        handled: true,
+        reply:
+          idioma === "en"
+            ? `Perfect — to confirm ${whenTxt}, reply YES or NO.`
+            : `Perfecto — para confirmar ${whenTxt}, responde SI o NO.`,
+        ctxPatch: { booking: { ...nextBooking, step: "confirm" }, booking_last_touch_at: Date.now() },
+      };
+    }
+
     // ✅ 2) Si el usuario pide "otras horas / otro horario / más tarde / más temprano"
     if (wantsMoreSlots(userText) && hours) {
       // intenta misma fecha si la tienes
@@ -559,69 +632,13 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
       ctxPatch: { booking, booking_last_touch_at: Date.now() },
     };
   }
-  
-  // ✅ Selección por número (1-5) (solo número exacto)
-  const choice = parseSlotChoice(userText, slotsShown.length);
-
-  if (!choice) {
-    return {
-      handled: true,
-      reply: idioma === "en"
-        ? `Reply with a number (1-${slotsShown.length}). You can also say a time like "2pm" or "14:00".`
-        : `Responde con un número (1-${slotsShown.length}). También puedes decir una hora como "2pm" o "14:00".`,
-      ctxPatch: { booking, booking_last_touch_at: Date.now() },
-    };
-  }
-
-  const picked = slotsShown[choice - 1];
-
-  const nextBooking = {
-    ...booking,
-    timeZone: tz,
-    picked_start: picked.startISO,
-    picked_end: picked.endISO,
-    start_time: picked.startISO,
-    end_time: picked.endISO,
-    slots: [],
-    date_only: getCtxDateFromBookingOrSlots(slotsShown, booking, tz),
-    last_offered_date: getCtxDateFromBookingOrSlots(slotsShown, booking, tz),
-  };
-
-  const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone: tz, idioma });
-
-  const missingName = !nextBooking?.name;
-  const missingEmail = !nextBooking?.email;
-
-  if (missingName && missingEmail) {
+    // ✅ Fallback FINAL: garantiza return en todos los caminos (evita ts(2366))
     return {
       handled: true,
       reply:
         idioma === "en"
-          ? `Perfect — I can do ${whenTxt}. Before I confirm, send your full name and email in ONE message (example: John Smith, john@email.com).`
-          : `Perfecto — puedo ${whenTxt}. Antes de confirmarla, envíame tu nombre completo y tu email en *un solo mensaje* (ej: Juan Pérez, juan@email.com).`,
-      ctxPatch: { booking: { ...nextBooking, step: "ask_all" }, booking_last_touch_at: Date.now() },
+          ? `Reply with a number (1-${slotsShown.length}). You can also say a time like "2pm" or "14:00".`
+          : `Responde con un número (1-${slotsShown.length}). También puedes decir una hora como "2pm" o "14:00".`,
+      ctxPatch: { booking, booking_last_touch_at: Date.now() },
     };
-  }
-
-  if (missingName) {
-    return {
-      handled: true,
-      reply: idioma === "en" ? `Perfect — I can do ${whenTxt}. What’s your full name?` : `Perfecto — puedo ${whenTxt}. ¿Cuál es tu nombre completo?`,
-      ctxPatch: { booking: { ...nextBooking, step: "ask_name" }, booking_last_touch_at: Date.now() },
-    };
-  }
-
-  if (missingEmail) {
-    return {
-      handled: true,
-      reply: idioma === "en" ? `Perfect — I can do ${whenTxt}. What’s your email?` : `Perfecto — puedo ${whenTxt}. ¿Cuál es tu email?`,
-      ctxPatch: { booking: { ...nextBooking, step: "ask_email" }, booking_last_touch_at: Date.now() },
-    };
-  }
-
-  return {
-    handled: true,
-    reply: idioma === "en" ? `Perfect — to confirm ${whenTxt}, reply YES or NO.` : `Perfecto — para confirmar ${whenTxt}, responde SI o NO.`,
-    ctxPatch: { booking: { ...nextBooking, step: "confirm" }, booking_last_touch_at: Date.now() },
-  };
 }
