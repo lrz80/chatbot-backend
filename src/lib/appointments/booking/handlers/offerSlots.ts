@@ -19,6 +19,7 @@ import {
   filterSlotsByConstraint,
   filterSlotsNearTime,
   formatSlotHuman,
+  filterSlotsByDaypart,
 } from "../time";
 
 import { getSlotsForDate, getSlotsForDateWindow } from "../slots";
@@ -77,6 +78,12 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   const slotsRaw: Slot[] = Array.isArray(booking?.slots) ? booking.slots : [];
   const slots: Slot[] = sortSlotsAsc(slotsRaw);
   
+  const tz = booking?.timeZone || timeZone;
+  const daypart = ((booking as any)?.daypart || null) as ("morning" | "afternoon" | null);
+
+  // ✅ Esto es EXACTAMENTE lo que el usuario debe ver y elegir
+  const slotsShown: Slot[] = daypart ? filterSlotsByDaypart(slots, tz, daypart) : slots;
+
       if (!slots.length) {
         return {
           handled: true,
@@ -96,7 +103,6 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   
       // 0) CAMBIO DE DÍA (antes que wantsMoreSlots)
       if (wantsAnotherDay(userText) && hours) {
-        const tz = booking.timeZone || timeZone;
   
         const ctxDate =
           (booking as any)?.date_only ||
@@ -111,7 +117,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
             .plus({ days: 1 })
             .toFormat("yyyy-MM-dd");
   
-          const nextSlots = sortSlotsAsc(
+          let nextSlots = sortSlotsAsc(
             await getSlotsForDate({
                 tenantId,
                 timeZone: tz,
@@ -120,23 +126,26 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
                 bufferMin,
                 hours,
             })
-            );
+          );
+
+          if (daypart) nextSlots = filterSlotsByDaypart(nextSlots, tz, daypart);
 
           if (nextSlots.length) {
+            const take = nextSlots.slice(0, 5);
             return {
-              handled: true,
-              reply: renderSlotsMessage({ idioma, timeZone: tz, slots: nextSlots.slice(0, 5) }),
-              ctxPatch: {
+                handled: true,
+                reply: renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
+                ctxPatch: {
                 booking: {
-                  ...booking,
-                  step: "offer_slots",
-                  timeZone: tz,
-                  slots: nextSlots.slice(0, 5),
-                  last_offered_date: nextDate,
-                  date_only: nextDate,
+                    ...booking,
+                    step: "offer_slots",
+                    timeZone: tz,
+                    slots: take,                 // ✅ guarda lo filtrado
+                    last_offered_date: nextDate,
+                    date_only: nextDate,
                 },
                 booking_last_touch_at: Date.now(),
-              },
+                },
             };
           }
         }
@@ -160,8 +169,8 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
           handled: true,
           reply: renderSlotsMessage({
             idioma,
-            timeZone: booking.timeZone || timeZone,
-            slots
+            timeZone: tz,
+            slots: slotsShown,
           }),
           ctxPatch: { booking, booking_last_touch_at: Date.now() },
         };
@@ -186,7 +195,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     }
   
     // ✅ 1) Si hay slots ofrecidos, prioriza selección por número aunque venga con texto ("ok 3", "la 2", etc.)
-    if (slots.length) {
+    if (slotsShown.length) {
     const m = String(userText || "")
         .replace(/[^\d]/g, " ")  // deja solo dígitos separados
         .trim()
@@ -194,9 +203,8 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
 
     if (m) {
         const n = Number(m[1]);
-        if (Number.isFinite(n) && n >= 1 && n <= slots.length) {
-        const picked = slots[n - 1];
-        const tz = booking?.timeZone || timeZone;
+        if (Number.isFinite(n) && n >= 1 && n <= slotsShown.length) {
+          const picked = slotsShown[n - 1];
 
         const nextBooking = {
             ...booking,
@@ -207,8 +215,8 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
             end_time: picked.endISO,
             slots: [],                       // ✅ limpia lista
             // preserva fecha contexto para que no se pierda
-            date_only: getCtxDateFromBookingOrSlots(slots, booking, tz),
-            last_offered_date: getCtxDateFromBookingOrSlots(slots, booking, tz),
+            date_only: getCtxDateFromBookingOrSlots(slotsShown, booking, tz),
+            last_offered_date: getCtxDateFromBookingOrSlots(slotsShown, booking, tz),
         };
 
         const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone: tz, idioma });
@@ -266,7 +274,6 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     const hhmm = extractTimeOnlyToken(userText);
 
     if (hhmm) {
-    const tz = booking.timeZone || timeZone;
 
     if (!hours) {
         return {
@@ -300,7 +307,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     }
 
     // ✅ 1) Siempre calcula el día completo para saber si existe EXACTO (2pm)
-    const allDaySlots = sortSlotsAsc(
+    let allDaySlots = sortSlotsAsc(
         await getSlotsForDate({
         tenantId,
         timeZone: tz,
@@ -310,6 +317,8 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         hours,
         })
     );
+
+    if (daypart) allDaySlots = filterSlotsByDaypart(allDaySlots, tz, daypart);
 
     const exact = allDaySlots.find((s) => {
         const start = DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm");
@@ -392,7 +401,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
           : null);
   
       if (ctxDate) {
-        const allDaySlots = sortSlotsAsc(
+        let allDaySlots = sortSlotsAsc(
             await getSlotsForDate({
               tenantId,
               timeZone: booking.timeZone || timeZone,
@@ -403,6 +412,8 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         })
       );
   
+      if (daypart) allDaySlots = filterSlotsByDaypart(allDaySlots, booking.timeZone || timeZone, daypart);
+
         // Si el día tiene más opciones que las actuales, reemplaza por las del día
         if (allDaySlots.length) {
           return {
@@ -456,8 +467,8 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     }
   
     const filtered = filterSlotsByConstraint({
-      slots,
-      timeZone: booking.timeZone || timeZone,
+      slots: slotsShown,
+      timeZone: tz,
       constraint,
       max: 5,
     });
@@ -467,14 +478,14 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         handled: true,
         reply: renderSlotsMessage({
           idioma,
-          timeZone: booking.timeZone || timeZone,
+          timeZone: tz,
           slots: filtered,
         }),
         ctxPatch: {
           booking: {
             ...booking,
             step: "offer_slots",
-            timeZone: booking.timeZone || timeZone,
+            timeZone: tz,
             slots: filtered,
           },
           booking_last_touch_at: Date.now(),
@@ -484,8 +495,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   
     // ✅ Si no hubo slots cercanos, y tenemos hhmm, re-busca con ventana (OPCIÓN D real)
     if (hours && hasHHMM(constraint)) {
-      const tz = booking.timeZone || timeZone;
-  
+      
       // determina fecha contexto: date_only o last_offered_date o del primer slot
       const ctxDate =
         (booking as any)?.date_only ||
@@ -504,7 +514,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         const windowStartHHmm = base.minus({ hours: 2 }).toFormat("HH:mm");
         const windowEndHHmm = base.plus({ hours: 3 }).toFormat("HH:mm");
   
-        const newSlots = sortSlotsAsc(
+        let newSlots = sortSlotsAsc(
           await getSlotsForDateWindow({
             tenantId,
             timeZone: tz,
@@ -516,7 +526,9 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
             windowEndHHmm,
           })
         );
-  
+
+        if (daypart) newSlots = filterSlotsByDaypart(newSlots, tz, daypart);
+
         if (newSlots.length) {
           const take = newSlots.slice(0, 5);
           return {
@@ -529,7 +541,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
                 timeZone: tz,
                 slots: take,
                 last_offered_date: ctxDate,
-                date_only: ctxDate, // opcional, ayuda a aceptar "HH:mm" luego
+                date_only: ctxDate,
               },
               booking_last_touch_at: Date.now(),
             },
@@ -549,20 +561,19 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   }
   
   // ✅ Selección por número (1-5) (solo número exacto)
-  const choice = parseSlotChoice(userText, slots.length);
+  const choice = parseSlotChoice(userText, slotsShown.length);
 
   if (!choice) {
     return {
       handled: true,
       reply: idioma === "en"
-        ? `Reply with a number (1-${slots.length}). You can also say a time like "2pm" or "14:00".`
-        : `Responde con un número (1-${slots.length}). También puedes decir una hora como "2pm" o "14:00".`,
+        ? `Reply with a number (1-${slotsShown.length}). You can also say a time like "2pm" or "14:00".`
+        : `Responde con un número (1-${slotsShown.length}). También puedes decir una hora como "2pm" o "14:00".`,
       ctxPatch: { booking, booking_last_touch_at: Date.now() },
     };
   }
 
-  const picked = slots[choice - 1];
-  const tz = booking?.timeZone || timeZone;
+  const picked = slotsShown[choice - 1];
 
   const nextBooking = {
     ...booking,
@@ -572,8 +583,8 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     start_time: picked.startISO,
     end_time: picked.endISO,
     slots: [],
-    date_only: getCtxDateFromBookingOrSlots(slots, booking, tz),
-    last_offered_date: getCtxDateFromBookingOrSlots(slots, booking, tz),
+    date_only: getCtxDateFromBookingOrSlots(slotsShown, booking, tz),
+    last_offered_date: getCtxDateFromBookingOrSlots(slotsShown, booking, tz),
   };
 
   const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone: tz, idioma });

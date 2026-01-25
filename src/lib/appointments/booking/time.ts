@@ -4,6 +4,18 @@ import type { HoursByWeekday } from "./types";
 
 export const MIN_LEAD_MINUTES = 5;
 
+type Slot = { startISO: string; endISO: string };
+
+export function filterSlotsByDaypart(slots: Slot[], tz: string, daypart: "morning" | "afternoon") {
+  return (slots || []).filter((s) => {
+    const h = DateTime.fromISO(s.startISO, { zone: tz }).hour;
+
+    // Ajusta si tu “tarde” empieza a las 12
+    if (daypart === "morning") return h < 12;
+    return h >= 12;
+  });
+}
+
 export function isPastSlot(startISO: string, timeZone: string) {
   const start = DateTime.fromISO(startISO, { zone: timeZone });
   const now = DateTime.now().setZone(timeZone);
