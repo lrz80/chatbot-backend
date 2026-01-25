@@ -1,5 +1,6 @@
 // src/lib/appointments/booking/handlers/askContact.ts
 import { formatSlotHuman } from "../time";
+import { parsePhone } from "../text";
 
 export type AskContactDeps = {
   tenantId: string;
@@ -23,6 +24,7 @@ export type AskContactDeps = {
     contacto: string;
     nombre: string;
     email: string;
+    telefono?: string | null;
   }) => Promise<any>;
 };
 
@@ -45,6 +47,8 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
     parseEmail,
     upsertClienteBookingData,
   } = deps;
+
+  const isMeta = canal === "facebook" || canal === "instagram"; // ✅ IG/FB requiere teléfono
 
   if (wantsToChangeTopic(userText)) {
     return { handled: false, ctxPatch: { booking: { step: "idle" } } };
@@ -94,6 +98,22 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
     };
   }
 
+  const phone = parsePhone(userText); // ✅ intenta extraer teléfono del mismo mensaje
+
+  if (isMeta && !phone) {
+    return {
+      handled: true,
+      reply:
+        idioma === "en"
+          ? "I’m missing your phone number (include country code). Example: +1 305 555 1234"
+          : "Me falta tu número de teléfono (con código de país). Ej: +1 305 555 1234",
+      ctxPatch: {
+        booking: { ...booking, step: "ask_contact" },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
   const startISO = (booking as any)?.picked_start || null;
   const endISO = (booking as any)?.picked_end || null;
 
@@ -107,6 +127,7 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
     contacto,
     nombre: name,
     email,
+    telefono: phone || null,
   });
 
   const whenTxt = formatSlotHuman({ startISO, timeZone, idioma });
@@ -123,6 +144,7 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
         timeZone,
         name,
         email,
+        phone: phone || null,
         start_time: startISO,
         end_time: endISO,
         picked_start: null,

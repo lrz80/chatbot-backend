@@ -189,6 +189,34 @@ if (!startISO || !endISO) {
   };
 }
 
+  const isMeta = canal === "facebook" || canal === "instagram";
+
+  // ✅ Phone correcto:
+  // - WA: contacto (número real de WhatsApp)
+  // - IG/FB: booking.phone (capturado en ask_contact)
+  const customerPhone =
+    isMeta ? String(hydratedBooking?.phone || "").trim() : String(contacto || "").trim();
+
+  const customerEmail = String(hydratedBooking?.email || "").trim() || null;
+
+  if (isMeta && !customerPhone) {
+    return {
+      handled: true,
+      reply:
+        idioma === "en"
+          ? "Before I confirm it, please send your phone number (include country code). Example: +1 305 555 1234"
+          : "Antes de confirmarla, envíame tu número de teléfono (con código de país). Ej: +1 305 555 1234",
+      ctxPatch: {
+        booking: {
+          ...hydratedBooking,
+          step: "ask_contact",
+          timeZone: hydratedBooking?.timeZone || timeZone,
+        },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
   // 6) crear appointment pending idempotente (dedupe real)
   const customer_name = hydratedBooking?.name || "Cliente";
 
@@ -196,8 +224,8 @@ if (!startISO || !endISO) {
     tenantId,
     channel: canal,
     customer_name,
-    customer_phone: contacto,
-    customer_email: hydratedBooking.email,
+    customer_phone: customerPhone || undefined,
+    customer_email: customerEmail || undefined,
     start_time: startISO,
     end_time: endISO,
   });
@@ -210,7 +238,7 @@ if (!startISO || !endISO) {
     };
   }
 
-  // 6) si ya estaba confirmado, responde idempotente
+  // 7) si ya estaba confirmado, responde idempotente
   if (pending.status === "confirmed" && pending.google_event_link) {
     return {
       handled: true,
@@ -219,7 +247,7 @@ if (!startISO || !endISO) {
     };
   }
 
-  // 7) si google no conectado, salir limpio
+  // 8) si google no conectado, salir limpio
   if (!googleConnected) {
     return {
       handled: true,
@@ -228,12 +256,12 @@ if (!startISO || !endISO) {
     };
   }
 
-  // 8) intentar reservar en Google
-  const g = await bookInGoogle({
+  // 9) intentar reservar en Google
+    const g = await bookInGoogle({
     tenantId,
     customer_name,
-    customer_phone: contacto,
-    customer_email: hydratedBooking.email,
+    customer_phone: customerPhone || null,
+    customer_email: customerEmail || null,
     startISO,
     endISO,
     timeZone,

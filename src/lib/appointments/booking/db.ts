@@ -153,21 +153,23 @@ export async function upsertClienteBookingData(opts: {
   contacto: string;
   nombre?: string | null;
   email?: string | null;
+  telefono?: string | null;
 }) {
-  const { tenantId, canal, contacto, nombre, email } = opts;
+  const { tenantId, canal, contacto, nombre, email, telefono } = opts;
 
   try {
     await pool.query(
       `
-      INSERT INTO clientes (tenant_id, canal, contacto, nombre, email, updated_at, created_at)
-      VALUES ($1,$2,$3,$4,$5, NOW(), NOW())
+      INSERT INTO clientes (tenant_id, canal, contacto, nombre, email, telefono, updated_at, created_at)
+      VALUES ($1,$2,$3,$4,$5,$6, NOW(), NOW())
       ON CONFLICT (tenant_id, canal, contacto)
       DO UPDATE SET
-        nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
-        email  = COALESCE(EXCLUDED.email,  clientes.email),
+        nombre   = COALESCE(EXCLUDED.nombre,   clientes.nombre),
+        email    = COALESCE(EXCLUDED.email,    clientes.email),
+        telefono = COALESCE(EXCLUDED.telefono, clientes.telefono),
         updated_at = NOW()
       `,
-      [tenantId, canal, contacto, nombre || null, email || null]
+      [tenantId, canal, contacto, nombre || null, email || null, telefono || null]
     );
   } catch (e: any) {
     console.warn("⚠️ upsertClienteBookingData failed:", e?.message);

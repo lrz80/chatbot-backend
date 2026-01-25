@@ -2,6 +2,7 @@
 import { DateTime } from "luxon";
 
 export const EMAIL_REGEX = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+export const PHONE_REGEX = /(\+?\d[\d\s().-]{7,}\d)/;
 
 export function normalizeText(s: string) {
   return String(s || "")
@@ -659,6 +660,18 @@ export function parseEmail(input: string) {
   if (!raw) return null;
   const ok = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(raw);
   return ok ? raw : null;
+}
+
+export function parsePhone(text: string): string | null {
+  const raw = String(text || "").trim();
+  const m = raw.match(PHONE_REGEX)?.[0] || null;
+  if (!m) return null;
+
+  let cleaned = m.replace(/[^\d+]/g, "");
+  const digits = cleaned.replace(/[^\d]/g, "");
+  if (digits.length < 8) return null;
+
+  return cleaned;
 }
 
 export function parseFullName(input: string) {

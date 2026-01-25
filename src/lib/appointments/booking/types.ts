@@ -12,7 +12,8 @@ export type BookingCtx = {
       | "ask_all"
       | "ask_name"
       | "ask_email"
-      | "ask_datetime";
+      | "ask_datetime"
+      | "ask_phone";
 
     start_time?: string | null;
     end_time?: string | null;
@@ -20,6 +21,7 @@ export type BookingCtx = {
 
     name?: string | null;
     email?: string | null;
+    phone?: string | null;
     purpose?: string | null;
 
     date_only?: string | null;
