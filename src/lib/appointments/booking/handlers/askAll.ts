@@ -51,8 +51,18 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
     parseDateTimeExplicit,
   } = deps;
 
+  // ✅ Hydrate: preservar slot elegido aunque venga en picked_*
+  const hydratedBooking = {
+    ...booking,
+    timeZone,
+    start_time: booking?.start_time || booking?.picked_start || null,
+    end_time: booking?.end_time || booking?.picked_end || null,
+  };
+
+  const hasChosenSlot = !!hydratedBooking.start_time && !!hydratedBooking.end_time;
+
   if (wantsToChangeTopic(userText)) {
-    return { handled: false, ctxPatch: { booking: { step: "idle" } } };
+    return { handled: false, ctxPatch: { booking: { ...hydratedBooking, step: "idle" } } };
   }
 
   if (wantsToCancel(userText)) {
@@ -93,10 +103,11 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
             : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
         ctxPatch: {
           booking: {
+            ...hydratedBooking,
             step: "ask_datetime",
             timeZone,
-            name: parsed?.name || booking?.name || null,
-            email: parsed?.email || booking?.email || null,
+            name: parsed?.name || hydratedBooking?.name || null,
+            email: parsed?.email || hydratedBooking?.email || null,
             date_only: null,
           },
           booking_last_touch_at: Date.now(),
@@ -120,6 +131,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
             : "Esa fecha ya pasó. Envíame una fecha futura (YYYY-MM-DD).",
         ctxPatch: {
           booking: {
+            ...hydratedBooking,
             step: "ask_datetime",
             timeZone,
             name: parsed.name,
@@ -142,6 +154,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
             : `Perfecto — ¿a qué hora te gustaría el ${dateOnly}? Respóndeme con HH:mm (ej: 14:00).`,
         ctxPatch: {
           booking: {
+            ...hydratedBooking,
             step: "ask_datetime",
             timeZone,
             name: parsed.name,
@@ -169,13 +182,40 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
       reply: renderSlotsMessage({ idioma, timeZone, slots }),
       ctxPatch: {
         booking: {
+            ...hydratedBooking,
           step: "offer_slots",
           timeZone,
           name: parsed.name,
           email: parsed.email,
-          purpose: booking?.purpose || null,
+          purpose: hydratedBooking?.purpose || null,
           date_only: dateOnly,
           slots,
+        },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
+  // ✅ Caso CLAVE: ya existe slot elegido (start/end), pero el usuario mandó nombre+email
+  // (por ejemplo viene de confirm -> ask_all). No debemos pedir fecha/hora otra vez.
+  if (hasChosenSlot && parsed?.name && parsed?.email && !parsed?.startISO) {
+    const whenTxt = formatSlotHuman({ startISO: hydratedBooking.start_time, timeZone, idioma });
+
+    return {
+      handled: true,
+      reply:
+        idioma === "en"
+          ? `Perfect — I’ve got your details. To confirm ${whenTxt}, reply YES or NO.`
+          : `Perfecto — ya tengo tus datos. Para confirmar ${whenTxt}, responde SI o NO.`,
+      ctxPatch: {
+        booking: {
+          ...hydratedBooking,
+          step: "confirm",
+          name: parsed.name,
+          email: parsed.email,
+          // conservar start/end ya elegidos
+          start_time: hydratedBooking.start_time,
+          end_time: hydratedBooking.end_time,
         },
         booking_last_touch_at: Date.now(),
       },
@@ -193,6 +233,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
           : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
       ctxPatch: {
         booking: {
+          ...hydratedBooking,
           step: "confirm",
           timeZone,
           name: parsed.name,
@@ -215,9 +256,10 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
           : "Me falta tu nombre y apellido (ej: Juan Pérez).",
       ctxPatch: {
         booking: {
+          ...hydratedBooking,
           step: "ask_name",
           timeZone,
-          email: parsed?.email || booking?.email || null,
+          email: parsed?.email || hydratedBooking?.email || null,
         },
         booking_last_touch_at: Date.now(),
       },
@@ -233,9 +275,10 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
           : "Me falta tu email (ej: nombre@email.com).",
       ctxPatch: {
         booking: {
+          ...hydratedBooking,
           step: "ask_email",
           timeZone,
-          name: parsed?.name || booking?.name || null,
+          name: parsed?.name || hydratedBooking?.name || null,
         },
         booking_last_touch_at: Date.now(),
       },
@@ -251,10 +294,11 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
         : "Me falta la fecha y hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-21 14:00).",
     ctxPatch: {
       booking: {
+        ...hydratedBooking,
         step: "ask_datetime",
         timeZone,
-        name: parsed?.name || booking?.name || null,
-        email: parsed?.email || booking?.email || null,
+        name: parsed?.name || hydratedBooking?.name || null,
+        email: parsed?.email || hydratedBooking?.email || null,
       },
       booking_last_touch_at: Date.now(),
     },
