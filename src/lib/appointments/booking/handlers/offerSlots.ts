@@ -256,6 +256,9 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     // Detectar horas sin am/pm ("a las 3", "las 4", "para las 11")
     let hhmmFallback = null;
     const mSimple = userText.match(/\b(?:a\s*las|a\s*la|las)\s*(\d{1,2})(?:[:.](\d{2}))?\b/i);
+    const missingAmPmSimple = !!mSimple && !/\b(am|a\.m\.|pm|p\.m\.)\b/i.test(userText);
+    const simpleHour = mSimple ? Number(mSimple[1]) : null;
+    const simpleMin = mSimple ? Number(mSimple[2] || "0") : null;
 
     if (mSimple) {
     let h = Number(mSimple[1]);
@@ -328,9 +331,25 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
 
       if (daypart) allDaySlots = filterSlotsByDaypart(allDaySlots, tz, daypart);
 
+      // ✅ Desambiguar "a las 3" sin AM/PM cuando NO hay daypart:
+      // probamos 03:00 y luego 15:00 si aplica y existe en slots del día
+      const candidates: string[] = [hhmmFixed];
+
+      if (
+        missingAmPmSimple &&
+        daypart == null &&
+        simpleHour != null &&
+        simpleMin != null &&
+        simpleHour >= 1 && simpleHour <= 11
+      ) {
+        const hhPm = simpleHour + 12;
+        const hhmmPm = `${String(hhPm).padStart(2, "0")}:${String(simpleMin).padStart(2, "0")}`;
+        if (!candidates.includes(hhmmPm)) candidates.push(hhmmPm);
+      }
+
       const exact = allDaySlots.find((s) => {
         const start = DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm");
-        return start === hhmmFixed;
+        return candidates.includes(start);
       });
 
       // ✅ Si existe EXACTO -> CONFIRM (opción B)
@@ -362,14 +381,21 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         };
       }
 
-      // ✅ Si NO existe exacto -> decirlo explícitamente + ofrecer cercanos
+      // ✅ Si el PM candidate existe en los slots del día, úsalo para buscar cercanos
+      const pmCandidate = candidates[1];
+      const pmExists =
+        !!pmCandidate &&
+        allDaySlots.some(
+          (s) => DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm") === pmCandidate
+        );
+
       const near = sortSlotsAsc(
         filterSlotsNearTime({
-        slots: allDaySlots,     // ✅ usa TODO el día, no booking.slots recortado
-        timeZone: tz,
-        hhmm: hhmmFixed, 
-        windowMinutes: 180,     // ±3h
-        max: 5,
+          slots: allDaySlots, // ✅ usa TODO el día
+          timeZone: tz,
+          hhmm: pmExists ? pmCandidate : candidates[0],
+          windowMinutes: 180, // ±3h
+          max: 5,
         })
       );
 
