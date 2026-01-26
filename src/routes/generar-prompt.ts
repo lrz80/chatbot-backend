@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v6"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v7"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -306,31 +306,94 @@ function splitLinesSmart(text: string) {
 // "Nombre del negocio: X", "Servicios principales:", "- a", "- b", etc.
 function parseKeyValueTemplate(text: string) {
   const lines = splitLinesSmart(text);
+
   const kv: Record<string, string[]> = {};
   let currentKey: string | null = null;
 
   const push = (key: string, value: string) => {
     const k = key.trim();
     if (!kv[k]) kv[k] = [];
-    if (value.trim()) kv[k].push(value.trim());
+    const v = (value || "").trim();
+    if (v) kv[k].push(v);
   };
 
+  // ✅ Solo permitimos headings conocidos (multi-negocio)
+  const normalizeKey = (raw: string) => raw.trim().toLowerCase();
+
+  const allowedKeys = new Map<string, string>([
+    ["nombre del negocio", "Nombre del negocio"],
+    ["tipo de negocio", "Tipo de negocio"],
+    ["ubicación", "Ubicación"],
+    ["ubicacion", "Ubicación"],
+    ["teléfono", "Teléfono"],
+    ["telefono", "Teléfono"],
+
+    ["servicios", "Servicios"],
+    ["servicios principales", "Servicios principales"],
+
+    ["horarios", "Horarios"],
+    ["horario", "Horarios"],
+
+    ["precios", "Precios"],
+    ["precios o cómo consultar precios", "Precios"],
+    ["precios o como consultar precios", "Precios"],
+
+    ["reservas", "Reservas"],
+    ["reservas / contacto", "Reservas / contacto"],
+    ["reservas / contacto:", "Reservas / contacto"], // por si viene con :
+    ["contacto", "Contacto"],
+    ["reservas / contacto", "Reservas / contacto"],
+    ["reservas / contacto", "Reservas / contacto"],
+
+    ["políticas", "Políticas"],
+    ["politicas", "Políticas"],
+    ["política", "Políticas"],
+    ["politica", "Políticas"],
+  ]);
+
+  const isUrlLine = (s: string) => /^https?:\/\//i.test(s) || /^mailto:/i.test(s) || /^tel:/i.test(s);
+
   for (const raw of lines) {
-    const line = raw.trim();
+    const line = (raw || "").trim();
     if (!line) continue;
 
-    // Key: Value
-    const m = line.match(/^([^:]{2,60}):\s*(.*)$/);
-    if (m) {
-      currentKey = m[1].trim();
-      const v = (m[2] || "").trim();
-      if (v) push(currentKey, v);
+    // ✅ Si es URL, nunca la tomes como key: value
+    if (isUrlLine(line)) {
+      if (currentKey) push(currentKey, line);
       continue;
     }
 
-    // List item under current key
+    // ✅ Heading tipo "Horarios:" o "Precios:" (SIN necesidad de value)
+    const heading = line.match(/^([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 \/]+):\s*$/);
+    if (heading) {
+      const keyNorm = normalizeKey(heading[1]);
+      const canonical = allowedKeys.get(keyNorm);
+      if (canonical) {
+        currentKey = canonical;
+        continue;
+      }
+      // si no es heading permitido, lo ignoramos (para evitar llaves basura)
+      currentKey = null;
+      continue;
+    }
+
+    // ✅ Formato "Key: Value" solo si Key es permitida y NO es URL
+    const kvLine = line.match(/^([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 \/]{2,60}):\s*(.+)$/);
+    if (kvLine) {
+      const keyNorm = normalizeKey(kvLine[1]);
+      const canonical = allowedKeys.get(keyNorm);
+      if (canonical) {
+        currentKey = canonical;
+        push(currentKey, kvLine[2]);
+        continue;
+      }
+      // key no permitida -> no la uses
+      currentKey = null;
+      continue;
+    }
+
+    // ✅ Item bajo key actual: "- item" o "• item"
     if (currentKey) {
-      // permite "- item" o "• item"
       const item = line.replace(/^[-•]\s*/, "").trim();
       if (item) push(currentKey, item);
     }
