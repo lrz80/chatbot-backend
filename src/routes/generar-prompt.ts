@@ -359,7 +359,7 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
   // Detecta si realmente era una plantilla (tiene llaves tipo "Nombre del negocio", etc.)
   const hasTemplateSignals =
     Object.keys(kv).some(k =>
-      /nombre del negocio|tipo de negocio|ubicaci[oó]n|servicios|horarios|precios|reservas|contacto/i.test(k)
+      /nombre del negocio|tipo de negocio|ubicaci[oó]n|servicios|servicios principales|horarios|precios|reservas|reservas \/ contacto|contacto/i.test(k)
     );
 
   if (hasTemplateSignals) {
