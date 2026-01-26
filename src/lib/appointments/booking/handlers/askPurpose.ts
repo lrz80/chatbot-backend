@@ -63,7 +63,7 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
           ? "Got it. Is it an appointment, class, consultation, or a call?"
           : "Entiendo. ¿Es una cita, clase, consulta o llamada?",
       ctxPatch: {
-        booking: { ...booking, step: "ask_purpose", timeZone },
+        booking: { ...booking, step: "ask_purpose", timeZone, lang: idioma },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -81,6 +81,7 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
         step: "ask_daypart",
         timeZone,
         purpose,
+        lang: booking?.lang || idioma,
       },
       booking_last_touch_at: Date.now(),
     },

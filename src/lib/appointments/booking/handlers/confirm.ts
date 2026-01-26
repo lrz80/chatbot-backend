@@ -87,12 +87,15 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     end_time: booking?.end_time || booking?.picked_end || null,
   };
 
+  const effectiveLang: "es" | "en" =
+  (hydratedBooking?.lang as any) || idioma;
+
   // 1) cancelación explícita (aunque no haya respondido yes/no)
   if (wantsToCancel(userText)) {
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
           : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
       ctxPatch: { booking: { step: "idle" }, booking_last_touch_at: Date.now() },
@@ -103,8 +106,14 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
   if (!yes && !no) {
     return {
       handled: true,
-      reply: idioma === "en" ? "Please reply YES to confirm or NO to cancel." : "Responde SI para confirmar o NO para cancelar.",
-      ctxPatch: { booking: hydratedBooking, booking_last_touch_at: Date.now() },
+      reply: effectiveLang === "en" ? "Please reply YES to confirm or NO to cancel." : "Responde SI para confirmar o NO para cancelar.",
+      ctxPatch: {
+        booking: {
+          ...hydratedBooking,
+          lang: (hydratedBooking?.lang as any) || idioma, // ✅
+        },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -113,15 +122,15 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "No problem. Send me another date and time (YYYY-MM-DD HH:mm)."
           : "Perfecto. Envíame otra fecha y hora (YYYY-MM-DD HH:mm).",
       ctxPatch: {
         booking: {
-          ...booking,
+          ...hydratedBooking,
           step: "ask_datetime",
           timeZone: hydratedBooking?.timeZone || timeZone,
-          name: booking?.name || null,
+          name: hydratedBooking?.name || null,
           email: booking?.email || null,
           purpose: booking?.purpose || null,
           start_time: null,
@@ -146,17 +155,17 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     if (missingName || missingEmail || missingPhone) {
       // Mensaje: 1 solo paso. Ejemplos distintos para WA vs Meta
       const example = isMeta
-        ? (idioma === "en"
+        ? (effectiveLang === "en"
             ? "John Smith, john@email.com, +13055551234"
             : "Juan Pérez, juan@email.com, +13055551234")
-        : (idioma === "en"
+        : (effectiveLang === "en"
             ? "John Smith, john@email.com"
             : "Juan Pérez, juan@email.com");
 
       return {
         handled: true,
         reply:
-          idioma === "en"
+          effectiveLang === "en"
             ? `Perfect. Before I book it, send ${isMeta ? "your full name, email, and phone" : "your full name and email"} in ONE message. Example: ${example}`
             : `Perfecto. Antes de agendarla, envíame ${isMeta ? "tu nombre completo, email y teléfono" : "tu nombre completo y tu email"} en *un solo mensaje*. Ej: ${example}`,
         ctxPatch: {
@@ -164,6 +173,7 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
             ...hydratedBooking,
             step: "ask_all",
             timeZone: hydratedBooking?.timeZone || timeZone,
+            lang: (hydratedBooking?.lang as any) || idioma,
           },
           booking_last_touch_at: Date.now(),
         },
@@ -179,10 +189,17 @@ if (!startISO || !endISO) {
   return {
     handled: true,
     reply:
-      idioma === "en"
+      effectiveLang === "en"
         ? "Send me the date and time (YYYY-MM-DD HH:mm)."
         : "Envíame la fecha y hora (YYYY-MM-DD HH:mm).",
-    ctxPatch: { booking: { ...hydratedBooking, step: "ask_datetime" }, booking_last_touch_at: Date.now() },
+    ctxPatch: {
+      booking: {
+        ...hydratedBooking,
+        step: "ask_datetime",
+        lang: (hydratedBooking?.lang as any) || idioma, // ✅
+      },
+      booking_last_touch_at: Date.now(),
+    },
   };
 }
 
@@ -215,8 +232,19 @@ if (!startISO || !endISO) {
   if (!pending) {
     return {
       handled: true,
-      reply: idioma === "en" ? "Something went wrong creating your booking. Please try again." : "Ocurrió un problema creando la reserva. Por favor intenta de nuevo.",
-      ctxPatch: { booking: { step: "ask_datetime", timeZone }, booking_last_touch_at: Date.now() },
+      reply: effectiveLang === "en" ? "Something went wrong creating your booking. Please try again." : "Ocurrió un problema creando la reserva. Por favor intenta de nuevo.",
+      ctxPatch: {
+        booking: {
+          ...hydratedBooking,
+          step: "ask_datetime",
+          timeZone: hydratedBooking?.timeZone || timeZone,
+          start_time: null,
+          end_time: null,
+          date_only: null,
+          lang: (hydratedBooking?.lang as any) || idioma,
+        },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -224,7 +252,7 @@ if (!startISO || !endISO) {
   if (pending.status === "confirmed" && pending.google_event_link) {
     return {
       handled: true,
-      reply: idioma === "en" ? `Already booked. ${pending.google_event_link}`.trim() : `Ya quedó agendado. ${pending.google_event_link}`.trim(),
+      reply: effectiveLang === "en" ? `Already booked. ${pending.google_event_link}`.trim() : `Ya quedó agendado. ${pending.google_event_link}`.trim(),
       ctxPatch: { booking: { step: "idle" }, booking_last_touch_at: Date.now() },
     };
   }
@@ -233,7 +261,7 @@ if (!startISO || !endISO) {
   if (!googleConnected) {
     return {
       handled: true,
-      reply: idioma === "en" ? "Scheduling isn’t available for this business right now." : "El agendamiento no está disponible en este momento para este negocio.",
+      reply: effectiveLang === "en" ? "Scheduling isn’t available for this business right now." : "El agendamiento no está disponible en este momento para este negocio.",
       ctxPatch: { booking: { step: "idle" }, booking_last_touch_at: Date.now() },
     };
   }
@@ -278,7 +306,7 @@ if (!startISO || !endISO) {
           const take = slots.slice(0, 5);
           return {
             handled: true,
-            reply: renderSlotsMessage({ idioma, timeZone, slots: take }),
+            reply: renderSlotsMessage({ idioma: effectiveLang, timeZone, slots: take }),
             ctxPatch: {
               booking: {
                 ...hydratedBooking,
@@ -287,6 +315,7 @@ if (!startISO || !endISO) {
                 slots: take,
                 date_only: dateISO,
                 last_offered_date: dateISO,
+                lang: (hydratedBooking?.lang as any) || idioma,
               },
               booking_last_touch_at: Date.now(),
             },
@@ -299,10 +328,21 @@ if (!startISO || !endISO) {
       return {
         handled: true,
         reply:
-          idioma === "en"
+          effectiveLang === "en"
             ? "That date/time is in the past. Please send a future date and time (YYYY-MM-DD HH:mm)."
             : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
-        ctxPatch: { booking: { step: "ask_datetime", timeZone }, booking_last_touch_at: Date.now() },
+        ctxPatch: {
+          booking: {
+            ...hydratedBooking,
+            step: "ask_datetime",
+            timeZone: hydratedBooking?.timeZone || timeZone,
+            start_time: null,
+            end_time: null,
+            date_only: null,
+            lang: (hydratedBooking?.lang as any) || idioma,
+          },
+          booking_last_touch_at: Date.now(),
+        },
       };
     }
 
@@ -310,20 +350,42 @@ if (!startISO || !endISO) {
       return {
         handled: true,
         reply:
-          idioma === "en"
+          effectiveLang === "en"
             ? "That time is outside business hours. Please choose a different time."
             : "Ese horario está fuera del horario de atención. Elige otro horario.",
-        ctxPatch: { booking: { step: "ask_datetime", timeZone }, booking_last_touch_at: Date.now() },
+        ctxPatch: {
+          booking: {
+            ...hydratedBooking,
+            step: "ask_datetime",
+            timeZone: hydratedBooking?.timeZone || timeZone,
+            start_time: null,
+            end_time: null,
+            date_only: null,
+            lang: (hydratedBooking?.lang as any) || idioma,
+          },
+          booking_last_touch_at: Date.now(),
+        },
       };
     }
 
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "That time doesn’t seem to be available. Could you send me another date and time? (YYYY-MM-DD HH:mm)"
           : "Ese horario ya no está disponible. ¿Me compartes otra fecha y hora? (YYYY-MM-DD HH:mm)",
-      ctxPatch: { booking: { step: "ask_datetime", timeZone }, booking_last_touch_at: Date.now() },
+      ctxPatch: {
+        booking: {
+          ...hydratedBooking,
+          step: "ask_datetime",
+          timeZone: hydratedBooking?.timeZone || timeZone,
+          start_time: null,
+          end_time: null,
+          date_only: null,
+          lang: (hydratedBooking?.lang as any) || idioma,
+        },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -339,7 +401,7 @@ if (!startISO || !endISO) {
   return {
     handled: true,
     reply:
-      idioma === "en"
+      effectiveLang === "en"
         ? `You're all set — your appointment is confirmed. ${g.htmlLink || ""}`.trim()
         : `Perfecto, tu cita quedó confirmada. ${g.htmlLink || ""}`.trim(),
     ctxPatch: {

@@ -20,6 +20,7 @@ export type BookingCtx = {
     name?: string | null;
     email?: string | null;
     phone?: string | null;
+    lang?: "es" | "en";
     purpose?: string | null;
 
     date_only?: string | null;

@@ -117,7 +117,7 @@ export function handleStartBooking(deps: StartBookingDeps): {
           ? "Sure! What would you like to schedule — an appointment, a consultation, or a call?"
           : "¡Claro! ¿Qué te gustaría agendar? Una cita, una consulta o una llamada.",
       ctxPatch: {
-        booking: { step: "ask_purpose", timeZone },
+        booking: { step: "ask_purpose", timeZone, lang: idioma },
         booking_last_touch_at: Date.now(),
       },
     };
