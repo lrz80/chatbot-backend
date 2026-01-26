@@ -16,26 +16,82 @@ const router = express.Router();
 router.get(
   "/",
   authenticateUser,
-  async (
-    req: Request & {
-      user?: { uid: string; tenant_id: string; email?: string };
-    },
-    res: Response
-  ) => {
+  async (req, res) => {
     try {
-      const user = req.user;
+      const tenantId = req.user?.tenant_id;
+      if (!tenantId)
+        return res.status(401).json({ ok: false, error: "TENANT_NOT_FOUND_IN_TOKEN" });
 
-      if (!user?.tenant_id) {
-        return res.status(401).json({
-          ok: false,
-          error: "TENANT_NOT_FOUND_IN_TOKEN",
-        });
+      // Filtros opcionales
+      const {
+        canal,
+        estado,
+        cliente,
+        telefono,
+        desde,
+        hasta,
+      } = req.query;
+
+      // Construcción dinámica del WHERE
+      const where = [`a.tenant_id = $1`];
+      const params: any[] = [tenantId];
+      let idx = 2;
+
+      if (canal) {
+        const c = String(Array.isArray(canal) ? canal[0] : canal).trim().toLowerCase();
+        where.push(`LOWER(a.channel) = $${idx++}`);
+        params.push(c);
       }
 
-      const tenantId = user.tenant_id;
+      if (estado) {
+        const raw = String(Array.isArray(estado) ? estado[0] : estado).trim().toLowerCase();
 
-      const { rows } = await pool.query(
-        `
+        const map: Record<string, string> = {
+          // español -> db
+          "pendiente": "pending",
+          "confirmada": "confirmed",
+          "cancelada": "cancelled",
+          "atendida": "attended",
+
+          // por si llegan ya en inglés/db
+          "pending": "pending",
+          "confirmed": "confirmed",
+          "cancelled": "cancelled",
+          "attended": "attended",
+        };
+
+        const s = map[raw];
+        if (s) {
+          where.push(`a.status = $${idx++}`);
+          params.push(s);
+        }
+      }
+
+      if (cliente) {
+        const q = String(Array.isArray(cliente) ? cliente[0] : cliente).trim();
+        where.push(`a.customer_name ILIKE $${idx++}`);
+        params.push(`%${q}%`);
+      }
+
+      if (telefono) {
+        const q = String(Array.isArray(telefono) ? telefono[0] : telefono).trim();
+        where.push(`a.customer_phone ILIKE $${idx++}`);
+        params.push(`%${q}%`);
+      }
+
+      if (desde) {
+        where.push(`a.start_time >= $${idx++}`);
+        params.push(desde);
+      }
+
+      if (hasta) {
+        where.push(`a.start_time <= $${idx++}`);
+        params.push(hasta);
+      }
+
+      const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+      const query = `
         SELECT
           a.id,
           a.tenant_id,
@@ -52,23 +108,18 @@ router.get(
           a.updated_at
         FROM appointments a
         LEFT JOIN services s ON s.id = a.service_id
-        WHERE a.tenant_id = $1
+        ${whereSQL}
         ORDER BY a.start_time DESC
-        LIMIT 50
-        `,
-        [tenantId]
-      );
+        LIMIT 200
+      `;
 
-      return res.json({
-        ok: true,
-        appointments: rows,
-      });
-    } catch (error) {
-      console.error("[GET /api/appointments] Error:", error);
-      return res.status(500).json({
-        ok: false,
-        error: "INTERNAL_SERVER_ERROR",
-      });
+      const { rows } = await pool.query(query, params);
+
+      return res.json({ ok: true, appointments: rows });
+
+    } catch (e) {
+      console.error("GET /appointments error:", e);
+      return res.status(500).json({ ok: false, error: "INTERNAL_SERVER_ERROR" });
     }
   }
 );
