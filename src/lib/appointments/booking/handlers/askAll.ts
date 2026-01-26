@@ -261,8 +261,8 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
       handled: true,
       reply:
         idioma === "en"
-          ? `Perfect — I’ve got your details. To confirm ${whenTxt}, reply YES or NO.`
-          : `Perfecto — ya tengo tus datos. Para confirmar ${whenTxt}, responde SI o NO.`,
+          ? `Perfect — everything is ready. To finalize ${whenTxt}, reply YES or NO.`
+          : `Perfecto — ya tengo todo listo. Para finalizar ${whenTxt}, responde SI o NO.`,
         ctxPatch: {
           booking: {
             ...hydratedBooking,
