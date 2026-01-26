@@ -5,7 +5,8 @@ import type { HoursByWeekday } from "./types";
 type DayHours = { start: string; end: string }; // local helper
 
 export async function getAppointmentSettings(tenantId: string) {
-  const { rows } = await pool.query(
+  // 1) Asegura fila (si no existe)
+  await pool.query(
     `
     INSERT INTO appointment_settings (
       tenant_id,
@@ -16,15 +17,24 @@ export async function getAppointmentSettings(tenantId: string) {
       min_lead_minutes
     )
     VALUES ($1, 30, 10, 'America/New_York', true, 60)
-    ON CONFLICT (tenant_id)
-    DO UPDATE SET tenant_id = EXCLUDED.tenant_id
-    RETURNING
+    ON CONFLICT (tenant_id) DO NOTHING
+    `,
+    [tenantId]
+  );
+
+  // 2) Lee settings
+  const { rows } = await pool.query(
+    `
+    SELECT
       tenant_id,
       default_duration_min,
       buffer_min,
       timezone,
       enabled,
       min_lead_minutes
+    FROM appointment_settings
+    WHERE tenant_id = $1
+    LIMIT 1
     `,
     [tenantId]
   );
@@ -37,6 +47,49 @@ export async function getAppointmentSettings(tenantId: string) {
     enabled: r.enabled !== false,
     minLeadMinutes: Number(r.min_lead_minutes ?? 60),
   };
+}
+
+export async function updateAppointmentSettings(
+  tenantId: string,
+  patch: Partial<{
+    durationMin: number;
+    bufferMin: number;
+    timeZone: string;
+    enabled: boolean;
+    minLeadMinutes: number;
+  }>
+) {
+  // Lee current (y asegura fila)
+  const current = await getAppointmentSettings(tenantId);
+
+  // Merge (solo lo que venga definido)
+  const merged = {
+    ...current,
+    ...Object.fromEntries(Object.entries(patch).filter(([_, v]) => v !== undefined)),
+  };
+
+  await pool.query(
+    `
+    UPDATE appointment_settings
+    SET
+      default_duration_min = $2,
+      buffer_min           = $3,
+      timezone             = $4,
+      enabled              = $5,
+      min_lead_minutes     = $6
+    WHERE tenant_id = $1
+    `,
+    [
+      tenantId,
+      Number(merged.durationMin),
+      Number(merged.bufferMin),
+      String(merged.timeZone),
+      merged.enabled !== false,
+      Number(merged.minLeadMinutes),
+    ]
+  );
+
+  return merged;
 }
 
 export async function getBusinessHours(tenantId: string): Promise<HoursByWeekday | null> {

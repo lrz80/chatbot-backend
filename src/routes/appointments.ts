@@ -4,6 +4,8 @@ import pool from "../lib/db";
 import { authenticateUser } from "../middleware/auth";
 import axios from "axios";
 import { enviarMensajePorPartes } from "../lib/enviarMensajePorPartes";
+import { getAppointmentSettings, updateAppointmentSettings } from "../lib/appointments/booking/db";
+
 
 const router = express.Router();
 
@@ -256,6 +258,113 @@ router.put(
         ok: false,
         error: "INTERNAL_SERVER_ERROR",
       });
+    }
+  }
+);
+
+/**
+ * GET /api/appointments/settings
+ * Devuelve appointment_settings del tenant autenticado (incluye min_lead_minutes).
+ */
+router.get(
+  "/settings",
+  authenticateUser,
+  async (
+    req: Request & { user?: { uid: string; tenant_id: string; email?: string } },
+    res: Response
+  ) => {
+    try {
+      const tenantId = req.user?.tenant_id;
+      if (!tenantId) {
+        return res.status(401).json({ ok: false, error: "TENANT_NOT_FOUND_IN_TOKEN" });
+      }
+
+      const settings = await getAppointmentSettings(tenantId);
+
+      return res.json({ ok: true, settings });
+    } catch (error) {
+      console.error("[GET /api/appointments/settings] Error:", error);
+      return res.status(500).json({ ok: false, error: "INTERNAL_SERVER_ERROR" });
+    }
+  }
+);
+
+/**
+ * PATCH /api/appointments/settings
+ * Actualiza appointment_settings del tenant (minLeadMinutes, durationMin, bufferMin, timeZone, enabled).
+ */
+router.patch(
+  "/settings",
+  authenticateUser,
+  async (
+    req: Request & { user?: { uid: string; tenant_id: string; email?: string } },
+    res: Response
+  ) => {
+    try {
+      const tenantId = req.user?.tenant_id;
+      if (!tenantId) {
+        return res.status(401).json({ ok: false, error: "TENANT_NOT_FOUND_IN_TOKEN" });
+      }
+
+      const {
+        durationMin,
+        bufferMin,
+        timeZone,
+        enabled,
+        minLeadMinutes,
+      } = (req.body || {}) as {
+        durationMin?: any;
+        bufferMin?: any;
+        timeZone?: any;
+        enabled?: any;
+        minLeadMinutes?: any;
+      };
+
+      // Validación/normalización mínima (no revientes por NaN)
+      const patch: any = {};
+
+      if (durationMin !== undefined) {
+        const v = Number(durationMin);
+        if (!Number.isFinite(v) || v <= 0) {
+          return res.status(400).json({ ok: false, error: "INVALID_durationMin" });
+        }
+        patch.durationMin = v;
+      }
+
+      if (bufferMin !== undefined) {
+        const v = Number(bufferMin);
+        if (!Number.isFinite(v) || v < 0) {
+          return res.status(400).json({ ok: false, error: "INVALID_bufferMin" });
+        }
+        patch.bufferMin = v;
+      }
+
+      if (minLeadMinutes !== undefined) {
+        const v = Number(minLeadMinutes);
+        if (!Number.isFinite(v) || v < 0) {
+          return res.status(400).json({ ok: false, error: "INVALID_minLeadMinutes" });
+        }
+        patch.minLeadMinutes = v;
+      }
+
+      if (timeZone !== undefined) {
+        const tz = String(timeZone || "").trim();
+        if (!tz) {
+          return res.status(400).json({ ok: false, error: "INVALID_timeZone" });
+        }
+        patch.timeZone = tz;
+      }
+
+      if (enabled !== undefined) {
+        patch.enabled = !!enabled;
+      }
+
+      const settings = await updateAppointmentSettings(tenantId, patch);
+
+      return res.json({ ok: true, settings });
+    } catch (error) {
+      console.error("[PATCH /api/appointments/settings] Error:", error);
+      return res.status(500).json({ ok: false, error: "INTERNAL_SERVER_ERROR" });
     }
   }
 );
