@@ -109,7 +109,7 @@ router.get(
         FROM appointments a
         LEFT JOIN services s ON s.id = a.service_id
         ${whereSQL}
-        ORDER BY a.start_time DESC
+        ORDER BY a.start_time ASC
         LIMIT 200
       `;
 
