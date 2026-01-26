@@ -17,7 +17,8 @@ import { getSlotsForDate } from "../slots";
 type ParseDateTimeExplicitFn = (
   input: string,
   timeZone: string,
-  durationMin: number
+  durationMin: number,
+  minLeadMinutes: number
 ) => any;
 
 export type AskAllDeps = {
@@ -33,6 +34,7 @@ export type AskAllDeps = {
   hours: any | null; // HoursByWeekday | null
 
   parseDateTimeExplicit: ParseDateTimeExplicitFn;
+  minLeadMinutes: number; 
 };
 
 export async function handleAskAll(deps: AskAllDeps): Promise<{
@@ -50,6 +52,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
     durationMin,
     bufferMin,
     hours,
+    minLeadMinutes,
     parseDateTimeExplicit,
   } = deps;
 
@@ -92,7 +95,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
     };
   }
 
-  const parsed = parseAllInOne(userText, timeZone, durationMin, parseDateTimeExplicit);
+  const parsed = parseAllInOne(userText, timeZone, durationMin, minLeadMinutes, parseDateTimeExplicit);
 
   // ✅ Merge: lo que llega del usuario + lo que ya teníamos
   const name = (parsed?.name || hydratedBooking?.name || "").trim() || null;
@@ -107,7 +110,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
   // ✅ Si vino fecha/hora pero era en el pasado, dilo explícitamente
   const dtToken = extractDateTimeToken(userText);
   if (dtToken) {
-    const chk: any = parseDateTimeExplicit(dtToken, timeZone, durationMin);
+    const chk: any = parseDateTimeExplicit(dtToken, timeZone, durationMin, minLeadMinutes);
     if (chk?.error === "PAST_SLOT") {
       return {
         handled: true,
@@ -131,7 +134,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
   }
 
   // ✅ Caso: el usuario manda SOLO fecha (YYYY-MM-DD) + name/email pero sin hora
-  const dateOnly = extractDateOnlyToken(userText);
+  const dateOnly = extractDateOnlyToken(userText, timeZone);
   if (dateOnly && parsed?.name && parsed?.email && !parsed?.startISO) {
     // bloquea fecha pasada
     const dateOnlyDt = DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: timeZone });
@@ -189,21 +192,25 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
       durationMin,
       bufferMin,
       hours,
+      minLeadMinutes,
     });
+
+    const take = (slots || []).slice(0, 5);
 
     return {
       handled: true,
-      reply: renderSlotsMessage({ idioma, timeZone, slots }),
+      reply: renderSlotsMessage({ idioma, timeZone, slots: take }),
       ctxPatch: {
         booking: {
-            ...hydratedBooking,
+          ...hydratedBooking,
           step: "offer_slots",
           timeZone,
           name: parsed.name,
           email: parsed.email,
           purpose: hydratedBooking?.purpose || null,
           date_only: dateOnly,
-          slots,
+          slots: take,
+          last_offered_date: dateOnly, // ✅ útil para "otro día" / "más horarios"
         },
         booking_last_touch_at: Date.now(),
       },

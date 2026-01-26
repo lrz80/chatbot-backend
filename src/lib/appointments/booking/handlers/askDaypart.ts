@@ -24,6 +24,7 @@ export type AskDaypartDeps = {
   durationMin: number;
   bufferMin: number;
   hours: any | null; // HoursByWeekday | null
+  minLeadMinutes: number;
 };
 
 function inferDaypartFromHHMM(hhmm: string): "morning" | "afternoon" {
@@ -111,6 +112,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     durationMin,
     bufferMin,
     hours,
+    minLeadMinutes,
   } = deps;
 
   if (wantsToChangeTopic(userText)) {
@@ -190,6 +192,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       hours,
       windowStartHHmm,
       windowEndHHmm,
+      minLeadMinutes,
     });
 
     // 1) Si existe EXACTO, pasamos a confirm (NO lista)
@@ -300,7 +303,8 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       durationMin,
       bufferMin,
       hours,
-      dateOnly, // yyyy-MM-dd
+      dateOnly, 
+      minLeadMinutes,
     });
 
     if (!slotsForDay?.length) {
@@ -408,6 +412,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       hours,
       windowStartHHmm,
       windowEndHHmm,
+      minLeadMinutes,
     });
 
     console.log(
@@ -504,6 +509,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       durationMin,
       bufferMin,
       hours,
+      minLeadMinutes,
     });
 
     console.log(
@@ -651,6 +657,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     hours,
     daypart: dp,
     daysAhead: 7,
+    minLeadMinutes,
   });
 
   const dateOnlyFromFirst = slots?.[0]?.startISO

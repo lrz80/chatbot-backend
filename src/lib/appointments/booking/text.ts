@@ -379,7 +379,7 @@ export function extractDateOnlyToken(input: string, timeZone?: string): string |
       const targetDow = dias[d];
       const currDow = today.weekday; // lunes=1...domingo=7
       let diff = targetDow - currDow;
-      if (diff <= 0) diff += 7; // siguiente ocurrencia
+      if (diff < 0) diff += 7; // permite hoy
       return today.plus({ days: diff }).toFormat("yyyy-MM-dd");
     }
   }
@@ -507,20 +507,25 @@ if (hasTimeCue) {
 export function buildDateTimeFromText(
   text: string,
   timeZone: string,
-  durationMin: number
-): { startISO: string; endISO: string } | null {
+  durationMin: number,
+  opts?: {
+    minLeadMinutes?: number;          // default 5
+    businessHours?: { start: string; end: string }; // "09:00" - "17:00"
+  }
+):
+  | { startISO: string; endISO: string }
+  | { error: "PAST_SLOT" | "OUTSIDE_HOURS" }
+  | null {
   const dateISO = extractDateOnlyToken(text, timeZone);
   const hhmm = extractTimeOnlyToken(text);
 
   if (!dateISO || !hhmm) return null;
 
-  // Parse hh:mm
   const [hStr, mStr] = hhmm.split(":");
   let hh = Number(hStr);
   const mm = Number(mStr);
 
   // Heurística AM/PM cuando NO hay señal explícita:
-  // Si el texto NO tiene am/pm y el usuario dijo "a las/para las" con 1-7 -> asumir PM (15:00-19:00)
   const s = String(text || "").toLowerCase();
   const hasAmPm = /\b(am|pm|a\.m\.|p\.m\.)\b/.test(s);
   const hasAtCue = /\b(a\s+la(s)?|para\s+la(s)?)\b/.test(s);
@@ -529,13 +534,36 @@ export function buildDateTimeFromText(
     hh += 12; // 3 -> 15
   }
 
-  const start = DateTime.fromISO(`${dateISO}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00`, { zone: timeZone });
+  const start = DateTime.fromISO(
+    `${dateISO}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00`,
+    { zone: timeZone }
+  );
 
   if (!start.isValid) return null;
 
-  // (Opcional) evita slots en el pasado
+  // ✅ Validación de LEAD TIME (MIN_LEAD_MINUTES)
   const now = DateTime.now().setZone(timeZone);
-  if (start < now.minus({ minutes: 1 })) return null;
+  const minLead = Math.max(0, opts?.minLeadMinutes ?? 5);
+  if (start < now.plus({ minutes: minLead })) {
+    return { error: "PAST_SLOT" }; // incluye "too soon"
+  }
+
+  // ✅ Validación de HORARIO de negocio (9am - 5pm)
+  const bh = opts?.businessHours;
+  if (bh?.start && bh?.end) {
+    const [oh, om] = bh.start.split(":").map(Number);
+    const [ch, cm] = bh.end.split(":").map(Number);
+
+    const open = start.set({ hour: oh, minute: om, second: 0, millisecond: 0 });
+    const close = start.set({ hour: ch, minute: cm, second: 0, millisecond: 0 });
+
+    // start debe estar dentro del rango y el END no puede pasar el cierre
+    const end = start.plus({ minutes: durationMin });
+
+    if (start < open || end > close) {
+      return { error: "OUTSIDE_HOURS" };
+    }
+  }
 
   const end = start.plus({ minutes: durationMin });
   return { startISO: start.toISO()!, endISO: end.toISO()! };
@@ -706,6 +734,7 @@ export function parseAllInOne(
   input: string,
   timeZone: string,
   durationMin: number,
+  minLeadMinutes: number,
   parseDateTimeExplicit: any
 ) {
   const raw = String(input || "").trim();
@@ -715,7 +744,7 @@ export function parseAllInOne(
 
   // 2) DateTime explícito (YYYY-MM-DD HH:mm)
   const dtToken = extractDateTimeToken(raw);
-  const dtParsed = dtToken ? parseDateTimeExplicit(dtToken, timeZone, durationMin) : null;
+  const dtParsed = dtToken ? parseDateTimeExplicit(dtToken, timeZone, durationMin, minLeadMinutes) : null;
 
   const startISO =
     (dtParsed as any)?.error === "PAST_SLOT" ? null : (dtParsed as any)?.startISO || null;

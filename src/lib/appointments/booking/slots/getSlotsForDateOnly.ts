@@ -12,10 +12,14 @@ export async function getSlotsForDateOnly(opts: {
   durationMin: number;
   bufferMin: number;
   hours: HoursByWeekday | null;
+  minLeadMinutes: number;
   dateOnly: string;      // yyyy-MM-dd
   afterISO?: string | null;
 }): Promise<Slot[]> {
-  const { tenantId, timeZone, durationMin, bufferMin, hours, dateOnly } = opts;
+  const { tenantId, timeZone, durationMin, bufferMin, hours, dateOnly, minLeadMinutes } = opts;
+
+  const lead = Number(minLeadMinutes);
+  const safeLead = Number.isFinite(lead) && lead >= 0 ? lead : 0;
 
   if (!hours) return [];
 
@@ -60,6 +64,7 @@ export async function getSlotsForDateOnly(opts: {
     durationMin,
     bufferMin,
     timeZone,
+    minLeadMinutes: safeLead,
   });
 
   const out: Slot[] = [];

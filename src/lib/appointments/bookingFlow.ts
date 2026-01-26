@@ -23,12 +23,10 @@ import {
   wantsToChangeTopic,
   matchesBookingIntent,
   parseFullName,
-  normalizeText,
 } from "./booking/text";
 import { handleAskEmailPhone } from "./booking/handlers/askEmailPhone";
 
 import {
-  MIN_LEAD_MINUTES,
   parseDateTimeExplicit,
   isWithinBusinessHours,
 } from "./booking/time";
@@ -54,6 +52,7 @@ async function bookInGoogle(opts: {
   endISO: string;
   timeZone: string;
   bufferMin: number;
+  minLeadMinutes: number;
 }) {
   const { tenantId, customer_name, startISO, endISO, timeZone, bufferMin } = opts;
 
@@ -66,7 +65,10 @@ async function bookInGoogle(opts: {
 
   // ✅ BLOQUEO FINAL: NO permitir eventos en el pasado
   const now = DateTime.now().setZone(timeZone);
-  if (start < now.plus({ minutes: MIN_LEAD_MINUTES })) {
+  const lead = Number(opts.minLeadMinutes);
+  const safeLead = Number.isFinite(lead) && lead >= 0 ? lead : 0;
+
+  if (start < now.plus({ minutes: safeLead })) {
     return { ok: false as const, error: "PAST_SLOT" as const, busy: [] as any[] };
   }
 
@@ -223,12 +225,27 @@ export async function bookingFlowMvp(opts: {
     return { handled: false };
   }
 
-  // ✅ timezone real del negocio (prioridad: ctx > settings > fallback)
-  const timeZone = booking.timeZone || apptSettings.timezone || "America/New_York";
+  const timeZone = booking.timeZone || apptSettings.timeZone || "America/New_York";
 
-  // ✅ valores MVP
-  const durationMin = apptSettings.default_duration_min ?? 30;
-  const bufferMin = apptSettings.buffer_min ?? 10;
+  const durationMin = apptSettings.durationMin ?? 30;
+  const bufferMin = apptSettings.bufferMin ?? 10;
+
+  const lead = Number(apptSettings.minLeadMinutes);
+  const minLeadMinutes = Number.isFinite(lead) && lead >= 0 ? lead : 0;
+
+  const bookInGoogleTenant = (args: {
+    tenantId: string;
+    customer_name: string;
+    customer_phone?: string | null;
+    customer_email?: string | null;
+    startISO: string;
+    endISO: string;
+    timeZone: string;
+    bufferMin: number;
+  }) => bookInGoogle({ ...args, minLeadMinutes });
+
+  const parseDateTimeExplicitTenant = (input: string, tz: string, dur: number) =>
+  parseDateTimeExplicit(input, tz, dur, minLeadMinutes);
 
   const hours = await getBusinessHours(tenantId);
 
@@ -387,6 +404,7 @@ if (booking.step === "ask_daypart") {
     durationMin,
     bufferMin,
     hours,
+    minLeadMinutes,
   });
 }
 
@@ -401,7 +419,8 @@ if (booking.step === "ask_all") {
     durationMin,
     bufferMin,
     hours,
-    parseDateTimeExplicit,
+    minLeadMinutes, // ✅
+    parseDateTimeExplicit: parseDateTimeExplicitTenant,            
   });
 }
 
@@ -433,6 +452,7 @@ if (booking.step === "offer_slots") {
     durationMin,
     bufferMin,
     hours,
+    minLeadMinutes,
   });
 }
 
@@ -464,7 +484,7 @@ if (booking.step === "ask_email_phone") {
       timeZone,
       durationMin,
       hours,
-      parseDateTimeExplicit,
+      parseDateTimeExplicit: parseDateTimeExplicitTenant,
     });
   }
 
@@ -480,11 +500,12 @@ if (booking.step === "ask_email_phone") {
       durationMin,
       bufferMin,
       hours,
+      minLeadMinutes,
       googleConnected,
       createPendingAppointmentOrGetExisting,
       markAppointmentFailed,
       markAppointmentConfirmed,
-      bookInGoogle,
+      bookInGoogle: bookInGoogleTenant,
     });
   }
 

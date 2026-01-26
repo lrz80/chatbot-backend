@@ -3,7 +3,7 @@ import { DateTime } from "luxon";
 import { googleFreeBusy } from "../../../services/googleCalendar";
 import type { GoogleFreeBusyResponse } from "../../../services/googleCalendar";
 import type { HoursByWeekday, Slot } from "./types";
-import { MIN_LEAD_MINUTES, parseHHmm, weekdayKey } from "./time";
+import { parseHHmm, weekdayKey } from "./time";
 import type { TimeConstraint } from "./text";
 
 
@@ -61,8 +61,12 @@ export function sliceIntoSlots(opts: {
   durationMin: number;
   bufferMin: number;
   timeZone: string;
+  minLeadMinutes: number; // ✅ NUEVO (tenant)
 }): Slot[] {
-  const { freeRanges, durationMin, bufferMin, timeZone } = opts;
+  const { freeRanges, durationMin, bufferMin, timeZone, minLeadMinutes } = opts;
+
+  const lead = Number(minLeadMinutes);
+  const safeLead = Number.isFinite(lead) && lead >= 0 ? lead : 0;
 
   const slots: Slot[] = [];
   const stepMin = Math.max(1, Number(durationMin || 0) + Number(bufferMin || 0));
@@ -71,7 +75,7 @@ export function sliceIntoSlots(opts: {
     let start = r.start;
 
     // lead time
-    const now = DateTime.now().setZone(timeZone).plus({ minutes: MIN_LEAD_MINUTES });
+    const now = DateTime.now().setZone(timeZone).plus({ minutes: safeLead });
     if (start < now) start = now;
 
     start = start.set({ second: 0, millisecond: 0 });
@@ -206,8 +210,12 @@ export async function getSlotsForDate(opts: {
   durationMin: number;
   bufferMin: number;
   hours: HoursByWeekday | null;
+  minLeadMinutes: number; 
 }): Promise<Slot[]> {
-  const { tenantId, timeZone, dateISO, durationMin, bufferMin, hours } = opts;
+  const { tenantId, timeZone, dateISO, durationMin, bufferMin, hours, minLeadMinutes } = opts;
+
+  const lead = Number(minLeadMinutes);
+  const safeLead = Number.isFinite(lead) && lead >= 0 ? lead : 0;
 
   const day = DateTime.fromFormat(dateISO, "yyyy-MM-dd", { zone: timeZone });
   if (!hours) return [];
@@ -225,7 +233,7 @@ export async function getSlotsForDate(opts: {
   const windowEnd = day.set({ hour: en.h, minute: en.min, second: 0, millisecond: 0 });
 
   // ✅ Si es hoy, no ofrezcas slots antes de (ahora + lead time)
-  const nowLead = DateTime.now().setZone(timeZone).plus({ minutes: MIN_LEAD_MINUTES });
+  const nowLead = DateTime.now().setZone(timeZone).plus({ minutes: safeLead });
   if (windowStart < nowLead && nowLead < windowEnd) {
     // mueve el inicio de la ventana al lead time
     // (mantiene el mismo día y respeta horario)
@@ -255,6 +263,7 @@ export async function getSlotsForDate(opts: {
     durationMin,
     bufferMin,
     timeZone,
+    minLeadMinutes: safeLead,
   });
 
   return slots; // NO cortes aquí
@@ -267,6 +276,7 @@ export async function getSlotsForDateWithConstraint(opts: {
   durationMin: number;
   bufferMin: number;
   hours: HoursByWeekday | null;
+  minLeadMinutes: number;
   constraint?: TimeConstraint | null;
   limit?: number;
 }): Promise<Slot[]> {
@@ -277,6 +287,7 @@ export async function getSlotsForDateWithConstraint(opts: {
     durationMin: opts.durationMin,
     bufferMin: opts.bufferMin,
     hours: opts.hours,
+    minLeadMinutes: opts.minLeadMinutes,
   });
 
   const filtered = applyTimeConstraintToSlots({
@@ -295,12 +306,16 @@ export async function getNextSlotsByDaypart(opts: {
   durationMin: number;
   bufferMin: number;
   hours: HoursByWeekday | null;
+  minLeadMinutes: number;
   daypart: "morning" | "afternoon";
   daysAhead?: number;
   afterISO?: string | null;
 }): Promise<Slot[]> {
   const { tenantId, timeZone, durationMin, bufferMin, hours, daypart } = opts;
   const daysAhead = opts.daysAhead ?? 7;
+
+  const lead = Number(opts.minLeadMinutes);
+  const safeLead = Number.isFinite(lead) && lead >= 0 ? lead : 0;
 
   if (!hours) return [];
 
@@ -357,6 +372,7 @@ export async function getNextSlotsByDaypart(opts: {
       durationMin,
       bufferMin,
       timeZone,
+      minLeadMinutes: safeLead,
     });
 
     for (const s of slots) {
@@ -397,12 +413,16 @@ export async function getSlotsForDateWindow(opts: {
   durationMin: number;
   bufferMin: number;
   hours: HoursByWeekday | null;
+  minLeadMinutes: number;
 
   // NUEVO: ventana dentro del día (HH:mm)
   windowStartHHmm: string; // "17:00"
   windowEndHHmm: string;   // "20:00"
 }): Promise<Slot[]> {
-  const { tenantId, timeZone, dateISO, durationMin, bufferMin, hours, windowStartHHmm, windowEndHHmm } = opts;
+  const { tenantId, timeZone, dateISO, durationMin, bufferMin, hours, windowStartHHmm, windowEndHHmm, minLeadMinutes } = opts;
+
+  const lead = Number(minLeadMinutes);
+  const safeLead = Number.isFinite(lead) && lead >= 0 ? lead : 0;
 
   const day = DateTime.fromFormat(dateISO, "yyyy-MM-dd", { zone: timeZone });
   if (!hours) return [];
@@ -430,7 +450,7 @@ export async function getSlotsForDateWindow(opts: {
   if (windowEnd > businessEnd) windowEnd = businessEnd;
 
   // Lead time si es hoy
-  const nowLead = DateTime.now().setZone(timeZone).plus({ minutes: MIN_LEAD_MINUTES });
+  const nowLead = DateTime.now().setZone(timeZone).plus({ minutes: safeLead });
   if (windowStart < nowLead && nowLead < windowEnd) {
     (windowStart as any) = nowLead.set({ second: 0, millisecond: 0 });
   }
@@ -458,6 +478,7 @@ export async function getSlotsForDateWindow(opts: {
     durationMin,
     bufferMin,
     timeZone,
+    minLeadMinutes: safeLead,
   });
 
   return slots;

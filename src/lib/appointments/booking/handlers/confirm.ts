@@ -18,6 +18,8 @@ type ConfirmDeps = {
   bufferMin: number;
   hours: any | null;
 
+  minLeadMinutes: number;
+
   googleConnected: boolean;
 
   // DB + side-effects (se inyectan)
@@ -66,6 +68,7 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     durationMin,
     bufferMin,
     hours,
+    minLeadMinutes,
     googleConnected,
     createPendingAppointmentOrGetExisting,
     markAppointmentFailed,
@@ -268,14 +271,23 @@ if (!startISO || !endISO) {
           durationMin,
           bufferMin,
           hours,
+          minLeadMinutes,
         });
 
         if (slots.length) {
+          const take = slots.slice(0, 5);
           return {
             handled: true,
-            reply: renderSlotsMessage({ idioma, timeZone, slots }),
+            reply: renderSlotsMessage({ idioma, timeZone, slots: take }),
             ctxPatch: {
-              booking: { ...hydratedBooking, step: "offer_slots", timeZone, slots },
+              booking: {
+                ...hydratedBooking,
+                step: "offer_slots",
+                timeZone,
+                slots: take,
+                date_only: dateISO,
+                last_offered_date: dateISO,
+              },
               booking_last_touch_at: Date.now(),
             },
           };

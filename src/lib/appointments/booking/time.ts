@@ -2,7 +2,6 @@
 import { DateTime } from "luxon";
 import type { HoursByWeekday } from "./types";
 
-export const MIN_LEAD_MINUTES = 5;
 
 type Slot = { startISO: string; endISO: string };
 
@@ -16,11 +15,15 @@ export function filterSlotsByDaypart(slots: Slot[], tz: string, daypart: "mornin
   });
 }
 
-export function isPastSlot(startISO: string, timeZone: string) {
+export function isPastSlot(startISO: string, timeZone: string, minLeadMinutes: number) {
   const start = DateTime.fromISO(startISO, { zone: timeZone });
   const now = DateTime.now().setZone(timeZone);
   if (!start.isValid) return true;
-  const minStart = now.plus({ minutes: MIN_LEAD_MINUTES });
+
+  const lead = Number(minLeadMinutes);
+  const safeLead = Number.isFinite(lead) && lead >= 0 ? lead : 0;
+
+  const minStart = now.plus({ minutes: safeLead });
   return start < minStart;
 }
 
@@ -82,7 +85,12 @@ export function formatBizWindow(idioma: "es" | "en", bizStart: DateTime, bizEnd:
   return `${bizStart.toFormat(fmt)} - ${bizEnd.toFormat(fmt)}`;
 }
 
-export function parseDateTimeExplicit(input: string, timeZone: string, durationMin: number) {
+export function parseDateTimeExplicit(
+  input: string,
+  timeZone: string,
+  durationMin: number,
+  minLeadMinutes: number
+) {
   const m = String(input || "").trim().match(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})$/);
   if (!m) return null;
 
@@ -94,7 +102,7 @@ export function parseDateTimeExplicit(input: string, timeZone: string, durationM
   const endISO = dt.plus({ minutes: durationMin }).toISO();
   if (!startISO || !endISO) return null;
 
-  if (isPastSlot(startISO, timeZone)) {
+  if (isPastSlot(startISO, timeZone, minLeadMinutes)) {
     return { startISO: null, endISO: null, timeZone, error: "PAST_SLOT" as const };
   }
 

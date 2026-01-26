@@ -1,6 +1,9 @@
 // src/lib/appointments/booking/handlers/start.ts
 import { DateTime } from "luxon";
-import { buildDateTimeFromText } from "../text";
+import { buildDateTimeFromText, extractDateOnlyToken } from "../text";
+import type { HoursByWeekday } from "../types";
+import { weekdayKey, parseHHmm } from "../time";
+
 
 export type StartBookingDeps = {
   idioma: "es" | "en";
@@ -10,7 +13,11 @@ export type StartBookingDeps = {
   wantsBooking: boolean;
   detectPurpose: (s: string) => string | null;
 
-  durationMin: number; // ✅ NUEVO
+  durationMin: number;
+
+  // ✅ opcionales (para no romper callers)
+  minLeadMinutes?: number;
+  hours?: HoursByWeekday | null;
 };
 
 export function handleStartBooking(deps: StartBookingDeps): {
@@ -18,12 +25,63 @@ export function handleStartBooking(deps: StartBookingDeps): {
   reply?: string;
   ctxPatch?: any;
 } {
-  const { idioma, userText, timeZone, wantsBooking, detectPurpose, durationMin } = deps;
+    const { idioma, userText, timeZone, wantsBooking, detectPurpose, durationMin, minLeadMinutes, hours } = deps;
 
   if (!wantsBooking) return { handled: false };
 
   // ✅ NUEVO: si el usuario ya dijo día+hora ("lunes a las 3") -> confirm directo
-  const dt = buildDateTimeFromText(userText, timeZone, durationMin);
+  // Vamos a validar usando:
+  // - minLeadMinutes (por tenant)
+  // - businessHours (por tenant) según el weekday del dateISO detectado
+  const dateISO = extractDateOnlyToken(userText, timeZone);
+
+  let businessHours: { start: string; end: string } | undefined = undefined;
+  if (dateISO && hours) {
+    const day = DateTime.fromFormat(dateISO, "yyyy-MM-dd", { zone: timeZone });
+    if (day.isValid) {
+      const key = weekdayKey(day);
+      const dayHours = hours[key];
+      if (dayHours?.start && dayHours?.end && parseHHmm(dayHours.start) && parseHHmm(dayHours.end)) {
+        businessHours = { start: dayHours.start, end: dayHours.end };
+      }
+    }
+  }
+
+  const dt = buildDateTimeFromText(userText, timeZone, durationMin, {
+    minLeadMinutes,
+    businessHours,
+  });
+
+  // Si buildDateTimeFromText devolvió error, responde algo usable
+  if (dt && "error" in dt) {
+    if (dt.error === "PAST_SLOT") {
+      return {
+        handled: true,
+        reply:
+          idioma === "en"
+            ? "That time is too soon or already passed. What other time works for you?"
+            : "Ese horario está muy pronto o ya pasó. ¿Qué otra hora te funciona?",
+        ctxPatch: {
+          booking: { step: "ask_datetime", timeZone },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    // OUTSIDE_HOURS
+    return {
+      handled: true,
+      reply:
+        idioma === "en"
+          ? "That time is outside our business hours. What time within business hours works for you?"
+          : "Ese horario está fuera del horario del negocio. ¿Qué hora dentro del horario te funciona?",
+      ctxPatch: {
+        booking: { step: "ask_datetime", timeZone },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
   if (dt) {
     const human =
       idioma === "en"

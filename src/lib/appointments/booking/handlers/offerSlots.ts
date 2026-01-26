@@ -37,6 +37,7 @@ export type OfferSlotsDeps = {
   timeZone: string;
   durationMin: number;
   bufferMin: number;
+  minLeadMinutes: number; 
   hours: any | null;         // HoursByWeekday | null
 };
 
@@ -128,6 +129,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     timeZone,
     durationMin,
     bufferMin,
+    minLeadMinutes,
     hours,
   } = deps;
 
@@ -181,6 +183,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
                 dateISO: nextDate,
                 durationMin,
                 bufferMin,
+                minLeadMinutes,
                 hours,
             })
           );
@@ -325,6 +328,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         dateISO: ctxDate,
         durationMin,
         bufferMin,
+        minLeadMinutes,
         hours,
         })
       );
@@ -510,6 +514,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
               dateISO: ctxDate,
               durationMin,
               bufferMin,
+              minLeadMinutes,
               hours,
         })
       );
@@ -623,6 +628,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
             dateISO: ctxDate,
             durationMin,
             bufferMin,
+            minLeadMinutes,
             hours,
             windowStartHHmm,
             windowEndHHmm,

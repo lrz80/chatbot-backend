@@ -15,8 +15,8 @@ router.get("/", authenticateUser, async (req: any, res) => {
 
   try {
     const { rows } = await pool.query(
-      `SELECT tenant_id, default_duration_min, buffer_min, timezone, enabled
-         FROM appointment_settings
+      `SELECT tenant_id, default_duration_min, buffer_min, timezone, enabled, min_lead_minutes
+        FROM appointment_settings
         WHERE tenant_id = $1
         LIMIT 1`,
       [tenantId]
@@ -27,6 +27,7 @@ router.get("/", authenticateUser, async (req: any, res) => {
       tenant_id: tenantId,
       default_duration_min: 30,
       buffer_min: 10,
+      min_lead_minutes: 60,
       timezone: "America/New_York",
       enabled: true,
     };
@@ -51,11 +52,18 @@ router.post("/", authenticateUser, async (req: any, res) => {
     buffer_min,
     timezone,
     enabled,
+    min_lead_minutes,
   } = req.body || {};
 
   // Validaciones mínimas (MVP)
   const dur = Number(default_duration_min);
   const buf = Number(buffer_min);
+
+  const lead = Number(min_lead_minutes);
+
+  if (!Number.isFinite(lead) || lead < 0 || lead > 1440) {
+    return res.status(400).json({ ok: false, error: "min_lead_minutes inválido (0–1440)" });
+  }
 
   if (!Number.isFinite(dur) || dur < 5 || dur > 480) {
     return res.status(400).json({ ok: false, error: "default_duration_min inválido (5–480)" });
@@ -74,18 +82,19 @@ router.post("/", authenticateUser, async (req: any, res) => {
   try {
     const { rows } = await pool.query(
       `INSERT INTO appointment_settings
-         (tenant_id, default_duration_min, buffer_min, timezone, enabled, created_at, updated_at)
-       VALUES
-         ($1, $2, $3, $4, $5, now(), now())
-       ON CONFLICT (tenant_id)
-       DO UPDATE SET
-         default_duration_min = EXCLUDED.default_duration_min,
-         buffer_min = EXCLUDED.buffer_min,
-         timezone = EXCLUDED.timezone,
-         enabled = EXCLUDED.enabled,
-         updated_at = now()
-       RETURNING tenant_id, default_duration_min, buffer_min, timezone, enabled`,
-      [tenantId, dur, buf, timezone, enabledVal]
+        (tenant_id, default_duration_min, buffer_min, min_lead_minutes, timezone, enabled, created_at, updated_at)
+      VALUES
+        ($1, $2, $3, $4, $5, $6, now(), now())
+      ON CONFLICT (tenant_id)
+      DO UPDATE SET
+        default_duration_min = EXCLUDED.default_duration_min,
+        buffer_min = EXCLUDED.buffer_min,
+        min_lead_minutes = EXCLUDED.min_lead_minutes,   -- ✅ NUEVO
+        timezone = EXCLUDED.timezone,
+        enabled = EXCLUDED.enabled,
+        updated_at = now()
+      RETURNING tenant_id, default_duration_min, buffer_min, min_lead_minutes, timezone, enabled`,
+      [tenantId, dur, buf, lead, timezone, enabledVal]
     );
 
     return res.json({ ok: true, settings: rows[0] });

@@ -6,18 +6,36 @@ type DayHours = { start: string; end: string }; // local helper
 
 export async function getAppointmentSettings(tenantId: string) {
   const { rows } = await pool.query(
-    `SELECT default_duration_min, buffer_min, timezone, enabled
-       FROM appointment_settings
-      WHERE tenant_id = $1
-      LIMIT 1`,
+    `
+    INSERT INTO appointment_settings (
+      tenant_id,
+      default_duration_min,
+      buffer_min,
+      timezone,
+      enabled,
+      min_lead_minutes
+    )
+    VALUES ($1, 30, 10, 'America/New_York', true, 60)
+    ON CONFLICT (tenant_id)
+    DO UPDATE SET tenant_id = EXCLUDED.tenant_id
+    RETURNING
+      tenant_id,
+      default_duration_min,
+      buffer_min,
+      timezone,
+      enabled,
+      min_lead_minutes
+    `,
     [tenantId]
   );
 
+  const r = rows[0] || {};
   return {
-    default_duration_min: rows[0]?.default_duration_min ?? 30,
-    buffer_min: rows[0]?.buffer_min ?? 10,
-    timezone: rows[0]?.timezone ?? "America/New_York",
-    enabled: rows[0]?.enabled ?? true,
+    durationMin: Number(r.default_duration_min ?? 30),
+    bufferMin: Number(r.buffer_min ?? 10),
+    timeZone: String(r.timezone ?? "America/New_York"),
+    enabled: r.enabled !== false,
+    minLeadMinutes: Number(r.min_lead_minutes ?? 60),
   };
 }
 
