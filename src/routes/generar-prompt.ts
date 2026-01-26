@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v4"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v5"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
