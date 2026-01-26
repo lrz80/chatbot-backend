@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v5"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v6"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -356,6 +356,14 @@ function proseToBullets(text: string, maxItems = 10) {
 function buildOperationalBusinessContext(infoClean: string, nombreNegocio: string) {
   const kv = parseKeyValueTemplate(infoClean);
 
+  console.log("🧪 DEBUG kv keys:", Object.keys(kv));
+  console.log("🧪 DEBUG kv sample:", {
+    Horarios: (kv["Horarios"] || kv["Horario"] || []).slice(0, 5),
+    Precios: (kv["Precios"] || []).slice(0, 8),
+    Reservas: (kv["Reservas / contacto"] || kv["Reservas / Contacto"] || kv["Reservas"] || kv["Contacto"] || []).slice(0, 5),
+    Politicas: (kv["Políticas"] || kv["Politicas"] || []).slice(0, 5),
+  });
+
   // Detecta si realmente era una plantilla (tiene llaves tipo "Nombre del negocio", etc.)
   const hasTemplateSignals =
     Object.keys(kv).some(k =>
@@ -369,9 +377,15 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
     const tel  = (kv["Teléfono"]?.[0] || "").trim();
 
     const servicios = kv["Servicios principales"] || kv["Servicios"] || [];
-    const horarios  = kv["Horarios"] || [];
+    const horarios  = kv["Horarios"] || kv["Horario"] || [];
     const precios   = kv["Precios o cómo consultar precios"] || kv["Precios"] || [];
-    const reservas  = kv["Reservas / contacto"] || kv["Reservas"] || kv["Contacto"] || [];
+    const reservas  =
+      kv["Reservas / contacto"] ||
+      kv["Reservas / Contacto"] ||
+      kv["Reservas"] ||
+      kv["Contacto"] ||
+      [];
+    const politicas = kv["Políticas"] || kv["Politicas"] || kv["Política"] || kv["Politica"] || [];
 
     const out: string[] = [];
 
@@ -405,6 +419,12 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
       out.push("");
       out.push("RESERVAS / CONTACTO");
       out.push(...toBullets(reservas));
+    }
+
+    if (politicas.length) {
+      out.push("");
+      out.push("POLÍTICAS");
+      out.push(...toBullets(politicas));
     }
 
     return compact(out.join("\n"));
@@ -452,6 +472,16 @@ router.post("/", async (req: Request, res: Response) => {
     // (F) Normaliza saltos/espacios y compacta antes de mandar al modelo
     const funciones = compact(descripcionCapped.replace(/\\n/g, "\n").replace(/\r/g, ""));
     const info      = compact(informacionCapped.replace(/\\n/g, "\n").replace(/\r/g, ""));
+
+    console.log("🧪 DEBUG generar-prompt input:", {
+      tenant_id,
+      canal: canalNorm,
+      idioma: idiomaNorm,
+      funciones_len: funciones.length,
+      info_len: info.length,
+      info_head: info.slice(0, 300),
+      info_tail: info.slice(-300),
+    });
 
     if (!funciones || !info || !idiomaNorm) {
       return res.status(400).json({ error: "Faltan campos requeridos" });
