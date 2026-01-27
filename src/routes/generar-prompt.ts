@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v7"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v8"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -353,7 +353,24 @@ function parseKeyValueTemplate(text: string) {
 
   const isUrlLine = (s: string) => /^https?:\/\//i.test(s) || /^mailto:/i.test(s) || /^tel:/i.test(s);
 
-  for (const raw of lines) {
+    // ✅ Une URLs que quedaron solas en la siguiente línea:
+  // Ej:
+  // "Clase Funcional Gratis:"
+  // "https://...."
+  const mergedLines: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const cur = (lines[i] || "").trim();
+    const next = (lines[i + 1] || "").trim();
+
+    if (cur && cur.endsWith(":") && /^https?:\/\//i.test(next)) {
+      mergedLines.push(`${cur} ${next}`);
+      i++; // saltar next
+      continue;
+    }
+    mergedLines.push(lines[i]);
+  }
+
+  for (const raw of mergedLines) {
     const line = (raw || "").trim();
     if (!line) continue;
 
