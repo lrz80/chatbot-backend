@@ -30,32 +30,34 @@ export async function resolveTenantFromInbound(opts: {
   // 3) Lookup por origen
   try {
     if (origen === "twilio") {
-      const tenantRes = await pool.query(
-        `
-        SELECT *
-          FROM tenants
-        WHERE REPLACE(LOWER(twilio_number),'whatsapp:','') = $1
-           OR REPLACE(LOWER(twilio_number),'whatsapp:','') = $2
-        LIMIT 1
-        `,
-        [numeroLower, numeroSinMasLower]
-      );
+    // Queremos comparar SOLO dígitos para soportar:
+    // 'whatsapp:+1775...', '+1775...', 'tel:+1775...', '1775...'
+    const toDigits = numeroSinMas; // ya es sin '+'
 
-      return tenantRes.rows[0] || null;
-    }
-
-    // origen === "meta"
     const tenantRes = await pool.query(
       `
       SELECT *
-        FROM tenants
-      WHERE REPLACE(LOWER(whatsapp_phone_number_id::text),'whatsapp:','') = $1
+      FROM tenants
+      WHERE REGEXP_REPLACE(
+              REGEXP_REPLACE(LOWER(COALESCE(twilio_number, '')), '^(whatsapp:|tel:)', ''),
+              '[^0-9]',
+              '',
+              'g'
+            ) = $1
       LIMIT 1
       `,
-      [numeroLower]
+      [toDigits]
     );
 
     return tenantRes.rows[0] || null;
+  }
+
+    // origen === "meta"
+    // Para Meta NO se resuelve por "To" (no es número).
+    // Debe venir resuelto por context.tenant en el pipeline de Meta.
+    // Si no viene, devolvemos null.
+    return null;
+
   } catch (e: any) {
     console.warn("⚠️ resolveTenantFromInbound failed:", {
       origen,
