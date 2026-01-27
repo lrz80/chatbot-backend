@@ -279,12 +279,15 @@ if (!startISO || !endISO) {
   });
 
   if (!g.ok) {
-    await markAppointmentFailed({
-      apptId: pending.id,
-      error_reason: String((g as any)?.error || "GOOGLE_ERROR"),
-    });
+    const err = String((g as any)?.error || "GOOGLE_ERROR");
 
-    const err = String((g as any)?.error || "");
+    // ✅ NO guardar "failed" cuando solo es "hora no disponible"
+    if (err !== "PAST_SLOT") {
+        await markAppointmentFailed({
+        apptId: pending.id,
+        error_reason: err,
+        });
+    }
 
     // SLOT_BUSY -> ofrecer alternativas del mismo día
     if (err === "SLOT_BUSY") {
@@ -306,7 +309,7 @@ if (!startISO || !endISO) {
           const take = slots.slice(0, 5);
           return {
             handled: true,
-            reply: renderSlotsMessage({ idioma: effectiveLang, timeZone, slots: take }),
+            reply: renderSlotsMessage({ idioma: effectiveLang, timeZone, slots: take, style: "closest" }),
             ctxPatch: {
               booking: {
                 ...hydratedBooking,
@@ -329,8 +332,8 @@ if (!startISO || !endISO) {
         handled: true,
         reply:
           effectiveLang === "en"
-            ? "That date/time is in the past. Please send a future date and time (YYYY-MM-DD HH:mm)."
-            : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
+            ? "That date/time isn’t available. Please send a future date and time (YYYY-MM-DD HH:mm)."
+            : "Esa fecha/hora no esta disponible. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
         ctxPatch: {
           booking: {
             ...hydratedBooking,
@@ -351,8 +354,8 @@ if (!startISO || !endISO) {
         handled: true,
         reply:
           effectiveLang === "en"
-            ? "That time is outside business hours. Please choose a different time."
-            : "Ese horario está fuera del horario de atención. Elige otro horario.",
+            ? "That time isn’t available. Please choose a different time."
+            : "Ese horario no está disponible. Elige otro horario.",
         ctxPatch: {
           booking: {
             ...hydratedBooking,
