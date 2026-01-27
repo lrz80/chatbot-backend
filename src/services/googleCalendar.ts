@@ -1,6 +1,7 @@
 //src/services/googleCalendar.ts
 import pool from "../lib/db";
 import { decryptToken } from "./googleCrypto";
+import crypto from "crypto";
 
 export type GoogleBusyBlock = { start: string; end: string };
 
@@ -169,7 +170,7 @@ export async function googleCreateEvent(params: {
   const calendarId = encodeURIComponent(params.calendarId || "primary");
 
   const resp = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events`,
+    `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events?conferenceDataVersion=1`,
     {
       method: "POST",
       headers: {
@@ -181,11 +182,28 @@ export async function googleCreateEvent(params: {
         description: params.description || "",
         start: { dateTime: params.startISO, timeZone: params.timeZone },
         end: { dateTime: params.endISO, timeZone: params.timeZone },
+
+        // ✅ Crea Google Meet automáticamente
+        conferenceData: {
+          createRequest: {
+            requestId: crypto.randomUUID(),
+            conferenceSolutionKey: { type: "hangoutsMeet" },
+          },
+        },
       }),
     }
   );
 
   const json = await resp.json();
+    // ✅ Si Google devolvió meet link, lo anexamos al description para que sea visible siempre
+    const meetLink =
+      json?.hangoutLink ||
+      json?.conferenceData?.entryPoints?.find((e: any) => e?.entryPointType === "video")?.uri;
+
+    if (meetLink && typeof json?.description === "string" && !json.description.includes(meetLink)) {
+      json.description = `${json.description}\n\nGoogle Meet: ${meetLink}`.trim();
+    }
+
     if (!resp.ok) {
       console.error("Google create event failed:", json);
 
