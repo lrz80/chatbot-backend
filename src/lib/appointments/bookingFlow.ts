@@ -39,9 +39,26 @@ import { handleConfirm } from "./booking/handlers/confirm";
 import { handleAskName } from "./booking/handlers/askName";
 import { handleAskPurpose } from "./booking/handlers/askPurpose";
 import { handleStartBooking } from "./booking/handlers/start";
+import pool from "../../lib/db";
 
 
 const BOOKING_FLOW_TTL_MS = 30 * 60 * 1000; // 30 minutos (ajústalo a 15/60 si quieres)
+
+async function getTenantCalendarId(tenantId: string): Promise<string> {
+  const { rows } = await pool.query(
+    `
+    SELECT calendar_id
+    FROM calendar_integrations
+    WHERE tenant_id = $1
+      AND provider = 'google'
+      AND status = 'connected'
+    LIMIT 1
+    `,
+    [tenantId]
+  );
+
+  return rows[0]?.calendar_id || "primary";
+}
 
 async function bookInGoogle(opts: {
   tenantId: string;
@@ -97,7 +114,8 @@ async function bookInGoogle(opts: {
     return { ok: false as const, error: "INVALID_DATETIME" as const, busy: [] as any[] };
   }
 
-  const calendarId = "primary";
+  const calendarId = await getTenantCalendarId(tenantId);
+  console.log("🧪 [BOOKING] using calendarId", { tenantId, calendarId });
 
   const fb = await googleFreeBusy({
     tenantId,
@@ -124,8 +142,8 @@ async function bookInGoogle(opts: {
   console.log("FREEBUSY RAW:", {
     calendarKeys: Object.keys(calendars),
     primaryBusyCount: calendars?.primary?.busy?.length ?? null,
-    requestedCalendarId: "primary",
-    requestedBusyCount: calendars?.["primary"]?.busy?.length ?? null,
+    requestedCalendarId: calendarId,
+    requestedBusyCount: calendars?.[calendarId]?.busy?.length ?? null,
     anyBusyCount: Object.values(calendars)?.[0]?.busy?.length ?? null,
   });
 
