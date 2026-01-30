@@ -80,6 +80,23 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
   const yes = /^(si|sí|yes|y)$/i.test(t);
   const no = /^(no|n)$/i.test(t);
 
+  console.log("🧨 [CONFIRM ENTER]", {
+    tenantId,
+    canal,
+    contacto,
+    userText,
+    yes,
+    no,
+    step: booking?.step,
+    booking_name: booking?.name,
+    booking_email: booking?.email,
+    booking_phone: booking?.phone,
+    booking_start: booking?.start_time,
+    booking_end: booking?.end_time,
+    picked_start: booking?.picked_start,
+    picked_end: booking?.picked_end,
+  });
+
   // ✅ Hydrate start/end desde picked_* por seguridad
   const hydratedBooking = {
     ...booking,
@@ -174,6 +191,19 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     // WhatsApp NO pide phone; Meta sí
     const missingPhone = isMeta && (isJunk(phoneRaw) || phoneRaw.length < 7);
 
+    console.log("🧨 [CONFIRM VALIDATE]", {
+      tenantId,
+      canal,
+      yes,
+      isMeta,
+      nameRaw,
+      emailRaw,
+      phoneRaw,
+      missingName,
+      missingEmail,
+      missingPhone,
+    });
+
     if (missingName || missingEmail || missingPhone) {
       const example = isMeta
         ? (effectiveLang === "en"
@@ -255,6 +285,16 @@ if (!startISO || !endISO) {
   // ✅ Teléfono real:
   // - WhatsApp: contacto ES el teléfono
   // - IG/FB: contacto es senderId, el teléfono viene de booking.phone
+
+  console.log("🧨 [CONFIRM PASS HARDGATE]", {
+    tenantId,
+    canal,
+    customer_name,
+    customer_email_clean,
+    customerPhone,
+    startISO,
+    endISO,
+  });
 
   const pending = await createPendingAppointmentOrGetExisting({
     tenantId,
