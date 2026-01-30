@@ -159,7 +159,12 @@ router.get("/connect", authenticateUser, async (req: Request, res: Response) => 
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: "code",
-      scope: "https://www.googleapis.com/auth/calendar",
+      scope: [
+        "https://www.googleapis.com/auth/calendar",
+        "openid",
+        "email",
+        "profile",
+      ].join(" "),
       access_type: "offline",
       prompt: "consent",
       include_granted_scopes: "true",
@@ -263,6 +268,25 @@ router.get("/callback", async (req: Request, res: Response) => {
 
     let refreshEncToStore: string | null = null;
 
+    // ✅ 1) Buscar el calendarId real del "primary"
+    let calendarIdReal: string = "primary";
+
+    try {
+      const calListRes = await fetch("https://www.googleapis.com/calendar/v3/users/me/calendarList", {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      const calListJson: any = await calListRes.json();
+
+      const primary = Array.isArray(calListJson?.items)
+        ? calListJson.items.find((c: any) => c?.primary === true)
+        : null;
+
+      if (primary?.id) calendarIdReal = String(primary.id);
+    } catch (e) {
+      console.log("⚠️ Could not fetch calendarList, using primary fallback");
+    }
+
     if (refreshToken) {
       refreshEncToStore = encryptToken(String(refreshToken));
     } else {
@@ -293,7 +317,7 @@ router.get("/callback", async (req: Request, res: Response) => {
       INSERT INTO calendar_integrations
         (tenant_id, provider, refresh_token_enc, connected_email, calendar_id, status, updated_at)
       VALUES
-        ($1, 'google', $2, $3, 'primary', 'connected', now())
+        ($1, 'google', $2, $3, $4, 'connected', now())
       ON CONFLICT (tenant_id, provider)
       DO UPDATE SET
         refresh_token_enc = COALESCE(EXCLUDED.refresh_token_enc, calendar_integrations.refresh_token_enc),
@@ -302,7 +326,7 @@ router.get("/callback", async (req: Request, res: Response) => {
         status            = 'connected',
         updated_at        = now()
       `,
-      [tenantId, refreshEncToStore, connectedEmail]
+      [tenantId, refreshEncToStore, connectedEmail, calendarIdReal]
     );
 
     // Redirige al dashboard donde muestras el status

@@ -151,7 +151,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
 
   const tz = hydratedBooking.timeZone;
 
-  const calendarId = "primary";
+  const calendarId = hydratedBooking?.calendar_id || "primary";
 
   const t = normalizeText(userText);
   const slotsRaw: Slot[] = Array.isArray(hydratedBooking?.slots) ? hydratedBooking.slots : [];
