@@ -106,6 +106,10 @@ async function bookInGoogle(opts: {
     calendarId,
   });
 
+    if ((fb as any)?.degraded) {
+    return { ok: false as const, error: "FREEBUSY_DEGRADED" as const, busy: [] as any[] };
+  }
+
   console.log("🧪 [BOOKING] freebusy response", {
     tenantId,
     calendarId,

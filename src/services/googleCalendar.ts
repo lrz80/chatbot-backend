@@ -140,29 +140,53 @@ export async function googleFreeBusy(params: {
     }),
   });
 
-  const json = (await resp.json()) as GoogleFreeBusyResponse & { error?: any };
+    const json = (await resp.json()) as GoogleFreeBusyResponse & { error?: any };
 
-    if (!resp.ok) {
-      console.error("Google freebusy failed:", json);
+  if (!resp.ok) {
+    console.error("Google freebusy failed:", json);
 
-      // ✅ Si Google responde 401/403 por token inválido, desconecta y degrada
-      if (resp.status === 401 || resp.status === 403) {
-        await markGoogleDisconnected(params.tenantId, `freebusy_${resp.status}`);
-        console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarId, status: resp.status });
-        return emptyFreeBusy(calendarId, true);
-      }
-
-      // ✅ Otros errores: degradar también
+    if (resp.status === 401 || resp.status === 403) {
+      await markGoogleDisconnected(params.tenantId, `freebusy_${resp.status}`);
       console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarId, status: resp.status });
       return emptyFreeBusy(calendarId, true);
     }
 
-    // ✅ Garantiza que siempre exista la clave exacta del calendarId consultado
-  if (!json?.calendars?.[calendarId]) {
-    json.calendars = { ...(json.calendars || {}), [calendarId]: { busy: [] } };
+    console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarId, status: resp.status });
+    return emptyFreeBusy(calendarId, true);
   }
 
-  const busyCount = json?.calendars?.[calendarId]?.busy?.length || 0;
+  const calendars = json?.calendars || {};
+  const keys = Object.keys(calendars);
+
+  // 🔥 LOG REAL: qué devolvió Google
+  console.log("🧪 freeBusy raw keys:", {
+    tenantId: params.tenantId,
+    requestedCalendarId: calendarId,
+    keys,
+    requestedBusyCount: calendars?.[calendarId]?.busy?.length ?? null,
+    firstKey: keys[0] || null,
+    firstBusyCount: keys[0] ? (calendars?.[keys[0]]?.busy?.length ?? null) : null,
+  });
+
+  // ✅ Si no viene la clave pedida, NO inventes busy vacío.
+  // Usa fallback: si hay 1 sola key, úsala.
+  if (!calendars?.[calendarId]) {
+    if (keys.length === 1) {
+      const only = keys[0];
+      return { calendars: { [calendarId]: calendars[only] }, degraded: false };
+    }
+
+    // Si hay varias keys y no está la pedida → esto es raro
+    // mejor degradar para NO agendar a ciegas
+    console.log("🟡 freeBusy degraded: missing requested calendar key", {
+      tenantId: params.tenantId,
+      requestedCalendarId: calendarId,
+      keys,
+    });
+    return emptyFreeBusy(calendarId, true);
+  }
+
+  const busyCount = calendars?.[calendarId]?.busy?.length || 0;
   console.log("🗓️ freeBusy:", {
     tenantId: params.tenantId,
     calendarId,
@@ -171,7 +195,8 @@ export async function googleFreeBusy(params: {
     busyCount,
     degraded: false,
   });
-  return json;
+
+  return { ...json, degraded: false };
 }
 
 export async function googleCreateEvent(params: {
@@ -241,5 +266,17 @@ export async function googleCreateEvent(params: {
 
     throw new Error("google_create_event_failed");
   }
+  console.log("📌 [GCAL] createEvent result", {
+    tenantId: params.tenantId,
+    calendarId: params.calendarId || "primary",
+    eventId: json?.id,
+    htmlLink: json?.htmlLink,
+    status: json?.status,
+    organizer: json?.organizer?.email,
+    creator: json?.creator?.email,
+    start: json?.start,
+    end: json?.end,
+  });
+
   return json;
 }
