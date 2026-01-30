@@ -4,7 +4,8 @@ import type { HoursByWeekday } from "../types"; // ajusta si está en otro archi
 
 import { weekdayKey, parseHHmm } from "../time"; // ajusta imports según tu proyecto
 import { googleFreeBusy } from "../../../../services/googleCalendar"; // ajusta ruta real
-import { extractBusyBlocks, subtractBusyFromWindow, sliceIntoSlots } from "../slots"; // ajusta ruta real
+import { subtractBusyFromWindow, sliceIntoSlots } from "../slots";
+import { extractBusyBlocks } from "../freebusy";
 
 export async function getSlotsForDateOnly(opts: {
   tenantId: string;
@@ -42,15 +43,17 @@ export async function getSlotsForDateOnly(opts: {
   const bizEnd = day.set({ hour: en.h, minute: en.min, second: 0, millisecond: 0 });
   if (bizEnd <= bizStart) return [];
 
-  // ✅ FreeBusy solo para ese día dentro del horario del negocio
+  const calendarId = "primary";
+
   const fb = await googleFreeBusy({
     tenantId,
     timeMin: bizStart.toISO()!,
     timeMax: bizEnd.toISO()!,
-    calendarId: "primary",
+    calendarId,
   });
 
-  const busy = extractBusyBlocks(fb);
+  const busy = extractBusyBlocks(fb, calendarId);
+  console.log("🧪 getSlotsForDateOnly busy:", { tenantId, calendarId, dateOnly, busyCount: busy.length });
 
   const freeRanges = subtractBusyFromWindow({
     windowStart: bizStart,
