@@ -105,8 +105,15 @@ async function bookInGoogle(opts: {
     timeMax,
     calendarId,
   });
-  
-  console.log("FREEBUSY RAW:", JSON.stringify(fb, null, 2));
+
+  const calendars = fb?.calendars || {};
+  console.log("FREEBUSY RAW:", {
+    calendarKeys: Object.keys(calendars),
+    primaryBusyCount: calendars?.primary?.busy?.length ?? null,
+    requestedCalendarId: "primary",
+    requestedBusyCount: calendars?.["primary"]?.busy?.length ?? null,
+    anyBusyCount: Object.values(calendars)?.[0]?.busy?.length ?? null,
+  });
 
   const busy = extractBusyBlocks(fb, calendarId);
   console.log("🧪 [BOOKING] freebusy raw keys", {
