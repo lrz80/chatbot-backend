@@ -141,6 +141,12 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     lang: booking?.lang || idioma, // ✅ sticky lang
   };
 
+  const resetPersonal = {
+    name: null,
+    email: null,
+    phone: null,
+  };
+
   const effectiveLang: "es" | "en" = (hydratedBooking.lang as any) || idioma;
 
   const tz = hydratedBooking.timeZone;
@@ -428,6 +434,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
           ctxPatch: {
             booking: {
               ...hydratedBooking,
+              ...resetPersonal,
               step: "confirm",
               timeZone: tz,
               picked_start: exact.startISO,
@@ -508,6 +515,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
 
       const nextBooking = {
         ...hydratedBooking,
+        ...resetPersonal,
         timeZone: tz,
         picked_start: picked.startISO,
         picked_end: picked.endISO,
