@@ -392,29 +392,60 @@ if (!startISO || !endISO) {
     };
   }
 
-  // 9) confirmado
-  await markAppointmentConfirmed({
+  // ✅ Hard check: sin link/id = NO confirmado
+    const link = String(g.htmlLink || "").trim();
+    const gid = String(g.event_id || "").trim();
+
+    if (!link || !gid) {
+    await markAppointmentFailed({
+        apptId: pending.id,
+        error_reason: "CREATE_EVENT_FAILED",
+    });
+
+    return {
+        handled: true,
+        reply:
+        effectiveLang === "en"
+            ? "I tried to book it, but Google Calendar didn’t confirm the event. Please try again."
+            : "Intenté agendarla, pero Google Calendar no confirmó el evento. Intenta de nuevo enviando otra fecha y hora (YYYY-MM-DD HH:mm).",
+        ctxPatch: {
+        booking: {
+            ...hydratedBooking,
+            step: "ask_datetime",
+            timeZone: hydratedBooking?.timeZone || timeZone,
+            start_time: null,
+            end_time: null,
+            date_only: null,
+            lang: (hydratedBooking?.lang as any) || idioma,
+        },
+        booking_last_touch_at: Date.now(),
+        },
+    };
+    }
+
+    // ✅ Ya sí: confirmado real
+    await markAppointmentConfirmed({
     apptId: pending.id,
-    google_event_id: g.event_id ?? null,
-    google_event_link: g.htmlLink ?? null,
-  });
+    google_event_id: gid,
+    google_event_link: link,
+    });
 
-  const apptId = pending.id;
+    const apptId = pending.id;
 
-  return {
+    return {
     handled: true,
     reply:
-      effectiveLang === "en"
-        ? `You're all set — your appointment is confirmed. ${g.htmlLink || ""}`.trim()
-        : `Perfecto, tu cita quedó confirmada. ${g.htmlLink || ""}`.trim(),
+        effectiveLang === "en"
+        ? `You're all set — your appointment is confirmed. ${link}`.trim()
+        : `Perfecto, tu cita quedó confirmada. ${link}`.trim(),
     ctxPatch: {
-      booking: { step: "idle" },
-      last_appointment_id: apptId,
-      booking_completed: true,
-      booking_completed_at: new Date().toISOString(),
-      booking_last_done_at: Date.now(),
-      booking_last_event_link: g.htmlLink || null,
-      booking_last_touch_at: Date.now(),
+        booking: { step: "idle" },
+        last_appointment_id: apptId,
+        booking_completed: true,
+        booking_completed_at: new Date().toISOString(),
+        booking_last_done_at: Date.now(),
+        booking_last_event_link: link,
+        booking_last_touch_at: Date.now(),
     },
-  };
+    };
 }

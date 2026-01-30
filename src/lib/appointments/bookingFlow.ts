@@ -137,10 +137,33 @@ async function bookInGoogle(opts: {
         timeZone,
     });
 
+    console.log("✅ [BOOKING] googleCreateEvent response", {
+      tenantId,
+      eventId: event?.id,
+      htmlLink: event?.htmlLink,
+      startISO,
+      endISO,
+      timeZone,
+    });
+
+  // ✅ Si Google no devolvió un evento real, FALLA
+  if (!event?.id || !event?.htmlLink) {
+    console.log("❌ [BOOKING] googleCreateEvent failed or returned empty", {
+      tenantId,
+      event,
+    });
+
+    return {
+      ok: false as const,
+      error: "CREATE_EVENT_FAILED" as const,
+      busy: [] as any[],
+    };
+  }
+
   return {
     ok: true as const,
-    event_id: event?.id || null,
-    htmlLink: event?.htmlLink || null,
+    event_id: event.id,
+    htmlLink: event.htmlLink,
   };
 }
 
@@ -172,7 +195,7 @@ export async function bookingFlowMvp(opts: {
   if (waPhone && !booking?.phone) {
     booking.phone = waPhone;
   }
-  
+
   const messageId = opts.messageId ? String(opts.messageId) : null;
   console.log("📅 [BOOKING] in", { tenantId, canal, contacto, messageId });
 
