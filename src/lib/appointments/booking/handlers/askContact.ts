@@ -51,19 +51,21 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
     upsertClienteBookingData,
   } = deps;
 
+  const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
+
   if (wantsToChangeTopic(userText)) {
-    return { handled: false, ctxPatch: { booking: { step: "idle" } } };
+    return { handled: false, ctxPatch: { booking: { ...booking, step: "idle", lang: effectiveLang } } };
   }
 
   if (wantsToCancel(userText)) {
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "No worries, whenever you’re ready to schedule, I’ll be here to help."
           : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
       ctxPatch: {
-        booking: { step: "idle" },
+        booking: { ...booking, step: "idle", lang: effectiveLang },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -76,10 +78,10 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "I’m missing your first and last name (example: John Smith)."
           : "Me falta tu nombre y apellido (ej: Juan Pérez).",
-      ctxPatch: { booking: { ...booking, step: "ask_contact" }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: { ...booking, step: "ask_contact", lang: effectiveLang  }, booking_last_touch_at: Date.now() },
     };
   }
 
@@ -87,10 +89,10 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "I’m missing a valid email (example: name@email.com)."
           : "Me falta un email válido (ej: nombre@email.com).",
-      ctxPatch: { booking: { ...booking, step: "ask_contact" }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: { ...booking, step: "ask_contact", lang: effectiveLang  }, booking_last_touch_at: Date.now() },
     };
   }
 
@@ -99,10 +101,10 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "I’m missing your phone number (example: +1 305 555 1234). Please send it."
           : "Me falta tu número de teléfono (ej: +1 305 555 1234). Envíamelo por favor.",
-      ctxPatch: { booking: { ...booking, step: "ask_contact" }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: { ...booking, step: "ask_contact", lang: effectiveLang  }, booking_last_touch_at: Date.now() },
     };
   }
 
@@ -110,7 +112,7 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
   const endISO = (booking as any)?.picked_end || null;
 
   if (!startISO || !endISO) {
-    return { handled: false, ctxPatch: { booking: { step: "idle" } } };
+    return { handled: false, ctxPatch: { booking: { ...booking, step: "idle", lang: effectiveLang } } };
   }
 
   await upsertClienteBookingData({
@@ -122,18 +124,20 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
     telefono: phone || null,
   });
 
-  const whenTxt = formatSlotHuman({ startISO, timeZone, idioma });
+  const whenTxt = formatSlotHuman({ startISO, timeZone, idioma: effectiveLang });
 
   return {
     handled: true,
     reply:
-      idioma === "en"
+      effectiveLang === "en"
         ? `To confirm booking for ${whenTxt}? Reply YES to confirm or NO to cancel.`
         : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
     ctxPatch: {
       booking: {
+        ...booking,
         step: "confirm",
         timeZone,
+        lang: effectiveLang,
         name,
         email,
         phone: phone || (booking as any)?.phone || null,

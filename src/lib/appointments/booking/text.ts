@@ -351,11 +351,13 @@ export function extractDateOnlyToken(input: string, timeZone?: string): string |
     return today.toFormat("yyyy-MM-dd");
   }
 
-  if (/\bpasado\s+mañana\b/.test(raw)) {
+  // "pasado mañana" o "pasado manana"
+  if (/\bpasado\s+(mañana|manana)\b/.test(raw)) {
     return today.plus({ days: 2 }).toFormat("yyyy-MM-dd");
   }
 
-  if (/\bmañana\b/.test(raw)) {
+  // "mañana" o "manana"
+  if (/\b(mañana|manana)\b/.test(raw)) {
     return today.plus({ days: 1 }).toFormat("yyyy-MM-dd");
   }
 

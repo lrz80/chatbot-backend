@@ -186,6 +186,11 @@ export async function bookingFlowMvp(opts: {
   const ctx = (opts.ctx && typeof opts.ctx === "object") ? (opts.ctx as BookingCtx) : {};
   const booking = ctx.booking || { step: "idle" as const };
 
+  // ✅ Fijar idioma del booking al idioma actual detectado
+  if (!booking.lang || booking.lang !== idioma) {
+    booking.lang = idioma;
+  }
+
   // ✅ WhatsApp: ya tenemos el teléfono (contacto). No lo pidas.
   const waPhone = canal === "whatsapp" ? String(contacto || "").trim() : "";
   if (waPhone) {
@@ -414,6 +419,9 @@ if (booking.step === "idle") {
     wantsBooking,
     detectPurpose,
     durationMin,
+    minLeadMinutes,
+    hours,
+    booking, // ✅
   });
 }
 
@@ -421,7 +429,7 @@ if (booking.step === "ask_purpose") {
   return handleAskPurpose({
     idioma,
     userText,
-    booking,
+    booking: { ...(booking || {}), lang: (booking?.lang as any) || idioma }, // ✅ asegura lang sticky
     timeZone,
     tenantId,
     canal,
@@ -434,7 +442,7 @@ if (booking.step === "ask_purpose") {
 if (booking.step === "ask_daypart") {
   return handleAskDaypart({
     tenantId,
-    idioma,
+    idioma: booking?.lang || idioma, 
     userText,
     booking,
     timeZone,
@@ -446,18 +454,20 @@ if (booking.step === "ask_daypart") {
 }
 
 if (booking.step === "ask_all") {
+  const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma; // ✅ sticky
+
   return handleAskAll({
     tenantId,
     canal,
-    idioma,
+    idioma: effectiveLang, // ✅
     userText,
     booking,
     timeZone,
     durationMin,
     bufferMin,
     hours,
-    minLeadMinutes, // ✅
-    parseDateTimeExplicit: parseDateTimeExplicitTenant,            
+    minLeadMinutes,
+    parseDateTimeExplicit: parseDateTimeExplicitTenant,
   });
 }
 
@@ -466,7 +476,7 @@ if (booking.step === "ask_name") {
     tenantId,
     canal,
     contacto,
-    idioma,
+    idioma: (booking?.lang || idioma),
     userText,
     booking,
     timeZone,

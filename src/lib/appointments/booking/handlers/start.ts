@@ -27,6 +27,7 @@ export function handleStartBooking(deps: StartBookingDeps): {
   ctxPatch?: any;
 } {
   const { idioma, userText, timeZone, wantsBooking, detectPurpose, durationMin, minLeadMinutes, hours, booking } = deps;
+  const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
 
   if (!wantsBooking) return { handled: false };
 
@@ -59,11 +60,11 @@ export function handleStartBooking(deps: StartBookingDeps): {
       return {
         handled: true,
         reply:
-          idioma === "en"
+          effectiveLang === "en"
             ? "That time is too soon or already passed. What other time works for you?"
             : "Ese horario está muy pronto o ya pasó. ¿Qué otra hora te funciona?",
         ctxPatch: {
-          booking: { step: "ask_datetime", timeZone },
+          booking: { ...(booking || {}), step: "ask_datetime", timeZone, lang: effectiveLang },
           booking_last_touch_at: Date.now(),
         },
       };
@@ -73,11 +74,11 @@ export function handleStartBooking(deps: StartBookingDeps): {
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "That time is outside our business hours. What time within business hours works for you?"
           : "Ese horario está fuera del horario del negocio. ¿Qué hora dentro del horario te funciona?",
       ctxPatch: {
-        booking: { step: "ask_datetime", timeZone },
+        booking: { ...(booking || {}), step: "ask_datetime", timeZone, lang: effectiveLang },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -85,14 +86,14 @@ export function handleStartBooking(deps: StartBookingDeps): {
 
   if (dt) {
     const human =
-      idioma === "en"
+      effectiveLang === "en"
         ? DateTime.fromISO(dt.startISO).setZone(timeZone).toFormat("cccc, LLL d 'at' h:mm a")
         : DateTime.fromISO(dt.startISO).setZone(timeZone).toFormat("cccc d 'de' LLL 'a las' h:mm a");
 
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? `Perfect — I have ${human}. Confirm?`
           : `Perfecto — tengo ${human}. ¿Confirmas?`,
       ctxPatch: {
@@ -100,6 +101,7 @@ export function handleStartBooking(deps: StartBookingDeps): {
           ...(booking || {}),
           step: "confirm",
           timeZone,
+          lang: effectiveLang,
           picked_start: dt.startISO,
           picked_end: dt.endISO,
         },
@@ -115,11 +117,11 @@ export function handleStartBooking(deps: StartBookingDeps): {
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "Sure! What would you like to schedule — an appointment, a consultation, or a call?"
           : "¡Claro! ¿Qué te gustaría agendar? Una cita, una consulta o una llamada.",
       ctxPatch: {
-        booking: { step: "ask_purpose", timeZone, lang: idioma },
+        booking: { ...(booking || {}), step: "ask_purpose", timeZone, lang: effectiveLang },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -129,11 +131,11 @@ export function handleStartBooking(deps: StartBookingDeps): {
   return {
     handled: true,
     reply:
-      idioma === "en"
+      effectiveLang === "en"
         ? "Sure, I can help you schedule it. Does morning or afternoon work better for you?"
         : "Claro, puedo ayudarte a agendar. ¿Te funciona más en la mañana o en la tarde?",
     ctxPatch: {
-      booking: { step: "ask_daypart", timeZone, purpose },
+      booking: { ...(booking || {}), step: "ask_daypart", timeZone, purpose, lang: effectiveLang },
       booking_last_touch_at: Date.now(),
     },
   };

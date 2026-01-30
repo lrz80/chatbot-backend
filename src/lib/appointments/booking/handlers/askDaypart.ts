@@ -116,19 +116,24 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     minLeadMinutes,
   } = deps;
 
+  const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
+
+  // helper: siempre preserva el lang
+  const withLang = (b: any) => ({ ...(b || {}), lang: (b?.lang as any) || effectiveLang });
+
   if (wantsToChangeTopic(userText)) {
-    return { handled: false, ctxPatch: { booking: { step: "idle" } } };
+    return { handled: false, ctxPatch: { booking: withLang({ ...booking, step: "idle" }) } };
   }
 
   if (wantsToCancel(userText)) {
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "No worries, whenever you’re ready to schedule, I’ll be here to help."
           : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
       ctxPatch: {
-        booking: { step: "idle" },
+        booking: withLang({ ...booking, step: "idle" }),
         booking_last_touch_at: Date.now(),
       },
     };
@@ -159,13 +164,13 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
           handled: true,
           reply: buildAskAllMessage(idioma, booking?.purpose || null),
           ctxPatch: {
-            booking: {
+            booking: withLang({
               ...booking,
               step: "ask_all",
               timeZone,
               date_only: dateOnly,
               daypart: inferDaypartFromHHMM(hhmm),
-            },
+            }),
             booking_last_touch_at: Date.now(),
           },
         };
@@ -205,17 +210,17 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
       if (exact) {
         const pretty = DateTime.fromISO(exact.startISO, { zone: tz })
-          .setLocale(idioma === "en" ? "en" : "es")
-          .toFormat(idioma === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+          .setLocale(effectiveLang === "en" ? "en" : "es")
+          .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
 
         return {
           handled: true,
           reply:
-            idioma === "en"
+            effectiveLang === "en"
               ? `Perfect, I have available ${pretty}. Do you want to confirm this time? (yes/no)`
               : `Perfecto, tengo disponible ${pretty}. ¿Confirmas ese horario? (sí/no)`,
           ctxPatch: {
-            booking: {
+            booking: withLang({
               ...booking,
               step: "confirm",
               timeZone: tz,
@@ -228,7 +233,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
               date_only: dateOnly,
               last_offered_date: dateOnly,
               slots: [], // ✅ sin lista
-            },
+            }),
             booking_last_touch_at: Date.now(),
           },
         };
@@ -246,7 +251,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       const todayISO = now.toFormat("yyyy-MM-dd");
       const datePrefix =
         dateOnly !== todayISO
-          ? (idioma === "en"
+          ? (effectiveLang === "en"
               ? `For ${DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("EEE, LLL dd")}, `
               : `Para ${DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `)
           : "";
@@ -254,13 +259,13 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       return {
         handled: true,
         reply:
-          idioma === "en"
+          effectiveLang === "en"
             ? `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n` +
               renderSlotsMessage({ idioma, timeZone: tz, slots: take })
             : `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n` +
               renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
         ctxPatch: {
-          booking: {
+          booking: withLang({
             ...booking,
             step: "offer_slots",
             timeZone: tz,
@@ -269,7 +274,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
             slots: take,
             date_only: dateOnly,
             last_offered_date: dateOnly,
-          },
+          }),
           booking_last_touch_at: Date.now(),
         },
       };
@@ -312,7 +317,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       return {
         handled: true,
         reply:
-          idioma === "en"
+          effectiveLang === "en"
             ? "I don’t have openings that day. Would morning or afternoon on another day work for you?"
             : "Ese día no tengo disponibilidad. ¿Te funciona más en la mañana o en la tarde en otro día?",
         ctxPatch: {
@@ -349,12 +354,12 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
         handled: true,
         reply: buildAskAllMessage(idioma, booking?.purpose || null),
         ctxPatch: {
-          booking: {
+          booking: withLang({
             ...booking,
             step: "ask_all",
             timeZone,
             daypart: inferDaypartFromHHMM(hhmm),
-          },
+          }),
           booking_last_touch_at: Date.now(),
         },
       };
@@ -433,24 +438,24 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       const todayISO = now.toFormat("yyyy-MM-dd");
       const datePrefix =
       ctxDate !== todayISO
-        ? (idioma === "en"
+        ? (effectiveLang === "en"
             ? `For ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("EEE, LLL dd")}, `
             : `Para ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `)
         : "";
 
       if (exact) {
         const pretty = DateTime.fromISO(exact.startISO, { zone: tz })
-          .setLocale(idioma === "en" ? "en" : "es")
-          .toFormat(idioma === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+          .setLocale(effectiveLang === "en" ? "en" : "es")
+          .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
 
         return {
           handled: true,
           reply:
-            idioma === "en"
+            effectiveLang === "en"
               ? `Perfect, I have available ${pretty}. Do you want to confirm this time? (yes/no)`
               : `Perfecto, tengo disponible ${pretty}. ¿Confirmas ese horario? (sí/no)`,
           ctxPatch: {
-            booking: {
+            booking: withLang({
               ...booking,
               step: "confirm",
               timeZone: tz,
@@ -463,7 +468,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
               date_only: ctxDate,
               last_offered_date: ctxDate,
               slots: [], // ✅ importante: sin lista
-            },
+            }),
             booking_last_touch_at: Date.now(),
           },
         };
@@ -481,13 +486,13 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       return {
         handled: true,
         reply:
-          idioma === "en"
+          effectiveLang === "en"
             ? `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n` +
               renderSlotsMessage({ idioma, timeZone: tz, slots: take })
             : `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n` +
               renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
           ctxPatch: {
-            booking: {
+            booking: withLang({
               ...booking,
               step: "offer_slots",
               timeZone: tz,
@@ -496,7 +501,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
               slots: take,
               date_only: ctxDate,
               last_offered_date: ctxDate,
-            },
+            }),
             booking_last_touch_at: Date.now(),
           },
         };
@@ -538,7 +543,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     const todayISO = now.toFormat("yyyy-MM-dd");
     const datePrefix =
         ctxDate !== todayISO
-        ? (idioma === "en"
+        ? (effectiveLang === "en"
             ? `The next availability date on: ${ctxDate}. `
             : `La próxima fecha disponible es: ${ctxDate}. `)
         : "";
@@ -546,17 +551,17 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     // ✅ SI EXISTE EXACTO → CONFIRMAR DIRECTO (NO LISTA)
     if (exact) {
         const pretty = DateTime.fromISO(exact.startISO, { zone: tz })
-        .setLocale(idioma === "en" ? "en" : "es")
-        .toFormat(idioma === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+        .setLocale(effectiveLang === "en" ? "en" : "es")
+        .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
 
         return {
         handled: true,
         reply:
-            idioma === "en"
+            effectiveLang === "en"
               ? `Perfect, I have available ${pretty}. Do you want to confirm this time? (yes/no)`
               : `Perfecto, tengo disponible ${pretty}. ¿Confirmas ese horario? (sí/no)`,
         ctxPatch: {
-            booking: {
+            booking: withLang({
             ...booking,
             step: "confirm",
             timeZone: tz,
@@ -569,7 +574,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
             date_only: ctxDate,
             last_offered_date: ctxDate,
             slots: [],
-            },
+            }),
             booking_last_touch_at: Date.now(),
         },
         };
@@ -587,13 +592,13 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     return {
         handled: true,
         reply:
-        idioma === "en"
+        effectiveLang === "en"
             ? `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n` +
             renderSlotsMessage({ idioma, timeZone: tz, slots: take })
             : `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n` +
             renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
         ctxPatch: {
-        booking: {
+        booking: withLang({
             ...booking,
             step: "offer_slots",
             timeZone: tz,
@@ -602,7 +607,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
             slots: take,
             date_only: ctxDate,
             last_offered_date: ctxDate,
-        },
+        }),
         booking_last_touch_at: Date.now(),
         },
     };
@@ -611,7 +616,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "I don’t see availability near that time. Would morning or afternoon work better?"
           : "No veo disponibilidad cerca de esa hora. ¿Te funciona más en la mañana o en la tarde?",
       ctxPatch: {
@@ -625,7 +630,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
   if (!dp) {
     return {
       handled: true,
-      reply: idioma === "en" ? "Please reply: morning or afternoon." : "Respóndeme: mañana o tarde.",
+      reply: effectiveLang === "en" ? "Please reply: morning or afternoon." : "Respóndeme: mañana o tarde.",
       ctxPatch: {
         booking: { ...booking, step: "ask_daypart", timeZone },
         booking_last_touch_at: Date.now(),

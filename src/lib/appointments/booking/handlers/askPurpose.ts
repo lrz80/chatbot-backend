@@ -29,11 +29,13 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
     detectPurpose,
   } = deps;
 
+  const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
+
   // Escape: usuario cambió de tema
   if (wantsToChangeTopic(userText)) {
     return {
       handled: false,
-      ctxPatch: { booking: { step: "idle" } },
+      ctxPatch: { booking: { ...(booking || {}), step: "idle" } },
     };
   }
 
@@ -42,11 +44,11 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
           : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
       ctxPatch: {
-        booking: { step: "idle" },
+        booking: { ...(booking || {}), step: "idle" },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -59,11 +61,11 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "Got it. Is it an appointment, class, consultation, or a call?"
           : "Entiendo. ¿Es una cita, clase, consulta o llamada?",
       ctxPatch: {
-        booking: { ...booking, step: "ask_purpose", timeZone, lang: idioma },
+        booking: { ...(booking || {}), step: "ask_purpose", timeZone, lang: effectiveLang },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -73,15 +75,16 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
   return {
     handled: true,
     reply:
-      idioma === "en"
+      effectiveLang === "en"
         ? "Sure, I can help you schedule it. Does morning or afternoon work better for you?"
         : "Claro, puedo ayudarte a agendar. ¿Te funciona más en la mañana o en la tarde?",
     ctxPatch: {
       booking: {
+        ...(booking || {}),
         step: "ask_daypart",
         timeZone,
         purpose,
-        lang: booking?.lang || idioma,
+        lang: effectiveLang,
       },
       booking_last_touch_at: Date.now(),
     },
