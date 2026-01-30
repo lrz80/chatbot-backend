@@ -44,6 +44,12 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
   if (!wantsBooking) return { handled: false };
 
+  const resetPersonal = {
+    name: null,
+    email: null,
+    phone: null,   // WA no lo necesita, Meta lo llenas luego
+  };
+
   // ✅ NUEVO: si el usuario ya dijo día+hora ("lunes a las 3") -> confirm directo
   // Vamos a validar usando:
   // - minLeadMinutes (por tenant)
@@ -151,6 +157,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
           ctxPatch: {
             booking: {
               ...(hydratedBooking || {}),
+              ...resetPersonal,
               step: "confirm",
               timeZone: tz,
               lang: effectiveLang,
@@ -186,6 +193,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         ctxPatch: {
           booking: {
             ...(hydratedBooking || {}),
+            ...resetPersonal,
             step: "offer_slots",
             timeZone: tz,
             lang: effectiveLang,
@@ -217,7 +225,8 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
           : `Perfecto — tengo ${human}. ¿Confirmas?`,
       ctxPatch: {
         booking: {
-          ...(booking || {}),
+          ...(hydratedBooking || {}),
+          ...resetPersonal,
           step: "confirm",
           timeZone: tz,
           lang: effectiveLang,
