@@ -146,16 +146,35 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
 
   const isMeta = canal === "facebook" || canal === "instagram";
 
+  const clean = (v: any) => String(v ?? "").trim();
+
+  const isJunk = (s: string) => {
+    const t = s.trim().toLowerCase();
+    return !t || t === "null" || t === "undefined" || t === "n/a" || t === "-";
+  };
+
+  const isValidEmail = (s: string) =>
+    /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(s.trim());
+
+  const isValidName = (s: string) => {
+    const t = s.trim();
+    // mínimo 2 palabras o al menos 3 letras
+    return t.length >= 3;
+  };
+
   // ✅ 4) YES -> si faltan datos, SIEMPRE manda a ask_all (1 solo paso)
   if (yes) {
-    const missingName = !String(hydratedBooking?.name || "").trim();
-    const missingEmail = !String(hydratedBooking?.email || "").trim();
+    const nameRaw = clean(hydratedBooking?.name);
+    const emailRaw = clean(hydratedBooking?.email);
+    const phoneRaw = clean(hydratedBooking?.phone);
 
-    // WhatsApp NO necesita phone (ya lo tienes en `contacto`)
-    const missingPhone = isMeta && !String(hydratedBooking?.phone || "").trim();
+    const missingName = isJunk(nameRaw) || !isValidName(nameRaw);
+    const missingEmail = isJunk(emailRaw) || !isValidEmail(emailRaw);
+
+    // WhatsApp NO pide phone; Meta sí
+    const missingPhone = isMeta && (isJunk(phoneRaw) || phoneRaw.length < 7);
 
     if (missingName || missingEmail || missingPhone) {
-      // Mensaje: 1 solo paso. Ejemplos distintos para WA vs Meta
       const example = isMeta
         ? (effectiveLang === "en"
             ? "John Smith, john@email.com, +13055551234"
@@ -175,6 +194,10 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
             ...hydratedBooking,
             step: "ask_all",
             timeZone: tz,
+            // 🔥 limpia basura para que NO “pase” por tener strings raros
+            name: missingName ? null : nameRaw,
+            email: missingEmail ? null : emailRaw,
+            phone: missingPhone ? null : phoneRaw,
             lang: (hydratedBooking?.lang as any) || idioma,
           },
           booking_last_touch_at: Date.now(),
@@ -183,7 +206,7 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     }
   }
 
-  // 5) YES pero sin start/end
+// 5) YES pero sin start/end
 const startISO = hydratedBooking?.start_time;
 const endISO = hydratedBooking?.end_time;
 
@@ -212,12 +235,24 @@ if (!startISO || !endISO) {
     ? String(hydratedBooking?.phone || "").trim()
     : String(contacto || "").trim();
 
-  const customerEmail = String(hydratedBooking?.email || "").trim() || null;
-
   // 6) crear appointment pending idempotente (dedupe real)
-  const customer_name = hydratedBooking?.name || "Cliente";
+  const customer_name = clean(hydratedBooking?.name);
+  const customer_email_clean = clean(hydratedBooking?.email);
 
-    // ✅ Teléfono real:
+  if (isJunk(customer_name) || !isValidName(customer_name) || isJunk(customer_email_clean) || !isValidEmail(customer_email_clean)) {
+    return {
+      handled: true,
+      reply: effectiveLang === "en"
+        ? "Before confirming, please send your full name and email in one message."
+        : "Antes de confirmar, envíame tu nombre completo y tu email en un solo mensaje.",
+      ctxPatch: { booking: { ...hydratedBooking, step: "ask_all" }, booking_last_touch_at: Date.now() },
+    };
+  }
+
+  const customerEmail = customer_email_clean || null;
+
+
+  // ✅ Teléfono real:
   // - WhatsApp: contacto ES el teléfono
   // - IG/FB: contacto es senderId, el teléfono viene de booking.phone
 
@@ -267,6 +302,18 @@ if (!startISO || !endISO) {
       ctxPatch: { booking: { ...hydratedBooking, step: "idle" }, booking_last_touch_at: Date.now() },
     };
   }
+
+  console.log("🧾 [CONFIRM] booking attempt", {
+    tenantId,
+    canal,
+    contacto,
+    tz,
+    startISO,
+    endISO,
+    name: customer_name,
+    email: customerEmail,
+    phone: customerPhone,
+  });
 
   // 9) intentar reservar en Google
     const g = await bookInGoogle({
@@ -320,6 +367,11 @@ if (!startISO || !endISO) {
                 slots: take,
                 date_only: dateISO,
                 last_offered_date: dateISO,
+                // 🔥 limpia el slot que ya no sirve
+                start_time: null,
+                end_time: null,
+                picked_start: null,
+                picked_end: null,
                 lang: (hydratedBooking?.lang as any) || idioma,
               },
               booking_last_touch_at: Date.now(),

@@ -15,10 +15,19 @@ export function subtractBusyFromWindow(opts: {
 }): Array<{ start: DateTime; end: DateTime }> {
   const { windowStart, windowEnd, busy, timeZone } = opts;
 
+  const parseBusyIso = (iso: string) => {
+    // 1) respeta offsets/Z si vienen
+    const dt = DateTime.fromISO(iso);
+    if (dt.isValid) return dt.setZone(timeZone);
+
+    // 2) fallback: si viene sin timezone, asúmelo en timeZone
+    return DateTime.fromISO(iso, { zone: timeZone });
+  };
+
   const busyBlocks = (busy || [])
     .map((b) => ({
-      start: DateTime.fromISO(b.start, { zone: timeZone }),
-      end: DateTime.fromISO(b.end, { zone: timeZone }),
+      start: parseBusyIso(b.start),
+      end: parseBusyIso(b.end),
     }))
     .filter((b) => b.start.isValid && b.end.isValid)
     .sort((a, b) => a.start.toMillis() - b.start.toMillis());
@@ -267,7 +276,7 @@ export async function getSlotsForDate(opts: {
     durationMin,
     bufferMin,
     timeZone,
-    minLeadMinutes: safeLead,
+    minLeadMinutes,
   });
 
   return slots; // NO cortes aquí
@@ -378,7 +387,7 @@ export async function getNextSlotsByDaypart(opts: {
       durationMin,
       bufferMin,
       timeZone,
-      minLeadMinutes: safeLead,
+      minLeadMinutes: opts.minLeadMinutes, // ✅
     });
 
     for (const s of slots) {
@@ -500,7 +509,7 @@ export async function getSlotsForDateWindow(opts: {
     durationMin,
     bufferMin,
     timeZone,
-    minLeadMinutes: safeLead,
+    minLeadMinutes,
   });
 
   return slots;

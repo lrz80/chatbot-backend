@@ -106,6 +106,16 @@ async function bookInGoogle(opts: {
     calendarId,
   });
 
+  console.log("🧪 [BOOKING] freebusy response", {
+    tenantId,
+    calendarId,
+    timeMin,
+    timeMax,
+    calendarsKeys: Object.keys((fb as any)?.calendars || {}),
+    primaryBusy: (fb as any)?.calendars?.primary?.busy ?? null,
+    requestedBusy: (fb as any)?.calendars?.[calendarId]?.busy ?? null,
+  });
+
   const calendars = fb?.calendars || {};
   console.log("FREEBUSY RAW:", {
     calendarKeys: Object.keys(calendars),
@@ -116,6 +126,13 @@ async function bookInGoogle(opts: {
   });
 
   const busy = extractBusyBlocks(fb, calendarId);
+  console.log("🧪 [BOOKING] busy extracted", {
+    tenantId,
+    calendarId,
+    extractedCount: busy.length,
+    extractedSample: busy[0] || null,
+  });
+
   console.log("🧪 [BOOKING] freebusy raw keys", {
     tenantId,
     calendarId,
