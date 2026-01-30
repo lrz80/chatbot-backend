@@ -202,7 +202,8 @@ export async function getSlotsForDate(opts: {
   durationMin: number;
   bufferMin: number;
   hours: HoursByWeekday | null;
-  minLeadMinutes: number; 
+  minLeadMinutes: number;
+  calendarId?: string; 
 }): Promise<Slot[]> {
   const { tenantId, timeZone, dateISO, durationMin, bufferMin, hours, minLeadMinutes } = opts;
 
@@ -234,7 +235,7 @@ export async function getSlotsForDate(opts: {
 
   if (!windowStart.isValid || !windowEnd.isValid || windowEnd <= windowStart) return [];
 
-  const calendarId = "primary";
+  const calendarId = opts.calendarId || "primary";
 
   const fb = await googleFreeBusy({
     tenantId,
@@ -423,6 +424,7 @@ export async function getSlotsForDateWindow(opts: {
   bufferMin: number;
   hours: HoursByWeekday | null;
   minLeadMinutes: number;
+  calendarId?: string; // ✅ NUEVO
 
   // NUEVO: ventana dentro del día (HH:mm)
   windowStartHHmm: string; // "17:00"
@@ -466,7 +468,7 @@ export async function getSlotsForDateWindow(opts: {
 
   if (!windowStart.isValid || !windowEnd.isValid || windowEnd <= windowStart) return [];
 
-  const calendarId = "primary";
+  const calendarId = opts.calendarId || "primary";
 
   const fb = await googleFreeBusy({
     tenantId,

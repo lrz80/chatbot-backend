@@ -23,6 +23,8 @@ import {
 } from "../time";
 
 import { getSlotsForDate, getSlotsForDateWindow } from "../slots";
+import { googleFreeBusy } from "../../../../services/googleCalendar";
+import { extractBusyBlocks } from "../freebusy";
 
 type Slot = { startISO: string; endISO: string };
 
@@ -143,6 +145,8 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
 
   const tz = hydratedBooking.timeZone;
 
+  const calendarId = "primary";
+
   const t = normalizeText(userText);
   const slotsRaw: Slot[] = Array.isArray(hydratedBooking?.slots) ? hydratedBooking.slots : [];
   const slots: Slot[] = sortSlotsAsc(slotsRaw);
@@ -194,6 +198,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
                 bufferMin,
                 minLeadMinutes,
                 hours,
+                calendarId,
             })
           );
 
@@ -339,6 +344,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         bufferMin,
         minLeadMinutes,
         hours,
+        calendarId,
         })
       );
 
@@ -364,6 +370,49 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         const start = DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm");
         return candidates.includes(start);
       });
+
+      if (exact) {
+        const calId = "primary";
+        const fbCheck = await googleFreeBusy({
+          tenantId,
+          timeMin: DateTime.fromISO(exact.startISO, { zone: tz }).toISO()!,
+          timeMax: DateTime.fromISO(exact.endISO, { zone: tz }).toISO()!,
+          calendarId: calId,
+        });
+
+        const busyNow = extractBusyBlocks(fbCheck, calId);
+
+        if (busyNow.length > 0) {
+          // re-calcula y ofrece otras opciones
+          const refresh = sortSlotsAsc(
+            await getSlotsForDate({
+              tenantId,
+              timeZone: tz,
+              dateISO: ctxDate,
+              durationMin,
+              bufferMin,
+              minLeadMinutes,
+              hours,
+              calendarId: calId,
+            })
+          );
+
+          const take = (daypart ? filterSlotsByDaypart(refresh, tz, daypart) : refresh).slice(0, 5);
+
+          return {
+            handled: true,
+            reply: effectiveLang === "en"
+              ? "That time just got taken. Here are the next available options:"
+              : "Esa hora se acaba de ocupar. Aquí tienes las próximas opciones disponibles:",
+            ctxPatch: {
+              booking: { ...hydratedBooking, step: "offer_slots", timeZone: tz, slots: take, last_offered_date: ctxDate, date_only: ctxDate },
+              booking_last_touch_at: Date.now(),
+            },
+          };
+        }
+
+        // ... sigue tu lógica normal
+      }
 
       // ✅ Si existe EXACTO -> CONFIRM (opción B)
       if (exact) {
@@ -524,6 +573,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
               bufferMin,
               minLeadMinutes,
               hours,
+              calendarId,
         })
       );
   
@@ -638,6 +688,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
             bufferMin,
             minLeadMinutes,
             hours,
+            calendarId,
             windowStartHHmm,
             windowEndHHmm,
           })
