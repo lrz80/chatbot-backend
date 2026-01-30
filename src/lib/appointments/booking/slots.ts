@@ -1,6 +1,6 @@
 // src/lib/appointments/booking/slots.ts
 import { DateTime } from "luxon";
-import { googleFreeBusy } from "@/services/googleCalendar";
+import { googleFreeBusy } from "../../../services/googleCalendar";
 import type { HoursByWeekday, Slot } from "./types";
 import { parseHHmm, weekdayKey } from "./time";
 import type { TimeConstraint } from "./text";
