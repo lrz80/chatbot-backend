@@ -63,7 +63,13 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
 
   // ✅ Capturar ambos en el MISMO mensaje
   const email = parseEmail(userText);
-  const phone = parsePhone(userText);
+  const parsedPhone = parsePhone(userText);
+
+  // ✅ WhatsApp: si no viene teléfono en el texto, usa el "contacto" (ya es el número real)
+  const waPhone =
+    canal === "whatsapp" ? String(contacto || "").trim() : "";
+
+  const phone = parsedPhone || (waPhone ? waPhone : null);
 
   // Email es obligatorio siempre
   if (!email) {
@@ -71,8 +77,12 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
       handled: true,
       reply:
         idioma === "en"
-          ? "Send your email and phone in ONE message Please! (example: name@email.com, +1 305 555 1234)."
-          : "Por favor Envíame tu email y tu teléfono en UN solo mensaje (ej: nombre@email.com, +1 305 555 1234).",
+          ? (requirePhone
+              ? "Send your email and phone in ONE message please! (example: name@email.com, +1 305 555 1234)."
+              : "Send your email in ONE message please! (example: name@email.com).")
+          : (requirePhone
+              ? "Por favor envíame tu email y tu teléfono en UN solo mensaje (ej: nombre@email.com, +1 305 555 1234)."
+              : "Por favor envíame tu email en UN solo mensaje (ej: nombre@email.com)."),
       ctxPatch: {
         booking: { ...booking, step: "ask_email_phone" },
         booking_last_touch_at: Date.now(),
@@ -122,7 +132,7 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
     contacto,
     nombre: name,
     email,
-    telefono: phone || null,
+    telefono: phone,
   });
 
   const whenTxt = formatSlotHuman({ startISO, timeZone, idioma });
@@ -143,8 +153,6 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
         phone: phone || null,
         start_time: startISO,
         end_time: endISO,
-        picked_start: null,
-        picked_end: null,
       },
       booking_last_touch_at: Date.now(),
     },

@@ -18,6 +18,7 @@ export type StartBookingDeps = {
   // ✅ opcionales (para no romper callers)
   minLeadMinutes?: number;
   hours?: HoursByWeekday | null;
+  booking?: any; // ✅ ADD
 };
 
 export function handleStartBooking(deps: StartBookingDeps): {
@@ -25,7 +26,7 @@ export function handleStartBooking(deps: StartBookingDeps): {
   reply?: string;
   ctxPatch?: any;
 } {
-    const { idioma, userText, timeZone, wantsBooking, detectPurpose, durationMin, minLeadMinutes, hours } = deps;
+  const { idioma, userText, timeZone, wantsBooking, detectPurpose, durationMin, minLeadMinutes, hours, booking } = deps;
 
   if (!wantsBooking) return { handled: false };
 
@@ -96,6 +97,7 @@ export function handleStartBooking(deps: StartBookingDeps): {
           : `Perfecto — tengo ${human}. ¿Confirmas?`,
       ctxPatch: {
         booking: {
+          ...(booking || {}),
           step: "confirm",
           timeZone,
           picked_start: dt.startISO,

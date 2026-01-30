@@ -160,11 +160,21 @@ export async function bookingFlowMvp(opts: {
 }> {
   const { tenantId, canal, contacto, idioma, userText } = opts;
 
-  const messageId = opts.messageId ? String(opts.messageId) : null;
-  console.log("📅 [BOOKING] in", { tenantId, canal, contacto, messageId });
-
   const ctx = (opts.ctx && typeof opts.ctx === "object") ? (opts.ctx as BookingCtx) : {};
   const booking = ctx.booking || { step: "idle" as const };
+
+  // ✅ WhatsApp: ya tenemos el teléfono (contacto). No lo pidas.
+  const waPhone = canal === "whatsapp" ? String(contacto || "").trim() : "";
+  if (waPhone) {
+    if (!booking.phone) booking.phone = waPhone;
+  }
+  
+  if (waPhone && !booking?.phone) {
+    booking.phone = waPhone;
+  }
+  
+  const messageId = opts.messageId ? String(opts.messageId) : null;
+  console.log("📅 [BOOKING] in", { tenantId, canal, contacto, messageId });
 
   const nowMs = Date.now();
 
