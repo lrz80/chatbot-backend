@@ -79,7 +79,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
           ? "What day would you like to book? Please send a date (YYYY-MM-DD)."
           : "¿Para qué día quieres agendar? Envíame una fecha (YYYY-MM-DD).",
       ctxPatch: {
-        booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
+        booking: { ...hydratedBooking, step: "ask_datetime", timeZone: tz },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -98,7 +98,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
             ? "I couldn’t read that time. Please use HH:mm (example: 14:00)."
             : "No pude leer esa hora. Usa HH:mm (ej: 14:00).",
         ctxPatch: {
-          booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
+          booking: { ...hydratedBooking, step: "ask_datetime", timeZone: tz },
           booking_last_touch_at: Date.now(),
         },
       };
@@ -112,7 +112,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
             ? "That time is in the past. Please send a future time."
             : "Esa hora ya pasó. Envíame una hora futura.",
         ctxPatch: {
-          booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
+          booking: { ...hydratedBooking, step: "ask_datetime", timeZone: tz },
           booking_last_touch_at: Date.now(),
         },
       };
@@ -124,7 +124,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
         hours,
         startISO: parsed2.startISO,
         endISO: parsed2.endISO,
-        timeZone,
+        timeZone: tz,
       });
 
       if (!check.ok) {
@@ -136,7 +136,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
                 ? "We’re closed that day. Please choose another date."
                 : "Ese día estamos cerrados. Envíame otra fecha.",
             ctxPatch: {
-              booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
+              booking: { ...hydratedBooking, step: "ask_datetime", timeZone: tz },
               booking_last_touch_at: Date.now(),
             },
           };
@@ -155,7 +155,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
                 ? `That time is outside business hours (${windowTxt}). Please send a time within that range.`
                 : `Esa hora está fuera del horario (${windowTxt}). Envíame una hora dentro de ese rango.`,
             ctxPatch: {
-              booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
+              booking: { ...hydratedBooking, step: "ask_datetime", timeZone: tz },
               booking_last_touch_at: Date.now(),
             },
           };
@@ -163,7 +163,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
       }
     }
 
-    const whenTxt = formatSlotHuman({ startISO: parsed2.startISO!, timeZone, idioma: effectiveLang });
+    const whenTxt = formatSlotHuman({ startISO: parsed2.startISO!, timeZone: tz, idioma: effectiveLang });
 
     return {
       handled: true,
@@ -177,7 +177,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
           step: "confirm",
           start_time: parsed2.startISO,
           end_time: parsed2.endISO,
-          timeZone,
+          timeZone: tz,
           date_only: null,
         },
         booking_last_touch_at: Date.now(),
@@ -186,7 +186,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
   }
 
   // 2) Caso: fecha/hora completa en un mensaje
-  const parsed: any = parseDateTimeExplicit(userText, timeZone, durationMin);
+  const parsed: any = parseDateTimeExplicit(userText, tz, durationMin);
 
   if (!parsed) {
     return {
@@ -196,7 +196,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
           ? "I couldn’t read that. Please use: YYYY-MM-DD HH:mm (example: 2026-01-17 15:00)."
           : "No pude leer esa fecha/hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-17 15:00).",
       ctxPatch: {
-        booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
+        booking: { ...hydratedBooking, step: "ask_datetime", timeZone: tz },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -210,7 +210,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
           ? "That date/time is in the past. Please send a future date and time (YYYY-MM-DD HH:mm)."
           : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
       ctxPatch: {
-        booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
+        booking: { ...hydratedBooking, step: "ask_datetime", timeZone: tz },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -222,7 +222,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
       hours,
       startISO: parsed.startISO,
       endISO: parsed.endISO,
-      timeZone,
+      timeZone: tz,
     });
 
     if (!check.ok) {
@@ -234,7 +234,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
               ? "We’re closed that day. Please choose another date."
               : "Ese día estamos cerrados. Envíame otra fecha.",
           ctxPatch: {
-            booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
+            booking: { ...hydratedBooking, step: "ask_datetime", timeZone: tz },
             booking_last_touch_at: Date.now(),
           },
         };
@@ -249,7 +249,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
               ? `That time is outside business hours (${windowTxt}). Please send a time within that range.`
               : `Esa hora está fuera del horario (${windowTxt}). Envíame una hora dentro de ese rango.`,
           ctxPatch: {
-            booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
+            booking: { ...hydratedBooking, step: "ask_datetime", timeZone: tz },
             booking_last_touch_at: Date.now(),
           },
         };
@@ -257,7 +257,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
     }
   }
 
-  const whenTxt = formatSlotHuman({ startISO: parsed.startISO!, timeZone, idioma: effectiveLang });
+  const whenTxt = formatSlotHuman({ startISO: parsed.startISO!, timeZone: tz, idioma: effectiveLang });
 
   return {
     handled: true,
@@ -271,7 +271,7 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
         step: "confirm",
         start_time: parsed.startISO,
         end_time: parsed.endISO,
-        timeZone,
+        timeZone: tz,
       },
       booking_last_touch_at: Date.now(),
     },
