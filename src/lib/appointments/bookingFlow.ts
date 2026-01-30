@@ -105,6 +105,8 @@ async function bookInGoogle(opts: {
     timeMax,
     calendarId,
   });
+  
+  console.log("FREEBUSY RAW:", JSON.stringify(fb, null, 2));
 
   const busy = extractBusyBlocks(fb, calendarId);
   console.log("🧪 [BOOKING] freebusy raw keys", {
