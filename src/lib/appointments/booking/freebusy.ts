@@ -1,36 +1,40 @@
 // src/lib/appointments/booking/freebusy.ts
 
-export function extractBusyBlocks(fb: any): Array<{ startISO: string; endISO: string }> {
-  // Respuesta típica de Google freebusy:
-  // { calendars: { primary: { busy: [{ start, end }, ...] } } }
+type BusyBlock = { startISO: string; endISO: string };
+
+function mapBusy(arr: any[]): BusyBlock[] {
+  return arr
+    .filter((b: any) => b?.start && b?.end)
+    .map((b: any) => ({ startISO: String(b.start), endISO: String(b.end) }));
+}
+
+export function extractBusyBlocks(
+  fb: any,
+  calendarId?: string
+): BusyBlock[] {
   const calendars = fb?.calendars;
 
+  // 1) Si sabemos el calendarId consultado, úsalo SIEMPRE primero
+  if (calendarId && calendars && typeof calendars === "object") {
+    const byId = calendars?.[calendarId]?.busy;
+    if (Array.isArray(byId)) return mapBusy(byId);
+  }
+
+  // 2) Luego intenta primary
   if (calendars && typeof calendars === "object") {
-    // intenta primary primero
     const primaryBusy = calendars?.primary?.busy;
-    if (Array.isArray(primaryBusy)) {
-      return primaryBusy
-        .filter((b: any) => b?.start && b?.end)
-        .map((b: any) => ({ startISO: String(b.start), endISO: String(b.end) }));
-    }
+    if (Array.isArray(primaryBusy)) return mapBusy(primaryBusy);
 
-    // fallback por si el calendar no se llama "primary"
-    const firstKey = Object.keys(calendars)[0];
-    const anyBusy = calendars?.[firstKey]?.busy;
-    if (Array.isArray(anyBusy)) {
-      return anyBusy
-        .filter((b: any) => b?.start && b?.end)
-        .map((b: any) => ({ startISO: String(b.start), endISO: String(b.end) }));
+    // 3) fallback: cualquier key que tenga busy array
+    for (const key of Object.keys(calendars)) {
+      const anyBusy = calendars?.[key]?.busy;
+      if (Array.isArray(anyBusy)) return mapBusy(anyBusy);
     }
   }
 
-  // fallback defensivo si tu wrapper devuelve directamente fb.busy
+  // 4) fallback defensivo si tu wrapper devuelve directamente fb.busy
   const busy = fb?.busy;
-  if (Array.isArray(busy)) {
-    return busy
-      .filter((b: any) => b?.start && b?.end)
-      .map((b: any) => ({ startISO: String(b.start), endISO: String(b.end) }));
-  }
+  if (Array.isArray(busy)) return mapBusy(busy);
 
   return [];
 }

@@ -9,6 +9,10 @@ export type GoogleFreeBusyResponse = {
   calendars?: Record<string, { busy?: GoogleBusyBlock[] }>;
 };
 
+function emptyFreeBusy(calendarId: string, degraded = true) {
+  return { calendars: { [calendarId]: { busy: [] } }, degraded };
+}
+
 type GoogleTokens = { access_token: string; expires_in?: number; token_type?: string };
 
 async function markGoogleDisconnected(tenantId: string, reason: string) {
@@ -108,8 +112,15 @@ export async function googleFreeBusy(params: {
     const msg = String(e?.message || "");
 
     // ✅ Si no hay conexión o refresh murió, degradar: sin busy blocks
-    if (msg === "google_not_connected" || msg === "google_refresh_failed") {
-      return { calendars: { primary: { busy: [] } }, degraded: true };
+    if (
+      msg === "google_not_connected" ||
+      msg === "google_refresh_failed" ||
+      msg === "google_refresh_token_invalid" ||
+      msg === "google_oauth_not_configured"
+    ) {
+      const calendarId = params.calendarId || "primary";
+      console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarId });
+      return emptyFreeBusy(calendarId, true);
     }
     throw e;
   }
@@ -131,19 +142,35 @@ export async function googleFreeBusy(params: {
 
   const json = (await resp.json()) as GoogleFreeBusyResponse & { error?: any };
 
-  if (!resp.ok) {
-    console.error("Google freebusy failed:", json);
+    if (!resp.ok) {
+      console.error("Google freebusy failed:", json);
 
-    // ✅ Si Google responde 401/403 por token inválido, desconecta y degrada
-    if (resp.status === 401 || resp.status === 403) {
-      await markGoogleDisconnected(params.tenantId, `freebusy_${resp.status}`);
-      return { calendars: { primary: { busy: [] } }, degraded: true };
+      // ✅ Si Google responde 401/403 por token inválido, desconecta y degrada
+      if (resp.status === 401 || resp.status === 403) {
+        await markGoogleDisconnected(params.tenantId, `freebusy_${resp.status}`);
+        console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarId, status: resp.status });
+        return emptyFreeBusy(calendarId, true);
+      }
+
+      // ✅ Otros errores: degradar también
+      console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarId, status: resp.status });
+      return emptyFreeBusy(calendarId, true);
     }
 
-    // Otros errores sí pueden ser relevantes, pero para booking es mejor degradar también:
-    return { calendars: { primary: { busy: [] } }, degraded: true };
+    // ✅ Garantiza que siempre exista la clave exacta del calendarId consultado
+  if (!json?.calendars?.[calendarId]) {
+    json.calendars = { ...(json.calendars || {}), [calendarId]: { busy: [] } };
   }
 
+  const busyCount = json?.calendars?.[calendarId]?.busy?.length || 0;
+  console.log("🗓️ freeBusy:", {
+    tenantId: params.tenantId,
+    calendarId,
+    timeMin: params.timeMin,
+    timeMax: params.timeMax,
+    busyCount,
+    degraded: false,
+  });
   return json;
 }
 

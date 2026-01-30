@@ -1,32 +1,24 @@
 // src/lib/appointments/booking/slots.ts
 import { DateTime } from "luxon";
-import { googleFreeBusy } from "../../../services/googleCalendar";
-import type { GoogleFreeBusyResponse } from "../../../services/googleCalendar";
+import { googleFreeBusy } from "@/services/googleCalendar";
 import type { HoursByWeekday, Slot } from "./types";
 import { parseHHmm, weekdayKey } from "./time";
 import type { TimeConstraint } from "./text";
+import { extractBusyBlocks } from "./freebusy";
 
-
-export function extractBusyBlocks(fb: GoogleFreeBusyResponse | any): Array<{ start: string; end: string }> {
-  if (!fb?.calendars) return [];
-  const primary = fb.calendars.primary || fb.calendars["primary"];
-  if (primary?.busy) return primary.busy;
-  const anyCal = Object.values(fb.calendars)[0] as any;
-  return Array.isArray(anyCal?.busy) ? anyCal.busy : [];
-}
 
 export function subtractBusyFromWindow(opts: {
   windowStart: DateTime;
   windowEnd: DateTime;
-  busy: Array<{ start: string; end: string }>;
+  busy: Array<{ startISO: string; endISO: string }>;
   timeZone: string;
 }): Array<{ start: DateTime; end: DateTime }> {
   const { windowStart, windowEnd, busy, timeZone } = opts;
 
   const busyBlocks = (busy || [])
     .map((b) => ({
-      start: DateTime.fromISO(b.start, { zone: timeZone }),
-      end: DateTime.fromISO(b.end, { zone: timeZone }),
+      start: DateTime.fromISO(b.startISO, { zone: timeZone }),
+      end: DateTime.fromISO(b.endISO, { zone: timeZone }),
     }))
     .filter((b) => b.start.isValid && b.end.isValid)
     .sort((a, b) => a.start.toMillis() - b.start.toMillis());
@@ -242,14 +234,25 @@ export async function getSlotsForDate(opts: {
 
   if (!windowStart.isValid || !windowEnd.isValid || windowEnd <= windowStart) return [];
 
-  const fb: GoogleFreeBusyResponse = await googleFreeBusy({
+  const calendarId = "primary";
+
+  const fb = await googleFreeBusy({
     tenantId,
     timeMin: windowStart.toISO()!,
     timeMax: windowEnd.toISO()!,
-    calendarId: "primary",
+    calendarId,
   });
 
-  const busy = extractBusyBlocks(fb);
+  const busy = extractBusyBlocks(fb, calendarId);
+    console.log("🧪 getSlotsForDate busy:", {
+    tenantId,
+    calendarId,
+    dateISO,
+    timeMin: windowStart.toISO(),
+    timeMax: windowEnd.toISO(),
+    busyCount: busy.length,
+    sample: busy[0] || null,
+  });
 
   const freeRanges = subtractBusyFromWindow({
     windowStart,
@@ -351,15 +354,17 @@ export async function getNextSlotsByDaypart(opts: {
     const win = daypartWindowFromBusinessHours({ day, bizStart, bizEnd, daypart });
     if (!win) continue;
 
+    const calendarId = "primary";
+
     const fb = await googleFreeBusy({
       tenantId,
       timeMin: win.start.toISO()!,
       timeMax: win.end.toISO()!,
-      calendarId: "primary",
+      calendarId,
     });
 
-    const busy = extractBusyBlocks(fb);
-
+    const busy = extractBusyBlocks(fb, calendarId);
+    
     const freeRanges = subtractBusyFromWindow({
       windowStart: win.start,
       windowEnd: win.end,
@@ -396,13 +401,17 @@ export async function isRangeBusy(opts: {
   timeMaxISO: string;
   calendarId?: string;
 }) {
+  const calendarId = opts.calendarId || "primary";
+
   const fb = await googleFreeBusy({
     tenantId: opts.tenantId,
     timeMin: opts.timeMinISO,
     timeMax: opts.timeMaxISO,
-    calendarId: opts.calendarId || "primary",
+    calendarId,
   });
-  const busy = extractBusyBlocks(fb);
+
+  const busy = extractBusyBlocks(fb, calendarId);
+  
   return { busy, isBusy: busy.length > 0 };
 }
 
@@ -457,14 +466,25 @@ export async function getSlotsForDateWindow(opts: {
 
   if (!windowStart.isValid || !windowEnd.isValid || windowEnd <= windowStart) return [];
 
-  const fb: GoogleFreeBusyResponse = await googleFreeBusy({
+  const calendarId = "primary";
+
+  const fb = await googleFreeBusy({
     tenantId,
     timeMin: windowStart.toISO()!,
     timeMax: windowEnd.toISO()!,
-    calendarId: "primary",
+    calendarId,
   });
 
-  const busy = extractBusyBlocks(fb);
+  const busy = extractBusyBlocks(fb, calendarId);
+    console.log("🧪 getSlotsForDate busy:", {
+    tenantId,
+    calendarId,
+    dateISO,
+    timeMin: windowStart.toISO(),
+    timeMax: windowEnd.toISO(),
+    busyCount: busy.length,
+    sample: busy[0] || null,
+  });
 
   const freeRanges = subtractBusyFromWindow({
     windowStart,
@@ -482,4 +502,21 @@ export async function getSlotsForDateWindow(opts: {
   });
 
   return slots;
+}
+
+export async function validateSlotStillFree(opts: {
+  tenantId: string;
+  calendarId?: string;
+  slot: Slot;
+}): Promise<boolean> {
+  const calendarId = opts.calendarId || "primary";
+
+  const { isBusy } = await isRangeBusy({
+    tenantId: opts.tenantId,
+    timeMinISO: opts.slot.startISO,
+    timeMaxISO: opts.slot.endISO,
+    calendarId,
+  });
+
+  return !isBusy;
 }
