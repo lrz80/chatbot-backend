@@ -403,6 +403,18 @@ export async function bookingFlowMvp(opts: {
     (rawWants && !capability) ||
     (hasAppointmentContext(userText) && !capability);
 
+  // ✅ RESET PERSONAL SOLO AL INICIO DE UN BOOKING NUEVO
+  // Evita que se agende "sin preguntar nada" por tener name/email guardados de antes.
+  if (booking.step === "idle" && wantsBooking) {
+    booking.name = null;
+    booking.email = null;
+
+    // en WhatsApp el phone lo tenemos del contacto; en Meta se captura luego
+    if (canal === "facebook" || canal === "instagram") {
+      booking.phone = null;
+    }
+  }
+
   if (
     booking.step === "idle" &&
     capability &&

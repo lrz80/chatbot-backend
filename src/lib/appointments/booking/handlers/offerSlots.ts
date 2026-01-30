@@ -432,7 +432,6 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
           ctxPatch: {
             booking: {
               ...hydratedBooking,
-              ...resetPersonal,
               step: "confirm",
               timeZone: tz,
               picked_start: exact.startISO,

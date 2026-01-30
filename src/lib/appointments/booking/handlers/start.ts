@@ -157,7 +157,6 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
           ctxPatch: {
             booking: {
               ...(hydratedBooking || {}),
-              ...resetPersonal,
               step: "confirm",
               timeZone: tz,
               lang: effectiveLang,
@@ -226,7 +225,6 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
       ctxPatch: {
         booking: {
           ...(hydratedBooking || {}),
-          ...resetPersonal,
           step: "confirm",
           timeZone: tz,
           lang: effectiveLang,
