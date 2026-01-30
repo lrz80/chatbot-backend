@@ -92,10 +92,14 @@ export function handleStartBooking(deps: StartBookingDeps): {
   }
 
   if (dt) {
+    const d = DateTime.fromISO(dt.startISO, { zone: tz }).setLocale(
+      effectiveLang === "en" ? "en" : "es"
+    );
+
     const human =
       effectiveLang === "en"
-        ? DateTime.fromISO(dt.startISO).setZone(tz).toFormat("cccc, LLL d 'at' h:mm a")
-        : DateTime.fromISO(dt.startISO).setZone(tz).toFormat("cccc d 'de' LLL 'a las' h:mm a");
+        ? d.toFormat("cccc, LLL d 'at' h:mm a")
+        : d.toFormat("cccc d 'de' LLL 'a las' h:mm a");
 
     return {
       handled: true,
