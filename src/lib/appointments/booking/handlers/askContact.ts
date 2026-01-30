@@ -51,10 +51,17 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
     upsertClienteBookingData,
   } = deps;
 
-  const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
+  const hydratedBooking = {
+    ...(booking || {}),
+    timeZone: (booking?.timeZone as any) || timeZone, // ✅ sticky tz
+    lang: (booking?.lang as any) || idioma,           // ✅ sticky lang
+  };
+
+  const effectiveLang: "es" | "en" = hydratedBooking.lang;
+  const tz = hydratedBooking.timeZone;
 
   if (wantsToChangeTopic(userText)) {
-    return { handled: false, ctxPatch: { booking: { ...booking, step: "idle", lang: effectiveLang } } };
+    return { handled: false, ctxPatch: { booking: { ...hydratedBooking, step: "idle", lang: effectiveLang } } };
   }
 
   if (wantsToCancel(userText)) {
@@ -65,7 +72,7 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
           ? "No worries, whenever you’re ready to schedule, I’ll be here to help."
           : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
       ctxPatch: {
-        booking: { ...booking, step: "idle", lang: effectiveLang },
+        booking: { ...hydratedBooking, step: "idle", lang: effectiveLang },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -81,7 +88,7 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
         effectiveLang === "en"
           ? "I’m missing your first and last name (example: John Smith)."
           : "Me falta tu nombre y apellido (ej: Juan Pérez).",
-      ctxPatch: { booking: { ...booking, step: "ask_contact", lang: effectiveLang  }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: { ...hydratedBooking, step: "ask_contact", lang: effectiveLang  }, booking_last_touch_at: Date.now() },
     };
   }
 
@@ -92,7 +99,7 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
         effectiveLang === "en"
           ? "I’m missing a valid email (example: name@email.com)."
           : "Me falta un email válido (ej: nombre@email.com).",
-      ctxPatch: { booking: { ...booking, step: "ask_contact", lang: effectiveLang  }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: { ...hydratedBooking, step: "ask_contact", lang: effectiveLang  }, booking_last_touch_at: Date.now() },
     };
   }
 
@@ -104,15 +111,15 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
         effectiveLang === "en"
           ? "I’m missing your phone number (example: +1 305 555 1234). Please send it."
           : "Me falta tu número de teléfono (ej: +1 305 555 1234). Envíamelo por favor.",
-      ctxPatch: { booking: { ...booking, step: "ask_contact", lang: effectiveLang  }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: { ...hydratedBooking, step: "ask_contact", lang: effectiveLang  }, booking_last_touch_at: Date.now() },
     };
   }
 
-  const startISO = (booking as any)?.picked_start || null;
-  const endISO = (booking as any)?.picked_end || null;
+  const startISO = (hydratedBooking as any)?.picked_start || (hydratedBooking as any)?.start_time || null;
+  const endISO   = (hydratedBooking as any)?.picked_end   || (hydratedBooking as any)?.end_time   || null;
 
   if (!startISO || !endISO) {
-    return { handled: false, ctxPatch: { booking: { ...booking, step: "idle", lang: effectiveLang } } };
+    return { handled: false, ctxPatch: { booking: { ...hydratedBooking, step: "idle", lang: effectiveLang } } };
   }
 
   await upsertClienteBookingData({
@@ -124,7 +131,7 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
     telefono: phone || null,
   });
 
-  const whenTxt = formatSlotHuman({ startISO, timeZone, idioma: effectiveLang });
+  const whenTxt = formatSlotHuman({ startISO, timeZone: tz, idioma: effectiveLang });
 
   return {
     handled: true,
@@ -134,9 +141,9 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
         : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
     ctxPatch: {
       booking: {
-        ...booking,
+        ...hydratedBooking,
         step: "confirm",
-        timeZone,
+        timeZone: tz,
         lang: effectiveLang,
         name,
         email,

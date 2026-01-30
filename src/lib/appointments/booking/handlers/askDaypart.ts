@@ -116,10 +116,21 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     minLeadMinutes,
   } = deps;
 
-  const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
+  const hydratedBooking = {
+    ...booking,
+    timeZone: booking?.timeZone || timeZone,     // ✅ sticky tz
+    lang: (booking?.lang as any) || idioma,      // ✅ sticky lang
+  };
+
+  const effectiveLang: "es" | "en" = (hydratedBooking.lang as any) || idioma;
+  const tz = hydratedBooking.timeZone;
 
   // helper: siempre preserva el lang
-  const withLang = (b: any) => ({ ...(b || {}), lang: (b?.lang as any) || effectiveLang });
+  const withLang = (b: any) => ({
+    ...(b || {}),
+    lang: (b?.lang as any) || effectiveLang,
+    timeZone: b?.timeZone || tz, // ✅ sticky tz
+  });
 
   if (wantsToChangeTopic(userText)) {
     return { handled: false, ctxPatch: { booking: withLang({ ...booking, step: "idle" }) } };
@@ -153,7 +164,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
     // ✅ Si el usuario menciona una fecha ("para el 25", "martes", "mañana", etc.)
     // en vez de daypart, debemos continuar el flujo ofreciendo slots para esa fecha.
-    const dateOnly = extractDateOnlyToken(userText, timeZone);
+    const dateOnly = extractDateOnlyToken(userText, tz);
 
     // ✅ Opción B: si el usuario trae FECHA + HORA (ej "lunes a las 2pm"),
     // intentamos esa hora exacta primero; si no existe, damos las más cercanas.
@@ -167,7 +178,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
             booking: withLang({
               ...booking,
               step: "ask_all",
-              timeZone,
+              timeZone: tz,
               date_only: dateOnly,
               daypart: inferDaypartFromHHMM(hhmm),
             }),
@@ -176,7 +187,6 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
         };
       }
 
-    const tz = timeZone;
     const now = DateTime.now().setZone(tz);
 
     // Ventana real alrededor de la hora pedida (2h antes, 3h después)
@@ -294,7 +304,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
           booking: {
             ...booking,
             step: "ask_all",
-            timeZone,
+            timeZone: tz,
             date_only: dateOnly,
           },
           booking_last_touch_at: Date.now(),
@@ -305,7 +315,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     // Si hay horario: ofrecer slots de ESE día (sin preguntar mañana/tarde)
     const slotsForDay = await getSlotsForDateOnly({
       tenantId,
-      timeZone,
+      timeZone: tz,
       durationMin,
       bufferMin,
       hours,
@@ -321,7 +331,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
             ? "I don’t have openings that day. Would morning or afternoon on another day work for you?"
             : "Ese día no tengo disponibilidad. ¿Te funciona más en la mañana o en la tarde en otro día?",
         ctxPatch: {
-          booking: { ...booking, step: "ask_daypart", timeZone },
+          booking: withLang({ ...booking, step: "ask_daypart" }),
           booking_last_touch_at: Date.now(),
         },
       };
@@ -329,11 +339,11 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
     return {
       handled: true,
-      reply: renderSlotsMessage({ idioma, timeZone, slots: slotsForDay }),
+      reply: renderSlotsMessage({ idioma, timeZone: tz, slots: slotsForDay }),
       ctxPatch: {
         booking: {
           step: "offer_slots",
-          timeZone,
+          timeZone: tz,
           purpose: booking?.purpose || null,
           daypart: null,
           slots: slotsForDay,
@@ -357,7 +367,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
           booking: withLang({
             ...booking,
             step: "ask_all",
-            timeZone,
+            timeZone: tz,
             daypart: inferDaypartFromHHMM(hhmm),
           }),
           booking_last_touch_at: Date.now(),
@@ -365,8 +375,6 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       };
     }
 
-    // Determina fecha contexto: si ya hay date_only úsala; si no, usa hoy (o mañana si ya es tarde)
-    const tz = timeZone;
     const now = DateTime.now().setZone(tz);
 
     // Si hoy está cerrado, busca el próximo día abierto (máx 14 días)
@@ -620,7 +628,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
           ? "I don’t see availability near that time. Would morning or afternoon work better?"
           : "No veo disponibilidad cerca de esa hora. ¿Te funciona más en la mañana o en la tarde?",
       ctxPatch: {
-        booking: { ...booking, step: "ask_daypart", timeZone },
+        booking: withLang({ ...booking, step: "ask_daypart" }),
         booking_last_touch_at: Date.now(),
       },
     };
@@ -632,7 +640,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       handled: true,
       reply: effectiveLang === "en" ? "Please reply: morning or afternoon." : "Respóndeme: mañana o tarde.",
       ctxPatch: {
-        booking: { ...booking, step: "ask_daypart", timeZone },
+        booking: withLang({ ...booking, step: "ask_daypart" }),
         booking_last_touch_at: Date.now(),
       },
     };
@@ -647,7 +655,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
         booking: {
           ...booking,
           step: "ask_all",
-          timeZone,
+          timeZone: tz,
           daypart: dp,
         },
         booking_last_touch_at: Date.now(),
@@ -657,7 +665,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
   const slots = await getNextSlotsByDaypart({
     tenantId,
-    timeZone,
+    timeZone: tz,
     durationMin,
     bufferMin,
     hours,
@@ -667,16 +675,16 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
   });
 
   const dateOnlyFromFirst = slots?.[0]?.startISO
-    ? DateTime.fromISO(slots[0].startISO, { zone: timeZone }).toFormat("yyyy-MM-dd")
+    ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
     : null;
 
   return {
     handled: true,
-    reply: renderSlotsMessage({ idioma, timeZone, slots }),
+    reply: renderSlotsMessage({ idioma, timeZone: tz, slots }),
     ctxPatch: {
       booking: {
         step: "offer_slots",
-        timeZone,
+        timeZone: tz,
         purpose: booking?.purpose || null,
         daypart: dp,
         slots,

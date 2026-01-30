@@ -42,11 +42,20 @@ export async function handleAskEmail(deps: AskEmailDeps): Promise<{
     upsertClienteBookingData,
   } = deps;
 
+  const hydratedBooking = {
+    ...(booking || {}),
+    timeZone: (booking?.timeZone as any) || timeZone, // ✅ sticky tz
+    lang: (booking?.lang as any) || idioma,           // ✅ sticky lang
+  };
+
+  const effectiveLang: "es" | "en" = hydratedBooking.lang;
+  const tz = hydratedBooking.timeZone;
+
   // Escape si cambió de tema -> salimos del flow
   if (wantsToChangeTopic(userText)) {
     return {
       handled: false,
-      ctxPatch: { booking: { step: "idle" } },
+      ctxPatch: { booking: { ...hydratedBooking, step: "idle" } },
     };
   }
 
@@ -54,11 +63,11 @@ export async function handleAskEmail(deps: AskEmailDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
           : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
       ctxPatch: {
-        booking: { step: "idle" },
+        booking: { ...hydratedBooking, step: "idle" },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -69,11 +78,11 @@ export async function handleAskEmail(deps: AskEmailDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "Please send a valid email (example: name@email.com)."
           : "Envíame un email válido (ej: nombre@email.com).",
       ctxPatch: {
-        booking: { ...booking, step: "ask_email", timeZone },
+        booking: { ...hydratedBooking, step: "ask_email", timeZone: tz },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -83,18 +92,17 @@ export async function handleAskEmail(deps: AskEmailDeps): Promise<{
     tenantId,
     canal,
     contacto,
-    nombre: (booking as any)?.name || null,
+    nombre: (hydratedBooking as any)?.name || null,
     email,
   });
 
   const hydrated = {
-    ...booking,
+    ...hydratedBooking,
     email,
-    name: (booking as any)?.name || null,
-    timeZone,
-    // ✅ por seguridad: si tienes picked_* pero no start/end aún
-    start_time: (booking as any)?.start_time || (booking as any)?.picked_start || null,
-    end_time: (booking as any)?.end_time || (booking as any)?.picked_end || null,
+    name: (hydratedBooking as any)?.name || null,
+    timeZone: tz,
+    start_time: (hydratedBooking as any)?.start_time || (hydratedBooking as any)?.picked_start || null,
+    end_time: (hydratedBooking as any)?.end_time || (hydratedBooking as any)?.picked_end || null,
   };
 
   const hasChosenSlot = !!hydrated.start_time && !!hydrated.end_time;
@@ -103,10 +111,10 @@ export async function handleAskEmail(deps: AskEmailDeps): Promise<{
   return {
     handled: true,
     reply: hasChosenSlot
-      ? (idioma === "en"
+      ? (effectiveLang === "en"
           ? "Perfect — I have everything. Please reply YES to confirm or NO to cancel."
           : "Perfecto — ya tengo todo. Responde SI para confirmar o NO para cancelar.")
-      : (idioma === "en"
+      : (effectiveLang === "en"
           ? "Great. Now send the date and time in this format: YYYY-MM-DD HH:mm (example: 2026-01-17 15:00)."
           : "Perfecto. Ahora envíame la fecha y hora en este formato: YYYY-MM-DD HH:mm (ej: 2026-01-17 15:00)."),
     ctxPatch: {

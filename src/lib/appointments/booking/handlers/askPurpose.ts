@@ -29,13 +29,20 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
     detectPurpose,
   } = deps;
 
-  const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
+  const hydratedBooking = {
+    ...(booking || {}),
+    timeZone: (booking?.timeZone as any) || timeZone, // ✅ sticky tz
+    lang: (booking?.lang as any) || idioma,           // ✅ sticky lang
+  };
+
+  const effectiveLang: "es" | "en" = hydratedBooking.lang;
+  const tz = hydratedBooking.timeZone;
 
   // Escape: usuario cambió de tema
   if (wantsToChangeTopic(userText)) {
     return {
       handled: false,
-      ctxPatch: { booking: { ...(booking || {}), step: "idle" } },
+      ctxPatch: { booking: { ...hydratedBooking, step: "idle", timeZone: tz, lang: effectiveLang } },
     };
   }
 
@@ -48,7 +55,7 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
           ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
           : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
       ctxPatch: {
-        booking: { ...(booking || {}), step: "idle" },
+        booking: { ...hydratedBooking, step: "idle", timeZone: tz, lang: effectiveLang },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -65,7 +72,7 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
           ? "Got it. Is it an appointment, class, consultation, or a call?"
           : "Entiendo. ¿Es una cita, clase, consulta o llamada?",
       ctxPatch: {
-        booking: { ...(booking || {}), step: "ask_purpose", timeZone, lang: effectiveLang },
+        booking: { ...hydratedBooking, step: "ask_purpose", timeZone: tz, lang: effectiveLang },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -80,9 +87,9 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
         : "Claro, puedo ayudarte a agendar. ¿Te funciona más en la mañana o en la tarde?",
     ctxPatch: {
       booking: {
-        ...(booking || {}),
+        ...hydratedBooking,
         step: "ask_daypart",
-        timeZone,
+        timeZone: tz,
         purpose,
         lang: effectiveLang,
       },

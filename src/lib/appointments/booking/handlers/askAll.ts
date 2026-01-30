@@ -58,10 +58,10 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
 
   const isMeta = canal === "facebook" || canal === "instagram";
   // ✅ Hydrate: preservar slot elegido aunque venga en picked_*
-    const hydratedBooking = {
+  const hydratedBooking = {
     ...booking,
-    timeZone,
-    lang: booking?.lang || idioma, // ✅
+    timeZone: booking?.timeZone || timeZone, // ✅ sticky
+    lang: booking?.lang || idioma,           // ✅ sticky
     start_time: booking?.start_time || booking?.picked_start || null,
     end_time: booking?.end_time || booking?.picked_end || null,
     phone: booking?.phone || null,
@@ -73,7 +73,8 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
     slots: booking?.slots || [],
   };
 
-  const effectiveLang: "es" | "en" = (hydratedBooking?.lang as any) || idioma; // ✅
+  const effectiveLang: "es" | "en" = (hydratedBooking.lang as any) || idioma;
+  const tz = hydratedBooking.timeZone; // ✅ single source of truth
 
   const hasChosenSlot = !!hydratedBooking.start_time && !!hydratedBooking.end_time;
 
@@ -95,7 +96,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
           lang: effectiveLang,
           start_time: null,
           end_time: null,
-          timeZone,
+          timeZone: tz,
           name: null,
           email: null,
           purpose: null,
@@ -106,7 +107,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
     };
   }
 
-  const parsed = parseAllInOne(userText, timeZone, durationMin, minLeadMinutes, parseDateTimeExplicit);
+  const parsed = parseAllInOne(userText, tz, durationMin, minLeadMinutes, parseDateTimeExplicit);
 
   // ✅ Merge: lo que llega del usuario + lo que ya teníamos
   const name = (parsed?.name || hydratedBooking?.name || "").trim() || null;
@@ -121,7 +122,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
   // ✅ Si vino fecha/hora pero era en el pasado, dilo explícitamente
   const dtToken = extractDateTimeToken(userText);
   if (dtToken) {
-    const chk: any = parseDateTimeExplicit(dtToken, timeZone, durationMin, minLeadMinutes);
+    const chk: any = parseDateTimeExplicit(dtToken, tz, durationMin, minLeadMinutes);
     if (chk?.error === "PAST_SLOT") {
       return {
         handled: true,
@@ -134,7 +135,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
             ...hydratedBooking,
             step: "ask_datetime",
             lang: effectiveLang,
-            timeZone,
+            timeZone: tz,
             name: parsed?.name || hydratedBooking?.name || null,
             email: parsed?.email || hydratedBooking?.email || null,
             date_only: null,
@@ -146,11 +147,11 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
   }
 
   // ✅ Caso: el usuario manda SOLO fecha (YYYY-MM-DD) + name/email pero sin hora
-  const dateOnly = extractDateOnlyToken(userText, timeZone);
+  const dateOnly = extractDateOnlyToken(userText, tz);
   if (dateOnly && parsed?.name && parsed?.email && !parsed?.startISO) {
     // bloquea fecha pasada
-    const dateOnlyDt = DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: timeZone });
-    const todayStart = DateTime.now().setZone(timeZone).startOf("day");
+    const dateOnlyDt = DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: tz });
+    const todayStart = DateTime.now().setZone(tz).startOf("day");
     if (dateOnlyDt.isValid && dateOnlyDt < todayStart) {
       return {
         handled: true,
@@ -163,7 +164,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
             ...hydratedBooking,
             step: "ask_datetime",
             lang: effectiveLang,
-            timeZone,
+            timeZone: tz,
             name: parsed.name,
             email: parsed.email,
             date_only: null,
@@ -187,7 +188,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
             ...hydratedBooking,
             step: "ask_datetime",
             lang: effectiveLang,
-            timeZone,
+            timeZone: tz,
             name: parsed.name,
             email: parsed.email,
             date_only: dateOnly,
@@ -201,7 +202,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
     // ✅ Hay business hours -> generamos slots para ese día
     const slots = await getSlotsForDate({
       tenantId,
-      timeZone,
+      timeZone: tz,
       dateISO: dateOnly,
       durationMin,
       bufferMin,
@@ -213,13 +214,13 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
 
     return {
       handled: true,
-      reply: renderSlotsMessage({ idioma: effectiveLang, timeZone, slots: take }),
+      reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take }),
       ctxPatch: {
         booking: {
           ...hydratedBooking,
           step: "offer_slots",
           lang: effectiveLang,
-          timeZone,
+          timeZone: tz,
           name: parsed.name,
           email: parsed.email,
           purpose: hydratedBooking?.purpose || null,
@@ -261,6 +262,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
             ...hydratedBooking,
             step: "ask_all",
             lang: effectiveLang,
+            timeZone: tz, 
             name,
             email,
             phone,
@@ -271,7 +273,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
     }
 
     // ✅ Ya tengo todo lo necesario -> vuelve a confirm sin fricción
-    const whenTxt = formatSlotHuman({ startISO: hydratedBooking.start_time, timeZone, idioma: effectiveLang  });
+    const whenTxt = formatSlotHuman({ startISO: hydratedBooking.start_time, timeZone: tz, idioma: effectiveLang  });
 
     return {
       handled: true,
@@ -284,6 +286,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
             ...hydratedBooking,
             step: "confirm",
             lang: effectiveLang,
+            timeZone: tz,
             name,
             email,
             phone,
@@ -297,7 +300,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
 
   // ✅ Si vino completo, vamos directo a confirm
   if (name && email && parsed?.startISO && parsed?.endISO && (!isMeta || phone)) {
-    const whenTxt = formatSlotHuman({ startISO: parsed.startISO, timeZone, idioma: effectiveLang  });
+    const whenTxt = formatSlotHuman({ startISO: parsed.startISO, timeZone: tz, idioma: effectiveLang  });
     return {
       handled: true,
       reply:
@@ -309,7 +312,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
           ...hydratedBooking,
           step: "confirm",
           lang: effectiveLang,
-          timeZone,
+          timeZone: tz,
           name: parsed.name,
           email: parsed.email,
           phone,
@@ -348,6 +351,7 @@ if (missingName || missingEmail || missingPhone) {
         ...hydratedBooking,
         step: "ask_all",
         lang: effectiveLang,
+        timeZone: tz, 
         name,
         email,
         phone,
@@ -369,7 +373,7 @@ if (missingName || missingEmail || missingPhone) {
         ...hydratedBooking,
         step: "ask_datetime",
         lang: effectiveLang,
-        timeZone,
+        timeZone: tz,
         name,
         email,
         phone,

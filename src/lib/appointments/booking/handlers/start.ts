@@ -27,7 +27,14 @@ export function handleStartBooking(deps: StartBookingDeps): {
   ctxPatch?: any;
 } {
   const { idioma, userText, timeZone, wantsBooking, detectPurpose, durationMin, minLeadMinutes, hours, booking } = deps;
-  const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
+  const hydratedBooking = {
+    ...(booking || {}),
+    timeZone: (booking?.timeZone as any) || timeZone, // ✅ sticky tz
+    lang: (booking?.lang as any) || idioma,           // ✅ sticky lang
+  };
+
+  const effectiveLang: "es" | "en" = hydratedBooking.lang;
+  const tz = hydratedBooking.timeZone;
 
   if (!wantsBooking) return { handled: false };
 
@@ -35,11 +42,11 @@ export function handleStartBooking(deps: StartBookingDeps): {
   // Vamos a validar usando:
   // - minLeadMinutes (por tenant)
   // - businessHours (por tenant) según el weekday del dateISO detectado
-  const dateISO = extractDateOnlyToken(userText, timeZone);
+  const dateISO = extractDateOnlyToken(userText, tz);
 
   let businessHours: { start: string; end: string } | undefined = undefined;
   if (dateISO && hours) {
-    const day = DateTime.fromFormat(dateISO, "yyyy-MM-dd", { zone: timeZone });
+    const day = DateTime.fromFormat(dateISO, "yyyy-MM-dd", { zone: tz });
     if (day.isValid) {
       const key = weekdayKey(day);
       const dayHours = hours[key];
@@ -49,7 +56,7 @@ export function handleStartBooking(deps: StartBookingDeps): {
     }
   }
 
-  const dt = buildDateTimeFromText(userText, timeZone, durationMin, {
+  const dt = buildDateTimeFromText(userText, tz, durationMin, {
     minLeadMinutes,
     businessHours,
   });
@@ -64,7 +71,7 @@ export function handleStartBooking(deps: StartBookingDeps): {
             ? "That time is too soon or already passed. What other time works for you?"
             : "Ese horario está muy pronto o ya pasó. ¿Qué otra hora te funciona?",
         ctxPatch: {
-          booking: { ...(booking || {}), step: "ask_datetime", timeZone, lang: effectiveLang },
+          booking: { ...(booking || {}), step: "ask_datetime", timeZone: tz, lang: effectiveLang },
           booking_last_touch_at: Date.now(),
         },
       };
@@ -78,7 +85,7 @@ export function handleStartBooking(deps: StartBookingDeps): {
           ? "That time is outside our business hours. What time within business hours works for you?"
           : "Ese horario está fuera del horario del negocio. ¿Qué hora dentro del horario te funciona?",
       ctxPatch: {
-        booking: { ...(booking || {}), step: "ask_datetime", timeZone, lang: effectiveLang },
+        booking: { ...(booking || {}), step: "ask_datetime", timeZone: tz, lang: effectiveLang },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -87,8 +94,8 @@ export function handleStartBooking(deps: StartBookingDeps): {
   if (dt) {
     const human =
       effectiveLang === "en"
-        ? DateTime.fromISO(dt.startISO).setZone(timeZone).toFormat("cccc, LLL d 'at' h:mm a")
-        : DateTime.fromISO(dt.startISO).setZone(timeZone).toFormat("cccc d 'de' LLL 'a las' h:mm a");
+        ? DateTime.fromISO(dt.startISO).setZone(tz).toFormat("cccc, LLL d 'at' h:mm a")
+        : DateTime.fromISO(dt.startISO).setZone(tz).toFormat("cccc d 'de' LLL 'a las' h:mm a");
 
     return {
       handled: true,
@@ -100,7 +107,7 @@ export function handleStartBooking(deps: StartBookingDeps): {
         booking: {
           ...(booking || {}),
           step: "confirm",
-          timeZone,
+          timeZone: tz,
           lang: effectiveLang,
           picked_start: dt.startISO,
           picked_end: dt.endISO,
@@ -121,7 +128,7 @@ export function handleStartBooking(deps: StartBookingDeps): {
           ? "Sure! What would you like to schedule — an appointment, a consultation, or a call?"
           : "¡Claro! ¿Qué te gustaría agendar? Una cita, una consulta o una llamada.",
       ctxPatch: {
-        booking: { ...(booking || {}), step: "ask_purpose", timeZone, lang: effectiveLang },
+        booking: { ...(booking || {}), step: "ask_purpose", timeZone: tz, lang: effectiveLang },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -135,7 +142,7 @@ export function handleStartBooking(deps: StartBookingDeps): {
         ? "Sure, I can help you schedule it. Does morning or afternoon work better for you?"
         : "Claro, puedo ayudarte a agendar. ¿Te funciona más en la mañana o en la tarde?",
     ctxPatch: {
-      booking: { ...(booking || {}), step: "ask_daypart", timeZone, purpose, lang: effectiveLang },
+      booking: { ...(booking || {}), step: "ask_daypart", timeZone: tz, purpose, lang: effectiveLang },
       booking_last_touch_at: Date.now(),
     },
   };

@@ -33,12 +33,12 @@ export type OfferSlotsDeps = {
   idioma: "es" | "en";
   userText: string;
 
-  booking: any;              // BookingCtx.booking
+  booking: any;              
   timeZone: string;
   durationMin: number;
   bufferMin: number;
   minLeadMinutes: number; 
-  hours: any | null;         // HoursByWeekday | null
+  hours: any | null;         
 };
 
 function hasHHMM(c: any): c is { hhmm: string } {
@@ -465,11 +465,11 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         start_time: picked.startISO,
         end_time: picked.endISO,
         slots: [],
-        date_only: getCtxDateFromBookingOrSlots(slotsShown, booking, tz),
-        last_offered_date: getCtxDateFromBookingOrSlots(slotsShown, booking, tz),
+        date_only: getCtxDateFromBookingOrSlots(slotsShown, hydratedBooking, tz),
+        last_offered_date: getCtxDateFromBookingOrSlots(slotsShown, hydratedBooking, tz),
       };
 
-      const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone: tz, idioma });
+      const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone: tz, idioma: effectiveLang });
 
       const requirePhone = deps.canal === "facebook" || deps.canal === "instagram"; // IG/FB sí; WA normalmente no
       const missingName = !nextBooking?.name;
@@ -511,14 +511,14 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         (hydratedBooking as any)?.date_only ||
         (hydratedBooking as any)?.last_offered_date ||
         (slots?.[0]?.startISO
-          ? DateTime.fromISO(slots[0].startISO, { zone: booking.timeZone || timeZone }).toFormat("yyyy-MM-dd")
+          ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
           : null);
   
       if (ctxDate) {
         let allDaySlots = sortSlotsAsc(
             await getSlotsForDate({
               tenantId,
-              timeZone: booking.timeZone || timeZone,
+              timeZone: tz,
               dateISO: ctxDate,
               durationMin,
               bufferMin,
@@ -527,18 +527,18 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         })
       );
   
-      if (daypart) allDaySlots = filterSlotsByDaypart(allDaySlots, booking.timeZone || timeZone, daypart);
+      if (daypart) allDaySlots = filterSlotsByDaypart(allDaySlots, tz, daypart);
 
         // Si el día tiene más opciones que las actuales, reemplaza por las del día
         if (allDaySlots.length) {
           return {
             handled: true,
-            reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: booking.timeZone || timeZone, slots: allDaySlots.slice(0, 5) }),
+            reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: allDaySlots.slice(0, 5) }),
             ctxPatch: {
               booking: {
                 ...hydratedBooking,
                 step: "offer_slots",
-                timeZone: booking.timeZone || timeZone,
+                timeZone: tz,
                 slots: allDaySlots.slice(0, 5),
                 last_offered_date: ctxDate,
                 date_only: ctxDate, },
@@ -557,7 +557,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     if (rawConstraint) {
       let constraint: TimeConstraint = rawConstraint;
   
-      const dp = (booking as any)?.daypart || null;
+      const dp = (hydratedBooking as any)?.daypart || null;
   
     const missingAmPm = !/\b(am|a\.m\.|pm|p\.m\.)\b/i.test(userText);
   

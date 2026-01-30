@@ -42,11 +42,13 @@ export async function handleAskName(deps: AskNameDeps): Promise<{
     upsertClienteBookingData,
   } = deps;
 
-    const hydratedBooking = {
+  const hydratedBooking = {
     ...booking,
-    timeZone,
+    timeZone: booking?.timeZone || timeZone,
     lang: booking?.lang || idioma, // ✅ sticky lang
   };
+
+  const tz = hydratedBooking.timeZone;
 
   const effectiveLang: "es" | "en" = (hydratedBooking?.lang as any) || idioma;
 
@@ -54,7 +56,7 @@ export async function handleAskName(deps: AskNameDeps): Promise<{
   if (wantsToChangeTopic(userText)) {
     return {
       handled: false,
-      ctxPatch: { booking: { ...hydratedBooking, step: "idle" } },
+      ctxPatch: { booking: { ...hydratedBooking, step: "idle", timeZone: tz } },
     };
   }
 
@@ -66,7 +68,7 @@ export async function handleAskName(deps: AskNameDeps): Promise<{
           ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
           : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
       ctxPatch: {
-        booking: { ...hydratedBooking, step: "idle" },
+        booking: { ...hydratedBooking, step: "idle", timeZone: tz },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -81,7 +83,7 @@ export async function handleAskName(deps: AskNameDeps): Promise<{
           ? "Please send your first and last name (example: John Smith)."
           : "Envíame tu nombre y apellido (ej: Juan Pérez).",
       ctxPatch: {
-        booking: { ...hydratedBooking, step: "ask_name" },
+        booking: { ...hydratedBooking, step: "ask_name", timeZone: tz },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -110,6 +112,7 @@ export async function handleAskName(deps: AskNameDeps): Promise<{
         ...hydratedBooking,
         step: nextNeedsEmail ? "ask_email" : "confirm",
         name,
+        timeZone: tz,
         },
       booking_last_touch_at: Date.now(),
     },

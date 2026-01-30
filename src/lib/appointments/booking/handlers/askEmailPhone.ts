@@ -93,7 +93,7 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
               ? "Por favor envíame tu email y tu teléfono en UN solo mensaje (ej: nombre@email.com, +1 305 555 1234)."
               : "Por favor envíame tu email en UN solo mensaje (ej: nombre@email.com)."),
       ctxPatch: {
-        booking: { ...hydratedBooking, step: "ask_email_phone" },
+        booking: { ...hydratedBooking, step: "ask_email_phone", timeZone: tz },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -108,7 +108,7 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
           ? "I got your email. Now send your phone with country code (example: +1 305 555 1234)."
           : "Ya tengo tu email. Ahora envíame tu teléfono con código de país (ej: +1 305 555 1234).",
       ctxPatch: {
-        booking: { ...hydratedBooking, step: "ask_email_phone", email },
+        booking: { ...hydratedBooking, step: "ask_email_phone", timeZone: tz, email },
         booking_last_touch_at: Date.now(),
       },
     };
