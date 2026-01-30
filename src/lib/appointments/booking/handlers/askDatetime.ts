@@ -33,12 +33,21 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
     parseDateTimeExplicit,
   } = deps;
 
+    const hydratedBooking = {
+    ...booking,
+    timeZone: booking?.timeZone || timeZone,
+    lang: booking?.lang || idioma, // ✅ sticky
+  };
+
+  const effectiveLang: "es" | "en" = (hydratedBooking.lang as any) || idioma;
+
+  const tz = hydratedBooking.timeZone;
+  const b: any = hydratedBooking;
+  const dateCtx = b?.date_only || b?.last_offered_date || null;
+
   // Escape: cambió de tema
   if (wantsToChangeTopic(userText)) {
-    return {
-      handled: false,
-      ctxPatch: { booking: { step: "idle" } },
-    };
+    return { handled: false, ctxPatch: { booking: { ...hydratedBooking, step: "idle" } } };
   }
 
   // Cancelar
@@ -46,18 +55,15 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
           : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
       ctxPatch: {
-        booking: { step: "idle" },
+        booking: { ...hydratedBooking, step: "idle" },
         booking_last_touch_at: Date.now(),
       },
     };
   }
-
-  const b: any = booking || {};
-  const dateCtx = b?.date_only || b?.last_offered_date || null;
 
   // 1) Caso: solo hora (HH:mm o flexible 5pm / a las 5)
   const hhmmOnly = String(userText || "").trim().match(/^(\d{1,2}:\d{2})$/);
@@ -69,11 +75,11 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "What day would you like to book? Please send a date (YYYY-MM-DD)."
           : "¿Para qué día quieres agendar? Envíame una fecha (YYYY-MM-DD).",
       ctxPatch: {
-        booking: { ...booking, step: "ask_datetime", timeZone },
+        booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -82,17 +88,17 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
   // Si hay dateCtx + hora -> parsea `${dateCtx} ${hhmm}`
   if (dateCtx && wantsOnlyTime) {
     const hhmmVal = hhmmOnly ? hhmmOnly[1].padStart(5, "0") : String(flex);
-    const parsed2: any = parseDateTimeExplicit(`${dateCtx} ${hhmmVal}`, timeZone, durationMin);
+    const parsed2: any = parseDateTimeExplicit(`${dateCtx} ${hhmmVal}`, tz, durationMin);
 
     if (!parsed2) {
       return {
         handled: true,
         reply:
-          idioma === "en"
+          effectiveLang === "en"
             ? "I couldn’t read that time. Please use HH:mm (example: 14:00)."
             : "No pude leer esa hora. Usa HH:mm (ej: 14:00).",
         ctxPatch: {
-          booking: { ...booking, step: "ask_datetime", timeZone },
+          booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
           booking_last_touch_at: Date.now(),
         },
       };
@@ -102,11 +108,11 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
       return {
         handled: true,
         reply:
-          idioma === "en"
+          effectiveLang === "en"
             ? "That time is in the past. Please send a future time."
             : "Esa hora ya pasó. Envíame una hora futura.",
         ctxPatch: {
-          booking: { ...booking, step: "ask_datetime", timeZone },
+          booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
           booking_last_touch_at: Date.now(),
         },
       };
@@ -126,11 +132,11 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
           return {
             handled: true,
             reply:
-              idioma === "en"
+              effectiveLang === "en"
                 ? "We’re closed that day. Please choose another date."
                 : "Ese día estamos cerrados. Envíame otra fecha.",
             ctxPatch: {
-              booking: { ...booking, step: "ask_datetime", timeZone },
+              booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
               booking_last_touch_at: Date.now(),
             },
           };
@@ -138,18 +144,18 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
 
         if (check.reason === "outside" && (check as any).bizStart && (check as any).bizEnd) {
           const windowTxt = formatBizWindow(
-            idioma,
+            effectiveLang,
             (check as any).bizStart,
             (check as any).bizEnd
           );
           return {
             handled: true,
             reply:
-              idioma === "en"
+              effectiveLang === "en"
                 ? `That time is outside business hours (${windowTxt}). Please send a time within that range.`
                 : `Esa hora está fuera del horario (${windowTxt}). Envíame una hora dentro de ese rango.`,
             ctxPatch: {
-              booking: { ...booking, step: "ask_datetime", timeZone },
+              booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
               booking_last_touch_at: Date.now(),
             },
           };
@@ -157,17 +163,17 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
       }
     }
 
-    const whenTxt = formatSlotHuman({ startISO: parsed2.startISO!, timeZone, idioma });
+    const whenTxt = formatSlotHuman({ startISO: parsed2.startISO!, timeZone, idioma: effectiveLang });
 
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? `To confirm booking for ${whenTxt}? Reply YES to confirm or NO to cancel.`
           : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
       ctxPatch: {
         booking: {
-          ...booking,
+          ...hydratedBooking,
           step: "confirm",
           start_time: parsed2.startISO,
           end_time: parsed2.endISO,
@@ -186,11 +192,11 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "I couldn’t read that. Please use: YYYY-MM-DD HH:mm (example: 2026-01-17 15:00)."
           : "No pude leer esa fecha/hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-17 15:00).",
       ctxPatch: {
-        booking: { ...booking, step: "ask_datetime", timeZone },
+        booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -200,11 +206,11 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "That date/time is in the past. Please send a future date and time (YYYY-MM-DD HH:mm)."
           : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
       ctxPatch: {
-        booking: { ...booking, step: "ask_datetime", timeZone },
+        booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -224,26 +230,26 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
         return {
           handled: true,
           reply:
-            idioma === "en"
+            effectiveLang === "en"
               ? "We’re closed that day. Please choose another date."
               : "Ese día estamos cerrados. Envíame otra fecha.",
           ctxPatch: {
-            booking: { ...booking, step: "ask_datetime", timeZone },
+            booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
             booking_last_touch_at: Date.now(),
           },
         };
       }
 
       if (check.reason === "outside" && (check as any).bizStart && (check as any).bizEnd) {
-        const windowTxt = formatBizWindow(idioma, (check as any).bizStart, (check as any).bizEnd);
+        const windowTxt = formatBizWindow(effectiveLang, (check as any).bizStart, (check as any).bizEnd);
         return {
           handled: true,
           reply:
-            idioma === "en"
+            effectiveLang === "en"
               ? `That time is outside business hours (${windowTxt}). Please send a time within that range.`
               : `Esa hora está fuera del horario (${windowTxt}). Envíame una hora dentro de ese rango.`,
           ctxPatch: {
-            booking: { ...booking, step: "ask_datetime", timeZone },
+            booking: { ...hydratedBooking, step: "ask_datetime", timeZone },
             booking_last_touch_at: Date.now(),
           },
         };
@@ -251,17 +257,17 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
     }
   }
 
-  const whenTxt = formatSlotHuman({ startISO: parsed.startISO!, timeZone, idioma });
+  const whenTxt = formatSlotHuman({ startISO: parsed.startISO!, timeZone, idioma: effectiveLang });
 
   return {
     handled: true,
     reply:
-      idioma === "en"
+      effectiveLang === "en"
         ? `To confirm booking for ${whenTxt}? Reply YES to confirm or NO to cancel.`
         : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
     ctxPatch: {
       booking: {
-        ...booking, // preserva name/email
+        ...hydratedBooking,
         step: "confirm",
         start_time: parsed.startISO,
         end_time: parsed.endISO,

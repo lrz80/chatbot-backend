@@ -83,12 +83,14 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
   // ✅ Hydrate start/end desde picked_* por seguridad
   const hydratedBooking = {
     ...booking,
+    timeZone: booking?.timeZone || timeZone,
+    lang: (booking?.lang as any) || idioma, // ✅ sticky
     start_time: booking?.start_time || booking?.picked_start || null,
     end_time: booking?.end_time || booking?.picked_end || null,
   };
 
-  const effectiveLang: "es" | "en" =
-  (hydratedBooking?.lang as any) || idioma;
+  const effectiveLang: "es" | "en" = (hydratedBooking?.lang as any) || idioma;
+  const tz = hydratedBooking.timeZone;
 
   // 1) cancelación explícita (aunque no haya respondido yes/no)
   if (wantsToCancel(userText)) {
@@ -98,7 +100,7 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
         effectiveLang === "en"
           ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
           : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
-      ctxPatch: { booking: { step: "idle" }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: { ...hydratedBooking, step: "idle" }, booking_last_touch_at: Date.now() },
     };
   }
 
@@ -129,7 +131,7 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
         booking: {
           ...hydratedBooking,
           step: "ask_datetime",
-          timeZone: hydratedBooking?.timeZone || timeZone,
+          timeZone: tz,
           name: hydratedBooking?.name || null,
           email: booking?.email || null,
           purpose: booking?.purpose || null,
@@ -172,7 +174,7 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
           booking: {
             ...hydratedBooking,
             step: "ask_all",
-            timeZone: hydratedBooking?.timeZone || timeZone,
+            timeZone: tz,
             lang: (hydratedBooking?.lang as any) || idioma,
           },
           booking_last_touch_at: Date.now(),
@@ -237,7 +239,7 @@ if (!startISO || !endISO) {
         booking: {
           ...hydratedBooking,
           step: "ask_datetime",
-          timeZone: hydratedBooking?.timeZone || timeZone,
+          timeZone: tz,
           start_time: null,
           end_time: null,
           date_only: null,
@@ -253,7 +255,7 @@ if (!startISO || !endISO) {
     return {
       handled: true,
       reply: effectiveLang === "en" ? `Already booked. ${pending.google_event_link}`.trim() : `Ya quedó agendado. ${pending.google_event_link}`.trim(),
-      ctxPatch: { booking: { step: "idle" }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: { ...hydratedBooking, step: "idle" }, booking_last_touch_at: Date.now() },
     };
   }
 
@@ -262,7 +264,7 @@ if (!startISO || !endISO) {
     return {
       handled: true,
       reply: effectiveLang === "en" ? "Scheduling isn’t available for this business right now." : "El agendamiento no está disponible en este momento para este negocio.",
-      ctxPatch: { booking: { step: "idle" }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: { ...hydratedBooking, step: "idle" }, booking_last_touch_at: Date.now() },
     };
   }
 
@@ -274,7 +276,7 @@ if (!startISO || !endISO) {
     customer_email: customerEmail || null,
     startISO,
     endISO,
-    timeZone,
+    timeZone: tz,
     bufferMin,
   });
 
@@ -291,13 +293,13 @@ if (!startISO || !endISO) {
 
     // SLOT_BUSY -> ofrecer alternativas del mismo día
     if (err === "SLOT_BUSY") {
-      const day = DateTime.fromISO(startISO, { zone: timeZone });
+      const day = DateTime.fromISO(startISO, { zone: tz });
       const dateISO = day.isValid ? day.toFormat("yyyy-MM-dd") : null;
 
       if (dateISO) {
         const slots = await getSlotsForDate({
           tenantId,
-          timeZone,
+          timeZone: tz,
           dateISO,
           durationMin,
           bufferMin,
@@ -309,12 +311,12 @@ if (!startISO || !endISO) {
           const take = slots.slice(0, 5);
           return {
             handled: true,
-            reply: renderSlotsMessage({ idioma: effectiveLang, timeZone, slots: take, style: "closest" }),
+            reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take, style: "closest" }),
             ctxPatch: {
               booking: {
                 ...hydratedBooking,
                 step: "offer_slots",
-                timeZone,
+                timeZone: tz,
                 slots: take,
                 date_only: dateISO,
                 last_offered_date: dateISO,
@@ -338,7 +340,7 @@ if (!startISO || !endISO) {
           booking: {
             ...hydratedBooking,
             step: "ask_datetime",
-            timeZone: hydratedBooking?.timeZone || timeZone,
+            timeZone: tz,
             start_time: null,
             end_time: null,
             date_only: null,
@@ -360,7 +362,7 @@ if (!startISO || !endISO) {
           booking: {
             ...hydratedBooking,
             step: "ask_datetime",
-            timeZone: hydratedBooking?.timeZone || timeZone,
+            timeZone: tz,
             start_time: null,
             end_time: null,
             date_only: null,
@@ -381,7 +383,7 @@ if (!startISO || !endISO) {
         booking: {
           ...hydratedBooking,
           step: "ask_datetime",
-          timeZone: hydratedBooking?.timeZone || timeZone,
+          timeZone: tz,
           start_time: null,
           end_time: null,
           date_only: null,
@@ -412,7 +414,7 @@ if (!startISO || !endISO) {
         booking: {
             ...hydratedBooking,
             step: "ask_datetime",
-            timeZone: hydratedBooking?.timeZone || timeZone,
+            timeZone: tz,
             start_time: null,
             end_time: null,
             date_only: null,

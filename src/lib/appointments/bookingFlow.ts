@@ -506,12 +506,15 @@ if (booking.step === "offer_slots") {
 }
 
 if (booking.step === "ask_email_phone") {
-  const requirePhone = canal === "facebook" || canal === "instagram"; // IG/FB sí
+  const requirePhone = canal === "facebook" || canal === "instagram";
+
+  const effectiveLang = (booking?.lang as "es" | "en") || idioma;
+
   return handleAskEmailPhone({
     tenantId,
     canal,
     contacto,
-    idioma,
+    idioma: effectiveLang,
     userText,
     booking,
     timeZone,
@@ -522,20 +525,22 @@ if (booking.step === "ask_email_phone") {
   });
 }
 
-  if (booking.step === "ask_datetime") {
-    return handleAskDatetime({
-      tenantId,
-      canal,
-      contacto,
-      idioma,
-      userText,
-      booking,
-      timeZone,
-      durationMin,
-      hours,
-      parseDateTimeExplicit: parseDateTimeExplicitTenant,
-    });
-  }
+if (booking.step === "ask_datetime") {
+  const effectiveLang = (booking?.lang === "en" || booking?.lang === "es") ? booking.lang : idioma;
+
+  return handleAskDatetime({
+    tenantId,
+    canal,
+    contacto,
+    idioma: effectiveLang, // ✅ STICKY
+    userText,
+    booking,
+    timeZone,
+    durationMin,
+    hours,
+    parseDateTimeExplicit: parseDateTimeExplicitTenant,
+  });
+}
 
   if (booking.step === "confirm") {
     return handleConfirm({
