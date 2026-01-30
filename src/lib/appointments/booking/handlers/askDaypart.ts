@@ -41,8 +41,9 @@ function normalizeHHMMNatural(userText: string, hhmm: string | null): string | n
   const hasAmPm = /\b(am|pm|a\.m\.|p\.m\.)\b/.test(s);
   if (hasAmPm) return hhmm;
 
-  // Si el usuario da señales de mañana, NO convertir a PM
-  const morningCue = /\b(ma[nñ]ana|temprano|morning|a\s+primera\s+hora)\b/.test(s);
+  // Solo bloquear conversión a PM si el usuario realmente dijo "en la mañana"/"por la mañana"/"morning" o "temprano"
+  // (NO incluir "mañana" porque suele significar "tomorrow")
+  const morningCue = /\b(en\s+la\s+ma[nñ]ana|por\s+la\s+ma[nñ]ana|temprano|morning|early)\b/.test(s);
   if (morningCue) return hhmm;
 
   // Si el usuario usa "a las / para las / at / for" y la hora es 1..7,
@@ -53,7 +54,7 @@ function normalizeHHMMNatural(userText: string, hhmm: string | null): string | n
   const h = Number(hhmm.slice(0, 2));
   const m = hhmm.slice(3, 5);
 
-  if (h >= 1 && h <= 7) {
+  if (h >= 1 && h <= 8) {
     const hh = String(h + 12).padStart(2, "0");
     return `${hh}:${m}`;
   }
