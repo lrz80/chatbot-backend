@@ -97,20 +97,20 @@ async function bookInGoogle(opts: {
     return { ok: false as const, error: "INVALID_DATETIME" as const, busy: [] as any[] };
   }
 
-  // ✅ aquí ya son string seguros
+  const calendarId = "primary";
+
   const fb = await googleFreeBusy({
     tenantId,
     timeMin,
     timeMax,
-    calendarId: "primary",
+    calendarId,
   });
 
-  const busy = extractBusyBlocks(fb);
-  console.log("📅 [BOOKING] freebusy", {
+  const busy = extractBusyBlocks(fb, calendarId);
+  console.log("🧪 [BOOKING] freebusy raw keys", {
     tenantId,
-    timeMin,
-    timeMax,
-    busyCount: busy.length,
+    calendarId,
+    calendarsKeys: Object.keys((fb as any)?.calendars || {}),
   });
 
   if (busy.length > 0) {
@@ -129,7 +129,7 @@ async function bookInGoogle(opts: {
 
     const event = await googleCreateEvent({
         tenantId,
-        calendarId: "primary",
+        calendarId,
         summary: `Reserva: ${customer_name}`,
         description: descriptionLines.join("\n"),
         startISO,
