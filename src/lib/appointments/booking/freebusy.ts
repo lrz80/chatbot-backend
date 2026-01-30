@@ -1,38 +1,35 @@
 // src/lib/appointments/booking/freebusy.ts
 
-type BusyBlock = { startISO: string; endISO: string };
+export type BusyBlock = { start: string; end: string };
 
 function mapBusy(arr: any[]): BusyBlock[] {
-  return arr
+  return (arr || [])
     .filter((b: any) => b?.start && b?.end)
-    .map((b: any) => ({ startISO: String(b.start), endISO: String(b.end) }));
+    .map((b: any) => ({ start: String(b.start), end: String(b.end) }));
 }
 
-export function extractBusyBlocks(
-  fb: any,
-  calendarId?: string
-): BusyBlock[] {
+export function extractBusyBlocks(fb: any, calendarId?: string): BusyBlock[] {
   const calendars = fb?.calendars;
 
-  // 1) Si sabemos el calendarId consultado, úsalo SIEMPRE primero
+  // 1) calendarId pedido
   if (calendarId && calendars && typeof calendars === "object") {
     const byId = calendars?.[calendarId]?.busy;
     if (Array.isArray(byId)) return mapBusy(byId);
   }
 
-  // 2) Luego intenta primary
+  // 2) primary
   if (calendars && typeof calendars === "object") {
     const primaryBusy = calendars?.primary?.busy;
     if (Array.isArray(primaryBusy)) return mapBusy(primaryBusy);
 
-    // 3) fallback: cualquier key que tenga busy array
+    // 3) cualquier key
     for (const key of Object.keys(calendars)) {
       const anyBusy = calendars?.[key]?.busy;
       if (Array.isArray(anyBusy)) return mapBusy(anyBusy);
     }
   }
 
-  // 4) fallback defensivo si tu wrapper devuelve directamente fb.busy
+  // 4) fallback: fb.busy directo
   const busy = fb?.busy;
   if (Array.isArray(busy)) return mapBusy(busy);
 

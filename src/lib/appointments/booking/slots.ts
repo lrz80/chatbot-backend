@@ -10,15 +10,15 @@ import { extractBusyBlocks } from "./freebusy";
 export function subtractBusyFromWindow(opts: {
   windowStart: DateTime;
   windowEnd: DateTime;
-  busy: Array<{ startISO: string; endISO: string }>;
+  busy: Array<{ start: string; end: string }>;
   timeZone: string;
 }): Array<{ start: DateTime; end: DateTime }> {
   const { windowStart, windowEnd, busy, timeZone } = opts;
 
   const busyBlocks = (busy || [])
     .map((b) => ({
-      start: DateTime.fromISO(b.startISO, { zone: timeZone }),
-      end: DateTime.fromISO(b.endISO, { zone: timeZone }),
+      start: DateTime.fromISO(b.start, { zone: timeZone }),
+      end: DateTime.fromISO(b.end, { zone: timeZone }),
     }))
     .filter((b) => b.start.isValid && b.end.isValid)
     .sort((a, b) => a.start.toMillis() - b.start.toMillis());
