@@ -75,6 +75,8 @@ async function bookInGoogle(opts: {
   // ✅ NUEVO: valida contra horario del negocio (si existe)
   try {
     const hours = await getBusinessHours(tenantId);
+    console.log("🕒 [BOOKING] business hours:", { tenantId, hours });
+
     if (hours) {
       const check = isWithinBusinessHours({
         hours,
@@ -248,6 +250,8 @@ export async function bookingFlowMvp(opts: {
   parseDateTimeExplicit(input, tz, dur, minLeadMinutes);
 
   const hours = await getBusinessHours(tenantId);
+  console.log("🕒 [BOOKING] business hours:", { tenantId, hours });
+
 
   // ✅ POST-BOOKING GUARD (SAFE):
   // NO usar last_appointment_id como gatillo global.
