@@ -354,6 +354,13 @@ if (!startISO || !endISO) {
     email: customerEmail,
     phone: customerPhone,
   });
+console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (before bookInGoogle)", {
+  tenantId,
+  canal,
+  contacto,
+  startISO,
+  endISO,
+});
 
   // 9) intentar reservar en Google
     const g = await bookInGoogle({
@@ -366,6 +373,12 @@ if (!startISO || !endISO) {
     timeZone: tz,
     bufferMin,
   });
+console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
+  ok: g?.ok,
+  event_id: (g as any)?.event_id,
+  htmlLink: (g as any)?.htmlLink,
+  error: (g as any)?.error,
+});
 
   if (!g.ok) {
     const err = String((g as any)?.error || "GOOGLE_ERROR");
