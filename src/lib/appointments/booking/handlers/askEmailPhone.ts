@@ -46,18 +46,27 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
     upsertClienteBookingData,
   } = deps;
 
+    const hydratedBooking = {
+    ...booking,
+    timeZone: booking?.timeZone || timeZone,
+    lang: booking?.lang || idioma, // ✅ sticky lang
+  };
+
+  const effectiveLang: "es" | "en" = (hydratedBooking.lang as any) || idioma;
+  const tz = hydratedBooking.timeZone;
+
   if (wantsToChangeTopic(userText)) {
-    return { handled: false, ctxPatch: { booking: { step: "idle" } } };
+    return { handled: false, ctxPatch: { booking: { ...hydratedBooking, step: "idle" } } };
   }
 
   if (wantsToCancel(userText)) {
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "No worries, whenever you’re ready to schedule, I’ll be here to help."
           : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
-      ctxPatch: { booking: { step: "idle" }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: { ...hydratedBooking, step: "idle" }, booking_last_touch_at: Date.now() },
     };
   }
 
@@ -76,7 +85,7 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? (requirePhone
               ? "Send your email and phone in ONE message please! (example: name@email.com, +1 305 555 1234)."
               : "Send your email in ONE message please! (example: name@email.com).")
@@ -84,7 +93,7 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
               ? "Por favor envíame tu email y tu teléfono en UN solo mensaje (ej: nombre@email.com, +1 305 555 1234)."
               : "Por favor envíame tu email en UN solo mensaje (ej: nombre@email.com)."),
       ctxPatch: {
-        booking: { ...booking, step: "ask_email_phone" },
+        booking: { ...hydratedBooking, step: "ask_email_phone" },
         booking_last_touch_at: Date.now(),
       },
     };
@@ -95,34 +104,34 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "I got your email. Now send your phone with country code (example: +1 305 555 1234)."
           : "Ya tengo tu email. Ahora envíame tu teléfono con código de país (ej: +1 305 555 1234).",
       ctxPatch: {
-        booking: { ...booking, step: "ask_email_phone", email },
+        booking: { ...hydratedBooking, step: "ask_email_phone", email },
         booking_last_touch_at: Date.now(),
       },
     };
   }
 
-  const name = booking?.name || null;
+  const name = hydratedBooking?.name || null;
   if (!name) {
     // Si por algún motivo llegamos aquí sin nombre, volvemos a pedirlo.
     return {
       handled: true,
       reply:
-        idioma === "en"
+        effectiveLang === "en"
           ? "Before confirming, what is your first and last name? (example: John Smith)"
           : "Antes de confirmar, ¿cuál es tu nombre y apellido? (ej: Juan Pérez)",
-      ctxPatch: { booking: { ...booking, step: "ask_name" }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: { ...hydratedBooking, step: "ask_name" }, booking_last_touch_at: Date.now() },
     };
   }
 
-  const startISO = booking?.picked_start || booking?.start_time || null;
-  const endISO = booking?.picked_end || booking?.end_time || null;
+  const startISO = hydratedBooking?.picked_start || hydratedBooking?.start_time || null;
+  const endISO   = hydratedBooking?.picked_end   || hydratedBooking?.end_time   || null;
 
   if (!startISO || !endISO) {
-    return { handled: false, ctxPatch: { booking: { step: "idle" } } };
+    return { handled: false, ctxPatch: { booking: { ...hydratedBooking, step: "idle" } } };
   }
 
   // ✅ Guardar en DB
@@ -135,20 +144,20 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
     telefono: phone,
   });
 
-  const whenTxt = formatSlotHuman({ startISO, timeZone, idioma });
+  const whenTxt = formatSlotHuman({ startISO, timeZone: tz, idioma: effectiveLang });
 
   // ✅ Mensaje final sin loops
   return {
     handled: true,
     reply:
-      idioma === "en"
+      effectiveLang === "en"
         ? `Perfect. Confirm booking for ${whenTxt}? Reply YES to confirm or NO to cancel.`
         : `Perfecto. Confirmo tu cita para ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
     ctxPatch: {
       booking: {
-        ...booking,
+        ...hydratedBooking,
         step: "confirm",
-        timeZone,
+        timeZone: tz,
         email,
         phone: phone || null,
         start_time: startISO,

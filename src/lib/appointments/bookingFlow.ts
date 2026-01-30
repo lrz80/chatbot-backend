@@ -487,12 +487,14 @@ if (booking.step === "ask_name") {
   });
 }
 
+const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
+
 if (booking.step === "offer_slots") {
   return handleOfferSlots({
     tenantId,
     canal,
     contacto,
-    idioma,
+    idioma: effectiveLang,   // ✅
     userText,
     booking,
     timeZone,
