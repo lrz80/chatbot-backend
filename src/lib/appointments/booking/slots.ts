@@ -292,6 +292,7 @@ export async function getSlotsForDateWithConstraint(opts: {
   minLeadMinutes: number;
   constraint?: TimeConstraint | null;
   limit?: number;
+  calendarId?: string;
 }): Promise<Slot[]> {
   const base = await getSlotsForDate({
     tenantId: opts.tenantId,
@@ -301,6 +302,7 @@ export async function getSlotsForDateWithConstraint(opts: {
     bufferMin: opts.bufferMin,
     hours: opts.hours,
     minLeadMinutes: opts.minLeadMinutes,
+    calendarId: opts.calendarId,
   });
 
   const filtered = applyTimeConstraintToSlots({
@@ -323,6 +325,7 @@ export async function getNextSlotsByDaypart(opts: {
   daypart: "morning" | "afternoon";
   daysAhead?: number;
   afterISO?: string | null;
+  calendarId?: string;
 }): Promise<Slot[]> {
   const { tenantId, timeZone, durationMin, bufferMin, hours, daypart } = opts;
   const daysAhead = opts.daysAhead ?? 7;
@@ -364,7 +367,7 @@ export async function getNextSlotsByDaypart(opts: {
     const win = daypartWindowFromBusinessHours({ day, bizStart, bizEnd, daypart });
     if (!win) continue;
 
-    const calendarId = "primary";
+    const calendarId = opts.calendarId || "primary";
 
     const fb = await googleFreeBusy({
       tenantId,

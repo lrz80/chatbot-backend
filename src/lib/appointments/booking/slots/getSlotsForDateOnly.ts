@@ -16,7 +16,10 @@ export async function getSlotsForDateOnly(opts: {
   minLeadMinutes: number;
   dateOnly: string;      // yyyy-MM-dd
   afterISO?: string | null;
+  calendarId?: string;
 }): Promise<Slot[]> {
+  const calendarId = opts.calendarId || "primary";
+
   const { tenantId, timeZone, durationMin, bufferMin, hours, dateOnly, minLeadMinutes } = opts;
 
   const lead = Number(minLeadMinutes);
@@ -43,8 +46,6 @@ export async function getSlotsForDateOnly(opts: {
   const bizEnd = day.set({ hour: en.h, minute: en.min, second: 0, millisecond: 0 });
   if (bizEnd <= bizStart) return [];
 
-  const calendarId = "primary";
-
   const fb = await googleFreeBusy({
     tenantId,
     timeMin: bizStart.toISO()!,
@@ -67,7 +68,7 @@ export async function getSlotsForDateOnly(opts: {
     durationMin,
     bufferMin,
     timeZone,
-    minLeadMinutes: safeLead,
+    minLeadMinutes: opts.minLeadMinutes,
   });
 
   const out: Slot[] = [];
