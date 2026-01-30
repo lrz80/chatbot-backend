@@ -378,18 +378,16 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
       });
 
       if (exact) {
-        const calId = "primary";
         const fbCheck = await googleFreeBusy({
           tenantId,
           timeMin: DateTime.fromISO(exact.startISO, { zone: tz }).toISO()!,
           timeMax: DateTime.fromISO(exact.endISO, { zone: tz }).toISO()!,
-          calendarId: calId,
+          calendarId,
         });
 
-        const busyNow = extractBusyBlocks(fbCheck, calId);
+        const busyNow = extractBusyBlocks(fbCheck, calendarId);
 
         if (busyNow.length > 0) {
-          // re-calcula y ofrece otras opciones
           const refresh = sortSlotsAsc(
             await getSlotsForDate({
               tenantId,
@@ -399,7 +397,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
               bufferMin,
               minLeadMinutes,
               hours,
-              calendarId: calId,
+              calendarId,
             })
           );
 
