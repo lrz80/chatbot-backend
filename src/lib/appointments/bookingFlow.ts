@@ -230,6 +230,17 @@ export async function bookingFlowMvp(opts: {
   ctxPatch?: any;
 }> {
   const { tenantId, canal, contacto, idioma, userText } = opts;
+  console.log("🟩🟩🟩 BOOKING_FLOW_MVP HIT", {
+    tenantId,
+    canal,
+    contacto,
+    idioma,
+    userText: String(userText || "").slice(0, 80),
+    hasCtx: !!opts.ctx,
+    messageId: opts.messageId || null,
+    ts: new Date().toISOString(),
+  });
+
 
   const ctx = (opts.ctx && typeof opts.ctx === "object") ? (opts.ctx as BookingCtx) : {};
   const booking = ctx.booking || { step: "idle" as const };
