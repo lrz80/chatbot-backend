@@ -159,6 +159,19 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   
   const daypart = (hydratedBooking?.daypart || null) as ("morning" | "afternoon" | null);
 
+  const step = hydratedBooking?.step;
+
+  // ✅ Si ya hay un slot elegido, NO recalcular nada aquí.
+  // Esto evita que un "sí" o cualquier mensaje posterior cambie date/time.
+  const hasPicked = !!hydratedBooking?.picked_start && !!hydratedBooking?.picked_end;
+
+  if (hasPicked && (step === "ask_all" || step === "confirm")) {
+    return {
+      handled: false, // que lo maneje el handler de ask_all/confirm
+      ctxPatch: { booking: { ...hydratedBooking }, booking_last_touch_at: Date.now() },
+    };
+  }
+
   // ✅ Esto es EXACTAMENTE lo que el usuario debe ver y elegir
   const slotsShown: Slot[] = daypart ? filterSlotsByDaypart(slots, tz, daypart) : slots;
 
@@ -211,7 +224,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
           if (daypart) nextSlots = filterSlotsByDaypart(nextSlots, tz, daypart);
 
           if (nextSlots.length) {
-            const take = nextSlots.slice(0, 5);
+            const take = nextSlots.slice(0, 3);
             return {
                 handled: true,
                 reply: renderSlotsMessage({ idioma:effectiveLang, timeZone: tz, slots: take }),
@@ -401,7 +414,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
             })
           );
 
-          const take = (daypart ? filterSlotsByDaypart(refresh, tz, daypart) : refresh).slice(0, 5);
+          const take = (daypart ? filterSlotsByDaypart(refresh, tz, daypart) : refresh).slice(0, 3);
 
           return {
             handled: true,
@@ -465,7 +478,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         })
       );
 
-      const take = near.length ? near : allDaySlots.slice(0, 5);
+      const take = near.length ? near : allDaySlots.slice(0, 3);
 
       return {
         handled: true,
@@ -518,6 +531,8 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         picked_end: picked.endISO,
         start_time: picked.startISO,
         end_time: picked.endISO,
+        slot_locked: true,
+        slot_locked_at: Date.now(),
         slots: [],
         date_only: getCtxDateFromBookingOrSlots(slotsShown, hydratedBooking, tz),
         last_offered_date: getCtxDateFromBookingOrSlots(slotsShown, hydratedBooking, tz),
@@ -588,13 +603,13 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         if (allDaySlots.length) {
           return {
             handled: true,
-            reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: allDaySlots.slice(0, 5) }),
+            reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: allDaySlots.slice(0, 3) }),
             ctxPatch: {
               booking: {
                 ...hydratedBooking,
                 step: "offer_slots",
                 timeZone: tz,
-                slots: allDaySlots.slice(0, 5),
+                slots: allDaySlots.slice(0, 3),
                 last_offered_date: ctxDate,
                 date_only: ctxDate, },
               booking_last_touch_at: Date.now(),
@@ -702,7 +717,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         if (daypart) newSlots = filterSlotsByDaypart(newSlots, tz, daypart);
 
         if (newSlots.length) {
-          const take = newSlots.slice(0, 5);
+          const take = newSlots.slice(0, 3);
           return {
             handled: true,
             reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take }),

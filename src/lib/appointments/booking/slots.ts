@@ -405,7 +405,7 @@ export async function getNextSlotsByDaypart(opts: {
     }
   }
 
-  return out.slice(0, 5);
+  return out.slice(0, 3);
 }
 
 export async function isRangeBusy(opts: {

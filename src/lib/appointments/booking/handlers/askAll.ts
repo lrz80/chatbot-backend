@@ -210,7 +210,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
       minLeadMinutes,
     });
 
-    const take = (slots || []).slice(0, 5);
+    const take = (slots || []).slice(0, 3);
 
     return {
       handled: true,

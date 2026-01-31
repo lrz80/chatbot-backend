@@ -84,5 +84,5 @@ export async function getSlotsForDateOnly(opts: {
     if (out.length >= 5) break;
   }
 
-  return out.slice(0, 5);
+  return out.slice(0, 3);
 }

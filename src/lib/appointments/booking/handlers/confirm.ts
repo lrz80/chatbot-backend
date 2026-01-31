@@ -101,10 +101,22 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
   const hydratedBooking = {
     ...booking,
     timeZone: booking?.timeZone || timeZone,
-    lang: (booking?.lang as any) || idioma, // ✅ sticky
-    start_time: booking?.start_time || booking?.picked_start || null,
-    end_time: booking?.end_time || booking?.picked_end || null,
+    lang: (booking?.lang as any) || idioma,
+
+    // ✅ picked_* es la fuente de verdad en confirmación
+    start_time: booking?.picked_start || booking?.start_time || null,
+    end_time: booking?.picked_end || booking?.end_time || null,
   };
+
+  const locked = !!hydratedBooking?.picked_start && !!hydratedBooking?.picked_end;
+
+  if (locked) {
+    // si alguien dejó start_time distinto a picked_start, lo corregimos aquí
+    if (hydratedBooking.start_time !== hydratedBooking.picked_start || hydratedBooking.end_time !== hydratedBooking.picked_end) {
+      hydratedBooking.start_time = hydratedBooking.picked_start;
+      hydratedBooking.end_time = hydratedBooking.picked_end;
+    }
+  }
 
   const effectiveLang: "es" | "en" = (hydratedBooking?.lang as any) || idioma;
   const tz = hydratedBooking.timeZone;
@@ -408,7 +420,7 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
         });
 
         if (slots.length) {
-          const take = slots.slice(0, 5);
+          const take = slots.slice(0, 3);
           return {
             handled: true,
             reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take, style: "closest" }),

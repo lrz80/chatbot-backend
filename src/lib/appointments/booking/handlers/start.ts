@@ -181,7 +181,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
           const target = base.toMillis();
           return Math.abs(am - target) - Math.abs(bm - target);
         })
-        .slice(0, 5);
+        .slice(0, 3);
 
       return {
         handled: true,
