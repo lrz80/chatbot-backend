@@ -514,6 +514,7 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
   // ✅ Hard check: sin link/id = NO confirmado
     const link = String(g.htmlLink || "").trim();
     const gid = String(g.event_id || "").trim();
+    const meet = String((g as any).meetLink || "").trim();
 
     if (!link || !gid) {
     await markAppointmentFailed({
@@ -546,7 +547,7 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
     await markAppointmentConfirmed({
     apptId: pending.id,
     google_event_id: gid,
-    google_event_link: link,
+    google_event_link: meet || link,
     });
 
     const apptId = pending.id;
@@ -554,9 +555,9 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
     return {
     handled: true,
     reply:
-        effectiveLang === "en"
-        ? `You're all set — your appointment is confirmed. ${link}`.trim()
-        : `Perfecto, tu cita quedó confirmada. ${link}`.trim(),
+      effectiveLang === "en"
+        ? `You're all set — your appointment is confirmed.${meet ? ` Join here: ${meet}` : ""}`.trim()
+        : `Perfecto, tu cita quedó confirmada.${meet ? ` Únete aquí: ${meet}` : ""}`.trim(),
     ctxPatch: {
         booking: { step: "idle" },
         last_appointment_id: apptId,

@@ -246,37 +246,85 @@ export async function googleCreateEvent(params: {
     }
   );
 
-  const json = await resp.json();
-    // ✅ Si Google devolvió meet link, lo anexamos al description para que sea visible siempre
-    const meetLink =
-      json?.hangoutLink ||
-      json?.conferenceData?.entryPoints?.find((e: any) => e?.entryPointType === "video")?.uri;
+  const json = await resp.json().catch(() => ({}));
 
-    if (meetLink && typeof json?.description === "string" && !json.description.includes(meetLink)) {
-      json.description = `${json.description}\n\nGoogle Meet: ${meetLink}`.trim();
+  // ✅ Si Google devolvió meet link, lo anexamos al description para que sea visible siempre
+  const meetLink =
+    json?.hangoutLink ||
+    json?.conferenceData?.entryPoints?.find((e: any) => e?.entryPointType === "video")?.uri;
+
+  if (meetLink && typeof json?.description === "string" && !json.description.includes(meetLink)) {
+    json.description = `${json.description}\n\nGoogle Meet: ${meetLink}`.trim();
+  }
+
+  json.meetLink = meetLink || null;
+  
+  if (!resp.ok) {
+    console.error("Google create event failed:", json);
+
+    if (resp.status === 401 || resp.status === 403) {
+      await markGoogleDisconnected(params.tenantId, `create_${resp.status}`);
+      throw new Error("google_not_connected");
     }
-
-    if (!resp.ok) {
-      console.error("Google create event failed:", json);
-
-      if (resp.status === 401 || resp.status === 403) {
-        await markGoogleDisconnected(params.tenantId, `create_${resp.status}`);
-        throw new Error("google_not_connected");
-      }
 
     throw new Error("google_create_event_failed");
   }
-  console.log("📌 [GCAL] createEvent result", {
+
+  // ✅ VERIFICACIÓN: GET del evento recién creado
+  const createdEventId = String(json?.id || "").trim();
+
+  const verified =
+    createdEventId
+      ? await googleGetEvent({ accessToken, calendarId, eventId: createdEventId })
+      : null;
+
+  console.log("🟣 [GCAL INSERT]", {
     tenantId: params.tenantId,
     calendarId: params.calendarId || "primary",
     eventId: json?.id,
-    htmlLink: json?.htmlLink,
-    status: json?.status,
-    organizer: json?.organizer?.email,
-    creator: json?.creator?.email,
-    start: json?.start,
-    end: json?.end,
+    htmlLink_insert: json?.htmlLink,
+    status_insert: json?.status,
+    organizer_insert: json?.organizer?.email,
+    creator_insert: json?.creator?.email,
   });
 
-  return json;
+  console.log("🟢 [GCAL GET VERIFY]", {
+    tenantId: params.tenantId,
+    calendarId: params.calendarId || "primary",
+    eventId: verified?.id || createdEventId || null,
+    htmlLink_get: verified?.htmlLink || null,
+    status_get: verified?.status || null,
+    organizer_get: verified?.organizer?.email || null,
+    creator_get: verified?.creator?.email || null,
+    icaluid_get: verified?.iCalUID || null,
+  });
+
+  // ✅ Devuelve SIEMPRE el evento verificado si existe
+  return verified || json;
+}
+
+async function googleGetEvent(args: {
+  accessToken: string;
+  calendarId: string; // ya URL-encoded
+  eventId: string;
+}) {
+  const r = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${args.calendarId}/events/${encodeURIComponent(args.eventId)}`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${args.accessToken}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  const j = await r.json().catch(() => ({}));
+
+  if (!r.ok) {
+    console.error("Google get event failed:", { status: r.status, body: j });
+    return null;
+  }
+
+  return j;
 }

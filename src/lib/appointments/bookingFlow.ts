@@ -212,6 +212,7 @@ async function bookInGoogle(opts: {
     ok: true as const,
     event_id: event.id,
     htmlLink: event.htmlLink,
+    meetLink: (event as any)?.meetLink || (event as any)?.hangoutLink || null,
   };
 }
 
