@@ -104,6 +104,8 @@ export async function googleFreeBusy(params: {
   timeMax: string; // ISO
   calendarId?: string; // default primary
 }): Promise<GoogleFreeBusyResponse & { degraded?: boolean }> {
+  console.log("🧬 GCAL MODULE LOADED v2026-01-31-B");
+
   let accessToken: string;
 
   try {
@@ -258,7 +260,7 @@ export async function googleCreateEvent(params: {
   }
 
   json.meetLink = meetLink || null;
-  
+
   if (!resp.ok) {
     console.error("Google create event failed:", json);
 

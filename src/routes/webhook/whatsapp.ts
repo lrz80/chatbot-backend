@@ -656,6 +656,7 @@ export async function procesarMensajeWhatsApp(
   body: any,
   context?: WhatsAppContext
 ): Promise<void> {
+console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString() });
 
   const decisionFlags = {
     channelSelected: false,
