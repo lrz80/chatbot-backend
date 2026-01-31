@@ -55,6 +55,13 @@ const GLOBAL_ID =
 const sha256 = (s: string) =>
   crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
 
+router.all("/webhook", (req, res, next) => {
+  console.log("🔥 META HIT", req.method, req.originalUrl);
+  console.log("headers:", req.headers["user-agent"], req.headers["x-hub-signature-256"]);
+  console.log("body:", JSON.stringify(req.body));
+  next();
+});
+
 // ✅ DEDUPE 7 días (bucket estable). No depende de timezone.
 function bucket7DaysUTC(d = new Date()) {
   const ms = d.getTime();
