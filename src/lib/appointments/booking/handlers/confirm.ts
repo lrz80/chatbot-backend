@@ -31,6 +31,7 @@ type ConfirmDeps = {
     customer_email?: string;
     start_time: string;
     end_time: string;
+    idempotency_key: string;
   }) => Promise<any | null>;
 
   markAppointmentFailed: (args: { apptId: string; error_reason: string }) => Promise<void>;
@@ -51,6 +52,42 @@ type ConfirmDeps = {
     bufferMin: number;
   }) => Promise<{ ok: boolean; event_id?: string | null; htmlLink?: string | null; error?: string; busy?: any[] }>;
 };
+
+function buildIdempotencyKey(args: {
+  tenantId: string;
+  channel: string;
+  customerPhone: string;  // ✅ teléfono real (WA=contacto, Meta=booking.phone)
+  startISO: string;
+  endISO: string;
+}) {
+  const { tenantId, channel, customerPhone, startISO, endISO } = args;
+
+  const phone = String(customerPhone || "").trim();
+  const s = String(startISO || "").trim();
+  const e = String(endISO || "").trim();
+
+  // key estable por slot + cliente (no por senderId)
+  return `appt:${tenantId}:${channel}:${phone}:${s}:${e}`;
+}
+
+function resetBooking(tz: string, lang: "es" | "en") {
+  return {
+    step: "idle",
+    timeZone: tz,
+    lang,
+    name: null,
+    email: null,
+    phone: null,
+    purpose: null,
+    start_time: null,
+    end_time: null,
+    picked_start: null,
+    picked_end: null,
+    date_only: null,
+    slots: null,
+    last_offered_date: null,
+  };
+}
 
 export async function handleConfirm(deps: ConfirmDeps): Promise<{
   handled: boolean;
@@ -129,7 +166,7 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
         effectiveLang === "en"
           ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
           : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
-      ctxPatch: { booking: { ...hydratedBooking, step: "idle" }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: resetBooking(tz, effectiveLang), booking_last_touch_at: Date.now() }
     };
   }
 
@@ -154,20 +191,10 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
       handled: true,
       reply:
         effectiveLang === "en"
-          ? "No problem. Send me another date and time (YYYY-MM-DD HH:mm)."
-          : "Perfecto. Envíame otra fecha y hora (YYYY-MM-DD HH:mm).",
+          ? "Okay — canceled. If you want to book another time, just send the date and time (YYYY-MM-DD HH:mm)."
+          : "Listo — cancelado. Si quieres agendar otro horario, envíame la fecha y hora (YYYY-MM-DD HH:mm).",
       ctxPatch: {
-        booking: {
-          ...hydratedBooking,
-          step: "ask_datetime",
-          timeZone: tz,
-          name: hydratedBooking?.name || null,
-          email: booking?.email || null,
-          purpose: booking?.purpose || null,
-          start_time: null,
-          end_time: null,
-          date_only: null,
-        },
+        booking: resetBooking(tz, effectiveLang),
         booking_last_touch_at: Date.now(),
       },
     };
@@ -308,6 +335,14 @@ if (!startISO || !endISO) {
     endISO,
   });
 
+  const idempotency_key = buildIdempotencyKey({
+    tenantId,
+    channel: canal,
+    customerPhone,     // ✅ NO contacto
+    startISO,
+    endISO,
+  });
+
   const pending = await createPendingAppointmentOrGetExisting({
     tenantId,
     channel: canal,
@@ -316,6 +351,7 @@ if (!startISO || !endISO) {
     customer_email: customerEmail || undefined,
     start_time: startISO,
     end_time: endISO,
+    idempotency_key,
   });
 
   if (!pending) {
@@ -338,20 +374,32 @@ if (!startISO || !endISO) {
   }
 
   // 7) si ya estaba confirmado, responde idempotente
-  if (pending.status === "confirmed" && pending.google_event_link) {
+  const sameSlot =
+    String(pending.start_time || "") === String(startISO) &&
+    String(pending.end_time || "") === String(endISO);
+
+  if (pending.status === "confirmed" && pending.google_event_link && sameSlot) {
     return {
       handled: true,
-      reply: effectiveLang === "en" ? `Already booked. ${pending.google_event_link}`.trim() : `Ya quedó agendado. ${pending.google_event_link}`.trim(),
-      ctxPatch: { booking: { ...hydratedBooking, step: "idle" }, booking_last_touch_at: Date.now() },
+      reply: effectiveLang === "en"
+        ? `Already booked for that time. ${pending.google_event_link}`.trim()
+        : `Ya quedó agendado para ese horario. ${pending.google_event_link}`.trim(),
+      ctxPatch: {
+        booking: { step: "idle" },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
+
+  // Si está confirmed pero NO es el mismo slot, NO bloquees.
+  // Continúa al bookInGoogle y crea otra cita.
 
   // 8) si google no conectado, salir limpio
   if (!googleConnected) {
     return {
       handled: true,
       reply: effectiveLang === "en" ? "Scheduling isn’t available for this business right now." : "El agendamiento no está disponible en este momento para este negocio.",
-      ctxPatch: { booking: { ...hydratedBooking, step: "idle" }, booking_last_touch_at: Date.now() },
+      ctxPatch: { booking: resetBooking(tz, effectiveLang), booking_last_touch_at: Date.now() },
     };
   }
 
@@ -523,25 +571,16 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
     });
 
     return {
-        handled: true,
-        reply:
-        effectiveLang === "en"
-            ? "I tried to book it, but Google Calendar didn’t confirm the event. Please try again."
-            : "Intenté agendarla, pero Google Calendar no confirmó el evento. Intenta de nuevo enviando otra fecha y hora (YYYY-MM-DD HH:mm).",
-        ctxPatch: {
-        booking: {
-            ...hydratedBooking,
-            step: "ask_datetime",
-            timeZone: tz,
-            start_time: null,
-            end_time: null,
-            date_only: null,
-            lang: (hydratedBooking?.lang as any) || idioma,
-        },
+      handled: true,
+      reply: effectiveLang === "en"
+        ? "I couldn’t confirm the booking with Google. Please send a new date and time (YYYY-MM-DD HH:mm)."
+        : "No pude confirmar la cita con Google. Envíame una nueva fecha y hora (YYYY-MM-DD HH:mm).",
+      ctxPatch: {
+        booking: resetBooking(tz, effectiveLang),
         booking_last_touch_at: Date.now(),
-        },
+      },
     };
-    }
+  }
 
     // ✅ Ya sí: confirmado real
     await markAppointmentConfirmed({
@@ -559,7 +598,7 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
         ? `You're all set — your appointment is confirmed.${meet ? ` Join here: ${meet}` : ""}`.trim()
         : `Perfecto, tu cita quedó confirmada.${meet ? ` Únete aquí: ${meet}` : ""}`.trim(),
     ctxPatch: {
-        booking: { step: "idle" },
+        booking: resetBooking(tz, effectiveLang),
         last_appointment_id: apptId,
         booking_completed: true,
         booking_completed_at: new Date().toISOString(),
