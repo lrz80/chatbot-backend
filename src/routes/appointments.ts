@@ -334,7 +334,31 @@ router.get(
 
       const settings = await getAppointmentSettings(tenantId);
 
-      return res.json({ ok: true, settings });
+      // ✅ Traer cuenta conectada de Google
+      const gi = await pool.query(
+        `
+        SELECT status, connected_email, calendar_id
+        FROM calendar_integrations
+        WHERE tenant_id = $1 AND provider = 'google'
+        LIMIT 1
+        `,
+        [tenantId]
+      );
+
+      const g = gi.rows[0] as
+        | { status?: string; connected_email?: string | null; calendar_id?: string | null }
+        | undefined;
+
+      return res.json({
+        ok: true,
+        settings,
+        google: {
+          status: g?.status ?? "disconnected",
+          connected_email: g?.connected_email ?? null,
+          calendar_id: g?.calendar_id ?? null,
+          connected: (g?.status === "connected"),
+        },
+      });
     } catch (error) {
       console.error("[GET /api/appointments/settings] Error:", error);
       return res.status(500).json({ ok: false, error: "INTERNAL_SERVER_ERROR" });

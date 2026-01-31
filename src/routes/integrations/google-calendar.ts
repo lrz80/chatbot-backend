@@ -194,6 +194,8 @@ router.post("/disconnect", authenticateUser, async (req, res) => {
       UPDATE calendar_integrations
       SET
         status = 'revoked',
+        connected_email = NULL,
+        calendar_id = NULL,
         updated_at = NOW()
       WHERE tenant_id = $1
         AND provider = 'google'
@@ -201,10 +203,7 @@ router.post("/disconnect", authenticateUser, async (req, res) => {
       [tenantId]
     );
 
-    return res.json({
-      ok: true,
-      connected: false,
-    });
+    return res.json({ ok: true, connected: false, connected_email: null, calendar_id: null });
   } catch (err) {
     console.error("❌ google-calendar disconnect error:", err);
     return res.status(500).json({
