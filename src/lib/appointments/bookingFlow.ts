@@ -40,6 +40,7 @@ import { handleAskName } from "./booking/handlers/askName";
 import { handleAskPurpose } from "./booking/handlers/askPurpose";
 import { handleStartBooking } from "./booking/handlers/start";
 import pool from "../../lib/db";
+import { getSlotsForDateWindow } from "./booking/slots";
 
 
 const BOOKING_FLOW_TTL_MS = 30 * 60 * 1000; // 30 minutos (ajústalo a 15/60 si quieres)
@@ -485,6 +486,9 @@ if (wantsBooking && !bookingLink && !googleConnected) {
 
 if (booking.step === "idle") {
   return handleStartBooking({
+    tenantId,                 // ✅
+    bufferMin,                // ✅ (ya lo tienes calculado arriba)
+    getSlotsForDateWindow,    // ✅
     idioma,
     userText,
     timeZone,
@@ -493,7 +497,7 @@ if (booking.step === "idle") {
     durationMin,
     minLeadMinutes,
     hours,
-    booking, // ✅
+    booking,
   });
 }
 
