@@ -7,6 +7,12 @@ function hlog(...args: any[]) {
   if (HUMANIZER_DEBUG) console.log("🤖[HUMANIZER]", ...args);
 }
 
+function debugChars(label: string, s: string) {
+  const str = String(s || "");
+  const codes = [...str].map((ch) => ch.charCodeAt(0));
+  hlog(label, { len: str.length, codes, repr: JSON.stringify(str) });
+}
+
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export type BookingHumanizeIntent =
@@ -236,6 +242,11 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
     // ✅ Si violó locked -> NO se usa
     if (!respectsLocked(out, locked)) {
       hlog("LOCKED_VIOLATION", { intent, idioma, locked, rawOut, out, canonicalText });
+
+      // 👇 debug caracteres (solo cuando falla)
+      for (const chunk of locked) debugChars("LOCKED_CHUNK", chunk);
+      debugChars("OUT", out);
+
       return canonicalText;
     }
 
