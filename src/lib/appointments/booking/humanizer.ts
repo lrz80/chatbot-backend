@@ -125,6 +125,24 @@ function confirmWordsViolation(out: string, intent: BookingHumanizeIntent, idiom
   );
 }
 
+function extractFinalWhatsAppMessage(raw: string) {
+  let s = (raw || "").trim();
+
+  // Si el modelo mete un prefacio tipo "Claro, aquí tienes..."
+  s = s.replace(/^claro[, ]+aquí tienes el mensaje reescrito:\s*/i, "").trim();
+  s = s.replace(/^aquí tienes (el )?mensaje reescrito:\s*/i, "").trim();
+
+  // Si devuelve un bloque entre comillas, toma SOLO el contenido
+  // Ej: "Genial, tengo ... ¿Confirmas?"
+  const m = s.match(/"([^"]+)"/s);
+  if (m?.[1]) s = m[1].trim();
+
+  // Limpieza de espacios y saltos
+  s = s.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+
+  return s;
+}
+
 export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> {
   const {
     canonicalText,
@@ -194,15 +212,21 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
       temperature: 0.4,
     });
 
-    const out = (res as any).output_text?.trim?.() || "";
-    if (!out) {
-    hlog("EMPTY_OUTPUT", { intent, idioma, canonicalText });
-    return fallbackFromCanonical(args);
+    const rawOut = (res as any).output_text?.trim?.() || "";
+    if (!rawOut) {
+      hlog("EMPTY_OUTPUT", { intent, idioma, canonicalText });
+      return fallbackFromCanonical(args);
+    }
+
+    const out = extractFinalWhatsAppMessage(rawOut);
+      if (!out) {
+      hlog("EMPTY_OUTPUT_AFTER_CLEAN", { intent, idioma, rawOut, canonicalText });
+      return fallbackFromCanonical(args);
     }
 
     // ✅ Si violó locked -> NO se usa
     if (!respectsLocked(out, locked)) {
-      hlog("LOCKED_VIOLATION", { intent, idioma, locked, out, canonicalText });
+      hlog("LOCKED_VIOLATION", { intent, idioma, locked, rawOut, out, canonicalText });
       return canonicalText;
     }
 
