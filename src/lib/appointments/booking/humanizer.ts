@@ -104,10 +104,29 @@ function fallbackFromCanonical(args: HumanizeArgs) {
   return args.canonicalText || fallback(args);
 }
 
+function normalizeLock(s: string) {
+  return String(s || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\u00A0/g, " ")   // NBSP (160)
+    .replace(/\u202F/g, " ")   // narrow NBSP
+    .replace(/\u2007/g, " ")   // figure space
+    .replace(/[ \t]+/g, " ")
+    .trim();
+}
+
 function respectsLocked(out: string, locked: string[] = []) {
+  const outRaw = String(out || "");
+  const outNorm = normalizeLock(outRaw);
+
   for (const chunk of locked) {
     if (!chunk) continue;
-    if (!out.includes(chunk)) return false;
+
+    // 1) match exacto (tu regla fuerte)
+    if (outRaw.includes(chunk)) continue;
+
+    // 2) match normalizado (solo espacios invisibles)
+    const cNorm = normalizeLock(chunk);
+    if (!outNorm.includes(cNorm)) return false;
   }
   return true;
 }
