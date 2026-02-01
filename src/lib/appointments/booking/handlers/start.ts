@@ -5,6 +5,7 @@ import type { HoursByWeekday } from "../types";
 import { weekdayKey, parseHHmm } from "../time";
 import { getSlotsForDateWindow } from "../slots";
 import { renderSlotsMessage } from "../time";
+import { humanizeBookingReply } from "../humanizer";
 
 
 export type StartBookingDeps = {
@@ -149,11 +150,16 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
             ? DateTime.fromISO(exact.startISO, { zone: tz }).setLocale("en").toFormat("cccc, LLL d 'at' h:mm a")
             : DateTime.fromISO(exact.startISO, { zone: tz }).setLocale("es").toFormat("cccc d 'de' LLL 'a las' h:mm a");
 
+        const humanReply = await humanizeBookingReply({
+          idioma: effectiveLang,
+          intent: "slot_exact_available",
+          askedText: userText,
+          prettyWhen: human,
+        });
+
         return {
           handled: true,
-          reply: effectiveLang === "en"
-            ? `Perfect — I have ${human}. Confirm?`
-            : `Perfecto — tengo ${human}. ¿Confirmas?`,
+          reply: humanReply,
           ctxPatch: {
             booking: {
               ...(hydratedBooking || {}),
@@ -218,12 +224,16 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         ? d.toFormat("cccc, LLL d 'at' h:mm a")
         : d.toFormat("cccc d 'de' LLL 'a las' h:mm a");
 
+    const humanReply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "slot_exact_available",
+      askedText: userText,
+      prettyWhen: human,
+    });
+
     return {
       handled: true,
-      reply:
-        effectiveLang === "en"
-          ? `Perfect — I have ${human}. Confirm?`
-          : `Perfecto — tengo ${human}. ¿Confirmas?`,
+      reply: humanReply,
       ctxPatch: {
         booking: {
           ...(hydratedBooking || {}),
