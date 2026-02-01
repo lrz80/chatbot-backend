@@ -15,7 +15,9 @@ export type AskPurposeDeps = {
   detectPurpose: (s: string) => string | null;
 };
 
-export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
+export async function handleAskPurpose(
+  deps: AskPurposeDeps
+): Promise<{
   handled: boolean;
   reply?: string;
   ctxPatch?: any;
@@ -43,16 +45,25 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
   if (wantsToChangeTopic(userText)) {
     return {
       handled: false,
-      ctxPatch: { booking: { ...hydratedBooking, step: "idle", timeZone: tz, lang: effectiveLang } },
+      ctxPatch: {
+        booking: { ...hydratedBooking, step: "idle", timeZone: tz, lang: effectiveLang },
+      },
     };
   }
 
   // Cancelar proceso
   if (wantsToCancel(userText)) {
+    const canonicalText =
+      effectiveLang === "en"
+        ? "No problem — I’ll pause scheduling for now. Whenever you’re ready, just tell me."
+        : "Perfecto — pauso el agendamiento por ahora. Cuando estés listo, me dices.";
+
     const reply = await humanizeBookingReply({
       idioma: effectiveLang,
       intent: "cancel_booking",
       askedText: userText,
+      canonicalText,
+      locked: [],
     });
 
     return {
@@ -68,11 +79,19 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
   // Intentar identificar propósito
   const purpose = detectPurpose(userText);
 
+  // Si no entendimos el propósito, aclaramos (humanizado)
   if (!purpose) {
+    const canonicalText =
+      effectiveLang === "en"
+        ? "Got it — what are you trying to book? (class, appointment, consultation, or a call)"
+        : "Entiendo — ¿qué te gustaría agendar? (clase, cita, consulta o llamada)";
+
     const reply = await humanizeBookingReply({
       idioma: effectiveLang,
       intent: "ask_purpose_clarify",
       askedText: userText,
+      canonicalText,
+      locked: [],
     });
 
     return {
@@ -85,11 +104,18 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
     };
   }
 
-  // Avanza a ask_daypart
+  // Avanza a ask_daypart (humanizado)
+  const canonicalText =
+    effectiveLang === "en"
+      ? `Perfect — for ${purpose}, do mornings or afternoons work better?`
+      : `Perfecto — para ${purpose}, ¿te funciona mejor en la mañana o en la tarde?`;
+
   const reply = await humanizeBookingReply({
     idioma: effectiveLang,
     intent: "ask_daypart",
     askedText: userText,
+    canonicalText,
+    locked: [purpose], // ✅ evita que lo “traducca” raro o lo cambie
     purpose,
   });
 

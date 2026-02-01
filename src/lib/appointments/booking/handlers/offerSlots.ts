@@ -32,16 +32,16 @@ type Slot = { startISO: string; endISO: string };
 export type OfferSlotsDeps = {
   tenantId: string;
   canal: string;
-  
+
   idioma: "es" | "en";
   userText: string;
 
-  booking: any;              
+  booking: any;
   timeZone: string;
   durationMin: number;
   bufferMin: number;
-  minLeadMinutes: number; 
-  hours: any | null;         
+  minLeadMinutes: number;
+  hours: any | null;
 };
 
 function hasHHMM(c: any): c is { hhmm: string } {
@@ -99,7 +99,6 @@ function resolveWeekdayDateISO(userText: string, tz: string, baseISO?: string | 
     sunday: 7,
   };
 
-  // busca si el texto contiene algún día
   let target: number | null = null;
   for (const k of Object.keys(map)) {
     if (new RegExp(`\\b${k}\\b`, "i").test(s)) {
@@ -149,214 +148,259 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   };
 
   const effectiveLang: "es" | "en" = (hydratedBooking.lang as any) || idioma;
-
   const tz = hydratedBooking.timeZone;
-
   const calendarId = hydratedBooking?.calendar_id || "primary";
 
   const t = normalizeText(userText);
   const slotsRaw: Slot[] = Array.isArray(hydratedBooking?.slots) ? hydratedBooking.slots : [];
   const slots: Slot[] = sortSlotsAsc(slotsRaw);
-  
-  const daypart = (hydratedBooking?.daypart || null) as ("morning" | "afternoon" | null);
 
+  const daypart = (hydratedBooking?.daypart || null) as ("morning" | "afternoon" | null);
   const step = hydratedBooking?.step;
 
-  // ✅ Si ya hay un slot elegido, NO recalcular nada aquí.
-  // Esto evita que un "sí" o cualquier mensaje posterior cambie date/time.
   const hasPicked = !!hydratedBooking?.picked_start && !!hydratedBooking?.picked_end;
-
   if (hasPicked && (step === "ask_all" || step === "confirm")) {
     return {
-      handled: false, // que lo maneje el handler de ask_all/confirm
+      handled: false,
       ctxPatch: { booking: { ...hydratedBooking }, booking_last_touch_at: Date.now() },
     };
   }
 
-  // ✅ Esto es EXACTAMENTE lo que el usuario debe ver y elegir
   const slotsShown: Slot[] = daypart ? filterSlotsByDaypart(slots, tz, daypart) : slots;
 
-      if (!slots.length) {
+  // ✅ Sin slots guardados
+  if (!slots.length) {
+    const canonicalText =
+      effectiveLang === "en"
+        ? "I don’t have available times saved for that date. Please send another date (YYYY-MM-DD)."
+        : "No tengo horarios disponibles guardados para esa fecha. Envíame otra fecha (YYYY-MM-DD).";
+
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "ask_purpose_clarify", // intent “genérico” para reescritura, el canonical manda
+      askedText: userText,
+      canonicalText,
+      locked: [],
+    });
+
+    return {
+      handled: true,
+      reply,
+      ctxPatch: {
+        booking: {
+          ...hydratedBooking,
+          step: "ask_datetime",
+          date_only: null,
+          slots: [],
+        },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
+  // 0) CAMBIO DE DÍA (antes que wantsMoreSlots)
+  if (wantsAnotherDay(userText) && hours) {
+    const ctxDate =
+      (hydratedBooking as any)?.date_only ||
+      (hydratedBooking as any)?.last_offered_date ||
+      (slots?.[0]?.startISO
+        ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
+        : null);
+
+    if (ctxDate) {
+      const nextDate = DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz })
+        .plus({ days: 1 })
+        .toFormat("yyyy-MM-dd");
+
+      let nextSlots = sortSlotsAsc(
+        await getSlotsForDate({
+          tenantId,
+          timeZone: tz,
+          dateISO: nextDate,
+          durationMin,
+          bufferMin,
+          minLeadMinutes,
+          hours,
+          calendarId,
+        })
+      );
+
+      if (daypart) nextSlots = filterSlotsByDaypart(nextSlots, tz, daypart);
+
+      if (nextSlots.length) {
+        const take = nextSlots.slice(0, 3);
         return {
           handled: true,
-          reply: effectiveLang === "en"
-            ? "I'm sorry! I don’t have available times saved for that date. Please send another date (YYYY-MM-DD)."
-            : "Lo siento! No tengo horarios disponibles para esa fecha. Envíame otra fecha (YYYY-MM-DD).",
+          reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take }),
           ctxPatch: {
-              booking: {
+            booking: {
               ...hydratedBooking,
-                  step: "ask_datetime",
-                  date_only: null,
-                  slots: [],},
+              step: "offer_slots",
+              timeZone: tz,
+              slots: take,
+              last_offered_date: nextDate,
+              date_only: nextDate,
+            },
             booking_last_touch_at: Date.now(),
           },
         };
       }
-  
-      // 0) CAMBIO DE DÍA (antes que wantsMoreSlots)
-      if (wantsAnotherDay(userText) && hours) {
-  
-        const ctxDate =
-          (hydratedBooking as any)?.date_only ||
-          (hydratedBooking as any)?.last_offered_date ||
-          (slots?.[0]?.startISO
-            ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
-            : null);
-  
-        if (ctxDate) {
-          // siguiente día
-          const nextDate = DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz })
-            .plus({ days: 1 })
-            .toFormat("yyyy-MM-dd");
-  
-          let nextSlots = sortSlotsAsc(
-            await getSlotsForDate({
-                tenantId,
-                timeZone: tz,
-                dateISO: nextDate,
-                durationMin,
-                bufferMin,
-                minLeadMinutes,
-                hours,
-                calendarId,
-            })
-          );
-
-          if (daypart) nextSlots = filterSlotsByDaypart(nextSlots, tz, daypart);
-
-          if (nextSlots.length) {
-            const take = nextSlots.slice(0, 3);
-            return {
-                handled: true,
-                reply: renderSlotsMessage({ idioma:effectiveLang, timeZone: tz, slots: take }),
-                ctxPatch: {
-                booking: {
-                    ...hydratedBooking,
-                    step: "offer_slots",
-                    timeZone: tz,
-                    slots: take,                 // ✅ guarda lo filtrado
-                    last_offered_date: nextDate,
-                    date_only: nextDate,
-                },
-                booking_last_touch_at: Date.now(),
-                },
-            };
-          }
-        }
-  
-        return {
-          handled: true,
-          reply: effectiveLang === "en"
-            ? "I'm sorry! I don’t see availability on the next day. Would you like to try a different date?"
-            : "Lo siento! No veo disponibilidad para el próximo día. ¿Quieres que probemos otra fecha?",
-          ctxPatch: { booking: {...hydratedBooking}, booking_last_touch_at: Date.now() },
-        };
-      }
-  
-      // ⚠️ Solo repetir lista si NO está pidiendo una hora específica (2pm, 14:00, 3pm)
-      const hasExplicitHour =
-      extractTimeOnlyToken(userText) ||
-      extractTimeConstraint(userText);
-
-      if (!hasExplicitHour && /\b(horario|horarios|hours|available|disponible|disponibles)\b/i.test(t)) {
-        return {
-          handled: true,
-          reply: renderSlotsMessage({
-            idioma: effectiveLang,
-            timeZone: tz,
-            slots: slotsShown,
-          }),
-          ctxPatch: { booking: {...hydratedBooking}, booking_last_touch_at: Date.now() },
-        };
-      }
-  
-      // Ahora sí, cualquier otro cambio de tema
-      if (wantsToChangeTopic(userText)) {
-      return { handled: false, ctxPatch: { booking: { ...hydratedBooking, step: "idle" } } };
-      }
-  
-    if (wantsToCancel(userText)) {
-      return {
-        handled: true,
-        reply: effectiveLang === "en"
-          ? "No worries, whenever you’re ready to schedule, I’ll be here to help."
-          : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
-        ctxPatch: { 
-          booking: { ...hydratedBooking, step: "idle" },
-          booking_last_touch_at: Date.now(),
-        },
-      };
     }
-  
-    const hhmm = extractTimeOnlyToken(userText);
 
-    // Detectar horas sin am/pm ("a las 3", "las 4", "para las 11")
-    let hhmmFallback = null;
-    const mSimple = userText.match(/\b(?:a\s*las|a\s*la|las)\s*(\d{1,2})(?:[:.](\d{2}))?\b/i);
-    const missingAmPmSimple = !!mSimple && !/\b(am|a\.m\.|pm|p\.m\.)\b/i.test(userText);
-    const simpleHour = mSimple ? Number(mSimple[1]) : null;
-    const simpleMin = mSimple ? Number(mSimple[2] || "0") : null;
+    const canonicalText =
+      effectiveLang === "en"
+        ? "I don’t see availability on the next day. Want to try a different date?"
+        : "No veo disponibilidad para el próximo día. ¿Quieres que probemos otra fecha?";
 
-    if (mSimple) {
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "no_openings_that_day",
+      askedText: userText,
+      canonicalText,
+      locked: [],
+    });
+
+    return {
+      handled: true,
+      reply,
+      ctxPatch: { booking: { ...hydratedBooking }, booking_last_touch_at: Date.now() },
+    };
+  }
+
+  // ⚠️ Solo repetir lista si NO pide hora específica
+  const hasExplicitHour = extractTimeOnlyToken(userText) || extractTimeConstraint(userText);
+
+  if (!hasExplicitHour && /\b(horario|horarios|hours|available|disponible|disponibles)\b/i.test(t)) {
+    return {
+      handled: true,
+      reply: renderSlotsMessage({
+        idioma: effectiveLang,
+        timeZone: tz,
+        slots: slotsShown,
+      }),
+      ctxPatch: { booking: { ...hydratedBooking }, booking_last_touch_at: Date.now() },
+    };
+  }
+
+  // Cambio de tema
+  if (wantsToChangeTopic(userText)) {
+    return { handled: false, ctxPatch: { booking: { ...hydratedBooking, step: "idle" } } };
+  }
+
+  // Cancelar
+  if (wantsToCancel(userText)) {
+    const canonicalText =
+      effectiveLang === "en"
+        ? "No worries — whenever you’re ready to schedule, I’ll be here to help."
+        : "No hay problema — cuando necesites agendar, aquí estaré para ayudarte.";
+
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "cancel_booking",
+      askedText: userText,
+      canonicalText,
+      locked: [],
+    });
+
+    return {
+      handled: true,
+      reply,
+      ctxPatch: {
+        booking: { ...hydratedBooking, step: "idle" },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
+  const hhmm = extractTimeOnlyToken(userText);
+
+  // Detectar horas sin am/pm ("a las 3", "las 4", "para las 11")
+  let hhmmFallback: string | null = null;
+  const mSimple = userText.match(/\b(?:a\s*las|a\s*la|las)\s*(\d{1,2})(?:[:.](\d{2}))?\b/i);
+  const missingAmPmSimple = !!mSimple && !/\b(am|a\.m\.|pm|p\.m\.)\b/i.test(userText);
+  const simpleHour = mSimple ? Number(mSimple[1]) : null;
+  const simpleMin = mSimple ? Number(mSimple[2] || "0") : null;
+
+  if (mSimple) {
     let h = Number(mSimple[1]);
     let mm = Number(mSimple[2] || "0");
 
-    // Si existe daypart -> infiere AM/PM
     if (daypart === "afternoon" && h >= 1 && h <= 11) h += 12;
     if (daypart === "morning" && h === 12) h = 0;
 
     hhmmFallback = `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+  }
+
+  const hhmmFixed = hhmm || hhmmFallback;
+
+  // -----------------------------------------
+  // 1) Usuario pide una HORA
+  // -----------------------------------------
+  if (hhmmFixed) {
+    if (!hours) {
+      const canonicalText =
+        effectiveLang === "en"
+          ? "What date is that for? (example: 2026-01-26)"
+          : "¿Para qué fecha sería? (ej: 2026-01-26)";
+
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "ask_purpose_clarify",
+        askedText: userText,
+        canonicalText,
+        locked: [],
+      });
+
+      return {
+        handled: true,
+        reply,
+        ctxPatch: { booking: { ...hydratedBooking }, booking_last_touch_at: Date.now() },
+      };
     }
 
-    // final
-    const hhmmFixed = hhmm || hhmmFallback;
+    const dateFromText = extractDateOnlyToken(userText, tz);
 
-    if (hhmmFixed) {
-      if (!hours) {
-        return {
-          handled: true,
-          reply: effectiveLang === "en"
-            ? "What date is that for? (example: 2026-01-26)"
-            : "¿Para qué fecha sería? (ej: 2026-01-26)",
-          ctxPatch: { booking: {...hydratedBooking}, booking_last_touch_at: Date.now() },
-        };
-      }
+    const baseForWeekday =
+      (hydratedBooking as any)?.date_only ||
+      (hydratedBooking as any)?.last_offered_date ||
+      (slots?.[0]?.startISO
+        ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
+        : null);
 
-      // ✅ si el usuario escribió una fecha ("lunes", "mañana", "26 ene"), úsala por encima del ctx
-      const dateFromText = extractDateOnlyToken(userText, tz);
+    const weekdayDate = resolveWeekdayDateISO(userText, tz, baseForWeekday);
 
-      // ✅ NUEVO: si escribió "miércoles / wed", conviértelo a yyyy-MM-dd
-      const baseForWeekday =
-        (hydratedBooking as any)?.date_only ||
-        (hydratedBooking as any)?.last_offered_date ||
-        (slots?.[0]?.startISO
-          ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
-          : null);
+    const ctxDate =
+      dateFromText ||
+      weekdayDate ||
+      (hydratedBooking as any)?.date_only ||
+      (hydratedBooking as any)?.last_offered_date ||
+      (slots?.[0]?.startISO
+        ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
+        : null);
 
-      const weekdayDate = resolveWeekdayDateISO(userText, tz, baseForWeekday);
+    if (!ctxDate) {
+      const canonicalText =
+        effectiveLang === "en"
+          ? "What date should I check? (example: 2026-01-26)"
+          : "¿Qué fecha debo revisar? (ej: 2026-01-26)";
 
-      const ctxDate =
-        dateFromText ||
-        weekdayDate ||
-        (hydratedBooking as any)?.date_only ||
-        (hydratedBooking as any)?.last_offered_date ||
-        (slots?.[0]?.startISO
-          ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
-          : null);
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "ask_purpose_clarify",
+        askedText: userText,
+        canonicalText,
+        locked: [],
+      });
 
-      if (!ctxDate) {
-        return {
-          handled: true,
-          reply: effectiveLang === "en"
-            ? "What date should I check? (example: 2026-01-26)"
-            : "¿Qué fecha debo revisar? (ej: 2026-01-26)",
-          ctxPatch: { booking: {...hydratedBooking}, booking_last_touch_at: Date.now() },
-        };
-      }
+      return {
+        handled: true,
+        reply,
+        ctxPatch: { booking: { ...hydratedBooking }, booking_last_touch_at: Date.now() },
+      };
+    }
 
-      // ✅ 1) Siempre calcula el día completo para saber si existe EXACTO (2pm)
-      let allDaySlots = sortSlotsAsc(
-        await getSlotsForDate({
+    let allDaySlots = sortSlotsAsc(
+      await getSlotsForDate({
         tenantId,
         timeZone: tz,
         dateISO: ctxDate,
@@ -365,311 +409,385 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         minLeadMinutes,
         hours,
         calendarId,
-        })
-      );
+      })
+    );
 
-      if (daypart) allDaySlots = filterSlotsByDaypart(allDaySlots, tz, daypart);
+    if (daypart) allDaySlots = filterSlotsByDaypart(allDaySlots, tz, daypart);
 
-      // ✅ Desambiguar "a las 3" sin AM/PM cuando NO hay daypart:
-      // probamos 03:00 y luego 15:00 si aplica y existe en slots del día
-      const candidates: string[] = [hhmmFixed];
+    // Desambiguar 3 -> 03:00 vs 15:00 si no hay daypart
+    const candidates: string[] = [hhmmFixed];
 
-      if (
-        missingAmPmSimple &&
-        daypart == null &&
-        simpleHour != null &&
-        simpleMin != null &&
-        simpleHour >= 1 && simpleHour <= 11
-      ) {
-        const hhPm = simpleHour + 12;
-        const hhmmPm = `${String(hhPm).padStart(2, "0")}:${String(simpleMin).padStart(2, "0")}`;
-        if (!candidates.includes(hhmmPm)) candidates.push(hhmmPm);
-      }
+    if (
+      missingAmPmSimple &&
+      daypart == null &&
+      simpleHour != null &&
+      simpleMin != null &&
+      simpleHour >= 1 && simpleHour <= 11
+    ) {
+      const hhPm = simpleHour + 12;
+      const hhmmPm = `${String(hhPm).padStart(2, "0")}:${String(simpleMin).padStart(2, "0")}`;
+      if (!candidates.includes(hhmmPm)) candidates.push(hhmmPm);
+    }
 
-      const exact = allDaySlots.find((s) => {
-        const start = DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm");
-        return candidates.includes(start);
+    const exact = allDaySlots.find((s) => {
+      const start = DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm");
+      return candidates.includes(start);
+    });
+
+    // Si existe exacto, valida freebusy
+    if (exact) {
+      const fbCheck = await googleFreeBusy({
+        tenantId,
+        timeMin: DateTime.fromISO(exact.startISO, { zone: tz }).toISO()!,
+        timeMax: DateTime.fromISO(exact.endISO, { zone: tz }).toISO()!,
+        calendarId,
       });
 
-      if (exact) {
-        const fbCheck = await googleFreeBusy({
-          tenantId,
-          timeMin: DateTime.fromISO(exact.startISO, { zone: tz }).toISO()!,
-          timeMax: DateTime.fromISO(exact.endISO, { zone: tz }).toISO()!,
-          calendarId,
-        });
+      const busyNow = extractBusyBlocks(fbCheck, calendarId);
 
-        const busyNow = extractBusyBlocks(fbCheck, calendarId);
+      if (busyNow.length > 0) {
+        const refresh = sortSlotsAsc(
+          await getSlotsForDate({
+            tenantId,
+            timeZone: tz,
+            dateISO: ctxDate,
+            durationMin,
+            bufferMin,
+            minLeadMinutes,
+            hours,
+            calendarId,
+          })
+        );
 
-        if (busyNow.length > 0) {
-          const refresh = sortSlotsAsc(
-            await getSlotsForDate({
-              tenantId,
-              timeZone: tz,
-              dateISO: ctxDate,
-              durationMin,
-              bufferMin,
-              minLeadMinutes,
-              hours,
-              calendarId,
-            })
-          );
+        const take = (daypart ? filterSlotsByDaypart(refresh, tz, daypart) : refresh).slice(0, 3);
+        const optionsText = renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take });
 
-          const take = (daypart ? filterSlotsByDaypart(refresh, tz, daypart) : refresh).slice(0, 3);
+        const canonicalText =
+          effectiveLang === "en"
+            ? `That time just got taken. Here are the next available options:\n\n${optionsText}`
+            : `Esa hora se acaba de ocupar. Aquí tienes las próximas opciones disponibles:\n\n${optionsText}`;
 
-          return {
-            handled: true,
-            reply: effectiveLang === "en"
-              ? "That time just got taken. Here are the next available options:"
-              : "Esa hora se acaba de ocupar. Aquí tienes las próximas opciones disponibles:",
-            ctxPatch: {
-              booking: { ...hydratedBooking, step: "offer_slots", timeZone: tz, slots: take, last_offered_date: ctxDate, date_only: ctxDate },
-              booking_last_touch_at: Date.now(),
-            },
-          };
-        }
-
-        // ... sigue tu lógica normal
-      }
-
-      // ✅ Si existe EXACTO -> CONFIRM (opción B)
-      if (exact) {
-        const pretty = DateTime.fromISO(exact.startISO, { zone: tz })
-          .setLocale(effectiveLang === "en" ? "en" : "es")
-          .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
-
-        const humanReply = await humanizeBookingReply({
+        const reply = await humanizeBookingReply({
           idioma: effectiveLang,
-          intent: "slot_exact_available",
-          askedText: userText,      // 👈 para que responda “según cómo le preguntan”
-          prettyWhen: pretty,
+          intent: "slot_exact_unavailable_with_options",
+          askedText: userText,
+          canonicalText,
+          locked: [optionsText],
+          optionsText,
         });
 
         return {
           handled: true,
-          reply: humanReply,
+          reply,
           ctxPatch: {
             booking: {
               ...hydratedBooking,
-              step: "confirm",
+              step: "offer_slots",
               timeZone: tz,
-              picked_start: exact.startISO,
-              picked_end: exact.endISO,
-              start_time: exact.startISO,
-              end_time: exact.endISO,
+              slots: take,
               last_offered_date: ctxDate,
               date_only: ctxDate,
-              slots: [],
             },
             booking_last_touch_at: Date.now(),
           },
         };
       }
+    }
 
-      // ✅ Si el PM candidate existe en los slots del día, úsalo para buscar cercanos
-      const pmCandidate = candidates[1];
-      const pmExists =
-        !!pmCandidate &&
-        allDaySlots.some(
-          (s) => DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm") === pmCandidate
-        );
+    // ✅ Exacto disponible -> confirm
+    if (exact) {
+      const prettyWhen = DateTime.fromISO(exact.startISO, { zone: tz })
+        .setLocale(effectiveLang === "en" ? "en" : "es")
+        .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
 
-      const near = sortSlotsAsc(
-        filterSlotsNearTime({
-          slots: allDaySlots, // ✅ usa TODO el día
-          timeZone: tz,
-          hhmm: pmExists ? pmCandidate : candidates[0],
-          windowMinutes: 180, // ±3h
-          max: 5,
-        })
-      );
+      const canonicalText =
+        effectiveLang === "en"
+          ? `Yes — I do have ${prettyWhen} available. Want me to book it?`
+          : `Sí — tengo ${prettyWhen} disponible. ¿Quieres que la reserve?`;
 
-      const take = near.length ? near : allDaySlots.slice(0, 3);
+      const humanReply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "slot_exact_available",
+        askedText: userText,
+        canonicalText,
+        locked: [prettyWhen],
+        prettyWhen,
+      });
 
       return {
         handled: true,
-        reply: renderSlotsMessage({
-          idioma: effectiveLang,
-          timeZone: tz,
-          slots: take,
-          style: "closest",
-          ask: "anything",
-        }),
+        reply: humanReply,
         ctxPatch: {
-        booking: {
+          booking: {
             ...hydratedBooking,
-            step: "offer_slots",
+            step: "confirm",
             timeZone: tz,
-            slots: take,
+            picked_start: exact.startISO,
+            picked_end: exact.endISO,
+            start_time: exact.startISO,
+            end_time: exact.endISO,
             last_offered_date: ctxDate,
             date_only: ctxDate,
-        },
-        booking_last_touch_at: Date.now(),
-        },
-      };
-    }
-    
-    // ✅ Solo interpretamos "número de opción" si NO hay hora explícita
-    const hasExplicitTime = !!hhmmFixed || !!extractTimeConstraint(userText);
-
-    // ✅ Solo interpretamos "número de opción" si NO hay hora explícita
-    if (!hasExplicitTime) {
-      const choice = parseSlotChoice(userText, slotsShown.length);
-
-      if (!choice) {
-        return {
-        handled: true,
-          reply:
-            effectiveLang === "en"
-            ? `Reply with a number (1-${slotsShown.length}). You can also say a time like "2pm" or "14:00".`
-            : `Responde con un número (1-${slotsShown.length}). También puedes decir una hora como "2pm" o "14:00".`,
-          ctxPatch: { booking: {...hydratedBooking}, booking_last_touch_at: Date.now() },
-        };
-      }
-
-      const picked = slotsShown[choice - 1];
-
-      const nextBooking = {
-        ...hydratedBooking,
-        ...resetPersonal,
-        timeZone: tz,
-        picked_start: picked.startISO,
-        picked_end: picked.endISO,
-        start_time: picked.startISO,
-        end_time: picked.endISO,
-        slot_locked: true,
-        slot_locked_at: Date.now(),
-        slots: [],
-        date_only: getCtxDateFromBookingOrSlots(slotsShown, hydratedBooking, tz),
-        last_offered_date: getCtxDateFromBookingOrSlots(slotsShown, hydratedBooking, tz),
-      };
-
-      const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone: tz, idioma: effectiveLang });
-
-      const requirePhone = deps.canal === "facebook" || deps.canal === "instagram"; // IG/FB sí; WA normalmente no
-      const missingName = !nextBooking?.name;
-      const missingEmail = !nextBooking?.email;
-      const missingPhone = requirePhone && !nextBooking?.phone;
-
-      if (missingName || missingEmail || missingPhone) {
-        const needPhone = requirePhone; // ✅ solo IG/FB
-
-        const fieldsEs = [
-          missingName ? "nombre completo" : null,
-          missingEmail ? "email" : null,
-          needPhone ? "teléfono" : null,
-        ].filter(Boolean);
-
-        const fieldsEn = [
-          missingName ? "full name" : null,
-          missingEmail ? "email" : null,
-          needPhone ? "phone" : null,
-        ].filter(Boolean);
-
-        const exampleEs = needPhone
-          ? "Ej: Juan Pérez, juan@email.com, +13055551234"
-          : "Ej: Juan Pérez, juan@email.com";
-
-        const exampleEn = needPhone
-          ? "Example: John Smith, john@email.com, +13055551234"
-          : "Example: John Smith, john@email.com";
-
-        return {
-          handled: true,
-          reply:
-            effectiveLang === "en"
-              ? `Perfect — I can do ${whenTxt}. Before I book it, send in ONE message: ${fieldsEn.join(", ")}. ${exampleEn}`
-              : `Perfecto — puedo ${whenTxt}. Antes de agendarla, envíame en *un solo mensaje*: ${fieldsEs.join(", ")}. ${exampleEs}`,
-          ctxPatch: {
-            booking: { ...nextBooking, step: "ask_all" },
-            booking_last_touch_at: Date.now(),
+            slots: [],
           },
-        };
-      }
-
-      // ✅ Ya tengo todo -> confirmar
-      return {
-        handled: true,
-        reply:
-          idioma === "en"
-            ? `Perfect — to confirm ${whenTxt}, reply YES or NO.`
-            : `Perfecto — para confirmar ${whenTxt}, responde SI o NO.`,
-        ctxPatch: {
-          booking: { ...nextBooking, step: "confirm" },
           booking_last_touch_at: Date.now(),
         },
       };
     }
 
-    // ✅ 2) Si el usuario pide "otras horas / otro horario / más tarde / más temprano"
-    if (wantsMoreSlots(userText) && hours) {
-      // intenta misma fecha si la tienes
-      const ctxDate =
-        (hydratedBooking as any)?.date_only ||
-        (hydratedBooking as any)?.last_offered_date ||
-        (slots?.[0]?.startISO
-          ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
-          : null);
-  
-      if (ctxDate) {
-        let allDaySlots = sortSlotsAsc(
-            await getSlotsForDate({
-              tenantId,
-              timeZone: tz,
-              dateISO: ctxDate,
-              durationMin,
-              bufferMin,
-              minLeadMinutes,
-              hours,
-              calendarId,
+    // No exacto -> cercanos
+    const pmCandidate = candidates[1];
+    const pmExists =
+      !!pmCandidate &&
+      allDaySlots.some(
+        (s) => DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm") === pmCandidate
+      );
+
+    const near = sortSlotsAsc(
+      filterSlotsNearTime({
+        slots: allDaySlots,
+        timeZone: tz,
+        hhmm: pmExists ? pmCandidate : candidates[0],
+        windowMinutes: 180,
+        max: 5,
+      })
+    );
+
+    const take = near.length ? near : allDaySlots.slice(0, 3);
+    const optionsText = renderSlotsMessage({
+      idioma: effectiveLang,
+      timeZone: tz,
+      slots: take,
+      style: "closest",
+      ask: "anything",
+    });
+
+    const canonicalText =
+      effectiveLang === "en"
+        ? `I don’t have that exact time. Here are the closest options:\n\n${optionsText}`
+        : `No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n${optionsText}`;
+
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "slot_exact_unavailable_with_options",
+      askedText: userText,
+      canonicalText,
+      locked: [optionsText],
+      optionsText,
+    });
+
+    return {
+      handled: true,
+      reply,
+      ctxPatch: {
+        booking: {
+          ...hydratedBooking,
+          step: "offer_slots",
+          timeZone: tz,
+          slots: take,
+          last_offered_date: ctxDate,
+          date_only: ctxDate,
+        },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
+  // -----------------------------------------
+  // 2) Número de opción (solo si NO hay hora explícita)
+  // -----------------------------------------
+  const hasExplicitTime = !!hhmmFixed || !!extractTimeConstraint(userText);
+
+  if (!hasExplicitTime) {
+    const choice = parseSlotChoice(userText, slotsShown.length);
+
+    if (!choice) {
+      const canonicalText =
+        effectiveLang === "en"
+          ? `Reply with a number (1-${slotsShown.length}). You can also say a time like "2pm" or "14:00".`
+          : `Responde con un número (1-${slotsShown.length}). También puedes decir una hora como "2pm" o "14:00".`;
+
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "ask_daypart_retry",
+        askedText: userText,
+        canonicalText,
+        locked: [],
+      });
+
+      return {
+        handled: true,
+        reply,
+        ctxPatch: { booking: { ...hydratedBooking }, booking_last_touch_at: Date.now() },
+      };
+    }
+
+    const picked = slotsShown[choice - 1];
+
+    const nextBooking = {
+      ...hydratedBooking,
+      ...resetPersonal,
+      timeZone: tz,
+      picked_start: picked.startISO,
+      picked_end: picked.endISO,
+      start_time: picked.startISO,
+      end_time: picked.endISO,
+      slot_locked: true,
+      slot_locked_at: Date.now(),
+      slots: [],
+      date_only: getCtxDateFromBookingOrSlots(slotsShown, hydratedBooking, tz),
+      last_offered_date: getCtxDateFromBookingOrSlots(slotsShown, hydratedBooking, tz),
+    };
+
+    const whenTxt = formatSlotHuman({ startISO: picked.startISO, timeZone: tz, idioma: effectiveLang });
+
+    const requirePhone = deps.canal === "facebook" || deps.canal === "instagram";
+    const missingName = !nextBooking?.name;
+    const missingEmail = !nextBooking?.email;
+    const missingPhone = requirePhone && !nextBooking?.phone;
+
+    if (missingName || missingEmail || missingPhone) {
+      const needPhone = requirePhone;
+
+      const fieldsEs = [
+        missingName ? "nombre completo" : null,
+        missingEmail ? "email" : null,
+        needPhone ? "teléfono" : null,
+      ].filter(Boolean);
+
+      const fieldsEn = [
+        missingName ? "full name" : null,
+        missingEmail ? "email" : null,
+        needPhone ? "phone" : null,
+      ].filter(Boolean);
+
+      const exampleEs = needPhone
+        ? "Ej: Juan Pérez, juan@email.com, +13055551234"
+        : "Ej: Juan Pérez, juan@email.com";
+
+      const exampleEn = needPhone
+        ? "Example: John Smith, john@email.com, +13055551234"
+        : "Example: John Smith, john@email.com";
+
+      const canonicalText =
+        effectiveLang === "en"
+          ? `Perfect — I can do ${whenTxt}. Before I book it, send in ONE message: ${fieldsEn.join(", ")}. ${exampleEn}`
+          : `Perfecto — puedo ${whenTxt}. Antes de agendarla, envíame en un solo mensaje: ${fieldsEs.join(", ")}. ${exampleEs}`;
+
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "ask_purpose",
+        askedText: userText,
+        canonicalText,
+        locked: [whenTxt],
+        prettyWhen: whenTxt,
+      });
+
+      return {
+        handled: true,
+        reply,
+        ctxPatch: {
+          booking: { ...nextBooking, step: "ask_all" },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    // Confirm YES/NO
+    const canonicalText =
+      effectiveLang === "en"
+        ? `Perfect — to confirm ${whenTxt}, reply YES or NO.`
+        : `Perfecto — para confirmar ${whenTxt}, responde SI o NO.`;
+
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "ask_confirm_yes_no",
+      askedText: userText,
+      canonicalText,
+      locked: [whenTxt],
+      prettyWhen: whenTxt,
+    });
+
+    return {
+      handled: true,
+      reply,
+      ctxPatch: {
+        booking: { ...nextBooking, step: "confirm" },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
+  // -----------------------------------------
+  // 3) “Más horas / más opciones”
+  // -----------------------------------------
+  if (wantsMoreSlots(userText) && hours) {
+    const ctxDate =
+      (hydratedBooking as any)?.date_only ||
+      (hydratedBooking as any)?.last_offered_date ||
+      (slots?.[0]?.startISO
+        ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
+        : null);
+
+    if (ctxDate) {
+      let allDaySlots = sortSlotsAsc(
+        await getSlotsForDate({
+          tenantId,
+          timeZone: tz,
+          dateISO: ctxDate,
+          durationMin,
+          bufferMin,
+          minLeadMinutes,
+          hours,
+          calendarId,
         })
       );
-  
+
       if (daypart) allDaySlots = filterSlotsByDaypart(allDaySlots, tz, daypart);
 
-        // Si el día tiene más opciones que las actuales, reemplaza por las del día
-        if (allDaySlots.length) {
-          return {
-            handled: true,
-            reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: allDaySlots.slice(0, 3) }),
-            ctxPatch: {
-              booking: {
-                ...hydratedBooking,
-                step: "offer_slots",
-                timeZone: tz,
-                slots: allDaySlots.slice(0, 3),
-                last_offered_date: ctxDate,
-                date_only: ctxDate, },
-              booking_last_touch_at: Date.now(),
+      if (allDaySlots.length) {
+        const take = allDaySlots.slice(0, 3);
+        return {
+          handled: true,
+          reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take }),
+          ctxPatch: {
+            booking: {
+              ...hydratedBooking,
+              step: "offer_slots",
+              timeZone: tz,
+              slots: take,
+              last_offered_date: ctxDate,
+              date_only: ctxDate,
             },
-          };
-        }
+            booking_last_touch_at: Date.now(),
+          },
+        };
       }
     }
-  
-    // -----------------------------------------
-    // Interpretar frases vagas ("después de las 4", etc.)
-    // -----------------------------------------
-    const rawConstraint = extractTimeConstraint(userText);
-  
-    if (rawConstraint) {
-      let constraint: TimeConstraint = rawConstraint;
-  
-      const dp = (hydratedBooking as any)?.daypart || null;
-  
+  }
+
+  // -----------------------------------------
+  // 4) Frases vagas con constraint (“después de las 4”, etc.)
+  // -----------------------------------------
+  const rawConstraint = extractTimeConstraint(userText);
+
+  if (rawConstraint) {
+    let constraint: TimeConstraint = rawConstraint;
+
+    const dp = (hydratedBooking as any)?.daypart || null;
     const missingAmPm = !/\b(am|a\.m\.|pm|p\.m\.)\b/i.test(userText);
-  
+
     if (
       dp === "afternoon" &&
       missingAmPm &&
       (constraint.kind === "after" ||
         constraint.kind === "before" ||
         constraint.kind === "around") &&
-      hasHHMM(constraint) // ✅ aquí TS SÍ estrecha el tipo en este scope
+      hasHHMM(constraint)
     ) {
       const h = Number(constraint.hhmm.slice(0, 2));
       const m = Number(constraint.hhmm.slice(3, 5));
-  
+
       if (h >= 1 && h <= 11) {
         const hh = h + 12;
         constraint = {
@@ -678,14 +796,14 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         };
       }
     }
-  
+
     const filtered = filterSlotsByConstraint({
       slots: slotsShown,
       timeZone: tz,
       constraint,
       max: 5,
     });
-  
+
     if (filtered.length) {
       return {
         handled: true,
@@ -705,28 +823,26 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         },
       };
     }
-  
-    // ✅ Si no hubo slots cercanos, y tenemos hhmm, re-busca con ventana (OPCIÓN D real)
+
+    // Re-buscar con ventana si no hubo cerca
     if (hours && hasHHMM(constraint)) {
-      
-      // determina fecha contexto: date_only o last_offered_date o del primer slot
       const ctxDate =
         (hydratedBooking as any)?.date_only ||
         (hydratedBooking as any)?.last_offered_date ||
         (slots?.[0]?.startISO
           ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
           : null);
-  
+
       if (ctxDate) {
         const h = Number(constraint.hhmm.slice(0, 2));
         const m = Number(constraint.hhmm.slice(3, 5));
-  
+
         const base = DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz })
           .set({ hour: h, minute: m, second: 0, millisecond: 0 });
-  
+
         const windowStartHHmm = base.minus({ hours: 2 }).toFormat("HH:mm");
         const windowEndHHmm = base.plus({ hours: 3 }).toFormat("HH:mm");
-  
+
         let newSlots = sortSlotsAsc(
           await getSlotsForDateWindow({
             tenantId,
@@ -764,23 +880,44 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         }
       }
     }
-  
-    // fallback si no se pudo re-buscar
+
+    const canonicalText =
+      effectiveLang === "en"
+        ? "I don’t see availability near that time. Would you like something earlier or later?"
+        : "No veo disponibilidad cerca de esa hora. ¿Te sirve más temprano o más tarde?";
+
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "no_availability_near_time",
+      askedText: userText,
+      canonicalText,
+      locked: [],
+    });
+
     return {
       handled: true,
-      reply: effectiveLang === "en"
-        ? "I don’t see availability near that time. Would you like something earlier or later?"
-        : "No veo disponibilidad cerca de esa hora. ¿Te sirve más temprano o más tarde?",
-      ctxPatch: { booking: {...hydratedBooking}, booking_last_touch_at: Date.now() },
+      reply,
+      ctxPatch: { booking: { ...hydratedBooking }, booking_last_touch_at: Date.now() },
     };
   }
-    // ✅ Fallback FINAL: garantiza return en todos los caminos (evita ts(2366))
-    return {
-      handled: true,
-      reply:
-        effectiveLang === "en"
-          ? `Reply with a number (1-${slotsShown.length}). You can also say a time like "2pm" or "14:00".`
-          : `Responde con un número (1-${slotsShown.length}). También puedes decir una hora como "2pm" o "14:00".`,
-      ctxPatch: { booking: {...hydratedBooking}, booking_last_touch_at: Date.now() },
-    };
+
+  // ✅ Fallback final
+  const canonicalText =
+    effectiveLang === "en"
+      ? `Reply with a number (1-${slotsShown.length}). You can also say a time like "2pm" or "14:00".`
+      : `Responde con un número (1-${slotsShown.length}). También puedes decir una hora como "2pm" o "14:00".`;
+
+  const reply = await humanizeBookingReply({
+    idioma: effectiveLang,
+    intent: "ask_daypart_retry",
+    askedText: userText,
+    canonicalText,
+    locked: [],
+  });
+
+  return {
+    handled: true,
+    reply,
+    ctxPatch: { booking: { ...hydratedBooking }, booking_last_touch_at: Date.now() },
+  };
 }

@@ -14,7 +14,6 @@ import { extractTimeOnlyToken, extractTimeConstraint } from "../text";
 import { getSlotsForDateWindow, getSlotsForDate } from "../slots";
 import { humanizeBookingReply } from "../humanizer";
 
-
 export type AskDaypartDeps = {
   tenantId: string;
   idioma: "es" | "en";
@@ -47,7 +46,7 @@ function normalizeHHMMNatural(userText: string, hhmm: string | null): string | n
   const morningCue = /\b(en\s+la\s+ma[nñ]ana|por\s+la\s+ma[nñ]ana|temprano|morning|early)\b/.test(s);
   if (morningCue) return hhmm;
 
-  // Si el usuario usa "a las / para las / at / for" y la hora es 1..7,
+  // Si el usuario usa "a las / para las / at / for" y la hora es 1..8,
   // en español casi siempre significa PM (3 -> 15:00)
   const atCue = /\b(a\s+las|a\s+la|para\s+las|para\s+la|at|for)\b/.test(s);
   if (!atCue) return hhmm;
@@ -138,10 +137,17 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
   }
 
   if (wantsToCancel(userText)) {
+    const canonicalText =
+      effectiveLang === "en"
+        ? "No worries — I’ll pause scheduling for now. Whenever you’re ready, just tell me."
+        : "Perfecto — pauso el agendamiento por ahora. Cuando estés listo, me dices.";
+
     const reply = await humanizeBookingReply({
       idioma: effectiveLang,
       intent: "cancel_booking",
       askedText: userText,
+      canonicalText,
+      locked: [],
     });
 
     return {
@@ -162,34 +168,32 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       return typeof c?.hhmm === "string" ? c.hhmm : null;
     })();
 
-    // ✅ NUEVO: normaliza "a las 3" -> 15:00 cuando aplica
-    hhmm = normalizeHHMMNatural(userText, hhmm);
-    console.log("[ASK_DAYPART hhmm normalized]", { userText, hhmm });
+  // ✅ normaliza "a las 3" -> 15:00 cuando aplica
+  hhmm = normalizeHHMMNatural(userText, hhmm);
+  console.log("[ASK_DAYPART hhmm normalized]", { userText, hhmm });
 
-    // ✅ Si el usuario menciona una fecha ("para el 25", "martes", "mañana", etc.)
-    // en vez de daypart, debemos continuar el flujo ofreciendo slots para esa fecha.
-    const dateOnly = extractDateOnlyToken(userText, tz);
+  // ✅ Si el usuario menciona una fecha ("para el 25", "martes", "mañana", etc.)
+  const dateOnly = extractDateOnlyToken(userText, tz);
 
-    // ✅ Opción B: si el usuario trae FECHA + HORA (ej "lunes a las 2pm"),
-    // intentamos esa hora exacta primero; si no existe, damos las más cercanas.
-    if (dateOnly && hhmm) {
-      // Si no hay horario configurado, pedir todo manualmente pero guardar date_only
-      if (!hours) {
-        return {
-          handled: true,
-          reply: buildAskAllMessage(idioma, booking?.purpose || null),
-          ctxPatch: {
-            booking: withLang({
-              ...booking,
-              step: "ask_all",
-              timeZone: tz,
-              date_only: dateOnly,
-              daypart: inferDaypartFromHHMM(hhmm),
-            }),
-            booking_last_touch_at: Date.now(),
-          },
-        };
-      }
+  // ✅ FECHA + HORA: intentamos exacto; si no, cercanos
+  if (dateOnly && hhmm) {
+    // Si no hay horario configurado, pedir todo manualmente pero guardar date_only
+    if (!hours) {
+      return {
+        handled: true,
+        reply: buildAskAllMessage(idioma, booking?.purpose || null),
+        ctxPatch: {
+          booking: withLang({
+            ...booking,
+            step: "ask_all",
+            timeZone: tz,
+            date_only: dateOnly,
+            daypart: inferDaypartFromHHMM(hhmm),
+          }),
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
 
     const now = DateTime.now().setZone(tz);
 
@@ -215,23 +219,30 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       minLeadMinutes,
     });
 
-    // 1) Si existe EXACTO, pasamos a confirm (NO lista)
     if (windowSlots?.length) {
       const exact = windowSlots.find((s) => {
         const start = DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm");
         return start === hhmm;
       });
 
+      // ✅ Exacto -> confirm directo (sin lista)
       if (exact) {
-        const pretty = DateTime.fromISO(exact.startISO, { zone: tz })
+        const prettyWhen = DateTime.fromISO(exact.startISO, { zone: tz })
           .setLocale(effectiveLang === "en" ? "en" : "es")
           .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+
+        const canonicalText =
+          effectiveLang === "en"
+            ? `Yes — I do have ${prettyWhen} available. Want me to book it?`
+            : `Sí — tengo ${prettyWhen} disponible. ¿Quieres que la reserve?`;
 
         const reply = await humanizeBookingReply({
           idioma: effectiveLang,
           intent: "slot_exact_available",
           askedText: userText,
-          prettyWhen: pretty,
+          canonicalText,
+          locked: [prettyWhen],
+          prettyWhen,
         });
 
         return {
@@ -250,14 +261,14 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
               picked_end: exact.endISO,
               date_only: dateOnly,
               last_offered_date: dateOnly,
-              slots: [], // ✅ sin lista
+              slots: [],
             }),
             booking_last_touch_at: Date.now(),
           },
         };
       }
 
-      // 2) Si NO hay exacto, damos los más cercanos (lista 1-5)
+      // ❌ No exacto -> cercanos
       const take = pickClosestSlotsToHHMM({
         slots: windowSlots,
         timeZone: tz,
@@ -276,12 +287,19 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
       const optionsText = renderSlotsMessage({ idioma, timeZone: tz, slots: take });
 
+      const canonicalText =
+        effectiveLang === "en"
+          ? `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n${optionsText}`
+          : `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n${optionsText}`;
+
       const reply = await humanizeBookingReply({
         idioma: effectiveLang,
         intent: "slot_exact_unavailable_with_options",
         askedText: userText,
+        canonicalText,
+        locked: [datePrefix, optionsText].filter(Boolean),
         optionsText,
-        datePrefix, // ✅ nuevo
+        datePrefix,
       });
 
       return {
@@ -303,12 +321,11 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       };
     }
 
-    // Si la ventana no devolvió nada, cae a tu flujo normal de dateOnly (slots del día)
-    // No retornamos aquí; dejamos que siga al if (dateOnly)
+    // Si la ventana no devolvió nada, cae al flujo normal de dateOnly
   }
 
   if (dateOnly) {
-    // Si no hay horario configurado: pedir todo manualmente, pero guardando date_only
+    // Sin horario: captura manual
     if (!hours) {
       return {
         handled: true,
@@ -325,23 +342,31 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       };
     }
 
-    // Si hay horario: ofrecer slots de ESE día (sin preguntar mañana/tarde)
+    // Slots del día
     const slotsForDay = await getSlotsForDateOnly({
       tenantId,
       timeZone: tz,
       durationMin,
       bufferMin,
       hours,
-      dateOnly, 
+      dateOnly,
       minLeadMinutes,
     });
 
     if (!slotsForDay?.length) {
+      const canonicalText =
+        effectiveLang === "en"
+          ? "I don’t have openings that day. Want to try another day or morning/afternoon?"
+          : "Ese día no tengo disponibilidad. ¿Quieres probar otro día o prefieres mañana/tarde?";
+
       const reply = await humanizeBookingReply({
         idioma: effectiveLang,
         intent: "no_openings_that_day",
         askedText: userText,
+        canonicalText,
+        locked: [],
       });
+
       return {
         handled: true,
         reply,
@@ -370,10 +395,10 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     };
   }
 
-  // ✅ Si el usuario responde con una HORA ("3pm", "15:00", "a las 3")
+  // ✅ Solo HORA ("3pm", "15:00", "a las 3") sin fecha
   if (hhmm) {
     console.log("[ASK_DAYPART hhmm]", { userText, hhmm });
-    // Si no hay horario configurado, pasamos a ask_all y guardamos lo que podamos
+
     if (!hours) {
       return {
         handled: true,
@@ -392,22 +417,22 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
     const now = DateTime.now().setZone(tz);
 
-    // Si hoy está cerrado, busca el próximo día abierto (máx 14 días)
+    // si hoy está cerrado, busca próximo día abierto
     let dt = now.startOf("day");
     if (!isOpenOnDate(hours, dt)) {
-    for (let i = 1; i < 14; i++) {
+      for (let i = 1; i < 14; i++) {
         const cand = dt.plus({ days: i });
         if (isOpenOnDate(hours, cand)) {
-        dt = cand;
-        break;
+          dt = cand;
+          break;
         }
-    }
+      }
     }
 
     const ctxDate =
-    booking?.date_only ||
-    booking?.last_offered_date ||
-    dt.toFormat("yyyy-MM-dd");
+      booking?.date_only ||
+      booking?.last_offered_date ||
+      dt.toFormat("yyyy-MM-dd");
 
     const h = Number(hhmm.slice(0, 2));
     const m = Number(hhmm.slice(3, 5));
@@ -417,20 +442,6 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
     const windowStartHHmm = base.minus({ hours: 2 }).toFormat("HH:mm");
     const windowEndHHmm = base.plus({ hours: 3 }).toFormat("HH:mm");
-
-    console.log("[DEBUG HOURS]", {
-      hours,
-    });
-
-    console.log("[ASK_DAYPART preWindow]", {
-      ctxDate,
-      tz,
-      now: now.toISO(),
-      windowStartHHmm,
-      windowEndHHmm,
-      durationMin,
-      bufferMin,
-    });
 
     const windowSlots = await getSlotsForDateWindow({
       tenantId,
@@ -444,15 +455,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       minLeadMinutes,
     });
 
-    console.log(
-      "[ASK_DAYPART windowSlots HH:mm]",
-      (windowSlots || []).map(s =>
-        DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm")
-      )
-    );
-
     if (windowSlots?.length) {
-      // ✅ 1) Si existe EXACTO, CONFIRMAMOS (NO lista)
       const exact = windowSlots.find((s) => {
         const start = DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm");
         return start === hhmm;
@@ -460,22 +463,30 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
       const todayISO = now.toFormat("yyyy-MM-dd");
       const datePrefix =
-      ctxDate !== todayISO
-        ? (effectiveLang === "en"
-            ? `For ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("EEE, LLL dd")}, `
-            : `Para ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `)
-        : "";
+        ctxDate !== todayISO
+          ? (effectiveLang === "en"
+              ? `For ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("EEE, LLL dd")}, `
+              : `Para ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `)
+          : "";
 
       if (exact) {
-        const pretty = DateTime.fromISO(exact.startISO, { zone: tz })
+        const prettyWhen = DateTime.fromISO(exact.startISO, { zone: tz })
           .setLocale(effectiveLang === "en" ? "en" : "es")
           .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+
+        const canonicalText =
+          effectiveLang === "en"
+            ? `${datePrefix}Yes — I do have ${prettyWhen} available. Want me to book it?`
+            : `${datePrefix}Sí — tengo ${prettyWhen} disponible. ¿Quieres que la reserve?`;
 
         const reply = await humanizeBookingReply({
           idioma: effectiveLang,
           intent: "slot_exact_available",
           askedText: userText,
-          prettyWhen: pretty,
+          canonicalText,
+          locked: [datePrefix, prettyWhen].filter(Boolean),
+          prettyWhen,
+          datePrefix,
         });
 
         return {
@@ -494,14 +505,14 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
               picked_end: exact.endISO,
               date_only: ctxDate,
               last_offered_date: ctxDate,
-              slots: [], // ✅ importante: sin lista
+              slots: [],
             }),
             booking_last_touch_at: Date.now(),
           },
         };
       }
 
-      // ✅ 2) Si NO hay exacto, entonces sí devolvemos opciones cercanas (lista 1-5)
+      // no exacto -> cercanos
       const take = pickClosestSlotsToHHMM({
         slots: windowSlots,
         timeZone: tz,
@@ -512,34 +523,41 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
       const optionsText = renderSlotsMessage({ idioma, timeZone: tz, slots: take });
 
+      const canonicalText =
+        effectiveLang === "en"
+          ? `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n${optionsText}`
+          : `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n${optionsText}`;
+
       const reply = await humanizeBookingReply({
         idioma: effectiveLang,
         intent: "slot_exact_unavailable_with_options",
         askedText: userText,
+        canonicalText,
+        locked: [datePrefix, optionsText].filter(Boolean),
         optionsText,
-        datePrefix, // ✅ nuevo
+        datePrefix,
       });
 
       return {
         handled: true,
         reply,
-          ctxPatch: {
-            booking: withLang({
-              ...booking,
-              step: "offer_slots",
-              timeZone: tz,
-              purpose: booking?.purpose || null,
-              daypart: inferDaypartFromHHMM(hhmm),
-              slots: take,
-              date_only: ctxDate,
-              last_offered_date: ctxDate,
-            }),
-            booking_last_touch_at: Date.now(),
-          },
-        };
-      }
+        ctxPatch: {
+          booking: withLang({
+            ...booking,
+            step: "offer_slots",
+            timeZone: tz,
+            purpose: booking?.purpose || null,
+            daypart: inferDaypartFromHHMM(hhmm),
+            slots: take,
+            date_only: ctxDate,
+            last_offered_date: ctxDate,
+          }),
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
 
-    // Fallback: si no hay en ventana, ofrece el día completo
+    // Fallback: día completo
     const allDaySlots = await getSlotsForDate({
       tenantId,
       timeZone: tz,
@@ -550,96 +568,93 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       minLeadMinutes,
     });
 
-    console.log(
-      "[ASK_DAYPART allDay HH:mm]",
-      (allDaySlots || []).map(s =>
-        DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm")
-      )
-    );
-
-    console.log("[ASK_DAYPART allDay checks]", {
-      has1400: (allDaySlots || []).some(s =>
-        DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm") === "14:00"
-      ),
-      hasRequested: (allDaySlots || []).some(s =>
-        DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm") === hhmm
-      ),
-    });
-
     if (allDaySlots?.length) {
-    const exact = allDaySlots.find((s) => {
+      const exact = allDaySlots.find((s) => {
         const start = DateTime.fromISO(s.startISO, { zone: tz }).toFormat("HH:mm");
         return start === hhmm;
-    });
+      });
 
-    const todayISO = now.toFormat("yyyy-MM-dd");
-    const datePrefix =
+      const todayISO = now.toFormat("yyyy-MM-dd");
+      const datePrefix =
         ctxDate !== todayISO
-        ? (effectiveLang === "en"
-            ? `The next availability date on: ${ctxDate}. `
-            : `La próxima fecha disponible es: ${ctxDate}. `)
-        : "";
+          ? (effectiveLang === "en"
+              ? `For ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("EEE, LLL dd")}, `
+              : `Para ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `)
+          : "";
 
-    // ✅ SI EXISTE EXACTO → CONFIRMAR DIRECTO (NO LISTA)
-    if (exact) {
-        const pretty = DateTime.fromISO(exact.startISO, { zone: tz })
-        .setLocale(effectiveLang === "en" ? "en" : "es")
-        .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+      if (exact) {
+        const prettyWhen = DateTime.fromISO(exact.startISO, { zone: tz })
+          .setLocale(effectiveLang === "en" ? "en" : "es")
+          .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+
+        const canonicalText =
+          effectiveLang === "en"
+            ? `${datePrefix}Yes — I do have ${prettyWhen} available. Want me to book it?`
+            : `${datePrefix}Sí — tengo ${prettyWhen} disponible. ¿Quieres que la reserve?`;
 
         const reply = await humanizeBookingReply({
           idioma: effectiveLang,
           intent: "slot_exact_available",
           askedText: userText,
-          prettyWhen: pretty,
+          canonicalText,
+          locked: [datePrefix, prettyWhen].filter(Boolean),
+          prettyWhen,
+          datePrefix,
         });
 
         return {
           handled: true,
           reply,
-        ctxPatch: {
+          ctxPatch: {
             booking: withLang({
-            ...booking,
-            step: "confirm",
-            timeZone: tz,
-            purpose: booking?.purpose || null,
-            daypart: inferDaypartFromHHMM(hhmm),
-            start_time: exact.startISO,
-            end_time: exact.endISO,
-            picked_start: exact.startISO,
-            picked_end: exact.endISO,
-            date_only: ctxDate,
-            last_offered_date: ctxDate,
-            slots: [],
+              ...booking,
+              step: "confirm",
+              timeZone: tz,
+              purpose: booking?.purpose || null,
+              daypart: inferDaypartFromHHMM(hhmm),
+              start_time: exact.startISO,
+              end_time: exact.endISO,
+              picked_start: exact.startISO,
+              picked_end: exact.endISO,
+              date_only: ctxDate,
+              last_offered_date: ctxDate,
+              slots: [],
             }),
             booking_last_touch_at: Date.now(),
-        },
+          },
         };
-    }
+      }
 
-    // ✅ SI NO HAY EXACTO → DEVOLVER LISTA CERCANA
-    const take = pickClosestSlotsToHHMM({
+      const take = pickClosestSlotsToHHMM({
         slots: allDaySlots,
         timeZone: tz,
         dateISO: ctxDate,
         hhmm,
         max: 5,
-    });
+      });
 
-    const optionsText = renderSlotsMessage({ idioma, timeZone: tz, slots: take });
+      const optionsText = renderSlotsMessage({ idioma, timeZone: tz, slots: take });
 
-    const reply = await humanizeBookingReply({
-      idioma: effectiveLang,
-      intent: "slot_exact_unavailable_with_options",
-      askedText: userText,
-      optionsText,
-      datePrefix, // ✅ nuevo
-    });
+      const canonicalText =
+        effectiveLang === "en"
+          ? `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n${optionsText}`
+          : `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n${optionsText}`;
 
-    return {
-      handled: true,
-      reply,
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "slot_exact_unavailable_with_options",
+        askedText: userText,
+        canonicalText,
+        locked: [datePrefix, optionsText].filter(Boolean),
+        optionsText,
+        datePrefix,
+      });
+
+      return {
+        handled: true,
+        reply,
         ctxPatch: {
-        booking: withLang({
+          booking: withLang({
             ...booking,
             step: "offer_slots",
             timeZone: tz,
@@ -648,16 +663,24 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
             slots: take,
             date_only: ctxDate,
             last_offered_date: ctxDate,
-        }),
-        booking_last_touch_at: Date.now(),
+          }),
+          booking_last_touch_at: Date.now(),
         },
-    };
+      };
     }
+
+    // ✅ nada cerca
+    const canonicalText =
+      effectiveLang === "en"
+        ? "I don’t see openings near that time. Would you prefer earlier or later?"
+        : "No veo disponibilidad cerca de esa hora. ¿Te sirve más temprano o más tarde?";
 
     const reply = await humanizeBookingReply({
       idioma: effectiveLang,
       intent: "no_availability_near_time",
       askedText: userText,
+      canonicalText,
+      locked: [],
     });
 
     return {
@@ -672,11 +695,19 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
   const dp = detectDaypart(userText);
   if (!dp) {
+    const canonicalText =
+      effectiveLang === "en"
+        ? "Got you — do you prefer morning or afternoon?"
+        : "Entiendo — ¿te funciona mejor en la mañana o en la tarde?";
+
     const reply = await humanizeBookingReply({
       idioma: effectiveLang,
       intent: "ask_daypart_retry",
       askedText: userText,
+      canonicalText,
+      locked: [],
     });
+
     return {
       handled: true,
       reply,
@@ -687,7 +718,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     };
   }
 
-  // Si no hay horario configurado: pasamos a ask_all (captura manual)
+  // Si no hay horario configurado: ask_all (captura manual)
   if (!hours) {
     return {
       handled: true,

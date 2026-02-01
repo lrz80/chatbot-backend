@@ -3,21 +3,24 @@ import OpenAI from "openai";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+export type BookingHumanizeIntent =
+  | "slot_exact_available"
+  | "slot_exact_unavailable_with_options"
+  | "ask_confirm_yes_no"
+  | "ask_purpose"
+  | "ask_purpose_clarify"
+  | "ask_daypart"
+  | "cancel_booking"
+  | "ask_daypart_retry"
+  | "no_openings_that_day"
+  | "no_availability_near_time";
+
 export type HumanizeArgs = {
   idioma: "es" | "en";
-  intent:
-    | "slot_exact_available"
-    | "slot_exact_unavailable_with_options"
-    | "ask_confirm_yes_no"
-    | "ask_purpose"
-    | "ask_purpose_clarify"
-    | "ask_daypart"
-    | "cancel_booking"
-    | "ask_daypart_retry"
-    | "no_availability_near_time"
-    | "no_openings_that_day"
-    | "no_availability_near_time";
+  intent: BookingHumanizeIntent;
   askedText?: string;
+  canonicalText: string;
+  locked?: string[];
   prettyWhen?: string;
   optionsText?: string;
   purpose?: string;
@@ -25,7 +28,9 @@ export type HumanizeArgs = {
 };
 
 function fallback(args: HumanizeArgs) {
-  const { idioma, intent, prettyWhen, optionsText, purpose } = args;
+  const { idioma, intent, prettyWhen, optionsText, purpose, datePrefix } = args;
+
+  const basePrefix = datePrefix || "";
 
   if (idioma === "en") {
     if (intent === "slot_exact_available") return `Yes — I do have ${prettyWhen} available. Want me to book it?`;
@@ -36,7 +41,6 @@ function fallback(args: HumanizeArgs) {
     if (intent === "ask_daypart") return `Perfect — for ${purpose || "that"}, does morning or afternoon work better?`;
     if (intent === "cancel_booking") return `No problem — I’ll pause this. Whenever you’re ready, just tell me.`;
     if (intent === "ask_daypart_retry") return "Got you — do you prefer morning or afternoon?";
-    if (intent === "no_availability_near_time") return "I don’t see openings near that time. Would you prefer earlier or later?";
     if (intent === "no_openings_that_day") return "I don’t have openings that day. Want to try another day or morning/afternoon?";
     if (intent === "no_availability_near_time") return "I don’t see openings near that time. Would you prefer morning or afternoon?";
   }
@@ -49,48 +53,88 @@ function fallback(args: HumanizeArgs) {
   if (intent === "ask_daypart") return `Perfecto — para ${purpose || "eso"}, ¿te funciona mejor en la mañana o en la tarde?`;
   if (intent === "cancel_booking") return `Perfecto — lo pauso por ahora. Cuando estés listo, me dices.`;
   if (intent === "ask_daypart_retry") return "Entiendo — ¿te funciona mejor en la mañana o en la tarde?";
-  if (intent === "no_availability_near_time") return "No veo disponibilidad cerca de esa hora. ¿Te sirve más temprano o más tarde?";
   if (intent === "no_openings_that_day") return "Ese día no tengo disponibilidad. ¿Quieres probar otro día o prefieres mañana/tarde?";
   if (intent === "no_availability_near_time") return "No veo disponibilidad cerca de esa hora. ¿Prefieres mañana o tarde?";
 
   return idioma === "en" ? "Ok." : "Ok.";
 }
 
+function fallbackFromCanonical(args: HumanizeArgs) {
+  return args.canonicalText || fallback(args);
+}
+
+function respectsLocked(out: string, locked: string[] = []) {
+  for (const chunk of locked) {
+    if (!chunk) continue;
+    if (!out.includes(chunk)) return false;
+  }
+  return true;
+}
+
+// ✅ (opcional) también evitamos que el modelo meta "sí/no" si no es confirm
+function confirmWordsViolation(out: string, intent: BookingHumanizeIntent, idioma: "es" | "en") {
+  if (intent === "ask_confirm_yes_no") return false;
+  const s = out.toLowerCase();
+  if (idioma === "en") return /\b(yes|no)\b/.test(s);
+  return /\b(si|sí|no)\b/.test(s);
+}
+
 export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> {
+  const {
+    canonicalText,
+    locked = [],
+  } = args;
+
+  // ✅ Si no hay API key, no arriesgamos: devolvemos el canónico
+  if (!process.env.OPENAI_API_KEY) return fallbackFromCanonical(args);
+
   try {
     const { idioma, intent, askedText, prettyWhen, optionsText, purpose, datePrefix } = args;
 
     const system =
       idioma === "en"
-        ? `You rewrite booking replies to sound natural and human for WhatsApp.
-Rules:
-- DO NOT invent times, dates, availability, names, emails, phone numbers, or links.
-- Only use the exact details provided in the input.
-- Keep it short, friendly, not robotic.
-- If the intent is not confirm, do not mention YES/NO.
-- If the user asked a question, answer it directly.`
-        : `Reescribes respuestas de agendamiento para que suenen humanas en WhatsApp.
-Reglas:
-- NO inventes horas, fechas, disponibilidad, nombres, emails, teléfonos ni links.
-- Solo usa los datos exactos que te paso.
-- Corto, amigable, cero robótico.
-- Si el intent no es confirmación, no menciones SI/NO.
-- Si el usuario hizo una pregunta, respóndela directo.`;
+        ? `You rewrite ONE WhatsApp message to sound natural.
+    STRICT RULES (must follow):
+    - Do NOT change the meaning of the message.
+    - Do NOT add or remove availability.
+    - Do NOT add times, dates, options, names, emails, phones, or links.
+    - If there are LOCKED chunks, you MUST keep them EXACTLY as-is (character by character).
+    - If the intent is not confirm, do not mention YES/NO.
+    - Output only the final message, no explanations.`
+        : `Reescribes UN mensaje de WhatsApp para que suene natural.
+    REGLAS ESTRICTAS:
+    - NO cambies el significado del mensaje.
+    - NO inventes ni quites disponibilidad.
+    - NO agregues horas, fechas, opciones, nombres, emails, teléfonos ni links.
+    - Si hay fragmentos LOCKED, debes copiarlos EXACTAMENTE iguales (carácter por carácter).
+    - Si el intent no es confirmación, no menciones SI/NO.
+    - Devuelve solo el mensaje final, sin explicación.`;
 
     const payload = {
       intent,
+      idioma,
       askedText: askedText || "",
+      canonicalText,
+      locked,
+      // extras opcionales (por si en el futuro quieres analizar)
       prettyWhen: prettyWhen || "",
       optionsText: optionsText || "",
       purpose: purpose || "",
       datePrefix: datePrefix || "",
-      idioma,
     };
 
     const user =
       idioma === "en"
-        ? `Rewrite ONE WhatsApp message using this JSON (do not add new info):\n${JSON.stringify(payload)}`
-        : `Reescribe UN mensaje de WhatsApp usando este JSON (sin agregar info nueva):\n${JSON.stringify(payload)}`;
+        ? `Rewrite the CANONICAL message to sound more human, WITHOUT changing meaning.
+    LOCKED chunks must remain EXACTLY unchanged.
+
+    JSON:
+    ${JSON.stringify(payload)}`
+            : `Reescribe el mensaje CANÓNICO para que suene más humano, SIN cambiar el significado.
+    Los fragmentos LOCKED deben quedar EXACTAMENTE iguales.
+
+    JSON:
+    ${JSON.stringify(payload)}`;
 
     const res = await client.responses.create({
       model: "gpt-4.1-mini",
@@ -102,8 +146,17 @@ Reglas:
     });
 
     const out = (res as any).output_text?.trim?.() || "";
-    return out || fallback(args);
-  } catch {
-    return fallback(args);
+    if (!out) return fallbackFromCanonical(args);
+
+    // ✅ Si violó locked -> NO se usa
+    if (!respectsLocked(out, locked)) return canonicalText;
+
+    // ✅ Si metió YES/NO cuando no debe -> NO se usa
+    if (confirmWordsViolation(out, intent, idioma)) return canonicalText;
+
+    return out;
+  } catch (e: any) {
+    // en error, nunca “inventamos”: devolvemos el canónico
+    return fallbackFromCanonical(args);
   }
 }
