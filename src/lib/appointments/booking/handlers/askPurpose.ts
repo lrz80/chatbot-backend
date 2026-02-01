@@ -1,4 +1,5 @@
 // src/lib/appointments/booking/handlers/askPurpose.ts
+import { humanizeBookingReply } from "../humanizer";
 
 export type AskPurposeDeps = {
   idioma: "es" | "en";
@@ -48,12 +49,15 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
 
   // Cancelar proceso
   if (wantsToCancel(userText)) {
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "cancel_booking",
+      askedText: userText,
+    });
+
     return {
       handled: true,
-      reply:
-        effectiveLang === "en"
-          ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
-          : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
+      reply,
       ctxPatch: {
         booking: { ...hydratedBooking, step: "idle", timeZone: tz, lang: effectiveLang },
         booking_last_touch_at: Date.now(),
@@ -65,12 +69,15 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
   const purpose = detectPurpose(userText);
 
   if (!purpose) {
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "ask_purpose_clarify",
+      askedText: userText,
+    });
+
     return {
       handled: true,
-      reply:
-        effectiveLang === "en"
-          ? "Got it. Is it an appointment, class, consultation, or a call?"
-          : "Entiendo. ¿Es una cita, clase, consulta o llamada?",
+      reply,
       ctxPatch: {
         booking: { ...hydratedBooking, step: "ask_purpose", timeZone: tz, lang: effectiveLang },
         booking_last_touch_at: Date.now(),
@@ -79,12 +86,16 @@ export async function handleAskPurpose(deps: AskPurposeDeps): Promise<{
   }
 
   // Avanza a ask_daypart
+  const reply = await humanizeBookingReply({
+    idioma: effectiveLang,
+    intent: "ask_daypart",
+    askedText: userText,
+    purpose,
+  });
+
   return {
     handled: true,
-    reply:
-      effectiveLang === "en"
-        ? "Sure, I can help you schedule it. Does morning or afternoon work better for you?"
-        : "Claro, puedo ayudarte a agendar. ¿Te funciona más en la mañana o en la tarde?",
+    reply,
     ctxPatch: {
       booking: {
         ...hydratedBooking,

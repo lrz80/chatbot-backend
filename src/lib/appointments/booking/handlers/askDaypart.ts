@@ -12,6 +12,7 @@ import { extractDateOnlyToken } from "../text";
 import { getSlotsForDateOnly } from "../slots/getSlotsForDateOnly";
 import { extractTimeOnlyToken, extractTimeConstraint } from "../text";
 import { getSlotsForDateWindow, getSlotsForDate } from "../slots";
+import { humanizeBookingReply } from "../humanizer";
 
 
 export type AskDaypartDeps = {
@@ -137,12 +138,15 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
   }
 
   if (wantsToCancel(userText)) {
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "cancel_booking",
+      askedText: userText,
+    });
+
     return {
       handled: true,
-      reply:
-        effectiveLang === "en"
-          ? "No worries, whenever you’re ready to schedule, I’ll be here to help."
-          : "No hay problema, cuando necesites agendar estaré aquí para ayudarte.",
+      reply,
       ctxPatch: {
         booking: withLang({ ...booking, step: "idle" }),
         booking_last_touch_at: Date.now(),
@@ -223,12 +227,16 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
           .setLocale(effectiveLang === "en" ? "en" : "es")
           .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
 
+        const reply = await humanizeBookingReply({
+          idioma: effectiveLang,
+          intent: "slot_exact_available",
+          askedText: userText,
+          prettyWhen: pretty,
+        });
+
         return {
           handled: true,
-          reply:
-            effectiveLang === "en"
-              ? `Perfect, I have available ${pretty}. Do you want to confirm this time? (yes/no)`
-              : `Perfecto, tengo disponible ${pretty}. ¿Confirmas ese horario? (sí/no)`,
+          reply,
           ctxPatch: {
             booking: withLang({
               ...booking,
@@ -266,14 +274,19 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
               : `Para ${DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `)
           : "";
 
+      const optionsText = renderSlotsMessage({ idioma, timeZone: tz, slots: take });
+
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "slot_exact_unavailable_with_options",
+        askedText: userText,
+        optionsText,
+        datePrefix, // ✅ nuevo
+      });
+
       return {
         handled: true,
-        reply:
-          effectiveLang === "en"
-            ? `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n` +
-              renderSlotsMessage({ idioma, timeZone: tz, slots: take })
-            : `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n` +
-              renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
+        reply,
         ctxPatch: {
           booking: withLang({
             ...booking,
@@ -324,12 +337,14 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     });
 
     if (!slotsForDay?.length) {
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "no_openings_that_day",
+        askedText: userText,
+      });
       return {
         handled: true,
-        reply:
-          effectiveLang === "en"
-            ? "I don’t have openings that day. Would morning or afternoon on another day work for you?"
-            : "Ese día no tengo disponibilidad. ¿Te funciona más en la mañana o en la tarde en otro día?",
+        reply,
         ctxPatch: {
           booking: withLang({ ...booking, step: "ask_daypart" }),
           booking_last_touch_at: Date.now(),
@@ -456,12 +471,16 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
           .setLocale(effectiveLang === "en" ? "en" : "es")
           .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
 
+        const reply = await humanizeBookingReply({
+          idioma: effectiveLang,
+          intent: "slot_exact_available",
+          askedText: userText,
+          prettyWhen: pretty,
+        });
+
         return {
           handled: true,
-          reply:
-            effectiveLang === "en"
-              ? `Perfect, I have available ${pretty}. Do you want to confirm this time? (yes/no)`
-              : `Perfecto, tengo disponible ${pretty}. ¿Confirmas ese horario? (sí/no)`,
+          reply,
           ctxPatch: {
             booking: withLang({
               ...booking,
@@ -491,14 +510,19 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
         max: 5,
       });
 
+      const optionsText = renderSlotsMessage({ idioma, timeZone: tz, slots: take });
+
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "slot_exact_unavailable_with_options",
+        askedText: userText,
+        optionsText,
+        datePrefix, // ✅ nuevo
+      });
+
       return {
         handled: true,
-        reply:
-          effectiveLang === "en"
-            ? `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n` +
-              renderSlotsMessage({ idioma, timeZone: tz, slots: take })
-            : `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n` +
-              renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
+        reply,
           ctxPatch: {
             booking: withLang({
               ...booking,
@@ -562,12 +586,16 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
         .setLocale(effectiveLang === "en" ? "en" : "es")
         .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
 
+        const reply = await humanizeBookingReply({
+          idioma: effectiveLang,
+          intent: "slot_exact_available",
+          askedText: userText,
+          prettyWhen: pretty,
+        });
+
         return {
-        handled: true,
-        reply:
-            effectiveLang === "en"
-              ? `Perfect, I have available ${pretty}. Do you want to confirm this time? (yes/no)`
-              : `Perfecto, tengo disponible ${pretty}. ¿Confirmas ese horario? (sí/no)`,
+          handled: true,
+          reply,
         ctxPatch: {
             booking: withLang({
             ...booking,
@@ -597,14 +625,19 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
         max: 5,
     });
 
+    const optionsText = renderSlotsMessage({ idioma, timeZone: tz, slots: take });
+
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "slot_exact_unavailable_with_options",
+      askedText: userText,
+      optionsText,
+      datePrefix, // ✅ nuevo
+    });
+
     return {
-        handled: true,
-        reply:
-        effectiveLang === "en"
-            ? `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n` +
-            renderSlotsMessage({ idioma, timeZone: tz, slots: take })
-            : `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n` +
-            renderSlotsMessage({ idioma, timeZone: tz, slots: take }),
+      handled: true,
+      reply,
         ctxPatch: {
         booking: withLang({
             ...booking,
@@ -621,12 +654,15 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     };
     }
 
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "no_availability_near_time",
+      askedText: userText,
+    });
+
     return {
       handled: true,
-      reply:
-        effectiveLang === "en"
-          ? "I don’t see availability near that time. Would morning or afternoon work better?"
-          : "No veo disponibilidad cerca de esa hora. ¿Te funciona más en la mañana o en la tarde?",
+      reply,
       ctxPatch: {
         booking: withLang({ ...booking, step: "ask_daypart" }),
         booking_last_touch_at: Date.now(),
@@ -636,9 +672,14 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
   const dp = detectDaypart(userText);
   if (!dp) {
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "ask_daypart_retry",
+      askedText: userText,
+    });
     return {
       handled: true,
-      reply: effectiveLang === "en" ? "Please reply: morning or afternoon." : "Respóndeme: mañana o tarde.",
+      reply,
       ctxPatch: {
         booking: withLang({ ...booking, step: "ask_daypart" }),
         booking_last_touch_at: Date.now(),

@@ -81,8 +81,8 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         handled: true,
         reply:
           effectiveLang === "en"
-            ? "That time is too soon or already passed. What other time works for you?"
-            : "Ese horario está muy pronto o ya pasó. ¿Qué otra hora te funciona?",
+            ? "I'm sorry! That time is not available. What other time works for you?"
+            : "Lo siento! Ese horario no está disponible. ¿Qué otra hora te funciona?",
         ctxPatch: {
           booking: { ...(booking || {}), step: "ask_datetime", timeZone: tz, lang: effectiveLang },
           booking_last_touch_at: Date.now(),
@@ -95,8 +95,8 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
       handled: true,
       reply:
         effectiveLang === "en"
-          ? "That time is outside our business hours. What time within business hours works for you?"
-          : "Ese horario está fuera del horario del negocio. ¿Qué hora dentro del horario te funciona?",
+          ? "I'm sorry! That time is not available. What other time works for you?"
+          : "Lo siento! Ese horario no está disponible. ¿Qué otra hora te funciona?",
       ctxPatch: {
         booking: { ...(booking || {}), step: "ask_datetime", timeZone: tz, lang: effectiveLang },
         booking_last_touch_at: Date.now(),
@@ -252,12 +252,15 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
   // 1) Sin propósito -> pregunta propósito
   if (!purpose) {
+    const humanReply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "ask_purpose",
+      askedText: userText,
+    });
+
     return {
       handled: true,
-      reply:
-        effectiveLang === "en"
-          ? "Sure! What would you like to schedule — an appointment, a consultation, or a call?"
-          : "¡Claro! ¿Qué te gustaría agendar? Una cita, una consulta o una llamada.",
+      reply: humanReply,
       ctxPatch: {
         booking: { ...(booking || {}), step: "ask_purpose", timeZone: tz, lang: effectiveLang },
         booking_last_touch_at: Date.now(),
@@ -266,12 +269,16 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
   }
 
   // 2) Con propósito -> pregunta daypart
+  const humanReply = await humanizeBookingReply({
+    idioma: effectiveLang,
+    intent: "ask_daypart",
+    askedText: userText,
+    purpose,
+  });
+
   return {
     handled: true,
-    reply:
-      effectiveLang === "en"
-        ? "Sure, I can help you schedule it. Does morning or afternoon work better for you?"
-        : "Claro, puedo ayudarte a agendar. ¿Te funciona más en la mañana o en la tarde?",
+    reply: humanReply,
     ctxPatch: {
       booking: { ...(booking || {}), step: "ask_daypart", timeZone: tz, purpose, lang: effectiveLang },
       booking_last_touch_at: Date.now(),
