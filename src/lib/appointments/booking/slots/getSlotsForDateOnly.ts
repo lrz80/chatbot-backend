@@ -50,10 +50,10 @@ export async function getSlotsForDateOnly(opts: {
     tenantId,
     timeMin: bizStart.toISO()!,
     timeMax: bizEnd.toISO()!,
-    calendarId,
+    calendarIds: calendarId ? [calendarId] : ["primary"],
   });
 
-  const busy = extractBusyBlocks(fb, calendarId);
+  const busy = extractBusyBlocks(fb);
   console.log("🧪 getSlotsForDateOnly busy:", { tenantId, calendarId, dateOnly, busyCount: busy.length });
 
   const freeRanges = subtractBusyFromWindow({

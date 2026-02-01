@@ -440,10 +440,10 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         tenantId,
         timeMin: DateTime.fromISO(exact.startISO, { zone: tz }).toISO()!,
         timeMax: DateTime.fromISO(exact.endISO, { zone: tz }).toISO()!,
-        calendarId,
+        calendarIds: calendarId ? [calendarId] : ["primary"],
       });
 
-      const busyNow = extractBusyBlocks(fbCheck, calendarId);
+      const busyNow = extractBusyBlocks(fbCheck);
 
       if (busyNow.length > 0) {
         const refresh = sortSlotsAsc(

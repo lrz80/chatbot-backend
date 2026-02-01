@@ -123,7 +123,7 @@ async function bookInGoogle(opts: {
     tenantId,
     timeMin,
     timeMax,
-    calendarId,
+    calendarIds: calendarId ? [calendarId, "primary"] : ["primary"],
   });
 
     if ((fb as any)?.degraded) {
@@ -136,20 +136,16 @@ async function bookInGoogle(opts: {
     timeMin,
     timeMax,
     calendarsKeys: Object.keys((fb as any)?.calendars || {}),
-    primaryBusy: (fb as any)?.calendars?.primary?.busy ?? null,
-    requestedBusy: (fb as any)?.calendars?.[calendarId]?.busy ?? null,
+    combinedBusyCount: (fb as any)?.calendars?.combined?.busy?.length ?? null,
   });
 
   const calendars = fb?.calendars || {};
   console.log("FREEBUSY RAW:", {
     calendarKeys: Object.keys(calendars),
-    primaryBusyCount: calendars?.primary?.busy?.length ?? null,
-    requestedCalendarId: calendarId,
-    requestedBusyCount: calendars?.[calendarId]?.busy?.length ?? null,
-    anyBusyCount: Object.values(calendars)?.[0]?.busy?.length ?? null,
+    combinedBusyCount: calendars?.combined?.busy?.length ?? null,
   });
 
-  const busy = extractBusyBlocks(fb, calendarId);
+  const busy = extractBusyBlocks(fb);
   console.log("🧪 [BOOKING] busy extracted", {
     tenantId,
     calendarId,

@@ -9,8 +9,8 @@ export type GoogleFreeBusyResponse = {
   calendars?: Record<string, { busy?: GoogleBusyBlock[] }>;
 };
 
-function emptyFreeBusy(calendarId: string, degraded = true) {
-  return { calendars: { [calendarId]: { busy: [] } }, degraded };
+function emptyFreeBusy(degraded = true) {
+  return { calendars: { combined: { busy: [] } }, degraded };
 }
 
 type GoogleTokens = { access_token: string; expires_in?: number; token_type?: string };
@@ -102,7 +102,7 @@ export async function googleFreeBusy(params: {
   tenantId: string;
   timeMin: string; // ISO
   timeMax: string; // ISO
-  calendarId?: string; // default primary
+  calendarIds?: string[];
 }): Promise<GoogleFreeBusyResponse & { degraded?: boolean }> {
   console.log("🧬 GCAL MODULE LOADED v2026-01-31-B");
 
@@ -120,14 +120,18 @@ export async function googleFreeBusy(params: {
       msg === "google_refresh_token_invalid" ||
       msg === "google_oauth_not_configured"
     ) {
-      const calendarId = params.calendarId || "primary";
-      console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarId });
-      return emptyFreeBusy(calendarId, true);
+      const calendarIds = (params.calendarIds && params.calendarIds.length > 0)
+        ? params.calendarIds
+        : ["primary"];
+      console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarIds });
+      return emptyFreeBusy(true);
     }
     throw e;
   }
 
-  const calendarId = params.calendarId || "primary";
+  const calendarIds = (params.calendarIds && params.calendarIds.length > 0)
+  ? params.calendarIds
+  : ["primary"];
 
   const resp = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
     method: "POST",
@@ -138,7 +142,7 @@ export async function googleFreeBusy(params: {
     body: JSON.stringify({
       timeMin: params.timeMin,
       timeMax: params.timeMax,
-      items: [{ id: calendarId }],
+      items: calendarIds.map((id) => ({ id })),
     }),
   });
 
@@ -149,12 +153,12 @@ export async function googleFreeBusy(params: {
 
     if (resp.status === 401 || resp.status === 403) {
       await markGoogleDisconnected(params.tenantId, `freebusy_${resp.status}`);
-      console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarId, status: resp.status });
-      return emptyFreeBusy(calendarId, true);
+      console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarIds, status: resp.status });
+      return emptyFreeBusy(true);
     }
 
-    console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarId, status: resp.status });
-    return emptyFreeBusy(calendarId, true);
+    console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarIds, status: resp.status });
+    return emptyFreeBusy(true);
   }
 
   const calendars = json?.calendars || {};
@@ -163,44 +167,38 @@ export async function googleFreeBusy(params: {
   // 🔥 LOG REAL: qué devolvió Google
   console.log("🧪 freeBusy raw keys:", {
     tenantId: params.tenantId,
-    requestedCalendarId: calendarId,
+    requestedCalendarIds: calendarIds,
     keys,
-    requestedBusyCount: calendars?.[calendarId]?.busy?.length ?? null,
-    firstKey: keys[0] || null,
-    firstBusyCount: keys[0] ? (calendars?.[keys[0]]?.busy?.length ?? null) : null,
+    counts: keys.reduce((acc: any, k) => {
+      acc[k] = calendars?.[k]?.busy?.length ?? 0;
+      return acc;
+    }, {}),
   });
 
-  // ✅ Si no viene la clave pedida, NO inventes busy vacío.
-  // Usa fallback: si hay 1 sola key, úsala.
-  if (!calendars?.[calendarId]) {
-    if (keys.length === 1) {
-      const only = keys[0];
-      return { calendars: { [calendarId]: calendars[only] }, degraded: false };
-    }
-
-    // Si hay varias keys y no está la pedida → esto es raro
-    // mejor degradar para NO agendar a ciegas
-    console.log("🟡 freeBusy degraded: missing requested calendar key", {
-      tenantId: params.tenantId,
-      requestedCalendarId: calendarId,
-      keys,
-    });
-    return emptyFreeBusy(calendarId, true);
+  const allBusy: GoogleBusyBlock[] = [];
+  for (const id of calendarIds) {
+    const busy = calendars?.[id]?.busy || [];
+    for (const b of busy) allBusy.push(b);
   }
 
-  const busyCount = calendars?.[calendarId]?.busy?.length || 0;
-  console.log("🗓️ freeBusy:", {
+  // ✅ si no hubo keys pero la respuesta fue ok, igual devolvemos estructura consistente
+  console.log("🗓️ freeBusy combined:", {
     tenantId: params.tenantId,
-    calendarId,
+    calendarIds,
     timeMin: params.timeMin,
     timeMax: params.timeMax,
-    busyCount,
+    busyCount: allBusy.length,
     degraded: false,
   });
 
-  return { ...json, degraded: false };
+  return {
+    calendars: {
+      // clave virtual: "combined"
+      combined: { busy: allBusy },
+    },
+    degraded: false,
+  };
 }
-
 export async function googleCreateEvent(params: {
   tenantId: string;
   calendarId?: string; // default primary

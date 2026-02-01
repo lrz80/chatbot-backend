@@ -6,6 +6,12 @@ import { parseHHmm, weekdayKey } from "./time";
 import type { TimeConstraint } from "./text";
 import { extractBusyBlocks } from "./freebusy";
 
+function normalizeCalendarIds(args: { calendarIds?: string[]; calendarId?: string }) {
+  const ids = Array.isArray(args.calendarIds) ? args.calendarIds.filter(Boolean) : [];
+  if (ids.length > 0) return ids;
+  if (args.calendarId) return [args.calendarId];
+  return ["primary"];
+}
 
 export function subtractBusyFromWindow(opts: {
   windowStart: DateTime;
@@ -212,6 +218,7 @@ export async function getSlotsForDate(opts: {
   bufferMin: number;
   hours: HoursByWeekday | null;
   minLeadMinutes: number;
+  calendarIds?: string[];
   calendarId?: string; 
 }): Promise<Slot[]> {
   const { tenantId, timeZone, dateISO, durationMin, bufferMin, hours, minLeadMinutes } = opts;
@@ -244,19 +251,19 @@ export async function getSlotsForDate(opts: {
 
   if (!windowStart.isValid || !windowEnd.isValid || windowEnd <= windowStart) return [];
 
-  const calendarId = opts.calendarId || "primary";
+  const calendarIds = normalizeCalendarIds({ calendarIds: opts.calendarIds, calendarId: opts.calendarId });
 
   const fb = await googleFreeBusy({
     tenantId,
     timeMin: windowStart.toISO()!,
     timeMax: windowEnd.toISO()!,
-    calendarId,
+    calendarIds,
   });
 
-  const busy = extractBusyBlocks(fb, calendarId);
+  const busy = extractBusyBlocks(fb);
     console.log("🧪 getSlotsForDate busy:", {
     tenantId,
-    calendarId,
+    calendarIds,
     dateISO,
     timeMin: windowStart.toISO(),
     timeMax: windowEnd.toISO(),
@@ -325,6 +332,7 @@ export async function getNextSlotsByDaypart(opts: {
   daypart: "morning" | "afternoon";
   daysAhead?: number;
   afterISO?: string | null;
+  calendarIds?: string[]; // ✅ ADD
   calendarId?: string;
 }): Promise<Slot[]> {
   const { tenantId, timeZone, durationMin, bufferMin, hours, daypart } = opts;
@@ -367,16 +375,16 @@ export async function getNextSlotsByDaypart(opts: {
     const win = daypartWindowFromBusinessHours({ day, bizStart, bizEnd, daypart });
     if (!win) continue;
 
-    const calendarId = opts.calendarId || "primary";
+    const calendarIds = normalizeCalendarIds({ calendarIds: opts.calendarIds, calendarId: opts.calendarId });
 
     const fb = await googleFreeBusy({
       tenantId,
       timeMin: win.start.toISO()!,
       timeMax: win.end.toISO()!,
-      calendarId,
+      calendarIds,
     });
 
-    const busy = extractBusyBlocks(fb, calendarId);
+    const busy = extractBusyBlocks(fb);
     
     const freeRanges = subtractBusyFromWindow({
       windowStart: win.start,
@@ -412,18 +420,19 @@ export async function isRangeBusy(opts: {
   tenantId: string;
   timeMinISO: string;
   timeMaxISO: string;
+  calendarIds?: string[]; // ✅ ADD
   calendarId?: string;
 }) {
-  const calendarId = opts.calendarId || "primary";
+  const calendarIds = normalizeCalendarIds({ calendarIds: opts.calendarIds, calendarId: opts.calendarId });
 
   const fb = await googleFreeBusy({
     tenantId: opts.tenantId,
     timeMin: opts.timeMinISO,
     timeMax: opts.timeMaxISO,
-    calendarId,
+    calendarIds,
   });
 
-  const busy = extractBusyBlocks(fb, calendarId);
+  const busy = extractBusyBlocks(fb);
   
   return { busy, isBusy: busy.length > 0 };
 }
@@ -436,7 +445,8 @@ export async function getSlotsForDateWindow(opts: {
   bufferMin: number;
   hours: HoursByWeekday | null;
   minLeadMinutes: number;
-  calendarId?: string; // ✅ NUEVO
+  calendarIds?: string[]; // ✅ ARRAY
+  calendarId?: string; // ✅ ADD (compat)
 
   // NUEVO: ventana dentro del día (HH:mm)
   windowStartHHmm: string; // "17:00"
@@ -480,19 +490,19 @@ export async function getSlotsForDateWindow(opts: {
 
   if (!windowStart.isValid || !windowEnd.isValid || windowEnd <= windowStart) return [];
 
-  const calendarId = opts.calendarId || "primary";
+  const calendarIds = normalizeCalendarIds({ calendarIds: opts.calendarIds, calendarId: opts.calendarId });
 
   const fb = await googleFreeBusy({
     tenantId,
     timeMin: windowStart.toISO()!,
     timeMax: windowEnd.toISO()!,
-    calendarId,
+    calendarIds,
   });
 
-  const busy = extractBusyBlocks(fb, calendarId);
+  const busy = extractBusyBlocks(fb);
     console.log("🧪 getSlotsForDate busy:", {
     tenantId,
-    calendarId,
+    calendarIds,
     dateISO,
     timeMin: windowStart.toISO(),
     timeMax: windowEnd.toISO(),
@@ -520,16 +530,18 @@ export async function getSlotsForDateWindow(opts: {
 
 export async function validateSlotStillFree(opts: {
   tenantId: string;
+  calendarIds?: string[]; // ✅ ADD
   calendarId?: string;
   slot: Slot;
 }): Promise<boolean> {
-  const calendarId = opts.calendarId || "primary";
+  const calendarIds = normalizeCalendarIds({ calendarIds: opts.calendarIds, calendarId: opts.calendarId });
 
   const { isBusy } = await isRangeBusy({
     tenantId: opts.tenantId,
     timeMinISO: opts.slot.startISO,
     timeMaxISO: opts.slot.endISO,
-    calendarId,
+    calendarIds,              // ✅ pass array
+    calendarId: opts.calendarId, // ✅ FIX: antes era "calendarId" undefined
   });
 
   return !isBusy;
