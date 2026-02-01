@@ -182,6 +182,22 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
     locked = [],
   } = args;
 
+  // ✅ Para intents críticos, no arriesgamos variaciones del modelo.
+  // Mantiene respuestas cortas y humanas sin inventar ni repetir horarios.
+  if (args.intent === "slot_exact_available") {
+    const when = args.prettyWhen || locked[0] || "";
+    return args.idioma === "en"
+      ? `Perfect — I have ${when} available. Want me to book it?`
+      : `¡Perfecto! Tengo ${when} disponible. ¿Quieres que lo reserve?`;
+  }
+
+  if (args.intent === "ask_confirm_yes_no") {
+    const when = args.prettyWhen || locked[0] || "";
+    return args.idioma === "en"
+      ? `To confirm ${when}, reply YES or NO.`
+      : `Para confirmar ${when}, responde SÍ o NO.`;
+  }
+
   // ✅ Si no hay API key, no arriesgamos: devolvemos el canónico
   if (!process.env.OPENAI_API_KEY) {
     hlog("NO_API_KEY", { intent: args.intent, idioma: args.idioma });
