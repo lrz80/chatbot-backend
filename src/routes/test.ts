@@ -22,10 +22,10 @@ router.get("/google-availability", async (req: Request, res: Response) => {
       tenantId,
       timeMin,
       timeMax,
-      calendarId: "primary",
+      calendarIds: ["primary"],
     });
 
-    const busy = fb?.calendars?.primary?.busy || [];
+    const busy = (fb as any)?.calendars?.combined?.busy || [];
 
     return res.json({
       ok: true,
@@ -33,6 +33,7 @@ router.get("/google-availability", async (req: Request, res: Response) => {
       timeMax,
       busy,
       is_free: busy.length === 0,
+      degraded: !!(fb as any)?.degraded,
     });
   } catch (e: any) {
     console.error("❌ test google-availability error:", e);
