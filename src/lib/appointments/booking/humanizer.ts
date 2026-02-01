@@ -1,6 +1,12 @@
 //src/lib/appointments/booking/humanizer.ts
 import OpenAI from "openai";
 
+const HUMANIZER_DEBUG = process.env.HUMANIZER_DEBUG === "1";
+
+function hlog(...args: any[]) {
+  if (HUMANIZER_DEBUG) console.log("🤖[HUMANIZER]", ...args);
+}
+
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 export type BookingHumanizeIntent =
@@ -126,7 +132,10 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
   } = args;
 
   // ✅ Si no hay API key, no arriesgamos: devolvemos el canónico
-  if (!process.env.OPENAI_API_KEY) return fallbackFromCanonical(args);
+  if (!process.env.OPENAI_API_KEY) {
+    hlog("NO_API_KEY", { intent: args.intent, idioma: args.idioma });
+    return fallbackFromCanonical(args);
+  }
 
   try {
     const { idioma, intent, askedText, prettyWhen, optionsText, purpose, datePrefix } = args;
@@ -186,16 +195,28 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
     });
 
     const out = (res as any).output_text?.trim?.() || "";
-    if (!out) return fallbackFromCanonical(args);
+    if (!out) {
+    hlog("EMPTY_OUTPUT", { intent, idioma, canonicalText });
+    return fallbackFromCanonical(args);
+    }
 
     // ✅ Si violó locked -> NO se usa
-    if (!respectsLocked(out, locked)) return canonicalText;
+    if (!respectsLocked(out, locked)) {
+      hlog("LOCKED_VIOLATION", { intent, idioma, locked, out, canonicalText });
+      return canonicalText;
+    }
 
     // ✅ Si metió YES/NO cuando no debe -> NO se usa
-    if (confirmWordsViolation(out, intent, idioma)) return canonicalText;
+    if (confirmWordsViolation(out, intent, idioma)) {
+      hlog("CONFIRM_WORDS_VIOLATION", { intent, idioma, out, canonicalText });
+      return canonicalText;
+    }
+
+    hlog("OK_HUMANIZED", { intent, idioma, out });
 
     return out;
   } catch (e: any) {
+    hlog("OPENAI_ERROR", { intent: args.intent, idioma: args.idioma, error: String(e?.message || e) });
     // en error, nunca “inventamos”: devolvemos el canónico
     return fallbackFromCanonical(args);
   }
