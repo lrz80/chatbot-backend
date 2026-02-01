@@ -25,6 +25,7 @@ import {
 import { getSlotsForDate, getSlotsForDateWindow } from "../slots";
 import { googleFreeBusy } from "../../../../services/googleCalendar";
 import { extractBusyBlocks } from "../freebusy";
+import { humanizeBookingReply } from "../humanizer";
 
 type Slot = { startISO: string; endISO: string };
 
@@ -434,14 +435,19 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
       // ✅ Si existe EXACTO -> CONFIRM (opción B)
       if (exact) {
         const pretty = DateTime.fromISO(exact.startISO, { zone: tz })
-        .setLocale(effectiveLang === "en" ? "en" : "es")
-        .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+          .setLocale(effectiveLang === "en" ? "en" : "es")
+          .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+
+        const humanReply = await humanizeBookingReply({
+          idioma: effectiveLang,
+          intent: "slot_exact_available",
+          askedText: userText,      // 👈 para que responda “según cómo le preguntan”
+          prettyWhen: pretty,
+        });
 
         return {
           handled: true,
-          reply: effectiveLang === "en"
-            ? `Perfect, I have ${pretty}. Do you want to confirm? (yes/no)`
-            : `Perfecto, tengo ${pretty}. ¿Confirmas ese horario? (sí/no)`,
+          reply: humanReply,
           ctxPatch: {
             booking: {
               ...hydratedBooking,
@@ -453,8 +459,8 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
               end_time: exact.endISO,
               last_offered_date: ctxDate,
               date_only: ctxDate,
-              slots: [], // ✅ sin lista
-              },
+              slots: [],
+            },
             booking_last_touch_at: Date.now(),
           },
         };
