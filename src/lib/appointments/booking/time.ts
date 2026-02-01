@@ -231,18 +231,40 @@ export function renderSlotsMessage(opts: {
 }
 
 export function parseSlotChoice(text: string, max: number): number | null {
-  const raw = String(text || "").trim();
+  const raw = String(text || "").trim().toLowerCase();
+  if (!raw) return null;
 
-  // Aseguramos que sea SOLO un número aislado.
-  // No debe contener letras, "pm", "am", "a las", etc.
-  // Limpia espacios, puntos o paréntesis, pero nada más.
-  const m = raw.match(/^(?:opci[oó]n|option)?\s*([1-9])\s*[).]?\s*$/i);
-  if (!m) return null;
+  // Si parece hora ("12pm", "2pm", "14:00", "9:30am") NO lo trates como elección
+  const looksLikeTime =
+    /\b(am|pm|a\.m\.|p\.m\.)\b/.test(raw) ||
+    /\b([01]?\d|2[0-3]):([0-5]\d)\b/.test(raw);
 
-  const n = Number(m[1]);
-  if (!Number.isFinite(n) || n < 1 || n > max) return null;
+  if (looksLikeTime) return null;
 
-  return n;
+  const t = raw.replace(/\s+/g, " ");
+
+  // 1) "2" / "2." / " 2 "
+  let m = t.match(/^\s*(\d{1,2})\s*\.?\s*$/);
+  if (m) {
+    const n = Number(m[1]);
+    return n >= 1 && n <= max ? n : null;
+  }
+
+  // 2) "la 2" / "el 2" / "#2" / "opcion 2" / "número 2" / "num 2"
+  m = t.match(/\b(?:la|el|#|opcion|opción|option|numero|número|num|nro)\s*(\d{1,2})\b/);
+  if (m) {
+    const n = Number(m[1]);
+    return n >= 1 && n <= max ? n : null;
+  }
+
+  // 3) "me quedo con la 2" / "escojo 2" / "elijo 2" / "pick 2"
+  m = t.match(/\b(?:me quedo con|escojo|elijo|elige|pick|choose)\s*(?:la|el)?\s*(\d{1,2})\b/);
+  if (m) {
+    const n = Number(m[1]);
+    return n >= 1 && n <= max ? n : null;
+  }
+
+  return null;
 }
 
 export function filterSlotsNearTime(opts: {
