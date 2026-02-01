@@ -140,6 +140,10 @@ function extractFinalWhatsAppMessage(raw: string) {
   // Limpieza de espacios y saltos
   s = s.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 
+  // ✅ Arregla el caso común: "p. m.." / "a. m.." (doble punto)
+  // Mantiene "p. m." / "a. m." exacto para que pase LOCKED.
+  s = s.replace(/(\b[ap]\.\s*m\.)\.+/gi, "$1");
+
   return s;
 }
 
