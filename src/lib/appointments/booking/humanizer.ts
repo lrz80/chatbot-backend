@@ -19,7 +19,8 @@ export type BookingHumanizeIntent =
   | "ask_time_for_date"
   | "offer_slots_for_date"
   | "ask_missing_field"
-  | "ask_datetime_format";
+  | "ask_datetime_format"
+  | "ask_other_time";;
 
 export type HumanizeArgs = {
   idioma: "es" | "en";
@@ -50,6 +51,7 @@ function fallback(args: HumanizeArgs) {
     if (intent === "ask_daypart_retry") return "Quick one — morning or afternoon?";
     if (intent === "no_openings_that_day") return "I don’t have openings that day. Want to try another date?";
     if (intent === "no_availability_near_time") return "I don’t see openings near that time. Would you like something earlier or later?";
+    if (intent === "ask_other_time") return "Got it — what other time works for you?";
 
     // ✅ nuevos
     if (intent === "past_slot") return "That date/time is in the past. Please send a future date and time (example: 2026-01-21 14:00).";
@@ -58,6 +60,8 @@ function fallback(args: HumanizeArgs) {
     if (intent === "offer_slots_for_date") return `Perfect — here are a few options:\n${optionsText}`;
     if (intent === "ask_missing_field") return "I’m missing one detail — can you send it again?";
     if (intent === "ask_datetime_format") return "I’m missing the date and time. Please use: YYYY-MM-DD HH:mm (example: 2026-01-21 14:00).";
+    if (intent === "ask_other_time") return "Perfecto — ¿qué otra hora te funciona?";
+
   }
 
   // ES
@@ -98,10 +102,21 @@ function respectsLocked(out: string, locked: string[] = []) {
 
 // ✅ (opcional) también evitamos que el modelo meta "sí/no" si no es confirm
 function confirmWordsViolation(out: string, intent: BookingHumanizeIntent, idioma: "es" | "en") {
+  // Solo permitimos pedir "SI/NO" cuando el intent es confirmación.
   if (intent === "ask_confirm_yes_no") return false;
-  const s = out.toLowerCase();
-  if (idioma === "en") return /\b(yes|no)\b/.test(s);
-  return /\b(si|sí|no)\b/.test(s);
+
+  const s = (out || "").toLowerCase();
+
+  // Bloquea SOLO frases que pidan explícitamente confirmar con SI/NO,
+  // no la palabra "no" usada en una oración normal.
+  if (idioma === "en") {
+    return /\b(reply|respond)\s+(yes|no)\b/.test(s) || /\byes\/no\b/.test(s);
+  }
+
+  return (
+    /\b(responde|contesta)\s+(si|sí|no)\b/.test(s) ||
+    /\b(si\/no|sí\/no)\b/.test(s)
+  );
 }
 
 export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> {

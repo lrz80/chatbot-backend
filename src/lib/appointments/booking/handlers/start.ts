@@ -148,8 +148,8 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
         const canonicalText =
           effectiveLang === "en"
-            ? `Perfect — I do have ${prettyWhen}. Confirm?`
-            : `Perfecto — tengo ${prettyWhen}. ¿Confirmas?`;
+            ? `Perfect I do have ${prettyWhen}. Confirm?`
+            : `Perfecto tengo ${prettyWhen}. disponible. ¿La reservo?`;
 
         const humanReply = await humanizeBookingReply({
           idioma: effectiveLang,
