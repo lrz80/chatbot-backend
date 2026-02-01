@@ -138,10 +138,9 @@ function extractFinalWhatsAppMessage(raw: string) {
   s = s.replace(/^claro[, ]+aquí tienes el mensaje reescrito:\s*/i, "").trim();
   s = s.replace(/^aquí tienes (el )?mensaje reescrito:\s*/i, "").trim();
 
-  // Si devuelve un bloque entre comillas, toma SOLO el contenido
-  // Ej: "Genial, tengo ... ¿Confirmas?"
-  const m = s.match(/"([^"]+)"/s);
-  if (m?.[1]) s = m[1].trim();
+  // Variantes: "Claro, aquí tienes el mensaje:" (con espacios raros/emoji/puntuación)
+  s = s.replace(/^\s*claro[,\s¡!]*aquí\s+tienes\s+el\s+mensaje\s*[:\-–—]?\s*/i, "").trim();
+  s = s.replace(/^\s*aquí\s+tienes\s+el\s+mensaje\s*[:\-–—]?\s*/i, "").trim();
 
   // Limpieza de espacios y saltos
   s = s.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -149,6 +148,11 @@ function extractFinalWhatsAppMessage(raw: string) {
   // ✅ Arregla el caso común: "p. m.." / "a. m.." (doble punto)
   // Mantiene "p. m." / "a. m." exacto para que pase LOCKED.
   s = s.replace(/(\b[ap]\.\s*m\.)\.+/gi, "$1");
+
+  // Si devuelve un bloque entre comillas, toma SOLO el contenido
+  // Ej: "Genial, tengo ... ¿Confirmas?"
+  const m = s.match(/"([^"]+)"/s);
+  if (m?.[1]) s = m[1].trim();
 
   return s;
 }
@@ -234,7 +238,9 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
     }
 
     const out = extractFinalWhatsAppMessage(rawOut);
-      if (!out) {
+    hlog("FINAL_AFTER_CLEAN", { intent, idioma, out });
+
+    if (!out) {
       hlog("EMPTY_OUTPUT_AFTER_CLEAN", { intent, idioma, rawOut, canonicalText });
       return fallbackFromCanonical(args);
     }
