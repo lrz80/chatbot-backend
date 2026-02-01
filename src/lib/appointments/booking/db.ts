@@ -221,12 +221,25 @@ export async function loadBookingTerms(tenantId: string): Promise<string[]> {
 export async function upsertClienteBookingData(opts: {
   tenantId: string;
   canal: string;
-  contacto: string;
+  contacto?: string; // ✅ ahora opcional
   nombre?: string | null;
   email?: string | null;
   telefono?: string | null;
 }) {
-  const { tenantId, canal, contacto, nombre, email, telefono } = opts;
+  const { tenantId, canal, nombre, email, telefono } = opts;
+
+  // ✅ contactoFinal: usamos lo mejor disponible
+  const contactoFinal =
+    (opts.contacto && String(opts.contacto).trim()) ||
+    (telefono && String(telefono).trim()) ||
+    (email && String(email).trim()) ||
+    "";
+
+  // ✅ Si no tenemos ningún identificador, no insertamos (evita basura / conflictos raros)
+  if (!contactoFinal) {
+    console.warn("⚠️ upsertClienteBookingData: missing contacto/telefono/email");
+    return;
+  }
 
   try {
     await pool.query(
@@ -240,7 +253,7 @@ export async function upsertClienteBookingData(opts: {
         telefono = COALESCE(EXCLUDED.telefono, clientes.telefono),
         updated_at = NOW()
       `,
-      [tenantId, canal, contacto, nombre || null, email || null, telefono || null]
+      [tenantId, canal, contactoFinal, nombre || null, email || null, telefono || null]
     );
   } catch (e: any) {
     console.warn("⚠️ upsertClienteBookingData failed:", e?.message);

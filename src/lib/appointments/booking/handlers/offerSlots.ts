@@ -31,7 +31,7 @@ type Slot = { startISO: string; endISO: string };
 export type OfferSlotsDeps = {
   tenantId: string;
   canal: string;
-  contacto: string;
+  
   idioma: "es" | "en";
   userText: string;
 
@@ -144,7 +144,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   const resetPersonal = {
     name: null,
     email: null,
-    phone: null,
+    phone: hydratedBooking.phone || null,
   };
 
   const effectiveLang: "es" | "en" = (hydratedBooking.lang as any) || idioma;
@@ -546,12 +546,34 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
       const missingPhone = requirePhone && !nextBooking?.phone;
 
       if (missingName || missingEmail || missingPhone) {
+        const needPhone = requirePhone; // ✅ solo IG/FB
+
+        const fieldsEs = [
+          missingName ? "nombre completo" : null,
+          missingEmail ? "email" : null,
+          needPhone ? "teléfono" : null,
+        ].filter(Boolean);
+
+        const fieldsEn = [
+          missingName ? "full name" : null,
+          missingEmail ? "email" : null,
+          needPhone ? "phone" : null,
+        ].filter(Boolean);
+
+        const exampleEs = needPhone
+          ? "Ej: Juan Pérez, juan@email.com, +13055551234"
+          : "Ej: Juan Pérez, juan@email.com";
+
+        const exampleEn = needPhone
+          ? "Example: John Smith, john@email.com, +13055551234"
+          : "Example: John Smith, john@email.com";
+
         return {
           handled: true,
           reply:
             effectiveLang === "en"
-              ? `Perfect — I can do ${whenTxt}. Before I book it, send everything in ONE message: full name, email, and phone. Example: John Smith, john@email.com, +13055551234`
-              : `Perfecto — puedo ${whenTxt}. Antes de agendarla, envíame todo en *un solo mensaje*: nombre completo, email y teléfono. Ej: Juan Pérez, juan@email.com, +13055551234`,
+              ? `Perfect — I can do ${whenTxt}. Before I book it, send in ONE message: ${fieldsEn.join(", ")}. ${exampleEn}`
+              : `Perfecto — puedo ${whenTxt}. Antes de agendarla, envíame en *un solo mensaje*: ${fieldsEs.join(", ")}. ${exampleEs}`,
           ctxPatch: {
             booking: { ...nextBooking, step: "ask_all" },
             booking_last_touch_at: Date.now(),

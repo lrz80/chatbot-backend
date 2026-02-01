@@ -5,7 +5,6 @@ import { formatSlotHuman } from "../time";
 export type AskEmailPhoneDeps = {
   tenantId: string;
   canal: string;
-  contacto: string;
   idioma: "es" | "en";
   userText: string;
 
@@ -20,7 +19,6 @@ export type AskEmailPhoneDeps = {
   upsertClienteBookingData: (args: {
     tenantId: string;
     canal: string;
-    contacto: string;
     nombre: string;
     email: string;
     telefono?: string | null;
@@ -35,7 +33,6 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
   const {
     tenantId,
     canal,
-    contacto,
     idioma,
     userText,
     booking,
@@ -74,9 +71,9 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
   const email = parseEmail(userText);
   const parsedPhone = parsePhone(userText);
 
-  // ✅ WhatsApp: si no viene teléfono en el texto, usa el "contacto" (ya es el número real)
+  // ✅ WhatsApp: usar booking.phone (ya lo seteas al inicio del flow)
   const waPhone =
-    canal === "whatsapp" ? String(contacto || "").trim() : "";
+    canal === "whatsapp" ? String(booking?.phone || "").trim() : "";
 
   const phone = parsedPhone || (waPhone ? waPhone : null);
 
@@ -138,7 +135,6 @@ export async function handleAskEmailPhone(deps: AskEmailPhoneDeps): Promise<{
   await upsertClienteBookingData({
     tenantId,
     canal,
-    contacto,
     nombre: name,
     email,
     telefono: phone,

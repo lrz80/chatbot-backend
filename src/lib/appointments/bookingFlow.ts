@@ -569,7 +569,6 @@ if (booking.step === "offer_slots") {
   return handleOfferSlots({
     tenantId,
     canal,
-    contacto,
     idioma: effectiveLang,   // ✅
     userText,
     booking,
@@ -589,7 +588,6 @@ if (booking.step === "ask_email_phone") {
   return handleAskEmailPhone({
     tenantId,
     canal,
-    contacto,
     idioma: effectiveLang,
     userText,
     booking,
