@@ -348,10 +348,17 @@ router.post("/availability", authenticateUser, async (req: Request, res: Respons
     const { timeMin, timeMax, calendarId } = req.body || {};
     if (!timeMin || !timeMax) return res.status(400).json({ error: "missing_time_range" });
 
-    const fb = await googleFreeBusy({ tenantId, timeMin, timeMax, calendarId: calendarId || "primary" });
-    const busy = fb?.calendars?.[calendarId || "primary"]?.busy || [];
+    // ahora usamos calendarIds (puedes pasar 1 o varios)
+    const fb = await googleFreeBusy({
+      tenantId,
+      timeMin,
+      timeMax,
+      calendarIds: calendarId ? [calendarId, "primary"] : ["primary"],
+    });
 
-    return res.json({ ok: true, busy, is_free: busy.length === 0 });
+    const busy = (fb as any)?.calendars?.combined?.busy || [];
+    return res.json({ ok: true, busy, is_free: busy.length === 0, degraded: !!(fb as any)?.degraded });
+
   } catch (e: any) {
     const msg = String(e?.message || "");
     if (msg === "google_not_connected") return res.status(409).json({ error: "google_not_connected" });
@@ -378,9 +385,14 @@ router.post("/book", authenticateUser, async (req: Request, res: Response) => {
       tenantId,
       timeMin: startISO,
       timeMax: endISO,
-      calendarId: calendarId || "primary",
+      calendarIds: calendarId ? [calendarId, "primary"] : ["primary"],
     });
-    const busy = fb?.calendars?.[calendarId || "primary"]?.busy || [];
+
+    if ((fb as any)?.degraded) {
+      return res.status(409).json({ error: "freebusy_degraded" });
+    }
+
+    const busy = (fb as any)?.calendars?.combined?.busy || [];
     if (busy.length > 0) return res.status(409).json({ error: "slot_busy", busy });
 
     const event = await googleCreateEvent({
