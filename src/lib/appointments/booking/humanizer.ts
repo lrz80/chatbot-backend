@@ -13,7 +13,13 @@ export type BookingHumanizeIntent =
   | "cancel_booking"
   | "ask_daypart_retry"
   | "no_openings_that_day"
-  | "no_availability_near_time";
+  | "no_availability_near_time"
+  | "past_slot"
+  | "past_date"
+  | "ask_time_for_date"
+  | "offer_slots_for_date"
+  | "ask_missing_field"
+  | "ask_datetime_format";
 
 export type HumanizeArgs = {
   idioma: "es" | "en";
@@ -35,26 +41,45 @@ function fallback(args: HumanizeArgs) {
   if (idioma === "en") {
     if (intent === "slot_exact_available") return `Yes — I do have ${prettyWhen} available. Want me to book it?`;
     if (intent === "ask_confirm_yes_no") return `Perfect — to confirm ${prettyWhen}, reply YES or NO.`;
-    if (intent === "slot_exact_unavailable_with_options") return `I don’t have that exact time. Here are the closest options:\n${optionsText}`;
-    if (intent === "ask_purpose") return "Sure! What would you like to schedule?";
-    if (intent === "ask_purpose_clarify") return `Got you — what are you looking to book? A class, an appointment, a consultation, or a call?`;
+    if (intent === "slot_exact_unavailable_with_options")
+      return `${basePrefix}I don’t have that exact time. Here are the closest options:\n${optionsText}`;
+    if (intent === "ask_purpose") return "Sure — what would you like to schedule?";
+    if (intent === "ask_purpose_clarify") return "Got you — what are you looking to book? A class, an appointment, a consultation, or a call?";
     if (intent === "ask_daypart") return `Perfect — for ${purpose || "that"}, does morning or afternoon work better?`;
-    if (intent === "cancel_booking") return `No problem — I’ll pause this. Whenever you’re ready, just tell me.`;
-    if (intent === "ask_daypart_retry") return "Got you — do you prefer morning or afternoon?";
-    if (intent === "no_openings_that_day") return "I don’t have openings that day. Want to try another day or morning/afternoon?";
-    if (intent === "no_availability_near_time") return "I don’t see openings near that time. Would you prefer morning or afternoon?";
+    if (intent === "cancel_booking") return "No problem — I’ll pause this. Whenever you’re ready, just tell me.";
+    if (intent === "ask_daypart_retry") return "Quick one — morning or afternoon?";
+    if (intent === "no_openings_that_day") return "I don’t have openings that day. Want to try another date?";
+    if (intent === "no_availability_near_time") return "I don’t see openings near that time. Would you like something earlier or later?";
+
+    // ✅ nuevos
+    if (intent === "past_slot") return "That date/time is in the past. Please send a future date and time (example: 2026-01-21 14:00).";
+    if (intent === "past_date") return "That date is in the past. Please send a future date (YYYY-MM-DD).";
+    if (intent === "ask_time_for_date") return "Got it — what time works for you that day? Reply with HH:mm (example: 14:00).";
+    if (intent === "offer_slots_for_date") return `Perfect — here are a few options:\n${optionsText}`;
+    if (intent === "ask_missing_field") return "I’m missing one detail — can you send it again?";
+    if (intent === "ask_datetime_format") return "I’m missing the date and time. Please use: YYYY-MM-DD HH:mm (example: 2026-01-21 14:00).";
   }
 
+  // ES
   if (intent === "slot_exact_available") return `Sí — tengo ${prettyWhen} disponible. ¿Quieres que la reserve?`;
   if (intent === "ask_confirm_yes_no") return `Perfecto — para confirmar ${prettyWhen}, responde SI o NO.`;
-  if (intent === "slot_exact_unavailable_with_options") return `No tengo esa hora exacta. Estas son las opciones más cercanas:\n${optionsText}`;
+  if (intent === "slot_exact_unavailable_with_options")
+    return `${basePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n${optionsText}`;
   if (intent === "ask_purpose") return "¡Claro! ¿Qué te gustaría agendar?";
-  if (intent === "ask_purpose_clarify") return `Perfecto — ¿qué te gustaría agendar? ¿Clase, cita, consulta o llamada?`;
+  if (intent === "ask_purpose_clarify") return "Perfecto — ¿qué te gustaría agendar? ¿Clase, cita, consulta o llamada?";
   if (intent === "ask_daypart") return `Perfecto — para ${purpose || "eso"}, ¿te funciona mejor en la mañana o en la tarde?`;
-  if (intent === "cancel_booking") return `Perfecto — lo pauso por ahora. Cuando estés listo, me dices.`;
-  if (intent === "ask_daypart_retry") return "Entiendo — ¿te funciona mejor en la mañana o en la tarde?";
-  if (intent === "no_openings_that_day") return "Ese día no tengo disponibilidad. ¿Quieres probar otro día o prefieres mañana/tarde?";
-  if (intent === "no_availability_near_time") return "No veo disponibilidad cerca de esa hora. ¿Prefieres mañana o tarde?";
+  if (intent === "cancel_booking") return "Perfecto — lo pauso por ahora. Cuando estés listo, me dices.";
+  if (intent === "ask_daypart_retry") return "Rápido: ¿mañana o tarde?";
+  if (intent === "no_openings_that_day") return "Ese día no tengo disponibilidad. ¿Probamos otra fecha?";
+  if (intent === "no_availability_near_time") return "No veo disponibilidad cerca de esa hora. ¿Te sirve más temprano o más tarde?";
+
+  // ✅ nuevos
+  if (intent === "past_slot") return "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (ej: 2026-01-21 14:00).";
+  if (intent === "past_date") return "Esa fecha ya pasó. Envíame una fecha futura (YYYY-MM-DD).";
+  if (intent === "ask_time_for_date") return "Perfecto — ¿a qué hora te gustaría ese día? Respóndeme con HH:mm (ej: 14:00).";
+  if (intent === "offer_slots_for_date") return `Perfecto — aquí tienes algunas opciones:\n${optionsText}`;
+  if (intent === "ask_missing_field") return "Me falta un detalle — ¿me lo envías otra vez?";
+  if (intent === "ask_datetime_format") return "Me falta la fecha y la hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-21 14:00).";
 
   return idioma === "en" ? "Ok." : "Ok.";
 }

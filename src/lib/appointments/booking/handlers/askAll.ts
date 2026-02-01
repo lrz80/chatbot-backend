@@ -11,6 +11,7 @@ import {
 
 import { renderSlotsMessage, formatSlotHuman } from "../time";
 import { getSlotsForDate } from "../slots";
+import { humanizeBookingReply } from "../humanizer";
 
 // parseDateTimeExplicit viene de booking/time en tu flujo principal,
 // pero aquí lo recibimos como dependencia para no acoplar el handler.
@@ -34,7 +35,7 @@ export type AskAllDeps = {
   hours: any | null; // HoursByWeekday | null
 
   parseDateTimeExplicit: ParseDateTimeExplicitFn;
-  minLeadMinutes: number; 
+  minLeadMinutes: number;
 };
 
 export async function handleAskAll(deps: AskAllDeps): Promise<{
@@ -57,11 +58,12 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
   } = deps;
 
   const isMeta = canal === "facebook" || canal === "instagram";
+
   // ✅ Hydrate: preservar slot elegido aunque venga en picked_*
   const hydratedBooking = {
     ...booking,
     timeZone: booking?.timeZone || timeZone, // ✅ sticky
-    lang: booking?.lang || idioma,           // ✅ sticky
+    lang: booking?.lang || idioma, // ✅ sticky
     start_time: booking?.start_time || booking?.picked_start || null,
     end_time: booking?.end_time || booking?.picked_end || null,
     phone: booking?.phone || null,
@@ -78,17 +80,38 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
 
   const hasChosenSlot = !!hydratedBooking.start_time && !!hydratedBooking.end_time;
 
+  // ----------------------------
+  // Cambio de tema
+  // ----------------------------
   if (wantsToChangeTopic(userText)) {
-    return { handled: false, ctxPatch: { booking: { ...hydratedBooking, step: "idle", lang: effectiveLang, } } };
+    return {
+      handled: false,
+      ctxPatch: {
+        booking: { ...hydratedBooking, step: "idle", lang: effectiveLang },
+      },
+    };
   }
 
+  // ----------------------------
+  // Cancelar
+  // ----------------------------
   if (wantsToCancel(userText)) {
+    const canonicalText =
+      effectiveLang === "en"
+        ? "No problem — I’ll stop this for now. Whenever you’re ready, just tell me."
+        : "Claro — lo detengo por ahora. Cuando estés listo, solo dime.";
+
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "cancel_booking",
+      askedText: userText,
+      canonicalText,
+      locked: [],
+    });
+
     return {
       handled: true,
-      reply:
-        effectiveLang === "en"
-          ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
-          : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
+      reply,
       ctxPatch: {
         booking: {
           ...hydratedBooking,
@@ -107,29 +130,43 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
     };
   }
 
+  // ----------------------------
+  // Parse “todo en uno”
+  // ----------------------------
   const parsed = parseAllInOne(userText, tz, durationMin, minLeadMinutes, parseDateTimeExplicit);
 
-  // ✅ Merge: lo que llega del usuario + lo que ya teníamos
+  // Merge: lo que llega del usuario + lo que ya teníamos
   const name = (parsed?.name || hydratedBooking?.name || "").trim() || null;
   const email = (parsed?.email || hydratedBooking?.email || "").trim() || null;
 
   // phone solo aplica a Meta (IG/FB). En WhatsApp no lo pedimos aquí.
-  const phone =
-    isMeta
-      ? ((parsed?.phone || hydratedBooking?.phone || "").trim() || null)
-      : (hydratedBooking?.phone || null);
+  const phone = isMeta
+    ? ((parsed?.phone || hydratedBooking?.phone || "").trim() || null)
+    : (hydratedBooking?.phone || null);
 
-  // ✅ Si vino fecha/hora pero era en el pasado, dilo explícitamente
+  // ----------------------------
+  // Si vino fecha/hora pero era pasado: dilo explícito
+  // ----------------------------
   const dtToken = extractDateTimeToken(userText);
   if (dtToken) {
     const chk: any = parseDateTimeExplicit(dtToken, tz, durationMin, minLeadMinutes);
     if (chk?.error === "PAST_SLOT") {
+      const canonicalText =
+        effectiveLang === "en"
+          ? "That date/time is in the past. Send a future date and time like: 2026-01-21 14:00"
+          : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura como: 2026-01-21 14:00";
+
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "past_slot",
+        askedText: userText,
+        canonicalText,
+        locked: [],
+      });
+
       return {
         handled: true,
-        reply:
-          effectiveLang === "en"
-            ? "That date/time is in the past. Please send a future date and time (YYYY-MM-DD HH:mm)."
-            : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
+        reply,
         ctxPatch: {
           booking: {
             ...hydratedBooking,
@@ -146,19 +183,31 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
     }
   }
 
-  // ✅ Caso: el usuario manda SOLO fecha (YYYY-MM-DD) + name/email pero sin hora
+  // ----------------------------
+  // Caso: SOLO fecha (YYYY-MM-DD) + name/email pero sin hora
+  // ----------------------------
   const dateOnly = extractDateOnlyToken(userText, tz);
   if (dateOnly && parsed?.name && parsed?.email && !parsed?.startISO) {
-    // bloquea fecha pasada
     const dateOnlyDt = DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: tz });
     const todayStart = DateTime.now().setZone(tz).startOf("day");
+
     if (dateOnlyDt.isValid && dateOnlyDt < todayStart) {
+      const canonicalText =
+        effectiveLang === "en"
+          ? "That date is in the past. Please send a future date (YYYY-MM-DD)."
+          : "Esa fecha ya pasó. Envíame una fecha futura (YYYY-MM-DD).";
+
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "past_date",
+        askedText: userText,
+        canonicalText,
+        locked: [],
+      });
+
       return {
         handled: true,
-        reply:
-          effectiveLang === "en"
-            ? "That date is in the past. Please send a future date (YYYY-MM-DD)."
-            : "Esa fecha ya pasó. Envíame una fecha futura (YYYY-MM-DD).",
+        reply,
         ctxPatch: {
           booking: {
             ...hydratedBooking,
@@ -175,14 +224,24 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
       };
     }
 
-    // Si no hay business hours, pedimos hora en HH:mm y guardamos date_only para combinar luego
+    // Sin business hours: pedir hora HH:mm y guardar date_only
     if (!hours) {
+      const canonicalText =
+        effectiveLang === "en"
+          ? `Got it — what time works for you on ${dateOnly}? Reply with HH:mm (example: 14:00).`
+          : `Perfecto — ¿a qué hora te gustaría el ${dateOnly}? Respóndeme con HH:mm (ej: 14:00).`;
+
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "ask_time_for_date",
+        askedText: userText,
+        canonicalText,
+        locked: [dateOnly],
+      });
+
       return {
         handled: true,
-        reply:
-          effectiveLang === "en"
-            ? `Got it — what time works for you on ${dateOnly}? Reply with HH:mm (example: 14:00).`
-            : `Perfecto — ¿a qué hora te gustaría el ${dateOnly}? Respóndeme con HH:mm (ej: 14:00).`,
+        reply,
         ctxPatch: {
           booking: {
             ...hydratedBooking,
@@ -199,8 +258,8 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
       };
     }
 
-    // ✅ Hay business hours -> generamos slots para ese día
-    const slots = await getSlotsForDate({
+    // Con business hours: generar slots de ese día
+    const daySlots = await getSlotsForDate({
       tenantId,
       timeZone: tz,
       dateISO: dateOnly,
@@ -210,11 +269,26 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
       minLeadMinutes,
     });
 
-    const take = (slots || []).slice(0, 3);
+    const take = (daySlots || []).slice(0, 3);
+    const optionsText = renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take });
+
+    const canonicalText =
+      effectiveLang === "en"
+        ? `Perfect — here are a few options for ${dateOnly}:\n\n${optionsText}`
+        : `Perfecto — aquí tienes algunas opciones para ${dateOnly}:\n\n${optionsText}`;
+
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "offer_slots_for_date",
+      askedText: userText,
+      canonicalText,
+      locked: [dateOnly, optionsText],
+      optionsText,
+    });
 
     return {
       handled: true,
-      reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take }),
+      reply,
       ctxPatch: {
         booking: {
           ...hydratedBooking,
@@ -226,87 +300,132 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
           purpose: hydratedBooking?.purpose || null,
           date_only: dateOnly,
           slots: take,
-          last_offered_date: dateOnly, // ✅ útil para "otro día" / "más horarios"
+          last_offered_date: dateOnly,
         },
         booking_last_touch_at: Date.now(),
       },
     };
   }
 
-  // ✅ Caso CLAVE: ya existe slot elegido (start/end), pero el usuario mandó nombre+email
-  // (por ejemplo viene de confirm -> ask_all). No debemos pedir fecha/hora otra vez.
+  // ----------------------------
+  // Caso CLAVE: ya existe slot elegido (start/end) pero user manda name/email/phone
+  // ----------------------------
   if (hasChosenSlot && (name || email || phone) && !parsed?.startISO) {
     const missingName = !name;
     const missingEmail = !email;
     const missingPhone = isMeta && !phone;
 
-    // Si aún falta algo, pide SOLO el faltante y TE QUEDAS EN ask_all
+    // Si falta algo, pedir SOLO lo faltante
     if (missingName || missingEmail || missingPhone) {
       const want =
-        missingName ? (effectiveLang === "en" ? "your full name" : "tu nombre completo")
-        : missingEmail ? (effectiveLang === "en" ? "your email" : "tu email")
-        : (effectiveLang === "en" ? "your phone number (with country code)" : "tu teléfono (con código de país)");
+        missingName
+          ? (effectiveLang === "en" ? "your full name" : "tu nombre completo")
+          : missingEmail
+          ? (effectiveLang === "en" ? "your email" : "tu email")
+          : (effectiveLang === "en"
+              ? "your phone number (with country code)"
+              : "tu teléfono (con código de país)");
 
       const ex =
         missingName ? (effectiveLang === "en" ? "John Smith" : "Juan Pérez")
         : missingEmail ? "name@email.com"
         : "+13055551234";
 
+      const canonicalText =
+        effectiveLang === "en"
+          ? `I’m just missing ${want}. Example: ${ex}`
+          : `Solo me falta ${want}. Ej: ${ex}`;
+
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "ask_missing_field",
+        askedText: userText,
+        canonicalText,
+        locked: [want, ex],
+      });
+
       return {
         handled: true,
-        reply: effectiveLang === "en"
-          ? `I’m just missing ${want}. Example: ${ex}`
-          : `Solo me falta ${want}. Ej: ${ex}`,
+        reply,
         ctxPatch: {
           booking: {
             ...hydratedBooking,
             step: "ask_all",
             lang: effectiveLang,
-            timeZone: tz, 
-            name,
-            email,
-            phone,
-          },
-          booking_last_touch_at: Date.now(),
-        },
-      };
-    }
-
-    // ✅ Ya tengo todo lo necesario -> vuelve a confirm sin fricción
-    const whenTxt = formatSlotHuman({ startISO: hydratedBooking.start_time, timeZone: tz, idioma: effectiveLang  });
-
-    return {
-      handled: true,
-      reply:
-        effectiveLang === "en"
-          ? `Perfect — everything is ready. To finalize ${whenTxt}, reply YES or NO.`
-          : `Perfecto — ya tengo todo listo. Para finalizar ${whenTxt}, responde SI o NO.`,
-        ctxPatch: {
-          booking: {
-            ...hydratedBooking,
-            step: "confirm",
-            lang: effectiveLang,
             timeZone: tz,
             name,
             email,
             phone,
-            start_time: hydratedBooking.start_time,
-            end_time: hydratedBooking.end_time,
           },
           booking_last_touch_at: Date.now(),
         },
       };
     }
 
-  // ✅ Si vino completo, vamos directo a confirm
-  if (name && email && parsed?.startISO && parsed?.endISO && (!isMeta || phone)) {
-    const whenTxt = formatSlotHuman({ startISO: parsed.startISO, timeZone: tz, idioma: effectiveLang  });
+    // Ya tengo todo -> volver a confirm
+    const whenTxt = formatSlotHuman({
+      startISO: hydratedBooking.start_time,
+      timeZone: tz,
+      idioma: effectiveLang,
+    });
+
+    const canonicalText =
+      effectiveLang === "en"
+        ? `Perfect — everything is ready. To finalize ${whenTxt}, reply YES or NO.`
+        : `Perfecto — ya tengo todo listo. Para finalizar ${whenTxt}, responde SI o NO.`;
+
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "ask_confirm_yes_no",
+      askedText: userText,
+      canonicalText,
+      locked: [whenTxt],
+      prettyWhen: whenTxt,
+    });
+
     return {
       handled: true,
-      reply:
-        effectiveLang === "en"
-          ? `To confirm booking for ${whenTxt}? Reply YES to confirm or NO to cancel.`
-          : `Para confirmar: ${whenTxt}. Responde SI para confirmar o NO para cancelar.`,
+      reply,
+      ctxPatch: {
+        booking: {
+          ...hydratedBooking,
+          step: "confirm",
+          lang: effectiveLang,
+          timeZone: tz,
+          name,
+          email,
+          phone,
+          start_time: hydratedBooking.start_time,
+          end_time: hydratedBooking.end_time,
+        },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
+  // ----------------------------
+  // Si vino completo (name/email + start/end) -> confirm directo
+  // ----------------------------
+  if (name && email && parsed?.startISO && parsed?.endISO && (!isMeta || phone)) {
+    const whenTxt = formatSlotHuman({ startISO: parsed.startISO, timeZone: tz, idioma: effectiveLang });
+
+    const canonicalText =
+      effectiveLang === "en"
+        ? `To confirm booking for ${whenTxt}, reply YES to confirm or NO to cancel.`
+        : `Para confirmar ${whenTxt}, responde SI para confirmar o NO para cancelar.`;
+
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "ask_confirm_yes_no",
+      askedText: userText,
+      canonicalText,
+      locked: [whenTxt],
+      prettyWhen: whenTxt,
+    });
+
+    return {
+      handled: true,
+      reply,
       ctxPatch: {
         booking: {
           ...hydratedBooking,
@@ -324,50 +443,78 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
     };
   }
 
-  // ✅ Fallbacks: pedir SOLO lo que falta (en orden)
-  // ✅ Fallbacks: pedir SOLO lo que falta, pero SIEMPRE en ask_all
-const missingName = !name;
-const missingEmail = !email;
-const missingPhone = isMeta && !phone;
+  // ----------------------------
+  // Fallback: pedir SOLO lo que falta (name/email/phone)
+  // ----------------------------
+  const missingName = !name;
+  const missingEmail = !email;
+  const missingPhone = isMeta && !phone;
 
-if (missingName || missingEmail || missingPhone) {
-  const want =
-    missingName ? (effectiveLang === "en" ? "your full name" : "tu nombre completo")
-    : missingEmail ? (effectiveLang === "en" ? "your email" : "tu email")
-    : (effectiveLang === "en" ? "your phone number (with country code)" : "tu teléfono (con código de país)");
+  if (missingName || missingEmail || missingPhone) {
+    const want =
+      missingName
+        ? (effectiveLang === "en" ? "your full name" : "tu nombre completo")
+        : missingEmail
+        ? (effectiveLang === "en" ? "your email" : "tu email")
+        : (effectiveLang === "en"
+            ? "your phone number (with country code)"
+            : "tu teléfono (con código de país)");
 
-  const ex =
-    missingName ? (effectiveLang === "en" ? "John Smith" : "Juan Pérez")
-    : missingEmail ? "name@email.com"
-    : "+13055551234";
+    const ex =
+      missingName ? (effectiveLang === "en" ? "John Smith" : "Juan Pérez")
+      : missingEmail ? "name@email.com"
+      : "+13055551234";
 
-  return {
-    handled: true,
-    reply: effectiveLang === "en"
-      ? `I’m just missing ${want}. Example: ${ex}`
-      : `Solo me falta ${want}. Ej: ${ex}`,
-    ctxPatch: {
-      booking: {
-        ...hydratedBooking,
-        step: "ask_all",
-        lang: effectiveLang,
-        timeZone: tz, 
-        name,
-        email,
-        phone,
-      },
-      booking_last_touch_at: Date.now(),
-    },
-  };
-}
-
-  // Falta fecha/hora
-  return {
-    handled: true,
-    reply:
+    const canonicalText =
       effectiveLang === "en"
-        ? "I’m missing the date/time. Please use: YYYY-MM-DD HH:mm (example: 2026-01-21 14:00)."
-        : "Me falta la fecha y hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-21 14:00).",
+        ? `I’m just missing ${want}. Example: ${ex}`
+        : `Solo me falta ${want}. Ej: ${ex}`;
+
+    const reply = await humanizeBookingReply({
+      idioma: effectiveLang,
+      intent: "ask_missing_field",
+      askedText: userText,
+      canonicalText,
+      locked: [want, ex],
+    });
+
+    return {
+      handled: true,
+      reply,
+      ctxPatch: {
+        booking: {
+          ...hydratedBooking,
+          step: "ask_all",
+          lang: effectiveLang,
+          timeZone: tz,
+          name,
+          email,
+          phone,
+        },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
+  // ----------------------------
+  // Falta fecha/hora
+  // ----------------------------
+  const canonicalText =
+    effectiveLang === "en"
+      ? "I’m missing the date and time. Please use: YYYY-MM-DD HH:mm (example: 2026-01-21 14:00)."
+      : "Me falta la fecha y la hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-21 14:00).";
+
+  const reply = await humanizeBookingReply({
+    idioma: effectiveLang,
+    intent: "ask_datetime_format",
+    askedText: userText,
+    canonicalText,
+    locked: [],
+  });
+
+  return {
+    handled: true,
+    reply,
     ctxPatch: {
       booking: {
         ...hydratedBooking,

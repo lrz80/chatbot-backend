@@ -41,6 +41,8 @@ import { bookingFlowMvp } from "../../lib/appointments/bookingFlow";
 import crypto from "crypto";
 import { sendCapiEvent } from "../../services/metaCapi";
 import { isAmbiguousLangText } from "../../lib/appointments/booking/text";
+import { runBookingGuardrail } from "../../lib/appointments/booking/guardrail";
+
 
 const sha256 = (s: string) =>
   crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
@@ -1424,6 +1426,37 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       limit: 12,
     });
 
+    // ✅ Guardrail reusable: si huele a booking, NO pases al LLM
+    const gr = await runBookingGuardrail({
+      bookingEnabled,
+      bookingLink,
+      tenantId: tenant.id,
+      canal: "whatsapp",
+      contacto: contactoNorm,
+      idioma: idiomaDestino,
+      userText: userInput,
+      ctx: convoCtx,
+      messageId,
+      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
+      bookingFlow: bookingFlowMvp, // DI
+    });
+
+    if (gr.result?.ctxPatch) transition({ patchCtx: gr.result.ctxPatch });
+
+    if (gr.hit && gr.result?.handled) {
+      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+        activeFlow,
+        activeStep,
+        context: convoCtx,
+      });
+
+      return await replyAndExit(
+        gr.result.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
+        "booking_guardrail:sm_reply",
+        "agendar_cita"
+      );
+    }
+
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
       promptBase: promptBaseMem,
@@ -1507,6 +1540,36 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   // ✅ FALLBACK ÚNICO (solo si SM no respondió)
   // ===============================
   if (!replied) {
+      const gr = await runBookingGuardrail({
+      bookingEnabled,
+      bookingLink,
+      tenantId: tenant.id,
+      canal: "whatsapp",
+      contacto: contactoNorm,
+      idioma: idiomaDestino,
+      userText: userInput,
+      ctx: convoCtx,
+      messageId,
+      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
+      bookingFlow: bookingFlowMvp,
+    });
+
+    if (gr.result?.ctxPatch) transition({ patchCtx: gr.result.ctxPatch });
+
+    if (gr.hit && gr.result?.handled) {
+      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+        activeFlow,
+        activeStep,
+        context: convoCtx,
+      });
+
+      return await replyAndExit(
+        gr.result.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
+        "booking_guardrail:sm_fallback",
+        "agendar_cita"
+      );
+    }
+
     const composed = await answerWithPromptBase({
       tenantId: tenant.id,
       promptBase: promptBaseMem,

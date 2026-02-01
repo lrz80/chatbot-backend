@@ -23,6 +23,7 @@ import {
   wantsToChangeTopic,
   matchesBookingIntent,
   parseFullName,
+  wantsSpecificTime,
 } from "./booking/text";
 import { handleAskEmailPhone } from "./booking/handlers/askEmailPhone";
 
@@ -399,11 +400,25 @@ export async function bookingFlowMvp(opts: {
   const capability = isCapabilityQuestion(userText);
   const directReq = isDirectBookingRequest(userText);
 
+  const specificTime = wantsSpecificTime(userText);
+
   const wantsBooking =
     hasExplicitDateTime(userText) ||
     directReq ||
     (rawWants && !capability) ||
-    (hasAppointmentContext(userText) && !capability);
+    (hasAppointmentContext(userText) && !capability) ||
+    // ✅ CLAVE: “tienes disponibilidad para el lunes a las 3?”
+    (specificTime && !capability);
+  console.log("[BOOKING wantsBooking]", {
+    userText,
+    wantsBooking,
+    specificTime,
+    rawWants,
+    directReq,
+    capability,
+    hasAppointmentContext: hasAppointmentContext(userText),
+    hasExplicitDateTime: hasExplicitDateTime(userText),
+  });
 
   // ✅ RESET PERSONAL SOLO AL INICIO DE UN BOOKING NUEVO
   // Evita que se agende "sin preguntar nada" por tener name/email guardados de antes.
@@ -411,9 +426,9 @@ export async function bookingFlowMvp(opts: {
     booking.name = null;
     booking.email = null;
 
-    // en WhatsApp el phone lo tenemos del contacto; en Meta se captura luego
-    if (canal === "facebook" || canal === "instagram") {
-      booking.phone = null;
+  // en WhatsApp el phone lo tenemos del contacto; en Meta se captura luego
+  if (canal === "facebook" || canal === "instagram") {
+    booking.phone = null;
     }
   }
 

@@ -42,6 +42,7 @@ import crypto from "crypto";
 import { sendCapiEvent } from "../../services/metaCapi";
 import { bookingFlowMvp } from "../../lib/appointments/bookingFlow";
 import { isAmbiguousLangText } from "../../lib/appointments/booking/text";
+import { runBookingGuardrail } from "../../lib/appointments/booking/guardrail";
 
 
 type CanalEnvio = "facebook" | "instagram";
@@ -1329,12 +1330,10 @@ router.post("/api/facebook/webhook", async (req, res) => {
           console.warn("⚠️ [META] applyEmotionTriggers failed:", e?.message);
         }
 
-        // ===============================
-        // 📅 BOOKING GATE (Google Calendar) — ANTES del SM/LLM
-        // ===============================
+        // 📅 BOOKING GUARDRAIL (reusable) — ANTES del SM/LLM
         const bookingLink = extractBookingLinkFromPrompt(promptBase);
 
-        // ✅ Si el toggle está OFF, nunca ejecutes bookingFlowMvp (y limpia estados viejos)
+        // ✅ Si el toggle está OFF, limpia estados viejos y NO ejecutes nada
         if (!bookingEnabled) {
           if ((convoCtx as any)?.booking) {
             transition({ patchCtx: { booking: null } });
@@ -1345,35 +1344,37 @@ router.post("/api/facebook/webhook", async (req, res) => {
             });
           }
         } else {
-          const bookingStep = (convoCtx as any)?.booking?.step;
-          const inBooking = bookingStep && bookingStep !== "idle";
-
-          const bk = await bookingFlowMvp({
+          const gr = await runBookingGuardrail({
+            bookingEnabled,
+            bookingLink,
             tenantId,
-            canal: canalEnvio,     // ✅ "facebook" | "instagram"
-            contacto: senderId,    // PSID/IGSID
+            canal: canalEnvio,          // ✅ "facebook" | "instagram"
+            contacto: senderId,
             idioma: idiomaDestino,
             userText: userInput,
             ctx: convoCtx,
-            bookingLink,
             messageId,
+            detectedIntent: lastIntent || INTENCION_FINAL_CANONICA || null,
+            bookingFlow: bookingFlowMvp, // DI
           });
 
-          if (bk?.ctxPatch) transition({ patchCtx: bk.ctxPatch });
+          // aplica patch aunque no haya “hit” (por ejemplo wantsToChangeTopic limpia booking)
+          if (gr.result?.ctxPatch) transition({ patchCtx: gr.result.ctxPatch });
 
-          if (bk?.handled) {
-            // ✅ FIX CRÍTICO: persiste el ctx del booking ANTES de salir
+          if (gr.hit && gr.result?.handled) {
             await setConversationStateCompat(tenantId, canal, senderId, {
               activeFlow,
               activeStep,
               context: convoCtx,
             });
+
             await replyAndExit(
-              bk.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
-              "booking_flow",
+              gr.result.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
+              "booking_guardrail:pre_sm",
               "agendar_cita"
             );
-            continue; // 👈 importantísimo en el loop Meta
+
+            continue; // ✅ CRÍTICO en Meta loop
           }
         }
 
@@ -1472,6 +1473,38 @@ router.post("/api/facebook/webhook", async (req, res) => {
             limit: 12,
           });
 
+          const gr = await runBookingGuardrail({
+            bookingEnabled,
+            bookingLink,
+            tenantId,
+            canal: canalEnvio,
+            contacto: senderId,
+            idioma: idiomaDestino,
+            userText: userInput,
+            ctx: convoCtx,
+            messageId,
+            detectedIntent: smResult.intent || lastIntent || INTENCION_FINAL_CANONICA || null,
+            bookingFlow: bookingFlowMvp,
+          });
+
+          if (gr.result?.ctxPatch) transition({ patchCtx: gr.result.ctxPatch });
+
+          if (gr.hit && gr.result?.handled) {
+            await setConversationStateCompat(tenantId, canal, senderId, {
+              activeFlow,
+              activeStep,
+              context: convoCtx,
+            });
+
+            await replyAndExit(
+              gr.result.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
+              "booking_guardrail:sm_reply",
+              "agendar_cita"
+            );
+
+            continue;
+          }
+
           const composed = await answerWithPromptBase({
             tenantId,
             promptBase: promptBaseMem,
@@ -1550,6 +1583,38 @@ router.post("/api/facebook/webhook", async (req, res) => {
             excludeMessageId: messageId,
             limit: 12,
           });
+
+          const gr = await runBookingGuardrail({
+            bookingEnabled,
+            bookingLink,
+            tenantId,
+            canal: canalEnvio,
+            contacto: senderId,
+            idioma: idiomaDestino,
+            userText: userInput,
+            ctx: convoCtx,
+            messageId,
+            detectedIntent: lastIntent || INTENCION_FINAL_CANONICA || null,
+            bookingFlow: bookingFlowMvp,
+          });
+
+          if (gr.result?.ctxPatch) transition({ patchCtx: gr.result.ctxPatch });
+
+          if (gr.hit && gr.result?.handled) {
+            await setConversationStateCompat(tenantId, canal, senderId, {
+              activeFlow,
+              activeStep,
+              context: convoCtx,
+            });
+
+            await replyAndExit(
+              gr.result.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
+              "booking_guardrail:sm_fallback",
+              "agendar_cita"
+            );
+
+            continue;
+          }
 
           const composed = await answerWithPromptBase({
             tenantId,

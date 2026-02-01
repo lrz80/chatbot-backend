@@ -21,7 +21,7 @@ export function hasExplicitDateTime(text: string) {
 export function hasAppointmentContext(text: string) {
   const t = normalizeText(text);
   const agendLike = /\bagend+a+\w*\b/;
-  const bookLike = /\b(cita|consulta|reservar|reserva|turno|appointment|booking|schedule)\b/;
+  const bookLike = /\b(cita|consulta|reservar|reserva|turno|appointment|booking|schedule|disponibilidad|disponible|horario|horarios)\b/;
   return agendLike.test(t) || bookLike.test(t);
 }
 
