@@ -47,7 +47,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
   const resetPersonal = {
     name: null,
     email: null,
-    phone: null,   // WA no lo necesita, Meta lo llenas luego
+    phone: hydratedBooking.phone || null,
   };
 
   // ✅ NUEVO: si el usuario ya dijo día+hora ("lunes a las 3") -> confirm directo
@@ -185,10 +185,12 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
       return {
         handled: true,
-        reply:
-          effectiveLang === "en"
-            ? `I don’t have that exact time. Here are the closest options:\n\n` + renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take, style: "closest" })
-            : `No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n` + renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take, style: "closest" }),
+        reply: renderSlotsMessage({
+          idioma: effectiveLang,
+          timeZone: tz,
+          slots: take,
+          style: "closest",
+        }),
         ctxPatch: {
           booking: {
             ...(hydratedBooking || {}),

@@ -619,11 +619,13 @@ if (booking.step === "ask_datetime") {
 }
 
   if (booking.step === "confirm") {
+    const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
+
     return handleConfirm({
       tenantId,
       canal,
       contacto,
-      idioma,
+      idioma: effectiveLang,
       userText,
       booking,
       timeZone,
