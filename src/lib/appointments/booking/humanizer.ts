@@ -186,7 +186,7 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
     ${JSON.stringify(payload)}`;
 
     const res = await client.responses.create({
-      model: "gpt-40-mini",
+      model: "gpt-4o-mini",
       input: [
         { role: "system", content: system },
         { role: "user", content: user },
