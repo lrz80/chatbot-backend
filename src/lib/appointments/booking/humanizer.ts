@@ -169,16 +169,18 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
     - Do NOT change the meaning of the message.
     - Do NOT add or remove availability.
     - Do NOT add times, dates, options, names, emails, phones, or links.
-    - If there are LOCKED chunks, you MUST keep them EXACTLY as-is (character by character).
+    - There are MUST_COPY text snippets you must copy EXACTLY (character by character). Do not rename, summarize, or refer to them.
     - If the intent is not confirm, do not mention YES/NO.
+    - You must include all MUST_COPY snippets verbatim in your output.
     - Output only the final message, no explanations.`
         : `Reescribes UN mensaje de WhatsApp para que suene natural.
     REGLAS ESTRICTAS:
     - NO cambies el significado del mensaje.
     - NO inventes ni quites disponibilidad.
     - NO agregues horas, fechas, opciones, nombres, emails, teléfonos ni links.
-    - Si hay fragmentos LOCKED, debes copiarlos EXACTAMENTE iguales (carácter por carácter).
+    - Hay fragmentos MUST_COPY que debes copiar EXACTAMENTE igual (carácter por carácter). No los renombres, no los resumas, no te refieras a ellos.
     - Si el intent no es confirmación, no menciones SI/NO.
+    - Debes incluir todos los fragmentos MUST_COPY literalmente en tu salida.
     - Devuelve solo el mensaje final, sin explicación.`;
 
     const payload = {
@@ -186,6 +188,7 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
       idioma,
       askedText: askedText || "",
       canonicalText,
+      mustCopy: locked,
       locked,
       // extras opcionales (por si en el futuro quieres analizar)
       prettyWhen: prettyWhen || "",
@@ -197,12 +200,14 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
     const user =
       idioma === "en"
         ? `Rewrite the CANONICAL message to sound more human, WITHOUT changing meaning.
-    LOCKED chunks must remain EXACTLY unchanged.
+    MUST_COPY snippets must appear EXACTLY in the final message (copy/paste them exactly).
+    Never output the words "LOCKED" or "MUST_COPY".
 
     JSON:
     ${JSON.stringify(payload)}`
             : `Reescribe el mensaje CANÓNICO para que suene más humano, SIN cambiar el significado.
-    Los fragmentos LOCKED deben quedar EXACTAMENTE iguales.
+    Los fragmentos MUST_COPY deben aparecer EXACTAMENTE en el mensaje final (cópialos tal cual).
+    Nunca escribas las palabras "LOCKED" ni "MUST_COPY".
 
     JSON:
     ${JSON.stringify(payload)}`;
