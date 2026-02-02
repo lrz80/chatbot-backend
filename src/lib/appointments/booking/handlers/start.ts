@@ -275,7 +275,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
           idioma: effectiveLang,
           timeZone: tz,
           slots: next.take,
-          style: "closest",
+          style: "sameDay", // ✅ antes: "closest"
         });
 
         const prettyDay =
@@ -285,8 +285,8 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
         const canonicalText =
           effectiveLang === "en"
-            ? `I’m fully booked that day. The next available day is ${prettyDay}. Here are a few options:\n\n${optionsText}`
-            : `Ese día no tengo disponibilidad. El próximo día disponible es ${prettyDay}. Aquí tienes algunas opciones:\n\n${optionsText}`;
+            ? `I’m fully booked that day. The next available day is ${prettyDay}.\n\n${optionsText}`
+            : `Ese día no tengo disponibilidad. El próximo día disponible es ${prettyDay}.\n\n${optionsText}`;
 
         const humanReply = await humanizeBookingReply({
           idioma: effectiveLang,
@@ -601,13 +601,13 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
           idioma: effectiveLang,
           timeZone: tz,
           slots: take,
-          style: "closest",
+          style: "sameDay", // ✅ antes: "closest"
         });
 
         const canonicalText =
           effectiveLang === "en"
-            ? `Sorry, that time isn't available. I have these times available:\n\n${optionsText}`
-            : `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`;
+            ? `Sorry, that time isn't available.\n\n${optionsText}`
+            : `Lo siento, esa hora no está disponible.\n\n${optionsText}`;
 
         const humanReply = await humanizeBookingReply({
           idioma: effectiveLang,

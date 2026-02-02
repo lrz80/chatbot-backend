@@ -222,7 +222,7 @@ export function renderSlotsMessage(opts: {
     ask === "anything"
       ? idioma === "en"
         ? `Please Reply with a number (1-${slots.length}) or tell me a time (like "2pm" / "14:00").`
-        : `Por favorResponde con un número (1-${slots.length}) o dime una hora (como "2pm" / "14:00").`
+        : `Por favor responde con un número (1-${slots.length}) o dime una hora (como "2pm" / "14:00").`
       : idioma === "en"
         ? `Please Reply with the number you prefer (1-${slots.length}).`
         : `Por favor Responde con el número que prefieras (1-${slots.length}).`;
