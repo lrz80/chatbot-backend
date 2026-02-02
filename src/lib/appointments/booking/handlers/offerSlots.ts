@@ -193,6 +193,92 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
 
   const slotsShown: Slot[] = daypart ? filterSlotsByDaypart(slots, tz, daypart) : slots;
 
+  // ✅ Detectar si el usuario pide explícitamente "mañana" o "tarde"
+  const asksAfternoon = /\b(tarde|afternoon|pm)\b/i.test(t);
+  const asksMorning = /\b(mañana|morning|am)\b/i.test(t);
+  const askedDaypart: "morning" | "afternoon" | null =
+    asksAfternoon ? "afternoon" : asksMorning ? "morning" : null;
+
+  // ✅ Si pidió daypart, refrescamos slots del DÍA COMPLETO y filtramos por daypart.
+  // Esto evita que se quede atrapado con los 3 slots guardados (que pueden ser solo mañana).
+  if (askedDaypart && hours) {
+    const ctxDate =
+      (hydratedBooking as any)?.date_only ||
+      (hydratedBooking as any)?.last_offered_date ||
+      (slots?.[0]?.startISO
+        ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
+        : null);
+
+    if (ctxDate) {
+      let allDaySlots = sortSlotsAsc(
+        await getSlotsForDate({
+          tenantId,
+          timeZone: tz,
+          dateISO: ctxDate,
+          durationMin,
+          bufferMin,
+          minLeadMinutes,
+          hours,
+          calendarId,
+        })
+      );
+
+      const filtered = filterSlotsByDaypart(allDaySlots, tz, askedDaypart);
+
+      if (filtered.length) {
+        const take = filtered.slice(0, 3);
+
+        const optionsText = renderSlotsMessage({
+          idioma: effectiveLang,
+          timeZone: tz,
+          slots: take,
+          style: "sameDay",
+          ask: "number",
+        });
+
+        return {
+          handled: true,
+          reply: optionsText,
+          ctxPatch: {
+            booking: {
+              ...hydratedBooking,
+              step: "offer_slots",
+              timeZone: tz,
+              daypart: askedDaypart,
+              slots: take,
+              last_offered_date: ctxDate,
+              date_only: ctxDate,
+            },
+            booking_last_touch_at: Date.now(),
+          },
+        };
+      }
+
+      // si no hay en ese daypart:
+      const canonicalText =
+        effectiveLang === "en"
+          ? `I don’t have availability in the ${askedDaypart === "afternoon" ? "afternoon" : "morning"} for that day. Want to try another time?`
+          : `No tengo disponibilidad en la ${askedDaypart === "afternoon" ? "tarde" : "mañana"} para ese día. ¿Quieres probar otra hora?`;
+
+      const reply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "no_availability_near_time",
+        askedText: userText,
+        canonicalText,
+        locked: [],
+      });
+
+      return {
+        handled: true,
+        reply,
+        ctxPatch: {
+          booking: { ...hydratedBooking, timeZone: tz, daypart: askedDaypart },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+  }
+
   // ✅ Sin slots guardados
   if (!slots.length) {
     const canonicalText =
@@ -300,7 +386,11 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   // ⚠️ Solo repetir lista si NO pide hora específica
   const hasExplicitHour = extractTimeOnlyToken(userText) || extractTimeConstraint(userText);
 
-  if (!hasExplicitHour && /\b(horario|horarios|hours|available|disponible|disponibles)\b/i.test(t)) {
+  if (
+    !hasExplicitHour &&
+    /\b(horario|horarios|hours|available|availability|openings|slots|disponible|disponibles|disponibilidad)\b/i.test(t)
+  ) {
+
     return {
       handled: true,
       reply: renderSlotsMessage({
@@ -645,6 +735,14 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     const choice = parseSlotChoice(userText, slotsShown.length);
 
     if (!choice) {
+      // Si el usuario preguntó por disponibilidad, re-muestra la lista en vez de "retry"
+      if (/\b(disponible|disponibles|disponibilidad|available|availability)\b/i.test(t)) {
+        return {
+          handled: true,
+          reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: slotsShown }),
+          ctxPatch: { booking: { ...hydratedBooking }, booking_last_touch_at: Date.now() },
+        };
+      }
       const canonicalText =
         effectiveLang === "en"
           ? `Reply with a number (1-${slotsShown.length}). You can also say a time like "2pm" or "14:00".`
