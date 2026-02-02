@@ -6,6 +6,8 @@ import { weekdayKey, parseHHmm } from "../time";
 import { getSlotsForDateWindow } from "../slots";
 import { renderSlotsMessage } from "../time";
 import { humanizeBookingReply } from "../humanizer";
+import { googleFreeBusy } from "../../../../services/googleCalendar";
+import { extractBusyBlocks } from "../freebusy";
 
 
 export type StartBookingDeps = {
@@ -42,6 +44,30 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
   const effectiveLang: "es" | "en" = hydratedBooking.lang;
   const tz = hydratedBooking.timeZone;
+
+  async function isSlotReallyFree(startISO: string, endISO: string) {
+    if (!deps.tenantId) return { ok: false, reason: "no_tenant" as const };
+    if (!Number.isFinite(deps.bufferMin as any)) return { ok: false, reason: "no_buffer" as const };
+
+    const start = DateTime.fromISO(startISO, { zone: tz });
+    const end = DateTime.fromISO(endISO, { zone: tz });
+    const timeMin = start.minus({ minutes: Number(deps.bufferMin) }).toISO();
+    const timeMax = end.plus({ minutes: Number(deps.bufferMin) }).toISO();
+
+    if (!timeMin || !timeMax) return { ok: false, reason: "invalid_range" as const };
+
+    const fb = await googleFreeBusy({
+      tenantId: deps.tenantId,
+      timeMin,
+      timeMax,
+      calendarIds: ["primary"], // por ahora. En el paso siguiente lo cambiamos al calendar_id real del tenant.
+    });
+
+    if ((fb as any)?.degraded) return { ok: false, reason: "degraded" as const };
+
+    const busy = extractBusyBlocks(fb);
+    return { ok: busy.length === 0, reason: busy.length ? "busy" as const : null };
+  }
 
   if (!wantsBooking) return { handled: false };
 
@@ -137,6 +163,32 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
       // ✅ Exacto disponible -> confirm directo (igual que askDaypart)
       if (exact) {
+        // ✅ Guard: check real con Google
+        const check = await isSlotReallyFree(exact.startISO, exact.endISO);
+        if (!check.ok) {
+          const canonicalText =
+            effectiveLang === "en"
+              ? "I can’t confirm that time right now. What other time works for you?"
+              : "Ahora mismo no puedo confirmar ese horario en el calendario. ¿Qué otra hora te funciona?";
+
+          const humanReply = await humanizeBookingReply({
+            idioma: effectiveLang,
+            intent: "ask_daypart_retry",
+            askedText: userText,
+            canonicalText,
+            locked: [],
+          });
+
+          return {
+            handled: true,
+            reply: humanReply,
+            ctxPatch: {
+              booking: { ...(hydratedBooking || {}), step: "ask_datetime", timeZone: tz, lang: effectiveLang },
+              booking_last_touch_at: Date.now(),
+            },
+          };
+        }
+
         const prettyWhen =
           effectiveLang === "en"
             ? DateTime.fromISO(exact.startISO, { zone: tz })
@@ -236,6 +288,32 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
   if (dt) {
     const d = DateTime.fromISO(dt.startISO, { zone: tz }).setLocale(effectiveLang === "en" ? "en" : "es");
+
+    // ✅ Guard: check real con Google (si no podemos chequear, NO confirmes)
+    const check = await isSlotReallyFree(dt.startISO, dt.endISO);
+    if (!check.ok) {
+      const canonicalText =
+        effectiveLang === "en"
+          ? "I can’t confirm that time right now. What other time works for you?"
+          : "Ahora mismo no puedo confirmar ese horario en el calendario. ¿Qué otra hora te funciona?";
+
+      const humanReply = await humanizeBookingReply({
+        idioma: effectiveLang,
+        intent: "ask_daypart_retry",
+        askedText: userText,
+        canonicalText,
+        locked: [],
+      });
+
+      return {
+        handled: true,
+        reply: humanReply,
+        ctxPatch: {
+          booking: { ...(hydratedBooking || {}), step: "ask_datetime", timeZone: tz, lang: effectiveLang },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
 
     const prettyWhen =
       effectiveLang === "en"
