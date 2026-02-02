@@ -77,6 +77,23 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
     return { ok: busy.length === 0, reason: busy.length ? "busy" as const : null };
   }
 
+  async function pickClosestActuallyFreeSlots(target: DateTime, slots: any[], max = 3) {
+  const sorted = [...slots].sort((a, b) => {
+    const am = DateTime.fromISO(a.startISO, { zone: tz }).toMillis();
+    const bm = DateTime.fromISO(b.startISO, { zone: tz }).toMillis();
+    const t = target.toMillis();
+    return Math.abs(am - t) - Math.abs(bm - t);
+  });
+
+  const out: any[] = [];
+  for (const s of sorted) {
+    if (out.length >= max) break;
+    const ok = await isSlotReallyFree(s.startISO, s.endISO);
+    if (ok.ok) out.push(s);
+  }
+  return out;
+}
+
   if (!wantsBooking) return { handled: false };
 
   const resetPersonal = {
@@ -169,66 +186,81 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         return start === hhmm;
       });
 
-      const takeClosest3 = (target: DateTime) =>
-        [...windowSlots]
-          .sort((a, b) => {
-            const am = DateTime.fromISO(a.startISO, { zone: tz }).toMillis();
-            const bm = DateTime.fromISO(b.startISO, { zone: tz }).toMillis();
-            const t = target.toMillis();
-            return Math.abs(am - t) - Math.abs(bm - t);
-          })
-          .slice(0, 3);
-
       // ✅ Exacto disponible -> confirm directo (igual que askDaypart)
       if (exact) {
         // ✅ Guard: check real con Google
         const check = await isSlotReallyFree(exact.startISO, exact.endISO);
 
-        // ❌ si está ocupado -> ofrecer 3 cercanos
+        // ✅ si está ocupado -> ofrecer 3 cercanos REALMENTE libres
         if (!check.ok && check.reason === "busy") {
-          const take = takeClosest3(base);
+          const take = await pickClosestActuallyFreeSlots(base, windowSlots, 3);
 
-          const optionsText = renderSlotsMessage({
-            idioma: effectiveLang,
-            timeZone: tz,
-            slots: take,
-            style: "closest",
-          });
+          if (take.length > 0) {
+            const optionsText = renderSlotsMessage({
+              idioma: effectiveLang,
+              timeZone: tz,
+              slots: take,
+              style: "closest",
+            });
 
+            const canonicalText =
+              effectiveLang === "en"
+                ? `Sorry, that time isn't available. I have these times available:\n\n${optionsText}`
+                : `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`;
+
+            const humanReply = await humanizeBookingReply({
+              idioma: effectiveLang,
+              intent: "slot_exact_unavailable_with_options",
+              askedText: userText,
+              canonicalText,
+              optionsText,
+              locked: [optionsText],
+            });
+
+            return {
+              handled: true,
+              reply: humanReply,
+              ctxPatch: {
+                booking: {
+                  ...(hydratedBooking || {}),
+                  ...resetPersonal,
+                  step: "offer_slots",
+                  timeZone: tz,
+                  lang: effectiveLang,
+                  date_only: dateISO2,
+                  last_offered_date: dateISO2,
+                  slots: take,
+                },
+                booking_last_touch_at: Date.now(),
+              },
+            };
+          }
+
+          // no conseguimos opciones libres
           const canonicalText =
             effectiveLang === "en"
-              ? `Sorry, that time isn't available. I have these times available:\n\n${optionsText}`
-              : `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`;
+              ? "Sorry, that time isn't available. What other time works for you?"
+              : "Lo siento, esa hora no está disponible. ¿Qué otra hora te funciona?";
 
           const humanReply = await humanizeBookingReply({
             idioma: effectiveLang,
-            intent: "slot_exact_unavailable_with_options",
+            intent: "ask_daypart_retry",
             askedText: userText,
             canonicalText,
-            optionsText,
-            locked: [optionsText], // ✅ no puede inventar ni alterar
+            locked: [],
           });
 
           return {
             handled: true,
             reply: humanReply,
             ctxPatch: {
-              booking: {
-                ...(hydratedBooking || {}),
-                ...resetPersonal,
-                step: "offer_slots",
-                timeZone: tz,
-                lang: effectiveLang,
-                date_only: dateISO2,
-                last_offered_date: dateISO2,
-                slots: take,
-              },
+              booking: { ...(hydratedBooking || {}), step: "ask_datetime", timeZone: tz, lang: effectiveLang },
               booking_last_touch_at: Date.now(),
             },
           };
         }
 
-        // 🟡 si no podemos confirmar (degraded / no tokens / etc) -> no inventar
+        // 🟡 degraded / no_tenant / invalid_range / etc -> NO inventar slots
         if (!check.ok) {
           const canonicalText =
             effectiveLang === "en"
@@ -295,17 +327,34 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         };
       }
 
-      // ❌ No hay exacto -> ofrecer cercanos (top 5)
-      const take = [...windowSlots]
-        .sort((a, b) => {
-          const am = DateTime.fromISO(a.startISO, { zone: tz }).toMillis();
-          const bm = DateTime.fromISO(b.startISO, { zone: tz }).toMillis();
-          const target = base.toMillis();
-          return Math.abs(am - target) - Math.abs(bm - target);
-        })
-        .slice(0, 3);
+      // ❌ No hay exacto -> ofrecer 3 cercanos realmente libres
+      const take = await pickClosestActuallyFreeSlots(base, windowSlots, 3);
 
-      // ✅ Humanizado (SIN inventar): bloquea TODA la lista
+      // ⚠️ Si no hay ninguna hora realmente libre → fallback
+      if (!take.length) {
+        const canonicalText =
+          effectiveLang === "en"
+            ? "Sorry — I don’t have availability around that time. What other time works for you?"
+            : "Lo siento — no tengo disponibilidad cerca de esa hora. ¿Qué otra hora te funciona?";
+
+        const humanReply = await humanizeBookingReply({
+          idioma: effectiveLang,
+          intent: "ask_daypart_retry",
+          askedText: userText,
+          canonicalText,
+          locked: [],
+        });
+
+        return {
+          handled: true,
+          reply: humanReply,
+          ctxPatch: {
+            booking: { ...(hydratedBooking || {}), step: "ask_datetime", timeZone: tz, lang: effectiveLang },
+            booking_last_touch_at: Date.now(),
+          },
+        };
+      }
+
       const optionsText = renderSlotsMessage({
         idioma: effectiveLang,
         timeZone: tz,
@@ -315,8 +364,8 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
       const canonicalText =
         effectiveLang === "en"
-          ? `I don’t have that exact time. Here are the closest options:\n\n${optionsText}`
-          : `No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n${optionsText}`;
+          ? `Sorry, that time isn’t available. I have these times available:\n\n${optionsText}`
+          : `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`;
 
       const humanReply = await humanizeBookingReply({
         idioma: effectiveLang,
@@ -324,7 +373,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         askedText: userText,
         canonicalText,
         optionsText,
-        locked: [optionsText], // ✅ CLAVE: no puede cambiar slots ni inventar
+        locked: [optionsText], // asegura que no invente horarios
       });
 
       return {
@@ -372,14 +421,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         minLeadMinutes: deps.minLeadMinutes || 0,
       });
 
-      const take = [...(windowSlots || [])]
-        .sort((a, b) => {
-          const am = DateTime.fromISO(a.startISO, { zone: tz }).toMillis();
-          const bm = DateTime.fromISO(b.startISO, { zone: tz }).toMillis();
-          const t = target.toMillis();
-          return Math.abs(am - t) - Math.abs(bm - t);
-        })
-        .slice(0, 3);
+      const take = await pickClosestActuallyFreeSlots(target, windowSlots || [], 3);
 
       if (take.length) {
         const optionsText = renderSlotsMessage({
