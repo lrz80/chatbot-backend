@@ -24,23 +24,23 @@ export function extractBusyBlocks(fb: any, calendarId?: string): BusyBlock[] {
     return Array.isArray(arr) ? mapBusy(arr) : null;
   };
 
-  // 1) Si te pidieron calendarId, úsalo (aunque sea [])
+  // 1) Si te pidieron calendarId, úsalo SOLO si trae busy real
   if (calendarId) {
     const b = getBusy(calendarId);
-    if (b) return b;
+    if (b && b.length > 0) return b;
   }
 
-  // 2) Si existe primary, úsalo
+  // 2) Si existe primary, úsalo SOLO si trae busy real
   if (Object.prototype.hasOwnProperty.call(calendars, "primary")) {
     const b = getBusy("primary");
-    if (b) return b;
+    if (b && b.length > 0) return b;
   }
 
-  // 3) Si hay exactamente 1 calendario, úsalo
+  // 3) Si hay exactamente 1 calendario, úsalo SOLO si trae busy real
   const keys = Object.keys(calendars);
   if (keys.length === 1) {
     const b = getBusy(keys[0]);
-    if (b) return b;
+    if (b && b.length > 0) return b;
   }
 
   // 4) ✅ Busca primero uno que tenga busy NO vacío
