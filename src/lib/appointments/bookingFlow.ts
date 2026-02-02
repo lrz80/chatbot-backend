@@ -216,7 +216,7 @@ async function bookInGoogle(opts: {
 
 export async function bookingFlowMvp(opts: {
   tenantId: string;
-  canal: string; // "whatsapp"
+  canal: "whatsapp" | "facebook" | "instagram";
   contacto: string;
   idioma: "es" | "en";
   userText: string;
@@ -498,6 +498,8 @@ if (wantsBooking && !bookingLink && !googleConnected) {
 if (booking.step === "idle") {
   return handleStartBooking({
     tenantId,                 // ✅
+    canal: canal as any,
+    contacto,
     bufferMin,                // ✅ (ya lo tienes calculado arriba)
     getSlotsForDateWindow,    // ✅
     idioma,

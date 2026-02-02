@@ -89,6 +89,15 @@ function resetBooking(tz: string, lang: "es" | "en") {
   };
 }
 
+function normalizePhone(raw: any) {
+  // conserva + al inicio si existe; elimina todo lo demás
+  const s = String(raw ?? "").trim();
+  if (!s) return "";
+  const hasPlus = s.startsWith("+");
+  const digits = s.replace(/[^\d]/g, "");
+  return (hasPlus ? "+" : "") + digits;
+}
+
 export async function handleConfirm(deps: ConfirmDeps): Promise<{
   handled: boolean;
   reply?: string;
@@ -228,7 +237,8 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     const missingEmail = isJunk(emailRaw) || !isValidEmail(emailRaw);
 
     // WhatsApp NO pide phone; Meta sí
-    const missingPhone = isMeta && (isJunk(phoneRaw) || phoneRaw.length < 7);
+    const phoneNorm = normalizePhone(phoneRaw);
+    const missingPhone = isMeta && (isJunk(phoneRaw) || phoneNorm.replace(/[^\d]/g, "").length < 7);
 
     console.log("🧨 [CONFIRM VALIDATE]", {
       tenantId,
@@ -266,7 +276,7 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
             // 🔥 limpia basura para que NO “pase” por tener strings raros
             name: missingName ? null : nameRaw,
             email: missingEmail ? null : emailRaw,
-            phone: missingPhone ? null : phoneRaw,
+            phone: missingPhone ? null : phoneNorm,
             lang: (hydratedBooking?.lang as any) || idioma,
           },
           booking_last_touch_at: Date.now(),
@@ -300,9 +310,11 @@ if (!startISO || !endISO) {
   // ✅ Teléfono definitivo por canal:
   // - WhatsApp: `contacto` ya ES el teléfono
   // - IG/FB: `booking.phone` (capturado en ask_all)
-  const customerPhone = isMeta
+  const customerPhoneRaw = isMeta
     ? String(hydratedBooking?.phone || "").trim()
     : String(contacto || "").trim();
+
+  const customerPhone = normalizePhone(customerPhoneRaw);
 
   // 6) crear appointment pending idempotente (dedupe real)
   const customer_name = clean(hydratedBooking?.name);

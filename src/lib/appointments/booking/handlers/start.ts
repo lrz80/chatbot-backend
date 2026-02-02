@@ -9,12 +9,15 @@ import { humanizeBookingReply } from "../humanizer";
 import { googleFreeBusy } from "../../../../services/googleCalendar";
 import { extractBusyBlocks } from "../freebusy";
 import { cancelAppointmentById } from "../../cancelAppointment";
+import { findActiveAppointmentsByPhone } from "../../find";
 
 
 export type StartBookingDeps = {
   idioma: "es" | "en";
   userText: string;
   timeZone: string;
+  canal: "whatsapp" | "facebook" | "instagram";
+  contacto: string; // WhatsApp: phone, Meta: senderId
 
   wantsBooking: boolean;
   detectPurpose: (s: string) => string | null;
@@ -38,11 +41,21 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 }> {
   const { idioma, userText, timeZone, wantsBooking, detectPurpose, durationMin, minLeadMinutes, hours, booking } = deps;
 
-    // ------------------------------------------------------------------
+  // ------------------------------------------------------------------
   // ✅ Gestionar cita ya creada: cancelar / reprogramar (post-booking)
   // Usa booking.last_appointment_id (lo guardas en confirm.ts)
   // ------------------------------------------------------------------
-  const hasLastAppt = !!(deps as any)?.booking?.last_appointment_id;
+  const isMeta = deps.canal === "facebook" || deps.canal === "instagram";
+
+  // Teléfono real del cliente según canal:
+  // - WhatsApp: contacto ES el teléfono
+  // - Meta: booking.phone (porque lo pides en ask_all)
+  const customerPhone = isMeta
+    ? String(deps.booking?.phone || "").trim()
+    : String(deps.contacto || "").trim();
+
+  // hay teléfono válido?
+  const hasCustomerPhone = !!customerPhone && customerPhone.length >= 7;
 
   const wantsManageExisting =
     /\b(cancel(ar|ar la)?|cancelé|cancela|anular|reprogram(ar|ar la)?|reagendar|mover la cita|cambiar la cita|reschedule|cancel appointment)\b/i.test(
@@ -50,13 +63,63 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
     );
 
   // 1) Si el usuario pide cancelar/reprogramar y tenemos una cita previa -> preguntar
-  if (hasLastAppt && wantsManageExisting && (deps as any)?.booking?.step !== "manage_existing") {
+  if (hasCustomerPhone && wantsManageExisting && deps.booking?.step !== "manage_existing") {
     const lang: "es" | "en" = ((deps as any)?.booking?.lang as any) || deps.idioma;
+
+    if (!(deps as any)?.tenantId) {
+      return {
+        handled: true,
+        reply:
+          lang === "en"
+            ? "I can’t access scheduling right now. Please try again."
+            : "Ahora mismo no puedo acceder al calendario. Intenta de nuevo.",
+        ctxPatch: { booking: { ...(deps as any).booking }, booking_last_touch_at: Date.now() },
+      };
+    }
+
+    const appts = (await findActiveAppointmentsByPhone(deps.tenantId!, customerPhone)) ?? [];
+
+    if (!appts.length) {
+      return {
+        handled: true,
+        reply:
+          lang === "en"
+            ? "I can’t find an active appointment for this phone number. If you want, tell me the new date and time to book (YYYY-MM-DD HH:mm)."
+            : "No encuentro una cita activa con este número. Si quieres, dime la nueva fecha y hora para agendar (YYYY-MM-DD HH:mm).",
+        ctxPatch: { booking: { ...(deps as any).booking }, booking_last_touch_at: Date.now() },
+      };
+    }
+
+    // Si hay 1 sola -> directo a menu cancelar/reprogramar
+    if (appts.length === 1) {
+      const apptId = String(appts[0].id);
+
+      const msg =
+        lang === "en"
+          ? "Got it. What would you like to do?\n1) Cancel the appointment\n2) Reschedule it\nReply with 1 or 2."
+          : "Entiendo. ¿Qué deseas hacer?\n1) Cancelar la cita\n2) Reprogramarla\nResponde con 1 o 2.";
+
+      return {
+        handled: true,
+        reply: msg,
+        ctxPatch: {
+          booking: {
+            ...(deps as any).booking,
+            step: "manage_existing",
+            manage_existing_appt_id: apptId,
+          },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    // Si hay varias -> por ahora usa la más próxima (después hacemos selector)
+    const apptId = String(appts[0].id);
 
     const msg =
       lang === "en"
-        ? "Got it. What would you like to do?\n1) Cancel the appointment\n2) Reschedule it\nReply with 1 or 2."
-        : "Entiendo. ¿Qué deseas hacer?\n1) Cancelar la cita\n2) Reprogramarla\nResponde con 1 o 2.";
+        ? "I found more than one appointment. I’ll use the next one. What would you like to do?\n1) Cancel\n2) Reschedule\nReply with 1 or 2."
+        : "Encontré más de una cita. Usaré la más próxima. ¿Qué deseas hacer?\n1) Cancelar\n2) Reprogramar\nResponde con 1 o 2.";
 
     return {
       handled: true,
@@ -65,7 +128,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         booking: {
           ...(deps as any).booking,
           step: "manage_existing",
-          manage_existing_appt_id: (deps as any).booking.last_appointment_id,
+          manage_existing_appt_id: apptId,
         },
         booking_last_touch_at: Date.now(),
       },
