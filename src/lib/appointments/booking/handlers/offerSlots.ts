@@ -118,6 +118,10 @@ function resolveWeekdayDateISO(userText: string, tz: string, baseISO?: string | 
   return picked.toFormat("yyyy-MM-dd");
 }
 
+function pickSlotsStyle(daypart: "morning" | "afternoon" | null) {
+  return daypart ? ("daypart" as const) : ("sameDay" as const);
+}
+
 export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   handled: boolean;
   reply?: string;
@@ -231,7 +235,12 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         const take = nextSlots.slice(0, 3);
         return {
           handled: true,
-          reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take }),
+          reply: renderSlotsMessage({
+            idioma: effectiveLang,
+            timeZone: tz,
+            slots: take,
+            style: pickSlotsStyle(daypart),
+          }),
           ctxPatch: {
             booking: {
               ...hydratedBooking,
@@ -277,6 +286,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         idioma: effectiveLang,
         timeZone: tz,
         slots: slotsShown,
+        style: pickSlotsStyle(daypart),
       }),
       ctxPatch: { booking: { ...hydratedBooking }, booking_last_touch_at: Date.now() },
     };
@@ -460,7 +470,12 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         );
 
         const take = (daypart ? filterSlotsByDaypart(refresh, tz, daypart) : refresh).slice(0, 3);
-        const optionsText = renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take });
+        const optionsText = renderSlotsMessage({
+          idioma: effectiveLang,
+          timeZone: tz,
+          slots: take,
+          style: "neutral", // 👈 clave: NO intro
+        });
 
         const canonicalText =
           effectiveLang === "en"
@@ -558,7 +573,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
       idioma: effectiveLang,
       timeZone: tz,
       slots: take,
-      style: "closest",
+      style: "neutral", // 👈 NO intro
       ask: "anything",
     });
 
@@ -749,7 +764,12 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         const take = allDaySlots.slice(0, 3);
         return {
           handled: true,
-          reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take }),
+          reply: renderSlotsMessage({
+            idioma: effectiveLang,
+            timeZone: tz,
+            slots: take,
+            style: pickSlotsStyle(daypart),
+          }),
           ctxPatch: {
             booking: {
               ...hydratedBooking,
@@ -811,6 +831,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
           idioma: effectiveLang,
           timeZone: tz,
           slots: filtered,
+          style: pickSlotsStyle(daypart),
         }),
         ctxPatch: {
           booking: {
@@ -864,7 +885,12 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
           const take = newSlots.slice(0, 3);
           return {
             handled: true,
-            reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take }),
+            reply: renderSlotsMessage({
+              idioma: effectiveLang,
+              timeZone: tz,
+              slots: take,
+              style: pickSlotsStyle(daypart),
+            }),
             ctxPatch: {
               booking: {
                 ...hydratedBooking,

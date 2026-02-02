@@ -168,7 +168,7 @@ export function renderSlotsMessage(opts: {
   slots: Array<{ startISO: string; endISO: string }>;
 
   intro?: boolean;
-  style?: "default" | "closest" | "more" | "sameDay" | "neutral";
+  style?: "default" | "closest" | "more" | "sameDay" | "neutral" | "daypart";
   ask?: "number" | "anything";
 }): string {
   const {
@@ -202,6 +202,7 @@ export function renderSlotsMessage(opts: {
     closest: "I'm sorry! That exact time isn’t available. Here are the closest options:",
     more: "No problem — here are a few more options:",
     sameDay: dayLabel ? `Here are the available times for ${dayLabel}:` : "Here are the available times for that day:",
+    daypart: "Here are the available times:",
     neutral: "",
   };
 
@@ -210,6 +211,7 @@ export function renderSlotsMessage(opts: {
     closest: "Lo siento! Esa hora exacta no está disponible. Estas son las opciones más cercanas:",
     more: "Perfecto — aquí van más opciones:",
     sameDay: dayLabel ? `Estos son los horarios disponibles para ${dayLabel}:` : "Estos son los horarios disponibles para ese día:",
+    daypart: "Aquí tienes los horarios disponibles:",
     neutral: "",
   };
 
