@@ -209,6 +209,22 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
       : `Para confirmar ${when}, responde SÍ o NO.`;
   }
 
+  // ✅ Para intents de "retry / clarify", NO usamos LLM.
+  // Evita respuestas basura tipo "2pm", "ok", etc.
+  const noLLMIntents = new Set([
+    "ask_daypart_retry",
+    "ask_other_time",
+    "ask_datetime",
+    "ask_date",
+    "no_openings_that_day",
+    "no_availability_near_time",
+    "cancel_booking",
+  ] as const);
+
+  if (noLLMIntents.has(args.intent as any)) {
+    return canonicalText;
+  }
+
   // ✅ Si no hay API key, no arriesgamos: devolvemos el canónico
   if (!process.env.OPENAI_API_KEY) {
     hlog("NO_API_KEY", { intent: args.intent, idioma: args.idioma });
@@ -289,6 +305,12 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
     if (!out) {
       hlog("EMPTY_OUTPUT_AFTER_CLEAN", { intent, idioma, rawOut, canonicalText });
       return fallbackFromCanonical(args);
+    }
+
+    // ✅ Guard anti-basura: si el modelo devuelve algo demasiado corto (ej: "2pm")
+    if (out.trim().length < 15) {
+      hlog("TOO_SHORT_OUTPUT", { intent, idioma, out, canonicalText });
+      return canonicalText;
     }
 
     // ✅ Si violó locked -> NO se usa
