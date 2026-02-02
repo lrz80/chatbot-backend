@@ -78,21 +78,21 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
   }
 
   async function pickClosestActuallyFreeSlots(target: DateTime, slots: any[], max = 3) {
-  const sorted = [...slots].sort((a, b) => {
-    const am = DateTime.fromISO(a.startISO, { zone: tz }).toMillis();
-    const bm = DateTime.fromISO(b.startISO, { zone: tz }).toMillis();
-    const t = target.toMillis();
-    return Math.abs(am - t) - Math.abs(bm - t);
-  });
+    const sorted = [...slots].sort((a, b) => {
+      const am = DateTime.fromISO(a.startISO, { zone: tz }).toMillis();
+      const bm = DateTime.fromISO(b.startISO, { zone: tz }).toMillis();
+      const t = target.toMillis();
+      return Math.abs(am - t) - Math.abs(bm - t);
+    });
 
-  const out: any[] = [];
-  for (const s of sorted) {
-    if (out.length >= max) break;
-    const ok = await isSlotReallyFree(s.startISO, s.endISO);
-    if (ok.ok) out.push(s);
+    const out: any[] = [];
+    for (const s of sorted) {
+      if (out.length >= max) break;
+      const ok = await isSlotReallyFree(s.startISO, s.endISO);
+      if (ok.ok) out.push(s);
+    }
+    return out;
   }
-  return out;
-}
 
 async function findFreeSlotsForDay(dateISO: string, target: DateTime, max = 3) {
   if (!deps.getSlotsForDateWindow || !deps.tenantId || typeof deps.bufferMin !== "number" || !hours) return [];
@@ -753,6 +753,69 @@ async function findNextDayWithAvailability(fromDateISO: string, target: DateTime
               last_offered_date: dateISO3,
               slots: take,
             },
+            booking_last_touch_at: Date.now(),
+          },
+        };
+      }
+
+      // ✅ Día completo: intenta 3 opciones en ese mismo día (9-5)
+      const anySameDay = await findFreeSlotsForDay(dateISO3, target, 3);
+      if (anySameDay.length) {
+        const optionsText = renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: anySameDay, style: "closest" });
+        const canonicalText =
+          effectiveLang === "en"
+            ? `That time isn't available. Here are other available times that day:\n\n${optionsText}`
+            : `Ese horario no está disponible. Aquí tienes otras horas disponibles ese día:\n\n${optionsText}`;
+
+        const humanReply = await humanizeBookingReply({
+          idioma: effectiveLang,
+          intent: "slot_exact_unavailable_with_options",
+          askedText: userText,
+          canonicalText,
+          optionsText,
+          locked: [optionsText],
+        });
+
+        return {
+          handled: true,
+          reply: humanReply,
+          ctxPatch: {
+            booking: { ...(hydratedBooking || {}), ...resetPersonal, step: "offer_slots", timeZone: tz, lang: effectiveLang, date_only: dateISO3, last_offered_date: dateISO3, slots: anySameDay },
+            booking_last_touch_at: Date.now(),
+          },
+        };
+      }
+
+      // ✅ Next day con disponibilidad
+      const next = await findNextDayWithAvailability(dateISO3, target, 14, 3);
+      if (next?.take?.length) {
+        const optionsText = renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: next.take, style: "closest" });
+
+        const prettyDay =
+          effectiveLang === "en"
+            ? DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("cccc, LLL d")
+            : DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("cccc d 'de' LLL");
+
+        const canonicalText =
+          effectiveLang === "en"
+            ? `I’m fully booked that day. The next available day is ${prettyDay}. Here are a few options:\n\n${optionsText}`
+            : `Ese día no tengo disponibilidad. El próximo día disponible es ${prettyDay}. Aquí tienes algunas opciones:\n\n${optionsText}`;
+
+        const humanReply = await humanizeBookingReply({
+          idioma: effectiveLang,
+          intent: "offer_slots_for_date",
+          askedText: userText,
+          canonicalText,
+          optionsText,
+          locked: [optionsText, prettyDay],
+          datePrefix: `${prettyDay}: `,
+        });
+
+        return {
+          handled: true,
+          reply: humanReply,
+          ctxPatch: {
+            booking: { ...(hydratedBooking || {}), ...resetPersonal, step: "offer_slots", timeZone: tz, lang: effectiveLang, date_only: next.dateISO, last_offered_date: next.dateISO, slots: next.take },
             booking_last_touch_at: Date.now(),
           },
         };
