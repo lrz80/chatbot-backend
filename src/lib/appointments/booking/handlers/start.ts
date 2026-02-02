@@ -131,7 +131,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
       const humanReply = await humanizeBookingReply({
         idioma: effectiveLang,
-        intent: "ask_daypart_retry",
+        intent: "ask_other_time",
         askedText: userText,
         canonicalText,
         locked: [], // nada sensible aquí
@@ -244,7 +244,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
           const humanReply = await humanizeBookingReply({
             idioma: effectiveLang,
-            intent: "ask_daypart_retry",
+            intent: "ask_other_time",
             askedText: userText,
             canonicalText,
             locked: [],
@@ -322,7 +322,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
           const humanReply = await humanizeBookingReply({
             idioma: effectiveLang,
-            intent: "ask_daypart_retry",
+            intent: "ask_other_time",
             askedText: userText,
             canonicalText,
             locked: [],
@@ -392,7 +392,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
         const humanReply = await humanizeBookingReply({
           idioma: effectiveLang,
-          intent: "ask_daypart_retry",
+          intent: "ask_other_time",
           askedText: userText,
           canonicalText,
           locked: [],
@@ -522,12 +522,12 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
     if (!check.ok) {
       const canonicalText =
         effectiveLang === "en"
-          ? "I can’t confirm that time right now. What other time works for you?"
-          : "Ahora mismo no puedo confirmar ese horario en el calendario. ¿Qué otra hora te funciona?";
+          ? "That time isn't available. What other time works for you?"
+          : "Ese horario no está disponible. ¿Qué otra hora te funciona?";
 
       const humanReply = await humanizeBookingReply({
         idioma: effectiveLang,
-        intent: "ask_daypart_retry",
+        intent: "ask_other_time",
         askedText: userText,
         canonicalText,
         locked: [],

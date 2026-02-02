@@ -72,7 +72,6 @@ function fallback(args: HumanizeArgs) {
     if (intent === "offer_slots_for_date") return `Perfect — here are a few options:\n${optionsText}`;
     if (intent === "ask_missing_field") return "I’m missing one detail — can you send it again?";
     if (intent === "ask_datetime_format") return "I’m missing the date and time. Please use: YYYY-MM-DD HH:mm (example: 2026-01-21 14:00).";
-    if (intent === "ask_other_time") return "Perfecto — ¿qué otra hora te funciona?";
 
   }
 
@@ -88,6 +87,7 @@ function fallback(args: HumanizeArgs) {
   if (intent === "ask_daypart_retry") return "Rápido: ¿mañana o tarde?";
   if (intent === "no_openings_that_day") return "Ese día no tengo disponibilidad. ¿Probamos otra fecha?";
   if (intent === "no_availability_near_time") return "No veo disponibilidad cerca de esa hora. ¿Te sirve más temprano o más tarde?";
+  if (intent === "ask_other_time") return "Perfecto — ¿qué otra hora te funciona?";
 
   // ✅ nuevos
   if (intent === "past_slot") return "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (ej: 2026-01-21 14:00).";
@@ -96,7 +96,7 @@ function fallback(args: HumanizeArgs) {
   if (intent === "offer_slots_for_date") return `Perfecto — aquí tienes algunas opciones:\n${optionsText}`;
   if (intent === "ask_missing_field") return "Me falta un detalle — ¿me lo envías otra vez?";
   if (intent === "ask_datetime_format") return "Me falta la fecha y la hora. Usa: YYYY-MM-DD HH:mm (ej: 2026-01-21 14:00).";
-
+  
   return idioma === "en" ? "Ok." : "Ok.";
 }
 
@@ -181,6 +181,17 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
     canonicalText,
     locked = [],
   } = args;
+
+    // ✅ Si hay opciones de horarios, NO humanizamos: devolvemos canónico tal cual.
+  // Esto evita cualquier "recorte" o cambios de formato que rompan la lista.
+  if (args.intent === "slot_exact_unavailable_with_options" && (args.optionsText || "").trim()) {
+    return canonicalText;
+  }
+
+  // ✅ También para offer_slots_for_date (si lo usas con optionsText)
+  if (args.intent === "offer_slots_for_date" && (args.optionsText || "").trim()) {
+    return canonicalText;
+  }
 
   // ✅ Para intents críticos, no arriesgamos variaciones del modelo.
   // Mantiene respuestas cortas y humanas sin inventar ni repetir horarios.
