@@ -182,7 +182,7 @@ export async function humanizeBookingReply(args: HumanizeArgs): Promise<string> 
     locked = [],
   } = args;
 
-    // ✅ Si hay opciones de horarios, NO humanizamos: devolvemos canónico tal cual.
+  // ✅ Si hay opciones de horarios, NO humanizamos: devolvemos canónico tal cual.
   // Esto evita cualquier "recorte" o cambios de formato que rompan la lista.
   if (args.intent === "slot_exact_unavailable_with_options" && (args.optionsText || "").trim()) {
     return canonicalText;

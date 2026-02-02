@@ -94,6 +94,58 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
   return out;
 }
 
+async function findFreeSlotsForDay(dateISO: string, target: DateTime, max = 3) {
+  if (!deps.getSlotsForDateWindow || !deps.tenantId || typeof deps.bufferMin !== "number" || !hours) return [];
+
+  const day = DateTime.fromFormat(dateISO, "yyyy-MM-dd", { zone: tz });
+  const key = weekdayKey(day);
+  const bh = hours[key];
+  if (!bh?.start || !bh?.end) return [];
+
+  const slots = await deps.getSlotsForDateWindow({
+    tenantId: deps.tenantId,
+    timeZone: tz,
+    dateISO,
+    durationMin,
+    bufferMin: deps.bufferMin,
+    hours,
+    windowStartHHmm: bh.start,
+    windowEndHHmm: bh.end,
+    minLeadMinutes: deps.minLeadMinutes || 0,
+  });
+
+  if (!slots?.length) return [];
+  return pickClosestActuallyFreeSlots(target, slots, max);
+}
+
+async function findNextDayWithAvailability(fromDateISO: string, target: DateTime, maxDays = 14, max = 3) {
+  const startDay = DateTime.fromFormat(fromDateISO, "yyyy-MM-dd", { zone: tz });
+  if (!startDay.isValid) return null;
+
+  for (let i = 1; i <= maxDays; i++) {
+    const d = startDay.plus({ days: i });
+    const key = weekdayKey(d);
+
+    // salta días cerrados (sat/sun null etc.)
+    if (!hours?.[key]?.start || !hours?.[key]?.end) continue;
+
+    const dateISO = d.toFormat("yyyy-MM-dd");
+
+    // target para ordenar cercanía: mismo “HH:mm” que pidió el user, pero ese día
+    const t = d.set({
+      hour: target.hour,
+      minute: target.minute,
+      second: 0,
+      millisecond: 0,
+    });
+
+    const take = await findFreeSlotsForDay(dateISO, t, max);
+    if (take.length) return { dateISO, take };
+  }
+
+  return null;
+}
+
   if (!wantsBooking) return { handled: false };
 
   const resetPersonal = {
@@ -236,15 +288,109 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
             };
           }
 
-          // no conseguimos opciones libres
+          // ✅ Día completo: intenta rescatar 3 opciones en ese mismo día (9-5)
+          const anySameDay = await findFreeSlotsForDay(dateISO2, base, 3);
+
+          if (anySameDay.length) {
+            const optionsText = renderSlotsMessage({
+              idioma: effectiveLang,
+              timeZone: tz,
+              slots: anySameDay,
+              style: "closest",
+            });
+
+            const canonicalText =
+              effectiveLang === "en"
+                ? `That time isn't available. Here are other available times that day:\n\n${optionsText}`
+                : `Ese horario no está disponible. Aquí tienes otras horas disponibles ese día:\n\n${optionsText}`;
+
+            const humanReply = await humanizeBookingReply({
+              idioma: effectiveLang,
+              intent: "slot_exact_unavailable_with_options",
+              askedText: userText,
+              canonicalText,
+              optionsText,
+              locked: [optionsText],
+            });
+
+            return {
+              handled: true,
+              reply: humanReply,
+              ctxPatch: {
+                booking: {
+                  ...(hydratedBooking || {}),
+                  ...resetPersonal,
+                  step: "offer_slots",
+                  timeZone: tz,
+                  lang: effectiveLang,
+                  date_only: dateISO2,
+                  last_offered_date: dateISO2,
+                  slots: anySameDay,
+                },
+                booking_last_touch_at: Date.now(),
+              },
+            };
+          }
+
+          // ✅ Si el día está full, busca el siguiente día con disponibilidad
+          const next = await findNextDayWithAvailability(dateISO2, base, 14, 3);
+
+          if (next?.take?.length) {
+            const optionsText = renderSlotsMessage({
+              idioma: effectiveLang,
+              timeZone: tz,
+              slots: next.take,
+              style: "closest",
+            });
+
+            const prettyDay =
+              effectiveLang === "en"
+                ? DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("cccc, LLL d")
+                : DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("cccc d 'de' LLL");
+
+            const canonicalText =
+              effectiveLang === "en"
+                ? `I’m fully booked that day. The next available day is ${prettyDay}. Here are a few options:\n\n${optionsText}`
+                : `Ese día no tengo disponibilidad. El próximo día disponible es ${prettyDay}. Aquí tienes algunas opciones:\n\n${optionsText}`;
+
+            const humanReply = await humanizeBookingReply({
+              idioma: effectiveLang,
+              intent: "offer_slots_for_date",
+              askedText: userText,
+              canonicalText,
+              optionsText,
+              locked: [optionsText, prettyDay],
+              datePrefix: `${prettyDay}: `,
+            });
+
+            return {
+              handled: true,
+              reply: humanReply,
+              ctxPatch: {
+                booking: {
+                  ...(hydratedBooking || {}),
+                  ...resetPersonal,
+                  step: "offer_slots",
+                  timeZone: tz,
+                  lang: effectiveLang,
+                  date_only: next.dateISO,
+                  last_offered_date: next.dateISO,
+                  slots: next.take,
+                },
+                booking_last_touch_at: Date.now(),
+              },
+            };
+          }
+
+          // si ni en 14 días hay, pide otra fecha
           const canonicalText =
             effectiveLang === "en"
-              ? "Sorry, that time isn't available. What other time works for you?"
-              : "Lo siento, esa hora no está disponible. ¿Qué otra hora te funciona?";
+              ? "I don’t see availability in the next days. What other date works for you?"
+              : "No veo disponibilidad en los próximos días. ¿Qué otra fecha te funciona?";
 
           const humanReply = await humanizeBookingReply({
             idioma: effectiveLang,
-            intent: "ask_other_time",
+            intent: "no_openings_that_day",
             askedText: userText,
             canonicalText,
             locked: [],
@@ -254,7 +400,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
             handled: true,
             reply: humanReply,
             ctxPatch: {
-              booking: { ...(hydratedBooking || {}), step: "ask_datetime", timeZone: tz, lang: effectiveLang },
+              booking: { ...(hydratedBooking || {}), step: "ask_date", timeZone: tz, lang: effectiveLang },
               booking_last_touch_at: Date.now(),
             },
           };
@@ -385,14 +531,109 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
       // ⚠️ Si no hay ninguna hora realmente libre → fallback
       if (!take.length) {
+        // ✅ Día completo: intenta rescatar 3 opciones en ese mismo día (9-5)
+        const anySameDay = await findFreeSlotsForDay(dateISO2, base, 3);
+
+        if (anySameDay.length) {
+          const optionsText = renderSlotsMessage({
+            idioma: effectiveLang,
+            timeZone: tz,
+            slots: anySameDay,
+            style: "closest",
+          });
+
+          const canonicalText =
+            effectiveLang === "en"
+              ? `That time isn't available. Here are other available times that day:\n\n${optionsText}`
+              : `Ese horario no está disponible. Aquí tienes otras horas disponibles ese día:\n\n${optionsText}`;
+
+          const humanReply = await humanizeBookingReply({
+            idioma: effectiveLang,
+            intent: "slot_exact_unavailable_with_options",
+            askedText: userText,
+            canonicalText,
+            optionsText,
+            locked: [optionsText],
+          });
+
+          return {
+            handled: true,
+            reply: humanReply,
+            ctxPatch: {
+              booking: {
+                ...(hydratedBooking || {}),
+                ...resetPersonal,
+                step: "offer_slots",
+                timeZone: tz,
+                lang: effectiveLang,
+                date_only: dateISO2,
+                last_offered_date: dateISO2,
+                slots: anySameDay,
+              },
+              booking_last_touch_at: Date.now(),
+            },
+          };
+        }
+
+        // ✅ Si el día está full, busca el siguiente día con disponibilidad
+        const next = await findNextDayWithAvailability(dateISO2, base, 14, 3);
+
+        if (next?.take?.length) {
+          const optionsText = renderSlotsMessage({
+            idioma: effectiveLang,
+            timeZone: tz,
+            slots: next.take,
+            style: "closest",
+          });
+
+          const prettyDay =
+            effectiveLang === "en"
+              ? DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("cccc, LLL d")
+              : DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("cccc d 'de' LLL");
+
+          const canonicalText =
+            effectiveLang === "en"
+              ? `I’m fully booked that day. The next available day is ${prettyDay}. Here are a few options:\n\n${optionsText}`
+              : `Ese día no tengo disponibilidad. El próximo día disponible es ${prettyDay}. Aquí tienes algunas opciones:\n\n${optionsText}`;
+
+          const humanReply = await humanizeBookingReply({
+            idioma: effectiveLang,
+            intent: "offer_slots_for_date",
+            askedText: userText,
+            canonicalText,
+            optionsText,
+            locked: [optionsText, prettyDay],
+            datePrefix: `${prettyDay}: `,
+          });
+
+          return {
+            handled: true,
+            reply: humanReply,
+            ctxPatch: {
+              booking: {
+                ...(hydratedBooking || {}),
+                ...resetPersonal,
+                step: "offer_slots",
+                timeZone: tz,
+                lang: effectiveLang,
+                date_only: next.dateISO,
+                last_offered_date: next.dateISO,
+                slots: next.take,
+              },
+              booking_last_touch_at: Date.now(),
+            },
+          };
+        }
+
+        // si ni en 14 días hay, pide otra fecha
         const canonicalText =
           effectiveLang === "en"
-            ? "Sorry — I don’t have availability around that time. What other time works for you?"
-            : "Lo siento — no tengo disponibilidad cerca de esa hora. ¿Qué otra hora te funciona?";
+            ? "I don’t see availability in the next days. What other date works for you?"
+            : "No veo disponibilidad en los próximos días. ¿Qué otra fecha te funciona?";
 
         const humanReply = await humanizeBookingReply({
           idioma: effectiveLang,
-          intent: "ask_other_time",
+          intent: "no_openings_that_day",
           askedText: userText,
           canonicalText,
           locked: [],
@@ -402,7 +643,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
           handled: true,
           reply: humanReply,
           ctxPatch: {
-            booking: { ...(hydratedBooking || {}), step: "ask_datetime", timeZone: tz, lang: effectiveLang },
+            booking: { ...(hydratedBooking || {}), step: "ask_date", timeZone: tz, lang: effectiveLang },
             booking_last_touch_at: Date.now(),
           },
         };
