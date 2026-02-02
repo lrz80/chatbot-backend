@@ -444,7 +444,9 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
 
   // Detectar horas sin am/pm ("a las 3", "las 4", "para las 11")
   let hhmmFallback: string | null = null;
-  const mSimple = userText.match(/\b(?:a\s*las|a\s*la|las)\s*(\d{1,2})(?:[:.](\d{2}))?\b/i);
+  const mSimple = userText.match(
+    /\b(?:a\s*las|a\s*la|las|sobre\s*las|como\s*las|tipo)\s*(\d{1,2})(?:[:.](\d{2}))?(?:\s*(am|a\.m\.|pm|p\.m\.|de la tarde|de la mañana))?/i
+  );
   const missingAmPmSimple = !!mSimple && !/\b(am|a\.m\.|pm|p\.m\.)\b/i.test(userText);
   const simpleHour = mSimple ? Number(mSimple[1]) : null;
   const simpleMin = mSimple ? Number(mSimple[2] || "0") : null;
