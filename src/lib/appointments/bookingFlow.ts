@@ -290,7 +290,7 @@ export async function bookingFlowMvp(opts: {
     return {
       handled: false,
       ctxPatch: {
-        booking: { step: "idle" },
+        booking: { ...(booking || {}), step: "idle" },
         booking_last_touch_at: null,
         // opcional: limpia rastros para evitar efectos raros
         last_appointment_id: null,
@@ -314,7 +314,7 @@ export async function bookingFlowMvp(opts: {
         ? "Scheduling is unavailable right now."
         : "El agendamiento no está disponible en este momento.",
       ctxPatch: { 
-        booking: { step: "idle" }, 
+        booking: { ...(booking || {}), step: "idle" }, 
         booking_last_touch_at: Date.now(),
       },
    };
@@ -324,6 +324,10 @@ export async function bookingFlowMvp(opts: {
   }
 
   const timeZone = booking.timeZone || apptSettings.timeZone || "America/New_York";
+
+  const calendarId = await getTenantCalendarId(tenantId);
+
+  (booking as any).calendar_id = calendarId;
 
   const durationMin = apptSettings.durationMin ?? 30;
   const bufferMin = apptSettings.bufferMin ?? 10;

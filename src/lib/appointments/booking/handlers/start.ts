@@ -255,11 +255,14 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
     if (!timeMin || !timeMax) return { ok: false, reason: "invalid_range" as const };
 
+    // ✅ usa el calendar_id real del tenant (si existe) + primary como fallback
+    const calendarId = (deps as any)?.booking?.calendar_id || (deps as any)?.calendarId || null;
+
     const fb = await googleFreeBusy({
       tenantId: deps.tenantId,
       timeMin,
       timeMax,
-      calendarIds: ["primary"], // por ahora. En el paso siguiente lo cambiamos al calendar_id real del tenant.
+      calendarIds: calendarId ? [calendarId, "primary"] : ["primary"],
     });
 
     if ((fb as any)?.degraded) return { ok: false, reason: "degraded" as const };
@@ -269,6 +272,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
       tenantId: deps.tenantId,
       timeMin,
       timeMax,
+      calendarIds: calendarId ? [calendarId, "primary"] : ["primary"],
       degraded: (fb as any)?.degraded ?? null,
       busyCount: busy.length,
     });
