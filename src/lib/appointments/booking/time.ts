@@ -266,6 +266,13 @@ export function parseSlotChoice(text: string, max: number): number | null {
     return n >= 1 && n <= max ? n : null;
   }
 
+    // 4) "4 está bien" / "2 por favor" / "1 ok" (número en cualquier parte del texto)
+  m = t.match(/\b(\d{1,2})\b/);
+  if (m) {
+    const n = Number(m[1]);
+    return n >= 1 && n <= max ? n : null;
+  }
+
   return null;
 }
 
