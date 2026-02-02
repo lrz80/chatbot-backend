@@ -260,12 +260,65 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
           };
         }
 
-        // 🟡 degraded / no_tenant / invalid_range / etc -> NO inventar slots
+        // ✅ Si NO está libre (busy / degraded / lo que sea), NO digas "no puedo confirmar".
+        // En vez de eso, ofrece 3 slots cercanos del windowSlots.
         if (!check.ok) {
+          // intenta dar 3 opciones cercanas (windowSlots ya viene filtrado por freebusy + buffer en tu motor)
+          const take = [...windowSlots]
+            .sort((a, b) => {
+              const am = DateTime.fromISO(a.startISO, { zone: tz }).toMillis();
+              const bm = DateTime.fromISO(b.startISO, { zone: tz }).toMillis();
+              const t = base.toMillis();
+              return Math.abs(am - t) - Math.abs(bm - t);
+            })
+            .slice(0, 3);
+
+          if (take.length) {
+            const optionsText = renderSlotsMessage({
+              idioma: effectiveLang,
+              timeZone: tz,
+              slots: take,
+              style: "closest",
+            });
+
+            const canonicalText =
+              effectiveLang === "en"
+                ? `Sorry, that time isn't available. I have these times available:\n\n${optionsText}`
+                : `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`;
+
+            const humanReply = await humanizeBookingReply({
+              idioma: effectiveLang,
+              intent: "slot_exact_unavailable_with_options",
+              askedText: userText,
+              canonicalText,
+              optionsText,
+              locked: [optionsText],
+            });
+
+            return {
+              handled: true,
+              reply: humanReply,
+              ctxPatch: {
+                booking: {
+                  ...(hydratedBooking || {}),
+                  ...resetPersonal,
+                  step: "offer_slots",
+                  timeZone: tz,
+                  lang: effectiveLang,
+                  date_only: dateISO2,
+                  last_offered_date: dateISO2,
+                  slots: take,
+                },
+                booking_last_touch_at: Date.now(),
+              },
+            };
+          }
+
+          // si por alguna razón no tenemos slots, entonces sí pedimos otra hora
           const canonicalText =
             effectiveLang === "en"
-              ? "I can’t confirm that time right now. What other time works for you?"
-              : "Ahora mismo no puedo confirmar ese horario en el calendario. ¿Qué otra hora te funciona?";
+              ? "Sorry, that time isn't available. What other time works for you?"
+              : "Lo siento, esa hora no está disponible. ¿Qué otra hora te funciona?";
 
           const humanReply = await humanizeBookingReply({
             idioma: effectiveLang,
