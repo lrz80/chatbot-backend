@@ -9,8 +9,15 @@ export type GoogleFreeBusyResponse = {
   calendars?: Record<string, { busy?: GoogleBusyBlock[] }>;
 };
 
-function emptyFreeBusy(degraded = true) {
-  return { calendars: { combined: { busy: [] } }, degraded };
+function emptyFreeBusy(calendarIds: string[] = ["primary"], degraded = true) {
+  const calendars: Record<string, { busy: GoogleBusyBlock[] }> = {};
+
+  for (const id of calendarIds) calendars[id] = { busy: [] };
+
+  // clave virtual adicional
+  calendars["combined"] = { busy: [] };
+
+  return { calendars, degraded };
 }
 
 type GoogleTokens = { access_token: string; expires_in?: number; token_type?: string };
@@ -123,8 +130,10 @@ export async function googleFreeBusy(params: {
       const calendarIds = (params.calendarIds && params.calendarIds.length > 0)
         ? params.calendarIds
         : ["primary"];
+
       console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarIds });
-      return emptyFreeBusy(true);
+      return emptyFreeBusy(calendarIds, true);
+
     }
     throw e;
   }
@@ -154,17 +163,17 @@ export async function googleFreeBusy(params: {
     if (resp.status === 401 || resp.status === 403) {
       await markGoogleDisconnected(params.tenantId, `freebusy_${resp.status}`);
       console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarIds, status: resp.status });
-      return emptyFreeBusy(true);
+      return emptyFreeBusy(calendarIds, true);
     }
 
     console.log("🟡 freeBusy degraded:", { tenantId: params.tenantId, calendarIds, status: resp.status });
-    return emptyFreeBusy(true);
+    return emptyFreeBusy(calendarIds, true);
   }
 
   const calendars = json?.calendars || {};
   const keys = Object.keys(calendars);
 
-  // 🔥 LOG REAL: qué devolvió Google
+  // 🔥 LOG REAL
   console.log("🧪 freeBusy raw keys:", {
     tenantId: params.tenantId,
     requestedCalendarIds: calendarIds,
@@ -181,7 +190,9 @@ export async function googleFreeBusy(params: {
     for (const b of busy) allBusy.push(b);
   }
 
-  // ✅ si no hubo keys pero la respuesta fue ok, igual devolvemos estructura consistente
+  // ✅ Agrega "combined" SIN destruir el json original
+  (calendars as any)["combined"] = { busy: allBusy };
+
   console.log("🗓️ freeBusy combined:", {
     tenantId: params.tenantId,
     calendarIds,
@@ -191,13 +202,7 @@ export async function googleFreeBusy(params: {
     degraded: false,
   });
 
-  return {
-    calendars: {
-      // clave virtual: "combined"
-      combined: { busy: allBusy },
-    },
-    degraded: false,
-  };
+  return { ...json, calendars, degraded: false };
 }
 export async function googleCreateEvent(params: {
   tenantId: string;
