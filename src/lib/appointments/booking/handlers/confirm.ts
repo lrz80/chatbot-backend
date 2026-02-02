@@ -598,13 +598,23 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
         ? `You're all set — your appointment is confirmed.${meet ? ` Join here: ${meet}` : ""}`.trim()
         : `Perfecto, tu cita quedó confirmada.${meet ? ` Únete aquí: ${meet}` : ""}`.trim(),
     ctxPatch: {
-        booking: resetBooking(tz, effectiveLang),
-        last_appointment_id: apptId,
-        booking_completed: true,
-        booking_completed_at: new Date().toISOString(),
-        booking_last_done_at: Date.now(),
-        booking_last_event_link: link,
-        booking_last_touch_at: Date.now(),
+      booking: resetBooking(tz, effectiveLang),
+
+      // ✅ Identificadores para acciones post-agenda (cancel/reprogram)
+      last_appointment_id: apptId,
+      last_appointment_google_event_id: gid,
+      last_appointment_startISO: startISO,
+      last_appointment_endISO: endISO,
+      last_appointment_tz: tz,
+      last_appointment_channel: canal,
+
+      // ✅ Link correcto (si hay meet, ese es el que importa)
+      booking_last_event_link: meet || link,
+
+      booking_completed: true,
+      booking_completed_at: new Date().toISOString(),
+      booking_last_done_at: Date.now(),
+      booking_last_touch_at: Date.now(),
     },
     };
 }

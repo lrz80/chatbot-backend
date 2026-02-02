@@ -8,6 +8,7 @@ import { renderSlotsMessage } from "../time";
 import { humanizeBookingReply } from "../humanizer";
 import { googleFreeBusy } from "../../../../services/googleCalendar";
 import { extractBusyBlocks } from "../freebusy";
+import { cancelAppointmentById } from "../../cancelAppointment";
 
 
 export type StartBookingDeps = {
@@ -36,6 +37,141 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
   ctxPatch?: any;
 }> {
   const { idioma, userText, timeZone, wantsBooking, detectPurpose, durationMin, minLeadMinutes, hours, booking } = deps;
+
+    // ------------------------------------------------------------------
+  // ✅ Gestionar cita ya creada: cancelar / reprogramar (post-booking)
+  // Usa booking.last_appointment_id (lo guardas en confirm.ts)
+  // ------------------------------------------------------------------
+  const hasLastAppt = !!(deps as any)?.booking?.last_appointment_id;
+
+  const wantsManageExisting =
+    /\b(cancel(ar|ar la)?|cancelé|cancela|anular|reprogram(ar|ar la)?|reagendar|mover la cita|cambiar la cita|reschedule|cancel appointment)\b/i.test(
+      String(deps.userText || "")
+    );
+
+  // 1) Si el usuario pide cancelar/reprogramar y tenemos una cita previa -> preguntar
+  if (hasLastAppt && wantsManageExisting && (deps as any)?.booking?.step !== "manage_existing") {
+    const lang: "es" | "en" = ((deps as any)?.booking?.lang as any) || deps.idioma;
+
+    const msg =
+      lang === "en"
+        ? "Got it. What would you like to do?\n1) Cancel the appointment\n2) Reschedule it\nReply with 1 or 2."
+        : "Entiendo. ¿Qué deseas hacer?\n1) Cancelar la cita\n2) Reprogramarla\nResponde con 1 o 2.";
+
+    return {
+      handled: true,
+      reply: msg,
+      ctxPatch: {
+        booking: {
+          ...(deps as any).booking,
+          step: "manage_existing",
+          manage_existing_appt_id: (deps as any).booking.last_appointment_id,
+        },
+        booking_last_touch_at: Date.now(),
+      },
+    };
+  }
+
+  // 2) Si estamos en modo manage_existing -> procesar 1 o 2
+  if ((deps as any)?.booking?.step === "manage_existing") {
+    const lang: "es" | "en" = ((deps as any)?.booking?.lang as any) || deps.idioma;
+    const apptId = String((deps as any)?.booking?.manage_existing_appt_id || "").trim();
+
+    const raw = String(deps.userText || "").trim().toLowerCase();
+
+    const chooseCancel = raw === "1" || /\b(cancel|cancelar|anular)\b/i.test(raw);
+    const chooseReschedule = raw === "2" || /\b(reprogram|reagendar|mover|cambiar|reschedule)\b/i.test(raw);
+
+    if (!apptId) {
+      return {
+        handled: true,
+        reply:
+          lang === "en"
+            ? "I can’t find your last appointment. Please tell me the date/time you want to book (YYYY-MM-DD HH:mm)."
+            : "No encuentro tu última cita. Envíame la fecha y hora para agendar (YYYY-MM-DD HH:mm).",
+        ctxPatch: {
+          booking: {
+            ...(deps as any).booking,
+            step: "ask_datetime",
+          },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    // 2a) Cancelar
+    if (chooseCancel) {
+      const out = await cancelAppointmentById({
+        tenantId: (deps as any).tenantId,
+        appointmentId: apptId,
+      });
+
+      if (!out.ok) {
+        return {
+          handled: true,
+          reply:
+            lang === "en"
+              ? "I couldn’t cancel it right now. Please try again in a moment."
+              : "No pude cancelarla en este momento. Intenta de nuevo en unos segundos.",
+          ctxPatch: {
+            booking: {
+              ...(deps as any).booking,
+              step: "idle",
+              manage_existing_appt_id: null,
+            },
+            booking_last_touch_at: Date.now(),
+          },
+        };
+      }
+
+      return {
+        handled: true,
+        reply:
+          lang === "en"
+            ? "Done — your appointment has been canceled."
+            : "Listo — tu cita quedó cancelada.",
+        ctxPatch: {
+          booking: {
+            ...(deps as any).booking,
+            step: "idle",
+            manage_existing_appt_id: null,
+          },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    // 2b) Reprogramar -> arrancar ask_datetime y guardar de dónde venimos
+    if (chooseReschedule) {
+      return {
+        handled: true,
+        reply:
+          lang === "en"
+            ? "Sure — what new date and time would you like? (YYYY-MM-DD HH:mm)"
+            : "Perfecto — ¿qué nueva fecha y hora deseas? (YYYY-MM-DD HH:mm)",
+        ctxPatch: {
+          booking: {
+            ...(deps as any).booking,
+            step: "ask_datetime",
+            reschedule_from_appt_id: apptId,
+            manage_existing_appt_id: null,
+          },
+          booking_last_touch_at: Date.now(),
+        },
+      };
+    }
+
+    // 2c) Si no eligió bien
+    return {
+      handled: true,
+      reply:
+        lang === "en"
+          ? "Reply with 1 to cancel or 2 to reschedule."
+          : "Responde con 1 para cancelar o 2 para reprogramar.",
+      ctxPatch: { booking: { ...(deps as any).booking }, booking_last_touch_at: Date.now() },
+    };
+  }
+
   const hydratedBooking = {
     ...(booking || {}),
     timeZone: (booking?.timeZone as any) || timeZone, // ✅ sticky tz

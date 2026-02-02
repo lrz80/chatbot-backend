@@ -333,3 +333,64 @@ async function googleGetEvent(args: {
 
   return j;
 }
+
+export async function googleDeleteEvent(params: {
+  tenantId: string;
+  calendarId?: string; // default primary
+  eventId: string;     // google event id (NO iCalUID)
+}) {
+  let accessToken: string;
+
+  try {
+    accessToken = await getGoogleAccessToken(params.tenantId);
+  } catch (e: any) {
+    const msg = String(e?.message || "");
+    if (
+      msg === "google_not_connected" ||
+      msg === "google_refresh_failed" ||
+      msg === "google_refresh_token_invalid" ||
+      msg === "google_oauth_not_configured"
+    ) {
+      throw new Error("google_not_connected");
+    }
+    throw e;
+  }
+
+  const calendarId = encodeURIComponent(params.calendarId || "primary");
+  const eventId = encodeURIComponent(String(params.eventId || "").trim());
+
+  if (!eventId) throw new Error("missing_event_id");
+
+  const resp = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events/${eventId}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  // Google DELETE normalmente devuelve 204 No Content
+  if (resp.status === 204) {
+    return { ok: true };
+  }
+
+  // A veces devuelve JSON en errores
+  const body = await resp.json().catch(() => ({} as any));
+
+  if (resp.status === 401 || resp.status === 403) {
+    await markGoogleDisconnected(params.tenantId, `delete_${resp.status}`);
+    throw new Error("google_not_connected");
+  }
+
+  // Si el evento no existe ya, lo tratamos como "ya cancelado" (idempotente)
+  if (resp.status === 404) {
+    return { ok: true, already_missing: true };
+  }
+
+  console.error("Google delete event failed:", { status: resp.status, body });
+  throw new Error("google_delete_event_failed");
+}
+

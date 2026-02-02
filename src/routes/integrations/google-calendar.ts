@@ -6,7 +6,7 @@ import { canUseChannel } from "../../lib/features";
 import fetch from "node-fetch"; // si estás en Node 18 y TS lo permite, puedes usar fetch global sin importar
 import { encryptToken, decryptToken } from "../../services/googleCrypto";
 import crypto from "crypto";
-import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
+import { googleFreeBusy, googleCreateEvent, googleDeleteEvent } from "../../services/googleCalendar";
 
 const router = Router();
 
@@ -409,6 +409,33 @@ router.post("/book", authenticateUser, async (req: Request, res: Response) => {
     // await pool.query(`INSERT INTO appointments (...) VALUES (...)`, [...]);
 
     return res.json({ ok: true, event_id: event?.id, htmlLink: event?.htmlLink || null });
+  } catch (e: any) {
+    const msg = String(e?.message || "");
+    if (msg === "google_not_connected") return res.status(409).json({ error: "google_not_connected" });
+    return res.status(500).json({ error: "internal" });
+  }
+});
+
+// POST /api/integrations/google-calendar/cancel
+// Body: { eventId: string, calendarId?: string }
+router.post("/cancel", authenticateUser, async (req: Request, res: Response) => {
+  try {
+    const tenantId = getTenantId(req, res);
+    if (!tenantId) return res.status(401).json({ error: "unauthorized" });
+
+    const gate = await canUseChannel(tenantId, "google_calendar");
+    if (!gate.settings_enabled) return res.status(403).json({ error: "google_calendar_disabled" });
+
+    const { eventId, calendarId } = req.body || {};
+    if (!eventId) return res.status(400).json({ error: "missing_eventId" });
+
+    const out = await googleDeleteEvent({
+      tenantId,
+      calendarId: calendarId || "primary",
+      eventId: String(eventId),
+    });
+
+    return res.json(out);
   } catch (e: any) {
     const msg = String(e?.message || "");
     if (msg === "google_not_connected") return res.status(409).json({ error: "google_not_connected" });
