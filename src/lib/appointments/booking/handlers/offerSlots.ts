@@ -122,6 +122,24 @@ function pickSlotsStyle(daypart: "morning" | "afternoon" | null) {
   return daypart ? ("daypart" as const) : ("sameDay" as const);
 }
 
+function inferDaypartFromText(userText: string): "morning" | "afternoon" | null {
+  const s = normalizeText(userText);
+
+  // ES
+  if (/\b(tarde|por la tarde)\b/i.test(s)) return "afternoon";
+  if (/\b(mañana|por la mañana)\b/i.test(s)) return "morning";
+
+  // EN
+  if (/\b(afternoon)\b/i.test(s)) return "afternoon";
+  if (/\b(morning)\b/i.test(s)) return "morning";
+
+  // Si menciona am/pm explícito, ayuda
+  if (/\b(pm|p\.m\.)\b/i.test(userText)) return "afternoon";
+  if (/\b(am|a\.m\.)\b/i.test(userText)) return "morning";
+
+  return null;
+}
+
 export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   handled: boolean;
   reply?: string;
@@ -159,7 +177,10 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   const slotsRaw: Slot[] = Array.isArray(hydratedBooking?.slots) ? hydratedBooking.slots : [];
   const slots: Slot[] = sortSlotsAsc(slotsRaw);
 
-  const daypart = (hydratedBooking?.daypart || null) as ("morning" | "afternoon" | null);
+  const daypartSaved = (hydratedBooking?.daypart || null) as ("morning" | "afternoon" | null);
+  const daypartAsked = inferDaypartFromText(userText);
+  const daypart = daypartAsked || daypartSaved; // 👈 prioridad: lo que el usuario pidió en ESTE mensaje
+
   const step = hydratedBooking?.step;
 
   const hasPicked = !!hydratedBooking?.picked_start && !!hydratedBooking?.picked_end;
@@ -286,9 +307,16 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         idioma: effectiveLang,
         timeZone: tz,
         slots: slotsShown,
-        style: pickSlotsStyle(daypart),
+        style: daypart ? ("daypart" as const) : ("sameDay" as const),
+        ask: "anything",
       }),
-      ctxPatch: { booking: { ...hydratedBooking }, booking_last_touch_at: Date.now() },
+      ctxPatch: {
+        booking: {
+          ...hydratedBooking,
+          daypart: daypartAsked || hydratedBooking?.daypart || null, // 👈 persiste si lo pidió
+        },
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
