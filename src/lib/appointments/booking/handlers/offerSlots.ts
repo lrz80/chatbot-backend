@@ -447,9 +447,14 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   const mSimple = userText.match(
     /\b(?:a\s*las|a\s*la|las|sobre\s*las|como\s*las|tipo)\s*(\d{1,2})(?:[:.](\d{2}))?(?:\s*(am|a\.m\.|pm|p\.m\.|de la tarde|de la mañana))?/i
   );
+
+  const hasTarde = /\b(de la tarde|por la tarde|tarde)\b/i.test(userText);
+  const hasManana = /\b(de la mañana|por la mañana|mañana)\b/i.test(userText);
+
   const missingAmPmSimple =
     !!mSimple &&
     !/\b(am|a\.m\.|pm|p\.m\.|de la tarde|de la mañana)\b/i.test(userText);
+
   const simpleHour = mSimple ? Number(mSimple[1]) : null;
   const simpleMin = mSimple ? Number(mSimple[2] || "0") : null;
 
@@ -457,8 +462,12 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     let h = Number(mSimple[1]);
     let mm = Number(mSimple[2] || "0");
 
-    if (daypart === "afternoon" && h >= 1 && h <= 11) h += 12;
-    if (daypart === "morning" && h === 12) h = 0;
+    // 👇 inferimos daypart desde el texto si booking.daypart viene null
+    const effectiveDaypart =
+      daypart || (hasTarde ? "afternoon" : hasManana ? "morning" : null);
+
+    if (effectiveDaypart === "afternoon" && h >= 1 && h <= 11) h += 12;
+    if (effectiveDaypart === "morning" && h === 12) h = 0;
 
     hhmmFallback = `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
   }
