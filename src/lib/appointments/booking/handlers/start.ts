@@ -66,6 +66,14 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
     if ((fb as any)?.degraded) return { ok: false, reason: "degraded" as const };
 
     const busy = extractBusyBlocks(fb);
+    console.log("🧪 [SLOT REALLY FREE]", {
+      tenantId: deps.tenantId,
+      timeMin,
+      timeMax,
+      degraded: (fb as any)?.degraded ?? null,
+      busyCount: busy.length,
+    });
+
     return { ok: busy.length === 0, reason: busy.length ? "busy" as const : null };
   }
 
@@ -161,10 +169,66 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         return start === hhmm;
       });
 
+      const takeClosest3 = (target: DateTime) =>
+        [...windowSlots]
+          .sort((a, b) => {
+            const am = DateTime.fromISO(a.startISO, { zone: tz }).toMillis();
+            const bm = DateTime.fromISO(b.startISO, { zone: tz }).toMillis();
+            const t = target.toMillis();
+            return Math.abs(am - t) - Math.abs(bm - t);
+          })
+          .slice(0, 3);
+
       // ✅ Exacto disponible -> confirm directo (igual que askDaypart)
       if (exact) {
         // ✅ Guard: check real con Google
         const check = await isSlotReallyFree(exact.startISO, exact.endISO);
+
+        // ❌ si está ocupado -> ofrecer 3 cercanos
+        if (!check.ok && check.reason === "busy") {
+          const take = takeClosest3(base);
+
+          const optionsText = renderSlotsMessage({
+            idioma: effectiveLang,
+            timeZone: tz,
+            slots: take,
+            style: "closest",
+          });
+
+          const canonicalText =
+            effectiveLang === "en"
+              ? `Sorry, that time isn't available. I have these times available:\n\n${optionsText}`
+              : `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`;
+
+          const humanReply = await humanizeBookingReply({
+            idioma: effectiveLang,
+            intent: "slot_exact_unavailable_with_options",
+            askedText: userText,
+            canonicalText,
+            optionsText,
+            locked: [optionsText], // ✅ no puede inventar ni alterar
+          });
+
+          return {
+            handled: true,
+            reply: humanReply,
+            ctxPatch: {
+              booking: {
+                ...(hydratedBooking || {}),
+                ...resetPersonal,
+                step: "offer_slots",
+                timeZone: tz,
+                lang: effectiveLang,
+                date_only: dateISO2,
+                last_offered_date: dateISO2,
+                slots: take,
+              },
+              booking_last_touch_at: Date.now(),
+            },
+          };
+        }
+
+        // 🟡 si no podemos confirmar (degraded / no tokens / etc) -> no inventar
         if (!check.ok) {
           const canonicalText =
             effectiveLang === "en"
@@ -189,14 +253,11 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
           };
         }
 
+        // ✅ Exacto disponible -> confirm directo
         const prettyWhen =
           effectiveLang === "en"
-            ? DateTime.fromISO(exact.startISO, { zone: tz })
-                .setLocale("en")
-                .toFormat("cccc, LLL d 'at' h:mm a")
-            : DateTime.fromISO(exact.startISO, { zone: tz })
-                .setLocale("es")
-                .toFormat("cccc d 'de' LLL 'a las' h:mm a");
+            ? DateTime.fromISO(exact.startISO, { zone: tz }).setLocale("en").toFormat("cccc, LLL d 'at' h:mm a")
+            : DateTime.fromISO(exact.startISO, { zone: tz }).setLocale("es").toFormat("cccc d 'de' LLL 'a las' h:mm a");
 
         const canonicalText =
           effectiveLang === "en"
@@ -208,7 +269,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
           intent: "slot_exact_available",
           askedText: userText,
           canonicalText,
-          locked: [prettyWhen], // ✅ NO tocar la fecha/hora
+          locked: [prettyWhen],
           prettyWhen,
         });
 
@@ -291,6 +352,78 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
     // ✅ Guard: check real con Google (si no podemos chequear, NO confirmes)
     const check = await isSlotReallyFree(dt.startISO, dt.endISO);
+
+    if (!check.ok && check.reason === "busy" && deps.getSlotsForDateWindow && deps.tenantId && typeof deps.bufferMin === "number" && hours) {
+      const target = DateTime.fromISO(dt.startISO, { zone: tz });
+
+      const dateISO3 = target.toFormat("yyyy-MM-dd");
+      const windowStartHHmm = target.minus({ hours: 2 }).toFormat("HH:mm");
+      const windowEndHHmm = target.plus({ hours: 3 }).toFormat("HH:mm");
+
+      const windowSlots = await deps.getSlotsForDateWindow({
+        tenantId: deps.tenantId,
+        timeZone: tz,
+        dateISO: dateISO3,
+        durationMin,
+        bufferMin: deps.bufferMin,
+        hours,
+        windowStartHHmm,
+        windowEndHHmm,
+        minLeadMinutes: deps.minLeadMinutes || 0,
+      });
+
+      const take = [...(windowSlots || [])]
+        .sort((a, b) => {
+          const am = DateTime.fromISO(a.startISO, { zone: tz }).toMillis();
+          const bm = DateTime.fromISO(b.startISO, { zone: tz }).toMillis();
+          const t = target.toMillis();
+          return Math.abs(am - t) - Math.abs(bm - t);
+        })
+        .slice(0, 3);
+
+      if (take.length) {
+        const optionsText = renderSlotsMessage({
+          idioma: effectiveLang,
+          timeZone: tz,
+          slots: take,
+          style: "closest",
+        });
+
+        const canonicalText =
+          effectiveLang === "en"
+            ? `Sorry, that time isn't available. I have these times available:\n\n${optionsText}`
+            : `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`;
+
+        const humanReply = await humanizeBookingReply({
+          idioma: effectiveLang,
+          intent: "slot_exact_unavailable_with_options",
+          askedText: userText,
+          canonicalText,
+          optionsText,
+          locked: [optionsText],
+        });
+
+        return {
+          handled: true,
+          reply: humanReply,
+          ctxPatch: {
+            booking: {
+              ...(hydratedBooking || {}),
+              ...resetPersonal,
+              step: "offer_slots",
+              timeZone: tz,
+              lang: effectiveLang,
+              date_only: dateISO3,
+              last_offered_date: dateISO3,
+              slots: take,
+            },
+            booking_last_touch_at: Date.now(),
+          },
+        };
+      }
+    }
+
+    // si no es busy o no tenemos slots para sugerir:
     if (!check.ok) {
       const canonicalText =
         effectiveLang === "en"
