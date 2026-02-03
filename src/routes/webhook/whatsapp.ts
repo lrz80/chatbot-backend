@@ -1153,62 +1153,111 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
   const awaiting = (convoCtx as any)?.awaiting || activeStep || null;
 
-  // ✅ SERVICE LINK PICK: si el turno anterior mostró opciones 1-5
+  // ✅ SERVICE LINK PICK (STICKY): si hay opciones pendientes, NO avanzamos el flujo
+  // hasta que el usuario elija (número o texto que matchee una opción).
   {
-    const n = parsePickNumber(userInput);
+    const pickState = (convoCtx as any)?.service_link_pick;
+    const options = Array.isArray(pickState?.options) ? pickState.options : [];
 
-    const pick = (convoCtx as any)?.service_link_pick;
-    const options = Array.isArray(pick?.options) ? pick.options : [];
+    if (options.length) {
+      const createdAtMs =
+        typeof pickState?.created_at === "string" ? Date.parse(pickState.created_at) : NaN;
 
-    // si usuario mandó número y tenemos opciones guardadas
-    if (n !== null && options.length) {
-      const createdAt = Date.parse(String(pick?.created_at || ""));
-      const fresh = Number.isFinite(createdAt) ? (Date.now() - createdAt) < 10 * 60 * 1000 : false;
+      const fresh =
+        Number.isFinite(createdAtMs) ? (Date.now() - createdAtMs) < 10 * 60 * 1000 : false;
 
+      // Expiró: limpiar y pedir que lo solicite de nuevo
       if (!fresh) {
         transition({ patchCtx: { service_link_pick: null } });
-        await setConversationStateCompat(tenant.id, canal, contactoNorm, { activeFlow, activeStep, context: convoCtx });
+        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+          activeFlow,
+          activeStep,
+          context: convoCtx,
+        });
 
-        const msg = idiomaDestino === "en"
-          ? "That selection expired. Ask me again which service you want."
-          : "Esa selección expiró. Vuelve a pedirme el link del servicio.";
+        const msg =
+          idiomaDestino === "en"
+            ? "That selection expired. Ask me again which service you want."
+            : "Esa selección expiró. Vuelve a pedirme el link del servicio.";
         return await replyAndExit(msg, "service_link_pick:expired", "service_link");
       }
 
-      const idx = n - 1;
+      // 1) Intento por número 1-5
+      const n = parsePickNumber(userInput);
+      if (n !== null) {
+        const idx = n - 1;
 
-      if (idx < 0 || idx >= options.length) {
-        const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
-        const msg =
-          idiomaDestino === "en"
-            ? `Please reply with a valid number:\n${lines}`
-            : `Responde con un número válido:\n${lines}`;
+        if (idx < 0 || idx >= options.length) {
+          const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
+          const msg =
+            idiomaDestino === "en"
+              ? `Please reply with a valid number:\n${lines}`
+              : `Responde con un número válido:\n${lines}`;
+          return await replyAndExit(msg, "service_link_pick:out_of_range", "service_link");
+        }
 
-        return await replyAndExit(msg, "service_link_pick:out_of_range", "service_link");
+        const chosen = options[idx];
+        const url = String(chosen?.url || "").trim();
+
+        // limpiar pick y persistir
+        transition({ patchCtx: { service_link_pick: null } });
+        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+          activeFlow,
+          activeStep,
+          context: convoCtx,
+        });
+
+        if (!url) {
+          const msg =
+            idiomaDestino === "en"
+              ? "That option doesn't have a link saved yet."
+              : "Esa opción no tiene link guardado todavía.";
+          return await replyAndExit(msg, "service_link_pick:no_url", "service_link");
+        }
+
+        return await replyAndExit(url, "service_link_pick:number", "service_link");
       }
 
-      const chosen = options[idx];
-      const url = String(chosen?.url || "").trim();
+      // 2) Intento por texto (ej: "large", "41+ lbs", "small")
+      //    Mapeo simple: si el userText está contenido en el label o viceversa.
+      const t = String(userInput || "").trim().toLowerCase();
+      if (t.length >= 2) {
+        const matchIdx = options.findIndex((o: any) => {
+          const lbl = String(o?.label || "").toLowerCase();
+          return lbl.includes(t) || t.includes(lbl);
+        });
 
-      // limpiar el pick para que no se reuse
-      transition({ patchCtx: { service_link_pick: null } });
+        if (matchIdx >= 0) {
+          const chosen = options[matchIdx];
+          const url = String(chosen?.url || "").trim();
 
-      // ✅ persistir limpieza
-      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-        activeFlow,
-        activeStep,
-        context: convoCtx,
-      });
+          transition({ patchCtx: { service_link_pick: null } });
+          await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+            activeFlow,
+            activeStep,
+            context: convoCtx,
+          });
 
-      if (!url) {
-        const msg =
-          idiomaDestino === "en"
-            ? "That option doesn't have a link saved yet."
-            : "Esa opción no tiene link guardado todavía.";
-        return await replyAndExit(msg, "service_link_pick:no_url", "service_link");
+          if (!url) {
+            const msg =
+              idiomaDestino === "en"
+                ? "That option doesn't have a link saved yet."
+                : "Esa opción no tiene link guardado todavía.";
+            return await replyAndExit(msg, "service_link_pick:text_no_url", "service_link");
+          }
+
+          return await replyAndExit(url, "service_link_pick:text", "service_link");
+        }
       }
 
-      return await replyAndExit(url, "service_link_pick", "service_link");
+      // 3) Si hay pick pendiente y NO eligió bien -> re-preguntar y NO seguir el flujo
+      const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
+      const msg =
+        idiomaDestino === "en"
+          ? `Which option do you want? Reply with the number:\n${lines}`
+          : `¿Cuál opción quieres? Responde con el número:\n${lines}`;
+
+      return await replyAndExit(msg, "service_link_pick:reprompt", "service_link");
     }
   }
 
@@ -1429,42 +1478,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
   }
 
-    // ===============================
-  // ✅ SERVICE LINK PICK (respuesta "1-5")
-  // Si el bot mostró opciones y el usuario responde un número, enviamos SOLO el link.
-  // ===============================
-  {
-    const pick = String(userInput || "").trim();
-    const n = /^[1-5]$/.test(pick) ? Number(pick) : null;
-
-    const pickState = (convoCtx as any)?.service_link_pick;
-    const options = Array.isArray(pickState?.options) ? pickState.options : null;
-
-    // Ventana de validez: 10 minutos
-    const createdAt = typeof pickState?.created_at === "string" ? Date.parse(pickState.created_at) : null;
-    const fresh = createdAt && Number.isFinite(createdAt) ? (Date.now() - createdAt) < 10 * 60 * 1000 : false;
-
-    if (n && options && fresh) {
-      const chosen = options[n - 1];
-
-      // Limpiar estado inmediatamente
-      transition({ patchCtx: { service_link_pick: null } });
-
-      if (chosen?.url) {
-        return await replyAndExit(String(chosen.url), "service_link:pick", "service_link");
-      }
-
-      const msg =
-        idiomaDestino === "en"
-          ? "That option doesn’t have a link saved yet. Want the general booking link instead?"
-          : "Esa opción aún no tiene link guardado. ¿Quieres que te envíe el link general para reservar?";
-
-      return await replyAndExit(msg, "service_link:pick_no_url", "service_link");
-    }
-
-    // Si respondió número pero no hay estado, no hacemos nada (deja seguir el flujo normal)
-  }
-
   // 👋 GREETING GATE: SOLO si NO estamos en booking
   if (
     !inBooking0 &&
@@ -1642,9 +1655,10 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       transition({
         patchCtx: {
           service_link_pick: {
+            kind: "service_link_pick",
             options,
             created_at: new Date().toISOString(),
-          },
+          }
         },
       });
 

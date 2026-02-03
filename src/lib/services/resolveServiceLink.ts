@@ -144,29 +144,72 @@ export async function resolveServiceLink(args: {
     };
   }
 
-  // 3) Si el servicio tiene variantes, intentar resolver variante por nombre
-  const { rows: variants } = await pool.query(
+  // ✅ 3) Traer variantes activas del servicio TOP (SIEMPRE, no solo por trigram)
+  // Esto permite forzar elección cuando el servicio tiene múltiples variantes.
+  const { rows: allVariants } = await pool.query(
     `
-    SELECT v.*,
-           similarity(v.variant_name, $2) AS vscore
+    SELECT v.*
     FROM service_variants v
     WHERE v.service_id = $1
       AND v.active = TRUE
-      AND v.variant_name % $2
-    ORDER BY vscore DESC, v.variant_name ASC
-    LIMIT 3
+    ORDER BY v.variant_name ASC
     `,
-    [top.id, q]
+    [top.id]
   );
 
-  if (variants.length) {
-    const v = variants[0];
-    const vScore = Number(v.vscore || 0);
+  const hasMultipleVariants = allVariants.length >= 2;
 
-    // Si variante coincide razonablemente y tiene link, priorízala
-    if (vScore >= 0.35 && (v.variant_url || top.service_url)) {
-      const url = (v.variant_url || top.service_url) as string;
-      return { ok: true, url, label: `${top.name} - ${v.variant_name}`, kind: "variant" };
+  // heurística simple: detecta si el usuario ya especificó tamaño/peso
+  const userMentionsVariant =
+    /\b(small|medium|large|xl|xxl)\b/i.test(qRaw) ||
+    /\b(pequeñ[oa]s?|median[oa]s?|grand[ea]s?)\b/i.test(qRaw) ||
+    /\b(\d+\s*(lb|lbs|pounds|kg))\b/i.test(qRaw) ||
+    /\b(\d+\s*-\s*\d+)\b/.test(qRaw) ||
+    /\b(\d+\+)\b/.test(qRaw);
+
+  // ✅ 3.5) Si el servicio top tiene 2+ variantes activas y el usuario NO especificó variante:
+  // NO mandes link directo -> pide elección.
+  if (hasMultipleVariants && !userMentionsVariant) {
+    return {
+      ok: false,
+      reason: "ambiguous",
+      options: allVariants.slice(0, 5).map((v: any) => ({
+        label: `${top.name} - ${v.variant_name}`,
+        url: v.variant_url || top.service_url || null,
+      })),
+    };
+  }
+
+  // 4) Si el usuario sí menciona variante, intenta resolver cuál variante exacta.
+  // Solo en este caso hacemos trigram a variantes (porque ya hay señal).
+  if (allVariants.length) {
+    const { rows: variants } = await pool.query(
+      `
+      SELECT v.*,
+             similarity(v.variant_name, $2) AS vscore
+      FROM service_variants v
+      WHERE v.service_id = $1
+        AND v.active = TRUE
+        AND v.variant_name % $2
+      ORDER BY vscore DESC, v.variant_name ASC
+      LIMIT 3
+      `,
+      [top.id, q]
+    );
+
+    if (variants.length) {
+      const v = variants[0];
+      const vScore = Number(v.vscore || 0);
+
+      if (vScore >= 0.35 && (v.variant_url || top.service_url)) {
+        const url = (v.variant_url || top.service_url) as string;
+        return {
+          ok: true,
+          url,
+          label: `${top.name} - ${v.variant_name}`,
+          kind: "variant",
+        };
+      }
     }
   }
 
