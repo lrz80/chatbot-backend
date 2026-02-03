@@ -42,6 +42,8 @@ import crypto from "crypto";
 import { sendCapiEvent } from "../../services/metaCapi";
 import { isAmbiguousLangText } from "../../lib/appointments/booking/text";
 import { runBookingGuardrail } from "../../lib/appointments/booking/guardrail";
+import { wantsServiceLink } from "../../lib/services/wantsServiceLink";
+import { resolveServiceLink } from "../../lib/services/resolveServiceLink";
 
 
 const sha256 = (s: string) =>
@@ -1514,6 +1516,44 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         "seguridad"
       );
     }
+  }
+
+    // ===============================
+  // 🔗 SERVICE LINK FAST-PATH (SOLO LINK)
+  // Debe ir ANTES del fallback/LLM. Usa Single Exit.
+  // ===============================
+  if (wantsServiceLink(userInput)) {
+    const resolved = await resolveServiceLink({
+      tenantId: tenant.id,
+      query: userInput,
+      limit: 5,
+    });
+
+    if (resolved.ok) {
+      // ✅ SOLO el link
+      return await replyAndExit(resolved.url, "service_link", "service_link");
+    }
+
+    if (resolved.reason === "ambiguous" && resolved.options?.length) {
+      const lines = resolved.options
+        .slice(0, 5)
+        .map((o, i) => `${i + 1}) ${o.label}`)
+        .join("\n");
+
+      const msg =
+        idiomaDestino === "en"
+          ? `Which service do you want the link for? Reply with the number:\n${lines}`
+          : `¿De cuál servicio quieres el link? Responde con el número:\n${lines}`;
+
+      return await replyAndExit(msg, "service_link:ambiguous", "service_link");
+    }
+
+    const msg =
+      idiomaDestino === "en"
+        ? "Which service do you need the link for? Tell me the exact name."
+        : "¿De cuál servicio necesitas el link exactamente? Dime el nombre.";
+
+    return await replyAndExit(msg, "service_link:no_match", "service_link");
   }
 
   // ===============================
