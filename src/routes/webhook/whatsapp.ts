@@ -1367,6 +1367,42 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
   }
 
+    // ===============================
+  // ✅ SERVICE LINK PICK (respuesta "1-5")
+  // Si el bot mostró opciones y el usuario responde un número, enviamos SOLO el link.
+  // ===============================
+  {
+    const pick = String(userInput || "").trim();
+    const n = /^[1-5]$/.test(pick) ? Number(pick) : null;
+
+    const pickState = (convoCtx as any)?.service_link_pick;
+    const options = Array.isArray(pickState?.options) ? pickState.options : null;
+
+    // Ventana de validez: 10 minutos
+    const createdAt = typeof pickState?.created_at === "string" ? Date.parse(pickState.created_at) : null;
+    const fresh = createdAt && Number.isFinite(createdAt) ? (Date.now() - createdAt) < 10 * 60 * 1000 : false;
+
+    if (n && options && fresh) {
+      const chosen = options[n - 1];
+
+      // Limpiar estado inmediatamente
+      transition({ patchCtx: { service_link_pick: null } });
+
+      if (chosen?.url) {
+        return await replyAndExit(String(chosen.url), "service_link:pick", "service_link");
+      }
+
+      const msg =
+        idiomaDestino === "en"
+          ? "That option doesn’t have a link saved yet. Want the general booking link instead?"
+          : "Esa opción aún no tiene link guardado. ¿Quieres que te envíe el link general para reservar?";
+
+      return await replyAndExit(msg, "service_link:pick_no_url", "service_link");
+    }
+
+    // Si respondió número pero no hay estado, no hacemos nada (deja seguir el flujo normal)
+  }
+
   // 👋 GREETING GATE: SOLO si NO estamos en booking
   if (
     !inBooking0 &&
@@ -1534,9 +1570,23 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       return await replyAndExit(resolved.url, "service_link", "service_link");
     }
 
-    if (resolved.reason === "ambiguous" && resolved.options?.length) {
-      const lines = resolved.options
-        .slice(0, 5)
+        if (resolved.reason === "ambiguous" && resolved.options?.length) {
+      const options = resolved.options.slice(0, 5).map((o) => ({
+        label: o.label,
+        url: o.url || null,
+      }));
+
+      // ✅ Guardar opciones en estado para que "1/2/3" funcione
+      transition({
+        patchCtx: {
+          service_link_pick: {
+            options,
+            created_at: new Date().toISOString(),
+          },
+        },
+      });
+
+      const lines = options
         .map((o, i) => `${i + 1}) ${o.label}`)
         .join("\n");
 
