@@ -4,13 +4,38 @@ type ResolvedLink =
   | { ok: true; url: string; label: string; kind: "service" | "variant" }
   | { ok: false; reason: "no_match" | "ambiguous"; options?: { label: string; url?: string | null }[] };
 
+function normalizeServiceQuery(q: string) {
+  let s = String(q || "").toLowerCase();
+
+  // ES -> EN básicos (ajusta a tu industria)
+  const map: Array<[RegExp, string]> = [
+    [/\bbañ(o|os|ito|itos)\b/g, "bath"],
+    [/\bpeluquer(i|í)a\b/g, "groom"],
+    [/\bgrooming\b/g, "groom"],
+    [/\brecorte\b/g, "trim"],
+    [/\buñ(as|as)\b/g, "nails"],
+    [/\bdeslanad(o|o|a|ado)\b/g, "deshedding"],
+    [/\bdeshedding\b/g, "deshedding"],
+    [/\blimpieza de o(i|í)dos\b/g, "ears"],
+    [/\bo(i|í)dos\b/g, "ears"],
+    [/\bdientes\b/g, "teeth"],
+    [/\bcepillad(o|o)\b/g, "brush"],
+  ];
+
+  for (const [re, repl] of map) s = s.replace(re, repl);
+
+  return s.trim();
+}
+
 export async function resolveServiceLink(args: {
   tenantId: string;
   query: string;
   limit?: number;
 }): Promise<ResolvedLink> {
   const tenantId = args.tenantId;
-  const q = String(args.query || "").trim();
+  const qRaw = String(args.query || "").trim();
+  const q = normalizeServiceQuery(qRaw);
+
   const limit = Math.min(args.limit ?? 5, 10);
 
   if (!tenantId || !q) return { ok: false, reason: "no_match" };
@@ -30,7 +55,37 @@ export async function resolveServiceLink(args: {
     [tenantId, q, limit]
   );
 
-  if (!services.length) return { ok: false, reason: "no_match" };
+    if (!services.length) {
+    // Fallback: búsqueda simple por ILIKE (por si pg_trgm no matchea)
+    const like = `%${q}%`;
+    const { rows: services2 } = await pool.query(
+      `
+      SELECT s.*, 0.0 AS score
+      FROM services s
+      WHERE s.tenant_id = $1
+        AND s.active = TRUE
+        AND (
+          s.name ILIKE $2 OR
+          s.description ILIKE $2
+        )
+      ORDER BY s.category ASC, s.name ASC
+      LIMIT $3
+      `,
+      [tenantId, like, limit]
+    );
+
+    if (!services2.length) return { ok: false, reason: "no_match" };
+
+    // Si encontró algo, tratamos como ambiguo (para que el usuario elija 1-5)
+    return {
+      ok: false,
+      reason: "ambiguous",
+      options: services2.slice(0, 5).map((s: any) => ({
+        label: `${s.category ? `[${s.category}] ` : ""}${s.name}`,
+        url: s.service_url,
+      })),
+    };
+  }
 
   const top = services[0];
   const topScore = Number(top.score || 0);
