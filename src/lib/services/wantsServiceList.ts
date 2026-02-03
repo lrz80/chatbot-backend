@@ -2,14 +2,19 @@ export function wantsServiceList(text: string): boolean {
   const t = String(text || "").trim().toLowerCase();
   if (!t) return false;
 
-  // ES
-  if (/\b(servicios|lista\s+de\s+servicios|que\s+servicios\s+(tienes|ofreces)|catalogo|catálogo|menu|menú|precios|tarifas)\b/i.test(t)) {
-    // ojo: "precios" puede ser lista (si no mencionan un servicio específico)
+  // ✅ Si está preguntando precios, NO es lista de servicios
+  // (precios se maneja por wantsServiceInfo o intención "precio")
+  if (/\b(precio|precios|cu[aá]nto cuesta|cu[aá]nto valen|tarifa|tarifas|cost|price|pricing|how much|rates|rate)\b/i.test(t)) {
+    return false;
+  }
+
+  // ES: catálogo/menú/lista de servicios
+  if (/\b(servicios|lista\s+de\s+servicios|qu[eé]\s+servicios\s+(tienes|ofreces)|qu[eé]\s+ofrecen|cat[aá]logo|menu|men[uú])\b/i.test(t)) {
     return true;
   }
 
-  // EN
-  if (/\b(services|service\s+list|what\s+services\s+do\s+you\s+(have|offer)|catalog|menu|pricing|price\s+list|rates)\b/i.test(t)) {
+  // EN: services/menu/catalog
+  if (/\b(services|service\s+list|what\s+services\s+do\s+you\s+(have|offer)|what\s+do\s+you\s+offer|catalog|menu)\b/i.test(t)) {
     return true;
   }
 

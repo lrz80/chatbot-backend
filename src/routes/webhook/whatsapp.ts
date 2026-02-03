@@ -1267,6 +1267,145 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     }
   }
 
+  // ===============================
+  // 💲 SERVICE INFO FAST-PATH (precio / duración / incluye) — SIN LLM
+  // ===============================
+  {
+    const need = wantsServiceInfo(userInput);
+
+    if (need) {
+      const r = await resolveServiceInfo({
+        tenantId: tenant.id,
+        query: userInput,
+        limit: 5,
+      });
+
+      if (r.ok) {
+        const msg = renderServiceInfoReply(r, need, idiomaDestino);
+        return await replyAndExit(msg, "service_info", "service_info");
+      }
+
+      if (r.reason === "ambiguous" && r.options?.length) {
+        const options = r.options.slice(0, 5).map((o) => ({
+          label: o.label,
+          kind: o.kind,
+          service_id: o.service_id,
+          variant_id: o.variant_id || null,
+        }));
+
+        transition({
+          patchCtx: {
+            service_info_pick: {
+              need,
+              options,
+              created_at: new Date().toISOString(),
+            },
+          },
+        });
+
+        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+          activeFlow,
+          activeStep,
+          context: convoCtx,
+        });
+
+        const lines = options.map((o, i) => `${i + 1}) ${o.label}`).join("\n");
+
+        const msg =
+          idiomaDestino === "en"
+            ? `Which one do you mean? Reply with the number:\n${lines}`
+            : `¿Cuál quieres decir? Responde con el número:\n${lines}`;
+
+        return await replyAndExit(msg, "service_info:ambiguous", "service_info");
+      }
+
+      const msg =
+        idiomaDestino === "en"
+          ? "Which service do you mean? Tell me the exact name."
+          : "¿Cuál servicio exactamente? Dime el nombre.";
+
+      return await replyAndExit(msg, "service_info:no_match", "service_info");
+    }
+  }
+  
+  // ===============================
+  // 🔗 SERVICE LINK FAST-PATH (SOLO LINK)
+  // Debe ir ANTES del fallback/LLM. Usa Single Exit.
+  // ===============================
+  if (wantsServiceLink(userInput)) {
+    const resolved = await resolveServiceLink({
+      tenantId: tenant.id,
+      query: userInput,
+      limit: 5,
+    });
+
+    if (resolved.ok) {
+      // ✅ SOLO el link
+      return await replyAndExit(resolved.url, "service_link", "service_link");
+    }
+
+    if (resolved.reason === "ambiguous" && resolved.options?.length) {
+      const options = resolved.options.slice(0, 5).map((o) => ({
+        label: o.label,
+        url: o.url || null,
+      }));
+
+      // ✅ Guardar opciones en estado para que "1/2/3" funcione
+      transition({
+        patchCtx: {
+          service_link_pick: {
+            kind: "service_link_pick",
+            options,
+            created_at: new Date().toISOString(),
+          }
+        },
+      });
+
+      // ✅ persistir pick en conversation_state para que el próximo "2" funcione
+      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+        activeFlow,
+        activeStep,
+        context: convoCtx,
+      });
+
+      const lines = options
+        .map((o, i) => `${i + 1}) ${o.label}`)
+        .join("\n");
+
+      const msg =
+        idiomaDestino === "en"
+          ? `Which service do you want the link for? Reply with the number:\n${lines}`
+          : `¿De cuál servicio quieres el link? Responde con el número:\n${lines}`;
+
+      return await replyAndExit(msg, "service_link:ambiguous", "service_link");
+    }
+
+    const msg =
+      idiomaDestino === "en"
+        ? "Which service do you need the link for? Tell me the exact name."
+        : "¿De cuál servicio necesitas el link exactamente? Dime el nombre.";
+
+    return await replyAndExit(msg, "service_link:no_match", "service_link");
+  }
+
+  // ===============================
+  // 📋 SERVICE LIST FAST-PATH (lista desde DB) — SIN LLM
+  // ===============================
+  if (wantsServiceList(userInput)) {
+    const r = await resolveServiceList({ tenantId: tenant.id, limitServices: 8, limitVariantsPerService: 3 });
+
+    if (r.ok) {
+      const msg = renderServiceListReply(r.items, idiomaDestino);
+      return await replyAndExit(msg, "service_list", "service_list");
+    }
+
+    const msg =
+      idiomaDestino === "en"
+        ? "I don’t have services saved yet."
+        : "Todavía no tengo servicios guardados.";
+    return await replyAndExit(msg, "service_list:empty", "service_list");
+  }
+  
   // ✅ SERVICE INFO PICK (STICKY): si hay opciones pendientes para precio/duración/incluye
   {
     const pickState = (convoCtx as any)?.service_info_pick;
@@ -1403,145 +1542,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           : "No pude encontrar esa opción ya. Vuelve a preguntarme por el servicio.";
       return await replyAndExit(msg, "service_info_pick:not_found", "service_info");
     }
-  }
-
-  // ===============================
-  // 📋 SERVICE LIST FAST-PATH (lista desde DB) — SIN LLM
-  // ===============================
-  if (wantsServiceList(userInput)) {
-    const r = await resolveServiceList({ tenantId: tenant.id, limitServices: 8, limitVariantsPerService: 3 });
-
-    if (r.ok) {
-      const msg = renderServiceListReply(r.items, idiomaDestino);
-      return await replyAndExit(msg, "service_list", "service_list");
-    }
-
-    const msg =
-      idiomaDestino === "en"
-        ? "I don’t have services saved yet."
-        : "Todavía no tengo servicios guardados.";
-    return await replyAndExit(msg, "service_list:empty", "service_list");
-  }
-
-  // ===============================
-  // 💲 SERVICE INFO FAST-PATH (precio / duración / incluye) — SIN LLM
-  // ===============================
-  {
-    const need = wantsServiceInfo(userInput);
-
-    if (need) {
-      const r = await resolveServiceInfo({
-        tenantId: tenant.id,
-        query: userInput,
-        limit: 5,
-      });
-
-      if (r.ok) {
-        const msg = renderServiceInfoReply(r, need, idiomaDestino);
-        return await replyAndExit(msg, "service_info", "service_info");
-      }
-
-      if (r.reason === "ambiguous" && r.options?.length) {
-        const options = r.options.slice(0, 5).map((o) => ({
-          label: o.label,
-          kind: o.kind,
-          service_id: o.service_id,
-          variant_id: o.variant_id || null,
-        }));
-
-        transition({
-          patchCtx: {
-            service_info_pick: {
-              need,
-              options,
-              created_at: new Date().toISOString(),
-            },
-          },
-        });
-
-        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-          activeFlow,
-          activeStep,
-          context: convoCtx,
-        });
-
-        const lines = options.map((o, i) => `${i + 1}) ${o.label}`).join("\n");
-
-        const msg =
-          idiomaDestino === "en"
-            ? `Which one do you mean? Reply with the number:\n${lines}`
-            : `¿Cuál quieres decir? Responde con el número:\n${lines}`;
-
-        return await replyAndExit(msg, "service_info:ambiguous", "service_info");
-      }
-
-      const msg =
-        idiomaDestino === "en"
-          ? "Which service do you mean? Tell me the exact name."
-          : "¿Cuál servicio exactamente? Dime el nombre.";
-
-      return await replyAndExit(msg, "service_info:no_match", "service_info");
-    }
-  }
-
-  // ===============================
-  // 🔗 SERVICE LINK FAST-PATH (SOLO LINK)
-  // Debe ir ANTES del fallback/LLM. Usa Single Exit.
-  // ===============================
-  if (wantsServiceLink(userInput)) {
-    const resolved = await resolveServiceLink({
-      tenantId: tenant.id,
-      query: userInput,
-      limit: 5,
-    });
-
-    if (resolved.ok) {
-      // ✅ SOLO el link
-      return await replyAndExit(resolved.url, "service_link", "service_link");
-    }
-
-    if (resolved.reason === "ambiguous" && resolved.options?.length) {
-      const options = resolved.options.slice(0, 5).map((o) => ({
-        label: o.label,
-        url: o.url || null,
-      }));
-
-      // ✅ Guardar opciones en estado para que "1/2/3" funcione
-      transition({
-        patchCtx: {
-          service_link_pick: {
-            kind: "service_link_pick",
-            options,
-            created_at: new Date().toISOString(),
-          }
-        },
-      });
-
-      // ✅ persistir pick en conversation_state para que el próximo "2" funcione
-      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-        activeFlow,
-        activeStep,
-        context: convoCtx,
-      });
-
-      const lines = options
-        .map((o, i) => `${i + 1}) ${o.label}`)
-        .join("\n");
-
-      const msg =
-        idiomaDestino === "en"
-          ? `Which service do you want the link for? Reply with the number:\n${lines}`
-          : `¿De cuál servicio quieres el link? Responde con el número:\n${lines}`;
-
-      return await replyAndExit(msg, "service_link:ambiguous", "service_link");
-    }
-
-    const msg =
-      idiomaDestino === "en"
-        ? "Which service do you need the link for? Tell me the exact name."
-        : "¿De cuál servicio necesitas el link exactamente? Dime el nombre.";
-
-    return await replyAndExit(msg, "service_link:no_match", "service_link");
   }
 
   // ===============================
