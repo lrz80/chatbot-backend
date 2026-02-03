@@ -27,6 +27,9 @@ router.post('/checkout', async (req, res) => {
   const planRaw = (req.body?.plan || req.query?.plan || 'initial_399') as string;
   const plan = String(planRaw).toLowerCase().trim(); // "initial_399" | "test"
 
+  const priceIdRaw = (req.body?.priceId || req.query?.priceId) as string | undefined;
+  const priceId = priceIdRaw ? String(priceIdRaw).trim() : null;
+
   try {
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET!);
     const tenantId: string = decoded.tenant_id || decoded.uid; // por compatibilidad
@@ -42,11 +45,45 @@ router.post('/checkout', async (req, res) => {
     const email: string | undefined = u.rows[0]?.email;
     if (!email) return res.status(404).json({ error: 'Usuario no encontrado' });
 
-    // ✅ Construir sesión según plan
+    // ✅ 0) NUEVO: si viene priceId (modo dinámico desde /api/stripe/plans)
+    if (priceId) {
+      // 1) trae el price para saber si es recurring o one_time
+      const price = await stripe.prices.retrieve(priceId);
+
+      const mode: Stripe.Checkout.SessionCreateParams.Mode =
+        price.type === "recurring" ? "subscription" : "payment";
+
+      const session = await stripe.checkout.sessions.create({
+        mode,
+        customer_creation: "always",
+        line_items: [{ price: priceId, quantity: 1 }],
+
+        // Solo para payments tiene sentido guardar método (tu caso setup $399)
+        ...(mode === "payment"
+          ? {
+              payment_intent_data: { setup_future_usage: "off_session" as const },
+            }
+          : {}),
+
+        metadata: {
+          tenant_id: tenantId,
+          purpose: mode === "subscription" ? "aamy_membership" : "aamy_payment",
+          price_id: priceId,
+        },
+
+        client_reference_id: tenantId,
+        customer_email: email,
+        success_url: `${FRONTEND_URL}/upgrade/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${FRONTEND_URL}/upgrade?canceled=1`,
+      });
+
+      return res.json({ url: session.url });
+    }
+
+    // ✅ 1) Compatibilidad: flujo antiguo por "plan"
     if (plan === 'test') {
       if (!PRICE_TEST_0) return res.status(500).json({ error: 'STRIPE_PRICE_TEST_0 faltante' });
 
-      // ✅ Plan Test: subscription $0 (recurring)
       const session = await stripe.checkout.sessions.create({
         mode: 'subscription',
         customer_creation: 'always',
