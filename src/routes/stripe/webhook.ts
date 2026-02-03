@@ -208,18 +208,16 @@ async function notifyAdminPaymentSMS(params: {
     const client = getTwilioClient();
     if (!client) return;
 
-    // From: preferimos twilio_sms_number del tenant si existe, sino un número global
-    let fromNumber = process.env.TWILIO_SMS_NUMBER || '';
+    // ✅ Admin notifications SIEMPRE desde un número global del mismo Twilio Account
+    let fromNumber = process.env.TWILIO_SMS_NUMBER || "";
     let tenantName: string | null = null;
 
     if (params.tenantId) {
       const t = await pool.query(
-        `SELECT name, twilio_sms_number FROM tenants WHERE id = $1 LIMIT 1`,
+        `SELECT name FROM tenants WHERE id = $1 LIMIT 1`,
         [params.tenantId]
       );
       tenantName = t.rows[0]?.name ?? null;
-      const tenantFrom = t.rows[0]?.twilio_sms_number ?? null;
-      if (tenantFrom) fromNumber = tenantFrom;
     }
 
     if (!fromNumber) return;
@@ -830,7 +828,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
     const subscriptionId = typeof invoice.subscription === 'string' ? invoice.subscription : null;
     if (!subscriptionId) {
-      console.warn('⚠️ Subscription ID no encontrado en invoice.');
+      console.warn('ℹ️ invoice.payment_succeeded sin subscription (se ignora). invoice:', invoice.id);
       return res.status(200).json({ received: true });
     }
 

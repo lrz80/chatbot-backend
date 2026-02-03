@@ -65,7 +65,7 @@ router.post("/checkout", async (req, res) => {
         },
         client_reference_id: tenantId,
         customer_email: email,
-        success_url: `${FRONTEND_URL}/upgrade/success?session_id={CHECKOUT_SESSION_ID}`,
+        success_url: `${FRONTEND_URL}/dashboard/profile`,
         cancel_url: `${FRONTEND_URL}/upgrade?canceled=1`,
       };
 
@@ -97,7 +97,7 @@ router.post("/checkout", async (req, res) => {
         },
         client_reference_id: tenantId,
         customer_email: email,
-        success_url: `${FRONTEND_URL}/upgrade/success?session_id={CHECKOUT_SESSION_ID}`,
+        success_url: `${FRONTEND_URL}/dashboard/profile`,
         cancel_url: `${FRONTEND_URL}/upgrade?canceled=1`,
       });
 
@@ -123,7 +123,7 @@ router.post("/checkout", async (req, res) => {
       },
       client_reference_id: tenantId,
       customer_email: email,
-      success_url: `${FRONTEND_URL}/upgrade/success?session_id={CHECKOUT_SESSION_ID}`,
+      success_url: `${FRONTEND_URL}/dashboard/profile`,
       cancel_url: `${FRONTEND_URL}/upgrade?canceled=1`,
     });
 
