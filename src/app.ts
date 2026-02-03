@@ -107,6 +107,7 @@ console.log("📂 Servidor estático en:", path.join(__dirname, "../public/uploa
 const WHITELIST = [
   'https://www.aamy.ai',
   'https://aamy.ai',
+  'https://api.aamy.ai',
   'http://localhost:3000'
 ];
 
