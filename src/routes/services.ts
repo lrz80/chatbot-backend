@@ -138,6 +138,7 @@ router.get("/search", authenticateUser, async (req: any, res: Response) => {
  * Crea un servicio base (sin variantes)
  */
 router.post("/", authenticateUser, async (req: any, res: Response) => {
+  const client = await pool.connect();
   try {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(401).json({ error: "Tenant no encontrado" });
@@ -150,6 +151,7 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
       price_base,
       service_url,
       active,
+      variants, // ✅
     } = req.body || {};
 
     if (!name || !String(name).trim()) {
@@ -159,17 +161,21 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
       return res.status(400).json({ error: "service_url inválido" });
     }
 
-    const { rows } = await pool.query(
-    `
-    INSERT INTO services (
+    const vList = Array.isArray(variants) ? variants : [];
+
+    await client.query("BEGIN");
+
+    const svcRes = await client.query(
+      `
+      INSERT INTO services (
         tenant_id, category, name, description,
         duration_min, price_base,
         service_url, active
-    )
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-    RETURNING *
-    `,
-    [
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      RETURNING *
+      `,
+      [
         tenantId,
         category || "General",
         String(name).trim(),
@@ -178,18 +184,63 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
         price_base ?? null,
         service_url ? String(service_url).trim() : null,
         active ?? true,
-    ]
+      ]
     );
 
-    return res.status(201).json({ service: rows[0] });
+    const service = svcRes.rows[0];
 
+    const insertedVariants: any[] = [];
+    for (const v of vList) {
+      const vn = String(v?.variant_name || "").trim();
+      if (!vn) continue; // si quieres exigirlo: throw new Error("variant_name requerido");
+
+      const dur = v?.duration_min == null ? null : Number(v.duration_min);
+      if (v?.duration_min != null && !Number.isFinite(dur)) throw new Error("variant duration_min inválido");
+
+      const pr = v?.price == null ? null : Number(v.price);
+      if (v?.price != null && !Number.isFinite(pr)) throw new Error("variant price inválido");
+
+      const cur = (v?.currency ? String(v.currency).trim().toUpperCase() : "USD") || "USD";
+
+      let url: string | null = null;
+      if (v?.variant_url && String(v.variant_url).trim()) {
+        if (!isValidUrl(String(v.variant_url))) throw new Error("variant_url inválido");
+        url = String(v.variant_url).trim();
+      }
+
+      const vr = await client.query(
+        `
+        INSERT INTO service_variants (
+          service_id, variant_name, description,
+          duration_min, price, currency,
+          variant_url, active
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        RETURNING *
+        `,
+        [
+          service.id,
+          vn,
+          v?.description ? String(v.description) : "",
+          dur,
+          pr,
+          cur,
+          url,
+          v?.active ?? true,
+        ]
+      );
+
+      insertedVariants.push(vr.rows[0]);
+    }
+
+    await client.query("COMMIT");
+    return res.status(201).json({ service: { ...service, variants: insertedVariants } });
   } catch (e: any) {
+    try { await client.query("ROLLBACK"); } catch {}
     console.error("POST /api/services error:", e);
-    return res.status(500).json({
-      error: "Error creando servicio",
-      detail: e?.message,
-      code: e?.code,
-    });
+    return res.status(500).json({ error: "Error creando servicio", detail: e?.message, code: e?.code });
+  } finally {
+    client.release();
   }
 });
 
@@ -315,44 +366,61 @@ router.delete("/:id", authenticateUser, async (req: any, res: Response) => {
   }
 });
 
+// en src/routes/services.ts (o router separado, pero lo pongo aquí)
 router.post("/:id/variants", authenticateUser, async (req: any, res: Response) => {
   try {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(401).json({ error: "Tenant no encontrado" });
 
     const serviceId = String(req.params.id || "").trim();
-    if (!serviceId) return res.status(400).json({ error: "service id requerido" });
+    if (!serviceId) return res.status(400).json({ error: "service_id requerido" });
+
+    // ✅ validar que el service pertenece al tenant
+    const svc = await pool.query(
+      `SELECT id FROM services WHERE id = $1 AND tenant_id = $2`,
+      [serviceId, tenantId]
+    );
+    if (!svc.rows[0]) return res.status(404).json({ error: "Servicio no encontrado" });
 
     const {
       variant_name,
       description,
-      price_base,      // o price_from según tu schema
       duration_min,
+      price,
+      currency,
       variant_url,
       active,
-      sort_order,
     } = req.body || {};
 
     if (!variant_name || !String(variant_name).trim()) {
       return res.status(400).json({ error: "variant_name es requerido" });
     }
-    if (!isValidUrl(variant_url)) {
-      return res.status(400).json({ error: "variant_url inválido" });
+
+    // duration_min puede ser null, price puede ser null
+    const dur = duration_min == null ? null : Number(duration_min);
+    if (duration_min != null && !Number.isFinite(dur)) {
+      return res.status(400).json({ error: "duration_min inválido" });
     }
 
-    // ✅ valida tenant ownership del service
-    const { rows: svc } = await pool.query(
-      `SELECT id FROM services WHERE id = $1 AND tenant_id = $2`,
-      [serviceId, tenantId]
-    );
-    if (!svc[0]) return res.status(404).json({ error: "Servicio no encontrado" });
+    const pr = price == null ? null : Number(price);
+    if (price != null && !Number.isFinite(pr)) {
+      return res.status(400).json({ error: "price inválido" });
+    }
+
+    const cur = (currency ? String(currency).trim().toUpperCase() : "USD") || "USD";
+
+    let url: string | null = null;
+    if (variant_url && String(variant_url).trim()) {
+      if (!isValidUrl(String(variant_url))) return res.status(400).json({ error: "variant_url inválido" });
+      url = String(variant_url).trim();
+    }
 
     const { rows } = await pool.query(
       `
       INSERT INTO service_variants (
         service_id, variant_name, description,
-        price_base, duration_min, variant_url,
-        active, sort_order
+        duration_min, price, currency,
+        variant_url, active
       )
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       RETURNING *
@@ -360,12 +428,12 @@ router.post("/:id/variants", authenticateUser, async (req: any, res: Response) =
       [
         serviceId,
         String(variant_name).trim(),
-        description || "",
-        price_base ?? null,
-        duration_min ?? null,
-        variant_url ? String(variant_url).trim() : null,
+        description ? String(description) : "",
+        dur,
+        pr,
+        cur,
+        url,
         active ?? true,
-        sort_order ?? 0,
       ]
     );
 
@@ -376,12 +444,85 @@ router.post("/:id/variants", authenticateUser, async (req: any, res: Response) =
   }
 });
 
-router.delete("/:serviceId/variants/:variantId", authenticateUser, async (req: any, res: Response) => {
+router.put("/:id/variants/:variantId", authenticateUser, async (req: any, res: Response) => {
   try {
     const tenantId = getTenantId(req);
     if (!tenantId) return res.status(401).json({ error: "Tenant no encontrado" });
 
-    const serviceId = String(req.params.serviceId || "").trim();
+    const serviceId = String(req.params.id || "").trim();
+    const variantId = String(req.params.variantId || "").trim();
+
+    const { variant_name, description, duration_min, price, currency, variant_url, active } = req.body || {};
+
+    if (!variant_name || !String(variant_name).trim()) {
+      return res.status(400).json({ error: "variant_name es requerido" });
+    }
+
+    const dur = duration_min == null ? null : Number(duration_min);
+    if (duration_min != null && !Number.isFinite(dur)) {
+      return res.status(400).json({ error: "duration_min inválido" });
+    }
+
+    const pr = price == null ? null : Number(price);
+    if (price != null && !Number.isFinite(pr)) {
+      return res.status(400).json({ error: "price inválido" });
+    }
+
+    const cur = (currency ? String(currency).trim().toUpperCase() : "USD") || "USD";
+
+    let url: string | null = null;
+    if (variant_url && String(variant_url).trim()) {
+      if (!isValidUrl(String(variant_url))) return res.status(400).json({ error: "variant_url inválido" });
+      url = String(variant_url).trim();
+    }
+
+    const { rows } = await pool.query(
+      `
+      UPDATE service_variants v
+         SET variant_name = $4,
+             description = $5,
+             duration_min = $6,
+             price = $7,
+             currency = $8,
+             variant_url = $9,
+             active = $10,
+             updated_at = NOW()
+      FROM services s
+      WHERE v.id = $1
+        AND v.service_id = $2
+        AND s.id = v.service_id
+        AND s.tenant_id = $3
+      RETURNING v.*
+      `,
+      [
+        variantId,
+        serviceId,
+        tenantId,
+        String(variant_name).trim(),
+        description ? String(description) : "",
+        dur,
+        pr,
+        cur,
+        url,
+        active ?? true,
+      ]
+    );
+
+    if (!rows[0]) return res.status(404).json({ error: "Variante no encontrada" });
+
+    return res.json({ variant: rows[0] });
+  } catch (e: any) {
+    console.error("PUT /api/services/:id/variants/:variantId error:", e);
+    return res.status(500).json({ error: "Error actualizando variante", detail: e?.message });
+  }
+});
+
+router.delete("/:id/variants/:variantId", authenticateUser, async (req: any, res: Response) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(401).json({ error: "Tenant no encontrado" });
+
+    const serviceId = String(req.params.id || "").trim();
     const variantId = String(req.params.variantId || "").trim();
 
     const r = await pool.query(
@@ -398,7 +539,7 @@ router.delete("/:serviceId/variants/:variantId", authenticateUser, async (req: a
 
     return res.json({ ok: true, deleted: r.rowCount || 0 });
   } catch (e: any) {
-    console.error("DELETE /api/services/:serviceId/variants/:variantId error:", e);
+    console.error("DELETE /api/services/:id/variants/:variantId error:", e);
     return res.status(500).json({ error: "Error eliminando variante", detail: e?.message });
   }
 });
