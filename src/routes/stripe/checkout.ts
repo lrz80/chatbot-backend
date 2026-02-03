@@ -86,7 +86,6 @@ router.post('/checkout', async (req, res) => {
 
       const session = await stripe.checkout.sessions.create({
         mode: 'subscription',
-        customer_creation: 'always',
         line_items: [{ price: PRICE_TEST_0, quantity: 1 }],
         metadata: {
           tenant_id: tenantId,
