@@ -87,6 +87,7 @@ import googleCalendarIntegrationRouter from "./routes/integrations/google-calend
 import appointmentSettingsRoutes from "./routes/appointment-settings";
 import servicesRouter from "./routes/services";
 import serviceVariantsRouter from "./routes/serviceVariants";
+import servicesImportCsv from "./routes/services/import-csv";
 
 if (process.env.NODE_ENV !== 'production') {
   dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
@@ -226,6 +227,7 @@ app.use("/api/integrations/google-calendar", googleCalendarIntegrationRouter);
 app.use("/api/appointment-settings", appointmentSettingsRoutes);
 app.use("/api/services", servicesRouter);
 app.use("/api/service-variants", serviceVariantsRouter);
+app.use("/api/services", servicesImportCsv);
 
 // —— Ruta base ————————————————————————————————
 app.get('/', (_req, res) => {
