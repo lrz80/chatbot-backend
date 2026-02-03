@@ -235,13 +235,37 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
 
     await client.query("COMMIT");
     return res.status(201).json({ service: { ...service, variants: insertedVariants } });
-  } catch (e: any) {
+    } catch (e: any) {
     try { await client.query("ROLLBACK"); } catch {}
+
     console.error("POST /api/services error:", e);
-    return res.status(500).json({ error: "Error creando servicio", detail: e?.message, code: e?.code });
-  } finally {
+
+    // ✅ DUPLICADO: (tenant_id, category, name)
+    if (e?.code === "23505" && e?.constraint === "services_tenant_category_name_uniq") {
+        return res.status(409).json({
+        error: "Servicio ya existe en esa categoría",
+        code: "SERVICE_ALREADY_EXISTS",
+        detail: e?.detail,
+        });
+    }
+
+    // ✅ NOT NULL (duration_min) por si aún te pasa
+    if (e?.code === "23502" && e?.column === "duration_min") {
+        return res.status(400).json({
+        error: "duration_min es requerido (tu DB no permite null).",
+        code: "DURATION_REQUIRED",
+        detail: e?.detail,
+        });
+    }
+
+    return res.status(500).json({
+        error: "Error creando servicio",
+        detail: e?.message,
+        code: e?.code,
+    });
+    } finally {
     client.release();
-  }
+    }
 });
 
 router.put("/:id", authenticateUser, async (req: any, res: Response) => {
