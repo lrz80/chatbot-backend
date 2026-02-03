@@ -78,7 +78,7 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
       name,
       description,
       duration_min,
-      price_from,
+      price_base,
       currency,
       service_url,
       active,
@@ -95,11 +95,10 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
       `
       INSERT INTO services (
         tenant_id, category, name, description,
-        duration_min, price_from, currency,
+        duration_min, price_base,
         service_url, active
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-      RETURNING *
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       `,
       [
         tenantId,
@@ -107,8 +106,7 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
         String(name).trim(),
         description || "",
         duration_min ?? null,
-        price_from ?? null,
-        currency || "USD",
+        price_base ?? null,
         service_url ? String(service_url).trim() : null,
         active ?? true,
       ]
