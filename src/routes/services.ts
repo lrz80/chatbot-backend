@@ -315,4 +315,92 @@ router.delete("/:id", authenticateUser, async (req: any, res: Response) => {
   }
 });
 
+router.post("/:id/variants", authenticateUser, async (req: any, res: Response) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(401).json({ error: "Tenant no encontrado" });
+
+    const serviceId = String(req.params.id || "").trim();
+    if (!serviceId) return res.status(400).json({ error: "service id requerido" });
+
+    const {
+      variant_name,
+      description,
+      price_base,      // o price_from según tu schema
+      duration_min,
+      variant_url,
+      active,
+      sort_order,
+    } = req.body || {};
+
+    if (!variant_name || !String(variant_name).trim()) {
+      return res.status(400).json({ error: "variant_name es requerido" });
+    }
+    if (!isValidUrl(variant_url)) {
+      return res.status(400).json({ error: "variant_url inválido" });
+    }
+
+    // ✅ valida tenant ownership del service
+    const { rows: svc } = await pool.query(
+      `SELECT id FROM services WHERE id = $1 AND tenant_id = $2`,
+      [serviceId, tenantId]
+    );
+    if (!svc[0]) return res.status(404).json({ error: "Servicio no encontrado" });
+
+    const { rows } = await pool.query(
+      `
+      INSERT INTO service_variants (
+        service_id, variant_name, description,
+        price_base, duration_min, variant_url,
+        active, sort_order
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      RETURNING *
+      `,
+      [
+        serviceId,
+        String(variant_name).trim(),
+        description || "",
+        price_base ?? null,
+        duration_min ?? null,
+        variant_url ? String(variant_url).trim() : null,
+        active ?? true,
+        sort_order ?? 0,
+      ]
+    );
+
+    return res.status(201).json({ variant: rows[0] });
+  } catch (e: any) {
+    console.error("POST /api/services/:id/variants error:", e);
+    return res.status(500).json({ error: "Error creando variante", detail: e?.message });
+  }
+});
+
+router.delete("/:serviceId/variants/:variantId", authenticateUser, async (req: any, res: Response) => {
+  try {
+    const tenantId = getTenantId(req);
+    if (!tenantId) return res.status(401).json({ error: "Tenant no encontrado" });
+
+    const serviceId = String(req.params.serviceId || "").trim();
+    const variantId = String(req.params.variantId || "").trim();
+
+    const r = await pool.query(
+      `
+      DELETE FROM service_variants v
+      USING services s
+      WHERE v.id = $1
+        AND v.service_id = $2
+        AND s.id = v.service_id
+        AND s.tenant_id = $3
+      `,
+      [variantId, serviceId, tenantId]
+    );
+
+    return res.json({ ok: true, deleted: r.rowCount || 0 });
+  } catch (e: any) {
+    console.error("DELETE /api/services/:serviceId/variants/:variantId error:", e);
+    return res.status(500).json({ error: "Error eliminando variante", detail: e?.message });
+  }
+});
+
 export default router;
