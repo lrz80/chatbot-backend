@@ -13,12 +13,19 @@ router.post('/checkout', async (req, res) => {
   const PRICE_INITIAL_399 = process.env.STRIPE_PRICE_INITIAL_399;
   if (!PRICE_INITIAL_399) return res.status(500).json({ error: 'STRIPE_PRICE_INITIAL_399 faltante' });
 
-  const FRONTEND_URL = process.env.FRONTEND_URL || 'https://www.aamy.ai';
+  // ✅ NUEVO: precio del plan Test ($0)
+  const PRICE_TEST_0 = process.env.STRIPE_PRICE_TEST_0; // price_...
+  // Nota: solo lo exigimos si el usuario pide plan test
 
+  const FRONTEND_URL = process.env.FRONTEND_URL || 'https://www.aamy.ai';
   const stripe = new Stripe(STRIPE_SECRET_KEY, { apiVersion: '2022-11-15' });
 
   const token = req.cookies?.token;
   if (!token) return res.status(401).json({ error: 'No autorizado' });
+
+  // ✅ NUEVO: plan seleccionado
+  const planRaw = (req.body?.plan || req.query?.plan || 'initial_399') as string;
+  const plan = String(planRaw).toLowerCase().trim(); // "initial_399" | "test"
 
   try {
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET!);
@@ -27,25 +34,49 @@ router.post('/checkout', async (req, res) => {
     // Email del usuario (Stripe lo usa para crear Customer + Receipt)
     const u = await pool.query(
       `SELECT email
-      FROM users
-      WHERE tenant_id::text = $1 OR uid::text = $1
-      LIMIT 1`,
+       FROM users
+       WHERE tenant_id::text = $1 OR uid::text = $1
+       LIMIT 1`,
       [tenantId]
     );
     const email: string | undefined = u.rows[0]?.email;
     if (!email) return res.status(404).json({ error: 'Usuario no encontrado' });
 
+    // ✅ Construir sesión según plan
+    if (plan === 'test') {
+      if (!PRICE_TEST_0) return res.status(500).json({ error: 'STRIPE_PRICE_TEST_0 faltante' });
+
+      // ✅ Plan Test: subscription $0 (recurring)
+      const session = await stripe.checkout.sessions.create({
+        mode: 'subscription',
+        customer_creation: 'always',
+        line_items: [{ price: PRICE_TEST_0, quantity: 1 }],
+        metadata: {
+          tenant_id: tenantId,
+          purpose: 'aamy_test_0',
+          plan: 'test',
+        },
+        client_reference_id: tenantId,
+        customer_email: email,
+        success_url: `${FRONTEND_URL}/upgrade/success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${FRONTEND_URL}/upgrade?canceled=1`,
+      });
+
+      return res.json({ url: session.url });
+    }
+
+    // ✅ Default: pago inicial $399 (como ya lo tienes)
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       customer_creation: 'always',
       line_items: [{ price: PRICE_INITIAL_399, quantity: 1 }],
       payment_intent_data: {
-        // guarda el método de pago para futuros cobros (la suscripción mensual)
         setup_future_usage: 'off_session',
       },
       metadata: {
         tenant_id: tenantId,
         purpose: 'aamy_initial_399',
+        plan: 'initial_399',
       },
       client_reference_id: tenantId,
       customer_email: email,
@@ -55,8 +86,8 @@ router.post('/checkout', async (req, res) => {
 
     return res.json({ url: session.url });
   } catch (err) {
-    console.error('❌ Error creando sesión Stripe (payment $399):', err);
-    return res.status(500).json({ error: 'Error creando sesión de pago' });
+    console.error('❌ Error creando sesión Stripe:', err);
+    return res.status(500).json({ error: 'Error creando sesión de checkout' });
   }
 });
 
