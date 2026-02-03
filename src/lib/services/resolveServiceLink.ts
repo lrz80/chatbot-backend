@@ -63,6 +63,17 @@ export async function resolveServiceLink(args: {
     `,
     [tenantId, q, limit]
   );
+  console.log("🔎 [resolveServiceLink] qRaw/q =", { qRaw, q, tenantId });
+
+  console.log(
+    "🔎 [resolveServiceLink] candidates =",
+    (services || []).map((s: any) => ({
+      name: s.name,
+      category: s.category,
+      score: Number(s.score || 0),
+      url: s.service_url,
+    }))
+  );
 
     if (!services.length) {
     // Fallback: búsqueda simple por ILIKE (por si pg_trgm no matchea)
