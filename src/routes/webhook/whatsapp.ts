@@ -44,6 +44,7 @@ import { isAmbiguousLangText } from "../../lib/appointments/booking/text";
 import { runBookingGuardrail } from "../../lib/appointments/booking/guardrail";
 import { wantsServiceLink } from "../../lib/services/wantsServiceLink";
 import { resolveServiceLink } from "../../lib/services/resolveServiceLink";
+import { serviceLinkPickFromAwaiting } from "../../lib/services/serviceLinkPickFromAwaiting";
 
 
 const sha256 = (s: string) =>
@@ -111,6 +112,14 @@ function looksLikeBookingPayload(text: string) {
   const hasDateOnly = /\b\d{4}-\d{2}-\d{2}\b/.test(t);
   const hasTimeOnly = /^\s*\d{2}:\d{2}\s*$/.test(t);
   return hasEmail || hasDateTime || hasDateOnly || hasTimeOnly;
+}
+
+function parsePickNumber(text: string): number | null {
+  const t = String(text || "").trim();
+  if (!/^\d+$/.test(t)) return null;
+  const n = Number(t);
+  if (!Number.isFinite(n)) return null;
+  return n;
 }
 
 function pickSelectedChannelFromText(
@@ -1144,11 +1153,51 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
   const awaiting = (convoCtx as any)?.awaiting || activeStep || null;
 
-  console.log("🧠 convo_state (start) =", {
-    activeFlow,
-    activeStep,
-    convoCtx,
-  });
+  // ✅ SERVICE LINK PICK: si el turno anterior mostró opciones 1-5
+  {
+    const n = parsePickNumber(userInput);
+
+    const pick = (convoCtx as any)?.service_link_pick;
+    const options = Array.isArray(pick?.options) ? pick.options : [];
+
+    // si usuario mandó número y tenemos opciones guardadas
+    if (n !== null && options.length) {
+      const idx = n - 1;
+
+      if (idx < 0 || idx >= options.length) {
+        const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
+        const msg =
+          idiomaDestino === "en"
+            ? `Please reply with a valid number:\n${lines}`
+            : `Responde con un número válido:\n${lines}`;
+
+        return await replyAndExit(msg, "service_link_pick:out_of_range", "service_link");
+      }
+
+      const chosen = options[idx];
+      const url = String(chosen?.url || "").trim();
+
+      // limpiar el pick para que no se reuse
+      transition({ patchCtx: { service_link_pick: null } });
+
+      // ✅ persistir limpieza
+      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+        activeFlow,
+        activeStep,
+        context: convoCtx,
+      });
+
+      if (!url) {
+        const msg =
+          idiomaDestino === "en"
+            ? "That option doesn't have a link saved yet."
+            : "Esa opción no tiene link guardado todavía.";
+        return await replyAndExit(msg, "service_link_pick:no_url", "service_link");
+      }
+
+      return await replyAndExit(url, "service_link_pick", "service_link");
+    }
+  }
 
   // ===============================
   // 🔎 DEBUG: estado de flujo (clientes)
@@ -1554,7 +1603,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
   }
 
-    // ===============================
+  // ===============================
   // 🔗 SERVICE LINK FAST-PATH (SOLO LINK)
   // Debe ir ANTES del fallback/LLM. Usa Single Exit.
   // ===============================
@@ -1570,7 +1619,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       return await replyAndExit(resolved.url, "service_link", "service_link");
     }
 
-        if (resolved.reason === "ambiguous" && resolved.options?.length) {
+    if (resolved.reason === "ambiguous" && resolved.options?.length) {
       const options = resolved.options.slice(0, 5).map((o) => ({
         label: o.label,
         url: o.url || null,
@@ -1584,6 +1633,13 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
             created_at: new Date().toISOString(),
           },
         },
+      });
+
+      // ✅ persistir pick en conversation_state para que el próximo "2" funcione
+      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+        activeFlow,
+        activeStep,
+        context: convoCtx,
       });
 
       const lines = options
