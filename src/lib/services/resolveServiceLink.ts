@@ -14,17 +14,26 @@ function normalizeServiceQuery(q: string) {
     [/\bgrooming\b/g, "groom"],
     [/\brecorte\b/g, "trim"],
     [/\buñ(as|as)\b/g, "nails"],
-    [/\bdeslanad(o|o|a|ado)\b/g, "deshedding"],
+    [/\bdeslanad(o|a|os|as|ado|ada)\b/g, "deshedding"],
     [/\bdeshedding\b/g, "deshedding"],
-    [/\blimpieza de o(i|í)dos\b/g, "ears"],
+    [/\blimpieza\s+de\s+o(i|í)dos\b/g, "ears"],
     [/\bo(i|í)dos\b/g, "ears"],
     [/\bdientes\b/g, "teeth"],
-    [/\bcepillad(o|o)\b/g, "brush"],
+    [/\bcepillad(o|a)\b/g, "brush"],
   ];
-
   for (const [re, repl] of map) s = s.replace(re, repl);
 
-  return s.trim();
+  // ✅ Quitar ruido típico de pedir links (ES/EN)
+  s = s.replace(
+    /\b(mandame|mándame|pasame|pásame|env[ií]ame|enviame|dame|necesito|quiero|me\s+das|me\s+puedes|puedes|por\s+favor|pf|pls|please|send\s+me|send|link|enlace|url|reservar|reserva|agendar|agenda|book|booking|schedule|the|a|an|of|for|to|del|de|el|la|los|las|un|una|unos|unas)\b/g,
+    " "
+  );
+
+  // Limpieza final
+  s = s.replace(/[^\p{L}\p{N}\s-]+/gu, " "); // quita puntuación
+  s = s.replace(/\s+/g, " ").trim();
+
+  return s;
 }
 
 export async function resolveServiceLink(args: {
@@ -57,21 +66,25 @@ export async function resolveServiceLink(args: {
 
     if (!services.length) {
     // Fallback: búsqueda simple por ILIKE (por si pg_trgm no matchea)
-    const like = `%${q}%`;
+    const tokens = q.split(" ").filter(Boolean);
+    const patterns = tokens.length
+    ? tokens.map((t) => `%${t}%`)
+    : [`%${q}%`];
+
     const { rows: services2 } = await pool.query(
-      `
-      SELECT s.*, 0.0 AS score
-      FROM services s
-      WHERE s.tenant_id = $1
+    `
+    SELECT s.*, 0.0 AS score
+    FROM services s
+    WHERE s.tenant_id = $1
         AND s.active = TRUE
         AND (
-          s.name ILIKE $2 OR
-          s.description ILIKE $2
+        s.name ILIKE ANY($2) OR
+        s.description ILIKE ANY($2)
         )
-      ORDER BY s.category ASC, s.name ASC
-      LIMIT $3
-      `,
-      [tenantId, like, limit]
+    ORDER BY s.category ASC, s.name ASC
+    LIMIT $3
+    `,
+    [tenantId, patterns, limit]
     );
 
     if (!services2.length) return { ok: false, reason: "no_match" };
