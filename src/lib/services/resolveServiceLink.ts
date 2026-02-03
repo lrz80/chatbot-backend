@@ -112,9 +112,9 @@ export async function resolveServiceLink(args: {
   }
 
     const top = services[0];
-  const topScore = Number(top.score || 0);
+  const topScore = Number(top?.score || 0);
   const second = services[1];
-  const secondScore = second ? Number(second.score || 0) : 0;
+  const secondScore = Number(second?.score || 0);
 
   // 2) Si score es bajo -> ambiguo
   if (topScore < 0.35) {
@@ -128,12 +128,10 @@ export async function resolveServiceLink(args: {
     };
   }
 
-  // ✅ 2B) Si hay 2+ candidatos y están muy cerca -> ambiguo
-  // Regla práctica:
-  // - Si el segundo tiene score decente (>= 0.30)
-  // - y la diferencia top - second es pequeña (<= 0.08)
-  // => pedimos que el usuario elija.
-  if (services.length >= 2 && secondScore >= 0.30 && (topScore - secondScore) <= 0.08) {
+  // ✅ 2B) Si hay 2+ candidatos con scores "fuertes", NO adivines -> deja elegir.
+  // Regla: si el segundo es suficientemente bueno, pedimos elección.
+  // (Esto fuerza el caso "bath" con Deluxe Bath + Basic Bath)
+  if (services.length >= 2 && secondScore >= 0.35) {
     return {
       ok: false,
       reason: "ambiguous",
