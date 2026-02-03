@@ -328,15 +328,15 @@ function parseKeyValueTemplate(text: string) {
     ["teléfono", "Teléfono"],
     ["telefono", "Teléfono"],
 
-    ["servicios", "Servicios"],
-    ["servicios principales", "Servicios principales"],
+    //["servicios", "Servicios"],
+    //["servicios principales", "Servicios principales"],
 
     ["horarios", "Horarios"],
     ["horario", "Horarios"],
 
-    ["precios", "Precios"],
-    ["precios o cómo consultar precios", "Precios"],
-    ["precios o como consultar precios", "Precios"],
+    //["precios", "Precios"],
+    //["precios o cómo consultar precios", "Precios"],
+    //["precios o como consultar precios", "Precios"],
 
     ["reservas", "Reservas"],
     ["reservas / contacto", "Reservas / contacto"],
@@ -477,11 +477,11 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
       tel ? `Teléfono: ${tel}` : "",
     ].filter(Boolean)));
 
-    if (servicios.length) {
-      out.push("");
-      out.push("SERVICIOS");
-      out.push(...toBullets(servicios));
-    }
+    //if (servicios.length) {
+      //out.push("");
+      //out.push("SERVICIOS");
+      //out.push(...toBullets(servicios));
+    //}
 
     if (horarios.length) {
       out.push("");
@@ -489,11 +489,11 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
       out.push(...toBullets(horarios));
     }
 
-    if (precios.length) {
-      out.push("");
-      out.push("PRECIOS");
-      out.push(...toBullets(precios));
-    }
+    //if (precios.length) {
+      //out.push("");
+      //out.push("PRECIOS");
+      //out.push(...toBullets(precios));
+    //}
 
     if (reservas.length) {
       out.push("");
@@ -689,6 +689,9 @@ router.post("/", async (req: Request, res: Response) => {
             "- Do not ask questions before answering a direct question.",
             "- Ask at most 1 question only if needed.",
             "- Do not repeat long text verbatim; paraphrase briefly when needed.",
+            "- Service catalog (services/variants/prices/duration) must NOT live in the prompt.",
+            "- When the user asks for price, duration, or what's included, query the database (services/service_variants).",
+            "- If ambiguous (multiple variants), ask them to pick 1–5. Do not guess.",
           ]
         : [
             "- No inventes información.",
@@ -697,6 +700,9 @@ router.post("/", async (req: Request, res: Response) => {
             "- No hagas preguntas antes de responder una pregunta directa.",
             "- Máximo 1 pregunta si es necesaria.",
             "- No repitas textos largos literalmente; parafrasea breve cuando sea necesario.",
+            "- Catálogo (servicios/variantes/precios/duración) NO vive en el prompt.",
+            "- Cuando el usuario pregunte precios, duración o qué incluye un servicio, consulta la base de datos (services/service_variants).",
+            "- Si hay ambigüedad (varias variantes), pide elegir 1–5. No adivines.",
           ]),
       "",
 
