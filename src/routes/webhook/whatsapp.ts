@@ -1162,6 +1162,19 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
     // si usuario mandó número y tenemos opciones guardadas
     if (n !== null && options.length) {
+      const createdAt = Date.parse(String(pick?.created_at || ""));
+      const fresh = Number.isFinite(createdAt) ? (Date.now() - createdAt) < 10 * 60 * 1000 : false;
+
+      if (!fresh) {
+        transition({ patchCtx: { service_link_pick: null } });
+        await setConversationStateCompat(tenant.id, canal, contactoNorm, { activeFlow, activeStep, context: convoCtx });
+
+        const msg = idiomaDestino === "en"
+          ? "That selection expired. Ask me again which service you want."
+          : "Esa selección expiró. Vuelve a pedirme el link del servicio.";
+        return await replyAndExit(msg, "service_link_pick:expired", "service_link");
+      }
+
       const idx = n - 1;
 
       if (idx < 0 || idx >= options.length) {

@@ -7,25 +7,27 @@ type ResolvedLink =
 function normalizeServiceQuery(q: string) {
   let s = String(q || "").toLowerCase();
 
-  // ES -> EN básicos (ajusta a tu industria)
+  // ✅ Sinónimos ES/EN BÁSICOS (universales, NO por industria)
+  // Mantén esto corto para no sesgar a un vertical.
   const map: Array<[RegExp, string]> = [
-    [/\bbañ(o|os|ito|itos)\b/g, "bath"],
-    [/\bpeluquer(i|í)a\b/g, "groom"],
-    [/\bgrooming\b/g, "groom"],
-    [/\brecorte\b/g, "trim"],
-    [/\buñ(as|as)\b/g, "nails"],
-    [/\bdeslanad(o|a|os|as|ado|ada)\b/g, "deshedding"],
-    [/\bdeshedding\b/g, "deshedding"],
-    [/\blimpieza\s+de\s+o(i|í)dos\b/g, "ears"],
-    [/\bo(i|í)dos\b/g, "ears"],
-    [/\bdientes\b/g, "teeth"],
-    [/\bcepillad(o|a)\b/g, "brush"],
+    // ES -> EN (muy comunes)
+    [/\bbañ(o|os)\b/g, "bath"],
+    [/\bcita(s)?\b/g, "appointment"],
+    [/\breserva(s)?\b/g, "booking"],
+    [/\bmembres(i|í)a(s)?\b/g, "membership"],
+    [/\bpaquete(s)?\b/g, "package"],
   ];
   for (const [re, repl] of map) s = s.replace(re, repl);
 
-  // ✅ Quitar ruido típico de pedir links (ES/EN)
+  // ✅ Quitar ruido típico al pedir links (ES/EN) — universal
   s = s.replace(
-    /\b(mandame|mándame|pasame|pásame|env[ií]ame|enviame|dame|necesito|quiero|me\s+das|me\s+puedes|puedes|por\s+favor|pf|pls|please|send\s+me|send|link|enlace|url|reservar|reserva|agendar|agenda|book|booking|schedule|the|a|an|of|for|to|del|de|el|la|los|las|un|una|unos|unas)\b/g,
+    /\b(mandame|mándame|pasame|pásame|env[ií]ame|enviame|dame|quiero|necesito|me\s+das|me\s+puedes|puedes|por\s+favor|pf|pls|please|send\s+me|send|link|enlace|url|reservar|reserva|agendar|agenda|book|booking|schedule)\b/g,
+    " "
+  );
+
+  // ✅ Stopwords ES/EN (universales)
+  s = s.replace(
+    /\b(el|la|los|las|un|una|unos|unas|de|del|al|para|por|con|sin|y|o|que|es|en|the|a|an|of|for|to|and|or|is|in|on)\b/g,
     " "
   );
 
