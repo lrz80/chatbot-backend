@@ -117,7 +117,11 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
     return res.status(201).json({ service: rows[0] });
   } catch (e: any) {
     console.error("POST /api/services error:", e);
-    return res.status(500).json({ error: "Error creando servicio" });
+    return res.status(500).json({
+      error: "Error creando servicio",
+      detail: e?.message,
+      code: e?.code,
+    });
   }
 });
 
