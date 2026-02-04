@@ -9,6 +9,32 @@ function isValidUrl(u?: string) {
   return /^https?:\/\/.+/i.test(u.trim());
 }
 
+function parseNullableInt(v: any): number | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return Math.trunc(n);
+}
+
+function parseNullablePrice(v: any): number | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;                // ✅ "" => null
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100) / 100;   // ✅ 2 decimales
+}
+
+function parseBool(v: any, fallback: boolean): boolean {
+  if (v === true || v === false) return v;
+  const s = String(v ?? "").trim().toLowerCase();
+  if (["true", "1", "yes", "si"].includes(s)) return true;
+  if (["false", "0", "no"].includes(s)) return false;
+  return fallback;
+}
+
 /**
  * POST /api/service-variants
  * Crea variante para un servicio
@@ -49,27 +75,57 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
       return res.status(403).json({ error: "No autorizado para este servicio" });
     }
 
+    const durationParsed = parseNullableInt(duration_min);
+    const priceParsed = parseNullablePrice(price);
+    const currencyParsed = String(currency || "USD").trim().toUpperCase() || "USD";
+    const activeParsed = parseBool(active, true);
+
+    const desc = (description === null || description === undefined)
+      ? null
+      : String(description).trim();
+
+    const url = variant_url ? String(variant_url).trim() : null;
+
+    console.log("[service-variants:create] incoming", {
+      service_id,
+      variant_name,
+      duration_raw: duration_min,
+      durationParsed,
+      price_raw: price,
+      priceParsed,
+      currencyParsed,
+      url,
+      activeParsed,
+    });
+
     const { rows } = await pool.query(
-      `
-      INSERT INTO service_variants (
+    `
+    INSERT INTO service_variants (
         service_id, variant_name, description,
         duration_min, price, currency,
-        variant_url, active
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-      RETURNING *
-      `,
-      [
+        variant_url, active, created_at, updated_at
+    )
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8, NOW(), NOW())
+    RETURNING *
+    `,
+    [
         service_id,
         String(variant_name).trim(),
-        description || "",
-        duration_min ?? null,
-        price ?? null,
-        currency || "USD",
-        variant_url ? String(variant_url).trim() : null,
-        active ?? true,
-      ]
+        desc,                 // ✅ null o string
+        durationParsed,       // ✅ int|null
+        priceParsed,          // ✅ number|null (nunca "")
+        currencyParsed,       // ✅ USD
+        url,                  // ✅ null o URL
+        activeParsed,         // ✅ boolean
+    ]
     );
+
+    console.log("[service-variants:create] saved", {
+      id: rows[0]?.id,
+      price: rows[0]?.price,
+      currency: rows[0]?.currency,
+      duration_min: rows[0]?.duration_min,
+    });
 
     return res.status(201).json({ variant: rows[0] });
   } catch (e: any) {

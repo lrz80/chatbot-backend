@@ -13,6 +13,24 @@ function isValidUrl(u?: string) {
   return /^https?:\/\/.+/i.test(u.trim());
 }
 
+function parseNullableInt(v: any): number | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return Math.trunc(n);
+}
+
+function parseNullablePrice(v: any): number | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null; // ✅ "" => null (y NO pisa)
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100) / 100;
+}
+
 /**
  * GET /api/services
  * Lista servicios del tenant (incluye variantes)
@@ -196,10 +214,10 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
       const vn = String(v?.variant_name || "").trim();
       if (!vn) continue; // si quieres exigirlo: throw new Error("variant_name requerido");
 
-      const dur = v?.duration_min == null ? null : Number(v.duration_min);
+      const dur = parseNullableInt(v?.duration_min);
       if (v?.duration_min != null && !Number.isFinite(dur)) throw new Error("variant duration_min inválido");
 
-      const pr = v?.price == null ? null : Number(v.price);
+      const pr = parseNullablePrice(v?.price);
       if (v?.price != null && !Number.isFinite(pr)) throw new Error("variant price inválido");
 
       const cur = (v?.currency ? String(v.currency).trim().toUpperCase() : "USD") || "USD";
@@ -487,15 +505,8 @@ router.put("/:id/variants/:variantId", authenticateUser, async (req: any, res: R
       return res.status(400).json({ error: "variant_name es requerido" });
     }
 
-    const dur = duration_min == null ? null : Number(duration_min);
-    if (duration_min != null && !Number.isFinite(dur)) {
-      return res.status(400).json({ error: "duration_min inválido" });
-    }
-
-    const pr = price == null ? null : Number(price);
-    if (price != null && !Number.isFinite(pr)) {
-      return res.status(400).json({ error: "price inválido" });
-    }
+    const dur = parseNullableInt(duration_min);
+    const pr = parseNullablePrice(price);
 
     const cur = (currency ? String(currency).trim().toUpperCase() : "USD") || "USD";
 
@@ -508,14 +519,14 @@ router.put("/:id/variants/:variantId", authenticateUser, async (req: any, res: R
     const { rows } = await pool.query(
       `
       UPDATE service_variants v
-         SET variant_name = $4,
-             description = $5,
-             duration_min = $6,
-             price = $7,
-             currency = $8,
-             variant_url = $9,
-             active = $10,
-             updated_at = NOW()
+        SET variant_name = $4,
+          description  = $5,
+          duration_min = COALESCE($6, v.duration_min),
+          price        = COALESCE($7, v.price),
+          currency     = COALESCE($8, v.currency),
+          variant_url  = COALESCE($9, v.variant_url),
+          active       = COALESCE($10, v.active),
+          updated_at   = NOW()
       FROM services s
       WHERE v.id = $1
         AND v.service_id = $2
@@ -533,7 +544,7 @@ router.put("/:id/variants/:variantId", authenticateUser, async (req: any, res: R
         pr,
         cur,
         url,
-        active ?? true,
+        typeof active === "boolean" ? active : null, // ✅ para que COALESCE funcione
       ]
     );
 
