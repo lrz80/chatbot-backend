@@ -1270,6 +1270,97 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   }
 
   // ===============================
+  // 💲 PRICE LIST FAST-PATH (pregunta genérica "precios") — SIN LLM
+  // PÉGALO antes de SERVICE INFO FAST-PATH
+  // ===============================
+  function wantsGeneralPrices(text: string) {
+    const t = String(text || "").toLowerCase().trim();
+
+    const asksPrice =
+      /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+val(e|en)|tarifa|cost(o|os))\b/.test(t);
+
+    // solo bloquea si menciona algo MUY específico (plan/bronze/paquete X/etc.)
+    const mentionsSpecific =
+      /\b(bronze|plan\s+bronze|paquete\s+\d+|package\s+\d+|cycling|cicl(ing)?|funcional|functional|single\s+class)\b/.test(t);
+
+    return asksPrice && !mentionsSpecific;
+  }
+
+  if (wantsGeneralPrices(userInput)) {
+    const { rows } = await pool.query(
+      `
+      (
+        SELECT
+          s.name AS label,
+          NULL::text AS variant_name,
+          s.price_base AS price,
+          'USD'::text AS currency,
+          s.service_url AS url,
+          1 AS sort_group,
+          s.sort_order AS s_sort,
+          NULL::int AS v_sort,
+          s.updated_at AS updated_at
+        FROM services s
+        WHERE s.tenant_id = $1
+          AND s.active = TRUE
+          AND s.price_base IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM service_variants v2
+            WHERE v2.service_id = s.id
+              AND v2.active = TRUE
+              AND v2.price IS NOT NULL
+          )
+      )
+      UNION ALL
+      (
+        SELECT
+          s.name AS label,
+          v.variant_name AS variant_name,
+          v.price AS price,
+          COALESCE(v.currency, 'USD') AS currency,
+          COALESCE(v.variant_url, s.service_url) AS url,
+          2 AS sort_group,
+          s.sort_order AS s_sort,
+          v.sort_order AS v_sort,
+          v.updated_at AS updated_at
+        FROM services s
+        JOIN service_variants v ON v.service_id = s.id
+        WHERE s.tenant_id = $1
+          AND s.active = TRUE
+          AND v.active = TRUE
+          AND v.price IS NOT NULL
+      )
+      ORDER BY sort_group ASC, s_sort NULLS LAST, v_sort NULLS LAST, updated_at DESC
+      LIMIT 12
+      `,
+      [tenant.id]
+    );
+
+    if (!rows.length) {
+      const msg =
+        idiomaDestino === "en"
+          ? "I don’t have prices saved yet."
+          : "Todavía no tengo precios guardados.";
+      return await replyAndExit(msg, "price_list:empty", "precios");
+    }
+
+    const lines = rows.map((r: any) => {
+      const p = Number(r.price);
+      const cur = String(r.currency || "USD");
+      const name = r.variant_name ? `${r.label} - ${r.variant_name}` : String(r.label);
+      return `• ${name}: $${p.toFixed(2)} ${cur}`;
+    });
+
+    const msg =
+      idiomaDestino === "en"
+        ? `Here are the current prices:\n\n${lines.join("\n")}\n\nDo you want Cycling or Functional?`
+        : `Estos son los precios actuales:\n\n${lines.join("\n")}\n\n¿Te interesa Cycling o Funcional?`;
+
+    return await replyAndExit(msg, "price_list", "precios");
+  }
+
+  // ===============================
   // 💲 SERVICE INFO FAST-PATH (precio / duración / incluye) — SIN LLM
   // ===============================
   {
@@ -1479,14 +1570,22 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           [tenant.id, chosen.variant_id]
         );
         const row = rows[0];
+        const price =
+          row.price !== null && row.price !== undefined
+            ? Number(row.price)
+            : (row.price_base !== null && row.price_base !== undefined ? Number(row.price_base) : null);
+
+        const currency =
+          row.currency ? String(row.currency) : "USD";
+
         if (row) {
           resolved = {
             ok: true,
             kind: "variant",
             label: `${row.service_name} - ${row.variant_name}`,
             url: row.variant_url || row.service_url || null,
-            price: row.price !== null ? Number(row.price) : null,
-            currency: row.currency ? String(row.currency) : "USD",
+            price,
+            currency,
             duration_min:
               row.variant_duration !== null
                 ? Number(row.variant_duration)
@@ -1502,25 +1601,78 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       } else {
         const { rows } = await pool.query(
           `
-          SELECT *
-          FROM services
-          WHERE tenant_id = $1 AND active = TRUE AND id = $2
+          SELECT
+            s.id AS service_id,
+            s.name AS service_name,
+            s.description AS service_desc,
+            s.duration_min AS service_duration,
+            s.price_base AS service_price_base,
+            s.service_url AS service_url,
+
+            v.id AS variant_id,
+            v.variant_name,
+            v.description AS variant_desc,
+            v.duration_min AS variant_duration,
+            v.price AS variant_price,
+            v.currency AS variant_currency,
+            v.variant_url AS variant_url
+          FROM services s
+          LEFT JOIN LATERAL (
+            SELECT v.*
+            FROM service_variants v
+            WHERE v.service_id = s.id
+              AND v.active = TRUE
+              AND v.price IS NOT NULL
+            ORDER BY v.sort_order NULLS LAST, v.updated_at DESC
+            LIMIT 1
+          ) v ON TRUE
+          WHERE s.tenant_id = $1
+            AND s.active = TRUE
+            AND s.id = $2
           LIMIT 1
           `,
           [tenant.id, chosen.service_id]
         );
-        const s = rows[0];
-        if (s) {
+
+        const row = rows[0];
+        if (row) {
+          // ✅ Preferir precio de variante si existe; si no, usar service_price_base
+          const price =
+            row.variant_price !== null && row.variant_price !== undefined
+              ? Number(row.variant_price)
+              : (row.service_price_base !== null ? Number(row.service_price_base) : null);
+
+          const currency =
+            row.variant_currency ? String(row.variant_currency) : "USD";
+
+          const url =
+            (row.variant_url && String(row.variant_url).trim())
+              ? String(row.variant_url)
+              : (row.service_url ? String(row.service_url) : null);
+
+          const duration_min =
+            row.variant_duration !== null && row.variant_duration !== undefined
+              ? Number(row.variant_duration)
+              : (row.service_duration !== null ? Number(row.service_duration) : null);
+
+          const description =
+            (row.variant_desc && String(row.variant_desc).trim())
+              ? String(row.variant_desc)
+              : (row.service_desc ? String(row.service_desc) : null);
+
           resolved = {
             ok: true,
-            kind: "service",
-            label: String(s.name),
-            url: s.service_url ? String(s.service_url) : null,
-            price: s.price_base !== null ? Number(s.price_base) : null,
-            currency: "USD",
-            duration_min: s.duration_min !== null ? Number(s.duration_min) : null,
-            description: s.description ? String(s.description) : null,
-            service_id: String(s.id),
+            kind: row.variant_id ? "variant" : "service",  // 👈 si hay variante con precio, úsala
+            label: row.variant_id
+              ? `${row.service_name} - ${row.variant_name}`
+              : String(row.service_name),
+            url,
+            price,
+            currency,
+            duration_min,
+            description,
+            service_id: String(row.service_id),
+            variant_id: row.variant_id ? String(row.variant_id) : null,
           };
         }
       }
