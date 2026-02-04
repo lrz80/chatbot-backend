@@ -152,6 +152,7 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
       service_url,
       active,
       variants, // ✅
+      tipo,
     } = req.body || {};
 
     if (!name || !String(name).trim()) {
@@ -170,9 +171,9 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
       INSERT INTO services (
         tenant_id, category, name, description,
         duration_min, price_base,
-        service_url, active
+        service_url, active, tipo
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
       RETURNING *
       `,
       [
@@ -184,6 +185,7 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
         price_base ?? null,
         service_url ? String(service_url).trim() : null,
         active ?? true,
+        (tipo === "plan" ? "plan" : "service")
       ]
     );
 
@@ -284,6 +286,7 @@ router.put("/:id", authenticateUser, async (req: any, res: Response) => {
       price_base,
       service_url,
       active,
+      tipo,
     } = req.body || {};
 
     if (!name || !String(name).trim()) {
@@ -303,6 +306,7 @@ router.put("/:id", authenticateUser, async (req: any, res: Response) => {
              price_base = $7,
              service_url = $8,
              active = $9,
+             tipo = $10,
              updated_at = NOW()
        WHERE id = $1
          AND tenant_id = $2
@@ -318,6 +322,7 @@ router.put("/:id", authenticateUser, async (req: any, res: Response) => {
         price_base ?? null,
         service_url ? String(service_url).trim() : null,
         active ?? true,
+        (tipo === "plan" ? "plan" : "service")
       ]
     );
 
