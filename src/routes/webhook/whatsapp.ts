@@ -966,6 +966,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         saveAssistantMessageAndEmit({
           ...opts,
           canal,
+          fromNumber: contactoNorm, // ✅ fuerza el mismo key
           intent: (lastIntent || INTENCION_FINAL_CANONICA || null),
           interest_level: (typeof detectedInterest === "number" ? detectedInterest : null),
         }),
@@ -1773,7 +1774,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
             duration_min,
             description,
             service_id: String(row.service_id),
-            variant_id: row.variant_id ? String(row.variant_id) : null,
+            variant_id: String(row.variant_id),
           };
         }
       }
@@ -1924,7 +1925,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   await saveUserMessageAndEmit({
     tenantId: tenant.id,
     canal,
-    fromNumber: fromNumber || contactoNorm, // ✅ usa fromNumber real
+    fromNumber: contactoNorm, // ✅ usa fromNumber real
     messageId,
     content: userInput || '',
     intent: detectedIntent,
@@ -2105,7 +2106,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     const history = await getRecentHistoryForModel({
       tenantId: tenant.id,
       canal,
-      fromNumber: fromNumber || contactoNorm, // ✅ usa fromNumber real
+      fromNumber: contactoNorm, // ✅ usa fromNumber real
       excludeMessageId: messageId,
       limit: 12,
     });
@@ -2215,7 +2216,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   const history = await getRecentHistoryForModel({
     tenantId: tenant.id,
     canal,
-    fromNumber: fromNumber || contactoNorm, // ✅ usa fromNumber real
+    fromNumber: contactoNorm, // ✅ usa fromNumber real
     excludeMessageId: messageId,
     limit: 12,
   });
