@@ -43,6 +43,14 @@ import { sendCapiEvent } from "../../services/metaCapi";
 import { bookingFlowMvp } from "../../lib/appointments/bookingFlow";
 import { isAmbiguousLangText } from "../../lib/appointments/booking/text";
 import { runBookingGuardrail } from "../../lib/appointments/booking/guardrail";
+import { wantsServiceLink } from "../../lib/services/wantsServiceLink";
+import { resolveServiceLink } from "../../lib/services/resolveServiceLink";
+import { wantsServiceInfo } from "../../lib/services/wantsServiceInfo";
+import { resolveServiceInfo } from "../../lib/services/resolveServiceInfo";
+import { renderServiceInfoReply } from "../../lib/services/renderServiceInfoReply";
+import { wantsServiceList } from "../../lib/services/wantsServiceList";
+import { resolveServiceList } from "../../lib/services/resolveServiceList";
+import { renderServiceListReply } from "../../lib/services/renderServiceListReply";
 
 
 type CanalEnvio = "facebook" | "instagram";
@@ -61,6 +69,14 @@ function bucket7DaysUTC(d = new Date()) {
   const ms = d.getTime();
   const windowMs = 7 * 24 * 60 * 60 * 1000;
   return `b7:${Math.floor(ms / windowMs)}`;
+}
+
+function parsePickNumber(text: string): number | null {
+  const t = String(text || "").trim();
+  const m = t.match(/^([1-9]\d*)$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
 }
 
 // ✅ Reserva dedupe en DB usando interactions (unique tenant+canal+message_id)
@@ -817,25 +833,28 @@ router.post("/api/facebook/webhook", async (req, res) => {
 
             const eventId = `lead:${tenantId}:${contactHash}`; // ✅ 1 vez en la vida
 
-            await sendCapiEvent({
-              tenantId,
-              eventName: "Lead",
-              eventId,
-              userData: {
-                external_id: sha256(`${tenantId}:${senderId}`),
-              },
-              customData: {
-                channel: canalEnvio, // "facebook" | "instagram"
-                source: "first_inbound_message",
-                inbound_message_id: messageId,
-                preview: (userInput || "").slice(0, 80),
-                page_id: String(pageId || ""),
-              },
-            });
+            const ok = await reserveCapiEvent(tenantId, eventId);
+            if (ok) {
+              await sendCapiEvent({
+                tenantId,
+                eventName: "Lead",
+                eventId,
+                userData: {
+                  external_id: sha256(`${tenantId}:${senderId}`),
+                },
+                customData: {
+                  channel: canalEnvio,
+                  source: "first_inbound_message",
+                  inbound_message_id: messageId,
+                  preview: (userInput || "").slice(0, 80),
+                  page_id: String(pageId || ""),
+                },
+              });
 
-            console.log("✅ CAPI Lead enviado (primer mensaje):", { tenantId, canalEnvio, senderId });
-          } else {
-            console.log("⏭️ CAPI Lead omitido (ya existía cliente):", { tenantId, canalEnvio, senderId });
+              console.log("✅ CAPI Lead enviado (primer mensaje):", { tenantId, canalEnvio, senderId });
+            } else {
+              console.log("⏭️ CAPI Lead omitido (ya existía cliente):", { tenantId, canalEnvio, senderId });
+            }
           }
         } catch (e: any) {
           console.warn("⚠️ Error enviando CAPI Lead PRO:", e?.message);
@@ -1150,30 +1169,28 @@ router.post("/api/facebook/webhook", async (req, res) => {
                 const contactHash = sha256(senderId); // PSID/IGSID estable
                 const eventId = `ql:${tenantId}:${contactHash}`; // ✅ 1 vez en la vida
 
-                await sendCapiEvent({
-                  tenantId,
-                  eventName: "Contact",
-                  eventId,
-                  userData: {
-                    external_id: sha256(`${tenantId}:${senderId}`),
-                  },
-                  customData: {
-                    channel: canalEnvio,
-                    intent: finalIntent,
-                    interest_level: finalNivel,
-                    inbound_message_id: messageId,
-                    page_id: String(pageId || ""),
-                  },
-                });
+                const ok = await reserveCapiEvent(tenantId, eventId);
+                if (ok) {
+                  await sendCapiEvent({
+                    tenantId,
+                    eventName: "Contact",
+                    eventId,
+                    userData: {
+                      external_id: sha256(`${tenantId}:${senderId}`),
+                    },
+                    customData: {
+                      channel: canalEnvio,
+                      intent: finalIntent,
+                      interest_level: finalNivel,
+                      inbound_message_id: messageId,
+                      page_id: String(pageId || ""),
+                    },
+                  });
 
-                console.log("✅ [META] CAPI Contact (#2) enviado:", {
-                  tenantId,
-                  canalEnvio,
-                  senderId,
-                  finalIntent,
-                  finalNivel,
-                  eventId,
-                });
+                  console.log("✅ [META] CAPI Contact (#2) enviado:", { tenantId, canalEnvio, senderId, eventId });
+                } else {
+                  console.log("⏭️ [META] CAPI Contact (#2) deduped:", { tenantId, canalEnvio, senderId, eventId });
+                }
               }
             } catch (e: any) {
               console.warn("⚠️ [META] Error enviando CAPI Contact (#2):", e?.message);
@@ -1411,6 +1428,404 @@ router.post("/api/facebook/webhook", async (req, res) => {
         const bookingStep0 = (convoCtx as any)?.booking?.step;
         const inBooking0 = bookingStep0 && bookingStep0 !== "idle";
 
+        // ===============================
+        // 🔗/💲/📋 SERVICES FAST-PATH + STICKY PICKS (META)
+        // ===============================
+        if (!inBooking0) {
+          // ✅ SERVICE LINK PICK (STICKY)
+          {
+            const pickState = (convoCtx as any)?.service_link_pick;
+            const options = Array.isArray(pickState?.options) ? pickState.options : [];
+
+            if (options.length) {
+              const createdAtMs =
+                typeof pickState?.created_at === "string" ? Date.parse(pickState.created_at) : NaN;
+
+              const fresh =
+                Number.isFinite(createdAtMs) ? (Date.now() - createdAtMs) < 10 * 60 * 1000 : false;
+
+              // expiró -> limpiar + persistir + pedir de nuevo
+              if (!fresh) {
+                transition({ patchCtx: { service_link_pick: null } });
+
+                await setConversationStateCompat(tenantId, canal, senderId, {
+                  activeFlow,
+                  activeStep,
+                  context: convoCtx,
+                });
+
+                const msg =
+                  idiomaDestino === "en"
+                    ? "That selection expired. Ask me again which service you want."
+                    : "Esa selección expiró. Vuelve a pedirme el link del servicio.";
+
+                await replyAndExit(msg, "service_link_pick:expired", "service_link");
+                continue;
+              }
+
+              // 1) por número
+              const n = parsePickNumber(userInput);
+              if (n !== null) {
+                const idx = n - 1;
+
+                if (idx < 0 || idx >= options.length) {
+                  const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
+                  const msg =
+                    idiomaDestino === "en"
+                      ? `Please reply with a valid number:\n${lines}`
+                      : `Responde con un número válido:\n${lines}`;
+
+                  await replyAndExit(msg, "service_link_pick:out_of_range", "service_link");
+                  continue;
+                }
+
+                const chosen = options[idx];
+                const url = String(chosen?.url || "").trim();
+
+                transition({ patchCtx: { service_link_pick: null } });
+                await setConversationStateCompat(tenantId, canal, senderId, {
+                  activeFlow,
+                  activeStep,
+                  context: convoCtx,
+                });
+
+                if (!url) {
+                  const msg =
+                    idiomaDestino === "en"
+                      ? "That option doesn't have a link saved yet."
+                      : "Esa opción no tiene link guardado todavía.";
+
+                  await replyAndExit(msg, "service_link_pick:no_url", "service_link");
+                  continue;
+                }
+
+                await replyAndExit(url, "service_link_pick:number", "service_link");
+                continue;
+              }
+
+              // 2) por texto
+              const t = String(userInput || "").trim().toLowerCase();
+              if (t.length >= 2) {
+                const matchIdx = options.findIndex((o: any) => {
+                  const lbl = String(o?.label || "").toLowerCase();
+                  return lbl.includes(t) || t.includes(lbl);
+                });
+
+                if (matchIdx >= 0) {
+                  const chosen = options[matchIdx];
+                  const url = String(chosen?.url || "").trim();
+
+                  transition({ patchCtx: { service_link_pick: null } });
+                  await setConversationStateCompat(tenantId, canal, senderId, {
+                    activeFlow,
+                    activeStep,
+                    context: convoCtx,
+                  });
+
+                  if (!url) {
+                    const msg =
+                      idiomaDestino === "en"
+                        ? "That option doesn't have a link saved yet."
+                        : "Esa opción no tiene link guardado todavía.";
+
+                    await replyAndExit(msg, "service_link_pick:text_no_url", "service_link");
+                    continue;
+                  }
+
+                  await replyAndExit(url, "service_link_pick:text", "service_link");
+                  continue;
+                }
+              }
+
+              // 3) reprompt
+              const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
+              const msg =
+                idiomaDestino === "en"
+                  ? `Which option do you want? Reply with the number:\n${lines}`
+                  : `¿Cuál opción quieres? Responde con el número:\n${lines}`;
+
+              await replyAndExit(msg, "service_link_pick:reprompt", "service_link");
+              continue;
+            }
+          }
+
+          // 💲 SERVICE INFO FAST-PATH
+          {
+            const need = wantsServiceInfo(userInput);
+
+            if (need) {
+              const r = await resolveServiceInfo({
+                tenantId,
+                query: userInput,
+                limit: 5,
+              });
+
+              if (r.ok) {
+                const msg = renderServiceInfoReply(r, need, idiomaDestino);
+                await replyAndExit(msg, "service_info", "service_info");
+                continue;
+              }
+
+              if (r.reason === "ambiguous" && r.options?.length) {
+                const options = r.options.slice(0, 5).map((o: any) => ({
+                  label: o.label,
+                  kind: o.kind,
+                  service_id: o.service_id,
+                  variant_id: o.variant_id || null,
+                }));
+
+                transition({
+                  patchCtx: {
+                    service_info_pick: {
+                      need,
+                      options,
+                      created_at: new Date().toISOString(),
+                    },
+                  },
+                });
+
+                await setConversationStateCompat(tenantId, canal, senderId, {
+                  activeFlow,
+                  activeStep,
+                  context: convoCtx,
+                });
+
+                const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
+
+                const msg =
+                  idiomaDestino === "en"
+                    ? `Which one do you mean? Reply with the number:\n${lines}`
+                    : `¿Cuál quieres decir? Responde con el número:\n${lines}`;
+
+                await replyAndExit(msg, "service_info:ambiguous", "service_info");
+                continue;
+              }
+
+              const msg =
+                idiomaDestino === "en"
+                  ? "Which service do you mean? Tell me the exact name."
+                  : "¿Cuál servicio exactamente? Dime el nombre.";
+
+              await replyAndExit(msg, "service_info:no_match", "service_info");
+              continue;
+            }
+          }
+
+          // 🔗 SERVICE LINK FAST-PATH (solo link)
+          if (wantsServiceLink(userInput)) {
+            const resolved = await resolveServiceLink({
+              tenantId,
+              query: userInput,
+              limit: 5,
+            });
+
+            if (resolved.ok) {
+              await replyAndExit(resolved.url, "service_link", "service_link");
+              continue;
+            }
+
+            if (resolved.reason === "ambiguous" && resolved.options?.length) {
+              const options = resolved.options.slice(0, 5).map((o: any) => ({
+                label: o.label,
+                url: o.url || null,
+              }));
+
+              transition({
+                patchCtx: {
+                  service_link_pick: {
+                    kind: "service_link_pick",
+                    options,
+                    created_at: new Date().toISOString(),
+                  },
+                },
+              });
+
+              await setConversationStateCompat(tenantId, canal, senderId, {
+                activeFlow,
+                activeStep,
+                context: convoCtx,
+              });
+
+              const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
+
+              const msg =
+                idiomaDestino === "en"
+                  ? `Which service do you want the link for? Reply with the number:\n${lines}`
+                  : `¿De cuál servicio quieres el link? Responde con el número:\n${lines}`;
+
+              await replyAndExit(msg, "service_link:ambiguous", "service_link");
+              continue;
+            }
+
+            const msg =
+              idiomaDestino === "en"
+                ? "Which service do you need the link for? Tell me the exact name."
+                : "¿De cuál servicio necesitas el link exactamente? Dime el nombre.";
+
+            await replyAndExit(msg, "service_link:no_match", "service_link");
+            continue;
+          }
+
+          // 📋 SERVICE LIST FAST-PATH
+          if (wantsServiceList(userInput)) {
+            const r = await resolveServiceList({ tenantId, limitServices: 8, limitVariantsPerService: 3 });
+
+            if (r.ok) {
+              const msg = renderServiceListReply(r.items, idiomaDestino);
+              await replyAndExit(msg, "service_list", "service_list");
+              continue;
+            }
+
+            const msg =
+              idiomaDestino === "en" ? "I don’t have services saved yet." : "Todavía no tengo servicios guardados.";
+            await replyAndExit(msg, "service_list:empty", "service_list");
+            continue;
+          }
+
+          // ✅ SERVICE INFO PICK (STICKY)
+          {
+            const pickState = (convoCtx as any)?.service_info_pick;
+            const options = Array.isArray(pickState?.options) ? pickState.options : [];
+
+            if (options.length) {
+              const createdAtMs =
+                typeof pickState?.created_at === "string" ? Date.parse(pickState.created_at) : NaN;
+
+              const fresh =
+                Number.isFinite(createdAtMs) ? (Date.now() - createdAtMs) < 10 * 60 * 1000 : false;
+
+              if (!fresh) {
+                transition({ patchCtx: { service_info_pick: null } });
+                await setConversationStateCompat(tenantId, canal, senderId, {
+                  activeFlow,
+                  activeStep,
+                  context: convoCtx,
+                });
+
+                const msg =
+                  idiomaDestino === "en"
+                    ? "That selection expired. Ask again about the service."
+                    : "Esa selección expiró. Vuelve a preguntarme por el servicio.";
+
+                await replyAndExit(msg, "service_info_pick:expired", "service_info");
+                continue;
+              }
+
+              const n = parsePickNumber(userInput);
+              if (n === null) {
+                const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
+                const msg =
+                  idiomaDestino === "en" ? `Reply with the number:\n${lines}` : `Responde con el número:\n${lines}`;
+                await replyAndExit(msg, "service_info_pick:reprompt", "service_info");
+                continue;
+              }
+
+              const idx = n - 1;
+              if (idx < 0 || idx >= options.length) {
+                const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
+                const msg =
+                  idiomaDestino === "en"
+                    ? `Please reply with a valid number:\n${lines}`
+                    : `Responde con un número válido:\n${lines}`;
+                await replyAndExit(msg, "service_info_pick:out_of_range", "service_info");
+                continue;
+              }
+
+              const chosen = options[idx];
+              const need = (pickState?.need || "any") as any;
+
+              // Resolver determinístico por IDs
+              let resolved: any = null;
+
+              if (chosen.kind === "variant" && chosen.variant_id) {
+                const { rows } = await pool.query(
+                  `
+                  SELECT s.id AS service_id, s.name AS service_name, s.description AS service_desc,
+                        s.duration_min AS service_duration, s.price_base, s.service_url,
+                        v.id AS variant_id, v.variant_name, v.description AS variant_desc,
+                        v.duration_min AS variant_duration, v.price, v.currency, v.variant_url
+                  FROM service_variants v
+                  JOIN services s ON s.id = v.service_id
+                  WHERE s.tenant_id = $1
+                    AND s.active = TRUE
+                    AND v.active = TRUE
+                    AND v.id = $2
+                  LIMIT 1
+                  `,
+                  [tenantId, chosen.variant_id]
+                );
+
+                const row = rows[0];
+                if (row) {
+                  resolved = {
+                    ok: true,
+                    kind: "variant",
+                    label: `${row.service_name} - ${row.variant_name}`,
+                    url: row.variant_url || row.service_url || null,
+                    price: row.price !== null ? Number(row.price) : null,
+                    currency: row.currency ? String(row.currency) : "USD",
+                    duration_min:
+                      row.variant_duration !== null
+                        ? Number(row.variant_duration)
+                        : (row.service_duration !== null ? Number(row.service_duration) : null),
+                    description:
+                      (row.variant_desc && String(row.variant_desc).trim())
+                        ? String(row.variant_desc)
+                        : (row.service_desc ? String(row.service_desc) : null),
+                    service_id: String(row.service_id),
+                    variant_id: String(row.variant_id),
+                  };
+                }
+              } else {
+                const { rows } = await pool.query(
+                  `
+                  SELECT *
+                  FROM services
+                  WHERE tenant_id = $1 AND active = TRUE AND id = $2
+                  LIMIT 1
+                  `,
+                  [tenantId, chosen.service_id]
+                );
+
+                const s = rows[0];
+                if (s) {
+                  resolved = {
+                    ok: true,
+                    kind: "service",
+                    label: String(s.name),
+                    url: s.service_url ? String(s.service_url) : null,
+                    price: s.price_base !== null ? Number(s.price_base) : null,
+                    currency: "USD",
+                    duration_min: s.duration_min !== null ? Number(s.duration_min) : null,
+                    description: s.description ? String(s.description) : null,
+                    service_id: String(s.id),
+                  };
+                }
+              }
+
+              transition({ patchCtx: { service_info_pick: null } });
+              await setConversationStateCompat(tenantId, canal, senderId, {
+                activeFlow,
+                activeStep,
+                context: convoCtx,
+              });
+
+              if (resolved?.ok) {
+                const msg = renderServiceInfoReply(resolved, need, idiomaDestino);
+                await replyAndExit(msg, "service_info_pick", "service_info");
+                continue;
+              }
+
+              const msg =
+                idiomaDestino === "en"
+                  ? "I couldn't find that option anymore. Ask again about the service."
+                  : "No pude encontrar esa opción ya. Vuelve a preguntarme por el servicio.";
+              await replyAndExit(msg, "service_info_pick:not_found", "service_info");
+              continue;
+            }
+          }
+        }
+        
         // 👋 GREETING GATE (igual WA defensivo)
         if (
           !inBooking0 &&
