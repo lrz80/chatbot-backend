@@ -24,10 +24,37 @@ function parseNullableInt(v: any): number | null {
 
 function parseNullablePrice(v: any): number | null {
   if (v === null || v === undefined) return null;
-  const s = String(v).trim();
-  if (!s) return null; // ✅ "" => null (y NO pisa)
+
+  let s = String(v).trim();
+  if (!s) return null;
+
+  // Quita símbolos y texto (USD, $, etc), deja dígitos, coma y punto
+  s = s.replace(/[^\d.,-]/g, "");
+
+  // Si viene estilo ES: "19,99" => "19.99"
+  // Si viene "1,234.56" dejamos el punto como decimal y quitamos comas de miles
+  // Si viene "1.234,56" (EU) => quitamos puntos miles y coma decimal a punto
+  const hasComma = s.includes(",");
+  const hasDot = s.includes(".");
+
+  if (hasComma && hasDot) {
+    // decide cuál es decimal por la última aparición
+    const lastComma = s.lastIndexOf(",");
+    const lastDot = s.lastIndexOf(".");
+    if (lastComma > lastDot) {
+      // "1.234,56" => "1234.56"
+      s = s.replace(/\./g, "").replace(",", ".");
+    } else {
+      // "1,234.56" => "1234.56"
+      s = s.replace(/,/g, "");
+    }
+  } else if (hasComma && !hasDot) {
+    s = s.replace(",", ".");
+  }
+
   const n = Number(s);
   if (!Number.isFinite(n)) return null;
+
   return Math.round(n * 100) / 100;
 }
 
@@ -454,6 +481,9 @@ router.post("/:id/variants", authenticateUser, async (req: any, res: Response) =
       return res.status(400).json({ error: "price inválido" });
     }
 
+    console.log("[VARIANT POST] body =", req.body);
+    console.log("[VARIANT POST] raw price =", req.body?.price, "parsed =", pr);
+
     const cur = (currency ? String(currency).trim().toUpperCase() : "USD") || "USD";
 
     let url: string | null = null;
@@ -507,6 +537,9 @@ router.put("/:id/variants/:variantId", authenticateUser, async (req: any, res: R
 
     const dur = parseNullableInt(duration_min);
     const pr = parseNullablePrice(price);
+
+    console.log("[VARIANT PUT] body =", req.body);
+    console.log("[VARIANT PUT] raw price =", req.body?.price, "parsed =", pr);
 
     const cur = (currency ? String(currency).trim().toUpperCase() : "USD") || "USD";
 
