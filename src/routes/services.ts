@@ -529,17 +529,19 @@ router.put("/:id/variants/:variantId", authenticateUser, async (req: any, res: R
     const serviceId = String(req.params.id || "").trim();
     const variantId = String(req.params.variantId || "").trim();
 
-    const { variant_name, description, duration_min, price, currency, variant_url, active } = req.body || {};
+    const { variant_name, description, duration_min, price, price_base, currency, variant_url, active } = req.body || {};
 
     if (!variant_name || !String(variant_name).trim()) {
       return res.status(400).json({ error: "variant_name es requerido" });
     }
 
     const dur = parseNullableInt(duration_min);
-    const pr = parseNullablePrice(price);
+    const pr = parseNullablePrice(
+      typeof price !== "undefined" ? price : price_base
+    );
 
     console.log("[VARIANT PUT] body =", req.body);
-    console.log("[VARIANT PUT] raw price =", req.body?.price, "parsed =", pr);
+    console.log("[VARIANT PUT] raw price =", req.body?.price, "raw price_base =", req.body?.price_base, "parsed =", pr);
 
     const cur = (currency ? String(currency).trim().toUpperCase() : "USD") || "USD";
 
@@ -554,10 +556,10 @@ router.put("/:id/variants/:variantId", authenticateUser, async (req: any, res: R
       UPDATE service_variants v
         SET variant_name = $4,
           description  = $5,
-          duration_min = COALESCE($6, v.duration_min),
-          price        = COALESCE($7, v.price),
+          duration_min = $6,
+          price = $7,
           currency     = COALESCE($8, v.currency),
-          variant_url  = COALESCE($9, v.variant_url),
+          variant_url  = $9,
           active       = COALESCE($10, v.active),
           updated_at   = NOW()
       FROM services s
