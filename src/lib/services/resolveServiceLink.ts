@@ -16,6 +16,15 @@ function normalizeServiceQuery(q: string) {
     [/\breserva(s)?\b/g, "booking"],
     [/\bmembres(i|í)a(s)?\b/g, "membership"],
     [/\bpaquete(s)?\b/g, "package"],
+        // Trial / free / complimentary (universal)
+    [/\bclase\s+de\s+prueba\b/g, "trial"],
+    [/\bprimera\s+clase\b/g, "trial"],
+    [/\bclase\s+gratis\b/g, "trial"],
+    [/\bgratis\b/g, "free"],
+    [/\bprueba\b/g, "trial"],
+    [/\bcomplimentary\b/g, "free"],
+    [/\bcomp\b/g, "free"],
+    [/\bintro(ductory)?\b/g, "trial"],
   ];
   for (const [re, repl] of map) s = s.replace(re, repl);
 
@@ -38,6 +47,15 @@ function normalizeServiceQuery(q: string) {
   return s;
 }
 
+function isTrialLikeQuery(raw: string) {
+  const s = String(raw || "").toLowerCase();
+  return (
+    /\b(trial|free\s*trial|free\s*class|first\s*class|intro|introductory|clase\s*de\s*prueba|clase\s*gratis|primera\s*clase|complimentary|comp)\b/i.test(
+      s
+    )
+  );
+}
+
 export async function resolveServiceLink(args: {
   tenantId: string;
   query: string;
@@ -50,6 +68,128 @@ export async function resolveServiceLink(args: {
   const limit = Math.min(args.limit ?? 5, 10);
 
   if (!tenantId || !q) return { ok: false, reason: "no_match" };
+
+    // ✅ FAST PATH: si el usuario pide "clase de prueba / trial / complimentary",
+  // resolvemos desde el catálogo usando el nombre (sin hardcode por negocio)
+  if (isTrialLikeQuery(qRaw)) {
+    // buscamos un servicio trial/free por nombre/desc (tenant-scoped)
+    const { rows: trialServices } = await pool.query(
+      `
+      SELECT s.*,
+             GREATEST(similarity(s.name, $2), similarity(s.description, $2)) AS score
+      FROM services s
+      WHERE s.tenant_id = $1
+        AND s.active = TRUE
+        AND (
+          LOWER(s.name) LIKE '%trial%' OR
+          LOWER(s.name) LIKE '%free%' OR
+          LOWER(s.name) LIKE '%prueba%' OR
+          LOWER(s.name) LIKE '%gratis%' OR
+          LOWER(s.name) LIKE '%complimentary%' OR
+          LOWER(s.name) LIKE '%intro%'
+          OR s.name % $2 OR s.description % $2
+        )
+      ORDER BY
+        (CASE
+          WHEN LOWER(s.name) LIKE '%trial%' THEN 0
+          WHEN LOWER(s.name) LIKE '%free%' THEN 1
+          WHEN LOWER(s.name) LIKE '%prueba%' THEN 2
+          ELSE 3
+        END) ASC,
+        score DESC,
+        s.name ASC
+      LIMIT $3
+      `,
+      [tenantId, q, limit]
+    );
+
+    if (!trialServices.length) return { ok: false, reason: "no_match" };
+
+    // Usamos el top trial como "top", y dejamos que tu misma lógica de variantes
+    // fuerce elección si hay 2+ (Functional/Cycling)
+    const trialTop = trialServices[0];
+
+    // Traer variantes activas del servicio trialTop
+    const { rows: trialVariants } = await pool.query(
+      `
+      SELECT v.*
+      FROM service_variants v
+      WHERE v.service_id = $1
+        AND v.active = TRUE
+      ORDER BY v.variant_name ASC
+      `,
+      [trialTop.id]
+    );
+
+    // Si hay 2+ variantes y usuario no especificó, pedir elección (tu lógica)
+    const hasMultiple = trialVariants.length >= 2;
+
+    const userMentionsVariant =
+      /\b(small|medium|large|xl|xxl)\b/i.test(qRaw) ||
+      /\b(pequeñ[oa]s?|median[oa]s?|grand[ea]s?)\b/i.test(qRaw) ||
+      /\b(\d+\s*(lb|lbs|pounds|kg))\b/i.test(qRaw) ||
+      /\b(\d+\s*-\s*\d+)\b/.test(qRaw) ||
+      /\b(\d+\+)\b/.test(qRaw) ||
+      // ✅ adicional universal: cycling/functional si el negocio lo usa como variantes
+      /\b(cycling|cycle|spin|spinning|functional|funcional)\b/i.test(qRaw);
+
+    if (hasMultiple && !userMentionsVariant) {
+      return {
+        ok: false,
+        reason: "ambiguous",
+        options: trialVariants.slice(0, 5).map((v: any) => ({
+          label: `${trialTop.name} - ${v.variant_name}`,
+          url: v.variant_url || trialTop.service_url || null,
+        })),
+      };
+    }
+
+    // Si el usuario menciona una variante (o solo hay 1), intenta resolver variante por trigram
+    if (trialVariants.length) {
+      const { rows: variants } = await pool.query(
+        `
+        SELECT v.*,
+               similarity(v.variant_name, $2) AS vscore
+        FROM service_variants v
+        WHERE v.service_id = $1
+          AND v.active = TRUE
+        ORDER BY vscore DESC, v.variant_name ASC
+        LIMIT 3
+        `,
+        [trialTop.id, q]
+      );
+
+      if (variants.length) {
+        const v = variants[0];
+        const url = (v.variant_url || trialTop.service_url) as string | undefined;
+        if (url) {
+          return { ok: true, url, label: `${trialTop.name} - ${v.variant_name}`, kind: "variant" };
+        }
+      }
+
+      // Si no matcheó variante pero hay solo 1 con link, úsala
+      if (trialVariants.length === 1) {
+        const v = trialVariants[0];
+        const url = (v.variant_url || trialTop.service_url) as string | undefined;
+        if (url) return { ok: true, url, label: `${trialTop.name} - ${v.variant_name}`, kind: "variant" };
+      }
+    }
+
+    // Si no hay variantes con link, usa service_url
+    if (trialTop.service_url) {
+      return { ok: true, url: trialTop.service_url, label: trialTop.name, kind: "service" };
+    }
+
+    // Trial encontrado pero sin links configurados en service ni variantes
+    return {
+      ok: false,
+      reason: "ambiguous",
+      options: trialServices.slice(0, 5).map((s: any) => ({
+        label: `${s.category ? `[${s.category}] ` : ""}${s.name}`,
+        url: s.service_url,
+      })),
+    };
+  }
 
   // 1) Buscar el mejor servicio por similitud (mismo SQL del endpoint search)
   const { rows: services } = await pool.query(
