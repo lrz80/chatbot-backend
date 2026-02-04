@@ -793,22 +793,33 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
   const isAmbiguous = isNumericOnly || isAmbiguousLangText(userInput);
 
-  if (isAmbiguous) {
-    // ✅ NO detectar idioma con "ok 3", "2pm", "👍", etc.
-    // ✅ Solo reusar el idioma guardado del cliente
-    idiomaDestino = await getIdiomaClienteDB(tenant.id, canal, turn.contactoNorm, tenantBase);
-    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (ambiguous)`);
+  // 1) Primero: intenta recuperar el idioma ya guardado
+  const idiomaGuardado = await getIdiomaClienteDB(tenant.id, canal, contactoNorm, tenantBase);
+
+  // 2) Si ya hay idioma guardado, úsalo SIEMPRE (no lo pises por frases cortas)
+  //    Solo permite cambio si el usuario lo pide explícitamente.
+  function userRequestsLangSwitch(t: string) {
+    const s = String(t || "").toLowerCase();
+    return (
+      /\b(english|in english|speak english|habla ingles|en ingles)\b/.test(s) ||
+      /\b(español|spanish|en español|habla español)\b/.test(s)
+    );
+  }
+
+  if (!userRequestsLangSwitch(userInput)) {
+    // ✅ Congela idioma por sesión/contacto
+    idiomaDestino = idiomaGuardado;
+    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (sticky)`);
   } else {
-    // ✅ Texto con señal suficiente -> detectar y persistir
+    // Si lo pidió explícito, detecta y actualiza
     let detectado: string | null = null;
     try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
 
     const normalizado: "es" | "en" = normalizeLang(detectado || tenantBase);
-
-    await upsertIdiomaClienteDB(tenant.id, canal, turn.contactoNorm, normalizado);
+    await upsertIdiomaClienteDB(tenant.id, canal, contactoNorm, normalizado);
 
     idiomaDestino = normalizado;
-    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= userInput`);
+    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= user_request_switch`);
   }
 
   const event = {
@@ -1371,6 +1382,25 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       });
 
       if (r.ok) {
+        // ✅ guarda el servicio/variante resuelto como contexto del hilo
+        transition({
+          patchCtx: {
+            last_service_ref: {
+              kind: r.kind || null,
+              label: r.label || null,
+              service_id: r.service_id || null,
+              variant_id: r.variant_id || null,
+              saved_at: new Date().toISOString(),
+            }
+          }
+        });
+
+        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+          activeFlow,
+          activeStep,
+          context: convoCtx,
+        });
+
         const msg = renderServiceInfoReply(r, need, idiomaDestino);
         return await replyAndExit(msg, "service_info", "service_info");
       }
@@ -1409,6 +1439,80 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         return await replyAndExit(msg, "service_info:ambiguous", "service_info");
       }
 
+      // ✅ Si NO hubo match pero tenemos un servicio previo en contexto, úsalo.
+      const lastRef = (convoCtx as any)?.last_service_ref;
+
+      if (lastRef?.service_id) {
+        // re-resolver por ID (determinístico) usando el mismo SQL que ya usas en pick
+        const { rows } = await pool.query(
+          `
+          SELECT
+            s.id AS service_id,
+            s.name AS service_name,
+            s.description AS service_desc,
+            s.duration_min AS service_duration,
+            s.price_base AS service_price_base,
+            s.service_url AS service_url,
+
+            v.id AS variant_id,
+            v.variant_name,
+            v.description AS variant_desc,
+            v.duration_min AS variant_duration,
+            v.price AS variant_price,
+            v.currency AS variant_currency,
+            v.variant_url AS variant_url
+          FROM services s
+          LEFT JOIN service_variants v ON v.id = $2 AND v.service_id = s.id
+          WHERE s.tenant_id = $1
+            AND s.active = TRUE
+            AND s.id = $3
+          LIMIT 1
+          `,
+          [tenant.id, lastRef.variant_id || null, lastRef.service_id]
+        );
+
+        const row = rows[0];
+        if (row) {
+          const price =
+            row.variant_price != null ? Number(row.variant_price)
+            : (row.service_price_base != null ? Number(row.service_price_base) : null);
+
+          const currency = row.variant_currency ? String(row.variant_currency) : "USD";
+          const duration_min =
+            row.variant_duration != null ? Number(row.variant_duration)
+            : (row.service_duration != null ? Number(row.service_duration) : null);
+
+          const description =
+            (row.variant_desc && String(row.variant_desc).trim())
+              ? String(row.variant_desc)
+              : (row.service_desc ? String(row.service_desc) : null);
+
+          const url =
+            (row.variant_url && String(row.variant_url).trim())
+              ? String(row.variant_url)
+              : (row.service_url ? String(row.service_url) : null);
+
+          const kind: "variant" | "service" = row.variant_id ? "variant" : "service";
+
+          const resolved = {
+            ok: true as const,
+            kind,
+            label: row.variant_id ? `${row.service_name} - ${row.variant_name}` : String(row.service_name),
+            url,
+            price,
+            currency: (currency ?? null) as string | null,
+            duration_min,
+            description,
+            service_id: String(row.service_id),
+            variant_id: row.variant_id ? String(row.variant_id) : undefined,
+          };
+
+          const msg = renderServiceInfoReply(resolved, need, idiomaDestino);
+          return await replyAndExit(msg, "service_info:ctx_last_ref", "service_info");
+        }
+      }
+
+      // Si no hay last_service_ref, entonces sí pide nombre.
       const msg =
         idiomaDestino === "en"
           ? "Which service do you mean? Tell me the exact name."
@@ -1683,6 +1787,24 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       });
 
       if (resolved?.ok) {
+        transition({
+          patchCtx: {
+            last_service_ref: {
+              kind: resolved.kind || null,
+              label: resolved.label || null,
+              service_id: resolved.service_id || null,
+              variant_id: resolved.variant_id || null,
+              saved_at: new Date().toISOString(),
+            }
+          }
+        });
+
+        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+          activeFlow,
+          activeStep,
+          context: convoCtx,
+        });
+
         const msg = renderServiceInfoReply(resolved, need, idiomaDestino);
         return await replyAndExit(msg, "service_info_pick", "service_info");
       }
