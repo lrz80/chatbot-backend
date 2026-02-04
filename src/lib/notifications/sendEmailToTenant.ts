@@ -40,17 +40,19 @@ export async function sendEmailToTenant(opts: {
 
   try {
     const info = await transporter.sendMail({
-        from: process.env.EMAIL_FROM || "noreply@aamy.ai",
+        from: process.env.EMAIL_FROM || process.env.MAIL_FROM || "noreply@aamy.ai",
         to,
         subject,
         text,
     });
 
-    console.log("✅ [EMAIL notify] sent", {
-        tenantId,
-        to,
-        messageId: info?.messageId,
-        response: info?.response,
+    const fromEmail = process.env.EMAIL_FROM || process.env.MAIL_FROM || "noreply@aamy.ai";
+
+    console.log("📧 [EMAIL notify] preparing", {
+      from: fromEmail,
+      to,
+      tenantId,
+      textLen: String(text || "").length,
     });
 
     return true;
