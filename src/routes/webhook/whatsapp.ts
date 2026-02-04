@@ -1204,15 +1204,13 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
       // 1) Intento por número 1-5
       const n = parsePickNumber(userInput);
+      const need = (pickState?.need || "any") as any;
+
       if (n !== null) {
         const idx = n - 1;
 
         if (idx < 0 || idx >= options.length) {
-          const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
-          const msg =
-            idiomaDestino === "en"
-              ? `Please reply with a valid number:\n${lines}`
-              : `Responde con un número válido:\n${lines}`;
+          const msg = renderOutOfRangeMenu(options, need, idiomaDestino as any);
           return await replyAndExit(msg, "service_link_pick:out_of_range", "service_link");
         }
 
@@ -1646,6 +1644,71 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         ? "I don’t have services saved yet."
         : "Todavía no tengo servicios guardados.";
     return await replyAndExit(msg, "service_list:empty", "service_list");
+    }
+
+    function looksLikeVariants(labels: string[]) {
+    // si la mayoría comparte prefijo antes de " - ", probablemente son variantes del mismo servicio
+    const prefixes = labels.map(l => String(l || "").split(" - ")[0].trim()).filter(Boolean);
+    if (!prefixes.length) return false;
+
+    const freq = new Map<string, number>();
+    for (const p of prefixes) freq.set(p, (freq.get(p) || 0) + 1);
+    const top = Math.max(...Array.from(freq.values()));
+    return top >= 2;
+  }
+
+  function humanNeedLabel(need: string, lang: "es" | "en") {
+    const n = String(need || "any");
+    if (lang === "en") {
+      if (n === "price") return "the price";
+      if (n === "duration") return "the duration";
+      if (n === "includes") return "what it includes";
+      return "more details";
+    }
+    // es
+    if (n === "price") return "el precio";
+    if (n === "duration") return "la duración";
+    if (n === "includes") return "qué incluye";
+    return "más detalles";
+  }
+
+  function renderPickMenu(options: any[], need: string, lang: "es" | "en") {
+    const labels = options.map(o => String(o.label || ""));
+    const isVar = looksLikeVariants(labels);
+
+    const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
+    const what = humanNeedLabel(need, lang);
+
+    if (lang === "en") {
+      return (
+        `${isVar ? "Which option do you want?" : "Which service do you mean?"} ` +
+        `Reply with the number so I can give you ${what}:\n\n` +
+        `${lines}\n\n` +
+        `Reply with just the number (e.g. 1).`
+      );
+    }
+
+    return (
+      `${isVar ? "¿Cuál opción quieres?" : "¿A cuál servicio te refieres?"} ` +
+      `Respóndeme con el número para darte ${what}:\n\n` +
+      `${lines}\n\n` +
+      `Solo responde con el número (ej: 1).`
+    );
+  }
+
+  function renderOutOfRangeMenu(options: any[], need: string, lang: "es" | "en") {
+    const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
+    if (lang === "en") {
+      return `That number isn’t in the list. Please choose one of these:\n\n${lines}`;
+    }
+    return `Ese número no está en la lista. Elige una de estas opciones:\n\n${lines}`;
+  }
+
+  function renderExpiredPick(lang: "es" | "en") {
+    if (lang === "en") {
+      return "That selection expired (it was pending for a while). Ask again about the service and I’ll show the options again.";
+    }
+    return "Esa selección expiró (quedó pendiente por un rato). Vuelve a preguntarme por el servicio y te muestro las opciones otra vez.";
   }
 
   // ✅ SERVICE INFO PICK (STICKY): si hay opciones pendientes para precio/duración/incluye
@@ -1668,36 +1731,27 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           context: convoCtx,
         });
 
-        const msg =
-          idiomaDestino === "en"
-            ? "That selection expired. Ask again about the service."
-            : "Esa selección expiró. Vuelve a preguntarme por el servicio.";
+        const msg = renderExpiredPick(idiomaDestino as any);
+
         return await replyAndExit(msg, "service_info_pick:expired", "service_info");
       }
 
       const n = parsePickNumber(userInput);
+      const need = (pickState?.need || "any") as any;
+
       if (n === null) {
-        const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
-        const msg =
-          idiomaDestino === "en"
-            ? `Reply with the number:\n${lines}`
-            : `Responde con el número:\n${lines}`;
+        const msg = renderPickMenu(options, need, idiomaDestino as any);
         return await replyAndExit(msg, "service_info_pick:reprompt", "service_info");
       }
 
       const idx = n - 1;
       if (idx < 0 || idx >= options.length) {
-        const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
-        const msg =
-          idiomaDestino === "en"
-            ? `Please reply with a valid number:\n${lines}`
-            : `Responde con un número válido:\n${lines}`;
+        const msg = renderOutOfRangeMenu(options, need, idiomaDestino as any);
         return await replyAndExit(msg, "service_info_pick:out_of_range", "service_info");
       }
 
       const chosen = options[idx];
-      const need = (pickState?.need || "any") as any;
-
+    
       // Resolver por IDs (determinístico)
       let resolved: any = null;
 
