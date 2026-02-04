@@ -4,6 +4,7 @@ import nodemailer from "nodemailer";
 
 export async function sendEmailToTenant(opts: {
   tenantId: string;
+  toEmail: string;
   subject: string;
   text: string;
 }) {

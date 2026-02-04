@@ -56,14 +56,14 @@ export async function setHumanOverride(opts: {
     const source = (opts.source || "unknown").trim();
 
     const { rows: trows } = await pool.query(
-    `SELECT nombre_negocio, telefono_negocio, email_negocio
+    `SELECT name, telefono_negocio, email_negocio
         FROM tenants
         WHERE id=$1
         LIMIT 1`,
     [tenantId]
     );
     const t = trows[0] || {};
-    const nombreNegocio = String(t?.nombre_negocio || "").trim();
+    const nombreNegocio = String(t?.name || "").trim();
     const telNegocio = String(t?.telefono_negocio || "").trim();
     const emailNegocio = String(t?.email_negocio || "").trim();
 
@@ -85,14 +85,19 @@ export async function setHumanOverride(opts: {
       msg +
       (safeUserMsg.length > 240 ? `\n\nMensaje completo:\n${safeUserMsg}` : "");
     // SMS + Email best-effort (no rompas el flujo)
-    try { await sendSmsToTenantPhone({ tenantId, text: msg }); } catch {}
-    try {
-      await sendEmailToTenant({
+    if (telNegocio) {
+      try { await sendSmsToTenantPhone({ tenantId, toPhone: telNegocio, text: msg }); } catch {}
+    }
+    if (emailNegocio) {
+      try {
+        await sendEmailToTenant({
         tenantId,
+        toEmail: emailNegocio,
         subject: "Human override activado - Aamy",
         text: emailText,
-      });
-    } catch {}
+        });
+      } catch {}
+    }
   }
 
   return { wasActive, activatedNow: !wasActive };

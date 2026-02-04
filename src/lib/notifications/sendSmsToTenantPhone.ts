@@ -9,9 +9,10 @@ function normalizePhone(p: string) {
 
 export async function sendSmsToTenantPhone(opts: {
   tenantId: string;
+  toPhone: string;
   text: string;
 }) {
-  const { tenantId, text } = opts;
+  const { tenantId, toPhone, text } = opts;
 
   const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || "";
   const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || "";

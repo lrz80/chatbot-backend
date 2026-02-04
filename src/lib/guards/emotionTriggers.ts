@@ -63,6 +63,7 @@ export async function applyEmotionTriggers(opts: {
       minutes: 5,
       reason: e,
       source: "emotion_trigger",
+      
       userMessage: opts.userMessage || null,
       messageId: opts.messageId || null,
     });
