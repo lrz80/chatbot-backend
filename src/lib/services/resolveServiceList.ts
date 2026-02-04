@@ -7,26 +7,33 @@ export type ServiceListItem = {
   duration_min: number | null;
   price_base: number | null;
   service_url: string | null;
-  // variantes agregadas (máx 3 para no spamear)
-  variants: { variant_id: string; variant_name: string; price: number | null; duration_min: number | null; variant_url: string | null }[];
+  variants: {
+    variant_id: string;
+    variant_name: string;
+    price: number | null;
+    duration_min: number | null;
+    variant_url: string | null;
+  }[];
 };
 
 export async function resolveServiceList(opts: {
   tenantId: string;
-  limitServices?: number;     // default 8
-  limitVariantsPerService?: number; // default 3
+  limitServices?: number;
+  limitVariantsPerService?: number;
 }): Promise<{ ok: true; items: ServiceListItem[] } | { ok: false; reason: "empty" | "error" }> {
   const tenantId = opts.tenantId;
   const limitServices = Math.min(20, Math.max(1, opts.limitServices ?? 8));
   const limitVariantsPerService = Math.min(5, Math.max(0, opts.limitVariantsPerService ?? 3));
 
   try {
-    // 1) servicios activos
+    // 1) SOLO servicios reales (tipo='service')
     const sRes = await pool.query(
       `
       SELECT id, name, category, duration_min, price_base, service_url
       FROM services
-      WHERE tenant_id = $1 AND active = TRUE
+      WHERE tenant_id = $1
+        AND active = TRUE
+        AND COALESCE(tipo, 'service') = 'service'
       ORDER BY updated_at DESC
       LIMIT $2
       `,
@@ -36,9 +43,9 @@ export async function resolveServiceList(opts: {
     const services = sRes.rows || [];
     if (!services.length) return { ok: false, reason: "empty" };
 
-    // 2) variantes para esos servicios (si limitVariantsPerService > 0)
+    // 2) variantes (máx N por servicio)
     const ids = services.map((s: any) => s.id);
-    let variantsByService: Record<string, any[]> = {};
+    const variantsByService: Record<string, any[]> = {};
 
     if (limitVariantsPerService > 0) {
       const vRes = await pool.query(
