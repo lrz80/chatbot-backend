@@ -26,13 +26,14 @@ type UniversalIntent =
   | "precio"
   | "horario"
   | "ubicacion"
-  | "disponibilidad" // disponibilidad / stock / cupos / disponibilidad agenda
-  | "agendar" // reservar / cita / booking
+  | "disponibilidad"
+  | "agendar"
+  | "clase_prueba" // ✅ NUEVO: trial / free class / class pass / demo
   | "pago"
   | "cancelar"
   | "soporte"
   | "queja"
-  | "info_servicio" // info general de lo que venden/ofrecen
+  | "info_servicio"
   | "no_interesado"
   | "duda";
 
@@ -107,6 +108,39 @@ const UNIVERSAL: Array<{
     nivel: 1,
     phrases: ["no me interesa", "no gracias", "not interested", "i am not interested"],
   },
+    {
+    intent: "clase_prueba",
+    nivel: 3,
+    words: [
+      "prueba",
+      "trial",
+      "demo",
+      "free",
+      "gratis",
+      "freebie",
+      "intro",
+      "introductory",
+      "complimentary", // ✅ NUEVO
+      "compliment",    // por si escriben mal
+      "comp",          // shorthand común en gyms/fitness
+    ],
+    phrases: [
+      "clase de prueba",
+      "clase gratis",
+      "primera clase",
+      "primera clase gratis",
+      "free class",
+      "trial class",
+      "book a free class",
+      "first class",
+      "first class free",
+      "intro class",
+      "introductory class",
+      "complimentary class",     // ✅ NUEVO
+      "complimentary session",   // ✅ NUEVO
+      "free session",            // ✅ NUEVO
+    ],
+  },
 ];
 
 /** Señales de “quiero info” genérica (sin sesgo por industria) */
@@ -169,7 +203,7 @@ export function esIntencionDeVenta(intencion: string): boolean {
   // En un mundo ideal esto sería por “grupo”/metadata en DB.
   // Como compatibilidad, usamos un set pequeño universal.
   const s = (intencion || "").toLowerCase();
-  return ["precio", "agendar", "pago", "disponibilidad"].some((k) => s.includes(k)) || s.includes("comprar");
+  return ["precio", "agendar", "pago", "disponibilidad", "clase_prueba"].some((k) => s.includes(k)) || s.includes("comprar");
 }
 
 /** ---------- Cargar contexto + intenciones del tenant ---------- */
@@ -242,6 +276,14 @@ export async function detectarIntencion(
   const original = (mensaje || "").trim();
   const texto = norm(original);
   const textoCore = norm(stripLeadingGreeting(original)) || texto;
+
+  // ✅ FAST-PATH: clase de prueba / trial (debe ganar contra "info_servicio")
+  const TRIAL_RE =
+    /\b(clase\s*(de)?\s*prueba|clase\s*gratis|primera\s*clase(\s*gratis)?|free\s*class|trial\s*class|book\s*(a)?\s*free\s*class|intro(\s*class)?|introductory\s*class|complimentary(\s*(class|session))?|comp(ed)?\s*(class|session)?)\b/i;
+
+  if (TRIAL_RE.test(original)) {
+    return { intencion: "clase_prueba", nivel_interes: 3 };
+  }
 
   // ✅ “más info” (ES/EN) debe ganar contra "pago" si NO hay señales explícitas de checkout/pago
   const MORE_INFO_RE =
@@ -321,6 +363,7 @@ export async function detectarIntencion(
     "ubicacion",
     "disponibilidad",
     "agendar",
+    "clase_prueba", // ✅ NUEVO
     "pago",
     "cancelar",
     "soporte",
