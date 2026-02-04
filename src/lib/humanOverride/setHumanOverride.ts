@@ -86,13 +86,12 @@ export async function setHumanOverride(opts: {
       (safeUserMsg.length > 240 ? `\n\nMensaje completo:\n${safeUserMsg}` : "");
     // SMS + Email best-effort (no rompas el flujo)
     if (telNegocio) {
-      try { await sendSmsToTenantPhone({ tenantId, toPhone: telNegocio, text: msg }); } catch {}
+      try { await sendSmsToTenantPhone({ tenantId, text: msg }); } catch {}
     }
     if (emailNegocio) {
       try {
         await sendEmailToTenant({
         tenantId,
-        toEmail: emailNegocio,
         subject: "Human override activado - Aamy",
         text: emailText,
         });

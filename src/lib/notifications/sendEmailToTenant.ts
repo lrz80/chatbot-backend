@@ -4,7 +4,6 @@ import nodemailer from "nodemailer";
 
 export async function sendEmailToTenant(opts: {
   tenantId: string;
-  toEmail: string;
   subject: string;
   text: string;
 }) {
@@ -19,6 +18,13 @@ export async function sendEmailToTenant(opts: {
   );
 
   const to = String(rows[0]?.email_negocio || "").trim();
+  console.log("📧 [EMAIL notify] preparing", {
+    tenantId,
+    to,
+    subject,
+    textLen: String(text || "").length,
+  });
+
   if (!to) throw new Error("email_negocio missing for tenant");
 
   // ✅ Ajusta a tu config real (ya usas noreply@aamy.ai)
@@ -32,12 +38,30 @@ export async function sendEmailToTenant(opts: {
     },
   });
 
-  await transporter.sendMail({
-    from: process.env.MAIL_FROM || "noreply@aamy.ai",
-    to,
-    subject,
-    text,
-  });
+  try {
+    const info = await transporter.sendMail({
+        from: process.env.MAIL_FROM || "noreply@aamy.ai",
+        to,
+        subject,
+        text,
+    });
 
-  return true;
+    console.log("✅ [EMAIL notify] sent", {
+        tenantId,
+        to,
+        messageId: info?.messageId,
+        response: info?.response,
+    });
+
+    return true;
+    } catch (e: any) {
+    console.error("❌ [EMAIL notify] failed", {
+        tenantId,
+        to,
+        code: e?.code,
+        message: e?.message,
+        response: e?.response,
+    });
+    throw e;
+    }
 }
