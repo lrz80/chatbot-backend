@@ -52,7 +52,9 @@ import { resolveServiceList } from "../../lib/services/resolveServiceList";
 import { renderServiceListReply } from "../../lib/services/renderServiceListReply";
 import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
 import { setHumanOverride } from "../../lib/humanOverride/setHumanOverride";
-
+import { resolveThreadLang } from "../../lib/lang/threadLang";
+import { getCustomerLangDB, upsertCustomerLangDB } from "../../lib/lang/customerLangStore";
+import { saveConversationState } from "../../lib/conversation/saveConversationState";
 
 const sha256 = (s: string) =>
   crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
@@ -790,38 +792,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     console.warn("⚠️ Error enviando CAPI Lead PRO:", e?.message);
   }
 
-  const isNumericOnly = /^\s*\d+\s*$/.test(userInput);
-  const isAmbiguous = isNumericOnly || isAmbiguousLangText(userInput);
-
-  // 1) Primero: intenta recuperar el idioma ya guardado
-  const idiomaGuardado = await getIdiomaClienteDB(tenant.id, canal, contactoNorm, tenantBase);
-
-  // 2) Si ya hay idioma guardado, úsalo SIEMPRE (no lo pises por frases cortas)
-  //    Solo permite cambio si el usuario lo pide explícitamente.
-  function userRequestsLangSwitch(t: string) {
-    const s = String(t || "").toLowerCase();
-    return (
-      /\b(english|in english|speak english|habla ingles|en ingles)\b/.test(s) ||
-      /\b(español|spanish|en español|habla español)\b/.test(s)
-    );
-  }
-
-  if (!userRequestsLangSwitch(userInput)) {
-    // ✅ Congela idioma por sesión/contacto
-    idiomaDestino = idiomaGuardado;
-    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= DB (sticky)`);
-  } else {
-    // Si lo pidió explícito, detecta y actualiza
-    let detectado: string | null = null;
-    try { detectado = normLang(await detectarIdioma(userInput)); } catch {}
-
-    const normalizado: "es" | "en" = normalizeLang(detectado || tenantBase);
-    await upsertIdiomaClienteDB(tenant.id, canal, contactoNorm, normalizado);
-
-    idiomaDestino = normalizado;
-    console.log(`🌍 idiomaDestino= ${idiomaDestino} fuente= user_request_switch`);
-  }
-
   const event = {
     pool,
     tenant,
@@ -833,10 +803,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     messageId,
     origen,
   };
-
-  // ✅ Prompt base disponible temprano (para SM y gates)
-  const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
-  let promptBaseMem = promptBase;
 
   console.log("🔎 numero normalizado =", { numero, numeroSinMas });
 
@@ -892,6 +858,40 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   let activeFlow = st.active_flow || "generic_sales";
   let activeStep = st.active_step || "start";
   let convoCtx = (st.context && typeof st.context === "object") ? st.context : {};
+
+  // ===============================
+  // 🌍 THREAD LANG (reusable) — después de convo_state
+  // ===============================
+  const convoForLang = {
+    activeFlow,
+    activeStep,
+    context: convoCtx,
+  };
+
+  const langRes = await resolveThreadLang({
+    tenantId: tenant.id,
+    canal: "whatsapp",
+    contacto: contactoNorm,
+    tenantDefaultLang: tenantBase, // ya lo tienes calculado arriba
+    userText: userInput,
+    convo: convoForLang,
+    getCustomerLang: async ({ tenantId, canal, contacto }) =>
+      getIdiomaClienteDB(tenantId, canal, contacto, tenantBase),
+    upsertCustomerLang: async ({ tenantId, canal, contacto, lang }) =>
+      upsertIdiomaClienteDB(tenantId, canal, contacto, lang),
+    allowExplicitSwitch: true,
+  });
+
+  // ✅ idioma final del turno (sticky + lock en loops)
+  idiomaDestino = langRes.lang;
+
+  // ✅ persistimos patch en convoCtx para lock (thread_lang / booking.lang si aplica)
+  if (langRes.ctxPatch) {
+    convoCtx = { ...(convoCtx || {}), ...(langRes.ctxPatch || {}) };
+  }
+
+  const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
+  let promptBaseMem = promptBase;
 
   // ===============================
   // 🔁 Helpers de decisión (BACKEND SOLO DECIDE)
