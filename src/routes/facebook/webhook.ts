@@ -52,6 +52,7 @@ import { wantsServiceList } from "../../lib/services/wantsServiceList";
 import { resolveServiceList } from "../../lib/services/resolveServiceList";
 import { renderServiceListReply } from "../../lib/services/renderServiceListReply";
 import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
+import { setHumanOverride } from "../../lib/humanOverride/setHumanOverride";
 
 
 type CanalEnvio = "facebook" | "instagram";
@@ -1345,6 +1346,17 @@ router.post("/api/facebook/webhook", async (req, res) => {
 
           // Si requiere handoff, responde 1 vez y sale por Single Exit
           if (trig?.action === "handoff_human" && trig.replyOverride) {
+            await setHumanOverride({
+              tenantId,
+              canal,
+              contacto: senderId,
+              minutes: 5,
+              reason: (emotion || trig?.ctxPatch?.handoff_reason || "emotion").toString(),
+              source: "emotion",
+              customerPhone: senderId, // IG / FB no envían teléfono
+              userMessage: userInput,
+              messageId: messageId || null,
+            });
             await replyAndExit(trig.replyOverride, "emotion_trigger", lastIntent);
             continue; // 👈 importante en Meta (loop)
           }

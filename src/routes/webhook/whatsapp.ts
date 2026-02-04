@@ -51,6 +51,7 @@ import { wantsServiceList } from "../../lib/services/wantsServiceList";
 import { resolveServiceList } from "../../lib/services/resolveServiceList";
 import { renderServiceListReply } from "../../lib/services/renderServiceListReply";
 import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
+import { setHumanOverride } from "../../lib/humanOverride/setHumanOverride";
 
 
 const sha256 = (s: string) =>
@@ -1683,6 +1684,18 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
     // Si requiere handoff, respondemos y salimos (Single Exit)
     if (trig?.action === "handoff_human" && trig.replyOverride) {
+      await setHumanOverride({
+        tenantId: tenant.id,
+        canal,
+        contacto: contactoNorm,
+        minutes: 5,
+        reason: (emotion || trig?.ctxPatch?.handoff_reason || "emotion").toString(),
+        source: "emotion",
+        customerPhone: fromNumber || contactoNorm,
+        userMessage: userInput,
+        messageId: messageId || null,
+      });
+
       return await replyAndExit(trig.replyOverride, "emotion_trigger", detectedIntent);
     }
   } catch (e: any) {

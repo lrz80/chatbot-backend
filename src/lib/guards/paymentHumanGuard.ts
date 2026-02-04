@@ -110,11 +110,22 @@ export async function paymentHumanGuard(opts: {
   if (PAGO_CONFIRM_REGEX.test(userInput || "")) {
     await pool.query(
       `INSERT INTO clientes (tenant_id, canal, contacto, estado, updated_at)
-      VALUES ($1, $2, $3, 'pago_en_confirmacion', now())
+      VALUES ($1,$2,$3,'pago_en_confirmacion',now())
       ON CONFLICT (tenant_id, canal, contacto)
       DO UPDATE SET estado='pago_en_confirmacion', updated_at=now()`,
       [tenantId, canal, contacto]
     );
+
+    await setHumanOverride({
+      tenantId,
+      canal,
+      contacto,
+      minutes: 5,
+      reason: "pago_confirmado",
+      source: "payment",
+      customerPhone: contacto, // si tienes el real pásalo desde event (ideal)
+      userMessage: userInput,
+    });
 
     // ✅ activa override + notifica (TTL 5 min)
     await setHumanOverride({

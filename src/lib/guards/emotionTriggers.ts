@@ -54,20 +54,5 @@ export async function applyEmotionTriggers(opts: {
     ctxPatch = { ready_to_close: true, last_emotion: e };
   }
 
-  // Persistencia mínima (solo si hay acción)
-  if (action === "handoff_human") {
-    await setHumanOverride({
-      tenantId,
-      canal,
-      contacto,
-      minutes: 5,
-      reason: e,
-      source: "emotion_trigger",
-      
-      userMessage: opts.userMessage || null,
-      messageId: opts.messageId || null,
-    });
-  }
-
   return { action, replyOverride, ctxPatch };
 }
