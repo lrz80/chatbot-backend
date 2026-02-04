@@ -1269,6 +1269,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     }
   }
 
+
   // ===============================
   // 💲 PRICE LIST FAST-PATH (pregunta genérica "precios") — SIN LLM
   // PÉGALO antes de SERVICE INFO FAST-PATH
