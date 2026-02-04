@@ -1298,7 +1298,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           'USD'::text AS currency,
           s.service_url AS url,
           1 AS sort_group,
-          s.sort_order AS s_sort,
           NULL::int AS v_sort,
           s.updated_at AS updated_at
         FROM services s
@@ -1322,8 +1321,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           COALESCE(v.currency, 'USD') AS currency,
           COALESCE(v.variant_url, s.service_url) AS url,
           2 AS sort_group,
-          s.sort_order AS s_sort,
-          v.sort_order AS v_sort,
           v.updated_at AS updated_at
         FROM services s
         JOIN service_variants v ON v.service_id = s.id
@@ -1332,7 +1329,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           AND v.active = TRUE
           AND v.price IS NOT NULL
       )
-      ORDER BY sort_group ASC, s_sort NULLS LAST, v_sort NULLS LAST, updated_at DESC
+      ORDER BY sort_group ASC, updated_at DESC
       LIMIT 12
       `,
       [tenant.id]
