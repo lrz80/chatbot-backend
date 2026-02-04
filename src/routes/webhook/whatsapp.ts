@@ -1298,7 +1298,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           'USD'::text AS currency,
           s.service_url AS url,
           1 AS sort_group,
-          NULL::int AS v_sort,
           s.updated_at AS updated_at
         FROM services s
         WHERE s.tenant_id = $1
