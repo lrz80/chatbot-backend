@@ -67,7 +67,7 @@ export async function paymentHumanGuard(opts: {
 
   // 1) Leer estado cliente
   const { rows: clienteRows } = await pool.query(
-    `SELECT estado, human_override, nombre, email, telefono, pais, segmento
+    `SELECT estado, human_override, human_override_until, nombre, email, telefono, pais, segmento
      FROM clientes
      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
      LIMIT 1`,
@@ -78,9 +78,26 @@ export async function paymentHumanGuard(opts: {
   const estadoActual = String(cliente?.estado || "").toLowerCase();
   const humanOverride = cliente?.human_override === true;
 
-  // 2) Silencio total si humano tomó conversación
-  if (humanOverride) {
+  const until = cliente?.human_override_until ? new Date(cliente.human_override_until) : null;
+  const overrideActive = humanOverride && until && until.getTime() > Date.now();
+
+  // 2) Silencio total SOLO si human_override está vigente (TTL)
+  if (overrideActive) {
     return { action: "silence", reason: "human_override" };
+  }
+
+  // ✅ Si estaba true pero vencido, limpiamos (para no quedarse “pegado”)
+  if (humanOverride && !overrideActive) {
+    try {
+      await pool.query(
+        `UPDATE clientes
+            SET human_override = false,
+                human_override_until = NULL,
+                updated_at = NOW()
+          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
+        [tenantId, canal, contacto]
+      );
+    } catch {}
   }
 
   // 3) Silencio total si está en confirmación de pago
@@ -91,10 +108,14 @@ export async function paymentHumanGuard(opts: {
   // 4) Si confirma pago → set estado + human_override (DB) y pedir respuesta por LLM (sin hardcode)
   if (PAGO_CONFIRM_REGEX.test(userInput || "")) {
     await pool.query(
-      `INSERT INTO clientes (tenant_id, canal, contacto, estado, human_override, updated_at)
-       VALUES ($1, $2, $3, 'pago_en_confirmacion', true, now())
-       ON CONFLICT (tenant_id, canal, contacto)
-       DO UPDATE SET estado='pago_en_confirmacion', human_override=true, updated_at=now()`,
+      `INSERT INTO clientes (tenant_id, canal, contacto, estado, human_override, human_override_until, updated_at)
+      VALUES ($1, $2, $3, 'pago_en_confirmacion', true, NOW() + INTERVAL '5 minutes', now())
+      ON CONFLICT (tenant_id, canal, contacto)
+      DO UPDATE SET
+        estado = 'pago_en_confirmacion',
+        human_override = true,
+        human_override_until = NOW() + INTERVAL '5 minutes',
+        updated_at = now()`,
       [tenantId, canal, contacto]
     );
 

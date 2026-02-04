@@ -53,9 +53,10 @@ export async function applyEmotionTriggers(opts: {
   if (action === "handoff_human") {
     await pool.query(
       `UPDATE clientes
-         SET human_override = true,
-             updated_at = NOW()
-       WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
+        SET human_override = true,
+            human_override_until = NOW() + INTERVAL '5 minutes',
+            updated_at = NOW()
+      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
       [tenantId, canal, contacto]
     );
   }
