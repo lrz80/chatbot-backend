@@ -1,6 +1,8 @@
 import pool from "../db";
 import type { Canal } from "../detectarIntencion";
 import { esIntencionDeVenta } from "../detectarIntencion";
+import { setHumanOverride } from "../humanOverride/setHumanOverride";
+
 
 type Emotion = "enfado" | "frustracion" | "neutral" | "interes" | "entusiasmo" | string;
 
@@ -11,6 +13,9 @@ export async function applyEmotionTriggers(opts: {
   emotion: Emotion | null;
   intent: string | null;
   interestLevel: number | null;
+
+  userMessage?: string | null;   // ✅ NUEVO
+  messageId?: string | null;     // ✅ opcional
 }) {
   const { tenantId, canal, contacto, emotion, intent, interestLevel } = opts;
 
@@ -51,14 +56,16 @@ export async function applyEmotionTriggers(opts: {
 
   // Persistencia mínima (solo si hay acción)
   if (action === "handoff_human") {
-    await pool.query(
-      `UPDATE clientes
-        SET human_override = true,
-            human_override_until = NOW() + INTERVAL '5 minutes',
-            updated_at = NOW()
-      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
-      [tenantId, canal, contacto]
-    );
+    await setHumanOverride({
+      tenantId,
+      canal,
+      contacto,
+      minutes: 5,
+      reason: e,
+      source: "emotion_trigger",
+      userMessage: opts.userMessage || null,
+      messageId: opts.messageId || null,
+    });
   }
 
   return { action, replyOverride, ctxPatch };

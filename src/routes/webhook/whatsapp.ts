@@ -44,13 +44,13 @@ import { isAmbiguousLangText } from "../../lib/appointments/booking/text";
 import { runBookingGuardrail } from "../../lib/appointments/booking/guardrail";
 import { wantsServiceLink } from "../../lib/services/wantsServiceLink";
 import { resolveServiceLink } from "../../lib/services/resolveServiceLink";
-import { serviceLinkPickFromAwaiting } from "../../lib/services/serviceLinkPickFromAwaiting";
 import { wantsServiceInfo } from "../../lib/services/wantsServiceInfo";
 import { resolveServiceInfo } from "../../lib/services/resolveServiceInfo";
 import { renderServiceInfoReply } from "../../lib/services/renderServiceInfoReply";
 import { wantsServiceList } from "../../lib/services/wantsServiceList";
 import { resolveServiceList } from "../../lib/services/resolveServiceList";
 import { renderServiceListReply } from "../../lib/services/renderServiceListReply";
+import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
 
 
 const sha256 = (s: string) =>
@@ -647,6 +647,7 @@ async function getRecentHistoryForModel(opts: {
 // 🧠 STATE MACHINE (conversational brain)
 // ===============================
 const sm = createStateMachine([
+  humanOverrideGate, 
   paymentHumanGate,
   yesNoStateGate,
   awaitingGate,
@@ -1405,7 +1406,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         : "Todavía no tengo servicios guardados.";
     return await replyAndExit(msg, "service_list:empty", "service_list");
   }
-  
+
   // ✅ SERVICE INFO PICK (STICKY): si hay opciones pendientes para precio/duración/incluye
   {
     const pickState = (convoCtx as any)?.service_info_pick;
@@ -1667,9 +1668,12 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       tenantId: tenant.id,
       canal,
       contacto: contactoNorm,
-      emotion,                 // <- tu variable actual
-      intent: detectedIntent,  // <- ya calculada arriba
+      emotion,
+      intent: detectedIntent,
       interestLevel: detectedInterest,
+
+      userMessage: userInput || null,   // ✅
+      messageId: messageId || null,     // ✅
     });
 
     // Persistimos señales para SM/LLM/Debug

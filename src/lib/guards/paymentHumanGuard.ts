@@ -3,6 +3,7 @@ import type { Pool } from "pg";
 import type { Canal } from '../../lib/detectarIntencion';
 import type { TurnEvent } from "../conversation/stateMachine";
 import type { GateResult } from "../conversation/stateMachine";
+import { setHumanOverride } from "../humanOverride/setHumanOverride";
 
 
 type Idioma = "es" | "en";
@@ -108,16 +109,23 @@ export async function paymentHumanGuard(opts: {
   // 4) Si confirma pago → set estado + human_override (DB) y pedir respuesta por LLM (sin hardcode)
   if (PAGO_CONFIRM_REGEX.test(userInput || "")) {
     await pool.query(
-      `INSERT INTO clientes (tenant_id, canal, contacto, estado, human_override, human_override_until, updated_at)
-      VALUES ($1, $2, $3, 'pago_en_confirmacion', true, NOW() + INTERVAL '5 minutes', now())
+      `INSERT INTO clientes (tenant_id, canal, contacto, estado, updated_at)
+      VALUES ($1, $2, $3, 'pago_en_confirmacion', now())
       ON CONFLICT (tenant_id, canal, contacto)
-      DO UPDATE SET
-        estado = 'pago_en_confirmacion',
-        human_override = true,
-        human_override_until = NOW() + INTERVAL '5 minutes',
-        updated_at = now()`,
+      DO UPDATE SET estado='pago_en_confirmacion', updated_at=now()`,
       [tenantId, canal, contacto]
     );
+
+    // ✅ activa override + notifica (TTL 5 min)
+    await setHumanOverride({
+      tenantId,
+      canal,
+      contacto,
+      minutes: 5,
+      reason: "pago_confirmado_por_usuario",
+      source: "payment_guard",
+      userMessage: userInput || null,
+    });
 
     return {
       action: "reply",

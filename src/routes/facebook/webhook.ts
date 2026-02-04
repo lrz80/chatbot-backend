@@ -51,6 +51,7 @@ import { renderServiceInfoReply } from "../../lib/services/renderServiceInfoRepl
 import { wantsServiceList } from "../../lib/services/wantsServiceList";
 import { resolveServiceList } from "../../lib/services/resolveServiceList";
 import { renderServiceListReply } from "../../lib/services/renderServiceListReply";
+import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
 
 
 type CanalEnvio = "facebook" | "instagram";
@@ -680,6 +681,7 @@ async function safeEnviarMeta(
 // State machine (igual WA)
 // ===============================
 const sm = createStateMachine([
+  humanOverrideGate, 
   paymentHumanGate,
   yesNoStateGate,
   awaitingGate,
@@ -1332,6 +1334,9 @@ router.post("/api/facebook/webhook", async (req, res) => {
             emotion, // ✅ ya viene normalizado
             intent: lastIntent,
             interestLevel: nivelInteres,
+
+            userMessage: userInput || null,   // ✅
+            messageId: messageId || null,     // ✅
           });
 
           if (trig?.ctxPatch) {
