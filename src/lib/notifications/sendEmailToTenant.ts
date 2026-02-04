@@ -40,7 +40,7 @@ export async function sendEmailToTenant(opts: {
 
   try {
     const info = await transporter.sendMail({
-        from: process.env.MAIL_FROM || "noreply@aamy.ai",
+        from: process.env.EMAIL_FROM || "noreply@aamy.ai",
         to,
         subject,
         text,
