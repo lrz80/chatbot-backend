@@ -866,9 +866,17 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   const storedLang = await getIdiomaClienteDB(tenant.id, canal, contactoNorm, tenantBase);
 
   // 2) detectar idioma del mensaje (puede devolver: "es" | "en" | "pt" | "und")
+  // ⚠️ override para mensajes cortos típicos (evita "und" => caída a ES)
   let detectedLang = "und" as any;
   try {
-    detectedLang = await detectarIdioma(userInput); 
+    const t0 = String(userInput || "").trim().toLowerCase();
+
+    const forceShort =
+      /^(hello|hi|hey|good morning|good afternoon|good evening|thanks|thank you|ok|okay|i need more info|more info|info|information)$/i.test(t0)
+        ? "en"
+        : null;
+
+    detectedLang = forceShort || (await detectarIdioma(userInput));
   } catch {}
 
   // 3) map: tu sistema hoy está 100% "es/en" en prompts/UI.
@@ -879,11 +887,14 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     detectedLang === "pt" ? "es" :  // 👈 AJUSTABLE
     "und";
 
-  // 4) lock: si estás en booking y ya hay lang en ctx, NO cambies
+  // 4) lock SOLO durante booking (fuera de booking, nunca bloquees idioma)
+  const bookingStepLang = (convoCtx as any)?.booking?.step;
+  const inBookingLang = bookingStepLang && bookingStepLang !== "idle";
+
   const lockedLang =
-    (convoCtx as any)?.thread_lang ||
-    (convoCtx as any)?.booking?.lang ||
-    null;
+    inBookingLang
+      ? ((convoCtx as any)?.booking?.lang || (convoCtx as any)?.thread_lang || null)
+      : null;
 
   // 5) regla final: SIEMPRE idioma del cliente
   // - si hay lock => usa lock
@@ -903,10 +914,19 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
   // ✅ set idiomaDestino del turno
   idiomaDestino = finalLang;
+    console.log("🌍 LANG DEBUG =", {
+    userInput,
+    tenantBase,
+    storedLang,
+    detectedLang,
+    detectedSupported,
+    lockedLang,
+    inBookingLang,
+    idiomaDestino,
+  });
 
-  // ✅ opcional: guarda thread_lang si quieres “lockear” durante flujos
-  // (recomendado para booking / state machine)
-  if (!(convoCtx as any)?.thread_lang) {
+  // ✅ thread_lang SOLO durante booking (evita romper autodetección normal)
+  if (inBookingLang && !(convoCtx as any)?.thread_lang) {
     convoCtx = { ...(convoCtx || {}), thread_lang: idiomaDestino };
   }
 
