@@ -93,10 +93,8 @@ function containsAnyToken(text: string, tokens: string[]) {
 
 function isTrialLikeQuery(raw: string) {
   const s = String(raw || "").toLowerCase();
-  return (
-    /\b(trial|free\s*trial|free\s*class|first\s*class|intro|introductory|clase\s*de\s*prueba|clase\s*gratis|primera\s*clase|complimentary|comp)\b/i.test(
-      s
-    )
+  return /\b(prueba|de\s*prueba|trial|free\s*trial|free\s*class|first\s*class|primera\s*clase|intro|introductory|clase\s*de\s*prueba|clase\s*gratis|gratis|gratuita|complimentary|complementary|comp)\b/i.test(
+    s
   );
 }
 
