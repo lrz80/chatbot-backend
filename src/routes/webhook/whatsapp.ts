@@ -865,29 +865,26 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // 1) idioma guardado del cliente (si existe)
   const storedLang = await getIdiomaClienteDB(tenant.id, canal, contactoNorm, tenantBase);
 
-  // 2) detectar idioma del mensaje (puede devolver: "es" | "en" | "pt" | "und")
-  // ⚠️ override para mensajes cortos típicos (evita "und" => caída a ES)
-  let detectedLang = "und" as any;
+  // 2) detectar idioma del mensaje (SOLO "es" | "en")
+  // ⚠️ override para mensajes cortos típicos (evita false negatives)
+  let detectedLang: "es" | "en" | null = null;
+
   try {
     const t0 = String(userInput || "").trim().toLowerCase();
 
-    const forceShort =
-      /^(hello|hi|hey|good morning|good afternoon|good evening|thanks|thank you|ok|okay|i need more info|more info|info|information)$/i.test(t0)
-        ? "en"
-        : null;
+    // Si es corto/ambiguo, NO fuerces idioma con el detector
+    // (usa el storedLang o tenantBase)
+    const isAmbiguousShort =
+      t0.length <= 2 ||
+      /^(ok|okay|k|👍|yes|no|si|sí|hola|hello|hi|hey|thanks|thank you)$/i.test(t0);
 
-    detectedLang = forceShort || (await detectarIdioma(userInput));
+    if (!isAmbiguousShort) {
+      // detectarIdioma DEBE devolver solo "es" o "en"
+      detectedLang = await detectarIdioma(userInput);
+    }
   } catch {}
 
-  // 3) map: tu sistema hoy está 100% "es/en" en prompts/UI.
-  // Si detecta pt, de momento lo tratamos como "es" (o cambia a "en" si prefieres).
-  const detectedSupported: "es" | "en" | "und" =
-    detectedLang === "en" ? "en" :
-    detectedLang === "es" ? "es" :
-    detectedLang === "pt" ? "es" :  // 👈 AJUSTABLE
-    "und";
-
-  // 4) lock SOLO durante booking (fuera de booking, nunca bloquees idioma)
+  // 3) lock SOLO durante booking (fuera de booking, nunca bloquees idioma)
   const bookingStepLang = (convoCtx as any)?.booking?.step;
   const inBookingLang = bookingStepLang && bookingStepLang !== "idle";
 
@@ -896,36 +893,35 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       ? ((convoCtx as any)?.booking?.lang || (convoCtx as any)?.thread_lang || null)
       : null;
 
-  // 5) regla final: SIEMPRE idioma del cliente
+  // 4) regla final (ES/EN únicamente)
   // - si hay lock => usa lock
-  // - si detector es und => usa storedLang o tenantBase
-  // - si detector da es/en => usa detector y persiste en clientes
+  // - si NO hay detectedLang => usa storedLang o tenantBase
+  // - si detectedLang => úsalo y persiste
   let finalLang: "es" | "en" = tenantBase;
 
   if (lockedLang === "en" || lockedLang === "es") {
     finalLang = lockedLang;
-  } else if (detectedSupported === "und") {
+  } else if (!detectedLang) {
     finalLang = storedLang || tenantBase;
   } else {
-    finalLang = detectedSupported;
-    // ✅ persiste sticky para próximos mensajes (hello/ok/etc)
+    finalLang = detectedLang;
     await upsertIdiomaClienteDB(tenant.id, canal, contactoNorm, finalLang);
   }
 
   // ✅ set idiomaDestino del turno
   idiomaDestino = finalLang;
-    console.log("🌍 LANG DEBUG =", {
+
+  console.log("🌍 LANG DEBUG =", {
     userInput,
     tenantBase,
     storedLang,
     detectedLang,
-    detectedSupported,
     lockedLang,
     inBookingLang,
     idiomaDestino,
   });
 
-  // ✅ thread_lang SOLO durante booking (evita romper autodetección normal)
+  // ✅ thread_lang SOLO durante booking
   if (inBookingLang && !(convoCtx as any)?.thread_lang) {
     convoCtx = { ...(convoCtx || {}), thread_lang: idiomaDestino };
   }

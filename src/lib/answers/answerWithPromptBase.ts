@@ -149,16 +149,27 @@ export async function answerWithPromptBase(
   out = stripUrlsIfPromptHasNone(out, promptBase);
   out = capLines(out, maxLines);
 
-  // Asegurar idioma de salida
+  // Asegurar idioma de salida (solo ES/EN)
   try {
-    const langOut = await detectarIdioma(out);
-    if (langOut && langOut !== 'zxx' && langOut !== idiomaDestino) {
+    const raw = await detectarIdioma(out);
+
+    const norm = String(raw || "")
+      .toLowerCase()
+      .split(/[-_]/)[0];
+
+    const langOut: "es" | "en" | null =
+      norm === "en" ? "en" :
+      norm === "es" ? "es" :
+      null;
+
+    // Solo traducimos si el detector devuelve ES/EN y es diferente al idiomaDestino
+    if (langOut && langOut !== idiomaDestino) {
       out = await traducirMensaje(out, idiomaDestino);
       out = sanitizeChatOutput(out);
       out = capLines(out, maxLines);
     }
   } catch (e) {
-    console.warn('⚠️ No se pudo ajustar el idioma en answerWithPromptBase:', e);
+    console.warn("⚠️ No se pudo ajustar el idioma en answerWithPromptBase:", e);
   }
 
   return { text: out };

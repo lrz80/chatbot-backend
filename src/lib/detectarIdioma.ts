@@ -1,83 +1,33 @@
-// src/lib/detectarIdioma.ts
 import OpenAI from "openai";
 
-// ✅ Mensajes que NO deben cambiar idioma (muy cortos / genéricos)
-function esAmbiguo(texto: string) {
+export async function detectarIdioma(texto: string): Promise<"es" | "en"> {
   const t = String(texto || "").trim().toLowerCase();
-  if (!t) return true;
 
-  // emojis o confirmaciones ultra-cortas
-  if (t.length <= 2) return true;
+  // Mensajes demasiado cortos o ambiguos → NO CAMBIAN idioma
+  if (t.length <= 2 || /^(ok|okay|k|👍|yes|no|si|sí|hola|hello|hi|hey)$/i.test(t)) {
+    return "es"; // o "en" si prefieres
+  }
 
-  // ✅ NO incluyas hello/hola aquí (eso sí define idioma)
-  if (/^(ok|okay|kk|👍|yes|no|si|sí|y|n)$/i.test(t)) return true;
-
-  return false;
-}
-
-/**
- * Pre-detector local (rápido y estable).
- * Devuelve: "es" | "en" | "pt" | null (null => usar OpenAI)
- */
-function detectarIdiomaLocal(input: string): "es" | "en" | "pt" | null {
-  const t = String(input || "").trim().toLowerCase();
-  if (!t) return null;
-
-  // Señales fuertes de español (caracteres)
+  // Heurísticas rápidas
   if (/[ñáéíóúü¿¡]/.test(t)) return "es";
+  if (/\b(hola|buenas|precio|información|agendar|reservar)\b/.test(t)) return "es";
+  if (/\b(hello|hi|please|info|information|class|schedule|book)\b/.test(t)) return "en";
 
-  // Señales fuertes de portugués (caracteres)
-  if (/[ãõç]/.test(t)) return "pt";
-
-  // Palabras comunes ES
-  if (/\b(hola|buenas|precio|informacion|información|clase|clases|agendar|reservar|horario|cita)\b/.test(t)) {
-    return "es";
-  }
-
-  // Palabras comunes EN
-  if (/\b(hello|hi|hey|please|info|information|class|classes|schedule|book|booking|i need|i want)\b/.test(t)) {
-    return "en";
-  }
-
-  // Palabras comunes PT
-  if (/\b(ol[aá]|por favor|informa(c|ç)[aã]o|agendar|marcar|hor[aá]rio)\b/.test(t)) {
-    return "pt";
-  }
-
-  return null;
-}
-
-/**
- * Detector final:
- * - Si es ambiguo => "und"
- * - Si local decide => "es"|"en"|"pt"
- * - Si no, OpenAI fallback
- */
-export async function detectarIdioma(texto: string): Promise<"es" | "en" | "pt" | "und"> {
-  if (esAmbiguo(texto)) return "und";
-
-  const local = detectarIdiomaLocal(texto);
-  if (local) return local;
-
+  // OpenAI (solo ES o EN)
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
 
-  const respuesta = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+  const res = await openai.chat.completions.create({
+    model: "gpt-4",
     messages: [
       {
         role: "user",
-        content:
-          `Detecta el idioma de este mensaje y responde SOLO con: es, en, o pt.\n\nMensaje: "${texto}"`,
+        content: `Detecta si este texto está en español o inglés. Responde solo "es" o "en": "${texto}"`,
       },
     ],
     temperature: 0,
   });
 
-  const idioma = respuesta.choices[0]?.message?.content?.trim().toLowerCase();
+  const out = res.choices[0]?.message?.content?.trim().toLowerCase();
 
-  if (idioma === "es" || idioma === "en" || idioma === "pt") return idioma;
-
-  // Si OpenAI responde basura, NO fuerces "es" aquí.
-  // Devuelve "und" para que el webhook use el sticky anterior.
-  return "und";
+  return out === "en" ? "en" : "es";
 }
