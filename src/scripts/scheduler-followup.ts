@@ -53,8 +53,16 @@ async function enviarMensajesProgramados() {
         // Traduce el follow-up si no coincide con el idioma del cliente
         let contenido = m.contenido;
         try {
-          const idOut = await detectarIdioma(contenido);
-          if (idOut && idOut !== "zxx" && idOut !== idiomaDestino) {
+          const raw = await detectarIdioma(contenido);
+          const norm = String(raw || "").toLowerCase().split(/[-_]/)[0];
+
+          // Solo aceptamos idiomas soportados ↓↓
+          const lang: "es" | "en" | null =
+            norm === "en" ? "en" :
+            norm === "es" ? "es" :
+            null;
+
+          if (lang && lang !== idiomaDestino) {
             contenido = await traducirMensaje(contenido, idiomaDestino);
           }
         } catch {

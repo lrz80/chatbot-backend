@@ -157,9 +157,15 @@ export async function runBeginnerRecoInterceptor(args: InterceptorArgs): Promise
     );
     if (rows[0]?.respuesta) {
       let extra = rows[0].respuesta as string;
-      try {
-        const lang = await detectarIdioma(extra);
-        if (lang && lang !== 'zxx' && lang !== idiomaDestino) {
+            try {
+        const raw = await detectarIdioma(extra);
+        const norm = String(raw || "").toLowerCase().split(/[-_]/)[0];
+        const lang: "es" | "en" | null =
+          norm === "en" ? "en" :
+          norm === "es" ? "es" :
+          null;
+
+        if (lang && lang !== idiomaDestino) {
           extra = await traducirMensaje(extra, idiomaDestino);
         }
       } catch {}
@@ -173,9 +179,15 @@ export async function runBeginnerRecoInterceptor(args: InterceptorArgs): Promise
   }
 
   // 5) Garantizar idiomaDestino
-  try {
-    const det = await detectarIdioma(msg);
-    if (det && det !== 'zxx' && det !== idiomaDestino) {
+    try {
+    const raw = await detectarIdioma(msg);
+    const norm = String(raw || "").toLowerCase().split(/[-_]/)[0];
+    const det: "es" | "en" | null =
+      norm === "en" ? "en" :
+      norm === "es" ? "es" :
+      null;
+
+    if (det && det !== idiomaDestino) {
       msg = await traducirMensaje(msg, idiomaDestino);
     }
   } catch {}
