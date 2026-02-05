@@ -457,21 +457,36 @@ export async function bookingFlowMvp(opts: {
 
   const bookingLink = opts.bookingLink ? String(opts.bookingLink).trim() : null;
 
-  // 1) Si el tenant apagó agendamiento: bloquea todo
-  if (!bookingEnabled) {
-    if (wantsBooking || booking.step !== "idle") {
+// 1) Si el tenant apagó agendamiento (toggle OFF): SOLO manda link si existe.
+//    NO digas "unavailable" si tienes link.
+if (!bookingEnabled) {
+  if (wantsBooking || booking.step !== "idle") {
+    if (bookingLink) {
       return {
         handled: true,
         reply: idioma === "en"
-            ? "Scheduling is unavailable right now."
-            : "El agendamiento no está disponible en este momento.",
-        ctxPatch: { 
-        booking: { step: "idle" }, 
-        booking_last_touch_at: Date.now(), },
+          ? `You can book here: ${bookingLink}`
+          : `Puedes agendar aquí: ${bookingLink}`,
+        ctxPatch: {
+          booking: { step: "idle" },
+          booking_last_touch_at: Date.now(),
+        },
       };
     }
-    return { handled: false };
+
+    return {
+      handled: true,
+      reply: idioma === "en"
+        ? "Scheduling is unavailable right now."
+        : "El agendamiento no está disponible en este momento.",
+      ctxPatch: {
+        booking: { step: "idle" },
+        booking_last_touch_at: Date.now(),
+      },
+    };
   }
+  return { handled: false };
+}
 
 // 2) Si hay link, responde con el link (y NO uses Google)
 if (wantsBooking && bookingLink) {

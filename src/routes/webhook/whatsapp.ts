@@ -1291,12 +1291,12 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     });
 
     if (resolved.ok) {
-        const msg =
-          idiomaDestino === "en"
-            ? `Here’s the link for **${resolved.label}**:\n${resolved.url}\n\nIf you want, tell me what day/time you prefer and I’ll help you pick a slot.`
-            : `Aquí tienes el enlace para **${resolved.label}**:\n${resolved.url}\n\nSi quieres, dime qué día/hora prefieres y te ayudo a escoger.`;
+      const msg =
+        idiomaDestino === "en"
+          ? `Here’s the link for ${resolved.label}:\n${resolved.url}`
+          : `Aquí tienes el enlace para ${resolved.label}:\n${resolved.url}`;
 
-        return await replyAndExit(msg, "service_link", "service_link");
+      return await replyAndExit(msg, "service_link", "service_link");
     }
 
     if (resolved.reason === "ambiguous" && resolved.options?.length) {
