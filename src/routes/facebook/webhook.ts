@@ -53,7 +53,7 @@ import { resolveServiceList } from "../../lib/services/resolveServiceList";
 import { renderServiceListReply } from "../../lib/services/renderServiceListReply";
 import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
 import { setHumanOverride } from "../../lib/humanOverride/setHumanOverride";
-
+import { saveAssistantMessageAndEmit } from "../../lib/channels/engine/messages/saveAssistantMessageAndEmit";
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -438,69 +438,6 @@ async function saveUserMessageAndEmit(opts: {
     });
   } catch (e) {
     console.warn("⚠️ No se pudo registrar mensaje user + socket:", e);
-  }
-}
-
-async function saveAssistantMessageAndEmit(opts: {
-  tenantId: string;
-  canal: Canal;
-  fromNumber: string;
-  messageId: string | null;
-  content: string;
-  intent?: string | null;
-  interestLevel?: number | null;
-}) {
-  const { tenantId, canal, fromNumber, messageId, content } = opts;
-
-  if (!messageId) return;
-
-  try {
-    const finalMessageId = messageId ? `${messageId}-bot` : null;
-
-    const { rows } = await pool.query(
-      `INSERT INTO messages (
-        tenant_id, role, content, timestamp, canal, from_number, message_id, intent, interest_level
-      )
-      VALUES ($1, 'assistant', $2, NOW(), $3, $4, $5, $6, $7)
-      ON CONFLICT (tenant_id, message_id) DO NOTHING
-      RETURNING id, timestamp, role, content, canal, from_number, intent, interest_level`,
-      [
-        tenantId,
-        content,
-        canal,
-        fromNumber || "anónimo",
-        finalMessageId,
-        opts.intent ?? null,
-        (typeof opts.interestLevel === "number" ? opts.interestLevel : null),
-      ]
-    );
-
-    const inserted = rows[0];
-    console.log("💾 [DB messages assistant]", {
-      messageId: finalMessageId,
-      inserted: !!inserted,
-      canal,
-      fromNumber,
-    });
-
-    if (!inserted) return;
-
-    const io = getIO();
-    if (!io) return;
-
-    io.emit("message:new", {
-      id: inserted.id,
-      created_at: inserted.timestamp,
-      timestamp: inserted.timestamp,
-      role: inserted.role,
-      content: inserted.content,
-      canal: inserted.canal,
-      from_number: inserted.from_number,
-      intent: inserted.intent,
-      interest_level: inserted.interest_level,
-    });
-  } catch (e) {
-    console.warn("⚠️ No se pudo registrar mensaje assistant + socket:", e);
   }
 }
 
