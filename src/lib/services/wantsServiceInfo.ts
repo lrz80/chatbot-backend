@@ -35,6 +35,12 @@ function hasObjectAnchor(t: string): boolean {
     "me","my","mi","mis","your","tu","tus","please","pls"
   ]);
 
+  // "class / clase" suelen indicar objeto aunque no haya "for/of/de"
+  if (/\b(class|clase)\b/i.test(t)) {
+    const cleaned = t.replace(/\b(class|clase)\b/gi, "").trim();
+    if (cleaned.length >= 3) return true;
+  }
+
   const contentTokens = tokens.filter(x => !stop.has(x));
   return contentTokens.length >= 3; // "precio del corte fade" -> ok, "cuales son los precios" -> no
 }
@@ -44,9 +50,6 @@ function isGenericPriceQuestion(t: string): boolean {
 
   // Si NO hay ancla/objeto, lo consideramos genérico
   if (!hasObjectAnchor(t)) return true;
-
-  // Y si es muy corto, también lo consideramos genérico
-  if (t.length <= 25) return true;
 
   return false;
 }

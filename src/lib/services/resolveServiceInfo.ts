@@ -41,6 +41,49 @@ function normalizeQuery(q: string) {
   return s;
 }
 
+async function fallbackToPricedPackage(tenantId: string): Promise<ResolvedServiceInfo | null> {
+  // Busca un item “paquetes/credits/classes” que tenga variantes con precio
+  const { rows } = await pool.query(
+    `
+    SELECT s.id, s.name, s.description, s.duration_min, s.service_url,
+           v.id AS variant_id, v.variant_name, v.description AS vdesc,
+           v.price, v.currency, v.duration_min AS vdur, v.variant_url
+    FROM services s
+    JOIN service_variants v ON v.service_id = s.id AND v.active = TRUE
+    WHERE s.tenant_id = $1
+      AND s.active = TRUE
+      AND (
+        lower(s.name) LIKE '%package%' OR
+        lower(s.name) LIKE '%paquete%' OR
+        lower(s.name) LIKE '%credit%' OR
+        lower(s.name) LIKE '%class%'
+      )
+      AND v.price IS NOT NULL
+    ORDER BY s.name ASC, v.price ASC NULLS LAST
+    LIMIT 1
+    `,
+    [tenantId]
+  );
+
+  const r = rows[0];
+  if (!r) return null;
+
+  const url = (r.variant_url || r.service_url || null) as string | null;
+
+  return {
+    ok: true,
+    kind: "variant",
+    label: `${r.name} - ${r.variant_name}`,
+    url,
+    price: r.price !== null ? Number(r.price) : null,
+    currency: r.currency ? String(r.currency) : "USD",
+    duration_min: r.vdur !== null ? Number(r.vdur) : (r.duration_min !== null ? Number(r.duration_min) : null),
+    description: (r.vdesc && String(r.vdesc).trim()) ? String(r.vdesc) : (r.description ? String(r.description) : null),
+    service_id: String(r.id),
+    variant_id: String(r.variant_id),
+  };
+}
+
 function userMentionsVariant(qRaw: string) {
   const src = String(qRaw || "");
   return (
@@ -178,14 +221,23 @@ export async function resolveServiceInfo(args: {
     }
   }
 
-  // 5) Sin match de variante (o no hay variantes): devolver service base
+  // 5) Si el service base NO tiene precio y NO tiene variantes, intenta fallback a paquetes con precio
+  const servicePrice = top.price_base !== null ? Number(top.price_base) : null;
+  const hasAnyVariant = allVariants.length > 0;
+
+  if ((servicePrice === null || servicePrice <= 0) && !hasAnyVariant) {
+    const fb = await fallbackToPricedPackage(tenantId);
+    if (fb) return fb;
+  }
+
+  // 6) Sin match de variante (o no hay variantes): devolver service base
   return {
     ok: true,
     kind: "service",
     label: String(top.name),
     url: top.service_url ? String(top.service_url) : null,
-    price: top.price_base !== null ? Number(top.price_base) : null,
-    currency: "USD", // services no tienen currency; puedes asumir USD o meterlo luego en schema
+    price: servicePrice,
+    currency: "USD",
     duration_min: top.duration_min !== null ? Number(top.duration_min) : null,
     description: top.description ? String(top.description) : null,
     service_id: String(top.id),
