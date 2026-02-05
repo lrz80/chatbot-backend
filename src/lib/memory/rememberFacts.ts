@@ -1,7 +1,7 @@
 // backend/src/lib/memory/rememberFacts.ts
 import { getMemoryValue, setMemoryValue } from "../clientMemory";
+import type { Canal } from "../types/canal";
 
-type Canal = "whatsapp" | "facebook" | "instagram" | "sms" | "voice" | "voz";
 
 export async function rememberFacts(params: {
   tenantId: string;

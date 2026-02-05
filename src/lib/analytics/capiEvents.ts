@@ -82,6 +82,7 @@ export async function capiLeadFirstInbound(opts: {
  * Reglas: esIntencionDeVenta && nivel>=2
  */
 export async function capiContactQualified(opts: {
+  pool: typeof poolType;
   tenantId: string;
   canal: "whatsapp" | "facebook" | "instagram";
   contactoNorm: string;
@@ -90,7 +91,7 @@ export async function capiContactQualified(opts: {
   finalIntent: string;
   finalNivel: number;
 }) {
-  const { tenantId, canal, contactoNorm, fromNumber, messageId, finalIntent, finalNivel } = opts;
+  const { pool, tenantId, canal, contactoNorm, fromNumber, messageId, finalIntent, finalNivel } = opts;
 
   try {
     const raw = String(fromNumber || contactoNorm || "").trim();
@@ -98,6 +99,12 @@ export async function capiContactQualified(opts: {
     const phoneHash = sha256(phoneE164 || contactoNorm);
 
     const eventId = `ql:${tenantId}:${phoneHash}`; // ✅ 1 vez en la vida
+
+    const ok = await reserveCapiEvent(pool, tenantId, eventId);
+    if (!ok) {
+      console.log("⏭️ CAPI Contact deduped:", { tenantId, canal, contactoNorm, eventId });
+      return;
+    }
 
     await sendCapiEvent({
       tenantId,

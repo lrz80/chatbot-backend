@@ -15,10 +15,7 @@ import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 import { saludoPuroRegex } from '../../lib/saludosConversacionales';
 import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
-import { rememberTurn } from "../../lib/memory/rememberTurn";
-import { rememberFacts } from "../../lib/memory/rememberFacts";
 import { getMemoryValue } from "../../lib/clientMemory";
-import { refreshFactsSummary } from "../../lib/memory/refreshFactsSummary";
 import {
   setConversationState as setConversationStateDB,
   getOrInitConversationState,
@@ -30,13 +27,9 @@ import { yesNoStateGate } from "../../lib/guards/yesNoStateGate";
 import { buildTurnContext } from "../../lib/conversation/buildTurnContext";
 import { awaitingGate } from "../../lib/guards/awaitingGate";
 import { createStateMachine } from "../../lib/conversation/stateMachine";
-import { recordSalesIntent } from "../../lib/sales/recordSalesIntent";
 import { detectarEmocion } from "../../lib/detectarEmocion";
 import { applyEmotionTriggers } from "../../lib/guards/emotionTriggers";
 import { scheduleFollowUpIfEligible, cancelPendingFollowUps } from "../../lib/followups/followUpScheduler";
-import { bookingFlowMvp } from "../../lib/appointments/bookingFlow";
-import crypto from "crypto";
-import { runBookingGuardrail } from "../../lib/appointments/booking/guardrail";
 import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
 import { setHumanOverride } from "../../lib/humanOverride/setHumanOverride";
 import { saveAssistantMessageAndEmit } from "../../lib/channels/engine/messages/saveAssistantMessageAndEmit";
@@ -70,33 +63,11 @@ import {
   upsertSelectedChannelDB,
 } from "../../lib/channels/engine/clients/clientDb";
 import { resolveTurnLangClientFirst } from "../../lib/channels/engine/lang/resolveTurnLang";
-
-const sha256 = (s: string) =>
-  crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
-
-// ✅ DEDUPE 7 días (bucket estable). No depende de timezone.
-function bucket7DaysUTC(d = new Date()) {
-  const ms = d.getTime();
-  const windowMs = 7 * 24 * 60 * 60 * 1000;
-  return `b7:${Math.floor(ms / windowMs)}`;
-}
-
-// ✅ Reserva dedupe en DB usando interactions (ya tienes unique tenant+canal+message_id)
-async function reserveCapiEvent(tenantId: string, eventId: string): Promise<boolean> {
-  try {
-    const r = await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-       VALUES ($1, 'meta_capi', $2, NOW())
-       ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
-       RETURNING 1`,
-      [tenantId, eventId]
-    );
-    return (r.rowCount ?? 0) > 0;
-  } catch (e: any) {
-    console.warn("⚠️ reserveCapiEvent failed:", e?.message);
-    return false;
-  }
-}
+import { runPostReplyActions } from "../../lib/conversation/postReplyActions";
+import { runBookingPipeline } from "../../lib/appointments/booking/bookingPipeline";
+import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBookingCourtesyGuard";
+import { rememberAfterReply } from "../../lib/memory/rememberAfterReply";
+import { getWhatsAppModeStatus } from "../../lib/whatsapp/getWhatsAppModeStatus";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -112,84 +83,6 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 
 // BOOKING HELPERS
 const BOOKING_TZ = "America/New_York";
-
-async function getWhatsAppModeStatus(tenantId: string): Promise<{
-  mode: "twilio" | "cloudapi";
-  status: "enabled" | "disabled";
-}> {
-  const { rows } = await pool.query(
-    `SELECT whatsapp_mode, whatsapp_status
-       FROM tenants
-      WHERE id = $1
-      LIMIT 1`,
-    [tenantId]
-  );
-
-  const row = rows[0] || {};
-  const modeRaw = String(row.whatsapp_mode || "twilio").trim().toLowerCase();
-  const statusRaw = String(row.whatsapp_status || "disabled").trim().toLowerCase();
-
-  const mode: "twilio" | "cloudapi" = modeRaw === "cloudapi" ? "cloudapi" : "twilio";
-
-  // backward compatible si guardabas "connected/active"
-  const status: "enabled" | "disabled" =
-    (statusRaw === "enabled" || statusRaw === "active" || statusRaw === "connected")
-      ? "enabled"
-      : "disabled";
-
-  return { mode, status };
-}
-
-
-
-function extractBookingLinkFromPrompt(promptBase: string): string | null {
-  if (!promptBase) return null;
-
-  // Preferido: marcador LINK_RESERVA:
-  const tagged = promptBase.match(/LINK_RESERVA:\s*(https?:\/\/\S+)/i);
-  if (tagged?.[1]) return tagged[1].replace(/[),.]+$/g, "");
-
-  // fallback: nada (no adivines)
-  return null;
-}
-
-async function rememberAfterReply(opts: {
-  tenantId: string;
-  senderId: string;          // contactoNorm
-  idiomaDestino: 'es'|'en';
-  userText: string;
-  assistantText: string;
-  lastIntent?: string | null;
-}) {
-  const { tenantId, senderId, idiomaDestino, userText, assistantText, lastIntent } = opts;
-
-  try {
-    await rememberTurn({
-      tenantId,
-      canal: "whatsapp",
-      senderId,
-      userText,
-      assistantText,
-    });
-
-    await rememberFacts({
-      tenantId,
-      canal: "whatsapp",
-      senderId,
-      preferredLang: idiomaDestino,
-      lastIntent: lastIntent || null,
-    });
-
-    await refreshFactsSummary({
-      tenantId,
-      canal: "whatsapp",
-      senderId,
-      idioma: idiomaDestino,
-    });
-  } catch (e) {
-    console.warn("⚠️ rememberAfterReply failed:", e);
-  }
-}
 
 // ===============================
 // 🧠 STATE MACHINE (conversational brain)
@@ -267,6 +160,9 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     console.log("⛔ No se encontró tenant para este inbound (buildTurnContext).");
     return;
   }
+
+  // ⚡ No hacemos 2 queries a DB: cache local del turno
+  const waModePromise = getWhatsAppModeStatus(tenant.id);
 
   // 👉 idioma base del tenant (fallback)
   const tenantBase: Lang = normalizeLang(tenant?.idioma || "es");
@@ -534,110 +430,39 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           intent: (lastIntent || INTENCION_FINAL_CANONICA || null),
           interest_level: (typeof detectedInterest === "number" ? detectedInterest : null),
         }),
-        rememberAfterReply,
+        rememberAfterReply: (args: any) =>
+        rememberAfterReply({
+          ...args,
+          canal: "whatsapp", // ✅ usa el canal real del turno
+        }),
       }
     );
 
     try {
       if (!handled || !reply) return;
 
-      const finalIntent = (lastIntent || INTENCION_FINAL_CANONICA || "").toString().trim().toLowerCase();
-      const finalNivel =
-        typeof detectedInterest === "number"
-          ? Math.min(3, Math.max(1, detectedInterest))
-          : 2;
+      await runPostReplyActions({
+        pool,
+        tenant,
+        tenantId: tenant.id,
+        canal,
 
-      if (messageId && finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 2) {
-        await recordSalesIntent({
-          tenantId: tenant.id,
-          contacto: contactoNorm,
-          canal,
-          mensaje: userInput,
-          intencion: finalIntent,
-          nivelInteres: finalNivel,
-          messageId,
-        });
-      }
+        contactoNorm,
+        fromNumber: fromNumber || null,
+        messageId: messageId || null,
+        userInput: userInput || "",
 
-      // ===============================
-      // 📡 META CAPI — QUALIFIED LEAD (OPCIÓN PRO): 1 vez por contacto evento 2
-      // ===============================
-      try {
-        const finalIntent = (lastIntent || INTENCION_FINAL_CANONICA || "").toString().trim().toLowerCase();
-        const finalNivel =
-          typeof detectedInterest === "number"
-            ? Math.min(3, Math.max(1, detectedInterest))
-            : 2;
+        idiomaDestino,
 
-        if (messageId && finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 2) {
-          await capiContactQualified({
-            tenantId: tenant.id,
-            canal: "whatsapp",
-            contactoNorm,
-            fromNumber,
-            messageId,
-            finalIntent,
-            finalNivel,
-          });
-        }
-      } catch (e: any) {
-        console.warn("⚠️ Error en CAPI Contact wrapper:", e?.message);
-      }
+        lastIntent,
+        intentFallback: INTENCION_FINAL_CANONICA || null,
 
-      const bookingStep = (convoCtx as any)?.booking?.step;
-      const inBooking = bookingStep && bookingStep !== "idle";
+        detectedInterest,
 
-      // opcional: si confirmaste booking este turno
-      const bookingJustCompleted = !!(convoCtx as any)?.booking_completed;
-
-      // ===============================
-      // 📡 META CAPI — EVENTO #3 (ULTRA-UNIVERSAL): Lead (solo intención FUERTE)
-      // Dedupe: 1 vez por contacto cada 7 días (bucket)
-      // ===============================
-      try {
-        const finalIntent = (lastIntent || INTENCION_FINAL_CANONICA || "").toString().trim().toLowerCase();
-        const finalNivel =
-          typeof detectedInterest === "number"
-            ? Math.min(3, Math.max(1, detectedInterest))
-            : 1;
-
-        if (messageId && finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 3) {
-          await capiLeadStrongWeekly({
-            pool,
-            tenantId: tenant.id,
-            canal: "whatsapp",
-            contactoNorm,
-            fromNumber,
-            messageId,
-            finalIntent,
-            finalNivel,
-          });
-        }
-      } catch (e: any) {
-        console.warn("⚠️ Error en CAPI LeadStrong wrapper:", e?.message);
-      }
-
-      const skipFollowUp =
-        inBooking ||
-        bookingJustCompleted ||
-        finalIntent === "agendar_cita";
-
-      try {
-        await scheduleFollowUpIfEligible({
-          tenant,
-          canal,
-          contactoNorm,
-          idiomaDestino,
-          intFinal: finalIntent || null,
-          nivel: finalNivel,
-          userText: userInput,
-          skip: skipFollowUp, // ✅ AQUÍ
-        });
-      } catch (e: any) {
-        console.warn("⚠️ scheduleFollowUpIfEligible failed:", e?.message);
-      }
+        convoCtx,
+      });
     } catch (e: any) {
-      console.warn("⚠️ recordSalesIntent(final) failed:", e?.message);
+      console.warn("⚠️ runPostReplyActions failed:", e?.message);
     }
   }
 
@@ -648,54 +473,47 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   }
 
   // ===============================
-  // 📅 BOOKING GATE (Google Calendar) - ANTES del SM/LLM
+  // 📅 BOOKING helper (reduce duplicación)
   // ===============================
-  const bookingLink = extractBookingLinkFromPrompt(promptBase);
-
-  // ✅ Si el toggle está OFF, nunca ejecutes bookingFlowMvp (y limpia estados viejos)
-  if (!bookingEnabled) {
-    if ((convoCtx as any)?.booking) {
-      transition({ patchCtx: { booking: null } }); // limpia en memoria del turno
-      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-        activeFlow,
-        activeStep,
-        context: { booking: null },
-      });
-    }
-  } else {
-    const bookingStep = (convoCtx as any)?.booking?.step;
-    const inBooking = bookingStep && bookingStep !== "idle";
-
-    const bk = await bookingFlowMvp({
+  async function tryBooking(mode: "gate" | "guardrail", tag: string) {
+    const bk = await runBookingPipeline({
+      pool,
       tenantId: tenant.id,
       canal: "whatsapp",
       contacto: contactoNorm,
       idioma: idiomaDestino,
       userText: userInput,
+      messageId: messageId || null,
+
       ctx: convoCtx,
-      bookingLink,
-      messageId,
+      transition,
+
+      bookingEnabled,
+      promptBase,
+
+      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
+
+      mode,
+      sourceTag: tag,
+
+      persistState: async (nextCtx) => {
+        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+          activeFlow,
+          activeStep,
+          context: nextCtx,
+        });
+        convoCtx = nextCtx;
+      },
     });
 
-    if (bk?.ctxPatch) transition({ patchCtx: bk.ctxPatch });
-
-    // ✅ clave: si estabas en booking y el flow decide handled=false, igual NO dejes el ctx sucio
-    // (ya lo limpiaste vía ctxPatch en wantsToChangeTopic, perfecto)
-    if (bk?.handled) {
-      // ✅ asegura persistencia del paso antes de salir
-      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-        activeFlow,
-        activeStep,
-        context: convoCtx, // ya incluye bk.ctxPatch por transition()
-      });
-
-      return await replyAndExit(
-        bk.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
-        "booking_flow",
-        "agendar_cita"
-      );
+    if (bk.handled) {
+      await replyAndExit(bk.reply, bk.source, bk.intent);
+      return true;
     }
+    return false;
   }
+
+  if (await tryBooking("gate", "pre_sm")) return;
 
   const bookingStep0 = (convoCtx as any)?.booking?.step;
   const inBooking0 = bookingStep0 && bookingStep0 !== "idle";
@@ -782,7 +600,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
 console.log("🧠 facts_summary (start of turn) =", memStart);
 
-  const { mode, status } = await getWhatsAppModeStatus(tenant.id);
+  const { mode, status } = await waModePromise;
 
   const guard = await whatsappModeMembershipGuard({
     tenant,
@@ -934,36 +752,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   // Evita que después de agendar, un "gracias" dispare el saludo inicial.
   // ===============================
   {
-    const lastDoneAt = (convoCtx as any)?.booking_last_done_at;
-    const completedAtISO = (convoCtx as any)?.booking_completed_at;
-
-    // soporta epoch (number) o ISO
-    const lastMs =
-      typeof lastDoneAt === "number"
-        ? lastDoneAt
-        : (typeof completedAtISO === "string" ? Date.parse(completedAtISO) : null);
-
-    if (lastMs && Number.isFinite(lastMs)) {
-      const seconds = (Date.now() - lastMs) / 1000;
-
-      // ventana: 10 minutos (ajústala)
-      if (seconds >= 0 && seconds < 10 * 60) {
-        const t = (userInput || "").toString().trim().toLowerCase();
-
-        const courtesy =
-          /^(gracias|muchas gracias|thank you|thanks|ok|okay|perfecto|listo|vale|dale|bien|genial|super|cool)$/i.test(t);
-
-        // Si solo fue cortesía, no saludes, no reinicies, responde breve y humano.
-        if (courtesy) {
-          const replyText =
-            idiomaDestino === "en"
-              ? "You’re welcome."
-              : "A la orden.";
-
-          return await replyAndExit(replyText, "post_booking_courtesy", "cortesia");
-        }
-      }
-    }
+    const c = postBookingCourtesyGuard({ ctx: convoCtx, userInput, idioma: idiomaDestino });
+    if (c.hit) return await replyAndExit(c.reply, "post_booking_courtesy", "cortesia");
   }
 
   // ✅ PRE-GREETING LANG FORCE (para hello/hi/hey)
@@ -1054,36 +844,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       limit: 12,
     });
 
-    // ✅ Guardrail reusable: si huele a booking, NO pases al LLM
-    const gr = await runBookingGuardrail({
-      bookingEnabled,
-      bookingLink,
-      tenantId: tenant.id,
-      canal: "whatsapp",
-      contacto: contactoNorm,
-      idioma: idiomaDestino,
-      userText: userInput,
-      ctx: convoCtx,
-      messageId,
-      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
-      bookingFlow: bookingFlowMvp, // DI
-    });
-
-    if (gr.result?.ctxPatch) transition({ patchCtx: gr.result.ctxPatch });
-
-    if (gr.hit && gr.result?.handled) {
-      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-        activeFlow,
-        activeStep,
-        context: convoCtx,
-      });
-
-      return await replyAndExit(
-        gr.result.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
-        "booking_guardrail:sm_reply",
-        "agendar_cita"
-      );
-    }
+    if (await tryBooking("guardrail", "sm_reply")) return;
 
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
@@ -1168,35 +929,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   // ✅ FALLBACK ÚNICO (solo si SM no respondió)
   // ===============================
   if (!replied) {
-      const gr = await runBookingGuardrail({
-      bookingEnabled,
-      bookingLink,
-      tenantId: tenant.id,
-      canal: "whatsapp",
-      contacto: contactoNorm,
-      idioma: idiomaDestino,
-      userText: userInput,
-      ctx: convoCtx,
-      messageId,
-      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
-      bookingFlow: bookingFlowMvp,
-    });
 
-    if (gr.result?.ctxPatch) transition({ patchCtx: gr.result.ctxPatch });
-
-    if (gr.hit && gr.result?.handled) {
-      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-        activeFlow,
-        activeStep,
-        context: convoCtx,
-      });
-
-      return await replyAndExit(
-        gr.result.reply || (idiomaDestino === "en" ? "Ok." : "Perfecto."),
-        "booking_guardrail:sm_fallback",
-        "agendar_cita"
-      );
-    }
+    if (await tryBooking("guardrail", "sm_fallback")) return;
 
     const composed = await answerWithPromptBase({
       tenantId: tenant.id,

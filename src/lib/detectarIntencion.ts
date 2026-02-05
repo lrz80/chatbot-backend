@@ -1,9 +1,11 @@
 // src/lib/detectarIntencion.ts
 import OpenAI from "openai";
 import pool from "./db";
+import type { Canal } from "./types/canal";
+export type { Canal };
+
 
 export type Intento = { intencion: string; nivel_interes: number };
-export type Canal = "whatsapp" | "facebook" | "instagram" | "meta" | "voz" | "preview";
 
 /** ---------- Normalización ---------- */
 const stripDiacritics = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");

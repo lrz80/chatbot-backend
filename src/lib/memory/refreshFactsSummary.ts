@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { getMemoryValue, setMemoryValue } from "../clientMemory";
+import type { Canal } from "../types/canal";
 
 export async function refreshFactsSummary(opts: {
   tenantId: string;
