@@ -751,6 +751,40 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
   const isNewLead = await ensureClienteBase(tenant.id, canal, contactoNorm);
 
+  // ✅ FORZAR IDIOMA EN PRIMER MENSAJE (o saludo claro)
+  // Evita que "hello" use el storedLang viejo en ES.
+  try {
+    const t0 = String(userInput || "").trim().toLowerCase();
+    const isClearHello = /^(hello|hi|hey)\b/i.test(t0);
+    const isClearHola  = /^(hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches)\b/i.test(t0);
+
+    if (isNewLead || isClearHello || isClearHola) {
+      // detectarIdioma aquí debe devolver es|en
+      const forced = await detectarIdioma(userInput);
+
+      // Si el saludo es clarísimo, sobreescribe por seguridad
+      const forcedLang: Lang =
+        isClearHello ? "en" :
+        isClearHola  ? "es" :
+        forced;
+
+      // Guardar idioma sticky ANTES de bienvenida
+      await upsertIdiomaClienteDB(tenant.id, canal, contactoNorm, forcedLang);
+      idiomaDestino = forcedLang;
+
+      // Si estás en booking y tienes thread_lang, no lo toques aquí.
+      console.log("🌍 LANG FORCED (first/hello) =", {
+        isNewLead,
+        userInput,
+        forced,
+        forcedLang,
+        idiomaDestino,
+      });
+    }
+  } catch (e: any) {
+    console.warn("⚠️ LANG FORCE failed:", e?.message);
+  }
+
   // ===============================
   // 📡 META CAPI — LEAD (OPCIÓN PRO): solo primer mensaje del contacto
   // ===============================
@@ -2181,6 +2215,29 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           return await replyAndExit(replyText, "post_booking_courtesy", "cortesia");
         }
       }
+    }
+  }
+
+  // ✅ PRE-GREETING LANG FORCE (para hello/hi/hey)
+  if (!inBooking0) {
+    const t0 = String(userInput || "").trim().toLowerCase();
+
+    const isHello = /^(hello|hi|hey)\b/i.test(t0);
+    const isHola =
+      /^(hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches)\b/i.test(t0);
+
+    if (isHello || isHola) {
+      const forcedLang: Lang = isHello ? "en" : "es";
+      idiomaDestino = forcedLang;
+
+      // 🔒 Persistir para que quede sticky para ese contacto
+      await upsertIdiomaClienteDB(tenant.id, canal, contactoNorm, forcedLang);
+
+      console.log("🌍 PRE-GREETING FORCED LANG =", {
+        userInput,
+        forcedLang,
+        contactoNorm,
+      });
     }
   }
 
