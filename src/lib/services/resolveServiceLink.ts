@@ -47,6 +47,50 @@ function normalizeServiceQuery(q: string) {
   return s;
 }
 
+function normLite(s: string) {
+  return String(s || "").toLowerCase();
+}
+
+function isTrialLike(qRaw: string) {
+  // complimentary = gratis (correcto)
+  // complementary = adicional (común typo), lo soportamos igual
+  return /\b(prueba|trial|free\s*trial|intro|introductory|first\s*class|clase\s+de\s+prueba|clase\s+gratis|gratuita|complimentary|complementary)\b/i.test(qRaw);
+}
+
+function wantsClassLike(qRaw: string) {
+  return /\b(clase|classes|class|session|sesion|sesión)\b/i.test(qRaw);
+}
+
+function wantsPlanLike(qRaw: string) {
+  return /\b(plan|planes|membresia|membresía|membership|autopay|subscription|suscripcion|suscripción|paquete|packages)\b/i.test(qRaw);
+}
+
+function extractKeyTokens(qRaw: string) {
+  // tokens "de intención" que sí discriminan: cycling, functional, sauna, etc.
+  const raw = normalizeServiceQuery(qRaw);
+  const parts = raw.split(" ").map(t => t.trim()).filter(Boolean);
+
+  const stop = new Set([
+    "service","servicio","plan","paquete","package","membership","membresia",
+    "class","clase","classes","sesion","session","booking","book","reservar","reserva","agendar","agenda",
+    "link","enlace","url",
+    // trial markers los tratamos aparte con isTrialLike
+    "trial","prueba","gratis","gratuita","free","intro","first"
+  ]);
+
+  const tokens = parts
+    .filter(t => t.length >= 3)
+    .filter(t => !stop.has(t));
+
+  // unique
+  return Array.from(new Set(tokens));
+}
+
+function containsAnyToken(text: string, tokens: string[]) {
+  const t = normLite(text);
+  return tokens.some(tok => t.includes(tok));
+}
+
 function isTrialLikeQuery(raw: string) {
   const s = String(raw || "").toLowerCase();
   return (
@@ -195,7 +239,7 @@ export async function resolveServiceLink(args: {
   const { rows: services } = await pool.query(
     `
     SELECT s.*,
-           GREATEST(similarity(s.name, $2), similarity(s.description, $2)) AS score
+      GREATEST(similarity(s.name, $2), similarity(s.description, $2)) AS score
     FROM services s
     WHERE s.tenant_id = $1
       AND s.active = TRUE
@@ -205,19 +249,87 @@ export async function resolveServiceLink(args: {
     `,
     [tenantId, q, limit]
   );
+  // ====== FLAGS DEL MENSAJE (antes de filtrar) ======
+  const trialReq = isTrialLike(qRaw);
+  const keyTokens = extractKeyTokens(qRaw);
+  const classReq = wantsClassLike(qRaw);
+  const planReq = wantsPlanLike(qRaw);
+
+  // ====== FILTROS SOBRE SERVICES (NO hardcode por negocio) ======
+  let filtered = (services || []) as any[];
+
+  // 1) Si pidió "clase" y NO pidió plan/membresía, filtra fuera tipo=plan
+  if (classReq && !planReq) {
+    filtered = filtered.filter(s => String(s.tipo || "").toLowerCase() !== "plan");
+  }
+
+  // 2) Si es trial/prueba, intenta quedarte solo con servicios que parezcan trial
+  if (trialReq) {
+    const trialFiltered = filtered.filter(s => {
+      const hay = `${s.name || ""} ${s.category || ""} ${s.description || ""}`.toLowerCase();
+      return /\b(trial|free|intro|prueba|gratis|complimentary|complementary)\b/i.test(hay);
+    });
+    if (trialFiltered.length) filtered = trialFiltered;
+  }
+
+  // 3) Tokens discriminantes (ej: cycling/functional/sauna/laser/etc) sobre servicio
+  if (keyTokens.length) {
+    const tokenFiltered = filtered.filter(s =>
+      containsAnyToken(`${s.name || ""} ${s.category || ""} ${s.description || ""}`, keyTokens)
+    );
+    if (tokenFiltered.length) filtered = tokenFiltered;
+  }
+
+  // ✅ Resultado final inicial
+  let servicesFinal = filtered;
+
+  // 4) Si tokens NO aparecen en el servicio pero SÍ en variantes, mantener ese servicio
+  if (keyTokens.length && servicesFinal.length) {
+    const keep: any[] = [];
+
+    for (const s of servicesFinal) {
+      const hayService = `${s.name || ""} ${s.category || ""} ${s.description || ""}`;
+      if (containsAnyToken(hayService, keyTokens)) {
+        keep.push(s);
+        continue;
+      }
+
+      const { rows: vrows } = await pool.query(
+        `
+        SELECT v.variant_name, v.description
+        FROM service_variants v
+        WHERE v.service_id = $1
+          AND v.active = TRUE
+        `,
+        [s.id]
+      );
+
+      const hayVariants = (vrows || [])
+        .map((v: any) => `${v.variant_name || ""} ${v.description || ""}`)
+        .join(" | ");
+
+      if (containsAnyToken(hayVariants, keyTokens)) {
+        keep.push(s);
+      }
+    }
+
+    if (keep.length) servicesFinal = keep;
+  }
+
   console.log("🔎 [resolveServiceLink] qRaw/q =", { qRaw, q, tenantId });
 
   console.log(
     "🔎 [resolveServiceLink] candidates =",
-    (services || []).map((s: any) => ({
+    (servicesFinal || []).map((s: any) => ({
       name: s.name,
       category: s.category,
+      tipo: s.tipo,
       score: Number(s.score || 0),
       url: s.service_url,
     }))
   );
 
-    if (!services.length) {
+  if (!servicesFinal.length) {
     // Fallback: búsqueda simple por ILIKE (por si pg_trgm no matchea)
     const tokens = q.split(" ").filter(Boolean);
     const patterns = tokens.length
@@ -242,20 +354,42 @@ export async function resolveServiceLink(args: {
 
     if (!services2.length) return { ok: false, reason: "no_match" };
 
-    // Si encontró algo, tratamos como ambiguo (para que el usuario elija 1-5)
+    let services2Final = (services2 || []) as any[];
+
+    if (classReq && !planReq) {
+      services2Final = services2Final.filter(s => String(s.tipo || "").toLowerCase() !== "plan");
+    }
+
+    if (trialReq) {
+      const trialFiltered2 = services2Final.filter(s => {
+        const hay = `${s.name || ""} ${s.category || ""} ${s.description || ""}`.toLowerCase();
+        return /\b(trial|free|intro|prueba|gratis|complimentary|complementary)\b/i.test(hay);
+    });
+    if (trialFiltered2.length) services2Final = trialFiltered2;
+    }
+
+    if (keyTokens.length) {
+      const tokenFiltered2 = services2Final.filter(s =>
+        containsAnyToken(`${s.name || ""} ${s.category || ""} ${s.description || ""}`, keyTokens)
+    );
+    if (tokenFiltered2.length) services2Final = tokenFiltered2;
+    }
+
+    if (!services2Final.length) return { ok: false, reason: "no_match" };
+
     return {
       ok: false,
       reason: "ambiguous",
-      options: services2.slice(0, 5).map((s: any) => ({
+      options: services2Final.slice(0, 5).map((s: any) => ({
         label: `${s.category ? `[${s.category}] ` : ""}${s.name}`,
         url: s.service_url,
       })),
     };
   }
 
-    const top = services[0];
+  const top = servicesFinal[0];
   const topScore = Number(top?.score || 0);
-  const second = services[1];
+  const second = servicesFinal[1];
   const secondScore = Number(second?.score || 0);
 
   // 2) Si score es bajo -> ambiguo
@@ -263,7 +397,7 @@ export async function resolveServiceLink(args: {
     return {
       ok: false,
       reason: "ambiguous",
-      options: services.slice(0, 5).map((s: any) => ({
+      options: servicesFinal.slice(0, 5).map((s: any) => ({
         label: `${s.category ? `[${s.category}] ` : ""}${s.name}`,
         url: s.service_url,
       })),
@@ -273,11 +407,11 @@ export async function resolveServiceLink(args: {
   // ✅ 2B) Si hay 2+ candidatos con scores "fuertes", NO adivines -> deja elegir.
   // Regla: si el segundo es suficientemente bueno, pedimos elección.
   // (Esto fuerza el caso "bath" con Deluxe Bath + Basic Bath)
-  if (services.length >= 2 && secondScore >= 0.35) {
+  if (servicesFinal.length >= 2 && secondScore >= 0.35) {
     return {
       ok: false,
       reason: "ambiguous",
-      options: services.slice(0, 5).map((s: any) => ({
+      options: servicesFinal.slice(0, 5).map((s: any) => ({
         label: `${s.category ? `[${s.category}] ` : ""}${s.name}`,
         url: s.service_url,
       })),
@@ -362,7 +496,7 @@ export async function resolveServiceLink(args: {
   return {
     ok: false,
     reason: "ambiguous",
-    options: services.slice(0, 5).map((s: any) => ({
+    options: servicesFinal.slice(0, 5).map((s: any) => ({
       label: `${s.category ? `[${s.category}] ` : ""}${s.name}`,
       url: s.service_url,
     })),
