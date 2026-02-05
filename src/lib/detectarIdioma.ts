@@ -4,9 +4,13 @@ export async function detectarIdioma(texto: string): Promise<"es" | "en"> {
   const t = String(texto || "").trim().toLowerCase();
 
   // Mensajes demasiado cortos o ambiguos → NO CAMBIAN idioma
-  if (t.length <= 2 || /^(ok|okay|k|👍|yes|no|si|sí|hola|hello|hi|hey)$/i.test(t)) {
-    return "es"; // o "en" si prefieres
+  if (t.length <= 2 || /^(ok|okay|k|👍|yes|no|si|sí)$/i.test(t)) {
+    return "es";
   }
+
+  // Saludos claros: sí determinan idioma
+  if (/^(hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches)$/i.test(t)) return "es";
+  if (/^(hello|hi|hey)$/i.test(t)) return "en";
 
   // Heurísticas rápidas
   if (/[ñáéíóúü¿¡]/.test(t)) return "es";
