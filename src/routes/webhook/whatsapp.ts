@@ -40,7 +40,6 @@ import { scheduleFollowUpIfEligible, cancelPendingFollowUps } from "../../lib/fo
 import { bookingFlowMvp } from "../../lib/appointments/bookingFlow";
 import crypto from "crypto";
 import { sendCapiEvent } from "../../services/metaCapi";
-import { isAmbiguousLangText } from "../../lib/appointments/booking/text";
 import { runBookingGuardrail } from "../../lib/appointments/booking/guardrail";
 import { wantsServiceLink } from "../../lib/services/wantsServiceLink";
 import { resolveServiceLink } from "../../lib/services/resolveServiceLink";
@@ -52,9 +51,6 @@ import { resolveServiceList } from "../../lib/services/resolveServiceList";
 import { renderServiceListReply } from "../../lib/services/renderServiceListReply";
 import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
 import { setHumanOverride } from "../../lib/humanOverride/setHumanOverride";
-import { resolveThreadLang } from "../../lib/lang/threadLang";
-import { getCustomerLangDB, upsertCustomerLangDB } from "../../lib/lang/customerLangStore";
-import { saveConversationState } from "../../lib/conversation/saveConversationState";
 
 const sha256 = (s: string) =>
   crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
@@ -196,8 +192,12 @@ const normLang = (code?: string | null) => {
   const base = code.toString().split(/[-_]/)[0].toLowerCase();
   return base === 'zxx' ? null : base; // zxx = sin lenguaje
 };
-const normalizeLang = (code?: string | null): 'es' | 'en' =>
-  (code || '').toLowerCase().startsWith('en') ? 'en' : 'es';
+type Lang = "es" | "en";
+
+const normalizeLang = (code?: string | null): Lang => {
+  const base = String(code || "").toLowerCase().split(/[-_]/)[0];
+  return base === "en" ? "en" : "es";
+};
 
 // BOOKING HELPERS
 const BOOKING_TZ = "America/New_York";
@@ -257,8 +257,8 @@ async function getIdiomaClienteDB(
   tenantId: string,
   canal: string,
   contacto: string,
-  fallback: 'es'|'en'
-): Promise<'es'|'en'> {
+  fallback: Lang
+): Promise<Lang> {
   try {
     const { rows } = await pool.query(
       `SELECT idioma
@@ -276,7 +276,7 @@ async function upsertIdiomaClienteDB(
   tenantId: string,
   canal: string,
   contacto: string,
-  idioma: 'es'|'en'
+  idioma: Lang
 ) {
   try {
     await pool.query(
@@ -724,10 +724,8 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   }
 
   // 👉 idioma base del tenant (fallback)
-  const tenantBase: "es" | "en" = normalizeLang(tenant?.idioma || "es");
-
-  // ✅ idiomaDestino debe existir ANTES de armar 'event'
-  let idiomaDestino: "es" | "en" = tenantBase;
+  const tenantBase: Lang = normalizeLang(tenant?.idioma || "es");
+  let idiomaDestino: Lang = tenantBase;
 
   const origen = turn.origen;
 
@@ -860,37 +858,59 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   let convoCtx = (st.context && typeof st.context === "object") ? st.context : {};
 
   // ===============================
-  // 🌍 THREAD LANG (reusable) — después de convo_state
+  // 🌍 LANG RESOLUTION (CLIENT-FIRST)
+  // Sticky per contacto + autodetect per turno
   // ===============================
-  const convoForLang = {
-    activeFlow,
-    activeStep,
-    context: convoCtx,
-  };
 
-  const langRes = await resolveThreadLang({
-    tenantId: tenant.id,
-    canal: "whatsapp",
-    contacto: contactoNorm,
-    tenantDefaultLang: tenantBase, // ya lo tienes calculado arriba
-    userText: userInput,
-    convo: convoForLang,
-    getCustomerLang: async ({ tenantId, canal, contacto }) =>
-      getIdiomaClienteDB(tenantId, canal, contacto, tenantBase),
-    upsertCustomerLang: async ({ tenantId, canal, contacto, lang }) =>
-      upsertIdiomaClienteDB(tenantId, canal, contacto, lang),
-    allowExplicitSwitch: true,
-  });
+  // 1) idioma guardado del cliente (si existe)
+  const storedLang = await getIdiomaClienteDB(tenant.id, canal, contactoNorm, tenantBase);
 
-  // ✅ idioma final del turno (sticky + lock en loops)
-  idiomaDestino = langRes.lang;
+  // 2) detectar idioma del mensaje (puede devolver: "es" | "en" | "pt" | "und")
+  let detectedLang = "und" as any;
+  try {
+    detectedLang = await detectarIdioma(userInput); 
+  } catch {}
 
-  // ✅ persistimos patch en convoCtx para lock (thread_lang / booking.lang si aplica)
-  if (langRes.ctxPatch) {
-    convoCtx = { ...(convoCtx || {}), ...(langRes.ctxPatch || {}) };
+  // 3) map: tu sistema hoy está 100% "es/en" en prompts/UI.
+  // Si detecta pt, de momento lo tratamos como "es" (o cambia a "en" si prefieres).
+  const detectedSupported: "es" | "en" | "und" =
+    detectedLang === "en" ? "en" :
+    detectedLang === "es" ? "es" :
+    detectedLang === "pt" ? "es" :  // 👈 AJUSTABLE
+    "und";
+
+  // 4) lock: si estás en booking y ya hay lang en ctx, NO cambies
+  const lockedLang =
+    (convoCtx as any)?.thread_lang ||
+    (convoCtx as any)?.booking?.lang ||
+    null;
+
+  // 5) regla final: SIEMPRE idioma del cliente
+  // - si hay lock => usa lock
+  // - si detector es und => usa storedLang o tenantBase
+  // - si detector da es/en => usa detector y persiste en clientes
+  let finalLang: "es" | "en" = tenantBase;
+
+  if (lockedLang === "en" || lockedLang === "es") {
+    finalLang = lockedLang;
+  } else if (detectedSupported === "und") {
+    finalLang = storedLang || tenantBase;
+  } else {
+    finalLang = detectedSupported;
+    // ✅ persiste sticky para próximos mensajes (hello/ok/etc)
+    await upsertIdiomaClienteDB(tenant.id, canal, contactoNorm, finalLang);
   }
 
-  const promptBase = getPromptPorCanal('whatsapp', tenant, idiomaDestino);
+  // ✅ set idiomaDestino del turno
+  idiomaDestino = finalLang;
+
+  // ✅ opcional: guarda thread_lang si quieres “lockear” durante flujos
+  // (recomendado para booking / state machine)
+  if (!(convoCtx as any)?.thread_lang) {
+    convoCtx = { ...(convoCtx || {}), thread_lang: idiomaDestino };
+  }
+
+  const promptBase = getPromptPorCanal("whatsapp", tenant, idiomaDestino);
   let promptBaseMem = promptBase;
 
   // ===============================

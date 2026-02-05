@@ -191,8 +191,13 @@ const normLang = (code?: string | null) => {
   return base === "zxx" ? null : base;
 };
 
-const normalizeLang = (code?: string | null): "es" | "en" =>
-  (code || "").toLowerCase().startsWith("en") ? "en" : "es";
+type Lang = "es" | "en";
+
+const normalizeLang = (code?: string | null): Lang => {
+  const base = String(code || "").toLowerCase().split(/[-_]/)[0];
+  return base === "en" ? "en" : "es";
+};
+
 
 // ===============================
 // DB helpers (alineados a WA)
@@ -233,8 +238,8 @@ async function getIdiomaClienteDB(
   tenantId: string,
   canal: string,
   contacto: string,
-  fallback: "es" | "en"
-): Promise<"es" | "en"> {
+  fallback: Lang
+): Promise<Lang> {
   try {
     const { rows } = await pool.query(
       `SELECT idioma
@@ -252,20 +257,20 @@ async function upsertIdiomaClienteDB(
   tenantId: string,
   canal: string,
   contacto: string,
-  idioma: "es" | "en"
+  idioma: Lang
 ) {
   try {
     await pool.query(
       `INSERT INTO clientes (tenant_id, canal, contacto, idioma)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (tenant_id, canal, contacto)
-       DO UPDATE SET
-         idioma = EXCLUDED.idioma,
-         updated_at = now()`,
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (tenant_id, canal, contacto)
+      DO UPDATE SET
+        idioma = EXCLUDED.idioma,
+        updated_at = now()`,
       [tenantId, canal, contacto, idioma]
     );
   } catch (e) {
-    console.warn("No se pudo guardar idioma del cliente:", e);
+    console.warn('No se pudo guardar idioma del cliente:', e);
   }
 }
 
