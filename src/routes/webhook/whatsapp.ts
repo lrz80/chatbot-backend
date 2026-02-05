@@ -1279,6 +1279,109 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     }
   }
 
+  // ===============================
+  // 🔗 SERVICE LINK FAST-PATH (SOLO LINK)
+  // Debe ir ANTES del fallback/LLM. Usa Single Exit.
+  // ===============================
+  if (wantsServiceLink(userInput)) {
+    const resolved = await resolveServiceLink({
+      tenantId: tenant.id,
+      query: userInput,
+      limit: 5,
+    });
+
+    if (resolved.ok) {
+        const msg =
+          idiomaDestino === "en"
+            ? `Here’s the link for **${resolved.label}**:\n${resolved.url}\n\nIf you want, tell me what day/time you prefer and I’ll help you pick a slot.`
+            : `Aquí tienes el enlace para **${resolved.label}**:\n${resolved.url}\n\nSi quieres, dime qué día/hora prefieres y te ayudo a escoger.`;
+
+        return await replyAndExit(msg, "service_link", "service_link");
+    }
+
+    if (resolved.reason === "ambiguous" && resolved.options?.length) {
+      const options = resolved.options.slice(0, 5).map((o) => ({
+        label: o.label,
+        url: o.url || null,
+      }));
+
+      // ✅ Guardar opciones en estado para que "1/2/3" funcione
+      transition({
+        patchCtx: {
+          service_link_pick: {
+            kind: "service_link_pick",
+            options,
+            created_at: new Date().toISOString(),
+          }
+        },
+      });
+
+      // ✅ persistir pick en conversation_state para que el próximo "2" funcione
+      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+        activeFlow,
+        activeStep,
+        context: convoCtx,
+      });
+
+      function looksLikeVariantsOfSameService(labels: string[]) {
+        // Heurística universal: si la mayoría comparte el mismo prefijo antes de " - "
+        const prefixes = labels
+          .map(l => String(l || ""))
+          .map(l => l.split(" - ")[0].trim())
+          .filter(Boolean);
+
+        if (!prefixes.length) return false;
+
+        const freq = new Map<string, number>();
+        for (const p of prefixes) freq.set(p, (freq.get(p) || 0) + 1);
+
+        const top = Array.from(freq.values()).sort((a, b) => b - a)[0] || 0;
+        return top >= 2; // 2+ con mismo prefijo => probablemente variantes
+      }
+
+      function shortenUrl(u?: string | null) {
+        if (!u) return "";
+        try {
+          const url = new URL(u);
+          // deja dominio + path corto (sin query gigante)
+          const path = url.pathname.length > 28 ? url.pathname.slice(0, 28) + "…" : url.pathname;
+          return `${url.host}${path}`;
+        } catch {
+          return String(u).slice(0, 40) + (String(u).length > 40 ? "…" : "");
+        }
+      }
+
+      const labels = options.map(o => o.label);
+      const isVariants = looksLikeVariantsOfSameService(labels);
+
+      // líneas más “humanas”: label + (opcional) mini dominio para dar confianza
+      const lines = options
+        .map((o, i) => {
+          const hint = o.url ? ` (${shortenUrl(o.url)})` : "";
+          return `${i + 1}) ${o.label}${hint}`;
+        })
+        .join("\n");
+
+      const msg =
+        idiomaDestino === "en"
+          ? isVariants
+            ? `Perfect — there are a couple of options. Which one do you prefer?\n\n${lines}\n\nReply with the number and I’ll send the booking link.`
+            : `Got it — which one do you want the link for?\n\n${lines}\n\nReply with the number and I’ll send it.`
+          : isVariants
+            ? `¡Perfecto! Hay un par de opciones 😊 ¿Cuál prefieres?\n\n${lines}\n\nRespóndeme con el número y te envío el enlace para reservar.`
+            : `¡Listo! ¿Cuál de estos servicios quieres?\n\n${lines}\n\nRespóndeme con el número y te envío el enlace.`;
+
+
+      return await replyAndExit(msg, "service_link:ambiguous", "service_link");
+    }
+
+    const msg =
+      idiomaDestino === "en"
+        ? "Which service do you need the link for? Tell me the exact name."
+        : "¿De cuál servicio necesitas el link exactamente? Dime el nombre.";
+
+    return await replyAndExit(msg, "service_link:no_match", "service_link");
+  }
 
   // ===============================
   // 💲 PRICE LIST FAST-PATH (pregunta genérica "precios") — SIN LLM
@@ -1521,112 +1624,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     }
   }
   
-  // ===============================
-  // 🔗 SERVICE LINK FAST-PATH (SOLO LINK)
-  // Debe ir ANTES del fallback/LLM. Usa Single Exit.
-  // ===============================
-  if (wantsServiceLink(userInput)) {
-    const resolved = await resolveServiceLink({
-      tenantId: tenant.id,
-      query: userInput,
-      limit: 5,
-    });
-
-    if (resolved.ok) {
-      // ✅ SOLO el link
-      if (resolved.ok) {
-        const msg =
-          idiomaDestino === "en"
-            ? `Here’s the link for **${resolved.label}**:\n${resolved.url}\n\nIf you want, tell me what day/time you prefer and I’ll help you pick a slot.`
-            : `Aquí tienes el enlace para **${resolved.label}**:\n${resolved.url}\n\nSi quieres, dime qué día/hora prefieres y te ayudo a escoger.`;
-
-        return await replyAndExit(msg, "service_link", "service_link");
-      }
-    }
-
-    if (resolved.reason === "ambiguous" && resolved.options?.length) {
-      const options = resolved.options.slice(0, 5).map((o) => ({
-        label: o.label,
-        url: o.url || null,
-      }));
-
-      // ✅ Guardar opciones en estado para que "1/2/3" funcione
-      transition({
-        patchCtx: {
-          service_link_pick: {
-            kind: "service_link_pick",
-            options,
-            created_at: new Date().toISOString(),
-          }
-        },
-      });
-
-      // ✅ persistir pick en conversation_state para que el próximo "2" funcione
-      await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-        activeFlow,
-        activeStep,
-        context: convoCtx,
-      });
-
-      function looksLikeVariantsOfSameService(labels: string[]) {
-        // Heurística universal: si la mayoría comparte el mismo prefijo antes de " - "
-        const prefixes = labels
-          .map(l => String(l || ""))
-          .map(l => l.split(" - ")[0].trim())
-          .filter(Boolean);
-
-        if (!prefixes.length) return false;
-
-        const freq = new Map<string, number>();
-        for (const p of prefixes) freq.set(p, (freq.get(p) || 0) + 1);
-
-        const top = Array.from(freq.values()).sort((a, b) => b - a)[0] || 0;
-        return top >= 2; // 2+ con mismo prefijo => probablemente variantes
-      }
-
-      function shortenUrl(u?: string | null) {
-        if (!u) return "";
-        try {
-          const url = new URL(u);
-          // deja dominio + path corto (sin query gigante)
-          const path = url.pathname.length > 28 ? url.pathname.slice(0, 28) + "…" : url.pathname;
-          return `${url.host}${path}`;
-        } catch {
-          return String(u).slice(0, 40) + (String(u).length > 40 ? "…" : "");
-        }
-      }
-
-      const labels = options.map(o => o.label);
-      const isVariants = looksLikeVariantsOfSameService(labels);
-
-      // líneas más “humanas”: label + (opcional) mini dominio para dar confianza
-      const lines = options
-        .map((o, i) => {
-          const hint = o.url ? ` (${shortenUrl(o.url)})` : "";
-          return `${i + 1}) ${o.label}${hint}`;
-        })
-        .join("\n");
-
-      const msg =
-        idiomaDestino === "en"
-          ? isVariants
-            ? `Perfect — there are a couple of options. Which one do you prefer?\n\n${lines}\n\nReply with the number and I’ll send the booking link.`
-            : `Got it — which one do you want the link for?\n\n${lines}\n\nReply with the number and I’ll send it.`
-          : isVariants
-            ? `¡Perfecto! Hay un par de opciones 😊 ¿Cuál prefieres?\n\n${lines}\n\nRespóndeme con el número y te envío el enlace para reservar.`
-            : `¡Listo! ¿Cuál de estos servicios quieres?\n\n${lines}\n\nRespóndeme con el número y te envío el enlace.`;
-
-
-      return await replyAndExit(msg, "service_link:ambiguous", "service_link");
-    }
-
-    const msg =
-      idiomaDestino === "en"
-        ? "Which service do you need the link for? Tell me the exact name."
-        : "¿De cuál servicio necesitas el link exactamente? Dime el nombre.";
-
-    return await replyAndExit(msg, "service_link:no_match", "service_link");
-  }
 
   // ===============================
   // 📋 SERVICE LIST FAST-PATH (lista desde DB) — SIN LLM
