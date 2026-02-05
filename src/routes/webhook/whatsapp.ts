@@ -60,6 +60,16 @@ import {
   capiLeadStrongWeekly,
 } from "../../lib/analytics/capiEvents";
 import { handleServicesFastpath } from "../../lib/services/fastpath/handleServicesFastpath";
+import type { Lang } from "../../lib/channels/engine/clients/clientDb";
+import {
+  normalizeLang,
+  ensureClienteBase,
+  getIdiomaClienteDB,
+  upsertIdiomaClienteDB,
+  getSelectedChannelDB,
+  upsertSelectedChannelDB,
+} from "../../lib/channels/engine/clients/clientDb";
+import { resolveTurnLangClientFirst } from "../../lib/channels/engine/lang/resolveTurnLang";
 
 const sha256 = (s: string) =>
   crypto.createHash("sha256").update(String(s || "").trim().toLowerCase()).digest("hex");
@@ -100,19 +110,6 @@ const MAX_WHATSAPP_LINES = 16; // 14–16 es el sweet spot
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
-// Normalizadores
-const normLang = (code?: string | null) => {
-  if (!code) return null;
-  const base = code.toString().split(/[-_]/)[0].toLowerCase();
-  return base === 'zxx' ? null : base; // zxx = sin lenguaje
-};
-type Lang = "es" | "en";
-
-const normalizeLang = (code?: string | null): Lang => {
-  const base = String(code || "").toLowerCase().split(/[-_]/)[0];
-  return base === "en" ? "en" : "es";
-};
-
 // BOOKING HELPERS
 const BOOKING_TZ = "America/New_York";
 
@@ -143,110 +140,7 @@ async function getWhatsAppModeStatus(tenantId: string): Promise<{
   return { mode, status };
 }
 
-async function ensureClienteBase(
-  tenantId: string,
-  canal: string,
-  contacto: string
-): Promise<boolean> {
-  try {
-    const r = await pool.query(
-      `
-      INSERT INTO clientes (tenant_id, canal, contacto, created_at, updated_at)
-      VALUES ($1, $2, $3, NOW(), NOW())
-      ON CONFLICT (tenant_id, canal, contacto)
-      DO UPDATE SET updated_at = NOW()
-      RETURNING (xmax = 0) AS inserted
-      `,
-      [tenantId, canal, contacto]
-    );
 
-    return r.rows?.[0]?.inserted === true; // ✅ true = primer mensaje de ese contacto
-  } catch (e: any) {
-    console.warn("⚠️ ensureClienteBase FAILED", e?.message);
-    return false;
-  }
-}
-
-async function getIdiomaClienteDB(
-  tenantId: string,
-  canal: string,
-  contacto: string,
-  fallback: Lang
-): Promise<Lang> {
-  try {
-    const { rows } = await pool.query(
-      `SELECT idioma
-        FROM clientes
-        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
-        LIMIT 1`,
-      [tenantId, canal, contacto]
-    );
-    if (rows[0]?.idioma) return normalizeLang(rows[0].idioma);
-  } catch {}
-  return fallback;
-}
-
-async function upsertIdiomaClienteDB(
-  tenantId: string,
-  canal: string,
-  contacto: string,
-  idioma: Lang
-) {
-  try {
-    await pool.query(
-      `INSERT INTO clientes (tenant_id, canal, contacto, idioma)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (tenant_id, canal, contacto)
-      DO UPDATE SET
-        idioma = EXCLUDED.idioma,
-        updated_at = now()`,
-      [tenantId, canal, contacto, idioma]
-    );
-  } catch (e) {
-    console.warn('No se pudo guardar idioma del cliente:', e);
-  }
-}
-
-async function getSelectedChannelDB(
-  tenantId: string,
-  canal: string,
-  contacto: string
-): Promise<"whatsapp" | "instagram" | "facebook" | "multi" | null> {
-  try {
-    const { rows } = await pool.query(
-      `SELECT selected_channel
-       FROM clientes
-       WHERE tenant_id=$1 AND canal=$2 AND contacto=$3
-       LIMIT 1`,
-      [tenantId, canal, contacto]
-    );
-    const v = String(rows[0]?.selected_channel || "").trim().toLowerCase();
-    if (v === "whatsapp" || v === "instagram" || v === "facebook" || v === "multi") return v as any;
-  } catch {}
-  return null;
-}
-
-async function upsertSelectedChannelDB(
-  tenantId: string,
-  canal: string,
-  contacto: string,
-  selected: "whatsapp" | "instagram" | "facebook" | "multi"
-) {
-  try {
-    await pool.query(
-      `INSERT INTO clientes (tenant_id, canal, contacto, selected_channel, selected_channel_updated_at, updated_at)
-       VALUES ($1, $2, $3, $4, NOW(), NOW())
-       ON CONFLICT (tenant_id, canal, contacto)
-       DO UPDATE SET
-         selected_channel = EXCLUDED.selected_channel,
-         selected_channel_updated_at = NOW(),
-         updated_at = NOW()`,
-      [tenantId, canal, contacto, selected]
-    );
-  } catch (e) {
-    console.warn("⚠️ No se pudo guardar selected_channel:", e);
-  }
-}
 
 function extractBookingLinkFromPrompt(promptBase: string): string | null {
   if (!promptBase) return null;
@@ -400,7 +294,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     }
   }
 
-  const isNewLead = await ensureClienteBase(tenant.id, canal, contactoNorm);
+  const isNewLead = await ensureClienteBase(pool, tenant.id, canal, contactoNorm);
 
   // ✅ FORZAR IDIOMA EN PRIMER MENSAJE (o saludo claro)
   // Evita que "hello" use el storedLang viejo en ES.
@@ -420,7 +314,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         forced;
 
       // Guardar idioma sticky ANTES de bienvenida
-      await upsertIdiomaClienteDB(tenant.id, canal, contactoNorm, forcedLang);
+      await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, forcedLang);
       idiomaDestino = forcedLang;
 
       // Si estás en booking y tienes thread_lang, no lo toques aquí.
@@ -516,70 +410,35 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
   // ===============================
   // 🌍 LANG RESOLUTION (CLIENT-FIRST)
-  // Sticky per contacto + autodetect per turno
   // ===============================
+  const storedLang = await getIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, tenantBase);
 
-  // 1) idioma guardado del cliente (si existe)
-  const storedLang = await getIdiomaClienteDB(tenant.id, canal, contactoNorm, tenantBase);
+  const langRes = await resolveTurnLangClientFirst({
+    pool,
+    tenantId: tenant.id,
+    canal,
+    contacto: contactoNorm,
+    userInput,
+    tenantBase,
+    storedLang,
+    detectarIdioma,
+    convoCtx,
+  });
 
-  // 2) detectar idioma del mensaje (SOLO "es" | "en")
-  // ⚠️ override para mensajes cortos típicos (evita false negatives)
-  let detectedLang: "es" | "en" | null = null;
-
-  try {
-    const t0 = String(userInput || "").trim().toLowerCase();
-
-    // Si es corto/ambiguo, NO fuerces idioma con el detector
-    // (usa el storedLang o tenantBase)
-    const isAmbiguousShort =
-      t0.length <= 2 ||
-      /^(ok|okay|k|👍|yes|no|si|sí|hola|hello|hi|hey|thanks|thank you)$/i.test(t0);
-
-    if (!isAmbiguousShort) {
-      // detectarIdioma DEBE devolver solo "es" o "en"
-      detectedLang = await detectarIdioma(userInput);
-    }
-  } catch {}
-
-  // 3) lock SOLO durante booking (fuera de booking, nunca bloquees idioma)
-  const bookingStepLang = (convoCtx as any)?.booking?.step;
-  const inBookingLang = bookingStepLang && bookingStepLang !== "idle";
-
-  const lockedLang =
-    inBookingLang
-      ? ((convoCtx as any)?.booking?.lang || (convoCtx as any)?.thread_lang || null)
-      : null;
-
-  // 4) regla final (ES/EN únicamente)
-  // - si hay lock => usa lock
-  // - si NO hay detectedLang => usa storedLang o tenantBase
-  // - si detectedLang => úsalo y persiste
-  let finalLang: "es" | "en" = tenantBase;
-
-  if (lockedLang === "en" || lockedLang === "es") {
-    finalLang = lockedLang;
-  } else if (!detectedLang) {
-    finalLang = storedLang || tenantBase;
-  } else {
-    finalLang = detectedLang;
-    await upsertIdiomaClienteDB(tenant.id, canal, contactoNorm, finalLang);
-  }
-
-  // ✅ set idiomaDestino del turno
-  idiomaDestino = finalLang;
+  idiomaDestino = langRes.finalLang;
 
   console.log("🌍 LANG DEBUG =", {
     userInput,
     tenantBase,
     storedLang,
-    detectedLang,
-    lockedLang,
-    inBookingLang,
+    detectedLang: langRes.detectedLang,
+    lockedLang: langRes.lockedLang,
+    inBookingLang: langRes.inBookingLang,
     idiomaDestino,
   });
 
   // ✅ thread_lang SOLO durante booking
-  if (inBookingLang && !(convoCtx as any)?.thread_lang) {
+  if (langRes.inBookingLang && !(convoCtx as any)?.thread_lang) {
     convoCtx = { ...(convoCtx || {}), thread_lang: idiomaDestino };
   }
 
@@ -903,6 +762,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // 🔎 Estado persistido (FIX 4)
   // ===============================
   const selectedChannel = await getSelectedChannelDB(
+    pool,
     tenant.id,
     canal,
     contactoNorm
@@ -1119,7 +979,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       idiomaDestino = forcedLang;
 
       // 🔒 Persistir para que quede sticky para ese contacto
-      await upsertIdiomaClienteDB(tenant.id, canal, contactoNorm, forcedLang);
+      await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, forcedLang);
 
       console.log("🌍 PRE-GREETING FORCED LANG =", {
         userInput,
@@ -1179,8 +1039,10 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         canal: event.canal,
         contacto: event.contacto,
         effects: smResult.transition.effects,
-        upsertSelectedChannelDB,
-        upsertIdiomaClienteDB,
+        upsertSelectedChannelDB: (tenantId, canal, contacto, selected) =>
+          upsertSelectedChannelDB(pool, tenantId, canal, contacto, selected),
+        upsertIdiomaClienteDB: (tenantId, canal, contacto, idioma) =>
+          upsertIdiomaClienteDB(pool, tenantId, canal, contacto, idioma),
       });
     }
 
@@ -1289,7 +1151,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     const picked = pickSelectedChannelFromText(userInput);
 
     if (picked) {
-      await upsertSelectedChannelDB(tenant.id, canal, contactoNorm, picked);
+      await upsertSelectedChannelDB(pool, tenant.id, canal, contactoNorm, picked);
       decisionFlags.channelSelected = true;
     }
   }
