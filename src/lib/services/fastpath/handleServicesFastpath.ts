@@ -90,7 +90,8 @@ function wantsGeneralPrices(text: string) {
   const t = String(text || "").toLowerCase().trim();
 
   const asksPrice =
-    /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+val(e|en)|tarifa|cost(o|os))\b/.test(t);
+    /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+val(e|en)|tarifa|cost(o|os))\b/.test(t) ||
+    /\b(price|prices|how\s+much|how\s+much\s+is|cost|rate|fee)\b/.test(t);
 
   // si menciona algo MUY específico, NO es la lista general
   const mentionsSpecific =
@@ -175,6 +176,7 @@ async function resolveServiceInfoByDb(args: {
         lower(v.variant_name) LIKE lower($2)
         OR lower(s.name) LIKE lower($2)
       )
+      AND v.price IS NOT NULL
     ORDER BY
       -- preferir match por variante
       (CASE WHEN lower(v.variant_name) LIKE lower($2) THEN 0 ELSE 1 END),
