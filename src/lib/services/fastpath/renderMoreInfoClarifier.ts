@@ -54,7 +54,9 @@ export async function renderMoreInfoClarifier(args: {
       SELECT * FROM svc
     ) x
     WHERE (x.price IS NOT NULL) OR (x.description IS NOT NULL AND length(trim(x.description)) > 0)
-    ORDER BY x.updated_at DESC
+    ORDER BY
+      (CASE WHEN x.price IS NOT NULL THEN 0 ELSE 1 END),
+      x.updated_at DESC
     LIMIT 6
     `,
     [tenantId]
@@ -67,26 +69,36 @@ export async function renderMoreInfoClarifier(args: {
     if (lang === "en") {
       return (
         "Sure! What information do you need?\n" +
-        "Tell me what you’re interested in (prices, schedule, what a class includes, or a specific service/plan), and I’ll help."
+        "Tell me what you need (prices, hours, what it includes, booking, or a specific service), and I’ll help."
       );
     }
     return (
       "¡Claro! ¿Qué información necesitas exactamente?\n" +
-      "Dime si buscas precios, horarios, qué incluye, o el nombre del servicio/plan y te ayudo."
+      "Dime si buscas precios, horarios, qué incluye, reservar, o el nombre del servicio y te ayudo."
     );
   }
 
   if (lang === "en") {
     return (
-      "Sure! What information do you need?\n" +
-      "Are you looking for prices, schedule, what it includes, or details about a specific option?\n\n" +
-      `For example: ${examples.join(", ")}.`
+      "Sure 😊 What do you need exactly?\n" +
+      "1) Prices\n" +
+      "2) What it includes\n" +
+      "3) Hours / Location\n" +
+      "4) Booking / Availability\n" +
+      "5) Recommendation (tell me what you’re looking for)\n\n" +
+      `Examples: ${examples.join(", ")}.\n` +
+      "Reply with a number (1–5) or type the name of the service."
     );
   }
 
   return (
-    "¡Claro! ¿Qué información necesitas exactamente?\n" +
-    "¿Buscas precios, horarios, qué incluye, o detalles de alguna opción en específico?\n\n" +
-    `Por ejemplo: ${examples.join(", ")}.`
+    "¡Claro! 😊 ¿Qué necesitas exactamente?\n" +
+    "1) Precios\n" +
+    "2) Qué incluye\n" +
+    "3) Horarios / Ubicación\n" +
+    "4) Reservar / Disponibilidad\n" +
+    "5) Recomendación (dime qué estás buscando)\n\n" +
+    `Ejemplos: ${examples.join(", ")}.\n` +
+    "Respóndeme con un número (1–5) o escribe el nombre del servicio."
   );
 }
