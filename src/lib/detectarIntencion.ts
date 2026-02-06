@@ -205,7 +205,11 @@ export function esIntencionDeVenta(intencion: string): boolean {
   // En un mundo ideal esto sería por “grupo”/metadata en DB.
   // Como compatibilidad, usamos un set pequeño universal.
   const s = (intencion || "").toLowerCase();
-  return ["precio", "agendar", "pago", "disponibilidad", "clase_prueba"].some((k) => s.includes(k)) || s.includes("comprar");
+  return (
+    ["precio", "agendar", "pago", "disponibilidad", "clase_prueba", "info_servicio"].some((k) =>
+      s.includes(k)
+    ) || s.includes("comprar")
+  );
 }
 
 /** ---------- Cargar contexto + intenciones del tenant ---------- */
@@ -291,8 +295,12 @@ export async function detectarIntencion(
   const MORE_INFO_RE =
     /\b(mas\s*inf(o(rmacion)?)?|m[aá]s\s*inf(o(rmaci[oó]n)?)?|informaci[oó]n\s*adicional|more\s*info|more\s*information|more\s*details|tell\s*me\s*more)\b/i;
 
+  const STRONG_INFO_RE =
+  /\b(i\s*need|need|quiero|quisiera|necesito)\b/i;
+
   if (MORE_INFO_RE.test(original)) {
-    return { intencion: "info_servicio", nivel_interes: 2 };
+    const nivel = STRONG_INFO_RE.test(original) ? 3 : 2;
+    return { intencion: "info_servicio", nivel_interes: nivel as 2 | 3 };
   }
 
   // ✅ FAST-PATH: intención de activar/suscribirse (ES/EN) — antes de flagVenta fallbacks

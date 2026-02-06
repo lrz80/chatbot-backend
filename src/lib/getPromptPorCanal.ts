@@ -15,7 +15,17 @@ export function getPromptPorCanal(canal: string, tenant: any, idioma: string = '
 export function getBienvenidaPorCanal(canal: string, tenant: any, idioma: string = 'es'): string {
   const nombre = tenant.name || "nuestro negocio";
 
-  // ✅ WhatsApp / default (columna real que tú tienes)
+  // 🔎 Si algún día guardas bienvenidas por idioma, soporta ambos formatos:
+  // - mensaje_bienvenida_en / mensaje_bienvenida_es
+  // - bienvenida_meta_en / bienvenida_meta_es
+  const waByLang =
+    (tenant?.[`mensaje_bienvenida_${idioma}`] || "").trim();
+
+  const metaByLang =
+    (tenant?.[`bienvenida_meta_${idioma}`] || "").trim() ||
+    (tenant?.meta_config?.[`bienvenida_meta_${idioma}`] || "").trim();
+
+  // ✅ WhatsApp / default (columna real que tú tienes hoy)
   const wa = (tenant.mensaje_bienvenida || "").trim();
 
   // ✅ Meta (puede venir del JOIN o de un objeto meta_config)
@@ -25,11 +35,24 @@ export function getBienvenidaPorCanal(canal: string, tenant: any, idioma: string
 
   // Prioridad por canal
   if (canal === 'facebook' || canal === 'instagram' || canal === 'preview-meta') {
-    return meta || "";
+    // 1) por idioma si existe
+    if (metaByLang) return metaByLang;
+
+    // 2) si hay bienvenida meta pero está en ES y el cliente es EN, NO la uses
+    //    (si la usas, seguirás saludando en español)
+    if (!meta) return generarBienvenidaPorIdioma(nombre, idioma);
+
+    // 3) fallback seguro
+    return generarBienvenidaPorIdioma(nombre, idioma);
   }
 
   // Otros canales (WhatsApp, etc.)
-  return wa || "";
+  // 1) por idioma si existe
+  if (waByLang) return waByLang;
+
+  // 2) si no existe, NO uses wa fijo (porque casi seguro está en ES)
+  //    mejor usa la bienvenida por idioma
+  return generarBienvenidaPorIdioma(nombre, idioma);
 }
 
 function generarPromptPorIdioma(

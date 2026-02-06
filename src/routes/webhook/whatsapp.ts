@@ -68,6 +68,7 @@ import { runBookingPipeline } from "../../lib/appointments/booking/bookingPipeli
 import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBookingCourtesyGuard";
 import { rememberAfterReply } from "../../lib/memory/rememberAfterReply";
 import { getWhatsAppModeStatus } from "../../lib/whatsapp/getWhatsAppModeStatus";
+import { handleInfoServicio } from "../../lib/answers/handlers/handleInfoServicio";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -800,6 +801,35 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     });
 
     return await replyAndExit(bienvenida, "welcome_gate", "saludo");
+  }
+
+  // ===============================
+  // ✅ INFO_SERVICIO (determinista, sin LLM brochure)
+  // ===============================
+  {
+    const info = await handleInfoServicio({
+      pool,
+      tenantId: tenant.id,
+      tenant,
+      idioma: idiomaDestino,
+      canal,
+      inBooking: Boolean(inBooking0),
+      awaiting: (convoCtx as any)?.awaiting || null,
+      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
+    });
+
+    if (info.handled) {
+      transition({
+        flow: "generic_sales",
+        step: "answer",
+        patchCtx: {
+          last_bot_action: "info_servicio",
+          last_reply_source: info.source,
+        },
+      });
+
+      return await replyAndExit(info.text, info.source, info.intent);
+    }
   }
 
   const smResult = await sm({
