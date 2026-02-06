@@ -14,6 +14,7 @@ import { renderServiceListReply } from "../renderServiceListReply";
 
 import { parsePickNumber } from "../../channels/engine/parsers/parsers";
 import { traducirMensaje } from "../../traducirMensaje";
+import { renderMoreInfoClarifier } from "./renderMoreInfoClarifier";
 
 type Lang = "es" | "en";
 
@@ -596,7 +597,18 @@ export async function handleServicesFastpath(args: {
   // 4) SERVICE INFO FAST-PATH (precio/duración/incluye)
   // =========================================================
   {
-    const need = wantsServiceInfo(routingText);
+    const need = wantsServiceInfo(userInput);
+
+    if (need === "any") {
+    const msg = await renderMoreInfoClarifier({
+        pool,
+        tenantId,
+        lang: idiomaDestino,
+    });
+
+    await replyAndExit(msg, "service_info:any_clarify", "service_info");
+    return { handled: true };
+    }
 
     if (need) {
       const hint = String(userInput || "").trim();
