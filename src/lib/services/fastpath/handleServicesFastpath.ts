@@ -102,42 +102,28 @@ function renderExpiredPick(lang: Lang) {
   return "Esa selección expiró (quedó pendiente por un rato). Vuelve a preguntarme por el servicio y te muestro las opciones otra vez.";
 }
 
-async function wantsGeneralPrices(text: string, pool: Pool, tenantId: string) {
+function wantsGeneralPrices(text: string) {
   const t = String(text || "").toLowerCase().trim();
 
-  // Si no pregunta por precio → no aplica
+  // señales de precio (genéricas)
   const asksPrice =
     /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|tarifa|cost(o|os))\b/.test(t) ||
-    /\b(price|prices|how\s+much|cost|rate|fee)\b/.test(t);
+    /\b(price|prices|how\s+much|how\s+much\s+is|cost|rate|fee)\b/.test(t);
 
   if (!asksPrice) return false;
 
-  // Si menciona el nombre de un servicio existente → NO es general
-  const { rows } = await pool.query(
-    `SELECT name FROM services WHERE tenant_id = $1 AND active = TRUE`,
-    [tenantId]
-  );
+  // quitamos frases de precio y medimos lo que queda:
+  // si queda MUY poco texto -> suele ser general ("precios", "cuánto cuesta")
+  const remainder = t
+    .replace(/\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|tarifa|cost(o|os))\b/g, "")
+    .replace(/\b(price|prices|how\s+much|how\s+much\s+is|cost|rate|fee)\b/g, "")
+    .replace(/[^a-z0-9áéíóúñ\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
-  for (const r of rows) {
-    const name = String(r.name || "").toLowerCase();
-    if (name && t.includes(name)) return false;
-  }
-
-  // Si menciona palabras como "corte", "bath", "groom", etc. que pertenecen a variants → tampoco es general
-  const varRows = await pool.query(
-    `SELECT variant_name FROM service_variants v 
-     JOIN services s ON s.id = v.service_id
-     WHERE s.tenant_id = $1 AND s.active = TRUE AND v.active = TRUE`,
-    [tenantId]
-  );
-
-  for (const r of varRows.rows) {
-    const name = String(r.variant_name || "").toLowerCase();
-    if (name && t.includes(name)) return false;
-  }
-
-  // Si nada específico coincide → es una pregunta genérica
-  return true;
+  // si el mensaje ya trae bastante contenido (ej "corte de pelo") NO lo tratamos como lista general,
+  // porque primero queremos intentar match específico por DB.
+  return remainder.length <= 10;
 }
 
 function wantsPrice(text: string) {
@@ -661,78 +647,142 @@ export async function handleServicesFastpath(args: {
     return { handled: true };
   }
 
-  // =========================================================
-  // 3) PRICE LIST FAST-PATH (precios genéricos)
-  // =========================================================
-  if (await wantsGeneralPrices(routingText, pool, tenantId)) {
-    const { rows } = await pool.query(
-      `
-      (
-        SELECT
-          s.name AS label,
-          NULL::text AS variant_name,
-          s.price_base AS price,
-          'USD'::text AS currency,
-          s.service_url AS url,
-          1 AS sort_group,
-          s.updated_at AS updated_at
-        FROM services s
-        WHERE s.tenant_id = $1
-          AND s.active = TRUE
-          AND s.price_base IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1
-            FROM service_variants v2
-            WHERE v2.service_id = s.id
-              AND v2.active = TRUE
-              AND v2.price IS NOT NULL
-          )
-      )
-      UNION ALL
-      (
-        SELECT
-          s.name AS label,
-          v.variant_name AS variant_name,
-          v.price AS price,
-          COALESCE(v.currency, 'USD') AS currency,
-          COALESCE(v.variant_url, s.service_url) AS url,
-          2 AS sort_group,
-          v.updated_at AS updated_at
-        FROM services s
-        JOIN service_variants v ON v.service_id = s.id
-        WHERE s.tenant_id = $1
-          AND s.active = TRUE
-          AND v.active = TRUE
-          AND v.price IS NOT NULL
-      )
-      ORDER BY sort_group ASC, updated_at DESC
-      LIMIT 12
-      `,
-      [tenantId]
-    );
-
-    if (!rows.length) {
-      const msg =
-        idiomaDestino === "en" ? "I don’t have prices saved yet." : "Todavía no tengo precios guardados.";
-      await replyAndExit(msg, "price_list:empty", "precios");
-      return { handled: true };
-    }
-
-    const lines = rows.map((r: any) => {
-      const p = Number(r.price);
-      const cur = String(r.currency || "USD");
-      const name = r.variant_name ? `${r.label} - ${r.variant_name}` : String(r.label);
-      return `• ${name}: $${p.toFixed(2)} ${cur}`;
+    // =========================================================
+    // 3) PRICE LIST FAST-PATH (precios genéricos)
+    //    ✅ PERO: primero intenta match específico (service/variant)
+    // =========================================================
+    if (wantsPrice(routingText)) {
+    // ✅ 3A) Intento 1: resolver precio específico por DB (service/variant)
+    // Ej: "cuanto cuesta el corte de pelo" -> debe devolver menú por tamaño si aplica
+    const specific = await resolveServiceInfoByDb({
+        pool,
+        tenantId,
+        query: String(userInput || "").trim(),
+        need: "price",
+        limit: 5,
     });
 
-    const msg =
-      idiomaDestino === "en"
-        ? `Here are the current prices:\n\n${lines.join("\n")}\n\nWhich one would you like details on?`
-        : `Estos son los precios actuales:\n\n${lines.join("\n")}\n\n¿Cuál te interesa para darte más detalles?`;
+    // ✅ Si encontró 1 match -> responde SOLO ese precio
+    if (specific.ok) {
+        transition({
+        patchCtx: {
+            last_service_ref: {
+            kind: specific.kind || null,
+            label: specific.label || null,
+            service_id: specific.service_id || null,
+            variant_id: specific.variant_id || null,
+            saved_at: new Date().toISOString(),
+            },
+        },
+        });
 
-    await replyAndExit(msg, "price_list", "precios");
-    return { handled: true };
-  }
+        await persistState({ context: convoCtx });
+
+        const msg = renderServiceInfoReply(specific, "price", idiomaDestino);
+        await replyAndExit(msg, "price:specific_match", "service_info");
+        return { handled: true };
+    }
+
+    // ✅ Si devolvió varias opciones (por tamaño, etc.) -> crea menú sticky
+    if (specific.reason === "ambiguous" && specific.options?.length) {
+        const options = specific.options.slice(0, 5).map((o: any) => ({
+        label: o.label,
+        kind: o.kind,
+        service_id: o.service_id,
+        variant_id: o.variant_id || null,
+        }));
+
+        transition({
+        patchCtx: {
+            service_info_pick: {
+            need: "price",
+            options,
+            created_at: new Date().toISOString(),
+            },
+        },
+        });
+
+        await persistState({ context: convoCtx });
+
+        const msg = renderPickMenu(options, "price", idiomaDestino);
+        await replyAndExit(msg, "price:ambiguous_pick", "service_info");
+        return { handled: true };
+    }
+
+    // ✅ 3B) Si el usuario realmente pidió precios "generales" -> lista corta
+    // (si no, deja que siga el pipeline normal)
+    if (wantsGeneralPrices(routingText)) {
+        const { rows } = await pool.query(
+        `
+        (
+            SELECT
+            s.name AS label,
+            NULL::text AS variant_name,
+            s.price_base AS price,
+            'USD'::text AS currency,
+            s.service_url AS url,
+            1 AS sort_group,
+            s.updated_at AS updated_at
+            FROM services s
+            WHERE s.tenant_id = $1
+            AND s.active = TRUE
+            AND s.price_base IS NOT NULL
+            AND NOT EXISTS (
+                SELECT 1
+                FROM service_variants v2
+                WHERE v2.service_id = s.id
+                AND v2.active = TRUE
+                AND v2.price IS NOT NULL
+            )
+        )
+        UNION ALL
+        (
+            SELECT
+            s.name AS label,
+            v.variant_name AS variant_name,
+            v.price AS price,
+            COALESCE(v.currency, 'USD') AS currency,
+            COALESCE(v.variant_url, s.service_url) AS url,
+            2 AS sort_group,
+            v.updated_at AS updated_at
+            FROM services s
+            JOIN service_variants v ON v.service_id = s.id
+            WHERE s.tenant_id = $1
+            AND s.active = TRUE
+            AND v.active = TRUE
+            AND v.price IS NOT NULL
+        )
+        ORDER BY sort_group ASC, updated_at DESC
+        LIMIT 12
+        `,
+        [tenantId]
+        );
+
+        if (!rows.length) {
+        const msg =
+            idiomaDestino === "en"
+            ? "I don’t have prices saved yet."
+            : "Todavía no tengo precios guardados.";
+        await replyAndExit(msg, "price_list:empty", "precios");
+        return { handled: true };
+        }
+
+        const lines = rows.map((r: any) => {
+        const p = Number(r.price);
+        const cur = String(r.currency || "USD");
+        const name = r.variant_name ? `${r.label} - ${r.variant_name}` : String(r.label);
+        return `• ${name}: $${p.toFixed(2)} ${cur}`;
+        });
+
+        const msg =
+        idiomaDestino === "en"
+            ? `Here are the current prices:\n\n${lines.join("\n")}\n\nWhich one are you interested in?`
+            : `Estos son los precios actuales:\n\n${lines.join("\n")}\n\n¿Cuál te interesa para darte más detalles?`;
+
+        await replyAndExit(msg, "price_list:fallback_general", "precios");
+        return { handled: true };
+    }
+    }
 
   // =========================================================
   // 4) SERVICE INFO FAST-PATH (precio/duración/incluye)
