@@ -178,7 +178,6 @@ async function resolveServiceInfoByDb(args: {
     ORDER BY
       -- preferir match por variante
       (CASE WHEN lower(v.variant_name) LIKE lower($2) THEN 0 ELSE 1 END),
-      v.sort_order NULLS LAST,
       v.updated_at DESC
     LIMIT 5
     `,
@@ -865,7 +864,7 @@ export async function handleServicesFastpath(args: {
             WHERE v.service_id = s.id
               AND v.active = TRUE
               AND v.price IS NOT NULL
-            ORDER BY v.sort_order NULLS LAST, v.updated_at DESC
+            ORDER BY v.updated_at DESC
             LIMIT 1
           ) v ON TRUE
           WHERE s.tenant_id = $1
