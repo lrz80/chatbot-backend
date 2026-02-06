@@ -102,29 +102,42 @@ function renderExpiredPick(lang: Lang) {
   return "Esa selección expiró (quedó pendiente por un rato). Vuelve a preguntarme por el servicio y te muestro las opciones otra vez.";
 }
 
-function wantsGeneralPrices(text: string) {
+async function wantsGeneralPrices(text: string, pool: Pool, tenantId: string) {
   const t = String(text || "").toLowerCase().trim();
 
-  // señales de precio (genéricas, no por negocio)
+  // Si no pregunta por precio → no aplica
   const asksPrice =
-    /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+val(e|en)|tarifa|cost(o|os))\b/.test(t) ||
-    /\b(price|prices|how\s+much|how\s+much\s+is|cost|rate|fee)\b/.test(t);
+    /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|tarifa|cost(o|os))\b/.test(t) ||
+    /\b(price|prices|how\s+much|cost|rate|fee)\b/.test(t);
 
   if (!asksPrice) return false;
 
-  // Si el texto incluye contenido "específico" más allá de pedir precio,
-  // NO asumimos lista general. Esto evita hardcode por negocio.
-  // Heurística: quitamos las frases de precio y medimos lo que queda.
-  const remainder = t
-    .replace(/\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+val(e|en)|tarifa|cost(o|os))\b/g, "")
-    .replace(/\b(price|prices|how\s+much|how\s+much\s+is|cost|rate|fee)\b/g, "")
-    .replace(/[^a-z0-9áéíóúñ\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  // Si menciona el nombre de un servicio existente → NO es general
+  const { rows } = await pool.query(
+    `SELECT name FROM services WHERE tenant_id = $1 AND active = TRUE`,
+    [tenantId]
+  );
 
-  // Si queda bastante texto (p.ej. nombre del servicio), NO es lista general.
-  // Esto es genérico y aplica a cualquier tenant/vertical.
-  return remainder.length <= 12;
+  for (const r of rows) {
+    const name = String(r.name || "").toLowerCase();
+    if (name && t.includes(name)) return false;
+  }
+
+  // Si menciona palabras como "corte", "bath", "groom", etc. que pertenecen a variants → tampoco es general
+  const varRows = await pool.query(
+    `SELECT variant_name FROM service_variants v 
+     JOIN services s ON s.id = v.service_id
+     WHERE s.tenant_id = $1 AND s.active = TRUE AND v.active = TRUE`,
+    [tenantId]
+  );
+
+  for (const r of varRows.rows) {
+    const name = String(r.variant_name || "").toLowerCase();
+    if (name && t.includes(name)) return false;
+  }
+
+  // Si nada específico coincide → es una pregunta genérica
+  return true;
 }
 
 function wantsPrice(text: string) {
@@ -313,6 +326,113 @@ async function resolveServiceInfoByDb(args: {
         variant_id: null,
       })),
     };
+  }
+
+    // 3) FALLBACK: si no matchea por LIKE, intenta por TOKENS en services
+  // y si ese service tiene variantes con precio, devolvemos menú (size, etc.)
+  const svc2 = await pool.query(
+    `
+    SELECT
+      s.id AS service_id,
+      s.name AS service_name,
+      s.description AS service_desc,
+      s.duration_min AS service_duration,
+      s.price_base AS service_price_base,
+      s.service_url AS service_url
+    FROM services s
+    WHERE s.tenant_id = $1
+      AND s.active = TRUE
+    ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC NULLS LAST
+    LIMIT 40
+    `,
+    [tenantId]
+  );
+
+  const qTokens = tokens; // ya los calculaste arriba
+  const scored = (svc2.rows || [])
+    .map((r: any) => {
+      const name = String(r.service_name || "").toLowerCase();
+      const score = qTokens.reduce((acc, tok) => (name.includes(tok) ? acc + 1 : acc), 0);
+      return { row: r, score };
+    })
+    .filter((x: any) => x.score > 0)
+    .sort((a: any, b: any) => b.score - a.score);
+
+  if (scored.length) {
+    const best = scored[0].row;
+
+    // trae variantes con precio para este service
+    const vr2 = await pool.query(
+      `
+      SELECT
+        v.id AS variant_id,
+        v.variant_name,
+        v.description AS variant_desc,
+        v.duration_min AS variant_duration,
+        v.price AS variant_price,
+        COALESCE(v.currency, 'USD') AS variant_currency,
+        COALESCE(v.variant_url, $2) AS variant_url
+      FROM service_variants v
+      WHERE v.service_id = $1
+        AND v.active = TRUE
+        AND v.price IS NOT NULL
+      ORDER BY v.updated_at DESC NULLS LAST
+      LIMIT 8
+      `,
+      [best.service_id, best.service_url || null]
+    );
+
+    // Si hay variantes → devolvemos AMBIGUOUS con options (para que el user elija)
+    if (vr2.rows?.length > 1) {
+      return {
+        ok: false as const,
+        reason: "ambiguous" as const,
+        options: vr2.rows.slice(0, 5).map((v: any) => ({
+          label: `${best.service_name} - ${v.variant_name}`,
+          kind: "variant",
+          service_id: String(best.service_id),
+          variant_id: String(v.variant_id),
+        })),
+      };
+    }
+
+    // Si hay 1 variante → respondemos directo
+    if (vr2.rows?.length === 1) {
+      const v = vr2.rows[0];
+      return {
+        ok: true as const,
+        kind: "variant" as const,
+        label: `${best.service_name} - ${v.variant_name}`,
+        url: v.variant_url || best.service_url || null,
+        price: v.variant_price != null ? Number(v.variant_price) : null,
+        currency: v.variant_currency ? String(v.variant_currency) : "USD",
+        duration_min: v.variant_duration != null ? Number(v.variant_duration) : null,
+        description:
+          v.variant_desc && String(v.variant_desc).trim()
+            ? String(v.variant_desc)
+            : best.service_desc
+              ? String(best.service_desc)
+              : null,
+        service_id: String(best.service_id),
+        variant_id: String(v.variant_id),
+      };
+    }
+
+    // si no hay variantes con precio, pero el service tiene price_base, devolvemos service
+    if (best.service_price_base != null) {
+      return {
+        ok: true as const,
+        kind: "service" as const,
+        label: String(best.service_name),
+        url: best.service_url || null,
+        price: Number(best.service_price_base),
+        currency: "USD",
+        duration_min: best.service_duration != null ? Number(best.service_duration) : null,
+        description: best.service_desc ? String(best.service_desc) : null,
+        service_id: String(best.service_id),
+        variant_id: undefined,
+      };
+    }
   }
 
   return { ok: false as const, reason: "no_match" as const };
@@ -544,7 +664,7 @@ export async function handleServicesFastpath(args: {
   // =========================================================
   // 3) PRICE LIST FAST-PATH (precios genéricos)
   // =========================================================
-  if (wantsGeneralPrices(routingText)) {
+  if (await wantsGeneralPrices(routingText, pool, tenantId)) {
     const { rows } = await pool.query(
       `
       (
