@@ -13,6 +13,7 @@ import { resolveServiceList } from "../resolveServiceList";
 import { renderServiceListReply } from "../renderServiceListReply";
 
 import { parsePickNumber } from "../../channels/engine/parsers/parsers";
+import { traducirMensaje } from "../../traducirMensaje";
 
 type Lang = "es" | "en";
 
@@ -33,6 +34,19 @@ function looksLikeVariants(labels: string[]) {
   for (const p of prefixes) freq.set(p, (freq.get(p) || 0) + 1);
   const top = Math.max(...Array.from(freq.values()));
   return top >= 2;
+}
+
+async function toCanonicalEsForRouting(text: string, lang: Lang) {
+  const t = String(text || "").trim();
+  if (!t) return t;
+  if (lang === "es") return t;
+
+  try {
+    const es = await traducirMensaje(t, "es");
+    return String(es || t).trim() || t;
+  } catch {
+    return t;
+  }
 }
 
 function humanNeedLabel(need: string, lang: Lang) {
@@ -89,15 +103,26 @@ function renderExpiredPick(lang: Lang) {
 function wantsGeneralPrices(text: string) {
   const t = String(text || "").toLowerCase().trim();
 
+  // señales de precio (genéricas, no por negocio)
   const asksPrice =
     /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+val(e|en)|tarifa|cost(o|os))\b/.test(t) ||
     /\b(price|prices|how\s+much|how\s+much\s+is|cost|rate|fee)\b/.test(t);
 
-  // si menciona algo MUY específico, NO es la lista general
-  const mentionsSpecific =
-    /\b(bronze|plan\s+bronze|paquete\s+\d+|package\s+\d+|cycling|cicl(ing)?|funcional|functional|single\s+class)\b/.test(t);
+  if (!asksPrice) return false;
 
-  return asksPrice && !mentionsSpecific;
+  // Si el texto incluye contenido "específico" más allá de pedir precio,
+  // NO asumimos lista general. Esto evita hardcode por negocio.
+  // Heurística: quitamos las frases de precio y medimos lo que queda.
+  const remainder = t
+    .replace(/\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+val(e|en)|tarifa|cost(o|os))\b/g, "")
+    .replace(/\b(price|prices|how\s+much|how\s+much\s+is|cost|rate|fee)\b/g, "")
+    .replace(/[^a-z0-9áéíóúñ\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Si queda bastante texto (p.ej. nombre del servicio), NO es lista general.
+  // Esto es genérico y aplica a cualquier tenant/vertical.
+  return remainder.length <= 12;
 }
 
 function wantsPrice(text: string) {
@@ -105,25 +130,11 @@ function wantsPrice(text: string) {
   return /\b(price|how much|cost|pricing|cu[aá]nto|precio|cuesta|vale|tarifa)\b/.test(t);
 }
 
-function extractServiceQueryHint(text: string) {
-  // lo mínimo para encontrar "single class", "cycling", "functional", etc
-  const t = String(text || "").toLowerCase();
-
-  // normaliza algunos términos
-  const normalized = t
-    .replace(/\bindoor\s+cycling\b/g, "cycling")
-    .replace(/\bfunctional\s+training\b/g, "functional")
-    .replace(/\bclase\s+individual\b/g, "single class")
-    .replace(/\buna\s+clase\b/g, "single class");
-
-  // si no hay nada útil, devuelve vacío
-  return normalized.trim();
-}
-
 async function resolveServiceInfoByDb(args: {
   pool: Pool;
   tenantId: string;
   query: string;
+  need?: "price" | "duration" | "includes" | string;
   limit?: number;
 }) {
   const { pool, tenantId, query } = args;
@@ -242,10 +253,14 @@ async function resolveServiceInfoByDb(args: {
     WHERE s.tenant_id = $1
       AND s.active = TRUE
       AND lower(s.name) LIKE lower($2)
+      AND (
+        $3::text IS DISTINCT FROM 'price'
+        OR s.price_base IS NOT NULL
+      )
     ORDER BY s.updated_at DESC
     LIMIT 5
     `,
-    [tenantId, pattern]
+    [tenantId, pattern, String(args.need || "")]
   );
 
   if (sr.rows?.length === 1) {
@@ -333,6 +348,8 @@ export async function handleServicesFastpath(args: {
     persistState,
     replyAndExit,
   } = args;
+
+    const routingText = await toCanonicalEsForRouting(userInput, idiomaDestino);
 
   // =========================================================
   // 1) SERVICE LINK PICK (sticky)
@@ -435,7 +452,7 @@ export async function handleServicesFastpath(args: {
   // =========================================================
   // 2) SERVICE LINK FAST-PATH
   // =========================================================
-  if (wantsServiceLink(userInput)) {
+  if (wantsServiceLink(routingText)) {
     const resolved = await resolveServiceLink({
       tenantId,
       query: userInput,
@@ -505,7 +522,7 @@ export async function handleServicesFastpath(args: {
   // =========================================================
   // 3) PRICE LIST FAST-PATH (precios genéricos)
   // =========================================================
-  if (wantsGeneralPrices(userInput)) {
+  if (wantsGeneralPrices(routingText)) {
     const { rows } = await pool.query(
       `
       (
@@ -579,18 +596,19 @@ export async function handleServicesFastpath(args: {
   // 4) SERVICE INFO FAST-PATH (precio/duración/incluye)
   // =========================================================
   {
-    const need = wantsServiceInfo(userInput);
+    const need = wantsServiceInfo(routingText);
 
     if (need) {
-      // ✅ DB-FIRST resolver: intenta variantes primero (para "Single Class", etc.)
-      const hint = extractServiceQueryHint(userInput);
+      const hint = String(userInput || "").trim();
 
-      // solo hacemos DB-first cuando es claramente precio/info de servicio
-      // (evita interferir con otras rutas)
-      const r =
-        wantsPrice(userInput)
-          ? await resolveServiceInfoByDb({ pool, tenantId, query: hint, limit: 5 })
-          : await resolveServiceInfo({ tenantId, query: userInput, limit: 5 });
+      // ✅ DB-first siempre; si no matchea, luego puedes caer a resolveServiceInfo si quieres
+      const r = await resolveServiceInfoByDb({
+        pool,
+        tenantId,
+        query: hint,
+        need,
+        limit: 5,
+      });
 
       if (r.ok) {
         transition({
@@ -636,6 +654,73 @@ export async function handleServicesFastpath(args: {
         await replyAndExit(msg, "service_info:ambiguous", "service_info");
         return { handled: true };
       }
+
+      if (!r.ok && need === "price") {
+        // ✅ si preguntan precio y no hubo match específico, damos lista de precios
+        // reutiliza la misma query de tu price_list (sin hardcode por negocio)
+        const { rows } = await pool.query(
+          `
+          (
+            SELECT
+              s.name AS label,
+              NULL::text AS variant_name,
+              s.price_base AS price,
+              'USD'::text AS currency,
+              s.service_url AS url,
+              1 AS sort_group,
+              s.updated_at AS updated_at
+            FROM services s
+            WHERE s.tenant_id = $1
+                AND s.active = TRUE
+                AND s.price_base IS NOT NULL
+                AND NOT EXISTS (
+                SELECT 1
+                FROM service_variants v2
+                WHERE v2.service_id = s.id
+                    AND v2.active = TRUE
+                    AND v2.price IS NOT NULL
+                )
+            )
+            UNION ALL
+            (
+            SELECT
+                s.name AS label,
+                v.variant_name AS variant_name,
+                v.price AS price,
+                COALESCE(v.currency, 'USD') AS currency,
+                COALESCE(v.variant_url, s.service_url) AS url,
+                2 AS sort_group,
+                v.updated_at AS updated_at
+            FROM services s
+            JOIN service_variants v ON v.service_id = s.id
+            WHERE s.tenant_id = $1
+                AND s.active = TRUE
+                AND v.active = TRUE
+                AND v.price IS NOT NULL
+            )
+            ORDER BY sort_group ASC, updated_at DESC
+            LIMIT 12
+            `,
+            [tenantId]
+        );
+
+        if (rows.length) {
+            const lines = rows.map((rr: any) => {
+            const p = Number(rr.price);
+            const cur = String(rr.currency || "USD");
+            const name = rr.variant_name ? `${rr.label} - ${rr.variant_name}` : String(rr.label);
+            return `• ${name}: $${p.toFixed(2)} ${cur}`;
+            });
+
+            const msg =
+            idiomaDestino === "en"
+                ? `Here are the current prices:\n\n${lines.join("\n")}`
+                : `Estos son los precios actuales:\n\n${lines.join("\n")}`;
+
+            await replyAndExit(msg, "service_info:price_fallback_list", "precios");
+            return { handled: true };
+          }
+        }
 
       // fallback por last_service_ref
       const lastRef = convoCtx?.last_service_ref;
@@ -734,7 +819,7 @@ export async function handleServicesFastpath(args: {
   // =========================================================
   // 5) SERVICE LIST FAST-PATH
   // =========================================================
-  if (wantsServiceList(userInput)) {
+  if (wantsServiceList(routingText)) {
     const r = await resolveServiceList({
       tenantId,
       limitServices: 8,
