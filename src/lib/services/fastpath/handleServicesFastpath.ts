@@ -15,6 +15,7 @@ import { renderServiceListReply } from "../renderServiceListReply";
 import { parsePickNumber } from "../../channels/engine/parsers/parsers";
 import { traducirMensaje } from "../../traducirMensaje";
 import { renderMoreInfoClarifier } from "./renderMoreInfoClarifier";
+import { renderServiceSummaryReply } from "./renderServiceSummaryReply";
 
 type Lang = "es" | "en";
 
@@ -597,7 +598,7 @@ export async function handleServicesFastpath(args: {
   // 4) SERVICE INFO FAST-PATH (precio/duración/incluye)
   // =========================================================
   {
-    const need = wantsServiceInfo(userInput);
+    const need = wantsServiceInfo(routingText);
 
     if (need === "any") {
     const msg = await renderMoreInfoClarifier({
@@ -829,24 +830,16 @@ export async function handleServicesFastpath(args: {
   }
 
   // =========================================================
-  // 5) SERVICE LIST FAST-PATH
+  // 5) SERVICE LIST / MORE INFO (SUMMARY, no spam)
   // =========================================================
   if (wantsServiceList(routingText)) {
-    const r = await resolveServiceList({
+    const msg = await renderServiceSummaryReply({
+      pool,
       tenantId,
-      limitServices: 8,
-      limitVariantsPerService: 3,
+      lang: idiomaDestino,
     });
 
-    if (r.ok) {
-      const msg = renderServiceListReply(r.items, idiomaDestino);
-      await replyAndExit(msg, "service_list", "service_list");
-      return { handled: true };
-    }
-
-    const msg =
-      idiomaDestino === "en" ? "I don’t have services saved yet." : "Todavía no tengo servicios guardados.";
-    await replyAndExit(msg, "service_list:empty", "service_list");
+    await replyAndExit(msg, "service_summary", "service_list");
     return { handled: true };
   }
 
