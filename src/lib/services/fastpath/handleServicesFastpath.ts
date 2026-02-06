@@ -132,6 +132,26 @@ function wantsPrice(text: string) {
   return /\b(price|how much|cost|pricing|cu[aá]nto|precio|cuesta|vale|tarifa)\b/.test(t);
 }
 
+function wantsMoreInfoOnly(text: string) {
+  const t = String(text || "").toLowerCase().trim();
+
+  // frases “más info” (ES/EN)
+  const asksMore =
+    /\b(m[aá]s\s*info(rmaci[oó]n)?|quiero\s+m[aá]s\s+info|dame\s+m[aá]s\s+info|m[aá]s\s+detalles|detalles)\b/.test(t) ||
+    /\b(more\s+info(rmation)?|more\s+details|details|tell\s+me\s+more)\b/.test(t);
+
+  if (!asksMore) return false;
+
+  // si ya pidió algo específico (precio/horario/reservar/lista/servicios), NO es “solo más info”
+  const specific =
+    /\b(precio|precios|cu[aá]nto|price|prices|cost|rate|fee)\b/.test(t) ||
+    /\b(horario|horarios|hours|open|close|ubicaci[oó]n|location|address)\b/.test(t) ||
+    /\b(reserv|cita|booking|appointment|schedule)\b/.test(t) ||
+    /\b(servicios|services|lista|menu|cat[aá]logo|catalog)\b/.test(t);
+
+  return !specific;
+}
+
 async function resolveServiceInfoByDb(args: {
   pool: Pool;
   tenantId: string;
@@ -587,8 +607,8 @@ export async function handleServicesFastpath(args: {
 
     const msg =
       idiomaDestino === "en"
-        ? `Here are the current prices:\n\n${lines.join("\n")}\n\nDo you want Cycling or Functional?`
-        : `Estos son los precios actuales:\n\n${lines.join("\n")}\n\n¿Te interesa Cycling o Funcional?`;
+        ? `Here are the current prices:\n\n${lines.join("\n")}\n\nWhich one would you like details on?`
+        : `Estos son los precios actuales:\n\n${lines.join("\n")}\n\n¿Cuál te interesa para darte más detalles?`;
 
     await replyAndExit(msg, "price_list", "precios");
     return { handled: true };
@@ -832,6 +852,17 @@ export async function handleServicesFastpath(args: {
   // =========================================================
   // 5) SERVICE LIST / MORE INFO (SUMMARY, no spam)
   // =========================================================
+  if (wantsMoreInfoOnly(routingText)) {
+    const msg = await renderMoreInfoClarifier({
+      pool,
+      tenantId,
+      lang: idiomaDestino,
+    });
+
+    await replyAndExit(msg, "more_info:clarifier", "service_info");
+    return { handled: true };
+  }
+
   if (wantsServiceList(routingText)) {
     const msg = await renderServiceSummaryReply({
       pool,
