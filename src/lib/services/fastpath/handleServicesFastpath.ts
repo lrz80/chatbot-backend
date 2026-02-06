@@ -99,6 +99,187 @@ function wantsGeneralPrices(text: string) {
   return asksPrice && !mentionsSpecific;
 }
 
+function wantsPrice(text: string) {
+  const t = String(text || "").toLowerCase();
+  return /\b(price|how much|cost|pricing|cu[aá]nto|precio|cuesta|vale|tarifa)\b/.test(t);
+}
+
+function extractServiceQueryHint(text: string) {
+  // lo mínimo para encontrar "single class", "cycling", "functional", etc
+  const t = String(text || "").toLowerCase();
+
+  // normaliza algunos términos
+  const normalized = t
+    .replace(/\bindoor\s+cycling\b/g, "cycling")
+    .replace(/\bfunctional\s+training\b/g, "functional")
+    .replace(/\bclase\s+individual\b/g, "single class")
+    .replace(/\buna\s+clase\b/g, "single class");
+
+  // si no hay nada útil, devuelve vacío
+  return normalized.trim();
+}
+
+async function resolveServiceInfoByDb(args: {
+  pool: Pool;
+  tenantId: string;
+  query: string;
+  limit?: number;
+}) {
+  const { pool, tenantId, query } = args;
+  const q = String(query || "").trim();
+  if (!q) return { ok: false as const, reason: "no_match" as const };
+
+  // Heurística: keywords útiles para matching
+  // (no hardcode de negocio; solo términos genéricos)
+  const tokens = q
+    .toLowerCase()
+    .split(/[^a-z0-9áéíóúñ]+/i)
+    .filter(Boolean)
+    .slice(0, 12);
+
+  // si no hay tokens, no hacemos nada
+  if (!tokens.length) return { ok: false as const, reason: "no_match" as const };
+
+  // arma un patrón ILIKE con los tokens más fuertes
+  // prioridad: "single class", "package", "plan", "cycling", "functional"
+  const priority = ["single", "class", "package", "plan", "cycling", "functional", "cicl", "func"];
+  const sorted = tokens.sort((a, b) => (priority.includes(b) ? 1 : 0) - (priority.includes(a) ? 1 : 0));
+  const top = sorted.slice(0, 4).join(" ");
+
+  const pattern = `%${top}%`;
+
+  // 1) Primero intenta MATCH EN VARIANTES (este es tu caso)
+  const vr = await pool.query(
+    `
+    SELECT
+      s.id AS service_id,
+      s.name AS service_name,
+      s.description AS service_desc,
+      s.duration_min AS service_duration,
+      s.price_base AS service_price_base,
+      s.service_url AS service_url,
+
+      v.id AS variant_id,
+      v.variant_name,
+      v.description AS variant_desc,
+      v.duration_min AS variant_duration,
+      v.price AS variant_price,
+      COALESCE(v.currency, 'USD') AS variant_currency,
+      v.variant_url AS variant_url
+    FROM service_variants v
+    JOIN services s ON s.id = v.service_id
+    WHERE s.tenant_id = $1
+      AND s.active = TRUE
+      AND v.active = TRUE
+      AND (
+        lower(v.variant_name) LIKE lower($2)
+        OR lower(s.name) LIKE lower($2)
+      )
+    ORDER BY
+      -- preferir match por variante
+      (CASE WHEN lower(v.variant_name) LIKE lower($2) THEN 0 ELSE 1 END),
+      v.sort_order NULLS LAST,
+      v.updated_at DESC
+    LIMIT 5
+    `,
+    [tenantId, pattern]
+  );
+
+  if (vr.rows?.length === 1) {
+    const row = vr.rows[0];
+    const price =
+      row.variant_price != null ? Number(row.variant_price)
+      : row.service_price_base != null ? Number(row.service_price_base)
+      : null;
+
+    const resolved = {
+      ok: true as const,
+      kind: "variant" as const,
+      label: `${row.service_name} - ${row.variant_name}`,
+      url: row.variant_url || row.service_url || null,
+      price,
+      currency: row.variant_currency ? String(row.variant_currency) : "USD",
+      duration_min:
+        row.variant_duration != null ? Number(row.variant_duration)
+        : row.service_duration != null ? Number(row.service_duration)
+        : null,
+      description:
+        row.variant_desc && String(row.variant_desc).trim()
+          ? String(row.variant_desc)
+          : row.service_desc ? String(row.service_desc) : null,
+      service_id: String(row.service_id),
+      variant_id: String(row.variant_id),
+    };
+
+    return resolved;
+  }
+
+  if (vr.rows?.length > 1) {
+    return {
+      ok: false as const,
+      reason: "ambiguous" as const,
+      options: vr.rows.map((r: any) => ({
+        label: `${r.service_name} - ${r.variant_name}`,
+        kind: "variant",
+        service_id: String(r.service_id),
+        variant_id: String(r.variant_id),
+      })),
+    };
+  }
+
+  // 2) Si no hay variantes, intenta SERVICES (precio_base)
+  const sr = await pool.query(
+    `
+    SELECT
+      s.id AS service_id,
+      s.name AS service_name,
+      s.description AS service_desc,
+      s.duration_min AS service_duration,
+      s.price_base AS service_price_base,
+      s.service_url AS service_url
+    FROM services s
+    WHERE s.tenant_id = $1
+      AND s.active = TRUE
+      AND lower(s.name) LIKE lower($2)
+    ORDER BY s.updated_at DESC
+    LIMIT 5
+    `,
+    [tenantId, pattern]
+  );
+
+  if (sr.rows?.length === 1) {
+    const row = sr.rows[0];
+    const resolved = {
+      ok: true as const,
+      kind: "service" as const,
+      label: String(row.service_name),
+      url: row.service_url || null,
+      price: row.service_price_base != null ? Number(row.service_price_base) : null,
+      currency: "USD",
+      duration_min: row.service_duration != null ? Number(row.service_duration) : null,
+      description: row.service_desc ? String(row.service_desc) : null,
+      service_id: String(row.service_id),
+      variant_id: undefined,
+    };
+    return resolved;
+  }
+
+  if (sr.rows?.length > 1) {
+    return {
+      ok: false as const,
+      reason: "ambiguous" as const,
+      options: sr.rows.map((r: any) => ({
+        label: String(r.service_name),
+        kind: "service",
+        service_id: String(r.service_id),
+        variant_id: null,
+      })),
+    };
+  }
+
+  return { ok: false as const, reason: "no_match" as const };
+}
+
 function shortenUrl(u?: string | null) {
   if (!u) return "";
   try {
@@ -400,11 +581,15 @@ export async function handleServicesFastpath(args: {
     const need = wantsServiceInfo(userInput);
 
     if (need) {
-      const r = await resolveServiceInfo({
-        tenantId,
-        query: userInput,
-        limit: 5,
-      });
+      // ✅ DB-FIRST resolver: intenta variantes primero (para "Single Class", etc.)
+      const hint = extractServiceQueryHint(userInput);
+
+      // solo hacemos DB-first cuando es claramente precio/info de servicio
+      // (evita interferir con otras rutas)
+      const r =
+        wantsPrice(userInput)
+          ? await resolveServiceInfoByDb({ pool, tenantId, query: hint, limit: 5 })
+          : await resolveServiceInfo({ tenantId, query: userInput, limit: 5 });
 
       if (r.ok) {
         transition({
