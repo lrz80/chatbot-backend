@@ -5,17 +5,16 @@ import { wantsServiceLink } from "../wantsServiceLink";
 import { resolveServiceLink } from "../resolveServiceLink";
 
 import { wantsServiceInfo } from "../wantsServiceInfo";
-import { resolveServiceInfo } from "../resolveServiceInfo";
+
 import { renderServiceInfoReply } from "../renderServiceInfoReply";
 
 import { wantsServiceList } from "../wantsServiceList";
-import { resolveServiceList } from "../resolveServiceList";
-import { renderServiceListReply } from "../renderServiceListReply";
 
 import { parsePickNumber } from "../../channels/engine/parsers/parsers";
 import { traducirMensaje } from "../../traducirMensaje";
 import { renderMoreInfoClarifier } from "./renderMoreInfoClarifier";
 import { renderServiceSummaryReply } from "./renderServiceSummaryReply";
+import { isNonCatalogQuestion } from "./gates/isNonCatalogQuestion";
 
 type Lang = "es" | "en";
 
@@ -478,6 +477,11 @@ export async function handleServicesFastpath(args: {
   } = args;
 
     const routingText = await toCanonicalEsForRouting(userInput, idiomaDestino);
+
+    // 0) Gates: preguntas que NO son sobre catálogo/precios/servicios
+    if (isNonCatalogQuestion(routingText)) {
+    return { handled: false };
+    }
 
   // =========================================================
   // 1) SERVICE LINK PICK (sticky)
