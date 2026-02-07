@@ -303,6 +303,18 @@ export async function detectarIntencion(
     return { intencion: "info_servicio", nivel_interes: nivel as 2 | 3 };
   }
 
+    // ✅ FAST-PATH: recomendación / "qué me recomiendas" / "primera vez"
+  const RECOMMEND_RE =
+    /\b(recom(i|í)end(as|a|ame)?|recommend|what\s+do\s+you\s+recommend|suggest|sugiere|sugerencia|que\s+me\s+recomiendas|cu(al|á)l\s+me\s+recomiendas|que\s+servicio\s+me\s+recomiendas|primera\s+vez|first\s+time)\b/i;
+
+  const SERVICE_QUERY_RE =
+    /\b(servicio(s)?|service(s)?|groom(ing)?|bañ(o|os)|bath|corte|cut)\b/i;
+
+  // Si piden recomendación o preguntan "qué servicio", es info_servicio con interés alto
+  if (RECOMMEND_RE.test(original) || (SERVICE_QUERY_RE.test(original) && !/\b(precio|cost|price|cu(a|á)nto)\b/i.test(original))) {
+    return { intencion: "info_servicio", nivel_interes: 3 };
+  }
+
   // ✅ FAST-PATH: intención de activar/suscribirse (ES/EN) — antes de flagVenta fallbacks
   const NEG_RE = /\b(no|aun\s*no|todav[ií]a\s*no|not)\b/i;
 

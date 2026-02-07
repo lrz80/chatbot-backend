@@ -16,6 +16,14 @@ import { renderMoreInfoClarifier } from "./renderMoreInfoClarifier";
 import { renderServiceSummaryReply } from "./renderServiceSummaryReply";
 import { isNonCatalogQuestion } from "./gates/isNonCatalogQuestion";
 import { resolveServiceInfoByDb } from "./resolveServiceInfoByDb";
+import {
+  isStickyPickOptOut,
+  isStickyPickDifferentQuestion,
+  renderStickyPickOptOutReply,
+  renderStickyPickExpiredReply,
+  renderStickyPickRepromptReply,
+} from "./gates/stickyPickEscape";
+
 
 type Lang = "es" | "en";
 
@@ -229,17 +237,30 @@ export async function handleServicesFastpath(args: {
         transition({ patchCtx: { service_link_pick: null } });
         await persistState({ context: convoCtx });
 
-        const msg =
-          idiomaDestino === "en"
-            ? "That selection expired. Ask me again which service you want."
-            : "Esa selección expiró. Vuelve a pedirme el link del servicio.";
-
+        const msg = renderStickyPickExpiredReply(idiomaDestino);
         await replyAndExit(msg, "service_link_pick:expired", "service_link");
         return { handled: true };
       }
 
       const n = parsePickNumber(userInput);
       const need = (pickState?.need || "any") as any;
+
+      // ✅ escape: no gracias / cancelar
+      if (isStickyPickOptOut(userInput)) {
+        transition({ patchCtx: { service_link_pick: null } });
+        await persistState({ context: convoCtx });
+
+        const msg = renderStickyPickOptOutReply(idiomaDestino);
+        await replyAndExit(msg, "service_link_pick:opt_out", "no_interesado");
+        return { handled: true };
+      }
+
+      // ✅ si el usuario hizo otra pregunta (no es pick), limpia y deja seguir el pipeline
+      if (n === null && (isNonCatalogQuestion(routingText) || isStickyPickDifferentQuestion(userInput))) {
+        transition({ patchCtx: { service_link_pick: null } });
+        await persistState({ context: convoCtx });
+        return { handled: false };
+      }
 
       if (n !== null) {
         const idx = n - 1;
@@ -298,11 +319,25 @@ export async function handleServicesFastpath(args: {
         }
       }
 
+      const repromptCount = Number(pickState?.reprompt_count || 0);
+      if (repromptCount >= 1) {
+        transition({ patchCtx: { service_link_pick: null } });
+        await persistState({ context: convoCtx });
+        return { handled: false };
+      }
+
+      transition({
+        patchCtx: {
+          service_link_pick: {
+            ...pickState,
+            reprompt_count: repromptCount + 1,
+          },
+        },
+      });
+      await persistState({ context: convoCtx });
+
       const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
-      const msg =
-        idiomaDestino === "en"
-          ? `Which option do you want? Reply with the number:\n${lines}`
-          : `¿Cuál opción quieres? Responde con el número:\n${lines}`;
+      const msg = renderStickyPickRepromptReply(idiomaDestino, lines);
 
       await replyAndExit(msg, "service_link_pick:reprompt", "service_link");
       return { handled: true };
@@ -697,10 +732,46 @@ export async function handleServicesFastpath(args: {
         return { handled: true };
       }
 
-      const n = parsePickNumber(userInput);
+            const n = parsePickNumber(userInput);
       const need = (pickState?.need || "any") as any;
 
+      // ✅ escape: no gracias / cancelar
+      if (isStickyPickOptOut(userInput)) {
+        transition({ patchCtx: { service_info_pick: null } });
+        await persistState({ context: convoCtx });
+
+        const msg = renderStickyPickOptOutReply(idiomaDestino);
+        await replyAndExit(msg, "service_info_pick:opt_out", "no_interesado");
+        return { handled: true };
+      }
+
+      // ✅ si el usuario hizo otra pregunta (no es pick), limpia y deja seguir el pipeline
+      if (n === null && (isNonCatalogQuestion(routingText) || isStickyPickDifferentQuestion(userInput))) {
+        transition({ patchCtx: { service_info_pick: null } });
+        await persistState({ context: convoCtx });
+        return { handled: false };
+      }
+
+      // ✅ anti-loop: solo repregunta 1 vez, si insiste en texto, suelta el sticky
       if (n === null) {
+        const repromptCount = Number(pickState?.reprompt_count || 0);
+
+        if (repromptCount >= 1) {
+          transition({ patchCtx: { service_info_pick: null } });
+          await persistState({ context: convoCtx });
+          return { handled: false };
+        }
+
+        transition({
+          patchCtx: {
+            service_info_pick: {
+              ...pickState,
+              reprompt_count: repromptCount + 1,
+            },
+          },
+        });
+        await persistState({ context: convoCtx });
+
         const msg = renderPickMenu(options, need, idiomaDestino);
         await replyAndExit(msg, "service_info_pick:reprompt", "service_info");
         return { handled: true };
