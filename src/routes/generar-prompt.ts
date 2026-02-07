@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v8"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v9"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -523,6 +523,72 @@ function buildOperationalRules(funcionesClean: string) {
   return compact(["REGLAS Y COMPORTAMIENTO", t].join("\n"));
 }
 
+function extractServiceCandidatesFromInfoBlock(infoBlock: string): string[] {
+  const t = String(infoBlock || "");
+  if (!t.trim()) return [];
+
+  const lines = t.split("\n").map((l) => l.trim()).filter(Boolean);
+
+  // Si existe heading "SERVICIOS", prioriza solo esa sección
+  const idx = lines.findIndex((l) => /^SERVICIOS$/i.test(l));
+  let slice = lines;
+  if (idx >= 0) {
+    slice = lines.slice(idx + 1);
+    // corta cuando empieza otro heading típico
+    const stopIdx = slice.findIndex((l) =>
+      /^(HORARIOS|RESERVAS|RESERVAS \/ CONTACTO|POL[IÍ]TICAS|DATOS DEL NEGOCIO|CONOCIMIENTO DEL NEGOCIO)$/i.test(l)
+    );
+    if (stopIdx >= 0) slice = slice.slice(0, stopIdx);
+  }
+
+  // Candidatos: bullets "- " o "• "
+  const items = slice
+    .map((l) => l.replace(/^[-•]\s*/, "").trim())
+    .filter((l) => l.length >= 2 && l.length <= 80)
+    .filter((l) => !/^nombre:|^tipo:|^ubicaci/i.test(l));
+
+  // Dedupe case-insensitive preservando orden
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const it of items) {
+    const k = it.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(it);
+  }
+  return out;
+}
+
+function buildCatalogSummaryBlock(idioma: Lang, nombreNegocio: string, infoBlock: string) {
+  const services = extractServiceCandidatesFromInfoBlock(infoBlock);
+
+  // Si no hay servicios, no creamos bloque (evita inventar)
+  if (!services.length) return "";
+
+  const top = services.slice(0, 7); // ✅ corto
+  const lines = top.map((s) => `- ${s}`);
+
+  if (idioma === "en") {
+    return compact([
+      "CATALOG_SUMMARY (DO NOT LIST EVERYTHING):",
+      `- Business: ${nombreNegocio}`,
+      ...lines,
+      "",
+      "Rule: If the user asks for services/menu/catalog, show ONLY this short summary and ask:",
+      '"Which service are you looking for?"',
+    ].join("\n"));
+  }
+
+  return compact([
+    "RESUMEN_DE_SERVICIOS (NO LISTAR TODO):",
+    `- Negocio: ${nombreNegocio}`,
+    ...lines,
+    "",
+    "Regla: Si el usuario pide servicios/menú/catálogo, muestra SOLO este resumen y pregunta:",
+    '"¿Qué servicio estás buscando?"',
+  ].join("\n"));
+}
+
 // ———————————————————————————————————————————————————
 
 router.post("/", async (req: Request, res: Response) => {
@@ -602,6 +668,27 @@ router.post("/", async (req: Request, res: Response) => {
     const conversionMode = buildConversionMode(idiomaNorm);
     const ctaGuide = enlacesOficiales.length ? buildCtaMap(idiomaNorm, linkGroups) : "";
 
+    const catalogAntiSpamRules =
+    idiomaNorm === "en"
+      ? compact([
+          "CATALOG_RULES (CRITICAL):",
+          "- Never paste the full catalog list from BUSINESS_CONTEXT.",
+          "- If user asks: services/menu/catalog/more info:",
+          "  1) Answer with CATALOG_SUMMARY only (max 7 bullets).",
+          "  2) Ask ONE question: Which service are you looking for?",
+          "- If they ask for prices but don't specify a service: ask which service.",
+          "- If user replies with a number, treat it as picking from the summary and ask confirmation if needed.",
+        ].join("\n"))
+      : compact([
+          "REGLAS_DE_CATALOGO (CRÍTICO):",
+          "- Nunca pegues la lista completa del catálogo desde CONTEXTO_DEL_NEGOCIO.",
+          "- Si el usuario pide: servicios/menú/catálogo/más info:",
+          "  1) Responde SOLO con RESUMEN_DE_SERVICIOS (máx 7 bullets).",
+          "  2) Haz UNA pregunta: ¿Qué servicio estás buscando?",
+          "- Si piden precios sin especificar servicio: pregunta cuál servicio.",
+          "- Si el usuario responde con un número, interprétalo como elección del resumen y confirma si hay ambigüedad.",
+        ].join("\n"));
+
     // ———————————————————————————————————————————————————
     // Generación determinística (sin OpenAI) para prompts consistentes
     // descripcion -> reglas / comportamiento ("Qué debe hacer tu asistente")
@@ -625,6 +712,8 @@ router.post("/", async (req: Request, res: Response) => {
 
     const infoBlock = infoOperativo ? infoOperativo : "";
     const funcionesBlock = reglasOperativas ? reglasOperativas : "";
+
+    const catalogSummaryBlock = buildCatalogSummaryBlock(idiomaNorm, nombreNegocio, infoBlock);
 
     const linksPolicy = enlacesOficiales.length
       ? (idiomaNorm === "en"
@@ -664,7 +753,15 @@ router.post("/", async (req: Request, res: Response) => {
       "",
 
       // 3) Contexto del negocio (lo que “sabe”)
-      infoBlock ? (idiomaNorm === "en" ? "BUSINESS_CONTEXT" : "CONTEXTO_DEL_NEGOCIO") : "",
+      // 3) Contexto del negocio (lo que “sabe”)
+      catalogSummaryBlock ? catalogSummaryBlock : "",
+      catalogSummaryBlock ? "" : "",
+
+      // ✅ Reglas anti-spam de catálogo (arriba, antes del contexto)
+      catalogAntiSpamRules,
+      "",
+
+      infoBlock ? (idiomaNorm === "en" ? "BUSINESS_CONTEXT (REFERENCE ONLY)" : "CONTEXTO_DEL_NEGOCIO (SOLO REFERENCIA)") : "",
       infoBlock ? infoBlock : "",
       "",
 
