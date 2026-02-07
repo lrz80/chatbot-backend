@@ -23,6 +23,16 @@ import {
   renderStickyPickExpiredReply,
   renderStickyPickRepromptReply,
 } from "./gates/stickyPickEscape";
+import { isGeneralCatalogQuestion } from "./gates/isGeneralCatalogQuestion";
+import {
+  renderPickMenu,
+  renderOutOfRangeMenu,
+  renderExpiredPick,
+  shortenUrl,
+  looksLikeVariantsOfSameService,
+} from "./ui/servicePickUi";
+import { toCanonicalEsForRouting } from "./utils/routingText";
+import { wantsGeneralPrices, wantsMoreInfoOnly } from "./gates/generalAsks";
 
 
 type Lang = "es" | "en";
@@ -32,159 +42,6 @@ type TransitionFn = (args: { patchCtx?: any; flow?: string; step?: string }) => 
 type PersistStateFn = (args: { context: any }) => Promise<void>;
 
 type ReplyAndExitFn = (text: string, source: string, intent?: string | null) => Promise<void>;
-
-function looksLikeVariants(labels: string[]) {
-  const prefixes = labels
-    .map((l) => String(l || "").split(" - ")[0].trim())
-    .filter(Boolean);
-
-  if (!prefixes.length) return false;
-
-  const freq = new Map<string, number>();
-  for (const p of prefixes) freq.set(p, (freq.get(p) || 0) + 1);
-  const top = Math.max(...Array.from(freq.values()));
-  return top >= 2;
-}
-
-async function toCanonicalEsForRouting(text: string, lang: Lang) {
-  const t = String(text || "").trim();
-  if (!t) return t;
-  if (lang === "es") return t;
-
-  try {
-    const es = await traducirMensaje(t, "es");
-    return String(es || t).trim() || t;
-  } catch {
-    return t;
-  }
-}
-
-function humanNeedLabel(need: string, lang: Lang) {
-  const n = String(need || "any");
-  if (lang === "en") {
-    if (n === "price") return "the price";
-    if (n === "duration") return "the duration";
-    if (n === "includes") return "what it includes";
-    return "more details";
-  }
-  if (n === "price") return "el precio";
-  if (n === "duration") return "la duración";
-  if (n === "includes") return "qué incluye";
-  return "más detalles";
-}
-
-function renderPickMenu(options: any[], need: string, lang: Lang) {
-  const labels = options.map((o) => String(o.label || ""));
-  const isVar = looksLikeVariants(labels);
-
-  const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
-  const what = humanNeedLabel(need, lang);
-
-  if (lang === "en") {
-    return (
-      `${isVar ? "Which option do you want?" : "Which service do you mean?"} ` +
-      `Reply with the number so I can give you ${what}:\n\n` +
-      `${lines}\n\n` +
-      `Reply with just the number (e.g. 1).`
-    );
-  }
-
-  return (
-    `${isVar ? "¿Cuál opción quieres?" : "¿A cuál servicio te refieres?"} ` +
-    `Respóndeme con el número para darte ${what}:\n\n` +
-    `${lines}\n\n` +
-    `Solo responde con el número (ej: 1).`
-  );
-}
-
-function renderOutOfRangeMenu(options: any[], _need: string, lang: Lang) {
-  const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
-  if (lang === "en") return `That number isn’t in the list. Please choose one of these:\n\n${lines}`;
-  return `Ese número no está en la lista. Elige una de estas opciones:\n\n${lines}`;
-}
-
-function renderExpiredPick(lang: Lang) {
-  if (lang === "en") {
-    return "That selection expired (it was pending for a while). Ask again about the service and I’ll show the options again.";
-  }
-  return "Esa selección expiró (quedó pendiente por un rato). Vuelve a preguntarme por el servicio y te muestro las opciones otra vez.";
-}
-
-function wantsGeneralPrices(text: string) {
-  const t = String(text || "").toLowerCase().trim();
-
-  // señales de precio (genéricas)
-  const asksPrice =
-    /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|tarifa|cost(o|os))\b/.test(t) ||
-    /\b(price|prices|how\s+much|how\s+much\s+is|cost|rate|fee)\b/.test(t);
-
-  if (!asksPrice) return false;
-
-  // quitamos frases de precio y medimos lo que queda:
-  // si queda MUY poco texto -> suele ser general ("precios", "cuánto cuesta")
-  const remainder = t
-    .replace(/\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|tarifa|cost(o|os))\b/g, "")
-    .replace(/\b(price|prices|how\s+much|how\s+much\s+is|cost|rate|fee)\b/g, "")
-    .replace(/[^a-z0-9áéíóúñ\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  // si el mensaje ya trae bastante contenido (ej "corte de pelo") NO lo tratamos como lista general,
-  // porque primero queremos intentar match específico por DB.
-  return remainder.length <= 10;
-}
-
-function wantsPrice(text: string) {
-  const t = String(text || "").toLowerCase();
-  return /\b(price|how much|cost|pricing|cu[aá]nto|precio|cuesta|vale|tarifa)\b/.test(t);
-}
-
-function wantsMoreInfoOnly(text: string) {
-  const t = String(text || "").toLowerCase().trim();
-
-  // frases “más info” (ES/EN)
-  const asksMore =
-    /\b(m[aá]s\s*info(rmaci[oó]n)?|quiero\s+m[aá]s\s+info|dame\s+m[aá]s\s+info|m[aá]s\s+detalles|detalles)\b/.test(t) ||
-    /\b(more\s+info(rmation)?|more\s+details|details|tell\s+me\s+more)\b/.test(t);
-
-  if (!asksMore) return false;
-
-  // si ya pidió algo específico (precio/horario/reservar/lista/servicios), NO es “solo más info”
-  const specific =
-    /\b(precio|precios|cu[aá]nto|price|prices|cost|rate|fee)\b/.test(t) ||
-    /\b(horario|horarios|hours|open|close|ubicaci[oó]n|location|address)\b/.test(t) ||
-    /\b(reserv|cita|booking|appointment|schedule)\b/.test(t) ||
-    /\b(servicios|services|lista|menu|cat[aá]logo|catalog)\b/.test(t);
-
-  return !specific;
-}
-
-function shortenUrl(u?: string | null) {
-  if (!u) return "";
-  try {
-    const url = new URL(u);
-    const path = url.pathname.length > 28 ? url.pathname.slice(0, 28) + "…" : url.pathname;
-    return `${url.host}${path}`;
-  } catch {
-    const s = String(u);
-    return s.slice(0, 40) + (s.length > 40 ? "…" : "");
-  }
-}
-
-function looksLikeVariantsOfSameService(labels: string[]) {
-  const prefixes = labels
-    .map((l) => String(l || ""))
-    .map((l) => l.split(" - ")[0].trim())
-    .filter(Boolean);
-
-  if (!prefixes.length) return false;
-
-  const freq = new Map<string, number>();
-  for (const p of prefixes) freq.set(p, (freq.get(p) || 0) + 1);
-
-  const top = Array.from(freq.values()).sort((a, b) => b - a)[0] || 0;
-  return top >= 2;
-}
 
 export async function handleServicesFastpath(args: {
   pool: Pool;
@@ -212,12 +69,18 @@ export async function handleServicesFastpath(args: {
     replyAndExit,
   } = args;
 
-    const routingText = await toCanonicalEsForRouting(userInput, idiomaDestino);
+  const routingText = await toCanonicalEsForRouting(userInput, idiomaDestino);
 
-    // 0) Gates: preguntas que NO son sobre catálogo/precios/servicios
-    if (isNonCatalogQuestion(routingText)) {
+  // 0) Gates: preguntas que NO son sobre catálogo/precios/servicios
+  if (isNonCatalogQuestion(routingText)) {
     return { handled: false };
-    }
+  }
+
+  // ✅ Gate: catálogo general → NO DB.
+  // Deja que responda el LLM con el prompt del tenant (info_clave como antes).
+  if (isGeneralCatalogQuestion(routingText)) {
+    return { handled: false };
+  }
 
   // =========================================================
   // 1) SERVICE LINK PICK (sticky)
@@ -266,7 +129,7 @@ export async function handleServicesFastpath(args: {
         const idx = n - 1;
 
         if (idx < 0 || idx >= options.length) {
-          const msg = renderOutOfRangeMenu(options, need, idiomaDestino);
+          const msg = renderOutOfRangeMenu(options, idiomaDestino);
           await replyAndExit(msg, "service_link_pick:out_of_range", "service_link");
           return { handled: true };
         }
@@ -779,7 +642,7 @@ export async function handleServicesFastpath(args: {
 
       const idx = n - 1;
       if (idx < 0 || idx >= options.length) {
-        const msg = renderOutOfRangeMenu(options, need, idiomaDestino);
+        const msg = renderOutOfRangeMenu(options, idiomaDestino);
         await replyAndExit(msg, "service_info_pick:out_of_range", "service_info");
         return { handled: true };
       }
