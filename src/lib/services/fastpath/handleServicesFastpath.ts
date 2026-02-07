@@ -76,12 +76,6 @@ export async function handleServicesFastpath(args: {
     return { handled: false };
   }
 
-  // ✅ Gate: catálogo general → NO DB.
-  // Deja que responda el LLM con el prompt del tenant (info_clave como antes).
-  if (isGeneralCatalogQuestion(routingText)) {
-    return { handled: false };
-  }
-
   // =========================================================
   // 1) SERVICE LINK PICK (sticky)
   // =========================================================
@@ -106,7 +100,6 @@ export async function handleServicesFastpath(args: {
       }
 
       const n = parsePickNumber(userInput);
-      const need = (pickState?.need || "any") as any;
 
       // ✅ escape: no gracias / cancelar
       if (isStickyPickOptOut(userInput)) {
@@ -182,6 +175,13 @@ export async function handleServicesFastpath(args: {
         }
       }
 
+      // si el usuario cambia a catálogo general / más info → suelta el sticky y deja seguir al LLM
+      if (isGeneralCatalogQuestion(routingText) || wantsMoreInfoOnly(routingText) || wantsServiceList(routingText)) {
+        transition({ patchCtx: { service_info_pick: null } }); // o service_link_pick en sección 1
+        await persistState({ context: convoCtx });
+        return { handled: false };
+      }
+
       const repromptCount = Number(pickState?.reprompt_count || 0);
       if (repromptCount >= 1) {
         transition({ patchCtx: { service_link_pick: null } });
@@ -205,6 +205,252 @@ export async function handleServicesFastpath(args: {
       await replyAndExit(msg, "service_link_pick:reprompt", "service_link");
       return { handled: true };
     }
+  }
+
+  // =========================================================
+  // 6) SERVICE INFO PICK (sticky)
+  // =========================================================
+  {
+    const pickState = convoCtx?.service_info_pick;
+    const options = Array.isArray(pickState?.options) ? pickState.options : [];
+
+    if (options.length) {
+      const createdAtMs =
+        typeof pickState?.created_at === "string" ? Date.parse(pickState.created_at) : NaN;
+
+      const fresh =
+        Number.isFinite(createdAtMs) ? Date.now() - createdAtMs < 10 * 60 * 1000 : false;
+
+      if (!fresh) {
+        transition({ patchCtx: { service_info_pick: null } });
+        await persistState({ context: convoCtx });
+
+        const msg = renderExpiredPick(idiomaDestino);
+        await replyAndExit(msg, "service_info_pick:expired", "service_info");
+        return { handled: true };
+      }
+
+            const n = parsePickNumber(userInput);
+      const need = (pickState?.need || "any") as any;
+
+      // ✅ escape: no gracias / cancelar
+      if (isStickyPickOptOut(userInput)) {
+        transition({ patchCtx: { service_info_pick: null } });
+        await persistState({ context: convoCtx });
+
+        const msg = renderStickyPickOptOutReply(idiomaDestino);
+        await replyAndExit(msg, "service_info_pick:opt_out", "no_interesado");
+        return { handled: true };
+      }
+
+      // ✅ si el usuario hizo otra pregunta (no es pick), limpia y deja seguir el pipeline
+      if (n === null && (isNonCatalogQuestion(routingText) || isStickyPickDifferentQuestion(userInput))) {
+        transition({ patchCtx: { service_info_pick: null } });
+        await persistState({ context: convoCtx });
+        return { handled: false };
+      }
+
+      // si el usuario cambia a catálogo general / más info → suelta el sticky y deja seguir al LLM
+      if (isGeneralCatalogQuestion(routingText) || wantsMoreInfoOnly(routingText) || wantsServiceList(routingText)) {
+        transition({ patchCtx: { service_info_pick: null } }); // o service_link_pick en sección 1
+        await persistState({ context: convoCtx });
+        return { handled: false };
+      }
+
+      // ✅ anti-loop: solo repregunta 1 vez, si insiste en texto, suelta el sticky
+      if (n === null) {
+        const repromptCount = Number(pickState?.reprompt_count || 0);
+
+        if (repromptCount >= 1) {
+          transition({ patchCtx: { service_info_pick: null } });
+          await persistState({ context: convoCtx });
+          return { handled: false };
+        }
+
+        transition({
+          patchCtx: {
+            service_info_pick: {
+              ...pickState,
+              reprompt_count: repromptCount + 1,
+            },
+          },
+        });
+        await persistState({ context: convoCtx });
+
+        const msg = renderPickMenu(options, need, idiomaDestino);
+        await replyAndExit(msg, "service_info_pick:reprompt", "service_info");
+        return { handled: true };
+      }
+
+      const idx = n - 1;
+      if (idx < 0 || idx >= options.length) {
+        const msg = renderOutOfRangeMenu(options, idiomaDestino);
+        await replyAndExit(msg, "service_info_pick:out_of_range", "service_info");
+        return { handled: true };
+      }
+
+      const chosen = options[idx];
+      let resolved: any = null;
+
+      if (chosen.kind === "variant" && chosen.variant_id) {
+        const { rows } = await pool.query(
+          `
+          SELECT s.id AS service_id, s.name AS service_name, s.description AS service_desc,
+                s.duration_min AS service_duration, s.price_base, s.service_url,
+                v.id AS variant_id, v.variant_name, v.description AS variant_desc,
+                v.duration_min AS variant_duration, v.price, v.currency, v.variant_url
+          FROM service_variants v
+          JOIN services s ON s.id = v.service_id
+          WHERE s.tenant_id = $1
+            AND s.active = TRUE
+            AND v.active = TRUE
+            AND v.id = $2
+          LIMIT 1
+          `,
+          [tenantId, chosen.variant_id]
+        );
+
+        const row = rows[0];
+        if (row) {
+          const price =
+            row.price != null ? Number(row.price)
+            : row.price_base != null ? Number(row.price_base)
+            : null;
+
+          const currency = row.currency ? String(row.currency) : "USD";
+
+          resolved = {
+            ok: true,
+            kind: "variant",
+            label: `${row.service_name} - ${row.variant_name}`,
+            url: row.variant_url || row.service_url || null,
+            price,
+            currency,
+            duration_min:
+              row.variant_duration != null ? Number(row.variant_duration)
+              : row.service_duration != null ? Number(row.service_duration)
+              : null,
+            description:
+              row.variant_desc && String(row.variant_desc).trim()
+                ? String(row.variant_desc)
+                : row.service_desc ? String(row.service_desc) : null,
+            service_id: String(row.service_id),
+            variant_id: String(row.variant_id),
+          };
+        }
+      } else {
+        const { rows } = await pool.query(
+          `
+          SELECT
+            s.id AS service_id,
+            s.name AS service_name,
+            s.description AS service_desc,
+            s.duration_min AS service_duration,
+            s.price_base AS service_price_base,
+            s.service_url AS service_url,
+
+            v.id AS variant_id,
+            v.variant_name,
+            v.description AS variant_desc,
+            v.duration_min AS variant_duration,
+            v.price AS variant_price,
+            v.currency AS variant_currency,
+            v.variant_url AS variant_url
+          FROM services s
+          LEFT JOIN LATERAL (
+            SELECT v.*
+            FROM service_variants v
+            WHERE v.service_id = s.id
+              AND v.active = TRUE
+              AND v.price IS NOT NULL
+            ORDER BY v.updated_at DESC
+            LIMIT 1
+          ) v ON TRUE
+          WHERE s.tenant_id = $1
+            AND s.active = TRUE
+            AND s.id = $2
+          LIMIT 1
+          `,
+          [tenantId, chosen.service_id]
+        );
+
+        const row = rows[0];
+        if (row) {
+          const price =
+            row.variant_price != null ? Number(row.variant_price)
+            : row.service_price_base != null ? Number(row.service_price_base)
+            : null;
+
+          const currency = row.variant_currency ? String(row.variant_currency) : "USD";
+
+          const url =
+            row.variant_url && String(row.variant_url).trim()
+              ? String(row.variant_url)
+              : row.service_url ? String(row.service_url) : null;
+
+          const duration_min =
+            row.variant_duration != null ? Number(row.variant_duration)
+            : row.service_duration != null ? Number(row.service_duration)
+            : null;
+
+          const description =
+            row.variant_desc && String(row.variant_desc).trim()
+              ? String(row.variant_desc)
+              : row.service_desc ? String(row.service_desc) : null;
+
+          resolved = {
+            ok: true,
+            kind: row.variant_id ? "variant" : "service",
+            label: row.variant_id ? `${row.service_name} - ${row.variant_name}` : String(row.service_name),
+            url,
+            price,
+            currency,
+            duration_min,
+            description,
+            service_id: String(row.service_id),
+            variant_id: row.variant_id ? String(row.variant_id) : undefined,
+          };
+        }
+      }
+
+      // limpiar pick
+      transition({ patchCtx: { service_info_pick: null } });
+      await persistState({ context: convoCtx });
+
+      if (resolved?.ok) {
+        transition({
+          patchCtx: {
+            last_service_ref: {
+              kind: resolved.kind || null,
+              label: resolved.label || null,
+              service_id: resolved.service_id || null,
+              variant_id: resolved.variant_id || null,
+              saved_at: new Date().toISOString(),
+            },
+          },
+        });
+
+        await persistState({ context: convoCtx });
+
+        const msg = renderServiceInfoReply(resolved, need, idiomaDestino);
+        await replyAndExit(msg, "service_info_pick", "service_info");
+        return { handled: true };
+      }
+
+      const msg =
+        idiomaDestino === "en"
+          ? "I couldn't find that option anymore. Ask again about the service."
+          : "No pude encontrar esa opción ya. Vuelve a preguntarme por el servicio.";
+
+      await replyAndExit(msg, "service_info_pick:not_found", "service_info");
+      return { handled: true };
+    }
+  }
+
+  // ✅ Gate: catálogo general → NO DB.
+  // Deja que responda el LLM con el prompt del tenant (info_clave como antes).
+  if (isGeneralCatalogQuestion(routingText)) {
+    return { handled: false };
   }
 
   // =========================================================
@@ -286,7 +532,7 @@ export async function handleServicesFastpath(args: {
 
     if (need === "any") {
     
-      return { handled: true };
+      return { handled: false };
     }
 
     if (need) {
@@ -546,239 +792,6 @@ export async function handleServicesFastpath(args: {
   // =========================================================
   if (wantsMoreInfoOnly(routingText)) return { handled: false };
   if (wantsServiceList(routingText)) return { handled: false };
-
-  // =========================================================
-  // 6) SERVICE INFO PICK (sticky)
-  // =========================================================
-  {
-    const pickState = convoCtx?.service_info_pick;
-    const options = Array.isArray(pickState?.options) ? pickState.options : [];
-
-    if (options.length) {
-      const createdAtMs =
-        typeof pickState?.created_at === "string" ? Date.parse(pickState.created_at) : NaN;
-
-      const fresh =
-        Number.isFinite(createdAtMs) ? Date.now() - createdAtMs < 10 * 60 * 1000 : false;
-
-      if (!fresh) {
-        transition({ patchCtx: { service_info_pick: null } });
-        await persistState({ context: convoCtx });
-
-        const msg = renderExpiredPick(idiomaDestino);
-        await replyAndExit(msg, "service_info_pick:expired", "service_info");
-        return { handled: true };
-      }
-
-            const n = parsePickNumber(userInput);
-      const need = (pickState?.need || "any") as any;
-
-      // ✅ escape: no gracias / cancelar
-      if (isStickyPickOptOut(userInput)) {
-        transition({ patchCtx: { service_info_pick: null } });
-        await persistState({ context: convoCtx });
-
-        const msg = renderStickyPickOptOutReply(idiomaDestino);
-        await replyAndExit(msg, "service_info_pick:opt_out", "no_interesado");
-        return { handled: true };
-      }
-
-      // ✅ si el usuario hizo otra pregunta (no es pick), limpia y deja seguir el pipeline
-      if (n === null && (isNonCatalogQuestion(routingText) || isStickyPickDifferentQuestion(userInput))) {
-        transition({ patchCtx: { service_info_pick: null } });
-        await persistState({ context: convoCtx });
-        return { handled: false };
-      }
-
-      // ✅ anti-loop: solo repregunta 1 vez, si insiste en texto, suelta el sticky
-      if (n === null) {
-        const repromptCount = Number(pickState?.reprompt_count || 0);
-
-        if (repromptCount >= 1) {
-          transition({ patchCtx: { service_info_pick: null } });
-          await persistState({ context: convoCtx });
-          return { handled: false };
-        }
-
-        transition({
-          patchCtx: {
-            service_info_pick: {
-              ...pickState,
-              reprompt_count: repromptCount + 1,
-            },
-          },
-        });
-        await persistState({ context: convoCtx });
-
-        const msg = renderPickMenu(options, need, idiomaDestino);
-        await replyAndExit(msg, "service_info_pick:reprompt", "service_info");
-        return { handled: true };
-      }
-
-      const idx = n - 1;
-      if (idx < 0 || idx >= options.length) {
-        const msg = renderOutOfRangeMenu(options, idiomaDestino);
-        await replyAndExit(msg, "service_info_pick:out_of_range", "service_info");
-        return { handled: true };
-      }
-
-      const chosen = options[idx];
-      let resolved: any = null;
-
-      if (chosen.kind === "variant" && chosen.variant_id) {
-        const { rows } = await pool.query(
-          `
-          SELECT s.id AS service_id, s.name AS service_name, s.description AS service_desc,
-                s.duration_min AS service_duration, s.price_base, s.service_url,
-                v.id AS variant_id, v.variant_name, v.description AS variant_desc,
-                v.duration_min AS variant_duration, v.price, v.currency, v.variant_url
-          FROM service_variants v
-          JOIN services s ON s.id = v.service_id
-          WHERE s.tenant_id = $1
-            AND s.active = TRUE
-            AND v.active = TRUE
-            AND v.id = $2
-          LIMIT 1
-          `,
-          [tenantId, chosen.variant_id]
-        );
-
-        const row = rows[0];
-        if (row) {
-          const price =
-            row.price != null ? Number(row.price)
-            : row.price_base != null ? Number(row.price_base)
-            : null;
-
-          const currency = row.currency ? String(row.currency) : "USD";
-
-          resolved = {
-            ok: true,
-            kind: "variant",
-            label: `${row.service_name} - ${row.variant_name}`,
-            url: row.variant_url || row.service_url || null,
-            price,
-            currency,
-            duration_min:
-              row.variant_duration != null ? Number(row.variant_duration)
-              : row.service_duration != null ? Number(row.service_duration)
-              : null,
-            description:
-              row.variant_desc && String(row.variant_desc).trim()
-                ? String(row.variant_desc)
-                : row.service_desc ? String(row.service_desc) : null,
-            service_id: String(row.service_id),
-            variant_id: String(row.variant_id),
-          };
-        }
-      } else {
-        const { rows } = await pool.query(
-          `
-          SELECT
-            s.id AS service_id,
-            s.name AS service_name,
-            s.description AS service_desc,
-            s.duration_min AS service_duration,
-            s.price_base AS service_price_base,
-            s.service_url AS service_url,
-
-            v.id AS variant_id,
-            v.variant_name,
-            v.description AS variant_desc,
-            v.duration_min AS variant_duration,
-            v.price AS variant_price,
-            v.currency AS variant_currency,
-            v.variant_url AS variant_url
-          FROM services s
-          LEFT JOIN LATERAL (
-            SELECT v.*
-            FROM service_variants v
-            WHERE v.service_id = s.id
-              AND v.active = TRUE
-              AND v.price IS NOT NULL
-            ORDER BY v.updated_at DESC
-            LIMIT 1
-          ) v ON TRUE
-          WHERE s.tenant_id = $1
-            AND s.active = TRUE
-            AND s.id = $2
-          LIMIT 1
-          `,
-          [tenantId, chosen.service_id]
-        );
-
-        const row = rows[0];
-        if (row) {
-          const price =
-            row.variant_price != null ? Number(row.variant_price)
-            : row.service_price_base != null ? Number(row.service_price_base)
-            : null;
-
-          const currency = row.variant_currency ? String(row.variant_currency) : "USD";
-
-          const url =
-            row.variant_url && String(row.variant_url).trim()
-              ? String(row.variant_url)
-              : row.service_url ? String(row.service_url) : null;
-
-          const duration_min =
-            row.variant_duration != null ? Number(row.variant_duration)
-            : row.service_duration != null ? Number(row.service_duration)
-            : null;
-
-          const description =
-            row.variant_desc && String(row.variant_desc).trim()
-              ? String(row.variant_desc)
-              : row.service_desc ? String(row.service_desc) : null;
-
-          resolved = {
-            ok: true,
-            kind: row.variant_id ? "variant" : "service",
-            label: row.variant_id ? `${row.service_name} - ${row.variant_name}` : String(row.service_name),
-            url,
-            price,
-            currency,
-            duration_min,
-            description,
-            service_id: String(row.service_id),
-            variant_id: row.variant_id ? String(row.variant_id) : undefined,
-          };
-        }
-      }
-
-      // limpiar pick
-      transition({ patchCtx: { service_info_pick: null } });
-      await persistState({ context: convoCtx });
-
-      if (resolved?.ok) {
-        transition({
-          patchCtx: {
-            last_service_ref: {
-              kind: resolved.kind || null,
-              label: resolved.label || null,
-              service_id: resolved.service_id || null,
-              variant_id: resolved.variant_id || null,
-              saved_at: new Date().toISOString(),
-            },
-          },
-        });
-
-        await persistState({ context: convoCtx });
-
-        const msg = renderServiceInfoReply(resolved, need, idiomaDestino);
-        await replyAndExit(msg, "service_info_pick", "service_info");
-        return { handled: true };
-      }
-
-      const msg =
-        idiomaDestino === "en"
-          ? "I couldn't find that option anymore. Ask again about the service."
-          : "No pude encontrar esa opción ya. Vuelve a preguntarme por el servicio.";
-
-      await replyAndExit(msg, "service_info_pick:not_found", "service_info");
-      return { handled: true };
-    }
-  }
 
   return { handled: false };
 }
