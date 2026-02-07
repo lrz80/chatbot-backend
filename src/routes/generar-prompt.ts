@@ -477,11 +477,11 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
       tel ? `Teléfono: ${tel}` : "",
     ].filter(Boolean)));
 
-    //if (servicios.length) {
-      //out.push("");
-      //out.push("SERVICIOS");
-      //out.push(...toBullets(servicios));
-    //}
+    if (servicios.length) {
+      out.push("");
+      out.push("SERVICIOS");
+      out.push(...toBullets(servicios));
+    }
 
     if (horarios.length) {
       out.push("");
