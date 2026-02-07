@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v9"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v10"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -115,6 +115,26 @@ function buildChannelRules(canal: Canal, idioma: Lang) {
   if (canal === "instagram" || canal === "facebook") return (isES ? igfbES : igfbEN).join("\n");
   if (canal === "voice") return (isES ? voiceES : voiceEN).join("\n");
   return (isES ? previewES : previewEN).join("\n");
+}
+
+function buildLanguageLock(idioma: Lang) {
+  if (idioma === "en") {
+    return [
+      "LANGUAGE_LOCK (CRITICAL):",
+      "- Reply 100% in English.",
+      "- Do NOT switch languages mid-reply.",
+      "- You may keep service names in their original language (e.g., 'Specialty Treatment'),",
+      "  but the explanation MUST be in English.",
+    ].join("\n");
+  }
+
+  return [
+    "BLOQUEO_DE_IDIOMA (CRÍTICO):",
+    "- Responde 100% en español.",
+    "- NO mezcles idiomas en la misma respuesta.",
+    "- Puedes mantener nombres de servicios en su idioma original (ej: 'Specialty Treatment'),",
+    "  pero la explicación DEBE ser en español.",
+  ].join("\n");
 }
 
 function buildResponseFormat(idioma: Lang) {
@@ -665,6 +685,7 @@ router.post("/", async (req: Request, res: Response) => {
     const linkGroups = classifyLinks(enlacesOficiales);
     const channelRules = buildChannelRules(canalNorm, idiomaNorm);
     const responseFormat = buildResponseFormat(idiomaNorm);
+    const languageLock = buildLanguageLock(idiomaNorm);
     const conversionMode = buildConversionMode(idiomaNorm);
     const ctaGuide = enlacesOficiales.length ? buildCtaMap(idiomaNorm, linkGroups) : "";
 
@@ -746,6 +767,8 @@ router.post("/", async (req: Request, res: Response) => {
         : "Atiendes conversaciones con clientes reales y respondes de forma profesional, clara y humana.",
       "",
       `Idioma: ${idiomaNorm}`,
+      "",
+      languageLock,
       "",
 
       // 2) Reglas por canal (✅ MULTICANAL)
