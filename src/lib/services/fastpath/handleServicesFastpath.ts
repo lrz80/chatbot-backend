@@ -285,14 +285,8 @@ export async function handleServicesFastpath(args: {
     const need = wantsServiceInfo(routingText);
 
     if (need === "any") {
-    const msg = await renderMoreInfoClarifier({
-        pool,
-        tenantId,
-        lang: idiomaDestino,
-    });
-
-    await replyAndExit(msg, "service_info:any_clarify", "service_info");
-    return { handled: true };
+    
+      return { handled: true };
     }
 
     if (need) {
@@ -550,27 +544,8 @@ export async function handleServicesFastpath(args: {
   // =========================================================
   // 5) SERVICE LIST / MORE INFO (SUMMARY, no spam)
   // =========================================================
-  if (wantsMoreInfoOnly(routingText)) {
-    const msg = await renderMoreInfoClarifier({
-      pool,
-      tenantId,
-      lang: idiomaDestino,
-    });
-
-    await replyAndExit(msg, "more_info:clarifier", "service_info");
-    return { handled: true };
-  }
-
-  if (wantsServiceList(routingText)) {
-    const msg = await renderServiceSummaryReply({
-      pool,
-      tenantId,
-      lang: idiomaDestino,
-    });
-
-    await replyAndExit(msg, "service_summary", "service_list");
-    return { handled: true };
-  }
+  if (wantsMoreInfoOnly(routingText)) return { handled: false };
+  if (wantsServiceList(routingText)) return { handled: false };
 
   // =========================================================
   // 6) SERVICE INFO PICK (sticky)
