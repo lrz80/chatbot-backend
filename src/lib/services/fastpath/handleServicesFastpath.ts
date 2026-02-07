@@ -400,8 +400,8 @@ export async function handleServicesFastpath(args: {
     if (need) {
       const hint = String(userInput || "").trim();
 
-      // ✅ DB-first siempre; si no matchea, luego puedes caer a resolveServiceInfo si quieres
-      const r = await resolveServiceInfoByDb({
+      // 1) intento con el texto original
+      let r = await resolveServiceInfoByDb({
         pool,
         tenantId,
         query: hint,
@@ -409,6 +409,29 @@ export async function handleServicesFastpath(args: {
         limit: 5,
       });
 
+      // 2) si NO matchea y estamos en ES, intentamos traduciendo la query a EN
+      if (!r.ok && idiomaDestino === "es") {
+        try {
+        const en = String(await traducirMensaje(hint, "en") || "").trim();
+          if (en && en.toLowerCase() !== hint.toLowerCase()) {
+            const r2 = await resolveServiceInfoByDb({
+            pool,
+            tenantId,
+            query: en,
+            need,
+            limit: 5,
+            });
+
+            // si el segundo intento resolvió o quedó ambiguous con opciones, úsalo
+            if (r2.ok || (r2.reason === "ambiguous" && r2.options?.length)) {
+            r = r2;
+            }
+          }
+        } catch {
+        // ignore
+        }
+      }
+      // ✅ DB-first siempre; si no matchea, luego puedes caer a resolveServiceInfo si quieres
       if (r.ok) {
         transition({
           patchCtx: {
