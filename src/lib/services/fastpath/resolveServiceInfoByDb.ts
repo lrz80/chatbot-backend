@@ -184,21 +184,21 @@ export async function resolveServiceInfoByDb(args: {
   limit?: number;
 }): Promise<Resolved> {
   const { pool, tenantId } = args;
-  const query = String(args.query || "").trim();
-  if (!query) return { ok: false, reason: "no_match" };
+  const userQuery = String(args.query || "").trim();
+  if (!userQuery) return { ok: false, reason: "no_match" };
 
   const limit = Math.min(Math.max(Number(args.limit || 5), 3), 8);
 
   // Importante: "uñas" (con ñ) sí; "unas" (sin ñ) NO.
   // Como luego normalizamos y se pierde la ñ, detectamos antes.
-  const hasEnye = /uñas|uña/i.test(query);
+  const hasEnye = /uñas|uña/i.test(userQuery);
 
   // Expand tokens mínimamente (universal, no por industria)
   // - "corte de pelo" ≈ "haircut"
   // - "uñas" (con ñ) ≈ "nails"
   // - no tocamos "unas" sin ñ
-  let qExpanded = query;
-  if (/\bcorte\b/i.test(query) && /\bpelo\b/i.test(query)) qExpanded += " haircut hair cut";
+  let qExpanded = userQuery;
+  if (/\bcorte\b/i.test(userQuery) && /\bpelo\b/i.test(userQuery)) qExpanded += " haircut hair cut";
   if (hasEnye) qExpanded += " nails nail";
 
   // 1) Variants candidates
@@ -343,6 +343,106 @@ export async function resolveServiceInfoByDb(args: {
         variant_id: x.variant_id || null,
       })),
     };
+  }
+
+  // ✅ Regla universal:
+  // Si ganó un SERVICE pero le falta la info pedida, y existen VARIANTS con esa info,
+  // entonces NO respondas "no tengo": muestra opciones (o responde la única).
+
+  const need = String(args.need || "");
+
+  const wantsPrice = need === "price" || need === "any" || need === "";
+  const wantsDuration = need === "duration" || need === "any" || need === "";
+  const wantsIncludes = need === "includes" || need === "any" || need === "";
+
+  const missingPrice =
+    wantsPrice && (best.price == null || !Number.isFinite(best.price as any));
+
+  const missingDuration =
+    wantsDuration && (best.duration_min == null || !Number.isFinite(best.duration_min as any));
+
+  const missingIncludes =
+    wantsIncludes && (!best.description || !String(best.description).trim());
+
+  if (best.kind === "service" && (missingPrice || missingDuration || missingIncludes)) {
+    const vPick = await pool.query(
+    `
+    SELECT
+      s.id AS service_id,
+      s.name AS service_name,
+      s.description AS service_desc,
+      s.duration_min AS service_duration,
+
+      v.id AS variant_id,
+      v.variant_name,
+      v.price,
+      COALESCE(v.currency, 'USD') AS currency,
+      v.duration_min AS variant_duration,
+      v.description AS variant_desc,
+      COALESCE(v.variant_url, s.service_url) AS url
+    FROM services s
+    JOIN service_variants v ON v.service_id = s.id
+    WHERE s.tenant_id = $1
+      AND s.active = TRUE
+      AND v.active = TRUE
+      AND s.id = $2
+      AND (
+        ($4::boolean = TRUE AND v.price IS NOT NULL)
+        OR ($5::boolean = TRUE AND v.duration_min IS NOT NULL)
+        OR ($6::boolean = TRUE AND v.description IS NOT NULL AND length(trim(v.description)) > 0)
+      )
+    ORDER BY v.updated_at DESC NULLS LAST, v.created_at DESC NULLS LAST
+    LIMIT $3
+    `,
+    [tenantId, best.service_id, limit, wantsPrice, wantsDuration, wantsIncludes]
+    );
+
+    const rows = vPick.rows || [];
+
+    if (rows.length === 1) {
+      const r = rows[0];
+
+      const price = r.price != null ? Number(r.price) : null;
+      const duration_min =
+        r.variant_duration != null
+          ? Number(r.variant_duration)
+          : r.service_duration != null
+            ? Number(r.service_duration)
+            : null;
+
+      const description =
+        r.variant_desc && String(r.variant_desc).trim()
+          ? String(r.variant_desc)
+          : r.service_desc
+            ? String(r.service_desc)
+            : null;
+
+      return {
+        ok: true,
+        kind: "variant",
+        label: `${r.service_name} - ${r.variant_name}`,
+        url: r.url || null,
+        price,
+        currency: r.currency ? String(r.currency) : "USD",
+        duration_min,
+        description,
+        service_id: String(r.service_id),
+        variant_id: String(r.variant_id),
+      };
+    }
+
+    if (rows.length > 1) {
+      return {
+        ok: false,
+        reason: "ambiguous",
+        options: rows.slice(0, limit).map((r: any) => ({
+          label: `${r.service_name} - ${r.variant_name}`,
+          kind: "variant" as const,
+          service_id: String(r.service_id),
+          variant_id: String(r.variant_id),
+        })),
+      };
+    }
   }
 
   // OK
