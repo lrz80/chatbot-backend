@@ -540,7 +540,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         await setConversationStateCompat(tenant.id, canal, contactoNorm, {
           activeFlow,
           activeStep,
-          context,
+          context: convoCtx,
         });
       },
 
