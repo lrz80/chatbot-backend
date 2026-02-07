@@ -13,7 +13,16 @@ export function isStickyPickDifferentQuestion(text: string) {
     /\b(walk\s*-?\s*in(s)?|walkins?)\b/.test(t) ||
     /\b(cita|appointment|book|booking|reserv|agendar|schedule)\b/.test(t) ||
     /\b(horario|horarios|hours|open|close|abren|cierran)\b/.test(t) ||
-    /\b(ubicaci[oó]n|direcci[oó]n|location|address)\b/.test(t)
+    /\b(ubicaci[oó]n|direcci[oó]n|location|address)\b/.test(t) ||
+
+    // ✅ NUEVO: el usuario cambió a “catálogo general / recomendación”
+    /\b(que\s+servicios\s+ofrecen|servicios\s+ofrecen|que\s+tienen|que\s+hacen|que\s+ofrecen)\b/.test(t) ||
+    /\b(servicios|services|cat[aá]logo|catalog|men[uú]|menu|lista)\b/.test(t) ||
+    /\b(recom(i|í)end(a|as|ame)?|recommend|suggest|sugerencia|que\s+me\s+recomiendas)\b/.test(t) ||
+
+    // ✅ NUEVO: “más info” (incluye tu caso “quiero mas inf”)
+    /\b(m[aá]s\s*info(rmaci[oó]n)?|quiero\s+m[aá]s\s+inf|quiero\s+m[aá]s\s+info|dame\s+m[aá]s\s+info|m[aá]s\s+detalles|detalles)\b/.test(t) ||
+    /\b(more\s+info(rmation)?|more\s+details|tell\s+me\s+more|details)\b/.test(t)
   );
 }
 
