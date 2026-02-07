@@ -177,7 +177,7 @@ export async function handleServicesFastpath(args: {
 
       // si el usuario cambia a catálogo general / más info → suelta el sticky y deja seguir al LLM
       if (isGeneralCatalogQuestion(routingText) || wantsMoreInfoOnly(routingText) || wantsServiceList(routingText)) {
-        transition({ patchCtx: { service_info_pick: null } }); // o service_link_pick en sección 1
+        transition({ patchCtx: { service_link_pick: null } }); // o service_link_pick en sección 1
         await persistState({ context: convoCtx });
         return { handled: false };
       }
