@@ -328,8 +328,8 @@ function parseKeyValueTemplate(text: string) {
     ["teléfono", "Teléfono"],
     ["telefono", "Teléfono"],
 
-    //["servicios", "Servicios"],
-    //["servicios principales", "Servicios principales"],
+    ["servicios", "Servicios"],
+    ["servicios principales", "Servicios principales"],
 
     ["horarios", "Horarios"],
     ["horario", "Horarios"],
@@ -689,9 +689,10 @@ router.post("/", async (req: Request, res: Response) => {
             "- Do not ask questions before answering a direct question.",
             "- Ask at most 1 question only if needed.",
             "- Do not repeat long text verbatim; paraphrase briefly when needed.",
-            "- Service catalog (services/variants/prices/duration) must NOT live in the prompt.",
-            "- When the user asks for price, duration, or what's included, query the database (services/service_variants).",
-            "- If ambiguous (multiple variants), ask them to pick 1–5. Do not guess.",
+            "- A GENERAL service list (names only) may live in the prompt as a quick guide.",
+            "- Do not include prices in the prompt.",
+            "- For price, duration, or what's included, query the database (services/service_variants).",
+            "- If multiple variants exist, ask them to pick 1–5. Do not guess.",
           ]
         : [
             "- No inventes información.",
@@ -700,9 +701,10 @@ router.post("/", async (req: Request, res: Response) => {
             "- No hagas preguntas antes de responder una pregunta directa.",
             "- Máximo 1 pregunta si es necesaria.",
             "- No repitas textos largos literalmente; parafrasea breve cuando sea necesario.",
-            "- Catálogo (servicios/variantes/precios/duración) NO vive en el prompt.",
-            "- Cuando el usuario pregunte precios, duración o qué incluye un servicio, consulta la base de datos (services/service_variants).",
-            "- Si hay ambigüedad (varias variantes), pide elegir 1–5. No adivines.",
+            "- La lista GENERAL de servicios (solo nombres) puede vivir en el prompt como guía rápida.",
+            "- No incluyas precios en el prompt.",
+            "- Para precio, duración o qué incluye, consulta la base de datos (services/service_variants).",
+            "- Si hay varias variantes, pide elegir 1–5. No adivines.",
           ]),
       "",
 
