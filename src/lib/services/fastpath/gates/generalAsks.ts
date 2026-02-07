@@ -9,13 +9,24 @@ export function wantsGeneralPrices(text: string) {
 
   if (!asksPrice) return false;
 
-  const remainder = t
+  // quitamos tokens de "precio" y dejamos lo demás
+  let remainder = t
     .replace(/\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|tarifa|cost(o|os))\b/g, "")
     .replace(/\b(price|prices|how\s+much|how\s+much\s+is|cost|rate|fee)\b/g, "")
     .replace(/[^a-z0-9áéíóúñ\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
+  // ✅ quita “relleno” típico: "cuales son los", "dime", "me puedes", etc.
+  remainder = remainder
+    .replace(/\b(cuales|cu[aá]les|son|los|las|el|la|de|del|para|por|me|puedes|podr[ií]as|dime|quiero|necesito|info|informaci[oó]n)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // Si después de quitar relleno NO queda nada, es general.
+  if (remainder.length === 0) return true;
+
+  // Si queda muy poco, también es general.
   return remainder.length <= 10;
 }
 

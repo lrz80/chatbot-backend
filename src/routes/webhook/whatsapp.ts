@@ -876,9 +876,14 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
     if (await tryBooking("guardrail", "sm_reply")) return;
 
+    const NO_NUMERIC_MENUS =
+      idiomaDestino === "en"
+        ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."
+        : "REGLA: NO muestres menús numerados ni pidas que respondan con un número. Si necesitas aclarar, haz UNA sola pregunta corta. Las selecciones por número las maneja el sistema, no tú.";
+
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
-      promptBase: promptBaseMem,
+      promptBase: [promptBaseMem, "", NO_NUMERIC_MENUS].join("\n"),
       userInput: [
         "SYSTEM_EVENT_FACTS (use to respond; do not mention systems; keep it short):",
         JSON.stringify(smResult.facts || {}),
@@ -962,9 +967,14 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
     if (await tryBooking("guardrail", "sm_fallback")) return;
 
+    const NO_NUMERIC_MENUS =
+      idiomaDestino === "en"
+        ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."
+        : "REGLA: NO muestres menús numerados ni pidas que respondan con un número. Si necesitas aclarar, haz UNA sola pregunta corta. Las selecciones por número las maneja el sistema, no tú.";
+
     const composed = await answerWithPromptBase({
-      tenantId: tenant.id,
-      promptBase: promptBaseMem,
+      tenantId: event.tenantId,
+      promptBase: [promptBaseMem, "", NO_NUMERIC_MENUS].join("\n"),
       userInput,
       history, // ✅ aquí
       idiomaDestino,
