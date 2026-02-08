@@ -81,6 +81,68 @@ export async function handleServicesFastpath(args: {
     await persistState({ context: ctx });
   }
 
+    // =========================================================
+  // 🔒 PASSIVE ANCHOR: guarda last_service_ref aunque responda el LLM
+  // (evita que "small / perro pequeño" se quede sin contexto)
+  // =========================================================
+  {
+    const lastRef = ctx?.last_service_ref;
+
+    const lastRefFresh = (() => {
+      const saved = String(lastRef?.saved_at || "").trim();
+      if (!saved) return false;
+      const ts = Date.parse(saved);
+      if (!Number.isFinite(ts)) return false;
+      return Date.now() - ts < 1000 * 60 * 20; // 20 min
+    })();
+
+    // Si no hay ancla fresca, intentamos detectar el servicio desde este turno
+    if (!lastRefFresh) {
+      let r0: any = null;
+
+      // 1) intento directo
+      try {
+        r0 = await resolveServiceInfoByDb({
+          pool,
+          tenantId,
+          query: String(userInput || "").trim(),
+          need: "any",
+          limit: 1,
+        });
+      } catch {}
+
+      // 2) si no matchea y estamos en ES, intentamos traduciendo a EN
+      if ((!r0 || !r0.ok) && idiomaDestino === "es") {
+        try {
+          const en = String(await traducirMensaje(String(userInput || ""), "en") || "").trim();
+          if (en && en.toLowerCase() !== String(userInput || "").toLowerCase()) {
+            const r1 = await resolveServiceInfoByDb({
+              pool,
+              tenantId,
+              query: en,
+              need: "any",
+              limit: 1,
+            });
+            if (r1?.ok) r0 = r1;
+          }
+        } catch {}
+      }
+
+      // Si encontramos servicio/variante, lo guardamos en contexto (SIN responder)
+      if (r0?.ok && r0?.service_id) {
+        await applyPatch({
+          last_service_ref: {
+            kind: r0.kind || null,
+            label: r0.label || null,
+            service_id: r0.service_id || null,
+            variant_id: r0.variant_id || null,
+            saved_at: new Date().toISOString(),
+          },
+        });
+      }
+    }
+  }
+
   // 0) Gates: preguntas que NO son sobre catálogo/precios/servicios
   if (isNonCatalogQuestion(routingText)) {
     return { handled: false };
