@@ -114,10 +114,10 @@ async function fallbackToPricedPackage(tenantId: string): Promise<ResolvedServic
 }
 
 function userMentionsVariant(qRaw: string) {
-  const src = String(qRaw || "");
+  const src = stripDiacritics(String(qRaw || "").toLowerCase());
   return (
-    /\b(small|medium|large|xl|xxl)\b/i.test(src) ||
-    /\b(pequeñ[oa]s?|median[oa]s?|grand[ea]s?)\b/i.test(src) ||
+    /\b(small|medium|large|xl|xxl|xs|x-small)\b/i.test(src) ||
+    /\b(pequeno|pequena|pequenos|pequenas|mediano|mediana|medianos|medianas|grande|grandes)\b/i.test(src) ||
     /\b(\d+\s*(lb|lbs|pounds|kg))\b/i.test(src) ||
     /\b(\d+\s*-\s*\d+)\b/.test(src) ||
     /\b(\d+\+)\b/.test(src)
@@ -172,15 +172,19 @@ export async function resolveServiceInfo(args: {
   }
 
   if (services.length >= 2 && secondScore >= 0.35) {
-    return {
-      ok: false,
-      reason: "ambiguous",
-      options: services.slice(0, 5).map((s: any) => ({
-        label: `${s.category ? `[${s.category}] ` : ""}${s.name}`,
-        kind: "service",
-        service_id: s.id,
-      })),
-    };
+    const gap = topScore - secondScore;
+    // ✅ solo ambiguo si están realmente cerca
+    if (gap < 0.08) {
+        return {
+        ok: false,
+        reason: "ambiguous",
+        options: services.slice(0, 5).map((s: any) => ({
+          label: `${s.category ? `[${s.category}] ` : ""}${s.name}`,
+          kind: "service",
+          service_id: s.id,
+        })),
+      };
+    }
   }
 
   // 3) Traer TODAS las variantes activas del top (siempre)
@@ -251,6 +255,40 @@ export async function resolveServiceInfo(args: {
           description: (v.description && String(v.description).trim()) ? String(v.description) : (top.description ? String(top.description) : null),
           service_id: String(top.id),
           variant_id: String(v.id),
+        };
+      }
+    }
+
+    // ✅ matcher determinístico por tamaño (universal)
+    const src = stripDiacritics(qRaw.toLowerCase());
+    const wantsSmall = /\b(pequeno|pequena|pequenos|pequenas|small|xs|x-small)\b/.test(src);
+    const wantsMedium = /\b(mediano|mediana|medianos|medianas|medium|m)\b/.test(src);
+    const wantsLarge = /\b(grande|grandes|large|l)\b/.test(src);
+    const wantsXL = /\b(xl|extra\s*large|extra-large)\b/.test(src);
+
+    if (allVariants.length) {
+      const pick = allVariants.find((vv: any) => {
+        const name = stripDiacritics(String(vv.variant_name || "").toLowerCase());
+        if (wantsSmall) return /\b(small|xs|x-small|pequeno|pequena)\b/.test(name);
+        if (wantsMedium) return /\b(medium|mediano|mediana)\b/.test(name);
+        if (wantsLarge) return /\b(large|grande)\b/.test(name);
+        if (wantsXL) return /\b(xl|extra\s*large|extra-large)\b/.test(name);
+        return false;
+      });
+
+      if (pick) {
+        const url = (pick.variant_url || top.service_url || null) as string | null;
+        return {
+          ok: true,
+          kind: "variant",
+          label: `${top.name} - ${pick.variant_name}`,
+          url,
+          price: pick.price !== null ? Number(pick.price) : null,
+          currency: pick.currency ? String(pick.currency) : "USD",
+          duration_min: pick.duration_min !== null ? Number(pick.duration_min) : (top.duration_min !== null ? Number(top.duration_min) : null),
+          description: (pick.description && String(pick.description).trim()) ? String(pick.description) : (top.description ? String(top.description) : null),
+          service_id: String(top.id),
+          variant_id: String(pick.id),
         };
       }
     }
