@@ -12,8 +12,6 @@ import { wantsServiceList } from "../wantsServiceList";
 
 import { parsePickNumber } from "../../channels/engine/parsers/parsers";
 import { traducirMensaje } from "../../traducirMensaje";
-import { renderMoreInfoClarifier } from "./renderMoreInfoClarifier";
-import { renderServiceSummaryReply } from "./renderServiceSummaryReply";
 import { isNonCatalogQuestion } from "./gates/isNonCatalogQuestion";
 import { resolveServiceInfoByDb } from "./resolveServiceInfoByDb";
 import {
@@ -33,6 +31,8 @@ import {
 } from "./ui/servicePickUi";
 import { toCanonicalEsForRouting } from "./utils/routingText";
 import { wantsGeneralPrices, wantsMoreInfoOnly } from "./gates/generalAsks";
+import { looksLikeVariantPick } from "./looksLikeVariantPick";
+import { pickVariantFromServiceContext } from "./pickVariantFromServiceContext";
 
 
 type Lang = "es" | "en";
@@ -549,6 +549,66 @@ export async function handleServicesFastpath(args: {
 
     if (need) {
       const hint = String(userInput || "").trim();
+
+      // ✅ Si el user está eligiendo variante (“small/pequeño/20 lbs”) y tenemos last service fresco,
+      // resolvemos SOLO dentro de las variantes del último servicio.
+      if (
+        need === "price" &&
+        lastRefFresh &&
+        convoCtx?.last_service_ref?.service_id &&
+        !convoCtx?.last_service_ref?.variant_id &&
+        looksLikeVariantPick(userInput)
+      ) {
+        const pick = await pickVariantFromServiceContext({
+          pool,
+          tenantId,
+          serviceId: convoCtx.last_service_ref.service_id,
+          userPickText: String(userInput || "").trim(),
+          limit: 5,
+        });
+
+        if (pick.ok) {
+          const rPicked = pick.resolved;
+
+          transition({
+            patchCtx: {
+              last_service_ref: {
+                kind: rPicked.kind,
+                label: rPicked.label,
+                service_id: rPicked.service_id,
+                variant_id: rPicked.variant_id,
+                saved_at: new Date().toISOString(),
+              },
+            },
+        });
+
+        await persistState({ context: convoCtx });
+
+        const msg = renderServiceInfoReply(rPicked, need, idiomaDestino);
+        await replyAndExit(msg, "service_info:variant_pick_ctx", "service_info");
+        return { handled: true };
+      }
+
+      if (pick.reason === "ambiguous" && pick.options?.length) {
+        const options = pick.options.slice(0, 5);
+
+        transition({
+          patchCtx: {
+            service_info_pick: {
+              need,
+              options,
+              created_at: new Date().toISOString(),
+            },
+          },
+        });
+
+        await persistState({ context: convoCtx });
+
+        const msg = renderPickMenu(options, need, idiomaDestino);
+        await replyAndExit(msg, "service_info:variant_pick_ctx_ambiguous", "service_info");
+        return { handled: true };
+      }
+    }
 
       // 1) intento con el texto original
       let r = await resolveServiceInfoByDb({
