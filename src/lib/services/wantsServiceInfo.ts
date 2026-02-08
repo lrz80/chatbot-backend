@@ -54,11 +54,15 @@ function isGenericPriceQuestion(t: string): boolean {
   return false;
 }
 
-export function wantsServiceInfo(text: string): ServiceInfoNeed | null {
+export function wantsServiceInfo(
+  text: string,
+  opts?: { hasContextAnchor?: boolean }
+): ServiceInfoNeed | null {
   const t = String(text || "").trim().toLowerCase();
 
   // ✅ Evita que "¿Cuáles son los precios?" dispare service_info (multitenant-safe)
-  if (isGenericPriceQuestion(t)) {
+  // PERO si ya estamos hablando de un servicio/variante (contexto), entonces sí.
+  if (isGenericPriceQuestion(t) && !opts?.hasContextAnchor) {
     return null;
   }
 

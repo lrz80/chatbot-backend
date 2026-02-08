@@ -189,6 +189,17 @@ export async function resolveServiceInfoByDb(args: {
 
   const limit = Math.min(Math.max(Number(args.limit || 5), 3), 8);
 
+  const need = String(args.need || "");
+
+  const wantsPrice = need === "price" || need === "any";
+  const wantsDuration = need === "duration" || need === "any";
+  const wantsIncludes = need === "includes" || need === "any";
+
+  // Si no vino need, asume "any" pero SIN mezclar señales:
+  // deja que el scoring elija por label, no por “includes”.
+  // (o sea: no lo uses para filtrar candidates)
+  const isNeedUnknown = !need;
+
   // Importante: "uñas" (con ñ) sí; "unas" (sin ñ) NO.
   // Como luego normalizamos y se pierde la ñ, detectamos antes.
   const hasEnye = /uñas|uña/i.test(userQuery);
@@ -224,11 +235,16 @@ export async function resolveServiceInfoByDb(args: {
     WHERE s.tenant_id = $1
       AND s.active = TRUE
       AND v.active = TRUE
-      AND (v.price IS NOT NULL OR (v.description IS NOT NULL AND length(trim(v.description)) > 0))
+      AND (
+        ($2::boolean = TRUE AND v.price IS NOT NULL)
+        OR ($3::boolean = TRUE AND v.duration_min IS NOT NULL)
+        OR ($4::boolean = TRUE AND v.description IS NOT NULL AND length(trim(v.description)) > 0)
+        OR ($5::boolean = TRUE) -- fallback para need desconocido
+      )
     ORDER BY v.updated_at DESC NULLS LAST, v.created_at DESC NULLS LAST
     LIMIT 250
     `,
-    [tenantId]
+    [tenantId, wantsPrice, wantsDuration, wantsIncludes, isNeedUnknown || need === "any"]
   );
 
   // 2) Services candidates (solo si tienen price_base o description)
@@ -348,13 +364,6 @@ export async function resolveServiceInfoByDb(args: {
   // ✅ Regla universal:
   // Si ganó un SERVICE pero le falta la info pedida, y existen VARIANTS con esa info,
   // entonces NO respondas "no tengo": muestra opciones (o responde la única).
-
-  const need = String(args.need || "");
-
-  const wantsPrice = need === "price" || need === "any" || need === "";
-  const wantsDuration = need === "duration" || need === "any" || need === "";
-  const wantsIncludes = need === "includes" || need === "any" || need === "";
-
   const missingPrice =
     wantsPrice && (best.price == null || !Number.isFinite(best.price as any));
 
@@ -444,6 +453,79 @@ export async function resolveServiceInfoByDb(args: {
       };
     }
   }
+
+  // ✅ Si ganó un VARIANT pero no tiene la info pedida,
+// intenta otras variantes del mismo service que sí la tengan.
+if (best.kind === "variant" && (missingPrice || missingDuration || missingIncludes)) {
+  const vPick2 = await pool.query(
+    `
+    SELECT
+      s.id AS service_id,
+      s.name AS service_name,
+      s.description AS service_desc,
+      s.duration_min AS service_duration,
+
+      v.id AS variant_id,
+      v.variant_name,
+      v.price,
+      COALESCE(v.currency, 'USD') AS currency,
+      v.duration_min AS variant_duration,
+      v.description AS variant_desc,
+      COALESCE(v.variant_url, s.service_url) AS url
+    FROM services s
+    JOIN service_variants v ON v.service_id = s.id
+    WHERE s.tenant_id = $1
+      AND s.active = TRUE
+      AND v.active = TRUE
+      AND s.id = $2
+      AND (
+        ($4::boolean = TRUE AND v.price IS NOT NULL)
+        OR ($5::boolean = TRUE AND v.duration_min IS NOT NULL)
+        OR ($6::boolean = TRUE AND v.description IS NOT NULL AND length(trim(v.description)) > 0)
+      )
+    ORDER BY v.updated_at DESC NULLS LAST, v.created_at DESC NULLS LAST
+    LIMIT $3
+    `,
+    [tenantId, best.service_id, limit, wantsPrice, wantsDuration, wantsIncludes]
+  );
+
+  const rows = vPick2.rows || [];
+
+  if (rows.length === 1) {
+    const r = rows[0];
+    return {
+      ok: true,
+      kind: "variant",
+      label: `${r.service_name} - ${r.variant_name}`,
+      url: r.url || null,
+      price: r.price != null ? Number(r.price) : null,
+      currency: r.currency ? String(r.currency) : "USD",
+      duration_min:
+        r.variant_duration != null ? Number(r.variant_duration)
+        : r.service_duration != null ? Number(r.service_duration)
+        : null,
+      description:
+        r.variant_desc && String(r.variant_desc).trim()
+          ? String(r.variant_desc)
+          : r.service_desc ? String(r.service_desc) : null,
+      service_id: String(r.service_id),
+      variant_id: String(r.variant_id),
+    };
+  }
+
+  if (rows.length > 1) {
+    return {
+      ok: false,
+      reason: "ambiguous",
+      options: rows.slice(0, limit).map((r: any) => ({
+        label: `${r.service_name} - ${r.variant_name}`,
+        kind: "variant" as const,
+        service_id: String(r.service_id),
+        variant_id: String(r.variant_id),
+      })),
+    };
+  }
+}
 
   // OK
   return {

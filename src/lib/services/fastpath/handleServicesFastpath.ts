@@ -528,7 +528,19 @@ export async function handleServicesFastpath(args: {
   // 4) SERVICE INFO FAST-PATH (precio/duración/incluye)
   // =========================================================
   {
-    const need = wantsServiceInfo(routingText);
+    const lastRef = convoCtx?.last_service_ref;
+
+    const lastRefFresh = (() => {
+    const saved = String(lastRef?.saved_at || "").trim();
+    if (!saved) return false;
+    const ts = Date.parse(saved);
+    if (!Number.isFinite(ts)) return false;
+    return Date.now() - ts < 1000 * 60 * 20; // 20 min
+    })();
+
+    const need = wantsServiceInfo(routingText, {
+    hasContextAnchor: Boolean(lastRefFresh && lastRef?.service_id),
+    });
 
     if (need === "any") {
     
@@ -614,16 +626,6 @@ export async function handleServicesFastpath(args: {
         await replyAndExit(msg, "service_info:ambiguous", "service_info");
         return { handled: true };
       }
-
-      const lastRef = convoCtx?.last_service_ref;
-
-      const lastRefFresh = (() => {
-      const saved = String(lastRef?.saved_at || "").trim();
-        if (!saved) return false;
-      const ts = Date.parse(saved);
-        if (!Number.isFinite(ts)) return false;
-        return Date.now() - ts < 1000 * 60 * 20; // 20 min
-      })();
 
       // fallback por last_service_ref (solo si está fresco)
       if (lastRefFresh && lastRef?.service_id) {
