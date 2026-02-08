@@ -625,80 +625,80 @@ export async function handleServicesFastpath(args: {
         return Date.now() - ts < 1000 * 60 * 20; // 20 min
       })();
 
-      // ✅ fallback por last_service_ref (solo si está fresco)
-      if (lastRef?.service_id && lastRefFresh) {
-        const { rows } = await pool.query(
-          `
-          SELECT
-            s.id AS service_id,
-            s.name AS service_name,
-            s.description AS service_desc,
-            s.duration_min AS service_duration,
-            s.price_base AS service_price_base,
-            s.service_url AS service_url,
+      // fallback por last_service_ref (solo si está fresco)
+      if (lastRefFresh && lastRef?.service_id) {
+      const { rows } = await pool.query(
+        `
+        SELECT
+        s.id AS service_id,
+        s.name AS service_name,
+        s.description AS service_desc,
+        s.duration_min AS service_duration,
+        s.price_base AS service_price_base,
+        s.service_url AS service_url,
 
-            v.id AS variant_id,
-            v.variant_name,
-            v.description AS variant_desc,
-            v.duration_min AS variant_duration,
-            v.price AS variant_price,
-            v.currency AS variant_currency,
-            v.variant_url AS variant_url
-          FROM services s
-          LEFT JOIN service_variants v ON v.id = $2 AND v.service_id = s.id
-          WHERE s.tenant_id = $1
-            AND s.active = TRUE
-            AND s.id = $3
-          LIMIT 1
-          `,
-          [tenantId, lastRef.variant_id || null, lastRef.service_id]
-        );
+        v.id AS variant_id,
+        v.variant_name,
+        v.description AS variant_desc,
+        v.duration_min AS variant_duration,
+        v.price AS variant_price,
+        v.currency AS variant_currency,
+        v.variant_url AS variant_url
+        FROM services s
+        LEFT JOIN service_variants v ON v.id = $2 AND v.service_id = s.id
+        WHERE s.tenant_id = $1
+        AND s.active = TRUE
+        AND s.id = $3
+        LIMIT 1
+        `,
+        [tenantId, lastRef.variant_id || null, lastRef.service_id]
+      );
 
-        const row = rows[0];
-        if (row) {
-          const price =
-            row.variant_price != null
-              ? Number(row.variant_price)
-              : row.service_price_base != null
-                ? Number(row.service_price_base)
-                : null;
+      const row = rows[0];
+      if (row) {
+        const price =
+          row.variant_price != null
+            ? Number(row.variant_price)
+            : row.service_price_base != null
+            ? Number(row.service_price_base)
+            : null;
 
           const currency = row.variant_currency ? String(row.variant_currency) : "USD";
 
           const duration_min =
-            row.variant_duration != null
-              ? Number(row.variant_duration)
-              : row.service_duration != null
-                ? Number(row.service_duration)
-                : null;
+          row.variant_duration != null
+            ? Number(row.variant_duration)
+            : row.service_duration != null
+            ? Number(row.service_duration)
+            : null;
 
           const description =
-            row.variant_desc && String(row.variant_desc).trim()
-              ? String(row.variant_desc)
-              : row.service_desc
-                ? String(row.service_desc)
-                : null;
+          row.variant_desc && String(row.variant_desc).trim()
+            ? String(row.variant_desc)
+            : row.service_desc
+            ? String(row.service_desc)
+            : null;
 
           const url =
-            row.variant_url && String(row.variant_url).trim()
-              ? String(row.variant_url)
-              : row.service_url
-                ? String(row.service_url)
-                : null;
+          row.variant_url && String(row.variant_url).trim()
+            ? String(row.variant_url)
+            : row.service_url
+            ? String(row.service_url)
+            : null;
 
           const kind: "variant" | "service" = row.variant_id ? "variant" : "service";
 
           const resolved = {
-            ok: true as const,
-            kind,
-            label: row.variant_id ? `${row.service_name} - ${row.variant_name}` : String(row.service_name),
-            url,
-            price,
-            currency: (currency ?? null) as string | null,
-            duration_min,
-            description,
-            service_id: String(row.service_id),
-            variant_id: row.variant_id ? String(row.variant_id) : undefined,
+          ok: true as const,
+          kind,
+          label: row.variant_id ? `${row.service_name} - ${row.variant_name}` : String(row.service_name),
+          url,
+          price,
+          currency: (currency ?? null) as string | null,
+          duration_min,
+          description,
+          service_id: String(row.service_id),
+          variant_id: row.variant_id ? String(row.variant_id) : undefined,
           };
 
           const msg = renderServiceInfoReply(resolved, need, idiomaDestino);
@@ -708,8 +708,8 @@ export async function handleServicesFastpath(args: {
       }
 
       if (!r.ok && need === "price") {
-        // ✅ SOLO damos lista general si el mensaje es general ("precios", "cuánto cuesta", etc.)
-        if (wantsGeneralPrices(routingText) && !(lastRef?.service_id && lastRefFresh)) {
+        // ✅ SOLO damos lista general si el mensaje es general ("precios", "lista de precios", etc.)
+        if (wantsGeneralPrices(routingText)) {
           const { rows } = await pool.query(
             `
             (
@@ -723,76 +723,92 @@ export async function handleServicesFastpath(args: {
                 s.updated_at AS updated_at
               FROM services s
               WHERE s.tenant_id = $1
-                  AND s.active = TRUE
-                  AND s.price_base IS NOT NULL
-                  AND NOT EXISTS (
-                  SELECT 1
-                  FROM service_variants v2
-                  WHERE v2.service_id = s.id
-                      AND v2.active = TRUE
-                      AND v2.price IS NOT NULL
-                  )
+                AND s.active = TRUE
+                AND s.price_base IS NOT NULL
+                AND NOT EXISTS (
+                SELECT 1
+                FROM service_variants v2
+                WHERE v2.service_id = s.id
+                    AND v2.active = TRUE
+                    AND v2.price IS NOT NULL
+                )
             )
             UNION ALL
             (
               SELECT
-                  s.name AS label,
-                  v.variant_name AS variant_name,
-                  v.price AS price,
-                  COALESCE(v.currency, 'USD') AS currency,
-                  COALESCE(v.variant_url, s.service_url) AS url,
-                  2 AS sort_group,
-                  v.updated_at AS updated_at
+                s.name AS label,
+                v.variant_name AS variant_name,
+                v.price AS price,
+                COALESCE(v.currency, 'USD') AS currency,
+                COALESCE(v.variant_url, s.service_url) AS url,
+                2 AS sort_group,
+                v.updated_at AS updated_at
               FROM services s
               JOIN service_variants v ON v.service_id = s.id
               WHERE s.tenant_id = $1
-                  AND s.active = TRUE
-                  AND v.active = TRUE
-                  AND v.price IS NOT NULL
+                AND s.active = TRUE
+                AND v.active = TRUE
+                AND v.price IS NOT NULL
             )
             ORDER BY sort_group ASC, updated_at DESC
             LIMIT 12
             `,
             [tenantId]
-          );
+            );
 
-          if (rows.length) {
-            const lines = rows.map((rr: any) => {
-              const p = Number(rr.price);
-              const cur = String(rr.currency || "USD");
-              const name = rr.variant_name ? `${rr.label} - ${rr.variant_name}` : String(rr.label);
-              return `• ${name}: $${p.toFixed(2)} ${cur}`;
+            if (rows.length) {
+              const lines = rows.map((rr: any) => {
+                const p = Number(rr.price);
+                const cur = String(rr.currency || "USD");
+                const name = rr.variant_name ? `${rr.label} - ${rr.variant_name}` : String(rr.label);
+                return `• ${name}: $${p.toFixed(2)} ${cur}`;
             });
 
-            const msg =
-              idiomaDestino === "en"
+              const msg =
+                idiomaDestino === "en"
                 ? `Here are the current prices:\n\n${lines.join("\n")}`
                 : `Estos son los precios actuales:\n\n${lines.join("\n")}`;
 
             await replyAndExit(msg, "service_info:price_fallback_list", "precios");
             return { handled: true };
-          }
+            }
         }
 
-        // ✅ Si el mensaje NO es general (ej: "corte de pelo", "uñas"), NO spamees lista:
-        // pide el nombre exacto o sugiere que te escriban "Haircut / Cut / Nails trimming" etc.
-        const msg =
-          idiomaDestino === "en"
-            ? "Which service do you mean exactly? Tell me the service name (e.g., Haircut / Nail trim / Bath)."
-            : "¿De cuál servicio exactamente? Dime el nombre del servicio (ej: corte, uñas, baño).";
-
-        await replyAndExit(msg, "service_info:price_no_match_clarify", "service_info");
-        return { handled: true };
-      }
-
-      const msg =
+    // ✅ Si NO es "precios generales", pide aclaración (NO spam)
+    const msg =
         idiomaDestino === "en"
-          ? "Which service do you mean? Tell me the exact name."
-          : "¿Cuál servicio exactamente? Dime el nombre.";
+        ? "Sure — which service do you mean? Tell me the service name (e.g., Nail trim / Bath / Haircut)."
+        : "Claro — ¿de cuál servicio exactamente? Dime el nombre (ej: corte de uñas / baño / corte de pelo).";
 
-      await replyAndExit(msg, "service_info:no_match", "service_info");
-      return { handled: true };
+    await replyAndExit(msg, "service_info:price_no_match_clarify", "service_info");
+    return { handled: true };
     }
+
+    // ✅ Si preguntan duración o qué incluye y no pudimos resolver por DB ni por last_ref,
+    // no spamees nada: pide el servicio exacto.
+    if (!r.ok && (need === "duration" || need === "includes")) {
+    const msg =
+        idiomaDestino === "en"
+        ? need === "duration"
+            ? "How long is it for which service? Tell me the service name (e.g., Nail trim / Bath / Haircut)."
+            : "What’s included in which service? Tell me the service name (e.g., Nail trim / Bath / Haircut)."
+        : need === "duration"
+            ? "¿La duración de cuál servicio? Dime el nombre (ej: corte de uñas / baño / corte de pelo)."
+            : "¿Qué incluye cuál servicio? Dime el nombre (ej: corte de uñas / baño / corte de pelo).";
+
+    await replyAndExit(msg, `service_info:${need}_no_match_clarify`, "service_info");
+    return { handled: true };
+    }
+
+        const msg =
+            idiomaDestino === "en"
+            ? "Which service do you mean? Tell me the exact name."
+            : "¿Cuál servicio exactamente? Dime el nombre.";
+
+        await replyAndExit(msg, "service_info:no_match", "service_info");
+        return { handled: true };
+        }
+        
   }
 
   // =========================================================
