@@ -14,7 +14,7 @@ export function renderServiceListReply(items: ServiceListItem[], idioma: "es"|"e
   const header =
     idioma === "en"
       ? "Here are our services:"
-      : "Estos son nuestros servicios:";
+      : "Estos son algunos de nuestros servicios:";
 
   const lines: string[] = [];
 

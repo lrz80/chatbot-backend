@@ -537,11 +537,15 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       transition: ({ patchCtx, flow, step }) => transition({ patchCtx, flow, step }),
 
       persistState: async ({ context }) => {
+        // ✅ usa el contexto NUEVO que devuelve el fastpath
         await setConversationStateCompat(tenant.id, canal, contactoNorm, {
           activeFlow,
           activeStep,
-          context: convoCtx,
+          context,
         });
+
+        // ✅ mantén el convoCtx local sincronizado
+        convoCtx = context;
       },
 
       replyAndExit: async (text, source, intent) => {

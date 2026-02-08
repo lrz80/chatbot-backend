@@ -567,17 +567,17 @@ export async function handleServicesFastpath(args: {
                 variant_id: rPicked.variant_id,
                 saved_at: new Date().toISOString(),
               },
-        });
+          });
 
-        const msg = renderServiceInfoReply(rPicked, need, idiomaDestino);
-        await replyAndExit(msg, "service_info:variant_pick_ctx", "service_info");
-        return { handled: true };
-      }
+          const msg = renderServiceInfoReply(rPicked, need, idiomaDestino);
+          await replyAndExit(msg, "service_info:variant_pick_ctx", "service_info");
+          return { handled: true };
+        }
 
-      if (pick.reason === "ambiguous" && pick.options?.length) {
-        const options = pick.options.slice(0, 5);
+        if (pick.reason === "ambiguous" && pick.options?.length) {
+          const options = pick.options.slice(0, 5);
 
-        await applyPatch({
+          await applyPatch({
             service_info_pick: {
               need,
               options,
@@ -585,11 +585,11 @@ export async function handleServicesFastpath(args: {
             },
         });
 
-        const msg = renderPickMenu(options, need, idiomaDestino);
-        await replyAndExit(msg, "service_info:variant_pick_ctx_ambiguous", "service_info");
-        return { handled: true };
+          const msg = renderPickMenu(options, need, idiomaDestino);
+          await replyAndExit(msg, "service_info:variant_pick_ctx_ambiguous", "service_info");
+          return { handled: true };
+        }
       }
-    }
 
       // 1) intento con el texto original
       let r = await resolveServiceInfoByDb({
