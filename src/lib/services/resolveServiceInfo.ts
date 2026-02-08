@@ -25,8 +25,13 @@ export type ResolvedServiceInfo =
       }>;
     };
 
+function stripDiacritics(s: string) {
+  return s.normalize("NFD").replace(/\p{Diacritic}/gu, "");
+}
+
 function normalizeQuery(q: string) {
   let s = String(q || "").toLowerCase();
+  s = stripDiacritics(s); 
   // quita ruido universal
   s = s.replace(
     /\b(mandame|mándame|pasame|pásame|env[ií]ame|enviame|dame|quiero|necesito|me\s+das|me\s+puedes|puedes|por\s+favor|pf|pls|please|send\s+me|send|link|enlace|url|reservar|reserva|agendar|agenda|book|booking|schedule|precio|cost|price|cuesta|dura|duration|incluye|includes)\b/g,
@@ -39,6 +44,30 @@ function normalizeQuery(q: string) {
   s = s.replace(/[^\p{L}\p{N}\s-]+/gu, " ");
   s = s.replace(/\s+/g, " ").trim();
   return s;
+}
+
+function buildVariantQuery(qRaw: string) {
+  const src = stripDiacritics(String(qRaw || "").toLowerCase());
+
+  // tokens base normalizados (sin ruido)
+  const base = normalizeQuery(src);
+
+  // hints universales de tamaño (ES/EN)
+  const hints: string[] = [];
+
+  if (/\b(pequeno|pequena|pequenos|pequenas|small|xs|x-small)\b/i.test(src)) hints.push("small xs");
+  if (/\b(mediano|mediana|medianos|medianas|medium|m)\b/i.test(src)) hints.push("medium m");
+  if (/\b(grande|grandes|large|l)\b/i.test(src)) hints.push("large l");
+  if (/\b(xl|extra\s*large|extra-large)\b/i.test(src)) hints.push("xl extra large");
+
+  // pesos / rangos comunes (universales)
+  // ej: "10 lbs", "5-10", "20+"
+  if (/\b\d+\s*(lb|lbs|pounds|kg)\b/i.test(src)) hints.push("weight");
+  if (/\b\d+\s*-\s*\d+\b/.test(src)) hints.push("range");
+  if (/\b\d+\+\b/.test(src)) hints.push("plus");
+
+  const enriched = [base, ...hints].join(" ").replace(/\s+/g, " ").trim();
+  return enriched || base;
 }
 
 async function fallbackToPricedPackage(tenantId: string): Promise<ResolvedServiceInfo | null> {
@@ -185,6 +214,8 @@ export async function resolveServiceInfo(args: {
 
   // 4) Si menciona variante, intenta escoger por similitud
   if (allVariants.length && mentions) {
+    const variantQuery = buildVariantQuery(qRaw);
+
     const { rows: variants } = await pool.query(
       `
       SELECT v.*,
@@ -199,26 +230,42 @@ export async function resolveServiceInfo(args: {
       ORDER BY vscore DESC, v.variant_name ASC
       LIMIT 3
       `,
-      [top.id, q]
+      [top.id, variantQuery]
     );
 
     if (variants.length) {
       const v = variants[0];
       const url = (v.variant_url || top.service_url || null) as string | null;
+      const vscore = Number(v?.vscore || 0);
 
+    // ✅ si el score es suficientemente bueno, selecciona
+    if (vscore >= 0.25) {
       return {
         ok: true,
         kind: "variant",
         label: `${top.name} - ${v.variant_name}`,
-        url,
-        price: v.price !== null ? Number(v.price) : null,
-        currency: v.currency ? String(v.currency) : "USD",
-        duration_min: v.duration_min !== null ? Number(v.duration_min) : (top.duration_min !== null ? Number(top.duration_min) : null),
-        description: (v.description && String(v.description).trim()) ? String(v.description) : (top.description ? String(top.description) : null),
-        service_id: String(top.id),
-        variant_id: String(v.id),
-      };
+          url,
+          price: v.price !== null ? Number(v.price) : null,
+          currency: v.currency ? String(v.currency) : "USD",
+          duration_min: v.duration_min !== null ? Number(v.duration_min) : (top.duration_min !== null ? Number(top.duration_min) : null),
+          description: (v.description && String(v.description).trim()) ? String(v.description) : (top.description ? String(top.description) : null),
+          service_id: String(top.id),
+          variant_id: String(v.id),
+        };
+      }
     }
+
+    // ✅ NUEVO: mencionó variante pero no matcheó → pedir elección
+    return {
+      ok: false,
+      reason: "ambiguous",
+      options: allVariants.slice(0, 5).map((v: any) => ({
+        label: `${top.name} - ${v.variant_name}`,
+        kind: "variant",
+        service_id: top.id,
+        variant_id: v.id,
+      })),
+    };
   }
 
   // 5) Si el service base NO tiene precio y NO tiene variantes, intenta fallback a paquetes con precio
