@@ -116,7 +116,7 @@ export async function resolveCatalogFromDb(args: {
     ORDER BY score DESC, s.name ASC
     LIMIT 5
     `,
-    [tenantId, q, 5]
+    [tenantId, q]
   );
 
   if (!services.length) {
