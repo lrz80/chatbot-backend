@@ -18,6 +18,15 @@ function parseNullableInt(v: any): number | null {
   return Math.trunc(n);
 }
 
+function parseNullableNumber(v: any): number | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n)) return null;
+  return n;
+}
+
 function parseNullablePrice(v: any): number | null {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
@@ -33,6 +42,16 @@ function parseBool(v: any, fallback: boolean): boolean {
   if (["true", "1", "yes", "si"].includes(s)) return true;
   if (["false", "0", "no"].includes(s)) return false;
   return fallback;
+}
+
+function parseSizeToken(v: any): "small" | "medium" | "large" | "xl" | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim().toLowerCase();
+  if (!s) return null;
+
+  const allowed = new Set(["small", "medium", "large", "xl"]);
+  if (!allowed.has(s)) return null; // invalid -> null (o puedes tirar 400)
+  return s as any;
 }
 
 /**
@@ -99,16 +118,16 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
     });
 
     const { rows } = await pool.query(
-    `
-    INSERT INTO service_variants (
+      `
+      INSERT INTO service_variants (
         service_id, variant_name, description,
         duration_min, price, currency,
         variant_url, active, created_at, updated_at
-    )
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8, NOW(), NOW())
-    RETURNING *
-    `,
-    [
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8, NOW(), NOW())
+      RETURNING *
+      `,
+      [
         service_id,
         String(variant_name).trim(),
         desc,                 // ✅ null o string
@@ -117,7 +136,7 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
         currencyParsed,       // ✅ USD
         url,                  // ✅ null o URL
         activeParsed,         // ✅ boolean
-    ]
+      ]
     );
 
     console.log("[service-variants:create] saved", {
@@ -131,6 +150,81 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
   } catch (e: any) {
     console.error("POST /api/service-variants error:", e);
     return res.status(500).json({ error: "Error creando variante" });
+  }
+});
+
+/**
+ * PATCH /api/service-variants/:id
+ * Actualiza metadata de variante: size_token / min_weight_lbs / max_weight_lbs
+ *
+ * ✅ EXACTAMENTE para que Brain B (Catalog Resolver) pueda resolver por tamaño/peso.
+ */
+router.patch("/:id", authenticateUser, async (req: any, res: Response) => {
+  try {
+    const variantId = String(req.params.id || "").trim();
+    if (!variantId) {
+      return res.status(400).json({ error: "id de variante requerido" });
+    }
+
+    const tenantId = req.user?.tenant_id;
+    if (!tenantId) {
+      return res.status(401).json({ error: "No autorizado" });
+    }
+
+    const {
+      size_token,
+      min_weight_lbs,
+      max_weight_lbs,
+    } = req.body || {};
+
+    // 1) validar payload
+    const sizeTokenParsed = parseSizeToken(size_token);
+
+    // pesos pueden ser decimales (lbs)
+    const minW = parseNullableNumber(min_weight_lbs);
+    const maxW = parseNullableNumber(max_weight_lbs);
+
+    if (minW !== null && minW < 0) return res.status(400).json({ error: "min_weight_lbs inválido" });
+    if (maxW !== null && maxW < 0) return res.status(400).json({ error: "max_weight_lbs inválido" });
+    if (minW !== null && maxW !== null && minW > maxW) {
+      return res.status(400).json({ error: "min_weight_lbs no puede ser mayor que max_weight_lbs" });
+    }
+
+    // 2) seguridad: validar que esa variante pertenece al tenant actual (join services)
+    const { rows: check } = await pool.query(
+      `
+      SELECT v.id
+      FROM service_variants v
+      JOIN services s ON s.id = v.service_id
+      WHERE v.id = $1 AND s.tenant_id = $2
+      LIMIT 1
+      `,
+      [variantId, tenantId]
+    );
+
+    if (!check.length) {
+      return res.status(404).json({ error: "Variante no encontrada" });
+    }
+
+    // 3) update
+    const { rows } = await pool.query(
+      `
+      UPDATE service_variants
+      SET
+        size_token = $1,
+        min_weight_lbs = $2,
+        max_weight_lbs = $3,
+        updated_at = NOW()
+      WHERE id = $4
+      RETURNING id, service_id, variant_name, size_token, min_weight_lbs, max_weight_lbs, updated_at
+      `,
+      [sizeTokenParsed, minW, maxW, variantId]
+    );
+
+    return res.json({ variant: rows[0] });
+  } catch (e: any) {
+    console.error("PATCH /api/service-variants/:id error:", e);
+    return res.status(500).json({ error: "Error actualizando variante" });
   }
 });
 

@@ -79,7 +79,20 @@ export async function resolveCatalogFromDb(args: {
 
       // 2) match por size_token
       if (!picked && sizeToken) {
+        // 1) por columna size_token si existe
         picked = variants.find((v: any) => String(v.size_token || "") === sizeToken);
+
+        // 2) fallback por nombre si size_token está NULL
+        if (!picked) {
+           picked = variants.find((v: any) => {
+            const name = String(v.variant_name || "").toLowerCase();
+            if (sizeToken === "small") return /\b(small|peque|toy|mini|xs)\b/.test(name);
+            if (sizeToken === "medium") return /\b(medium|mediano|md)\b/.test(name);
+            if (sizeToken === "large") return /\b(large|grande|lg)\b/.test(name);
+            if (sizeToken === "xl") return /\b(xl|extra\s*large|gigante)\b/.test(name);
+            return false;
+          });
+        }
       }
 
       // 3) fallback estable
