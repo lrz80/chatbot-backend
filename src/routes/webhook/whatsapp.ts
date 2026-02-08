@@ -39,21 +39,14 @@ import { safeSendText } from "../../lib/channels/engine/dedupe/safeSendText";
 import { applyAwaitingEffects } from "../../lib/channels/engine/state/applyAwaitingEffects";
 import {
   PAGO_CONFIRM_REGEX,
-  EMAIL_REGEX,
-  PHONE_REGEX,
   extractPaymentLinkFromPrompt,
   looksLikeBookingPayload,
-  parsePickNumber,
   pickSelectedChannelFromText,
   parseDatosCliente,
 } from "../../lib/channels/engine/parsers/parsers";
 import {
   capiLeadFirstInbound,
-  capiContactQualified,
-  capiLeadStrongWeekly,
 } from "../../lib/analytics/capiEvents";
-import { handleServicesFastpath } from "../../lib/services/fastpath/handleServicesFastpath";
-import { resolveServiceInfoByDb } from "../../lib/services/fastpath/resolveServiceInfoByDb";
 import type { Lang } from "../../lib/channels/engine/clients/clientDb";
 import {
   normalizeLang,
@@ -69,6 +62,7 @@ import { runBookingPipeline } from "../../lib/appointments/booking/bookingPipeli
 import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBookingCourtesyGuard";
 import { rememberAfterReply } from "../../lib/memory/rememberAfterReply";
 import { getWhatsAppModeStatus } from "../../lib/whatsapp/getWhatsAppModeStatus";
+import { catalogBrain } from "../../lib/catalog/catalogBrain";
 
 
 // Puedes ponerlo debajo de los imports
@@ -437,43 +431,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           ...args,
           canal: "whatsapp", // ✅ usa el canal real del turno
         }),
-        captureLastServiceRef: async ({ tenantId, userInput, assistantText, idiomaDestino, convoCtx }) => {
-          // si ya hay last_service_ref fresco, no lo sobreescribas
-          const saved = String(convoCtx?.last_service_ref?.saved_at || "");
-          const ts = saved ? Date.parse(saved) : NaN;
-          const fresh = Number.isFinite(ts) ? (Date.now() - ts < 1000 * 60 * 20) : false;
-          if (fresh && convoCtx?.last_service_ref?.service_id) return null;
-
-          // 1) intenta con el texto del usuario
-          let r = await resolveServiceInfoByDb({
-            pool,
-            tenantId,
-            query: userInput,
-            need: "any",
-            limit: 1,
-          });
-
-          // 2) si no matchea, intenta con lo que escribió el bot (suele tener el nombre exacto)
-          if (!r.ok) {
-            r = await resolveServiceInfoByDb({
-              pool,
-              tenantId,
-              query: assistantText,
-              need: "any",
-              limit: 1,
-            });
-          }
-
-          if (!r.ok) return null;
-
-          return {
-            kind: (r.kind || null),
-            label: (r.label || null),
-            service_id: (r.service_id || null),
-            variant_id: (r.variant_id || null),
-            saved_at: new Date().toISOString(),
-          };
-        },
       }
     );
 
@@ -558,41 +515,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   const inBooking0 = bookingStep0 && bookingStep0 !== "idle";
 
   const awaiting = (convoCtx as any)?.awaiting || activeStep || null;
-
-  // ===============================
-  // ⚡ SERVICES FAST-PATH (link/info/list/prices + picks) — SIN LLM
-  // ===============================
-  {
-    const svc = await handleServicesFastpath({
-      pool,
-      tenantId: tenant.id,
-      canal,
-      contacto: contactoNorm,
-      userInput,
-      idiomaDestino,
-      convoCtx,
-
-      transition: ({ patchCtx, flow, step }) => transition({ patchCtx, flow, step }),
-
-      persistState: async ({ context }) => {
-        // ✅ usa el contexto NUEVO que devuelve el fastpath
-        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-          activeFlow,
-          activeStep,
-          context,
-        });
-
-        // ✅ mantén el convoCtx local sincronizado
-        convoCtx = context;
-      },
-
-      replyAndExit: async (text, source, intent) => {
-        await replyAndExit(text, source, intent);
-      },
-    });
-
-    if (svc.handled) return;
-  }
 
   // ===============================
   // 🔎 DEBUG: estado de flujo (clientes)
@@ -873,9 +795,9 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         contacto: event.contacto,
         effects: smResult.transition.effects,
         upsertSelectedChannelDB: (tenantId, canal, contacto, selected) =>
-          upsertSelectedChannelDB(pool, tenantId, canal, contacto, selected),
+        upsertSelectedChannelDB(pool, tenantId, canal, contacto, selected),
         upsertIdiomaClienteDB: (tenantId, canal, contacto, idioma) =>
-          upsertIdiomaClienteDB(pool, tenantId, canal, contacto, idioma),
+        upsertIdiomaClienteDB(pool, tenantId, canal, contacto, idioma),
       });
     }
 
@@ -894,10 +816,57 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."
         : "REGLA: NO muestres menús numerados ni pidas que respondan con un número. Si necesitas aclarar, haz UNA sola pregunta corta. Las selecciones por número las maneja el sistema, no tú.";
 
+        // ===============================
+    // 🧠 Brain B: Catalog Resolver (DB-first)
+    // ===============================
+    const cat = await catalogBrain({
+      pool,
+      tenantId: tenant.id,
+      userInput,
+      idiomaDestino,
+      convoCtx,
+    });
+
+    // si Brain B quiere aclaración: respondemos SIN LLM
+    if (cat.hit && cat.status === "needs_clarification") {
+      if (cat.ctxPatch) transition({ patchCtx: cat.ctxPatch });
+      return await replyAndExit(cat.ask, "catalog:clarify", "service_info");
+    }
+
+    // si era catálogo pero no matcheó: 1 pregunta corta
+    if (cat.hit && cat.status === "no_match") {
+      return await replyAndExit(cat.ask, "catalog:no_match", "service_info");
+    }
+
+    // si resolvió: guardamos last_service_ref + inyectamos facts al LLM
+    let catalogFacts: any = null;
+    if (cat.hit && cat.status === "resolved") {
+      if (cat.ctxPatch) {
+        transition({ patchCtx: cat.ctxPatch });
+
+        // ✅ persistir el patch YA (para que last_service_ref quede sticky)
+        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+          activeFlow,
+          activeStep,
+          context: convoCtx,
+        });
+      }
+      catalogFacts = cat.facts;
+    }
+
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
-      promptBase: [promptBaseMem, "", NO_NUMERIC_MENUS].join("\n"),
-      userInput: [
+      promptBase: [
+        promptBaseMem,
+        "",
+        NO_NUMERIC_MENUS,
+        "",
+        idiomaDestino === "en"
+          ? "CATALOG RULES: If CATALOGO_DB_FACTS is present, you MUST use it as the ONLY source for prices/duration/what's-included/links. Do not invent."
+          : "REGLAS CATÁLOGO: Si existe CATALOGO_DB_FACTS, DEBES usarlo como ÚNICA fuente para precios/duración/qué incluye/links. No inventes."
+      ].join("\n"),
+        userInput: [
+        catalogFacts ? `CATALOGO_DB_FACTS:\n${JSON.stringify(catalogFacts)}\n` : "",
         "SYSTEM_EVENT_FACTS (use to respond; do not mention systems; keep it short):",
         JSON.stringify(smResult.facts || {}),
         "",
@@ -910,6 +879,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       maxLines: MAX_WHATSAPP_LINES,
       fallbackText: getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
     });
+
+    replied = true;
 
     return await replyAndExit(
       composed.text,
@@ -985,10 +956,60 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."
         : "REGLA: NO muestres menús numerados ni pidas que respondan con un número. Si necesitas aclarar, haz UNA sola pregunta corta. Las selecciones por número las maneja el sistema, no tú.";
 
+    // ===============================
+    // 🧠 Brain B: Catalog Resolver (DB-first)
+    // ===============================
+    const cat = await catalogBrain({
+      pool,
+      tenantId: tenant.id,
+      userInput,
+      idiomaDestino,
+      convoCtx,
+    });
+
+    // si Brain B quiere aclaración: respondemos SIN LLM
+    if (cat.hit && cat.status === "needs_clarification") {
+      if (cat.ctxPatch) transition({ patchCtx: cat.ctxPatch });
+      return await replyAndExit(cat.ask, "catalog:clarify", "service_info");
+    }
+
+    // si era catálogo pero no matcheó: 1 pregunta corta
+    if (cat.hit && cat.status === "no_match") {
+      return await replyAndExit(cat.ask, "catalog:no_match", "service_info");
+    }
+
+    // si resolvió: guardamos last_service_ref + inyectamos facts al LLM
+    let catalogFacts: any = null;
+    if (cat.hit && cat.status === "resolved") {
+      if (cat.ctxPatch) {
+        transition({ patchCtx: cat.ctxPatch });
+
+        // ✅ persistir el patch YA (para que last_service_ref quede sticky)
+        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+          activeFlow,
+          activeStep,
+          context: convoCtx,
+        });
+      }
+      catalogFacts = cat.facts;
+    }
+
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
-      promptBase: [promptBaseMem, "", NO_NUMERIC_MENUS].join("\n"),
-      userInput,
+      promptBase: [
+        promptBaseMem,
+        "",
+        NO_NUMERIC_MENUS,
+        "",
+        idiomaDestino === "en"
+          ? "CATALOG RULES: If CATALOGO_DB_FACTS is present, you MUST use it as the ONLY source for prices/duration/what's-included/links. Do not invent."
+          : "REGLAS CATÁLOGO: Si existe CATALOGO_DB_FACTS, DEBES usarlo como ÚNICA fuente para precios/duración/qué incluye/links. No inventes."
+      ].join("\n"),
+      userInput: [
+        catalogFacts ? `CATALOGO_DB_FACTS:\n${JSON.stringify(catalogFacts)}\n` : "",
+        "USER_MESSAGE:",
+        userInput,
+      ].join("\n"),
       history, // ✅ aquí
       idiomaDestino,
       canal: "whatsapp",
