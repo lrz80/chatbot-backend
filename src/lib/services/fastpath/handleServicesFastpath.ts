@@ -71,6 +71,16 @@ export async function handleServicesFastpath(args: {
 
   const routingText = await toCanonicalEsForRouting(userInput, idiomaDestino);
 
+    // ✅ ctx local: lo vamos a ir actualizando aquí y SIEMPRE persistimos este objeto
+  let ctx = convoCtx || {};
+
+  // ✅ helper: aplica patch, notifica al transition y persiste el ctx actualizado
+  async function applyPatch(patch: any) {
+    ctx = { ...(ctx || {}), ...(patch || {}) };
+    transition({ patchCtx: patch });
+    await persistState({ context: ctx });
+  }
+
   // 0) Gates: preguntas que NO son sobre catálogo/precios/servicios
   if (isNonCatalogQuestion(routingText)) {
     return { handled: false };
@@ -80,7 +90,7 @@ export async function handleServicesFastpath(args: {
   // 1) SERVICE LINK PICK (sticky)
   // =========================================================
   {
-    const pickState = convoCtx?.service_link_pick;
+    const pickState = ctx?.service_link_pick;
     const options = Array.isArray(pickState?.options) ? pickState.options : [];
 
     if (options.length) {
@@ -91,8 +101,7 @@ export async function handleServicesFastpath(args: {
         Number.isFinite(createdAtMs) ? Date.now() - createdAtMs < 10 * 60 * 1000 : false;
 
       if (!fresh) {
-        transition({ patchCtx: { service_link_pick: null } });
-        await persistState({ context: convoCtx });
+        await applyPatch({ service_link_pick: null });
 
         const msg = renderStickyPickExpiredReply(idiomaDestino);
         await replyAndExit(msg, "service_link_pick:expired", "service_link");
@@ -103,8 +112,7 @@ export async function handleServicesFastpath(args: {
 
       // ✅ escape: no gracias / cancelar
       if (isStickyPickOptOut(userInput)) {
-        transition({ patchCtx: { service_link_pick: null } });
-        await persistState({ context: convoCtx });
+        await applyPatch({ service_link_pick: null });
 
         const msg = renderStickyPickOptOutReply(idiomaDestino);
         await replyAndExit(msg, "service_link_pick:opt_out", "no_interesado");
@@ -113,8 +121,7 @@ export async function handleServicesFastpath(args: {
 
       // ✅ si el usuario hizo otra pregunta (no es pick), limpia y deja seguir el pipeline
       if (n === null && (isNonCatalogQuestion(routingText) || isStickyPickDifferentQuestion(userInput))) {
-        transition({ patchCtx: { service_link_pick: null } });
-        await persistState({ context: convoCtx });
+        await applyPatch({ service_link_pick: null });
         return { handled: false };
       }
 
@@ -130,8 +137,7 @@ export async function handleServicesFastpath(args: {
         const chosen = options[idx];
         const url = String(chosen?.url || "").trim();
 
-        transition({ patchCtx: { service_link_pick: null } });
-        await persistState({ context: convoCtx });
+        await applyPatch({ service_link_pick: null });
 
         if (!url) {
           const msg =
@@ -158,9 +164,8 @@ export async function handleServicesFastpath(args: {
           const chosen = options[matchIdx];
           const url = String(chosen?.url || "").trim();
 
-          transition({ patchCtx: { service_link_pick: null } });
-          await persistState({ context: convoCtx });
-
+          await applyPatch({ service_link_pick: null });
+        
           if (!url) {
             const msg =
               idiomaDestino === "en"
@@ -177,28 +182,23 @@ export async function handleServicesFastpath(args: {
 
       // si el usuario cambia a catálogo general / más info → suelta el sticky y deja seguir al LLM
       if (isGeneralCatalogQuestion(routingText) || wantsMoreInfoOnly(routingText) || wantsServiceList(routingText)) {
-        transition({ patchCtx: { service_link_pick: null } }); // o service_link_pick en sección 1
-        await persistState({ context: convoCtx });
+        await applyPatch({  service_link_pick: null }); // o service_link_pick en sección 1
         return { handled: false };
       }
 
       const repromptCount = Number(pickState?.reprompt_count || 0);
       if (repromptCount >= 1) {
-        transition({ patchCtx: { service_link_pick: null } });
-        await persistState({ context: convoCtx });
+        await applyPatch({ service_link_pick: null });
         return { handled: false };
       }
 
-      transition({
-        patchCtx: {
+      await applyPatch({
           service_link_pick: {
             ...pickState,
             reprompt_count: repromptCount + 1,
           },
-        },
       });
-      await persistState({ context: convoCtx });
-
+     
       const lines = options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join("\n");
       const msg = renderStickyPickRepromptReply(idiomaDestino, lines);
 
@@ -211,7 +211,7 @@ export async function handleServicesFastpath(args: {
   // 6) SERVICE INFO PICK (sticky)
   // =========================================================
   {
-    const pickState = convoCtx?.service_info_pick;
+    const pickState = ctx?.service_info_pick;
     const options = Array.isArray(pickState?.options) ? pickState.options : [];
 
     if (options.length) {
@@ -222,9 +222,8 @@ export async function handleServicesFastpath(args: {
         Number.isFinite(createdAtMs) ? Date.now() - createdAtMs < 10 * 60 * 1000 : false;
 
       if (!fresh) {
-        transition({ patchCtx: { service_info_pick: null } });
-        await persistState({ context: convoCtx });
-
+        await applyPatch({ service_info_pick: null });
+       
         const msg = renderExpiredPick(idiomaDestino);
         await replyAndExit(msg, "service_info_pick:expired", "service_info");
         return { handled: true };
@@ -235,9 +234,8 @@ export async function handleServicesFastpath(args: {
 
       // ✅ escape: no gracias / cancelar
       if (isStickyPickOptOut(userInput)) {
-        transition({ patchCtx: { service_info_pick: null } });
-        await persistState({ context: convoCtx });
-
+        await applyPatch({ service_info_pick: null });
+        
         const msg = renderStickyPickOptOutReply(idiomaDestino);
         await replyAndExit(msg, "service_info_pick:opt_out", "no_interesado");
         return { handled: true };
@@ -245,15 +243,13 @@ export async function handleServicesFastpath(args: {
 
       // ✅ si el usuario hizo otra pregunta (no es pick), limpia y deja seguir el pipeline
       if (n === null && (isNonCatalogQuestion(routingText) || isStickyPickDifferentQuestion(userInput))) {
-        transition({ patchCtx: { service_info_pick: null } });
-        await persistState({ context: convoCtx });
+        await applyPatch({ service_info_pick: null });
         return { handled: false };
       }
 
       // si el usuario cambia a catálogo general / más info → suelta el sticky y deja seguir al LLM
       if (isGeneralCatalogQuestion(routingText) || wantsMoreInfoOnly(routingText) || wantsServiceList(routingText)) {
-        transition({ patchCtx: { service_info_pick: null } }); // o service_link_pick en sección 1
-        await persistState({ context: convoCtx });
+        await applyPatch({ service_info_pick: null }); // o service_link_pick en sección 1
         return { handled: false };
       }
 
@@ -262,21 +258,17 @@ export async function handleServicesFastpath(args: {
         const repromptCount = Number(pickState?.reprompt_count || 0);
 
         if (repromptCount >= 1) {
-          transition({ patchCtx: { service_info_pick: null } });
-          await persistState({ context: convoCtx });
+          await applyPatch({ service_info_pick: null });
           return { handled: false };
         }
 
-        transition({
-          patchCtx: {
+        await applyPatch({
             service_info_pick: {
               ...pickState,
               reprompt_count: repromptCount + 1,
             },
-          },
         });
-        await persistState({ context: convoCtx });
-
+       
         const msg = renderPickMenu(options, need, idiomaDestino);
         await replyAndExit(msg, "service_info_pick:reprompt", "service_info");
         return { handled: true };
@@ -414,12 +406,10 @@ export async function handleServicesFastpath(args: {
       }
 
       // limpiar pick
-      transition({ patchCtx: { service_info_pick: null } });
-      await persistState({ context: convoCtx });
+      await applyPatch({ service_info_pick: null });
 
       if (resolved?.ok) {
-        transition({
-          patchCtx: {
+        await applyPatch({
             last_service_ref: {
               kind: resolved.kind || null,
               label: resolved.label || null,
@@ -427,10 +417,7 @@ export async function handleServicesFastpath(args: {
               variant_id: resolved.variant_id || null,
               saved_at: new Date().toISOString(),
             },
-          },
         });
-
-        await persistState({ context: convoCtx });
 
         const msg = renderServiceInfoReply(resolved, need, idiomaDestino);
         await replyAndExit(msg, "service_info_pick", "service_info");
@@ -479,17 +466,13 @@ export async function handleServicesFastpath(args: {
         url: o.url || null,
       }));
 
-      transition({
-        patchCtx: {
+      await applyPatch({
           service_link_pick: {
             kind: "service_link_pick",
             options,
             created_at: new Date().toISOString(),
           },
-        },
       });
-
-      await persistState({ context: convoCtx });
 
       const labels = options.map((o) => o.label);
       const isVariants = looksLikeVariantsOfSameService(labels);
@@ -528,7 +511,7 @@ export async function handleServicesFastpath(args: {
   // 4) SERVICE INFO FAST-PATH (precio/duración/incluye)
   // =========================================================
   {
-    const lastRef = convoCtx?.last_service_ref;
+    const lastRef = ctx?.last_service_ref;
 
     const lastRefFresh = (() => {
     const saved = String(lastRef?.saved_at || "").trim();
@@ -555,14 +538,20 @@ export async function handleServicesFastpath(args: {
       if (
         need === "price" &&
         lastRefFresh &&
-        convoCtx?.last_service_ref?.service_id &&
-        !convoCtx?.last_service_ref?.variant_id &&
+        ctx?.last_service_ref?.service_id &&
+        !ctx?.last_service_ref?.variant_id &&
         looksLikeVariantPick(userInput)
       ) {
+        const serviceId = String(ctx?.last_service_ref?.service_id || "").trim();
+        if (!serviceId) {
+          // no hay serviceId válido aunque lastRefFresh diga true
+          return { handled: false };
+        }
+
         const pick = await pickVariantFromServiceContext({
           pool,
           tenantId,
-          serviceId: convoCtx.last_service_ref.service_id,
+          serviceId,
           userPickText: String(userInput || "").trim(),
           limit: 5,
         });
@@ -570,8 +559,7 @@ export async function handleServicesFastpath(args: {
         if (pick.ok) {
           const rPicked = pick.resolved;
 
-          transition({
-            patchCtx: {
+          await applyPatch({
               last_service_ref: {
                 kind: rPicked.kind,
                 label: rPicked.label,
@@ -579,10 +567,7 @@ export async function handleServicesFastpath(args: {
                 variant_id: rPicked.variant_id,
                 saved_at: new Date().toISOString(),
               },
-            },
         });
-
-        await persistState({ context: convoCtx });
 
         const msg = renderServiceInfoReply(rPicked, need, idiomaDestino);
         await replyAndExit(msg, "service_info:variant_pick_ctx", "service_info");
@@ -592,17 +577,13 @@ export async function handleServicesFastpath(args: {
       if (pick.reason === "ambiguous" && pick.options?.length) {
         const options = pick.options.slice(0, 5);
 
-        transition({
-          patchCtx: {
+        await applyPatch({
             service_info_pick: {
               need,
               options,
               created_at: new Date().toISOString(),
             },
-          },
         });
-
-        await persistState({ context: convoCtx });
 
         const msg = renderPickMenu(options, need, idiomaDestino);
         await replyAndExit(msg, "service_info:variant_pick_ctx_ambiguous", "service_info");
@@ -643,8 +624,7 @@ export async function handleServicesFastpath(args: {
       }
       // ✅ DB-first siempre; si no matchea, luego puedes caer a resolveServiceInfo si quieres
       if (r.ok) {
-        transition({
-          patchCtx: {
+        await applyPatch({
             last_service_ref: {
               kind: r.kind || null,
               label: r.label || null,
@@ -652,10 +632,7 @@ export async function handleServicesFastpath(args: {
               variant_id: r.variant_id || null,
               saved_at: new Date().toISOString(),
             },
-          },
         });
-
-        await persistState({ context: convoCtx });
 
         const msg = renderServiceInfoReply(r, need, idiomaDestino);
         await replyAndExit(msg, "service_info", "service_info");
@@ -670,17 +647,13 @@ export async function handleServicesFastpath(args: {
           variant_id: o.variant_id || null,
         }));
 
-        transition({
-          patchCtx: {
+        await applyPatch({
             service_info_pick: {
               need,
               options,
               created_at: new Date().toISOString(),
             },
-          },
         });
-
-        await persistState({ context: convoCtx });
 
         const msg = renderPickMenu(options, need, idiomaDestino);
         await replyAndExit(msg, "service_info:ambiguous", "service_info");
