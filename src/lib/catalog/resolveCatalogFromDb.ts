@@ -1,8 +1,81 @@
-// backend/src/lib/catalog/resolveCatalogFromDb.ts
 import type { Pool } from "pg";
 import type { CatalogNeed, CatalogResult, Lang } from "./types";
 import { userMentionsVariantHint } from "./variantHints";
 import { inferSizeTokenFromText, inferWeightLbsFromText } from "./normalizeSize";
+
+/** ===== helpers ===== */
+function isFresh(savedAt?: any, minutes = 20) {
+  const saved = String(savedAt || "").trim();
+  if (!saved) return false;
+  const ts = Date.parse(saved);
+  if (!Number.isFinite(ts)) return false;
+  return Date.now() - ts < 1000 * 60 * minutes;
+}
+
+function variantsLookLikeSizeOrWeight(variants: any[]) {
+  // ✅ Solo consideramos “size” si hay señales reales en DB o en el nombre
+  for (const v of variants || []) {
+    if (v?.size_token) return true;
+    if (v?.min_weight_lbs != null || v?.max_weight_lbs != null) return true;
+
+    const name = String(v?.variant_name || "").toLowerCase();
+    if (/\b(small|medium|large|xl|x-large|xs|x-small|peque(ñ|n)o|mediano|grande)\b/.test(name)) {
+      return true;
+    }
+    if (/\b(\d{1,3})\s?(lb|lbs|libras)\b/.test(name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function moneyLabel(v: any) {
+  const price =
+    v?.price != null && Number.isFinite(Number(v.price)) ? Number(v.price) : null;
+  const cur = v?.currency ? String(v.currency).toUpperCase() : "USD";
+  if (price == null) return null;
+  return cur === "USD" ? `$${price}` : `${price} ${cur}`;
+}
+
+function pickVariantBySizeOrWeight(args: {
+  variants: any[];
+  sizeToken: string | null;
+  weightLbs: number | null;
+}) {
+  const { variants, sizeToken, weightLbs } = args;
+  if (!variants?.length) return null;
+
+  // 1) match por peso
+  if (weightLbs != null) {
+    const hit = variants.find((v: any) => {
+      const max = v.max_weight_lbs != null ? Number(v.max_weight_lbs) : null;
+      const min = v.min_weight_lbs != null ? Number(v.min_weight_lbs) : null;
+      if (max != null && weightLbs > max) return false;
+      if (min != null && weightLbs < min) return false;
+      return true;
+    });
+    if (hit) return hit;
+  }
+
+  // 2) match por size_token (si existe en DB)
+  if (sizeToken) {
+    const hit = variants.find((v: any) => String(v.size_token || "") === sizeToken);
+    if (hit) return hit;
+
+    // 3) fallback por texto en nombre si no hay size_token poblado
+    const hit2 = variants.find((v: any) => {
+      const name = String(v.variant_name || "").toLowerCase();
+      if (sizeToken === "small") return /\b(small|xs|x-small|peque)\b/.test(name);
+      if (sizeToken === "medium") return /\b(medium|med|mediano)\b/.test(name);
+      if (sizeToken === "large") return /\b(large|grand|grande)\b/.test(name);
+      if (sizeToken === "xl") return /\b(xl|x-large|extra)\b/.test(name);
+      return false;
+    });
+    if (hit2) return hit2;
+  }
+
+  return variants[0]; // fallback estable
+}
 
 export async function resolveCatalogFromDb(args: {
   pool: Pool;
@@ -24,29 +97,22 @@ export async function resolveCatalogFromDb(args: {
     };
   }
 
-  // ===============================
-  // 0) lastRef fresco + user dio hint de variante (small/pequeño o peso)
-  // ===============================
-  const lastRefFresh = (() => {
-    const saved = String(lastRef?.saved_at || "").trim();
-    if (!saved) return false;
-    const ts = Date.parse(saved);
-    if (!Number.isFinite(ts)) return false;
-    return Date.now() - ts < 1000 * 60 * 20;
-  })();
+  const lastRefFresh = isFresh(lastRef?.saved_at, 20);
 
-  const sizeToken = inferSizeTokenFromText(q); // "small"|"medium"|"large"|"xl"|null
-  const weightLbs = inferWeightLbsFromText(q); // number|null
+  const sizeToken = inferSizeTokenFromText(q);    // "small"|"medium"|"large"|"xl"|null
+  const weightLbs = inferWeightLbsFromText(q);    // number|null
   const mentionsVariant = userMentionsVariantHint(q) || !!sizeToken || !!weightLbs;
 
+  /** =========================================================
+   *  0) Si lastRef fresco + el usuario respondió una variante (size/peso/keyword)
+   * ========================================================= */
   if (lastRefFresh && lastRef?.service_id && mentionsVariant) {
     const serviceId = String(lastRef.service_id);
 
     const { rows: variants } = await pool.query(
       `
-      SELECT
-        v.id, v.variant_name, v.description, v.price, v.currency, v.duration_min, v.variant_url,
-        v.size_token, v.min_weight_lbs, v.max_weight_lbs
+      SELECT v.id, v.variant_name, v.description, v.price, v.currency, v.duration_min, v.variant_url,
+             v.size_token, v.min_weight_lbs, v.max_weight_lbs
       FROM service_variants v
       WHERE v.service_id = $1 AND v.active = TRUE
       ORDER BY
@@ -63,42 +129,8 @@ export async function resolveCatalogFromDb(args: {
     );
 
     if (variants.length) {
-      let picked: any = null;
+      const picked = pickVariantBySizeOrWeight({ variants, sizeToken, weightLbs });
 
-      // 1) match por peso
-      if (weightLbs != null) {
-        picked = variants.find((v: any) => {
-          const max = v.max_weight_lbs != null ? Number(v.max_weight_lbs) : null;
-          const min = v.min_weight_lbs != null ? Number(v.min_weight_lbs) : null;
-
-          if (max != null && weightLbs > max) return false;
-          if (min != null && weightLbs < min) return false;
-          return true;
-        });
-      }
-
-      // 2) match por size_token
-      if (!picked && sizeToken) {
-        // 1) por columna size_token si existe
-        picked = variants.find((v: any) => String(v.size_token || "") === sizeToken);
-
-        // 2) fallback por nombre si size_token está NULL
-        if (!picked) {
-           picked = variants.find((v: any) => {
-            const name = String(v.variant_name || "").toLowerCase();
-            if (sizeToken === "small") return /\b(small|peque|toy|mini|xs)\b/.test(name);
-            if (sizeToken === "medium") return /\b(medium|mediano|md)\b/.test(name);
-            if (sizeToken === "large") return /\b(large|grande|lg)\b/.test(name);
-            if (sizeToken === "xl") return /\b(xl|extra\s*large|gigante)\b/.test(name);
-            return false;
-          });
-        }
-      }
-
-      // 3) fallback estable
-      if (!picked) picked = variants[0];
-
-      // traer service para label/url fallback
       const { rows: srows } = await pool.query(
         `
         SELECT id, name, description, duration_min, price_base, service_url
@@ -110,31 +142,25 @@ export async function resolveCatalogFromDb(args: {
       );
 
       const s = srows[0];
-      if (s) {
+      if (s && picked) {
         const facts = {
           kind: "variant" as const,
           label: `${s.name} - ${picked.variant_name}`,
           service_id: String(s.id),
           variant_id: String(picked.id),
           price:
-            picked.price != null
-              ? Number(picked.price)
-              : s.price_base != null
-                ? Number(s.price_base)
-                : null,
+            picked.price != null ? Number(picked.price)
+            : s.price_base != null ? Number(s.price_base)
+            : null,
           currency: picked.currency ? String(picked.currency) : "USD",
           duration_min:
-            picked.duration_min != null
-              ? Number(picked.duration_min)
-              : s.duration_min != null
-                ? Number(s.duration_min)
-                : null,
+            picked.duration_min != null ? Number(picked.duration_min)
+            : s.duration_min != null ? Number(s.duration_min)
+            : null,
           description:
-            picked.description
-              ? String(picked.description)
-              : s.description
-                ? String(s.description)
-                : null,
+            picked.description ? String(picked.description)
+            : s.description ? String(s.description)
+            : null,
           url: picked.variant_url || s.service_url || null,
         };
 
@@ -155,13 +181,12 @@ export async function resolveCatalogFromDb(args: {
         };
       }
     }
-
-    // si no hay variantes o no pudo resolver, cae al resolver normal por service
   }
 
-  // ===============================
-  // 1) resolver service top por similarity (DB es fuente de verdad)
-  // ===============================
+  /** =========================================================
+   *  1) Resolver service top por similarity (DB)
+   *  ✅ FIX: SOLO 2 params (tenantId, q)
+   * ========================================================= */
   const { rows: services } = await pool.query(
     `
     SELECT s.*,
@@ -192,11 +217,7 @@ export async function resolveCatalogFromDb(args: {
   const topScore = Number(top?.score || 0);
   const secondScore = Number(services[1]?.score || 0);
 
-  // si muy flojo o muy cerca -> pedir aclaración (1 pregunta)
-  if (
-    topScore < 0.35 ||
-    (services.length >= 2 && secondScore >= 0.35 && topScore - secondScore < 0.08)
-  ) {
+  if (topScore < 0.35 || (services.length >= 2 && secondScore >= 0.35 && topScore - secondScore < 0.08)) {
     const ask =
       idioma === "en"
         ? "Which one do you mean? Tell me the service name."
@@ -215,14 +236,13 @@ export async function resolveCatalogFromDb(args: {
     };
   }
 
-  // ===============================
-  // 2) cargar variantes del top (con columnas normalizadas)
-  // ===============================
+  /** =========================================================
+   *  2) Cargar variantes del top
+   * ========================================================= */
   const { rows: variants } = await pool.query(
     `
-    SELECT
-      v.id, v.variant_name, v.description, v.price, v.currency, v.duration_min, v.variant_url,
-      v.size_token, v.min_weight_lbs, v.max_weight_lbs
+    SELECT v.id, v.variant_name, v.description, v.price, v.currency, v.duration_min, v.variant_url,
+           v.size_token, v.min_weight_lbs, v.max_weight_lbs
     FROM service_variants v
     WHERE v.service_id = $1 AND v.active = TRUE
     ORDER BY
@@ -239,21 +259,92 @@ export async function resolveCatalogFromDb(args: {
   );
 
   const hasVariants = variants.length >= 1;
+  const sizeBased = hasVariants ? variantsLookLikeSizeOrWeight(variants) : false;
 
-  // ===============================
-  // 3) si tiene variantes y el user no dio hint, pedir 1 pregunta corta
-  // ===============================
+  /** =========================================================
+   *  3) Si tiene variantes y el user NO dio hint:
+   *     ✅ NO preguntes size SI NO ES size-based
+   *     ✅ Si need=price, devuelve precios por variante (top 5)
+   * ========================================================= */
   if (hasVariants && !mentionsVariant) {
+    // ✅ Caso A: variantes son por size/peso => pregunta size
+    if (sizeBased) {
+      const ask =
+        idioma === "en"
+          ? `Got it — which size do you need for ${top.name}? (Small / Medium / Large)`
+          : `Perfecto — ¿qué tamaño necesitas para ${top.name}? (Small / Medium / Large)`;
+
+      return {
+        hit: true,
+        status: "needs_clarification",
+        need,
+        ask,
+        ctxPatch: {
+          last_service_ref: {
+            kind: "service",
+            label: String(top.name),
+            service_id: String(top.id),
+            variant_id: null,
+            saved_at: new Date().toISOString(),
+          },
+        },
+      };
+    }
+
+    // ✅ Caso B: NO es size-based (planes, paquetes, opciones)
+    // Si el usuario pidió precio: responde con lista de precios por variante (sin preguntar size)
+    if (need === "price") {
+      const lines = variants.slice(0, 6).map((v: any) => {
+        const price = moneyLabel(v);
+        const name = String(v.variant_name || "Opción");
+        return price ? `• ${name}: ${price}` : `• ${name}: (precio no cargado)`;
+      });
+
+      const ask =
+        idioma === "en"
+          ? `Here are the prices for ${top.name}:\n${lines.join("\n")}\nWhich option would you like?`
+          : `Aquí tienes los precios de ${top.name}:\n${lines.join("\n")}\n¿Cuál opción te interesa?`;
+
+      return {
+        hit: true,
+        status: "needs_clarification",
+        need,
+        ask,
+        options: variants.slice(0, 6).map((v: any) => ({
+          label: `${v.variant_name}${moneyLabel(v) ? ` — ${moneyLabel(v)}` : ""}`,
+          kind: "variant",
+          service_id: String(top.id),
+          variant_id: String(v.id),
+        })),
+        ctxPatch: {
+          last_service_ref: {
+            kind: "service",
+            label: String(top.name),
+            service_id: String(top.id),
+            variant_id: null,
+            saved_at: new Date().toISOString(),
+          },
+        },
+      };
+    }
+
+    // Si el need no es price: pide cuál opción/variante quiere
     const ask =
       idioma === "en"
-        ? `Got it — which size do you need for ${top.name}? (Small / Medium / Large)`
-        : `Perfecto — ¿qué tamaño necesitas para ${top.name}? (Pequeño / Mediano / Grande)`;
+        ? `Which option for ${top.name} do you mean?`
+        : `¿Cuál opción de ${top.name} exactamente?`;
 
     return {
       hit: true,
       status: "needs_clarification",
       need,
       ask,
+      options: variants.slice(0, 6).map((v: any) => ({
+        label: String(v.variant_name),
+        kind: "variant",
+        service_id: String(top.id),
+        variant_id: String(v.id),
+      })),
       ctxPatch: {
         last_service_ref: {
           kind: "service",
@@ -266,27 +357,18 @@ export async function resolveCatalogFromDb(args: {
     };
   }
 
-  // ===============================
-  // 4) elegir variante si aplica (peso > size_token > fallback)
-  // ===============================
+  /** =========================================================
+   *  4) Elegir variante si aplica (solo si hay size/peso o el user ya dio hint)
+   * ========================================================= */
   let pickedVariant: any = null;
 
   if (hasVariants) {
-    if (weightLbs != null) {
-      pickedVariant = variants.find((v: any) => {
-        const max = v.max_weight_lbs != null ? Number(v.max_weight_lbs) : null;
-        const min = v.min_weight_lbs != null ? Number(v.min_weight_lbs) : null;
-
-        if (max != null && weightLbs > max) return false;
-        if (min != null && weightLbs < min) return false;
-        return true;
-      });
+    // Si es size-based o el user dio hint, intentamos pick.
+    if (sizeBased || mentionsVariant) {
+      pickedVariant = pickVariantBySizeOrWeight({ variants, sizeToken, weightLbs });
     }
 
-    if (!pickedVariant && sizeToken) {
-      pickedVariant = variants.find((v: any) => String(v.size_token || "") === sizeToken);
-    }
-
+    // Si no pudimos elegir, fallback estable
     if (!pickedVariant) pickedVariant = variants[0];
   }
 
@@ -298,24 +380,18 @@ export async function resolveCatalogFromDb(args: {
           service_id: String(top.id),
           variant_id: String(pickedVariant.id),
           price:
-            pickedVariant.price != null
-              ? Number(pickedVariant.price)
-              : top.price_base != null
-                ? Number(top.price_base)
-                : null,
+            pickedVariant.price != null ? Number(pickedVariant.price)
+            : top.price_base != null ? Number(top.price_base)
+            : null,
           currency: pickedVariant.currency ? String(pickedVariant.currency) : "USD",
           duration_min:
-            pickedVariant.duration_min != null
-              ? Number(pickedVariant.duration_min)
-              : top.duration_min != null
-                ? Number(top.duration_min)
-                : null,
+            pickedVariant.duration_min != null ? Number(pickedVariant.duration_min)
+            : top.duration_min != null ? Number(top.duration_min)
+            : null,
           description:
-            pickedVariant.description
-              ? String(pickedVariant.description)
-              : top.description
-                ? String(top.description)
-                : null,
+            pickedVariant.description ? String(pickedVariant.description)
+            : top.description ? String(top.description)
+            : null,
           url: pickedVariant.variant_url || top.service_url || null,
         }
       : {
