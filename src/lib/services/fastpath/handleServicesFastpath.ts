@@ -615,88 +615,18 @@ export async function handleServicesFastpath(args: {
         return { handled: true };
       }
 
-      if (!r.ok && need === "price") {
-        // ✅ SOLO damos lista general si el mensaje es general ("precios", "cuánto cuesta", etc.)
-        if (wantsGeneralPrices(routingText)) {
-          const { rows } = await pool.query(
-            `
-            (
-              SELECT
-                s.name AS label,
-                NULL::text AS variant_name,
-                s.price_base AS price,
-                'USD'::text AS currency,
-                s.service_url AS url,
-                1 AS sort_group,
-                s.updated_at AS updated_at
-              FROM services s
-              WHERE s.tenant_id = $1
-                  AND s.active = TRUE
-                  AND s.price_base IS NOT NULL
-                  AND NOT EXISTS (
-                  SELECT 1
-                  FROM service_variants v2
-                  WHERE v2.service_id = s.id
-                      AND v2.active = TRUE
-                      AND v2.price IS NOT NULL
-                  )
-            )
-            UNION ALL
-            (
-              SELECT
-                  s.name AS label,
-                  v.variant_name AS variant_name,
-                  v.price AS price,
-                  COALESCE(v.currency, 'USD') AS currency,
-                  COALESCE(v.variant_url, s.service_url) AS url,
-                  2 AS sort_group,
-                  v.updated_at AS updated_at
-              FROM services s
-              JOIN service_variants v ON v.service_id = s.id
-              WHERE s.tenant_id = $1
-                  AND s.active = TRUE
-                  AND v.active = TRUE
-                  AND v.price IS NOT NULL
-            )
-            ORDER BY sort_group ASC, updated_at DESC
-            LIMIT 12
-            `,
-            [tenantId]
-          );
-
-          if (rows.length) {
-            const lines = rows.map((rr: any) => {
-              const p = Number(rr.price);
-              const cur = String(rr.currency || "USD");
-              const name = rr.variant_name ? `${rr.label} - ${rr.variant_name}` : String(rr.label);
-              return `• ${name}: $${p.toFixed(2)} ${cur}`;
-            });
-
-            const msg =
-              idiomaDestino === "en"
-                ? `Here are the current prices:\n\n${lines.join("\n")}`
-                : `Estos son los precios actuales:\n\n${lines.join("\n")}`;
-
-            await replyAndExit(msg, "service_info:price_fallback_list", "precios");
-            return { handled: true };
-          }
-        }
-
-        // ✅ Si el mensaje NO es general (ej: "corte de pelo", "uñas"), NO spamees lista:
-        // pide el nombre exacto o sugiere que te escriban "Haircut / Cut / Nails trimming" etc.
-        const msg =
-          idiomaDestino === "en"
-            ? "Which service do you mean exactly? Tell me the service name (e.g., Haircut / Nail trim / Bath)."
-            : "¿De cuál servicio exactamente? Dime el nombre del servicio (ej: corte, uñas, baño).";
-
-        await replyAndExit(msg, "service_info:price_no_match_clarify", "service_info");
-        return { handled: true };
-      }
-
-      // fallback por last_service_ref
       const lastRef = convoCtx?.last_service_ref;
 
-      if (lastRef?.service_id) {
+      const lastRefFresh = (() => {
+      const saved = String(lastRef?.saved_at || "").trim();
+        if (!saved) return false;
+      const ts = Date.parse(saved);
+        if (!Number.isFinite(ts)) return false;
+        return Date.now() - ts < 1000 * 60 * 20; // 20 min
+      })();
+
+      // ✅ fallback por last_service_ref (solo si está fresco)
+      if (lastRef?.service_id && lastRefFresh) {
         const { rows } = await pool.query(
           `
           SELECT
@@ -775,6 +705,84 @@ export async function handleServicesFastpath(args: {
           await replyAndExit(msg, "service_info:ctx_last_ref", "service_info");
           return { handled: true };
         }
+      }
+
+      if (!r.ok && need === "price") {
+        // ✅ SOLO damos lista general si el mensaje es general ("precios", "cuánto cuesta", etc.)
+        if (wantsGeneralPrices(routingText) && !(lastRef?.service_id && lastRefFresh)) {
+          const { rows } = await pool.query(
+            `
+            (
+              SELECT
+                s.name AS label,
+                NULL::text AS variant_name,
+                s.price_base AS price,
+                'USD'::text AS currency,
+                s.service_url AS url,
+                1 AS sort_group,
+                s.updated_at AS updated_at
+              FROM services s
+              WHERE s.tenant_id = $1
+                  AND s.active = TRUE
+                  AND s.price_base IS NOT NULL
+                  AND NOT EXISTS (
+                  SELECT 1
+                  FROM service_variants v2
+                  WHERE v2.service_id = s.id
+                      AND v2.active = TRUE
+                      AND v2.price IS NOT NULL
+                  )
+            )
+            UNION ALL
+            (
+              SELECT
+                  s.name AS label,
+                  v.variant_name AS variant_name,
+                  v.price AS price,
+                  COALESCE(v.currency, 'USD') AS currency,
+                  COALESCE(v.variant_url, s.service_url) AS url,
+                  2 AS sort_group,
+                  v.updated_at AS updated_at
+              FROM services s
+              JOIN service_variants v ON v.service_id = s.id
+              WHERE s.tenant_id = $1
+                  AND s.active = TRUE
+                  AND v.active = TRUE
+                  AND v.price IS NOT NULL
+            )
+            ORDER BY sort_group ASC, updated_at DESC
+            LIMIT 12
+            `,
+            [tenantId]
+          );
+
+          if (rows.length) {
+            const lines = rows.map((rr: any) => {
+              const p = Number(rr.price);
+              const cur = String(rr.currency || "USD");
+              const name = rr.variant_name ? `${rr.label} - ${rr.variant_name}` : String(rr.label);
+              return `• ${name}: $${p.toFixed(2)} ${cur}`;
+            });
+
+            const msg =
+              idiomaDestino === "en"
+                ? `Here are the current prices:\n\n${lines.join("\n")}`
+                : `Estos son los precios actuales:\n\n${lines.join("\n")}`;
+
+            await replyAndExit(msg, "service_info:price_fallback_list", "precios");
+            return { handled: true };
+          }
+        }
+
+        // ✅ Si el mensaje NO es general (ej: "corte de pelo", "uñas"), NO spamees lista:
+        // pide el nombre exacto o sugiere que te escriban "Haircut / Cut / Nails trimming" etc.
+        const msg =
+          idiomaDestino === "en"
+            ? "Which service do you mean exactly? Tell me the service name (e.g., Haircut / Nail trim / Bath)."
+            : "¿De cuál servicio exactamente? Dime el nombre del servicio (ej: corte, uñas, baño).";
+
+        await replyAndExit(msg, "service_info:price_no_match_clarify", "service_info");
+        return { handled: true };
       }
 
       const msg =
