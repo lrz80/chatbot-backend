@@ -53,6 +53,7 @@ import {
   capiLeadStrongWeekly,
 } from "../../lib/analytics/capiEvents";
 import { handleServicesFastpath } from "../../lib/services/fastpath/handleServicesFastpath";
+import { resolveServiceInfoByDb } from "../../lib/services/fastpath/resolveServiceInfoByDb";
 import type { Lang } from "../../lib/channels/engine/clients/clientDb";
 import {
   normalizeLang,
@@ -436,6 +437,43 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           ...args,
           canal: "whatsapp", // ✅ usa el canal real del turno
         }),
+        captureLastServiceRef: async ({ tenantId, userInput, assistantText, idiomaDestino, convoCtx }) => {
+          // si ya hay last_service_ref fresco, no lo sobreescribas
+          const saved = String(convoCtx?.last_service_ref?.saved_at || "");
+          const ts = saved ? Date.parse(saved) : NaN;
+          const fresh = Number.isFinite(ts) ? (Date.now() - ts < 1000 * 60 * 20) : false;
+          if (fresh && convoCtx?.last_service_ref?.service_id) return null;
+
+          // 1) intenta con el texto del usuario
+          let r = await resolveServiceInfoByDb({
+            pool,
+            tenantId,
+            query: userInput,
+            need: "any",
+            limit: 1,
+          });
+
+          // 2) si no matchea, intenta con lo que escribió el bot (suele tener el nombre exacto)
+          if (!r.ok) {
+            r = await resolveServiceInfoByDb({
+              pool,
+              tenantId,
+              query: assistantText,
+              need: "any",
+              limit: 1,
+            });
+          }
+
+          if (!r.ok) return null;
+
+          return {
+            kind: (r.kind || null),
+            label: (r.label || null),
+            service_id: (r.service_id || null),
+            variant_id: (r.variant_id || null),
+            saved_at: new Date().toISOString(),
+          };
+        },
       }
     );
 

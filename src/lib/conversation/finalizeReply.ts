@@ -1,6 +1,14 @@
 // backend/src/lib/conversation/finalizeReply.ts
 import type { Canal } from '../../lib/detectarIntencion'; 
 
+type LastServiceRef = {
+  kind: "service" | "variant" | null;
+  label: string | null;
+  service_id: string | null;
+  variant_id?: string | null;
+  saved_at: string;
+};
+
 type FinalizeDeps = {
   // Sender/transport
   safeSend: (
@@ -35,6 +43,15 @@ type FinalizeDeps = {
     assistantText: string;
     lastIntent: string | null;
   }) => Promise<void>;
+
+  // ✅ opcional: permitir que el LLM deje ancla de servicio para turnos siguientes
+  captureLastServiceRef?: (args: {
+    tenantId: string;
+    userInput: string;
+    assistantText: string;
+    idiomaDestino: "es" | "en";
+    convoCtx: any;
+  }) => Promise<LastServiceRef | null>;
 };
 
 type FinalizeInput = {
@@ -92,8 +109,42 @@ export async function finalizeReply(
   // ✅ Sender único para estado/memoria
   const senderKey = contactoNorm || fromNumber || "anónimo";
 
+  // ✅ Intentar capturar last_service_ref (para casos donde el LLM respondió un servicio)
+  let capturedRef: LastServiceRef | null = null;
+
+  try {
+    const hasSticky =
+      Boolean(convoCtx?.service_info_pick?.options?.length) ||
+      Boolean(convoCtx?.service_link_pick?.options?.length);
+
+    const inBooking =
+      Boolean(convoCtx?.booking?.step && convoCtx.booking.step !== "idle");
+
+    if (
+      deps.captureLastServiceRef &&
+      !hasSticky &&
+      !inBooking &&
+      typeof userInput === "string" &&
+      typeof reply === "string" &&
+      userInput.trim().length >= 2 &&
+      reply.trim().length >= 2
+    ) {
+      capturedRef = await deps.captureLastServiceRef({
+        tenantId,
+        userInput,
+        assistantText: reply,
+        idiomaDestino,
+        convoCtx,
+      });
+    }
+  } catch {
+    // no romper el turno
+  }
+
   const nextCtx = {
     ...(convoCtx && typeof convoCtx === "object" ? convoCtx : {}),
+    ...(capturedRef?.service_id ? { last_service_ref: capturedRef } : {}),
+
     last_reply_source: replySource || null,
     last_intent: (lastIntent || intentFallback || null),
     last_assistant_text: reply,
