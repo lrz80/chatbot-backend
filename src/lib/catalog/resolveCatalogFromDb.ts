@@ -246,8 +246,8 @@ export async function resolveCatalogFromDb(args: {
   if (hasVariants && !mentionsVariant) {
     const ask =
       idioma === "en"
-        ? `Got it — what size is your pet for ${top.name}? (Small / Medium / Large)`
-        : `Perfecto — ¿qué tamaño es tu mascota para ${top.name}? (Pequeño / Mediano / Grande)`;
+        ? `Got it — which size do you need for ${top.name}? (Small / Medium / Large)`
+        : `Perfecto — ¿qué tamaño necesitas para ${top.name}? (Pequeño / Mediano / Grande)`;
 
     return {
       hit: true,
