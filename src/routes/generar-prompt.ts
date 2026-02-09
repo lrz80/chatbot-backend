@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v5"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v6"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -442,7 +442,7 @@ function proseToBullets(text: string, maxItems = 10) {
 function buildOperationalBusinessContext(infoClean: string, nombreNegocio: string) {
   const kv = parseKeyValueTemplate(infoClean);
 
-  // Detecta si realmente era una plantilla (tiene llaves tipo "Nombre del negocio", etc.)
+ // Detecta si realmente era una plantilla (tiene llaves tipo "Nombre del negocio", etc.)
   const hasTemplateSignals =
     Object.keys(kv).some(k =>
       /nombre del negocio|tipo de negocio|ubicaci[oó]n|servicios|servicios principales|horarios|precios|reserva(s)?|reservas \/ contacto|contacto|soporte/i.test(k)
