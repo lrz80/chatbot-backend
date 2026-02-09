@@ -354,9 +354,9 @@ function parseKeyValueTemplate(text: string) {
     ["horarios", "Horarios"],
     ["horario", "Horarios"],
 
-    //["precios", "Precios"],
-    //["precios o cómo consultar precios", "Precios"],
-    //["precios o como consultar precios", "Precios"],
+    ["precios", "Precios"],
+    ["precios o cómo consultar precios", "Precios"],
+    ["precios o como consultar precios", "Precios"],
 
     ["reservas", "Reservas"],
     ["reservas / contacto", "Reservas / contacto"],
@@ -509,11 +509,11 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
       out.push(...toBullets(horarios));
     }
 
-    //if (precios.length) {
-      //out.push("");
-      //out.push("PRECIOS");
-      //out.push(...toBullets(precios));
-    //}
+    if (precios.length) {
+      out.push("");
+      out.push("PRECIOS");
+      out.push(...toBullets(precios));
+    }
 
     if (reservas.length) {
       out.push("");
@@ -694,20 +694,34 @@ router.post("/", async (req: Request, res: Response) => {
       ? compact([
           "CATALOG_RULES (CRITICAL):",
           "- Never paste the full catalog list from BUSINESS_CONTEXT.",
-          "- If user asks: services/menu/catalog/more info:",
+          "- If user asks: services/menu/catalog/what do you have:",
           "  1) Answer with CATALOG_SUMMARY only (max 7 bullets).",
-          "  2) Ask ONE question: Which service are you looking for?",
-          "- If they ask for prices but don't specify a service: ask which service.",
-          "- If user replies with a number, treat it as picking from the summary and ask confirmation if needed.",
+          "  2) Ask ONE question: Which one are you interested in?",
+          "",
+          "- If user asks about PRICES but does NOT specify a plan/service:",
+          "  - Do NOT list all prices.",
+          "  - Reply with a short generic statement: prices vary depending on what they choose.",
+          "  - Ask ONE question to narrow it down (e.g., which plan/service they want).",
+          "",
+          "- If user asks the price of a SPECIFIC plan/service:",
+          "  - Answer that specific price using database facts (if provided elsewhere).",
+          "  - If multiple variants exist, ask them to pick (do not guess).",
         ].join("\n"))
       : compact([
           "REGLAS_DE_CATALOGO (CRÍTICO):",
           "- Nunca pegues la lista completa del catálogo desde CONTEXTO_DEL_NEGOCIO.",
-          "- Si el usuario pide: servicios/menú/catálogo/más info:",
+          "- Si el usuario pide: servicios/menú/catálogo/qué tienen:",
           "  1) Responde SOLO con RESUMEN_DE_SERVICIOS (máx 7 bullets).",
-          "  2) Haz UNA pregunta: ¿Qué servicio estás buscando?",
-          "- Si piden precios sin especificar servicio: pregunta cuál servicio.",
-          "- Si el usuario responde con un número, interprétalo como elección del resumen y confirma si hay ambigüedad.",
+          "  2) Haz UNA sola pregunta: ¿Cuál te interesa?",
+          "",
+          "- Si el usuario pregunta por PRECIOS pero NO especifica plan/servicio:",
+          "  - NO listes todos los precios.",
+          "  - Responde con un resumen genérico: los precios varían según lo que elija.",
+          "  - Haz UNA sola pregunta para concretar (qué plan/servicio busca).",
+          "",
+          "- Si el usuario pregunta el precio de un plan/servicio ESPECÍFICO:",
+          "  - Responde ese precio específico usando hechos de base de datos (si se proveen en otro lado).",
+          "  - Si hay variantes, pide que elija (no adivines).",
         ].join("\n"));
 
     // ———————————————————————————————————————————————————
@@ -810,7 +824,7 @@ router.post("/", async (req: Request, res: Response) => {
             "- Ask at most 1 question only if needed.",
             "- Do not repeat long text verbatim; paraphrase briefly when needed.",
             "- A GENERAL service list (names only) may live in the prompt as a quick guide.",
-            "- Do not include prices in the prompt.",
+            "- If asked 'what are your prices?' without a specific item: do NOT list everything; ask what they want.",
             "- For price, duration, or what's included, query the database (services/service_variants).",
             "- If multiple variants exist, ask them to pick 1–5. Do not guess.",
           ]
@@ -822,7 +836,7 @@ router.post("/", async (req: Request, res: Response) => {
             "- Máximo 1 pregunta si es necesaria.",
             "- No repitas textos largos literalmente; parafrasea breve cuando sea necesario.",
             "- La lista GENERAL de servicios (solo nombres) puede vivir en el prompt como guía rápida.",
-            "- No incluyas precios en el prompt.",
+            "- Si preguntan 'cuáles son los precios' sin especificar: NO listes todo; pregunta qué buscan.",
             "- Para precio, duración o qué incluye, consulta la base de datos (services/service_variants).",
             "- Si hay varias variantes, pide elegir 1–5. No adivines.",
           ]),
