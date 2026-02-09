@@ -63,6 +63,7 @@ import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBoo
 import { rememberAfterReply } from "../../lib/memory/rememberAfterReply";
 import { getWhatsAppModeStatus } from "../../lib/whatsapp/getWhatsAppModeStatus";
 import { catalogBrain } from "../../lib/catalog/catalogBrain";
+import { renderCatalogFactsAsPrompt } from "../../lib/catalog/renderCatalogFactsAsPrompt";
 
 
 // Puedes ponerlo debajo de los imports
@@ -854,6 +855,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       catalogFacts = cat.facts;
     }
 
+    const catalogFactsText =
+      catalogFacts ? renderCatalogFactsAsPrompt(catalogFacts, idiomaDestino) : "";
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
       promptBase: [
@@ -866,7 +869,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           : "REGLAS CATÁLOGO: Si existe CATALOGO_DB_FACTS, DEBES usarlo como ÚNICA fuente para precios/duración/qué incluye/links. No inventes."
       ].join("\n"),
         userInput: [
-        catalogFacts ? `CATALOGO_DB_FACTS:\n${JSON.stringify(catalogFacts)}\n` : "",
+        catalogFactsText ? `CATALOGO_DB_FACTS:\n${catalogFactsText}\n` : "",
         "SYSTEM_EVENT_FACTS (use to respond; do not mention systems; keep it short):",
         JSON.stringify(smResult.facts || {}),
         "",
@@ -994,6 +997,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       catalogFacts = cat.facts;
     }
 
+    const catalogFactsText =
+      catalogFacts ? renderCatalogFactsAsPrompt(catalogFacts, idiomaDestino) : "";
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
       promptBase: [
@@ -1002,11 +1007,11 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         NO_NUMERIC_MENUS,
         "",
         idiomaDestino === "en"
-          ? "CATALOG RULES: If CATALOGO_DB_FACTS is present, you MUST use it as the ONLY source for prices/duration/what's-included/links. Do not invent."
-          : "REGLAS CATÁLOGO: Si existe CATALOGO_DB_FACTS, DEBES usarlo como ÚNICA fuente para precios/duración/qué incluye/links. No inventes."
+          ? "CATALOG RULES: If CATALOGO_DB_FACTS is present, use it as the ONLY source for price/duration/includes. Do NOT paste it verbatim; answer naturally."
+          : "REGLAS CATÁLOGO: Si existe CATALOGO_DB_FACTS, úsalo como ÚNICA fuente para precio/duración/qué incluye. NO lo pegues literal; responde natural."
       ].join("\n"),
       userInput: [
-        catalogFacts ? `CATALOGO_DB_FACTS:\n${JSON.stringify(catalogFacts)}\n` : "",
+        catalogFactsText ? `CATALOGO_DB_FACTS:\n${catalogFactsText}\n` : "",
         "USER_MESSAGE:",
         userInput,
       ].join("\n"),
