@@ -1,16 +1,16 @@
 // src/routes/generar-prompt.ts
-// ✅ PROMPT-ONLY (sin DB), listo para copiar/pegar
 
 import { Router, Request, Response } from "express";
 import jwt, { JwtPayload } from "jsonwebtoken";
 import pool from "../lib/db";
-import crypto from "crypto";
+import crypto from "crypto";                 // (B) Cache por checksum (sha256)
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
-// ✅ bump para invalidar cache
-const PROMPT_GEN_VERSION = "v11";
+// (B) Cache en memoria por proceso
+// Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
+const PROMPT_GEN_VERSION = "v4"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -35,9 +35,10 @@ function normalizeUrl(u: string) {
     const url = new URL(u.trim());
     // conserva el hash (necesario para rutas SPA tipo Glofox)
     // quita "/" final solo si NO hay hash
-    if (url.pathname.endsWith("/") && url.pathname !== "/" && !url.hash) {
+    if (url.pathname.endsWith('/') && url.pathname !== '/' && !url.hash) {
       url.pathname = url.pathname.slice(0, -1);
     }
+    // usar href para conservar hash tal cual
     return url.href;
   } catch {
     return u.trim();
@@ -114,26 +115,6 @@ function buildChannelRules(canal: Canal, idioma: Lang) {
   if (canal === "instagram" || canal === "facebook") return (isES ? igfbES : igfbEN).join("\n");
   if (canal === "voice") return (isES ? voiceES : voiceEN).join("\n");
   return (isES ? previewES : previewEN).join("\n");
-}
-
-function buildLanguageLock(idioma: Lang) {
-  if (idioma === "en") {
-    return [
-      "LANGUAGE_LOCK (CRITICAL):",
-      "- Reply 100% in English.",
-      "- Do NOT switch languages mid-reply.",
-      "- You may keep service names in their original language (e.g., 'Specialty Treatment'),",
-      "  but the explanation MUST be in English.",
-    ].join("\n");
-  }
-
-  return [
-    "BLOQUEO_DE_IDIOMA (CRÍTICO):",
-    "- Responde 100% en español.",
-    "- NO mezcles idiomas en la misma respuesta.",
-    "- Puedes mantener nombres de servicios en su idioma original (ej: 'Specialty Treatment'),",
-    "  pero la explicación DEBE ser en español.",
-  ].join("\n");
 }
 
 function buildResponseFormat(idioma: Lang) {
@@ -223,17 +204,22 @@ function classifyLinks(links: string[]) {
       out.soporte.push(u);
       continue;
     }
-    if (/(book|booking|reserve|reserv|schedule|calendar|classes|appointment|day-view)/.test(s)) {
+    if (
+      /(book|booking|reserve|reserv|schedule|calendar|classes|appointment|day-view)/.test(s)
+    ) {
       out.reservas.push(u);
       continue;
     }
-    if (/(price|pricing|plan|plans|membership|memberships|checkout|buy|pagar|compra|membres)/.test(s)) {
+    if (
+      /(price|pricing|plan|plans|membership|memberships|checkout|buy|pagar|compra|membres)/.test(s)
+    ) {
       out.precios.push(u);
       continue;
     }
     out.otros.push(u);
   }
 
+  // dedupe simple manteniendo orden
   const uniq = (arr: string[]) => Array.from(new Set(arr));
   out.reservas = uniq(out.reservas);
   out.precios = uniq(out.precios);
@@ -271,10 +257,12 @@ function extractAllLinksFromText(text: string, max = 24): string[] {
   const found: string[] = [];
   let m: RegExpExecArray | null;
 
+  // 1) markdown [label](url)
   while ((m = MD_LINK.exec(text)) && found.length < max) {
     found.push(normalizeUrl(m[2]));
   }
 
+  // 2) bare urls
   const existing = new Set(found);
   const bare = text.match(BARE_URL) || [];
   for (const raw of bare) {
@@ -286,6 +274,7 @@ function extractAllLinksFromText(text: string, max = 24): string[] {
     }
   }
 
+  // 3) de-dup por host+path+search+hash (no pierdas variantes)
   const uniq = new Map<string, string>();
   for (const u of found) {
     try {
@@ -301,118 +290,47 @@ function extractAllLinksFromText(text: string, max = 24): string[] {
 
 function toBullets(lines: string[], prefix = "- ") {
   return lines
-    .map((l) => l.trim())
+    .map(l => l.trim())
     .filter(Boolean)
-    .map((l) => (l.startsWith("-") ? l : `${prefix}${l}`));
+    .map(l => (l.startsWith("-") ? l : `${prefix}${l}`));
 }
 
 function splitLinesSmart(text: string) {
   return (text || "")
     .replace(/\r/g, "")
     .split("\n")
-    .map((l) => l.trimEnd());
+    .map(l => l.trimEnd());
 }
 
 // Parsea plantillas estilo:
 // "Nombre del negocio: X", "Servicios principales:", "- a", "- b", etc.
 function parseKeyValueTemplate(text: string) {
   const lines = splitLinesSmart(text);
-
   const kv: Record<string, string[]> = {};
   let currentKey: string | null = null;
 
   const push = (key: string, value: string) => {
     const k = key.trim();
     if (!kv[k]) kv[k] = [];
-    const v = (value || "").trim();
-    if (v) kv[k].push(v);
+    if (value.trim()) kv[k].push(value.trim());
   };
 
-  const normalizeKey = (raw: string) => raw.trim().toLowerCase();
-
-  const allowedKeys = new Map<string, string>([
-    ["nombre del negocio", "Nombre del negocio"],
-    ["tipo de negocio", "Tipo de negocio"],
-    ["ubicación", "Ubicación"],
-    ["ubicacion", "Ubicación"],
-    ["teléfono", "Teléfono"],
-    ["telefono", "Teléfono"],
-
-    ["servicios", "Servicios"],
-    ["servicios principales", "Servicios principales"],
-    ["planes", "Planes"],
-    ["planes y membresias", "Planes y membresias"],
-    ["planes y membresías", "Planes y membresias"],
-
-    ["horarios", "Horarios"],
-    ["horario", "Horarios"],
-
-    ["precios", "Precios"],
-    ["precios o cómo consultar precios", "Precios"],
-    ["precios o como consultar precios", "Precios"],
-
-    ["reservas", "Reservas"],
-    ["reservas / contacto", "Reservas / contacto"],
-    ["reservas / contacto:", "Reservas / contacto"],
-    ["contacto", "Contacto"],
-
-    ["políticas", "Políticas"],
-    ["politicas", "Políticas"],
-    ["política", "Políticas"],
-    ["politica", "Políticas"],
-  ]);
-
-  const isUrlLine = (s: string) => /^https?:\/\//i.test(s) || /^mailto:/i.test(s) || /^tel:/i.test(s);
-
-  // ✅ Une URLs que quedaron solas en la siguiente línea:
-  const mergedLines: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const cur = (lines[i] || "").trim();
-    const next = (lines[i + 1] || "").trim();
-
-    if (cur && cur.endsWith(":") && /^https?:\/\//i.test(next)) {
-      mergedLines.push(`${cur} ${next}`);
-      i++;
-      continue;
-    }
-    mergedLines.push(lines[i]);
-  }
-
-  for (const raw of mergedLines) {
-    const line = (raw || "").trim();
+  for (const raw of lines) {
+    const line = raw.trim();
     if (!line) continue;
 
-    if (isUrlLine(line)) {
-      if (currentKey) push(currentKey, line);
+    // Key: Value
+    const m = line.match(/^([^:]{2,60}):\s*(.*)$/);
+    if (m) {
+      currentKey = m[1].trim();
+      const v = (m[2] || "").trim();
+      if (v) push(currentKey, v);
       continue;
     }
 
-    const heading = line.match(/^([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 \/]+):\s*$/);
-    if (heading) {
-      const keyNorm = normalizeKey(heading[1]);
-      const canonical = allowedKeys.get(keyNorm);
-      if (canonical) {
-        currentKey = canonical;
-        continue;
-      }
-      currentKey = null;
-      continue;
-    }
-
-    const kvLine = line.match(/^([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 \/]{2,60}):\s*(.+)$/);
-    if (kvLine) {
-      const keyNorm = normalizeKey(kvLine[1]);
-      const canonical = allowedKeys.get(keyNorm);
-      if (canonical) {
-        currentKey = canonical;
-        push(currentKey, kvLine[2]);
-        continue;
-      }
-      currentKey = null;
-      continue;
-    }
-
+    // List item under current key
     if (currentKey) {
+      // permite "- item" o "• item"
       const item = line.replace(/^[-•]\s*/, "").trim();
       if (item) push(currentKey, item);
     }
@@ -421,54 +339,54 @@ function parseKeyValueTemplate(text: string) {
   return kv;
 }
 
+// Si el texto parece prosa (párrafo largo), lo convierte a bullets por oraciones (sin inventar nada)
+function proseToBullets(text: string, maxItems = 10) {
+  const t = compact(text);
+  if (!t) return [];
+  // split básico por ". " y también por saltos
+  const parts = t
+    .replace(/\n+/g, " ")
+    .split(/(?<=[\.\!\?])\s+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  return parts.slice(0, maxItems).map(s => s.replace(/\s+/g, " "));
+}
+
 function buildOperationalBusinessContext(infoClean: string, nombreNegocio: string) {
   const kv = parseKeyValueTemplate(infoClean);
 
-  const hasTemplateSignals = Object.keys(kv).some((k) =>
-    /nombre del negocio|tipo de negocio|ubicaci[oó]n|servicios|horarios|precios|reservas|contacto|planes/i.test(k)
-  );
+  // Detecta si realmente era una plantilla (tiene llaves tipo "Nombre del negocio", etc.)
+  const hasTemplateSignals =
+    Object.keys(kv).some(k =>
+      /nombre del negocio|tipo de negocio|ubicaci[oó]n|servicios|horarios|precios|reservas|contacto/i.test(k)
+    );
 
   if (hasTemplateSignals) {
     const nombre = (kv["Nombre del negocio"]?.[0] || nombreNegocio || "").trim();
     const tipo = (kv["Tipo de negocio"]?.[0] || "").trim();
     const ubic = (kv["Ubicación"]?.[0] || "").trim();
-    const tel = (kv["Teléfono"]?.[0] || "").trim();
+    const tel  = (kv["Teléfono"]?.[0] || "").trim();
 
     const servicios = kv["Servicios principales"] || kv["Servicios"] || [];
-    const planes = kv["Planes y membresias"] || kv["Planes"] || [];
-    const horarios = kv["Horarios"] || [];
-    const precios = kv["Precios"] || [];
-    const reservas =
-      kv["Reservas / contacto"] ||
-      kv["Reservas"] ||
-      kv["Contacto"] ||
-      [];
-    const politicas = kv["Políticas"] || [];
+    const horarios  = kv["Horarios"] || [];
+    const precios   = kv["Precios o cómo consultar precios"] || kv["Precios"] || [];
+    const reservas  = kv["Reservas / contacto"] || kv["Reservas"] || kv["Contacto"] || [];
 
     const out: string[] = [];
 
     out.push("DATOS DEL NEGOCIO");
-    out.push(
-      ...toBullets(
-        [
-          nombre ? `Nombre: ${nombre}` : `Nombre: ${nombreNegocio}`,
-          tipo ? `Tipo: ${tipo}` : "",
-          ubic ? `Ubicación: ${ubic}` : "",
-          tel ? `Teléfono: ${tel}` : "",
-        ].filter(Boolean)
-      )
-    );
+    out.push(...toBullets([
+      nombre ? `Nombre: ${nombre}` : `Nombre: ${nombreNegocio}`,
+      tipo ? `Tipo: ${tipo}` : "",
+      ubic ? `Ubicación: ${ubic}` : "",
+      tel ? `Teléfono: ${tel}` : "",
+    ].filter(Boolean)));
 
     if (servicios.length) {
       out.push("");
       out.push("SERVICIOS");
       out.push(...toBullets(servicios));
-    }
-
-    if (planes.length) {
-      out.push("");
-      out.push("PLANES Y MEMBRESIAS");
-      out.push(...toBullets(planes));
     }
 
     if (horarios.length) {
@@ -489,15 +407,10 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
       out.push(...toBullets(reservas));
     }
 
-    if (politicas.length) {
-      out.push("");
-      out.push("POLÍTICAS");
-      out.push(...toBullets(politicas));
-    }
-
     return compact(out.join("\n"));
   }
 
+  // Fallback: si no era plantilla, lo compacta como bullets (sin inventar)
   const t = compact(infoClean || "");
   if (!t) return "";
   return compact(["CONOCIMIENTO DEL NEGOCIO", t].join("\n"));
@@ -506,145 +419,8 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
 function buildOperationalRules(funcionesClean: string) {
   const t = compact(funcionesClean || "");
   if (!t) return "";
+  // Respeta el formato que escribió el usuario (prosa o bullets)
   return compact(["REGLAS Y COMPORTAMIENTO", t].join("\n"));
-}
-
-// ——————— Extractores desde CONTEXTO (no DB) ———————
-function extractServiceCandidatesFromInfoBlock(infoBlock: string): string[] {
-  const t = String(infoBlock || "");
-  if (!t.trim()) return [];
-  const lines = t.split("\n").map((l) => l.trim()).filter(Boolean);
-
-  const idx = lines.findIndex((l) => /^SERVICIOS$/i.test(l));
-  let slice = lines;
-  if (idx >= 0) {
-    slice = lines.slice(idx + 1);
-    const stopIdx = slice.findIndex((l) =>
-      /^(PLANES\s+Y\s+MEMBRESIAS|HORARIOS|RESERVAS|RESERVAS \/ CONTACTO|POL[IÍ]TICAS|DATOS DEL NEGOCIO|CONOCIMIENTO DEL NEGOCIO|PRECIOS)$/i.test(l)
-    );
-    if (stopIdx >= 0) slice = slice.slice(0, stopIdx);
-  }
-
-  const items = slice
-    .map((l) => l.replace(/^[-•]\s*/, "").trim())
-    .filter((l) => l.length >= 2 && l.length <= 80)
-    .filter((l) => !/^nombre:|^tipo:|^ubicaci/i.test(l));
-
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const it of items) {
-    const k = it.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(it);
-  }
-  return out;
-}
-
-function extractPlanCandidatesFromInfoBlock(infoBlock: string): string[] {
-  const t = String(infoBlock || "");
-  if (!t.trim()) return [];
-
-  const lines = t.split("\n").map((l) => l.trim()).filter(Boolean);
-  const idx = lines.findIndex((l) => /^PLANES\s+Y\s+MEMBRESIAS$/i.test(l));
-  if (idx < 0) return [];
-
-  let slice = lines.slice(idx + 1);
-  const stopIdx = slice.findIndex((l) =>
-    /^(SERVICIOS|HORARIOS|RESERVAS|RESERVAS \/ CONTACTO|POL[IÍ]TICAS|DATOS DEL NEGOCIO|PRECIOS)$/i.test(l)
-  );
-  if (stopIdx >= 0) slice = slice.slice(0, stopIdx);
-
-  const items = slice
-    .map((l) => l.replace(/^[-•]\s*/, "").trim())
-    .filter((l) => l.length >= 2 && l.length <= 90);
-
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const it of items) {
-    const k = it.toLowerCase();
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(it);
-  }
-  return out;
-}
-
-function buildPlansSummaryBlock(idioma: Lang, nombreNegocio: string, infoBlock: string) {
-  const plans = extractPlanCandidatesFromInfoBlock(infoBlock);
-  const top = plans.slice(0, 7);
-  if (!top.length) return "";
-
-  if (idioma === "en") {
-    return compact([
-      "PLANS_SUMMARY (FROM CONTEXT, NAMES ONLY):",
-      `- Business: ${nombreNegocio}`,
-      ...top.map((p) => `- ${p}`),
-      "",
-      'Rule: If asked "what plans do you have?", reply using ONLY this list.',
-      'Then ask ONE question: "Which plan are you interested in?"',
-    ].join("\n"));
-  }
-
-  return compact([
-    "RESUMEN_DE_PLANES (DESDE CONTEXTO, SOLO NOMBRES):",
-    `- Negocio: ${nombreNegocio}`,
-    ...top.map((p) => `- ${p}`),
-    "",
-    'Regla: Si preguntan "¿qué planes tienes?", responde usando SOLO esta lista.',
-    'Luego haz UNA pregunta: "¿Cuál plan te interesa?"',
-  ].join("\n"));
-}
-
-function buildCatalogSummaryBlock(idioma: Lang, nombreNegocio: string, infoBlock: string) {
-  const services = extractServiceCandidatesFromInfoBlock(infoBlock);
-  const top = services.slice(0, 7);
-  if (!top.length) return "";
-
-  if (idioma === "en") {
-    return compact([
-      "CATALOG_SUMMARY (FROM CONTEXT, DO NOT LIST EVERYTHING):",
-      `- Business: ${nombreNegocio}`,
-      ...top.map((s) => `- ${s}`),
-      "",
-      'Rule: If user asks services/menu/catalog, reply using ONLY this short summary and ask:',
-      '"Which service are you looking for?"',
-    ].join("\n"));
-  }
-
-  return compact([
-    "RESUMEN_DE_SERVICIOS (DESDE CONTEXTO, NO LISTAR TODO):",
-    `- Negocio: ${nombreNegocio}`,
-    ...top.map((s) => `- ${s}`),
-    "",
-    'Regla: Si piden servicios/menú/catálogo, responde SOLO con este resumen y pregunta:',
-    '"¿Qué servicio estás buscando?"',
-  ].join("\n"));
-}
-
-function buildServicesSummaryOnlyBlock(idioma: Lang, nombreNegocio: string, services: string[]) {
-  const topServices = (services || []).slice(0, 7);
-  if (!topServices.length) return "";
-
-  if (idioma === "en") {
-    return compact([
-      "SERVICES_SUMMARY_FOR_INFO (FROM CONTEXT, SERVICES ONLY):",
-      `- Business: ${nombreNegocio}`,
-      ...topServices.map((s) => `- ${s}`),
-      "",
-      'Rule: If user asks "more info / info / more information" without specifying WHAT, reply using ONLY this list.',
-      'Then ask ONE question: "Which service are you interested in?"',
-    ].join("\n"));
-  }
-
-  return compact([
-    "RESUMEN_DE_SERVICIOS_PARA_INFO (DESDE CONTEXTO, SOLO SERVICIOS):",
-    `- Negocio: ${nombreNegocio}`,
-    ...topServices.map((s) => `- ${s}`),
-    "",
-    'Regla: Si piden "más info" sin especificar QUÉ, responde SOLO con esta lista.',
-    'Luego haz UNA pregunta: "¿En cuál servicio estás interesado?"',
-  ].join("\n"));
 }
 
 // ———————————————————————————————————————————————————
@@ -658,22 +434,26 @@ router.post("/", async (req: Request, res: Response) => {
     const tenant_id = decoded.tenant_id;
     const { descripcion, informacion, idioma, canal } = req.body;
 
-    const canalNorm = (String(canal || "preview").toLowerCase().trim() as Canal);
+    const canalNorm =
+      (String(canal || "preview").toLowerCase().trim() as Canal);
+
     const allowed = new Set<Canal>(["whatsapp", "instagram", "facebook", "preview", "voice"]);
     if (!allowed.has(canalNorm)) {
       return res.status(400).json({ error: "Canal inválido" });
     }
 
-    const idiomaNorm: Lang = idioma === "en" ? "en" : "es";
+    const idiomaNorm: Lang = (idioma === "en" ? "en" : "es");
 
+    // (E) Límite de entrada (para evitar prompts kilométricos)
     const MAX = 14_000; // caracteres
     const descripcionCapped = (descripcion || "").slice(0, MAX);
     const informacionCapped = (informacion || "").slice(0, MAX);
 
+    // (F) Normaliza saltos/espacios y compacta antes de mandar al modelo
     const funciones = compact(descripcionCapped.replace(/\\n/g, "\n").replace(/\r/g, ""));
-    const info = compact(informacionCapped.replace(/\\n/g, "\n").replace(/\r/g, ""));
+    const info      = compact(informacionCapped.replace(/\\n/g, "\n").replace(/\r/g, ""));
 
-    if (!funciones || !info) {
+    if (!funciones || !info || !idiomaNorm) {
       return res.status(400).json({ error: "Faltan campos requeridos" });
     }
 
@@ -687,11 +467,21 @@ router.post("/", async (req: Request, res: Response) => {
 
     const nombreNegocio = tenant.name || "nuestro negocio";
 
+    // (B) Cache hit?
     const cacheKey = keyOf(tenant_id, canalNorm, funciones, info, idiomaNorm);
     const hit = promptCache.get(cacheKey);
-    if (hit && Date.now() - hit.at < 1000 * 60 * 60 * 12) {
+    if (hit && Date.now() - hit.at < 1000 * 60 * 60 * 12) { // 12 horas
       return res.status(200).json({ prompt: hit.value });
     }
+
+    // Logs livianos (C)
+    console.log("📤 Generar prompt:", {
+      negocio: nombreNegocio,
+      idioma: idiomaNorm,
+      canal: canalNorm,
+      funciones_chars: funciones.length,
+      info_chars: info.length,
+    });
 
     // (A) URLs oficiales desde el propio contenido
     const enlacesOficiales = extractAllLinksFromText(`${funciones}\n\n${info}`, 24);
@@ -699,83 +489,52 @@ router.post("/", async (req: Request, res: Response) => {
     const linkGroups = classifyLinks(enlacesOficiales);
     const channelRules = buildChannelRules(canalNorm, idiomaNorm);
     const responseFormat = buildResponseFormat(idiomaNorm);
-    const languageLock = buildLanguageLock(idiomaNorm);
     const conversionMode = buildConversionMode(idiomaNorm);
     const ctaGuide = enlacesOficiales.length ? buildCtaMap(idiomaNorm, linkGroups) : "";
 
-    const catalogAntiSpamRules =
-      idiomaNorm === "en"
-        ? compact([
-            "CATALOG_RULES (CRITICAL):",
-            "- Never paste the full catalog list from BUSINESS_CONTEXT.",
-            '- If user asks "what plans do you have?":',
-            "  1) Answer ONLY with PLANS_SUMMARY (max 7 bullets).",
-            '  2) Ask ONE question: "Which plan are you interested in?"',
-            '- If user asks "more info / info / more information" without specifying what:',
-            "  1) Answer ONLY with SERVICES_SUMMARY_FOR_INFO (max 7 bullets).",
-            '  2) Ask ONE question: "Which service are you interested in?"',
-            "- If user asks services/menu/catalog:",
-            "  1) Answer with the short summary (max 7 bullets).",
-            "  2) Ask ONE question: Which service are you looking for?",
-            "- If they ask for prices without specifying a plan/service: show PLANS_SUMMARY (max 5) and ask which one.",
-          ].join("\n"))
-        : compact([
-            "REGLAS_DE_CATALOGO (CRÍTICO):",
-            "- Nunca pegues la lista completa del catálogo desde CONTEXTO_DEL_NEGOCIO.",
-            '- Si preguntan "¿qué planes tienes?" / paquetes / membresías:',
-            "  1) Responde SOLO con RESUMEN_DE_PLANES (máx 7 bullets).",
-            '  2) Haz UNA pregunta: "¿Cuál plan te interesa?"',
-            '- Si piden "más info" sin especificar QUÉ:',
-            "  1) Responde SOLO con RESUMEN_DE_SERVICIOS_PARA_INFO (máx 7 bullets).",
-            '  2) Haz UNA pregunta: "¿En cuál servicio estás interesado?"',
-            "- Si piden servicios/menú/catálogo:",
-            "  1) Responde con el resumen corto (máx 7 bullets).",
-            '  2) Haz UNA pregunta: "¿Qué servicio estás buscando?"',
-            "- Si preguntan por precios sin especificar: muestra RESUMEN_DE_PLANES (máx 5) y pregunta cuál le interesa.",
-          ].join("\n"));
+    // ———————————————————————————————————————————————————
+    // Generación determinística (sin OpenAI) para prompts consistentes
+    // descripcion -> reglas / comportamiento ("Qué debe hacer tu asistente")
+    // informacion -> hechos / memoria del negocio ("Información que el asistente debe conocer")
 
     function stripModeLine(text: string) {
       return (text || "")
-        .replace(/^#\s+.*$/gm, "")
+        .replace(/^#\s+.*$/gm, "") // quita comentarios
         .replace(/^MODO_PROMPT:\s*(ATENCION|ACTIVACION)\s*$/gmi, "")
         .trim();
     }
 
+    // Limpiar la línea MODO_PROMPT para que no aparezca en el prompt final
     const funcionesClean = stripModeLine(funciones);
     const infoClean = stripModeLine(info);
 
+    // Opcional: si tu UI no mete bullets, puedes forzar bullets line-by-line:
+    // Aquí NO transformo, solo dejo lo que el usuario puso.
     const infoOperativo = buildOperationalBusinessContext(infoClean, nombreNegocio);
     const reglasOperativas = buildOperationalRules(funcionesClean);
 
     const infoBlock = infoOperativo ? infoOperativo : "";
     const funcionesBlock = reglasOperativas ? reglasOperativas : "";
 
-    // ✅ PROMPT-ONLY: resúmenes salen SOLO del CONTEXTO (no DB)
-    const plansSummaryBlock = buildPlansSummaryBlock(idiomaNorm, nombreNegocio, infoOperativo);
-    const servicesSummaryBlock = buildCatalogSummaryBlock(idiomaNorm, nombreNegocio, infoOperativo);
-
-    const servicesOnly = extractServiceCandidatesFromInfoBlock(infoOperativo);
-    const servicesSummaryOnlyBlock = buildServicesSummaryOnlyBlock(idiomaNorm, nombreNegocio, servicesOnly);
-
     const linksPolicy = enlacesOficiales.length
-      ? idiomaNorm === "en"
-        ? [
-            "LINK_POLICY",
-            "- Use only URLs listed in OFFICIAL_LINKS.",
-            "- Max 2 links per reply (ideally 1 CTA link).",
-            "- Do not invent links and do not use shorteners.",
-          ].join("\n")
-        : [
-            "POLITICA_DE_ENLACES",
-            "- Comparte únicamente URLs listadas en ENLACES_OFICIALES.",
-            "- Máximo 2 enlaces por respuesta (idealmente 1 enlace de CTA).",
-            "- No inventes links ni uses acortadores.",
-          ].join("\n")
+      ? (idiomaNorm === "en"
+          ? [
+              "LINK_POLICY",
+              "- Use only URLs listed in OFFICIAL_LINKS.",
+              "- Max 2 links per reply (ideally 1 CTA link).",
+              "- Do not invent links and do not use shorteners.",
+            ].join("\n")
+          : [
+              "POLITICA_DE_ENLACES",
+              "- Comparte únicamente URLs listadas en ENLACES_OFICIALES.",
+              "- Máximo 2 enlaces por respuesta (idealmente 1 enlace de CTA).",
+              "- No inventes links ni uses acortadores.",
+            ].join("\n"))
       : "";
 
     const linksBlock = enlacesOficiales.length
       ? [
-          idiomaNorm === "en" ? "OFFICIAL_LINKS" : "ENLACES_OFICIALES",
+          (idiomaNorm === "en" ? "OFFICIAL_LINKS" : "ENLACES_OFICIALES"),
           ...enlacesOficiales.map((u) => `- ${u}`),
         ].join("\n")
       : "";
@@ -789,45 +548,29 @@ router.post("/", async (req: Request, res: Response) => {
       "",
       `Idioma: ${idiomaNorm}`,
       "",
-      languageLock,
-      "",
 
-      // 2) Reglas por canal
+      // 2) Reglas por canal (✅ MULTICANAL)
       channelRules,
       "",
 
-      // 3) Resúmenes (desde CONTEXTO)
-      plansSummaryBlock || "",
-      plansSummaryBlock ? "" : "",
-
-      servicesSummaryBlock || "",
-      servicesSummaryBlock ? "" : "",
-
-      // ✅ “más info” sin especificar => SOLO SERVICIOS
-      servicesSummaryOnlyBlock || "",
-      servicesSummaryOnlyBlock ? "" : "",
-
-      // ✅ Anti-spam
-      catalogAntiSpamRules,
+      // 3) Contexto del negocio (lo que “sabe”)
+      infoBlock ? (idiomaNorm === "en" ? "BUSINESS_CONTEXT" : "CONTEXTO_DEL_NEGOCIO") : "",
+      infoBlock ? infoBlock : "",
       "",
 
-      infoBlock ? (idiomaNorm === "en" ? "BUSINESS_CONTEXT (REFERENCE ONLY)" : "CONTEXTO_DEL_NEGOCIO (SOLO REFERENCIA)") : "",
-      infoBlock || "",
-      "",
-
-      // 4) Comportamiento del tenant
+      // 4) Comportamiento del tenant (lo que “hace”)
       funcionesBlock ? (idiomaNorm === "en" ? "BEHAVIOR_AND_STYLE" : "COMPORTAMIENTO_Y_ESTILO") : "",
-      funcionesBlock || "",
+      funcionesBlock ? funcionesBlock : "",
       "",
 
-      // 5) Formato + conversión
+      // 5) Formato de respuesta + modo conversión (✅ CALIDAD)
       responseFormat,
       "",
       conversionMode,
       "",
 
-      // 6) Reglas universales (✅ PROMPT-ONLY, NO DB)
-      idiomaNorm === "en" ? "RULES" : "REGLAS",
+      // 6) Reglas universales
+      (idiomaNorm === "en" ? "RULES" : "REGLAS"),
       ...(idiomaNorm === "en"
         ? [
             "- Never invent information.",
@@ -836,8 +579,6 @@ router.post("/", async (req: Request, res: Response) => {
             "- Do not ask questions before answering a direct question.",
             "- Ask at most 1 question only if needed.",
             "- Do not repeat long text verbatim; paraphrase briefly when needed.",
-            "- Prices/schedules/details must come ONLY from BUSINESS_CONTEXT. If not present, say you don't have it and offer the official link from OFFICIAL_LINKS.",
-            "- If asked 'what are your prices?' without a specific item: do NOT list everything; show PLANS_SUMMARY (max 5) and ask which plan.",
           ]
         : [
             "- No inventes información.",
@@ -846,29 +587,34 @@ router.post("/", async (req: Request, res: Response) => {
             "- No hagas preguntas antes de responder una pregunta directa.",
             "- Máximo 1 pregunta si es necesaria.",
             "- No repitas textos largos literalmente; parafrasea breve cuando sea necesario.",
-            "- Precios/horarios/detalles salen SOLO de CONTEXTO_DEL_NEGOCIO. Si no están ahí, dilo claro y ofrece el link oficial en ENLACES_OFICIALES.",
-            "- Si preguntan 'cuáles son los precios' sin especificar: NO listes todo; muestra RESUMEN_DE_PLANES (máx 5) y pregunta cuál plan.",
           ]),
       "",
 
-      // 7) Guía CTA + enlaces
-      ctaGuide || "",
+      // 7) Guía de CTA (✅ selecciona el link correcto)
+      ctaGuide ? ctaGuide : "",
       "",
-      linksPolicy || "",
-      linksBlock || "",
+
+      // 8) Enlaces oficiales (si existen)
+      linksPolicy ? linksPolicy : "",
+      linksBlock ? linksBlock : "",
     ].filter(Boolean);
 
-    const promptFinal = compact(promptCoreParts.join("\n"));
+    const prompt = compact(promptCoreParts.join("\n"));
 
+    // ✅ Prompt final SOLO operativo (sin política transversal de enlaces)
+    const promptFinal = prompt;
+
+    // (B) Guarda en cache para futuras llamadas idénticas
     promptCache.set(cacheKey, { value: promptFinal, at: Date.now() });
 
-    return res.status(200).json({
+    // ✅ Devuelve enlaces separados para que los uses como wrapper global
+    res.status(200).json({
       prompt: promptFinal,
       enlacesOficiales,
     });
   } catch (err) {
     console.error("❌ Error generando prompt:", err);
-    return res.status(500).json({ error: "Error interno del servidor" });
+    res.status(500).json({ error: "Error interno del servidor" });
   }
 });
 
