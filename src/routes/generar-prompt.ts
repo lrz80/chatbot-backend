@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v4"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v5"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -338,12 +338,18 @@ function parseKeyValueTemplate(text: string) {
     ["precios o cómo consultar precios", "Precios"],
     ["precios o como consultar precios", "Precios"],
 
-    ["reservas", "Reservas"],
-    ["reservas / contacto", "Reservas / contacto"],
-    ["reservas / contacto:", "Reservas / contacto"], // por si viene con :
+        // ✅ LINKS / CONTACTO
+    ["reserva", "Reserva"],
+    ["reservar", "Reserva"],
+    ["reservas", "Reserva"],
+
     ["contacto", "Contacto"],
+    ["soporte", "Soporte"],
+    ["support", "Soporte"],
+
+    // (compat con el campo viejo)
     ["reservas / contacto", "Reservas / contacto"],
-    ["reservas / contacto", "Reservas / contacto"],
+    ["reservas / contacto:", "Reservas / contacto"],
 
     ["políticas", "Políticas"],
     ["politicas", "Políticas"],
@@ -439,8 +445,26 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
   // Detecta si realmente era una plantilla (tiene llaves tipo "Nombre del negocio", etc.)
   const hasTemplateSignals =
     Object.keys(kv).some(k =>
-      /nombre del negocio|tipo de negocio|ubicaci[oó]n|servicios|servicios principales|horarios|precios|reservas|reservas \/ contacto|contacto/i.test(k)
+      /nombre del negocio|tipo de negocio|ubicaci[oó]n|servicios|servicios principales|horarios|precios|reserva(s)?|reservas \/ contacto|contacto|soporte/i.test(k)
     );
+
+    const splitReservaVsSoporte = (lines: string[]) => {
+    const urls = extractAllLinksFromText(lines.join("\n"), 24);
+    const groups = classifyLinks(urls);
+
+    // Mantén también líneas NO-URL (por si el usuario escribe instrucciones sin link)
+    const nonUrl = lines
+      .map(l => String(l || "").trim())
+      .filter(Boolean)
+      .filter(l => !/^https?:\/\//i.test(l) && !/^mailto:/i.test(l) && !/^tel:/i.test(l));
+
+    return {
+      reservaUrls: groups.reservas,
+      soporteUrls: groups.soporte,
+      otherUrls: groups.otros,     // por si meten otro link raro en esa sección
+      notes: nonUrl,
+    };
+  };
 
   if (hasTemplateSignals) {
     const nombre = (kv["Nombre del negocio"]?.[0] || nombreNegocio || "").trim();
@@ -451,12 +475,32 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
     const servicios = kv["Servicios principales"] || kv["Servicios"] || [];
     const horarios  = kv["Horarios"] || kv["Horario"] || [];
     const precios   = kv["Precios o cómo consultar precios"] || kv["Precios"] || [];
-    const reservas  =
+    const reservaLines =
+      kv["Reserva"] ||
       kv["Reservas / contacto"] ||
       kv["Reservas / Contacto"] ||
-      kv["Reservas"] ||
-      kv["Contacto"] ||
       [];
+
+    const contactoLines = kv["Contacto"] || [];
+    const soporteLines = kv["Soporte"] || [];
+
+    // Si venía mezclado en "Reservas / contacto", lo separamos por URL
+    const mixed = splitReservaVsSoporte(reservaLines);
+
+    const reservaFinal = [
+      ...mixed.reservaUrls,
+      // si el usuario puso texto en esa sección (sin URL), lo dejamos como nota debajo
+      ...mixed.notes,
+    ];
+
+    const contactoSoporteFinal = [
+      ...contactoLines,
+      ...soporteLines,
+      ...mixed.soporteUrls,
+      // si hay otros links que no clasificaron como reserva/soporte, los mandamos aquí
+      ...mixed.otherUrls,
+    ];
+
     const politicas = kv["Políticas"] || kv["Politicas"] || kv["Política"] || kv["Politica"] || [];
 
     const out: string[] = [];
@@ -487,10 +531,16 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
       out.push(...toBullets(precios));
     }
 
-    if (reservas.length) {
+        if (reservaFinal.length) {
       out.push("");
-      out.push("RESERVAS / CONTACTO");
-      out.push(...toBullets(reservas));
+      out.push("RESERVA");
+      out.push(...toBullets(reservaFinal));
+    }
+
+    if (contactoSoporteFinal.length) {
+      out.push("");
+      out.push("CONTACTO / SOPORTE");
+      out.push(...toBullets(contactoSoporteFinal));
     }
 
     if (politicas.length) {
