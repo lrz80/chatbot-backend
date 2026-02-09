@@ -824,9 +824,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         NO_NUMERIC_MENUS,
       ].join("\n"),
       userInput: [
-        "SYSTEM_EVENT_FACTS (use to respond; do not mention systems; keep it short):",
-        JSON.stringify(smResult.facts || {}),
-        "",
         "USER_MESSAGE:",
         event.userInput,
       ].join("\n"),

@@ -1,141 +1,90 @@
 // src/lib/getPromptPorCanal.ts
 
-export function getPromptPorCanal(canal: string, tenant: any, idioma: string = 'es'): string {
-  const nombre = tenant.name || "nuestro negocio";
-  const funciones = (tenant.funciones_asistente || '').replace(/\\n/g, '\n');
-  const info = (tenant.info_clave || '').replace(/\\n/g, '\n');
+type Canal =
+  | "whatsapp"
+  | "sms"
+  | "voice"
+  | "facebook"
+  | "instagram"
+  | "preview"
+  | "preview-meta"
+  | string;
 
-  if (canal === 'facebook' || canal === 'instagram' || canal === 'preview-meta') {
-    return tenant.prompt_meta || generarPromptPorIdioma(nombre, idioma, funciones, info);
-  }
+type Idioma = "es" | "en" | string;
 
-  return tenant.prompt || generarPromptPorIdioma(nombre, idioma, funciones, info);
+const isMeta = (canal: string) =>
+  canal === "facebook" || canal === "instagram" || canal === "preview-meta";
+
+function norm(txt: any) {
+  return String(txt ?? "")
+    .replace(/\\n/g, "\n")
+    .replace(/\r/g, "")
+    .trim();
 }
 
-export function getBienvenidaPorCanal(canal: string, tenant: any, idioma: string = 'es'): string {
-  const nombre = tenant.name || "nuestro negocio";
+/**
+ * DB-only:
+ * - Prioridad: prompt por idioma (si existe)
+ * - Luego: prompt base
+ * - Si no hay prompt -> lanza error (para que NO responda genérico)
+ */
+export function getPromptPorCanal(canal: Canal, tenant: any, idioma: Idioma = "es"): string {
+  const tenantName = tenant?.name || "nuestro negocio";
 
-  // 🔎 Si algún día guardas bienvenidas por idioma, soporta ambos formatos:
-  // - mensaje_bienvenida_en / mensaje_bienvenida_es
-  // - bienvenida_meta_en / bienvenida_meta_es
-  const waByLang =
-    (tenant?.[`mensaje_bienvenida_${idioma}`] || "").trim();
+  if (isMeta(canal)) {
+    const pLang = norm(tenant?.[`prompt_meta_${idioma}`] ?? tenant?.meta_config?.[`prompt_meta_${idioma}`]);
+    if (pLang) return pLang;
 
-  const metaByLang =
-    (tenant?.[`bienvenida_meta_${idioma}`] || "").trim() ||
-    (tenant?.meta_config?.[`bienvenida_meta_${idioma}`] || "").trim();
+    const p = norm(tenant?.prompt_meta ?? tenant?.meta_config?.prompt_meta);
+    if (p) return p;
 
-  // ✅ WhatsApp / default (columna real que tú tienes hoy)
-  const wa = (tenant.mensaje_bienvenida || "").trim();
+    throw new Error(`PROMPT_META_MISSING: tenant=${tenantName} canal=${canal} idioma=${idioma}`);
+  }
 
-  // ✅ Meta (puede venir del JOIN o de un objeto meta_config)
-  const meta =
-    (tenant.bienvenida_meta || "").trim() ||
-    (tenant.meta_config?.bienvenida_meta || "").trim();
+  // WhatsApp / default
+  const pLang = norm(tenant?.[`prompt_${idioma}`]);
+  if (pLang) return pLang;
 
-  // Prioridad por canal
-  if (canal === 'facebook' || canal === 'instagram' || canal === 'preview-meta') {
-    // 1) por idioma si existe
-    if (metaByLang) return metaByLang;
+  const p = norm(tenant?.prompt);
+  if (p) return p;
 
-    // 2) si hay bienvenida meta pero está en ES y el cliente es EN, NO la uses
-    //    (si la usas, seguirás saludando en español)
-    if (!meta) return generarBienvenidaPorIdioma(nombre, idioma);
+  throw new Error(`PROMPT_MISSING: tenant=${tenantName} canal=${canal} idioma=${idioma}`);
+}
 
-    // 3) fallback seguro
+/**
+ * Bienvenida DB-only:
+ * - Prioridad: bienvenida por idioma
+ * - Luego: bienvenida base
+ * - Si no existe -> fallback mínimo (solo saludo), porque si no, quedas sin saludo.
+ *   (Si quieres que también sea strict, te lo pongo strict.)
+ */
+export function getBienvenidaPorCanal(canal: Canal, tenant: any, idioma: Idioma = "es"): string {
+  const nombre = tenant?.name || "nuestro negocio";
+
+  if (isMeta(canal)) {
+    const bLang = norm(tenant?.[`bienvenida_meta_${idioma}`] ?? tenant?.meta_config?.[`bienvenida_meta_${idioma}`]);
+    if (bLang) return bLang;
+
+    const b = norm(tenant?.bienvenida_meta ?? tenant?.meta_config?.bienvenida_meta);
+    if (b) return b;
+
+    // fallback mínimo (saludo) para no quedarte mudo
     return generarBienvenidaPorIdioma(nombre, idioma);
   }
 
-  // Otros canales (WhatsApp, etc.)
-  // 1) por idioma si existe
-  if (waByLang) return waByLang;
+  const bLang = norm(tenant?.[`mensaje_bienvenida_${idioma}`]);
+  if (bLang) return bLang;
 
-  // 2) si no existe, NO uses wa fijo (porque casi seguro está en ES)
-  //    mejor usa la bienvenida por idioma
+  const b = norm(tenant?.mensaje_bienvenida);
+  if (b) return b;
+
   return generarBienvenidaPorIdioma(nombre, idioma);
 }
 
-function generarPromptPorIdioma(
-  nombre: string,
-  idioma: string,
-  funciones: string = '',
-  info: string = ''
-): string {
-  funciones = funciones.replace(/\\n/g, '\n').replace(/\r/g, '').trim();
-  info      = info.replace(/\\n/g, '\n').replace(/\r/g, '').trim();
-
-  // 🔧 Normaliza sin forzar listas (evita que el modelo responda con bullets)
-  const normalizarTexto = (txt: string): string => {
-    return (txt || '')
-      .replace(/\r/g, '')
-      .replace(/\n{3,}/g, '\n\n')         // evita saltos excesivos
-      .replace(/\. (?=[^\n])/g, '.\n')    // salto después de punto si no hay uno
-      .trim();
-  };
-
-  funciones = normalizarTexto(funciones);
-  info      = normalizarTexto(info);
-
-  const instrucciones: Record<string, string> = {
-    es: `Eres Amy, la asistente de IA del negocio ${nombre}. Atiendes clientes como una persona real por WhatsApp, Facebook, Instagram o teléfono.
-
-OBJETIVO:
-- Entender qué necesita el cliente.
-- Responder usando SOLO la información del negocio.
-- Cuando tenga sentido, guiar de forma natural hacia agendar, comprar o avanzar al siguiente paso definido por el negocio.
-
-ESTILO DE RESPUESTA (MUY IMPORTANTE):
-- Mensajes CORTOS, tipo WhatsApp (máx. 8–10 líneas, sin párrafos largos).
-- Tono cercano y profesional, sin sonar a anuncio ni landing page.
-- No repitas la misma presentación en cada mensaje.
-- Si algo no está en la información del negocio, dilo y ofrece la mejor alternativa real.
-
-FUNCIONES DEL NEGOCIO (contexto):
-${funciones || 'Información general sobre los servicios ofrecidos.'}
-
-INFORMACIÓN DEL NEGOCIO (fuente de verdad para responder):
-${info || 'No se proporcionó información adicional.'}
-
-IMPORTANTE:
-- No inventes precios, horarios, ubicaciones o promociones.
-- Responde siempre en español.`,
-    en: `You are Amy, the AI assistant for the business ${nombre}. You speak to customers as a real person would through WhatsApp, Facebook, Instagram or phone.
-
-GOAL:
-- Understand what the customer needs.
-- Answer using ONLY the business information provided.
-- When appropriate, naturally guide them to book, buy, or move to the next step defined by the business.
-
-RESPONSE STYLE (VERY IMPORTANT):
-- SHORT WhatsApp-style messages (max 8–10 lines, no long paragraphs).
-- Friendly and professional tone, not like an ad or landing page.
-- Do NOT repeat the same introduction every time.
-- If the information is missing, be honest and offer the closest valid option.
-
-BUSINESS FUNCTIONS (context):
-${funciones || 'General information about the services offered.'}
-
-BUSINESS DETAILS (source of truth for answering):
-${info || 'No additional info provided.'}
-
-IMPORTANT:
-- Do not invent prices, schedules, locations or promotions.
-- Always respond in English.`
-  };
-
-  const prompt = instrucciones[idioma] || instrucciones['es'];
-
-  console.log("🧠 Prompt generado para idioma:", idioma, " negocio:", nombre);
-
-  return prompt;
-}
-
-// Nota: esta función no se usa en este archivo; la dejo intacta por compatibilidad.
 function generarBienvenidaPorIdioma(nombre: string, idioma: string): string {
   const mensajes: Record<string, string> = {
     es: `Hola 👋 Soy Amy, bienvenida a ${nombre}. ¿En qué puedo ayudarte hoy?`,
     en: `Hi 👋 I'm Amy, welcome to ${nombre}. How can I help you today?`,
   };
-
   return mensajes[idioma] || mensajes.es;
 }
