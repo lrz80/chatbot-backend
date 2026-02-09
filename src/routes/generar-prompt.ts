@@ -306,31 +306,111 @@ function splitLinesSmart(text: string) {
 // "Nombre del negocio: X", "Servicios principales:", "- a", "- b", etc.
 function parseKeyValueTemplate(text: string) {
   const lines = splitLinesSmart(text);
+
   const kv: Record<string, string[]> = {};
   let currentKey: string | null = null;
 
   const push = (key: string, value: string) => {
     const k = key.trim();
     if (!kv[k]) kv[k] = [];
-    if (value.trim()) kv[k].push(value.trim());
+    const v = (value || "").trim();
+    if (v) kv[k].push(v);
   };
 
-  for (const raw of lines) {
-    const line = raw.trim();
+  // ✅ Solo permitimos headings conocidos (multi-negocio)
+  const normalizeKey = (raw: string) => raw.trim().toLowerCase();
+
+  const allowedKeys = new Map<string, string>([
+    ["nombre del negocio", "Nombre del negocio"],
+    ["tipo de negocio", "Tipo de negocio"],
+    ["ubicación", "Ubicación"],
+    ["ubicacion", "Ubicación"],
+    ["teléfono", "Teléfono"],
+    ["telefono", "Teléfono"],
+
+    ["servicios", "Servicios"],
+    ["servicios principales", "Servicios principales"],
+
+    ["horarios", "Horarios"],
+    ["horario", "Horarios"],
+
+    ["precios", "Precios"],
+    ["precios o cómo consultar precios", "Precios"],
+    ["precios o como consultar precios", "Precios"],
+
+    ["reservas", "Reservas"],
+    ["reservas / contacto", "Reservas / contacto"],
+    ["reservas / contacto:", "Reservas / contacto"], // por si viene con :
+    ["contacto", "Contacto"],
+    ["reservas / contacto", "Reservas / contacto"],
+    ["reservas / contacto", "Reservas / contacto"],
+
+    ["políticas", "Políticas"],
+    ["politicas", "Políticas"],
+    ["política", "Políticas"],
+    ["politica", "Políticas"],
+  ]);
+
+  const isUrlLine = (s: string) => /^https?:\/\//i.test(s) || /^mailto:/i.test(s) || /^tel:/i.test(s);
+
+  // ✅ Une URLs que quedaron solas en la siguiente línea:
+  // Ej:
+  // "Clase Funcional Gratis:"
+  // "https://...."
+  const mergedLines: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const cur = (lines[i] || "").trim();
+    const next = (lines[i + 1] || "").trim();
+
+    if (cur && cur.endsWith(":") && /^https?:\/\//i.test(next)) {
+      mergedLines.push(`${cur} ${next}`);
+      i++; // saltar next
+      continue;
+    }
+    mergedLines.push(lines[i]);
+  }
+
+  for (const raw of mergedLines) {
+    const line = (raw || "").trim();
     if (!line) continue;
 
-    // Key: Value
-    const m = line.match(/^([^:]{2,60}):\s*(.*)$/);
-    if (m) {
-      currentKey = m[1].trim();
-      const v = (m[2] || "").trim();
-      if (v) push(currentKey, v);
+    // ✅ Si es URL, nunca la tomes como key: value
+    if (isUrlLine(line)) {
+      if (currentKey) push(currentKey, line);
       continue;
     }
 
-    // List item under current key
+    // ✅ Heading tipo "Horarios:" o "Precios:" (SIN necesidad de value)
+    const heading = line.match(/^([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 \/]+):\s*$/);
+    if (heading) {
+      const keyNorm = normalizeKey(heading[1]);
+      const canonical = allowedKeys.get(keyNorm);
+      if (canonical) {
+        currentKey = canonical;
+        continue;
+      }
+      // si no es heading permitido, lo ignoramos (para evitar llaves basura)
+      currentKey = null;
+      continue;
+    }
+
+    // ✅ Formato "Key: Value" solo si Key es permitida y NO es URL
+    const kvLine = line.match(/^([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 \/]{2,60}):\s*(.+)$/);
+    if (kvLine) {
+      const keyNorm = normalizeKey(kvLine[1]);
+      const canonical = allowedKeys.get(keyNorm);
+      if (canonical) {
+        currentKey = canonical;
+        push(currentKey, kvLine[2]);
+        continue;
+      }
+      // key no permitida -> no la uses
+      currentKey = null;
+      continue;
+    }
+
+    // ✅ Item bajo key actual: "- item" o "• item"
     if (currentKey) {
-      // permite "- item" o "• item"
       const item = line.replace(/^[-•]\s*/, "").trim();
       if (item) push(currentKey, item);
     }
@@ -359,7 +439,7 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
   // Detecta si realmente era una plantilla (tiene llaves tipo "Nombre del negocio", etc.)
   const hasTemplateSignals =
     Object.keys(kv).some(k =>
-      /nombre del negocio|tipo de negocio|ubicaci[oó]n|servicios|horarios|precios|reservas|contacto/i.test(k)
+      /nombre del negocio|tipo de negocio|ubicaci[oó]n|servicios|servicios principales|horarios|precios|reservas|reservas \/ contacto|contacto/i.test(k)
     );
 
   if (hasTemplateSignals) {
@@ -369,9 +449,15 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
     const tel  = (kv["Teléfono"]?.[0] || "").trim();
 
     const servicios = kv["Servicios principales"] || kv["Servicios"] || [];
-    const horarios  = kv["Horarios"] || [];
+    const horarios  = kv["Horarios"] || kv["Horario"] || [];
     const precios   = kv["Precios o cómo consultar precios"] || kv["Precios"] || [];
-    const reservas  = kv["Reservas / contacto"] || kv["Reservas"] || kv["Contacto"] || [];
+    const reservas  =
+      kv["Reservas / contacto"] ||
+      kv["Reservas / Contacto"] ||
+      kv["Reservas"] ||
+      kv["Contacto"] ||
+      [];
+    const politicas = kv["Políticas"] || kv["Politicas"] || kv["Política"] || kv["Politica"] || [];
 
     const out: string[] = [];
 
@@ -407,6 +493,12 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
       out.push(...toBullets(reservas));
     }
 
+    if (politicas.length) {
+      out.push("");
+      out.push("POLÍTICAS");
+      out.push(...toBullets(politicas));
+    }
+
     return compact(out.join("\n"));
   }
 
@@ -434,8 +526,10 @@ router.post("/", async (req: Request, res: Response) => {
     const tenant_id = decoded.tenant_id;
     const { descripcion, informacion, idioma, canal } = req.body;
 
-    const canalNorm =
-      (String(canal || "preview").toLowerCase().trim() as Canal);
+    const canalNorm: Canal =
+      canal === "whatsapp" || canal === "instagram" || canal === "facebook" || canal === "voice" || canal === "preview"
+        ? canal
+        : "preview";
 
     const allowed = new Set<Canal>(["whatsapp", "instagram", "facebook", "preview", "voice"]);
     if (!allowed.has(canalNorm)) {
