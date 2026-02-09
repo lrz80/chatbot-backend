@@ -609,6 +609,106 @@ function buildCatalogSummaryBlock(idioma: Lang, nombreNegocio: string, infoBlock
   ].join("\n"));
 }
 
+function isProbablyPriceLine(s: string) {
+  const t = (s || "").toLowerCase();
+  return /\$|usd|mxn|eur|por mes|\/mo|monthly|mensual|price|precio|costo|cost/.test(t) || /\b\d{1,4}\.\d{2}\b/.test(t);
+}
+
+function normalizeLabelOnly(s: string) {
+  // Quita precios y ruido, deja solo el nombre.
+  let t = String(s || "").trim();
+
+  // corta todo lo que parezca precio: "Plan Bronze: $119.99" -> "Plan Bronze"
+  t = t.replace(/\s*[:\-–]\s*\$.*$/i, "").trim();
+  t = t.replace(/\s*[:\-–]\s*usd.*$/i, "").trim();
+  t = t.replace(/\s*\$?\d+(\.\d{1,2})?\s*(usd|mxn|eur)?\b.*$/i, "").trim();
+
+  // corta “( … )” al final si es muy largo
+  t = t.replace(/\s*\(([^)]{25,})\)\s*$/, "").trim();
+
+  return t;
+}
+
+async function fetchCatalogNamesFromDB(pool: any, tenantId: string) {
+  // Ajusta nombres/columnas si difieren en tu DB.
+  // Asumo tabla: services (tenant_id, name, tipo, active)
+  const { rows } = await pool.query(
+    `
+    SELECT name, COALESCE(tipo,'service') AS tipo
+    FROM services
+    WHERE tenant_id = $1 AND active = true
+    ORDER BY COALESCE(sort_order, 9999) ASC, name ASC
+    `,
+    [tenantId]
+  );
+
+  const plans: string[] = [];
+  const services: string[] = [];
+
+  for (const r of rows) {
+    const raw = String(r?.name || "").trim();
+    if (!raw) continue;
+
+    // Por si algún "name" viene con precio pegado (no debería, pero protegemos)
+    const label = normalizeLabelOnly(raw);
+    if (!label || isProbablyPriceLine(label)) continue;
+
+    if (String(r?.tipo || "").toLowerCase() === "plan") plans.push(label);
+    else services.push(label);
+  }
+
+  // dedupe manteniendo orden
+  const uniq = (arr: string[]) => Array.from(new Set(arr.map(x => x.trim()))).filter(Boolean);
+
+  return { plans: uniq(plans), services: uniq(services) };
+}
+
+function buildPlansServicesSummaryBlock(idioma: Lang, nombreNegocio: string, plans: string[], services: string[]) {
+  // prioridad: planes
+  const topPlans = (plans || []).slice(0, 7);
+  const topServices = (services || []).slice(0, 7);
+
+  if (idioma === "en") {
+    const out: string[] = [];
+    out.push("PLANS_SUMMARY (NAMES ONLY, NO PRICES):");
+    out.push(`- Business: ${nombreNegocio}`);
+
+    if (topPlans.length) {
+      out.push("");
+      out.push("PLANS:");
+      out.push(...topPlans.map(p => `- ${p}`));
+    } else if (topServices.length) {
+      out.push("");
+      out.push("SERVICES:");
+      out.push(...topServices.map(s => `- ${s}`));
+    }
+
+    out.push("");
+    out.push('Rule: If user asks "what plans do you have?", answer using PLANS list only.');
+    out.push('Then ask ONE question: "Which plan are you interested in?"');
+    return compact(out.join("\n"));
+  }
+
+  const out: string[] = [];
+  out.push("RESUMEN_DE_PLANES (SOLO NOMBRES, SIN PRECIOS):");
+  out.push(`- Negocio: ${nombreNegocio}`);
+
+  if (topPlans.length) {
+    out.push("");
+    out.push("PLANES:");
+    out.push(...topPlans.map(p => `- ${p}`));
+  } else if (topServices.length) {
+    out.push("");
+    out.push("SERVICIOS:");
+    out.push(...topServices.map(s => `- ${s}`));
+  }
+
+  out.push("");
+  out.push('Regla: Si preguntan "¿qué planes tienes?", responde usando SOLO la lista de PLANES.');
+  out.push('Luego haz UNA pregunta: "¿Cuál plan te interesa?"');
+  return compact(out.join("\n"));
+}
+
 // ———————————————————————————————————————————————————
 
 router.post("/", async (req: Request, res: Response) => {
@@ -663,6 +763,18 @@ router.post("/", async (req: Request, res: Response) => {
 
     const nombreNegocio = tenant.name || "nuestro negocio";
 
+    // ✅ Catálogo desde DB (planes primero). SOLO nombres, SIN precios.
+    let plansDb: string[] = [];
+    let servicesDb: string[] = [];
+
+    try {
+      const catDb = await fetchCatalogNamesFromDB(pool, tenant_id);
+      plansDb = catDb.plans || [];
+      servicesDb = catDb.services || [];
+    } catch (e: any) {
+      console.warn("⚠️ No se pudo leer catálogo desde DB:", e?.message);
+    }
+
     // (B) Cache hit?
     const cacheKey = keyOf(tenant_id, canalNorm, funciones, info, idiomaNorm);
     const hit = promptCache.get(cacheKey);
@@ -690,39 +802,29 @@ router.post("/", async (req: Request, res: Response) => {
     const ctaGuide = enlacesOficiales.length ? buildCtaMap(idiomaNorm, linkGroups) : "";
 
     const catalogAntiSpamRules =
-    idiomaNorm === "en"
-      ? compact([
-          "CATALOG_RULES (CRITICAL):",
-          "- Never paste the full catalog list from BUSINESS_CONTEXT.",
-          "- If user asks: services/menu/catalog/what do you have:",
-          "  1) Answer with CATALOG_SUMMARY only (max 7 bullets).",
-          "  2) Ask ONE question: Which one are you interested in?",
-          "",
-          "- If user asks about PRICES but does NOT specify a plan/service:",
-          "  - Do NOT list all prices.",
-          "  - Reply with a short generic statement: prices vary depending on what they choose.",
-          "  - Ask ONE question to narrow it down (e.g., which plan/service they want).",
-          "",
-          "- If user asks the price of a SPECIFIC plan/service:",
-          "  - Answer that specific price using database facts (if provided elsewhere).",
-          "  - If multiple variants exist, ask them to pick (do not guess).",
-        ].join("\n"))
-      : compact([
-          "REGLAS_DE_CATALOGO (CRÍTICO):",
-          "- Nunca pegues la lista completa del catálogo desde CONTEXTO_DEL_NEGOCIO.",
-          "- Si el usuario pide: servicios/menú/catálogo/qué tienen:",
-          "  1) Responde SOLO con RESUMEN_DE_SERVICIOS (máx 7 bullets).",
-          "  2) Haz UNA sola pregunta: ¿Cuál te interesa?",
-          "",
-          "- Si el usuario pregunta por PRECIOS pero NO especifica plan/servicio:",
-          "  - NO listes todos los precios.",
-          "  - Responde con un resumen genérico: los precios varían según lo que elija.",
-          "  - Haz UNA sola pregunta para concretar (qué plan/servicio busca).",
-          "",
-          "- Si el usuario pregunta el precio de un plan/servicio ESPECÍFICO:",
-          "  - Responde ese precio específico usando hechos de base de datos (si se proveen en otro lado).",
-          "  - Si hay variantes, pide que elija (no adivines).",
-        ].join("\n"));
+      idiomaNorm === "en"
+        ? compact([
+            "CATALOG_RULES (CRITICAL):",
+            "- Never paste the full catalog list from BUSINESS_CONTEXT.",
+            '- If user asks "what plans do you have?":',
+            "  1) Answer ONLY with PLANS_SUMMARY (max 7 bullets).",
+            '  2) Ask ONE question: "Which plan are you interested in?"',
+            "- If user asks services/menu/catalog:",
+            "  1) Answer with the short summary (max 7 bullets).",
+            "  2) Ask ONE question: Which service are you looking for?",
+            "- If they ask for prices without specifying a plan/service: ask ONE question to narrow it down.",
+          ].join("\n"))
+        : compact([
+            "REGLAS_DE_CATALOGO (CRÍTICO):",
+            "- Nunca pegues la lista completa del catálogo desde CONTEXTO_DEL_NEGOCIO.",
+            '- Si preguntan "¿qué planes tienes?" / paquetes / membresías:',
+            "  1) Responde SOLO con RESUMEN_DE_PLANES (máx 7 bullets).",
+            '  2) Haz UNA pregunta: "¿Cuál plan te interesa?"',
+            "- Si piden servicios/menú/catálogo:",
+            "  1) Responde con el resumen corto (máx 7 bullets).",
+            '  2) Haz UNA pregunta: "¿Qué servicio estás buscando?"',
+            "- Si piden precios sin especificar plan/servicio: haz UNA pregunta para aclarar.",
+          ].join("\n"));
 
     // ———————————————————————————————————————————————————
     // Generación determinística (sin OpenAI) para prompts consistentes
@@ -748,7 +850,12 @@ router.post("/", async (req: Request, res: Response) => {
     const infoBlock = infoOperativo ? infoOperativo : "";
     const funcionesBlock = reglasOperativas ? reglasOperativas : "";
 
-    const catalogSummaryBlock = buildCatalogSummaryBlock(idiomaNorm, nombreNegocio, infoBlock);
+    const catalogSummaryBlock = buildPlansServicesSummaryBlock(
+      idiomaNorm,
+      nombreNegocio,
+      plansDb,
+      servicesDb
+    );
 
     const linksPolicy = enlacesOficiales.length
       ? (idiomaNorm === "en"
