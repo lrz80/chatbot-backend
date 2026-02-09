@@ -62,8 +62,6 @@ import { runBookingPipeline } from "../../lib/appointments/booking/bookingPipeli
 import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBookingCourtesyGuard";
 import { rememberAfterReply } from "../../lib/memory/rememberAfterReply";
 import { getWhatsAppModeStatus } from "../../lib/whatsapp/getWhatsAppModeStatus";
-import { catalogBrain } from "../../lib/catalog/catalogBrain";
-import { renderCatalogFactsAsPrompt } from "../../lib/catalog/renderCatalogFactsAsPrompt";
 
 
 // Puedes ponerlo debajo de los imports
@@ -817,66 +815,22 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."
         : "REGLA: NO muestres menús numerados ni pidas que respondan con un número. Si necesitas aclarar, haz UNA sola pregunta corta. Las selecciones por número las maneja el sistema, no tú.";
 
-    // ===============================
-    // 🧠 Brain B: Catalog Resolver (DB-first)
-    // ===============================
-    const cat = await catalogBrain({
-      pool,
-      tenantId: tenant.id,
-      userInput,
-      idiomaDestino,
-      convoCtx,
-    });
-
-    // si Brain B quiere aclaración: respondemos SIN LLM
-    if (cat.hit && cat.status === "needs_clarification") {
-      if (cat.ctxPatch) transition({ patchCtx: cat.ctxPatch });
-      return await replyAndExit(cat.ask, "catalog:clarify", "service_info");
-    }
-
-    // si era catálogo pero no matcheó: 1 pregunta corta
-    if (cat.hit && cat.status === "no_match") {
-      return await replyAndExit(cat.ask, "catalog:no_match", "service_info");
-    }
-
-    // si resolvió: guardamos last_service_ref + inyectamos facts al LLM
-    let catalogFacts: any = null;
-    if (cat.hit && cat.status === "resolved") {
-      if (cat.ctxPatch) {
-        transition({ patchCtx: cat.ctxPatch });
-
-        // ✅ persistir el patch YA (para que last_service_ref quede sticky)
-        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-          activeFlow,
-          activeStep,
-          context: convoCtx,
-        });
-      }
-      catalogFacts = cat.facts;
-    }
-
-    const catalogFactsText =
-      catalogFacts ? renderCatalogFactsAsPrompt(catalogFacts, idiomaDestino) : "";
+    // 🚫 ROLLBACK: PROMPT-ONLY (sin DB catalog)
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
       promptBase: [
         promptBaseMem,
         "",
         NO_NUMERIC_MENUS,
-        "",
-        idiomaDestino === "en"
-          ? "CATALOG RULES: If CATALOGO_DB_FACTS is present, you MUST use it as the ONLY source for prices/duration/what's-included/links. Do not invent."
-          : "REGLAS CATÁLOGO: Si existe CATALOGO_DB_FACTS, DEBES usarlo como ÚNICA fuente para precios/duración/qué incluye/links. No inventes."
       ].join("\n"),
-        userInput: [
-        catalogFactsText ? `CATALOGO_DB_FACTS:\n${catalogFactsText}\n` : "",
+      userInput: [
         "SYSTEM_EVENT_FACTS (use to respond; do not mention systems; keep it short):",
         JSON.stringify(smResult.facts || {}),
         "",
         "USER_MESSAGE:",
         event.userInput,
       ].join("\n"),
-      history, // ✅ aquí
+      history,
       idiomaDestino,
       canal: "whatsapp",
       maxLines: MAX_WHATSAPP_LINES,
@@ -959,63 +913,19 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."
         : "REGLA: NO muestres menús numerados ni pidas que respondan con un número. Si necesitas aclarar, haz UNA sola pregunta corta. Las selecciones por número las maneja el sistema, no tú.";
 
-    // ===============================
-    // 🧠 Brain B: Catalog Resolver (DB-first)
-    // ===============================
-    const cat = await catalogBrain({
-      pool,
-      tenantId: tenant.id,
-      userInput,
-      idiomaDestino,
-      convoCtx,
-    });
-
-    // si Brain B quiere aclaración: respondemos SIN LLM
-    if (cat.hit && cat.status === "needs_clarification") {
-      if (cat.ctxPatch) transition({ patchCtx: cat.ctxPatch });
-      return await replyAndExit(cat.ask, "catalog:clarify", "service_info");
-    }
-
-    // si era catálogo pero no matcheó: 1 pregunta corta
-    if (cat.hit && cat.status === "no_match") {
-      return await replyAndExit(cat.ask, "catalog:no_match", "service_info");
-    }
-
-    // si resolvió: guardamos last_service_ref + inyectamos facts al LLM
-    let catalogFacts: any = null;
-    if (cat.hit && cat.status === "resolved") {
-      if (cat.ctxPatch) {
-        transition({ patchCtx: cat.ctxPatch });
-
-        // ✅ persistir el patch YA (para que last_service_ref quede sticky)
-        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
-          activeFlow,
-          activeStep,
-          context: convoCtx,
-        });
-      }
-      catalogFacts = cat.facts;
-    }
-
-    const catalogFactsText =
-      catalogFacts ? renderCatalogFactsAsPrompt(catalogFacts, idiomaDestino) : "";
+    // 🚫 ROLLBACK: PROMPT-ONLY (sin DB catalog)
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
       promptBase: [
         promptBaseMem,
         "",
         NO_NUMERIC_MENUS,
-        "",
-        idiomaDestino === "en"
-          ? "CATALOG RULES: If CATALOGO_DB_FACTS is present, use it as the ONLY source for price/duration/includes. Do NOT paste it verbatim; answer naturally."
-          : "REGLAS CATÁLOGO: Si existe CATALOGO_DB_FACTS, úsalo como ÚNICA fuente para precio/duración/qué incluye. NO lo pegues literal; responde natural."
       ].join("\n"),
       userInput: [
-        catalogFactsText ? `CATALOGO_DB_FACTS:\n${catalogFactsText}\n` : "",
         "USER_MESSAGE:",
         userInput,
       ].join("\n"),
-      history, // ✅ aquí
+      history,
       idiomaDestino,
       canal: "whatsapp",
       maxLines: MAX_WHATSAPP_LINES,
