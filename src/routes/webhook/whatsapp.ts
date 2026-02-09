@@ -62,6 +62,11 @@ import { runBookingPipeline } from "../../lib/appointments/booking/bookingPipeli
 import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBookingCourtesyGuard";
 import { rememberAfterReply } from "../../lib/memory/rememberAfterReply";
 import { getWhatsAppModeStatus } from "../../lib/whatsapp/getWhatsAppModeStatus";
+import {
+  isAskingIncludes,
+  findServiceBlock,
+  extractIncludesLine,
+} from "../../lib/infoclave/resolveIncludes";
 
 
 // Puedes ponerlo debajo de los imports
@@ -764,6 +769,44 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     });
 
     return await replyAndExit(bienvenida, "welcome_gate", "saludo");
+  }
+
+  // ===============================
+  // ✅ INFO_CLAVE GATE (reutilizable por cualquier canal)
+  // ===============================
+  {
+    const infoClave = String(tenant?.info_clave || "").trim();
+
+    if (infoClave && isAskingIncludes(userInput)) {
+      const blk = findServiceBlock(infoClave, userInput);
+
+      if (blk) {
+        const inc = extractIncludesLine(blk.lines);
+
+        if (inc) {
+          const msg =
+            idiomaDestino === "en"
+              ? `✅ ${blk.title}\nIncludes: ${inc}`
+              : `✅ ${blk.title}\nIncluye: ${inc}`;
+
+          return await replyAndExit(msg, "info_clave_includes", detectedIntent || "info");
+        }
+
+        const msg =
+          idiomaDestino === "en"
+            ? `I found "${blk.title}", but the service details are not loaded yet.`
+            : `Encontré "${blk.title}", pero aún no tengo cargado qué incluye.`;
+
+        return await replyAndExit(msg, "info_clave_missing_includes", detectedIntent || "info");
+      }
+
+      const ask =
+        idiomaDestino === "en"
+          ? `Which service are you referring to?`
+          : `¿A qué servicio te refieres exactamente?`;
+
+      return await replyAndExit(ask, "info_clave_no_match", detectedIntent || "info");
+    }
   }
 
   const smResult = await sm({
