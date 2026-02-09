@@ -824,6 +824,39 @@ function buildPlansServicesSummaryBlock(idioma: Lang, nombreNegocio: string, pla
   return compact(out.join("\n"));
 }
 
+function buildServicesSummaryOnlyBlock(
+  idioma: Lang,
+  nombreNegocio: string,
+  services: string[]
+) {
+  const topServices = (services || []).slice(0, 7);
+  if (!topServices.length) return "";
+
+  if (idioma === "en") {
+    return compact(
+      [
+        "SERVICES_SUMMARY_FOR_INFO (NAMES ONLY, NO PLANS, NO PRICES):",
+        `- Business: ${nombreNegocio}`,
+        ...topServices.map((s) => `- ${s}`),
+        "",
+        'Rule: If user asks "more info / info / more information" without specifying WHAT, reply using ONLY this list.',
+        'Then ask ONE question: "Which service are you interested in?"',
+      ].join("\n")
+    );
+  }
+
+  return compact(
+    [
+      "RESUMEN_DE_SERVICIOS_PARA_INFO (SOLO SERVICIOS, SIN PLANES, SIN PRECIOS):",
+      `- Negocio: ${nombreNegocio}`,
+      ...topServices.map((s) => `- ${s}`),
+      "",
+      'Regla: Si el usuario pide "más info" / "info" / "más información" sin especificar QUÉ, responde usando SOLO esta lista.',
+      'Luego haz UNA pregunta: "¿En cuál servicio estás interesado?"',
+    ].join("\n")
+  );
+}
+
 // ———————————————————————————————————————————————————
 
 router.post("/", async (req: Request, res: Response) => {
@@ -924,6 +957,9 @@ router.post("/", async (req: Request, res: Response) => {
             '- If user asks "what plans do you have?":',
             "  1) Answer ONLY with PLANS_SUMMARY (max 7 bullets).",
             '  2) Ask ONE question: "Which plan are you interested in?"',
+            '- If user asks "more info / info / more information" without specifying what:',
+            "  1) Answer ONLY with SERVICES_SUMMARY_FOR_INFO (max 7 bullets).",
+            '  2) Ask ONE question: "Which service are you interested in?"',
             "- If user asks services/menu/catalog:",
             "  1) Answer with the short summary (max 7 bullets).",
             "  2) Ask ONE question: Which service are you looking for?",
@@ -935,6 +971,9 @@ router.post("/", async (req: Request, res: Response) => {
             '- Si preguntan "¿qué planes tienes?" / paquetes / membresías:',
             "  1) Responde SOLO con RESUMEN_DE_PLANES (máx 7 bullets).",
             '  2) Haz UNA pregunta: "¿Cuál plan te interesa?"',
+            '- Si el usuario pide "más info" / "info" / "más información" sin especificar qué:',
+            "  1) Responde SOLO con RESUMEN_DE_SERVICIOS_PARA_INFO (máx 7 bullets).",
+            '  2) Haz UNA pregunta: "¿En cuál servicio estás interesado?"',
             "- Si piden servicios/menú/catálogo:",
             "  1) Responde con el resumen corto (máx 7 bullets).",
             '  2) Haz UNA pregunta: "¿Qué servicio estás buscando?"',
@@ -967,6 +1006,8 @@ router.post("/", async (req: Request, res: Response) => {
 
     const plansSummaryBlock = buildPlansSummaryFromDB(idiomaNorm, nombreNegocio, plansDb);
     const servicesSummaryBlock = buildServicesSummaryFromDB(idiomaNorm, nombreNegocio, servicesDb);
+
+    const servicesSummaryOnlyBlock = buildServicesSummaryOnlyBlock(idiomaNorm, nombreNegocio, servicesDb);
 
     const linksPolicy = enlacesOficiales.length
       ? (idiomaNorm === "en"
@@ -1013,6 +1054,10 @@ router.post("/", async (req: Request, res: Response) => {
 
       servicesSummaryBlock ? servicesSummaryBlock : "",
       servicesSummaryBlock ? "" : "",
+
+      // ✅ Si piden "más info" sin especificar: SOLO SERVICIOS (no planes)
+      servicesSummaryOnlyBlock ? servicesSummaryOnlyBlock : "",
+      servicesSummaryOnlyBlock ? "" : "",
 
       // ✅ Reglas anti-spam de catálogo
       catalogAntiSpamRules,
