@@ -579,6 +579,42 @@ function extractServiceCandidatesFromInfoBlock(infoBlock: string): string[] {
   return out;
 }
 
+function extractPlanCandidatesFromInfoBlock(infoBlock: string): string[] {
+  const t = String(infoBlock || "");
+  if (!t.trim()) return [];
+
+  const lines = t.split("\n").map(l => l.trim()).filter(Boolean);
+
+  // ✅ Buscar sección "PLANES Y MEMBRESIAS"
+  const idx = lines.findIndex(l => /^PLANES\s+Y\s+MEMBRESIAS$/i.test(l));
+  if (idx < 0) return [];
+
+  let slice = lines.slice(idx + 1);
+
+  // corta cuando empieza otro heading típico
+  const stopIdx = slice.findIndex(l =>
+    /^(HORARIOS|RESERVAS|RESERVAS \/ CONTACTO|POL[IÍ]TICAS|DATOS DEL NEGOCIO|SERVICIOS)$/i.test(l)
+  );
+  if (stopIdx >= 0) slice = slice.slice(0, stopIdx);
+
+  // limpia bullets y numeración "1." "2."
+  const items = slice
+    .map(l => l.replace(/^[-•]\s*/, "").trim())
+    .map(l => l.replace(/^\d+\.\s*/, "").trim())
+    .filter(l => l.length >= 2 && l.length <= 90);
+
+  // dedupe
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const it of items) {
+    const k = it.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(it);
+  }
+  return out;
+}
+
 function buildCatalogSummaryBlock(idioma: Lang, nombreNegocio: string, infoBlock: string) {
   const services = extractServiceCandidatesFromInfoBlock(infoBlock);
 
@@ -606,6 +642,85 @@ function buildCatalogSummaryBlock(idioma: Lang, nombreNegocio: string, infoBlock
     "",
     "Regla: Si el usuario pide servicios/menú/catálogo, muestra SOLO este resumen y pregunta:",
     '"¿Qué servicio estás buscando?"',
+  ].join("\n"));
+}
+
+function buildPlansSummaryFromDB(idioma: Lang, nombreNegocio: string, plans: string[]) {
+  const top = (plans || []).slice(0, 7);
+  if (!top.length) return "";
+
+  if (idioma === "en") {
+    return compact([
+      "PLANS_SUMMARY (NAMES ONLY, NO PRICES):",
+      `- Business: ${nombreNegocio}`,
+      ...top.map(p => `- ${p}`),
+      "",
+      'Rule: If asked "what plans do you have?", reply using ONLY this list.',
+      'Then ask ONE question: "Which plan are you interested in?"',
+    ].join("\n"));
+  }
+
+  return compact([
+    "RESUMEN_DE_PLANES (SOLO NOMBRES, SIN PRECIOS):",
+    `- Negocio: ${nombreNegocio}`,
+    ...top.map(p => `- ${p}`),
+    "",
+    'Regla: Si preguntan "¿qué planes tienes?", responde usando SOLO esta lista.',
+    'Luego haz UNA pregunta: "¿Cuál plan te interesa?"',
+  ].join("\n"));
+}
+
+function buildServicesSummaryFromDB(idioma: Lang, nombreNegocio: string, services: string[]) {
+  const top = (services || []).slice(0, 7);
+  if (!top.length) return "";
+
+  if (idioma === "en") {
+    return compact([
+      "CATALOG_SUMMARY (DO NOT LIST EVERYTHING):",
+      `- Business: ${nombreNegocio}`,
+      ...top.map(s => `- ${s}`),
+      "",
+      'Rule: If the user asks for services/menu/catalog, show ONLY this short summary and ask:',
+      '"Which service are you looking for?"',
+    ].join("\n"));
+  }
+
+  return compact([
+    "RESUMEN_DE_SERVICIOS (NO LISTAR TODO):",
+    `- Negocio: ${nombreNegocio}`,
+    ...top.map(s => `- ${s}`),
+    "",
+    "Regla: Si el usuario pide servicios/menú/catálogo, muestra SOLO este resumen y pregunta:",
+    '"¿Qué servicio estás buscando?"',
+  ].join("\n"));
+}
+
+function buildPlansSummaryBlock(idioma: Lang, nombreNegocio: string, infoBlock: string) {
+  const plans = extractPlanCandidatesFromInfoBlock(infoBlock);
+
+  if (!plans.length) return "";
+
+  const top = plans.slice(0, 7);
+  const lines = top.map(p => `- ${p}`);
+
+  if (idioma === "en") {
+    return compact([
+      "PLANS_SUMMARY (NAMES ONLY, NO PRICES):",
+      `- Business: ${nombreNegocio}`,
+      ...lines,
+      "",
+      'Rule: If asked "what plans do you have?", reply using ONLY this list.',
+      'Then ask ONE question: "Which plan are you interested in?"',
+    ].join("\n"));
+  }
+
+  return compact([
+    "RESUMEN_DE_PLANES (SOLO NOMBRES, SIN PRECIOS):",
+    `- Negocio: ${nombreNegocio}`,
+    ...lines,
+    "",
+    'Regla: Si preguntan "¿qué planes tienes?", responde usando SOLO esta lista.',
+    'Luego haz UNA pregunta: "¿Cuál plan te interesa?"',
   ].join("\n"));
 }
 
@@ -637,7 +752,7 @@ async function fetchCatalogNamesFromDB(pool: any, tenantId: string) {
     SELECT name, COALESCE(tipo,'service') AS tipo
     FROM services
     WHERE tenant_id = $1 AND active = true
-    ORDER BY COALESCE(sort_order, 9999) ASC, name ASC
+    ORDER BY name ASC
     `,
     [tenantId]
   );
@@ -823,7 +938,7 @@ router.post("/", async (req: Request, res: Response) => {
             "- Si piden servicios/menú/catálogo:",
             "  1) Responde con el resumen corto (máx 7 bullets).",
             '  2) Haz UNA pregunta: "¿Qué servicio estás buscando?"',
-            "- Si piden precios sin especificar plan/servicio: haz UNA pregunta para aclarar.",
+            "- Si preguntan por precios sin especificar: muestra RESUMEN_DE_PLANES (máx 5) y pregunta cuál le interesa.",
           ].join("\n"));
 
     // ———————————————————————————————————————————————————
@@ -850,12 +965,8 @@ router.post("/", async (req: Request, res: Response) => {
     const infoBlock = infoOperativo ? infoOperativo : "";
     const funcionesBlock = reglasOperativas ? reglasOperativas : "";
 
-    const catalogSummaryBlock = buildPlansServicesSummaryBlock(
-      idiomaNorm,
-      nombreNegocio,
-      plansDb,
-      servicesDb
-    );
+    const plansSummaryBlock = buildPlansSummaryFromDB(idiomaNorm, nombreNegocio, plansDb);
+    const servicesSummaryBlock = buildServicesSummaryFromDB(idiomaNorm, nombreNegocio, servicesDb);
 
     const linksPolicy = enlacesOficiales.length
       ? (idiomaNorm === "en"
@@ -896,12 +1007,14 @@ router.post("/", async (req: Request, res: Response) => {
       channelRules,
       "",
 
-      // 3) Contexto del negocio (lo que “sabe”)
-      // 3) Contexto del negocio (lo que “sabe”)
-      catalogSummaryBlock ? catalogSummaryBlock : "",
-      catalogSummaryBlock ? "" : "",
+      // 3) Resúmenes cortos (lo que el bot puede listar)
+      plansSummaryBlock ? plansSummaryBlock : "",
+      plansSummaryBlock ? "" : "",
 
-      // ✅ Reglas anti-spam de catálogo (arriba, antes del contexto)
+      servicesSummaryBlock ? servicesSummaryBlock : "",
+      servicesSummaryBlock ? "" : "",
+
+      // ✅ Reglas anti-spam de catálogo
       catalogAntiSpamRules,
       "",
 
