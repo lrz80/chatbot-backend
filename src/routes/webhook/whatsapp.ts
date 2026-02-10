@@ -333,6 +333,21 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     idiomaDestino,
   });
 
+  // ✅ LANG LOCK: si ya hay idioma del hilo, NO dejes que tokens cortos lo cambien
+  const threadLang = String((convoCtx as any)?.thread_lang || "").toLowerCase();
+  const threadLocked = (convoCtx as any)?.thread_lang_locked === true;
+
+  if (threadLocked && (threadLang === "es" || threadLang === "en")) {
+    idiomaDestino = threadLang as any;
+  }
+
+  const t = String(userInput || "").trim().toLowerCase();
+  const isSizeToken = /^(small|medium|large|x-large|xl|xs|peque(n|ñ)o|mediano|grande)$/i.test(t);
+
+  if (isSizeToken && (storedLang === "es" || storedLang === "en")) {
+    idiomaDestino = storedLang as any;
+  }
+
   // ✅ thread_lang SOLO durante booking
   if (langRes.inBookingLang && !(convoCtx as any)?.thread_lang) {
     convoCtx = { ...(convoCtx || {}), thread_lang: idiomaDestino };
@@ -863,6 +878,16 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         ? "RULE: If you provide a list of services/options, ALWAYS end with ONE short question: 'Which one are you interested in?'"
         : "REGLA: Si das una lista de servicios/opciones, SIEMPRE termina con UNA pregunta corta: '¿Cuál te interesa?'";
 
+    const PRICE_QUALIFIER_RULE =
+      idiomaDestino === "en"
+        ? "RULE: If a price is described as 'FROM/STARTING AT' (or 'desde'), you MUST keep that qualifier. Never rewrite it as an exact price. Use: 'starts at $X' / 'from $X'."
+        : "REGLA: Si un precio está descrito como 'DESDE' (o 'from/starting at'), DEBES mantener ese calificativo. Nunca lo conviertas en precio exacto. Usa: 'desde $X'.";
+
+    const NO_PRICE_INVENTION_RULE =
+      idiomaDestino === "en"
+        ? "RULE: Do not invent exact prices. Only mention prices if explicitly present in the provided business info, and preserve ranges/qualifiers."
+        : "REGLA: No inventes precios exactos. Solo menciona precios si están explícitos en la info del negocio, y preserva rangos/calificativos (DESDE).";
+
     // 🚫 ROLLBACK: PROMPT-ONLY (sin DB catalog)
     const fallbackWelcome = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
 
@@ -873,6 +898,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         "",
         NO_NUMERIC_MENUS,
         LIST_FOLLOWUP_RULE,
+        PRICE_QUALIFIER_RULE,
+        NO_PRICE_INVENTION_RULE,
       ].join("\n"),
       userInput: ["USER_MESSAGE:", event.userInput].join("\n"),
       history,
@@ -958,12 +985,28 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."
         : "REGLA: NO muestres menús numerados ni pidas que respondan con un número. Si necesitas aclarar, haz UNA sola pregunta corta. Las selecciones por número las maneja el sistema, no tú.";
 
+    const PRICE_QUALIFIER_RULE =
+      idiomaDestino === "en"
+        ? "RULE: If a price is described as 'FROM/STARTING AT' (or 'desde'), you MUST keep that qualifier. Never rewrite it as an exact price. Use: 'starts at $X' / 'from $X'."
+        : "REGLA: Si un precio está descrito como 'DESDE' (o 'from/starting at'), DEBES mantener ese calificativo. Nunca lo conviertas en precio exacto. Usa: 'desde $X'.";
+
+    const NO_PRICE_INVENTION_RULE =
+      idiomaDestino === "en"
+        ? "RULE: Do not invent exact prices. Only mention prices if explicitly present in the provided business info, and preserve ranges/qualifiers."
+        : "REGLA: No inventes precios exactos. Solo menciona precios si están explícitos en la info del negocio, y preserva rangos/calificativos (DESDE).";
+
     // 🚫 ROLLBACK: PROMPT-ONLY (sin DB catalog)
     const fallbackWelcome = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
 
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
-      promptBase: [promptBaseMem, "", NO_NUMERIC_MENUS].join("\n"),
+      promptBase: [
+        promptBaseMem,
+        "",
+        NO_NUMERIC_MENUS,
+        PRICE_QUALIFIER_RULE,
+        NO_PRICE_INVENTION_RULE,
+      ].join("\n"),
       userInput: ["USER_MESSAGE:", event.userInput].join("\n"),
       history,
       idiomaDestino,
