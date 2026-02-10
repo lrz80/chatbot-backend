@@ -10,13 +10,25 @@ const router = express.Router();
 
 type Canal = "sms" | "email" | "whatsapp" | "meta" | "voice" | "google_calendar";
 
-// ⚠️ Ya NO usamos un mapa hardcodeado de features por nombre de plan.
-// En su lugar, leemos del Product de Stripe (metadata) usando PRODUCT ID.
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
   apiVersion: "2022-11-15",
 });
 
-// Cache sencillo para no golpear Stripe en cada request
+/**
+ * ✅ (LEGACY) Mapa nombre_plan -> product_id
+ * Puedes dejarlo, pero YA NO ES el mecanismo principal.
+ * Si el plan es "test" u otro, no dependemos de esto.
+ */
+const PLAN_TO_PRODUCT: Record<string, string> = {
+  trial: process.env.STRIPE_PRODUCT_TRIAL_ID || "",
+  free: process.env.STRIPE_PRODUCT_TRIAL_ID || "",
+  starter: process.env.STRIPE_PRODUCT_STARTER_ID || "",
+  pro: process.env.STRIPE_PRODUCT_PRO_ID || "",
+  business: process.env.STRIPE_PRODUCT_BUSINESS_ID || "",
+  enterprise: process.env.STRIPE_PRODUCT_ENTERPRISE_ID || "",
+};
+
+// Cache por product_id (no por plan)
 const FEATURES_CACHE: Record<
   string,
   {
@@ -24,6 +36,7 @@ const FEATURES_CACHE: Record<
     features: Partial<Record<Canal, boolean>>;
   }
 > = {};
+
 const TTL_MS = 10 * 60 * 1000; // 10 minutos
 
 function toBool(v?: string | null) {
@@ -31,24 +44,39 @@ function toBool(v?: string | null) {
 }
 
 /**
- * ✅ Obtiene features desde Stripe usando PRODUCT ID
- * Lee:
- *  - whatsapp_enabled
- *  - sms_enabled
- *  - email_enabled
- *  - meta_enabled
- *  - voice_enabled
+ * ✅ Resuelve product_id SIN depender del nombre del plan.
+ * Prioridad:
+ *  1) tenants.extra_features.stripe_product_id  (admin / tu control)
+ *  2) env STRIPE_DEFAULT_PRODUCT_ID (opcional, fallback global)
+ *  3) legacy PLAN_TO_PRODUCT[planName]
  */
-async function getFeaturesFromStripeByProductId(productId: string) {
-  const key = `prod:${productId}`;
+function resolveProductId(planName: string, extra: any): string {
+  const fromExtra = String(extra?.stripe_product_id || "").trim();
+  if (fromExtra) return fromExtra;
+
+  const fromEnvDefault = String(process.env.STRIPE_DEFAULT_PRODUCT_ID || "").trim();
+  if (fromEnvDefault) return fromEnvDefault;
+
+  const legacy = PLAN_TO_PRODUCT[String(planName || "").toLowerCase().trim()];
+  return String(legacy || "").trim();
+}
+
+async function getFeaturesFromStripeProduct(productId: string) {
+  const key = String(productId || "").trim();
+  if (!key) {
+    // fallback conservador
+    return { whatsapp: true, sms: false, email: false, meta: false, voice: false };
+  }
+
   const hit = FEATURES_CACHE[key];
   if (hit && hit.exp > Date.now()) return hit.features;
 
   try {
-    const p = await stripe.products.retrieve(productId);
+    const p = await stripe.products.retrieve(key);
     const md = p.metadata || {};
 
-    const features: Partial<Record<Canal, boolean>> = {
+    // ✅ lectura por metadata del PRODUCT (Stripe)
+    const features = {
       whatsapp: toBool(md.whatsapp_enabled),
       sms: toBool(md.sms_enabled),
       email: toBool(md.email_enabled),
@@ -59,15 +87,8 @@ async function getFeaturesFromStripeByProductId(productId: string) {
     FEATURES_CACHE[key] = { exp: Date.now() + TTL_MS, features };
     return features;
   } catch (err) {
-    console.error("[channel-settings] Stripe fetch error(product):", err);
-    // fallback seguro (conservador)
-    const fallback: Partial<Record<Canal, boolean>> = {
-      whatsapp: true,
-      sms: false,
-      email: false,
-      meta: false,
-      voice: false,
-    };
+    console.error("[channel-settings] Stripe product fetch error:", err);
+    const fallback = { whatsapp: true, sms: false, email: false, meta: false, voice: false };
     FEATURES_CACHE[key] = { exp: Date.now() + TTL_MS, features: fallback };
     return fallback;
   }
@@ -77,7 +98,7 @@ async function getFeaturesFromStripeByProductId(productId: string) {
 function resolveEffectivePlan(row: any): { planName: string; trialActive: boolean } {
   const rawPlan = String(row?.plan || "").toLowerCase().trim();
 
-  // Regla: si hay plan pago distinto de trial/free => priorizar
+  // Si hay plan pago distinto de trial/free => priorizar
   if (rawPlan && rawPlan !== "trial" && rawPlan !== "free") {
     return { planName: rawPlan, trialActive: false };
   }
@@ -93,7 +114,6 @@ function resolveEffectivePlan(row: any): { planName: string; trialActive: boolea
   const planAfter = String(row?.plan_after_trial || "").toLowerCase().trim();
   if (es_trial && trial_ends_at && now.isAfter(trial_ends_at)) {
     if (planAfter) return { planName: planAfter, trialActive: false };
-    // fallback razonable
     return { planName: rawPlan || "starter", trialActive: false };
   }
 
@@ -130,9 +150,9 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
     if (canal === "google_calendar") {
       const { rows: csRows } = await pool.query(
         `SELECT google_calendar_enabled
-          FROM channel_settings
-          WHERE tenant_id = $1
-          LIMIT 1`,
+         FROM channel_settings
+         WHERE tenant_id = $1
+         LIMIT 1`,
         [tenant_id]
       );
       settingsEnabled = csRows[0]?.google_calendar_enabled === true;
@@ -140,9 +160,9 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
       settingsEnabled = !!(await getChannelEnabledBySettings(tenant_id, canal));
     }
 
-    // 3) Plan del tenant + extras + plan_limits (para fallback robusto)
+    // 3) Tenant plan + overrides
     const { rows } = await pool.query(
-      `SELECT plan, es_trial, trial_ends_at, plan_after_trial, extra_features, plan_limits
+      `SELECT plan, es_trial, trial_ends_at, plan_after_trial, extra_features
        FROM tenants
        WHERE id = $1`,
       [tenant_id]
@@ -151,70 +171,45 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
     const tenant = rows[0] || {};
     const { planName, trialActive } = resolveEffectivePlan(tenant);
 
-    // extra_features (puede ser null)
+    // 👇 extra_features (jsonb) para overrides/admin
     const extra = (tenant.extra_features as any) || {};
 
-    // ✅ Intentar resolver el Stripe Product ID
-    // 1) Preferido: extra_features.stripe_product_id
-    const stripeProductId =
-      typeof extra?.stripe_product_id === "string" ? extra.stripe_product_id.trim() : "";
+    // ✅ 3.1 Resolver product_id SIN depender del nombre del plan
+    const productId = resolveProductId(planName, extra);
 
-    // 2) Si el "plan" ya viene siendo un product id (prod_...), úsalo (por compat)
-    const planLooksLikeProductId = planName.startsWith("prod_") ? planName : "";
+    // 4) Features del plan desde Stripe PRODUCT metadata
+    const planFeatures = await getFeaturesFromStripeProduct(productId);
 
-    // prioridad: stripeProductId > planLooksLikeProductId
-    const productIdToUse = stripeProductId || planLooksLikeProductId;
-
-    // 4) Features del plan desde Stripe POR PRODUCT ID
-    let planFeatures: Partial<Record<Canal, boolean>>;
-
-    if (productIdToUse) {
-      planFeatures = await getFeaturesFromStripeByProductId(productIdToUse);
-    } else {
-      // ✅ Fallback: usa plan_limits si existe (tu DB lo tiene)
-      const limits = (tenant.plan_limits as any) || {};
-      planFeatures = {
-        whatsapp: Number(limits?.whatsapp ?? 0) > 0,
-        sms: Number(limits?.sms ?? 0) > 0,
-        email: Number(limits?.email ?? 0) > 0,
-        meta: Number(limits?.meta ?? 0) > 0,
-        // voz puede estar como "voz" en tu JSON
-        voice: Number(limits?.voz ?? limits?.voice ?? 0) > 0,
-      };
-    }
-
-    // Por defecto, lo que diga Stripe/plan_limits
-    // (para google_calendar lo dejamos true por ahora)
+    // 5) enabledByPlan
     const enabledByPlan = canal === "google_calendar" ? true : !!planFeatures[canal];
 
     // ✅ Override manual por tenant (admin)
-    // Nota: para google_calendar soportamos force_google_calendar si quieres usarlo luego
-    const enabledByOverride = extra?.[`force_${canal}`] === true;
+    const enabledByOverride =
+      extra?.[`force_${canal}`] === true ||
+      (canal === "meta" && extra?.force_meta === true);
 
     // ✅ Resultado final: plan OR override
     const enabledEffective = enabledByPlan || enabledByOverride;
 
-    // 5) Gate final
+    // 6) Gate final
     const enabled = enabledEffective && settingsEnabled && !maint.maintenance;
 
     res.setHeader("Cache-Control", "no-store");
     return res.json({
       canal,
       enabled,
-      plan_enabled: enabledEffective, // ✅ effective, no solo Stripe
+      plan_enabled: enabledEffective, // lo efectivo (Stripe PRODUCT metadata OR override)
       settings_enabled: settingsEnabled,
       maintenance: maint.maintenance,
       maintenance_message: maint.message,
       maintenance_window:
-        maint.starts_at || maint.ends_at
-          ? { starts_at: maint.starts_at, ends_at: maint.ends_at }
-          : null,
+        maint.starts_at || maint.ends_at ? { starts_at: maint.starts_at, ends_at: maint.ends_at } : null,
       plan_current: planName,
       trial_active: trialActive,
       trial_ends_at: tenant.trial_ends_at || null,
 
-      // ✅ útil para debug (puedes borrar luego si quieres)
-      product_id_used: productIdToUse || null,
+      // ✅ debug (para que veas qué product está usando)
+      product_id_used: productId || null,
     });
   } catch (e) {
     console.error("channel-settings error:", e);
