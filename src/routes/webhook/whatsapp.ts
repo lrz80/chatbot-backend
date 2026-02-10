@@ -328,6 +328,18 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     convoCtx,
   });
 
+  // 🛑 LANGUAGE HARD LOCK: if user writes in one language, force it
+  if (!storedLang) {
+    try {
+      const detected = await detectarIdioma(userInput);
+      if (detected === "es" || detected === "en") {
+        idiomaDestino = detected;
+        await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, detected);
+        console.log("🌍 FORCED LANGUAGE (no storedLang) =", detected);
+      }
+    } catch {}
+  }
+
   idiomaDestino = langRes.finalLang;
 
   console.log("🌍 LANG DEBUG =", {
