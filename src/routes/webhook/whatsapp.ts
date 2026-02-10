@@ -754,7 +754,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     saludoPuroRegex.test(userInput) &&
     !looksLikeBookingPayload(userInput) // ✅ evita “Hola soy Amy” cuando mandan nombre/email/fecha
   ) {
-    const bienvenida = getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+    const bienvenida = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
 
     transition({
       flow: activeFlow,
@@ -858,23 +858,28 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."
         : "REGLA: NO muestres menús numerados ni pidas que respondan con un número. Si necesitas aclarar, haz UNA sola pregunta corta. Las selecciones por número las maneja el sistema, no tú.";
 
+    const LIST_FOLLOWUP_RULE =
+      idiomaDestino === "en"
+        ? "RULE: If you provide a list of services/options, ALWAYS end with ONE short question: 'Which one are you interested in?'"
+        : "REGLA: Si das una lista de servicios/opciones, SIEMPRE termina con UNA pregunta corta: '¿Cuál te interesa?'";
+
     // 🚫 ROLLBACK: PROMPT-ONLY (sin DB catalog)
+    const fallbackWelcome = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
       promptBase: [
         promptBaseMem,
         "",
         NO_NUMERIC_MENUS,
+        LIST_FOLLOWUP_RULE,
       ].join("\n"),
-      userInput: [
-        "USER_MESSAGE:",
-        event.userInput,
-      ].join("\n"),
+      userInput: ["USER_MESSAGE:", event.userInput].join("\n"),
       history,
       idiomaDestino,
       canal: "whatsapp",
       maxLines: MAX_WHATSAPP_LINES,
-      fallbackText: getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
+      fallbackText: fallbackWelcome,
     });
 
     replied = true;
@@ -954,22 +959,17 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         : "REGLA: NO muestres menús numerados ni pidas que respondan con un número. Si necesitas aclarar, haz UNA sola pregunta corta. Las selecciones por número las maneja el sistema, no tú.";
 
     // 🚫 ROLLBACK: PROMPT-ONLY (sin DB catalog)
+    const fallbackWelcome = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
-      promptBase: [
-        promptBaseMem,
-        "",
-        NO_NUMERIC_MENUS,
-      ].join("\n"),
-      userInput: [
-        "USER_MESSAGE:",
-        userInput,
-      ].join("\n"),
+      promptBase: [promptBaseMem, "", NO_NUMERIC_MENUS].join("\n"),
+      userInput: ["USER_MESSAGE:", event.userInput].join("\n"),
       history,
       idiomaDestino,
       canal: "whatsapp",
       maxLines: MAX_WHATSAPP_LINES,
-      fallbackText: getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
+      fallbackText: fallbackWelcome,
     });
 
     setReply(composed.text, "sm-fallback");

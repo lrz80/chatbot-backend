@@ -1,4 +1,5 @@
 // src/lib/getPromptPorCanal.ts
+import { traducirMensaje } from "./traducirMensaje";
 
 type Canal =
   | "whatsapp"
@@ -58,7 +59,11 @@ export function getPromptPorCanal(canal: Canal, tenant: any, idioma: Idioma = "e
  * - Si no existe -> fallback mínimo (solo saludo), porque si no, quedas sin saludo.
  *   (Si quieres que también sea strict, te lo pongo strict.)
  */
-export function getBienvenidaPorCanal(canal: Canal, tenant: any, idioma: Idioma = "es"): string {
+export async function getBienvenidaPorCanal(
+  canal: Canal,
+  tenant: any,
+  idioma: Idioma = "es"
+): Promise<string> {
   const nombre = tenant?.name || "nuestro negocio";
 
   if (isMeta(canal)) {
@@ -66,9 +71,15 @@ export function getBienvenidaPorCanal(canal: Canal, tenant: any, idioma: Idioma 
     if (bLang) return bLang;
 
     const b = norm(tenant?.bienvenida_meta ?? tenant?.meta_config?.bienvenida_meta);
-    if (b) return b;
+    if (b) {
+      // ✅ fallback traducido si base está en otro idioma
+      const tenantLang = String(tenant?.idioma || "es").toLowerCase();
+      if (tenantLang !== String(idioma).toLowerCase()) {
+        try { return await traducirMensaje(b, idioma as any); } catch {}
+      }
+      return b;
+    }
 
-    // fallback mínimo (saludo) para no quedarte mudo
     return generarBienvenidaPorIdioma(nombre, idioma);
   }
 
@@ -76,7 +87,13 @@ export function getBienvenidaPorCanal(canal: Canal, tenant: any, idioma: Idioma 
   if (bLang) return bLang;
 
   const b = norm(tenant?.mensaje_bienvenida);
-  if (b) return b;
+  if (b) {
+    const tenantLang = String(tenant?.idioma || "es").toLowerCase();
+    if (tenantLang !== String(idioma).toLowerCase()) {
+      try { return await traducirMensaje(b, idioma as any); } catch {}
+    }
+    return b;
+  }
 
   return generarBienvenidaPorIdioma(nombre, idioma);
 }
