@@ -1,5 +1,6 @@
 // src/lib/features.ts
 import pool from "../lib/db";
+import Stripe from "stripe";
 
 export type Canal = "whatsapp" | "meta" | "voice" | "sms" | "email" | "google_calendar";
 
@@ -26,7 +27,11 @@ type Features = {
     voice_enabled: boolean;
     sms_enabled: boolean;
     email_enabled: boolean;
-    source: "tenant_plan_features" | "tenants.plan" | "default";
+    source:
+      | "tenant_plan_features"
+      | "stripe_product_metadata"
+      | "tenants.plan"
+      | "default";
     product_id?: string | null;
     plan_name?: string | null;
   };
@@ -52,7 +57,7 @@ const EMPTY_SETTINGS: Features["settings"] = {
 };
 
 const EMPTY_PLAN: Features["plan"] = {
-  whatsapp_enabled: true,  // por defecto permitimos WhatsApp
+  whatsapp_enabled: true, // por defecto permitimos WhatsApp
   meta_enabled: false,
   voice_enabled: false,
   sms_enabled: false,
@@ -61,6 +66,57 @@ const EMPTY_PLAN: Features["plan"] = {
   product_id: null,
   plan_name: null,
 };
+
+// ---------------- Stripe (metadata por product_id)
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY as string, {
+  apiVersion: "2022-11-15",
+});
+
+const STRIPE_FEATURES_CACHE: Record<
+  string,
+  { exp: number; plan: Pick<Features["plan"], "whatsapp_enabled" | "meta_enabled" | "voice_enabled" | "sms_enabled" | "email_enabled"> }
+> = {};
+const TTL_MS = 10 * 60 * 1000;
+
+function toBool(v?: string | null) {
+  return String(v ?? "").toLowerCase() === "true";
+}
+
+async function getPlanFromStripeProduct(productId: string) {
+  const key = String(productId || "").trim();
+  if (!key) return null;
+
+  const hit = STRIPE_FEATURES_CACHE[key];
+  if (hit && hit.exp > Date.now()) return hit.plan;
+
+  try {
+    const p = await stripe.products.retrieve(key);
+    const md = p?.metadata || {};
+
+    const plan = {
+      whatsapp_enabled: toBool(md.whatsapp_enabled),
+      meta_enabled: toBool(md.meta_enabled),
+      voice_enabled: toBool(md.voice_enabled),
+      sms_enabled: toBool(md.sms_enabled),
+      email_enabled: toBool(md.email_enabled),
+    };
+
+    STRIPE_FEATURES_CACHE[key] = { exp: Date.now() + TTL_MS, plan };
+    return plan;
+  } catch (e) {
+    console.error("[features] stripe.products.retrieve failed:", e);
+    // fallback conservador si Stripe falla (NO desbloquea por error)
+    const plan = {
+      whatsapp_enabled: true,
+      meta_enabled: false,
+      voice_enabled: false,
+      sms_enabled: false,
+      email_enabled: false,
+    };
+    STRIPE_FEATURES_CACHE[key] = { exp: Date.now() + TTL_MS, plan };
+    return plan;
+  }
+}
 
 // -------- Helpers
 export function isPaused(dateLike?: string | Date | null): boolean {
@@ -116,39 +172,59 @@ async function loadSettings(tenantId: string): Promise<Features["settings"]> {
 
   const out = { ...EMPTY_SETTINGS };
   for (const r of ordered) {
-    out.whatsapp_enabled      = !!r.whatsapp_enabled || out.whatsapp_enabled;
-    out.meta_enabled          = !!r.meta_enabled     || out.meta_enabled;
-    out.voice_enabled         = !!r.voice_enabled    || out.voice_enabled;
-    out.sms_enabled           = !!r.sms_enabled      || out.sms_enabled;
-    out.email_enabled         = !!r.email_enabled    || out.email_enabled;
-    out.paused_until          = r.paused_until ?? out.paused_until;
+    out.whatsapp_enabled = !!r.whatsapp_enabled || out.whatsapp_enabled;
+    out.meta_enabled = !!r.meta_enabled || out.meta_enabled;
+    out.voice_enabled = !!r.voice_enabled || out.voice_enabled;
+    out.sms_enabled = !!r.sms_enabled || out.sms_enabled;
+    out.email_enabled = !!r.email_enabled || out.email_enabled;
+
+    out.paused_until = r.paused_until ?? out.paused_until;
     out.paused_until_whatsapp = r.paused_until_whatsapp ?? out.paused_until_whatsapp;
-    out.paused_until_meta     = r.paused_until_meta ?? out.paused_until_meta;
-    out.paused_until_voice    = r.paused_until_voice ?? out.paused_until_voice;
-    out.paused_until_sms      = r.paused_until_sms ?? out.paused_until_sms;
-    out.paused_until_email    = r.paused_until_email ?? out.paused_until_email;
-    out.google_calendar_enabled = !!r.google_calendar_enabled || out.google_calendar_enabled;
+    out.paused_until_meta = r.paused_until_meta ?? out.paused_until_meta;
+    out.paused_until_voice = r.paused_until_voice ?? out.paused_until_voice;
+    out.paused_until_sms = r.paused_until_sms ?? out.paused_until_sms;
+    out.paused_until_email = r.paused_until_email ?? out.paused_until_email;
+
+    out.google_calendar_enabled =
+      !!r.google_calendar_enabled || out.google_calendar_enabled;
   }
   return out;
 }
 
 async function tableExists(table: string): Promise<boolean> {
-  const { rows } = await pool.query(
-    `select to_regclass($1) as reg`,
-    [`public.${table}`]
-  );
+  const { rows } = await pool.query(`select to_regclass($1) as reg`, [`public.${table}`]);
   return !!rows[0]?.reg;
 }
 
-// -------- Carga PLAN (prioridad: tenant_plan_features → tenants.plan → default)
+// -------- Carga PLAN (prioridad: tenant_plan_features → stripe product metadata → tenants.plan → default)
 async function loadPlan(tenantId: string): Promise<Features["plan"]> {
   if (!tenantId || !/^[0-9a-f-]{36}$/i.test(tenantId)) return { ...EMPTY_PLAN };
 
+  // 0) leemos tenant.plan y extra_features para poder tomar product_id real
+  let tenantPlanName: string | null = null;
+  let extra: any = {};
+  try {
+    const q0 = await pool.query(
+      `select plan as plan_name, extra_features
+         from tenants
+        where id = $1
+        limit 1`,
+      [tenantId]
+    );
+    if (q0.rows[0]) {
+      tenantPlanName = q0.rows[0].plan_name ?? null;
+      extra = (q0.rows[0].extra_features as any) || {};
+    }
+  } catch (_) {
+    // noop
+  }
+
   // 1) Cache por-tenant sincronizada desde Stripe (solo si la tabla existe)
+  //    Si existe y trae product_id+flags, esto es lo mejor (cero llamadas a Stripe)
   try {
     if (await tableExists("tenant_plan_features")) {
       const q1 = await pool.query(
-        `select product_id, 
+        `select product_id,
                 coalesce(whatsapp_enabled,false) as whatsapp_enabled,
                 coalesce(meta_enabled,false)     as meta_enabled,
                 coalesce(voice_enabled,false)    as voice_enabled,
@@ -168,57 +244,63 @@ async function loadPlan(tenantId: string): Promise<Features["plan"]> {
           sms_enabled: !!r.sms_enabled,
           email_enabled: !!r.email_enabled,
           source: "tenant_plan_features",
-          product_id: r.product_id,
-          plan_name: null,
+          product_id: r.product_id ?? null,
+          plan_name: tenantPlanName,
         };
       }
     }
   } catch (_) {
-    // silencioso: no logueamos para evitar ruido en DB logs
+    // silencioso
   }
 
-  // 2) Fallback: usa plan guardado en tenants y mapea con ENV
-  try {
-    const q2 = await pool.query(
-      `select plan as plan_name
-         from tenants
-        where id = $1
-        limit 1`,
-      [tenantId]
-    );
-    if (q2.rows[0]) {
-      const { plan_name } = q2.rows[0];
-      const plan = String(plan_name || "").toLowerCase();
+  // 2) ✅ Stripe product metadata por product_id REAL (sin “plan name”)
+  //    Lo tomamos de tenants.extra_features.stripe_product_id
+  const productId = String(extra?.stripe_product_id || "").trim();
+  if (productId) {
+    const stripePlan = await getPlanFromStripeProduct(productId);
+    if (stripePlan) {
+      return {
+        ...stripePlan,
+        source: "stripe_product_metadata",
+        product_id: productId,
+        plan_name: tenantPlanName,
+      };
+    }
+  }
 
-      if (plan === "starter") {
-        return {
-          whatsapp_enabled: true,
-          meta_enabled: false,
-          voice_enabled: false,
-          sms_enabled: false,
-          email_enabled: false,
-          source: "tenants.plan",
-          product_id: process.env.STRIPE_PRODUCT_STARTER_ID || null,
-          plan_name,
-        };
-      }
-      if (plan === "pro") {
-        return {
-          whatsapp_enabled: true,
-          meta_enabled: true,
-          voice_enabled: true,
-          sms_enabled: true,
-          email_enabled: true,
-          source: "tenants.plan",
-          product_id: process.env.STRIPE_PRODUCT_PRO_ID || null,
-          plan_name,
-        };
-      }
+  // 3) Fallback legacy por tenants.plan (si NO hay product_id)
+  //    (lo dejamos por compatibilidad, pero ya NO es el camino principal)
+  try {
+    const plan = String(tenantPlanName || "").toLowerCase();
+
+    if (plan === "starter") {
+      return {
+        whatsapp_enabled: true,
+        meta_enabled: false,
+        voice_enabled: false,
+        sms_enabled: false,
+        email_enabled: false,
+        source: "tenants.plan",
+        product_id: process.env.STRIPE_PRODUCT_STARTER_ID || null,
+        plan_name: tenantPlanName,
+      };
+    }
+    if (plan === "pro") {
+      return {
+        whatsapp_enabled: true,
+        meta_enabled: true,
+        voice_enabled: true,
+        sms_enabled: true,
+        email_enabled: true,
+        source: "tenants.plan",
+        product_id: process.env.STRIPE_PRODUCT_PRO_ID || null,
+        plan_name: tenantPlanName,
+      };
     }
   } catch (_) {}
 
-  // 3) Default conservador
-  return { ...EMPTY_PLAN };
+  // 4) Default conservador
+  return { ...EMPTY_PLAN, plan_name: tenantPlanName };
 }
 
 // -------- API pública de este módulo
@@ -246,30 +328,31 @@ export async function canUseChannel(
 
   // plan
   const plan_enabled =
-    canal === "whatsapp"        ? f.plan.whatsapp_enabled :
-    canal === "meta"            ? f.plan.meta_enabled :
-    canal === "voice"           ? f.plan.voice_enabled :
-    canal === "sms"             ? f.plan.sms_enabled :
-    canal === "email"           ? f.plan.email_enabled :
+    canal === "whatsapp" ? f.plan.whatsapp_enabled :
+    canal === "meta" ? f.plan.meta_enabled :
+    canal === "voice" ? f.plan.voice_enabled :
+    canal === "sms" ? f.plan.sms_enabled :
+    canal === "email" ? f.plan.email_enabled :
     canal === "google_calendar" ? true :
     false;
 
   // settings (toggle por-tenant / global)
   const settings_enabled =
-    canal === "whatsapp"        ? f.settings.whatsapp_enabled :
-    canal === "meta"            ? f.settings.meta_enabled :
-    canal === "voice"           ? f.settings.voice_enabled :
-    canal === "sms"             ? f.settings.sms_enabled :
-    canal === "email"           ? f.settings.email_enabled :
+    canal === "whatsapp" ? f.settings.whatsapp_enabled :
+    canal === "meta" ? f.settings.meta_enabled :
+    canal === "voice" ? f.settings.voice_enabled :
+    canal === "sms" ? f.settings.sms_enabled :
+    canal === "email" ? f.settings.email_enabled :
     canal === "google_calendar" ? f.settings.google_calendar_enabled :
     false;
 
   const paused =
     canal === "whatsapp" ? pausedFor("whatsapp", f.settings) :
-    canal === "meta"     ? pausedFor("meta", f.settings) :
-    canal === "voice"    ? pausedFor("voice", f.settings) :
-    canal === "sms"      ? pausedFor("sms", f.settings) :
-    canal === "email"    ? pausedFor("email", f.settings) : false;
+    canal === "meta" ? pausedFor("meta", f.settings) :
+    canal === "voice" ? pausedFor("voice", f.settings) :
+    canal === "sms" ? pausedFor("sms", f.settings) :
+    canal === "email" ? pausedFor("email", f.settings) :
+    false;
 
   const enabled = plan_enabled && settings_enabled && !paused;
 
@@ -280,10 +363,10 @@ export async function canUseChannel(
     settings_enabled,
     paused_until:
       canal === "whatsapp" ? f.settings.paused_until_whatsapp :
-      canal === "meta"     ? f.settings.paused_until_meta :
-      canal === "voice"    ? f.settings.paused_until_voice :
-      canal === "sms"      ? f.settings.paused_until_sms :
-      canal === "email"    ? f.settings.paused_until_email :
+      canal === "meta" ? f.settings.paused_until_meta :
+      canal === "voice" ? f.settings.paused_until_voice :
+      canal === "sms" ? f.settings.paused_until_sms :
+      canal === "email" ? f.settings.paused_until_email :
       null,
   };
 }
