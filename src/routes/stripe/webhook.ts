@@ -8,7 +8,7 @@ import { sendRenewalSuccessEmail } from '../../lib/mailer';
 import { sendCancelationEmail } from '../../lib/mailer';
 import { markTrialUsedByEmail } from '../../lib/trial';
 import twilio from 'twilio';
-import { sendCapiEvent } from "../../services/metaCapi"; 
+import { sendCapiEvent } from "../../services/metaCapi";
 import crypto from "crypto";
 
 const router = express.Router();
@@ -45,7 +45,7 @@ function buildCapiUserData(params: { tenantId: string; email?: string | null; ph
   return ud;
 }
 
-// ✅ UPsert a channel_settings
+// ✅ UPsert a channel_settings (toggles por tenant)
 const upsertChannelFlags = async (tenantId: string, flags: ChannelFlags) => {
   await pool.query(
     `
@@ -72,19 +72,49 @@ const upsertChannelFlags = async (tenantId: string, flags: ChannelFlags) => {
   );
 };
 
+// ✅ NUEVO: UPSERT a tenant_plan_features (plan gate real que usa features.ts)
+const upsertTenantPlanFeatures = async (tenantId: string, productId: string | null, flags: ChannelFlags) => {
+  // si no hay productId, igual guardamos null
+  await pool.query(
+    `
+    INSERT INTO tenant_plan_features
+      (tenant_id, product_id, whatsapp_enabled, meta_enabled, voice_enabled, sms_enabled, email_enabled, updated_at)
+    VALUES
+      ($1,       $2,         $3,              $4,           $5,            $6,          $7,           NOW())
+    ON CONFLICT (tenant_id)
+    DO UPDATE SET
+      product_id = EXCLUDED.product_id,
+      whatsapp_enabled = EXCLUDED.whatsapp_enabled,
+      meta_enabled = EXCLUDED.meta_enabled,
+      voice_enabled = EXCLUDED.voice_enabled,
+      sms_enabled = EXCLUDED.sms_enabled,
+      email_enabled = EXCLUDED.email_enabled,
+      updated_at = NOW()
+    `,
+    [
+      tenantId,
+      productId,
+      flags.whatsapp_enabled,
+      flags.meta_enabled,
+      flags.voice_enabled,
+      flags.sms_enabled,
+      flags.email_enabled,
+    ]
+  );
+};
+
 // Lee metadata del PRODUCTO y produce flags.
-// ⚠️ Si el producto NO tiene metadata, por defecto TODO EN FALSE
-// (si tu plan Starter incluye WhatsApp, déjalo true aquí)
 const flagsFromProduct = (product: Stripe.Product): ChannelFlags => {
   const md = (product.metadata || {}) as Record<string, string>;
 
-const defaults: ChannelFlags = {
-  whatsapp_enabled: true,
-  meta_enabled:     true,   // ✅ tu plan incluye IG/FB
-  voice_enabled:    false,
-  sms_enabled:      false,
-  email_enabled:    false,
-};
+  // defaults: pon aquí lo que SIEMPRE debe venir ON en tu plan base
+  const defaults: ChannelFlags = {
+    whatsapp_enabled: true,
+    meta_enabled:     true,   // ✅ según lo que tú quieres
+    voice_enabled:    false,
+    sms_enabled:      false,
+    email_enabled:    false,
+  };
 
   return {
     whatsapp_enabled: bool(md.whatsapp_enabled, defaults.whatsapp_enabled),
@@ -103,7 +133,6 @@ const limitsFromProduct = (product: Stripe.Product): PlanLimits => {
   try {
     const obj = JSON.parse(raw);
     if (!obj || typeof obj !== 'object') return {};
-    // fuerza valores numéricos
     const out: PlanLimits = {};
     for (const [k, v] of Object.entries(obj)) out[k] = Number(v) || 0;
     return out;
@@ -130,7 +159,7 @@ const getProductFromSubscription = async (stripe: Stripe, subscription: Stripe.S
   return await stripe.products.retrieve(productId);
 };
 
-// 🔎 Obtiene todos los productos de una suscripción (por si vendes bundles con varios precios)
+// 🔎 Obtiene todos los productos de una suscripción (por si vendes bundles)
 const getProductsFromSubscription = async (stripe: Stripe, sub: Stripe.Subscription) => {
   const prods: Stripe.Product[] = [];
   for (const it of sub.items.data) {
@@ -148,20 +177,6 @@ const combineFlags = (all: ChannelFlags[]) => ({
   sms_enabled:      all.some(f => f.sms_enabled),
   email_enabled:    all.some(f => f.email_enabled),
 });
-
-// Nombre/alias del plan desde la Subscription (lee el Product)
-const getPlanNameFromSubscription = async (stripe: Stripe, sub: Stripe.Subscription): Promise<string> => {
-  const price = sub.items?.data?.[0]?.price;
-  const productId = typeof price?.product === 'string' ? price.product : undefined;
-  if (!productId) return 'pro';
-  try {
-    const product = await stripe.products.retrieve(productId);
-    const name = (product.name || 'pro').toLowerCase();
-    return name;
-  } catch {
-    return 'pro';
-  }
-};
 
 function initStripe() {
   if (!stripe) {
@@ -195,7 +210,6 @@ async function notifyAdminPaymentSMS(params: {
     const adminPhone = process.env.ADMIN_PHONE;
     if (!adminPhone) return;
 
-    // Idempotencia: si ya notificamos este event_id, no enviar SMS
     const ins = await pool.query(
       `INSERT INTO stripe_sms_notifications(event_id)
        VALUES ($1)
@@ -203,12 +217,11 @@ async function notifyAdminPaymentSMS(params: {
        RETURNING event_id`,
       [params.eventId]
     );
-    if (ins.rowCount === 0) return; // ya notificado
+    if (ins.rowCount === 0) return;
 
     const client = getTwilioClient();
     if (!client) return;
 
-    // ✅ Admin notifications SIEMPRE desde un número global del mismo Twilio Account
     let fromNumber = process.env.TWILIO_SMS_NUMBER || "";
     let tenantName: string | null = null;
 
@@ -246,7 +259,6 @@ async function notifyAdminPaymentSMS(params: {
       body,
     });
   } catch (e) {
-    // Nunca romper el webhook por fallo de SMS
     console.warn('⚠️ SMS admin no enviado (se ignora):', e);
   }
 }
@@ -270,6 +282,7 @@ const resetearCanales = async (tenantId: string, planLimits: Record<string, numb
 };
 
 const getTenantIdBySubscriptionId = async (subscriptionId: string): Promise<string | null> => {
+  // OJO: asegúrate que tu columna sea tenants.subscription_id (como estás usando en UPDATE)
   const res = await pool.query('SELECT id FROM tenants WHERE subscription_id = $1 LIMIT 1', [subscriptionId]);
   return res.rows[0]?.id || null;
 };
@@ -288,14 +301,14 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   }
 
   // ==========================
-  // 1) COMPRAS DE CRÉDITOS
+  // 1) CHECKOUT COMPLETED
   // ==========================
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as Stripe.Checkout.Session;
     const email = session.customer_email;
 
     // ==========================
-    // 0) NUEVO: Opción A (Setup $399 payment -> crea suscripción $199 con trial 30d)
+    // 0) Opción A: Setup $399 -> crea suscripción $199 con trial 30d
     // ==========================
     if (
       session.mode === 'payment' &&
@@ -317,7 +330,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       }
 
       try {
-        // 1) Obtener PaymentMethod del payment intent del checkout y setearlo como default
         const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : null;
         if (paymentIntentId) {
           const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
@@ -330,7 +342,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           }
         }
 
-        // 2) Crear suscripción $199/mes con trial 30 días
         const subscription = await stripe.subscriptions.create({
           customer: customerId,
           items: [{ price: PRICE_MONTHLY_199 }],
@@ -340,7 +351,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
         const productsA = await getProductsFromSubscription(stripe, subscription);
 
-        // ✅ Plan limits desde productos (si hay varios, combina por MAX por canal)
         let planLimits: Record<string, number> = {};
         if (productsA.length) {
           for (const p of productsA) {
@@ -351,13 +361,11 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           }
         }
 
-        // 3) Vigencias (si está en trial, current_period_end igual viene bien como referencia)
         const vigencia = new Date(subscription.current_period_end * 1000);
         const inicio = new Date((subscription.start_date || Math.floor(Date.now() / 1000)) * 1000);
         const esTrial = subscription.status === 'trialing';
         const hasTrialFlag = Boolean(subscription.trial_end);
 
-        // 4) Guardar en DB (mismo esquema que ya usas)
         await pool.query(
           `
           UPDATE tenants
@@ -375,7 +383,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             tenantId,
             vigencia,
             inicio,
-            'pro',                 // o 'aamy_24_7' si prefieres fijo en tu sistema
+            'pro', // interno si quieres, pero OJO: gate real vendrá de tenant_plan_features
             subscription.id,
             esTrial,
             hasTrialFlag,
@@ -383,7 +391,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           ]
         );
 
-        // 5) Registrar trial por email (para bloquear trials futuros)
         if (email && hasTrialFlag) {
           try {
             await markTrialUsedByEmail(email, customerId);
@@ -392,52 +399,52 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           }
         }
 
-        // 6) Resetear usos (como ya haces)
         await resetearCanales(tenantId, planLimits);
 
-        // 7) Flags de canales (leer producto de la suscripción o fallback)
+        // ✅ FLAGS + tenant_plan_features (CRÍTICO)
         try {
           if (productsA.length) {
             const allFlags = productsA.map(p => flagsFromProduct(p));
             const combined = combineFlags(allFlags);
+            const productId = productsA[0]?.id || null;
+
             await upsertChannelFlags(tenantId, combined);
-            console.log('✅ Channel flags (Opción A) desde productos:', combined, 'tenant:', tenantId);
+            await upsertTenantPlanFeatures(tenantId, productId, combined);
+
+            console.log('✅ Flags/PlanFeatures (Opción A):', combined, 'tenant:', tenantId, 'product:', productId);
           } else {
-            await upsertChannelFlags(tenantId, {
+            const combined = {
               whatsapp_enabled: true,
               meta_enabled: true,
               voice_enabled: false,
               sms_enabled: false,
               email_enabled: false,
-            });
+            };
+            await upsertChannelFlags(tenantId, combined);
+            await upsertTenantPlanFeatures(tenantId, null, combined);
           }
         } catch (e) {
-          console.error('❌ Error estableciendo channel flags (Opción A):', e);
+          console.error('❌ Error estableciendo flags/plan_features (Opción A):', e);
         }
 
-        // 8) Correo activación
         if (email) {
           const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [tenantId]);
           const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
           try {
             await sendSubscriptionActivatedEmail(email, tenantName);
           } catch (e) {
-            console.warn('✉️ Aviso: fallo enviando correo de activación (Opción A):', e);
+            console.warn('✉️ fallo correo activación (Opción A):', e);
           }
         }
 
-        console.log('✅ Opción A completada: $399 pagado y suscripción $199 creada:', subscription.id);
+        console.log('✅ Opción A completada:', subscription.id);
 
-        // ✅ META CAPI: Purchase por setup $399 (dedupe por session.id)
         try {
-          const phoneE164 = (session.customer_details?.phone || "")
-            .replace(/[^\d+]/g, "")
-            .trim();
-
+          const phoneE164 = (session.customer_details?.phone || "").replace(/[^\d+]/g, "").trim();
           await sendCapiEvent({
             tenantId,
             eventName: "Purchase",
-            eventId: `purchase:${tenantId}:${session.id}`, // ✅ dedupe real
+            eventId: `purchase:${tenantId}:${session.id}`,
             userData: buildCapiUserData({ tenantId, email: email || null, phoneE164: phoneE164 || null }),
             customData: {
               value: (session.amount_total ?? 0) / 100,
@@ -447,7 +454,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             },
           });
         } catch (e) {
-          console.warn("⚠️ Meta CAPI Purchase (setup $399) falló (se ignora):", e);
+          console.warn("⚠️ Meta CAPI setup $399 falló:", e);
         }
 
         await notifyAdminPaymentSMS({
@@ -461,13 +468,15 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         });
 
       } catch (err) {
-        console.error('❌ Error en Opción A (crear suscripción $199 tras $399):', err);
+        console.error('❌ Error en Opción A:', err);
       }
 
       return res.status(200).json({ received: true });
     }
 
-    // Modo "payment" con metadata para créditos unitarios (sms, contactos, etc.)
+    // ==========================
+    // Compras de créditos (payment)
+    // ==========================
     if (
       session.mode === 'payment' &&
       session.metadata?.tenant_id &&
@@ -477,19 +486,11 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       const { tenant_id, canal, cantidad } = session.metadata;
       const cantidadInt = Number.parseInt(String(cantidad), 10) || 0;
 
-      // Canales permitidos
       const canalesPermitidos = ['sms', 'email', 'whatsapp', 'contactos', 'tokens_openai', 'voz', 'meta', 'followup'];
-      if (!canalesPermitidos.includes(canal)) {
-        console.warn(`⚠️ Canal no permitido en créditos: ${canal}`);
-        return res.status(200).json({ received: true });
-      }
-      if (!cantidadInt || cantidadInt <= 0) {
-        console.warn(`⚠️ Cantidad inválida en créditos: ${cantidad}`);
-        return res.status(200).json({ received: true });
-      }
+      if (!canalesPermitidos.includes(canal)) return res.status(200).json({ received: true });
+      if (!cantidadInt || cantidadInt <= 0) return res.status(200).json({ received: true });
 
       try {
-        // ⏰ Vencimiento EXACTO a la misma hora/min/seg de compra (+30 días)
         await pool.query(
           `
           INSERT INTO creditos_comprados
@@ -498,19 +499,15 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             ($1,        $2,    $3,       NOW(),        NOW() + INTERVAL '30 days', $4)
           ON CONFLICT (tenant_id, canal, external_id) DO NOTHING
           `,
-          [tenant_id, canal, cantidadInt, session.id] // session.id = external_id idempotente
+          [tenant_id, canal, cantidadInt, session.id]
         );
 
-        // ✅ META CAPI: Purchase por compra de créditos
         try {
-          const phoneE164 = (session.customer_details?.phone || "")
-            .replace(/[^\d+]/g, "")
-            .trim();
-
+          const phoneE164 = (session.customer_details?.phone || "").replace(/[^\d+]/g, "").trim();
           await sendCapiEvent({
             tenantId: tenant_id,
             eventName: "Purchase",
-            eventId: `purchase:${tenant_id}:${session.id}`, // ✅ dedupe real
+            eventId: `purchase:${tenant_id}:${session.id}`,
             userData: buildCapiUserData({ tenantId: tenant_id, email: email || null, phoneE164: phoneE164 || null }),
             customData: {
               value: (session.amount_total ?? 0) / 100,
@@ -522,7 +519,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             },
           });
         } catch (e) {
-          console.warn("⚠️ Meta CAPI Purchase (créditos) falló (se ignora):", e);
+          console.warn("⚠️ Meta CAPI créditos falló:", e);
         }
 
         if (email) {
@@ -545,8 +542,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
               `,
             });
           } catch (mailErr) {
-            // No bloquear el flujo por timeout SMTP
-            console.warn('✉️ Aviso: fallo enviando correo de créditos (se ignora):', mailErr);
+            console.warn('✉️ fallo correo créditos:', mailErr);
           }
         }
       } catch (error) {
@@ -556,10 +552,11 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       return res.status(200).json({ received: true });
     }
 
-    // Modo "subscription" (membresías)
+    // ==========================
+    // Membresías (subscription)
+    // ==========================
     if (email && session.subscription) {
       try {
-        // 1) Obtén el tenantId de metadata si vino en el Checkout; si no, busca por email
         let tenantId: string | null = session.metadata?.tenant_id ?? null;
 
         if (!tenantId) {
@@ -568,22 +565,18 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         }
 
         if (!tenantId) {
-          console.warn('⚠️ No se encontró tenantId para la suscripción (ni por metadata ni por email).');
+          console.warn('⚠️ No tenantId para la suscripción.');
           return res.status(200).json({ received: true });
         }
 
-        // ✅ META CAPI: Purchase por checkout de suscripción (si hubo cobro en el checkout)
         const value = (session.amount_total ?? 0) / 100;
         if (value > 0) {
           try {
-            const phoneE164 = (session.customer_details?.phone || "")
-              .replace(/[^\d+]/g, "")
-              .trim();
-
+            const phoneE164 = (session.customer_details?.phone || "").replace(/[^\d+]/g, "").trim();
             await sendCapiEvent({
               tenantId,
               eventName: "Purchase",
-              eventId: `purchase:${tenantId}:${session.id}`, // ✅ dedupe real
+              eventId: `purchase:${tenantId}:${session.id}`,
               userData: buildCapiUserData({ tenantId, email: email || null, phoneE164: phoneE164 || null }),
               customData: {
                 value,
@@ -593,69 +586,55 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
               },
             });
           } catch (e) {
-            console.warn("⚠️ Meta CAPI Purchase (subscription checkout) falló (se ignora):", e);
+            console.warn("⚠️ Meta CAPI subscription checkout falló:", e);
           }
         }
 
-        // 2) Datos de la suscripción
         const subscriptionId = session.subscription as string;
         const subscription = await stripe.subscriptions.retrieve(subscriptionId);
         const vigencia = new Date(subscription.current_period_end * 1000);
         const esTrial = subscription.status === 'trialing';
-        const hasTrialFlag = Boolean(subscription.trial_end); // hubo trial si existe trial_end
-
-        // 🔎 Lee el nombre del plan desde Stripe automáticamente
-        const product = subscription.items.data[0]?.price?.product;
-        let planValue = 'pro'; // valor por defecto
+        const hasTrialFlag = Boolean(subscription.trial_end);
 
         if (hasTrialFlag && email) {
           try {
-            // Guarda también el customerId si quieres
             const customerId = typeof subscription.customer === 'string' ? subscription.customer : null;
             await markTrialUsedByEmail(email, customerId || undefined);
           } catch (e) {
-            console.warn('⚠️ No se pudo marcar trial en trial_registry:', e);
-          }
-        }
-        if (typeof product === 'string') {
-          try {
-            const stripeProduct = await stripe.products.retrieve(product);
-            planValue = (stripeProduct.name || 'pro').toLowerCase(); // usa el nombre del producto en Stripe
-          } catch (e) {
-            console.warn('⚠️ No se pudo leer el nombre del producto:', e);
+            console.warn('⚠️ No se pudo marcar trial_registry:', e);
           }
         }
 
-        // ✅ Plan limits desde Stripe product (source of truth)
-        let planLimits: Record<string, number> = {};
-        if (typeof product === 'string') {
-          try {
-            const stripeProduct = await stripe.products.retrieve(product);
-            planLimits = limitsFromProduct(stripeProduct);
-          } catch (e) {
-            console.warn('⚠️ No se pudo leer plan_limits del producto:', e);
-          }
-        }
+        // ✅ Product + metadata (source of truth)
+        const prod = await getProductFromCheckoutSession(stripe, session.id);
+        const flags = prod ? flagsFromProduct(prod) : {
+          whatsapp_enabled: true,
+          meta_enabled: true,
+          voice_enabled: true,
+          sms_enabled: true,
+          email_enabled: true,
+        };
 
-        // 3) Activa membresía y guarda subscription_id (+ marca trial_ever_claimed si aplicó)
+        const planLimits = prod ? limitsFromProduct(prod) : {};
+
         await pool.query(
           `
           UPDATE tenants
-            SET membresia_activa     = true,
-            membresia_vigencia   = $2,
-            membresia_inicio     = $3,
-            plan                 = $4,
-            subscription_id      = $5,
-            es_trial             = $6,
-            trial_ever_claimed   = CASE WHEN $7 THEN true ELSE trial_ever_claimed END,
-            plan_limits          = $8
+            SET membresia_activa   = true,
+                membresia_vigencia = $2,
+                membresia_inicio   = $3,
+                plan               = $4,
+                subscription_id    = $5,
+                es_trial           = $6,
+                trial_ever_claimed = CASE WHEN $7 THEN true ELSE trial_ever_claimed END,
+                plan_limits        = $8
           WHERE id = $1
           `,
           [
             tenantId,
             vigencia,
             new Date(subscription.start_date * 1000),
-            planValue,
+            'pro', // nombre interno si quieres; PERO gate real viene de tenant_plan_features
             subscriptionId,
             esTrial,
             hasTrialFlag,
@@ -663,50 +642,36 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           ]
         );
 
-        // 4) Reinicia usos
         await resetearCanales(tenantId, planLimits);
 
-        // 5) Lee el producto y aplica flags de canales
+        // ✅ CRÍTICO: guardar plan features por metadata (para features.ts)
         try {
-          const productFromCheckout = await getProductFromCheckoutSession(stripe, session.id);
-          if (productFromCheckout) {
-            const flags = flagsFromProduct(productFromCheckout);
-            await upsertChannelFlags(tenantId, flags);
-            console.log('✅ Channel flags actualizados por checkout:', flags, 'tenant:', tenantId);
-          } else {
-            // fallback: todos true
-            await upsertChannelFlags(tenantId, {
-              whatsapp_enabled: true,
-              meta_enabled: true,
-              voice_enabled: true,
-              sms_enabled: true,
-              email_enabled: true,
-            });
-            console.log('ℹ️ No se obtuvo product; activados todos los canales por defecto.');
-
-          }
+          const productId = prod?.id || null;
+          await upsertChannelFlags(tenantId, flags);
+          await upsertTenantPlanFeatures(tenantId, productId, flags);
+          console.log('✅ channel_settings + tenant_plan_features actualizados:', flags, 'tenant:', tenantId, 'product:', productId);
         } catch (e) {
-          console.error('❌ Error estableciendo channel flags post-checkout:', e);
+          console.error('❌ Error estableciendo flags/plan_features post-checkout:', e);
         }
 
-           await notifyAdminPaymentSMS({
-              eventId: event.id,
-              tenantId,
-              kind: 'subscription_checkout',
-              amountCents: session.amount_total ?? null,
-              currency: session.currency ?? null,
-              email,
-              plan: planValue,
-            });
+        await notifyAdminPaymentSMS({
+          eventId: event.id,
+          tenantId,
+          kind: 'subscription_checkout',
+          amountCents: session.amount_total ?? null,
+          currency: session.currency ?? null,
+          email,
+          plan: 'pro',
+        });
 
-        // 6) Email de bienvenida/activación
         const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [tenantId]);
         const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
         try {
           await sendSubscriptionActivatedEmail(email, tenantName);
         } catch (e) {
-          console.warn('✉️ Aviso: fallo enviando correo de activación (se ignora):', e);
+          console.warn('✉️ fallo correo activación:', e);
         }
+
       } catch (error) {
         console.error('❌ Error activando membresía:', error);
       }
@@ -714,93 +679,89 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
   }
 
   // ==========================
-  // 2) SUBSCRIPCIÓN ACTUALIZADA
+  // 2) SUBSCRIPTION UPDATED
   // ==========================
   if (event.type === 'customer.subscription.updated') {
     const subscription = event.data.object as Stripe.Subscription;
+
+    // ✅ intenta resolver tenant por subscription_id
     const tenant_id = await getTenantIdBySubscriptionId(subscription.id);
+
+    // ✅ si no se encuentra, intenta por metadata tenant_id (esto depende de que checkout setee subscription.metadata.tenant_id)
+    const tenantIdMeta = (subscription.metadata as any)?.tenant_id ? String((subscription.metadata as any).tenant_id) : null;
+    const tenantId = tenant_id || tenantIdMeta;
+
     const customerId = typeof subscription.customer === 'string' ? subscription.customer : null;
+
     if (subscription.status === 'trialing' || subscription.trial_end) {
       try {
         if (customerId) {
           const customer = await stripe.customers.retrieve(customerId);
           const email = (typeof customer !== 'string' && 'email' in customer) ? (customer.email as string | null) : null;
-          if (email) {
-            await markTrialUsedByEmail(email, customerId);
-          }
+          if (email) await markTrialUsedByEmail(email, customerId);
         }
       } catch (e) {
-        console.warn('⚠️ No se pudo actualizar trial_registry en subscription.updated:', e);
+        console.warn('⚠️ No se pudo actualizar trial_registry (sub.updated):', e);
       }
     }
-    if (tenant_id) {
+
+    if (tenantId) {
       const esTrial = subscription.status === 'trialing';
-      const hasTrialFlag = Boolean(subscription.trial_end); // hubo trial alguna vez
+      const hasTrialFlag = Boolean(subscription.trial_end);
 
-      // 🔎 Lee el nombre del plan desde Stripe automáticamente
-      const product = subscription.items.data[0]?.price?.product;
-      let planValue = 'pro'; // valor por defecto
+      // ✅ Product(s) actuales y flags combinados
+      try {
+        const productsUpdated = await getProductsFromSubscription(stripe, subscription);
 
-      if (typeof product === 'string') {
-        try {
-          const stripeProduct = await stripe.products.retrieve(product);
-          planValue = (stripeProduct.name || 'pro').toLowerCase(); // usa el nombre del producto en Stripe
-        } catch (e) {
-          console.warn('⚠️ No se pudo leer el nombre del producto:', e);
+        if (productsUpdated.length) {
+          const allFlags = productsUpdated.map(p => flagsFromProduct(p));
+          const combined = combineFlags(allFlags);
+          const productId = productsUpdated[0]?.id || null;
+
+          await upsertChannelFlags(tenantId, combined);
+          await upsertTenantPlanFeatures(tenantId, productId, combined);
+
+          console.log('🔄 Flags/PlanFeatures actualizados (sub.updated):', combined, 'tenant:', tenantId, 'product:', productId);
         }
+      } catch (e) {
+        console.error('❌ Error actualizando flags/plan_features (sub.updated):', e);
       }
 
-      // ✅ Plan limits desde Stripe product
+      // Plan limits desde producto (si necesitas)
       let planLimits: Record<string, number> = {};
-      if (typeof product === 'string') {
-        try {
-          const stripeProduct = await stripe.products.retrieve(product);
-          planLimits = limitsFromProduct(stripeProduct);
-        } catch (e) {
-          console.warn('⚠️ No se pudo leer plan_limits del producto (sub.updated):', e);
-        }
-      }
+      try {
+        const p0 = await getProductFromSubscription(stripe, subscription);
+        if (p0) planLimits = limitsFromProduct(p0);
+      } catch {}
 
       await pool.query(
         `
         UPDATE tenants
-        SET es_trial             = $1,
-            plan                 = $2,
-            membresia_inicio     = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END,
-            membresia_vigencia   = $4,
-            trial_ever_claimed   = CASE WHEN $5 THEN true ELSE trial_ever_claimed END,
-            plan_limits          = $6
+        SET es_trial           = $1,
+            plan               = $2,
+            membresia_inicio   = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END,
+            membresia_vigencia = $4,
+            trial_ever_claimed = CASE WHEN $5 THEN true ELSE trial_ever_claimed END,
+            plan_limits        = $6
         WHERE id = $7
         `,
         [
           esTrial,
-          planValue,
+          'pro',
           new Date(subscription.current_period_start * 1000),
           new Date(subscription.current_period_end * 1000),
           hasTrialFlag,
           planLimits,
-          tenant_id,
+          tenantId,
         ]
       );
 
-      try {
-        const productsUpdated = await getProductsFromSubscription(stripe, subscription);
-        if (productsUpdated.length && tenant_id) {
-          const allFlags = productsUpdated.map(p => flagsFromProduct(p));
-          const combined = combineFlags(allFlags);
-          await upsertChannelFlags(tenant_id, combined);
-          console.log('🔄 Channel flags actualizados (multi-product):', combined, 'tenant:', tenant_id);
-        }
-      } catch (e) {
-        console.error('❌ Error actualizando channel flags en subscription.updated:', e);
-      }
-
-      console.log(`🔄 Subscripción actualizada para tenant ${tenant_id}: plan=${planValue}, es_trial=${esTrial}`);
+      console.log(`🔄 Subscripción actualizada tenant ${tenantId}: es_trial=${esTrial}`);
     }
   }
 
   // ==========================
-  // 3) RENOVACIÓN DE MEMBRESÍA
+  // 3) INVOICE PAYMENT SUCCEEDED (RENOVACIÓN)
   // ==========================
   if (event.type === 'invoice.payment_succeeded') {
     const invoice = event.data.object as Stripe.Invoice;
@@ -813,7 +774,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           const customer = await stripe.customers.retrieve(customerId);
           if (typeof customer !== 'string' && 'email' in customer && customer.email) {
             customerEmail = customer.email;
-            console.log('📧 Email recuperado del customerId:', customerEmail);
           }
         } catch (err) {
           console.warn('⚠️ No se pudo obtener email del cliente:', err);
@@ -821,28 +781,19 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       }
     }
 
-    if (!customerEmail) {
-      console.warn('⚠️ No se pudo obtener email del invoice ni del customerId.');
-      return res.status(200).json({ received: true });
-    }
+    if (!customerEmail) return res.status(200).json({ received: true });
 
     const subscriptionId = typeof invoice.subscription === 'string' ? invoice.subscription : null;
-    if (!subscriptionId) {
-      console.warn('ℹ️ invoice.payment_succeeded sin subscription (se ignora). invoice:', invoice.id);
-      return res.status(200).json({ received: true });
-    }
+    if (!subscriptionId) return res.status(200).json({ received: true });
 
-    // ✅ META CAPI: Purchase por renovación (invoice)
     const tenantId = await getTenantIdBySubscriptionId(subscriptionId);
-    if (!tenantId) {
-      console.warn("⚠️ invoice.payment_succeeded: no tenantId para subscriptionId", subscriptionId);
-      return res.status(200).json({ received: true });
-    }
+    if (!tenantId) return res.status(200).json({ received: true });
+
     try {
       await sendCapiEvent({
         tenantId,
         eventName: "Purchase",
-        eventId: `purchase:${tenantId}:${invoice.id}`, // ✅ dedupe por invoice.id
+        eventId: `purchase:${tenantId}:${invoice.id}`,
         userData: buildCapiUserData({ tenantId, email: customerEmail || null, phoneE164: null }),
         customData: {
           value: (invoice.amount_paid ?? 0) / 100,
@@ -852,42 +803,38 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         },
       });
     } catch (e) {
-      console.warn("⚠️ Meta CAPI Purchase (invoice renewal) falló (se ignora):", e);
+      console.warn("⚠️ Meta CAPI invoice renewal falló:", e);
     }
 
     try {
-      console.log('📄 Invoice recibido:', JSON.stringify(invoice, null, 2));
       const subscription = await stripe.subscriptions.retrieve(subscriptionId);
       const nuevaVigencia = subscription.current_period_end
         ? new Date(subscription.current_period_end * 1000)
-        : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // fallback
+        : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
-      // nombre de plan real desde Stripe
-      const priceProd = subscription.items.data[0]?.price?.product;
-      let planValue = 'pro';
-      if (typeof priceProd === 'string') {
-        try {
-          const stripeProduct = await stripe.products.retrieve(priceProd);
-          planValue = (stripeProduct.name || 'pro').toLowerCase();
-        } catch (e) {
-          console.warn('⚠️ No se pudo leer el nombre del producto (invoice):', e);
+      // ✅ product(s) -> flags/plan_features
+      try {
+        const productsInvoice = await getProductsFromSubscription(stripe, subscription);
+        if (productsInvoice.length) {
+          const allFlags = productsInvoice.map(p => flagsFromProduct(p));
+          const combined = combineFlags(allFlags);
+          const productId = productsInvoice[0]?.id || null;
+
+          await upsertChannelFlags(tenantId, combined);
+          await upsertTenantPlanFeatures(tenantId, productId, combined);
+
+          console.log('🔁 Flags/PlanFeatures (invoice.payment_succeeded):', combined, 'tenant:', tenantId, 'product:', productId);
         }
+      } catch (e) {
+        console.warn('⚠️ No se pudieron actualizar flags/plan_features (invoice):', e);
       }
 
-      // ✅ Plan limits desde Stripe product (invoice)
+      // planLimits si quieres mantener
       let planLimits: Record<string, number> = {};
-      if (typeof priceProd === 'string') {
-        try {
-          const stripeProduct = await stripe.products.retrieve(priceProd);
-          planLimits = limitsFromProduct(stripeProduct);
-        } catch (e) {
-          console.warn('⚠️ No se pudo leer plan_limits del producto (invoice):', e);
-        }
-      }
-
-      const userRes = await pool.query('SELECT tenant_id FROM users WHERE email = $1 LIMIT 1', [customerEmail]);
-      const user = userRes.rows[0];
-      if (!user?.tenant_id) return res.status(200).json({ received: true });
+      try {
+        const p0 = await getProductFromSubscription(stripe, subscription);
+        if (p0) planLimits = limitsFromProduct(p0);
+      } catch {}
 
       await pool.query(
         `
@@ -899,44 +846,27 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             plan_limits        = $4
         WHERE id = $1
         `,
-        [user.tenant_id, nuevaVigencia, planValue, planLimits]
+        [tenantId, nuevaVigencia, 'pro', planLimits]
       );
 
-      // 🔁 Sincroniza flags de canales al renovar (por si cambió de plan)
-      try {
-        const productsInvoice = await getProductsFromSubscription(stripe, subscription);
-        if (productsInvoice.length) {
-          const allFlags = productsInvoice.map(p => flagsFromProduct(p));
-          const combined = combineFlags(allFlags);
-          await upsertChannelFlags(user.tenant_id, combined);
-          console.log('🔁 Channel flags actualizados (invoice.payment_succeeded):', combined, 'tenant:', user.tenant_id);
-        }
-      } catch (e) {
-        console.warn('⚠️ No se pudieron actualizar channel flags en invoice.payment_succeeded:', e);
-      }
+      await resetearCanales(tenantId, planLimits);
 
-      console.log('🔁 Membresía renovada para', customerEmail, 'tenant', user.tenant_id);
-
-      await resetearCanales(user.tenant_id, planLimits);
-
-      const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [user.tenant_id]);
+      const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [tenantId]);
       const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
-
       await sendRenewalSuccessEmail(customerEmail, tenantName);
-      console.log('📧 Correo de renovación enviado');
+
     } catch (error) {
       console.error('❌ Error renovando membresía:', error);
     }
   }
 
   // ==========================
-  // 4) CANCELACIÓN DE SUSCRIPCIÓN
+  // 4) CANCELACIÓN
   // ==========================
   if (event.type === 'customer.subscription.deleted') {
     const subscription = event.data.object as Stripe.Subscription;
 
     let customerEmail: string | null = null;
-
     try {
       const customerId = subscription.customer;
       if (typeof customerId === 'string') {
@@ -949,16 +879,14 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       console.warn('⚠️ No se pudo obtener email del cliente:', err);
     }
 
-    if (!customerEmail) {
-      console.warn('⚠️ No se pudo obtener email del cliente para enviar la cancelación.');
-      return res.status(200).json({ received: true });
-    }
+    // resolve tenant
+    const tenant_id = await getTenantIdBySubscriptionId(subscription.id);
+    const tenantIdMeta = (subscription.metadata as any)?.tenant_id ? String((subscription.metadata as any).tenant_id) : null;
+    const tenantId = tenant_id || tenantIdMeta;
+
+    if (!tenantId) return res.status(200).json({ received: true });
 
     try {
-      const userRes = await pool.query('SELECT uid, tenant_id FROM users WHERE email = $1', [customerEmail]);
-      const user = userRes.rows[0];
-      if (!user) return res.status(200).json({ received: true });
-
       await pool.query(
         `
         UPDATE tenants
@@ -966,56 +894,40 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             plan = NULL
         WHERE id = $1
         `,
-        [user.tenant_id]
+        [tenantId]
       );
 
-      await upsertChannelFlags(user.tenant_id, {
+      const offFlags: ChannelFlags = {
         whatsapp_enabled: false,
         meta_enabled: false,
         voice_enabled: false,
         sms_enabled: false,
         email_enabled: false,
-      });
-      console.log('🛑 Channel flags desactivados por cancelación para tenant', user.tenant_id);
+      };
 
-      console.log('🛑 Cancelando plan para', customerEmail, 'con UID', user.uid);
+      await upsertChannelFlags(tenantId, offFlags);
+      await upsertTenantPlanFeatures(tenantId, null, offFlags);
 
-      await pool.query(
-        `
-        INSERT INTO uso_mensual (tenant_id, canal, mes, usados, limite)
-        VALUES ($1, 'contactos', date_trunc('month', CURRENT_DATE), 0, 0)
-        ON CONFLICT (tenant_id, canal, mes)
-        DO UPDATE SET limite = 0
-        `,
-        [user.tenant_id]
-      );
+      console.log('🛑 Flags/PlanFeatures desactivados por cancelación tenant', tenantId);
 
-      console.log('🛑 Suscripción cancelada y contactos reiniciados para', customerEmail);
+      // Email cancelación
+      if (customerEmail) {
+        const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [tenantId]);
+        const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
 
-      const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [user.tenant_id]);
-      const tenantName = tenantNameRes.rows[0]?.name || 'Usuario';
-
-      // Enviar correo de cancelación (no bloquear si falla)
-      try {
-        // Evita enviar a buzones de prueba/bloqueados
-        const skip = !customerEmail ||
-                    /^(demo|test|no-reply)@aamy\.ai$/i.test(customerEmail);
-        if (!skip) {
-          await sendCancelationEmail(customerEmail, tenantName);
-          console.log('📧 Correo de cancelación enviado a', customerEmail);
-        } else {
-          console.log('✉️ Salteado envío de cancelación a', customerEmail);
+        try {
+          const skip = !customerEmail || /^(demo|test|no-reply)@aamy\.ai$/i.test(customerEmail);
+          if (!skip) await sendCancelationEmail(customerEmail, tenantName);
+        } catch (mailErr: any) {
+          console.warn('✉️ fallo correo cancelación:', mailErr?.message || mailErr);
         }
-      } catch (mailErr: any) {
-        console.warn('✉️ Aviso: fallo enviando correo de cancelación (se ignora):',
-          mailErr?.responseCode, mailErr?.response || mailErr?.message || mailErr);
       }
     } catch (err) {
       console.error('❌ Error al cancelar membresía:', err);
     }
   }
 
-  res.status(200).json({ received: true });
+  return res.status(200).json({ received: true });
 });
 
 export default router;

@@ -31,6 +31,7 @@ router.post("/checkout", async (req, res) => {
   try {
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET!);
     const tenantId: string = decoded.tenant_id || decoded.uid;
+    if (!tenantId) return res.status(401).json({ error: "No tenant_id en token" });
 
     // Email del usuario
     const u = await pool.query(
@@ -58,16 +59,34 @@ router.post("/checkout", async (req, res) => {
       const sessionParams: Stripe.Checkout.SessionCreateParams = {
         mode,
         line_items: [{ price: priceId, quantity: 1 }],
+
         metadata: {
           tenant_id: tenantId,
           purpose: mode === "subscription" ? "aamy_membership" : "aamy_payment",
           price_id: priceId,
         },
+
+        // ✅ esto ayuda para recuperar el tenant aunque no tengas metadata en algún evento
         client_reference_id: tenantId,
+
         customer_email: email,
+
+        // (opcional) útil si luego quieres que el frontend pueda mostrar un estado
+        // success_url: `${FRONTEND_URL}/dashboard/profile?stripe=success&session_id={CHECKOUT_SESSION_ID}`,
         success_url: `${FRONTEND_URL}/dashboard/profile`,
         cancel_url: `${FRONTEND_URL}/upgrade?canceled=1`,
       };
+
+      // ✅ CRÍTICO: si es subscription, mete tenant_id en subscription.metadata
+      if (mode === "subscription") {
+        sessionParams.subscription_data = {
+          metadata: {
+            tenant_id: tenantId,
+            purpose: "aamy_membership",
+            price_id: priceId,
+          },
+        };
+      }
 
       // ✅ SOLO en payment se permite customer_creation
       if (mode === "payment") {
@@ -90,11 +109,22 @@ router.post("/checkout", async (req, res) => {
       const session = await stripe.checkout.sessions.create({
         mode: "subscription",
         line_items: [{ price: PRICE_TEST_0, quantity: 1 }],
+
         metadata: {
           tenant_id: tenantId,
           purpose: "aamy_test_0",
           plan: "test",
         },
+
+        // ✅ CRÍTICO: subscription.metadata
+        subscription_data: {
+          metadata: {
+            tenant_id: tenantId,
+            purpose: "aamy_test_0",
+            plan: "test",
+          },
+        },
+
         client_reference_id: tenantId,
         customer_email: email,
         success_url: `${FRONTEND_URL}/dashboard/profile`,
