@@ -67,6 +67,8 @@ import {
   findServiceBlock,
   extractIncludesLine,
 } from "../../lib/infoclave/resolveIncludes";
+import { getPriceInfoForService } from "../../lib/services/pricing/getFromPriceForService";
+import { resolveServiceIdFromText } from "../../lib/services/pricing/resolveServiceIdFromText";
 
 
 // Puedes ponerlo debajo de los imports
@@ -77,6 +79,11 @@ export type WhatsAppContext = {
 };
 
 const MAX_WHATSAPP_LINES = 16; // 14–16 es el sweet spot
+
+function isPriceQuestion(text: string) {
+  const t = String(text || "").toLowerCase();
+  return /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|costo|cost|price|how\s+much|starts?\s+at|from|desde)\b/i.test(t);
+}
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -821,6 +828,67 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           : `¿A qué servicio te refieres exactamente?`;
 
       return await replyAndExit(ask, "info_clave_no_match", detectedIntent || "info");
+    }
+  }
+
+  // ===============================
+  // ✅ PRICE FASTPATH (DB) — NO dependas del LLM para "DESDE"
+  // ===============================
+  function formatMoney(amount: number, currency: string) {
+    const a = Math.round(amount);
+    if (currency === "USD") return `$${a}`;
+    return `${a} ${currency}`;
+  }
+
+  function renderPriceReply(args: {
+    lang: "es" | "en";
+    mode: "fixed" | "from";
+    amount: number;
+    currency: string;
+  }) {
+    const money = formatMoney(args.amount, args.currency);
+
+    if (args.lang === "en") {
+      return args.mode === "fixed"
+        ? `✅ The price is ${money}. Would you like to book an appointment?`
+        : `✅ Starts at ${money}. Which option are you interested in?`;
+    }
+
+    return args.mode === "fixed"
+      ? `✅ El precio es ${money}. ¿Te gustaría agendar una cita?`
+      : `✅ Desde ${money}. ¿Cuál opción te interesa?`;
+  }
+
+  if (!inBooking0 && isPriceQuestion(userInput)) {
+    // A) si ya lo tienes en contexto (ideal)
+    let serviceId: string | null = (convoCtx as any)?.last_service_id || null;
+    let serviceName: string | null = (convoCtx as any)?.last_service_name || null;
+
+    // B) si no hay contexto, intenta resolver por texto contra services
+    if (!serviceId) {
+      const hit = await resolveServiceIdFromText(pool, tenant.id, userInput);
+      if (hit?.id) {
+        serviceId = hit.id;
+        serviceName = hit.name;
+
+        // guarda para próximas vueltas
+        transition({ patchCtx: { last_service_id: serviceId, last_service_name: serviceName } });
+      }
+    }
+
+    if (serviceId) {
+      const pi = await getPriceInfoForService(pool, tenant.id, serviceId);
+
+      if (pi.ok) {
+        const msg = renderPriceReply({
+          lang: idiomaDestino === "en" ? "en" : "es",
+          mode: pi.mode,
+          amount: pi.amount,
+          currency: (pi.currency || "USD").toUpperCase(),
+        });
+
+        return await replyAndExit(msg, "price_fastpath_db", detectedIntent || "precio");
+      }
     }
   }
 
