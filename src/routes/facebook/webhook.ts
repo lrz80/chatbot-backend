@@ -1634,21 +1634,6 @@ router.post("/api/facebook/webhook", async (req, res) => {
             continue;
           }
 
-          // 📋 SERVICE LIST FAST-PATH
-          if (wantsServiceList(userInput)) {
-            const r = await resolveServiceList({ tenantId, limitServices: 8, limitVariantsPerService: 3 });
-
-            if (r.ok) {
-              const msg = renderServiceListReply(r.items, idiomaDestino);
-              await replyAndExit(msg, "service_list", "service_list");
-              continue;
-            }
-
-            const msg =
-              idiomaDestino === "en" ? "I don’t have services saved yet." : "Todavía no tengo servicios guardados.";
-            await replyAndExit(msg, "service_list:empty", "service_list");
-            continue;
-          }
 
           // ✅ SERVICE INFO PICK (STICKY)
           {
