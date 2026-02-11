@@ -70,6 +70,7 @@ import {
 import { getPriceInfoForService } from "../../lib/services/pricing/getFromPriceForService";
 import { resolveServiceIdFromText } from "../../lib/services/pricing/resolveServiceIdFromText";
 import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
+import { resolveServiceInfo } from "../../lib/services/resolveServiceInfo";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -846,6 +847,57 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           : `¿A qué servicio te refieres exactamente?`;
 
       return await replyAndExit(ask, "info_clave_no_match", detectedIntent || "info");
+    }
+  }
+
+    // ===============================
+  // ✅ INCLUDES FASTPATH (DB catalog) — usa resolveServiceInfo
+  // Si INFO_CLAVE no resolvió, intenta responder desde services/service_variants
+  // ===============================
+  if (!inBooking0 && isAskingIncludes(userInput)) {
+    const r = await resolveServiceInfo({
+      tenantId: tenant.id,
+      query: userInput,
+      need: "includes", // ✅ clave: evita pedir variante si el service base tiene description
+      limit: 5,
+    });
+
+    if (r.ok) {
+      // guarda contexto para próximas preguntas (precio / booking)
+      transition({
+        patchCtx: {
+          last_service_id: r.service_id,
+          last_service_name: r.label,
+        },
+      });
+
+      if (r.description && String(r.description).trim()) {
+        const msg =
+          idiomaDestino === "en"
+            ? `✅ ${r.label}\nIncludes: ${String(r.description).trim()}`
+            : `✅ ${r.label}\nIncluye: ${String(r.description).trim()}`;
+
+        return await replyAndExit(msg, "includes_fastpath_db", detectedIntent || "info");
+      }
+
+      const msg =
+        idiomaDestino === "en"
+          ? `I found "${r.label}", but I don’t have the service details loaded yet.`
+          : `Encontré "${r.label}", pero aún no tengo cargado qué incluye.`;
+
+      return await replyAndExit(msg, "includes_fastpath_db_missing", detectedIntent || "info");
+    }
+
+    // Ambiguo: pide aclaración sin inventar
+    if (r.reason === "ambiguous" && r.options?.length) {
+      const opts = r.options.slice(0, 5).map((o) => `• ${o.label}`).join("\n");
+
+      const ask =
+        idiomaDestino === "en"
+          ? `Which one do you mean?\n${opts}`
+          : `¿Cuál de estos es?\n${opts}`;
+
+      return await replyAndExit(ask, "includes_fastpath_db_ambiguous", detectedIntent || "info");
     }
   }
 

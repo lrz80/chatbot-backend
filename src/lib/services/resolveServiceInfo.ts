@@ -1,3 +1,5 @@
+// src/lib/services/resolveServiceInfo.ts
+
 import pool from "../../lib/db";
 
 export type ResolvedServiceInfo =
@@ -25,13 +27,16 @@ export type ResolvedServiceInfo =
       }>;
     };
 
+export type ServiceInfoNeed = "price" | "duration" | "includes" | "any";
+
 function stripDiacritics(s: string) {
   return s.normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
 
 function normalizeQuery(q: string) {
   let s = String(q || "").toLowerCase();
-  s = stripDiacritics(s); 
+  s = stripDiacritics(s);
+
   // quita ruido universal
   s = s.replace(
     /\b(mandame|mándame|pasame|pásame|env[ií]ame|enviame|dame|quiero|necesito|me\s+das|me\s+puedes|puedes|por\s+favor|pf|pls|please|send\s+me|send|link|enlace|url|reservar|reserva|agendar|agenda|book|booking|schedule|precio|cost|price|cuesta|dura|duration|incluye|includes)\b/g,
@@ -106,8 +111,18 @@ async function fallbackToPricedPackage(tenantId: string): Promise<ResolvedServic
     url,
     price: r.price !== null ? Number(r.price) : null,
     currency: r.currency ? String(r.currency) : "USD",
-    duration_min: r.vdur !== null ? Number(r.vdur) : (r.duration_min !== null ? Number(r.duration_min) : null),
-    description: (r.vdesc && String(r.vdesc).trim()) ? String(r.vdesc) : (r.description ? String(r.description) : null),
+    duration_min:
+      r.vdur !== null
+        ? Number(r.vdur)
+        : r.duration_min !== null
+          ? Number(r.duration_min)
+          : null,
+    description:
+      r.vdesc && String(r.vdesc).trim()
+        ? String(r.vdesc)
+        : r.description
+          ? String(r.description)
+          : null,
     service_id: String(r.id),
     variant_id: String(r.variant_id),
   };
@@ -124,15 +139,32 @@ function userMentionsVariant(qRaw: string) {
   );
 }
 
+function toServiceResult(top: any): ResolvedServiceInfo {
+  const servicePrice = top.price_base !== null ? Number(top.price_base) : null;
+  return {
+    ok: true,
+    kind: "service",
+    label: String(top.name),
+    url: top.service_url ? String(top.service_url) : null,
+    price: servicePrice,
+    currency: "USD",
+    duration_min: top.duration_min !== null ? Number(top.duration_min) : null,
+    description: top.description ? String(top.description) : null,
+    service_id: String(top.id),
+  };
+}
+
 export async function resolveServiceInfo(args: {
   tenantId: string;
   query: string;
+  need?: ServiceInfoNeed; // ✅ NUEVO
   limit?: number;
 }): Promise<ResolvedServiceInfo> {
   const tenantId = args.tenantId;
   const qRaw = String(args.query || "").trim();
   const q = normalizeQuery(qRaw);
   const limit = Math.min(args.limit ?? 5, 10);
+  const need: ServiceInfoNeed = args.need ?? "any";
 
   if (!tenantId || !q) return { ok: false, reason: "no_match" };
 
@@ -158,7 +190,7 @@ export async function resolveServiceInfo(args: {
   const second = services[1];
   const secondScore = Number(second?.score || 0);
 
-  // 2) Ambiguo por scores (igual que link)
+  // 2) Ambiguo por scores
   if (topScore < 0.35) {
     return {
       ok: false,
@@ -175,7 +207,7 @@ export async function resolveServiceInfo(args: {
     const gap = topScore - secondScore;
     // ✅ solo ambiguo si están realmente cerca
     if (gap < 0.08) {
-        return {
+      return {
         ok: false,
         reason: "ambiguous",
         options: services.slice(0, 5).map((s: any) => ({
@@ -202,8 +234,52 @@ export async function resolveServiceInfo(args: {
   const hasMultipleVariants = allVariants.length >= 2;
   const mentions = userMentionsVariant(qRaw);
 
-  // ✅ regla: si hay 2+ variantes y el user NO especificó -> pedir elección
+  // ✅ FIX: Si hay 2+ variantes y el user NO especificó:
+  // - Para PRICE: pedir variante (si el service base no tiene precio)
+  // - Para INCLUDES/DURATION: responder service base si tiene data útil;
+  //   si NO tiene data útil, entonces sí pedir variante.
   if (hasMultipleVariants && !mentions) {
+    const serviceHasUsefulDescription = !!(top.description && String(top.description).trim());
+    const serviceHasUsefulDuration =
+      top.duration_min !== null && Number.isFinite(Number(top.duration_min));
+    const serviceHasUsefulPrice =
+      top.price_base !== null && Number.isFinite(Number(top.price_base)) && Number(top.price_base) > 0;
+
+    const needsPrice = need === "price";
+    const needsIncludes = need === "includes";
+    const needsDuration = need === "duration";
+    const needsAny = need === "any";
+
+    // (A) Precio: obliga variante si el service no trae precio
+    if (needsPrice && !serviceHasUsefulPrice) {
+      return {
+        ok: false,
+        reason: "ambiguous",
+        options: allVariants.slice(0, 5).map((v: any) => ({
+          label: `${top.name} - ${v.variant_name}`,
+          kind: "variant",
+          service_id: top.id,
+          variant_id: v.id,
+        })),
+      };
+    }
+
+    // (B) Includes: si el service tiene descripción -> responder service
+    if (needsIncludes && serviceHasUsefulDescription) {
+      return toServiceResult(top);
+    }
+
+    // (C) Duración: si el service tiene duración -> responder service
+    if (needsDuration && serviceHasUsefulDuration) {
+      return toServiceResult(top);
+    }
+
+    // (D) Any: si el service tiene algo útil -> responder service
+    if (needsAny && (serviceHasUsefulDescription || serviceHasUsefulDuration || serviceHasUsefulPrice)) {
+      return toServiceResult(top);
+    }
+
+    // (E) Si no hay data útil en el service base -> pedir variante
     return {
       ok: false,
       reason: "ambiguous",
@@ -242,17 +318,27 @@ export async function resolveServiceInfo(args: {
       const url = (v.variant_url || top.service_url || null) as string | null;
       const vscore = Number(v?.vscore || 0);
 
-    // ✅ si el score es suficientemente bueno, selecciona
-    if (vscore >= 0.25) {
-      return {
-        ok: true,
-        kind: "variant",
-        label: `${top.name} - ${v.variant_name}`,
+      // ✅ si el score es suficientemente bueno, selecciona
+      if (vscore >= 0.25) {
+        return {
+          ok: true,
+          kind: "variant",
+          label: `${top.name} - ${v.variant_name}`,
           url,
           price: v.price !== null ? Number(v.price) : null,
           currency: v.currency ? String(v.currency) : "USD",
-          duration_min: v.duration_min !== null ? Number(v.duration_min) : (top.duration_min !== null ? Number(top.duration_min) : null),
-          description: (v.description && String(v.description).trim()) ? String(v.description) : (top.description ? String(top.description) : null),
+          duration_min:
+            v.duration_min !== null
+              ? Number(v.duration_min)
+              : top.duration_min !== null
+                ? Number(top.duration_min)
+                : null,
+          description:
+            v.description && String(v.description).trim()
+              ? String(v.description)
+              : top.description
+                ? String(top.description)
+                : null,
           service_id: String(top.id),
           variant_id: String(v.id),
         };
@@ -285,15 +371,25 @@ export async function resolveServiceInfo(args: {
           url,
           price: pick.price !== null ? Number(pick.price) : null,
           currency: pick.currency ? String(pick.currency) : "USD",
-          duration_min: pick.duration_min !== null ? Number(pick.duration_min) : (top.duration_min !== null ? Number(top.duration_min) : null),
-          description: (pick.description && String(pick.description).trim()) ? String(pick.description) : (top.description ? String(top.description) : null),
+          duration_min:
+            pick.duration_min !== null
+              ? Number(pick.duration_min)
+              : top.duration_min !== null
+                ? Number(top.duration_min)
+                : null,
+          description:
+            pick.description && String(pick.description).trim()
+              ? String(pick.description)
+              : top.description
+                ? String(top.description)
+                : null,
           service_id: String(top.id),
           variant_id: String(pick.id),
         };
       }
     }
 
-    // ✅ NUEVO: mencionó variante pero no matcheó → pedir elección
+    // ✅ mencionó variante pero no matcheó → pedir elección
     return {
       ok: false,
       reason: "ambiguous",
@@ -316,15 +412,5 @@ export async function resolveServiceInfo(args: {
   }
 
   // 6) Sin match de variante (o no hay variantes): devolver service base
-  return {
-    ok: true,
-    kind: "service",
-    label: String(top.name),
-    url: top.service_url ? String(top.service_url) : null,
-    price: servicePrice,
-    currency: "USD",
-    duration_min: top.duration_min !== null ? Number(top.duration_min) : null,
-    description: top.description ? String(top.description) : null,
-    service_id: String(top.id),
-  };
+  return toServiceResult(top);
 }
