@@ -466,41 +466,12 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           intent: (lastIntent || INTENCION_FINAL_CANONICA || null),
           interest_level: (typeof detectedInterest === "number" ? detectedInterest : null),
         }),
-        rememberAfterReply: (args: any) => {
-        // ✅ NO afectar historial: esto solo corta client_memory (facts_summary/turn memory)
-        const intent = String(lastIntent || INTENCION_FINAL_CANONICA || "").toLowerCase().trim();
-        const text = String(reply || "");
-
-        const PRICE_IN_TEXT_RE =
-          /(\$\s?\d+(\.\d{1,2})?)|(\bUSD\b|\bEUR\b|\bMXN\b)|(\bdesde\s+\$?\s?\d+)|(\bstarts?\s+at\s+\$?\s?\d+)|(\bfrom\s+\$?\s?\d+)/i;
-
-        // 1) Si intent es precio → no guardes memoria
-        // 2) Si el texto tiene señales de precio → no guardes memoria
-        // 3) Si la respuesta viene de un source de precios → no guardes memoria
-        const src = String(replySource || "");
-        const isPricingTurn =
-          intent === "precio" ||
-          PRICE_IN_TEXT_RE.test(text) ||
-          src.includes("price_");
-
-        if (isPricingTurn) {
-        console.log("🧠 memory: SKIP rememberAfterReply (pricing)", {
-          tenantId: tenant.id,
-          canal,
-          contacto: contactoNorm,
-          intent,
-          replySource: src,
-          sample: text.slice(0, 120),
-        });
-
-        return Promise.resolve(); // ✅ mantiene el tipo Promise<void>
-      }
-
-        return rememberAfterReply({
+        rememberAfterReply: (args: any) =>
+        rememberAfterReply({
           ...args,
           canal: "whatsapp",
-        });
-      },
+          replySource: (args?.replySource ?? args?.source ?? null),
+        }),
       }
     );
 
