@@ -867,6 +867,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         patchCtx: {
           last_service_id: r.service_id,
           last_service_name: r.label,
+          last_service_at: Date.now(), // ✅ TTL
         },
       });
 
@@ -930,24 +931,64 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     mode: "fixed" | "from";
     amount: number;
     currency: string;
+    serviceName?: string | null; // opcional
+    hasVariants?: boolean;       // opcional (si lo sabes)
   }) {
     const money = formatMoney(args.amount, args.currency);
+    const name = (args.serviceName && String(args.serviceName).trim())
+      ? String(args.serviceName).trim()
+      : null;
 
     if (args.lang === "en") {
-      return args.mode === "fixed"
-        ? `✅ The price is ${money}. Would you like to book an appointment?`
-        : `✅ Starts at ${money}. Which option are you interested in?`;
+      if (args.mode === "fixed") {
+        return name
+          ? `✅ ${name}: ${money}. Would you like to book an appointment?`
+          : `✅ The price is ${money}. Would you like to book an appointment?`;
+      }
+
+      // mode === "from"
+      return name
+        ? `✅ ${name} starts at ${money} (price varies by option/size). Which option applies to you?`
+        : `✅ Starts at ${money} (price varies by option/size). Which option applies to you?`;
     }
 
-    return args.mode === "fixed"
-      ? `✅ El precio es ${money}. ¿Te gustaría agendar una cita?`
-      : `✅ Desde ${money}. ¿Cuál opción te interesa?`;
+    // ES
+    if (args.mode === "fixed") {
+      return name
+        ? `✅ ${name}: ${money}. ¿Te gustaría agendar una cita?`
+        : `✅ El precio es ${money}. ¿Te gustaría agendar una cita?`;
+    }
+
+    // mode === "from"
+    return name
+      ? `✅ ${name} empieza desde ${money} (varía según la opción/tamaño). ¿Qué opción aplica en tu caso?`
+      : `✅ Empieza desde ${money} (varía según la opción/tamaño). ¿Qué opción aplica en tu caso?`;
   }
 
   if (!inBooking0 && isPriceQuestion(userInput)) {
     // A) si ya lo tienes en contexto (ideal)
+    const LAST_SERVICE_TTL_MS = 60 * 60 * 1000; // 60 min (ajusta si quieres)
+
     let serviceId: string | null = (convoCtx as any)?.last_service_id || null;
     let serviceName: string | null = (convoCtx as any)?.last_service_name || null;
+    const lastAt = Number((convoCtx as any)?.last_service_at || 0);
+
+    if (serviceId && lastAt && Number.isFinite(lastAt)) {
+      const age = Date.now() - lastAt;
+      if (age > LAST_SERVICE_TTL_MS) {
+        // expiró → no uses contexto viejo
+        serviceId = null;
+        serviceName = null;
+
+        transition({
+          patchCtx: {
+            last_service_id: null,
+            last_service_name: null,
+            last_service_at: null,
+          },
+        });
+      }
+    }
 
     // B) si no hay contexto, intenta resolver por texto contra services
     if (!serviceId) {
@@ -957,7 +998,13 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         serviceName = hit.name;
 
         // guarda para próximas vueltas
-        transition({ patchCtx: { last_service_id: serviceId, last_service_name: serviceName } });
+        transition({
+          patchCtx: {
+            last_service_id: serviceId,
+            last_service_name: serviceName,
+            last_service_at: Date.now(), // ✅ TTL
+          },
+        });
       }
     }
 
@@ -980,6 +1027,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         mode: pi.mode,
         amount: pi.amount,
         currency: (pi.currency || "USD").toUpperCase(),
+        serviceName: serviceName || null,
       });
 
       // ✅ IMPORTANT: si estamos haciendo una pregunta de confirmación (sí/no),
