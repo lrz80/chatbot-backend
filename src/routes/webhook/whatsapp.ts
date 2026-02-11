@@ -841,16 +841,14 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         return await replyAndExit(msg, "info_clave_missing_includes", detectedIntent || "info");
       }
 
-      const ask =
-        idiomaDestino === "en"
-          ? `Which service are you referring to?`
-          : `¿A qué servicio te refieres exactamente?`;
-
-      return await replyAndExit(ask, "info_clave_no_match", detectedIntent || "info");
+      // ❗ NO cortes el flujo aquí.
+      // Si INFO_CLAVE no matchea, dejamos que el catálogo DB (resolveServiceInfo)
+      // intente resolver "qué incluye" sin preguntar cosas redundantes.
+      console.log("ℹ️ INFO_CLAVE: includes asked but no block matched; falling through to DB fastpath.");
     }
   }
 
-    // ===============================
+  // ===============================
   // ✅ INCLUDES FASTPATH (DB catalog) — usa resolveServiceInfo
   // Si INFO_CLAVE no resolvió, intenta responder desde services/service_variants
   // ===============================
