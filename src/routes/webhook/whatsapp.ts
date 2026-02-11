@@ -71,6 +71,7 @@ import { getPriceInfoForService } from "../../lib/services/pricing/getFromPriceF
 import { resolveServiceIdFromText } from "../../lib/services/pricing/resolveServiceIdFromText";
 import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
 import { resolveServiceInfo } from "../../lib/services/resolveServiceInfo";
+import { traducirMensaje } from "../../lib/traducirMensaje";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -870,10 +871,26 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       });
 
       if (r.description && String(r.description).trim()) {
+        let descOut = String(r.description).trim();
+
+        try {
+          const idOut = await detectarIdioma(descOut);
+
+          // Solo soportamos ES ↔ EN
+          if (
+            (idOut === "es" || idOut === "en") &&
+            idOut !== idiomaDestino
+          ) {
+            descOut = await traducirMensaje(descOut, idiomaDestino);
+          }
+        } catch (e: any) {
+          console.warn("⚠️ includes_fastpath_db translation failed:", e?.message || e);
+        }
+
         const msg =
           idiomaDestino === "en"
-            ? `✅ ${r.label}\nIncludes: ${String(r.description).trim()}`
-            : `✅ ${r.label}\nIncluye: ${String(r.description).trim()}`;
+            ? `✅ ${r.label}\nIncludes: ${descOut}`
+            : `✅ ${r.label}\nIncluye: ${descOut}`;
 
         return await replyAndExit(msg, "includes_fastpath_db", detectedIntent || "info");
       }
