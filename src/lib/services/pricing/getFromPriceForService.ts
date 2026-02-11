@@ -20,7 +20,8 @@ export async function getPriceInfoForService(
 ): Promise<PriceInfo> {
   if (!tenantId || !serviceId) return { ok: false, reason: "no_price" };
 
-  // 1) Primero: si existen variantes con precio, SIEMPRE manda variantes (desde)
+  // 1) Primero: si existen variantes con precio, SIEMPRE responde "desde"
+  // ✅ Multi-tenant: filtramos tenant por JOIN con services (service_variants no tiene tenant_id)
   const v = await pool.query(
     `
     SELECT
@@ -28,8 +29,10 @@ export async function getPriceInfoForService(
       MAX(v.currency) FILTER (WHERE v.currency IS NOT NULL AND v.currency <> '') AS any_currency,
       COUNT(*) AS n
     FROM service_variants v
-    WHERE v.tenant_id = $1
-      AND v.service_id = $2
+    JOIN services s ON s.id = v.service_id
+    WHERE s.tenant_id = $1
+      AND s.id = $2
+      AND s.active = true
       AND v.active = true
       AND v.price IS NOT NULL
       AND v.price > 0
@@ -45,20 +48,21 @@ export async function getPriceInfoForService(
     return { ok: true, mode: "from", amount: minNum, currency: cur };
   }
 
-  // 2) Si NO hay variantes con precio: usa price_base del service (fijo)
+  // 2) Si NO hay variantes con precio: usar price_base del servicio (fijo)
   const s = await pool.query(
     `
-    SELECT price_base
-    FROM services
-    WHERE tenant_id = $1
-      AND id = $2
-      AND active = true
+    SELECT s.price_base
+    FROM services s
+    WHERE s.tenant_id = $1
+      AND s.id = $2
+      AND s.active = true
     LIMIT 1
     `,
     [tenantId, serviceId]
   );
 
   const baseNum = toValidAmount(s.rows?.[0]?.price_base);
+
   if (baseNum !== null) {
     return { ok: true, mode: "fixed", amount: baseNum, currency: "USD" };
   }
