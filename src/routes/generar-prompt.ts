@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v6"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v13"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -29,6 +29,46 @@ const compact = (s: string) =>
 // (A+) Helpers para extraer TODAS las URLs de descripcion/informacion
 const MD_LINK = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi;
 const BARE_URL = /\bhttps?:\/\/[^\s)>\]]+/gi;
+
+function stripKnownHeadings(text: string) {
+  const t = splitLinesSmart(text);
+  const kill = new Set([
+    "COMPORTAMIENTO_Y_ESTILO",
+    "REGLAS Y COMPORTAMIENTO",
+    "COMPORTAMIENTO Y ESTILO",
+    "REGLAS PRINCIPALES",
+    "REGLAS DE CALIDAD",
+    "REGLA PARA PREGUNTAS DE PRECIOS",
+    "REGLAS DE COMUNICACIÓN SOBRE PRECIOS",
+    "ESTRUCTURA_DE_RESPUESTA",
+    "ESTRUCTURA GENERAL DE RESPUESTA",
+    "MODO_CONVERSION",
+    "MODO DE CONVERSIÓN",
+    "REGLAS_DEL_CANAL",
+    "CHANNEL_RULES",
+    "RULES",
+    "REGLAS",
+    "ENLACES_OFICIALES",
+    "OFFICIAL_LINKS",
+    "GUIA_DE_CTA",
+    "CTA_GUIDE",
+    "POLITICA_DE_ENLACES",
+    "LINK_POLICY",
+  ]);
+
+  const out: string[] = [];
+  for (const line of t) {
+    const s = String(line || "").trim();
+    if (!s) continue;
+
+    // heading puro (sin bullets) que coincide con nuestros bloques
+    const normalized = s.replace(/:$/, "").toUpperCase();
+    if (kill.has(normalized)) continue;
+
+    out.push(line);
+  }
+  return compact(out.join("\n"));
+}
 
 function normalizeUrl(u: string) {
   try {
@@ -561,8 +601,8 @@ function buildOperationalBusinessContext(infoClean: string, nombreNegocio: strin
 function buildOperationalRules(funcionesClean: string) {
   const t = compact(funcionesClean || "");
   if (!t) return "";
-  // Respeta el formato que escribió el usuario (prosa o bullets)
-  return compact(["REGLAS Y COMPORTAMIENTO", t].join("\n"));
+  // ✅ NO agregues encabezado aquí porque YA lo agregas en promptCoreParts
+  return t;
 }
 
 // ———————————————————————————————————————————————————
@@ -652,10 +692,13 @@ router.post("/", async (req: Request, res: Response) => {
     const funcionesClean = stripModeLine(funciones);
     const infoClean = stripModeLine(info);
 
+    const funcionesClean2 = stripKnownHeadings(funcionesClean);
+    const infoClean2 = stripKnownHeadings(infoClean);
+
     // Opcional: si tu UI no mete bullets, puedes forzar bullets line-by-line:
     // Aquí NO transformo, solo dejo lo que el usuario puso.
-    const infoOperativo = buildOperationalBusinessContext(infoClean, nombreNegocio);
-    const reglasOperativas = buildOperationalRules(funcionesClean);
+    const infoOperativo = buildOperationalBusinessContext(infoClean2, nombreNegocio);
+    const reglasOperativas = buildOperationalRules(funcionesClean2);
 
     const infoBlock = infoOperativo ? infoOperativo : "";
     const funcionesBlock = reglasOperativas ? reglasOperativas : "";
