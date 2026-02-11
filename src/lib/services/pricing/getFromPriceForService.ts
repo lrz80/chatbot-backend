@@ -25,26 +25,26 @@ export async function getPriceInfoForService(
   tenantId: string,
   serviceId: string
 ): Promise<PriceInfo> {
-  // 1) Precio fijo SOLO si es válido (>0) en services.price o services.price_base
-  const s = await pool.query(
+  // 1) Precio fijo SOLO si es válido (>0) en services.price_base
+    const s = await pool.query(
     `
-    SELECT
-      COALESCE(NULLIF(s.price, 0), NULLIF(s.price_base, 0)) AS base_price
+    SELECT s.price_base AS base_price
     FROM services s
     WHERE s.tenant_id = $1
-      AND s.id = $2
-      AND s.active = true
+        AND s.id = $2
+        AND s.active = true
     LIMIT 1
     `,
     [tenantId, serviceId]
-  );
+    );
 
-  const base = s.rows?.[0]?.base_price;
-  const baseNum = Number(base);
+    const base = s.rows?.[0]?.base_price;
+    const baseNum = Number(base);
 
-  if (Number.isFinite(baseNum) && baseNum > 0) {
+    // ⚠️ Importante: si price_base está en 0 o null, NO lo uses.
+    if (Number.isFinite(baseNum) && baseNum > 0) {
     return { ok: true, mode: "fixed", amount: baseNum, currency: "USD" };
-  }
+    }
 
   // 2) Variantes: "desde" = MIN(COALESCE(v.price, v.price_base)) + top 5 variantes
   const vAgg = await pool.query(
