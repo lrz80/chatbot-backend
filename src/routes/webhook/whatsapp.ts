@@ -951,13 +951,13 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           SELECT
             v.service_id,
             s.name AS service_name,
-            v.price_base::numeric AS price
+            v.price::numeric AS price
           FROM service_variants v
           JOIN services s ON s.id = v.service_id
           WHERE s.tenant_id = $1
             AND s.active = true
             AND v.active = true
-            AND v.price_base IS NOT NULL
+            AND v.price IS NOT NULL
         ),
         agg AS (
           SELECT
@@ -981,6 +981,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         `,
         [tenant.id]
       );
+      console.log("🧪 PRICE_SUMMARY_DB_ROWS =", JSON.stringify(rows, null, 2));
 
       const overallMin = rows?.[0]?.overall_min != null ? Number(rows[0].overall_min) : null;
       const overallMax = rows?.[0]?.overall_max != null ? Number(rows[0].overall_max) : null;
