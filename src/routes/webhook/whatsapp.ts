@@ -924,32 +924,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
   }
 
-  // 🛑 PRICE GUARD (UNIVERSAL): si preguntan precio y DB no resolvió,
-  // NO dejamos al LLM inventar números.
-  if (!inBooking0 && isPriceQuestion(userInput)) {
-    const bookingLink =
-      tenant?.booking_url ||
-      tenant?.link_reserva ||
-      tenant?.reserva_url ||
-      tenant?.website_url ||
-      null;
-
-    const msg =
-      idiomaDestino === "en"
-        ? [
-            "I can share pricing only if it’s in our official info (services/variants or our booking link).",
-            "Which specific item/service are you asking about? (name or a short description)",
-            bookingLink ? `You can also check/book here: ${bookingLink}` : null,
-          ].filter(Boolean).join("\n")
-        : [
-            "Puedo darte precios solo si están en la info oficial (servicios/variantes o link de reserva).",
-            "¿Cuál servicio/producto específico te interesa? (nombre o una breve descripción)",
-            bookingLink ? `También puedes ver/reservar aquí: ${bookingLink}` : null,
-          ].filter(Boolean).join("\n");
-
-    return await replyAndExit(msg, "price_guard_no_db", detectedIntent || "precio");
-  }
-
   const smResult = await sm({
     pool,
     tenantId: tenant.id,
