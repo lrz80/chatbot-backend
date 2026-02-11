@@ -69,7 +69,7 @@ import {
 } from "../../lib/infoclave/resolveIncludes";
 import { getPriceInfoForService } from "../../lib/services/pricing/getFromPriceForService";
 import { resolveServiceIdFromText } from "../../lib/services/pricing/resolveServiceIdFromText";
-
+import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -690,27 +690,34 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     if (trig?.ctxPatch) {
       transition({ patchCtx: trig.ctxPatch });
     }
-
-    // Si requiere handoff, respondemos y salimos (Single Exit)
-    if (trig?.action === "handoff_human" && trig.replyOverride) {
+  } catch (e: any) {
+    console.warn("⚠️ applyEmotionTriggers failed:", e?.message);
+  }
+  
+  // ========================================================
+    // 🚫 Human Override YA NO VIENE de emociones
+    // 🚸 SOLO SI EL USUARIO LO PIDE EXPLÍCITAMENTE (“quiero hablar con alguien”)
+    // ========================================================
+    if (isExplicitHumanRequest(userInput)) {
       await setHumanOverride({
         tenantId: tenant.id,
         canal,
         contacto: contactoNorm,
         minutes: 5,
-        reason: (emotion || trig?.ctxPatch?.handoff_reason || "emotion").toString(),
-        source: "emotion",
+        reason: "explicit_request",
+        source: "explicit_request",
         customerPhone: fromNumber || contactoNorm,
         userMessage: userInput,
         messageId: messageId || null,
       });
 
-      return await replyAndExit(trig.replyOverride, "emotion_trigger", detectedIntent);
+      return await replyAndExit(
+        "Entiendo. Para ayudarte mejor, te contactará una persona del equipo en un momento.",
+        "human_override_explicit",
+        detectedIntent
+      );
     }
-  } catch (e: any) {
-    console.warn("⚠️ applyEmotionTriggers failed:", e?.message);
-  }
-
+  
   // ===============================
   // ✅ MEMORIA (3): Retrieval → inyectar memoria del cliente en el prompt
   // ===============================
