@@ -1,54 +1,29 @@
 import type { Pool } from "pg";
 
+export type PriceOption = {
+  label: string;
+  amount: number;
+  currency: string;
+};
+
 export type PriceInfo =
   | { ok: true; mode: "fixed"; amount: number; currency: string }
-  | { ok: true; mode: "from"; amount: number; currency: string }
+  | {
+      ok: true;
+      mode: "from";
+      amount: number;
+      currency: string;
+      options?: PriceOption[]; // ✅ top variantes (para listar)
+      optionsCount?: number;   // ✅ total variantes con precio
+    }
   | { ok: false; reason: "no_price" };
-
-function toValidAmount(x: any): number | null {
-  if (x === null || x === undefined) return null;
-  const n = Number(x);
-  if (!Number.isFinite(n)) return null;
-  if (n <= 0) return null;
-  return n;
-}
 
 export async function getPriceInfoForService(
   pool: Pool,
   tenantId: string,
   serviceId: string
 ): Promise<PriceInfo> {
-  if (!tenantId || !serviceId) return { ok: false, reason: "no_price" };
-
-  // 1) Primero: si existen variantes con precio, SIEMPRE responde "desde"
-  // ✅ Multi-tenant: filtramos tenant por JOIN con services (service_variants no tiene tenant_id)
-  const v = await pool.query(
-    `
-    SELECT
-      MIN(v.price) AS min_price,
-      MAX(v.currency) FILTER (WHERE v.currency IS NOT NULL AND v.currency <> '') AS any_currency,
-      COUNT(*) AS n
-    FROM service_variants v
-    JOIN services s ON s.id = v.service_id
-    WHERE s.tenant_id = $1
-      AND s.id = $2
-      AND s.active = true
-      AND v.active = true
-      AND v.price IS NOT NULL
-      AND v.price > 0
-    `,
-    [tenantId, serviceId]
-  );
-
-  const nVariants = Number(v.rows?.[0]?.n || 0);
-  const minNum = toValidAmount(v.rows?.[0]?.min_price);
-
-  if (nVariants > 0 && minNum !== null) {
-    const cur = String(v.rows?.[0]?.any_currency || "USD").toUpperCase();
-    return { ok: true, mode: "from", amount: minNum, currency: cur };
-  }
-
-  // 2) Si NO hay variantes con precio: usar price_base del servicio (fijo)
+  // 1) Precio fijo SOLO si es válido (>0) en services.price_base
   const s = await pool.query(
     `
     SELECT s.price_base
@@ -61,10 +36,77 @@ export async function getPriceInfoForService(
     [tenantId, serviceId]
   );
 
-  const baseNum = toValidAmount(s.rows?.[0]?.price_base);
+  const base = s.rows?.[0]?.price_base;
+  const baseNum = Number(base);
 
-  if (baseNum !== null) {
+  // ⚠️ Importante: si price_base está en 0 o null, NO lo uses.
+  if (Number.isFinite(baseNum) && baseNum > 0) {
     return { ok: true, mode: "fixed", amount: baseNum, currency: "USD" };
+  }
+
+  // 2) Variantes: "desde" = MIN(variant.price) + (top 5 variantes)
+  // ✅ Nota: tu tabla service_variants NO tiene tenant_id (según tu error),
+  // así que filtramos por tenant haciendo JOIN con services.
+  const vAgg = await pool.query(
+    `
+    SELECT
+      MIN(v.price) AS min_price,
+      MAX(NULLIF(v.currency, '')) FILTER (WHERE v.currency IS NOT NULL) AS any_currency,
+      COUNT(*)::int AS n
+    FROM service_variants v
+    JOIN services s ON s.id = v.service_id
+    WHERE s.tenant_id = $1
+      AND v.service_id = $2
+      AND v.active = true
+      AND v.price IS NOT NULL
+      AND v.price > 0
+    `,
+    [tenantId, serviceId]
+  );
+
+  const min = vAgg.rows?.[0]?.min_price;
+  const minNum = Number(min);
+  const n = Number(vAgg.rows?.[0]?.n || 0);
+
+  if (Number.isFinite(minNum) && minNum > 0) {
+    // Trae top opciones (para responder tipo lista)
+    const vList = await pool.query(
+      `
+      SELECT
+        COALESCE(NULLIF(v.variant_name,''), 'Option') AS label,
+        v.price::numeric AS price,
+        COALESCE(NULLIF(v.currency,''), 'USD') AS currency
+      FROM service_variants v
+      JOIN services s ON s.id = v.service_id
+      WHERE s.tenant_id = $1
+        AND v.service_id = $2
+        AND v.active = true
+        AND v.price IS NOT NULL
+        AND v.price > 0
+      ORDER BY v.price ASC, v.variant_name ASC
+      LIMIT 5
+      `,
+      [tenantId, serviceId]
+    );
+
+    const options: PriceOption[] = (vList.rows || [])
+      .map((r: any) => ({
+        label: String(r.label || "").trim() || "Option",
+        amount: Number(r.price),
+        currency: String(r.currency || "USD").toUpperCase(),
+      }))
+      .filter((o) => Number.isFinite(o.amount) && o.amount > 0);
+
+    const cur = String(vAgg.rows?.[0]?.any_currency || "USD").toUpperCase();
+
+    return {
+      ok: true,
+      mode: "from",
+      amount: minNum,
+      currency: cur,
+      options: options.length ? options : undefined,
+      optionsCount: Number.isFinite(n) ? n : undefined,
+    };
   }
 
   return { ok: false, reason: "no_price" };
