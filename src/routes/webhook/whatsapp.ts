@@ -964,30 +964,39 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     if (serviceId) {
       const pi = await getPriceInfoForService(pool, tenant.id, serviceId);
 
-      if (pi.ok) {
-        const msg = renderPriceReply({
-          lang: idiomaDestino === "en" ? "en" : "es",
-          mode: pi.mode,
-          amount: pi.amount,
-          currency: (pi.currency || "USD").toUpperCase(),
-        });
+      // ✅ Si no hay precio resoluble, no suenes a error ni digas "no tengo precios cargados"
+      if (!pi.ok) {
+        const msg =
+          idiomaDestino === "en"
+            ? "To provide an accurate price, I just need to confirm which service you're interested in. Which one would you like to check?"
+            : "Para darte un precio exacto, necesito identificar el servicio específico. ¿Cuál deseas consultar?";
 
-        // ✅ IMPORTANT: si estamos haciendo una pregunta de confirmación (sí/no),
-        // seteamos awaiting para que el siguiente "sí" no se pierda.
-        if (pi.mode === "fixed") {
-          const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
-          await setAwaitingState(pool, {
-            tenantId: tenant.id,
-            canal,
-            senderId: contactoNorm,
-            field: "yes_no",
-            payload: { kind: "confirm_booking", source: "price_fastpath_db", serviceId },
-            ttlSeconds: 600,
-          });
-        }
-
-        return await replyAndExit(msg, "price_fastpath_db", detectedIntent || "precio");
+        return await replyAndExit(msg, "price_missing_db", detectedIntent || "precio");
       }
+
+      // ✅ Precio válido (fixed/from)
+      const msg = renderPriceReply({
+        lang: idiomaDestino === "en" ? "en" : "es",
+        mode: pi.mode,
+        amount: pi.amount,
+        currency: (pi.currency || "USD").toUpperCase(),
+      });
+
+      // ✅ IMPORTANT: si estamos haciendo una pregunta de confirmación (sí/no),
+      // seteamos awaiting para que el siguiente "sí" no se pierda.
+      if (pi.mode === "fixed") {
+        const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
+        await setAwaitingState(pool, {
+          tenantId: tenant.id,
+          canal,
+          senderId: contactoNorm,
+          field: "yes_no",
+          payload: { kind: "confirm_booking", source: "price_fastpath_db", serviceId },
+          ttlSeconds: 600,
+        });
+      }
+
+      return await replyAndExit(msg, "price_fastpath_db", detectedIntent || "precio");
     }
   }
 

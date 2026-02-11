@@ -5,12 +5,47 @@ export type PriceInfo =
   | { ok: true; mode: "from"; amount: number; currency: string }
   | { ok: false; reason: "no_price" };
 
+function toValidAmount(x: any): number | null {
+  if (x === null || x === undefined) return null;
+  const n = Number(x);
+  if (!Number.isFinite(n)) return null;
+  if (n <= 0) return null;
+  return n;
+}
+
 export async function getPriceInfoForService(
   pool: Pool,
   tenantId: string,
   serviceId: string
 ): Promise<PriceInfo> {
-  // 1) Precio fijo en services.price_base
+  if (!tenantId || !serviceId) return { ok: false, reason: "no_price" };
+
+  // 1) Primero: si existen variantes con precio, SIEMPRE manda variantes (desde)
+  const v = await pool.query(
+    `
+    SELECT
+      MIN(v.price) AS min_price,
+      MAX(v.currency) FILTER (WHERE v.currency IS NOT NULL AND v.currency <> '') AS any_currency,
+      COUNT(*) AS n
+    FROM service_variants v
+    WHERE v.tenant_id = $1
+      AND v.service_id = $2
+      AND v.active = true
+      AND v.price IS NOT NULL
+      AND v.price > 0
+    `,
+    [tenantId, serviceId]
+  );
+
+  const nVariants = Number(v.rows?.[0]?.n || 0);
+  const minNum = toValidAmount(v.rows?.[0]?.min_price);
+
+  if (nVariants > 0 && minNum !== null) {
+    const cur = String(v.rows?.[0]?.any_currency || "USD").toUpperCase();
+    return { ok: true, mode: "from", amount: minNum, currency: cur };
+  }
+
+  // 2) Si NO hay variantes con precio: usa price_base del service (fijo)
   const s = await pool.query(
     `
     SELECT price_base
@@ -23,32 +58,9 @@ export async function getPriceInfoForService(
     [tenantId, serviceId]
   );
 
-  const base = s.rows?.[0]?.price_base;
-  const baseNum = Number(base);
-  if (Number.isFinite(baseNum)) {
+  const baseNum = toValidAmount(s.rows?.[0]?.price_base);
+  if (baseNum !== null) {
     return { ok: true, mode: "fixed", amount: baseNum, currency: "USD" };
-  }
-
-  // 2) “Desde” por variantes: MIN(service_variants.price)
-  const v = await pool.query(
-    `
-    SELECT
-      MIN(price) AS min_price,
-      MAX(currency) FILTER (WHERE currency IS NOT NULL AND currency <> '') AS any_currency
-    FROM service_variants
-    WHERE tenant_id = $1
-      AND service_id = $2
-      AND active = true
-      AND price IS NOT NULL
-    `,
-    [tenantId, serviceId]
-  );
-
-  const min = v.rows?.[0]?.min_price;
-  const minNum = Number(min);
-  if (Number.isFinite(minNum)) {
-    const cur = String(v.rows?.[0]?.any_currency || "USD").toUpperCase();
-    return { ok: true, mode: "from", amount: minNum, currency: cur };
   }
 
   return { ok: false, reason: "no_price" };
