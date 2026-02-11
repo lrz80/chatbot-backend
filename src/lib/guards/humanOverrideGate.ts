@@ -13,14 +13,19 @@ import type { GateResult } from "../conversation/stateMachine";
  */
 
 function normalize(s: string) {
-  return String(s || "").trim().toLowerCase();
+  return String(s || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")  // elimina acentos
+    .replace(/[^\w\s]/g, " ")         // elimina signos raros
+    .replace(/\s+/g, " ")             // colapsa espacios
+    .trim();
 }
 
 function wantsDisableHumanOverride(text: string) {
   const t = normalize(text);
 
-  // Frases simples y seguras (puedes ampliar luego)
-  return /^(volver al bot|reactivar bot|reactivar|automatico|automático|resume|seguir|continua|continuar|no gracias|cancelar|ya no|stop|parar)$/i.test(
+  return /^(volver al bot|volver con el bot|regresar al bot|reactivar bot|reactivar|automatico|resume|continuar|continua|seguir|ya no|cancelar|stop|parar|no gracias|no gracia)$/i.test(
     t
   );
 }
