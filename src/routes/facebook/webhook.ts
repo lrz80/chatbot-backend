@@ -54,6 +54,7 @@ import { renderServiceListReply } from "../../lib/services/renderServiceListRepl
 import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
 import { setHumanOverride } from "../../lib/humanOverride/setHumanOverride";
 import { saveAssistantMessageAndEmit } from "../../lib/channels/engine/messages/saveAssistantMessageAndEmit";
+import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -1286,21 +1287,29 @@ router.post("/api/facebook/webhook", async (req, res) => {
             transition({ patchCtx: trig.ctxPatch });
           }
 
-          // Si requiere handoff, responde 1 vez y sale por Single Exit
-          if (trig?.action === "handoff_human" && trig.replyOverride) {
+          // ========================================================
+          // 🚸 HUMAN OVERRIDE (META): SOLO si el usuario lo pide explícitamente
+          // ========================================================
+          if (isExplicitHumanRequest(userInput)) {
             await setHumanOverride({
               tenantId,
-              canal,
+              canal: canalEnvio as any,
               contacto: senderId,
               minutes: 5,
-              reason: (emotion || trig?.ctxPatch?.handoff_reason || "emotion").toString(),
-              source: "emotion",
-              customerPhone: senderId, // IG / FB no envían teléfono
+              reason: "explicit_request",
+              source: "explicit_request",
+              customerPhone: senderId, // IG/FB no envían teléfono; usamos senderId
               userMessage: userInput,
               messageId: messageId || null,
             });
-            await replyAndExit(trig.replyOverride, "emotion_trigger", lastIntent);
-            continue; // 👈 importante en Meta (loop)
+
+            await replyAndExit(
+              "Entiendo. Para ayudarte mejor, te contactará una persona del equipo en un momento.",
+              "human_override_explicit",
+              lastIntent
+            );
+
+            continue; // ✅ importante en Meta (loop)
           }
         } catch (e: any) {
           console.warn("⚠️ [META] applyEmotionTriggers failed:", e?.message);
