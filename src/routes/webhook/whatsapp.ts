@@ -932,38 +932,43 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     mode: "fixed" | "from";
     amount: number;
     currency: string;
-    serviceName?: string | null; // opcional
-    hasVariants?: boolean;       // opcional (si lo sabes)
+    serviceName?: string | null;
+    bookingEnabled?: boolean;   // ✅ señal técnica (no industria)
+    hasVariants?: boolean;      // ✅ señal real del catálogo
   }) {
     const money = formatMoney(args.amount, args.currency);
     const name = (args.serviceName && String(args.serviceName).trim())
       ? String(args.serviceName).trim()
       : null;
 
+    const title = name ? `✅ ${name}: ` : "✅ ";
+    const book = args.bookingEnabled === true;
+
     if (args.lang === "en") {
       if (args.mode === "fixed") {
-        return name
-          ? `✅ ${name}: ${money}. Would you like to book an appointment?`
-          : `✅ The price is ${money}. Would you like to book an appointment?`;
+        // FIXED: no asumas booking; solo si bookingEnabled es true
+        return book
+          ? `${title}${money}. Would you like me to help you schedule it?`
+          : `${title}${money}. Do you want details on anything else?`;
       }
 
-      // mode === "from"
-      return name
-        ? `✅ ${name} starts at ${money} (price varies by option/size). Which option applies to you?`
-        : `✅ Starts at ${money} (price varies by option/size). Which option applies to you?`;
+      // FROM: solo pregunta por variante si existen variantes
+      return args.hasVariants
+        ? `${title}starts at ${money} (varies by option). If you tell me the exact name of the service or product you’re looking for, I can help you better 😊`
+        : `${title}starts at ${money}. Which item/service do you want pricing for?`;
     }
 
     // ES
     if (args.mode === "fixed") {
-      return name
-        ? `✅ ${name}: ${money}. ¿Te gustaría agendar una cita?`
-        : `✅ El precio es ${money}. ¿Te gustaría agendar una cita?`;
+      return book
+        ? `${title}${money}. ¿Quieres que te ayude a agendarlo?`
+        : `${title}${money}. ¿Quieres más detalles de algo?`;
     }
 
-    // mode === "from"
-    return name
-      ? `✅ ${name} empieza desde ${money} (varía según la opción/tamaño). ¿Qué opción aplica en tu caso?`
-      : `✅ Empieza desde ${money} (varía según la opción/tamaño). ¿Qué opción aplica en tu caso?`;
+    // FROM (variantes)
+    return args.hasVariants
+      ? `${title}empieza desde ${money} (varía según la opción). Si me dices el nombre exacto del servicio o producto que buscas, puedo ayudarte mejor 😊`
+      : `${title}empieza desde ${money}. ¿De cuál producto/servicio necesitas el precio?`;
   }
 
   if (!inBooking0 && isPriceQuestion(userInput)) {
