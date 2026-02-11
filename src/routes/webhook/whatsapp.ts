@@ -1088,7 +1088,22 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
     // B) si no hay contexto, intenta resolver por texto contra services
     if (!serviceId) {
-      const hit = await resolveServiceIdFromText(pool, tenant.id, userInput);
+      // 1) Intenta con el texto tal cual (por si el catálogo está ES o mixto)
+      let hit = await resolveServiceIdFromText(pool, tenant.id, userInput);
+
+      // 2) Si el cliente está en ES pero tu catálogo está EN, intenta traducido a EN
+      // (sin hardcode de industria: solo normaliza el query)
+      if (!hit?.id && idiomaDestino === "es") {
+        try {
+          const qEn = await traducirMensaje(userInput, "en");
+          if (qEn && qEn.trim() && qEn.trim().toLowerCase() !== userInput.trim().toLowerCase()) {
+            hit = await resolveServiceIdFromText(pool, tenant.id, qEn);
+          }
+        } catch (e: any) {
+          console.warn("⚠️ resolveServiceIdFromText translate-to-en failed:", e?.message || e);
+        }
+      }
+
       if (hit?.id) {
         serviceId = hit.id;
         serviceName = hit.name;
