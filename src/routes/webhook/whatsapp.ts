@@ -905,9 +905,49 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           currency: (pi.currency || "USD").toUpperCase(),
         });
 
+        // ✅ IMPORTANT: si estamos haciendo una pregunta de confirmación (sí/no),
+        // seteamos awaiting para que el siguiente "sí" no se pierda.
+        if (pi.mode === "fixed") {
+          const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
+          await setAwaitingState(pool, {
+            tenantId: tenant.id,
+            canal,
+            senderId: contactoNorm,
+            field: "yes_no",
+            payload: { kind: "confirm_booking", source: "price_fastpath_db", serviceId },
+            ttlSeconds: 600,
+          });
+        }
+
         return await replyAndExit(msg, "price_fastpath_db", detectedIntent || "precio");
       }
     }
+  }
+
+  // 🛑 PRICE GUARD (UNIVERSAL): si preguntan precio y DB no resolvió,
+  // NO dejamos al LLM inventar números.
+  if (!inBooking0 && isPriceQuestion(userInput)) {
+    const bookingLink =
+      tenant?.booking_url ||
+      tenant?.link_reserva ||
+      tenant?.reserva_url ||
+      tenant?.website_url ||
+      null;
+
+    const msg =
+      idiomaDestino === "en"
+        ? [
+            "I can share pricing only if it’s in our official info (services/variants or our booking link).",
+            "Which specific item/service are you asking about? (name or a short description)",
+            bookingLink ? `You can also check/book here: ${bookingLink}` : null,
+          ].filter(Boolean).join("\n")
+        : [
+            "Puedo darte precios solo si están en la info oficial (servicios/variantes o link de reserva).",
+            "¿Cuál servicio/producto específico te interesa? (nombre o una breve descripción)",
+            bookingLink ? `También puedes ver/reservar aquí: ${bookingLink}` : null,
+          ].filter(Boolean).join("\n");
+
+    return await replyAndExit(msg, "price_guard_no_db", detectedIntent || "precio");
   }
 
   const smResult = await sm({
@@ -933,6 +973,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     // Aplica side-effects declarados (awaiting, etc.)
     if (smResult.transition?.effects) {
       await applyAwaitingEffects({
+        pool,
         tenantId: event.tenantId,
         canal: event.canal,
         contacto: event.contacto,
@@ -996,6 +1037,28 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     });
 
     replied = true;
+
+    const textOut = String(composed.text || "").trim();
+
+    // detector GENÉRICO (no industria)
+    const looksYesNoQuestion =
+      /\?\s*$/.test(textOut) &&
+      (
+        /\b(te gustar[ií]a|quieres|deseas)\b/i.test(textOut) ||
+        /\b(would you like|do you want)\b/i.test(textOut)
+      );
+
+    if (looksYesNoQuestion) {
+      const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
+      await setAwaitingState(pool, {
+        tenantId: tenant.id,
+        canal,
+        senderId: contactoNorm,
+        field: "yes_no",
+        payload: { kind: "confirm_generic", source: "llm" },
+        ttlSeconds: 600,
+      });
+    }
 
     return await replyAndExit(
       composed.text,

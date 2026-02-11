@@ -1,11 +1,10 @@
-import { rememberTurn } from "./rememberTurn";
 import { rememberFacts } from "./rememberFacts";
 import { refreshFactsSummary } from "./refreshFactsSummary";
 import type { Canal } from "../../lib/types/canal";
 
 export async function rememberAfterReply(opts: {
   tenantId: string;
-  canal: Canal;              // "whatsapp" | "facebook" | "instagram" | etc.
+  canal: Canal;
   senderId: string;
   idiomaDestino: "es" | "en";
   userText: string;
@@ -17,19 +16,12 @@ export async function rememberAfterReply(opts: {
     canal,
     senderId,
     idiomaDestino,
-    userText,
-    assistantText,
     lastIntent,
   } = opts;
 
   try {
-    await rememberTurn({
-      tenantId,
-      canal,
-      senderId,
-      userText,
-      assistantText,
-    });
+    // ❌ NO guardar transcript en client_memory (turns)
+    // ya existe en tabla messages
 
     await rememberFacts({
       tenantId,

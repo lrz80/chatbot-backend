@@ -1,58 +1,86 @@
-// backend/src/lib/channels/engine/state/applyAwaitingEffects.ts
-import { clearAwaitingState } from "../../../awaiting";
+import type { Pool } from "pg";
+import type { SelectedChannel } from "../clients/clientDb";
+import { setAwaitingState } from "../../../awaiting/setAwaitingState";
+import { clearAwaitingState } from "../../../awaiting/clearAwaitingState";
 
-/**
- * Aplica efectos declarativos del state machine (awaiting).
- * OJO: No conoce nada del negocio. Solo mapea fields -> upserts.
- */
+type Effects = {
+  awaiting?: {
+    clear?: boolean;
+    field?: string;
+    value?: any;        // lo que parseó validateAwaitingInput
+    payload?: any;      // payload original
+    ttlSeconds?: number;
+  };
+  idioma?: { value: "es" | "en" };
+
+  // ✅ FIX: selected_channel NO es string, es SelectedChannel
+  selected_channel?: { value: SelectedChannel };
+};
+
 export async function applyAwaitingEffects(opts: {
   tenantId: string;
-  canal: any;      // Canal (whatsapp/facebook/instagram) o string
+  canal: string;
   contacto: string;
-  effects?: any;
+  effects: Effects;
 
-  // Inyecta estos dos upserts para no acoplarse a schema concreto
-  upsertSelectedChannelDB: (
+  // ✅ FIX: selected también debe ser SelectedChannel
+  upsertSelectedChannelDB?: (
     tenantId: string,
     canal: string,
     contacto: string,
-    selected: "whatsapp" | "instagram" | "facebook" | "multi"
-  ) => Promise<void>;
+    selected: SelectedChannel
+  ) => Promise<any>;
 
-  upsertIdiomaClienteDB: (
+  upsertIdiomaClienteDB?: (
     tenantId: string,
     canal: string,
     contacto: string,
     idioma: "es" | "en"
-  ) => Promise<void>;
+  ) => Promise<any>;
+
+  pool?: Pool;
 }) {
   const { tenantId, canal, contacto, effects } = opts;
-  const aw = effects?.awaiting;
-  if (!aw) return;
 
-  // 1) clear awaiting si aplica
-  if (aw.clear) {
-    await clearAwaitingState(tenantId, canal, contacto);
-  }
+  const pool = opts.pool;
+  if (!pool) throw new Error("applyAwaitingEffects requires pool");
 
-  // 2) persistir el valor capturado
-  const field = String(aw.field || "");
-  const value = aw.value;
+  // =========================
+  // Awaiting effects
+  // =========================
+  if (effects?.awaiting) {
+    const a = effects.awaiting;
 
-  // Mapea tus fields de awaiting a “upserts” correctos.
-  if (field === "select_channel" || field === "canal" || field === "canal_a_automatizar") {
-    if (value === "whatsapp" || value === "instagram" || value === "facebook" || value === "multi") {
-      await opts.upsertSelectedChannelDB(tenantId, canal, contacto, value);
+    if (a.clear) {
+      await clearAwaitingState(pool, tenantId, canal, contacto);
+    } else if (a.field) {
+      await setAwaitingState(pool, {
+        tenantId,
+        canal,
+        senderId: contacto,
+        field: a.field,
+        payload: {
+          ...(a.payload || {}),
+          ...(typeof a.value !== "undefined" ? { value: a.value } : {}),
+        },
+        ttlSeconds: Number(a.ttlSeconds || 600),
+      });
     }
-    return;
   }
 
-  if (field === "select_language") {
-    if (value === "es" || value === "en") {
-      await opts.upsertIdiomaClienteDB(tenantId, canal, contacto, value);
-    }
-    return;
+  // =========================
+  // Other effects (idioma / selected_channel)
+  // =========================
+  if (effects?.idioma?.value && opts.upsertIdiomaClienteDB) {
+    await opts.upsertIdiomaClienteDB(tenantId, canal, contacto, effects.idioma.value);
   }
 
-  // collect_* por ahora: hook listo, sin persistencia aquí
+  if (effects?.selected_channel?.value && opts.upsertSelectedChannelDB) {
+    await opts.upsertSelectedChannelDB(
+      tenantId,
+      canal,
+      contacto,
+      effects.selected_channel.value
+    );
+  }
 }
