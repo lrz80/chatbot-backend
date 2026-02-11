@@ -72,7 +72,8 @@ import { resolveServiceIdFromText } from "../../lib/services/pricing/resolveServ
 import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
 import { resolveServiceInfo } from "../../lib/services/resolveServiceInfo";
 import { traducirMensaje } from "../../lib/traducirMensaje";
-
+import { renderServiceListReply } from "../../lib/services/renderServiceListReply";
+import type { ServiceListItem } from "../../lib/services/resolveServiceList";
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
   tenant?: any;
@@ -88,6 +89,13 @@ const THREAD_TTL_MS = 2 * 60 * 60 * 1000; // 2 horas (ajústalo si quieres)
 function isPriceQuestion(text: string) {
   const t = String(text || "").toLowerCase();
   return /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|costo|cost|price|how\s+much|starts?\s+at|from|desde)\b/i.test(t);
+}
+
+function isServiceListQuestion(text: string) {
+  const t = String(text || "").toLowerCase().trim();
+
+  // ES/EN genérico (multi-tenant): servicios / opciones / productos / menú / lista / catálogo
+  return /\b(que\s+(servicios|opciones|productos)\s+(ofrec(en|e)|tien(en|e))|servicios\s+ofrec(en|e)|lista\s+de\s+(servicios|productos)|catalogo|cat[aá]logo|menu|men[uú]|opciones|what\s+(services|do\s+you\s+offer|do\s+you\s+have)|service\s+list|list\s+of\s+(services|products)|catalog)\b/i.test(t);
 }
 
 const router = Router();
@@ -1244,6 +1252,54 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       const msg = [header, "", ...examples, "", ask].join("\n");
       return await replyAndExit(msg, "price_summary_db", detectedIntent || "precio");
     }
+  }
+
+    // ===============================
+    // ✅ SERVICE LIST FASTPATH (DB) — lista bonita (bullets/números) sin hardcode
+    // ===============================
+    if (!inBooking0 && isServiceListQuestion(userInput)) {
+    const { rows } = await pool.query(
+      `
+      SELECT
+        id          AS service_id,
+        name        AS name,
+        category    AS category,
+        duration_min,
+        price_base,
+        service_url
+      FROM services
+      WHERE tenant_id = $1
+        AND active = true
+        AND name IS NOT NULL
+      ORDER BY name ASC
+      LIMIT 50;
+      `,
+      [tenant.id]
+    );
+
+    const items: ServiceListItem[] = (rows || []).map((r: any) => ({
+      service_id: String(r.service_id),
+      name: String(r.name || "").trim(),
+      category: r.category ?? null,
+      duration_min: r.duration_min ?? null,
+      price_base: r.price_base ?? null,
+      service_url: r.service_url ?? null,
+
+      // ✅ para lista simple NO necesitas variantes aquí
+      variants: [],
+    }));
+
+    const msg = renderServiceListReply({
+      items,
+      lang: idiomaDestino === "en" ? "en" : "es",
+      max: 6,
+      numbered: false,       // bullets
+      includeMeta: false,    // NO precio/duración por defecto
+      includeVariants: false,
+      // currency: tenant?.currency || null, // si luego lo agregas por tenant
+    });
+
+    return await replyAndExit(msg, "service_list_fastpath_db", detectedIntent || "servicios");
   }
 
   const smResult = await sm({
