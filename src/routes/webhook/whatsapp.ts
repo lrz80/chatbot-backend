@@ -82,6 +82,9 @@ export type WhatsAppContext = {
 
 const MAX_WHATSAPP_LINES = 16; // 14–16 es el sweet spot
 
+// ✅ THREAD TTL: si el hilo estuvo inactivo más de X, resetea flow/step/context
+const THREAD_TTL_MS = 2 * 60 * 60 * 1000; // 2 horas (ajústalo si quieres)
+
 function isPriceQuestion(text: string) {
   const t = String(text || "").toLowerCase();
   return /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|costo|cost|price|how\s+much|starts?\s+at|from|desde)\b/i.test(t);
@@ -314,6 +317,46 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   let convoCtx = (st.context && typeof st.context === "object") ? st.context : {};
 
   // ===============================
+  // 🕒 THREAD EXPIRY RESET (anti “se queda pegado”)
+  // Fuente: timestamp guardado en convoCtx.last_turn_at (ms)
+  // ===============================
+  try {
+    const lastTurnAt = Number((convoCtx as any)?.last_turn_at || 0);
+    const age = lastTurnAt ? (Date.now() - lastTurnAt) : 0;
+
+    if (lastTurnAt && age > THREAD_TTL_MS) {
+      console.log("🧹 THREAD TTL RESET:", {
+        tenantId: tenant.id,
+        canal,
+        contacto: contactoNorm,
+        age_ms: age,
+        ttl_ms: THREAD_TTL_MS,
+      });
+
+      // resetea estado del hilo (NO toca messages → métricas intactas)
+      activeFlow = "generic_sales";
+      activeStep = "start";
+      convoCtx = {};
+
+      // persiste reset en conversation_state
+      await setConversationStateDB({
+        tenantId: tenant.id,
+        canal,
+        senderId: contactoNorm,
+        activeFlow,
+        activeStep,
+        contextPatch: {
+          // marca para debug
+          thread_reset_reason: "ttl_expired",
+          thread_reset_at: new Date().toISOString(),
+        },
+      });
+    }
+  } catch (e: any) {
+    console.warn("⚠️ THREAD TTL RESET failed:", e?.message);
+  }
+
+  // ===============================
   // 🌍 LANG RESOLUTION (CLIENT-FIRST)
   // ===============================
   const storedLang = await getIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, tenantBase);
@@ -387,8 +430,13 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   }) {
     if (params.flow !== undefined) activeFlow = params.flow;
     if (params.step !== undefined) activeStep = params.step;
+
+    const basePatch = { last_turn_at: Date.now() }; // ✅ marca actividad del hilo
+
     if (params.patchCtx && typeof params.patchCtx === "object") {
-      convoCtx = { ...(convoCtx || {}), ...params.patchCtx };
+      convoCtx = { ...(convoCtx || {}), ...basePatch, ...params.patchCtx };
+    } else {
+      convoCtx = { ...(convoCtx || {}), ...basePatch };
     }
   }
 
