@@ -721,7 +721,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   // ===============================
   // ✅ MEMORIA (3): Retrieval → inyectar memoria del cliente en el prompt
   // ===============================
-
   try {
     const memRaw = await getMemoryValue<any>({
       tenantId: tenant.id,
