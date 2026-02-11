@@ -50,7 +50,7 @@ export async function getPriceInfoForService(
   const vAgg = await pool.query(
     `
     SELECT
-      MIN(COALESCE(v.price, v.price_base)) AS min_price,
+      MIN(v.price) AS min_price,
       MAX(NULLIF(v.currency, '')) FILTER (WHERE v.currency IS NOT NULL) AS any_currency,
       COUNT(*)::int AS n
     FROM service_variants v
@@ -58,8 +58,8 @@ export async function getPriceInfoForService(
     WHERE s.tenant_id = $1
       AND v.service_id = $2
       AND v.active = true
-      AND COALESCE(v.price, v.price_base) IS NOT NULL
-      AND COALESCE(v.price, v.price_base) > 0
+      AND v.price IS NOT NULL
+      AND v.price > 0
     `,
     [tenantId, serviceId]
   );
@@ -73,16 +73,16 @@ export async function getPriceInfoForService(
       `
       SELECT
         COALESCE(NULLIF(v.variant_name,''), 'Option') AS label,
-        COALESCE(v.price, v.price_base)::numeric AS price,
+        v.price::numeric AS price,
         COALESCE(NULLIF(v.currency,''), 'USD') AS currency
       FROM service_variants v
       JOIN services s ON s.id = v.service_id
       WHERE s.tenant_id = $1
         AND v.service_id = $2
         AND v.active = true
-        AND COALESCE(v.price, v.price_base) IS NOT NULL
-        AND COALESCE(v.price, v.price_base) > 0
-      ORDER BY COALESCE(v.price, v.price_base) ASC, v.variant_name ASC
+        AND v.price IS NOT NULL
+        AND v.price > 0
+        ORDER BY v.price ASC, v.variant_name ASC
       LIMIT 5
       `,
       [tenantId, serviceId]
