@@ -924,6 +924,113 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
   }
 
+  // ✅ PRICE SUMMARY (DB): pregunta genérica → resumen (rango + ejemplos), NO lista completa
+  if (!inBooking0 && isPriceQuestion(userInput)) {
+    const askedGeneric =
+      // ES
+      /\b(cu[aá]les\s+son\s+los\s+precios|precios\s*\?|precios\b)\b/i.test(userInput) ||
+      // EN
+      /\b(what\s+are\s+the\s+prices|prices\s*\?)\b/i.test(userInput);
+
+    if (askedGeneric) {
+      // Trae precios desde services y service_variants (sin depender de un servicio específico)
+      const { rows } = await pool.query(
+        `
+        WITH base AS (
+          SELECT
+            s.id AS service_id,
+            s.name AS service_name,
+            s.price_base::numeric AS price
+          FROM services s
+          WHERE s.tenant_id = $1
+            AND s.active = true
+            AND s.price_base IS NOT NULL
+
+          UNION ALL
+
+          SELECT
+            v.service_id,
+            s.name AS service_name,
+            v.price_base::numeric AS price
+          FROM service_variants v
+          JOIN services s ON s.id = v.service_id
+          WHERE s.tenant_id = $1
+            AND s.active = true
+            AND v.active = true
+            AND v.price_base IS NOT NULL
+        ),
+        agg AS (
+          SELECT
+            service_id,
+            service_name,
+            MIN(price) AS min_price,
+            MAX(price) AS max_price
+          FROM base
+          GROUP BY service_id, service_name
+        )
+        SELECT
+          (SELECT MIN(min_price) FROM agg) AS overall_min,
+          (SELECT MAX(max_price) FROM agg) AS overall_max,
+          service_id,
+          service_name,
+          min_price,
+          max_price
+        FROM agg
+        ORDER BY min_price ASC
+        LIMIT 5;
+        `,
+        [tenant.id]
+      );
+
+      const overallMin = rows?.[0]?.overall_min != null ? Number(rows[0].overall_min) : null;
+      const overallMax = rows?.[0]?.overall_max != null ? Number(rows[0].overall_max) : null;
+
+      // si no hay precios cargados en DB, no inventes
+      if (!overallMin || !overallMax) {
+        const msg =
+          idiomaDestino === "en"
+            ? "I don’t have the pricing loaded in our catalog yet. Which specific service are you interested in?"
+            : "Aún no tengo los precios cargados en el catálogo. ¿Qué servicio específico te interesa?";
+        return await replyAndExit(msg, "price_summary_db_empty", detectedIntent || "precio");
+      }
+
+      const fmt = (n: number) => `$${Math.round(n)}`;
+
+      // arma 3–5 ejemplos (sin listar todo)
+      const examples = rows
+        .filter((r: any) => r?.service_name)
+        .map((r: any) => {
+          const name = String(r.service_name);
+          const minP = Number(r.min_price);
+          const maxP = Number(r.max_price);
+
+          // si min==max => precio fijo; si no => "desde"
+          if (Number.isFinite(minP) && Number.isFinite(maxP) && Math.round(minP) === Math.round(maxP)) {
+            return idiomaDestino === "en"
+              ? `${name}: ${fmt(minP)}`
+              : `${name}: ${fmt(minP)}`;
+          }
+
+          return idiomaDestino === "en"
+            ? `${name}: starts at ${fmt(minP)}`
+            : `${name}: desde ${fmt(minP)}`;
+        });
+
+      const header =
+        idiomaDestino === "en"
+          ? `Prices range from ${fmt(overallMin)} to ${fmt(overallMax)}.`
+          : `Los precios van desde ${fmt(overallMin)} hasta ${fmt(overallMax)}.`;
+
+      const ask =
+        idiomaDestino === "en"
+          ? "Which service are you interested in?"
+          : "¿Qué servicio te interesa?";
+
+      const msg = [header, "", ...examples, "", ask].join("\n");
+      return await replyAndExit(msg, "price_summary_db", detectedIntent || "precio");
+    }
+  }
+
   const smResult = await sm({
     pool,
     tenantId: tenant.id,
