@@ -75,6 +75,7 @@ import { traducirMensaje } from "../../lib/traducirMensaje";
 import { renderPriceReply } from "../../lib/services/pricing/renderPriceReply";
 import { looksLikeShortLabel } from "../../lib/channels/engine/lang/looksLikeShortLabel";
 import { isGenericPriceQuestion } from "../../lib/services/pricing/isGenericPriceQuestion";
+import { renderGenericPriceSummaryReply } from "../../lib/services/pricing/renderGenericPriceSummaryReply";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -1176,17 +1177,15 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
             : `${name}: desde ${fmt(minP)}`;
         });
 
-      const header =
-        idiomaDestino === "en"
-          ? `Prices range from ${fmt(overallMin)} to ${fmt(overallMax)}.`
-          : `Los precios van desde ${fmt(overallMin)} hasta ${fmt(overallMax)}.`;
+      const msg = renderGenericPriceSummaryReply({
+        lang: idiomaDestino,
+        rows: rows.map((r: any) => ({
+          service_name: r.service_name,
+          min_price: r.min_price,
+          max_price: r.max_price,
+        })),
+      });
 
-      const ask =
-        idiomaDestino === "en"
-          ? "Which service are you interested in?"
-          : "¿Qué servicio te interesa?";
-
-      const msg = [header, "", ...examples, "", ask].join("\n");
       return await replyAndExit(msg, "price_summary_db", detectedIntent || "precio");
     }
   }
