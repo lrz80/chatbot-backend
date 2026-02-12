@@ -1093,8 +1093,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       if (!overallMin || !overallMax) {
         const msg =
           idiomaDestino === "en"
-            ? "I don’t have the pricing loaded in our catalog yet. Which specific service are you interested in?"
-            : "Aún no tengo los precios cargados en el catálogo. ¿Qué servicio específico te interesa?";
+            ? "Which specific service are you interested in?"
+            : "¿Qué servicio específico te interesa?";
         return await replyAndExit(msg, "price_summary_db_empty", detectedIntent || "precio");
       }
 
