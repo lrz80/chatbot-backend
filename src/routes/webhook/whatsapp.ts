@@ -74,6 +74,7 @@ import { resolveServiceInfo } from "../../lib/services/resolveServiceInfo";
 import { traducirMensaje } from "../../lib/traducirMensaje";
 import { renderPriceReply } from "../../lib/services/pricing/renderPriceReply";
 import { looksLikeShortLabel } from "../../lib/channels/engine/lang/looksLikeShortLabel";
+import { isGenericPriceQuestion } from "../../lib/services/pricing/isGenericPriceQuestion";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -939,10 +940,12 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
   }
 
+  const askedGenericPrices = isGenericPriceQuestion(userInput);
+
   // ===============================
   // ✅ PRICE FASTPATH (DB) — NO dependas del LLM para "DESDE"
   // ===============================
-  if (!inBooking0 && isPriceQuestion(userInput)) {
+  if (!inBooking0 && isPriceQuestion(userInput) && !askedGenericPrices) {
     // A) si ya lo tienes en contexto (ideal)
     const LAST_SERVICE_TTL_MS = 60 * 60 * 1000; // 60 min (ajusta si quieres)
 
@@ -1029,13 +1032,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
   // ✅ PRICE SUMMARY (DB): pregunta genérica → resumen (rango + ejemplos), NO lista completa
   if (!inBooking0 && isPriceQuestion(userInput)) {
-    const askedGeneric =
-      // ES
-      /\b(cu[aá]les\s+son\s+los\s+precios|precios\s*\?|precios\b)\b/i.test(userInput) ||
-      // EN
-      /\b(what\s+are\s+the\s+prices|prices\s*\?)\b/i.test(userInput);
 
-    if (askedGeneric) {
+    if (askedGenericPrices) {
       // Trae precios desde services y service_variants (sin depender de un servicio específico)
       const { rows } = await pool.query(
         `
