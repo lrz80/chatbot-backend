@@ -975,26 +975,10 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
     // B) si no hay contexto, intenta resolver por texto contra services
     if (!serviceId) {
-      const r = await resolveServiceIdFromText(pool, tenant.id, userInput);
-
-      console.log("🧪 PRICE_RESOLVE hit =", {
-        tenantId: tenant.id,
-        userInput,
-        hit: r,
-      });
-
-      if (r.kind === "ambiguous" && r.options?.length) {
-        const opts = r.options.slice(0, 4).map(o => `• ${o.name}`).join("\n");
-        return await replyAndExit(
-          `¿Cuál Plan Bronze te interesa?\n${opts}`,
-          "price_resolve_ambiguous",
-          detectedIntent || "precio"
-        );
-      }
-
-      if (r.kind === "hit") {
-        serviceId = r.hit.id;
-        serviceName = r.hit.name;
+      const hit = await resolveServiceIdFromText(pool, tenant.id, userInput);
+        if (hit?.id) {
+          serviceId = hit.id;
+          serviceName = hit.name;
 
         transition({
           patchCtx: {
