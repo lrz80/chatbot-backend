@@ -945,7 +945,10 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   // ===============================
   // ✅ PRICE FASTPATH (DB) — NO dependas del LLM para "DESDE"
   // ===============================
-  if (!inBooking0 && isPriceQuestion(userInput) && !askedGenericPrices) {
+  const isMembershipQuestion =
+  /\b(plan(es)?|mensual(es)?|membres[ií]a(s)?|monthly|membership)\b/i.test(userInput);
+
+  if (!inBooking0 && (isPriceQuestion(userInput) || isMembershipQuestion)) {
     // A) si ya lo tienes en contexto (ideal)
     const LAST_SERVICE_TTL_MS = 60 * 60 * 1000; // 60 min (ajusta si quieres)
 
