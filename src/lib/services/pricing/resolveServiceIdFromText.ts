@@ -84,12 +84,28 @@ export async function resolveServiceIdFromText(
 
   // Si hay direct match, priorízalo, pero si hay varios, elige el más largo/específico
   const directCandidates = normalized
-    .filter((s) => hasDirect(tNormRaw, s.norm) || hasDirect(tAlt, s.norm))
-    .sort((a, b) => b.norm.length - a.norm.length);
+    .filter((s) => hasDirect(tNormRaw, s.norm) || hasDirect(tAlt, s.norm));
 
   if (directCandidates.length) {
-    return { id: directCandidates[0].id, name: directCandidates[0].name };
-  }
+    // usa el mismo scoring ya existente
+    const scored = directCandidates
+      .map((s) => {
+        const sc1 = scoreAgainst(qTokens1, s.tokens, s.norm);
+        const sc2 = scoreAgainst(qTokens2, s.tokens, s.norm);
+        return { s, sc: Math.max(sc1, sc2) };
+      })
+      .sort((a, b) => b.sc - a.sc);
+
+    // si hay empate fuerte (ambiguo), NO adivines
+    const top = scored[0];
+    const second = scored[1];
+
+    if (second && Math.abs(top.sc - second.sc) < 0.08) {
+        return null;
+    }
+
+    return { id: top.s.id, name: top.s.name };
+    }
 
   // 3) Scoring robusto: token overlap + bonus por tokens raros (IDF-lite)
   //    Idea: tokens que aparecen en pocos servicios valen más.

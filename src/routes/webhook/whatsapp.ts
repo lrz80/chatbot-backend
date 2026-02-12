@@ -87,7 +87,7 @@ const MAX_WHATSAPP_LINES = 16; // 14–16 es el sweet spot
 
 function isPriceQuestion(text: string) {
   const t = String(text || "").toLowerCase();
-  return /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|costo|cost|price|how\s+much|starts?\s+at|from|desde)\b/i.test(t);
+  return /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|costo|cost|price|how\s+much|starts?\s+at|from|desde|plan|mensual|monthly|membres[ií]a|membership)\b/i.test(t);
 }
 
 const router = Router();
@@ -991,6 +991,47 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
             last_service_at: Date.now(), // ✅ TTL
           },
         });
+      }
+    }
+
+    // C) si sigue sin serviceId, intenta desambiguar con candidatos desde DB
+    if (!serviceId) {
+      const q = String(userInput || "").toLowerCase();
+
+      const tokens = q
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .map(t => t.trim())
+        .filter(t => t.length >= 3)
+        .slice(0, 4);
+
+      if (tokens.length) {
+        const likeParts = tokens.map((_, i) => `lower(s.name) LIKE $${i + 2}`);
+        const params: any[] = [tenant.id, ...tokens.map(t => `%${t}%`)];
+
+        const { rows } = await pool.query(
+          `
+          SELECT s.id, s.name
+          FROM services s
+          WHERE s.tenant_id = $1
+            AND s.active = true
+            AND (${likeParts.join(" OR ")})
+          ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC
+          LIMIT 5
+          `,
+          params
+        );
+
+        if (rows?.length) {
+          const opts = rows.map((r: any) => `• ${r.name}`).join("\n");
+          const ask =
+            idiomaDestino === "en"
+              ? `Which one do you mean?\n${opts}`
+              : `¿Cuál de estos planes/servicios quieres?\n${opts}`;
+
+          return await replyAndExit(ask, "price_disambiguation_db", detectedIntent || "precio");
+        }
       }
     }
 
