@@ -156,21 +156,47 @@ export async function resolveServiceIdFromText(
     return overlap + phraseBonus;
   };
 
-  let best: { s: any; score: number } | null = null;
+  // rank top-2 (no solo best) para detectar ambigüedad real
+  const ranked: { s: any; score: number }[] = [];
 
   for (const s of normalized) {
     const sc1 = scoreAgainst(qTokens1, s.tokens, s.norm);
     const sc2 = scoreAgainst(qTokens2, s.tokens, s.norm);
     const sc = Math.max(sc1, sc2);
-
-    if (!best || sc > best.score) best = { s, score: sc };
+    ranked.push({ s, score: sc });
   }
 
-  // Umbral: overlap token-based suele ser más estable que tu 0.35
-  // 0.55 funciona bien para evitar “bath” pegándose a todo
-  if (best && best.score >= 0.55) {
-    return { id: best.s.id, name: best.s.name };
+  ranked.sort((a, b) => b.score - a.score);
+
+  const top = ranked[0];
+  const second = ranked[1];
+
+  if (!top || top.score < 0.55) return null;
+
+  // ✅ (1) Empate práctico: si está muy cerca, NO adivines
+  if (second && Math.abs(top.score - second.score) < 0.10) {
+    return null;
   }
 
-  return null;
+  // ✅ (2) Ambigüedad por “token fuerte”:
+  // Si el usuario menciona un token que existe en el 2do candidato
+  // pero NO en el top, y ese token es raro en el catálogo → NO adivinar.
+  const qTokensAll = Array.from(new Set([...qTokens1, ...qTokens2]));
+  const topSet = new Set(top.s.tokens);
+  const secondSet = new Set(second?.s.tokens || []);
+
+  const rareToken = (tok: string) => {
+    const f = tokenFreq.get(tok) || 0;
+    return f > 0 && f <= 2; // aparece en 1–2 servicios → es “fuerte”
+  };
+
+  if (second) {
+    for (const qt of qTokensAll) {
+        if (!topSet.has(qt) && secondSet.has(qt) && rareToken(qt)) {
+        return null;
+      }
+    }
+  }
+
+  return { id: top.s.id, name: top.s.name };
 }
