@@ -2,36 +2,56 @@ import type { Pool } from "pg";
 import { detectarIdioma } from "../../detectarIdioma";
 import { traducirMensaje } from "../../traducirMensaje";
 
+type Hit = { id: string; name: string };
+
 export async function resolveServiceIdFromText(
   pool: Pool,
   tenantId: string,
   userText: string
-): Promise<{ id: string; name: string } | null> {
+): Promise<Hit | null> {
   let t = String(userText || "").trim();
   if (!t) return null;
 
   const idioma = await detectarIdioma(t).catch(() => "es");
 
-  // Normalización para acentos y comparación
   const normalize = (s: string) =>
-    s
+    String(s || "")
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase()
       .trim();
 
-  const tNorm = normalize(t);
+  const tNormRaw = normalize(t);
 
-  // 1) Traducción automática (ES → EN o EN → ES) si aplica
-  let tTranslated = tNorm;
+  // Traducción "cross" (ES<->EN) para mejorar match sin hardcode de negocio
+  let tAlt = tNormRaw;
   try {
-    if (idioma === "es") tTranslated = normalize(await traducirMensaje(t, "en"));
-    else if (idioma === "en") tTranslated = normalize(await traducirMensaje(t, "es"));
+    if (idioma === "es") tAlt = normalize(await traducirMensaje(t, "en"));
+    else if (idioma === "en") tAlt = normalize(await traducirMensaje(t, "es"));
   } catch {
-    /* fallback silencioso */
+    // fallback silencioso
   }
 
-  // 2) Traemos TODOS los servicios del tenant y normalizamos
+  // Stopwords genéricas (NO por industria) para no sobre-pesar “de / the / price / cuanto”
+  const STOP = new Set([
+    "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas",
+    "para", "por", "en", "y", "o", "a",
+    "the", "a", "an", "and", "or", "to", "for", "in", "of",
+    "precio", "precios", "cuanto", "cuanta", "cuesta", "vale", "costo",
+    "price", "prices", "cost", "how", "much", "what", "is", "que", "cual", "cuales"
+  ]);
+
+  const tokenize = (s: string) =>
+    normalize(s)
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .map((w) => w.trim())
+      .filter((w) => w && w.length >= 2 && !STOP.has(w));
+
+  const qTokens1 = tokenize(tNormRaw);
+  const qTokens2 = tokenize(tAlt);
+
+  // 1) Trae servicios del tenant
   const { rows: services } = await pool.query(
     `
     SELECT id, name
@@ -43,51 +63,96 @@ export async function resolveServiceIdFromText(
     [tenantId]
   );
 
-  if (!services.length) return null;
+  if (!services?.length) return null;
 
-  // Normalizamos cada nombre
   const normalized = services.map((s: any) => ({
-    id: s.id,
-    name: s.name,
+    id: String(s.id),
+    name: String(s.name),
     norm: normalize(s.name),
+    tokens: tokenize(s.name),
   }));
 
-  // 3) Intento exacto o substring flexible (t y tTranslated)
-  const directMatch =
-    normalized.find(s => tNorm.includes(s.norm) || s.norm.includes(tNorm)) ||
-    normalized.find(s => tTranslated.includes(s.norm) || s.norm.includes(tTranslated));
+  // 2) Match directo fuerte (frase/substr) con limpieza básica
+  //    (ej: "deluxe bath" dentro del nombre)
+  const hasDirect = (q: string, sNorm: string) => {
+    if (!q || !sNorm) return false;
+    // evita que "bano" haga match con todo por ser corto
+    if (q.length < 4) return false;
+    return q.includes(sNorm) || sNorm.includes(q);
+  };
 
-  if (directMatch) return { id: directMatch.id, name: directMatch.name };
+  // Si hay direct match, priorízalo, pero si hay varios, elige el más largo/específico
+  const directCandidates = normalized
+    .filter((s) => hasDirect(tNormRaw, s.norm) || hasDirect(tAlt, s.norm))
+    .sort((a, b) => b.norm.length - a.norm.length);
 
-  // 4) Similaridad difusa (sin depender de pg_trgm)
-  function similarity(a: string, b: string) {
-    // simple ratio: #caracteres comunes / maxLen
-    const maxLen = Math.max(a.length, b.length);
-    if (maxLen === 0) return 0;
-
-    let matches = 0;
-    for (const ch of a) if (b.includes(ch)) matches++;
-
-    return matches / maxLen;
+  if (directCandidates.length) {
+    return { id: directCandidates[0].id, name: directCandidates[0].name };
   }
 
-  let best: any = null;
-  let bestScore = 0;
+  // 3) Scoring robusto: token overlap + bonus por tokens raros (IDF-lite)
+  //    Idea: tokens que aparecen en pocos servicios valen más.
+  const tokenFreq = new Map<string, number>();
+  for (const s of normalized) {
+    const uniq = new Set(s.tokens);
+    for (const tok of uniq) tokenFreq.set(tok, (tokenFreq.get(tok) || 0) + 1);
+  }
+  const N = normalized.length;
+
+  const scoreAgainst = (qTokens: string[], sTokens: string[], sNorm: string) => {
+    if (!qTokens.length) return 0;
+
+    const sSet = new Set(sTokens);
+
+    // (A) overlap ponderado por “rareza”
+    let overlapWeighted = 0;
+    let qWeightTotal = 0;
+
+    for (const qt of qTokens) {
+      const f = tokenFreq.get(qt) || 0;
+      // rareza: si aparece en pocos servicios, pesa más
+      const w = 1 / Math.max(1, f);
+      qWeightTotal += w;
+      if (sSet.has(qt)) overlapWeighted += w;
+    }
+
+    const overlap = qWeightTotal > 0 ? overlapWeighted / qWeightTotal : 0;
+
+    // (B) bonus si el query tokens aparece “casi como frase”
+    //     (no requiere hardcode: solo mira tokens consecutivos)
+    let phraseBonus = 0;
+    if (qTokens.length >= 2) {
+      const qPhrase = qTokens.join(" ");
+      if (sNorm.includes(qPhrase)) phraseBonus = 0.25;
+    }
+
+    // (C) penaliza matches por token único muy genérico:
+    //     si solo coincide 1 token y ese token es frecuente, no debe ganar.
+    const matchedCount = qTokens.filter((qt) => sSet.has(qt)).length;
+    if (matchedCount === 1) {
+      const only = qTokens.find((qt) => sSet.has(qt))!;
+      const f = tokenFreq.get(only) || 0;
+      const frequent = f >= Math.max(2, Math.floor(N * 0.25)); // aparece en >=25% de servicios
+      if (frequent) return overlap * 0.4; // baja el score fuerte
+    }
+
+    return overlap + phraseBonus;
+  };
+
+  let best: { s: any; score: number } | null = null;
 
   for (const s of normalized) {
-    const sc1 = similarity(tNorm, s.norm);
-    const sc2 = similarity(tTranslated, s.norm);
+    const sc1 = scoreAgainst(qTokens1, s.tokens, s.norm);
+    const sc2 = scoreAgainst(qTokens2, s.tokens, s.norm);
     const sc = Math.max(sc1, sc2);
 
-    if (sc > bestScore) {
-      bestScore = sc;
-      best = s;
-    }
+    if (!best || sc > best.score) best = { s, score: sc };
   }
 
-  // umbral flexible 0.35 (funciona para nombres cortos y largos)
-  if (best && bestScore >= 0.35) {
-    return { id: best.id, name: best.name };
+  // Umbral: overlap token-based suele ser más estable que tu 0.35
+  // 0.55 funciona bien para evitar “bath” pegándose a todo
+  if (best && best.score >= 0.55) {
+    return { id: best.s.id, name: best.s.name };
   }
 
   return null;
