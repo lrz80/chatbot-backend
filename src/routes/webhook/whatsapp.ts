@@ -973,6 +973,12 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     // B) si no hay contexto, intenta resolver por texto contra services
     if (!serviceId) {
       const hit = await resolveServiceIdFromText(pool, tenant.id, userInput);
+      console.log("🧪 PRICE_RESOLVE hit =", {
+        tenantId: tenant.id,
+        userInput,
+        hit,
+      });
+
       if (hit?.id) {
         serviceId = hit.id;
         serviceName = hit.name;
@@ -990,13 +996,27 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
     if (serviceId) {
       const pi = await getPriceInfoForService(pool, tenant.id, serviceId);
+      console.log("🧪 PRICE_INFO pi =", {
+        tenantId: tenant.id,
+        serviceId,
+        serviceName,
+        pi,
+      });
 
       // ✅ Si no hay precio resoluble, no suenes a error ni digas "no tengo precios cargados"
       if (!pi.ok) {
+        // ✅ recuerda que estamos esperando el nombre del servicio para completar precio
+        transition({
+          patchCtx: {
+            pending_price_lookup: true,
+            pending_price_at: Date.now(),
+          },
+        });
+
         const msg =
           idiomaDestino === "en"
-            ? "To provide an accurate price, I just need to confirm which service you're interested in. Which one would you like to check?"
-            : "Para darte un precio exacto, necesito identificar el servicio específico. ¿Cuál deseas consultar?";
+            ? "To give you an exact price, which specific service/plan do you mean?"
+            : "Para darte el precio exacto, ¿cuál servicio/plan específico te interesa?";
 
         return await replyAndExit(msg, "price_missing_db", detectedIntent || "precio");
       }

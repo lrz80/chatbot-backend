@@ -41,9 +41,10 @@ export async function getPriceInfoForService(
     const base = s.rows?.[0]?.base_price;
     const baseNum = Number(base);
 
-    // ⚠️ Importante: si price_base está en 0 o null, NO lo uses.
-    if (Number.isFinite(baseNum) && baseNum > 0) {
-    return { ok: true, mode: "fixed", amount: baseNum, currency: "USD" };
+    // ✅ Acepta 0 como precio válido (ej: clase gratis / trial / free session).
+    // Solo rechazamos null/NaN o negativos.
+    if (base !== null && base !== undefined && Number.isFinite(baseNum) && baseNum >= 0) {
+      return { ok: true, mode: "fixed", amount: baseNum, currency: "USD" };
     }
 
   // 2) Variantes: "desde" = MIN(COALESCE(v.price, v.price_base)) + top 5 variantes
