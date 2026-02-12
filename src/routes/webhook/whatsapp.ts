@@ -73,6 +73,7 @@ import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
 import { resolveServiceInfo } from "../../lib/services/resolveServiceInfo";
 import { traducirMensaje } from "../../lib/traducirMensaje";
 import { renderPriceReply } from "../../lib/services/pricing/renderPriceReply";
+import { looksLikeShortLabel } from "../../lib/channels/engine/lang/looksLikeShortLabel";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -177,6 +178,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // 👉 idioma base del tenant (fallback)
   const tenantBase: Lang = normalizeLang(tenant?.idioma || "es");
   let idiomaDestino: Lang = tenantBase;
+  let forcedLangThisTurn: Lang | null = null;
 
   const origen = turn.origen;
 
@@ -222,6 +224,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       // Guardar idioma sticky ANTES de bienvenida
       await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, forcedLang);
       idiomaDestino = forcedLang;
+      forcedLangThisTurn = forcedLang;
 
       // Si estás en booking y tienes thread_lang, no lo toques aquí.
       console.log("🌍 LANG FORCED (first/hello) =", {
@@ -343,7 +346,24 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     } catch {}
   }
 
-  idiomaDestino = langRes.finalLang;
+  // Si ya forzamos idioma este turno (lead nuevo / saludo), NO lo pises.
+  if (forcedLangThisTurn) {
+    idiomaDestino = forcedLangThisTurn;
+  } else {
+    idiomaDestino = langRes.finalLang;
+  }
+
+  // ✅ NO CAMBIAR IDIOMA por tokens cortos tipo "Indoor cycling", "Deluxe Groom", etc.
+  // Si el hilo ya tiene idioma (storedLang) y el input parece label corto, quédate con storedLang.
+  if (
+    !langRes.inBookingLang &&
+    (storedLang === "es" || storedLang === "en") &&
+    (langRes.detectedLang === "es" || langRes.detectedLang === "en") &&
+    langRes.detectedLang !== storedLang &&
+    looksLikeShortLabel(userInput)
+  ) {
+    idiomaDestino = storedLang;
+  }
 
   console.log("🌍 LANG DEBUG =", {
     userInput,
