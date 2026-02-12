@@ -1087,8 +1087,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       const overallMin = rows?.[0]?.overall_min != null ? Number(rows[0].overall_min) : null;
       const overallMax = rows?.[0]?.overall_max != null ? Number(rows[0].overall_max) : null;
 
-      // si no hay precios cargados en DB, no inventes
-      if (!overallMin || !overallMax) {
+      // ✅ ojo: overallMin puede ser 0 (ej. clase gratis). No lo trates como "empty".
+      if (overallMin == null || overallMax == null) {
         const msg =
           idiomaDestino === "en"
             ? "Which specific service are you interested in?"
