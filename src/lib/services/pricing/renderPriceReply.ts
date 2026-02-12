@@ -1,3 +1,4 @@
+//src/lib/services/pricing/renderPriceReply.ts
 import type { Lang } from "../../channels/engine/clients/clientDb";
 import { normalizeVariantLabel } from "./normalizeVariantLabel";
 
@@ -37,9 +38,13 @@ export function renderPriceReply(args: {
   // FIXED (services.price_base)
   if (args.mode === "fixed") {
     if (args.lang === "en") {
-      return name ? `${name}: ${money}` : `Price: ${money}`;
+      return name
+          ? `${name}: ${money}\n\nIf you tell me the service or product name you’re looking for, I can help you better.`
+          : `Price: ${money}\n\nIf you tell me the service or product name you’re looking for, I can help you better.`;
     }
-    return name ? `${name}: ${money}` : `El precio es ${money}`;
+    return name
+        ? `${name}: ${money}\n\nSi me dices el nombre del servicio o producto que buscas, te puedo ayudar mejor.`
+        : `El precio es ${money}\n\nSi me dices el nombre del servicio o producto que buscas, te puedo ayudar mejor.`;
   }
 
   // FROM (service_variants.price)
@@ -53,7 +58,9 @@ export function renderPriceReply(args: {
           : "";
       return `${header}\n\nOptions:\n${list}${more}\n\nWhich option are you interested in?`;
     }
-    return name ? `${name} — starts at ${money}` : `Starts at ${money}`;
+    return name
+        ? `${name} — starts at ${money}\n\nIf you tell me the exact option name, I can help you better.`
+        : `Starts at ${money}\n\nIf you tell me the service/product name, I can help you better.`;
   }
 
   // ES
@@ -67,5 +74,7 @@ export function renderPriceReply(args: {
     return `${header}\n\nOpciones:\n${list}${more}\n\n¿Cuál opción te interesa?`;
   }
 
-  return name ? `${name} — desde ${money}` : `Desde ${money}`;
+  return name
+      ? `${name} — desde ${money}\n\nSi me dices el nombre exacto de la opción, te puedo ayudar mejor.`
+      : `Desde ${money}\n\nSi me dices el nombre del servicio o producto que buscas, te puedo ayudar mejor.`;
 }

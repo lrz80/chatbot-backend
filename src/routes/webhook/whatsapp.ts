@@ -72,10 +72,7 @@ import { resolveServiceIdFromText } from "../../lib/services/pricing/resolveServ
 import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
 import { resolveServiceInfo } from "../../lib/services/resolveServiceInfo";
 import { traducirMensaje } from "../../lib/traducirMensaje";
-import { renderServiceListReply } from "../../lib/services/renderServiceListReply";
-import type { ServiceListItem } from "../../lib/services/resolveServiceList";
 import { renderPriceReply } from "../../lib/services/pricing/renderPriceReply";
-
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -86,19 +83,9 @@ export type WhatsAppContext = {
 
 const MAX_WHATSAPP_LINES = 16; // 14–16 es el sweet spot
 
-// ✅ THREAD TTL: si el hilo estuvo inactivo más de X, resetea flow/step/context
-const THREAD_TTL_MS = 2 * 60 * 60 * 1000; // 2 horas (ajústalo si quieres)
-
 function isPriceQuestion(text: string) {
   const t = String(text || "").toLowerCase();
   return /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|costo|cost|price|how\s+much|starts?\s+at|from|desde)\b/i.test(t);
-}
-
-function isServiceListQuestion(text: string) {
-  const t = String(text || "").toLowerCase().trim();
-
-  // ES/EN genérico (multi-tenant): servicios / opciones / productos / menú / lista / catálogo
-  return /\b(que\s+(servicios|opciones|productos)\s+(ofrec(en|e)|tien(en|e))|servicios\s+ofrec(en|e)|lista\s+de\s+(servicios|productos)|catalogo|cat[aá]logo|menu|men[uú]|opciones|what\s+(services|do\s+you\s+offer|do\s+you\s+have)|service\s+list|list\s+of\s+(services|products)|catalog)\b/i.test(t);
 }
 
 const router = Router();
@@ -328,46 +315,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   let convoCtx = (st.context && typeof st.context === "object") ? st.context : {};
 
   // ===============================
-  // 🕒 THREAD EXPIRY RESET (anti “se queda pegado”)
-  // Fuente: timestamp guardado en convoCtx.last_turn_at (ms)
-  // ===============================
-  try {
-    const lastTurnAt = Number((convoCtx as any)?.last_turn_at || 0);
-    const age = lastTurnAt ? (Date.now() - lastTurnAt) : 0;
-
-    if (lastTurnAt && age > THREAD_TTL_MS) {
-      console.log("🧹 THREAD TTL RESET:", {
-        tenantId: tenant.id,
-        canal,
-        contacto: contactoNorm,
-        age_ms: age,
-        ttl_ms: THREAD_TTL_MS,
-      });
-
-      // resetea estado del hilo (NO toca messages → métricas intactas)
-      activeFlow = "generic_sales";
-      activeStep = "start";
-      convoCtx = {};
-
-      // persiste reset en conversation_state
-      await setConversationStateDB({
-        tenantId: tenant.id,
-        canal,
-        senderId: contactoNorm,
-        activeFlow,
-        activeStep,
-        contextPatch: {
-          // marca para debug
-          thread_reset_reason: "ttl_expired",
-          thread_reset_at: new Date().toISOString(),
-        },
-      });
-    }
-  } catch (e: any) {
-    console.warn("⚠️ THREAD TTL RESET failed:", e?.message);
-  }
-
-  // ===============================
   // 🌍 LANG RESOLUTION (CLIENT-FIRST)
   // ===============================
   const storedLang = await getIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, tenantBase);
@@ -441,13 +388,8 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   }) {
     if (params.flow !== undefined) activeFlow = params.flow;
     if (params.step !== undefined) activeStep = params.step;
-
-    const basePatch = { last_turn_at: Date.now() }; // ✅ marca actividad del hilo
-
     if (params.patchCtx && typeof params.patchCtx === "object") {
-      convoCtx = { ...(convoCtx || {}), ...basePatch, ...params.patchCtx };
-    } else {
-      convoCtx = { ...(convoCtx || {}), ...basePatch };
+      convoCtx = { ...(convoCtx || {}), ...params.patchCtx };
     }
   }
 
@@ -980,100 +922,89 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   // ===============================
   // ✅ PRICE FASTPATH (DB) — NO dependas del LLM para "DESDE"
   // ===============================
-  function formatMoney(amount: number, currency: string) {
-    const a = Math.round(amount);
-    if (currency === "USD") return `$${a}`;
-    return `${a} ${currency}`;
-  }
-
   if (!inBooking0 && isPriceQuestion(userInput)) {
-    const LAST_SERVICE_TTL_MS = 60 * 60 * 1000;
+    // A) si ya lo tienes en contexto (ideal)
+    const LAST_SERVICE_TTL_MS = 60 * 60 * 1000; // 60 min (ajusta si quieres)
 
     let serviceId: string | null = (convoCtx as any)?.last_service_id || null;
     let serviceName: string | null = (convoCtx as any)?.last_service_name || null;
     const lastAt = Number((convoCtx as any)?.last_service_at || 0);
 
-    // A) TTL del contexto
     if (serviceId && lastAt && Number.isFinite(lastAt)) {
       const age = Date.now() - lastAt;
       if (age > LAST_SERVICE_TTL_MS) {
+        // expiró → no uses contexto viejo
         serviceId = null;
         serviceName = null;
 
         transition({
-          patchCtx: { last_service_id: null, last_service_name: null, last_service_at: null },
-        });
-      }
-    }
-
-    // ✅ 1 sola resolución por texto (sirve como "set" si no hay contexto, o "override" si menciona otro)
-    let hitNow: { id: string; name: string } | null = null;
-    try {
-      hitNow = await resolveServiceIdFromText(pool, tenant.id, userInput);
-    } catch (e: any) {
-      console.warn("⚠️ resolveServiceIdFromText failed:", e?.message);
-    }
-
-    if (hitNow?.id) {
-      const isDifferent = !serviceId || hitNow.id !== serviceId;
-
-      if (isDifferent) {
-        serviceId = hitNow.id;
-        serviceName = hitNow.name;
-
-        transition({
           patchCtx: {
-            last_service_id: serviceId,
-            last_service_name: serviceName,
-            last_service_at: Date.now(),
-            last_service_reason: "price_set_or_override_by_text",
+            last_service_id: null,
+            last_service_name: null,
+            last_service_at: null,
           },
         });
       }
     }
 
-    // Si aún no hay serviceId, pide clarificación (sin inventar)
+    // B) si no hay contexto, intenta resolver por texto contra services
     if (!serviceId) {
-      const msg =
-        idiomaDestino === "en"
-          ? "Sure — which service are you asking about?"
-          : "Claro — ¿de qué servicio estás preguntando el precio?";
-      return await replyAndExit(msg, "price_missing_service", detectedIntent || "precio");
+      const hit = await resolveServiceIdFromText(pool, tenant.id, userInput);
+      if (hit?.id) {
+        serviceId = hit.id;
+        serviceName = hit.name;
+
+        // guarda para próximas vueltas
+        transition({
+          patchCtx: {
+            last_service_id: serviceId,
+            last_service_name: serviceName,
+            last_service_at: Date.now(), // ✅ TTL
+          },
+        });
+      }
     }
 
-    const pi = await getPriceInfoForService(pool, tenant.id, serviceId);
+    if (serviceId) {
+      const pi = await getPriceInfoForService(pool, tenant.id, serviceId);
 
-    if (!pi.ok) {
-      const msg =
-        idiomaDestino === "en"
-          ? "To give you an accurate price, I need to confirm the exact service/option. Which one is it?"
-          : "Para darte un precio exacto, necesito confirmar el servicio/opción exacta. ¿Cuál es?";
-      return await replyAndExit(msg, "price_missing_db", detectedIntent || "precio");
-    }
+      // ✅ Si no hay precio resoluble, no suenes a error ni digas "no tengo precios cargados"
+      if (!pi.ok) {
+        const msg =
+          idiomaDestino === "en"
+            ? "To provide an accurate price, I just need to confirm which service you're interested in. Which one would you like to check?"
+            : "Para darte un precio exacto, necesito identificar el servicio específico. ¿Cuál deseas consultar?";
 
-    const msg = renderPriceReply({
-      lang: idiomaDestino === "en" ? "en" : "es",
-      mode: pi.mode,
-      amount: pi.amount,
-      currency: (pi.currency || "USD").toUpperCase(),
-      serviceName: serviceName || null,
-      options: (pi as any).options,
-      optionsCount: (pi as any).optionsCount,
-    });
+        return await replyAndExit(msg, "price_missing_db", detectedIntent || "precio");
+      }
 
-    if (pi.mode === "fixed") {
-      const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
-      await setAwaitingState(pool, {
-        tenantId: tenant.id,
-        canal,
-        senderId: contactoNorm,
-        field: "yes_no",
-        payload: { kind: "confirm_booking", source: "price_fastpath_db", serviceId },
-        ttlSeconds: 600,
+      // ✅ Precio válido (fixed/from)
+      const msg = renderPriceReply({
+        lang: idiomaDestino === "en" ? "en" : "es",
+        mode: pi.mode,
+        amount: pi.amount,
+        currency: (pi.currency || "USD").toUpperCase(),
+        serviceName: serviceName || null,
+        options: pi.mode === "from" ? (pi.options || []) : undefined,
+        optionsCount: pi.mode === "from" ? (pi.optionsCount as any) : undefined,
       });
-    }
 
-    return await replyAndExit(msg, "price_fastpath_db", detectedIntent || "precio");
+      // ✅ IMPORTANT: si estamos haciendo una pregunta de confirmación (sí/no),
+      // seteamos awaiting para que el siguiente "sí" no se pierda.
+      if (pi.mode === "fixed") {
+        const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
+        await setAwaitingState(pool, {
+          tenantId: tenant.id,
+          canal,
+          senderId: contactoNorm,
+          field: "yes_no",
+          payload: { kind: "confirm_booking", source: "price_fastpath_db", serviceId },
+          ttlSeconds: 600,
+        });
+      }
+
+      return await replyAndExit(msg, "price_fastpath_db", detectedIntent || "precio");
+    }
   }
 
   // ✅ PRICE SUMMARY (DB): pregunta genérica → resumen (rango + ejemplos), NO lista completa
@@ -1182,54 +1113,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       const msg = [header, "", ...examples, "", ask].join("\n");
       return await replyAndExit(msg, "price_summary_db", detectedIntent || "precio");
     }
-  }
-
-    // ===============================
-    // ✅ SERVICE LIST FASTPATH (DB) — lista bonita (bullets/números) sin hardcode
-    // ===============================
-    if (!inBooking0 && isServiceListQuestion(userInput)) {
-    const { rows } = await pool.query(
-      `
-      SELECT
-        id          AS service_id,
-        name        AS name,
-        category    AS category,
-        duration_min,
-        price_base,
-        service_url
-      FROM services
-      WHERE tenant_id = $1
-        AND active = true
-        AND name IS NOT NULL
-      ORDER BY name ASC
-      LIMIT 50;
-      `,
-      [tenant.id]
-    );
-
-    const items: ServiceListItem[] = (rows || []).map((r: any) => ({
-      service_id: String(r.service_id),
-      name: String(r.name || "").trim(),
-      category: r.category ?? null,
-      duration_min: r.duration_min ?? null,
-      price_base: r.price_base ?? null,
-      service_url: r.service_url ?? null,
-
-      // ✅ para lista simple NO necesitas variantes aquí
-      variants: [],
-    }));
-
-    const msg = renderServiceListReply({
-      items,
-      lang: idiomaDestino === "en" ? "en" : "es",
-      max: 6,
-      numbered: false,       // bullets
-      includeMeta: false,    // NO precio/duración por defecto
-      includeVariants: false,
-      // currency: tenant?.currency || null, // si luego lo agregas por tenant
-    });
-
-    return await replyAndExit(msg, "service_list_fastpath_db", detectedIntent || "servicios");
   }
 
   const smResult = await sm({
