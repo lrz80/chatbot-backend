@@ -975,23 +975,32 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
     // B) si no hay contexto, intenta resolver por texto contra services
     if (!serviceId) {
-      const hit = await resolveServiceIdFromText(pool, tenant.id, userInput);
+      const r = await resolveServiceIdFromText(pool, tenant.id, userInput);
+
       console.log("🧪 PRICE_RESOLVE hit =", {
         tenantId: tenant.id,
         userInput,
-        hit,
+        hit: r,
       });
 
-      if (hit?.id) {
-        serviceId = hit.id;
-        serviceName = hit.name;
+      if (r.kind === "ambiguous" && r.options?.length) {
+        const opts = r.options.slice(0, 4).map(o => `• ${o.name}`).join("\n");
+        return await replyAndExit(
+          `¿Cuál Plan Bronze te interesa?\n${opts}`,
+          "price_resolve_ambiguous",
+          detectedIntent || "precio"
+        );
+      }
 
-        // guarda para próximas vueltas
+      if (r.kind === "hit") {
+        serviceId = r.hit.id;
+        serviceName = r.hit.name;
+
         transition({
           patchCtx: {
             last_service_id: serviceId,
             last_service_name: serviceName,
-            last_service_at: Date.now(), // ✅ TTL
+            last_service_at: Date.now(),
           },
         });
       }
