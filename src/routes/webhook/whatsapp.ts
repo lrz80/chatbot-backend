@@ -1102,47 +1102,48 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       const { rows } = await pool.query(
         `
         WITH base AS (
-          SELECT
-            s.id AS service_id,
-            s.name AS service_name,
-            s.price_base::numeric AS price
+          SELECT s.id AS service_id, s.name AS service_name, s.price_base::numeric AS price
           FROM services s
-          WHERE s.tenant_id = $1
-            AND s.active = true
-            AND s.price_base IS NOT NULL
+          WHERE s.tenant_id = $1 AND s.active = true AND s.price_base IS NOT NULL
 
           UNION ALL
 
-          SELECT
-            v.service_id,
-            s.name AS service_name,
-            v.price::numeric AS price
+          SELECT v.service_id, s.name AS service_name, v.price::numeric AS price
           FROM service_variants v
           JOIN services s ON s.id = v.service_id
-          WHERE s.tenant_id = $1
-            AND s.active = true
-            AND v.active = true
-            AND v.price IS NOT NULL
+          WHERE s.tenant_id = $1 AND s.active = true AND v.active = true AND v.price IS NOT NULL
         ),
         agg AS (
-          SELECT
-            service_id,
-            service_name,
-            MIN(price) AS min_price,
-            MAX(price) AS max_price
+          SELECT service_id, service_name, MIN(price) AS min_price, MAX(price) AS max_price
           FROM base
           GROUP BY service_id, service_name
+        ),
+        bounds AS (
+          SELECT
+            (SELECT MIN(min_price) FROM agg) AS overall_min,
+            (SELECT MAX(max_price) FROM agg) AS overall_max
+        ),
+        cheap AS (
+          SELECT * FROM agg ORDER BY min_price ASC LIMIT 3
+        ),
+        expensive AS (
+          SELECT * FROM agg ORDER BY max_price DESC LIMIT 2
+        ),
+        picked AS (
+          SELECT * FROM cheap
+          UNION
+          SELECT * FROM expensive
         )
         SELECT
-          (SELECT MIN(min_price) FROM agg) AS overall_min,
-          (SELECT MAX(max_price) FROM agg) AS overall_max,
-          service_id,
-          service_name,
-          min_price,
-          max_price
-        FROM agg
-        ORDER BY min_price ASC
-        LIMIT 5;
+          b.overall_min,
+          b.overall_max,
+          p.service_id,
+          p.service_name,
+          p.min_price,
+          p.max_price
+        FROM picked p
+        CROSS JOIN bounds b
+        ORDER BY p.min_price ASC;
         `,
         [tenant.id]
       );
