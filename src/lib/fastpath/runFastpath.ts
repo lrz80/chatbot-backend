@@ -35,6 +35,10 @@ export type FastpathCtx = {
   pending_price_lookup?: boolean;
   pending_price_at?: number | null;
 
+  // ✅ NUEVO: lista de planes mostrada recientemente (para seleccionar)
+  last_plan_list?: Array<{ id: string; name: string; url: string | null }>;
+  last_plan_list_at?: number | null;
+
   // cualquier otra cosa que tengas
   [k: string]: any;
 };
@@ -98,6 +102,47 @@ export type RunFastpathArgs = {
   lastServiceTtlMs?: number; // default 60 min
 };
 
+function normalizeText(s: string) {
+  return String(s || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parsePickIndex(text: string): number | null {
+  // acepta "1", "1)", "1.", "opcion 1", "la 2", etc.
+  const t = normalizeText(text);
+  const m = t.match(/\b(\d{1,2})\b/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+function bestNameMatch(
+  userText: string,
+  items: Array<{ id: string; name: string; url: string | null }>
+) {
+  const u = normalizeText(userText);
+  if (!u) return null;
+
+  // match por inclusión (simple y multitenant)
+  // si el usuario escribe "bronze cycling" o "plan bronze", etc.
+  const hits = items.filter((it) => {
+    const n = normalizeText(it.name);
+    return n.includes(u) || u.includes(n);
+  });
+
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) {
+    // si hay varios, elige el que tenga nombre más largo (más específico)
+    return hits.sort((a, b) => normalizeText(b.name).length - normalizeText(a.name).length)[0];
+  }
+  return null;
+}
+
 function normalizeTokensForLike(q: string) {
   return q
     .normalize("NFD")
@@ -145,47 +190,157 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const intentOut = (detectedIntent || "").trim() || null;
 
   // ===============================
-// ✅ CATALOG LIST FASTPATH (DB)  (plans/services)
-// ===============================
+  // ✅ PLAN PICK -> SEND SINGLE LINK (NO LIST)
+  // ===============================
+  {
+    const list = Array.isArray(convoCtx?.last_plan_list) ? convoCtx.last_plan_list : [];
+    const lastAt = Number(convoCtx?.last_plan_list_at || 0);
+
+    // TTL corto para evitar seleccionar algo viejo (10 min)
+    const ttlMs = 10 * 60 * 1000;
+    const listFresh = list.length > 0 && lastAt > 0 && Date.now() - lastAt <= ttlMs;
+
+    if (!listFresh) {
+      // si está vieja, límpiala (sin cortar flujo)
+      if (list.length) {
+        // 👇 esto solo limpia estado; deja seguir
+        // (si tu caller aplica ctxPatch aunque handled:false, perfecto)
+        // si NO, quita este bloque
+        return { handled: false, ctxPatch: { last_plan_list: undefined, last_plan_list_at: undefined } };
+      }
+    } else {
+      const idx = parsePickIndex(userInput);
+
+      let picked: { id: string; name: string; url: string | null } | null = null;
+
+      // 1) Selección por número
+      if (idx != null) {
+        const i = idx - 1;
+        if (i >= 0 && i < list.length) picked = list[i];
+      }
+
+      // 2) Selección por nombre (si no fue número)
+      if (!picked) {
+        picked = bestNameMatch(userInput, list);
+      }
+
+      if (picked) {
+        // si no hay url
+        if (!picked.url) {
+          return {
+            handled: true,
+            reply:
+              idiomaDestino === "en"
+                ? `${picked.name}\nI don’t have a direct link for this option yet. Do you want the price/details?`
+                : `${picked.name}\nAún no tengo un link directo para esta opción. ¿Quieres precio/detalles?`,
+            source: "service_list_db",
+            intent: intentOut || "planes",
+            ctxPatch: {
+              // limpiar lista para no reusar indefinidamente
+              last_plan_list: undefined,
+              last_plan_list_at: undefined,
+
+              // set last service para que includes/price funcione luego
+              last_service_id: picked.id,
+              last_service_name: picked.name,
+              last_service_at: Date.now(),
+            },
+          };
+        }
+
+        // ✅ caso normal: manda 1 solo link
+        return {
+          handled: true,
+          reply:
+            idiomaDestino === "en"
+              ? `${picked.name}\nHere’s the link:\n${picked.url}`
+              : `${picked.name}\nAquí tienes el link:\n${picked.url}`,
+          source: "service_list_db",
+          intent: intentOut || "planes",
+          ctxPatch: {
+            // ✅ limpiar lista tras elegir para evitar loops
+            last_plan_list: undefined,
+            last_plan_list_at: undefined,
+
+            // set last service
+            last_service_id: picked.id,
+            last_service_name: picked.name,
+            last_service_at: Date.now(),
+          },
+        };
+      }
+    }
+  }
+
+  // ===============================
+// ✅ PLAN / MEMBERSHIP LIST FASTPATH (DB)
 {
   const t = String(userInput || "").toLowerCase();
 
-  const wantsServices = /\b(servicio(s)?|service(s)?|clase(s)?|classes?)\b/i.test(t);
-  const wantsPlans = /\b(plan(es)?|paquete(s)?|membres[ií]a(s)?|membership(s)?|monthly|packages?)\b/i.test(t);
+  const wantsMembershipList =
+    /\b(plan(es)?|membres[ií]a(s)?|membership(s)?|monthly)\b/i.test(t);
 
-  const wantsListKeyword =
-    /\b(lista|list(a)?|cat[aá]logo|menu|ofrecen|offer|provide|have|tienes|tienen|opciones|disponibles)\b/i.test(t);
-
-  // Dispara si pide lista/catálogo u opciones de planes/servicios
-  const shouldList = wantsListKeyword && (wantsServices || wantsPlans || /\b(precio|prices?)\b/i.test(t));
-
-  if (shouldList || wantsPlans) {
-    // Decide tipos según el mensaje (SIN hardcode por negocio)
-    let tipos: string[] | null = null;
-    if (wantsPlans && !wantsServices) tipos = ["plan"];
-    else if (wantsServices && !wantsPlans) tipos = ["service"];
-    else tipos = ["plan", "service"];
-
+  if (wantsMembershipList) {
     const r = await resolveServiceList(pool, {
       tenantId,
-      limitServices: wantsPlans ? 10 : 8,
+      limitServices: 20,
       queryText: null,
-      tipos,
+      tipos: ["plan"], // ✅ IMPORTANTE: tus valores reales son 'plan'
     });
 
     if (r.ok) {
+      const isPackage = (cat: any) => {
+        const c = String(cat || "").toLowerCase();
+        return c.includes("package"); // Package / Packages
+      };
+
+      const memberships = r.items.filter((x) => !isPackage(x.category));
+      const packages = r.items.filter((x) => isPackage(x.category));
+
+      const parts: string[] = [];
+
+      if (memberships.length) {
+        parts.push(
+          renderServiceListReply({
+            lang: idiomaDestino === "en" ? "en" : "es",
+            items: memberships,
+            maxItems: 8,
+            includeLinks: false,
+            title: idiomaDestino === "en" ? "Membership plans:" : "Planes / Membresías:",
+          })
+        );
+      }
+
+      if (packages.length) {
+        parts.push(
+          renderServiceListReply({
+            lang: idiomaDestino === "en" ? "en" : "es",
+            items: packages,
+            maxItems: 6,
+            includeLinks: false,
+            title: idiomaDestino === "en" ? "Packages (optional):" : "Paquetes (opcional):",
+          })
+        );
+      }
+
+            // ✅ ESTE ES EL ORDEN QUE EL CLIENTE VERÁ (para que 1/2/3 funcione)
+      const itemsAll = [...memberships, ...packages];
+
       return {
         handled: true,
-        reply: renderServiceListReply({
-          lang: idiomaDestino === "en" ? "en" : "es",
-          items: r.items,
-          maxItems: wantsPlans ? 10 : 8,
-        }),
+        reply: parts.join("\n\n").trim(),
         source: "service_list_db",
-        intent: detectedIntent || (wantsPlans ? "planes" : "servicios"),
+        intent: "planes",
         ctxPatch: {
-          last_listed_services_at: Date.now(),
-          ...(wantsPlans ? { last_listed_plans_at: Date.now() } : null),
+          last_listed_plans_at: Date.now(),
+
+          // ✅ guardar lista para selección (número o nombre)
+          last_plan_list: itemsAll.map((x) => ({
+            id: x.service_id,
+            name: x.name,
+            url: x.service_url || null,
+          })),
+          last_plan_list_at: Date.now(),
         },
       };
     }

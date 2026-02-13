@@ -1,13 +1,13 @@
+// src/lib/services/resolveServiceList.ts
 import type { Pool } from "pg";
 
 export type ServiceListItem = {
   service_id: string;
   name: string;
+  tipo: "plan" | "service" | string;
   category: string | null;
   duration_min: number | null;
-  price_base: null;
   service_url: string | null;
-  variants: [];
 };
 
 export async function resolveServiceList(
@@ -16,13 +16,12 @@ export async function resolveServiceList(
     tenantId: string;
     limitServices?: number;
     queryText?: string | null;
-    tipos?: string[] | null; // ✅ NEW: ['plan','service'] (lowercase)
+    tipos?: string[] | null; // ✅ NUEVO: ['plan'] | ['service'] | ['plan','service']
   }
 ): Promise<{ ok: true; items: ServiceListItem[] } | { ok: false; reason: "empty" | "error" }> {
   const tenantId = opts.tenantId;
-  const limitServices = Math.min(50, Math.max(1, opts.limitServices ?? 8));
+  const limitServices = Math.min(20, Math.max(1, opts.limitServices ?? 8));
 
-  // filtro opcional por texto (genérico)
   const q = (opts.queryText || "").trim();
   const qLike = q
     ? `%${q
@@ -31,22 +30,21 @@ export async function resolveServiceList(
         .toLowerCase()}%`
     : null;
 
-  // tipos opcional (normalizado)
-  const tipos = (opts.tipos || null)?.map((x) => String(x || "").toLowerCase().trim()).filter(Boolean) || null;
+  // default: ambos
+  const tipos = (opts.tipos && opts.tipos.length ? opts.tipos : ["plan", "service"]).map((t) =>
+    String(t || "").toLowerCase()
+  );
 
   try {
     const sRes = await pool.query(
       `
-      SELECT id, name, category, duration_min, service_url
+      SELECT id, name, tipo, category, duration_min, service_url
       FROM services
       WHERE tenant_id = $1
         AND active = TRUE
+        AND (LOWER(tipo) = ANY($4::text[]))
         AND (
-          $2::text[] IS NULL
-          OR LOWER(tipo) = ANY($2::text[])
-        )
-        AND (
-          $3::text IS NULL
+          $2::text IS NULL
           OR LOWER(
               REGEXP_REPLACE(
                 TRANSLATE(name, 'ÁÀÄÂÃÉÈËÊÍÌÏÎÓÒÖÔÕÚÙÜÛÑ', 'AAAAAEEEEIIIIOOOOOUUUUN'),
@@ -54,12 +52,12 @@ export async function resolveServiceList(
                 ' ',
                 'g'
               )
-            ) LIKE $3
+            ) LIKE $2
         )
       ORDER BY updated_at DESC NULLS LAST, created_at DESC
-      LIMIT $4
+      LIMIT $3
       `,
-      [tenantId, tipos, qLike, limitServices]
+      [tenantId, qLike, limitServices, tipos]
     );
 
     const services = sRes.rows || [];
@@ -68,11 +66,10 @@ export async function resolveServiceList(
     const items: ServiceListItem[] = services.map((s: any) => ({
       service_id: String(s.id),
       name: String(s.name),
+      tipo: String(s.tipo || "").toLowerCase(),
       category: s.category ? String(s.category) : null,
       duration_min: s.duration_min == null ? null : Number(s.duration_min),
-      price_base: null,
       service_url: s.service_url ? String(s.service_url) : null,
-      variants: [],
     }));
 
     return { ok: true, items };
