@@ -693,7 +693,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // 4) PRICE SUMMARY (DB) solo si la pregunta es genérica
   //    - rango + ejemplos, NO lista completa
   // =========================================================
-  if (isPriceQuestion(userInput) && askedGenericPrices) {
+  if (isPriceQuestion(userInput) && isGenericPriceQuestion(userInput)) {
     const { rows } = await pool.query(
       `
       WITH base AS (
