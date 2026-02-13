@@ -301,6 +301,49 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 }
 
+  // =========================================================
+  // 1) INFO_CLAVE INCLUDES (si existe info_clave)
+  // =========================================================
+  {
+    const info = String(infoClave || "").trim();
+
+    if (info && isAskingIncludes(userInput)) {
+      const blk = findServiceBlock(info, userInput);
+
+      if (blk) {
+        const inc = extractIncludesLine(blk.lines);
+
+        if (inc) {
+          const msg =
+            idiomaDestino === "en"
+              ? `✅ ${blk.title}\nIncludes: ${inc}`
+              : `✅ ${blk.title}\nIncluye: ${inc}`;
+
+          return {
+            handled: true,
+            reply: msg,
+            source: "info_clave_includes",
+            intent: intentOut || "info",
+          };
+        }
+
+        const msg =
+          idiomaDestino === "en"
+            ? `I found "${blk.title}", but the service details are not loaded yet.`
+            : `Encontré "${blk.title}", pero aún no tengo cargado qué incluye.`;
+
+        return {
+          handled: true,
+          reply: msg,
+          source: "info_clave_missing_includes",
+          intent: intentOut || "info",
+        };
+      }
+
+      // Si no matcheó, NO cortamos aquí (dejamos que DB intente resolver)
+    }
+  }
+
   // ===============================
 // ✅ PACKAGES LIST (DB) - ONLY PACKAGES
 // ===============================
@@ -310,7 +353,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const wantsPackages =
     /\b(paquete(s)?|packages?|bundle(s)?|pack(s)?)\b/i.test(t);
 
-  if (wantsPackages && !isPriceQuestion(userInput)) {
+  const askingIncludes = isAskingIncludes(userInput);
+  const askingPrice = isPriceQuestion(userInput) || isGenericPriceQuestion(userInput);
+
+  if (wantsPackages && !askingIncludes && !askingPrice) {
     const r = await resolveServiceList(pool, {
       tenantId,
       limitServices: 20,
@@ -369,7 +415,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const wantsPlans =
     /\b(plan(es)?|membres[ií]a(s)?|membership(s)?|monthly)\b/i.test(t);
 
-  if (wantsPlans && !isPriceQuestion(userInput)) {
+  const askingIncludes = isAskingIncludes(userInput);
+  const askingPrice = isPriceQuestion(userInput) || isGenericPriceQuestion(userInput);
+
+  if (wantsPlans && !askingIncludes && !askingPrice) {
     const r = await resolveServiceList(pool, {
       tenantId,
       limitServices: 20,
@@ -424,49 +473,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 }
-
-  // =========================================================
-  // 1) INFO_CLAVE INCLUDES (si existe info_clave)
-  // =========================================================
-  {
-    const info = String(infoClave || "").trim();
-
-    if (info && isAskingIncludes(userInput)) {
-      const blk = findServiceBlock(info, userInput);
-
-      if (blk) {
-        const inc = extractIncludesLine(blk.lines);
-
-        if (inc) {
-          const msg =
-            idiomaDestino === "en"
-              ? `✅ ${blk.title}\nIncludes: ${inc}`
-              : `✅ ${blk.title}\nIncluye: ${inc}`;
-
-          return {
-            handled: true,
-            reply: msg,
-            source: "info_clave_includes",
-            intent: intentOut || "info",
-          };
-        }
-
-        const msg =
-          idiomaDestino === "en"
-            ? `I found "${blk.title}", but the service details are not loaded yet.`
-            : `Encontré "${blk.title}", pero aún no tengo cargado qué incluye.`;
-
-        return {
-          handled: true,
-          reply: msg,
-          source: "info_clave_missing_includes",
-          intent: intentOut || "info",
-        };
-      }
-
-      // Si no matcheó, NO cortamos aquí (dejamos que DB intente resolver)
-    }
-  }
 
   // =========================================================
   // 2) INCLUDES FASTPATH (DB catalog)
