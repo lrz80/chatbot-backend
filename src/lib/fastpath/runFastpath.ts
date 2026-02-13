@@ -25,7 +25,6 @@ import { isGenericPriceQuestion } from "../services/pricing/isGenericPriceQuesti
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
 import { resolveServiceList } from "../services/resolveServiceList";
 import { renderServiceListReply } from "../services/renderServiceListReply";
-import { naturalizeSecondaryOptionsLine } from "../fastpath/naturalizeSecondaryOptions";
 
 export type FastpathCtx = {
   last_service_id?: string | null;
@@ -395,7 +394,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           askPick: false, // ✅ clave: quita la pregunta robótica interna
         });
 
-        // ✅ “naturalizeSecondaryOptionsLine” si quieres mantenerlo, pero mejor úsalo solo para hints
         const listOnly = baseList; // (asumiendo que renderServiceListReply ya devuelve solo el listado+title)
 
         const reply = wrapHumanList({

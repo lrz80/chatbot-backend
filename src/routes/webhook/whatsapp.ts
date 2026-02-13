@@ -865,7 +865,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
     const hasPkgs = (convoCtx as any)?.has_packages_available === true;
 
-    if (isPlansList && hasPkgs) {
+    if (canal !== "whatsapp" && isPlansList && hasPkgs) {
       out = await naturalizeSecondaryOptionsLine({
         tenantId: tenant.id,
         idiomaDestino,
