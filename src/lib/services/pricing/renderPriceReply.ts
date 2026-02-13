@@ -17,6 +17,54 @@ function formatPrice(amount: number, currency: string, lang: Lang) {
   return formatMoney(n, currency);
 }
 
+function isFreeLabel(m: string) {
+  const s = String(m || "").trim().toLowerCase();
+  return s === "free" || s === "gratis";
+}
+
+function opener(lang: Lang) {
+  return lang === "en" ? "Sure! 😊" : "¡Claro! 😊";
+}
+
+function fixedLine(name: string | null, money: string, lang: Lang) {
+  const free = isFreeLabel(money);
+
+  if (lang === "en") {
+    if (name) return free ? `${name} is free.` : `${name} is ${money}.`;
+    return free ? `It’s free.` : `It’s ${money}.`;
+  }
+
+  // ES
+  if (name) return free ? `${name} es gratis.` : `${name} cuesta ${money}.`;
+  return free ? `Es gratis.` : `Cuesta ${money}.`;
+}
+
+function fromHeader(name: string | null, money: string, lang: Lang) {
+  const free = isFreeLabel(money);
+
+  if (lang === "en") {
+    if (name) return free ? `${name} has free options.` : `${name} starts at ${money}.`;
+    return free ? `There are free options.` : `Starting at ${money}.`;
+  }
+
+  // ES
+  if (name) return free ? `${name} tiene opciones gratis.` : `${name} empieza desde ${money}.`;
+  return free ? `Hay opciones gratis.` : `Desde ${money}.`;
+}
+
+function moreLine(extra: number, lang: Lang) {
+  if (extra <= 0) return "";
+  return lang === "en"
+    ? `\n…plus ${extra} more option(s).`
+    : `\n…y ${extra} opción(es) más.`;
+}
+
+function questionLine(lang: Lang) {
+  return lang === "en"
+    ? "Which one would you like— or tell me what you need and I’ll point you to the best option."
+    : "¿Cuál te interesa— o cuéntame qué necesitas y te recomiendo la mejor opción?";
+}
+
 export function renderPriceReply(args: {
   lang: Lang;
   mode: "fixed" | "from";
@@ -38,50 +86,32 @@ export function renderPriceReply(args: {
   const fmtLine = (o: PriceOption) => {
     const m = formatPrice(o.amount, o.currency || args.currency, args.lang);
     const label = normalizeVariantLabel(String(o.label || "").trim(), args.lang);
+    // Mantengo bullets porque WhatsApp los lee bien, pero con copy más humano alrededor
     return `• ${label}: ${m}`;
   };
 
   // FIXED (services.price_base)
   if (args.mode === "fixed") {
-    if (args.lang === "en") {
-      return name ? `${name}: ${money}` : `Price: ${money}`;
-    }
-    return name ? `${name}: ${money}` : `Precio: ${money}`;
+    // Respuesta humana, especialmente para Gratis/Free
+    return `${opener(args.lang)}\n${fixedLine(name, money, args.lang)}`;
   }
 
   // FROM (variants / ranges)
-  if (args.lang === "en") {
-    if (hasOptions) {
-      const header = name ? `${name} — starts at ${money}` : `Starts at ${money}`;
-      const list = args.options!.map(fmtLine).join("\n");
-
-      const more =
-        typeof args.optionsCount === "number" && args.optionsCount > args.options!.length
-          ? `\n…plus ${args.optionsCount - args.options!.length} more option(s).`
-          : "";
-
-      return `${header}\n${list}${more}\n\nWhich option are you interested in?`;
-    }
-
-    return name
-      ? `${name} — starts at ${money}\n\nWhich option are you interested in?`
-      : `Starts at ${money}\n\nWhich option are you interested in?`;
-  }
-
-  // ES
   if (hasOptions) {
-    const header = name ? `${name} — desde ${money}` : `Desde ${money}`;
+    const header = fromHeader(name, money, args.lang);
     const list = args.options!.map(fmtLine).join("\n");
 
-    const more =
-      typeof args.optionsCount === "number" && args.optionsCount > args.options!.length
-        ? `\n…y ${args.optionsCount - args.options!.length} opción(es) más.`
-        : "";
+    const extra =
+      typeof args.optionsCount === "number"
+        ? Math.max(0, args.optionsCount - args.options!.length)
+        : 0;
 
-    return `${header}\n${list}${more}\n\n¿Cuál opción te interesa?`;
+    const more = moreLine(extra, args.lang);
+
+    // Copy humano: intro + header + lista + pregunta flexible
+    return `${opener(args.lang)}\n${header}\n${list}${more}\n\n${questionLine(args.lang)}`;
   }
 
-  return name
-    ? `${name} — desde ${money}\n\n¿Cuál opción te interesa?`
-    : `Desde ${money}\n\n¿Cuál opción te interesa?`;
+  // Sin options: también humano
+  return `${opener(args.lang)}\n${fromHeader(name, money, args.lang)}\n\n${questionLine(args.lang)}`;
 }
