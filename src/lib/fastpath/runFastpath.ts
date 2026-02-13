@@ -272,8 +272,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
-  // ===============================
-// ✅ PLAN / MEMBERSHIP LIST FASTPATH (DB)
+  // ✅ PLAN / MEMBERSHIP LIST FASTPATH (DB)
 {
   const t = String(userInput || "").toLowerCase();
 
@@ -323,9 +322,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         );
       }
 
-            // ✅ ESTE ES EL ORDEN QUE EL CLIENTE VERÁ (para que 1/2/3 funcione)
-      const itemsAll = [...memberships, ...packages];
-
       return {
         handled: true,
         reply: parts.join("\n\n").trim(),
@@ -333,14 +329,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         intent: "planes",
         ctxPatch: {
           last_listed_plans_at: Date.now(),
-
-          // ✅ guardar lista para selección (número o nombre)
-          last_plan_list: itemsAll.map((x) => ({
-            id: x.service_id,
-            name: x.name,
-            url: x.service_url || null,
-          })),
-          last_plan_list_at: Date.now(),
+          // 🔥 aquí idealmente guardas los ids listados para luego mandar link (ver punto 4)
         },
       };
     }
