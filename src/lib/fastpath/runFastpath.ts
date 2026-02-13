@@ -27,7 +27,6 @@ import { resolveServiceList } from "../services/resolveServiceList";
 import { renderServiceListReply } from "../services/renderServiceListReply";
 
 export type FastpathCtx = {
-  // state context de conversation_state
   last_service_id?: string | null;
   last_service_name?: string | null;
   last_service_at?: number | null;
@@ -35,11 +34,20 @@ export type FastpathCtx = {
   pending_price_lookup?: boolean;
   pending_price_at?: number | null;
 
-  // ✅ NUEVO: lista de planes mostrada recientemente (para seleccionar)
+  // ✅ listas para selección posterior
   last_plan_list?: Array<{ id: string; name: string; url: string | null }>;
   last_plan_list_at?: number | null;
 
-  // cualquier otra cosa que tengas
+  last_package_list?: Array<{ id: string; name: string; url: string | null }>;
+  last_package_list_at?: number | null;
+
+  // ✅ señales estructurales (SIN COPY)
+  has_packages_available?: boolean;
+  has_packages_available_at?: number | null;
+
+  last_list_kind?: "plan" | "package";
+  last_list_kind_at?: number | null;
+
   [k: string]: any;
 };
 
@@ -190,158 +198,190 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const intentOut = (detectedIntent || "").trim() || null;
 
   // ===============================
-  // ✅ PLAN PICK -> SEND SINGLE LINK (NO LIST)
-  // ===============================
-  {
-    const list = Array.isArray(convoCtx?.last_plan_list) ? convoCtx.last_plan_list : [];
-    const lastAt = Number(convoCtx?.last_plan_list_at || 0);
+// ✅ PICK FROM LAST LIST -> SEND SINGLE LINK
+// ===============================
+{
+  const ttlMs = 10 * 60 * 1000;
 
-    // TTL corto para evitar seleccionar algo viejo (10 min)
-    const ttlMs = 10 * 60 * 1000;
-    const listFresh = list.length > 0 && lastAt > 0 && Date.now() - lastAt <= ttlMs;
+  const planList = Array.isArray(convoCtx?.last_plan_list) ? convoCtx.last_plan_list : [];
+  const planAt = Number(convoCtx?.last_plan_list_at || 0);
+  const planFresh = planList.length > 0 && planAt > 0 && Date.now() - planAt <= ttlMs;
 
-    if (!listFresh) {
-      // si está vieja, límpiala (sin cortar flujo)
-      if (list.length) {
-        // 👇 esto solo limpia estado; deja seguir
-        // (si tu caller aplica ctxPatch aunque handled:false, perfecto)
-        // si NO, quita este bloque
-        return { handled: false, ctxPatch: { last_plan_list: undefined, last_plan_list_at: undefined } };
-      }
-    } else {
-      const idx = parsePickIndex(userInput);
+  const pkgList = Array.isArray(convoCtx?.last_package_list) ? convoCtx.last_package_list : [];
+  const pkgAt = Number(convoCtx?.last_package_list_at || 0);
+  const pkgFresh = pkgList.length > 0 && pkgAt > 0 && Date.now() - pkgAt <= ttlMs;
 
+  const kind = (convoCtx?.last_list_kind as any) || null;
+  const kindAt = Number(convoCtx?.last_list_kind_at || 0);
+  const kindFresh = kind && kindAt > 0 && Date.now() - kindAt <= ttlMs;
+
+  if (planFresh || pkgFresh) {
+    const idx = parsePickIndex(userInput);
+
+    const tryPick = (list: Array<{ id: string; name: string; url: string | null }>) => {
       let picked: { id: string; name: string; url: string | null } | null = null;
 
-      // 1) Selección por número
       if (idx != null) {
         const i = idx - 1;
         if (i >= 0 && i < list.length) picked = list[i];
       }
+      if (!picked) picked = bestNameMatch(userInput, list);
 
-      // 2) Selección por nombre (si no fue número)
-      if (!picked) {
-        picked = bestNameMatch(userInput, list);
-      }
+      return picked;
+    };
 
-      if (picked) {
-        // si no hay url
-        if (!picked.url) {
-          return {
-            handled: true,
-            reply:
-              idiomaDestino === "en"
-                ? `${picked.name}\nI don’t have a direct link for this option yet. Do you want the price/details?`
-                : `${picked.name}\nAún no tengo un link directo para esta opción. ¿Quieres precio/detalles?`,
-            source: "service_list_db",
-            intent: intentOut || "planes",
-            ctxPatch: {
-              // limpiar lista para no reusar indefinidamente
-              last_plan_list: undefined,
-              last_plan_list_at: undefined,
+    // ✅ prioridad por “último tipo listado” si está fresco
+    let picked: { id: string; name: string; url: string | null } | null = null;
 
-              // set last service para que includes/price funcione luego
-              last_service_id: picked.id,
-              last_service_name: picked.name,
-              last_service_at: Date.now(),
-            },
-          };
-        }
+    if (kindFresh && kind === "package") {
+      if (pkgFresh) picked = tryPick(pkgList);
+      if (!picked && planFresh) picked = tryPick(planList);
+    } else {
+      // default: plan primero
+      if (planFresh) picked = tryPick(planList);
+      if (!picked && pkgFresh) picked = tryPick(pkgList);
+    }
 
-        // ✅ caso normal: manda 1 solo link
+    if (picked) {
+      const basePatch: Partial<FastpathCtx> = {
+        // limpiar listas tras elegir (evita loops)
+        last_plan_list: undefined,
+        last_plan_list_at: undefined,
+        last_package_list: undefined,
+        last_package_list_at: undefined,
+        last_list_kind: undefined,
+        last_list_kind_at: undefined,
+
+        // set last_service para price/includes
+        last_service_id: picked.id,
+        last_service_name: picked.name,
+        last_service_at: Date.now(),
+      };
+
+      // manda link SOLO si existe
+      const reply = picked.url ? `${picked.name}\n${picked.url}` : `${picked.name}`;
+
+      return {
+        handled: true,
+        reply,
+        source: "service_list_db",
+        intent: intentOut || "seleccion",
+        ctxPatch: basePatch,
+      };
+    }
+  }
+}
+
+  // ===============================
+// ✅ PACKAGES LIST (DB) - ONLY PACKAGES
+// ===============================
+{
+  const t = String(userInput || "").toLowerCase();
+
+  const wantsPackages =
+    /\b(paquete(s)?|packages?|bundle(s)?|pack(s)?)\b/i.test(t);
+
+  if (wantsPackages) {
+    const r = await resolveServiceList(pool, {
+      tenantId,
+      limitServices: 20,
+      queryText: null,
+      tipos: ["plan"],
+    });
+
+    if (r.ok) {
+      const isPackage = (cat: any) => String(cat || "").toLowerCase().includes("package");
+      const packages = r.items.filter((x) => isPackage(x.category));
+
+      if (packages.length) {
+        const reply = renderServiceListReply({
+          lang: idiomaDestino === "en" ? "en" : "es",
+          items: packages,
+          maxItems: 8,
+          includeLinks: false,
+          title: idiomaDestino === "en" ? "Packages:" : "Paquetes:",
+        });
+
         return {
           handled: true,
-          reply:
-            idiomaDestino === "en"
-              ? `${picked.name}\nHere’s the link:\n${picked.url}`
-              : `${picked.name}\nAquí tienes el link:\n${picked.url}`,
+          reply,
           source: "service_list_db",
-          intent: intentOut || "planes",
+          intent: "paquetes",
           ctxPatch: {
-            // ✅ limpiar lista tras elegir para evitar loops
-            last_plan_list: undefined,
-            last_plan_list_at: undefined,
-
-            // set last service
-            last_service_id: picked.id,
-            last_service_name: picked.name,
-            last_service_at: Date.now(),
+            last_package_list: packages.map((x) => ({
+              id: x.service_id,
+              name: x.name,
+              url: x.service_url || null,
+            })),
+            last_package_list_at: Date.now(),
+            last_list_kind: "package",
+            last_list_kind_at: Date.now(),
           },
         };
       }
     }
   }
+}
 
-  // ✅ PLAN / MEMBERSHIP LIST FASTPATH (DB)
+ // ===============================
+// ✅ PLANS LIST (DB) - ONLY PLANS
+// ===============================
 {
   const t = String(userInput || "").toLowerCase();
 
-  const wantsMembershipList =
+  const wantsPlans =
     /\b(plan(es)?|membres[ií]a(s)?|membership(s)?|monthly)\b/i.test(t);
 
-  if (wantsMembershipList) {
+  if (wantsPlans) {
     const r = await resolveServiceList(pool, {
       tenantId,
       limitServices: 20,
       queryText: null,
-      tipos: ["plan"], // ✅ IMPORTANTE: tus valores reales son 'plan'
+      tipos: ["plan"], // tus valores reales
     });
 
     if (r.ok) {
-      const isPackage = (cat: any) => {
-        const c = String(cat || "").toLowerCase();
-        return c.includes("package"); // Package / Packages
-      };
+      const isPackage = (cat: any) => String(cat || "").toLowerCase().includes("package");
 
-      const memberships = r.items.filter((x) => !isPackage(x.category));
+      const plans = r.items.filter((x) => !isPackage(x.category));
       const packages = r.items.filter((x) => isPackage(x.category));
 
-      const parts: string[] = [];
+      if (plans.length) {
+        const reply = renderServiceListReply({
+          lang: idiomaDestino === "en" ? "en" : "es",
+          items: plans,
+          maxItems: 8,
+          includeLinks: false,
+          title: idiomaDestino === "en" ? "Plans / Memberships:" : "Planes / Membresías:",
+        });
 
-      if (memberships.length) {
-        parts.push(
-          renderServiceListReply({
-            lang: idiomaDestino === "en" ? "en" : "es",
-            items: memberships,
-            maxItems: 8,
-            includeLinks: false,
-            title: idiomaDestino === "en" ? "Membership plans:" : "Planes / Membresías:",
-          })
-        );
+        return {
+          handled: true,
+          reply,
+          source: "service_list_db",
+          intent: "planes",
+          ctxPatch: {
+            last_plan_list: plans.map((x) => ({
+              id: x.service_id,
+              name: x.name,
+              url: x.service_url || null,
+            })),
+            last_plan_list_at: Date.now(),
+            last_list_kind: "plan",
+            // ✅ señal estructural, SIN COPY
+            has_packages_available: packages.length > 0,
+            has_packages_available_at: Date.now(),
+
+            // opcional: guardo los paquetes por si luego preguntan “paquetes”
+            last_package_list: packages.map((x) => ({
+              id: x.service_id,
+              name: x.name,
+              url: x.service_url || null,
+            })),
+            last_package_list_at: Date.now(),
+          },
+        };
       }
-
-      if (packages.length) {
-        parts.push(
-          renderServiceListReply({
-            lang: idiomaDestino === "en" ? "en" : "es",
-            items: packages,
-            maxItems: 6,
-            includeLinks: false,
-            title: idiomaDestino === "en" ? "Packages (optional):" : "Paquetes (opcional):",
-          })
-        );
-      }
-
-      // ✅ ESTE ES EL ORDEN QUE EL CLIENTE VERÁ (para que 1/2/3 funcione)
-      const itemsAll = [...memberships, ...packages];
-
-      return {
-        handled: true,
-        reply: parts.join("\n\n").trim(),
-        source: "service_list_db",
-        intent: "planes",
-        ctxPatch: {
-          last_listed_plans_at: Date.now(),
-
-          // ✅ guardar lista para selección (número o nombre)
-          last_plan_list: itemsAll.map((x) => ({
-            id: x.service_id,
-            name: x.name,
-            url: x.service_url || null,
-          })),
-          last_plan_list_at: Date.now(),
-        },
-      };
     }
   }
 }
