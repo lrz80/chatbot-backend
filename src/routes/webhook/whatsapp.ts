@@ -62,20 +62,9 @@ import { runBookingPipeline } from "../../lib/appointments/booking/bookingPipeli
 import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBookingCourtesyGuard";
 import { rememberAfterReply } from "../../lib/memory/rememberAfterReply";
 import { getWhatsAppModeStatus } from "../../lib/whatsapp/getWhatsAppModeStatus";
-import {
-  isAskingIncludes,
-  findServiceBlock,
-  extractIncludesLine,
-} from "../../lib/infoclave/resolveIncludes";
-import { getPriceInfoForService } from "../../lib/services/pricing/getFromPriceForService";
-import { resolveServiceIdFromText } from "../../lib/services/pricing/resolveServiceIdFromText";
 import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
-import { resolveServiceInfo } from "../../lib/services/resolveServiceInfo";
-import { traducirMensaje } from "../../lib/traducirMensaje";
-import { renderPriceReply } from "../../lib/services/pricing/renderPriceReply";
 import { looksLikeShortLabel } from "../../lib/channels/engine/lang/looksLikeShortLabel";
-import { isGenericPriceQuestion } from "../../lib/services/pricing/isGenericPriceQuestion";
-import { renderGenericPriceSummaryReply } from "../../lib/services/pricing/renderGenericPriceSummaryReply";
+import { runFastpath } from "../../lib/fastpath/runFastpath";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -85,11 +74,6 @@ export type WhatsAppContext = {
 };
 
 const MAX_WHATSAPP_LINES = 16; // 14–16 es el sweet spot
-
-function isPriceQuestion(text: string) {
-  const t = String(text || "").toLowerCase();
-  return /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|costo|cost|price|how\s+much|starts?\s+at|from|desde|plan|mensual|monthly|membres[ií]a|membership)\b/i.test(t);
-}
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
@@ -838,355 +822,41 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   }
 
   // ===============================
-  // ✅ INFO_CLAVE GATE (reutilizable por cualquier canal)
+  // ⚡ FASTPATH (extraído a módulo reusable)
   // ===============================
   {
-    const infoClave = String(tenant?.info_clave || "").trim();
-
-    if (infoClave && isAskingIncludes(userInput)) {
-      const blk = findServiceBlock(infoClave, userInput);
-
-      if (blk) {
-        const inc = extractIncludesLine(blk.lines);
-
-        if (inc) {
-          const msg =
-            idiomaDestino === "en"
-              ? `✅ ${blk.title}\nIncludes: ${inc}`
-              : `✅ ${blk.title}\nIncluye: ${inc}`;
-
-          return await replyAndExit(msg, "info_clave_includes", detectedIntent || "info");
-        }
-
-        const msg =
-          idiomaDestino === "en"
-            ? `I found "${blk.title}", but the service details are not loaded yet.`
-            : `Encontré "${blk.title}", pero aún no tengo cargado qué incluye.`;
-
-        return await replyAndExit(msg, "info_clave_missing_includes", detectedIntent || "info");
-      }
-
-      // ❗ NO cortes el flujo aquí.
-      // Si INFO_CLAVE no matchea, dejamos que el catálogo DB (resolveServiceInfo)
-      // intente resolver "qué incluye" sin preguntar cosas redundantes.
-      console.log("ℹ️ INFO_CLAVE: includes asked but no block matched; falling through to DB fastpath.");
-    }
-  }
-
-  // ===============================
-  // ✅ INCLUDES FASTPATH (DB catalog) — usa resolveServiceInfo
-  // Si INFO_CLAVE no resolvió, intenta responder desde services/service_variants
-  // ===============================
-  if (!inBooking0 && isAskingIncludes(userInput)) {
-    const r = await resolveServiceInfo({
+    const fp = await runFastpath({
+      pool,
       tenantId: tenant.id,
-      query: userInput,
-      need: "includes", // ✅ clave: evita pedir variante si el service base tiene description
-      limit: 5,
+      canal,
+      idiomaDestino,
+      userInput,
+      inBooking: Boolean(inBooking0),
+      convoCtx: convoCtx as any,
+      infoClave: String(tenant?.info_clave || ""),
+      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
+      maxDisambiguationOptions: 5,
+      lastServiceTtlMs: 60 * 60 * 1000,
     });
 
-    if (r.ok) {
-      // guarda contexto para próximas preguntas (precio / booking)
-      transition({
-        patchCtx: {
-          last_service_id: r.service_id,
-          last_service_name: r.label,
-          last_service_at: Date.now(), // ✅ TTL
-        },
-      });
+    // aplicar patch de contexto (last_service_id, TTL, pending_price_lookup, etc.)
+    if (fp.ctxPatch) transition({ patchCtx: fp.ctxPatch });
 
-      if (r.description && String(r.description).trim()) {
-        let descOut = String(r.description).trim();
-
-        try {
-          const idOut = await detectarIdioma(descOut);
-
-          // Solo soportamos ES ↔ EN
-          if (
-            (idOut === "es" || idOut === "en") &&
-            idOut !== idiomaDestino
-          ) {
-            descOut = await traducirMensaje(descOut, idiomaDestino);
-          }
-        } catch (e: any) {
-          console.warn("⚠️ includes_fastpath_db translation failed:", e?.message || e);
-        }
-
-        const msg =
-          idiomaDestino === "en"
-            ? `✅ ${r.label}\nIncludes: ${descOut}`
-            : `✅ ${r.label}\nIncluye: ${descOut}`;
-
-        return await replyAndExit(msg, "includes_fastpath_db", detectedIntent || "info");
-      }
-
-      const msg =
-        idiomaDestino === "en"
-          ? `I found "${r.label}", but I don’t have the service details loaded yet.`
-          : `Encontré "${r.label}", pero aún no tengo cargado qué incluye.`;
-
-      return await replyAndExit(msg, "includes_fastpath_db_missing", detectedIntent || "info");
-    }
-
-    // Ambiguo: pide aclaración sin inventar
-    if (r.reason === "ambiguous" && r.options?.length) {
-      const opts = r.options.slice(0, 5).map((o) => `• ${o.label}`).join("\n");
-
-      const ask =
-        idiomaDestino === "en"
-          ? `Which one do you mean?\n${opts}`
-          : `¿Cuál de estos es?\n${opts}`;
-
-      return await replyAndExit(ask, "includes_fastpath_db_ambiguous", detectedIntent || "info");
-    }
-  }
-
-  const askedGenericPrices = isGenericPriceQuestion(userInput);
-
-  // ===============================
-  // ✅ PRICE FASTPATH (DB) — NO dependas del LLM para "DESDE"
-  // ===============================
-  const isMembershipQuestion =
-  /\b(plan(es)?|mensual(es)?|membres[ií]a(s)?|monthly|membership)\b/i.test(userInput);
-
-  if (!inBooking0 && (isPriceQuestion(userInput) || isMembershipQuestion)) {
-    // A) si ya lo tienes en contexto (ideal)
-    const LAST_SERVICE_TTL_MS = 60 * 60 * 1000; // 60 min (ajusta si quieres)
-
-    let serviceId: string | null = (convoCtx as any)?.last_service_id || null;
-    let serviceName: string | null = (convoCtx as any)?.last_service_name || null;
-    const lastAt = Number((convoCtx as any)?.last_service_at || 0);
-
-    if (serviceId && lastAt && Number.isFinite(lastAt)) {
-      const age = Date.now() - lastAt;
-      if (age > LAST_SERVICE_TTL_MS) {
-        // expiró → no uses contexto viejo
-        serviceId = null;
-        serviceName = null;
-
-        transition({
-          patchCtx: {
-            last_service_id: null,
-            last_service_name: null,
-            last_service_at: null,
-          },
-        });
-      }
-    }
-
-    // B) si no hay contexto, intenta resolver por texto contra services
-    if (!serviceId) {
-      const hit = await resolveServiceIdFromText(pool, tenant.id, userInput);
-        if (hit?.id) {
-          serviceId = hit.id;
-          serviceName = hit.name;
-
-        transition({
-          patchCtx: {
-            last_service_id: serviceId,
-            last_service_name: serviceName,
-            last_service_at: Date.now(),
-          },
-        });
-      }
-    }
-
-    // C) si sigue sin serviceId, intenta desambiguar con candidatos desde DB
-    if (!serviceId) {
-      const q = String(userInput || "").toLowerCase();
-
-      const tokens = q
-        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-        .replace(/[^a-z0-9\s]/g, " ")
-        .split(/\s+/)
-        .map(t => t.trim())
-        .filter(t => t.length >= 3)
-        .slice(0, 4);
-
-      if (tokens.length) {
-        const likeParts = tokens.map((_, i) => `lower(s.name) LIKE $${i + 2}`);
-        const params: any[] = [tenant.id, ...tokens.map(t => `%${t}%`)];
-
-        const { rows } = await pool.query(
-          `
-          SELECT s.id, s.name
-          FROM services s
-          WHERE s.tenant_id = $1
-            AND s.active = true
-            AND (${likeParts.join(" OR ")})
-          ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC
-          LIMIT 5
-          `,
-          params
-        );
-
-        if (rows?.length) {
-          const opts = rows.map((r: any) => `• ${r.name}`).join("\n");
-          const ask =
-            idiomaDestino === "en"
-              ? `Which one do you mean?\n${opts}`
-              : `¿Cuál de estos planes/servicios quieres?\n${opts}`;
-
-          return await replyAndExit(ask, "price_disambiguation_db", detectedIntent || "precio");
-        }
-      }
-    }
-
-    if (serviceId) {
-      const pi = await getPriceInfoForService(pool, tenant.id, serviceId);
-      console.log("🧪 PRICE_INFO pi =", {
+    // aplicar efectos (awaiting) fuera del módulo
+    if (fp.handled && fp.awaitingEffect?.type === "set_awaiting_yes_no") {
+      const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
+      await setAwaitingState(pool, {
         tenantId: tenant.id,
-        serviceId,
-        serviceName,
-        pi,
+        canal,
+        senderId: contactoNorm,
+        field: "yes_no",
+        payload: fp.awaitingEffect.payload,
+        ttlSeconds: fp.awaitingEffect.ttlSeconds,
       });
-
-      // ✅ Si no hay precio resoluble, no suenes a error ni digas "no tengo precios cargados"
-      if (!pi.ok) {
-        // ✅ recuerda que estamos esperando el nombre del servicio para completar precio
-        transition({
-          patchCtx: {
-            pending_price_lookup: true,
-            pending_price_at: Date.now(),
-          },
-        });
-
-        const msg =
-          idiomaDestino === "en"
-            ? "To give you an exact price, which specific service/plan do you mean?"
-            : "Para darte el precio exacto, ¿cuál servicio/plan específico te interesa?";
-
-        return await replyAndExit(msg, "price_missing_db", detectedIntent || "precio");
-      }
-
-      // ✅ Precio válido (fixed/from)
-      const msg = renderPriceReply({
-        lang: idiomaDestino === "en" ? "en" : "es",
-        mode: pi.mode,
-        amount: pi.amount,
-        currency: (pi.currency || "USD").toUpperCase(),
-        serviceName: serviceName || null,
-        options: pi.mode === "from" ? (pi.options || []) : undefined,
-        optionsCount: pi.mode === "from" ? (pi.optionsCount as any) : undefined,
-      });
-
-      // ✅ IMPORTANT: si estamos haciendo una pregunta de confirmación (sí/no),
-      // seteamos awaiting para que el siguiente "sí" no se pierda.
-      if (pi.mode === "fixed") {
-        const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
-        await setAwaitingState(pool, {
-          tenantId: tenant.id,
-          canal,
-          senderId: contactoNorm,
-          field: "yes_no",
-          payload: { kind: "confirm_booking", source: "price_fastpath_db", serviceId },
-          ttlSeconds: 600,
-        });
-      }
-
-      return await replyAndExit(msg, "price_fastpath_db", detectedIntent || "precio");
     }
-  }
 
-  // ✅ PRICE SUMMARY (DB): pregunta genérica → resumen (rango + ejemplos), NO lista completa
-  if (!inBooking0 && isPriceQuestion(userInput)) {
-
-    if (askedGenericPrices) {
-      // Trae precios desde services y service_variants (sin depender de un servicio específico)
-      const { rows } = await pool.query(
-        `
-        WITH base AS (
-          SELECT s.id AS service_id, s.name AS service_name, s.price_base::numeric AS price
-          FROM services s
-          WHERE s.tenant_id = $1 AND s.active = true AND s.price_base IS NOT NULL
-
-          UNION ALL
-
-          SELECT v.service_id, s.name AS service_name, v.price::numeric AS price
-          FROM service_variants v
-          JOIN services s ON s.id = v.service_id
-          WHERE s.tenant_id = $1 AND s.active = true AND v.active = true AND v.price IS NOT NULL
-        ),
-        agg AS (
-          SELECT service_id, service_name, MIN(price) AS min_price, MAX(price) AS max_price
-          FROM base
-          GROUP BY service_id, service_name
-        ),
-        bounds AS (
-          SELECT
-            (SELECT MIN(min_price) FROM agg) AS overall_min,
-            (SELECT MAX(max_price) FROM agg) AS overall_max
-        ),
-        cheap AS (
-          SELECT * FROM agg ORDER BY min_price ASC LIMIT 3
-        ),
-        expensive AS (
-          SELECT * FROM agg ORDER BY max_price DESC LIMIT 2
-        ),
-        picked AS (
-          SELECT * FROM cheap
-          UNION
-          SELECT * FROM expensive
-        )
-        SELECT
-          b.overall_min,
-          b.overall_max,
-          p.service_id,
-          p.service_name,
-          p.min_price,
-          p.max_price
-        FROM picked p
-        CROSS JOIN bounds b
-        ORDER BY p.min_price ASC;
-        `,
-        [tenant.id]
-      );
-      console.log("🧪 PRICE_SUMMARY_DB_ROWS =", JSON.stringify(rows, null, 2));
-
-      const overallMin = rows?.[0]?.overall_min != null ? Number(rows[0].overall_min) : null;
-      const overallMax = rows?.[0]?.overall_max != null ? Number(rows[0].overall_max) : null;
-
-      // ✅ ojo: overallMin puede ser 0 (ej. clase gratis). No lo trates como "empty".
-      if (overallMin == null || overallMax == null) {
-        const msg =
-          idiomaDestino === "en"
-            ? "Which specific service are you interested in?"
-            : "¿Qué servicio específico te interesa?";
-        return await replyAndExit(msg, "price_summary_db_empty", detectedIntent || "precio");
-      }
-
-      const fmt = (n: number) => `$${Math.round(n)}`;
-
-      // arma 3–5 ejemplos (sin listar todo)
-      const examples = rows
-        .filter((r: any) => r?.service_name)
-        .map((r: any) => {
-          const name = String(r.service_name);
-          const minP = Number(r.min_price);
-          const maxP = Number(r.max_price);
-
-          // si min==max => precio fijo; si no => "desde"
-          if (Number.isFinite(minP) && Number.isFinite(maxP) && Math.round(minP) === Math.round(maxP)) {
-            return idiomaDestino === "en"
-              ? `${name}: ${fmt(minP)}`
-              : `${name}: ${fmt(minP)}`;
-          }
-
-          return idiomaDestino === "en"
-            ? `${name}: starts at ${fmt(minP)}`
-            : `${name}: desde ${fmt(minP)}`;
-        });
-
-      const msg = renderGenericPriceSummaryReply({
-        lang: idiomaDestino,
-        rows: rows.map((r: any) => ({
-          service_name: r.service_name,
-          min_price: r.min_price,
-          max_price: r.max_price,
-        })),
-      });
-
-      return await replyAndExit(msg, "price_summary_db", detectedIntent || "precio");
+    if (fp.handled) {
+      return await replyAndExit(fp.reply, fp.source, fp.intent);
     }
   }
 

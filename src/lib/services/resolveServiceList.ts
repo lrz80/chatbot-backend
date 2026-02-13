@@ -1,87 +1,72 @@
-import pool from "../db";
+// src/lib/services/resolveServiceList.ts
+import type { Pool } from "pg";
 
 export type ServiceListItem = {
   service_id: string;
   name: string;
   category: string | null;
   duration_min: number | null;
-  price_base: number | null;
+  price_base: null;
   service_url: string | null;
-  variants: {
-    variant_id: string;
-    variant_name: string;
-    price: number | null;
-    duration_min: number | null;
-    variant_url: string | null;
-  }[];
+  variants: [];
 };
 
-export async function resolveServiceList(opts: {
-  tenantId: string;
-  limitServices?: number;
-  limitVariantsPerService?: number;
-}): Promise<{ ok: true; items: ServiceListItem[] } | { ok: false; reason: "empty" | "error" }> {
+export async function resolveServiceList(
+  pool: Pool,
+  opts: {
+    tenantId: string;
+    limitServices?: number;
+    queryText?: string | null; // ✅ opcional
+  }
+): Promise<{ ok: true; items: ServiceListItem[] } | { ok: false; reason: "empty" | "error" }> {
   const tenantId = opts.tenantId;
   const limitServices = Math.min(20, Math.max(1, opts.limitServices ?? 8));
-  const limitVariantsPerService = Math.min(5, Math.max(0, opts.limitVariantsPerService ?? 3));
+
+  // filtro opcional por texto (genérico)
+  const q = (opts.queryText || "").trim();
+  const qLike = q
+    ? `%${q
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()}%`
+    : null;
 
   try {
-    // 1) SOLO servicios reales (tipo='service')
     const sRes = await pool.query(
       `
-      SELECT id, name, category, duration_min, price_base, service_url
+      SELECT id, name, category, duration_min, service_url
       FROM services
       WHERE tenant_id = $1
         AND active = TRUE
-        AND COALESCE(tipo, 'service') = 'service'
-      ORDER BY updated_at DESC
-      LIMIT $2
+        AND tipo = 'Servicio'
+        AND (
+          $2::text IS NULL
+          OR LOWER(
+              REGEXP_REPLACE(
+                TRANSLATE(name, 'ÁÀÄÂÃÉÈËÊÍÌÏÎÓÒÖÔÕÚÙÜÛÑ', 'AAAAAEEEEIIIIOOOOOUUUUN'),
+                '\\s+',
+                ' ',
+                'g'
+              )
+            ) LIKE $2
+        )
+      ORDER BY updated_at DESC NULLS LAST, created_at DESC
+      LIMIT $3
       `,
-      [tenantId, limitServices]
+      [tenantId, qLike, limitServices]
     );
 
     const services = sRes.rows || [];
     if (!services.length) return { ok: false, reason: "empty" };
 
-    // 2) variantes (máx N por servicio)
-    const ids = services.map((s: any) => s.id);
-    const variantsByService: Record<string, any[]> = {};
-
-    if (limitVariantsPerService > 0) {
-      const vRes = await pool.query(
-        `
-        SELECT id, service_id, variant_name, price, duration_min, variant_url
-        FROM service_variants
-        WHERE service_id = ANY($1::uuid[])
-          AND active = TRUE
-        ORDER BY updated_at DESC
-        `,
-        [ids]
-      );
-
-      for (const v of (vRes.rows || [])) {
-        const sid = String(v.service_id);
-        variantsByService[sid] = variantsByService[sid] || [];
-        if (variantsByService[sid].length < limitVariantsPerService) {
-          variantsByService[sid].push(v);
-        }
-      }
-    }
-
     const items: ServiceListItem[] = services.map((s: any) => ({
       service_id: String(s.id),
       name: String(s.name),
       category: s.category ? String(s.category) : null,
-      duration_min: (s.duration_min === null || s.duration_min === undefined) ? null : Number(s.duration_min),
-      price_base: (s.price_base === null || s.price_base === undefined) ? null : Number(s.price_base),
+      duration_min: s.duration_min == null ? null : Number(s.duration_min),
+      price_base: null,
       service_url: s.service_url ? String(s.service_url) : null,
-      variants: (variantsByService[String(s.id)] || []).map((v: any) => ({
-        variant_id: String(v.id),
-        variant_name: String(v.variant_name),
-        price: (v.price === null || v.price === undefined) ? null : Number(v.price),
-        duration_min: (v.duration_min === null || v.duration_min === undefined) ? null : Number(v.duration_min),
-        variant_url: v.variant_url ? String(v.variant_url) : null,
-      })),
+      variants: [],
     }));
 
     return { ok: true, items };
