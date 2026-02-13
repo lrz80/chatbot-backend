@@ -25,6 +25,7 @@ import { isGenericPriceQuestion } from "../services/pricing/isGenericPriceQuesti
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
 import { resolveServiceList } from "../services/resolveServiceList";
 import { renderServiceListReply } from "../services/renderServiceListReply";
+import { naturalizeSecondaryOptionsLine } from "../fastpath/naturalizeSecondaryOptions";
 
 export type FastpathCtx = {
   last_service_id?: string | null;
@@ -294,25 +295,23 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       const packages = r.items.filter((x) => isPackage(x.category));
 
       if (packages.length) {
-        const reply = renderServiceListReply({
+        const baseList = renderServiceListReply({
           lang: idiomaDestino === "en" ? "en" : "es",
           items: packages,
           maxItems: 8,
           includeLinks: false,
           title: idiomaDestino === "en" ? "Packages:" : "Paquetes:",
+          style: "bullets",
+          askPick: true,
         });
 
         return {
           handled: true,
-          reply,
+          reply: baseList, // aquí NO hace falta naturalizar porque no hay “secondary”
           source: "service_list_db",
           intent: "paquetes",
           ctxPatch: {
-            last_package_list: packages.map((x) => ({
-              id: x.service_id,
-              name: x.name,
-              url: x.service_url || null,
-            })),
+            last_package_list: packages.map((x) => ({ id: x.service_id, name: x.name, url: x.service_url || null })),
             last_package_list_at: Date.now(),
             last_list_kind: "package",
             last_list_kind_at: Date.now(),
@@ -347,37 +346,39 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       const packages = r.items.filter((x) => isPackage(x.category));
 
       if (plans.length) {
-        const reply = renderServiceListReply({
-          lang: idiomaDestino === "en" ? "en" : "es",
-          items: plans,
-          maxItems: 8,
-          includeLinks: false,
-          title: idiomaDestino === "en" ? "Plans / Memberships:" : "Planes / Membresías:",
-        });
+        const baseList = renderServiceListReply({
+        lang: idiomaDestino === "en" ? "en" : "es",
+        items: plans,
+        maxItems: 8,
+        includeLinks: false,
+        title: idiomaDestino === "en" ? "Plans / Memberships:" : "Planes / Membresías:",
+        style: "bullets",          // 👈 lo vamos a soportar abajo
+        askPick: true,             // 👈 pregunta corta al final (no “responde con número”)
+      });
 
-        return {
-          handled: true,
-          reply,
-          source: "service_list_db",
-          intent: "planes",
-          ctxPatch: {
-            last_plan_list: plans.map((x) => ({
-              id: x.service_id,
-              name: x.name,
-              url: x.service_url || null,
-            })),
+      const reply = await naturalizeSecondaryOptionsLine({
+        tenantId,
+        idiomaDestino,
+        canal,
+        baseText: baseList,
+        primary: "plans",
+        secondaryAvailable: packages.length > 0,
+        maxLines: 16,
+      });
+
+      return {
+        handled: true,
+        reply,
+        source: "service_list_db",
+        intent: "planes",
+        ctxPatch: {
+            last_plan_list: plans.map((x) => ({ id: x.service_id, name: x.name, url: x.service_url || null })),
             last_plan_list_at: Date.now(),
             last_list_kind: "plan",
-            // ✅ señal estructural, SIN COPY
+            last_list_kind_at: Date.now(),
             has_packages_available: packages.length > 0,
             has_packages_available_at: Date.now(),
-
-            // opcional: guardo los paquetes por si luego preguntan “paquetes”
-            last_package_list: packages.map((x) => ({
-              id: x.service_id,
-              name: x.name,
-              url: x.service_url || null,
-            })),
+            last_package_list: packages.map((x) => ({ id: x.service_id, name: x.name, url: x.service_url || null })),
             last_package_list_at: Date.now(),
           },
         };

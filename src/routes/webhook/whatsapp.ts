@@ -823,61 +823,63 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   }
 
   // ===============================
-  // ⚡ FASTPATH (extraído a módulo reusable)
-  // ===============================
-  {
-    const fp = await runFastpath({
-      pool,
+// ⚡ FASTPATH (extraído a módulo reusable)
+// ===============================
+{
+  const fp = await runFastpath({
+    pool,
+    tenantId: tenant.id,
+    canal,
+    idiomaDestino,
+    userInput,
+    inBooking: Boolean(inBooking0),
+    convoCtx: convoCtx as any,
+    infoClave: String(tenant?.info_clave || ""),
+    detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
+    maxDisambiguationOptions: 5,
+    lastServiceTtlMs: 60 * 60 * 1000,
+  });
+
+  // aplicar patch de contexto
+  if (fp.ctxPatch) transition({ patchCtx: fp.ctxPatch });
+
+  // aplicar efectos (awaiting) fuera del módulo
+  if (fp.handled && fp.awaitingEffect?.type === "set_awaiting_yes_no") {
+    const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
+    await setAwaitingState(pool, {
       tenantId: tenant.id,
       canal,
-      idiomaDestino,
-      userInput,
-      inBooking: Boolean(inBooking0),
-      convoCtx: convoCtx as any,
-      infoClave: String(tenant?.info_clave || ""),
-      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
-      maxDisambiguationOptions: 5,
-      lastServiceTtlMs: 60 * 60 * 1000,
+      senderId: contactoNorm,
+      field: "yes_no",
+      payload: fp.awaitingEffect.payload,
+      ttlSeconds: fp.awaitingEffect.ttlSeconds,
     });
+  }
 
-    // aplicar patch de contexto (last_service_id, TTL, pending_price_lookup, etc.)
-    if (fp.ctxPatch) transition({ patchCtx: fp.ctxPatch });
+  if (fp.handled) {
+    let out = fp.reply;
 
-    // aplicar efectos (awaiting) fuera del módulo
-    if (fp.handled && fp.awaitingEffect?.type === "set_awaiting_yes_no") {
-      const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
-      await setAwaitingState(pool, {
+    const isPlansList =
+      fp.source === "service_list_db" &&
+      (convoCtx as any)?.last_list_kind === "plan";
+
+    const hasPkgs = (convoCtx as any)?.has_packages_available === true;
+
+    if (isPlansList && hasPkgs) {
+      out = await naturalizeSecondaryOptionsLine({
         tenantId: tenant.id,
+        idiomaDestino,
         canal,
-        senderId: contactoNorm,
-        field: "yes_no",
-        payload: fp.awaitingEffect.payload,
-        ttlSeconds: fp.awaitingEffect.ttlSeconds,
+        baseText: out,
+        primary: "plans",
+        secondaryAvailable: true,
+        maxLines: MAX_WHATSAPP_LINES,
       });
     }
 
-    if (fp.handled) {
-      let out = fp.reply;
-
-      const hasPkgs =
-        (fp.ctxPatch && (fp.ctxPatch as any).has_packages_available === true) ||
-        (convoCtx && (convoCtx as any).has_packages_available === true);
-
-      if (fp.source === "service_list_db" && fp.intent === "planes" && hasPkgs) {
-        out = await naturalizeSecondaryOptionsLine({
-          tenantId: tenant.id,
-          idiomaDestino,
-          canal,
-          baseText: out,
-          primary: "plans",
-          secondaryAvailable: true,
-          maxLines: MAX_WHATSAPP_LINES,
-        });
-      }
-
-      return await replyAndExit(out, fp.source, fp.intent);
-    }
+    return await replyAndExit(out, fp.source, fp.intent);
   }
+}
 
   const smResult = await sm({
     pool,

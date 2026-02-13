@@ -1,38 +1,62 @@
 // src/lib/services/renderServiceListReply.ts
 import type { ServiceListItem } from "./resolveServiceList";
 
-export function renderServiceListReply(args: {
+type Args = {
   lang: "es" | "en";
   items: ServiceListItem[];
   maxItems: number;
-  includeLinks?: boolean; // ✅ NUEVO
-  title?: string;         // ✅ opcional
-}) {
-  const { lang, items, maxItems, includeLinks = false, title } = args;
+
+  includeLinks?: boolean; // cuando quieras mostrar urls junto al ítem
+  title?: string;
+
+  // ✅ NUEVO: controla el formato (por defecto bullets)
+  style?: "bullets" | "plain";
+
+  // ✅ NUEVO: pregunta corta al final (por defecto true)
+  askPick?: boolean;
+
+  // ✅ NUEVO: si quieres NO poner pregunta al final
+  // (por ejemplo, cuando vas a mandar link directo)
+};
+
+export function renderServiceListReply(args: Args) {
+  const {
+    lang,
+    items,
+    maxItems,
+    includeLinks = false,
+    title,
+    style = "bullets",
+    askPick = true,
+  } = args;
 
   const head =
-    title ??
+    (title && String(title).trim()) ||
     (lang === "en" ? "Here are some options:" : "Aquí tienes algunas opciones:");
 
-  const lines = items.slice(0, maxItems).map((it, i) => {
-    // ✅ sin links por defecto
-    return `${i + 1}) ${it.name}`;
-  });
+  const list = (items || []).slice(0, maxItems);
 
-  const tail =
-    lang === "en"
-      ? "Reply with the number or the name you want."
-      : "Responde con el número o con el nombre del que te interesa.";
+  const lines = list
+    .map((it) => {
+      const name = String(it?.name || "").trim();
+      if (!name) return null;
 
-  // Si includeLinks = true, puedes agregar otra sección aparte (solo cuando ya eligió)
-  if (includeLinks) {
-    const linkLines = items
-      .slice(0, maxItems)
-      .filter((it) => it.service_url)
-      .map((it) => `• ${it.name}: ${it.service_url}`);
+      const link = includeLinks && it.service_url ? ` — ${it.service_url}` : "";
+      if (style === "bullets") return `• ${name}${link}`;
+      return `${name}${link}`;
+    })
+    .filter(Boolean) as string[];
 
-    return `${head}\n${lines.join("\n")}\n\n${tail}\n\n${linkLines.join("\n")}`.trim();
+  const pickLine = askPick
+    ? (lang === "en" ? "Which one are you interested in?" : "¿Cuál te interesa?")
+    : "";
+
+  // Construcción final
+  const out = [head, ...lines];
+
+  if (pickLine) {
+    out.push("", pickLine);
   }
 
-  return `${head}\n${lines.join("\n")}\n\n${tail}`.trim();
+  return out.join("\n").trim();
 }
