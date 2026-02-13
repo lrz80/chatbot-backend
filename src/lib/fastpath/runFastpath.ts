@@ -310,7 +310,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const wantsPackages =
     /\b(paquete(s)?|packages?|bundle(s)?|pack(s)?)\b/i.test(t);
 
-  if (wantsPackages) {
+  if (wantsPackages && !isPriceQuestion(userInput)) {
     const r = await resolveServiceList(pool, {
       tenantId,
       limitServices: 20,
@@ -369,7 +369,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const wantsPlans =
     /\b(plan(es)?|membres[ií]a(s)?|membership(s)?|monthly)\b/i.test(t);
 
-  if (wantsPlans) {
+  if (wantsPlans && !isPriceQuestion(userInput)) {
     const r = await resolveServiceList(pool, {
       tenantId,
       limitServices: 20,
