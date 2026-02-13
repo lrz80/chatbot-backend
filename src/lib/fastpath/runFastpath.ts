@@ -145,122 +145,50 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const intentOut = (detectedIntent || "").trim() || null;
 
   // ===============================
-// ✅ PLAN / MEMBERSHIP LIST FASTPATH (DB)
+// ✅ CATALOG LIST FASTPATH (DB)  (plans/services)
 // ===============================
 {
   const t = String(userInput || "").toLowerCase();
 
-  const wantsMembershipList =
-    /\b(plan(es)?|membres[ií]a(s)?|membership(s)?|monthly)\b/i.test(t) &&
-    /\b(tienes|hay|opciones|offer|have|disponibles)\b/i.test(t);
-
-  if (wantsMembershipList) {
-    const { rows } = await pool.query(
-      `
-      SELECT id, name, category, duration_min, service_url
-      FROM services
-      WHERE tenant_id = $1
-        AND active = true
-        AND tipo IN ('Plan', 'Plan / Paquete')
-      ORDER BY updated_at DESC NULLS LAST, created_at DESC
-      LIMIT 10
-      `,
-      [tenantId]
-    );
-
-    if (rows.length) {
-      const items = rows.map((r: any) => ({
-        service_id: String(r.id),
-        name: String(r.name),
-        category: r.category ?? null,
-        duration_min: r.duration_min ?? null,
-        service_url: r.service_url ?? null,
-        variants: [],
-        price_base: null,
-      }));
-
-      return {
-        handled: true,
-        reply: renderServiceListReply({
-          lang: idiomaDestino === "en" ? "en" : "es",
-          items,
-          maxItems: 10,
-        }),
-        source: "service_list_db",
-        intent: "planes",
-        ctxPatch: {
-          last_listed_plans_at: Date.now(),
-        },
-      };
-    }
-  }
-}
-
-  // ===============================
-  // ✅ SERVICE LIST FASTPATH (DB)
-// ===============================
-{
-  const t = String(userInput || "").toLowerCase();
-
-  // Detectores genéricos (no industria)
-  const wantsServices =
-    /\b(servicio(s)?|clase(s)?|services?)\b/i.test(t);
-
-  const wantsPlans =
-    /\b(plan(es)?|paquete(s)?|membres[ií]a(s)?|membership|packages?)\b/i.test(t);
+  const wantsServices = /\b(servicio(s)?|service(s)?|clase(s)?|classes?)\b/i.test(t);
+  const wantsPlans = /\b(plan(es)?|paquete(s)?|membres[ií]a(s)?|membership(s)?|monthly|packages?)\b/i.test(t);
 
   const wantsListKeyword =
-    /\b(lista|list(a)?|cat[aá]logo|menu|ofrecen|offer|provide|have|tienes|tienen)\b/i.test(t);
+    /\b(lista|list(a)?|cat[aá]logo|menu|ofrecen|offer|provide|have|tienes|tienen|opciones|disponibles)\b/i.test(t);
 
-  // Dispara si:
-  // - pide servicios o planes, o
-  // - pide catálogo/lista explícitamente
-  const shouldList = (wantsListKeyword && (wantsServices || wantsPlans)) || wantsPlans || wantsServices;
+  // Dispara si pide lista/catálogo u opciones de planes/servicios
+  const shouldList = wantsListKeyword && (wantsServices || wantsPlans || /\b(precio|prices?)\b/i.test(t));
 
-  if (shouldList) {
-    // Decide tipos sin hardcode por negocio:
-    // - si menciona planes => Plan / Paquete
-    // - si menciona servicios => Servicio
-    // - si menciona ambos o es genérico => ambos
+  if (shouldList || wantsPlans) {
+    // Decide tipos según el mensaje (SIN hardcode por negocio)
     let tipos: string[] | null = null;
-
-    if (wantsPlans && !wantsServices) tipos = ["Plan / Paquete"];
-    else if (wantsServices && !wantsPlans) tipos = ["Servicio"];
-    else tipos = ["Servicio", "Plan / Paquete"];
+    if (wantsPlans && !wantsServices) tipos = ["plan"];
+    else if (wantsServices && !wantsPlans) tipos = ["service"];
+    else tipos = ["plan", "service"];
 
     const r = await resolveServiceList(pool, {
       tenantId,
-      limitServices: 8,
+      limitServices: wantsPlans ? 10 : 8,
       queryText: null,
-      tipos, // ✅ clave
+      tipos,
     });
 
     if (r.ok) {
       return {
         handled: true,
         reply: renderServiceListReply({
-          lang: (idiomaDestino === "en" ? "en" : "es"),
+          lang: idiomaDestino === "en" ? "en" : "es",
           items: r.items,
-          maxItems: 8,
+          maxItems: wantsPlans ? 10 : 8,
         }),
         source: "service_list_db",
         intent: detectedIntent || (wantsPlans ? "planes" : "servicios"),
-        ctxPatch: { last_listed_services_at: Date.now() },
+        ctxPatch: {
+          last_listed_services_at: Date.now(),
+          ...(wantsPlans ? { last_listed_plans_at: Date.now() } : null),
+        },
       };
     }
-
-    // Opcional: si quieres respuesta cuando esté vacío (recomendado)
-    // (si no, deja que caiga al LLM)
-    // if (!r.ok && r.reason === "empty") {
-    //   return {
-    //     handled: true,
-    //     reply: idiomaDestino === "en"
-    //       ? "Right now I don’t have a list available. What are you looking for?"
-    //       : "Ahora mismo no tengo una lista cargada. ¿Qué estás buscando?",
-    //     source: "service_list_db",
-    //     intent: detectedIntent || (wantsPlans ? "planes" : "servicios"),
-    //   };
-    // }
   }
 }
 

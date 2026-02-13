@@ -1,4 +1,3 @@
-// src/lib/services/resolveServiceList.ts
 import type { Pool } from "pg";
 
 export type ServiceListItem = {
@@ -8,7 +7,7 @@ export type ServiceListItem = {
   duration_min: number | null;
   price_base: null;
   service_url: string | null;
-  variants: any[]; // ✅ aquí NO uses ServiceVariantItem
+  variants: [];
 };
 
 export async function resolveServiceList(
@@ -16,15 +15,12 @@ export async function resolveServiceList(
   opts: {
     tenantId: string;
     limitServices?: number;
-    queryText?: string | null; // opcional
-    tipos?: string[] | null;   // ✅ nuevo: filtra por tipo(s)
+    queryText?: string | null;
+    tipos?: string[] | null; // ✅ NEW: ['plan','service'] (lowercase)
   }
-): Promise<
-  { ok: true; items: ServiceListItem[] } |
-  { ok: false; reason: "empty" | "error" }
-> {
+): Promise<{ ok: true; items: ServiceListItem[] } | { ok: false; reason: "empty" | "error" }> {
   const tenantId = opts.tenantId;
-  const limitServices = Math.min(20, Math.max(1, opts.limitServices ?? 8));
+  const limitServices = Math.min(50, Math.max(1, opts.limitServices ?? 8));
 
   // filtro opcional por texto (genérico)
   const q = (opts.queryText || "").trim();
@@ -35,8 +31,8 @@ export async function resolveServiceList(
         .toLowerCase()}%`
     : null;
 
-  // ✅ tipos opcionales
-  const tipos = Array.isArray(opts.tipos) && opts.tipos.length ? opts.tipos : null;
+  // tipos opcional (normalizado)
+  const tipos = (opts.tipos || null)?.map((x) => String(x || "").toLowerCase().trim()).filter(Boolean) || null;
 
   try {
     const sRes = await pool.query(
@@ -47,7 +43,7 @@ export async function resolveServiceList(
         AND active = TRUE
         AND (
           $2::text[] IS NULL
-          OR tipo = ANY($2::text[])
+          OR LOWER(tipo) = ANY($2::text[])
         )
         AND (
           $3::text IS NULL
