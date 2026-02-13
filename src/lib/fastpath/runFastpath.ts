@@ -187,7 +187,7 @@ function wrapHumanList(args: {
   const { lang, title, listText, kind, secondaryAvailable } = args;
 
   if (lang === "en") {
-    const intro = "Sure! Here are the options 😊";
+    const intro = "Sure! Here are some options 😊";
     const ask =
       kind === "plans"
         ? "Let me know what you're looking for and I’ll recommend the best fit 😊"
@@ -197,7 +197,7 @@ function wrapHumanList(args: {
   }
 
   // ES
-  const intro = "¡Claro! Aquí tienes las opciones 😊";
+  const intro = "¡Claro! Aquí tienes algunas opciones 😊";
   const ask =
     kind === "plans"
       ? "Cuéntame qué estás buscando y te recomiendo la mejor opción 😊"
@@ -389,17 +389,17 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           items: plans,
           maxItems: 8,
           includeLinks: false,
-          title: idiomaDestino === "en" ? "Plans / Memberships" : "Planes / Membresías",
+          title: undefined,
           style: "bullets",
           askPick: false, // ✅ clave: quita la pregunta robótica interna
         });
 
-        const listOnly = baseList; // (asumiendo que renderServiceListReply ya devuelve solo el listado+title)
-
         const reply = wrapHumanList({
           lang: idiomaDestino,
-          title: idiomaDestino === "en" ? "Plans / Memberships:" : "Planes / Membresías:",
-          listText: listOnly.replace(/^.*?:\s*\n?/m, "").trim(), // quita title duplicado si viniera incluido
+          title: idiomaDestino === "en"
+            ? "Plans / Memberships:"
+            : "Planes / Membresías:",
+          listText: baseList,
           kind: "plans",
           secondaryAvailable: packages.length > 0,
         });
