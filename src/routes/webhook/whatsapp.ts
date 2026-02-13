@@ -65,6 +65,7 @@ import { getWhatsAppModeStatus } from "../../lib/whatsapp/getWhatsAppModeStatus"
 import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
 import { looksLikeShortLabel } from "../../lib/channels/engine/lang/looksLikeShortLabel";
 import { runFastpath } from "../../lib/fastpath/runFastpath";
+import { naturalizeSecondaryOptionsLine } from "../../lib/fastpath/naturalizeSecondaryOptions";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -856,7 +857,25 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
 
     if (fp.handled) {
-      return await replyAndExit(fp.reply, fp.source, fp.intent);
+      let out = fp.reply;
+
+      const hasPkgs =
+        (fp.ctxPatch && (fp.ctxPatch as any).has_packages_available === true) ||
+        (convoCtx && (convoCtx as any).has_packages_available === true);
+
+      if (fp.source === "service_list_db" && fp.intent === "planes" && hasPkgs) {
+        out = await naturalizeSecondaryOptionsLine({
+          tenantId: tenant.id,
+          idiomaDestino,
+          canal,
+          baseText: out,
+          primary: "plans",
+          secondaryAvailable: true,
+          maxLines: MAX_WHATSAPP_LINES,
+        });
+      }
+
+      return await replyAndExit(out, fp.source, fp.intent);
     }
   }
 
