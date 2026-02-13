@@ -8,7 +8,7 @@ export type ServiceListItem = {
   duration_min: number | null;
   price_base: null;
   service_url: string | null;
-  variants: [];
+  variants: any[]; // ✅ aquí NO uses ServiceVariantItem
 };
 
 export async function resolveServiceList(

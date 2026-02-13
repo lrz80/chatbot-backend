@@ -145,6 +145,58 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const intentOut = (detectedIntent || "").trim() || null;
 
   // ===============================
+// ✅ PLAN / MEMBERSHIP LIST FASTPATH (DB)
+// ===============================
+{
+  const t = String(userInput || "").toLowerCase();
+
+  const wantsMembershipList =
+    /\b(plan(es)?|membres[ií]a(s)?|membership(s)?|monthly)\b/i.test(t) &&
+    /\b(tienes|hay|opciones|offer|have|disponibles)\b/i.test(t);
+
+  if (wantsMembershipList) {
+    const { rows } = await pool.query(
+      `
+      SELECT id, name, category, duration_min, service_url
+      FROM services
+      WHERE tenant_id = $1
+        AND active = true
+        AND tipo IN ('Plan', 'Plan / Paquete')
+      ORDER BY updated_at DESC NULLS LAST, created_at DESC
+      LIMIT 10
+      `,
+      [tenantId]
+    );
+
+    if (rows.length) {
+      const items = rows.map((r: any) => ({
+        service_id: String(r.id),
+        name: String(r.name),
+        category: r.category ?? null,
+        duration_min: r.duration_min ?? null,
+        service_url: r.service_url ?? null,
+        variants: [],
+        price_base: null,
+      }));
+
+      return {
+        handled: true,
+        reply: renderServiceListReply({
+          lang: idiomaDestino === "en" ? "en" : "es",
+          items,
+          maxItems: 10,
+        }),
+        source: "service_list_db",
+        intent: "planes",
+        ctxPatch: {
+          last_listed_plans_at: Date.now(),
+        },
+      };
+    }
+  }
+}
+
+  // ===============================
   // ✅ SERVICE LIST FASTPATH (DB)
 // ===============================
 {
