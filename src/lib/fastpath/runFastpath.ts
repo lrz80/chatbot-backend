@@ -178,6 +178,35 @@ function isMembershipLikeQuestion(text: string) {
   return /\b(plan(es)?|mensual(es)?|membres[ií]a(s)?|monthly|membership)\b/i.test(t);
 }
 
+function wrapHumanList(args: {
+  lang: Lang;
+  title: string;
+  listText: string;
+  kind: "plans" | "packages";
+  secondaryAvailable?: boolean;
+}) {
+  const { lang, title, listText, kind, secondaryAvailable } = args;
+
+  if (lang === "en") {
+    const intro = "Sure! Here are the options 😊";
+    const ask =
+      kind === "plans"
+        ? "Which one are you looking for— or tell me your goal and I’ll recommend the best one."
+        : "Which package are you interested in— or tell me what you need and I’ll guide you.";
+    const secondary = secondaryAvailable ? "\nIf you prefer, we also have packages." : "";
+    return `${intro}\n\n${title}\n${listText}\n\n${ask}${secondary}`;
+  }
+
+  // ES
+  const intro = "¡Claro! Aquí tienes las opciones 😊";
+  const ask =
+    kind === "plans"
+      ? "¿Cuál te interesa— o cuéntame tu objetivo y te recomiendo el mejor?"
+      : "¿Qué paquete te interesa— o cuéntame qué necesitas y te guío?";
+  const secondary = secondaryAvailable ? "\nSi prefieres, también tenemos paquetes." : "";
+  return `${intro}\n\n${title}\n${listText}\n\n${ask}${secondary}`;
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -302,16 +331,26 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           includeLinks: false,
           title: idiomaDestino === "en" ? "Packages:" : "Paquetes:",
           style: "bullets",
-          askPick: true,
+          askPick: false,
         });
+
+        // ✅ wrap humano (sin hardcode por tenant)
+        const reply =
+          idiomaDestino === "en"
+            ? `Sure! Here are the available packages 😊\n\n${baseList}\n\nWhich one are you interested in— or tell me what you need and I’ll recommend the best fit.`
+            : `¡Claro! Estos son los paquetes disponibles 😊\n\n${baseList}\n\n¿Cuál te interesa— o cuéntame qué necesitas y te recomiendo el mejor?`;
 
         return {
           handled: true,
-          reply: baseList, // aquí NO hace falta naturalizar porque no hay “secondary”
+          reply,
           source: "service_list_db",
           intent: "paquetes",
           ctxPatch: {
-            last_package_list: packages.map((x) => ({ id: x.service_id, name: x.name, url: x.service_url || null })),
+            last_package_list: packages.map((x) => ({
+              id: x.service_id,
+              name: x.name,
+              url: x.service_url || null,
+            })),
             last_package_list_at: Date.now(),
             last_list_kind: "package",
             last_list_kind_at: Date.now(),
@@ -347,31 +386,32 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
       if (plans.length) {
         const baseList = renderServiceListReply({
-        lang: idiomaDestino === "en" ? "en" : "es",
-        items: plans,
-        maxItems: 8,
-        includeLinks: false,
-        title: idiomaDestino === "en" ? "Plans / Memberships:" : "Planes / Membresías:",
-        style: "bullets",          // 👈 lo vamos a soportar abajo
-        askPick: true,             // 👈 pregunta corta al final (no “responde con número”)
-      });
+          lang: idiomaDestino === "en" ? "en" : "es",
+          items: plans,
+          maxItems: 8,
+          includeLinks: false,
+          title: idiomaDestino === "en" ? "Plans / Memberships" : "Planes / Membresías",
+          style: "bullets",
+          askPick: false, // ✅ clave: quita la pregunta robótica interna
+        });
 
-      const reply = await naturalizeSecondaryOptionsLine({
-        tenantId,
-        idiomaDestino,
-        canal,
-        baseText: baseList,
-        primary: "plans",
-        secondaryAvailable: packages.length > 0,
-        maxLines: 16,
-      });
+        // ✅ “naturalizeSecondaryOptionsLine” si quieres mantenerlo, pero mejor úsalo solo para hints
+        const listOnly = baseList; // (asumiendo que renderServiceListReply ya devuelve solo el listado+title)
 
-      return {
-        handled: true,
-        reply,
-        source: "service_list_db",
-        intent: "planes",
-        ctxPatch: {
+        const reply = wrapHumanList({
+          lang: idiomaDestino,
+          title: idiomaDestino === "en" ? "Plans / Memberships:" : "Planes / Membresías:",
+          listText: listOnly.replace(/^.*?:\s*\n?/m, "").trim(), // quita title duplicado si viniera incluido
+          kind: "plans",
+          secondaryAvailable: packages.length > 0,
+        });
+
+        return {
+          handled: true,
+          reply,
+          source: "service_list_db",
+          intent: "planes",
+          ctxPatch: {
             last_plan_list: plans.map((x) => ({ id: x.service_id, name: x.name, url: x.service_url || null })),
             last_plan_list_at: Date.now(),
             last_list_kind: "plan",
