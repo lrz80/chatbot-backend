@@ -190,8 +190,8 @@ function wrapHumanList(args: {
     const intro = "Sure! Here are the options 😊";
     const ask =
       kind === "plans"
-        ? "Which one are you looking for— or tell me your goal and I’ll recommend the best one."
-        : "Which package are you interested in— or tell me what you need and I’ll guide you.";
+        ? "Let me know what you're looking for and I’ll recommend the best fit 😊"
+        : "Let me know what you need and I’ll help you choose 😊";
     const secondary = secondaryAvailable ? "\nIf you prefer, we also have packages." : "";
     return `${intro}\n\n${title}\n${listText}\n\n${ask}${secondary}`;
   }
@@ -200,8 +200,8 @@ function wrapHumanList(args: {
   const intro = "¡Claro! Aquí tienes las opciones 😊";
   const ask =
     kind === "plans"
-      ? "¿Cuál te interesa— o cuéntame tu objetivo y te recomiendo el mejor?"
-      : "¿Qué paquete te interesa— o cuéntame qué necesitas y te guío?";
+      ? "Cuéntame qué estás buscando y te recomiendo la mejor opción 😊"
+      : "Cuéntame qué necesitas y te ayudo a elegir 😊";
   const secondary = secondaryAvailable ? "\nSi prefieres, también tenemos paquetes." : "";
   return `${intro}\n\n${title}\n${listText}\n\n${ask}${secondary}`;
 }
