@@ -16,9 +16,13 @@ export async function resolveServiceList(
   opts: {
     tenantId: string;
     limitServices?: number;
-    queryText?: string | null; // ✅ opcional
+    queryText?: string | null; // opcional
+    tipos?: string[] | null;   // ✅ nuevo: filtra por tipo(s)
   }
-): Promise<{ ok: true; items: ServiceListItem[] } | { ok: false; reason: "empty" | "error" }> {
+): Promise<
+  { ok: true; items: ServiceListItem[] } |
+  { ok: false; reason: "empty" | "error" }
+> {
   const tenantId = opts.tenantId;
   const limitServices = Math.min(20, Math.max(1, opts.limitServices ?? 8));
 
@@ -31,6 +35,9 @@ export async function resolveServiceList(
         .toLowerCase()}%`
     : null;
 
+  // ✅ tipos opcionales
+  const tipos = Array.isArray(opts.tipos) && opts.tipos.length ? opts.tipos : null;
+
   try {
     const sRes = await pool.query(
       `
@@ -38,9 +45,12 @@ export async function resolveServiceList(
       FROM services
       WHERE tenant_id = $1
         AND active = TRUE
-        AND tipo = 'Servicio'
         AND (
-          $2::text IS NULL
+          $2::text[] IS NULL
+          OR tipo = ANY($2::text[])
+        )
+        AND (
+          $3::text IS NULL
           OR LOWER(
               REGEXP_REPLACE(
                 TRANSLATE(name, 'ÁÀÄÂÃÉÈËÊÍÌÏÎÓÒÖÔÕÚÙÜÛÑ', 'AAAAAEEEEIIIIOOOOOUUUUN'),
@@ -48,12 +58,12 @@ export async function resolveServiceList(
                 ' ',
                 'g'
               )
-            ) LIKE $2
+            ) LIKE $3
         )
       ORDER BY updated_at DESC NULLS LAST, created_at DESC
-      LIMIT $3
+      LIMIT $4
       `,
-      [tenantId, qLike, limitServices]
+      [tenantId, tipos, qLike, limitServices]
     );
 
     const services = sRes.rows || [];
