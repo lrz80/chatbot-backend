@@ -65,7 +65,6 @@ export async function resolveBestLinkForService(args: {
       AND active = true
       AND NULLIF(TRIM(COALESCE(variant_url,'')), '') IS NOT NULL
     ORDER BY
-      COALESCE(sort_order, 999999) ASC,
       updated_at DESC NULLS LAST,
       created_at DESC
     `,
