@@ -66,7 +66,6 @@ import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
 import { looksLikeShortLabel } from "../../lib/channels/engine/lang/looksLikeShortLabel";
 import { runFastpath } from "../../lib/fastpath/runFastpath";
 import { naturalizeSecondaryOptionsLine } from "../../lib/fastpath/naturalizeSecondaryOptions";
-import { computeChoiceMemoryPatch } from "../../lib/conversation/applyChoiceMemoryPatch";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {

@@ -862,10 +862,75 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     const overallMax = rows?.[0]?.overall_max != null ? Number(rows[0].overall_max) : null;
 
     if (overallMin == null || overallMax == null) {
+      // ✅ No hay precios numéricos en DB: NO digas "no se especifica".
+      // En su lugar: lista planes/paquetes (si hay) + 1 pregunta útil.
+      const r = await resolveServiceList(pool, {
+        tenantId,
+        limitServices: 20,
+        queryText: null,
+        tipos: ["plan"],
+      });
+
+      if (r.ok && r.items?.length) {
+        const isPackage = (cat: any) => String(cat || "").toLowerCase().includes("package");
+
+        const plans = r.items.filter((x) => !isPackage(x.category));
+        const packages = r.items.filter((x) => isPackage(x.category));
+
+        const listPlans = plans.length
+          ? renderServiceListReply({
+              lang: idiomaDestino === "en" ? "en" : "es",
+              items: plans,
+              maxItems: 8,
+              includeLinks: false,
+              title: idiomaDestino === "en" ? "Plans / Memberships:" : "Planes / Membresías:",
+              style: "bullets",
+              askPick: false,
+            })
+          : "";
+
+        const listPkgs = packages.length
+          ? renderServiceListReply({
+              lang: idiomaDestino === "en" ? "en" : "es",
+              items: packages,
+              maxItems: 6,
+              includeLinks: false,
+              title: idiomaDestino === "en" ? "Packages:" : "Paquetes:",
+              style: "bullets",
+              askPick: false,
+            })
+          : "";
+
+        const ask =
+          idiomaDestino === "en"
+            ? "Which option are you interested in?"
+            : "¿Cuál opción te interesa?";
+
+        const reply = [listPlans, listPkgs].filter(Boolean).join("\n\n") + `\n\n${ask}`;
+
+        return {
+          handled: true,
+          reply,
+          source: "service_list_db",
+          intent: intentOut || "precio",
+          ctxPatch: {
+            last_plan_list: plans.map((x) => ({ id: x.service_id, name: x.name, url: x.service_url || null })),
+            last_plan_list_at: Date.now(),
+            last_package_list: packages.map((x) => ({ id: x.service_id, name: x.name, url: x.service_url || null })),
+            last_package_list_at: Date.now(),
+            last_list_kind: plans.length ? "plan" : "package",
+            last_list_kind_at: Date.now(),
+            has_packages_available: packages.length > 0,
+            has_packages_available_at: Date.now(),
+          },
+        };
+      }
+
+      // Si ni siquiera hay planes/paquetes, entonces sí: pide precisión (1 pregunta).
       const msg =
         idiomaDestino === "en"
-          ? "Which specific service are you interested in?"
-          : "¿Qué servicio específico te interesa?";
+          ? "To help you better, which service/plan are you asking about?"
+          : "Para ayudarte mejor, ¿de qué servicio o plan te gustaría saber el precio?";
 
       return {
         handled: true,
