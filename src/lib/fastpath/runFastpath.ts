@@ -49,6 +49,13 @@ export type FastpathCtx = {
   last_list_kind?: "plan" | "package";
   last_list_kind_at?: number | null;
 
+  pending_link_lookup?: boolean;
+  pending_link_at?: number | null;
+  pending_link_options?: Array<{ label: string; url: string }>;
+
+  last_bot_action?: string | null;
+  last_bot_action_at?: number | null;
+
   [k: string]: any;
 };
 
@@ -260,141 +267,212 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const intentOut = (detectedIntent || "").trim() || null;
 
   // ===============================
-// ✅ PICK FROM LAST LIST -> SEND SINGLE LINK
-// ===============================
-{
-  const ttlMs = 10 * 60 * 1000;
+  // ✅ PICK FROM LAST LIST -> SEND SINGLE LINK (NO HARDCODE)
+  // ===============================
+  {
+    const ttlMs = 10 * 60 * 1000;
 
-  const planList = Array.isArray(convoCtx?.last_plan_list) ? convoCtx.last_plan_list : [];
-  const planAt = Number(convoCtx?.last_plan_list_at || 0);
-  const planFresh = planList.length > 0 && planAt > 0 && Date.now() - planAt <= ttlMs;
+    const planList = Array.isArray(convoCtx?.last_plan_list) ? convoCtx.last_plan_list : [];
+    const planAt = Number(convoCtx?.last_plan_list_at || 0);
+    const planFresh = planList.length > 0 && planAt > 0 && Date.now() - planAt <= ttlMs;
 
-  const pkgList = Array.isArray(convoCtx?.last_package_list) ? convoCtx.last_package_list : [];
-  const pkgAt = Number(convoCtx?.last_package_list_at || 0);
-  const pkgFresh = pkgList.length > 0 && pkgAt > 0 && Date.now() - pkgAt <= ttlMs;
+    const pkgList = Array.isArray(convoCtx?.last_package_list) ? convoCtx.last_package_list : [];
+    const pkgAt = Number(convoCtx?.last_package_list_at || 0);
+    const pkgFresh = pkgList.length > 0 && pkgAt > 0 && Date.now() - pkgAt <= ttlMs;
 
-  const kind = (convoCtx?.last_list_kind as any) || null;
-  const kindAt = Number(convoCtx?.last_list_kind_at || 0);
-  const kindFresh = kind && kindAt > 0 && Date.now() - kindAt <= ttlMs;
+    const kind = (convoCtx?.last_list_kind as any) || null;
+    const kindAt = Number(convoCtx?.last_list_kind_at || 0);
+    const kindFresh = kind && kindAt > 0 && Date.now() - kindAt <= ttlMs;
 
-  if (planFresh || pkgFresh) {
-    const idx = parsePickIndex(userInput);
+    if (planFresh || pkgFresh) {
+      const idx = parsePickIndex(userInput);
 
-    const tryPick = (list: Array<{ id: string; name: string; url: string | null }>) => {
+      const tryPick = (list: Array<{ id: string; name: string; url: string | null }>) => {
+        let picked: { id: string; name: string; url: string | null } | null = null;
+
+        if (idx != null) {
+          const i = idx - 1;
+          if (i >= 0 && i < list.length) picked = list[i];
+        }
+        if (!picked) picked = bestNameMatch(userInput, list);
+
+        return picked;
+      };
+
+      // ✅ prioridad por “último tipo listado” si está fresco
       let picked: { id: string; name: string; url: string | null } | null = null;
 
-      if (idx != null) {
-        const i = idx - 1;
-        if (i >= 0 && i < list.length) picked = list[i];
+      if (kindFresh && kind === "package") {
+        if (pkgFresh) picked = tryPick(pkgList);
+        if (!picked && planFresh) picked = tryPick(planList);
+      } else {
+        if (planFresh) picked = tryPick(planList);
+        if (!picked && pkgFresh) picked = tryPick(pkgList);
       }
-      if (!picked) picked = bestNameMatch(userInput, list);
 
-      return picked;
-    };
+      if (picked) {
+        const basePatch: Partial<FastpathCtx> = {
+          // limpiar listas tras elegir (evita loops)
+          last_plan_list: undefined,
+          last_plan_list_at: undefined,
+          last_package_list: undefined,
+          last_package_list_at: undefined,
+          last_list_kind: undefined,
+          last_list_kind_at: undefined,
 
-    // ✅ prioridad por “último tipo listado” si está fresco
-    let picked: { id: string; name: string; url: string | null } | null = null;
+          // set last_service para price/includes
+          last_service_id: picked.id,
+          last_service_name: picked.name,
+          last_service_at: Date.now(),
+        };
 
-    if (kindFresh && kind === "package") {
-      if (pkgFresh) picked = tryPick(pkgList);
-      if (!picked && planFresh) picked = tryPick(planList);
-    } else {
-      // default: plan primero
-      if (planFresh) picked = tryPick(planList);
-      if (!picked && pkgFresh) picked = tryPick(pkgList);
-    }
+        // ✅ NO HARDCODE:
+        // - si picked.url existe úsalo (service_url guardado en lista)
+        // - si no, intenta resolver el mejor link desde DB (service_url o variant_url)
+        // - si hay varios (ambiguous), abre pending_link_lookup con labels reales del tenant
+        let finalUrl: string | null = picked.url ? String(picked.url).trim() : null;
 
-    if (picked) {
-      const basePatch: Partial<FastpathCtx> = {
-        // limpiar listas tras elegir (evita loops)
-        last_plan_list: undefined,
-        last_plan_list_at: undefined,
-        last_package_list: undefined,
-        last_package_list_at: undefined,
-        last_list_kind: undefined,
-        last_list_kind_at: undefined,
+        if (!finalUrl) {
+          const linkPick = await resolveBestLinkForService({
+            pool,
+            tenantId,
+            serviceId: picked.id,
+            userText: userInput,
+          });
 
-        // set last_service para price/includes
-        last_service_id: picked.id,
-        last_service_name: picked.name,
-        last_service_at: Date.now(),
-      };
+          if (linkPick.ok) {
+            finalUrl = linkPick.url;
+          } else if (linkPick.reason === "ambiguous") {
+            const labels = linkPick.options
+              .slice(0, 3)
+              .map((o) => o.label)
+              .filter(Boolean);
 
-      // ✅ usa variant_url si el texto sugiere variante (autopay / monthly / por mes)
-      let finalUrl: string | null = picked.url ? String(picked.url).trim() : null;
+            const q =
+              idiomaDestino === "en"
+                ? `Which option do you mean— ${labels.join(" or ")}?`
+                : `¿Cuál opción te refieres— ${labels.join(" o ")}?`;
 
-      try {
-        const u = String(userInput || "").toLowerCase();
-
-        // Señales genéricas (NO negocio-específicas)
-        const wantsVariant =
-          /\b(autopay|auto\s*pay|por\s*mes|mensual|monthly|per\s*month)\b/i.test(u);
-
-        if (wantsVariant) {
-          // 1) intenta match por nombre de variante (mejor)
-          const tokens = normalizeTokensForLike(userInput); // ya existe arriba en el archivo
-          const likeParts = tokens.map((_, i) => `lower(v.variant_name) LIKE $${i + 3}`);
-          const params: any[] = [tenantId, picked.id, ...tokens.map((t) => `%${t}%`)];
-
-          let vr: any;
-
-          if (tokens.length) {
-            vr = await pool.query(
-              `
-              SELECT NULLIF(trim(v.variant_url), '') AS variant_url
-              FROM service_variants v
-              JOIN services s ON s.id = v.service_id
-              WHERE s.tenant_id = $1
-                AND v.service_id = $2
-                AND v.active = true
-                AND v.variant_url IS NOT NULL
-                AND length(trim(v.variant_url)) > 0
-                AND (${likeParts.join(" OR ")})
-              ORDER BY v.updated_at DESC NULLS LAST, v.created_at DESC
-              LIMIT 1
-              `,
-              params
-            );
+            return {
+              handled: true,
+              reply: q,
+              source: "service_list_db",
+              intent: intentOut || "seleccion",
+              ctxPatch: {
+                ...basePatch,
+                pending_link_lookup: true,
+                pending_link_at: Date.now(),
+                pending_link_options: linkPick.options,
+                last_bot_action: "asked_link_option",
+                last_bot_action_at: Date.now(),
+              } as any,
+            };
           }
-
-          // 2) fallback: si no hubo match por nombre, usa "la primera variante con url"
-          if (!vr?.rows?.length) {
-            vr = await pool.query(
-              `
-              SELECT NULLIF(trim(v.variant_url), '') AS variant_url
-              FROM service_variants v
-              JOIN services s ON s.id = v.service_id
-              WHERE s.tenant_id = $1
-                AND v.service_id = $2
-                AND v.active = true
-                AND v.variant_url IS NOT NULL
-                AND length(trim(v.variant_url)) > 0
-              ORDER BY v.updated_at DESC NULLS LAST, v.created_at DESC
-              LIMIT 1
-              `,
-              [tenantId, picked.id]
-            );
-          }
-
-          const vurl = vr?.rows?.[0]?.variant_url ? String(vr.rows[0].variant_url).trim() : null;
-          if (vurl) finalUrl = vurl;
         }
-      } catch (e: any) {
-        // no-op: si algo falla, caemos a service_url
+
+        const reply = finalUrl ? `${picked.name}\n${finalUrl}` : `${picked.name}`;
+
+        return {
+          handled: true,
+          reply,
+          source: "service_list_db",
+          intent: intentOut || "seleccion",
+          ctxPatch: {
+            ...basePatch,
+            pending_link_lookup: undefined,
+            pending_link_at: undefined,
+            pending_link_options: undefined,
+            last_bot_action: finalUrl ? "sent_link" : undefined,
+            last_bot_action_at: finalUrl ? Date.now() : undefined,
+          } as any,
+        };
       }
-
-      const reply = finalUrl ? `${picked.name}\n${finalUrl}` : `${picked.name}`;
-
-      return {
-        handled: true,
-        reply,
-        source: "service_list_db",
-        intent: intentOut || "seleccion",
-        ctxPatch: basePatch,
-      };
     }
   }
-}
+
+  // ===============================
+  // ✅ ANTI-LOOP: clear pending_link if user changed topic
+  // (NO HARDCODE: only matches against pending_link_options labels)
+  // ===============================
+  {
+    const ttlMs = 5 * 60 * 1000;
+
+    const pending = Boolean(convoCtx?.pending_link_lookup);
+    const pendingAt = Number(convoCtx?.pending_link_at || 0);
+    const pendingOptions = Array.isArray(convoCtx?.pending_link_options)
+      ? convoCtx.pending_link_options
+      : [];
+
+    const pendingFresh =
+      pending && pendingAt > 0 && Date.now() - pendingAt <= ttlMs && pendingOptions.length > 0;
+
+    // Si expiró TTL, limpia y sigue normal
+    if (pending && !pendingFresh) {
+      return {
+        handled: false,
+        ctxPatch: {
+          pending_link_lookup: undefined,
+          pending_link_at: undefined,
+          pending_link_options: undefined,
+        } as any,
+      };
+    }
+
+    if (pendingFresh) {
+      const norm = (s: string) =>
+        String(s || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .trim();
+
+      const tNorm = norm(userInput);
+
+      // Cancel genérico (esto NO es hardcode de negocio)
+      const looksLikeCancel =
+        /\b(no|no\s+gracias|gracias|thanks|cancelar|olvidalo|olvidalo|stop)\b/.test(tNorm);
+
+      // (A) si responde con número (1,2,3) es claramente una opción
+      const idx = (() => {
+        const m = tNorm.match(/\b([1-9])\b/);
+        if (!m) return null;
+        const n = Number(m[1]);
+        return Number.isFinite(n) ? n : null;
+      })();
+
+      const looksLikeOptionByIndex =
+        idx != null && idx >= 1 && idx <= Math.min(9, pendingOptions.length);
+
+      // (B) match por palabras del label (evita depender de escribir el label completo)
+      const labelWordHit = pendingOptions.some((o: any) => {
+        const labelNorm = norm(o?.label || "");
+        if (!labelNorm) return false;
+
+        // Palabras del label con longitud razonable
+        const words = labelNorm.split(/\s+/).filter((w) => w.length >= 3);
+
+        // Si el usuario escribió alguna palabra clave del label
+        return words.some((w) => tNorm.includes(w));
+      });
+
+      const looksLikeOptionAnswer = looksLikeOptionByIndex || labelWordHit;
+
+      // Si canceló, o cambió de tema (no parece opción) -> limpia pending y deja seguir pipeline
+      if (looksLikeCancel || !looksLikeOptionAnswer) {
+        return {
+          handled: false,
+          ctxPatch: {
+            pending_link_lookup: undefined,
+            pending_link_at: undefined,
+            pending_link_options: undefined,
+          } as any,
+        };
+      }
+
+      // Si parece opción, NO limpies aquí; deja que el bloque "RESOLVE PENDING LINK"
+      // lo capture y envíe el link correcto.
+    }
+  }
 
 // ===============================
 // ✅ INTEREST -> SEND BEST LINK (service_url or variant_url)
@@ -402,19 +480,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 {
   const t = String(userInput || "").trim();
 
-  // ultra simple, multitenant y genérico (no “reservar”)
-  const looksInterested =
-    /\b(me interesa|lo quiero|quiero (ese|este)|quiero ese plan|como (me )?(inscribo|registro)|donde (pago|compro)|enviame el link|mandame el link|send me the link|i want it|i’m interested|im interested)\b/i.test(
-      t
-    );
+  const tNorm = normalizeText(userInput);
 
-  const shortReply = String(userInput || "").trim().length <= 22;
+  // intención genérica de “quiero link / web / comprar”, sin copy hardcode
+  const wantsLink =
+    /\b(link|enlace|url|web|website|sitio|pagina|página|comprar|buy|pagar|checkout)\b/i.test(tNorm);
 
-  // ✅ entra si:
-  // - viene de pending_link_lookup (si preguntaste “cuál opción?”)
-  // - o el user responde algo corto tipo “autopay”
-  // - o “me interesa” (looksInterested)
-  if ((looksInterested || shortReply || Boolean(convoCtx?.pending_link_lookup)) && convoCtx?.last_service_id) {
+  const pending = Boolean(convoCtx?.pending_link_lookup);
+
+  if ((wantsLink || pending) && convoCtx?.last_service_id) {
     const pick = await resolveBestLinkForService({
       pool,
       tenantId,
@@ -801,90 +875,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         source: "includes_fastpath_db_ambiguous",
         intent: intentOut || "info",
       };
-    }
-  }
-
- // ===============================
-  // ✅ ANTI-LOOP: clear pending_link if user changed topic
-  // (NO HARDCODE: only matches against pending_link_options labels)
-  // ===============================
-  {
-    const ttlMs = 5 * 60 * 1000;
-
-    const pending = Boolean(convoCtx?.pending_link_lookup);
-    const pendingAt = Number(convoCtx?.pending_link_at || 0);
-    const pendingOptions = Array.isArray(convoCtx?.pending_link_options)
-      ? convoCtx.pending_link_options
-      : [];
-
-    const pendingFresh =
-      pending && pendingAt > 0 && Date.now() - pendingAt <= ttlMs && pendingOptions.length > 0;
-
-    // Si expiró TTL, limpia y sigue normal
-    if (pending && !pendingFresh) {
-      return {
-        handled: false,
-        ctxPatch: {
-          pending_link_lookup: undefined,
-          pending_link_at: undefined,
-          pending_link_options: undefined,
-        } as any,
-      };
-    }
-
-    if (pendingFresh) {
-      const norm = (s: string) =>
-        String(s || "")
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .toLowerCase()
-          .trim();
-
-      const tNorm = norm(userInput);
-
-      // Cancel genérico (esto NO es hardcode de negocio)
-      const looksLikeCancel =
-        /\b(no|no\s+gracias|gracias|thanks|cancelar|olvidalo|olvidalo|stop)\b/.test(tNorm);
-
-      // (A) si responde con número (1,2,3) es claramente una opción
-      const idx = (() => {
-        const m = tNorm.match(/\b([1-9])\b/);
-        if (!m) return null;
-        const n = Number(m[1]);
-        return Number.isFinite(n) ? n : null;
-      })();
-
-      const looksLikeOptionByIndex =
-        idx != null && idx >= 1 && idx <= Math.min(9, pendingOptions.length);
-
-      // (B) match por palabras del label (evita depender de escribir el label completo)
-      const labelWordHit = pendingOptions.some((o: any) => {
-        const labelNorm = norm(o?.label || "");
-        if (!labelNorm) return false;
-
-        // Palabras del label con longitud razonable
-        const words = labelNorm.split(/\s+/).filter((w) => w.length >= 3);
-
-        // Si el usuario escribió alguna palabra clave del label
-        return words.some((w) => tNorm.includes(w));
-      });
-
-      const looksLikeOptionAnswer = looksLikeOptionByIndex || labelWordHit;
-
-      // Si canceló, o cambió de tema (no parece opción) -> limpia pending y deja seguir pipeline
-      if (looksLikeCancel || !looksLikeOptionAnswer) {
-        return {
-          handled: false,
-          ctxPatch: {
-            pending_link_lookup: undefined,
-            pending_link_at: undefined,
-            pending_link_options: undefined,
-          } as any,
-        };
-      }
-
-      // Si parece opción, NO limpies aquí; deja que el bloque "RESOLVE PENDING LINK"
-      // lo capture y envíe el link correcto.
     }
   }
 
