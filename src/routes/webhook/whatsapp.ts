@@ -377,6 +377,50 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     idiomaDestino = storedLang as any;
   }
 
+  // ✅ NO CAMBIAR IDIOMA cuando el usuario está seleccionando una opción
+  // Ej: "cycling autopay", "bronze por mes", etc.
+  // Regla: si el texto matchea alguna opción previamente listada por fastpath,
+  // nos quedamos con storedLang (idioma sticky del hilo).
+  const normalizeChoice = (s: string) =>
+    String(s || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const isChoosingFromLastList = (() => {
+    if (!(storedLang === "es" || storedLang === "en")) return false;
+
+    const u = normalizeChoice(userInput);
+    if (!u) return false;
+
+    // listas que fastpath suele guardar en ctx
+    const candidates: Array<{ name?: string; label?: string; text?: string }> = [
+      ...(((convoCtx as any)?.last_plan_list || []) as any[]),
+      ...(((convoCtx as any)?.last_package_list || []) as any[]),
+      ...(((convoCtx as any)?.last_service_list || []) as any[]),
+    ];
+
+    if (!candidates.length) return false;
+
+    // match por inclusión (para permitir "cycling autopay" vs "Plan Bronze Cycling (Autopay)")
+    return candidates.some((it) => {
+      const n = normalizeChoice(it?.name || it?.label || it?.text || "");
+      if (!n) return false;
+
+      // el usuario puede escribir una parte del nombre
+      // ej: "cycling autopay" ⟂ "plan bronze cycling autopay"
+      return n.includes(u) || u.includes(n);
+    });
+  })();
+
+  if (isChoosingFromLastList) {
+    idiomaDestino = storedLang as any;
+    console.log("🌍 LANG LOCK (choice token) =>", { userInput, storedLang });
+  }
+
   // ✅ thread_lang SOLO durante booking
   if (langRes.inBookingLang && !(convoCtx as any)?.thread_lang) {
     convoCtx = { ...(convoCtx || {}), thread_lang: idiomaDestino };

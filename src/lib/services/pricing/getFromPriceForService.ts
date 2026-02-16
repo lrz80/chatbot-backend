@@ -9,7 +9,7 @@ export type PriceOption = {
 };
 
 export type PriceInfo =
-  | { ok: true; mode: "fixed"; amount: number; currency: string }
+  | { ok: true; mode: "fixed"; amount: number; currency: string; service_url?: string | null }
   | {
       ok: true;
       mode: "from";
@@ -17,6 +17,8 @@ export type PriceInfo =
       currency: string;
       options?: PriceOption[];
       optionsCount?: number;
+      service_url?: string | null;
+      // ✅ si luego quieres: variant_url?: string | null (lo usamos en PICK, no aquí)
     }
   | { ok: false; reason: "no_price" };
 
@@ -27,24 +29,26 @@ export async function getPriceInfoForService(
 ): Promise<PriceInfo> {
   // 1) Precio fijo SOLO si es válido (>0) en services.price_base
     const s = await pool.query(
-    `
-    SELECT s.price_base AS base_price
-    FROM services s
-    WHERE s.tenant_id = $1
+      `
+      SELECT s.price_base AS base_price,
+            NULLIF(trim(s.service_url), '') AS service_url
+      FROM services s
+      WHERE s.tenant_id = $1
         AND s.id = $2
         AND s.active = true
-    LIMIT 1
-    `,
-    [tenantId, serviceId]
+      LIMIT 1
+      `,
+      [tenantId, serviceId]
     );
 
     const base = s.rows?.[0]?.base_price;
     const baseNum = Number(base);
+    const serviceUrl = s.rows?.[0]?.service_url ?? null;
 
     // ✅ Acepta 0 como precio válido (ej: clase gratis / trial / free session).
     // Solo rechazamos null/NaN o negativos.
     if (base !== null && base !== undefined && Number.isFinite(baseNum) && baseNum >= 0) {
-      return { ok: true, mode: "fixed", amount: baseNum, currency: "USD" };
+      return { ok: true, mode: "fixed", amount: baseNum, currency: "USD", service_url: serviceUrl };
     }
 
   // 2) Variantes: "desde" = MIN(COALESCE(v.price, v.price_base)) + top 5 variantes
@@ -53,7 +57,8 @@ export async function getPriceInfoForService(
     SELECT
       MIN(v.price) AS min_price,
       MAX(NULLIF(v.currency, '')) FILTER (WHERE v.currency IS NOT NULL) AS any_currency,
-      COUNT(*)::int AS n
+      COUNT(*)::int AS n,
+      NULLIF(trim(MAX(s.service_url)), '') AS service_url
     FROM service_variants v
     JOIN services s ON s.id = v.service_id
     WHERE s.tenant_id = $1
@@ -68,6 +73,7 @@ export async function getPriceInfoForService(
   const min = vAgg.rows?.[0]?.min_price;
   const minNum = Number(min);
   const n = Number(vAgg.rows?.[0]?.n || 0);
+  const serviceUrl2 = vAgg.rows?.[0]?.service_url ?? serviceUrl ?? null;
 
   if (Number.isFinite(minNum) && minNum > 0) {
     const vList = await pool.query(
@@ -106,6 +112,7 @@ export async function getPriceInfoForService(
       currency: cur,
       options: options.length ? options : undefined,
       optionsCount: Number.isFinite(n) ? n : undefined,
+      service_url: serviceUrl2,
     };
   }
 

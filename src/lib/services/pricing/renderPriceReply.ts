@@ -65,6 +65,12 @@ function questionLine(lang: Lang) {
     : "¿Cuál te interesa— o cuéntame qué necesitas y te recomiendo la mejor opción?";
 }
 
+function linkLine(url: string | null | undefined, lang: Lang) {
+  const u = String(url || "").trim();
+  if (!u) return "";
+  return lang === "en" ? `\n\nLink: ${u}` : `\n\nLink: ${u}`;
+}
+
 export function renderPriceReply(args: {
   lang: Lang;
   mode: "fixed" | "from";
@@ -73,6 +79,7 @@ export function renderPriceReply(args: {
   serviceName?: string | null;
   options?: PriceOption[];
   optionsCount?: number;
+  url?: string | null; // ✅ NUEVO
 }) {
   const name =
     args.serviceName && String(args.serviceName).trim()
@@ -93,7 +100,7 @@ export function renderPriceReply(args: {
   // FIXED (services.price_base)
   if (args.mode === "fixed") {
     // Respuesta humana, especialmente para Gratis/Free
-    return `${opener(args.lang)}\n${fixedLine(name, money, args.lang)}`;
+    return `${opener(args.lang)}\n${fixedLine(name, money, args.lang)}${linkLine(args.url, args.lang)}`;
   }
 
   // FROM (variants / ranges)
@@ -109,9 +116,9 @@ export function renderPriceReply(args: {
     const more = moreLine(extra, args.lang);
 
     // Copy humano: intro + header + lista + pregunta flexible
-    return `${opener(args.lang)}\n${header}\n${list}${more}\n\n${questionLine(args.lang)}`;
+    return `${opener(args.lang)}\n${header}\n${list}${more}\n\n${questionLine(args.lang)}${linkLine(args.url, args.lang)}`;
   }
 
   // Sin options: también humano
-  return `${opener(args.lang)}\n${fromHeader(name, money, args.lang)}\n\n${questionLine(args.lang)}`;
+  return `${opener(args.lang)}\n${fromHeader(name, money, args.lang)}\n\n${questionLine(args.lang)}${linkLine(args.url, args.lang)}`;
 }

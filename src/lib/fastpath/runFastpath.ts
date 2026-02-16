@@ -319,8 +319,70 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         last_service_at: Date.now(),
       };
 
-      // manda link SOLO si existe
-      const reply = picked.url ? `${picked.name}\n${picked.url}` : `${picked.name}`;
+      // ✅ usa variant_url si el texto sugiere variante (autopay / monthly / por mes)
+      let finalUrl: string | null = picked.url ? String(picked.url).trim() : null;
+
+      try {
+        const u = String(userInput || "").toLowerCase();
+
+        // Señales genéricas (NO negocio-específicas)
+        const wantsVariant =
+          /\b(autopay|auto\s*pay|por\s*mes|mensual|monthly|per\s*month)\b/i.test(u);
+
+        if (wantsVariant) {
+          // 1) intenta match por nombre de variante (mejor)
+          const tokens = normalizeTokensForLike(userInput); // ya existe arriba en el archivo
+          const likeParts = tokens.map((_, i) => `lower(v.variant_name) LIKE $${i + 3}`);
+          const params: any[] = [tenantId, picked.id, ...tokens.map((t) => `%${t}%`)];
+
+          let vr: any;
+
+          if (tokens.length) {
+            vr = await pool.query(
+              `
+              SELECT NULLIF(trim(v.variant_url), '') AS variant_url
+              FROM service_variants v
+              JOIN services s ON s.id = v.service_id
+              WHERE s.tenant_id = $1
+                AND v.service_id = $2
+                AND v.active = true
+                AND v.variant_url IS NOT NULL
+                AND length(trim(v.variant_url)) > 0
+                AND (${likeParts.join(" OR ")})
+              ORDER BY v.updated_at DESC NULLS LAST, v.created_at DESC
+              LIMIT 1
+              `,
+              params
+            );
+          }
+
+          // 2) fallback: si no hubo match por nombre, usa "la primera variante con url"
+          if (!vr?.rows?.length) {
+            vr = await pool.query(
+              `
+              SELECT NULLIF(trim(v.variant_url), '') AS variant_url
+              FROM service_variants v
+              JOIN services s ON s.id = v.service_id
+              WHERE s.tenant_id = $1
+                AND v.service_id = $2
+                AND v.active = true
+                AND v.variant_url IS NOT NULL
+                AND length(trim(v.variant_url)) > 0
+              ORDER BY v.updated_at DESC NULLS LAST, v.created_at DESC
+              LIMIT 1
+              `,
+              [tenantId, picked.id]
+            );
+          }
+
+          const vurl = vr?.rows?.[0]?.variant_url ? String(vr.rows[0].variant_url).trim() : null;
+          if (vurl) finalUrl = vurl;
+        }
+      } catch (e: any) {
+        // no-op: si algo falla, caemos a service_url
+      }
+
+      const reply = finalUrl ? `${picked.name}\n${finalUrl}` : `${picked.name}`;
 
       return {
         handled: true,
@@ -773,6 +835,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         };
       }
 
+      const url =
+        (pi as any).variant_url ||
+        (pi as any).service_url ||
+        null;
+
       const msg = renderPriceReply({
         lang: idiomaDestino === "en" ? "en" : "es",
         mode: pi.mode,
@@ -781,6 +848,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         serviceName: serviceName || null,
         options: pi.mode === "from" ? (pi.options || []) : undefined,
         optionsCount: pi.mode === "from" ? (pi.optionsCount as any) : undefined,
+        url, // ✅ AQUÍ
       });
 
       // Si es precio fijo, puedes querer “awaiting yes/no” para confirmar algo
