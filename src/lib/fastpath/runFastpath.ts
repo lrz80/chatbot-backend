@@ -25,6 +25,7 @@ import { isGenericPriceQuestion } from "../services/pricing/isGenericPriceQuesti
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
 import { resolveServiceList } from "../services/resolveServiceList";
 import { renderServiceListReply } from "../services/renderServiceListReply";
+import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
 
 export type FastpathCtx = {
   last_service_id?: string | null;
@@ -390,6 +391,71 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         source: "service_list_db",
         intent: intentOut || "seleccion",
         ctxPatch: basePatch,
+      };
+    }
+  }
+}
+
+// ===============================
+// ✅ INTEREST -> SEND BEST LINK (service_url or variant_url)
+// ===============================
+{
+  const t = String(userInput || "").trim();
+
+  // ultra simple, multitenant y genérico (no “reservar”)
+  const looksInterested =
+    /\b(me interesa|lo quiero|quiero (ese|este)|quiero ese plan|como (me )?(inscribo|registro)|donde (pago|compro)|enviame el link|mandame el link|send me the link|i want it|i’m interested|im interested)\b/i.test(
+      t
+    );
+
+  if (looksInterested && convoCtx?.last_service_id) {
+    const pick = await resolveBestLinkForService({
+      pool,
+      tenantId,
+      serviceId: String(convoCtx.last_service_id),
+      userText: t,
+    });
+
+    if (pick.ok) {
+      const name = String(convoCtx?.last_service_name || "").trim();
+      const reply = name ? `${name}\n${pick.url}` : pick.url;
+
+      return {
+        handled: true,
+        reply,
+        source: "service_list_db",
+        intent: intentOut || "link",
+        // NO rompas idioma ni contexto; solo marca acción
+        ctxPatch: {
+          last_bot_action: "sent_link",
+          last_bot_action_at: Date.now(),
+        } as any,
+      };
+    }
+
+    if (!pick.ok && pick.reason === "ambiguous") {
+      // 1 sola pregunta corta, sin menús numéricos
+      const labels = pick.options
+        .slice(0, 3)
+        .map((o) => o.label)
+        .filter(Boolean);
+
+      const q =
+        idiomaDestino === "en"
+          ? `Sure 😊 Which option do you want— ${labels.join(" or ")}?`
+          : `Perfecto 😊 ¿Cuál opción quieres— ${labels.join(" o ")}?`;
+
+      // opcional: guarda para que el próximo mensaje “autopay” resuelva directo
+      return {
+        handled: true,
+        reply: q,
+        source: "service_list_db",
+        intent: intentOut || "link",
+        ctxPatch: {
+          pending_link_lookup: true,
+          pending_link_at: Date.now(),
+          pending_link_options: pick.options, // si tu ctx permite JSON; si no, omítelo
+        } as any,
       };
     }
   }
