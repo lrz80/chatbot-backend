@@ -66,6 +66,7 @@ import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
 import { looksLikeShortLabel } from "../../lib/channels/engine/lang/looksLikeShortLabel";
 import { runFastpath } from "../../lib/fastpath/runFastpath";
 import { naturalizeSecondaryOptionsLine } from "../../lib/fastpath/naturalizeSecondaryOptions";
+import { computeChoiceMemoryPatch } from "../../lib/conversation/applyChoiceMemoryPatch";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -971,6 +972,9 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
     const textOut = String(composed.text || "").trim();
 
+    const patch = computeChoiceMemoryPatch({ assistantText: textOut, lang: idiomaDestino });
+    if (patch) transition({ patchCtx: patch });
+
     // detector GENÉRICO (no industria)
     const looksYesNoQuestion =
       /\?\s*$/.test(textOut) &&
@@ -992,7 +996,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
 
     return await replyAndExit(
-      composed.text,
+      textOut,
       smResult.replySource || "state_machine",
       smResult.intent || null
     );
@@ -1095,8 +1099,14 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       fallbackText: fallbackWelcome,
     });
 
-    setReply(composed.text, "sm-fallback");
+    const textOut = String(composed.text || "").trim();
+
+    const patch = computeChoiceMemoryPatch({ assistantText: textOut, lang: idiomaDestino });
+    if (patch) transition({ patchCtx: patch });
+
+    setReply(textOut, "sm-fallback");
     await finalizeReply();
     return;
+
   }
 }
