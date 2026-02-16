@@ -408,12 +408,18 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       t
     );
 
-  if (looksInterested && convoCtx?.last_service_id) {
+  const shortReply = String(userInput || "").trim().length <= 22;
+
+  // ✅ entra si:
+  // - viene de pending_link_lookup (si preguntaste “cuál opción?”)
+  // - o el user responde algo corto tipo “autopay”
+  // - o “me interesa” (looksInterested)
+  if ((looksInterested || shortReply || Boolean(convoCtx?.pending_link_lookup)) && convoCtx?.last_service_id) {
     const pick = await resolveBestLinkForService({
       pool,
       tenantId,
       serviceId: String(convoCtx.last_service_id),
-      userText: t,
+      userText: userInput,
     });
 
     if (pick.ok) {
