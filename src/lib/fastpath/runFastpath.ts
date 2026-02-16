@@ -48,15 +48,6 @@ export type FastpathCtx = {
   last_list_kind?: "plan" | "package";
   last_list_kind_at?: number | null;
 
-  // ✅ elección desde pregunta del asistente (LLM) tipo "A, B o ambas"
-  last_choice_options?: Array<{ key: string; label: string; payload?: any }>;
-  last_choice_at?: number | null;
-  last_choice_kind?: string | null;
-
-  chosen_choice_key?: string | null;
-  chosen_choice_label?: string | null;
-  chosen_choice_at?: number | null;
-
   [k: string]: any;
 };
 
@@ -83,8 +74,7 @@ export type FastpathResult =
         | "price_missing_db"
         | "price_fastpath_db"
         | "price_summary_db"
-        | "price_summary_db_empty"
-        | "choice_pick";
+        | "price_summary_db_empty";
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;
@@ -267,99 +257,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   if (inBooking) return { handled: false };
 
   const intentOut = (detectedIntent || "").trim() || null;
-
-  // ===============================
-// ✅ PICK FROM LAST CHOICE (LLM) -> RESOLVE "ambas/both/1/2/name"
-// ===============================
-{
-  const ttlMs = 10 * 60 * 1000;
-
-  const opts = Array.isArray(convoCtx?.last_choice_options) ? convoCtx.last_choice_options : [];
-  const at = Number(convoCtx?.last_choice_at || 0);
-  const fresh = opts.length > 0 && at > 0 && Date.now() - at <= ttlMs;
-
-  if (fresh) {
-    const idx = parsePickIndex(userInput);
-
-    const normalize = (s: string) => normalizeText(String(s || ""));
-
-    const isBothText = (txt: string) => {
-      const t = normalize(txt);
-      return (
-        t === "ambas" ||
-        t === "ambos" ||
-        t === "los dos" ||
-        t === "las dos" ||
-        t === "both" ||
-        t === "both of them"
-      );
-    };
-
-    const tryPick = () => {
-      // 1) by index
-      if (idx != null) {
-        const i = idx - 1;
-        if (i >= 0 && i < opts.length) return opts[i];
-      }
-
-      // 2) by "both/ambas" generic
-      if (isBothText(userInput)) {
-        const bothOpt = opts.find((o) => normalize(o.label) === "ambas" || normalize(o.label) === "both");
-        if (bothOpt) return bothOpt;
-        const allKey = opts.find((o) => String(o.key).toUpperCase() === "ALL");
-        if (allKey) return allKey;
-      }
-
-      // 3) by label inclusion (no negocio)
-      const u = normalize(userInput);
-      if (!u) return null;
-
-      const hits = opts.filter((o) => {
-        const l = normalize(o.label);
-        return l.includes(u) || u.includes(l);
-      });
-
-      if (hits.length === 1) return hits[0];
-      if (hits.length > 1) {
-        // elige label más largo (más específico)
-        return hits.sort((a, b) => normalize(b.label).length - normalize(a.label).length)[0];
-      }
-
-      return null;
-    };
-
-    const picked = tryPick();
-
-    if (picked) {
-      const pickedKey = String(picked.key || "").trim() || null;
-      const pickedLabel = String(picked.label || "").trim() || null;
-
-      const ctxPatch: Partial<FastpathCtx> = {
-        chosen_choice_key: pickedKey,
-        chosen_choice_label: pickedLabel,
-        chosen_choice_at: Date.now(),
-
-        // limpiar elección pendiente (evita loops)
-        last_choice_options: undefined,
-        last_choice_at: undefined,
-        last_choice_kind: undefined,
-      };
-
-      const reply =
-        idiomaDestino === "en"
-          ? `Perfect 😊 Got it: ${pickedLabel}. What would you like to know?`
-          : `Perfecto 😊 Listo: ${pickedLabel}. ¿Qué te gustaría saber?`;
-
-      return {
-        handled: true,
-        reply,
-        source: "choice_pick",
-        intent: intentOut || "seleccion",
-        ctxPatch,
-      };
-    }
-  }
-}
 
   // ===============================
 // ✅ PICK FROM LAST LIST -> SEND SINGLE LINK

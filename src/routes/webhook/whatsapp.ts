@@ -971,10 +971,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     replied = true;
 
     const textOut = String(composed.text || "").trim();
-
-    const patch = computeChoiceMemoryPatch({ assistantText: textOut, lang: idiomaDestino });
-    if (patch) transition({ patchCtx: patch });
-
+    
     // detector GENÉRICO (no industria)
     const looksYesNoQuestion =
       /\?\s*$/.test(textOut) &&
@@ -996,7 +993,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
 
     return await replyAndExit(
-      textOut,
+      composed.text,
       smResult.replySource || "state_machine",
       smResult.intent || null
     );
@@ -1099,14 +1096,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
       fallbackText: fallbackWelcome,
     });
 
-    const textOut = String(composed.text || "").trim();
-
-    const patch = computeChoiceMemoryPatch({ assistantText: textOut, lang: idiomaDestino });
-    if (patch) transition({ patchCtx: patch });
-
-    setReply(textOut, "sm-fallback");
+    setReply(composed.text, "sm-fallback");
     await finalizeReply();
     return;
-
   }
 }
