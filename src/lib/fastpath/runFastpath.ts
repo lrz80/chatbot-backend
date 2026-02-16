@@ -424,7 +424,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
     if (pick.ok) {
       const name = String(convoCtx?.last_service_name || "").trim();
-      const reply = name ? `${name}\n${pick.url}` : pick.url;
+      const reply =
+      idiomaDestino === "en"
+        ? `Perfect 😊\n\nHere’s the link${name ? ` for ${name}` : ""}:\n${pick.url}\n\nIf you need anything else, just let me know.`
+        : `Perfecto 😊\n\nAquí tienes el link${name ? ` de ${name}` : ""}:\n${pick.url}\n\nSi necesitas algo más, déjame saber y te ayudo.`;
 
       return {
         handled: true,
@@ -435,6 +438,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         ctxPatch: {
           last_bot_action: "sent_link",
           last_bot_action_at: Date.now(),
+          // 🔥 limpiar estado pendiente
+          pending_link_lookup: undefined,
+          pending_link_at: undefined,
+          pending_link_options: undefined,
         } as any,
       };
     }
