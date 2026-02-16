@@ -1,6 +1,10 @@
 export function isGenericPriceQuestion(text: string): boolean {
   const t = String(text || "").toLowerCase().trim();
 
+  // ✅ si es la pregunta genérica exacta, no la discutas
+  if (/^\s*(cu[aá]les\s+son\s+los\s+precios?)\s*\??\s*$/.test(t)) return true;
+  if (/^\s*(what\s+are\s+the\s+prices?)\s*\??\s*$/.test(t)) return true;
+
   const genericMatch =
     /\b(precios?|tarifas?|costos?)\b/.test(t) ||
     /\b(cu[aá]les\s+son\s+los\s+precios?)\b/.test(t) ||
@@ -9,7 +13,6 @@ export function isGenericPriceQuestion(text: string): boolean {
 
   if (!genericMatch) return false;
 
-  // 🔥 Detectar si hay palabras adicionales relevantes (ancla específica)
   const tokens = t
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -18,15 +21,20 @@ export function isGenericPriceQuestion(text: string): boolean {
     .filter(Boolean);
 
   const STOPWORDS = new Set([
-    "precio", "precios", "tarifa", "tarifas", "costo", "costos",
-    "cuanto", "cuanta", "cuestan", "vale", "valen",
-    "what", "are", "the", "price", "prices", "pricing",
-    "plan", "planes", "membresia", "membresias",
-    "monthly", "membership", "de", "los", "las", "del"
+    // ES
+    "precio","precios","tarifa","tarifas","costo","costos",
+    "cuales","cual","que","son","es","ser","de","del","la","las","el","los","un","una","unos","unas",
+    "me","te","se","mi","tu","su","por","para","en","al","a",
+    "cuanto","cuanta","cuestan","cuesta","vale","valen",
+    // EN
+    "what","are","the","is","do","you","have",
+    "price","prices","pricing","list","range",
+    // (opcionales) palabras que no deberían “anclar” a algo específico
+    "plan","planes","membresia","membresias","monthly","membership"
   ]);
 
   // Si existe al menos un token que NO sea stopword → no es genérica
-  const hasSpecificWord = tokens.some(t => !STOPWORDS.has(t) && t.length >= 3);
+  const hasSpecificWord = tokens.some(x => !STOPWORDS.has(x) && x.length >= 3);
 
   return !hasSpecificWord;
 }
