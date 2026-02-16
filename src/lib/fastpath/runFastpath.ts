@@ -804,6 +804,90 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
+ // ===============================
+  // ✅ ANTI-LOOP: clear pending_link if user changed topic
+  // (NO HARDCODE: only matches against pending_link_options labels)
+  // ===============================
+  {
+    const ttlMs = 5 * 60 * 1000;
+
+    const pending = Boolean(convoCtx?.pending_link_lookup);
+    const pendingAt = Number(convoCtx?.pending_link_at || 0);
+    const pendingOptions = Array.isArray(convoCtx?.pending_link_options)
+      ? convoCtx.pending_link_options
+      : [];
+
+    const pendingFresh =
+      pending && pendingAt > 0 && Date.now() - pendingAt <= ttlMs && pendingOptions.length > 0;
+
+    // Si expiró TTL, limpia y sigue normal
+    if (pending && !pendingFresh) {
+      return {
+        handled: false,
+        ctxPatch: {
+          pending_link_lookup: undefined,
+          pending_link_at: undefined,
+          pending_link_options: undefined,
+        } as any,
+      };
+    }
+
+    if (pendingFresh) {
+      const norm = (s: string) =>
+        String(s || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .trim();
+
+      const tNorm = norm(userInput);
+
+      // Cancel genérico (esto NO es hardcode de negocio)
+      const looksLikeCancel =
+        /\b(no|no\s+gracias|gracias|thanks|cancelar|olvidalo|olvidalo|stop)\b/.test(tNorm);
+
+      // (A) si responde con número (1,2,3) es claramente una opción
+      const idx = (() => {
+        const m = tNorm.match(/\b([1-9])\b/);
+        if (!m) return null;
+        const n = Number(m[1]);
+        return Number.isFinite(n) ? n : null;
+      })();
+
+      const looksLikeOptionByIndex =
+        idx != null && idx >= 1 && idx <= Math.min(9, pendingOptions.length);
+
+      // (B) match por palabras del label (evita depender de escribir el label completo)
+      const labelWordHit = pendingOptions.some((o: any) => {
+        const labelNorm = norm(o?.label || "");
+        if (!labelNorm) return false;
+
+        // Palabras del label con longitud razonable
+        const words = labelNorm.split(/\s+/).filter((w) => w.length >= 3);
+
+        // Si el usuario escribió alguna palabra clave del label
+        return words.some((w) => tNorm.includes(w));
+      });
+
+      const looksLikeOptionAnswer = looksLikeOptionByIndex || labelWordHit;
+
+      // Si canceló, o cambió de tema (no parece opción) -> limpia pending y deja seguir pipeline
+      if (looksLikeCancel || !looksLikeOptionAnswer) {
+        return {
+          handled: false,
+          ctxPatch: {
+            pending_link_lookup: undefined,
+            pending_link_at: undefined,
+            pending_link_options: undefined,
+          } as any,
+        };
+      }
+
+      // Si parece opción, NO limpies aquí; deja que el bloque "RESOLVE PENDING LINK"
+      // lo capture y envíe el link correcto.
+    }
+  }
+
   // =========================================================
   // 3) PRICE FASTPATH (DB)
   //    - usa contexto si existe (TTL)
