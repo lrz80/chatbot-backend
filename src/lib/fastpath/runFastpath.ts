@@ -1091,10 +1091,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         };
       }
 
-      const url =
-        (pi as any).variant_url ||
+      let url: string | null =
         (pi as any).service_url ||
         null;
+
+      // ✅ si hay options (variants) y el user dijo "autopay", intenta tomar el url de esa option
+      if (pi.mode === "from" && Array.isArray((pi as any).options) && (pi as any).options.length) {
+        const pick = bestNameMatch(userInput, (pi as any).options.map((o: any) => ({ name: o.label, url: o.url || null })));
+        if (pick?.url) url = String(pick.url).trim();
+      }
 
       const msg = renderPriceReply({
         lang: idiomaDestino === "en" ? "en" : "es",

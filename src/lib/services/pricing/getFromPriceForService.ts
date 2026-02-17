@@ -6,6 +6,7 @@ export type PriceOption = {
   label: string;
   amount: number;
   currency: string;
+  url?: string | null; // ✅
 };
 
 export type PriceInfo =
@@ -82,6 +83,7 @@ export async function getPriceInfoForService(
         COALESCE(NULLIF(v.variant_name,''), 'Option') AS label,
         v.price::numeric AS price,
         COALESCE(NULLIF(v.currency,''), 'USD') AS currency
+        NULLIF(trim(v.variant_url), '') AS variant_url
       FROM service_variants v
       JOIN services s ON s.id = v.service_id
       WHERE s.tenant_id = $1
@@ -100,6 +102,7 @@ export async function getPriceInfoForService(
         label: String(r.label || "").trim() || "Option",
         amount: Number(r.price),
         currency: String(r.currency || "USD").toUpperCase(),
+        url: r.variant_url ? String(r.variant_url).trim() : null,
       }))
       .filter((o) => Number.isFinite(o.amount) && o.amount > 0);
 
