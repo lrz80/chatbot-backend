@@ -638,22 +638,36 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     });
 
     if (pick.ok) {
-      const name = String(convoCtx?.last_service_name || "").trim();
+      const serviceId = String(convoCtx.last_service_id);
+      const baseName = String(convoCtx?.last_service_name || "").trim();
+
+      // ✅ Trae descripción: intenta variante por texto ("por mes", "autopay"), si no servicio
+      const d = await getServiceDetailsText(pool, tenantId, serviceId, userInput).catch(() => null);
+
+      const title = d?.titleSuffix
+        ? `${baseName || ""}${baseName ? " — " : ""}${String(d.titleSuffix).trim()}`
+        : baseName;
+
+      const infoText = d?.text ? String(d.text).trim() : "";
+
+      const outro =
+        idiomaDestino === "en"
+          ? "If you need anything else, just let me know 😊"
+          : "Si necesitas algo más, déjame saber 😊";
+
       const reply =
-      idiomaDestino === "en"
-        ? `Perfect 😊\n\nHere’s the link${name ? ` for ${name}` : ""}:\n${pick.url}\n\nIf you need anything else, just let me know.`
-        : `Perfecto 😊\n\nAquí tienes el link${name ? ` de ${name}` : ""}:\n${pick.url}\n\nSi necesitas algo más, déjame saber y te ayudo.`;
+        idiomaDestino === "en"
+          ? `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Here it is 😊\n${pick.url}\n\n${outro}`
+          : `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Aquí lo tienes 😊\n${pick.url}\n\n${outro}`;
 
       return {
         handled: true,
         reply,
         source: "service_list_db",
         intent: intentOut || "link",
-        // NO rompas idioma ni contexto; solo marca acción
         ctxPatch: {
-          last_bot_action: "sent_link",
+          last_bot_action: "sent_link_with_details",
           last_bot_action_at: Date.now(),
-          // 🔥 limpiar estado pendiente
           pending_link_lookup: undefined,
           pending_link_at: undefined,
           pending_link_options: undefined,
