@@ -68,7 +68,7 @@ function questionLine(lang: Lang) {
 function linkLine(url: string | null | undefined, lang: Lang) {
   const u = String(url || "").trim();
   if (!u) return "";
-  return lang === "en" ? `\n\nLink: ${u}` : `\n\nLink: ${u}`;
+  return lang === "en" ? `\n\nHere’s the link:\n${u}` : `\n\nAquí está el link:\n${u}`;
 }
 
 export function renderPriceReply(args: {

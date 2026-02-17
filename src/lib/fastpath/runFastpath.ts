@@ -773,11 +773,37 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               ? `${blk.title}\nIncludes: ${inc}`
               : `${blk.title}\nIncluye: ${inc}`;
 
+          let ctxPatch: Partial<FastpathCtx> | undefined;
+
+          try {
+            // intenta mapear el bloque de info_clave a un service real del catálogo
+            const hit = await resolveServiceIdFromText(pool, tenantId, blk.title);
+            if (hit?.id) {
+              ctxPatch = {
+                last_service_id: hit.id,
+                last_service_name: hit.name || blk.title,
+                last_service_at: Date.now(),
+              };
+            } else {
+              // fallback: al menos guardar nombre para debugging
+              ctxPatch = {
+                last_service_name: blk.title,
+                last_service_at: Date.now(),
+              };
+            }
+          } catch {
+            ctxPatch = {
+              last_service_name: blk.title,
+              last_service_at: Date.now(),
+            };
+          }
+
           return {
             handled: true,
             reply: msg,
             source: "info_clave_includes",
             intent: intentOut || "info",
+            ctxPatch,
           };
         }
 

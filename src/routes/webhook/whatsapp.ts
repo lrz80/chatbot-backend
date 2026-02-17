@@ -446,9 +446,56 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     });
   })();
 
-  if (isChoosingFromLastList) {
-    idiomaDestino = storedLang as any;
-    console.log("🌍 LANG LOCK (choice token) =>", { userInput, storedLang });
+  // ✅ NO CAMBIAR IDIOMA cuando el usuario está eligiendo desde una lista reciente
+  // Aunque storedLang sea null (lead nuevo), nos quedamos con el idioma actual del hilo (idiomaDestino),
+  // o con tenantBase como fallback.
+  {
+    const normalizeChoice = (s: string) =>
+      String(s || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const u = normalizeChoice(userInput);
+
+    const hasRecentList = (() => {
+      const ttlMs = 10 * 60 * 1000;
+      const at1 = Number((convoCtx as any)?.last_plan_list_at || 0);
+      const at2 = Number((convoCtx as any)?.last_package_list_at || 0);
+      const fresh1 = at1 > 0 && Date.now() - at1 <= ttlMs;
+      const fresh2 = at2 > 0 && Date.now() - at2 <= ttlMs;
+
+      const lp = Array.isArray((convoCtx as any)?.last_plan_list) ? (convoCtx as any).last_plan_list : [];
+      const pk = Array.isArray((convoCtx as any)?.last_package_list) ? (convoCtx as any).last_package_list : [];
+
+      return (fresh1 && lp.length > 0) || (fresh2 && pk.length > 0);
+    })();
+
+    const matchesListItem = (() => {
+      if (!u) return false;
+
+      const candidates: Array<{ name?: string; label?: string; text?: string }> = [
+        ...(((convoCtx as any)?.last_plan_list || []) as any[]),
+        ...(((convoCtx as any)?.last_package_list || []) as any[]),
+        ...(((convoCtx as any)?.last_service_list || []) as any[]),
+      ];
+
+      return candidates.some((it) => {
+        const n = normalizeChoice(it?.name || it?.label || it?.text || "");
+        if (!n) return false;
+        return n.includes(u) || u.includes(n);
+      });
+    })();
+
+    if (hasRecentList && matchesListItem) {
+      // prioridad: idioma sticky del contacto si existe; si no, manten el idiomaDestino actual; si no, tenantBase
+      const locked = (storedLang === "es" || storedLang === "en") ? storedLang : (idiomaDestino || tenantBase);
+      idiomaDestino = locked as any;
+      console.log("🌍 LANG LOCK (choice token, no flip) =>", { userInput, storedLang, locked, tenantBase });
+    }
   }
 
   // ✅ thread_lang SOLO durante booking
