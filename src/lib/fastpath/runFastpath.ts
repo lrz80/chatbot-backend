@@ -26,6 +26,7 @@ import { renderGenericPriceSummaryReply } from "../services/pricing/renderGeneri
 import { resolveServiceList } from "../services/resolveServiceList";
 import { renderServiceListReply } from "../services/renderServiceListReply";
 import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
+import type { ServiceListItem } from "../services/resolveServiceList";
 
 export type FastpathCtx = {
   last_service_id?: string | null;
@@ -179,12 +180,6 @@ function isPriceQuestion(text: string) {
   );
 }
 
-// “planes/membresía” también es genérico (no negocio específico)
-function isMembershipLikeQuestion(text: string) {
-  const t = String(text || "").toLowerCase();
-  return /\b(plan(es)?|mensual(es)?|membres[ií]a(s)?|monthly|membership)\b/i.test(t);
-}
-
 function isFreeOfferQuestion(text: string) {
   const t = String(text || "").toLowerCase();
 
@@ -217,58 +212,73 @@ function renderFreeOfferList(args: { lang: Lang; items: { name: string }[] }) {
   return `${intro}\n\n${listText}\n\n${ask}`;
 }
 
-function wrapHumanList(args: {
-  lang: Lang;
-  title: string;
-  listText: string;
-  kind: "plans" | "packages";
-  secondaryAvailable?: boolean;
-}) {
-  const { lang, title, listText, kind, secondaryAvailable } = args;
-
-  if (lang === "en") {
-    const intro = "Sure! Here are some options 😊";
-    const ask =
-      kind === "plans"
-        ? "Let me know what you're looking for and I’ll recommend the best fit 😊"
-        : "Let me know what you need and I’ll help you choose 😊";
-    const secondary = secondaryAvailable ? "\nIf you prefer, we also have packages." : "";
-    return `${intro}\n\n${title}\n${listText}\n\n${ask}${secondary}`;
-  }
-
-  // ES
-  const intro = "¡Claro! Aquí tienes algunas opciones 😊";
-  const ask =
-    kind === "plans"
-      ? "Cuéntame qué estás buscando y te recomiendo la mejor opción 😊"
-      : "Cuéntame qué necesitas y te ayudo a elegir 😊";
-  const secondary = secondaryAvailable ? "\nSi prefieres, también tenemos paquetes." : "";
-  return `${intro}\n\n${title}\n${listText}\n\n${ask}${secondary}`;
-}
-
-function isPlansListOnlyQuestion(text: string) {
-  const t = String(text || "").toLowerCase();
-  const asksPlans = /\b(plan(es)?|membres[ií]a(s)?|membership(s)?|monthly)\b/i.test(t);
-  const asksPrice = isPriceQuestion(text) || isGenericPriceQuestion(text);
-  // si pidió planes (aunque mencione “precio” genérico), mejor listar y luego dirigir
-  return asksPlans && !/\b(este|esta|ese|esa|that|this)\b/i.test(t);
-}
-
-function normCat(s: any) {
+function norm(s: any) {
   return String(s || "")
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
 }
 
+// Tipos aceptados para "plan/paquete" (schema-level, no negocio)
+function isPlanPackageType(tipo: any) {
+  const t = norm(tipo);
+  return (
+    t === "plan" ||
+    t === "plans" ||
+    t === "plan/paquete" ||
+    t === "plan / paquete" ||
+    t === "plan_paquete" ||
+    t === "plan-paquete" ||
+    t === "planpackage" ||
+    t === "plan_package"
+  );
+}
+
 function isPackageCategory(cat: any) {
-  const c = normCat(cat);
-  return c === "package" || c === "packages" || c === "paquete" || c === "paquetes" || c === "bundle" || c === "bundles" || c === "pack" || c === "packs";
+  const c = norm(cat);
+  return (
+    c === "package" ||
+    c === "packages" ||
+    c === "paquete" ||
+    c === "paquetes" ||
+    c === "bundle" ||
+    c === "bundles" ||
+    c === "pack" ||
+    c === "packs"
+  );
 }
 
 function isMembershipCategory(cat: any) {
-  const c = normCat(cat);
-  return c === "membresia" || c === "membresias" || c === "membership" || c === "memberships" || c === "monthly";
+  const c = norm(cat);
+  return (
+    c === "membresia" ||
+    c === "membresias" ||
+    c === "membership" ||
+    c === "memberships" ||
+    c === "monthly" ||
+    c === "mensual" ||
+    c === "mensuales"
+  );
+}
+
+function isPlansOrPackagesQuestion(text: string) {
+  const t = norm(text);
+  return /\b(plan|planes|membresia|membresias|membership|memberships|monthly|mensual|paquete|paquetes|package|packages|bundle|bundles|pack|packs)\b/.test(
+    t
+  );
+}
+
+function bulletList(items: Array<{ name: string }>, max = 8) {
+  return items
+    .slice(0, max)
+    .map((x, i) => `• ${i + 1}) ${x.name}`)
+    .join("\n");
+}
+
+function sectionTitle(lang: Lang, key: "plans" | "packages") {
+  if (lang === "en") return key === "plans" ? "Plans / Memberships:" : "Packages:";
+  return key === "plans" ? "Planes / Membresías:" : "Paquetes:";
 }
 
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
@@ -695,133 +705,89 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
-// ✅ PACKAGES LIST (DB) - ONLY PACKAGES
-// ===============================
-{
-  const t = String(userInput || "").toLowerCase();
+  // ✅ PLANS / PACKAGES LIST (DB, NO HARDCODE)
+  // ===============================
+  {
+    const askingIncludes = isAskingIncludes(userInput);
+    const askingPrice = isPriceQuestion(userInput) || isGenericPriceQuestion(userInput);
 
-  const wantsPackages =
-    /\b(paquete(s)?|packages?|bundle(s)?|pack(s)?)\b/i.test(t);
+    if (isPlansOrPackagesQuestion(userInput) && !askingIncludes && !askingPrice) {
+      const { rows } = await pool.query(
+        `
+        SELECT id, name, category, tipo, service_url
+        FROM services
+        WHERE tenant_id = $1
+          AND active = true
+        ORDER BY updated_at DESC NULLS LAST, created_at DESC
+        LIMIT 50
+        `,
+        [tenantId]
+      );
 
-  const askingIncludes = isAskingIncludes(userInput);
-  const askingPrice = isPriceQuestion(userInput) || isGenericPriceQuestion(userInput);
+      // Filtra SOLO los que sean tipo Plan/Paquete (robusto a labels)
+      const planPkg = (rows || []).filter((r: any) => isPlanPackageType(r.tipo));
 
-  if (wantsPackages && !askingIncludes && !askingPrice) {
-    const r = await resolveServiceList(pool, {
-      tenantId,
-      limitServices: 20,
-      queryText: null,
-      tipos: ["Plan / Paquete"],
-    });
+      if (planPkg.length) {
+        const items = planPkg.map((r: any) => ({
+          service_id: String(r.id),
+          name: String(r.name || "").trim(),
+          category: r.category ?? null,
+          service_url: r.service_url ? String(r.service_url).trim() : null,
+        }));
 
-    if (r.ok) {
-      const packages = r.items.filter(x => isPackageCategory(x.category));
+        const packages = items.filter((x: any) => isPackageCategory(x.category));
+        const memberships = items.filter((x: any) => isMembershipCategory(x.category));
+        const others = items.filter(
+          (x: any) => !isPackageCategory(x.category) && !isMembershipCategory(x.category)
+        );
 
-      if (packages.length) {
-        const baseList = renderServiceListReply({
-          lang: idiomaDestino === "en" ? "en" : "es",
-          items: packages,
-          maxItems: 8,
-          includeLinks: false,
-          title: idiomaDestino === "en" ? "Packages:" : "Paquetes:",
-          style: "bullets",
-          askPick: false,
-        });
+        // “planes” = memberships + others (lo que no es package)
+        const plans = [...memberships, ...others];
 
-        // ✅ wrap humano (sin hardcode por tenant)
-        const reply =
+        const listPlans =
+          plans.length ? `${sectionTitle(idiomaDestino, "plans")}\n${bulletList(plans)}` : "";
+
+
+        const listPkgs =
+          packages.length ? `${sectionTitle(idiomaDestino, "packages")}\n${bulletList(packages)}` : "";
+
+        const ask =
           idiomaDestino === "en"
-            ? `Sure! Here are the available packages 😊\n\n${baseList}\n\nWhich one are you interested in— or tell me what you need and I’ll recommend the best fit.`
-            : `¡Claro! Estos son los paquetes disponibles 😊\n\n${baseList}\n\n¿Cuál te interesa— o cuéntame qué necesitas y te recomiendo el mejor?`;
+            ? "Reply with the number or the name and I’ll send you the link."
+            : "Respóndeme con el número o el nombre y te envío el link.";
+
+        const reply = [listPlans, listPkgs].filter(Boolean).join("\n\n") + `\n\n${ask}`;
 
         return {
           handled: true,
           reply,
           source: "service_list_db",
-          intent: "paquetes",
+          intent: intentOut || "planes",
           ctxPatch: {
-            last_package_list: packages.map((x) => ({
+            last_plan_list: plans.map((x: any) => ({
+              id: x.service_id,
+              name: x.name,
+              url: x.service_url || null,
+            })),
+            last_plan_list_at: Date.now(),
+
+            last_package_list: packages.map((x: any) => ({
               id: x.service_id,
               name: x.name,
               url: x.service_url || null,
             })),
             last_package_list_at: Date.now(),
-            last_list_kind: "package",
-            last_list_kind_at: Date.now(),
-          },
-        };
-      }
-    }
-  }
-}
 
- // ===============================
-// ✅ PLANS LIST (DB) - ONLY PLANS
-// ===============================
-{
-  const t = String(userInput || "").toLowerCase();
-
-  const wantsPlans =
-    /\b(plan(es)?|membres[ií]a(s)?|membership(s)?|monthly)\b/i.test(t);
-
-  const askingIncludes = isAskingIncludes(userInput);
-  const askingPrice = isPriceQuestion(userInput) || isGenericPriceQuestion(userInput);
-
-  if ((wantsPlans || isPlansListOnlyQuestion(userInput)) && !askingIncludes) {
-    const r = await resolveServiceList(pool, {
-      tenantId,
-      limitServices: 20,
-      queryText: null,
-      tipos: ["Plan / Paquete"], // tus valores reales
-    });
-
-    if (r.ok) {
-      const isPackage = (cat: any) => String(cat || "").toLowerCase().includes("package");
-
-      const plans = r.items.filter(x => isMembershipCategory(x.category) || !isPackageCategory(x.category));
-      const packages = r.items.filter((x) => isPackage(x.category));
-
-      if (plans.length) {
-        const baseList = renderServiceListReply({
-          lang: idiomaDestino === "en" ? "en" : "es",
-          items: plans,
-          maxItems: 8,
-          includeLinks: false,
-          title: undefined,
-          style: "bullets",
-          askPick: false, // ✅ clave: quita la pregunta robótica interna
-        });
-
-        const reply = wrapHumanList({
-          lang: idiomaDestino,
-          title: idiomaDestino === "en"
-            ? "Plans / Memberships:"
-            : "Planes / Membresías:",
-          listText: baseList,
-          kind: "plans",
-          secondaryAvailable: packages.length > 0,
-        });
-
-        return {
-          handled: true,
-          reply,
-          source: "service_list_db",
-          intent: "planes",
-          ctxPatch: {
-            last_plan_list: plans.map((x) => ({ id: x.service_id, name: x.name, url: x.service_url || null })),
-            last_plan_list_at: Date.now(),
-            last_list_kind: "plan",
+            last_list_kind: plans.length ? "plan" : "package",
             last_list_kind_at: Date.now(),
             has_packages_available: packages.length > 0,
             has_packages_available_at: Date.now(),
-            last_package_list: packages.map((x) => ({ id: x.service_id, name: x.name, url: x.service_url || null })),
-            last_package_list_at: Date.now(),
           },
         };
       }
     }
   }
-}
+
 
   // =========================================================
   // 2) INCLUDES FASTPATH (DB catalog)
