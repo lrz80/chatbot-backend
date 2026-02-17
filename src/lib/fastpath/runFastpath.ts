@@ -246,6 +246,31 @@ function wrapHumanList(args: {
   return `${intro}\n\n${title}\n${listText}\n\n${ask}${secondary}`;
 }
 
+function isPlansListOnlyQuestion(text: string) {
+  const t = String(text || "").toLowerCase();
+  const asksPlans = /\b(plan(es)?|membres[ií]a(s)?|membership(s)?|monthly)\b/i.test(t);
+  const asksPrice = isPriceQuestion(text) || isGenericPriceQuestion(text);
+  // si pidió planes (aunque mencione “precio” genérico), mejor listar y luego dirigir
+  return asksPlans && !/\b(este|esta|ese|esa|that|this)\b/i.test(t);
+}
+
+function normCat(s: any) {
+  return String(s || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function isPackageCategory(cat: any) {
+  const c = normCat(cat);
+  return c === "package" || c === "packages" || c === "paquete" || c === "paquetes" || c === "bundle" || c === "bundles" || c === "pack" || c === "packs";
+}
+
+function isMembershipCategory(cat: any) {
+  const c = normCat(cat);
+  return c === "membresia" || c === "membresias" || c === "membership" || c === "memberships" || c === "monthly";
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -686,12 +711,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       tenantId,
       limitServices: 20,
       queryText: null,
-      tipos: ["plan"],
+      tipos: ["Plan / Paquete"],
     });
 
     if (r.ok) {
-      const isPackage = (cat: any) => String(cat || "").toLowerCase().includes("package");
-      const packages = r.items.filter((x) => isPackage(x.category));
+      const packages = r.items.filter(x => isPackageCategory(x.category));
 
       if (packages.length) {
         const baseList = renderServiceListReply({
@@ -743,18 +767,18 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const askingIncludes = isAskingIncludes(userInput);
   const askingPrice = isPriceQuestion(userInput) || isGenericPriceQuestion(userInput);
 
-  if (wantsPlans && !askingIncludes && !askingPrice) {
+  if ((wantsPlans || isPlansListOnlyQuestion(userInput)) && !askingIncludes) {
     const r = await resolveServiceList(pool, {
       tenantId,
       limitServices: 20,
       queryText: null,
-      tipos: ["plan"], // tus valores reales
+      tipos: ["Plan / Paquete"], // tus valores reales
     });
 
     if (r.ok) {
       const isPackage = (cat: any) => String(cat || "").toLowerCase().includes("package");
 
-      const plans = r.items.filter((x) => !isPackage(x.category));
+      const plans = r.items.filter(x => isMembershipCategory(x.category) || !isPackageCategory(x.category));
       const packages = r.items.filter((x) => isPackage(x.category));
 
       if (plans.length) {
@@ -885,7 +909,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   //    - si ambiguo, desambigua con candidates
   // =========================================================
   const askedGenericPrices = isGenericPriceQuestion(userInput);
-  const wantsPrice = isPriceQuestion(userInput) || isMembershipLikeQuestion(userInput);
+  const wantsPrice = isPriceQuestion(userInput) || isGenericPriceQuestion(userInput);
 
   if (wantsPrice) {
     let ctxPatch: Partial<FastpathCtx> | undefined;
@@ -1089,7 +1113,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         tenantId,
         limitServices: 20,
         queryText: null,
-        tipos: ["plan"],
+        tipos: ["Plan / Paquete"],
       });
 
       if (r.ok && r.items?.length) {
