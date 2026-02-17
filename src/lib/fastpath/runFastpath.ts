@@ -475,6 +475,18 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         const title = d?.titleSuffix ? `${picked.name} — ${d.titleSuffix}` : picked.name;
         const infoText = d?.text ? String(d.text).trim() : "";
 
+        // Si aún no hay URL, intenta 1 vez más resolver link usando el mismo userInput (ej: "autopay")
+        if (!finalUrl) {
+          const linkPick2 = await resolveBestLinkForService({
+            pool,
+            tenantId,
+            serviceId: picked.id,
+            userText: userInput,
+          }).catch(() => null);
+
+          if (linkPick2?.ok) finalUrl = linkPick2.url;
+        }
+
         const reply =
           idiomaDestino === "en"
             ? `${title}${infoText ? `\n\n${infoText}` : ""}${finalUrl ? `\n\nHere’s the link:\n${finalUrl}` : ""}`
