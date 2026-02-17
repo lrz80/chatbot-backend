@@ -53,10 +53,10 @@ export async function getPriceInfoForService(
     }
 
   // 2) Variantes: "desde" = MIN(COALESCE(v.price, v.price_base)) + top 5 variantes
-  const vAgg = await pool.query(
+    const vAgg = await pool.query(
     `
     SELECT
-      MIN(v.price) AS min_price,
+      MIN(COALESCE(v.price, v.price_base, s.price_base)) AS min_price,
       MAX(NULLIF(v.currency, '')) FILTER (WHERE v.currency IS NOT NULL) AS any_currency,
       COUNT(*)::int AS n,
       NULLIF(trim(MAX(s.service_url)), '') AS service_url
@@ -64,9 +64,9 @@ export async function getPriceInfoForService(
     JOIN services s ON s.id = v.service_id
     WHERE s.tenant_id = $1
       AND v.service_id = $2
-      AND v.active = true
-      AND v.price IS NOT NULL
-      AND v.price > 0
+      AND COALESCE(v.active, true) = true
+      AND COALESCE(v.price, v.price_base) IS NOT NULL
+      AND COALESCE(v.price, v.price_base) >= 0
     `,
     [tenantId, serviceId]
   );
@@ -81,17 +81,17 @@ export async function getPriceInfoForService(
       `
       SELECT
         COALESCE(NULLIF(v.variant_name,''), 'Option') AS label,
-        v.price::numeric AS price,
+        COALESCE(v.price, v.price_base, s.price_base)::numeric AS price,
         COALESCE(NULLIF(v.currency,''), 'USD') AS currency,
-        NULLIF(trim(v.variant_url), '') AS variant_url
+        COALESCE(NULLIF(trim(v.variant_url), ''), NULLIF(trim(s.service_url), '')) AS url
       FROM service_variants v
       JOIN services s ON s.id = v.service_id
       WHERE s.tenant_id = $1
         AND v.service_id = $2
-        AND v.active = true
-        AND v.price IS NOT NULL
-        AND v.price > 0
-        ORDER BY v.price ASC, v.variant_name ASC
+        AND COALESCE(v.active, true) = true
+        AND COALESCE(v.price, v.price_base) IS NOT NULL
+        AND COALESCE(v.price, v.price_base) >= 0
+      ORDER BY price ASC, v.variant_name ASC
       LIMIT 5
       `,
       [tenantId, serviceId]
@@ -102,9 +102,9 @@ export async function getPriceInfoForService(
         label: String(r.label || "").trim() || "Option",
         amount: Number(r.price),
         currency: String(r.currency || "USD").toUpperCase(),
-        url: r.variant_url ? String(r.variant_url).trim() : null,
+        url: r.url ? String(r.url).trim() : null,
       }))
-      .filter((o) => Number.isFinite(o.amount) && o.amount > 0);
+      .filter((o) => Number.isFinite(o.amount) && o.amount >= 0);
 
     const cur = String(vAgg.rows?.[0]?.any_currency || "USD").toUpperCase();
 

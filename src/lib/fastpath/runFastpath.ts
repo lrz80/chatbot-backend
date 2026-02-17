@@ -1135,12 +1135,43 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             }
           : { type: "none" };
 
+      // ✅ Si hay opciones (variants) en el precio, guardarlas como "last_plan_list"
+      // para que el siguiente mensaje ("autopay") dispare PICK FROM LAST LIST.
+      let listPatch: Partial<FastpathCtx> | undefined;
+
+      if (pi.mode === "from" && Array.isArray((pi as any).options) && (pi as any).options.length) {
+        const opts = (pi as any).options as Array<{ label: string; amount?: number; url?: string | null }>;
+
+        const items = opts
+          .map((o) => ({
+            id: `${serviceId}::${String(o.label || "").trim()}`,
+            name: String(o.label || "").trim(),
+            url: o.url ? String(o.url).trim() : null,
+
+          }))
+          .filter((x) => x.name);
+
+        if (items.length) {
+          listPatch = {
+            last_plan_list: items,
+            last_plan_list_at: Date.now(),
+            last_list_kind: "plan",
+            last_list_kind_at: Date.now(),
+          } as any;
+        }
+      }
+
       return {
         handled: true,
         reply: msg,
         source: "price_fastpath_db",
         intent: intentOut || "precio",
-        ctxPatch,
+        ctxPatch: {
+          ...(ctxPatch || {}),
+          ...(listPatch || {}),
+          last_bot_action: "sent_price_options",
+          last_bot_action_at: Date.now(),
+        } as any,
         awaitingEffect,
       };
     }

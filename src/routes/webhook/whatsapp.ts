@@ -167,6 +167,38 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   let idiomaDestino: Lang = tenantBase;
   let forcedLangThisTurn: Lang | null = null;
 
+  const normalizeChoice = (s: string) =>
+  String(s || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const isChoosingFromCtxLists = (ctx: any, userText: string) => {
+    const u = normalizeChoice(userText);
+    if (!u) return false;
+
+    const candidates: Array<{ name?: string; label?: string; text?: string }> = [
+      ...((ctx?.last_plan_list || []) as any[]),
+      ...((ctx?.last_package_list || []) as any[]),
+      ...((ctx?.last_service_list || []) as any[]),
+      ...((ctx?.pending_link_options || []) as any[]), // ✅ importante para tu flujo ambiguous
+    ];
+
+    if (!candidates.length) return false;
+
+    // Si el user manda "1" o "2" para escoger
+    if (/^[1-9]$/.test(u)) return true;
+
+    return candidates.some((it) => {
+      const n = normalizeChoice(it?.name || it?.label || it?.text || "");
+      if (!n) return false;
+      return n.includes(u) || u.includes(n);
+    });
+  };
+
   const origen = turn.origen;
 
   const numero = turn.numero;
@@ -309,35 +341,42 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // ===============================
   const storedLang = await getIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, tenantBase);
 
-  const langRes = await resolveTurnLangClientFirst({
-    pool,
-    tenantId: tenant.id,
-    canal,
-    contacto: contactoNorm,
-    userInput,
-    tenantBase,
-    storedLang,
-    detectarIdioma,
-    convoCtx,
-  });
+  // ✅ LANG EARLY-LOCK: si está eligiendo de listas del ctx, NO recalcules idioma este turno
+  const isChoosing = (storedLang === "es" || storedLang === "en")
+    ? isChoosingFromCtxLists(convoCtx, userInput)
+    : false;
 
-  // 🛑 LANGUAGE HARD LOCK: if user writes in one language, force it
-  if (!storedLang) {
-    try {
-      const detected = await detectarIdioma(userInput);
-      if (detected === "es" || detected === "en") {
-        idiomaDestino = detected;
-        await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, detected);
-        console.log("🌍 FORCED LANGUAGE (no storedLang) =", detected);
-      }
-    } catch {}
+  if (isChoosing) {
+    idiomaDestino = storedLang as any;
+    forcedLangThisTurn = idiomaDestino;
+    console.log("🌍 LANG EARLY-LOCK (ctx list pick) =>", { userInput, storedLang });
   }
+
+  const langRes = forcedLangThisTurn
+    ? { finalLang: forcedLangThisTurn, detectedLang: forcedLangThisTurn, lockedLang: true, inBookingLang: false }
+    : await resolveTurnLangClientFirst({
+        pool,
+        tenantId: tenant.id,
+        canal,
+        contacto: contactoNorm,
+        userInput,
+        tenantBase,
+        storedLang,
+        detectarIdioma,
+        convoCtx,
+      });
 
   // Si ya forzamos idioma este turno (lead nuevo / saludo), NO lo pises.
   if (forcedLangThisTurn) {
     idiomaDestino = forcedLangThisTurn;
   } else {
     idiomaDestino = langRes.finalLang;
+  }
+
+  // ✅ Persistir idioma final del turno (sticky)
+  // (pero NO lo sobrescribas si es booking lang locked)
+  if (!langRes.inBookingLang && (idiomaDestino === "es" || idiomaDestino === "en")) {
+    await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, idiomaDestino);
   }
 
   // ✅ NO CAMBIAR IDIOMA por tokens cortos tipo "Indoor cycling", "Deluxe Groom", etc.
@@ -381,15 +420,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // Ej: "cycling autopay", "bronze por mes", etc.
   // Regla: si el texto matchea alguna opción previamente listada por fastpath,
   // nos quedamos con storedLang (idioma sticky del hilo).
-  const normalizeChoice = (s: string) =>
-    String(s || "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
   const isChoosingFromLastList = (() => {
     if (!(storedLang === "es" || storedLang === "en")) return false;
 
@@ -818,29 +848,6 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   {
     const c = postBookingCourtesyGuard({ ctx: convoCtx, userInput, idioma: idiomaDestino });
     if (c.hit) return await replyAndExit(c.reply, "post_booking_courtesy", "cortesia");
-  }
-
-  // ✅ PRE-GREETING LANG FORCE (para hello/hi/hey)
-  if (!inBooking0) {
-    const t0 = String(userInput || "").trim().toLowerCase();
-
-    const isHello = /^(hello|hi|hey)\b/i.test(t0);
-    const isHola =
-      /^(hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches)\b/i.test(t0);
-
-    if (isHello || isHola) {
-      const forcedLang: Lang = isHello ? "en" : "es";
-      idiomaDestino = forcedLang;
-
-      // 🔒 Persistir para que quede sticky para ese contacto
-      await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, forcedLang);
-
-      console.log("🌍 PRE-GREETING FORCED LANG =", {
-        userInput,
-        forcedLang,
-        contactoNorm,
-      });
-    }
   }
 
   // 👋 GREETING GATE: SOLO si NO estamos en booking

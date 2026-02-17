@@ -54,21 +54,23 @@ export async function resolveBestLinkForService(args: {
   );
   const serviceUrl = s.rows?.[0]?.service_url ? String(s.rows[0].service_url) : "";
 
-  // 2) variant_url(s)
+  // 2) variant_url(s)  ✅ multitenant-safe
   const v = await pool.query(
     `
     SELECT
-      COALESCE(NULLIF(TRIM(COALESCE(variant_name,'')), ''), 'Option') AS label,
-      NULLIF(TRIM(COALESCE(variant_url,'')), '') AS url
-    FROM service_variants
-    WHERE service_id = $1
-      AND active = true
-      AND NULLIF(TRIM(COALESCE(variant_url,'')), '') IS NOT NULL
+      COALESCE(NULLIF(TRIM(COALESCE(v.variant_name,'')), ''), 'Option') AS label,
+      NULLIF(TRIM(COALESCE(v.variant_url,'')), '') AS url
+    FROM service_variants v
+    JOIN services s ON s.id = v.service_id
+    WHERE s.tenant_id = $1
+      AND s.id = $2
+      AND COALESCE(v.active, true) = true
+      AND NULLIF(TRIM(COALESCE(v.variant_url,'')), '') IS NOT NULL
     ORDER BY
-      updated_at DESC NULLS LAST,
-      created_at DESC
+      v.updated_at DESC NULLS LAST,
+      v.created_at DESC
     `,
-    [serviceId]
+    [tenantId, serviceId]
   );
 
   const options = (v.rows || [])
