@@ -128,16 +128,6 @@ function normalizeText(s: string) {
     .trim();
 }
 
-function parsePickIndex(text: string): number | null {
-  // acepta "1", "1)", "1.", "opcion 1", "la 2", etc.
-  const t = normalizeText(text);
-  const m = t.match(/\b(\d{1,2})\b/);
-  if (!m) return null;
-  const n = Number(m[1]);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return n;
-}
-
 function bestNameMatch(
   userText: string,
   items: Array<{ id: string; name: string; url: string | null }>
@@ -269,29 +259,9 @@ function isPlansOrPackagesQuestion(text: string) {
   );
 }
 
-function bulletList(items: Array<{ name: string }>, max = 8) {
-  return items
-    .slice(0, max)
-    .map((x, i) => `• ${i + 1}) ${x.name}`)
-    .join("\n");
-}
-
 function sectionTitle(lang: Lang, key: "plans" | "packages") {
   if (lang === "en") return key === "plans" ? "Plans / Memberships:" : "Packages:";
   return key === "plans" ? "Planes / Membresías:" : "Paquetes:";
-}
-
-function softAsk(lang: Lang) {
-  return lang === "en"
-    ? "Tell me which one you’re interested in and I’ll send you the details 🙂"
-    : "Dime cuál te interesa y te envío la información 🙂";
-}
-
-function bulletNoNumber(items: Array<{ name: string }>, max = 8) {
-  return items
-    .slice(0, max)
-    .map((x) => `• ${x.name}`)
-    .join("\n");
 }
 
 async function getServiceDetailsText(
@@ -366,19 +336,53 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ✅ PICK FROM LAST LIST -> SEND SINGLE LINK (NO HARDCODE)
   // ===============================
   {
-    const ttlMs = 10 * 60 * 1000;
+    const ttlMs = 5 * 60 * 1000;
 
     const planList = Array.isArray(convoCtx?.last_plan_list) ? convoCtx.last_plan_list : [];
-    const planAt = Number(convoCtx?.last_plan_list_at || 0);
-    const planFresh = planList.length > 0 && planAt > 0 && Date.now() - planAt <= ttlMs;
+    const planAtRaw = (convoCtx as any)?.last_plan_list_at;
+    const planAt = Number(planAtRaw);
+    const planAtOk = Number.isFinite(planAt) && planAt > 0;
+
+    // ✅ si hay lista pero NO hay timestamp válido, asumimos fresh (self-heal)
+    const planFresh = planList.length > 0 && (!planAtOk || Date.now() - planAt <= ttlMs);
 
     const pkgList = Array.isArray(convoCtx?.last_package_list) ? convoCtx.last_package_list : [];
-    const pkgAt = Number(convoCtx?.last_package_list_at || 0);
-    const pkgFresh = pkgList.length > 0 && pkgAt > 0 && Date.now() - pkgAt <= ttlMs;
+    const pkgAtRaw = (convoCtx as any)?.last_package_list_at;
+    const pkgAt = Number(pkgAtRaw);
+    const pkgAtOk = Number.isFinite(pkgAt) && pkgAt > 0;
+
+    const pkgFresh = pkgList.length > 0 && (!pkgAtOk || Date.now() - pkgAt <= ttlMs);
 
     const kind = (convoCtx?.last_list_kind as any) || null;
-    const kindAt = Number(convoCtx?.last_list_kind_at || 0);
-    const kindFresh = kind && kindAt > 0 && Date.now() - kindAt <= ttlMs;
+    const kindAtRaw = (convoCtx as any)?.last_list_kind_at;
+    const kindAt = Number(kindAtRaw);
+    const kindAtOk = Number.isFinite(kindAt) && kindAt > 0;
+
+    // ✅ si hay kind pero no timestamp válido, también lo consideramos fresh
+    const kindFresh = Boolean(kind) && (!kindAtOk || Date.now() - kindAt <= ttlMs);
+
+    // 🔎 debug fuerte
+    console.log("🧪 PICK CHECK", {
+      userInput,
+      planLen: planList.length,
+      planAtRaw,
+      planAt,
+      planFresh,
+      pkgLen: pkgList.length,
+      pkgAtRaw,
+      pkgAt,
+      pkgFresh,
+      kind,
+      kindAtRaw,
+      kindAt,
+      kindFresh,
+    });
+
+    const healPatch: Partial<FastpathCtx> = {};
+
+    if (planList.length > 0 && !planAtOk) healPatch.last_plan_list_at = Date.now();
+    if (pkgList.length > 0 && !pkgAtOk) healPatch.last_package_list_at = Date.now();
+    if (kind && !kindAtOk) healPatch.last_list_kind_at = Date.now();
 
     if (planFresh || pkgFresh) {
       const idx = (() => {
@@ -459,6 +463,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               source: "service_list_db",
               intent: intentOut || "seleccion",
               ctxPatch: {
+                ...healPatch,
                 ...basePatch,
                 pending_link_lookup: true,
                 pending_link_at: Date.now(),
