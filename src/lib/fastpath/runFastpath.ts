@@ -260,8 +260,15 @@ function isPlansOrPackagesQuestion(text: string) {
 }
 
 function sectionTitle(lang: Lang, key: "plans" | "packages") {
-  if (lang === "en") return key === "plans" ? "Plans / Memberships:" : "Packages:";
-  return key === "plans" ? "Planes / Membresías:" : "Paquetes:";
+  if (lang === "en") {
+    return key === "plans"
+      ? "Here are some of our available plans:"
+      : "Here are some of our available packages:";
+  }
+
+  return key === "plans"
+    ? "Aquí tienes algunos de nuestros planes:"
+    : "Aquí tienes algunos de nuestros paquetes:";
 }
 
 async function getServiceDetailsText(
@@ -454,8 +461,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
             const q =
               idiomaDestino === "en"
-                ? `Which option do you mean— ${labels.join(" or ")}?`
-                : `¿Cuál opción te refieres— ${labels.join(" o ")}?`;
+                ? `Just to make sure 😊 are you asking about ${labels.join(" or ")}?`
+                : `Solo para asegurarme 😊 ¿hablas de ${labels.join(" o ")}?`;
 
             return {
               handled: true,
@@ -1306,8 +1313,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const ask =
           idiomaDestino === "en"
-            ? "Which option are you interested in?"
-            : "¿Cuál opción te interesa?";
+            ? "Which one would you like to explore?"
+            : "¿Cuál te gustaría ver con más detalle?";
 
         const reply = [listPlans, listPkgs].filter(Boolean).join("\n\n") + `\n\n${ask}`;
 
