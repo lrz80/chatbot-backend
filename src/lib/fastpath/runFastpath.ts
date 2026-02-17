@@ -281,6 +281,67 @@ function sectionTitle(lang: Lang, key: "plans" | "packages") {
   return key === "plans" ? "Planes / Membresías:" : "Paquetes:";
 }
 
+function softAsk(lang: Lang) {
+  return lang === "en"
+    ? "Tell me which one you’re interested in and I’ll send you the details 🙂"
+    : "Dime cuál te interesa y te envío la información 🙂";
+}
+
+function bulletNoNumber(items: Array<{ name: string }>, max = 8) {
+  return items
+    .slice(0, max)
+    .map((x) => `• ${x.name}`)
+    .join("\n");
+}
+
+async function getServiceDetailsText(
+  pool: Pool,
+  tenantId: string,
+  serviceId: string,
+  userText: string
+): Promise<{ titleSuffix?: string | null; text: string | null }> {
+  const t = String(userText || "").trim();
+
+  // 1) intentar variante por texto
+  const { rows: vRows } = await pool.query(
+    `
+    SELECT v.variant_name, v.description
+    FROM service_variants v
+    JOIN services s ON s.id = v.service_id
+    WHERE s.tenant_id = $1
+      AND s.id = $2
+      AND COALESCE(v.active, true) = true
+      AND (
+        LOWER($3) LIKE '%' || LOWER(v.variant_name) || '%'
+        OR LOWER(v.variant_name) LIKE '%' || LOWER($3) || '%'
+      )
+    ORDER BY LENGTH(v.variant_name) DESC
+    LIMIT 1
+    `,
+    [tenantId, serviceId, t]
+  );
+
+  const v = vRows?.[0];
+  const vName = v?.variant_name ? String(v.variant_name).trim() : null;
+  const vDesc = v?.description ? String(v.description).trim() : null;
+
+  if (vDesc) return { titleSuffix: vName, text: vDesc };
+
+  // 2) fallback: descripción del servicio
+  const { rows: sRows } = await pool.query(
+    `
+    SELECT description
+    FROM services
+    WHERE tenant_id = $1 AND id = $2
+    LIMIT 1
+    `,
+    [tenantId, serviceId]
+  );
+
+  const sDesc = sRows?.[0]?.description ? String(sRows[0].description).trim() : null;
+  return { titleSuffix: null, text: sDesc || null };
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -320,7 +381,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     const kindFresh = kind && kindAt > 0 && Date.now() - kindAt <= ttlMs;
 
     if (planFresh || pkgFresh) {
-      const idx = parsePickIndex(userInput);
+      const idx = (() => {
+        const t = String(userInput || "").trim();
+        const m = t.match(/^([1-9])$/); // ✅ SOLO si el user manda "1" (y nada más)
+        return m ? Number(m[1]) : null;
+      })();
 
       const tryPick = (list: Array<{ id: string; name: string; url: string | null }>) => {
         let picked: { id: string; name: string; url: string | null } | null = null;
@@ -405,7 +470,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           }
         }
 
-        const reply = finalUrl ? `${picked.name}\n${finalUrl}` : `${picked.name}`;
+        const d = await getServiceDetailsText(pool, tenantId, picked.id, userInput).catch(() => null);
+
+        const title = d?.titleSuffix ? `${picked.name} — ${d.titleSuffix}` : picked.name;
+        const infoText = d?.text ? String(d.text).trim() : "";
+
+        const reply =
+          idiomaDestino === "en"
+            ? `${title}${infoText ? `\n\n${infoText}` : ""}${finalUrl ? `\n\nHere’s the link:\n${finalUrl}` : ""}`
+            : `${title}${infoText ? `\n\n${infoText}` : ""}${finalUrl ? `\n\nAquí está el link:\n${finalUrl}` : ""}`;
 
         return {
           handled: true,
@@ -417,8 +490,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             pending_link_lookup: undefined,
             pending_link_at: undefined,
             pending_link_options: undefined,
-            last_bot_action: finalUrl ? "sent_link" : undefined,
-            last_bot_action_at: finalUrl ? Date.now() : undefined,
+            last_bot_action: "sent_details",
+            last_bot_action_at: Date.now(),
           } as any,
         };
       }
@@ -469,7 +542,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
       // (A) si responde con número (1,2,3) es claramente una opción
       const idx = (() => {
-        const m = tNorm.match(/\b([1-9])\b/);
+        const m = tNorm.match(/^([1-9])$/); // ✅ solo si el mensaje es SOLO "1"
         if (!m) return null;
         const n = Number(m[1]);
         return Number.isFinite(n) ? n : null;
@@ -522,6 +595,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     /\b(link|enlace|url|web|website|sitio|pagina|página|comprar|buy|pagar|checkout)\b/i.test(tNorm);
 
   const pending = Boolean(convoCtx?.pending_link_lookup);
+
+  // ✅ Si ya acabamos de mandar "info + link" por PICK, no repetir aquí
+  const lastAct = String(convoCtx?.last_bot_action || "");
+  const lastActAt = Number(convoCtx?.last_bot_action_at || 0);
+  const justSentDetails = lastAct === "sent_details" && lastActAt > 0 && Date.now() - lastActAt < 2 * 60 * 1000;
+
+  if (justSentDetails && !pending) {
+    return { handled: false };
+  }
 
   if ((wantsLink || pending) && convoCtx?.last_service_id) {
     const pick = await resolveBestLinkForService({
@@ -706,6 +788,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   // ===============================
   // ✅ PLANS / PACKAGES LIST (DB, NO HARDCODE)
+  //  - NO mezcla planes + paquetes
+  //  - NO números
+  //  - CTA humano
   // ===============================
   {
     const askingIncludes = isAskingIncludes(userInput);
@@ -724,16 +809,18 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         [tenantId]
       );
 
-      // Filtra SOLO los que sean tipo Plan/Paquete (robusto a labels)
       const planPkg = (rows || []).filter((r: any) => isPlanPackageType(r.tipo));
-
-      if (planPkg.length) {
-        const items = planPkg.map((r: any) => ({
-          service_id: String(r.id),
-          name: String(r.name || "").trim(),
-          category: r.category ?? null,
-          service_url: r.service_url ? String(r.service_url).trim() : null,
-        }));
+      if (!planPkg.length) {
+        // no manejamos aquí; deja seguir
+      } else {
+        const items = planPkg
+          .map((r: any) => ({
+            service_id: String(r.id),
+            name: String(r.name || "").trim(),
+            category: r.category ?? null,
+            service_url: r.service_url ? String(r.service_url).trim() : null,
+          }))
+          .filter((x: any) => x.name);
 
         const packages = items.filter((x: any) => isPackageCategory(x.category));
         const memberships = items.filter((x: any) => isMembershipCategory(x.category));
@@ -741,29 +828,55 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           (x: any) => !isPackageCategory(x.category) && !isMembershipCategory(x.category)
         );
 
-        // “planes” = memberships + others (lo que no es package)
         const plans = [...memberships, ...others];
 
-        const listPlans =
-          plans.length ? `${sectionTitle(idiomaDestino, "plans")}\n${bulletList(plans)}` : "";
+        // ✅ Detectar si el usuario pidió específicamente paquetes
+        const tNorm = normalizeText(userInput);
+        const wantsPackages =
+          /\b(paquete(s)?|package(s)?|bundle(s)?|pack(s)?)\b/i.test(tNorm);
 
-
-        const listPkgs =
-          packages.length ? `${sectionTitle(idiomaDestino, "packages")}\n${bulletList(packages)}` : "";
+        // ✅ Lista SIN números
+        const bulletsNoNum = (arr: any[], max = 10) =>
+          arr.slice(0, max).map((x) => `• ${x.name}`).join("\n");
 
         const ask =
           idiomaDestino === "en"
-            ? "Reply with the number or the name and I’ll send you the link."
-            : "Respóndeme con el número o el nombre y te envío el link.";
+            ? "Tell me which one you’re interested in and I’ll send you the details 🙂"
+            : "Dime cuál te interesa y te envío la información 🙂";
 
-        const reply = [listPlans, listPkgs].filter(Boolean).join("\n\n") + `\n\n${ask}`;
+        // ✅ Responder SOLO una lista (planes O paquetes)
+        let reply = "";
+        let kind: "plan" | "package" = "plan";
+
+        if (wantsPackages) {
+          if (!packages.length) {
+            reply =
+              idiomaDestino === "en"
+                ? "We don’t have packages available right now. Would you like to see memberships instead?"
+                : "Ahora mismo no tenemos paquetes disponibles. ¿Quieres que te muestre las membresías?";
+          } else {
+            reply = `${sectionTitle(idiomaDestino, "packages")}\n${bulletsNoNum(packages)}\n\n${ask}`;
+            kind = "package";
+          }
+        } else {
+          if (!plans.length) {
+            reply =
+              idiomaDestino === "en"
+                ? "We don’t have memberships available right now. Would you like to see packages instead?"
+                : "Ahora mismo no tenemos membresías disponibles. ¿Quieres que te muestre los paquetes?";
+          } else {
+            reply = `${sectionTitle(idiomaDestino, "plans")}\n${bulletsNoNum(plans)}\n\n${ask}`;
+            kind = "plan";
+          }
+        }
 
         return {
           handled: true,
           reply,
           source: "service_list_db",
-          intent: intentOut || "planes",
+          intent: intentOut || (kind === "package" ? "paquetes" : "planes"),
           ctxPatch: {
+            // guardamos ambas listas por si el usuario cambia ("y paquetes?")
             last_plan_list: plans.map((x: any) => ({
               id: x.service_id,
               name: x.name,
@@ -778,8 +891,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             })),
             last_package_list_at: Date.now(),
 
-            last_list_kind: plans.length ? "plan" : "package",
+            last_list_kind: kind,
             last_list_kind_at: Date.now(),
+
             has_packages_available: packages.length > 0,
             has_packages_available_at: Date.now(),
           },
@@ -787,7 +901,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       }
     }
   }
-
 
   // =========================================================
   // 2) INCLUDES FASTPATH (DB catalog)
