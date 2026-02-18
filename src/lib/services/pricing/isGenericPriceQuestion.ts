@@ -1,6 +1,18 @@
 export function isGenericPriceQuestion(text: string): boolean {
   const t = String(text || "").toLowerCase().trim();
 
+  // ===============================
+  // ✅ GUARD: preguntas de planes/membresías NO son "precio genérico"
+  // (evita que "q planes tienes" caiga en resumen genérico)
+  // ===============================
+  const asksPlans =
+    /\b(planes?|plan)\b/.test(t) ||
+    /\b(membres[ií]as?|membresia)\b/.test(t) ||
+    /\b(memberships?|membership)\b/.test(t) ||
+    /\b(monthly)\b/.test(t);
+
+  if (asksPlans) return false;
+
   // ✅ si es la pregunta genérica exacta, no la discutas
   if (/^\s*(cu[aá]les\s+son\s+los\s+precios?)\s*\??\s*$/.test(t)) return true;
   if (/^\s*(what\s+are\s+the\s+prices?)\s*\??\s*$/.test(t)) return true;
@@ -29,8 +41,7 @@ export function isGenericPriceQuestion(text: string): boolean {
     // EN
     "what","are","the","is","do","you","have",
     "price","prices","pricing","list","range",
-    // (opcionales) palabras que no deberían “anclar” a algo específico
-    "plan","planes","membresia","membresias","monthly","membership"
+    // ❌ REMOVIDO: "plan","planes","membresia","membresias","monthly","membership"
   ]);
 
   // Si existe al menos un token que NO sea stopword → no es genérica

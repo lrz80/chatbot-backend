@@ -327,6 +327,18 @@ async function getServiceDetailsText(
   return { titleSuffix: null, text: sDesc || null };
 }
 
+function isAskingPlansOrPackages(t: string) {
+  const s = String(t || "").toLowerCase();
+  return (
+    /\b(planes?|plan)\b/.test(s) ||
+    /\b(paquetes?|paquete)\b/.test(s) ||
+    /\b(membres[ií]as?|membresia)\b/.test(s) ||
+    /\b(memberships?|membership)\b/.test(s) ||
+    /\b(packages?|package)\b/.test(s) ||
+    /\b(plans?)\b/.test(s)
+  );
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -808,7 +820,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // =========================================================
-  // 1) INFO_CLAVE INCLUDES (si existe info_clave)
+  // ✅ INFO_CLAVE INCLUDES (si existe info_clave)
   // =========================================================
   {
     const info = String(infoClave || "").trim();
@@ -876,6 +888,85 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
+  // =========================================================
+  // ✅ INCLUDES FASTPATH (DB catalog)
+  // =========================================================
+  if (isAskingIncludes(userInput)) {
+    const r = await resolveServiceInfo({
+      tenantId,
+      query: userInput,
+      need: "includes",
+      limit: maxDisambiguationOptions,
+    });
+
+    if (r.ok) {
+      const ctxPatch: Partial<FastpathCtx> = {
+        last_service_id: r.service_id,
+        last_service_name: r.label,
+        last_service_at: Date.now(),
+      };
+
+      if (r.description && String(r.description).trim()) {
+        let descOut = String(r.description).trim();
+
+        // Traducción ES<->EN (sin hardcode por negocio)
+        try {
+          const idOut = await detectarIdioma(descOut);
+          if ((idOut === "es" || idOut === "en") && idOut !== idiomaDestino) {
+            descOut = await traducirMensaje(descOut, idiomaDestino);
+          }
+        } catch {
+          // no-op
+        }
+
+        const msg =
+          idiomaDestino === "en"
+            ? `${r.label}\nIncludes: ${descOut}`
+            : `${r.label}\nIncluye: ${descOut}`;
+
+        return {
+          handled: true,
+          reply: msg,
+          source: "includes_fastpath_db",
+          intent: intentOut || "info",
+          ctxPatch,
+        };
+      }
+
+      const msg =
+        idiomaDestino === "en"
+          ? `I found "${r.label}", but I don’t have the service details loaded yet.`
+          : `Encontré "${r.label}", pero aún no tengo cargado qué incluye.`;
+
+      return {
+        handled: true,
+        reply: msg,
+        source: "includes_fastpath_db_missing",
+        intent: intentOut || "info",
+        ctxPatch,
+      };
+    }
+
+    if (r.reason === "ambiguous" && r.options?.length) {
+      const opts = r.options
+        .slice(0, maxDisambiguationOptions)
+        .map((o) => `• ${o.label}`)
+        .join("\n");
+
+      const ask =
+        idiomaDestino === "en"
+          ? `Which one do you mean?\n${opts}`
+          : `¿Cuál de estos es?\n${opts}`;
+
+      return {
+        handled: true,
+        reply: ask,
+        source: "includes_fastpath_db_ambiguous",
+        intent: intentOut || "info",
+      };
+    }
+  }
+
   // ===============================
   // ✅ PLANS / PACKAGES LIST (DB, NO HARDCODE)
   //  - NO mezcla planes + paquetes
@@ -886,7 +977,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     const askingIncludes = isAskingIncludes(userInput);
     const askingPrice = isPriceQuestion(userInput) || isGenericPriceQuestion(userInput);
 
-    if (isPlansOrPackagesQuestion(userInput) && !askingIncludes && !askingPrice) {
+    if (isPlansOrPackagesQuestion(userInput) && !askingIncludes) {
       const { rows } = await pool.query(
         `
         SELECT id, name, category, tipo, service_url
@@ -993,86 +1084,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // =========================================================
-  // 2) INCLUDES FASTPATH (DB catalog)
-  // =========================================================
-  if (isAskingIncludes(userInput)) {
-    const r = await resolveServiceInfo({
-      tenantId,
-      query: userInput,
-      need: "includes",
-      limit: maxDisambiguationOptions,
-    });
-
-    if (r.ok) {
-      const ctxPatch: Partial<FastpathCtx> = {
-        last_service_id: r.service_id,
-        last_service_name: r.label,
-        last_service_at: Date.now(),
-      };
-
-      if (r.description && String(r.description).trim()) {
-        let descOut = String(r.description).trim();
-
-        // Traducción ES<->EN (sin hardcode por negocio)
-        try {
-          const idOut = await detectarIdioma(descOut);
-          if ((idOut === "es" || idOut === "en") && idOut !== idiomaDestino) {
-            descOut = await traducirMensaje(descOut, idiomaDestino);
-          }
-        } catch {
-          // no-op
-        }
-
-        const msg =
-          idiomaDestino === "en"
-            ? `${r.label}\nIncludes: ${descOut}`
-            : `${r.label}\nIncluye: ${descOut}`;
-
-        return {
-          handled: true,
-          reply: msg,
-          source: "includes_fastpath_db",
-          intent: intentOut || "info",
-          ctxPatch,
-        };
-      }
-
-      const msg =
-        idiomaDestino === "en"
-          ? `I found "${r.label}", but I don’t have the service details loaded yet.`
-          : `Encontré "${r.label}", pero aún no tengo cargado qué incluye.`;
-
-      return {
-        handled: true,
-        reply: msg,
-        source: "includes_fastpath_db_missing",
-        intent: intentOut || "info",
-        ctxPatch,
-      };
-    }
-
-    if (r.reason === "ambiguous" && r.options?.length) {
-      const opts = r.options
-        .slice(0, maxDisambiguationOptions)
-        .map((o) => `• ${o.label}`)
-        .join("\n");
-
-      const ask =
-        idiomaDestino === "en"
-          ? `Which one do you mean?\n${opts}`
-          : `¿Cuál de estos es?\n${opts}`;
-
-      return {
-        handled: true,
-        reply: ask,
-        source: "includes_fastpath_db_ambiguous",
-        intent: intentOut || "info",
-      };
-    }
-  }
-
-  // =========================================================
-  // 2.5) FOLLOW-UP ROUTER (mantener hilo conversacional)
+  // ✅ FOLLOW-UP ROUTER (mantener hilo conversacional)
   // - si el usuario manda un mensaje corto / follow-up,
   //   intentamos resolver usando: pending flags + last list + last service
   // =========================================================
@@ -1171,7 +1183,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // =========================================================
-  // 3) PRICE FASTPATH (DB)
+  // ✅ PRICE FASTPATH (DB)
   //    - usa contexto si existe (TTL)
   //    - si no, resuelve por texto
   //    - si ambiguo, desambigua con candidates
@@ -1366,10 +1378,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // =========================================================
-  // 4) PRICE SUMMARY (DB) solo si la pregunta es genérica
+  // ✅ PRICE SUMMARY (DB) solo si la pregunta es genérica
   //    - rango + ejemplos, NO lista completa
   // =========================================================
-  if (isPriceQuestion(userInput) && isGenericPriceQuestion(userInput)) {
+  if (
+    isPriceQuestion(userInput) &&
+    isGenericPriceQuestion(userInput) &&
+    !isPlansOrPackagesQuestion(userInput)
+  ) {
     const { rows } = await pool.query(
       `
       WITH base AS (
