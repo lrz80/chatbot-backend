@@ -485,7 +485,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           const linkPick = await resolveBestLinkForService({
             pool,
             tenantId,
-            serviceId: picked.id,
+            serviceId: pickedServiceId,
             userText: userInput,
           });
 
@@ -520,9 +520,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           }
         }
 
-        const d = await getServiceDetailsText(pool, tenantId, picked.id, userInput).catch(() => null);
+        const d = await getServiceDetailsText(pool, tenantId, pickedServiceId, userInput).catch(() => null);
 
-        const title = d?.titleSuffix ? `${picked.name} — ${d.titleSuffix}` : picked.name;
+        const baseName = String(convoCtx?.last_service_name || "") || String(picked.name || "");
+        const title = d?.titleSuffix ? `${baseName} — ${d.titleSuffix}` : baseName;
+
         const infoText = d?.text ? String(d.text).trim() : "";
 
         // Si aún no hay URL, intenta 1 vez más resolver link usando el mismo userInput (ej: "autopay")
@@ -530,7 +532,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           const linkPick2 = await resolveBestLinkForService({
             pool,
             tenantId,
-            serviceId: picked.id,
+            serviceId: pickedServiceId,
             userText: userInput,
           }).catch(() => null);
 
