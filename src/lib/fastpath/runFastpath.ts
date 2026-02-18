@@ -1332,7 +1332,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const items = opts
           .map((o) => ({
-            id: `${serviceId}::${String(o.label || "").trim()}`,
+            id: String((o as any).variantId || "").trim(),
             name: String(o.label || "").trim(),
             url: o.url ? String(o.url).trim() : null,
 

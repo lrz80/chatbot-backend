@@ -3,6 +3,7 @@
 import type { Pool } from "pg";
 
 export type PriceOption = {
+  variantId: string;              // ✅ nuevo
   label: string;
   amount: number;
   currency: string;
@@ -28,32 +29,28 @@ export async function getPriceInfoForService(
   tenantId: string,
   serviceId: string
 ): Promise<PriceInfo> {
-  // 1) Precio fijo SOLO si es válido (>0) en services.price_base
-    const s = await pool.query(
-      `
-      SELECT s.price_base AS base_price,
-            NULLIF(trim(s.service_url), '') AS service_url
-      FROM services s
-      WHERE s.tenant_id = $1
-        AND s.id = $2
-        AND s.active = true
-      LIMIT 1
-      `,
-      [tenantId, serviceId]
-    );
 
-    const base = s.rows?.[0]?.base_price;
-    const baseNum = Number(base);
-    const serviceUrl = s.rows?.[0]?.service_url ?? null;
+  // 0) Cargar service base (por si no hay variantes)
+  const s = await pool.query(
+    `
+    SELECT
+      s.price_base AS base_price,
+      NULLIF(trim(s.service_url), '') AS service_url
+    FROM services s
+    WHERE s.tenant_id = $1
+      AND s.id = $2
+      AND s.active = true
+    LIMIT 1
+    `,
+    [tenantId, serviceId]
+  );
 
-    // ✅ Acepta 0 como precio válido (ej: clase gratis / trial / free session).
-    // Solo rechazamos null/NaN o negativos.
-    if (base !== null && base !== undefined && Number.isFinite(baseNum) && baseNum >= 0) {
-      return { ok: true, mode: "fixed", amount: baseNum, currency: "USD", service_url: serviceUrl };
-    }
+  const base = s.rows?.[0]?.base_price;
+  const baseNum = Number(base);
+  const serviceUrl = s.rows?.[0]?.service_url ?? null;
 
-  // 2) Variantes: "desde" = MIN(COALESCE(v.price, v.price_base)) + top 5 variantes
-    const vAgg = await pool.query(
+  // 1) ¿Hay variantes activas con precio?  (si sí, PRIORIDAD A VARIANTES)
+  const vAgg = await pool.query(
     `
     SELECT
       MIN(COALESCE(v.price, v.price_base, s.price_base)) AS min_price,
@@ -71,15 +68,18 @@ export async function getPriceInfoForService(
     [tenantId, serviceId]
   );
 
+  const n = Number(vAgg.rows?.[0]?.n || 0);
   const min = vAgg.rows?.[0]?.min_price;
   const minNum = Number(min);
-  const n = Number(vAgg.rows?.[0]?.n || 0);
+  const cur = String(vAgg.rows?.[0]?.any_currency || "USD").toUpperCase();
   const serviceUrl2 = vAgg.rows?.[0]?.service_url ?? serviceUrl ?? null;
 
-  if (Number.isFinite(minNum) && minNum > 0) {
+  // 2) Si hay variantes, devolvemos FROM (aunque base_price exista)
+  if (n > 0 && Number.isFinite(minNum) && minNum >= 0) {
     const vList = await pool.query(
       `
       SELECT
+        v.id AS variant_id,
         COALESCE(NULLIF(v.variant_name,''), 'Option') AS label,
         COALESCE(v.price, v.price_base, s.price_base)::numeric AS price,
         COALESCE(NULLIF(v.currency,''), 'USD') AS currency,
@@ -99,14 +99,13 @@ export async function getPriceInfoForService(
 
     const options: PriceOption[] = (vList.rows || [])
       .map((r: any) => ({
+        variantId: String(r.variant_id || "").trim(), // ✅
         label: String(r.label || "").trim() || "Option",
         amount: Number(r.price),
         currency: String(r.currency || "USD").toUpperCase(),
         url: r.url ? String(r.url).trim() : null,
       }))
-      .filter((o) => Number.isFinite(o.amount) && o.amount >= 0);
-
-    const cur = String(vAgg.rows?.[0]?.any_currency || "USD").toUpperCase();
+      .filter((o) => o.variantId && Number.isFinite(o.amount) && o.amount >= 0);
 
     return {
       ok: true,
@@ -119,5 +118,11 @@ export async function getPriceInfoForService(
     };
   }
 
+  // 3) Si NO hay variantes, usar fixed (base_price)
+  if (base !== null && base !== undefined && Number.isFinite(baseNum) && baseNum >= 0) {
+    return { ok: true, mode: "fixed", amount: baseNum, currency: "USD", service_url: serviceUrl };
+  }
+
   return { ok: false, reason: "no_price" };
 }
+
