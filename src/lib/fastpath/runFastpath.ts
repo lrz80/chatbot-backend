@@ -91,6 +91,7 @@ export type FastpathResult =
         | "price_missing_db"
         | "price_fastpath_db"
         | "price_summary_db"
+        | "info_general_overview"
         | "price_summary_db_empty";
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
@@ -358,6 +359,30 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   if (inBooking) return { handled: false };
 
   const intentOut = (detectedIntent || "").trim() || null;
+
+  // ===============================
+  // ✅ INFO_GENERAL OVERVIEW (NO ASK)
+  // ===============================
+  if (intentOut === "info_general") {
+    // anti-loop: limpia estados que fuerzan "pick" o "pending"
+    const ctxPatch: any = {
+      pending_link: null,
+      pending_price_lookup: null,
+      last_list_kind: null,
+      last_list_kind_at: null,
+    };
+
+    return {
+      handled: true,
+      source: "info_general_overview",
+      intent: intentOut,
+      reply:
+        idiomaDestino === "en"
+          ? "Sure — here’s an overview of what we offer. Tell me which one you’re interested in and I’ll send prices and available times 😊"
+          : "Claro 😊 Aquí tienes una descripción general de nuestros servicios. Dime cuál te interesa y te paso precios y horarios disponibles.",
+      ctxPatch,
+    };
+  }
 
   // ===============================
   // ✅ PICK FROM LAST LIST -> SEND SINGLE LINK (NO HARDCODE)

@@ -35,6 +35,7 @@ type UniversalIntent =
   | "cancelar"
   | "soporte"
   | "queja"
+  | "info_general"   // ✅ NUEVO
   | "info_servicio"
   | "no_interesado"
   | "duda";
@@ -206,9 +207,8 @@ export function esIntencionDeVenta(intencion: string): boolean {
   // Como compatibilidad, usamos un set pequeño universal.
   const s = (intencion || "").toLowerCase();
   return (
-    ["precio", "agendar", "pago", "disponibilidad", "clase_prueba", "info_servicio"].some((k) =>
-      s.includes(k)
-    ) || s.includes("comprar")
+    ["precio", "agendar", "pago", "disponibilidad", "clase_prueba"].some((k) => s.includes(k)) ||
+    s.includes("comprar")
   );
 }
 
@@ -300,7 +300,7 @@ export async function detectarIntencion(
 
   if (MORE_INFO_RE.test(original)) {
     const nivel = STRONG_INFO_RE.test(original) ? 3 : 2;
-    return { intencion: "info_servicio", nivel_interes: nivel as 2 | 3 };
+    return { intencion: "info_general", nivel_interes: nivel as 2 | 3 };
   }
 
     // ✅ FAST-PATH: recomendación / "qué me recomiendas" / "primera vez"
@@ -370,7 +370,7 @@ export async function detectarIntencion(
   }
 
   // 3) Si solo pide info genérica: info_servicio con interés medio
-  if (flagInfo) return { intencion: "info_servicio", nivel_interes: 2 };
+  if (flagInfo) return { intencion: "info_general", nivel_interes: 2 };
 
   // 4) Fallback LLM con intenciones dinámicas por tenant
   const [tenantInfo, tenantIntents] = await Promise.all([
@@ -390,6 +390,7 @@ export async function detectarIntencion(
     "cancelar",
     "soporte",
     "queja",
+    "info_general",  // ✅ NUEVO
     "info_servicio",
     "no_interesado",
     "duda",
@@ -423,6 +424,7 @@ Reglas:
 - "info_servicio" es para preguntas generales tipo: qué ofrecen, cómo funciona, detalles, catálogo, etc.
 - "agendar" es para citas/reservas/booking/visita.
 - "disponibilidad" es para stock/cupos/disponibilidad de fechas sin confirmar cita.
+- "info_general" es para: "quiero más info", "qué ofrecen", overview, catálogo general, sin servicio mencionado.
 - Si el usuario dice "quiero suscribirme / suscripción / activar membresía / sign up / subscribe", clasifica como "pago" con nivel_interes 3.
 - Devuelve también nivel_interes (1 bajo, 2 medio, 3 alto) basado en cercanía a compra:
   3: quiere agendar, pagar, comprar, link, cotización directa.
