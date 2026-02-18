@@ -63,12 +63,62 @@ export async function renderInfoGeneralOverview(args: {
     return true;
   });
 
-  // 4) Horarios: extraer sección de info_clave si existe
-  let horarios = "";
-  if (infoClave) {
-    const m = infoClave.match(/(horarios?|hours?)\s*[:\n]([\s\S]*?)(\n{2,}|$)/i);
-    if (m?.[2]) horarios = m[2].trim();
+// 4) Horarios: extraer sección de info_clave si existe
+let horarios = "";
+if (infoClave) {
+  // 1) Captura desde "Horarios:" hasta antes del próximo encabezado conocido
+  const m = infoClave.match(/(?:^|\n)\s*(horarios?|hours?)\s*:\s*\n?([\s\S]*?)$/i);
+  const raw = (m?.[2] || "").trim();
+
+  if (raw) {
+    // 2) Corta cuando empiece otra sección (genérico, no por negocio)
+    const stopHeaders = [
+      "reserva",
+      "reservas",
+      "booking",
+      "book",
+      "enlace",
+      "link",
+      "contacto",
+      "contact",
+      "telefono",
+      "teléfono",
+      "whatsapp",
+      "soporte",
+      "support",
+      "politicas",
+      "políticas",
+      "terms",
+      "condiciones",
+      "rules",
+      "reglas",
+      "notas",
+      "nota",
+      "faq",
+      "preguntas",
+    ];
+
+    const lines = raw.split("\n");
+    const kept: string[] = [];
+
+    for (const line of lines) {
+      const l = String(line || "").trim();
+      if (!l) {
+        kept.push(line);
+        continue;
+      }
+
+      const isHeaderLine = stopHeaders.some((h) =>
+        new RegExp(`^${h}\\s*:?\\s*$`, "i").test(l)
+      );
+
+      if (isHeaderLine) break;
+      kept.push(line);
+    }
+
+    horarios = kept.join("\n").trim();
   }
+}
 
   // 5) Render más humano (sin CTA)
   const greet =
