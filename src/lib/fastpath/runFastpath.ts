@@ -26,7 +26,8 @@ import { renderGenericPriceSummaryReply } from "../services/pricing/renderGeneri
 import { resolveServiceList } from "../services/resolveServiceList";
 import { renderServiceListReply } from "../services/renderServiceListReply";
 import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
-import type { ServiceListItem } from "../services/resolveServiceList";
+import { renderInfoGeneralOverview } from "../fastpath/renderInfoGeneralOverview";
+
 
 export type FastpathCtx = {
   last_service_id?: string | null;
@@ -361,25 +362,30 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const intentOut = (detectedIntent || "").trim() || null;
 
   // ===============================
-  // ✅ INFO_GENERAL OVERVIEW (NO ASK)
+  // ✅ INFO GENERAL OVERVIEW (NO ASK)
   // ===============================
   if (intentOut === "info_general") {
-    // anti-loop: limpia estados que fuerzan "pick" o "pending"
+    // Solo limpiar cosas de "listas" (no toques awaiting global)
     const ctxPatch: any = {
-      pending_link: null,
-      pending_price_lookup: null,
       last_list_kind: null,
       last_list_kind_at: null,
+      last_plan_list: null,
+      last_plan_list_at: null,
+      last_package_list: null,
+      last_package_list_at: null,
     };
+
+    const reply = await renderInfoGeneralOverview({
+      pool,
+      tenantId,
+      lang: idiomaDestino,
+    });
 
     return {
       handled: true,
-      source: "info_general_overview",
+      source: "service_list_db",
       intent: intentOut,
-      reply:
-        idiomaDestino === "en"
-          ? "Sure — here’s an overview of what we offer. Tell me which one you’re interested in and I’ll send prices and available times 😊"
-          : "Claro 😊 Aquí tienes una descripción general de nuestros servicios. Dime cuál te interesa y te paso precios y horarios disponibles.",
+      reply,
       ctxPatch,
     };
   }
