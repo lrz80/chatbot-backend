@@ -1,5 +1,3 @@
-//src/lib/fastpath/renderInfoGeneralOverview.ts
-
 import type { Pool } from "pg";
 import type { Lang } from "../channels/engine/clients/clientDb";
 
@@ -14,7 +12,7 @@ export async function renderInfoGeneralOverview(args: {
 }): Promise<string> {
   const { pool, tenantId, lang } = args;
 
-  // 1️⃣ Traer tenant (nombre + info_clave para horarios)
+  // 1) Tenant: nombre + info_clave (para horarios)
   const tRes = await pool.query(
     `SELECT name, info_clave
      FROM tenants
@@ -26,7 +24,7 @@ export async function renderInfoGeneralOverview(args: {
   const tenantName = String(tRes.rows?.[0]?.name || "").trim();
   const infoClave = String(tRes.rows?.[0]?.info_clave || "").trim();
 
-  // 2️⃣ Traer todos los servicios
+  // 2) Servicios: traer catálogo
   const sRes = await pool.query(
     `SELECT name
      FROM services
@@ -40,15 +38,14 @@ export async function renderInfoGeneralOverview(args: {
     .map((r) => String(r.name || "").trim())
     .filter(Boolean);
 
-  // 3️⃣ Filtros genéricos (sin hardcode por negocio)
+  // 3) Filtros genéricos (sin hardcode por negocio)
   const isPlan = (n: string) =>
     /\b(plan|membership|membres[ií]a|suscripci[oó]n|subscription)\b/i.test(n);
 
   const isPackage = (n: string) =>
     /\b(paquete|pack|bundle)\b/i.test(n) || /\b\d+\s*clases?\b/i.test(n);
 
-  const isTrial = (n: string) =>
-    /\b(prueba|trial|demo|gratis|free)\b/i.test(n);
+  const isTrial = (n: string) => /\b(prueba|trial|demo|gratis|free)\b/i.test(n);
 
   const isSingleClass = (n: string) =>
     /\b(clase\s+u[nñ]ica|single\s+class|drop[-\s]?in)\b/i.test(n);
@@ -56,7 +53,7 @@ export async function renderInfoGeneralOverview(args: {
   const isVariantNoise = (n: string) =>
     /\b(autopay|por\s+mes|mensual|per\s+month|monthly)\b/i.test(n);
 
-  // ✅ SOLO servicios principales
+  // ✅ Solo servicios principales
   const mainServices = rows.filter((n) => {
     if (isPlan(n)) return false;
     if (isPackage(n)) return false;
@@ -66,35 +63,42 @@ export async function renderInfoGeneralOverview(args: {
     return true;
   });
 
-  // 4️⃣ Extraer horarios desde info_clave (si existen)
+  // 4) Horarios: extraer sección de info_clave si existe
   let horarios = "";
   if (infoClave) {
     const m = infoClave.match(/(horarios?|hours?)\s*[:\n]([\s\S]*?)(\n{2,}|$)/i);
     if (m?.[2]) horarios = m[2].trim();
   }
 
-  // 5️⃣ Render final (solo servicios + horarios)
-  const header =
+  // 5) Render más humano (sin CTA)
+  const greet =
     lang === "en"
-      ? `Hi${tenantName ? `, welcome to ${tenantName}` : ""}! 😊`
-      : `Hola${tenantName ? `, bienvenido a ${tenantName}` : ""}! 😊`;
+      ? `Hi${tenantName ? `! Welcome to ${tenantName}` : ""} 😊`
+      : `Hola${tenantName ? `! Bienvenido a ${tenantName}` : ""} 😊`;
+
+  const intro =
+    lang === "en"
+      ? `Here’s what we offer:`
+      : `Esto es lo que ofrecemos:`;
 
   const servicesBlock =
     mainServices.length > 0
       ? lineJoin([
-          lang === "en" ? `*Main services:*` : `*Servicios principales:*`,
+          `${intro}`,
           ...mainServices.slice(0, 30).map((s) => `• ${s}`),
         ])
-      : "";
+      : lang === "en"
+        ? `Here’s an overview of our services.`
+        : `Aquí tienes un resumen de nuestros servicios.`;
+
+  // Horarios en tono humano
+  const hoursHeader =
+    lang === "en" ? `\nAnd these are our class times:` : `\nY estos son nuestros horarios:`;
 
   const hoursBlock =
     horarios
-      ? lineJoin([
-          "",
-          lang === "en" ? `*Hours / Schedule:*` : `*Horarios:*`,
-          horarios,
-        ])
+      ? lineJoin([hoursHeader, horarios])
       : "";
 
-  return lineJoin([header, servicesBlock, hoursBlock]).trim();
+  return lineJoin([greet, servicesBlock, hoursBlock]).trim();
 }
