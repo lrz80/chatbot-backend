@@ -59,6 +59,12 @@ export type FastpathCtx = {
 
   last_price_option_label?: string | null;
   last_price_option_at?: number | null;
+
+  last_selected_kind?: "service" | "option" | "plan" | "package" | null;
+  last_selected_id?: string | null;
+  last_selected_name?: string | null;
+  last_selected_at?: number | null;
+
   [k: string]: any;
 };
 
@@ -626,180 +632,180 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
-// ===============================
-// ✅ INTEREST -> SEND BEST LINK (service_url or variant_url)
-// ===============================
-{
-  const t = String(userInput || "").trim();
+  // ===============================
+  // ✅ INTEREST -> SEND BEST LINK (service_url or variant_url)
+  // ===============================
+  {
+    const t = String(userInput || "").trim();
 
-  const tNorm = normalizeText(userInput);
+    const tNorm = normalizeText(userInput);
 
-  // intención genérica de “quiero link / web / comprar”, sin copy hardcode
-  const wantsLink =
-    /\b(link|enlace|url|web|website|sitio|pagina|página|comprar|buy|pagar|checkout)\b/i.test(tNorm);
+    // intención genérica de “quiero link / web / comprar”, sin copy hardcode
+    const wantsLink =
+      /\b(link|enlace|url|web|website|sitio|pagina|página|comprar|buy|pagar|checkout)\b/i.test(tNorm);
 
-  const pending = Boolean(convoCtx?.pending_link_lookup);
+    const pending = Boolean(convoCtx?.pending_link_lookup);
 
-  // ✅ Si ya acabamos de mandar "info + link" por PICK, no repetir aquí
-  const lastAct = String(convoCtx?.last_bot_action || "");
-  const lastActAt = Number(convoCtx?.last_bot_action_at || 0);
-  const justSentDetails = lastAct === "sent_details" && lastActAt > 0 && Date.now() - lastActAt < 2 * 60 * 1000;
+    // ✅ Si ya acabamos de mandar "info + link" por PICK, no repetir aquí
+    const lastAct = String(convoCtx?.last_bot_action || "");
+    const lastActAt = Number(convoCtx?.last_bot_action_at || 0);
+    const justSentDetails = lastAct === "sent_details" && lastActAt > 0 && Date.now() - lastActAt < 2 * 60 * 1000;
 
-  if (justSentDetails && !pending) {
-    return { handled: false };
+    if (justSentDetails && !pending) {
+      return { handled: false };
+    }
+
+    if ((wantsLink || pending) && convoCtx?.last_service_id) {
+      const pick = await resolveBestLinkForService({
+        pool,
+        tenantId,
+        serviceId: String(convoCtx.last_service_id),
+        userText: userInput,
+      });
+
+      if (pick.ok) {
+        const serviceId = String(convoCtx.last_service_id);
+        const baseName = String(convoCtx?.last_service_name || "").trim();
+
+        // ✅ Trae descripción: intenta variante por texto ("por mes", "autopay"), si no servicio
+        const d = await getServiceDetailsText(pool, tenantId, serviceId, userInput).catch(() => null);
+
+        const title = d?.titleSuffix
+          ? `${baseName || ""}${baseName ? " — " : ""}${String(d.titleSuffix).trim()}`
+          : baseName;
+
+        const infoText = d?.text ? String(d.text).trim() : "";
+
+        const outro =
+          idiomaDestino === "en"
+            ? "If you need anything else, just let me know 😊"
+            : "Si necesitas algo más, déjame saber 😊";
+
+        const reply =
+          idiomaDestino === "en"
+            ? `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Here it is 😊\n${pick.url}\n\n${outro}`
+            : `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Aquí lo tienes 😊\n${pick.url}\n\n${outro}`;
+
+        return {
+          handled: true,
+          reply,
+          source: "service_list_db",
+          intent: intentOut || "link",
+          ctxPatch: {
+            last_bot_action: "sent_link_with_details",
+            last_bot_action_at: Date.now(),
+            pending_link_lookup: undefined,
+            pending_link_at: undefined,
+            pending_link_options: undefined,
+          } as any,
+        };
+      }
+
+      if (!pick.ok && pick.reason === "ambiguous") {
+        // 1 sola pregunta corta, sin menús numéricos
+        const labels = pick.options
+          .slice(0, 3)
+          .map((o) => o.label)
+          .filter(Boolean);
+
+        const q =
+          idiomaDestino === "en"
+            ? `Sure 😊 Which option do you want— ${labels.join(" or ")}?`
+            : `Perfecto 😊 ¿Cuál opción quieres— ${labels.join(" o ")}?`;
+
+        // opcional: guarda para que el próximo mensaje “autopay” resuelva directo
+        return {
+          handled: true,
+          reply: q,
+          source: "service_list_db",
+          intent: intentOut || "link",
+          ctxPatch: {
+            pending_link_lookup: true,
+            pending_link_at: Date.now(),
+            pending_link_options: pick.options, // si tu ctx permite JSON; si no, omítelo
+          } as any,
+        };
+      }
+    }
   }
 
-  if ((wantsLink || pending) && convoCtx?.last_service_id) {
-    const pick = await resolveBestLinkForService({
-      pool,
-      tenantId,
-      serviceId: String(convoCtx.last_service_id),
-      userText: userInput,
-    });
+  // ===============================
+  // ✅ FREE OFFER (DB) -> LIST OPTIONS THEN PICK -> SEND LINK
+  // ===============================
+  {
+    const wantsFreeOffer = isFreeOfferQuestion(userInput);
 
-    if (pick.ok) {
-      const serviceId = String(convoCtx.last_service_id);
-      const baseName = String(convoCtx?.last_service_name || "").trim();
+    if (wantsFreeOffer) {
+      // Servicios gratis del tenant (price_base=0) con URL directa
+      const { rows } = await pool.query(
+        `
+        SELECT s.id, s.name, s.service_url
+        FROM services s
+        WHERE s.tenant_id = $1
+          AND s.active = true
+          AND COALESCE(s.price_base, 0) <= 0
+          AND s.service_url IS NOT NULL
+          AND length(trim(s.service_url)) > 0
+        ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC
+        LIMIT 10
+        `,
+        [tenantId]
+      );
 
-      // ✅ Trae descripción: intenta variante por texto ("por mes", "autopay"), si no servicio
-      const d = await getServiceDetailsText(pool, tenantId, serviceId, userInput).catch(() => null);
+      const items = (rows || [])
+        .map((r: any) => ({
+          id: String(r.id),
+          name: String(r.name || "").trim(),
+          url: r.service_url ? String(r.service_url).trim() : null,
+        }))
+        .filter((x) => x.name && x.url);
 
-      const title = d?.titleSuffix
-        ? `${baseName || ""}${baseName ? " — " : ""}${String(d.titleSuffix).trim()}`
-        : baseName;
+      // Si no hay nada gratis con URL, no inventes "portal": pide especificación genérica
+      if (!items.length) {
+        const msg =
+          idiomaDestino === "en"
+            ? "Yes — we can help with a free/trial option 😊 What exactly are you looking for?"
+            : "Sí — podemos ayudarte con una opción gratis/de prueba 😊 ¿Qué estás buscando exactamente?";
+        return { handled: true, reply: msg, source: "service_list_db", intent: "free_offer" };
+      }
 
-      const infoText = d?.text ? String(d.text).trim() : "";
+      // Si hay 1 sola opción gratis: manda directo el link de ESA opción
+      if (items.length === 1) {
+        const one = items[0];
+        return {
+          handled: true,
+          reply: `${one.name}\n${one.url}`,
+          source: "service_list_db",
+          intent: "free_offer",
+          ctxPatch: {
+            last_service_id: one.id,
+            last_service_name: one.name,
+            last_service_at: Date.now(),
+          },
+        };
+      }
 
-      const outro =
-        idiomaDestino === "en"
-          ? "If you need anything else, just let me know 😊"
-          : "Si necesitas algo más, déjame saber 😊";
-
-      const reply =
-        idiomaDestino === "en"
-          ? `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Here it is 😊\n${pick.url}\n\n${outro}`
-          : `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Aquí lo tienes 😊\n${pick.url}\n\n${outro}`;
+      // Si hay 2+ opciones: lista y deja que el PICK FROM LAST LIST resuelva
+      const reply = renderFreeOfferList({
+        lang: idiomaDestino,
+        items: items.map((x) => ({ name: x.name })),
+      });
 
       return {
         handled: true,
         reply,
         source: "service_list_db",
-        intent: intentOut || "link",
-        ctxPatch: {
-          last_bot_action: "sent_link_with_details",
-          last_bot_action_at: Date.now(),
-          pending_link_lookup: undefined,
-          pending_link_at: undefined,
-          pending_link_options: undefined,
-        } as any,
-      };
-    }
-
-    if (!pick.ok && pick.reason === "ambiguous") {
-      // 1 sola pregunta corta, sin menús numéricos
-      const labels = pick.options
-        .slice(0, 3)
-        .map((o) => o.label)
-        .filter(Boolean);
-
-      const q =
-        idiomaDestino === "en"
-          ? `Sure 😊 Which option do you want— ${labels.join(" or ")}?`
-          : `Perfecto 😊 ¿Cuál opción quieres— ${labels.join(" o ")}?`;
-
-      // opcional: guarda para que el próximo mensaje “autopay” resuelva directo
-      return {
-        handled: true,
-        reply: q,
-        source: "service_list_db",
-        intent: intentOut || "link",
-        ctxPatch: {
-          pending_link_lookup: true,
-          pending_link_at: Date.now(),
-          pending_link_options: pick.options, // si tu ctx permite JSON; si no, omítelo
-        } as any,
-      };
-    }
-  }
-}
-
-  // ===============================
-// ✅ FREE OFFER (DB) -> LIST OPTIONS THEN PICK -> SEND LINK
-// ===============================
-{
-  const wantsFreeOffer = isFreeOfferQuestion(userInput);
-
-  if (wantsFreeOffer) {
-    // Servicios gratis del tenant (price_base=0) con URL directa
-    const { rows } = await pool.query(
-      `
-      SELECT s.id, s.name, s.service_url
-      FROM services s
-      WHERE s.tenant_id = $1
-        AND s.active = true
-        AND COALESCE(s.price_base, 0) <= 0
-        AND s.service_url IS NOT NULL
-        AND length(trim(s.service_url)) > 0
-      ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC
-      LIMIT 10
-      `,
-      [tenantId]
-    );
-
-    const items = (rows || [])
-      .map((r: any) => ({
-        id: String(r.id),
-        name: String(r.name || "").trim(),
-        url: r.service_url ? String(r.service_url).trim() : null,
-      }))
-      .filter((x) => x.name && x.url);
-
-    // Si no hay nada gratis con URL, no inventes "portal": pide especificación genérica
-    if (!items.length) {
-      const msg =
-        idiomaDestino === "en"
-          ? "Yes — we can help with a free/trial option 😊 What exactly are you looking for?"
-          : "Sí — podemos ayudarte con una opción gratis/de prueba 😊 ¿Qué estás buscando exactamente?";
-      return { handled: true, reply: msg, source: "service_list_db", intent: "free_offer" };
-    }
-
-    // Si hay 1 sola opción gratis: manda directo el link de ESA opción
-    if (items.length === 1) {
-      const one = items[0];
-      return {
-        handled: true,
-        reply: `${one.name}\n${one.url}`,
-        source: "service_list_db",
         intent: "free_offer",
         ctxPatch: {
-          last_service_id: one.id,
-          last_service_name: one.name,
-          last_service_at: Date.now(),
+          // reutilizamos tu mecanismo de pick: guardamos en last_plan_list (es solo una lista de selección)
+          last_plan_list: items.map((x) => ({ id: x.id, name: x.name, url: x.url })),
+          last_plan_list_at: Date.now(),
+          last_list_kind: "plan",
+          last_list_kind_at: Date.now(),
         },
       };
     }
-
-    // Si hay 2+ opciones: lista y deja que el PICK FROM LAST LIST resuelva
-    const reply = renderFreeOfferList({
-      lang: idiomaDestino,
-      items: items.map((x) => ({ name: x.name })),
-    });
-
-    return {
-      handled: true,
-      reply,
-      source: "service_list_db",
-      intent: "free_offer",
-      ctxPatch: {
-        // reutilizamos tu mecanismo de pick: guardamos en last_plan_list (es solo una lista de selección)
-        last_plan_list: items.map((x) => ({ id: x.id, name: x.name, url: x.url })),
-        last_plan_list_at: Date.now(),
-        last_list_kind: "plan",
-        last_list_kind_at: Date.now(),
-      },
-    };
   }
-}
 
   // =========================================================
   // 1) INFO_CLAVE INCLUDES (si existe info_clave)
@@ -1062,6 +1068,105 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         source: "includes_fastpath_db_ambiguous",
         intent: intentOut || "info",
       };
+    }
+  }
+
+  // =========================================================
+  // 2.5) FOLLOW-UP ROUTER (mantener hilo conversacional)
+  // - si el usuario manda un mensaje corto / follow-up,
+  //   intentamos resolver usando: pending flags + last list + last service
+  // =========================================================
+  {
+    const t = String(userInput || "").trim();
+    const tLower = t.toLowerCase();
+
+    const isShort =
+      t.length > 0 &&
+      t.length <= 22 &&                 // ajustable
+      !t.includes("?") &&
+      !/\b(hola|hi|hello|gracias|thanks)\b/i.test(tLower);
+
+    const now = Date.now();
+
+    const ttlMs = 10 * 60 * 1000;
+
+    // helpers de frescura
+    const fresh = (at: any) => {
+      const n = Number(at || 0);
+      return Number.isFinite(n) && n > 0 && now - n <= ttlMs;
+    };
+
+    const pendingPrice = Boolean((convoCtx as any)?.pending_price_lookup) && fresh((convoCtx as any)?.pending_price_at);
+    const pendingLink  = Boolean((convoCtx as any)?.pending_link_lookup)  && fresh((convoCtx as any)?.pending_link_at);
+
+    const lastServiceId = String((convoCtx as any)?.last_service_id || "").trim();
+    const lastServiceFresh = lastServiceId && fresh((convoCtx as any)?.last_service_at);
+
+    const planList = Array.isArray((convoCtx as any)?.last_plan_list) ? (convoCtx as any).last_plan_list : [];
+    const pkgList  = Array.isArray((convoCtx as any)?.last_package_list) ? (convoCtx as any).last_package_list : [];
+    const listFresh =
+      (planList.length && fresh((convoCtx as any)?.last_plan_list_at)) ||
+      (pkgList.length  && fresh((convoCtx as any)?.last_package_list_at));
+
+    // 1) Si estamos esperando aclaración de LINK y el user manda algo corto -> tratar como pick
+    if (isShort && pendingLink && Array.isArray((convoCtx as any)?.pending_link_options) && (convoCtx as any).pending_link_options.length) {
+      // Reutiliza tu bestNameMatch sobre options.label
+      const opts = (convoCtx as any).pending_link_options;
+      const pick = bestNameMatch(t, opts.map((o: any) => ({ name: o.label })));
+
+      if (pick?.name) {
+        // deja que tu lógica existente de resolveBestLinkForService se ejecute luego
+        // solo limpia pending para evitar loops y marca last_bot_action
+        return {
+          handled: false, // seguimos el flujo normal, pero con ctxPatch para limpiar pending y no perder hilo
+          ctxPatch: {
+            pending_link_lookup: null,
+            pending_link_at: null,
+            pending_link_options: null,
+            last_bot_action: "followup_link_pick",
+            last_bot_action_at: now,
+          } as any,
+        };
+      }
+    }
+
+    // 2) Si el user manda algo corto y hay una lista fresca -> deja que PICK FROM LAST LIST lo capture
+    if (isShort && listFresh) {
+      // no hacemos nada aquí: tu bloque PICK ya lo maneja
+    } else {
+      // 3) Si el user manda algo corto y estamos en pending_price_lookup -> resolver como servicio
+      if (isShort && pendingPrice) {
+        const hit = await resolveServiceIdFromText(pool, tenantId, t);
+        if (hit?.id) {
+          return {
+            handled: false,
+            ctxPatch: {
+              last_service_id: hit.id,
+              last_service_name: hit.name,
+              last_service_at: now,
+              pending_price_lookup: null,
+              pending_price_at: null,
+              last_bot_action: "followup_set_service_for_price",
+              last_bot_action_at: now,
+            } as any,
+          };
+        }
+      }
+
+      // 4) Si el user manda algo corto y existe last_service_id fresco -> interpretarlo como “seguir hablando de eso”
+      if (isShort && lastServiceFresh) {
+        // si el texto parece una opción (autopay / monthly / etc), guárdalo como preferencia
+        // (no hardcode: solo guardamos label)
+        return {
+          handled: false,
+          ctxPatch: {
+            last_price_option_label: t,
+            last_price_option_at: now,
+            last_bot_action: "followup_option_label",
+            last_bot_action_at: now,
+          } as any,
+        };
+      }
     }
   }
 
