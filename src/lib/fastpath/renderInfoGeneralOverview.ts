@@ -28,7 +28,7 @@ export async function renderInfoGeneralOverview(args: {
     `SELECT name
      FROM services
      WHERE tenant_id=$1
-     ORDER BY COALESCE(sort_order, 9999) ASC, name ASC
+     ORDER BY name ASC
      LIMIT 30`,
     [tenantId]
   );
