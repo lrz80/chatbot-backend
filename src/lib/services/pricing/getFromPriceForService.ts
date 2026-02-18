@@ -81,7 +81,7 @@ export async function getPriceInfoForService(
       SELECT
         v.id AS variant_id,
         COALESCE(NULLIF(v.variant_name,''), 'Option') AS label,
-        COALESCE(v.price, v.price_base, s.price_base)::numeric AS price,
+        COALESCE(v.price, s.price_base)::numeric AS price,
         COALESCE(NULLIF(v.currency,''), 'USD') AS currency,
         COALESCE(NULLIF(trim(v.variant_url), ''), NULLIF(trim(s.service_url), '')) AS url
       FROM service_variants v
