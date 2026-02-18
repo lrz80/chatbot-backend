@@ -54,8 +54,8 @@ export function renderGenericPriceSummaryReply(args: {
 
   const footer =
     lang === "en"
-        ? "Tell me a bit about what you're looking for and I’ll recommend the best option 😊"
-        : "Si me cuentas un poco qué estás buscando, te recomiendo la mejor opción 😊";
+        ? "Which of these options are you interested in? 😊"
+        : "¿Cuál de estas opciones te interesa? 😊";
 
   // Si por alguna razón no hay items, pregunta directo sin inventar
   if (!clean.length) {

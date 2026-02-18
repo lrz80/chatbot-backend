@@ -53,7 +53,7 @@ export async function getPriceInfoForService(
   const vAgg = await pool.query(
     `
     SELECT
-      MIN(COALESCE(v.price, v.price_base, s.price_base)) AS min_price,
+      MIN(COALESCE(v.price, s.price_base)) AS min_price,
       MAX(NULLIF(v.currency, '')) FILTER (WHERE v.currency IS NOT NULL) AS any_currency,
       COUNT(*)::int AS n,
       NULLIF(trim(MAX(s.service_url)), '') AS service_url
@@ -62,8 +62,8 @@ export async function getPriceInfoForService(
     WHERE s.tenant_id = $1
       AND v.service_id = $2
       AND COALESCE(v.active, true) = true
-      AND COALESCE(v.price, v.price_base) IS NOT NULL
-      AND COALESCE(v.price, v.price_base) >= 0
+      AND COALESCE(v.price, s.price_base) IS NOT NULL
+      AND COALESCE(v.price, s.price_base) >= 0
     `,
     [tenantId, serviceId]
   );
@@ -89,8 +89,8 @@ export async function getPriceInfoForService(
       WHERE s.tenant_id = $1
         AND v.service_id = $2
         AND COALESCE(v.active, true) = true
-        AND COALESCE(v.price, v.price_base) IS NOT NULL
-        AND COALESCE(v.price, v.price_base) >= 0
+        AND COALESCE(v.price, s.price_base) IS NOT NULL
+        AND COALESCE(v.price, s.price_base) >= 0
       ORDER BY price ASC, v.variant_name ASC
       LIMIT 5
       `,
