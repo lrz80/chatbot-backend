@@ -57,6 +57,8 @@ export type FastpathCtx = {
   last_bot_action?: string | null;
   last_bot_action_at?: number | null;
 
+  last_price_option_label?: string | null;
+  last_price_option_at?: number | null;
   [k: string]: any;
 };
 
@@ -398,7 +400,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         return m ? Number(m[1]) : null;
       })();
 
-      const tryPick = (list: Array<{ id: string; name: string; url: string | null }>) => {
+      const tryPick = (
+        list: Array<{ id: string; name: string; url: string | null }>,
+        kind: "plan" | "package"
+      ) => {
         let picked: { id: string; name: string; url: string | null } | null = null;
 
         if (idx != null) {
@@ -407,21 +412,26 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         }
         if (!picked) picked = bestNameMatch(userInput, list);
 
-        return picked;
+        return picked ? { ...picked, kind } : null;
       };
 
       // ✅ prioridad por “último tipo listado” si está fresco
-      let picked: { id: string; name: string; url: string | null } | null = null;
+      let picked: ({ id: string; name: string; url: string | null; kind: "plan" | "package" }) | null = null;
 
       if (kindFresh && kind === "package") {
-        if (pkgFresh) picked = tryPick(pkgList);
-        if (!picked && planFresh) picked = tryPick(planList);
+        if (pkgFresh) picked = tryPick(pkgList, "package");
+        if (!picked && planFresh) picked = tryPick(planList, "plan");
       } else {
-        if (planFresh) picked = tryPick(planList);
-        if (!picked && pkgFresh) picked = tryPick(pkgList);
+        if (planFresh) picked = tryPick(planList, "plan");
+        if (!picked && pkgFresh) picked = tryPick(pkgList, "package");
       }
 
       if (picked) {
+        // ✅ Si viene de lista de opciones (id compuesto), separar serviceId real
+        const rawPickedId = String(picked.id || "");
+        const parts = rawPickedId.split("::");
+        const pickedServiceId = parts[0] || rawPickedId;           // ✅ siempre termina siendo UUID real
+        const pickedOptionLabel = parts.length > 1 ? parts.slice(1).join("::") : null; // por si label trae ::
         const basePatch: Partial<FastpathCtx> = {
           // limpiar listas tras elegir (evita loops)
           last_plan_list: undefined,
@@ -431,10 +441,20 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           last_list_kind: undefined,
           last_list_kind_at: undefined,
 
-          // set last_service para price/includes
-          last_service_id: picked.id,
-          last_service_name: picked.name,
+          // ✅ CANÓNICO: qué fue lo último seleccionado (sirve para "precio" luego)
+          last_selected_kind: picked.kind, // "plan" | "package"
+          last_selected_id: picked.id,
+          last_selected_name: picked.name,
+          last_selected_at: Date.now(),
+
+          // ✅ set last_service REAL para price/includes
+          last_service_id: pickedServiceId,
+          last_service_name: picked.name, // (nombre mostrado, puede ser label)
           last_service_at: Date.now(),
+
+          // ✅ opcional pero recomendado: guardar la opción elegida para el siguiente “precio”
+          last_price_option_label: pickedOptionLabel,
+          last_price_option_at: Date.now(),
         };
 
         // ✅ NO HARDCODE:
@@ -1071,6 +1091,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           last_service_id: null,
           last_service_name: null,
           last_service_at: null,
+          last_price_option_label: null,
+          last_price_option_at: null,
         };
       }
     }
@@ -1159,6 +1181,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         (pi as any).service_url ||
         null;
 
+      // ✅ Si el user no escribió "autopay" ahora, pero lo eligió antes desde la lista,
+      // usa el label guardado para elegir la opción correcta.
+      const lastOpt = String((convoCtx as any)?.last_price_option_label || "").trim();
+
+      if (pi.mode === "from" && lastOpt && Array.isArray((pi as any).options) && (pi as any).options.length) {
+        const pick2 = bestNameMatch(lastOpt, (pi as any).options.map((o: any) => ({ name: o.label, url: o.url || null })));
+        if (pick2?.url) url = String(pick2.url).trim();
+      }
+
       // ✅ si hay options (variants) y el user dijo "autopay", intenta tomar el url de esa option
       if (pi.mode === "from" && Array.isArray((pi as any).options) && (pi as any).options.length) {
         const pick = bestNameMatch(userInput, (pi as any).options.map((o: any) => ({ name: o.label, url: o.url || null })));
@@ -1207,7 +1238,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           listPatch = {
             last_plan_list: items,
             last_plan_list_at: Date.now(),
-            last_list_kind: "plan",
+            last_list_kind: "option",
             last_list_kind_at: Date.now(),
           } as any;
         }
