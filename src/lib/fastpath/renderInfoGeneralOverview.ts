@@ -151,5 +151,11 @@ if (infoClave) {
       ? lineJoin([hoursHeader, horarios])
       : "";
 
-  return lineJoin([greet, servicesBlock, hoursBlock]).trim();
+  const cta =
+    lang === "en"
+      ? `\nWould you like to see our pricing? 😊`
+      : `\n¿Te gustaría conocer nuestros precios? 😊`;
+
+  return lineJoin([greet, servicesBlock, hoursBlock, cta]).trim();
+
 }
