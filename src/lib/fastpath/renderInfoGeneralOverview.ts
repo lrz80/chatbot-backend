@@ -27,10 +27,11 @@ export async function renderInfoGeneralOverview(args: {
   // 2) Servicios: traer catálogo
   const sRes = await pool.query(
     `SELECT name
-     FROM services
-     WHERE tenant_id = $1
-     ORDER BY name ASC
-     LIMIT 200`,
+    FROM services
+    WHERE tenant_id = $1
+        AND (active IS NULL OR active = TRUE)
+    ORDER BY name ASC
+    LIMIT 200`,
     [tenantId]
   );
 
