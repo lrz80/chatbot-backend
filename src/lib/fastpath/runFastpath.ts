@@ -1010,7 +1010,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     const askingIncludes = isAskingIncludes(userInput);
     const askingPrice = isPriceQuestion(userInput) || isGenericPriceQuestion(userInput);
 
-    if (isPlansOrPackagesQuestion(userInput) && !askingIncludes) {
+    if (isPlansOrPackagesQuestion(userInput) && !askingIncludes && !askingPrice) {
       const { rows } = await pool.query(
         `
         SELECT id, name, category, tipo, service_url
@@ -1305,27 +1305,23 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     if (serviceId) {
       const pi = await getPriceInfoForService(pool, tenantId, serviceId);
 
-      if (!pi.ok) {
-        // no “error”, solo pedir especificación
-        ctxPatch = {
-          ...(ctxPatch || {}),
-          pending_price_lookup: true,
-          pending_price_at: Date.now(),
-        };
+        if (!pi.ok) {
+          // Aquí NO sirve pedir "qué plan específico", el problema es que no hay precio cargado.
+          // Mejor responder directo que no tenemos el precio en sistema.
 
-        const msg =
-          idiomaDestino === "en"
-            ? "To give you an exact price, which specific service/plan do you mean?"
-            : "Para darte el precio exacto, ¿cuál servicio/plan específico te interesa?";
+          const msg =
+            idiomaDestino === "en"
+              ? "I’m sorry — I don’t have an exact price loaded for that option in the system yet. For now, I recommend checking directly with the studio so we can confirm the correct amount for you."
+              : "Disculpa — todavía no tengo cargado el precio exacto de esa opción en el sistema. Por ahora te recomiendo consultarlo directamente en el estudio para confirmarte el monto correcto.";
 
-        return {
-          handled: true,
-          reply: msg,
-          source: "price_missing_db",
-          intent: intentOut || "precio",
-          ctxPatch,
-        };
-      }
+          return {
+            handled: true,
+            reply: msg,
+            source: "price_missing_db",
+            intent: intentOut || "precio",
+            ctxPatch,
+          };
+        }
 
       let url: string | null =
         (pi as any).service_url ||
