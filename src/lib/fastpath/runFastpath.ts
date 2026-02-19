@@ -1427,11 +1427,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           s.name AS service_name,
           s.price_base::numeric AS price
         FROM services s
-        WHERE s.tenant_id = $1
+        WHERE
+          s.tenant_id = $1
           AND s.active = true
           AND s.price_base IS NOT NULL
-
-          -- ✅ EXCLUIR ADD-ONS (genérico, no por negocio)
           AND (
             s.category IS NULL
             OR lower(regexp_replace(s.category, '[^a-z]', '', 'g')) <> 'addon'
@@ -1445,15 +1444,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           v.price::numeric AS price
         FROM service_variants v
         JOIN services s ON s.id = v.service_id
-        WHERE s.tenant_id = $1
+        WHERE
+          s.tenant_id = $1
           AND s.active = true
           AND v.active = true
           AND v.price IS NOT NULL
-
-          -- ✅ EXCLUIR ADD-ONS (mismo filtro aquí también)
           AND (
             s.category IS NULL
-            OR lower(regexp_replace(s.category, '\\s+', '', 'g')) <> 'addon'
+            OR lower(regexp_replace(s.category, '[^a-z]', '', 'g')) <> 'addon'
           )
       ),
       agg AS (
