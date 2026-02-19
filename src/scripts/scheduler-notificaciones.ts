@@ -128,14 +128,17 @@ async function loadUsageForCycle(tid: string, canal: Canal, mesISO: string) {
 async function verificarNotificaciones() {
   console.log("🚨 Verificando límites de uso...");
 
-  // Evita duplicados si hay 2 instancias del mismo servicio corriendo
-  const lock = await pool.query(`SELECT pg_try_advisory_lock(987654321) AS locked`);
-  if (!lock.rows[0]?.locked) {
-    console.log("⏭️ Otro verificador ya está corriendo. Se omite este ciclo.");
-    return;
-  }
+  let lockTomado = false;
 
   try {
+    // Evita duplicados si hay 2 instancias del mismo servicio corriendo
+    const lock = await pool.query(`SELECT pg_try_advisory_lock(987654321) AS locked`);
+    if (!lock.rows[0]?.locked) {
+      console.log("⏭️ Otro verificador ya está corriendo. Se omite este ciclo.");
+      return;
+    }
+    lockTomado = true;
+
     // 1) Desactivar membresías vencidas (DB-only, rápido)
     await pool.query(`
       UPDATE tenants
@@ -311,10 +314,12 @@ Aamy.ai
 
     console.log("✅ Verificación de notificaciones completada.");
   } finally {
-    try {
-      await pool.query(`SELECT pg_advisory_unlock(987654321)`);
-    } catch (e) {
-      console.error("⚠️ Error liberando advisory lock:", e);
+    if (lockTomado) {
+      try {
+        await pool.query(`SELECT pg_advisory_unlock(987654321)`);
+      } catch (e) {
+        console.error("⚠️ Error liberando advisory lock:", e);
+      }
     }
   }
 }
@@ -328,9 +333,18 @@ async function loop() {
   while (true) {
     try {
       await verificarNotificaciones();
-    } catch (err) {
-      console.error("❌ Error en verificarNotificaciones:", err);
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      console.error("❌ Error en verificarNotificaciones:", msg);
+
+      if (msg.includes("Connection terminated unexpectedly")) {
+        console.error(
+          "🌐 Conexión a Postgres se cayó (transient). Se reintentará en unos segundos..."
+        );
+        await sleep(30_000); // pequeño backoff adicional
+      }
     }
+
     await sleep(5 * 60 * 1000);
   }
 }
