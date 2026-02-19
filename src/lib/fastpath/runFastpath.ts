@@ -1225,90 +1225,96 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const wantsPrice = isPriceQuestion(userInput) || isGenericPriceQuestion(userInput);
 
   if (wantsPrice) {
-    let ctxPatch: Partial<FastpathCtx> | undefined;
+    // ✅ Si la pregunta es de precios genéricos (ej: "qué precio tienen las clases funcionales?")
+    // y NO está preguntando explícitamente por planes/paquetes,
+    // NO intentamos resolver un solo servicio aquí. Dejamos que el bloque
+    // de PRICE SUMMARY (más abajo) maneje la respuesta.
+    if (askedGenericPrices && !isPlansOrPackagesQuestion(userInput)) {
+      // no hacemos nada aquí; dejamos que siga el flujo y caiga en PRICE SUMMARY
+    } else {
+      let ctxPatch: Partial<FastpathCtx> | undefined;
 
-    // A) contexto de último servicio (con TTL)
-    let serviceId: string | null = convoCtx?.last_service_id || null;
-    let serviceName: string | null = convoCtx?.last_service_name || null;
-    const lastAt = Number(convoCtx?.last_service_at || 0);
+      // A) contexto de último servicio (con TTL)
+      let serviceId: string | null = convoCtx?.last_service_id || null;
+      let serviceName: string | null = convoCtx?.last_service_name || null;
+      const lastAt = Number(convoCtx?.last_service_at || 0);
 
-    if (serviceId && lastAt && Number.isFinite(lastAt)) {
-      const age = Date.now() - lastAt;
-      if (age > lastServiceTtlMs) {
-        serviceId = null;
-        serviceName = null;
-        ctxPatch = {
-          last_service_id: null,
-          last_service_name: null,
-          last_service_at: null,
-          last_price_option_label: null,
-          last_price_option_at: null,
-        };
-      }
-    }
-
-    // B) intenta resolver serviceId por texto
-    if (!serviceId) {
-      const hit = await resolveServiceIdFromText(pool, tenantId, userInput);
-      if (hit?.id) {
-        serviceId = hit.id;
-        serviceName = hit.name;
-        ctxPatch = {
-          ...(ctxPatch || {}),
-          last_service_id: serviceId,
-          last_service_name: serviceName,
-          last_service_at: Date.now(),
-        };
-      }
-    }
-
-    // C) desambiguación simple por LIKE (sin depender de industria)
-    if (!serviceId) {
-      const tokens = normalizeTokensForLike(userInput);
-
-      if (tokens.length) {
-        const likeParts = tokens.map((_, i) => `lower(s.name) LIKE $${i + 2}`);
-        const params: any[] = [tenantId, ...tokens.map((t) => `%${t}%`)];
-
-        const { rows } = await pool.query(
-          `
-          SELECT s.id, s.name
-          FROM services s
-          WHERE s.tenant_id = $1
-            AND s.active = true
-            AND (${likeParts.join(" OR ")})
-          ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC
-          LIMIT ${maxDisambiguationOptions}
-          `,
-          params
-        );
-
-        if (rows?.length) {
-          const opts = rows.map((r: any) => `• ${r.name}`).join("\n");
-          const ask =
-            idiomaDestino === "en"
-              ? `Which of these options do you mean?\n${opts}`
-              : `¿Cuál de estas opciones te interesa?\n${opts}`;
-
-          return {
-            handled: true,
-            reply: ask,
-            source: "price_disambiguation_db",
-            intent: intentOut || "precio",
-            ctxPatch,
+      if (serviceId && lastAt && Number.isFinite(lastAt)) {
+        const age = Date.now() - lastAt;
+        if (age > lastServiceTtlMs) {
+          serviceId = null;
+          serviceName = null;
+          ctxPatch = {
+            last_service_id: null,
+            last_service_name: null,
+            last_service_at: null,
+            last_price_option_label: null,
+            last_price_option_at: null,
           };
         }
       }
-    }
 
-    // D) si ya tenemos serviceId => traer precio y responder
-    if (serviceId) {
-      const pi = await getPriceInfoForService(pool, tenantId, serviceId);
+      // B) intenta resolver serviceId por texto
+      if (!serviceId) {
+        const hit = await resolveServiceIdFromText(pool, tenantId, userInput);
+        if (hit?.id) {
+          serviceId = hit.id;
+          serviceName = hit.name;
+          ctxPatch = {
+            ...(ctxPatch || {}),
+            last_service_id: serviceId,
+            last_service_name: serviceName,
+            last_service_at: Date.now(),
+          };
+        }
+      }
+
+      // C) desambiguación simple por LIKE (sin depender de industria)
+      if (!serviceId) {
+        const tokens = normalizeTokensForLike(userInput);
+
+        if (tokens.length) {
+          const likeParts = tokens.map((_, i) => `lower(s.name) LIKE $${i + 2}`);
+          const params: any[] = [tenantId, ...tokens.map((t) => `%${t}%`)];
+
+          const { rows } = await pool.query(
+            `
+            SELECT s.id, s.name
+            FROM services s
+            WHERE s.tenant_id = $1
+              AND s.active = true
+              AND (${likeParts.join(" OR ")})
+            ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC
+            LIMIT ${maxDisambiguationOptions}
+            `,
+            params
+          );
+
+          if (rows?.length) {
+            const opts = rows.map((r: any) => `• ${r.name}`).join("\n");
+            const ask =
+              idiomaDestino === "en"
+                ? `Which of these options do you mean?\n${opts}`
+                : `¿Cuál de estas opciones te interesa?\n${opts}`;
+
+            return {
+              handled: true,
+              reply: ask,
+              source: "price_disambiguation_db",
+              intent: intentOut || "precio",
+              ctxPatch,
+            };
+          }
+        }
+      }
+
+      // D) si ya tenemos serviceId => traer precio y responder
+      if (serviceId) {
+        const pi = await getPriceInfoForService(pool, tenantId, serviceId);
 
         if (!pi.ok) {
-          // Aquí NO sirve pedir "qué plan específico", el problema es que no hay precio cargado.
-          // Mejor responder directo que no tenemos el precio en sistema.
-
+          // Aquí el problema es que no hay precio cargado en DB para ese servicio.
+          // No sirve pedir "qué plan específico", así que respondemos honesto.
           const msg =
             idiomaDestino === "en"
               ? "I’m sorry — I don’t have an exact price loaded for that option in the system yet. For now, I recommend checking directly with the studio so we can confirm the correct amount for you."
@@ -1323,86 +1329,86 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           };
         }
 
-      let url: string | null =
-        (pi as any).service_url ||
-        null;
+        let url: string | null = (pi as any).service_url || null;
 
-      // ✅ Si el user no escribió "autopay" ahora, pero lo eligió antes desde la lista,
-      // usa el label guardado para elegir la opción correcta.
-      const lastOpt = String((convoCtx as any)?.last_price_option_label || "").trim();
+        // ✅ Si el user no escribió "autopay" ahora, pero lo eligió antes desde la lista,
+        // usa el label guardado para elegir la opción correcta.
+        const lastOpt = String((convoCtx as any)?.last_price_option_label || "").trim();
 
-      if (pi.mode === "from" && lastOpt && Array.isArray((pi as any).options) && (pi as any).options.length) {
-        const pick2 = bestNameMatch(lastOpt, (pi as any).options.map((o: any) => ({ name: o.label, url: o.url || null })));
-        if (pick2?.url) url = String(pick2.url).trim();
-      }
-
-      // ✅ si hay options (variants) y el user dijo "autopay", intenta tomar el url de esa option
-      if (pi.mode === "from" && Array.isArray((pi as any).options) && (pi as any).options.length) {
-        const pick = bestNameMatch(userInput, (pi as any).options.map((o: any) => ({ name: o.label, url: o.url || null })));
-        if (pick?.url) url = String(pick.url).trim();
-      }
-
-      const msg = renderPriceReply({
-        lang: idiomaDestino === "en" ? "en" : "es",
-        mode: pi.mode,
-        amount: pi.amount,
-        currency: (pi.currency || "USD").toUpperCase(),
-        serviceName: serviceName || null,
-        options: pi.mode === "from" ? (pi.options || []) : undefined,
-        optionsCount: pi.mode === "from" ? (pi.optionsCount as any) : undefined,
-        url, // ✅ AQUÍ
-      });
-
-      // Si es precio fijo, puedes querer “awaiting yes/no” para confirmar algo
-      // (NO side effect aquí: devolvemos efecto declarativo)
-      const awaitingEffect: FastpathAwaitingEffect =
-        pi.mode === "fixed"
-          ? {
-              type: "set_awaiting_yes_no",
-              ttlSeconds: 600,
-              payload: { kind: "confirm_booking", source: "price_fastpath_db", serviceId },
-            }
-          : { type: "none" };
-
-      // ✅ Si hay opciones (variants) en el precio, guardarlas como "last_plan_list"
-      // para que el siguiente mensaje ("autopay") dispare PICK FROM LAST LIST.
-      let listPatch: Partial<FastpathCtx> | undefined;
-
-      if (pi.mode === "from" && Array.isArray((pi as any).options) && (pi as any).options.length) {
-        const opts = (pi as any).options as Array<{ label: string; amount?: number; url?: string | null }>;
-
-        const items = opts
-          .map((o) => ({
-            id: String((o as any).variantId || "").trim(),
-            name: String(o.label || "").trim(),
-            url: o.url ? String(o.url).trim() : null,
-
-          }))
-          .filter((x) => x.name);
-
-        if (items.length) {
-          listPatch = {
-            last_plan_list: items,
-            last_plan_list_at: Date.now(),
-            last_list_kind: "option",
-            last_list_kind_at: Date.now(),
-          } as any;
+        if (pi.mode === "from" && lastOpt && Array.isArray((pi as any).options) && (pi as any).options.length) {
+          const pick2 = bestNameMatch(
+            lastOpt,
+            (pi as any).options.map((o: any) => ({ id: (o as any).variantId, name: o.label, url: o.url || null }))
+          );
+          if (pick2?.url) url = String(pick2.url).trim();
         }
-      }
 
-      return {
-        handled: true,
-        reply: msg,
-        source: "price_fastpath_db",
-        intent: intentOut || "precio",
-        ctxPatch: {
-          ...(ctxPatch || {}),
-          ...(listPatch || {}),
-          last_bot_action: "sent_price_options",
-          last_bot_action_at: Date.now(),
-        } as any,
-        awaitingEffect,
-      };
+        // ✅ si hay options (variants) y el user dijo "autopay", intenta tomar el url de esa option
+        if (pi.mode === "from" && Array.isArray((pi as any).options) && (pi as any).options.length) {
+          const pick = bestNameMatch(
+            userInput,
+            (pi as any).options.map((o: any) => ({ id: (o as any).variantId, name: o.label, url: o.url || null }))
+          );
+          if (pick?.url) url = String(pick.url).trim();
+        }
+
+        const msg = renderPriceReply({
+          lang: idiomaDestino === "en" ? "en" : "es",
+          mode: pi.mode,
+          amount: pi.amount,
+          currency: (pi.currency || "USD").toUpperCase(),
+          serviceName: serviceName || null,
+          options: pi.mode === "from" ? (pi.options || []) : undefined,
+          optionsCount: pi.mode === "from" ? (pi.optionsCount as any) : undefined,
+          url, // ✅ AQUÍ
+        });
+
+        const awaitingEffect: FastpathAwaitingEffect =
+          pi.mode === "fixed"
+            ? {
+                type: "set_awaiting_yes_no",
+                ttlSeconds: 600,
+                payload: { kind: "confirm_booking", source: "price_fastpath_db", serviceId },
+              }
+            : { type: "none" };
+
+        let listPatch: Partial<FastpathCtx> | undefined;
+
+        if (pi.mode === "from" && Array.isArray((pi as any).options) && (pi as any).options.length) {
+          const opts = (pi as any).options as Array<{ label: string; amount?: number; url?: string | null }>;
+
+          const items = opts
+            .map((o) => ({
+              id: String((o as any).variantId || "").trim(),
+              name: String(o.label || "").trim(),
+              url: o.url ? String(o.url).trim() : null,
+            }))
+            .filter((x) => x.name);
+
+          if (items.length) {
+            listPatch = {
+              last_plan_list: items,
+              last_plan_list_at: Date.now(),
+              last_list_kind: "option",
+              last_list_kind_at: Date.now(),
+            } as any;
+          }
+        }
+
+        return {
+          handled: true,
+          reply: msg,
+          source: "price_fastpath_db",
+          intent: intentOut || "precio",
+          ctxPatch: {
+            ...(ctxPatch || {}),
+            ...(listPatch || {}),
+            last_bot_action: "sent_price_options",
+            last_bot_action_at: Date.now(),
+          } as any,
+          awaitingEffect,
+        };
+      }
     }
   }
 
