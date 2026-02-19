@@ -1433,7 +1433,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           AND s.price_base IS NOT NULL
           AND (
             s.category IS NULL
-            OR lower(regexp_replace(s.category, '[^a-z]', '', 'g')) <> 'addon'
+            OR regexp_replace(lower(s.category), '[^a-z]', '', 'g') <> 'addon'
           )
 
         UNION ALL
@@ -1451,7 +1451,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           AND v.price IS NOT NULL
           AND (
             s.category IS NULL
-            OR lower(regexp_replace(s.category, '[^a-z]', '', 'g')) <> 'addon'
+            OR regexp_replace(lower(s.category), '[^a-z]', '', 'g') <> 'addon'
           )
       ),
       agg AS (
