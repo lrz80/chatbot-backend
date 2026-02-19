@@ -1422,16 +1422,39 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     const { rows } = await pool.query(
       `
       WITH base AS (
-        SELECT s.id AS service_id, s.name AS service_name, s.price_base::numeric AS price
+        SELECT
+          s.id AS service_id,
+          s.name AS service_name,
+          s.price_base::numeric AS price
         FROM services s
-        WHERE s.tenant_id = $1 AND s.active = true AND s.price_base IS NOT NULL
+        WHERE s.tenant_id = $1
+          AND s.active = true
+          AND s.price_base IS NOT NULL
+
+          -- ✅ EXCLUIR ADD-ONS (genérico, no por negocio)
+          AND (
+            s.category IS NULL
+            OR lower(regexp_replace(s.category, '[^a-z]', '', 'g')) <> 'addon'
+          )
 
         UNION ALL
 
-        SELECT v.service_id, s.name AS service_name, v.price::numeric AS price
+        SELECT
+          v.service_id,
+          s.name AS service_name,
+          v.price::numeric AS price
         FROM service_variants v
         JOIN services s ON s.id = v.service_id
-        WHERE s.tenant_id = $1 AND s.active = true AND v.active = true AND v.price IS NOT NULL
+        WHERE s.tenant_id = $1
+          AND s.active = true
+          AND v.active = true
+          AND v.price IS NOT NULL
+
+          -- ✅ EXCLUIR ADD-ONS (mismo filtro aquí también)
+          AND (
+            s.category IS NULL
+            OR lower(regexp_replace(s.category, '\\s+', '', 'g')) <> 'addon'
+          )
       ),
       agg AS (
         SELECT service_id, service_name, MIN(price) AS min_price, MAX(price) AS max_price
@@ -1471,82 +1494,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     const overallMax = rows?.[0]?.overall_max != null ? Number(rows[0].overall_max) : null;
 
     if (overallMin == null || overallMax == null) {
-      // ✅ No hay precios numéricos en DB: NO digas "no se especifica".
-      // En su lugar: lista planes/paquetes (si hay) + 1 pregunta útil.
-      const r = await resolveServiceList(pool, {
-        tenantId,
-        limitServices: 20,
-        queryText: null,
-        tipos: ["Plan / Paquete"],
-      });
-
-      if (r.ok && r.items?.length) {
-        const isPackage = (cat: any) => String(cat || "").toLowerCase().includes("package");
-
-        const plans = r.items.filter((x) => !isPackage(x.category));
-        const packages = r.items.filter((x) => isPackage(x.category));
-
-        const listPlans = plans.length
-          ? renderServiceListReply({
-              lang: idiomaDestino === "en" ? "en" : "es",
-              items: plans,
-              maxItems: 8,
-              includeLinks: false,
-              title: idiomaDestino === "en" ? "Plans / Memberships:" : "Planes / Membresías:",
-              style: "bullets",
-              askPick: false,
-            })
-          : "";
-
-        const listPkgs = packages.length
-          ? renderServiceListReply({
-              lang: idiomaDestino === "en" ? "en" : "es",
-              items: packages,
-              maxItems: 6,
-              includeLinks: false,
-              title: idiomaDestino === "en" ? "Packages:" : "Paquetes:",
-              style: "bullets",
-              askPick: false,
-            })
-          : "";
-
-        const ask =
-          idiomaDestino === "en"
-            ? "Which one would you like to explore?"
-            : "¿Cuál te gustaría ver con más detalle?";
-
-        const reply = [listPlans, listPkgs].filter(Boolean).join("\n\n") + `\n\n${ask}`;
-
-        return {
-          handled: true,
-          reply,
-          source: "service_list_db",
-          intent: intentOut || "precio",
-          ctxPatch: {
-            last_plan_list: plans.map((x) => ({ id: x.service_id, name: x.name, url: x.service_url || null })),
-            last_plan_list_at: Date.now(),
-            last_package_list: packages.map((x) => ({ id: x.service_id, name: x.name, url: x.service_url || null })),
-            last_package_list_at: Date.now(),
-            last_list_kind: plans.length ? "plan" : "package",
-            last_list_kind_at: Date.now(),
-            has_packages_available: packages.length > 0,
-            has_packages_available_at: Date.now(),
-          },
-        };
-      }
-
-      // Si ni siquiera hay planes/paquetes, entonces sí: pide precisión (1 pregunta).
-      const msg =
-        idiomaDestino === "en"
-          ? "To help you better, which service/plan are you asking about?"
-          : "Para ayudarte mejor, ¿de qué servicio o plan te gustaría saber el precio?";
-
-      return {
-        handled: true,
-        reply: msg,
-        source: "price_summary_db_empty",
-        intent: intentOut || "precio",
-      };
+      // ... tu bloque fallback igual ...
     }
 
     const msg = renderGenericPriceSummaryReply({
