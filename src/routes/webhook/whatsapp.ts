@@ -79,6 +79,9 @@ const MAX_WHATSAPP_LINES = 16; // 14–16 es el sweet spot
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
+// 🛡️ Cache en memoria para dedupe de inbound (texto+contacto+tenant)
+const inboundDedupCache = new Map<string, number>();
+
 // BOOKING HELPERS
 const BOOKING_TZ = "America/New_York";
 
@@ -206,6 +209,43 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
   const fromNumber = turn.fromNumber;
   const contactoNorm = turn.contactoNorm;
+
+  // ===============================
+  // 🛡️ GATE ANTI-DUPLICADOS (texto + contacto + tenant)
+  // ===============================
+  {
+    const text = String(userInput || "").trim();
+    const contactKey = String(contactoNorm || fromNumber || numero || "").trim();
+
+    if (tenant && text && contactKey) {
+      const normalize = (s: string) =>
+        String(s || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim();
+
+      const normText = normalize(text);
+      const key = `${tenant.id}:${canal}:${contactKey}:${normText}`;
+
+      const now = Date.now();
+      const ttlMs = 15_000; // ventana de 15s para evitar reintentos de Twilio
+
+      const last = inboundDedupCache.get(key);
+
+      if (typeof last === "number" && now - last >= 0 && now - last < ttlMs) {
+        console.log("🚫 inbound dedupe: mensaje duplicado reciente, se omite procesamiento", {
+          key,
+          diffMs: now - last,
+        });
+        // No seguimos con fastpath / LLM / Twilio send
+        return;
+      }
+
+      inboundDedupCache.set(key, now);
+    }
+  }
 
   if (messageId) {
     const r = await pool.query(
