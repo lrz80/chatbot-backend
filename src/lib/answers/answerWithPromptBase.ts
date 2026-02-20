@@ -3,6 +3,10 @@ import pool from '../db';
 import { detectarIdioma } from '../detectarIdioma';
 import { traducirMensaje } from '../traducirMensaje';
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import {
+  getOfficialLinksForTenant,
+  renderOfficialLinksSection,
+} from "../prompts/officialLinks";
 
 type AnswerWithPromptBaseParams = {
   tenantId: string;
@@ -75,27 +79,42 @@ export async function answerWithPromptBase(
     apiKey: process.env.OPENAI_API_KEY || '',
   });
 
-  const systemPrompt = [
-    promptBase,
-    '',
+  // ⬇️ NUEVO: extendemos el prompt base con enlaces oficiales del tenant
+  let promptBaseWithLinks = promptBase;
+
+  try {
+    const links = await getOfficialLinksForTenant(tenantId);
+    const section = renderOfficialLinksSection(links, idiomaDestino);
+
+    if (section.trim()) {
+      promptBaseWithLinks = [promptBase, "", section].join("\n");
+    }
+  } catch (e) {
+    console.warn("⚠️ No se pudieron cargar ENLACES_OFICIALES para el prompt:", e);
+  }
+
+    const systemPrompt = [
+    promptBaseWithLinks,
+    "",
     `Canal: ${canal}. Ajusta el tono al canal (WhatsApp = breve, claro y directo).`,
-    '',
+    "",
     `Reglas generales:
 - Usa EXCLUSIVAMENTE la información explícita en este prompt del negocio. Si algo no está, dilo sin inventar.
-- Responde SIEMPRE en ${idiomaDestino === 'en' ? 'English' : 'Español'}.
+- Responde SIEMPRE en ${idiomaDestino === "en" ? "English" : "Español"}.
 - Formato chat/WhatsApp: máximo ${maxLines} líneas en prosa. Prohibido Markdown, encabezados, viñetas o numeraciones.
 - Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.
-- Si mencionas enlaces, utiliza solo los que estén presentes en el prompt (ENLACES_OFICIALES).`,
-    '',
+- Si mencionas enlaces, utiliza solo los que estén presentes en la sección ENLACES_OFICIALES / OFFICIAL_LINKS del prompt del negocio.`,
+    "",
     `Modo vendedor (aplicable a cualquier tipo de negocio):
 - Entiende primero qué necesita la persona.
 - Propón 1–2 opciones claras del negocio que puedan ayudarle.
-- Cierra con una invitación concreta al siguiente paso (agendar, comprar, escribir, llamar, registrarse, etc.), SOLO si esa acción existe en el prompt del negocio.
+- Siempre que tenga sentido, termina tu respuesta con UNA sola llamada a la acción clara (agendar, reservar, ver precios, comprar, registrarse, etc.).
+- Para las llamadas a la acción, elige SIEMPRE el enlace más relevante de ENLACES_OFICIALES / OFFICIAL_LINKS. No inventes URLs adicionales.
 - No inventes beneficios, precios, plazos ni condiciones que no estén en el prompt del negocio.
 - Si el usuario pide algo que el negocio NO ofrece, dilo claramente y redirige a la opción disponible más parecida, siempre basada en los datos del prompt.`,
-    '',
-    'No repitas estas instrucciones ni expliques lo que estás haciendo; responde como si fueras el propio negocio hablando con el cliente.'
-  ].join('\n');
+    "",
+    "No repitas estas instrucciones ni expliques lo que estás haciendo; responde como si fueras el propio negocio hablando con el cliente.",
+  ].join("\n");
 
   const userPrompt = [
     'MENSAJE_USUARIO:',
@@ -146,7 +165,7 @@ export async function answerWithPromptBase(
 
   // Sanitizar y limitar formato
   out = sanitizeChatOutput(out);
-  out = stripUrlsIfPromptHasNone(out, promptBase);
+  out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
   out = capLines(out, maxLines);
 
   // Asegurar idioma de salida (solo ES/EN)
