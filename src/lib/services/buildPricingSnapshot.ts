@@ -1,3 +1,4 @@
+//src/lib/services/buildPricingSnapshot.ts
 import type { Pool } from "pg";
 
 export async function buildPricingSnapshot(pool: Pool, tenantId: string): Promise<string> {

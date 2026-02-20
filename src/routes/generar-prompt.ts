@@ -4,6 +4,7 @@ import { Router, Request, Response } from "express";
 import jwt, { JwtPayload } from "jsonwebtoken";
 import pool from "../lib/db";
 import crypto from "crypto";                 // (B) Cache por checksum (sha256)
+import { buildPricingSnapshot } from "../lib/services/buildPricingSnapshot";
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
@@ -660,12 +661,35 @@ router.post("/", async (req: Request, res: Response) => {
 
     const nombreNegocio = tenant.name || "nuestro negocio";
 
-    const pricingSnapshot: string = compact(String(tenant.pricing_snapshot || ""));
+    // ⚡️ Snapshot de precios
+    let pricingSnapshot: string = compact(String(tenant.pricing_snapshot || ""));
 
-    // (B) Cache hit?
-    const cacheKey = keyOf(tenant_id, canalNorm, funciones, info, idiomaNorm, pricingSnapshot);
+    if (!pricingSnapshot) {
+      try {
+        const snapshot = await buildPricingSnapshot(pool, tenant_id);
+        pricingSnapshot = compact(snapshot);
+
+        await pool.query(
+          "UPDATE tenants SET pricing_snapshot = $1 WHERE id = $2",
+          [snapshot, tenant_id]
+        );
+      } catch (e) {
+        console.error("⚠️ No se pudo construir pricing_snapshot:", e);
+        pricingSnapshot = "";
+      }
+    }
+
+    // (B) Cache hit?  👉 OJO: el key incluye también el snapshot
+    const cacheKey = keyOf(
+      tenant_id,
+      canalNorm,
+      funciones,
+      info,
+      idiomaNorm,
+      pricingSnapshot
+    );
     const hit = promptCache.get(cacheKey);
-    if (hit && Date.now() - hit.at < 1000 * 60 * 60 * 12) { // 12 horas
+    if (hit && Date.now() - hit.at < 1000 * 60 * 60 * 12) {
       return res.status(200).json({ prompt: hit.value });
     }
 
