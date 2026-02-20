@@ -28,6 +28,7 @@ import { renderServiceListReply } from "../services/renderServiceListReply";
 import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
 import { renderInfoGeneralOverview } from "../fastpath/renderInfoGeneralOverview";
 import { filterRowsByMeaningfulTokens } from "../services/pricing/priceSummaryTokens";
+import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
 
 export type FastpathCtx = {
   last_service_id?: string | null;
@@ -821,10 +822,40 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             ? "If you need anything else, just let me know 😊"
             : "Si necesitas algo más, déjame saber 😊";
 
-        const reply =
+        let reply =
           idiomaDestino === "en"
             ? `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Here it is 😊\n${pick.url}\n\n${outro}`
             : `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Aquí lo tienes 😊\n${pick.url}\n\n${outro}`;
+
+          // ===============================
+          // 🔗 LINK DEL SERVICIO / VARIANTE
+          // ===============================
+          const variantId =
+            (convoCtx as any)?.last_variant_id
+              ? String((convoCtx as any).last_variant_id)
+              : null;
+
+          try {
+            const { serviceUrl, variantUrl } = await getServiceAndVariantUrl(
+              pool,
+              tenantId,
+              serviceId,
+              variantId
+            );
+
+            const finalUrl = variantUrl || serviceUrl;
+
+            if (finalUrl) {
+              const linkLine =
+                idiomaDestino === "en"
+                  ? `\n\n👉 You can see all the details or purchase here: ${finalUrl}`
+                  : `\n\n👉 Puedes ver todos los detalles o comprarlo aquí: ${finalUrl}`;
+
+              reply = `${reply}${linkLine}`;
+            }
+          } catch (e: any) {
+            console.warn("⚠️ runFastpath: no se pudo adjuntar URL de servicio:", e?.message);
+          }
 
         return {
           handled: true,
