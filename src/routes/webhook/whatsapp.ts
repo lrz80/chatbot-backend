@@ -995,13 +995,30 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
     }
 
     if (fp.handled) {
-      // ===============================
-      // 🧠 MODO HÍBRIDO PARA PRICE SUMMARY
-      // ===============================
-      if (fp.source === "price_summary_db" && fp.fastpathHint?.type === "price_summary") {
-        const hint = fp.fastpathHint.payload;
+      // ✅ Texto “factual” que viene de Fastpath (precios, includes, listas, etc.)
+      let fastpathText = fp.reply;
 
-        // Historia reciente para el modelo
+      const isPlansList =
+        fp.source === "service_list_db" &&
+        (convoCtx as any)?.last_list_kind === "plan";
+
+      const hasPkgs = (convoCtx as any)?.has_packages_available === true;
+
+      // Para otros canales (meta, sms…), mantenemos la naturalización secundaria
+      if (canal !== "whatsapp" && isPlansList && hasPkgs) {
+        fastpathText = await naturalizeSecondaryOptionsLine({
+          tenantId: tenant.id,
+          idiomaDestino,
+          canal,
+          baseText: fastpathText,
+          primary: "plans",
+          secondaryAvailable: true,
+          maxLines: MAX_WHATSAPP_LINES,
+        });
+      }
+
+      // 🌀 MODO HÍBRIDO: en WhatsApp dejamos que el LLM redacte usando esos datos
+      if (canal === "whatsapp") {
         const history = await getRecentHistoryForModel({
           tenantId: tenant.id,
           canal,
@@ -1022,91 +1039,42 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
         const NO_PRICE_INVENTION_RULE =
           idiomaDestino === "en"
-            ? "RULE: Do not invent exact prices. Only mention prices if explicitly present in the provided business info, and preserve ranges/qualifiers."
-            : "REGLA: No inventes precios exactos. Solo menciona precios si están explícitos en la info del negocio, y preserva rangos/calificativos (DESDE).";
+            ? "RULE: Do not invent exact prices. Only mention prices if explicitly present in the provided business info or in SYSTEM_STRUCTURED_DATA, and preserve ranges/qualifiers."
+            : "REGLA: No inventes precios exactos. Solo menciona precios si están explícitos en la info del negocio o en DATOS_ESTRUCTURADOS_DEL_SISTEMA, y preserva rangos/calificativos (DESDE).";
 
-        const PRICE_FACTS_HEADER =
+        // 🚀 Prompt base + datos estrictos de Fastpath
+        const promptConFastpath = [
+          promptBaseMem,
+          "",
+          "DATOS_ESTRUCTURADOS_DEL_SISTEMA (úsalos como fuente de verdad, sin cambiar montos ni nombres de planes/servicios):",
+          fastpathText,
+          "",
+          "INSTRUCCIONES_DE_ESTILO_PARA_ESTE TURNO:",
+          NO_NUMERIC_MENUS,
+          PRICE_QUALIFIER_RULE,
+          NO_PRICE_INVENTION_RULE,
+          "",
           idiomaDestino === "en"
-            ? "PRICE_SUMMARY_FROM_DB (facts – do NOT invent or change them). Each item has: service_name, min_price, max_price."
-            : "RESUMEN_DE_PRECIOS_DESDE_DB (hechos – NO los inventes ni los cambies). Cada ítem tiene: service_name, min_price, max_price.";
-
-        // Pasamos los datos como JSON plano al prompt, el modelo arma el texto final.
-        const priceFactsJson = JSON.stringify(hint.rows);
-
-        const fallbackWelcome = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+            ? "RULE: You may rephrase for a natural WhatsApp tone, but DO NOT change amounts, ranges, or plan/service names."
+            : "REGLA: Puedes re-redactar para que suene natural en WhatsApp, pero NO cambies montos, rangos ni nombres de planes/servicios.",
+        ].join("\n");
 
         const composed = await answerWithPromptBase({
           tenantId: tenant.id,
-          promptBase: [
-            promptBaseMem,
-            "",
-            NO_NUMERIC_MENUS,
-            PRICE_QUALIFIER_RULE,
-            NO_PRICE_INVENTION_RULE,
-            "",
-            PRICE_FACTS_HEADER,
-            priceFactsJson,
-          ].join("\n"),
-          userInput: ["USER_MESSAGE:", userInput].join("\n"),
+          promptBase: promptConFastpath,
+          userInput,                     // el mensaje real del cliente
           history,
           idiomaDestino,
           canal: "whatsapp",
           maxLines: MAX_WHATSAPP_LINES,
-          // fallback: si por alguna razón el LLM falla, usamos el texto de fastpath
-          fallbackText: fp.reply || fallbackWelcome,
+          fallbackText: fastpathText,    // si falla el LLM, enviamos al menos lo de Fastpath
         });
 
-        const textOut = String(composed.text || "").trim();
-
-        // Reutilizamos el detector genérico de pregunta sí/no
-        const looksYesNoQuestion =
-          /\?\s*$/.test(textOut) &&
-          (/\b(te gustar[ií]a|quieres|deseas)\b/i.test(textOut) ||
-            /\b(would you like|do you want)\b/i.test(textOut));
-
-        if (looksYesNoQuestion) {
-          const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
-          await setAwaitingState(pool, {
-            tenantId: tenant.id,
-            canal,
-            senderId: contactoNorm,
-            field: "yes_no",
-            payload: { kind: "confirm_generic", source: "llm_price_summary" },
-            ttlSeconds: 600,
-          });
-        }
-
-        return await replyAndExit(
-          composed.text,
-          "fastpath_price_summary_llm",
-          fp.intent || "precio"
-        );
+        return await replyAndExit(composed.text, fp.source, fp.intent);
       }
 
-      // ===============================
-      // 🔁 RESTO DE FASTPATH (igual que antes)
-      // ===============================
-      let out = fp.reply;
-
-      const isPlansList =
-        fp.source === "service_list_db" &&
-        (convoCtx as any)?.last_list_kind === "plan";
-
-      const hasPkgs = (convoCtx as any)?.has_packages_available === true;
-
-      if (canal !== "whatsapp" && isPlansList && hasPkgs) {
-        out = await naturalizeSecondaryOptionsLine({
-          tenantId: tenant.id,
-          idiomaDestino,
-          canal,
-          baseText: out,
-          primary: "plans",
-          secondaryAvailable: true,
-          maxLines: MAX_WHATSAPP_LINES,
-        });
-      }
-
-      return await replyAndExit(out, fp.source, fp.intent);
+      // 🔁 Para otros canales, seguimos devolviendo el texto de Fastpath directamente
+      return await replyAndExit(fastpathText, fp.source, fp.intent);
     }
   }
 
