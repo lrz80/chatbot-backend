@@ -97,10 +97,12 @@ export type FastpathResult =
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;
+      fastpathHint?: FastpathHint;          // 👈 NUEVO
     }
   | {
       handled: false;
       ctxPatch?: Partial<FastpathCtx>;
+      fastpathHint?: FastpathHint;          // opcional también aquí
     };
 
 export type RunFastpathArgs = {
@@ -128,6 +130,15 @@ export type RunFastpathArgs = {
   maxDisambiguationOptions?: number; // default 5
   lastServiceTtlMs?: number; // default 60 min
 };
+
+export type FastpathHint =
+  | {
+      type: "price_summary";
+      payload: {
+        lang: Lang;
+        rows: { service_name: string; min_price: number; max_price: number }[];
+      };
+    };
 
 function normalizeText(s: string) {
   return String(s || "")
@@ -1213,6 +1224,122 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         };
       }
     }
+  }
+
+  // =========================================================
+  // ✅ PRICE SUMMARY (DB) solo si la pregunta es genérica
+  //    - rango + ejemplos, NO lista completa
+  //    - excluye ADD-ON por categoría
+  // =========================================================
+  if (
+    isPriceQuestion(userInput) &&
+    isGenericPriceQuestion(userInput) &&
+    !isPlansOrPackagesQuestion(userInput)
+  ) {
+    const { rows } = await pool.query(
+      `
+      WITH base AS (
+        SELECT
+          s.id AS service_id,
+          s.name AS service_name,
+          s.price_base::numeric AS price
+        FROM services s
+        WHERE
+          s.tenant_id = $1
+          AND s.active = true
+          AND s.price_base IS NOT NULL
+          AND (
+            s.category IS NULL
+            OR regexp_replace(lower(s.category), '[^a-z]', '', 'g') <> 'addon'
+          )
+
+        UNION ALL
+
+        SELECT
+          v.service_id,
+          s.name AS service_name,
+          v.price::numeric AS price
+        FROM service_variants v
+        JOIN services s ON s.id = v.service_id
+        WHERE
+          s.tenant_id = $1
+          AND s.active = true
+          AND v.active = true
+          AND v.price IS NOT NULL
+          AND (
+            s.category IS NULL
+            OR regexp_replace(lower(s.category), '[^a-z]', '', 'g') <> 'addon'
+          )
+      ),
+      agg AS (
+        SELECT service_id, service_name, MIN(price) AS min_price, MAX(price) AS max_price
+        FROM base
+        GROUP BY service_id, service_name
+      ),
+      bounds AS (
+        SELECT
+          (SELECT MIN(min_price) FROM agg) AS overall_min,
+          (SELECT MAX(max_price) FROM agg) AS overall_max
+      ),
+      cheap AS (
+        SELECT * FROM agg ORDER BY min_price ASC LIMIT 3
+      ),
+      expensive AS (
+        SELECT * FROM agg ORDER BY max_price DESC LIMIT 2
+      ),
+      picked AS (
+        SELECT * FROM cheap
+        UNION
+        SELECT * FROM expensive
+      )
+      SELECT
+        b.overall_min,
+        b.overall_max,
+        p.service_name,
+        p.min_price,
+        p.max_price
+      FROM picked p
+      CROSS JOIN bounds b
+      ORDER BY p.min_price ASC;
+      `,
+      [tenantId]
+    );
+
+    const overallMin =
+      rows?.[0]?.overall_min != null ? Number(rows[0].overall_min) : null;
+    const overallMax =
+      rows?.[0]?.overall_max != null ? Number(rows[0].overall_max) : null;
+
+    // Si no hay precios válidos, deja que el pipeline normal responda
+    if (overallMin == null || overallMax == null) {
+      return { handled: false };
+    }
+
+    const simpleRows = rows.map((r: any) => ({
+      service_name: String(r.service_name || "").trim(),
+      min_price: Number(r.min_price),
+      max_price: Number(r.max_price),
+    }));
+
+    // Texto base por si algún canal lo quiere usar directo.
+    const msg = renderGenericPriceSummaryReply({
+      lang: idiomaDestino,
+      rows: simpleRows,
+    });
+
+    return {
+      handled: true,
+      reply: msg,
+      source: "price_summary_db",
+      intent: intentOut || "precio",
+      fastpathHint: {
+        type: "price_summary",
+        payload: {
+          lang: idiomaDestino,
+          rows: simpleRows,
+        },
+      },
+    };
   }
 
   return { handled: false };

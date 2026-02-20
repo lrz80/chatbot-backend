@@ -961,63 +961,154 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
   }
 
   // ===============================
-// ⚡ FASTPATH (extraído a módulo reusable)
-// ===============================
-{
-  const fp = await runFastpath({
-    pool,
-    tenantId: tenant.id,
-    canal,
-    idiomaDestino,
-    userInput,
-    inBooking: Boolean(inBooking0),
-    convoCtx: convoCtx as any,
-    infoClave: String(tenant?.info_clave || ""),
-    detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
-    maxDisambiguationOptions: 5,
-    lastServiceTtlMs: 60 * 60 * 1000,
-  });
-
-  // aplicar patch de contexto
-  if (fp.ctxPatch) transition({ patchCtx: fp.ctxPatch });
-
-  // aplicar efectos (awaiting) fuera del módulo
-  if (fp.handled && fp.awaitingEffect?.type === "set_awaiting_yes_no") {
-    const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
-    await setAwaitingState(pool, {
+  // ⚡ FASTPATH (extraído a módulo reusable)
+  // ===============================
+  {
+    const fp = await runFastpath({
+      pool,
       tenantId: tenant.id,
       canal,
-      senderId: contactoNorm,
-      field: "yes_no",
-      payload: fp.awaitingEffect.payload,
-      ttlSeconds: fp.awaitingEffect.ttlSeconds,
+      idiomaDestino,
+      userInput,
+      inBooking: Boolean(inBooking0),
+      convoCtx: convoCtx as any,
+      infoClave: String(tenant?.info_clave || ""),
+      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
+      maxDisambiguationOptions: 5,
+      lastServiceTtlMs: 60 * 60 * 1000,
     });
-  }
 
-  if (fp.handled) {
-    let out = fp.reply;
+    // aplicar patch de contexto
+    if (fp.ctxPatch) transition({ patchCtx: fp.ctxPatch });
 
-    const isPlansList =
-      fp.source === "service_list_db" &&
-      (convoCtx as any)?.last_list_kind === "plan";
-
-    const hasPkgs = (convoCtx as any)?.has_packages_available === true;
-
-    if (canal !== "whatsapp" && isPlansList && hasPkgs) {
-      out = await naturalizeSecondaryOptionsLine({
+    // aplicar efectos (awaiting) fuera del módulo
+    if (fp.handled && fp.awaitingEffect?.type === "set_awaiting_yes_no") {
+      const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
+      await setAwaitingState(pool, {
         tenantId: tenant.id,
-        idiomaDestino,
         canal,
-        baseText: out,
-        primary: "plans",
-        secondaryAvailable: true,
-        maxLines: MAX_WHATSAPP_LINES,
+        senderId: contactoNorm,
+        field: "yes_no",
+        payload: fp.awaitingEffect.payload,
+        ttlSeconds: fp.awaitingEffect.ttlSeconds,
       });
     }
 
-    return await replyAndExit(out, fp.source, fp.intent);
+    if (fp.handled) {
+      // ===============================
+      // 🧠 MODO HÍBRIDO PARA PRICE SUMMARY
+      // ===============================
+      if (fp.source === "price_summary_db" && fp.fastpathHint?.type === "price_summary") {
+        const hint = fp.fastpathHint.payload;
+
+        // Historia reciente para el modelo
+        const history = await getRecentHistoryForModel({
+          tenantId: tenant.id,
+          canal,
+          fromNumber: contactoNorm,
+          excludeMessageId: messageId,
+          limit: 12,
+        });
+
+        const NO_NUMERIC_MENUS =
+          idiomaDestino === "en"
+            ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."
+            : "REGLA: NO muestres menús numerados ni pidas que respondan con un número. Si necesitas aclarar, haz UNA sola pregunta corta. Las selecciones por número las maneja el sistema, no tú.";
+
+        const PRICE_QUALIFIER_RULE =
+          idiomaDestino === "en"
+            ? "RULE: If a price is described as 'FROM/STARTING AT' (or 'desde'), you MUST keep that qualifier. Never rewrite it as an exact price. Use: 'starts at $X' / 'from $X'."
+            : "REGLA: Si un precio está descrito como 'DESDE' (o 'from/starting at'), DEBES mantener ese calificativo. Nunca lo conviertas en precio exacto. Usa: 'desde $X'.";
+
+        const NO_PRICE_INVENTION_RULE =
+          idiomaDestino === "en"
+            ? "RULE: Do not invent exact prices. Only mention prices if explicitly present in the provided business info, and preserve ranges/qualifiers."
+            : "REGLA: No inventes precios exactos. Solo menciona precios si están explícitos en la info del negocio, y preserva rangos/calificativos (DESDE).";
+
+        const PRICE_FACTS_HEADER =
+          idiomaDestino === "en"
+            ? "PRICE_SUMMARY_FROM_DB (facts – do NOT invent or change them). Each item has: service_name, min_price, max_price."
+            : "RESUMEN_DE_PRECIOS_DESDE_DB (hechos – NO los inventes ni los cambies). Cada ítem tiene: service_name, min_price, max_price.";
+
+        // Pasamos los datos como JSON plano al prompt, el modelo arma el texto final.
+        const priceFactsJson = JSON.stringify(hint.rows);
+
+        const fallbackWelcome = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+
+        const composed = await answerWithPromptBase({
+          tenantId: tenant.id,
+          promptBase: [
+            promptBaseMem,
+            "",
+            NO_NUMERIC_MENUS,
+            PRICE_QUALIFIER_RULE,
+            NO_PRICE_INVENTION_RULE,
+            "",
+            PRICE_FACTS_HEADER,
+            priceFactsJson,
+          ].join("\n"),
+          userInput: ["USER_MESSAGE:", userInput].join("\n"),
+          history,
+          idiomaDestino,
+          canal: "whatsapp",
+          maxLines: MAX_WHATSAPP_LINES,
+          // fallback: si por alguna razón el LLM falla, usamos el texto de fastpath
+          fallbackText: fp.reply || fallbackWelcome,
+        });
+
+        const textOut = String(composed.text || "").trim();
+
+        // Reutilizamos el detector genérico de pregunta sí/no
+        const looksYesNoQuestion =
+          /\?\s*$/.test(textOut) &&
+          (/\b(te gustar[ií]a|quieres|deseas)\b/i.test(textOut) ||
+            /\b(would you like|do you want)\b/i.test(textOut));
+
+        if (looksYesNoQuestion) {
+          const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
+          await setAwaitingState(pool, {
+            tenantId: tenant.id,
+            canal,
+            senderId: contactoNorm,
+            field: "yes_no",
+            payload: { kind: "confirm_generic", source: "llm_price_summary" },
+            ttlSeconds: 600,
+          });
+        }
+
+        return await replyAndExit(
+          composed.text,
+          "fastpath_price_summary_llm",
+          fp.intent || "precio"
+        );
+      }
+
+      // ===============================
+      // 🔁 RESTO DE FASTPATH (igual que antes)
+      // ===============================
+      let out = fp.reply;
+
+      const isPlansList =
+        fp.source === "service_list_db" &&
+        (convoCtx as any)?.last_list_kind === "plan";
+
+      const hasPkgs = (convoCtx as any)?.has_packages_available === true;
+
+      if (canal !== "whatsapp" && isPlansList && hasPkgs) {
+        out = await naturalizeSecondaryOptionsLine({
+          tenantId: tenant.id,
+          idiomaDestino,
+          canal,
+          baseText: out,
+          primary: "plans",
+          secondaryAvailable: true,
+          maxLines: MAX_WHATSAPP_LINES,
+        });
+      }
+
+      return await replyAndExit(out, fp.source, fp.intent);
+    }
   }
-}
 
   const smResult = await sm({
     pool,
