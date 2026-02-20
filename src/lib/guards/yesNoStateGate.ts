@@ -118,6 +118,81 @@ export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
     };
   }
 
+  // -------------------------------------------------------------
+  // ✔️ HÍBRIDO YES/NO: Manejo de actions con link (sin pasar al LLM)
+  // -------------------------------------------------------------
+  const yesNoAction = ctx?.awaiting_yes_no_action ?? null;
+
+  if (yesNoAction && yn === "yes") {
+    const label = yesNoAction.label ?? (idiomaDestino === "es" ? "Continuar" : "Continue");
+    const link = yesNoAction.link ?? "";
+
+    const reply =
+      idiomaDestino === "es"
+        ? `¡Perfecto! Aquí tienes el enlace para continuar:\n${label}: ${link}\n\nSi necesitas algo más, estoy aquí para ayudarte 😊`
+        : `Perfect! Here’s your link to continue:\n${label}: ${link}\n\nIf you need anything else, I'm here to help 😊`;
+
+    // limpiar acción para que no se dispare otra vez
+    try {
+      await pool.query(
+        `
+        UPDATE conversation_state
+        SET context = (COALESCE(context,'{}'::jsonb) - 'awaiting_yes_no_action') || jsonb_build_object('awaiting_yesno', false),
+            updated_at = now()
+        WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
+        `,
+        [tenantId, canal, senderId]
+      );
+    } catch {}
+
+    return {
+      action: "reply",
+      replySource: "yesno-handled",
+      intent: "yesno",
+      facts: {
+        EVENT: "YESNO_LINK_SENT",
+        LINK: link,
+        LABEL: label,
+      },
+      transition: {
+        patchCtx: { awaiting_yes_no_action: null, awaiting_yesno: false },
+      }
+    };
+  }
+
+  if (yesNoAction && yn === "no") {
+    // si quiere ser más humano aquí, puedes ajustar
+    const reply =
+      idiomaDestino === "es"
+        ? `Sin problema 😊. Si necesitas algo más, estoy aquí para ayudarte.`
+        : `No worries 😊. If you need anything else, I'm here to help.`;
+
+    // limpiar igual
+    try {
+      await pool.query(
+        `
+        UPDATE conversation_state
+        SET context = (COALESCE(context,'{}'::jsonb) - 'awaiting_yes_no_action') || jsonb_build_object('awaiting_yesno', false),
+            updated_at = now()
+        WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
+        `,
+        [tenantId, canal, senderId]
+      );
+    } catch {}
+
+    return {
+      action: "reply",
+      replySource: "yesno-handled",
+      intent: "yesno",
+      facts: {
+        EVENT: "YESNO_NEGATIVE",
+      },
+      transition: {
+        patchCtx: { awaiting_yes_no_action: null, awaiting_yesno: false },
+      }
+    };
+  }
+
   // 3) Si hay handlers declarativos en ctx, los usamos
   // Ejemplo recomendado en tu ctx:
   // ctx.awaiting_yesno = true

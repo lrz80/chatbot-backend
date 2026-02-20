@@ -1070,6 +1070,53 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           fallbackText: fastpathText,    // si falla el LLM, enviamos al menos lo de Fastpath
         });
 
+        // ================================================
+        // PASO 1 — Detect CTA del LLM y preparar awaiting_yes_no_action
+        // ================================================
+        {
+          const text = (composed.text || "").toLowerCase().trim();
+
+          // Detecta si el LLM está haciendo una pregunta YES/NO natural
+          const isYesNoCTA =
+            /\?\s*$/.test(text) &&
+            (
+              /\bte gustar[íi]a\b/.test(text) ||
+              /\bquieres\b/.test(text) ||
+              /\bdeseas\b/.test(text) ||
+              /\bwould you like\b/.test(text) ||
+              /\bdo you want\b/.test(text)
+            );
+
+          if (isYesNoCTA) {
+            // El LLM mencionó un servicio en texto
+            // Intentamos recuperarlo del ctx (fastpath ya resolvió last_service_id)
+            const sid = convoCtx.last_service_id || null;
+            const sname = convoCtx.last_service_name || null;
+
+            let serviceUrl: string | null = null;
+            if (sid) {
+              const r = await pool.query(
+                `SELECT service_url FROM services WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
+                [sid, tenant.id]
+              );
+              serviceUrl = r.rows[0]?.service_url || null;
+            }
+
+            if (sid && serviceUrl) {
+              transition({
+                patchCtx: {
+                  awaiting_yes_no_action: {
+                    kind: "cta_yes_no_service",
+                    serviceId: sid,
+                    label: sname || "Reserva",
+                    link: serviceUrl
+                  }
+                }
+              });
+            }
+          }
+        }
+
         return await replyAndExit(composed.text, fp.source, fp.intent);
       }
 
