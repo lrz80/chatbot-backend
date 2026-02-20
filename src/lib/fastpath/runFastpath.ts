@@ -771,7 +771,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       };
     }
   }
-  
+
   // ===============================
   // ✅ INTEREST -> SEND BEST LINK (service_url or variant_url)
   // ===============================
@@ -882,17 +882,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         const inc = extractIncludesLine(blk.lines);
 
         if (inc) {
-          const msg =
-            idiomaDestino === "en"
-              ? `${blk.title}\nIncludes: ${inc}`
-              : `${blk.title}\nIncluye: ${inc}`;
-
           let ctxPatch: Partial<FastpathCtx> | undefined;
+          let serviceIdResolved: string | null = null;
 
           try {
-            // intenta mapear el bloque de info_clave a un service real del catálogo
             const hit = await resolveServiceIdFromText(pool, tenantId, blk.title);
             if (hit?.id) {
+              serviceIdResolved = hit.id;
               ctxPatch = {
                 last_service_id: hit.id,
                 last_service_name: hit.name || blk.title,
@@ -912,6 +908,35 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             };
           }
 
+          // 🔹 Mensaje base con lo que incluye
+          let msg =
+            idiomaDestino === "en"
+              ? `${blk.title}\nIncludes: ${inc}`
+              : `${blk.title}\nIncluye: ${inc}`;
+
+          // 🔹 EXTRA: intenta adjuntar el link del servicio si existe en DB
+          if (serviceIdResolved) {
+            try {
+              const linkPick = await resolveBestLinkForService({
+                pool,
+                tenantId,
+                serviceId: serviceIdResolved,
+                userText: userInput,
+              });
+
+              if (linkPick.ok && linkPick.url) {
+                const linkLine =
+                  idiomaDestino === "en"
+                    ? `\n\nHere’s the link:\n${linkPick.url}`
+                    : `\n\nAquí tienes el link:\n${linkPick.url}`;
+
+                msg += linkLine;
+              }
+            } catch {
+              // si falla el resolver de links, no rompemos la respuesta
+            }
+          }
+
           return {
             handled: true,
             reply: msg,
@@ -921,14 +946,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           };
         }
 
-        const msg =
+        const msgMissing =
           idiomaDestino === "en"
-            ? `I found "${blk.title}", but the service details are not loaded yet.`
-            : `Encontré "${blk.title}", pero aún no tengo cargado qué incluye.`;
+            ? `I found "${blk.title}", I don’t have the full details available right now, but I can share the general information or help you choose the option that fits you best. 😊`
+            : `Encontré "${blk.title}", En este momento no tengo disponible la descripción detallada, pero puedo darte la información general o ayudarte a elegir la opción que mejor se ajuste a lo que buscas. 😊`;
 
         return {
           handled: true,
-          reply: msg,
+          reply: msgMissing,
           source: "info_clave_missing_includes",
           intent: intentOut || "info",
         };
@@ -956,6 +981,26 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         last_service_at: Date.now(),
       };
 
+      // 🔹 Intentar resolver link del servicio desde catálogo DB
+      let linkSuffix = "";
+      try {
+        const linkPick = await resolveBestLinkForService({
+          pool,
+          tenantId,
+          serviceId: r.service_id,
+          userText: userInput,
+        });
+
+        if (linkPick.ok && linkPick.url) {
+          linkSuffix =
+            idiomaDestino === "en"
+              ? `\n\nHere’s the link:\n${linkPick.url}`
+              : `\n\nAquí tienes el link:\n${linkPick.url}`;
+        }
+      } catch {
+        // si falla, simplemente no añadimos link
+      }
+
       if (r.description && String(r.description).trim()) {
         let descOut = String(r.description).trim();
 
@@ -969,10 +1014,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           // no-op
         }
 
-        const msg =
+        const msgBase =
           idiomaDestino === "en"
             ? `${r.label}\nIncludes: ${descOut}`
             : `${r.label}\nIncluye: ${descOut}`;
+
+        const msg = msgBase + linkSuffix;
 
         return {
           handled: true,
@@ -983,10 +1030,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         };
       }
 
-      const msg =
+      const msgBase =
         idiomaDestino === "en"
-          ? `I found "${r.label}", but I don’t have the service details loaded yet.`
-          : `Encontré "${r.label}", pero aún no tengo cargado qué incluye.`;
+          ? `I found "${r.label}", I don’t have the full details available right now, but I can share the general information or help you choose the option that fits you best. 😊`
+          : `Encontré "${r.label}", En este momento no tengo disponible la descripción detallada, pero puedo darte la información general o ayudarte a elegir la opción que mejor se ajuste a lo que buscas. 😊`;
+
+      const msg = msgBase + linkSuffix;
 
       return {
         handled: true,
