@@ -14,10 +14,19 @@ const PROMPT_GEN_VERSION = "v13"; // ⬅️ cambia esto cada vez que ajustes la 
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
-const keyOf = (tenantId: string, canal: string, funciones: string, info: string, idioma: string) =>
+const keyOf = (
+  tenantId: string,
+  canal: string,
+  funciones: string,
+  info: string,
+  idioma: string,
+  pricingSnapshot: string
+) =>
   crypto
     .createHash("sha256")
-    .update(`${PROMPT_GEN_VERSION}::${tenantId}::${canal}::${idioma}::${funciones}::${info}`)
+    .update(
+      `${PROMPT_GEN_VERSION}::${tenantId}::${canal}::${idioma}::${funciones}::${info}::${pricingSnapshot}`
+    )
     .digest("hex");
 
 // ———————————————————————————————————————————————————
@@ -651,8 +660,10 @@ router.post("/", async (req: Request, res: Response) => {
 
     const nombreNegocio = tenant.name || "nuestro negocio";
 
+    const pricingSnapshot: string = compact(String(tenant.pricing_snapshot || ""));
+
     // (B) Cache hit?
-    const cacheKey = keyOf(tenant_id, canalNorm, funciones, info, idiomaNorm);
+    const cacheKey = keyOf(tenant_id, canalNorm, funciones, info, idiomaNorm, pricingSnapshot);
     const hit = promptCache.get(cacheKey);
     if (hit && Date.now() - hit.at < 1000 * 60 * 60 * 12) { // 12 horas
       return res.status(200).json({ prompt: hit.value });
@@ -700,8 +711,21 @@ router.post("/", async (req: Request, res: Response) => {
     const infoOperativo = buildOperationalBusinessContext(infoClean2, nombreNegocio);
     const reglasOperativas = buildOperationalRules(funcionesClean2);
 
-    const infoBlock = infoOperativo ? infoOperativo : "";
+    // 👇 OJO: aquí va `let`, no `const`
+    let infoBlock = infoOperativo ? infoOperativo : "";
     const funcionesBlock = reglasOperativas ? reglasOperativas : "";
+
+    // 🔹 Adjuntar snapshot de precios (multi-tenant, sin hardcode)
+    if (pricingSnapshot) {
+      const header =
+        idiomaNorm === "en" ? "PRICES_AND_PLANS" : "PRECIOS_Y_PLANES";
+
+      const snapBlock = compact(`${header}\n${pricingSnapshot}`);
+
+      infoBlock = infoBlock
+        ? compact(`${infoBlock}\n\n${snapBlock}`)
+        : snapBlock;
+    }
 
     const linksPolicy = enlacesOficiales.length
       ? (idiomaNorm === "en"

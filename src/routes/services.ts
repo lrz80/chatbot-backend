@@ -1,11 +1,26 @@
+//src/routes/services.ts
 import express, { Request, Response } from "express";
 import pool from "../lib/db";
 import { authenticateUser } from "../middleware/auth";
+import { buildPricingSnapshot } from "../lib/services/buildPricingSnapshot";
 
 const router = express.Router();
 
 function getTenantId(req: any) {
   return req.user?.tenant_id || req.tenant_id || req.tenantId;
+}
+
+async function refreshPricingSnapshot(tenantId: string) {
+  if (!tenantId) return;
+  try {
+    const snapshot = await buildPricingSnapshot(pool, tenantId);
+    await pool.query(
+      "UPDATE tenants SET pricing_snapshot = $1 WHERE id = $2",
+      [snapshot, tenantId]
+    );
+  } catch (err) {
+    console.error("Error actualizando pricing_snapshot:", err);
+  }
 }
 
 function isValidUrl(u?: string) {
@@ -281,6 +296,10 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
     }
 
     await client.query("COMMIT");
+
+    // 🔄 vuelve a generar el snapshot de precios para este tenant
+    await refreshPricingSnapshot(tenantId);
+
     return res.status(201).json({ service: { ...service, variants: insertedVariants } });
     } catch (e: any) {
     try { await client.query("ROLLBACK"); } catch {}
@@ -373,6 +392,9 @@ router.put("/:id", authenticateUser, async (req: any, res: Response) => {
 
     if (!rows[0]) return res.status(404).json({ error: "Servicio no encontrado" });
 
+    // 🔄 refrescar snapshot
+    await refreshPricingSnapshot(tenantId);
+
     return res.json({ service: rows[0] });
   } catch (e: any) {
     console.error("PUT /api/services/:id error:", e);
@@ -408,6 +430,8 @@ router.patch("/:id", authenticateUser, async (req: any, res: Response) => {
 
     if (!rows[0]) return res.status(404).json({ error: "Servicio no encontrado" });
 
+    await refreshPricingSnapshot(tenantId);
+
     return res.json({ service: rows[0] });
   } catch (e: any) {
     console.error("PATCH /api/services/:id error:", e);
@@ -431,6 +455,8 @@ router.delete("/:id", authenticateUser, async (req: any, res: Response) => {
       `,
       [id, tenantId]
     );
+
+    await refreshPricingSnapshot(tenantId);
 
     return res.json({ ok: true, deleted: r.rowCount || 0 });
   } catch (e: any) {
@@ -514,6 +540,8 @@ router.post("/:id/variants", authenticateUser, async (req: any, res: Response) =
       ]
     );
 
+    await refreshPricingSnapshot(tenantId);
+
     return res.status(201).json({ variant: rows[0] });
   } catch (e: any) {
     console.error("POST /api/services/:id/variants error:", e);
@@ -585,6 +613,8 @@ router.put("/:id/variants/:variantId", authenticateUser, async (req: any, res: R
 
     if (!rows[0]) return res.status(404).json({ error: "Variante no encontrada" });
 
+    await refreshPricingSnapshot(tenantId);
+
     return res.json({ variant: rows[0] });
   } catch (e: any) {
     console.error("PUT /api/services/:id/variants/:variantId error:", e);
@@ -612,6 +642,8 @@ router.delete("/:id/variants/:variantId", authenticateUser, async (req: any, res
       [variantId, serviceId, tenantId]
     );
 
+    await refreshPricingSnapshot(tenantId);
+    
     return res.json({ ok: true, deleted: r.rowCount || 0 });
   } catch (e: any) {
     console.error("DELETE /api/services/:id/variants/:variantId error:", e);
