@@ -1008,7 +1008,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ===============================
   {
     const askingIncludes = isAskingIncludes(userInput);
-    const askingPrice = isPriceQuestion(userInput) || isGenericPriceQuestion(userInput);
+    const askingPrice = isPriceQuestion(userInput); // ✅ ya no usamos isGenericPriceQuestion
 
     if (isPlansOrPackagesQuestion(userInput) && !askingIncludes && !askingPrice) {
       const { rows } = await pool.query(
@@ -1213,118 +1213,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         };
       }
     }
-  }
-
-  // =========================================================
-  // ✅ PRICE SUMMARY (DB) solo si la pregunta es genérica
-  //    - rango + ejemplos, NO lista completa
-  //    - filtrado por tokens genérico (sin hardcode de negocio)
-  // =========================================================
-  if (
-    isPriceQuestion(userInput) &&
-    isGenericPriceQuestion(userInput) &&
-    !isPlansOrPackagesQuestion(userInput)
-  ) {
-    const { rows } = await pool.query(
-      `
-        WITH base AS (
-          SELECT
-            s.id AS service_id,
-            s.name AS service_name,
-            s.price_base::numeric AS price
-          FROM services s
-          WHERE
-            s.tenant_id = $1
-            AND s.active = true
-            AND s.price_base IS NOT NULL
-            AND (
-              s.category IS NULL
-              OR regexp_replace(lower(s.category), '[^a-z]', '', 'g') <> 'addon'
-            )
-
-          UNION ALL
-
-          SELECT
-            v.service_id,
-            s.name AS service_name,
-            v.price::numeric AS price
-          FROM service_variants v
-          JOIN services s ON s.id = v.service_id
-          WHERE
-            s.tenant_id = $1
-            AND s.active = true
-            AND v.active = true
-            AND v.price IS NOT NULL
-            AND (
-              s.category IS NULL
-              OR regexp_replace(lower(s.category), '[^a-z]', '', 'g') <> 'addon'
-            )
-        ),
-        agg AS (
-          SELECT service_id, service_name, MIN(price) AS min_price, MAX(price) AS max_price
-          FROM base
-          GROUP BY service_id, service_name
-        ),
-        bounds AS (
-          SELECT
-            (SELECT MIN(min_price) FROM agg) AS overall_min,
-            (SELECT MAX(max_price) FROM agg) AS overall_max
-        ),
-        cheap AS (
-          SELECT * FROM agg ORDER BY min_price ASC LIMIT 3
-        ),
-        expensive AS (
-          SELECT * FROM agg ORDER BY max_price DESC LIMIT 2
-        ),
-        picked AS (
-          SELECT * FROM cheap
-          UNION
-          SELECT * FROM expensive
-        )
-        SELECT
-          b.overall_min,
-          b.overall_max,
-          p.service_name,
-          p.min_price,
-          p.max_price
-        FROM picked p
-        CROSS JOIN bounds b
-        ORDER BY p.min_price ASC;
-      `,
-      [tenantId]
-    );
-
-    if (!rows || !rows.length) {
-      return { handled: false };
-    }
-
-    const overallMin =
-      rows[0]?.overall_min != null ? Number(rows[0].overall_min) : null;
-    const overallMax =
-      rows[0]?.overall_max != null ? Number(rows[0].overall_max) : null;
-
-    if (overallMin == null || overallMax == null) {
-      return { handled: false };
-    }
-
-    // 🔍 filtramos por tokens significativos del usuario (genérico)
-    const filteredRows = filterRowsByMeaningfulTokens(rows, userInput);
-
-    const msg = renderGenericPriceSummaryReply({
-      lang: idiomaDestino,
-      rows: filteredRows.map((r: any) => ({
-        service_name: r.service_name,
-        min_price: r.min_price,
-        max_price: r.max_price,
-      })),
-    });
-
-    return {
-      handled: true,
-      reply: msg,
-      source: "price_summary_db",
-      intent: intentOut || "precio",
-    };
   }
 
   return { handled: false };
