@@ -1,51 +1,49 @@
+/**
+ * Pregunta de precio "genérica" = pregunta de precios en general,
+ * NO sobre un plan/servicio concreto por nombre.
+ *
+ * Ejemplos → TRUE (genéricas):
+ *  - "¿Qué precio tienen las clases funcionales?"
+ *  - "¿Cuáles son sus precios?"
+ *  - "How much do your classes cost?"
+ *
+ * Ejemplos → FALSE (específicas):
+ *  - "precio plan gold"
+ *  - "precio del plan bronze autopay"
+ *  - "how much is the VIP membership?"
+ */
 export function isGenericPriceQuestion(text: string): boolean {
-  const t = String(text || "").toLowerCase().trim();
+  const raw = String(text || "");
+  if (!raw.trim()) return false;
 
-  // ===============================
-  // ✅ GUARD: preguntas de planes/membresías NO son "precio genérico"
-  // (evita que "q planes tienes" caiga en resumen genérico)
-  // ===============================
-  const asksPlans =
-    /\b(planes?|plan)\b/.test(t) ||
-    /\b(membres[ií]as?|membresia)\b/.test(t) ||
-    /\b(memberships?|membership)\b/.test(t) ||
-    /\b(monthly)\b/.test(t);
-
-  if (asksPlans) return false;
-
-  // ✅ si es la pregunta genérica exacta, no la discutas
-  if (/^\s*(cu[aá]les\s+son\s+los\s+precios?)\s*\??\s*$/.test(t)) return true;
-  if (/^\s*(what\s+are\s+the\s+prices?)\s*\??\s*$/.test(t)) return true;
-
-  const genericMatch =
-    /\b(precios?|tarifas?|costos?)\b/.test(t) ||
-    /\b(cu[aá]les\s+son\s+los\s+precios?)\b/.test(t) ||
-    /\b(what\s+are\s+the\s+prices?|prices?\s*\?)\b/.test(t) ||
-    /\b(pricing|price\s+list|price\s+range)\b/.test(t);
-
-  if (!genericMatch) return false;
-
-  const tokens = t
+  const t = raw
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .filter(Boolean);
+    .toLowerCase();
 
-  const STOPWORDS = new Set([
-    // ES
-    "precio","precios","tarifa","tarifas","costo","costos",
-    "cuales","cual","que","son","es","ser","de","del","la","las","el","los","un","una","unos","unas",
-    "me","te","se","mi","tu","su","por","para","en","al","a",
-    "cuanto","cuanta","cuestan","cuesta","vale","valen",
-    // EN
-    "what","are","the","is","do","you","have",
-    "price","prices","pricing","list","range",
-    // ❌ REMOVIDO: "plan","planes","membresia","membresias","monthly","membership"
-  ]);
+  // 1) Tiene que ser claramente una pregunta de precio
+  const hasPriceWord = /\b(precio|precios|tarifa|tarifas|costo|costos|cost|price|prices|pricing|how much|cuanto cuesta|cuanto vale|cuanto cobran|cuanto cobran|cuanto sale)\b/.test(
+    t
+  );
+  if (!hasPriceWord) return false;
 
-  // Si existe al menos un token que NO sea stopword → no es genérica
-  const hasSpecificWord = tokens.some(x => !STOPWORDS.has(x) && x.length >= 3);
+  // 2) ¿Está hablando explícitamente de "planes / membresías / paquetes"?
+  const mentionsPlanUnit = /\b(plan|planes|membresia|membresias|membership|memberships|paquete|paquetes|package|packages|bundle|bundles|pack|packs|monthly)\b/.test(
+    t
+  );
 
-  return !hasSpecificWord;
+  // 3) ¿Menciona un NOMBRE típico de plan? (genérico, no de un negocio)
+  const mentionsNamedPlan = /\b(gold|bronze|silver|platinum|vip|basic|standard|premium|plus|pro)\b/.test(
+    t
+  );
+
+  // Si pregunta por "plan gold", "membresía platinum", etc.
+  // → NO es genérica, es de un plan concreto.
+  if (mentionsPlanUnit && mentionsNamedPlan) {
+    return false;
+  }
+
+  // En cualquier otro caso, tratamos la pregunta como "precio genérico"
+  // (incluye cosas como "qué precio tienen las clases funcionales?")
+  return true;
 }
