@@ -194,12 +194,18 @@ function isPriceQuestion(text: string) {
 function isFreeOfferQuestion(text: string) {
   const t = String(text || "").toLowerCase();
 
-  // Multi-negocio: "gratis/free" + señal de "trial/prueba/demo"
-  // No requiere "clase/class" (pero lo acepta si viene).
-  const hasFree = /\b(gratis|free)\b/i.test(t);
-  const hasTrialSignal = /\b(prueba|trial|demo|promocion|promoción|clase|class)\b/i.test(t);
+  const hasFreeWord = /\b(gratis|free)\b/i.test(t);
+  const hasTrialWord = /\b(prueba|trial|demo|promocion|promoción)\b/i.test(t);
+  const hasClassWord = /\b(clase|class)\b/i.test(t);
+  const hasTryVerb   = /\b(probar|try|testear|probarla|probarlo)\b/i.test(t);
 
-  return hasFree && hasTrialSignal;
+  // Caso A: explícitamente gratis + señal de prueba
+  if (hasFreeWord && (hasTrialWord || hasClassWord)) return true;
+
+  // Caso B: verbo de "probar" + palabra de clase, aunque no diga "gratis"
+  if (hasTryVerb && hasClassWord) return true;
+
+  return false;
 }
 
 function renderFreeOfferList(args: { lang: Lang; items: { name: string }[] }) {
@@ -689,6 +695,84 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
+  // ✅ FREE OFFER (DB) -> LIST OPTIONS THEN PICK -> SEND LINK
+  // ===============================
+  {
+    const wantsFreeOffer = isFreeOfferQuestion(userInput);
+
+    if (wantsFreeOffer) {
+      // Servicios gratis del tenant (price_base=0) con URL directa
+      const { rows } = await pool.query(
+        `
+        SELECT s.id, s.name, s.service_url
+        FROM services s
+        WHERE s.tenant_id = $1
+          AND s.active = true
+          AND COALESCE(s.price_base, 0) <= 0
+          AND s.service_url IS NOT NULL
+          AND length(trim(s.service_url)) > 0
+        ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC
+        LIMIT 10
+        `,
+        [tenantId]
+      );
+
+      const items = (rows || [])
+        .map((r: any) => ({
+          id: String(r.id),
+          name: String(r.name || "").trim(),
+          url: r.service_url ? String(r.service_url).trim() : null,
+        }))
+        .filter((x) => x.name && x.url);
+
+      // Si no hay nada gratis con URL, no inventes "portal": pide especificación genérica
+      if (!items.length) {
+        const msg =
+          idiomaDestino === "en"
+            ? "Yes — we can help with a free/trial option 😊 What exactly are you looking for?"
+            : "Sí — podemos ayudarte con una opción gratis/de prueba 😊 ¿Qué estás buscando exactamente?";
+        return { handled: true, reply: msg, source: "service_list_db", intent: "free_offer" };
+      }
+
+      // Si hay 1 sola opción gratis: manda directo el link de ESA opción
+      if (items.length === 1) {
+        const one = items[0];
+        return {
+          handled: true,
+          reply: `${one.name}\n${one.url}`,
+          source: "service_list_db",
+          intent: "free_offer",
+          ctxPatch: {
+            last_service_id: one.id,
+            last_service_name: one.name,
+            last_service_at: Date.now(),
+          },
+        };
+      }
+
+      // Si hay 2+ opciones: lista y deja que el PICK FROM LAST LIST resuelva
+      const reply = renderFreeOfferList({
+        lang: idiomaDestino,
+        items: items.map((x) => ({ name: x.name })),
+      });
+
+      return {
+        handled: true,
+        reply,
+        source: "service_list_db",
+        intent: "free_offer",
+        ctxPatch: {
+          // reutilizamos tu mecanismo de pick: guardamos en last_plan_list (es solo una lista de selección)
+          last_plan_list: items.map((x) => ({ id: x.id, name: x.name, url: x.url })),
+          last_plan_list_at: Date.now(),
+          last_list_kind: "plan",
+          last_list_kind_at: Date.now(),
+        },
+      };
+    }
+  }
+  
+  // ===============================
   // ✅ INTEREST -> SEND BEST LINK (service_url or variant_url)
   // ===============================
   {
@@ -782,84 +866,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           } as any,
         };
       }
-    }
-  }
-
-  // ===============================
-  // ✅ FREE OFFER (DB) -> LIST OPTIONS THEN PICK -> SEND LINK
-  // ===============================
-  {
-    const wantsFreeOffer = isFreeOfferQuestion(userInput);
-
-    if (wantsFreeOffer) {
-      // Servicios gratis del tenant (price_base=0) con URL directa
-      const { rows } = await pool.query(
-        `
-        SELECT s.id, s.name, s.service_url
-        FROM services s
-        WHERE s.tenant_id = $1
-          AND s.active = true
-          AND COALESCE(s.price_base, 0) <= 0
-          AND s.service_url IS NOT NULL
-          AND length(trim(s.service_url)) > 0
-        ORDER BY s.updated_at DESC NULLS LAST, s.created_at DESC
-        LIMIT 10
-        `,
-        [tenantId]
-      );
-
-      const items = (rows || [])
-        .map((r: any) => ({
-          id: String(r.id),
-          name: String(r.name || "").trim(),
-          url: r.service_url ? String(r.service_url).trim() : null,
-        }))
-        .filter((x) => x.name && x.url);
-
-      // Si no hay nada gratis con URL, no inventes "portal": pide especificación genérica
-      if (!items.length) {
-        const msg =
-          idiomaDestino === "en"
-            ? "Yes — we can help with a free/trial option 😊 What exactly are you looking for?"
-            : "Sí — podemos ayudarte con una opción gratis/de prueba 😊 ¿Qué estás buscando exactamente?";
-        return { handled: true, reply: msg, source: "service_list_db", intent: "free_offer" };
-      }
-
-      // Si hay 1 sola opción gratis: manda directo el link de ESA opción
-      if (items.length === 1) {
-        const one = items[0];
-        return {
-          handled: true,
-          reply: `${one.name}\n${one.url}`,
-          source: "service_list_db",
-          intent: "free_offer",
-          ctxPatch: {
-            last_service_id: one.id,
-            last_service_name: one.name,
-            last_service_at: Date.now(),
-          },
-        };
-      }
-
-      // Si hay 2+ opciones: lista y deja que el PICK FROM LAST LIST resuelva
-      const reply = renderFreeOfferList({
-        lang: idiomaDestino,
-        items: items.map((x) => ({ name: x.name })),
-      });
-
-      return {
-        handled: true,
-        reply,
-        source: "service_list_db",
-        intent: "free_offer",
-        ctxPatch: {
-          // reutilizamos tu mecanismo de pick: guardamos en last_plan_list (es solo una lista de selección)
-          last_plan_list: items.map((x) => ({ id: x.id, name: x.name, url: x.url })),
-          last_plan_list_at: Date.now(),
-          last_list_kind: "plan",
-          last_list_kind_at: Date.now(),
-        },
-      };
     }
   }
 
