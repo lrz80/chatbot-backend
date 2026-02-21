@@ -902,6 +902,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   // =========================================================
   // ✅ INFO_CLAVE INCLUDES (si existe info_clave)
+  //     - Responde "qué incluye..." usando info_clave
+  //     - Intenta resolver service_id desde:
+  //         1) convoCtx.last_service_id (si venimos de precios)
+  //         2) resolveServiceIdFromText(userInput)
+  //         3) título del bloque en info_clave (fallback)
+  //     - Si encuentra URL, adjunta link + CTA genérico
   // =========================================================
   {
     const info = String(infoClave || "").trim();
@@ -915,77 +921,89 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         if (inc) {
           let ctxPatch: Partial<FastpathCtx> | undefined;
           let serviceIdResolved: string | null = null;
+          let serviceNameResolved: string = blk.title;
 
-          try {
-            const hit = await resolveServiceIdFromText(pool, tenantId, blk.title);
-            if (hit?.id) {
-              serviceIdResolved = hit.id;
-              ctxPatch = {
-                last_service_id: hit.id,
-                last_service_name: hit.name || blk.title,
-                last_service_at: Date.now(),
-              };
-              serviceIdResolved = hit.id;
-            } else {
-              ctxPatch = {
-                last_service_name: blk.title,
-                last_service_at: Date.now(),
-              };
+          // 1) PRIORIDAD: lo que ya tenga el contexto (venimos de precios/lista)
+          if ((convoCtx as any)?.last_service_id) {
+            serviceIdResolved = String((convoCtx as any).last_service_id);
+            if ((convoCtx as any)?.last_service_name) {
+              serviceNameResolved = String((convoCtx as any).last_service_name);
             }
-          } catch {
-            ctxPatch = {
-              last_service_name: blk.title,
-              last_service_at: Date.now(),
-            };
           }
 
-          // 🔹 Mensaje base con lo que incluye (respetando tu Markdown/emojis de info_clave)
-          let msgBase =
+          // 2) Si no hay nada en contexto, intenta resolver por el texto del usuario
+          if (!serviceIdResolved) {
+            try {
+              const hit = await resolveServiceIdFromText(pool, tenantId, userInput);
+              if (hit?.id) {
+                serviceIdResolved = hit.id;
+                serviceNameResolved = hit.name || blk.title;
+              }
+            } catch {
+              // ignoramos error, seguimos con fallback
+            }
+          }
+
+          // 3) Fallback: intenta resolver por el título del bloque de info_clave
+          if (!serviceIdResolved) {
+            try {
+              const hit = await resolveServiceIdFromText(pool, tenantId, blk.title);
+              if (hit?.id) {
+                serviceIdResolved = hit.id;
+                serviceNameResolved = hit.name || blk.title;
+              }
+            } catch {
+              // si falla, no rompemos
+            }
+          }
+
+          // Patch de contexto mínimo
+          ctxPatch = {
+            last_service_id: serviceIdResolved || (convoCtx as any)?.last_service_id || null,
+            last_service_name: serviceNameResolved,
+            last_service_at: Date.now(),
+          };
+
+          // 🔹 Mensaje base con lo que incluye
+          let msg =
             idiomaDestino === "en"
-              ? `${blk.title}\n\n${inc}`
-              : `${blk.title}\n\n${inc}`;
+              ? `${serviceNameResolved}\nIncludes: ${inc}`
+              : `${serviceNameResolved}\nIncluye: ${inc}`;
 
-          // 🔹 Intentar resolver link del servicio (service_url / variant_url) de forma genérica
-          let finalUrl: string | null = null;
-
+          // 🔹 EXTRA: intenta adjuntar el link del servicio / variante
           if (serviceIdResolved) {
             try {
-              const linkPick = await resolveBestLinkForService({
+              // Usa el mismo resolver de links que el bloque de INTEREST
+              const pick = await resolveBestLinkForService({
                 pool,
                 tenantId,
                 serviceId: serviceIdResolved,
                 userText: userInput,
               });
 
-              if (linkPick.ok && linkPick.url) {
-                finalUrl = linkPick.url;
+              if (pick.ok && pick.url) {
+                const linkLine =
+                  idiomaDestino === "en"
+                    ? `\n\n👉 You can see all the details or purchase it here: ${pick.url}`
+                    : `\n\n👉 Puedes ver todos los detalles o adquirirlo aquí: ${pick.url}`;
+
+                msg += linkLine;
               }
             } catch (e) {
-              console.warn("⚠️ info_clave_includes: no se pudo resolver link:", (e as any)?.message);
+              console.warn(
+                "⚠️ fastpath includes: no se pudo adjuntar URL de servicio:",
+                (e as any)?.message
+              );
             }
           }
 
-          // 🔹 Línea de enlace (solo si existe en DB, sin hardcode por negocio)
-          let linkLine = "";
-          if (finalUrl) {
-            linkLine =
-              idiomaDestino === "en"
-                ? `Here’s the link with all the details:\n${finalUrl}`
-                : `Aquí tienes el enlace con todos los detalles del plan:\n${finalUrl}`;
-          }
-
-          // 🔹 CTA final – SIEMPRE
+          // 🔹 CTA genérico (igual para todos los negocios)
           const outro =
             idiomaDestino === "en"
-              ? "If you need more information or want to book, just let me know 🙂"
-              : "Si necesitas más información o quieres reservar, ¡dímelo! 😊";
+              ? "\n\nIf you need anything else, just let me know 😊"
+              : "\n\nSi necesitas algo más, déjame saber 😊";
 
-          // 🔹 Componer respuesta final (sin líneas vacías extra)
-          const parts = [msgBase.trim()];
-          if (linkLine) parts.push(linkLine.trim());
-          parts.push(outro);
-
-          const msg = parts.join("\n\n");
+          msg += outro;
 
           return {
             handled: true,
@@ -996,10 +1014,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           };
         }
 
+        // Si encontró bloque pero no línea "incluye", responde algo amable
         const msgMissing =
           idiomaDestino === "en"
-            ? `I found "${blk.title}", I don’t have the full details available right now, but I can share the general information or help you choose the option that fits you best. 😊`
-            : `Encontré "${blk.title}". En este momento no tengo disponible la descripción detallada, pero puedo darte la información general o ayudarte a elegir la opción que mejor se ajuste a lo que buscas. 😊`;
+            ? `I found "${blk.title}", but I don’t have the detailed “includes” section right now. I can share the general information or help you choose the option that fits you best. 😊`
+            : `Encontré "${blk.title}", pero en este momento no tengo disponible la sección detallada de “qué incluye”. Puedo darte la información general o ayudarte a elegir la opción que mejor se ajuste a lo que buscas. 😊`;
 
         return {
           handled: true,
@@ -1009,7 +1028,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         };
       }
 
-      // Si no matcheó, NO cortamos aquí (dejamos que DB intente resolver)
+      // Si no matcheó ningún bloque, dejamos que siga el flujo normal (DB/LLM)
     }
   }
 
