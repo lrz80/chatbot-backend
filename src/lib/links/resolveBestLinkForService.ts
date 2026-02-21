@@ -99,15 +99,32 @@ export async function resolveBestLinkForService(args: {
       const strongEnough = best.score >= 0.34; // ajustable
       const clearlyBetter = !second || best.score - second.score >= 0.12;
 
+      // Caso 1: coincidencia clara => variante específica
       if (strongEnough && clearlyBetter) {
         return { ok: true, url: best.url };
       }
 
-      return { ok: false, reason: "ambiguous", options };
+      // Caso 2: ambigüedad pero el servicio tiene service_url genérico
+      if (serviceUrl) {
+        return { ok: true, url: serviceUrl };
+      }
+
+      // 🚨 Caso 3: ambigüedad y NO hay service_url
+      // En este caso escogemos igualmente la mejor variante,
+      // aunque la similitud sea baja, para que SIEMPRE haya link.
+      return { ok: true, url: best.url };
     }
 
-    // Sin userText: ambiguo
-    return { ok: false, reason: "ambiguous", options };
+    // ===========================
+    // Sin userText:
+    // ===========================
+    if (serviceUrl) {
+      // usar link genérico del servicio
+      return { ok: true, url: serviceUrl };
+    }
+
+    // sin service_url: usar la primera variante como fallback
+    return { ok: true, url: options[0].url };
   }
 
   // 3) Sin variantes -> usar service_url si existe
