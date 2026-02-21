@@ -11,7 +11,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v13"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v14"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -95,7 +95,7 @@ function normalizeUrl(u: string) {
   }
 }
 
-type Canal = "whatsapp" | "instagram" | "facebook" | "preview" | "voice";
+type Canal = "whatsapp" | "meta" | "preview";
 type Lang = "es" | "en";
 
 function buildChannelRules(canal: Canal, idioma: Lang) {
@@ -119,7 +119,7 @@ function buildChannelRules(canal: Canal, idioma: Lang) {
     "- Evita listas enormes. Prioriza lo más importante.",
   ];
 
-  const igfbES = [
+  const metaES = [
     ...baseES,
     "- Respuestas aún más cortas (IG/FB se consume rápido).",
     "- Evita tecnicismos. 1 idea principal + CTA.",
@@ -130,19 +130,13 @@ function buildChannelRules(canal: Canal, idioma: Lang) {
     "- En vista previa puedes ser un poco más explicativo si el usuario lo pide.",
   ];
 
-  const voiceES = [
-    ...baseES,
-    "- Frases muy cortas. Una pregunta a la vez.",
-    "- Evita URLs largas; si es necesario, di 'te envío el link por mensaje' (si aplica).",
-  ];
-
   const whatsappEN = [
     ...baseEN,
     "- Keep replies short. If info is long, summarize and offer the official link.",
     "- Avoid huge lists. Prioritize the essentials.",
   ];
 
-  const igfbEN = [
+  const metaEN = [
     ...baseEN,
     "- Even shorter replies (IG/FB is fast).",
     "- Avoid jargon. One main point + CTA.",
@@ -153,17 +147,11 @@ function buildChannelRules(canal: Canal, idioma: Lang) {
     "- In preview you may be slightly more detailed if requested.",
   ];
 
-  const voiceEN = [
-    ...baseEN,
-    "- Very short sentences. One question at a time.",
-    "- Avoid long URLs; if needed, say you can send the link by message (if applicable).",
-  ];
-
   const isES = idioma === "es";
 
   if (canal === "whatsapp") return (isES ? whatsappES : whatsappEN).join("\n");
-  if (canal === "instagram" || canal === "facebook") return (isES ? igfbES : igfbEN).join("\n");
-  if (canal === "voice") return (isES ? voiceES : voiceEN).join("\n");
+  if (canal === "meta")      return (isES ? metaES : metaEN).join("\n");
+  // preview
   return (isES ? previewES : previewEN).join("\n");
 }
 
@@ -626,12 +614,17 @@ router.post("/", async (req: Request, res: Response) => {
     const tenant_id = decoded.tenant_id;
     const { descripcion, informacion, idioma, canal } = req.body;
 
-    const canalNorm: Canal =
-      canal === "whatsapp" || canal === "instagram" || canal === "facebook" || canal === "voice" || canal === "preview"
-        ? canal
-        : "preview";
+    // 🔥 Normalización robusta: solo whatsapp | meta | preview
+    let canalNorm: Canal = "preview";
 
-    const allowed = new Set<Canal>(["whatsapp", "instagram", "facebook", "preview", "voice"]);
+    if (typeof canal === "string") {
+      const safe = canal.trim().toLowerCase();
+      if (safe === "whatsapp" || safe === "meta" || safe === "preview") {
+        canalNorm = safe as Canal;
+      }
+    }
+
+    const allowed = new Set<Canal>(["whatsapp", "meta", "preview"]);
     if (!allowed.has(canalNorm)) {
       return res.status(400).json({ error: "Canal inválido" });
     }
