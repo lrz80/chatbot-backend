@@ -2,6 +2,7 @@
 import twilio from "twilio";
 import pool from "../db";
 import fetch from "node-fetch";
+import { splitMessage } from "../messages/splitMessage";
 
 console.log("🔐 TWILIO_ACCOUNT_SID: cargada correctamente");
 console.log("🔐 TWILIO_AUTH_TOKEN: cargada correctamente");
@@ -10,57 +11,6 @@ const client = twilio(
   process.env.TWILIO_ACCOUNT_SID!,
   process.env.TWILIO_AUTH_TOKEN!
 );
-
-// ---------- Helpers ----------
-const MAX_WHATSAPP = 3900; // límite seguro (WA ~4096 chars)
-
-function chunkByLimit(text: string, limit = MAX_WHATSAPP): string[] {
-  const blocks = (text ?? "").replace(/\r\n/g, "\n").split(/\n\n+/); // cortar por párrafos
-  const chunks: string[] = [];
-  let cur = "";
-
-  const pushCur = () => {
-    if (cur) {
-      chunks.push(cur);
-      cur = "";
-    }
-  };
-
-  for (let b of blocks) {
-    // si cabe el párrafo en el bloque actual
-    if ((cur ? cur.length + 2 : 0) + b.length <= limit) {
-      cur = cur ? `${cur}\n\n${b}` : b;
-      continue;
-    }
-    // cerramos bloque actual
-    pushCur();
-
-    if (b.length <= limit) {
-      cur = b;
-      continue;
-    }
-
-    // si el párrafo excede, corta por líneas
-    const lines = b.split("\n");
-    let acc = "";
-    for (let line of lines) {
-      if ((acc ? acc.length + 1 : 0) + line.length <= limit) {
-        acc = acc ? `${acc}\n${line}` : line;
-      } else {
-        if (acc) chunks.push(acc);
-        // último recurso: cortar la línea en rebanadas
-        while (line.length > limit) {
-          chunks.push(line.slice(0, limit));
-          line = line.slice(limit);
-        }
-        acc = line;
-      }
-    }
-    if (acc) chunks.push(acc);
-  }
-  pushCur();
-  return chunks;
-}
 
 // normaliza número a SOLO dígitos E.164 (sin "whatsapp:" ni "+")
 function normalizarNumero(numero: string): string {
@@ -424,8 +374,8 @@ export async function enviarWhatsApp(
     return false;
   }
 
-  // ✅ 2) dividir mensaje
-  const parts = chunkByLimit(mensaje);
+  // ✅ 2) dividir mensaje en partes de ~1000 caracteres (como el bot viejo)
+  const parts = splitMessage(mensaje, 1000);
 
   // ✅ 3) enviar SOLO por el proveedor activo
   if (mode === "cloudapi") {

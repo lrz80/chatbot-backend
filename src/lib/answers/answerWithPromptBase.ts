@@ -30,7 +30,7 @@ function sanitizeChatOutput(text: string) {
   let t = text
     .replace(/```[\s\S]*?```/g, '')         // bloques de código
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')     // headers markdown
-    .replace(/^\s*[-*•]\s+/gm, '')          // bullets
+    //.replace(/^\s*[-*•]\s+/gm, '')          // bullets
     .replace(/^\s*\d+\)\s+/gm, '')          // 1)
     .replace(/^\s*\d+\.\s+/gm, '')          // 1.
     .replace(/\r\n/g, '\n');
@@ -72,7 +72,7 @@ export async function answerWithPromptBase(
     history = [],
     idiomaDestino,
     canal,
-    maxLines = 16,
+    maxLines = 9999,
     fallbackText = '',
   } = params;
 
@@ -166,7 +166,6 @@ export async function answerWithPromptBase(
   // Sanitizar y limitar formato
   out = sanitizeChatOutput(out);
   out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
-  out = capLines(out, maxLines);
 
   // Asegurar idioma de salida (solo ES/EN)
   try {
@@ -185,7 +184,6 @@ export async function answerWithPromptBase(
     if (langOut && langOut !== idiomaDestino) {
       out = await traducirMensaje(out, idiomaDestino);
       out = sanitizeChatOutput(out);
-      out = capLines(out, maxLines);
     }
   } catch (e) {
     console.warn("⚠️ No se pudo ajustar el idioma en answerWithPromptBase:", e);

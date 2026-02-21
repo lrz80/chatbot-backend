@@ -74,7 +74,7 @@ export type WhatsAppContext = {
   origen?: "twilio" | "meta";
 };
 
-const MAX_WHATSAPP_LINES = 16; // 14–16 es el sweet spot
+const MAX_WHATSAPP_LINES = 9999; // 14–16 es el sweet spot
 
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
