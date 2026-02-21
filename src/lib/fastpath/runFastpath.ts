@@ -925,8 +925,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 last_service_name: hit.name || blk.title,
                 last_service_at: Date.now(),
               };
+              serviceIdResolved = hit.id;
             } else {
-              // fallback: al menos guardar nombre para debugging
               ctxPatch = {
                 last_service_name: blk.title,
                 last_service_at: Date.now(),
@@ -939,13 +939,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             };
           }
 
-          // 🔹 Mensaje base con lo que incluye
-          let msg =
+          // 🔹 Mensaje base con lo que incluye (respetando tu Markdown/emojis de info_clave)
+          let msgBase =
             idiomaDestino === "en"
-              ? `${blk.title}\nIncludes: ${inc}`
-              : `${blk.title}\nIncluye: ${inc}`;
+              ? `${blk.title}\n\n${inc}`
+              : `${blk.title}\n\n${inc}`;
 
-          // 🔹 EXTRA: intenta adjuntar el link del servicio si existe en DB
+          // 🔹 Intentar resolver link del servicio (service_url / variant_url) de forma genérica
+          let finalUrl: string | null = null;
+
           if (serviceIdResolved) {
             try {
               const linkPick = await resolveBestLinkForService({
@@ -956,17 +958,34 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               });
 
               if (linkPick.ok && linkPick.url) {
-                const linkLine =
-                  idiomaDestino === "en"
-                    ? `\n\nHere’s the link:\n${linkPick.url}`
-                    : `\n\nAquí tienes el link:\n${linkPick.url}`;
-
-                msg += linkLine;
+                finalUrl = linkPick.url;
               }
-            } catch {
-              // si falla el resolver de links, no rompemos la respuesta
+            } catch (e) {
+              console.warn("⚠️ info_clave_includes: no se pudo resolver link:", (e as any)?.message);
             }
           }
+
+          // 🔹 Línea de enlace (solo si existe en DB, sin hardcode por negocio)
+          let linkLine = "";
+          if (finalUrl) {
+            linkLine =
+              idiomaDestino === "en"
+                ? `Here’s the link with all the details:\n${finalUrl}`
+                : `Aquí tienes el enlace con todos los detalles del plan:\n${finalUrl}`;
+          }
+
+          // 🔹 CTA final – SIEMPRE
+          const outro =
+            idiomaDestino === "en"
+              ? "If you need more information or want to book, just let me know 🙂"
+              : "Si necesitas más información o quieres reservar, ¡dímelo! 😊";
+
+          // 🔹 Componer respuesta final (sin líneas vacías extra)
+          const parts = [msgBase.trim()];
+          if (linkLine) parts.push(linkLine.trim());
+          parts.push(outro);
+
+          const msg = parts.join("\n\n");
 
           return {
             handled: true,
@@ -980,7 +999,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         const msgMissing =
           idiomaDestino === "en"
             ? `I found "${blk.title}", I don’t have the full details available right now, but I can share the general information or help you choose the option that fits you best. 😊`
-            : `Encontré "${blk.title}", En este momento no tengo disponible la descripción detallada, pero puedo darte la información general o ayudarte a elegir la opción que mejor se ajuste a lo que buscas. 😊`;
+            : `Encontré "${blk.title}". En este momento no tengo disponible la descripción detallada, pero puedo darte la información general o ayudarte a elegir la opción que mejor se ajuste a lo que buscas. 😊`;
 
         return {
           handled: true,
