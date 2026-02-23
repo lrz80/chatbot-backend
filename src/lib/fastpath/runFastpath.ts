@@ -12,6 +12,7 @@ import {
   isAskingIncludes,
   findServiceBlock,
   extractIncludesLine,
+  normalizeText,
 } from "../infoclave/resolveIncludes";
 
 // DB catalog includes
@@ -140,15 +141,6 @@ export type FastpathHint =
         rows: { service_name: string; min_price: number; max_price: number }[];
       };
     };
-
-function normalizeText(s: string) {
-  return String(s || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 function bestNameMatch(
   userText: string,
@@ -954,6 +946,41 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               }
             } catch {
               // si falla, no rompemos
+            }
+          }
+
+          // 4) Fallback agresivo: buscar directamente en la tabla services por nombre
+          if (!serviceIdResolved) {
+            try {
+              const qNorm = normalizeText(blk.title || userInput);         // ej: "el plan gold incluye"
+              const tokens = qNorm
+                .split(" ")
+                .filter((t) => t.length >= 4 && t !== "plan");             // nos quedamos con cosas tipo "gold"
+
+              if (tokens.length) {
+                const pattern = `%${tokens.join("%")}%`;                   // "%gold%" o "%gold%clases%"
+
+                const { rows } = await pool.query(
+                  `
+                  SELECT id, name
+                  FROM services
+                  WHERE tenant_id = $1
+                    AND active = true
+                    AND lower(name) LIKE lower($2)
+                  ORDER BY updated_at DESC NULLS LAST, created_at DESC
+                  LIMIT 1
+                  `,
+                  [tenantId, pattern]
+                );
+
+                if (rows[0]) {
+                  serviceIdResolved = rows[0].id as string;
+                  serviceNameResolved =
+                    (rows[0].name as string) || serviceNameResolved;
+                }
+              }
+            } catch (e: any) {
+              console.warn("⚠️ fallback services.name LIKE failed:", e?.message);
             }
           }
 
