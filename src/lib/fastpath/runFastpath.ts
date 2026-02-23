@@ -894,12 +894,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   // =========================================================
   // ✅ INFO_CLAVE INCLUDES (si existe info_clave)
-  //     - Responde "qué incluye..." usando info_clave
-  //     - Intenta resolver service_id desde:
-  //         1) convoCtx.last_service_id (si venimos de precios)
-  //         2) resolveServiceIdFromText(userInput)
-  //         3) título del bloque en info_clave (fallback)
-  //     - Si encuentra URL, adjunta link + CTA genérico
+  //     - Responde "qué incluye..." usando info_clave cuando hay bloque
+  //     - SI NO hay bloque, pero ya sabemos last_service_id => usa link oficial
   // =========================================================
   {
     const info = String(infoClave || "").trim();
@@ -918,6 +914,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         lines: blk?.lines,
       });
 
+      // =====================================================
+      // 1) CASO IDEAL: hay bloque en info_clave + "Incluye:"
+      // =====================================================
       if (blk) {
         const inc = extractIncludesLine(blk.lines);
         console.log("🔎 [FP-INCLUDES] extractIncludesLine", { inc });
@@ -949,8 +948,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 serviceIdResolved = hit.id;
                 serviceNameResolved = hit.name || blk.title;
               }
-            } catch {
-              // ignoramos error, seguimos con fallback
+            } catch (e: any) {
+              console.warn("⚠️ [FP-INCLUDES] resolveServiceIdFromText(userText) failed:", e?.message);
             }
           }
 
@@ -963,8 +962,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 serviceIdResolved = hit.id;
                 serviceNameResolved = hit.name || blk.title;
               }
-            } catch {
-              // si falla, no rompemos
+            } catch (e: any) {
+              console.warn("⚠️ [FP-INCLUDES] resolveServiceIdFromText(blk.title) failed:", e?.message);
             }
           }
 
@@ -972,41 +971,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             serviceIdResolved,
             serviceNameResolved,
           });
-
-          // 4) Fallback agresivo: buscar directamente en la tabla services por nombre
-          if (!serviceIdResolved) {
-            try {
-              const qNorm = normalizeText(blk.title || userInput);         // ej: "el plan gold incluye"
-              const tokens = qNorm
-                .split(" ")
-                .filter((t) => t.length >= 4 && t !== "plan");             // nos quedamos con cosas tipo "gold"
-
-              if (tokens.length) {
-                const pattern = `%${tokens.join("%")}%`;                   // "%gold%" o "%gold%clases%"
-
-                const { rows } = await pool.query(
-                  `
-                  SELECT id, name
-                  FROM services
-                  WHERE tenant_id = $1
-                    AND active = true
-                    AND lower(name) LIKE lower($2)
-                  ORDER BY updated_at DESC NULLS LAST, created_at DESC
-                  LIMIT 1
-                  `,
-                  [tenantId, pattern]
-                );
-
-                if (rows[0]) {
-                  serviceIdResolved = rows[0].id as string;
-                  serviceNameResolved =
-                    (rows[0].name as string) || serviceNameResolved;
-                }
-              }
-            } catch (e: any) {
-              console.warn("⚠️ fallback services.name LIKE failed:", e?.message);
-            }
-          }
 
           // Patch de contexto mínimo
           ctxPatch = {
@@ -1024,7 +988,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           // 🔹 EXTRA: intenta adjuntar el link del servicio / variante
           if (serviceIdResolved) {
             try {
-              // Usa el mismo resolver de links que el bloque de INTEREST
               const pick = await resolveBestLinkForService({
                 pool,
                 tenantId,
@@ -1046,24 +1009,25 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
                 msg += linkLine;
               }
-            } catch (e) {
+            } catch (e: any) {
               console.warn(
-                "⚠️ fastpath includes: no se pudo adjuntar URL de servicio:",
-                (e as any)?.message
+                "⚠️ [FP-INCLUDES] no se pudo adjuntar URL de servicio:",
+                e?.message
               );
             }
           } else {
             console.log("⚠️ [FP-INCLUDES] serviceIdResolved es NULL; no se intentará resolver link");
           }
 
-          // 🔹 CTA genérico (igual para todos los negocios)
+          // 🔹 CTA genérico
           const outro =
             idiomaDestino === "en"
               ? "\n\nIf you need anything else, just let me know 😊"
               : "\n\nSi necesitas algo más, déjame saber 😊";
 
           msg += outro;
-          console.log("✅ [FP-INCLUDES] reply built", { msg });
+
+          console.log("✅ [FP-INCLUDES] reply built (with block)", { msg });
 
           return {
             handled: true,
@@ -1074,7 +1038,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           };
         }
 
-        // Si encontró bloque pero no línea "incluye", responde algo amable
+        // Bloque encontrado pero sin línea "Incluye:"
         const msgMissing =
           idiomaDestino === "en"
             ? `I found "${blk.title}", but I don’t have the detailed “includes” section right now. I can share the general information or help you choose the option that fits you best. 😊`
@@ -1091,9 +1055,67 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           intent: intentOut || "info",
         };
       }
-      
-      console.log("⚠️ [FP-INCLUDES] no block matched in info_clave for userText");
-      // Si no matcheó ningún bloque, dejamos que siga el flujo normal (DB/LLM)
+
+      // =====================================================
+      // 2) NUEVO: NO HAY BLOQUE, PERO YA SABEMOS EL SERVICIO
+      //     → usar last_service_id + link oficial
+      // =====================================================
+      const lastServiceId = (convoCtx as any)?.last_service_id
+        ? String((convoCtx as any).last_service_id)
+        : null;
+
+      const lastServiceName = (convoCtx as any)?.last_service_name
+        ? String((convoCtx as any).last_service_name)
+        : "Este plan";
+
+      console.log("🔎 [FP-INCLUDES] no block, trying context-based link", {
+        lastServiceId,
+        lastServiceName,
+      });
+
+      if (lastServiceId) {
+        try {
+          const pick = await resolveBestLinkForService({
+            pool,
+            tenantId,
+            serviceId: lastServiceId,
+            userText: userInput,
+          });
+
+          console.log("[FP-INCLUDES] context-based resolveBestLinkForService", { pick });
+
+          if (pick.ok && pick.url) {
+            const msg =
+              idiomaDestino === "en"
+                ? `${lastServiceName} includes what is described in this official plan link:\n\n👉 ${pick.url}\n\nIf you need anything else, just let me know 😊`
+                : `${lastServiceName} incluye lo que se detalla en este enlace oficial del plan:\n\n👉 ${pick.url}\n\nSi necesitas algo más, déjame saber 😊`;
+
+            console.log("✅ [FP-INCLUDES] reply built (ctx + link only)", {
+              msg,
+            });
+
+            return {
+              handled: true,
+              reply: msg,
+              source: "info_clave_includes",
+              intent: intentOut || "info",
+              ctxPatch: {
+                last_service_id: lastServiceId,
+                last_service_name: lastServiceName,
+                last_service_at: Date.now(),
+              } as any,
+            };
+          }
+        } catch (e: any) {
+          console.warn(
+            "⚠️ [FP-INCLUDES] context-based link resolver failed:",
+            e?.message
+          );
+        }
+      }
+
+      console.log("⚠️ [FP-INCLUDES] no block and no usable last_service_id; falling through");
+      // Si llegamos aquí, dejamos que siga el flujo normal (DB/LLM)
     }
   }
 
