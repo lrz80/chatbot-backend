@@ -23,15 +23,17 @@ export async function getOfficialLinksForTenant(
       s.id                         AS service_id,
       s.name                       AS service_name,
       s.category                   AS service_category,
-      s.tipo                       AS service_type,
       s.service_url                AS service_url,
+
       v.id                         AS variant_id,
-      v.name                       AS variant_name,
+      v.variant_name               AS variant_name,
       v.variant_url                AS variant_url
+
     FROM services s
     LEFT JOIN service_variants v
       ON v.service_id = s.id
      AND v.active = TRUE
+
     WHERE
       s.tenant_id = $1
       AND s.active = TRUE
