@@ -42,6 +42,12 @@ export async function resolveBestLinkForService(args: {
 }): Promise<LinkPick> {
   const { pool, tenantId, serviceId, userText } = args;
 
+  console.log("🔗 [LINK-RESOLVER] start", {
+    tenantId,
+    serviceId,
+    userText,
+  });
+
   // 1) Cargar service_url (pero NO devolverlo todavía)
   const s = await pool.query(
     `
@@ -53,6 +59,10 @@ export async function resolveBestLinkForService(args: {
     [tenantId, serviceId]
   );
   const serviceUrl = s.rows?.[0]?.service_url ? String(s.rows[0].service_url) : "";
+
+  console.log("🔗 [LINK-RESOLVER] service row", {
+    serviceUrl,
+  });
 
   // 2) variant_url(s)  ✅ multitenant-safe
   const v = await pool.query(
@@ -95,19 +105,35 @@ export async function resolveBestLinkForService(args: {
       const best = scored[0];
       const second = scored[1];
 
+      console.log("🔗 [LINK-RESOLVER] scored options", {
+        scored,
+        best,
+        second,
+      });
+
       // Umbrales (genéricos): debe haber match decente y no ser empate
       const strongEnough = best.score >= 0.34; // ajustable
       const clearlyBetter = !second || best.score - second.score >= 0.12;
 
       // Caso 1: coincidencia clara => variante específica
       if (strongEnough && clearlyBetter) {
+        console.log("🔗 [LINK-RESOLVER] strong match -> best.variant", {
+          url: best.url,
+        });
         return { ok: true, url: best.url };
       }
 
       // Caso 2: ambigüedad pero el servicio tiene service_url genérico
       if (serviceUrl) {
+        console.log("🔗 [LINK-RESOLVER] ambiguous but has serviceUrl -> fallback service", {
+          url: serviceUrl,
+        });
         return { ok: true, url: serviceUrl };
       }
+
+      console.log("🔗 [LINK-RESOLVER] ambiguous & no serviceUrl -> best.variant anyway", {
+        url: best.url,
+      });
 
       // 🚨 Caso 3: ambigüedad y NO hay service_url
       // En este caso escogemos igualmente la mejor variante,
@@ -119,7 +145,9 @@ export async function resolveBestLinkForService(args: {
     // Sin userText:
     // ===========================
     if (serviceUrl) {
-      // usar link genérico del servicio
+      console.log("🔗 [LINK-RESOLVER] no variants, using serviceUrl", {
+        url: serviceUrl,
+      });
       return { ok: true, url: serviceUrl };
     }
 
@@ -130,5 +158,6 @@ export async function resolveBestLinkForService(args: {
   // 3) Sin variantes -> usar service_url si existe
   if (serviceUrl) return { ok: true, url: serviceUrl };
 
+  console.log("🔗 [LINK-RESOLVER] no link found at all");
   return { ok: false, reason: "no_link" };
 }
