@@ -904,11 +904,23 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   {
     const info = String(infoClave || "").trim();
 
+    console.log("🔎 [FP-INCLUDES] check", {
+      hasInfo: !!info,
+      userInput,
+      isAsking: isAskingIncludes(userInput),
+    });
+
     if (info && isAskingIncludes(userInput)) {
       const blk = findServiceBlock(info, userInput);
+      console.log("🔎 [FP-INCLUDES] findServiceBlock", {
+        found: !!blk,
+        title: blk?.title,
+        lines: blk?.lines,
+      });
 
       if (blk) {
         const inc = extractIncludesLine(blk.lines);
+        console.log("🔎 [FP-INCLUDES] extractIncludesLine", { inc });
 
         if (inc) {
           let ctxPatch: Partial<FastpathCtx> | undefined;
@@ -923,10 +935,16 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             }
           }
 
+          console.log("🔎 [FP-INCLUDES] after ctx", {
+            serviceIdResolved_ctx: serviceIdResolved,
+            serviceNameResolved_ctx: serviceNameResolved,
+          });
+
           // 2) Si no hay nada en contexto, intenta resolver por el texto del usuario
           if (!serviceIdResolved) {
             try {
               const hit = await resolveServiceIdFromText(pool, tenantId, userInput);
+              console.log("🔎 [FP-INCLUDES] resolveServiceIdFromText(userText)", { hit });
               if (hit?.id) {
                 serviceIdResolved = hit.id;
                 serviceNameResolved = hit.name || blk.title;
@@ -940,6 +958,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           if (!serviceIdResolved) {
             try {
               const hit = await resolveServiceIdFromText(pool, tenantId, blk.title);
+              console.log("🔎 [FP-INCLUDES] resolveServiceIdFromText(blk.title)", { hit });
               if (hit?.id) {
                 serviceIdResolved = hit.id;
                 serviceNameResolved = hit.name || blk.title;
@@ -948,6 +967,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               // si falla, no rompemos
             }
           }
+
+          console.log("🔎 [FP-INCLUDES] final service resolution", {
+            serviceIdResolved,
+            serviceNameResolved,
+          });
 
           // 4) Fallback agresivo: buscar directamente en la tabla services por nombre
           if (!serviceIdResolved) {
@@ -1008,6 +1032,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 userText: userInput,
               });
 
+              console.log("🔗 [FP-INCLUDES] resolveBestLinkForService result", {
+                tenantId,
+                serviceIdResolved,
+                pick,
+              });
+
               if (pick.ok && pick.url) {
                 const linkLine =
                   idiomaDestino === "en"
@@ -1022,6 +1052,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 (e as any)?.message
               );
             }
+          } else {
+            console.log("⚠️ [FP-INCLUDES] serviceIdResolved es NULL; no se intentará resolver link");
           }
 
           // 🔹 CTA genérico (igual para todos los negocios)
@@ -1031,6 +1063,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               : "\n\nSi necesitas algo más, déjame saber 😊";
 
           msg += outro;
+          console.log("✅ [FP-INCLUDES] reply built", { msg });
 
           return {
             handled: true,
@@ -1047,6 +1080,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             ? `I found "${blk.title}", but I don’t have the detailed “includes” section right now. I can share the general information or help you choose the option that fits you best. 😊`
             : `Encontré "${blk.title}", pero en este momento no tengo disponible la sección detallada de “qué incluye”. Puedo darte la información general o ayudarte a elegir la opción que mejor se ajuste a lo que buscas. 😊`;
 
+        console.log("ℹ️ [FP-INCLUDES] block found but no includes line", {
+          title: blk.title,
+        });
+
         return {
           handled: true,
           reply: msgMissing,
@@ -1054,7 +1091,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           intent: intentOut || "info",
         };
       }
-
+      
+      console.log("⚠️ [FP-INCLUDES] no block matched in info_clave for userText");
       // Si no matcheó ningún bloque, dejamos que siga el flujo normal (DB/LLM)
     }
   }
