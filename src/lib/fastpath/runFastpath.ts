@@ -95,7 +95,8 @@ export type FastpathResult =
         | "price_fastpath_db"
         | "price_summary_db"
         | "info_general_overview"
-        | "price_summary_db_empty";
+        | "price_summary_db_empty"
+        | "info_clave_includes_ctx_link";
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;
@@ -1097,7 +1098,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             return {
               handled: true,
               reply: msg,
-              source: "info_clave_includes",
+              source: "info_clave_includes_ctx_link",
               intent: intentOut || "info",
               ctxPatch: {
                 last_service_id: lastServiceId,

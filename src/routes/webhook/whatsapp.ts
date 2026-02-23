@@ -1004,6 +1004,20 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
 
       const hasPkgs = (convoCtx as any)?.has_packages_available === true;
 
+      // 🔍 NUEVO: detectar si fastpath ya trae link o viene de info_clave_*
+      const hasLinkInFastpath = /https?:\/\/\S+/i.test(fastpathText);
+      const isInfoClaveSource = String(fp.source || "").startsWith("info_clave");
+
+      // 🛑 BYPASS LLM EN WHATSAPP SI YA TENEMOS LINK O ES INFO_CLAVE
+      if (canal === "whatsapp" && (hasLinkInFastpath || isInfoClaveSource)) {
+        console.log("[WHATSAPP][FASTPATH] Bypass LLM (link/info_clave)", {
+          source: fp.source,
+          hasLinkInFastpath,
+        });
+
+        return await replyAndExit(fastpathText, fp.source, fp.intent);
+      }
+
       // Para otros canales (meta, sms…), mantenemos la naturalización secundaria
       if (canal !== "whatsapp" && isPlansList && hasPkgs) {
         fastpathText = await naturalizeSecondaryOptionsLine({
@@ -1017,7 +1031,7 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
         });
       }
 
-      // 🌀 MODO HÍBRIDO: en WhatsApp dejamos que el LLM redacte usando esos datos
+      // 🌀 MODO HÍBRIDO SOLO CUANDO NO HAY LINK DIRECTO
       if (canal === "whatsapp") {
         const history = await getRecentHistoryForModel({
           tenantId: tenant.id,
@@ -1090,8 +1104,8 @@ console.log("🧠 facts_summary (start of turn) =", memStart);
           if (isYesNoCTA) {
             // El LLM mencionó un servicio en texto
             // Intentamos recuperarlo del ctx (fastpath ya resolvió last_service_id)
-            const sid = convoCtx.last_service_id || null;
-            const sname = convoCtx.last_service_name || null;
+            const sid = (convoCtx as any)?.last_service_id || null;
+            const sname = (convoCtx as any)?.last_service_name || null;
 
             let serviceUrl: string | null = null;
             if (sid) {
