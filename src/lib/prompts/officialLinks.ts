@@ -23,7 +23,7 @@ export async function getOfficialLinksForTenant(
       s.id                         AS service_id,
       s.name                       AS service_name,
       s.category                   AS service_category,
-      s.type                       AS service_type,
+      s.tipo                       AS service_type,
       s.service_url                AS service_url,
       v.id                         AS variant_id,
       v.name                       AS variant_name,
