@@ -1063,10 +1063,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         };
       }
 
-      // =====================================================
+            // =====================================================
       // 2) Fallback: NO HAY BLOQUE
       //     → 1) intentar resolver por TEXTO
-      //       2) si falla, usar contexto (last_service_id)
+      //       2) si falla, NO usar contexto; dejar a flujo normal/LLM
       // =====================================================
 
       let serviceIdResolved: string | null = null;
@@ -1088,27 +1088,23 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         );
       }
 
-      // 2.2 Fallback: si no hubo match por texto, usar contexto previo
-      const lastServiceId = (convoCtx as any)?.last_service_id
-        ? String((convoCtx as any).last_service_id)
-        : null;
-
-      const lastServiceName = (convoCtx as any)?.last_service_name
-        ? String((convoCtx as any).last_service_name)
-        : "Este plan";
-
-      if (!serviceIdResolved && lastServiceId) {
-        serviceIdResolved = lastServiceId;
-        serviceNameResolved = lastServiceName;
+      // ⛔️ Si NO pudimos resolver el servicio por texto:
+      //     → NO usamos last_service_id; dejamos que responda el flujo normal / LLM
+      if (!serviceIdResolved) {
+        console.log(
+          "⚠️ [FP-INCLUDES] no block and no usable serviceId; letting normal flow/LLM handle"
+        );
+        return {
+          handled: false,
+          reply: null,
+          source: "info_clave_includes_no_match",
+        } as any;
       }
 
-      console.log("🔎 [FP-INCLUDES] no block, trying link + DB", {
+      console.log("🔎 [FP-INCLUDES] no block, using resolved service", {
         userInput,
-        fromText: serviceIdResolved && serviceIdResolved !== lastServiceId
-          ? { serviceIdResolved, serviceNameResolved }
-          : null,
-        lastServiceId,
-        lastServiceName,
+        serviceIdResolved,
+        serviceNameResolved,
       });
 
       if (serviceIdResolved) {
@@ -1180,12 +1176,18 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             e?.message
           );
         }
-      } else {
-        console.log(
-          "⚠️ [FP-INCLUDES] no block and no usable serviceId; falling through"
-        );
       }
-      // Si llegamos aquí, dejamos que siga el flujo normal (DB/LLM)
+
+      // Si no pudimos construir respuesta (sin link o error raro),
+      // dejamos que el flujo normal/LLM conteste.
+      console.log(
+        "⚠️ [FP-INCLUDES] no-block could not build reply; letting normal flow/LLM handle"
+      );
+      return {
+        handled: false,
+        reply: null,
+        source: "info_clave_includes_fallback_llm",
+      } as any;
     }
   }
 
