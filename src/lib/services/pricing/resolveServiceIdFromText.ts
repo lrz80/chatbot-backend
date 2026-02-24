@@ -4,190 +4,175 @@ import type { Pool } from "pg";
 import { detectarIdioma } from "../../detectarIdioma";
 import { traducirMensaje } from "../../traducirMensaje";
 
-type Hit = { id: string; name: string };
+export type Hit = { id: string; name: string };
+
+type Candidate = {
+  serviceId: string;
+  label: string;
+  tokens: string[];
+};
+
+const STOPWORDS = new Set([
+  // ES artículos / conectores
+  "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas",
+  "para", "por", "en", "y", "o", "u", "a",
+  "que", "q", "este", "esta", "ese", "esa", "esto", "eso",
+  // EN artículos / conectores
+  "the", "a", "an", "and", "or", "to", "for", "in", "of", "what", "does",
+  // precio / genérico
+  "precio", "precios", "cuanto", "cuanta", "cuestan", "cuesta", "vale", "costo",
+  "price", "prices", "cost", "how", "much",
+  "include", "includes", "incluye", "incluyen",
+  // términos genéricos de planes
+  "plan", "planes", "membresia", "membresias",
+  "mensual", "mensuales", "monthly", "membership", "memberships",
+  "clase", "clases", "service", "services"
+]);
+
+function normalize(raw: string): string {
+  return String(raw || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function tokenize(raw: string): string[] {
+  return normalize(raw)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter((w) => w.length >= 2 && !STOPWORDS.has(w));
+}
+
+/**
+ * Score determinista: solapamiento de tokens.
+ * score = (# tokens en común) / (# tokens del servicio)
+ */
+function scoreTokens(queryTokens: string[], serviceTokens: string[]): number {
+  if (!queryTokens.length || !serviceTokens.length) return 0;
+
+  const qSet = new Set(queryTokens);
+  let common = 0;
+
+  for (const t of serviceTokens) {
+    if (qSet.has(t)) common += 1;
+  }
+
+  return common / serviceTokens.length; // 1.0 = todos los tokens coinciden
+}
 
 export async function resolveServiceIdFromText(
   pool: Pool,
   tenantId: string,
   userText: string
 ): Promise<Hit | null> {
-
   let t = String(userText || "").trim();
   if (!t) return null;
 
-  const idioma = await detectarIdioma(t).catch(() => "es");
-
-  const normalize = (s: string) =>
-    String(s || "")
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .toLowerCase()
-      .trim();
-
-  const tNormRaw = normalize(t);
-
-  // Traducción cruzada (ES <-> EN)
-  let tAlt = tNormRaw;
+  // 1) Idioma + posible traducción cruzada ES <-> EN
+  let idioma: "es" | "en" | string = "es";
   try {
-    if (idioma === "es") tAlt = normalize(await traducirMensaje(t, "en"));
-    else if (idioma === "en") tAlt = normalize(await traducirMensaje(t, "es"));
+    idioma = (await detectarIdioma(t)) as any;
   } catch {
-    // fallback silencioso
+    idioma = "es";
   }
 
-  // STOPWORDS genéricas (NO industria)
-  const STOP = new Set([
-    // artículos / conectores ES
-    "de","del","la","el","los","las","un","una","unos","unas",
-    "para","por","en","y","o","a",
-    // artículos / conectores EN
-    "the","a","an","and","or","to","for","in","of",
-    // precio
-    "precio","precios","cuanto","cuanta","cuestan","cuesta","vale","costo",
-    "price","prices","cost","how","much","what","is","que","cual","cuales",
-    // planes genéricos (NO industria específica)
-    "plan","planes","membresia","membresias",
-    "mensual","mensuales",
-    "monthly","membership","memberships"
-  ]);
+  const tNorm = normalize(t);
+  let tAlt = "";
 
-  const tokenize = (s: string) =>
-    normalize(s)
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .map((w) => w.trim())
-      .filter((w) => w && w.length >= 2 && !STOP.has(w));
+  try {
+    if (idioma === "es") {
+      tAlt = normalize(await traducirMensaje(t, "en"));
+    } else if (idioma === "en") {
+      tAlt = normalize(await traducirMensaje(t, "es"));
+    }
+  } catch {
+    tAlt = "";
+  }
 
-  const qTokens1 = tokenize(tNormRaw);
-  const qTokens2 = tokenize(tAlt);
+  const qTokens1 = tokenize(tNorm);
+  const qTokens2 = tAlt ? tokenize(tAlt) : [];
 
-  // 1) Traer servicios
-  const { rows: services } = await pool.query(
+  if (!qTokens1.length && !qTokens2.length) return null;
+
+  // 2) Traer candidatos desde DB (services + service_variants)
+  const { rows } = await pool.query<{
+    service_id: string;
+    label: string;
+  }>(
     `
-    SELECT id, name
-    FROM services
-    WHERE tenant_id = $1
-      AND active = true
-      AND name IS NOT NULL
+    WITH base AS (
+      SELECT
+        s.id AS service_id,
+        s.name AS label
+      FROM services s
+      WHERE
+        s.tenant_id = $1
+        AND s.active = true
+        AND s.name IS NOT NULL
+
+      UNION ALL
+
+      SELECT
+        s.id AS service_id,
+        v.label AS label
+      FROM service_variants v
+      JOIN services s ON s.id = v.service_id
+      WHERE
+        s.tenant_id = $1
+        AND s.active = true
+        AND v.label IS NOT NULL
+    )
+    SELECT service_id, label
+    FROM base
     `,
     [tenantId]
   );
 
-  if (!services?.length) return null;
+  if (!rows.length) return null;
 
-  const normalized = services.map((s: any) => ({
-    id: String(s.id),
-    name: String(s.name),
-    norm: normalize(s.name),
-    tokens: tokenize(s.name),
-  }));
-
-  // ----------------------------------------
-  // SCORING FUNCTION (MOVIDA ARRIBA)
-  // ----------------------------------------
-
-  const tokenFreq = new Map<string, number>();
-  for (const s of normalized) {
-    const uniq = new Set(s.tokens);
-    for (const tok of uniq) {
-      tokenFreq.set(tok, (tokenFreq.get(tok) || 0) + 1);
-    }
-  }
-
-  const N = normalized.length;
-
-  const scoreAgainst = (
-    qTokens: string[],
-    sTokens: string[],
-    sNorm: string
-  ) => {
-    if (!qTokens.length) return 0;
-
-    const sSet = new Set(sTokens);
-
-    let overlapWeighted = 0;
-    let qWeightTotal = 0;
-
-    for (const qt of qTokens) {
-      const f = tokenFreq.get(qt) || 0;
-      const w = 1 / Math.max(1, f);
-      qWeightTotal += w;
-      if (sSet.has(qt)) overlapWeighted += w;
-    }
-
-    const overlap = qWeightTotal > 0 ? overlapWeighted / qWeightTotal : 0;
-
-    let phraseBonus = 0;
-    if (qTokens.length >= 2) {
-      const qPhrase = qTokens.join(" ");
-      if (sNorm.includes(qPhrase)) phraseBonus = 0.25;
-    }
-
-    const matchedCount = qTokens.filter((qt) => sSet.has(qt)).length;
-
-    if (matchedCount === 1) {
-      const only = qTokens.find((qt) => sSet.has(qt))!;
-      const f = tokenFreq.get(only) || 0;
-      const frequent = f >= Math.max(2, Math.floor(N * 0.25));
-      if (frequent) return overlap * 0.4;
-    }
-
-    return overlap + phraseBonus;
-  };
-
-  // ----------------------------------------
-  // 2) DIRECT MATCH
-  // ----------------------------------------
-
-  const hasDirect = (q: string, sNorm: string) => {
-    if (!q || !sNorm) return false;
-    if (q.length < 4) return false;
-    return q.includes(sNorm) || sNorm.includes(q);
-  };
-
-  const directCandidates = normalized.filter(
-    (s) => hasDirect(tNormRaw, s.norm) || hasDirect(tAlt, s.norm)
-  );
-
-  if (directCandidates.length) {
-    const scored = directCandidates
-      .map((s) => {
-        const sc1 = scoreAgainst(qTokens1, s.tokens, s.norm);
-        const sc2 = scoreAgainst(qTokens2, s.tokens, s.norm);
-        return { s, sc: Math.max(sc1, sc2) };
-      })
-      .sort((a, b) => b.sc - a.sc);
-
-    const top = scored[0];
-    const second = scored[1];
-
-    if (second && Math.abs(top.sc - second.sc) < 0.08) {
-      return null;
-    }
-
-    return { id: top.s.id, name: top.s.name };
-  }
-
-  // ----------------------------------------
-  // 3) GENERAL SCORING
-  // ----------------------------------------
-
-  const ranked = normalized
-    .map((s) => {
-      const sc1 = scoreAgainst(qTokens1, s.tokens, s.norm);
-      const sc2 = scoreAgainst(qTokens2, s.tokens, s.norm);
-      return { s, score: Math.max(sc1, sc2) };
+  const candidates: Candidate[] = rows
+    .map((r) => {
+      const label = String(r.label || "").trim();
+      const tokens = tokenize(label);
+      if (!label || !tokens.length) return null;
+      return {
+        serviceId: String(r.service_id),
+        label,
+        tokens
+      };
     })
-    .sort((a, b) => b.score - a.score);
+    .filter(Boolean) as Candidate[];
 
-  const top = ranked[0];
-  const second = ranked[1];
+  if (!candidates.length) return null;
 
-  if (!top || top.score < 0.55) return null;
+  // 3) Scoring determinista
+  type Scored = { cand: Candidate; score: number };
 
-  if (second && Math.abs(top.score - second.score) < 0.10) {
+  const scored: Scored[] = candidates.map((cand) => {
+    const s1 = scoreTokens(qTokens1, cand.tokens);
+    const s2 = qTokens2.length ? scoreTokens(qTokens2, cand.tokens) : 0;
+    return { cand, score: Math.max(s1, s2) };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  const best = scored[0];
+  const second = scored[1];
+
+  // Umbral mínimo: al menos un token fuerte debe coincidir
+  const THRESHOLD = 0.34; // p.ej. 1 de 3 tokens
+  const MARGIN = 0.15;    // diferencia mínima con el segundo
+
+  if (!best || best.score < THRESHOLD) {
     return null;
   }
 
-  return { id: top.s.id, name: top.s.name };
+  // Si hay otro casi igual de bueno, lo marcamos como ambiguo (upstream decidirá)
+  if (second && second.score > 0 && Math.abs(best.score - second.score) < MARGIN) {
+    return null;
+  }
+
+  return { id: best.cand.serviceId, name: best.cand.label };
 }
