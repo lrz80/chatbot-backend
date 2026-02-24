@@ -379,21 +379,83 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // ===============================
   // 🌍 LANG RESOLUTION (CLIENT-FIRST)
   // ===============================
-  const storedLang = await getIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, tenantBase);
+  // Heurística para mensajes mezclados ES/EN
+  const ES_HINTS = [
+    " hola",
+    "buenas",
+    "buenos",
+    "gracias",
+    "por favor",
+    "quiero",
+    "quisiera",
+    "necesito",
+    "horarios",
+    "planes",
+    "precios",
+    "precio",
+    "clases",
+    "clase",
+    "informacion",
+    "información",
+  ];
+
+  const EN_HINTS = [
+    " hi",
+    "hello",
+    "thanks",
+    "thank you",
+    "please",
+    "schedule",
+    "schedules",
+    "plan ",
+    "plans",
+    "price",
+    "prices",
+    "class",
+    "classes",
+    "information",
+    "info",
+  ];
+
+  const countLangHints = (text: string, patterns: string[]): number => {
+    const t = String(text || "").toLowerCase();
+    let hits = 0;
+    for (const p of patterns) {
+      if (t.includes(p)) hits++;
+    }
+    return hits;
+  };
+
+  const storedLang = await getIdiomaClienteDB(
+    pool,
+    tenant.id,
+    canal,
+    contactoNorm,
+    tenantBase
+  );
 
   // ✅ LANG EARLY-LOCK: si está eligiendo de listas del ctx, NO recalcules idioma este turno
-  const isChoosing = (storedLang === "es" || storedLang === "en")
-    ? isChoosingFromCtxLists(convoCtx, userInput)
-    : false;
+  const isChoosing =
+    storedLang === "es" || storedLang === "en"
+      ? isChoosingFromCtxLists(convoCtx, userInput)
+      : false;
 
   if (isChoosing) {
     idiomaDestino = storedLang as any;
     forcedLangThisTurn = idiomaDestino;
-    console.log("🌍 LANG EARLY-LOCK (ctx list pick) =>", { userInput, storedLang });
+    console.log("🌍 LANG EARLY-LOCK (ctx list pick) =>", {
+      userInput,
+      storedLang,
+    });
   }
 
   const langRes = forcedLangThisTurn
-    ? { finalLang: forcedLangThisTurn, detectedLang: forcedLangThisTurn, lockedLang: true, inBookingLang: false }
+    ? {
+        finalLang: forcedLangThisTurn,
+        detectedLang: forcedLangThisTurn,
+        lockedLang: true,
+        inBookingLang: false,
+      }
     : await resolveTurnLangClientFirst({
         pool,
         tenantId: tenant.id,
@@ -416,7 +478,40 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // ✅ Persistir idioma final del turno (sticky)
   // (pero NO lo sobrescribas si es booking lang locked)
   if (!langRes.inBookingLang && (idiomaDestino === "es" || idiomaDestino === "en")) {
-    await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, idiomaDestino);
+    await upsertIdiomaClienteDB(
+      pool,
+      tenant.id,
+      canal,
+      contactoNorm,
+      idiomaDestino
+    );
+  }
+
+  // 🔍 Heurística EXTRA para mensajes mezclados tipo:
+  // "Hi hola buenas tardes..." → que no cambien el hilo a EN si la intención es ES.
+  if (
+    !langRes.inBookingLang &&
+    (idiomaDestino === "es" || idiomaDestino === "en")
+  ) {
+    const esHits = countLangHints(userInput, ES_HINTS);
+    const enHits = countLangHints(userInput, EN_HINTS);
+
+    // Si aún no tenemos storedLang (lead nuevo) → sesga hacia el idioma base del tenant.
+    if (!(storedLang === "es" || storedLang === "en")) {
+      if (tenantBase === "es" && esHits >= enHits && esHits >= 1) {
+        idiomaDestino = "es";
+      } else if (tenantBase === "en" && enHits >= esHits && enHits >= 1) {
+        idiomaDestino = "en";
+      }
+    } else {
+      // Si ya tenemos storedLang, deja que manden una palabra en el otro idioma
+      // sin flippear todo el hilo.
+      if (storedLang === "es" && esHits > enHits) {
+        idiomaDestino = "es";
+      } else if (storedLang === "en" && enHits > esHits) {
+        idiomaDestino = "en";
+      }
+    }
   }
 
   // ✅ NO CAMBIAR IDIOMA por tokens cortos tipo "Indoor cycling", "Deluxe Groom", etc.
@@ -428,7 +523,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     langRes.detectedLang !== storedLang &&
     looksLikeShortLabel(userInput)
   ) {
-    idiomaDestino = storedLang;
+    idiomaDestino = storedLang as any;
   }
 
   console.log("🌍 LANG DEBUG =", {
@@ -449,56 +544,18 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     idiomaDestino = threadLang as any;
   }
 
-  const t = String(userInput || "").trim().toLowerCase();
-  const isSizeToken = /^(small|medium|large|x-large|xl|xs|peque(n|ñ)o|mediano|grande)$/i.test(t);
+  const tLower = String(userInput || "").trim().toLowerCase();
+  const isSizeToken = /^(small|medium|large|x-large|xl|xs|peque(n|ñ)o|mediano|grande)$/i.test(
+    tLower
+  );
 
   if (isSizeToken && (storedLang === "es" || storedLang === "en")) {
     idiomaDestino = storedLang as any;
   }
 
-  // ✅ NO CAMBIAR IDIOMA cuando el usuario está seleccionando una opción
-  // Ej: "cycling autopay", "bronze por mes", etc.
-  // Regla: si el texto matchea alguna opción previamente listada por fastpath,
-  // nos quedamos con storedLang (idioma sticky del hilo).
-  const isChoosingFromLastList = (() => {
-    if (!(storedLang === "es" || storedLang === "en")) return false;
-
-    const u = normalizeChoice(userInput);
-    if (!u) return false;
-
-    // listas que fastpath suele guardar en ctx
-    const candidates: Array<{ name?: string; label?: string; text?: string }> = [
-      ...(((convoCtx as any)?.last_plan_list || []) as any[]),
-      ...(((convoCtx as any)?.last_package_list || []) as any[]),
-      ...(((convoCtx as any)?.last_service_list || []) as any[]),
-    ];
-
-    if (!candidates.length) return false;
-
-    // match por inclusión (para permitir "cycling autopay" vs "Plan Bronze Cycling (Autopay)")
-    return candidates.some((it) => {
-      const n = normalizeChoice(it?.name || it?.label || it?.text || "");
-      if (!n) return false;
-
-      // el usuario puede escribir una parte del nombre
-      // ej: "cycling autopay" ⟂ "plan bronze cycling autopay"
-      return n.includes(u) || u.includes(n);
-    });
-  })();
-
   // ✅ NO CAMBIAR IDIOMA cuando el usuario está eligiendo desde una lista reciente
-  // Aunque storedLang sea null (lead nuevo), nos quedamos con el idioma actual del hilo (idiomaDestino),
-  // o con tenantBase como fallback.
+  // Ej: "cycling autopay", "bronze por mes", etc.
   {
-    const normalizeChoice = (s: string) =>
-      String(s || "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-
     const u = normalizeChoice(userInput);
 
     const hasRecentList = (() => {
@@ -508,8 +565,12 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       const fresh1 = at1 > 0 && Date.now() - at1 <= ttlMs;
       const fresh2 = at2 > 0 && Date.now() - at2 <= ttlMs;
 
-      const lp = Array.isArray((convoCtx as any)?.last_plan_list) ? (convoCtx as any).last_plan_list : [];
-      const pk = Array.isArray((convoCtx as any)?.last_package_list) ? (convoCtx as any).last_package_list : [];
+      const lp = Array.isArray((convoCtx as any)?.last_plan_list)
+        ? (convoCtx as any).last_plan_list
+        : [];
+      const pk = Array.isArray((convoCtx as any)?.last_package_list)
+        ? (convoCtx as any).last_package_list
+        : [];
 
       return (fresh1 && lp.length > 0) || (fresh2 && pk.length > 0);
     })();
@@ -532,9 +593,17 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
     if (hasRecentList && matchesListItem) {
       // prioridad: idioma sticky del contacto si existe; si no, manten el idiomaDestino actual; si no, tenantBase
-      const locked = (storedLang === "es" || storedLang === "en") ? storedLang : (idiomaDestino || tenantBase);
+      const locked =
+        storedLang === "es" || storedLang === "en"
+          ? storedLang
+          : (idiomaDestino || tenantBase);
       idiomaDestino = locked as any;
-      console.log("🌍 LANG LOCK (choice token, no flip) =>", { userInput, storedLang, locked, tenantBase });
+      console.log("🌍 LANG LOCK (choice token, no flip) =>", {
+        userInput,
+        storedLang,
+        locked,
+        tenantBase,
+      });
     }
   }
 
