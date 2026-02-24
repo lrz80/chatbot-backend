@@ -104,7 +104,7 @@ export async function resolveServiceIdFromText(
     `
     WITH base AS (
       SELECT
-        s.id AS service_id,
+        s.id   AS service_id,
         s.name AS label
       FROM services s
       WHERE
@@ -115,14 +115,15 @@ export async function resolveServiceIdFromText(
       UNION ALL
 
       SELECT
-        s.id AS service_id,
-        v.label AS label
+        s.id           AS service_id,
+        v.variant_name AS label
       FROM service_variants v
       JOIN services s ON s.id = v.service_id
       WHERE
         s.tenant_id = $1
         AND s.active = true
-        AND v.label IS NOT NULL
+        AND v.active = true
+        AND v.variant_name IS NOT NULL
     )
     SELECT service_id, label
     FROM base
