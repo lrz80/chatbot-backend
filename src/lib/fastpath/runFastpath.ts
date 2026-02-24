@@ -307,6 +307,23 @@ function isAskingPlansOrPackages(t: string) {
   );
 }
 
+function isTrialQuery(raw: string): boolean {
+  const normalized = String(raw || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+  return (
+    normalized.includes("clase de prueba") ||
+    normalized.includes("clase prueba") ||
+    normalized.includes("prueba gratis") ||
+    normalized.includes("clase gratis") ||
+    normalized.includes("free class") ||
+    normalized.includes("trial") ||
+    normalized.includes("demo")
+  );
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -409,152 +426,186 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     if (kind && !kindAtOk) healPatch.last_list_kind_at = Date.now();
 
     if (planFresh || pkgFresh) {
-      const idx = (() => {
-        const t = String(userInput || "").trim();
-        const m = t.match(/^([1-9])$/); // ✅ SOLO si el user manda "1" (y nada más)
-        return m ? Number(m[1]) : null;
-      })();
-
-      const tryPick = (
-        list: Array<{ id: string; name: string; url: string | null }>,
-        kind: "plan" | "package"
-      ) => {
-        let picked: { id: string; name: string; url: string | null } | null = null;
-
-        if (idx != null) {
-          const i = idx - 1;
-          if (i >= 0 && i < list.length) picked = list[i];
-        }
-        if (!picked) picked = bestNameMatch(userInput, list);
-
-        return picked ? { ...picked, kind } : null;
-      };
-
-      // ✅ prioridad por “último tipo listado” si está fresco
-      let picked: ({ id: string; name: string; url: string | null; kind: "plan" | "package" }) | null = null;
-
-      if (kindFresh && kind === "package") {
-        if (pkgFresh) picked = tryPick(pkgList, "package");
-        if (!picked && planFresh) picked = tryPick(planList, "plan");
+      // 🛑 1) Si el mensaje es de "clase de prueba", NO usamos este flujo
+      if (isTrialQuery(userInput)) {
+        console.log("🧪 PICK SKIP — trial/demo query, dejar a otras reglas manejarlo");
       } else {
-        if (planFresh) picked = tryPick(planList, "plan");
-        if (!picked && pkgFresh) picked = tryPick(pkgList, "package");
-      }
+        // 🧮 índice tipo "1", "2", etc.
+        const idx = (() => {
+          const t = String(userInput || "").trim();
+          const m = t.match(/^([1-9])$/); // ✅ SOLO si el user manda "1" (y nada más)
+          return m ? Number(m[1]) : null;
+        })();
 
-      if (picked) {
-        // ✅ Si viene de lista de opciones (id compuesto), separar serviceId real
-        const rawPickedId = String(picked.id || "");
-        const parts = rawPickedId.split("::");
-        const pickedServiceId = parts[0] || rawPickedId;           // ✅ siempre termina siendo UUID real
-        const pickedOptionLabel = parts.length > 1 ? parts.slice(1).join("::") : null; // por si label trae ::
-        const basePatch: Partial<FastpathCtx> = {
-          // limpiar listas tras elegir (evita loops)
-          last_plan_list: undefined,
-          last_plan_list_at: undefined,
-          last_package_list: undefined,
-          last_package_list_at: undefined,
-          last_list_kind: undefined,
-          last_list_kind_at: undefined,
+        const msgNorm = normalizeText(userInput);
 
-          // ✅ CANÓNICO: qué fue lo último seleccionado (sirve para "precio" luego)
-          last_selected_kind: picked.kind, // "plan" | "package"
-          last_selected_id: picked.id,
-          last_selected_name: picked.name,
-          last_selected_at: Date.now(),
-
-          // ✅ set last_service REAL para price/includes
-          last_service_id: pickedServiceId,
-          last_service_name: picked.name, // (nombre mostrado, puede ser label)
-          last_service_at: Date.now(),
-
-          // ✅ opcional pero recomendado: guardar la opción elegida para el siguiente “precio”
-          last_price_option_label: pickedOptionLabel,
-          last_price_option_at: Date.now(),
-        };
-
-        // ✅ NO HARDCODE:
-        // - si picked.url existe úsalo (service_url guardado en lista)
-        // - si no, intenta resolver el mejor link desde DB (service_url o variant_url)
-        // - si hay varios (ambiguous), abre pending_link_lookup con labels reales del tenant
-        let finalUrl: string | null = picked.url ? String(picked.url).trim() : null;
-
-        if (!finalUrl) {
-          const linkPick = await resolveBestLinkForService({
-            pool,
-            tenantId,
-            serviceId: pickedServiceId,
-            userText: userInput,
+        // 🧠 ¿menciona explícitamente algún plan/paquete de la última lista?
+        const mentionsPlanFromList =
+          planFresh &&
+          planList.some((p: any) => {
+            const name = String(p?.name ?? p?.label ?? "").trim();
+            if (!name) return false;
+            const nameNorm = normalizeText(name);
+            return !!nameNorm && msgNorm.includes(nameNorm);
           });
 
-          if (linkPick.ok) {
-            finalUrl = linkPick.url;
-          } else if (linkPick.reason === "ambiguous") {
-            const labels = linkPick.options
-              .slice(0, 3)
-              .map((o) => o.label)
-              .filter(Boolean);
+        const mentionsPackageFromList =
+          pkgFresh &&
+          pkgList.some((p: any) => {
+            const name = String(p?.name ?? p?.label ?? "").trim();
+            if (!name) return false;
+            const nameNorm = normalizeText(name);
+            return !!nameNorm && msgNorm.includes(nameNorm);
+          });
 
-            const q =
+        // 🛑 2) Si el usuario NO mandó número NI mencionó un item de la lista,
+        // no hacemos pick y dejamos que otras reglas (precio, trial, etc.) actúen.
+        if (!mentionsPlanFromList && !mentionsPackageFromList && idx == null) {
+          console.log("🧪 PICK SKIP — no numeric choice or plan/package mention in msg");
+        } else {
+          const tryPick = (
+            list: Array<{ id: string; name: string; url: string | null }>,
+            kind: "plan" | "package"
+          ) => {
+            let picked: { id: string; name: string; url: string | null } | null = null;
+
+            if (idx != null) {
+              const i = idx - 1;
+              if (i >= 0 && i < list.length) picked = list[i];
+            }
+            if (!picked) picked = bestNameMatch(userInput, list);
+
+            return picked ? { ...picked, kind } : null;
+          };
+
+          // ✅ prioridad por “último tipo listado” si está fresco
+          let picked: ({ id: string; name: string; url: string | null; kind: "plan" | "package" }) | null = null;
+
+          if (kindFresh && kind === "package") {
+            if (pkgFresh) picked = tryPick(pkgList, "package");
+            if (!picked && planFresh) picked = tryPick(planList, "plan");
+          } else {
+            if (planFresh) picked = tryPick(planList, "plan");
+            if (!picked && pkgFresh) picked = tryPick(pkgList, "package");
+          }
+
+          if (picked) {
+            // ✅ Si viene de lista de opciones (id compuesto), separar serviceId real
+            const rawPickedId = String(picked.id || "");
+            const parts = rawPickedId.split("::");
+            const pickedServiceId = parts[0] || rawPickedId; // ✅ siempre termina siendo UUID real
+            const pickedOptionLabel = parts.length > 1 ? parts.slice(1).join("::") : null; // por si label trae ::
+
+            const basePatch: Partial<FastpathCtx> = {
+              // limpiar listas tras elegir (evita loops)
+              last_plan_list: undefined,
+              last_plan_list_at: undefined,
+              last_package_list: undefined,
+              last_package_list_at: undefined,
+              last_list_kind: undefined,
+              last_list_kind_at: undefined,
+
+              // ✅ CANÓNICO: qué fue lo último seleccionado (sirve para "precio" luego)
+              last_selected_kind: picked.kind, // "plan" | "package"
+              last_selected_id: picked.id,
+              last_selected_name: picked.name,
+              last_selected_at: Date.now(),
+
+              // ✅ set last_service REAL para price/includes
+              last_service_id: pickedServiceId,
+              last_service_name: picked.name, // (nombre mostrado, puede ser label)
+              last_service_at: Date.now(),
+
+              // ✅ opcional pero recomendado: guardar la opción elegida para el siguiente “precio”
+              last_price_option_label: pickedOptionLabel,
+              last_price_option_at: Date.now(),
+            };
+
+            // ✅ NO HARDCODE:
+            // - si picked.url existe úsalo (service_url guardado en lista)
+            // - si no, intenta resolver el mejor link desde DB (service_url o variant_url)
+            // - si hay varios (ambiguous), abre pending_link_lookup con labels reales del tenant
+            let finalUrl: string | null = picked.url ? String(picked.url).trim() : null;
+
+            if (!finalUrl) {
+              const linkPick = await resolveBestLinkForService({
+                pool,
+                tenantId,
+                serviceId: pickedServiceId,
+                userText: userInput,
+              });
+
+              if (linkPick.ok) {
+                finalUrl = linkPick.url;
+              } else if (linkPick.reason === "ambiguous") {
+                const labels = linkPick.options
+                  .slice(0, 3)
+                  .map((o) => o.label)
+                  .filter(Boolean);
+
+                const q =
+                  idiomaDestino === "en"
+                    ? `Just to make sure 😊 are you asking about ${labels.join(" or ")}?`
+                    : `Solo para asegurarme 😊 ¿hablas de ${labels.join(" o ")}?`;
+
+                return {
+                  handled: true,
+                  reply: q,
+                  source: "service_list_db",
+                  intent: intentOut || "seleccion",
+                  ctxPatch: {
+                    ...healPatch,
+                    ...basePatch,
+                    pending_link_lookup: true,
+                    pending_link_at: Date.now(),
+                    pending_link_options: linkPick.options,
+                    last_bot_action: "asked_link_option",
+                    last_bot_action_at: Date.now(),
+                  } as any,
+                };
+              }
+            }
+
+            const d = await getServiceDetailsText(tenantId, pickedServiceId, userInput).catch(() => null);
+
+            const baseName = String(convoCtx?.last_service_name || "") || String(picked.name || "");
+            const title = d?.titleSuffix ? `${baseName} — ${d.titleSuffix}` : baseName;
+
+            const infoText = d?.text ? String(d.text).trim() : "";
+
+            // Si aún no hay URL, intenta 1 vez más resolver link usando el mismo userInput (ej: "autopay")
+            if (!finalUrl) {
+              const linkPick2 = await resolveBestLinkForService({
+                pool,
+                tenantId,
+                serviceId: pickedServiceId,
+                userText: userInput,
+              }).catch(() => null);
+
+              if (linkPick2?.ok) finalUrl = linkPick2.url;
+            }
+
+            const reply =
               idiomaDestino === "en"
-                ? `Just to make sure 😊 are you asking about ${labels.join(" or ")}?`
-                : `Solo para asegurarme 😊 ¿hablas de ${labels.join(" o ")}?`;
+                ? `${title}${infoText ? `\n\n${infoText}` : ""}${finalUrl ? `\n\nHere’s the link:\n${finalUrl}` : ""}`
+                : `${title}${infoText ? `\n\n${infoText}` : ""}${finalUrl ? `\n\nAquí está el link:\n${finalUrl}` : ""}`;
 
             return {
               handled: true,
-              reply: q,
+              reply,
               source: "service_list_db",
               intent: intentOut || "seleccion",
               ctxPatch: {
-                ...healPatch,
                 ...basePatch,
-                pending_link_lookup: true,
-                pending_link_at: Date.now(),
-                pending_link_options: linkPick.options,
-                last_bot_action: "asked_link_option",
+                pending_link_lookup: undefined,
+                pending_link_at: undefined,
+                pending_link_options: undefined,
+                last_bot_action: "sent_details",
                 last_bot_action_at: Date.now(),
               } as any,
             };
           }
         }
-
-        const d = await getServiceDetailsText(tenantId, pickedServiceId, userInput).catch(() => null);
-
-        const baseName = String(convoCtx?.last_service_name || "") || String(picked.name || "");
-        const title = d?.titleSuffix ? `${baseName} — ${d.titleSuffix}` : baseName;
-
-        const infoText = d?.text ? String(d.text).trim() : "";
-
-        // Si aún no hay URL, intenta 1 vez más resolver link usando el mismo userInput (ej: "autopay")
-        if (!finalUrl) {
-          const linkPick2 = await resolveBestLinkForService({
-            pool,
-            tenantId,
-            serviceId: pickedServiceId,
-            userText: userInput,
-          }).catch(() => null);
-
-          if (linkPick2?.ok) finalUrl = linkPick2.url;
-        }
-
-        const reply =
-          idiomaDestino === "en"
-            ? `${title}${infoText ? `\n\n${infoText}` : ""}${finalUrl ? `\n\nHere’s the link:\n${finalUrl}` : ""}`
-            : `${title}${infoText ? `\n\n${infoText}` : ""}${finalUrl ? `\n\nAquí está el link:\n${finalUrl}` : ""}`;
-
-        return {
-          handled: true,
-          reply,
-          source: "service_list_db",
-          intent: intentOut || "seleccion",
-          ctxPatch: {
-            ...basePatch,
-            pending_link_lookup: undefined,
-            pending_link_at: undefined,
-            pending_link_options: undefined,
-            last_bot_action: "sent_details",
-            last_bot_action_at: Date.now(),
-          } as any,
-        };
       }
     }
   }
