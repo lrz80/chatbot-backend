@@ -14,19 +14,76 @@ type Candidate = {
 
 const STOPWORDS = new Set([
   // ES artículos / conectores
-  "de", "del", "la", "el", "los", "las", "un", "una", "unos", "unas",
-  "para", "por", "en", "y", "o", "u", "a",
-  "que", "q", "este", "esta", "ese", "esa", "esto", "eso",
+  "de",
+  "del",
+  "la",
+  "el",
+  "los",
+  "las",
+  "un",
+  "una",
+  "unos",
+  "unas",
+  "para",
+  "por",
+  "en",
+  "y",
+  "o",
+  "u",
+  "a",
+  "que",
+  "q",
+  "este",
+  "esta",
+  "ese",
+  "esa",
+  "esto",
+  "eso",
   // EN artículos / conectores
-  "the", "a", "an", "and", "or", "to", "for", "in", "of", "what", "does",
+  "the",
+  "a",
+  "an",
+  "and",
+  "or",
+  "to",
+  "for",
+  "in",
+  "of",
+  "what",
+  "does",
   // precio / genérico
-  "precio", "precios", "cuanto", "cuanta", "cuestan", "cuesta", "vale", "costo",
-  "price", "prices", "cost", "how", "much",
-  "include", "includes", "incluye", "incluyen",
-  // términos genéricos de planes
-  "plan", "planes", "membresia", "membresias",
-  "mensual", "mensuales", "monthly", "membership", "memberships",
-  "clase", "clases", "service", "services"
+  "precio",
+  "precios",
+  "cuanto",
+  "cuanta",
+  "cuestan",
+  "cuesta",
+  "vale",
+  "costo",
+  "price",
+  "prices",
+  "cost",
+  "how",
+  "much",
+  // includes
+  "include",
+  "includes",
+  "incluye",
+  "incluyen",
+  // términos genéricos de planes / servicios
+  "plan",
+  "planes",
+  "membresia",
+  "membresias",
+  "mensual",
+  "mensuales",
+  "monthly",
+  "membership",
+  "memberships",
+  "clase",
+  "clases",
+  "service",
+  "services",
 ]);
 
 function normalize(raw: string): string {
@@ -46,7 +103,7 @@ function tokenize(raw: string): string[] {
 }
 
 /**
- * Score determinista: solapamiento de tokens.
+ * Score determinista simple:
  * score = (# tokens en común) / (# tokens del servicio)
  */
 function scoreTokens(queryTokens: string[], serviceTokens: string[]): number {
@@ -59,7 +116,7 @@ function scoreTokens(queryTokens: string[], serviceTokens: string[]): number {
     if (qSet.has(t)) common += 1;
   }
 
-  return common / serviceTokens.length; // 1.0 = todos los tokens coinciden
+  return common / serviceTokens.length; // 1.0 = todos los tokens del servicio aparecen en la query
 }
 
 export async function resolveServiceIdFromText(
@@ -94,7 +151,13 @@ export async function resolveServiceIdFromText(
   const qTokens1 = tokenize(tNorm);
   const qTokens2 = tAlt ? tokenize(tAlt) : [];
 
-  if (!qTokens1.length && !qTokens2.length) return null;
+  // tokens "fuertes" = unión de ambos sets
+  const strongTokens = Array.from(new Set([...qTokens1, ...qTokens2]));
+
+  if (!qTokens1.length && !qTokens2.length) {
+    console.log("[RESOLVE-SERVICE] sin tokens fuertes, devolviendo null");
+    return null;
+  }
 
   // 2) Traer candidatos desde DB (services + service_variants)
   const { rows } = await pool.query<{
@@ -131,7 +194,10 @@ export async function resolveServiceIdFromText(
     [tenantId]
   );
 
-  if (!rows.length) return null;
+  if (!rows.length) {
+    console.log("[RESOLVE-SERVICE] sin candidatos en DB, devolviendo null");
+    return null;
+  }
 
   const candidates: Candidate[] = rows
     .map((r) => {
@@ -141,14 +207,17 @@ export async function resolveServiceIdFromText(
       return {
         serviceId: String(r.service_id),
         label,
-        tokens
+        tokens,
       };
     })
     .filter(Boolean) as Candidate[];
 
-  if (!candidates.length) return null;
+  if (!candidates.length) {
+    console.log("[RESOLVE-SERVICE] candidatos sin tokens, devolviendo null");
+    return null;
+  }
 
-  // 3) Scoring determinista
+  // 3) Scoring determinista para todos los candidatos
   type Scored = { cand: Candidate; score: number };
 
   const scored: Scored[] = candidates.map((cand) => {
@@ -162,18 +231,94 @@ export async function resolveServiceIdFromText(
   const best = scored[0];
   const second = scored[1];
 
-  // Umbral mínimo: al menos un token fuerte debe coincidir
-  const THRESHOLD = 0.34; // p.ej. 1 de 3 tokens
-  const MARGIN = 0.15;    // diferencia mínima con el segundo
+  console.log("[RESOLVE-SERVICE] debug", {
+    userText,
+    idioma,
+    strongTokens,
+    best: best
+      ? { label: best.cand.label, score: best.score, serviceId: best.cand.serviceId }
+      : null,
+    second: second
+      ? { label: second.cand.label, score: second.score, serviceId: second.cand.serviceId }
+      : null,
+  });
 
-  if (!best || best.score < THRESHOLD) {
+  // Parámetros de decisión
+  const BASE_THRESHOLD = 0.6; // para frases más específicas (>= 2 tokens fuertes)
+  const SINGLE_TOKEN_THRESHOLD = 0.7; // para queries de 1 token (ej. "bronze")
+  const MARGIN = 0.2; // diferencia mínima con el segundo para confiar
+
+  // 4) Caso especial: SOLO un token fuerte (ej. "bronze", "gold", "deluxe")
+  if (strongTokens.length === 1) {
+    const token = strongTokens[0];
+
+    const withToken = scored.filter(
+      (s) => s.score > 0 && s.cand.tokens.includes(token)
+    );
+
+    // Si hay 0 o más de 1 servicio con ese token → ambiguo, que lo maneje el LLM
+    if (withToken.length !== 1) {
+      console.log(
+        "[RESOLVE-SERVICE] 1 token fuerte pero",
+        withToken.length,
+        "candidatos → ambiguo, devolviendo null"
+      );
+      return null;
+    }
+
+    const only = withToken[0];
+
+    if (only.score >= SINGLE_TOKEN_THRESHOLD) {
+      console.log("[RESOLVE-SERVICE] match único por token fuerte", {
+        userText,
+        token,
+        label: only.cand.label,
+        score: only.score,
+      });
+      return { id: only.cand.serviceId, name: only.cand.label };
+    }
+
+    console.log(
+      "[RESOLVE-SERVICE] 1 token fuerte, 1 candidato pero score bajo, devolviendo null",
+      {
+        userText,
+        token,
+        label: only.cand.label,
+        score: only.score,
+      }
+    );
     return null;
   }
 
-  // Si hay otro casi igual de bueno, lo marcamos como ambiguo (upstream decidirá)
+  // 5) Caso general: 2+ tokens fuertes → usar mejor score con margen
+  if (!best || best.score < BASE_THRESHOLD) {
+    console.log("[RESOLVE-SERVICE] best.score por debajo del umbral, devolviendo null", {
+      userText,
+      bestScore: best?.score,
+      threshold: BASE_THRESHOLD,
+    });
+    return null;
+  }
+
   if (second && second.score > 0 && Math.abs(best.score - second.score) < MARGIN) {
+    console.log(
+      "[RESOLVE-SERVICE] empate entre best y second (margin pequeño), devolviendo null",
+      {
+        userText,
+        best: { label: best.cand.label, score: best.score },
+        second: { label: second.cand.label, score: second.score },
+        margin: Math.abs(best.score - second.score),
+        requiredMargin: MARGIN,
+      }
+    );
     return null;
   }
+
+  console.log("[RESOLVE-SERVICE] match aceptado (>=2 tokens fuertes)", {
+    userText,
+    label: best.cand.label,
+    score: best.score,
+  });
 
   return { id: best.cand.serviceId, name: best.cand.label };
 }
