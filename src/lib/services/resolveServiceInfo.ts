@@ -414,3 +414,73 @@ export async function resolveServiceInfo(args: {
   // 6) Sin match de variante (o no hay variantes): devolver service base
   return toServiceResult(top);
 }
+
+// ===============================================
+// ✅ Helper: traer texto descriptivo por service_id
+//     - Usa description del service
+//     - Si no tiene, usa la primera description de variant
+// ===============================================
+export async function getServiceDetailsText(
+  tenantId: string,
+  serviceId: string,
+  userText?: string | null
+): Promise<{ text: string | null; titleSuffix?: string | null }> {
+  const { rows } = await pool.query(
+    `
+    SELECT
+      s.name         AS service_name,
+      s.description  AS service_desc,
+      s.duration_min AS service_duration,
+      v.id           AS variant_id,
+      v.variant_name,
+      v.description  AS variant_desc,
+      v.duration_min AS variant_duration
+    FROM services s
+    LEFT JOIN service_variants v
+      ON v.service_id = s.id
+     AND v.active = TRUE
+    WHERE
+      s.tenant_id = $1
+      AND s.id = $2
+      AND s.active = TRUE
+    ORDER BY
+      v.updated_at DESC NULLS LAST,
+      v.created_at DESC
+    `,
+    [tenantId, serviceId]
+  );
+
+  if (!rows.length) {
+    return { text: null, titleSuffix: null };
+  }
+
+  // Por defecto usamos la description del service
+  const base = rows[0];
+  let desc: string | null =
+    base.service_desc && String(base.service_desc).trim()
+      ? String(base.service_desc)
+      : null;
+
+  let titleSuffix: string | null = null;
+
+  // Si el service no tiene description, buscamos alguna variant con description
+  if (!desc) {
+    for (const r of rows) {
+      if (r.variant_desc && String(r.variant_desc).trim()) {
+        desc = String(r.variant_desc);
+        titleSuffix = r.variant_name ? String(r.variant_name) : null;
+        break;
+      }
+    }
+  }
+
+  // Si tampoco hay description en variantes, devolvemos null (que el caller maneje fallback)
+  if (!desc) {
+    return { text: null, titleSuffix: null };
+  }
+
+  return {
+    text: desc.trim(),
+    titleSuffix: titleSuffix ? String(titleSuffix).trim() : null,
+  };
+}

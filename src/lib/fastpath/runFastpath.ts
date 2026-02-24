@@ -16,7 +16,10 @@ import {
 } from "../infoclave/resolveIncludes";
 
 // DB catalog includes
-import { resolveServiceInfo } from "../services/resolveServiceInfo";
+import {
+  resolveServiceInfo,          // si ya lo usas
+  getServiceDetailsText,       // 👉 añade esto
+} from "../services/resolveServiceInfo";
 
 // Pricing
 import { getPriceInfoForService } from "../services/pricing/getFromPriceForService";
@@ -292,54 +295,6 @@ function sectionTitle(lang: Lang, key: "plans" | "packages") {
     : "Aquí tienes algunos de nuestros paquetes:";
 }
 
-async function getServiceDetailsText(
-  pool: Pool,
-  tenantId: string,
-  serviceId: string,
-  userText: string
-): Promise<{ titleSuffix?: string | null; text: string | null }> {
-  const t = String(userText || "").trim();
-
-  // 1) intentar variante por texto
-  const { rows: vRows } = await pool.query(
-    `
-    SELECT v.variant_name, v.description
-    FROM service_variants v
-    JOIN services s ON s.id = v.service_id
-    WHERE s.tenant_id = $1
-      AND s.id = $2
-      AND COALESCE(v.active, true) = true
-      AND (
-        LOWER($3) LIKE '%' || LOWER(v.variant_name) || '%'
-        OR LOWER(v.variant_name) LIKE '%' || LOWER($3) || '%'
-      )
-    ORDER BY LENGTH(v.variant_name) DESC
-    LIMIT 1
-    `,
-    [tenantId, serviceId, t]
-  );
-
-  const v = vRows?.[0];
-  const vName = v?.variant_name ? String(v.variant_name).trim() : null;
-  const vDesc = v?.description ? String(v.description).trim() : null;
-
-  if (vDesc) return { titleSuffix: vName, text: vDesc };
-
-  // 2) fallback: descripción del servicio
-  const { rows: sRows } = await pool.query(
-    `
-    SELECT description
-    FROM services
-    WHERE tenant_id = $1 AND id = $2
-    LIMIT 1
-    `,
-    [tenantId, serviceId]
-  );
-
-  const sDesc = sRows?.[0]?.description ? String(sRows[0].description).trim() : null;
-  return { titleSuffix: null, text: sDesc || null };
-}
-
 function isAskingPlansOrPackages(t: string) {
   const s = String(t || "").toLowerCase();
   return (
@@ -562,7 +517,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           }
         }
 
-        const d = await getServiceDetailsText(pool, tenantId, pickedServiceId, userInput).catch(() => null);
+        const d = await getServiceDetailsText(tenantId, pickedServiceId, userInput).catch(() => null);
 
         const baseName = String(convoCtx?.last_service_name || "") || String(picked.name || "");
         const title = d?.titleSuffix ? `${baseName} — ${d.titleSuffix}` : baseName;
@@ -802,7 +757,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         const baseName = String(convoCtx?.last_service_name || "").trim();
 
         // ✅ Trae descripción: intenta variante por texto ("por mes", "autopay"), si no servicio
-        const d = await getServiceDetailsText(pool, tenantId, serviceId, userInput).catch(() => null);
+        const d = await getServiceDetailsText(tenantId, serviceId, userInput).catch(() => null);
 
         const title = d?.titleSuffix
           ? `${baseName || ""}${baseName ? " — " : ""}${String(d.titleSuffix).trim()}`
@@ -1057,9 +1012,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         };
       }
 
-      // =====================================================
-      // 2) NUEVO: NO HAY BLOQUE, PERO YA SABEMOS EL SERVICIO
-      //     → usar last_service_id + link oficial
+            // =====================================================
+      // 2) Fallback: NO HAY BLOQUE, PERO YA SABEMOS EL SERVICIO
+      //     → usar last_service_id + descripción DB + link oficial
       // =====================================================
       const lastServiceId = (convoCtx as any)?.last_service_id
         ? String((convoCtx as any).last_service_id)
@@ -1069,13 +1024,33 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         ? String((convoCtx as any).last_service_name)
         : "Este plan";
 
-      console.log("🔎 [FP-INCLUDES] no block, trying context-based link", {
+      console.log("🔎 [FP-INCLUDES] no block, trying context-based link + DB", {
         lastServiceId,
         lastServiceName,
       });
 
       if (lastServiceId) {
         try {
+          // 1) Traer descripción desde DB (services / service_variants)
+          let infoText = "";
+          try {
+            const d = await getServiceDetailsText(
+              tenantId,
+              lastServiceId,
+              userInput
+            ).catch(() => null);
+
+            if (d?.text) {
+              infoText = String(d.text).trim();
+            }
+          } catch (e: any) {
+            console.warn(
+              "⚠️ [FP-INCLUDES] getServiceDetailsText (ctx fallback) failed:",
+              e?.message
+            );
+          }
+
+          // 2) Resolver link oficial (variant_url o service_url)
           const pick = await resolveBestLinkForService({
             pool,
             tenantId,
@@ -1083,17 +1058,27 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             userText: userInput,
           });
 
-          console.log("[FP-INCLUDES] context-based resolveBestLinkForService", { pick });
+          console.log("[FP-INCLUDES] context-based resolveBestLinkForService", {
+            pick,
+          });
 
           if (pick.ok && pick.url) {
-            const msg =
-              idiomaDestino === "en"
-                ? `${lastServiceName} includes what is described in this official plan link:\n\n👉 ${pick.url}\n\nIf you need anything else, just let me know 😊`
-                : `${lastServiceName} incluye lo que se detalla en este enlace oficial del plan:\n\n👉 ${pick.url}\n\nSi necesitas algo más, déjame saber 😊`;
+            const header = lastServiceName;
+            const body = infoText ? `\n\n${infoText}` : "";
 
-            console.log("✅ [FP-INCLUDES] reply built (ctx + link only)", {
-              msg,
-            });
+            const linkLine =
+              idiomaDestino === "en"
+                ? `\n\n👉 You can see all the details or purchase it here: ${pick.url}`
+                : `\n\n👉 Puedes ver todos los detalles o adquirirlo aquí: ${pick.url}`;
+
+            const outro =
+              idiomaDestino === "en"
+                ? `\n\nIf you need anything else, just let me know 😊`
+                : `\n\nSi necesitas algo más, déjame saber 😊`;
+
+            const msg = `${header}${body}${linkLine}${outro}`.trim();
+
+            console.log("✅ [FP-INCLUDES] reply built (ctx + DB + link)", { msg });
 
             return {
               handled: true,
@@ -1109,13 +1094,17 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           }
         } catch (e: any) {
           console.warn(
-            "⚠️ [FP-INCLUDES] context-based link resolver failed:",
+            "⚠️ [FP-INCLUDES] context-based link+DB resolver failed:",
             e?.message
           );
         }
       }
 
-      console.log("⚠️ [FP-INCLUDES] no block and no usable last_service_id; falling through");
+      if (!lastServiceId) {
+        console.log(
+          "⚠️ [FP-INCLUDES] no block and no usable last_service_id; falling through"
+        );
+      }
       // Si llegamos aquí, dejamos que siga el flujo normal (DB/LLM)
     }
   }
