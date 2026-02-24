@@ -34,6 +34,9 @@ import { renderInfoGeneralOverview } from "../fastpath/renderInfoGeneralOverview
 import { filterRowsByMeaningfulTokens } from "../services/pricing/priceSummaryTokens";
 import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
 
+// Tipo inferido del helper real (sin duplicar tipos)
+type PriceInfo = Awaited<ReturnType<typeof getPriceInfoForService>>;
+
 export type FastpathCtx = {
   last_service_id?: string | null;
   last_service_name?: string | null;
@@ -99,7 +102,8 @@ export type FastpathResult =
         | "price_summary_db"
         | "info_general_overview"
         | "price_summary_db_empty"
-        | "info_clave_includes_ctx_link";
+        | "info_clave_includes_ctx_link"
+        | "interest_to_pricing";
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;
@@ -322,6 +326,24 @@ function isTrialQuery(raw: string): boolean {
     normalized.includes("trial") ||
     normalized.includes("demo")
   );
+}
+
+function isInterestMessage(raw: string): boolean {
+  const t = (raw || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+
+  // Verbos de interés genéricos, multi-industria
+  const patterns = [
+    /\bme interesa\b/,
+    /\bme interesan\b/,
+    /\bme llam[aá] la atencion\b/,
+    /\bquiero\b/,
+    /\bquisiera\b/,
+    /\bme gustar[ií]a\b/,
+    /\bme gusta(n)?\b/,
+    /\bcreo que tomar[ií]a\b/,
+  ];
+
+  return patterns.some((re) => re.test(t));
 }
 
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
@@ -895,6 +917,66 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             pending_link_options: pick.options, // si tu ctx permite JSON; si no, omítelo
           } as any,
         };
+      }
+    }
+  }
+
+  // =========================================================
+  // ✅ SI SUENA A "ME INTERESA X" → SALTAR A PRECIOS DIRECTO
+  //     - Funciona para cualquier negocio (servicios/planes)
+  // =========================================================
+  {
+    if (isInterestMessage(userInput)) {
+      try {
+        // 1) Intentar resolver el servicio desde el texto del usuario
+        const hit = await resolveServiceIdFromText(pool, tenantId, userInput);
+        console.log("[FASTPATH][INTEREST→PRICING] resolveServiceIdFromText", {
+          userInput,
+          hit,
+        });
+
+        // Si no hay match claro, dejamos que siga el flujo normal (definición / LLM)
+        if (!hit?.id) {
+          console.log(
+            "[FASTPATH][INTEREST→PRICING] sin servicio claro, dejo flujo normal"
+          );
+        } else {
+          // 2) Traer info de precios para ese servicio
+          const priceInfo: PriceInfo = await getPriceInfoForService(
+            pool,
+            tenantId,
+            hit.id
+          );
+          console.log("[FASTPATH][INTEREST→PRICING] priceInfo", priceInfo);
+
+          // Si no hay precio configurado, que responda el flujo normal
+          if (priceInfo.ok) {
+            const reply = await renderPriceReply({
+              // 👇 IMPORTANTE: aplanar la info de precio, NO "priceInfo:"
+              ...(priceInfo as any),
+              lang: idiomaDestino,
+              serviceName: hit.name || "Este servicio",
+            });
+
+            return {
+              handled: true,
+              reply,
+              source: "interest_to_pricing",
+              intent: intentOut || "precio",
+              ctxPatch: {
+                last_service_id: hit.id,
+                last_service_name: hit.name || "Este servicio",
+                last_service_at: Date.now(),
+              } as any,
+            };
+          }
+        }
+      } catch (e: any) {
+        console.warn(
+          "[FASTPATH][INTEREST→PRICING] failed",
+          e?.message || e
+        );
+        // Si algo peta, dejamos que siga el flujo normal
       }
     }
   }
