@@ -1063,10 +1063,32 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         };
       }
 
-            // =====================================================
-      // 2) Fallback: NO HAY BLOQUE, PERO YA SABEMOS EL SERVICIO
-      //     → usar last_service_id + descripción DB + link oficial
       // =====================================================
+      // 2) Fallback: NO HAY BLOQUE
+      //     → 1) intentar resolver por TEXTO
+      //       2) si falla, usar contexto (last_service_id)
+      // =====================================================
+
+      let serviceIdResolved: string | null = null;
+      let serviceNameResolved: string = "Este plan";
+
+      // 2.1 Intentar resolver desde el TEXTO del usuario
+      try {
+        const hit = await resolveServiceIdFromText(pool, tenantId, userInput);
+        console.log("🔎 [FP-INCLUDES] resolveServiceIdFromText (no-block)", { hit });
+
+        if (hit?.id) {
+          serviceIdResolved = hit.id;
+          serviceNameResolved = hit.name || serviceNameResolved;
+        }
+      } catch (e: any) {
+        console.warn(
+          "⚠️ [FP-INCLUDES] resolveServiceIdFromText (no-block) failed:",
+          e?.message
+        );
+      }
+
+      // 2.2 Fallback: si no hubo match por texto, usar contexto previo
       const lastServiceId = (convoCtx as any)?.last_service_id
         ? String((convoCtx as any).last_service_id)
         : null;
@@ -1075,19 +1097,28 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         ? String((convoCtx as any).last_service_name)
         : "Este plan";
 
-      console.log("🔎 [FP-INCLUDES] no block, trying context-based link + DB", {
+      if (!serviceIdResolved && lastServiceId) {
+        serviceIdResolved = lastServiceId;
+        serviceNameResolved = lastServiceName;
+      }
+
+      console.log("🔎 [FP-INCLUDES] no block, trying link + DB", {
+        userInput,
+        fromText: serviceIdResolved && serviceIdResolved !== lastServiceId
+          ? { serviceIdResolved, serviceNameResolved }
+          : null,
         lastServiceId,
         lastServiceName,
       });
 
-      if (lastServiceId) {
+      if (serviceIdResolved) {
         try {
           // 1) Traer descripción desde DB (services / service_variants)
           let infoText = "";
           try {
             const d = await getServiceDetailsText(
               tenantId,
-              lastServiceId,
+              serviceIdResolved,
               userInput
             ).catch(() => null);
 
@@ -1096,7 +1127,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             }
           } catch (e: any) {
             console.warn(
-              "⚠️ [FP-INCLUDES] getServiceDetailsText (ctx fallback) failed:",
+              "⚠️ [FP-INCLUDES] getServiceDetailsText (no-block) failed:",
               e?.message
             );
           }
@@ -1105,16 +1136,16 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           const pick = await resolveBestLinkForService({
             pool,
             tenantId,
-            serviceId: lastServiceId,
+            serviceId: serviceIdResolved,
             userText: userInput,
           });
 
-          console.log("[FP-INCLUDES] context-based resolveBestLinkForService", {
+          console.log("[FP-INCLUDES] resolveBestLinkForService (no-block)", {
             pick,
           });
 
           if (pick.ok && pick.url) {
-            const header = lastServiceName;
+            const header = serviceNameResolved;
             const body = infoText ? `\n\n${infoText}` : "";
 
             const linkLine =
@@ -1129,7 +1160,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
             const msg = `${header}${body}${linkLine}${outro}`.trim();
 
-            console.log("✅ [FP-INCLUDES] reply built (ctx + DB + link)", { msg });
+            console.log("✅ [FP-INCLUDES] reply built (no-block + link)", { msg });
 
             return {
               handled: true,
@@ -1137,23 +1168,21 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               source: "info_clave_includes_ctx_link",
               intent: intentOut || "info",
               ctxPatch: {
-                last_service_id: lastServiceId,
-                last_service_name: lastServiceName,
+                last_service_id: serviceIdResolved,
+                last_service_name: serviceNameResolved,
                 last_service_at: Date.now(),
               } as any,
             };
           }
         } catch (e: any) {
           console.warn(
-            "⚠️ [FP-INCLUDES] context-based link+DB resolver failed:",
+            "⚠️ [FP-INCLUDES] no-block link+DB resolver failed:",
             e?.message
           );
         }
-      }
-
-      if (!lastServiceId) {
+      } else {
         console.log(
-          "⚠️ [FP-INCLUDES] no block and no usable last_service_id; falling through"
+          "⚠️ [FP-INCLUDES] no block and no usable serviceId; falling through"
         );
       }
       // Si llegamos aquí, dejamos que siga el flujo normal (DB/LLM)
