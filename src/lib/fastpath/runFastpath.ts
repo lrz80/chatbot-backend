@@ -1652,6 +1652,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
     if (isCatalogQuestion) {
       const catalogText = await buildCatalogContext(pool, tenantId);
+      console.log("🧾 CATALOGO DEBUG\n", catalogText);
 
       const systemMsg =
         idiomaDestino === "en"
