@@ -109,7 +109,8 @@ export type FastpathResult =
         | "info_general_overview"
         | "price_summary_db_empty"
         | "info_clave_includes_ctx_link"
-        | "interest_to_pricing";
+        | "interest_to_pricing"
+        | "catalog_llm";
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;
@@ -348,12 +349,32 @@ function isInterestMessage(raw: string): boolean {
   return patterns.some((re) => re.test(t));
 }
 
-function finalize(reply: string): FastpathResult {
-  // Si FastpathResult tiene más campos, puedes ajustarlo luego.
-  // De momento, devolvemos al menos el texto.
+function finalize(
+  reply: string,
+  intent: string | null,
+  source:
+    | "service_list_db"
+    | "info_clave_includes"
+    | "info_clave_missing_includes"
+    | "includes_fastpath_db"
+    | "includes_fastpath_db_missing"
+    | "includes_fastpath_db_ambiguous"
+    | "price_disambiguation_db"
+    | "price_missing_db"
+    | "price_fastpath_db"
+    | "price_summary_db"
+    | "info_general_overview"
+    | "price_summary_db_empty"
+    | "info_clave_includes_ctx_link"
+    | "interest_to_pricing"
+    | "catalog_llm"
+): FastpathResult {
   return {
+    handled: true,
     reply,
-  } as FastpathResult;
+    source,
+    intent,
+  };
 }
 
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
@@ -1207,7 +1228,7 @@ ${catalogText}
         userMsg,
       });
 
-      return finalize(reply);
+      return finalize(reply, intentOut, "catalog_llm");
     }
   }
 
