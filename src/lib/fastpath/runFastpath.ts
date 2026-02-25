@@ -934,585 +934,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // =========================================================
-  // ✅ SI SUENA A "ME INTERESA X" → SALTAR A PRECIOS DIRECTO
-  //     - Funciona para cualquier negocio (servicios/planes)
-  // =========================================================
-  /*
-  {
-    if (isInterestMessage(userInput)) {
-      try {
-        // 1) Intentar resolver el servicio desde el texto del usuario
-        const hit = await resolveServiceIdFromText(pool, tenantId, userInput);
-        console.log("[FASTPATH][INTEREST→PRICING] resolveServiceIdFromText", {
-          userInput,
-          hit,
-        });
-
-        // Si no hay match claro, dejamos que siga el flujo normal (definición / LLM)
-        if (!hit?.id) {
-          console.log(
-            "[FASTPATH][INTEREST→PRICING] sin servicio claro, dejo flujo normal"
-          );
-        } else {
-          // 2) Traer info de precios para ese servicio
-          const priceInfo: PriceInfo = await getPriceInfoForService(
-            pool,
-            tenantId,
-            hit.id
-          );
-          console.log("[FASTPATH][INTEREST→PRICING] priceInfo", priceInfo);
-
-          // Si no hay precio configurado, que responda el flujo normal
-          if (priceInfo.ok) {
-            const reply = await renderPriceReply({
-              // 👇 IMPORTANTE: aplanar la info de precio, NO "priceInfo:"
-              ...(priceInfo as any),
-              lang: idiomaDestino,
-              serviceName: hit.name || "Este servicio",
-            });
-
-            return {
-              handled: true,
-              reply,
-              source: "interest_to_pricing",
-              intent: intentOut || "precio",
-              ctxPatch: {
-                last_service_id: hit.id,
-                last_service_name: hit.name || "Este servicio",
-                last_service_at: Date.now(),
-              } as any,
-            };
-          }
-        }
-      } catch (e: any) {
-        console.warn(
-          "[FASTPATH][INTEREST→PRICING] failed",
-          e?.message || e
-        );
-        // Si algo peta, dejamos que siga el flujo normal
-      }
-    }
-  }
-  */
-
-  // =========================================================
-  // ✅ INFO_CLAVE INCLUDES (si existe info_clave)
-  //     - Responde "qué incluye..." usando info_clave cuando hay bloque
-  //     - SI NO hay bloque, pero ya sabemos last_service_id => usa link oficial
-  // =========================================================
-  /*
-  {
-    const info = String(infoClave || "").trim();
-
-    console.log("🔎 [FP-INCLUDES] check", {
-      hasInfo: !!info,
-      userInput,
-      isAsking: isAskingIncludes(userInput),
-    });
-
-    if (info && isAskingIncludes(userInput)) {
-      const blk = findServiceBlock(info, userInput);
-      console.log("🔎 [FP-INCLUDES] findServiceBlock", {
-        found: !!blk,
-        title: blk?.title,
-        lines: blk?.lines,
-      });
-
-      // =====================================================
-      // 1) CASO IDEAL: hay bloque en info_clave + "Incluye:"
-      // =====================================================
-      if (blk) {
-        const inc = extractIncludesLine(blk.lines);
-        console.log("🔎 [FP-INCLUDES] extractIncludesLine", { inc });
-
-        if (inc) {
-          let ctxPatch: Partial<FastpathCtx> | undefined;
-          let serviceIdResolved: string | null = null;
-          let serviceNameResolved: string = blk.title;
-
-          // 1) PRIORIDAD: lo que ya tenga el contexto (venimos de precios/lista)
-          if ((convoCtx as any)?.last_service_id) {
-            serviceIdResolved = String((convoCtx as any).last_service_id);
-            if ((convoCtx as any)?.last_service_name) {
-              serviceNameResolved = String((convoCtx as any).last_service_name);
-            }
-          }
-
-          console.log("🔎 [FP-INCLUDES] after ctx", {
-            serviceIdResolved_ctx: serviceIdResolved,
-            serviceNameResolved_ctx: serviceNameResolved,
-          });
-
-          // 2) Si no hay nada en contexto, intenta resolver por el texto del usuario
-          if (!serviceIdResolved) {
-            try {
-              const hit = await resolveServiceIdFromText(pool, tenantId, userInput);
-              console.log("🔎 [FP-INCLUDES] resolveServiceIdFromText(userText)", { hit });
-              if (hit?.id) {
-                serviceIdResolved = hit.id;
-                serviceNameResolved = hit.name || blk.title;
-              }
-            } catch (e: any) {
-              console.warn("⚠️ [FP-INCLUDES] resolveServiceIdFromText(userText) failed:", e?.message);
-            }
-          }
-
-          // 3) Fallback: intenta resolver por el título del bloque de info_clave
-          if (!serviceIdResolved) {
-            try {
-              const hit = await resolveServiceIdFromText(pool, tenantId, blk.title);
-              console.log("🔎 [FP-INCLUDES] resolveServiceIdFromText(blk.title)", { hit });
-              if (hit?.id) {
-                serviceIdResolved = hit.id;
-                serviceNameResolved = hit.name || blk.title;
-              }
-            } catch (e: any) {
-              console.warn("⚠️ [FP-INCLUDES] resolveServiceIdFromText(blk.title) failed:", e?.message);
-            }
-          }
-
-          console.log("🔎 [FP-INCLUDES] final service resolution", {
-            serviceIdResolved,
-            serviceNameResolved,
-          });
-
-          // Patch de contexto mínimo
-          ctxPatch = {
-            last_service_id: serviceIdResolved || (convoCtx as any)?.last_service_id || null,
-            last_service_name: serviceNameResolved,
-            last_service_at: Date.now(),
-          };
-
-          // 🔹 Mensaje base con lo que incluye
-          let msg =
-            idiomaDestino === "en"
-              ? `${serviceNameResolved}\nIncludes: ${inc}`
-              : `${serviceNameResolved}\nIncluye: ${inc}`;
-
-          // 🔹 EXTRA: intenta adjuntar el link del servicio / variante
-          if (serviceIdResolved) {
-            try {
-              const pick = await resolveBestLinkForService({
-                pool,
-                tenantId,
-                serviceId: serviceIdResolved,
-                userText: userInput,
-              });
-
-              console.log("🔗 [FP-INCLUDES] resolveBestLinkForService result", {
-                tenantId,
-                serviceIdResolved,
-                pick,
-              });
-
-              if (pick.ok && pick.url) {
-                const linkLine =
-                  idiomaDestino === "en"
-                    ? `\n\n👉 You can see all the details or purchase it here: ${pick.url}`
-                    : `\n\n👉 Puedes ver todos los detalles o adquirirlo aquí: ${pick.url}`;
-
-                msg += linkLine;
-              }
-            } catch (e: any) {
-              console.warn(
-                "⚠️ [FP-INCLUDES] no se pudo adjuntar URL de servicio:",
-                e?.message
-              );
-            }
-          } else {
-            console.log("⚠️ [FP-INCLUDES] serviceIdResolved es NULL; no se intentará resolver link");
-          }
-
-          // 🔹 CTA genérico
-          const outro =
-            idiomaDestino === "en"
-              ? "\n\nIf you need anything else, just let me know 😊"
-              : "\n\nSi necesitas algo más, déjame saber 😊";
-
-          msg += outro;
-
-          console.log("✅ [FP-INCLUDES] reply built (with block)", { msg });
-
-          return {
-            handled: true,
-            reply: msg,
-            source: "info_clave_includes",
-            intent: intentOut || "info",
-            ctxPatch,
-          };
-        }
-
-        // Bloque encontrado pero sin línea "Incluye:"
-        const msgMissing =
-          idiomaDestino === "en"
-            ? `I found "${blk.title}", but I don’t have the detailed “includes” section right now. I can share the general information or help you choose the option that fits you best. 😊`
-            : `Encontré "${blk.title}", pero en este momento no tengo disponible la sección detallada de “qué incluye”. Puedo darte la información general o ayudarte a elegir la opción que mejor se ajuste a lo que buscas. 😊`;
-
-        console.log("ℹ️ [FP-INCLUDES] block found but no includes line", {
-          title: blk.title,
-        });
-
-        return {
-          handled: true,
-          reply: msgMissing,
-          source: "info_clave_missing_includes",
-          intent: intentOut || "info",
-        };
-      }
-
-            // =====================================================
-      // 2) Fallback: NO HAY BLOQUE
-      //     → 1) intentar resolver por TEXTO
-      //       2) si falla, NO usar contexto; dejar a flujo normal/LLM
-      // =====================================================
-
-      let serviceIdResolved: string | null = null;
-      let serviceNameResolved: string = "Este plan";
-
-      // 2.1 Intentar resolver desde el TEXTO del usuario
-      try {
-        const hit = await resolveServiceIdFromText(pool, tenantId, userInput);
-        console.log("🔎 [FP-INCLUDES] resolveServiceIdFromText (no-block)", { hit });
-
-        if (hit?.id) {
-          serviceIdResolved = hit.id;
-          serviceNameResolved = hit.name || serviceNameResolved;
-        }
-      } catch (e: any) {
-        console.warn(
-          "⚠️ [FP-INCLUDES] resolveServiceIdFromText (no-block) failed:",
-          e?.message
-        );
-      }
-
-      // ⛔️ Si NO pudimos resolver el servicio por texto:
-      //     → NO usamos last_service_id; dejamos que responda el flujo normal / LLM
-      if (!serviceIdResolved) {
-        console.log(
-          "⚠️ [FP-INCLUDES] no block and no usable serviceId; letting normal flow/LLM handle"
-        );
-        return {
-          handled: false,
-          reply: null,
-          source: "info_clave_includes_no_match",
-        } as any;
-      }
-
-      console.log("🔎 [FP-INCLUDES] no block, using resolved service", {
-        userInput,
-        serviceIdResolved,
-        serviceNameResolved,
-      });
-
-      if (serviceIdResolved) {
-        try {
-          // 1) Traer descripción desde DB (services / service_variants)
-          let infoText = "";
-          try {
-            const d = await getServiceDetailsText(
-              tenantId,
-              serviceIdResolved,
-              userInput
-            ).catch(() => null);
-
-            if (d?.text) {
-              infoText = String(d.text).trim();
-            }
-          } catch (e: any) {
-            console.warn(
-              "⚠️ [FP-INCLUDES] getServiceDetailsText (no-block) failed:",
-              e?.message
-            );
-          }
-
-          // 2) Resolver link oficial (variant_url o service_url)
-          const pick = await resolveBestLinkForService({
-            pool,
-            tenantId,
-            serviceId: serviceIdResolved,
-            userText: userInput,
-          });
-
-          console.log("[FP-INCLUDES] resolveBestLinkForService (no-block)", {
-            pick,
-          });
-
-          if (pick.ok && pick.url) {
-            const header = serviceNameResolved;
-            const body = infoText ? `\n\n${infoText}` : "";
-
-            const linkLine =
-              idiomaDestino === "en"
-                ? `\n\n👉 You can see all the details or purchase it here: ${pick.url}`
-                : `\n\n👉 Puedes ver todos los detalles o adquirirlo aquí: ${pick.url}`;
-
-            const outro =
-              idiomaDestino === "en"
-                ? `\n\nIf you need anything else, just let me know 😊`
-                : `\n\nSi necesitas algo más, déjame saber 😊`;
-
-            const msg = `${header}${body}${linkLine}${outro}`.trim();
-
-            console.log("✅ [FP-INCLUDES] reply built (no-block + link)", { msg });
-
-            return {
-              handled: true,
-              reply: msg,
-              source: "info_clave_includes_ctx_link",
-              intent: intentOut || "info",
-              ctxPatch: {
-                last_service_id: serviceIdResolved,
-                last_service_name: serviceNameResolved,
-                last_service_at: Date.now(),
-              } as any,
-            };
-          }
-        } catch (e: any) {
-          console.warn(
-            "⚠️ [FP-INCLUDES] no-block link+DB resolver failed:",
-            e?.message
-          );
-        }
-      }
-
-      // Si no pudimos construir respuesta (sin link o error raro),
-      // dejamos que el flujo normal/LLM conteste.
-      console.log(
-        "⚠️ [FP-INCLUDES] no-block could not build reply; letting normal flow/LLM handle"
-      );
-      return {
-        handled: false,
-        reply: null,
-        source: "info_clave_includes_fallback_llm",
-      } as any;
-    }
-  }
-  */
-
-  // =========================================================
-  // ✅ INCLUDES FASTPATH (DB catalog)
-  // =========================================================
-  /*
-  if (isAskingIncludes(userInput)) {
-    const r = await resolveServiceInfo({
-      tenantId,
-      query: userInput,
-      need: "includes",
-      limit: maxDisambiguationOptions,
-    });
-
-    if (r.ok) {
-      const ctxPatch: Partial<FastpathCtx> = {
-        last_service_id: r.service_id,
-        last_service_name: r.label,
-        last_service_at: Date.now(),
-      };
-
-      // 🔹 Intentar resolver link del servicio desde catálogo DB
-      let linkSuffix = "";
-      try {
-        const linkPick = await resolveBestLinkForService({
-          pool,
-          tenantId,
-          serviceId: r.service_id,
-          userText: userInput,
-        });
-
-        if (linkPick.ok && linkPick.url) {
-          linkSuffix =
-            idiomaDestino === "en"
-              ? `\n\nHere’s the link:\n${linkPick.url}`
-              : `\n\nAquí tienes el link:\n${linkPick.url}`;
-        }
-      } catch {
-        // si falla, simplemente no añadimos link
-      }
-
-      if (r.description && String(r.description).trim()) {
-        let descOut = String(r.description).trim();
-
-        // Traducción ES<->EN (sin hardcode por negocio)
-        try {
-          const idOut = await detectarIdioma(descOut);
-          if ((idOut === "es" || idOut === "en") && idOut !== idiomaDestino) {
-            descOut = await traducirMensaje(descOut, idiomaDestino);
-          }
-        } catch {
-          // no-op
-        }
-
-        const msgBase =
-          idiomaDestino === "en"
-            ? `${r.label}\nIncludes: ${descOut}`
-            : `${r.label}\nIncluye: ${descOut}`;
-
-        const msg = msgBase + linkSuffix;
-
-        return {
-          handled: true,
-          reply: msg,
-          source: "includes_fastpath_db",
-          intent: intentOut || "info",
-          ctxPatch,
-        };
-      }
-
-      const msgBase =
-        idiomaDestino === "en"
-          ? `I found "${r.label}", I don’t have the full details available right now, but I can share the general information or help you choose the option that fits you best. 😊`
-          : `Encontré "${r.label}", En este momento no tengo disponible la descripción detallada, pero puedo darte la información general o ayudarte a elegir la opción que mejor se ajuste a lo que buscas. 😊`;
-
-      const msg = msgBase + linkSuffix;
-
-      return {
-        handled: true,
-        reply: msg,
-        source: "includes_fastpath_db_missing",
-        intent: intentOut || "info",
-        ctxPatch,
-      };
-    }
-
-    if (r.reason === "ambiguous" && r.options?.length) {
-      const opts = r.options
-        .slice(0, maxDisambiguationOptions)
-        .map((o) => `• ${o.label}`)
-        .join("\n");
-
-      const ask =
-        idiomaDestino === "en"
-          ? `Which one do you mean?\n${opts}`
-          : `¿Cuál de estos es?\n${opts}`;
-
-      return {
-        handled: true,
-        reply: ask,
-        source: "includes_fastpath_db_ambiguous",
-        intent: intentOut || "info",
-      };
-    }
-  }
-  */
-
-  // ===============================
-  // ✅ PLANS / PACKAGES LIST (DB, NO HARDCODE)
-  //  - NO mezcla planes + paquetes
-  //  - NO números
-  //  - CTA humano
-  // ===============================
-  /*
-  {
-    const askingIncludes = isAskingIncludes(userInput);
-    const askingPrice = isPriceQuestion(userInput); // ✅ ya no usamos isGenericPriceQuestion
-
-    if (isPlansOrPackagesQuestion(userInput) && !askingIncludes && !askingPrice) {
-      const { rows } = await pool.query(
-        `
-        SELECT id, name, category, tipo, service_url
-        FROM services
-        WHERE tenant_id = $1
-          AND active = true
-        ORDER BY updated_at DESC NULLS LAST, created_at DESC
-        LIMIT 50
-        `,
-        [tenantId]
-      );
-
-      const planPkg = (rows || []).filter((r: any) => isPlanPackageType(r.tipo));
-      if (!planPkg.length) {
-        // no manejamos aquí; deja seguir
-      } else {
-        const items = planPkg
-          .map((r: any) => ({
-            service_id: String(r.id),
-            name: String(r.name || "").trim(),
-            category: r.category ?? null,
-            service_url: r.service_url ? String(r.service_url).trim() : null,
-          }))
-          .filter((x: any) => x.name);
-
-        const packages = items.filter((x: any) => isPackageCategory(x.category));
-        const memberships = items.filter((x: any) => isMembershipCategory(x.category));
-        const others = items.filter(
-          (x: any) => !isPackageCategory(x.category) && !isMembershipCategory(x.category)
-        );
-
-        const plans = [...memberships, ...others];
-
-        // ✅ Detectar si el usuario pidió específicamente paquetes
-        const tNorm = normalizeText(userInput);
-        const wantsPackages =
-          /\b(paquete(s)?|package(s)?|bundle(s)?|pack(s)?)\b/i.test(tNorm);
-
-        // ✅ Lista SIN números
-        const bulletsNoNum = (arr: any[], max = 10) =>
-          arr.slice(0, max).map((x) => `• ${x.name}`).join("\n");
-
-        const ask =
-          idiomaDestino === "en"
-            ? "Tell me which one you’re interested in and I’ll send you the details 🙂"
-            : "Dime cuál te interesa y te envío la información 🙂";
-
-        // ✅ Responder SOLO una lista (planes O paquetes)
-        let reply = "";
-        let kind: "plan" | "package" = "plan";
-
-        if (wantsPackages) {
-          if (!packages.length) {
-            reply =
-              idiomaDestino === "en"
-                ? "We don’t have packages available right now. Would you like to see memberships instead?"
-                : "Ahora mismo no tenemos paquetes disponibles. ¿Quieres que te muestre las membresías?";
-          } else {
-            reply = `${sectionTitle(idiomaDestino, "packages")}\n${bulletsNoNum(packages)}\n\n${ask}`;
-            kind = "package";
-          }
-        } else {
-          if (!plans.length) {
-            reply =
-              idiomaDestino === "en"
-                ? "We don’t have memberships available right now. Would you like to see packages instead?"
-                : "Ahora mismo no tenemos membresías disponibles. ¿Quieres que te muestre los paquetes?";
-          } else {
-            reply = `${sectionTitle(idiomaDestino, "plans")}\n${bulletsNoNum(plans)}\n\n${ask}`;
-            kind = "plan";
-          }
-        }
-
-        return {
-          handled: true,
-          reply,
-          source: "service_list_db",
-          intent: intentOut || (kind === "package" ? "paquetes" : "planes"),
-          ctxPatch: {
-            // guardamos ambas listas por si el usuario cambia ("y paquetes?")
-            last_plan_list: plans.map((x: any) => ({
-              id: x.service_id,
-              name: x.name,
-              url: x.service_url || null,
-            })),
-            last_plan_list_at: Date.now(),
-
-            last_package_list: packages.map((x: any) => ({
-              id: x.service_id,
-              name: x.name,
-              url: x.service_url || null,
-            })),
-            last_package_list_at: Date.now(),
-
-            last_list_kind: kind,
-            last_list_kind_at: Date.now(),
-
-            has_packages_available: packages.length > 0,
-            has_packages_available_at: Date.now(),
-          },
-        };
-      }
-    }
-  }
-  */
-
-  // =========================================================
   // ✅ FOLLOW-UP ROUTER (mantener hilo conversacional)
   // - si el usuario manda un mensaje corto / follow-up,
   //   intentamos resolver usando: pending flags + last list + last service
@@ -1654,88 +1075,130 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       const catalogText = await buildCatalogContext(pool, tenantId);
       console.log("🧾 CATALOGO DEBUG\n", catalogText);
 
-    const systemMsg =
-      idiomaDestino === "en"
-        ? `
-    You are Aamy, a sales assistant for a multi-tenant SaaS.
+      // 🔍 1) ¿La pregunta es de "combinar"?
+      const isCombineQuestion =
+        q.includes("combinar") ||
+        q.includes("mezclar") ||
+        q.includes("usar ambas") ||
+        q.includes("usar las dos") ||
+        q.includes("usar los dos") ||
+        q.includes("combo") ||
+        q.includes("paquete con") ||
+        // inglés básico
+        q.includes("combine") ||
+        q.includes("together") ||
+        q.includes("bundle");
 
-    You receive:
-    - The client's question.
-    - A CATALOG text for this business, built from the "services" and "service_variants" tables.
+      // 🔍 2) ¿En el catálogo hay algún plan/paquete que claramente da acceso múltiple?
+      const catLower = catalogText.toLowerCase();
 
-    GLOBAL RULES:
-    - Answer ONLY using information from the catalog text.
-    - Do NOT invent prices, services, bundles or conditions that are not in the catalog.
-    - Be friendly, concise and natural.
+      const hasMultiAccessPlan =
+        /ilimitad[oa]s?.+ (y|and)\s+/i.test(catLower) ||
+        catLower.includes("todas nuestras") ||
+        catLower.includes("todos nuestros") ||
+        catLower.includes("all our") ||
+        catLower.includes("all classes") ||
+        catLower.includes("any service") ||
+        catLower.includes("any of our");
 
-    PRICE / SERVICE / PLAN QUESTIONS:
-    - For price questions, use the prices from the catalog.
-    - If several options are relevant, give a short, clear comparison of the main ones instead of listing everything.
+      const questionType = isCombineQuestion ? "combination_and_price" : "price_or_plan";
 
-    COMBINED OPTIONS / BUNDLES (MULTI-BUSINESS LOGIC):
-    - If the client asks whether they can combine or use more than one type of service/product in a single option (for example two different services, categories or items):
-      - Scan the catalog for any service/plan/bundle whose description clearly offers:
-        - access to more than one service or category, OR
-        - access to “all” or “any” services in this business, OR
-        - “unlimited” use across multiple services or items.
-      - If such an option exists, you MUST:
-        1) Explicitly answer that they CAN use those services together under that plan/bundle.
-        2) Mention the name of the plan/bundle.
-        3) Give its main price (for example, the main monthly or package price or its most relevant variant).
-        4) Include its URL if present in the catalog.
-      - Only if there is truly NO option in the catalog that gives access to more than one service/category, explain that each service is handled/priced separately and mention the relevant individual options.
+      const metaHeader = `QUESTION_TYPE: ${questionType}\nHAS_MULTI_ACCESS_PLAN: ${
+        hasMultiAccessPlan ? "yes" : "no"
+      }`;
 
-    OUTPUT LANGUAGE:
-    - Always answer in ${idiomaDestino === "en" ? "English" : "Spanish"}.
-        `.trim()
-        : `
-    Eres Aamy, asistente de ventas de una plataforma SaaS multinegocio.
+      const systemMsg =
+        idiomaDestino === "en"
+          ? `
+You are Aamy, a sales assistant for a multi-tenant SaaS.
 
-    Recibes:
-    - La pregunta del cliente.
-    - Un texto de CATALOGO de este negocio, construido desde las tablas "services" y "service_variants".
+You receive:
+- A META section with high-level tags.
+- The client's question.
+- A CATALOG text for this business, built from the "services" and "service_variants" tables.
 
-    REGLAS GENERALES:
-    - Responde SOLO usando la información del catálogo.
-    - NO inventes precios, servicios, paquetes ni condiciones que no aparezcan en el catálogo.
-    - Usa un tono conversacional, claro y natural.
+META TAGS:
+- QUESTION_TYPE can be "combination_and_price" or "price_or_plan".
+- HAS_MULTI_ACCESS_PLAN is "yes" if the catalog text clearly contains at least one plan/pass/bundle that gives access to multiple services/categories or to "all"/"any" services; otherwise "no".
 
-    PREGUNTAS DE PRECIOS / SERVICIOS / PLANES:
-    - Para preguntas de precios, usa los precios del catálogo.
-    - Si hay varias opciones relevantes, haz una comparación corta y clara de las principales, en vez de listar todo.
+GLOBAL RULES:
+- Answer ONLY using information from the catalog text.
+- Do NOT invent prices, services, bundles or conditions that are not in the catalog.
+- Be friendly, concise and natural.
 
-    OPCIONES COMBINADAS / PAQUETES (LÓGICA MULTINEGOCIO):
-    - Si el cliente pregunta si puede combinar o usar más de un tipo de servicio/producto en una misma opción (por ejemplo dos servicios distintos, categorías diferentes o varios productos):
-      - Revisa en el catálogo si existe algún servicio/plan/paquete cuya descripción indique claramente:
-        - acceso a más de un servicio o categoría, O
-        - acceso a “todos” o “cualesquiera” servicios del negocio, O
-        - uso “ilimitado” de varios servicios o ítems.
-      - Si existe una opción así, DEBES:
-        1) Responder explícitamente que SÍ puede usar esos servicios juntos bajo ese plan/paquete.
-        2) Mencionar el nombre del plan/paquete.
-        3) Dar su precio principal (por ejemplo el precio mensual o de paquete más relevante, o la variante principal).
-        4) Incluir su URL si aparece en el catálogo.
-      - Solo si de verdad NO hay ninguna opción en el catálogo que dé acceso a más de un servicio/categoría, explica que cada servicio se maneja/cobra por separado y menciona las opciones individuales relevantes.
+PRICE / SERVICE / PLAN QUESTIONS:
+- For price questions, use the prices from the catalog.
+- If several options are relevant, give a short, clear comparison of the main ones instead of listing everything.
 
-    IDIOMA DE SALIDA:
-    - Responde siempre en ${idiomaDestino === "es" ? "español" : "inglés"}.
-        `.trim();
+VERY IMPORTANT – COMBINED OPTIONS / BUNDLES:
+- If QUESTION_TYPE is "combination_and_price" AND HAS_MULTI_ACCESS_PLAN is "yes":
+  - You MUST NOT answer that services/classes cannot be combined.
+  - You MUST pick at least one plan/service/pass/bundle from the catalog that clearly:
+    - gives access to more than one service or category, OR
+    - gives access to "all" or "any" services, OR
+    - offers "unlimited" use across multiple services or items.
+  - Recommend that option, mention its name, give its main price (for example the main monthly or package price or its most relevant variant), and include its URL if present.
+- Only if HAS_MULTI_ACCESS_PLAN is "no" are you allowed to answer that each service is handled/priced separately and list the individual options.
+
+OUTPUT LANGUAGE:
+- Always answer in ${idiomaDestino === "en" ? "English" : "Spanish"}.
+          `.trim()
+          : `
+Eres Aamy, asistente de ventas de una plataforma SaaS multinegocio.
+
+Recibes:
+- Una sección META con etiquetas de alto nivel.
+- La pregunta del cliente.
+- Un texto de CATALOGO de este negocio, construido desde las tablas "services" y "service_variants".
+
+ETIQUETAS META:
+- QUESTION_TYPE puede ser "combination_and_price" o "price_or_plan".
+- HAS_MULTI_ACCESS_PLAN es "yes" si el texto del catálogo contiene claramente al menos un plan/pase/paquete que da acceso a varios servicios/categorías o a "todos"/"cualesquiera" los servicios; en caso contrario es "no".
+
+REGLAS GENERALES:
+- Responde SOLO usando la información del catálogo.
+- NO inventes precios, servicios, paquetes ni condiciones que no aparezcan en el catálogo.
+- Usa un tono conversacional, claro y natural.
+
+PREGUNTAS DE PRECIOS / SERVICIOS / PLANES:
+- Para preguntas de precios, usa los precios del catálogo.
+- Si hay varias opciones relevantes, haz una comparación corta y clara de las principales, en vez de listar todo.
+
+MUY IMPORTANTE – OPCIONES COMBINADAS / PAQUETES:
+- Si QUESTION_TYPE es "combination_and_price" Y HAS_MULTI_ACCESS_PLAN es "yes":
+  - NO puedes responder que no se pueden combinar servicios/clases.
+  - Debes elegir al menos un plan/servicio/pase/paquete del catálogo que claramente:
+    - dé acceso a más de un servicio o categoría, O
+    - dé acceso a "todos" o "cualesquiera" servicios del negocio, O
+    - ofrezca uso "ilimitado" de varios servicios o ítems.
+  - Recomienda esa opción, menciona su nombre, da su precio principal (por ejemplo el precio mensual o de paquete más relevante) e incluye su URL si aparece.
+- Solo si HAS_MULTI_ACCESS_PLAN es "no" puedes responder que cada servicio se maneja/cobra por separado y listar las opciones individuales.
+
+IDIOMA DE SALIDA:
+- Responde siempre en ${idiomaDestino === "es" ? "español" : "inglés"}.
+          `.trim();
 
       const userMsg =
         idiomaDestino === "en"
           ? `
-  CLIENT QUESTION:
-  ${userInput}
+META:
+${metaHeader}
 
-  CATALOG:
-  ${catalogText}
+CLIENT QUESTION:
+${userInput}
+
+CATALOG:
+${catalogText}
           `.trim()
           : `
-  PREGUNTA DEL CLIENTE:
-  ${userInput}
+META:
+${metaHeader}
 
-  CATALOGO:
-  ${catalogText}
+PREGUNTA DEL CLIENTE:
+${userInput}
+
+CATALOGO:
+${catalogText}
           `.trim();
 
       const reply = await answerCatalogQuestionLLM({
@@ -1747,124 +1210,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       return finalize(reply);
     }
   }
-
-  // =========================================================
-  // ✅ PRICE SUMMARY (DB) solo si la pregunta es genérica
-  //    - rango + ejemplos, NO lista completa
-  //    - excluye ADD-ON por categoría
-  // =========================================================
-  /*
-  if (
-    isPriceQuestion(userInput) &&
-    isGenericPriceQuestion(userInput) &&
-    !isPlansOrPackagesQuestion(userInput)
-  ) {
-    const { rows } = await pool.query(
-      `
-      WITH base AS (
-        SELECT
-          s.id AS service_id,
-          s.name AS service_name,
-          s.price_base::numeric AS price
-        FROM services s
-        WHERE
-          s.tenant_id = $1
-          AND s.active = true
-          AND s.price_base IS NOT NULL
-          AND (
-            s.category IS NULL
-            OR regexp_replace(lower(s.category), '[^a-z]', '', 'g') <> 'addon'
-          )
-
-        UNION ALL
-
-        SELECT
-          v.service_id,
-          s.name AS service_name,
-          v.price::numeric AS price
-        FROM service_variants v
-        JOIN services s ON s.id = v.service_id
-        WHERE
-          s.tenant_id = $1
-          AND s.active = true
-          AND v.active = true
-          AND v.price IS NOT NULL
-          AND (
-            s.category IS NULL
-            OR regexp_replace(lower(s.category), '[^a-z]', '', 'g') <> 'addon'
-          )
-      ),
-      agg AS (
-        SELECT service_id, service_name, MIN(price) AS min_price, MAX(price) AS max_price
-        FROM base
-        GROUP BY service_id, service_name
-      ),
-      bounds AS (
-        SELECT
-          (SELECT MIN(min_price) FROM agg) AS overall_min,
-          (SELECT MAX(max_price) FROM agg) AS overall_max
-      ),
-      cheap AS (
-        SELECT * FROM agg ORDER BY min_price ASC LIMIT 3
-      ),
-      expensive AS (
-        SELECT * FROM agg ORDER BY max_price DESC LIMIT 2
-      ),
-      picked AS (
-        SELECT * FROM cheap
-        UNION
-        SELECT * FROM expensive
-      )
-      SELECT
-        b.overall_min,
-        b.overall_max,
-        p.service_name,
-        p.min_price,
-        p.max_price
-      FROM picked p
-      CROSS JOIN bounds b
-      ORDER BY p.min_price ASC;
-      `,
-      [tenantId]
-    );
-
-    const overallMin =
-      rows?.[0]?.overall_min != null ? Number(rows[0].overall_min) : null;
-    const overallMax =
-      rows?.[0]?.overall_max != null ? Number(rows[0].overall_max) : null;
-
-    // Si no hay precios válidos, deja que el pipeline normal responda
-    if (overallMin == null || overallMax == null) {
-      return { handled: false };
-    }
-
-    const simpleRows = rows.map((r: any) => ({
-      service_name: String(r.service_name || "").trim(),
-      min_price: Number(r.min_price),
-      max_price: Number(r.max_price),
-    }));
-
-    // Texto base por si algún canal lo quiere usar directo.
-    const msg = renderGenericPriceSummaryReply({
-      lang: idiomaDestino,
-      rows: simpleRows,
-    });
-
-    return {
-      handled: true,
-      reply: msg,
-      source: "price_summary_db",
-      intent: intentOut || "precio",
-      fastpathHint: {
-        type: "price_summary",
-        payload: {
-          lang: idiomaDestino,
-          rows: simpleRows,
-        },
-      },
-    };
-  }
-  */
 
   return { handled: false };
 }
