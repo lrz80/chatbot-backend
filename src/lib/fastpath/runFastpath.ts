@@ -1057,7 +1057,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // 🧠 MOTOR ÚNICO DE CATÁLOGO (services + service_variants)
   // ===============================
   {
-    // Heurística: detecta si la pregunta va de precios / planes / servicios / combinar
+    // 1) ¿Es una pregunta de catálogo?
     const isCatalogQuestion =
       q.includes("precio") ||
       q.includes("precios") ||
@@ -1092,125 +1092,146 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       q.includes("combine classes") ||
       q.includes("what is included");
 
-    if (isCatalogQuestion) {
-      const catalogText = await buildCatalogContext(pool, tenantId);
-      console.log("🧾 CATALOGO DEBUG\n", catalogText);
-
-      // 🔍 1) ¿La pregunta es de "combinar"?
-      const isCombineQuestion =
+    if (!isCatalogQuestion) {
+      // deja continuar con el resto del fastpath
+    } else {
+      // 2) Clasificar tipo de pregunta para META
+      const isCombinationIntent =
         q.includes("combinar") ||
         q.includes("mezclar") ||
         q.includes("usar ambas") ||
         q.includes("usar las dos") ||
-        q.includes("usar los dos") ||
-        q.includes("combo") ||
-        q.includes("paquete con") ||
-        // inglés básico
-        q.includes("combine") ||
-        q.includes("together") ||
+        q.includes("combine classes") ||
+        q.includes("use both");
+
+      const isPriceLike =
+        isPriceQuestion(userInput) ||
+        q.includes("plan") ||
+        q.includes("planes") ||
+        q.includes("membresia") ||
+        q.includes("membresía") ||
+        q.includes("membership") ||
+        q.includes("paquete") ||
+        q.includes("package") ||
         q.includes("bundle");
 
-      // 🔍 2) ¿En el catálogo hay algún plan/paquete que claramente da acceso múltiple?
-      const catLower = catalogText.toLowerCase();
+      const isAskingOtherPlans =
+        /\b(otro\s+plan|otros\s+planes|other\s+plans?)\b/.test(q);
 
-      const hasMultiAccessPlan =
-        /ilimitad[oa]s?.+ (y|and)\s+/i.test(catLower) ||
-        catLower.includes("todas nuestras") ||
-        catLower.includes("todos nuestros") ||
-        catLower.includes("all our") ||
-        catLower.includes("all classes") ||
-        catLower.includes("any service") ||
-        catLower.includes("any of our");
+      type QuestionType = "combination_and_price" | "price_or_plan" | "other_plans";
 
-      const questionType = isCombineQuestion ? "combination_and_price" : "price_or_plan";
+      let questionType: QuestionType = "price_or_plan";
+      if (isCombinationIntent && isPriceLike) {
+        questionType = "combination_and_price";
+      } else if (isAskingOtherPlans) {
+        questionType = "other_plans";
+      }
 
-      const metaHeader = `QUESTION_TYPE: ${questionType}\nHAS_MULTI_ACCESS_PLAN: ${
-        hasMultiAccessPlan ? "yes" : "no"
-      }`;
+      // 3) Construir el texto de catálogo
+      const catalogText = await buildCatalogContext(pool, tenantId);
+      console.log("🧾 CATALOGO DEBUG\n", catalogText);
 
+      // 4) Detectar si el catálogo tiene algún plan que claramente da acceso a varias cosas
+      const hasMultiAccessPlan = /todas las clases|todas nuestras clases|todas las sesiones|all classes|all services|any class|unlimited/i.test(
+        catalogText
+      );
+
+      const metaBlock =
+        `QUESTION_TYPE: ${questionType}\n` +
+        `HAS_MULTI_ACCESS_PLAN: ${hasMultiAccessPlan ? "yes" : "no"}`;
+
+      // 5) System message (el que ya ajustamos antes)
       const systemMsg =
         idiomaDestino === "en"
           ? `
-You are Aamy, a sales assistant for a multi-tenant SaaS platform.
+You are Aamy, a sales assistant for a multi-tenant SaaS.
 
-INPUT YOU RECEIVE:
+You receive:
 - A META section with high-level tags.
-- The client’s message.
-- A CATALOG text built from this business’s tables “services” and “service_variants”.
+- The client's question.
+- A CATALOG text for this business, built from the "services" and "service_variants" tables.
 
 META TAGS:
-- QUESTION_TYPE can be "combination_and_price" or "price_or_plan".
-- HAS_MULTI_ACCESS_PLAN is “true” or “false”.
-- ALREADY_SUGGESTED list contains plan/service names already shown previously (avoid repeating them).
+- QUESTION_TYPE can be "combination_and_price", "price_or_plan" or "other_plans".
+- HAS_MULTI_ACCESS_PLAN is "yes" if the catalog text clearly contains at least one plan/pass/bundle that gives access to multiple services/categories or to "all"/"any" services; otherwise "no". (The value is always "yes"/"no" in English, even if the answer is in Spanish.)
 
 GLOBAL RULES:
-- Answer ONLY using the catalog text.
-- NEVER invent prices, services, features, bundles, benefits, restrictions, or URLs.
-- Keep the tone friendly, concise and natural.
-- Avoid repeating plans already included in ALREADY_SUGGESTED unless the user explicitly asks about that exact plan.
+- Answer ONLY using information from the catalog text.
+- Do NOT invent prices, services, bundles or conditions that are not in the catalog.
+- Be friendly, concise and natural.
 
 PRICE / SERVICE / PLAN QUESTIONS:
-- Use catalog prices exactly as provided.
-- If multiple options apply, give a short comparison (do NOT list every single item unless explicitly asked).
+- For price questions, use the prices from the catalog.
+- If several options are relevant, give a short, clear comparison of the main ones instead of listing everything.
 
-VERY IMPORTANT – COMBINED OPTIONS:
-If QUESTION_TYPE = "combination_and_price" AND HAS_MULTI_ACCESS_PLAN = true:
-  - You MUST NOT say “they cannot be combined”.
-  - Select at least one plan/bundle that clearly:
-      • gives access to more than one service/category, OR
-      • gives access to “any/all” services, OR
-      • offers unlimited use across multiple items.
-  - Recommend that plan, state the main price (prefer the most relevant variant), and include its URL if present.
-If HAS_MULTI_ACCESS_PLAN = false:
-  - Explain that each service is separate and list their individual prices.
+VERY IMPORTANT – COMBINED OPTIONS / BUNDLES:
+- If QUESTION_TYPE is "combination_and_price" AND HAS_MULTI_ACCESS_PLAN is "yes":
+  - You MUST NOT answer that services/classes cannot be combined.
+  - You MUST pick at least one plan/service/pass/bundle from the catalog that clearly:
+    - gives access to more than one service or category, OR
+    - gives access to "all" or "any" services, OR
+    - offers "unlimited" use across multiple services or items.
+  - Recommend that option, mention its name, give its main price (for example the main monthly or package price or its most relevant variant), and include its URL if present.
+- Only if HAS_MULTI_ACCESS_PLAN is "no" are you allowed to answer that each service is handled/priced separately and list the individual options.
+
+VERY IMPORTANT – "OTHER PLANS" QUESTIONS:
+- If QUESTION_TYPE is "other_plans":
+  - Assume the client already knows at least one option.
+  - Your goal is to present a broader view of the catalog: show different plans/passes/bundles, not just repeat a single one.
+  - If the catalog has 3 or more relevant options, list at least 3 distinct options (for example: a trial/pass, a regular membership and a package).
+  - It is OK if some were possibly mentioned before, but avoid focusing only on the same plan.
 
 OUTPUT LANGUAGE:
-Always answer in ${idiomaDestino === "en" ? "English" : "Spanish"}.
+- Always answer in ${idiomaDestino === "en" ? "English" : "Spanish"}.
           `.trim()
           : `
 Eres Aamy, asistente de ventas de una plataforma SaaS multinegocio.
 
-ENTRADAS QUE RECIBES:
+Recibes:
 - Una sección META con etiquetas de alto nivel.
-- El mensaje del cliente.
-- Un texto de CATALOGO construido desde las tablas “services” y “service_variants”.
+- La pregunta del cliente.
+- Un texto de CATALOGO de este negocio, construido desde las tablas "services" y "service_variants".
 
 ETIQUETAS META:
-- QUESTION_TYPE puede ser "combination_and_price" o "price_or_plan".
-- HAS_MULTI_ACCESS_PLAN es “true” o “false”.
-- ALREADY_SUGGESTED contiene una lista de planes/servicios ya mencionados antes (evita repetirlos).
+- QUESTION_TYPE puede ser "combination_and_price", "price_or_plan" o "other_plans".
+- HAS_MULTI_ACCESS_PLAN es "yes" si el texto del catálogo contiene claramente al menos un plan/pase/paquete que da acceso a varios servicios/categorías o a "todos"/"cualesquiera" los servicios; en caso contrario es "no". (El valor es siempre "yes"/"no" en inglés, aunque la respuesta sea en español.)
 
 REGLAS GENERALES:
 - Responde SOLO usando la información del catálogo.
-- JAMÁS inventes precios, servicios, beneficios, restricciones ni URLs.
-- Mantén un tono natural, breve y conversacional.
-- Evita repetir planes que ya están en ALREADY_SUGGESTED, a menos que el cliente pregunte por ellos directamente.
+- NO inventes precios, servicios, paquetes ni condiciones que no aparezcan en el catálogo.
+- Usa un tono conversacional, claro y natural.
 
 PREGUNTAS DE PRECIOS / SERVICIOS / PLANES:
-- Usa exactamente los precios del catálogo.
-- Si hay varias opciones relevantes, ofrece una comparación breve (no enumeres todo si no te lo piden).
+- Para preguntas de precios, usa los precios del catálogo.
+- Si hay varias opciones relevantes, haz una comparación corta y clara de las principales, en vez de listar todo.
 
-MUY IMPORTANTE – OPCIONES QUE COMBINAN SERVICIOS:
-Si QUESTION_TYPE = "combination_and_price" Y HAS_MULTI_ACCESS_PLAN = true:
-  - NO puedes decir que no se pueden combinar.
-  - Debes elegir al menos un plan/paquete que claramente:
-      • dé acceso a más de un servicio o categoría, O
-      • dé acceso a “todos” o “cualesquiera” los servicios, O
-      • ofrezca uso ilimitado en varios servicios.
-  - Recomienda ese plan, menciona su precio principal (preferiblemente la variante más relevante) e incluye su URL si aparece.
+MUY IMPORTANTE – OPCIONES COMBINADAS / PAQUETES:
+- Si QUESTION_TYPE es "combination_and_price" Y HAS_MULTI_ACCESS_PLAN es "yes":
+  - NO puedes responder que no se pueden combinar servicios/clases.
+  - Debes elegir al menos un plan/servicio/pase/paquete del catálogo que claramente:
+    - dé acceso a más de un servicio o categoría, O
+    - dé acceso a "todos" o "cualesquiera" servicios del negocio, O
+    - ofrezca uso "ilimitado" de varios servicios o ítems.
+  - Recomienda esa opción, menciona su nombre, da su precio principal (por ejemplo el precio mensual o de paquete más relevante) e incluye su URL si aparece.
+- Solo si HAS_MULTI_ACCESS_PLAN es "no" puedes responder que cada servicio se maneja/cobra por separado y listar las opciones individuales.
 
-Si HAS_MULTI_ACCESS_PLAN = false:
-  - Indica que cada servicio se maneja por separado y da sus precios individuales.
+MUY IMPORTANTE – PREGUNTAS DE "OTROS PLANES":
+- Si QUESTION_TYPE es "other_plans":
+  - Asume que el cliente ya conoce al menos una opción.
+  - Tu objetivo es mostrar una vista más amplia del catálogo: presenta varios planes/pases/paquetes distintos, no repitas solo el mismo plan.
+  - Si el catálogo tiene 3 o más opciones relevantes, muestra al menos 3 opciones distintas (por ejemplo: un pase de prueba, una membresía regular y un paquete).
+  - Está bien que alguna opción ya se haya mencionado antes, pero evita centrarte otra vez solo en la misma.
 
 IDIOMA DE SALIDA:
-Responde siempre en ${idiomaDestino === "es" ? "español" : "inglés"}.
+- Responde siempre en ${idiomaDestino === "es" ? "español" : "inglés"}.
           `.trim();
 
+      // 6) Mensaje de usuario con META + CATALOGO
       const userMsg =
         idiomaDestino === "en"
           ? `
 META:
-${metaHeader}
+${metaBlock}
 
 CLIENT QUESTION:
 ${userInput}
@@ -1220,7 +1241,7 @@ ${catalogText}
           `.trim()
           : `
 META:
-${metaHeader}
+${metaBlock}
 
 PREGUNTA DEL CLIENTE:
 ${userInput}
@@ -1235,7 +1256,12 @@ ${catalogText}
         userMsg,
       });
 
-      return finalize(reply, intentOut, "catalog_llm");
+      return {
+        handled: true,
+        reply,
+        source: "catalog_llm",
+        intent: intentOut || "catalog",
+      };
     }
   }
 
