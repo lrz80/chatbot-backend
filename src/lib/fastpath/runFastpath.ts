@@ -33,6 +33,12 @@ import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
 import { renderInfoGeneralOverview } from "../fastpath/renderInfoGeneralOverview";
 import { filterRowsByMeaningfulTokens } from "../services/pricing/priceSummaryTokens";
 import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
+import { buildCatalogContext } from "../catalog/buildCatalogContext";
+import OpenAI from "openai";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY!,
+});
 
 // Tipo inferido del helper real (sin duplicar tipos)
 type PriceInfo = Awaited<ReturnType<typeof getPriceInfoForService>>;
@@ -150,6 +156,26 @@ export type FastpathHint =
       };
     };
 
+async function answerCatalogQuestionLLM(params: {
+  idiomaDestino: "es" | "en";
+  systemMsg: string;
+  userMsg: string;
+}) {
+  const { systemMsg, userMsg } = params;
+
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4.1-mini", // o el modelo que estás usando en producción
+    messages: [
+      { role: "system", content: systemMsg },
+      { role: "user", content: userMsg },
+    ],
+    temperature: 0.4,
+  });
+
+  const reply = completion.choices[0]?.message?.content ?? "";
+  return reply.trim();
+}
+
 function bestNameMatch(
   userText: string,
   items: Array<{ id: string; name: string; url: string | null }>
@@ -170,18 +196,6 @@ function bestNameMatch(
     return hits.sort((a, b) => normalizeText(b.name).length - normalizeText(a.name).length)[0];
   }
   return null;
-}
-
-function normalizeTokensForLike(q: string) {
-  return q
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 3)
-    .slice(0, 4);
 }
 
 // Detector genérico (no industria)
@@ -299,18 +313,6 @@ function sectionTitle(lang: Lang, key: "plans" | "packages") {
     : "Aquí tienes algunos de nuestros paquetes:";
 }
 
-function isAskingPlansOrPackages(t: string) {
-  const s = String(t || "").toLowerCase();
-  return (
-    /\b(planes?|plan)\b/.test(s) ||
-    /\b(paquetes?|paquete)\b/.test(s) ||
-    /\b(membres[ií]as?|membresia)\b/.test(s) ||
-    /\b(memberships?|membership)\b/.test(s) ||
-    /\b(packages?|package)\b/.test(s) ||
-    /\b(plans?)\b/.test(s)
-  );
-}
-
 function isTrialQuery(raw: string): boolean {
   const normalized = String(raw || "")
     .normalize("NFD")
@@ -346,6 +348,14 @@ function isInterestMessage(raw: string): boolean {
   return patterns.some((re) => re.test(t));
 }
 
+function finalize(reply: string): FastpathResult {
+  // Si FastpathResult tiene más campos, puedes ajustarlo luego.
+  // De momento, devolvemos al menos el texto.
+  return {
+    reply,
+  } as FastpathResult;
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -360,6 +370,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     maxDisambiguationOptions = 5,
     lastServiceTtlMs = 60 * 60 * 1000,
   } = args;
+
+  const q = userInput.toLowerCase().trim();
 
   // Fastpath solo aplica si NO estás en booking
   if (inBooking) return { handled: false };
@@ -925,6 +937,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ✅ SI SUENA A "ME INTERESA X" → SALTAR A PRECIOS DIRECTO
   //     - Funciona para cualquier negocio (servicios/planes)
   // =========================================================
+  /*
   {
     if (isInterestMessage(userInput)) {
       try {
@@ -980,12 +993,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       }
     }
   }
+  */
 
   // =========================================================
   // ✅ INFO_CLAVE INCLUDES (si existe info_clave)
   //     - Responde "qué incluye..." usando info_clave cuando hay bloque
   //     - SI NO hay bloque, pero ya sabemos last_service_id => usa link oficial
   // =========================================================
+  /*
   {
     const info = String(infoClave || "").trim();
 
@@ -1272,10 +1287,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       } as any;
     }
   }
+  */
 
   // =========================================================
   // ✅ INCLUDES FASTPATH (DB catalog)
   // =========================================================
+  /*
   if (isAskingIncludes(userInput)) {
     const r = await resolveServiceInfo({
       tenantId,
@@ -1375,6 +1392,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       };
     }
   }
+  */
 
   // ===============================
   // ✅ PLANS / PACKAGES LIST (DB, NO HARDCODE)
@@ -1382,6 +1400,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   //  - NO números
   //  - CTA humano
   // ===============================
+  /*
   {
     const askingIncludes = isAskingIncludes(userInput);
     const askingPrice = isPriceQuestion(userInput); // ✅ ya no usamos isGenericPriceQuestion
@@ -1491,6 +1510,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       }
     }
   }
+  */
 
   // =========================================================
   // ✅ FOLLOW-UP ROUTER (mantener hilo conversacional)
@@ -1591,11 +1611,118 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
+  // ===============================
+  // 🧠 MOTOR ÚNICO DE CATÁLOGO (services + service_variants)
+  // ===============================
+  {
+    // Heurística: detecta si la pregunta va de precios / planes / servicios / combinar
+    const isCatalogQuestion =
+      q.includes("precio") ||
+      q.includes("precios") ||
+      q.includes("cuanto cuesta") ||
+      q.includes("cuánto cuesta") ||
+      q.includes("costo") ||
+      q.includes("cuesta") ||
+      q.includes("plan") ||
+      q.includes("planes") ||
+      q.includes("membresia") ||
+      q.includes("membresía") ||
+      q.includes("clases") ||
+      q.includes("servicio") ||
+      q.includes("servicios") ||
+      q.includes("que incluye") ||
+      q.includes("qué incluye") ||
+      q.includes("incluye") ||
+      q.includes("combinar") ||
+      q.includes("mezclar") ||
+      q.includes("usar ambas") ||
+      q.includes("usar las dos") ||
+      q.includes("unlimited") ||
+      q.includes("ilimitado") ||
+      q.includes("pack") ||
+      q.includes("paquete") ||
+      q.includes("autopay") ||
+      // inglés
+      q.includes("price") ||
+      q.includes("prices") ||
+      q.includes("membership") ||
+      q.includes("bundle") ||
+      q.includes("combine classes") ||
+      q.includes("what is included");
+
+    if (isCatalogQuestion) {
+      const catalogText = await buildCatalogContext(pool, tenantId);
+
+      const systemMsg =
+        idiomaDestino === "en"
+          ? `
+  You are Aamy, a sales assistant for a multi-tenant SaaS.
+
+  You receive:
+  - The client's question.
+  - A CATALOG text for this business, built from the "services" and "service_variants" tables.
+
+  Rules:
+  - Answer ONLY using information from the catalog.
+  - For price questions, use the prices from the catalog. If multiple options are relevant, give a short, clear comparison (not a huge list).
+  - If the client asks whether they can combine classes/services, check in the catalog if there is any plan/service that clearly includes multiple categories or both classes.
+    - If such a plan exists, recommend it, briefly explain what it includes, and include its URL if present.
+    - If not, explain that each class/service has its own plan and mention the relevant options.
+  - If there is a URL in the catalog for the recommended plan/service, include it at the end.
+  - Be friendly, concise and natural. Do NOT invent prices or plans that are not in the catalog.
+  - Always answer in ${idiomaDestino === "en" ? "English" : "Spanish"}.
+          `.trim()
+          : `
+  Eres Aamy, asistente de ventas de una plataforma SaaS multinegocio.
+
+  Recibes:
+  - La pregunta del cliente.
+  - Un texto de CATALOGO de este negocio, construido desde las tablas "services" y "service_variants".
+
+  Reglas:
+  - Responde SOLO usando la información del catálogo.
+  - Para preguntas de precios, usa los precios del catálogo. Si hay varias opciones relevantes, haz una comparación corta y clara (no una lista infinita).
+  - Si el cliente pregunta si puede combinar clases/servicios, revisa en el catálogo si existe algún plan/servicio que incluya claramente varias categorías o ambas clases.
+    - Si existe, recomiéndalo, explica brevemente qué incluye e incluye la URL si la hay.
+    - Si no existe, explica que cada tipo de clase/servicio tiene su propio plan y menciona las opciones relevantes.
+  - Si hay una URL en el catálogo para el plan/servicio recomendado, inclúyela al final.
+  - Usa un tono conversacional, amigable y natural. NO inventes precios ni planes que no estén en el catálogo.
+  - Responde siempre en ${idiomaDestino === "es" ? "español" : "inglés"}.
+          `.trim();
+
+      const userMsg =
+        idiomaDestino === "en"
+          ? `
+  CLIENT QUESTION:
+  ${userInput}
+
+  CATALOG:
+  ${catalogText}
+          `.trim()
+          : `
+  PREGUNTA DEL CLIENTE:
+  ${userInput}
+
+  CATALOGO:
+  ${catalogText}
+          `.trim();
+
+      const reply = await answerCatalogQuestionLLM({
+        idiomaDestino,
+        systemMsg,
+        userMsg,
+      });
+
+      return finalize(reply);
+    }
+  }
+
   // =========================================================
   // ✅ PRICE SUMMARY (DB) solo si la pregunta es genérica
   //    - rango + ejemplos, NO lista completa
   //    - excluye ADD-ON por categoría
   // =========================================================
+  /*
   if (
     isPriceQuestion(userInput) &&
     isGenericPriceQuestion(userInput) &&
@@ -1706,6 +1833,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       },
     };
   }
+  */
 
   return { handled: false };
 }
