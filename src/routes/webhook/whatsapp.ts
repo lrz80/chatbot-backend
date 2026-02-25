@@ -379,53 +379,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // ===============================
   // 🌍 LANG RESOLUTION (CLIENT-FIRST)
   // ===============================
-  // Heurística para mensajes mezclados ES/EN
-  const ES_HINTS = [
-    " hola",
-    "buenas",
-    "buenos",
-    "gracias",
-    "por favor",
-    "quiero",
-    "quisiera",
-    "necesito",
-    "horarios",
-    "planes",
-    "precios",
-    "precio",
-    "clases",
-    "clase",
-    "informacion",
-    "información",
-  ];
-
-  const EN_HINTS = [
-    " hi",
-    "hello",
-    "thanks",
-    "thank you",
-    "please",
-    "schedule",
-    "schedules",
-    "plan ",
-    "plans",
-    "price",
-    "prices",
-    "class",
-    "classes",
-    "information",
-    "info",
-  ];
-
-  const countLangHints = (text: string, patterns: string[]): number => {
-    const t = String(text || "").toLowerCase();
-    let hits = 0;
-    for (const p of patterns) {
-      if (t.includes(p)) hits++;
-    }
-    return hits;
-  };
-
   const storedLang = await getIdiomaClienteDB(
     pool,
     tenant.id,
@@ -435,18 +388,14 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   );
 
   // ✅ LANG EARLY-LOCK: si está eligiendo de listas del ctx, NO recalcules idioma este turno
-  const isChoosing =
-    storedLang === "es" || storedLang === "en"
-      ? isChoosingFromCtxLists(convoCtx, userInput)
-      : false;
+  const isChoosing = (storedLang === "es" || storedLang === "en")
+    ? isChoosingFromCtxLists(convoCtx, userInput)
+    : false;
 
   if (isChoosing) {
     idiomaDestino = storedLang as any;
     forcedLangThisTurn = idiomaDestino;
-    console.log("🌍 LANG EARLY-LOCK (ctx list pick) =>", {
-      userInput,
-      storedLang,
-    });
+    console.log("🌍 LANG EARLY-LOCK (ctx list pick) =>", { userInput, storedLang });
   }
 
   const langRes = forcedLangThisTurn
@@ -468,11 +417,59 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         convoCtx,
       });
 
-  // Si ya forzamos idioma este turno (lead nuevo / saludo), NO lo pises.
+  // Idioma base propuesto por el resolver
   if (forcedLangThisTurn) {
     idiomaDestino = forcedLangThisTurn;
   } else {
     idiomaDestino = langRes.finalLang;
+  }
+
+  /**
+   * ✅ REGLA EXTRA: saludo bilingüe "Hi hola / hi buenas..."
+   * Caso típico:
+   *   "Hi hola buenas tardes estoy interesada..."
+   *
+   * Si el tenant o el cliente son ES, y el mensaje es un saludo mixto
+   * EN + ES, preferimos ESPAÑOL.
+   */
+  const bilingualGreeting = /^\s*(hi|hello)\s+(hola|buenas|buenos)\b/i.test(
+    userInput || ""
+  );
+
+  if (
+    !langRes.inBookingLang &&
+    bilingualGreeting &&
+    (storedLang === "es" || tenantBase === "es")
+  ) {
+    console.log("🌍 LANG OVERRIDE (bilingual greeting → es)", {
+      userInput,
+      storedLang,
+      tenantBase,
+      prevLang: idiomaDestino,
+    });
+    idiomaDestino = "es";
+  }
+
+  /**
+   * Pequeño extra genérico: si hay caracteres claramente españoles
+   * (á, é, í, ó, ú, ñ, ¿, ¡) y el tenant base es ES, y el detector dijo EN,
+   * inclinamos a ES. Esto es cross-industria.
+   */
+  const hasStrongEsChars = /[áéíóúñ¿¡]/i.test(userInput || "");
+
+  if (
+    !langRes.inBookingLang &&
+    hasStrongEsChars &&
+    idiomaDestino === "en" &&
+    (tenantBase === "es" || storedLang === "es")
+  ) {
+    console.log("🌍 LANG OVERRIDE (accent chars → es)", {
+      userInput,
+      storedLang,
+      tenantBase,
+      prevLang: idiomaDestino,
+    });
+    idiomaDestino = "es";
   }
 
   // ✅ Persistir idioma final del turno (sticky)
@@ -485,33 +482,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       contactoNorm,
       idiomaDestino
     );
-  }
-
-  // 🔍 Heurística EXTRA para mensajes mezclados tipo:
-  // "Hi hola buenas tardes..." → que no cambien el hilo a EN si la intención es ES.
-  if (
-    !langRes.inBookingLang &&
-    (idiomaDestino === "es" || idiomaDestino === "en")
-  ) {
-    const esHits = countLangHints(userInput, ES_HINTS);
-    const enHits = countLangHints(userInput, EN_HINTS);
-
-    // Si aún no tenemos storedLang (lead nuevo) → sesga hacia el idioma base del tenant.
-    if (!(storedLang === "es" || storedLang === "en")) {
-      if (tenantBase === "es" && esHits >= enHits && esHits >= 1) {
-        idiomaDestino = "es";
-      } else if (tenantBase === "en" && enHits >= esHits && enHits >= 1) {
-        idiomaDestino = "en";
-      }
-    } else {
-      // Si ya tenemos storedLang, deja que manden una palabra en el otro idioma
-      // sin flippear todo el hilo.
-      if (storedLang === "es" && esHits > enHits) {
-        idiomaDestino = "es";
-      } else if (storedLang === "en" && enHits > esHits) {
-        idiomaDestino = "en";
-      }
-    }
   }
 
   // ✅ NO CAMBIAR IDIOMA por tokens cortos tipo "Indoor cycling", "Deluxe Groom", etc.
@@ -544,6 +514,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     idiomaDestino = threadLang as any;
   }
 
+  // Tokens de talla (S/M/L) → mantén storedLang
   const tLower = String(userInput || "").trim().toLowerCase();
   const isSizeToken = /^(small|medium|large|x-large|xl|xs|peque(n|ñ)o|mediano|grande)$/i.test(
     tLower
@@ -553,9 +524,18 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     idiomaDestino = storedLang as any;
   }
 
-  // ✅ NO CAMBIAR IDIOMA cuando el usuario está eligiendo desde una lista reciente
+  // ✅ NO CAMBIAR IDIOMA cuando el usuario está seleccionando una opción
   // Ej: "cycling autopay", "bronze por mes", etc.
   {
+    const normalizeChoice = (s: string) =>
+      String(s || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
     const u = normalizeChoice(userInput);
 
     const hasRecentList = (() => {
@@ -592,11 +572,11 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     })();
 
     if (hasRecentList && matchesListItem) {
-      // prioridad: idioma sticky del contacto si existe; si no, manten el idiomaDestino actual; si no, tenantBase
       const locked =
         storedLang === "es" || storedLang === "en"
           ? storedLang
           : (idiomaDestino || tenantBase);
+
       idiomaDestino = locked as any;
       console.log("🌍 LANG LOCK (choice token, no flip) =>", {
         userInput,
