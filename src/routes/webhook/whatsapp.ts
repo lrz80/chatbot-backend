@@ -633,7 +633,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     if (intent !== undefined) lastIntent = intent;
   }
 
-  const safeSend = (tenantId: string, canal: string, messageId: string | null, toNumber: string, text: string) =>
+  const safeSendRaw = (tenantId: string, canal: string, messageId: string | null, toNumber: string, text: string) =>
     safeSendText({
       pool,
       tenantId,
@@ -645,7 +645,30 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       incrementUsage: incrementarUsoPorCanal,
     });
 
+  let skipSendForCatalogLLM = false;
+
   async function finalizeReply() {
+    // 👇 wrapper para poder “saltar” el envío cuando sea catalog_llm
+    // 👇 este sí tiene la firma que espera finalizeReplyLib
+    const safeSend = async (
+      tenantId: string,
+      canal: Canal,
+      messageId: string | null,
+      toNumber: string,
+      text: string
+    ): Promise<boolean> => {
+      // usamos la variable replySource del scope de procesarMensajeWhatsApp
+      const src = replySource || null;
+
+      if (skipSendForCatalogLLM && src === "catalog_llm") {
+        console.log("⏭️ [SAFE_SEND] Skip send porque source=catalog_llm");
+        return true; // devolvemos true para que finalizeReplyLib no lo vea como error
+      }
+
+      // delega al sender real
+      return await safeSendRaw(tenantId, canal, messageId, toNumber, text);
+    };
+
     await finalizeReplyLib(
       {
         handled,
@@ -669,27 +692,27 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         intentFallback: INTENCION_FINAL_CANONICA || null,
 
         onAfterOk: (nextCtx) => {
-          // ✅ mantener tus variables en sync
           convoCtx = nextCtx;
         },
       },
       {
+        // 👇 aquí VA el safeSend NUEVO (el de 5 args), no el wrapper por objeto
         safeSend,
         setConversationState: setConversationStateCompat,
         saveAssistantMessageAndEmit: async (opts: any) =>
-        saveAssistantMessageAndEmit({
-          ...opts,
-          canal,
-          fromNumber: contactoNorm, // ✅ fuerza el mismo key
-          intent: (lastIntent || INTENCION_FINAL_CANONICA || null),
-          interest_level: (typeof detectedInterest === "number" ? detectedInterest : null),
-        }),
+          saveAssistantMessageAndEmit({
+            ...opts,
+            canal,
+            fromNumber: contactoNorm, // ✅ fuerza el mismo key
+            intent: lastIntent || INTENCION_FINAL_CANONICA || null,
+            interest_level: typeof detectedInterest === "number" ? detectedInterest : null,
+          }),
         rememberAfterReply: (args: any) =>
-        rememberAfterReply({
-          ...args,
-          canal: "whatsapp",
-          replySource: (args?.replySource ?? args?.source ?? null),
-        }),
+          rememberAfterReply({
+            ...args,
+            canal: "whatsapp",
+            replySource: args?.replySource ?? args?.source ?? null,
+          }),
       }
     );
 
@@ -722,8 +745,30 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   }
 
   async function replyAndExit(text: string, source: string, intent?: string | null) {
+    // 👇 marca si tenemos que controlar el envío nosotros
+    skipSendForCatalogLLM = source === "catalog_llm";
+
     setReply(text, source, intent);
     await finalizeReply();
+
+    // 👇 si es catalog_llm, mandamos una sola burbuja por WhatsApp
+    if (skipSendForCatalogLLM) {
+      try {
+        const telefonoDestino = fromNumber || contactoNorm; // usa el mismo que usas en el resto del flujo
+
+        await enviarWhatsApp(
+          telefonoDestino,
+          text,
+          tenant.id,
+          { noSplit: true }       // ✅ fuerza TODO el texto en 1 mensaje
+        );
+      } catch (e) {
+        console.error("❌ Error enviando catalog_llm en una sola burbuja:", e);
+      } finally {
+        skipSendForCatalogLLM = false; // resetea para el próximo turno
+      }
+    }
+
     return;
   }
 
@@ -822,7 +867,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     key: "facts_summary",
   });
 
-console.log("🧠 facts_summary (start of turn) =", memStart);
+  console.log("🧠 facts_summary (start of turn) =", memStart);
 
   const { mode, status } = await waModePromise;
 

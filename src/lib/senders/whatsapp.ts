@@ -358,7 +358,8 @@ async function enviarPorTwilio(
 export async function enviarWhatsApp(
   telefono: string,
   mensaje: string,
-  tenantId: string
+  tenantId: string,
+  opts?: { noSplit?: boolean }
 ): Promise<boolean> {
   const digits = normalizarNumero(telefono);
   if (!digits) {
@@ -374,8 +375,15 @@ export async function enviarWhatsApp(
     return false;
   }
 
-  // ✅ 2) dividir mensaje en partes de ~1000 caracteres (como el bot viejo)
-  const parts = splitMessage(mensaje, 1000);
+  // ✅ 2) decidir si partimos el mensaje o lo mandamos entero
+  let parts: string[];
+  if (opts?.noSplit) {
+    // noSplit=true -> mandamos TODO en una sola burbuja
+    parts = [mensaje];
+  } else {
+    // comportamiento antiguo
+    parts = splitMessage(mensaje, 1000);
+  }
 
   // ✅ 3) enviar SOLO por el proveedor activo
   if (mode === "cloudapi") {
@@ -396,7 +404,7 @@ export async function enviarWhatsAppVoid(
   tenantId: string
 ): Promise<void> {
   try {
-    await enviarWhatsApp(telefono, mensaje, tenantId);
+    await enviarWhatsApp(telefono, mensaje, tenantId, undefined);
   } catch (e) {
     console.error("❌ enviarWhatsAppVoid error:", e);
   }
