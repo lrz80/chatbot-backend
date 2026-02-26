@@ -716,6 +716,34 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
         convoCtx,
       });
+      // 👇👇👇 AÑADIR ESTO
+      const intentForFollowUp =
+        INTENCION_FINAL_CANONICA || lastIntent || detectedIntent || null;
+
+      if (intentForFollowUp) {
+        try {
+          const scheduled = await scheduleFollowUpIfEligible({
+            tenant,
+            canal: "whatsapp",              // FollowUpChannel
+            contactoNorm,                   // 👈 nombre EXACTO del type
+            idiomaDestino,
+            intFinal: intentForFollowUp,    // intención final (string | null)
+            nivel: detectedInterest ?? null,
+            userText: userInput || "",
+            // skip: false,                  // opcional, solo si lo necesitas
+          });
+
+          console.log("📌 [FOLLOWUP] scheduleFollowUpIfEligible =>", {
+            scheduled,
+            intentForFollowUp,
+            detectedInterest,
+            contacto: contactoNorm,
+          });
+        } catch (e: any) {
+          console.warn("⚠️ scheduleFollowUpIfEligible failed:", e?.message);
+        }
+      }
+      // 👆👆👆 HASTA AQUÍ
     } catch (e: any) {
       console.warn("⚠️ runPostReplyActions failed:", e?.message);
     }
