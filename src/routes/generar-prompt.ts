@@ -4,14 +4,13 @@ import { Router, Request, Response } from "express";
 import jwt, { JwtPayload } from "jsonwebtoken";
 import pool from "../lib/db";
 import crypto from "crypto";                 // (B) Cache por checksum (sha256)
-import { buildPricingSnapshot } from "../lib/services/buildPricingSnapshot";
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || "secret-key";
 
 // (B) Cache en memoria por proceso
 // Clave = sha256(PROMPT_GEN_VERSION + tenant_id + idioma + funciones + info)
-const PROMPT_GEN_VERSION = "v14"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
+const PROMPT_GEN_VERSION = "v15"; // ⬅️ cambia esto cada vez que ajustes la lógica del generador
 
 const promptCache = new Map<string, { value: string; at: number }>();
 
@@ -21,12 +20,11 @@ const keyOf = (
   funciones: string,
   info: string,
   idioma: string,
-  pricingSnapshot: string
 ) =>
   crypto
     .createHash("sha256")
     .update(
-      `${PROMPT_GEN_VERSION}::${tenantId}::${canal}::${idioma}::${funciones}::${info}::${pricingSnapshot}`
+      `${PROMPT_GEN_VERSION}::${tenantId}::${canal}::${idioma}::${funciones}::${info}`
     )
     .digest("hex");
 
@@ -654,24 +652,6 @@ router.post("/", async (req: Request, res: Response) => {
 
     const nombreNegocio = tenant.name || "nuestro negocio";
 
-    // ⚡️ Snapshot de precios
-    let pricingSnapshot: string = compact(String(tenant.pricing_snapshot || ""));
-
-    if (!pricingSnapshot) {
-      try {
-        const snapshot = await buildPricingSnapshot(pool, tenant_id);
-        pricingSnapshot = compact(snapshot);
-
-        await pool.query(
-          "UPDATE tenants SET pricing_snapshot = $1 WHERE id = $2",
-          [snapshot, tenant_id]
-        );
-      } catch (e) {
-        console.error("⚠️ No se pudo construir pricing_snapshot:", e);
-        pricingSnapshot = "";
-      }
-    }
-
     // (B) Cache hit?  👉 OJO: el key incluye también el snapshot
     const cacheKey = keyOf(
       tenant_id,
@@ -679,7 +659,6 @@ router.post("/", async (req: Request, res: Response) => {
       funciones,
       info,
       idiomaNorm,
-      pricingSnapshot
     );
     const hit = promptCache.get(cacheKey);
     if (hit && Date.now() - hit.at < 1000 * 60 * 60 * 12) {
@@ -731,18 +710,6 @@ router.post("/", async (req: Request, res: Response) => {
     // 👇 OJO: aquí va `let`, no `const`
     let infoBlock = infoOperativo ? infoOperativo : "";
     const funcionesBlock = reglasOperativas ? reglasOperativas : "";
-
-    // 🔹 Adjuntar snapshot de precios (multi-tenant, sin hardcode)
-    if (pricingSnapshot) {
-      const header =
-        idiomaNorm === "en" ? "PRICES_AND_PLANS" : "PRECIOS_Y_PLANES";
-
-      const snapBlock = compact(`${header}\n${pricingSnapshot}`);
-
-      infoBlock = infoBlock
-        ? compact(`${infoBlock}\n\n${snapBlock}`)
-        : snapBlock;
-    }
 
     const linksPolicy = enlacesOficiales.length
       ? (idiomaNorm === "en"
