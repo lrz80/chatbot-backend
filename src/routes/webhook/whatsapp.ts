@@ -396,6 +396,16 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   const langRes = langOut.langRes;
   convoCtx = langOut.convoCtx;
 
+  console.log("🌍 LANG DEBUG =", {
+    userInput,
+    tenantBase,
+    storedLang,
+    detectedLang: langRes.detectedLang,
+    lockedLang: langRes.lockedLang,
+    inBookingLang: langRes.inBookingLang,
+    idiomaDestino,
+  });
+
   // ===============================
   // 🔁 Helpers de decisión (BACKEND SOLO DECIDE)
   // ===============================

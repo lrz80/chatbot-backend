@@ -269,18 +269,17 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
     convoCtx = { ...(convoCtx || {}), thread_lang: idiomaDestino };
   }
 
-  console.log("🌍 LANG DEBUG =", {
-    userInput,
-    tenantBase,
-    storedLang,
-    detectedLang: langRes.detectedLang,
-    lockedLang: langRes.lockedLang,
-    inBookingLang: langRes.inBookingLang,
-    idiomaDestino,
-  });
-
   const promptBase = getPromptPorCanal(canal, tenant, idiomaDestino);
   const promptBaseMem = promptBase;
+
+  console.log("🌍 [resolveLangForTurn] RESULT =", {
+    canal,
+    contactoNorm,
+    idiomaDestino,
+    storedLang,
+    detectedLang: langRes.detectedLang,
+    inBookingLang: langRes.inBookingLang,
+  });
 
   return {
     idiomaDestino,
