@@ -51,12 +51,11 @@ import type { Lang } from "../../lib/channels/engine/clients/clientDb";
 import {
   normalizeLang,
   ensureClienteBase,
-  getIdiomaClienteDB,
   upsertIdiomaClienteDB,
   getSelectedChannelDB,
   upsertSelectedChannelDB,
 } from "../../lib/channels/engine/clients/clientDb";
-import { resolveTurnLangClientFirst } from "../../lib/channels/engine/lang/resolveTurnLang";
+import { resolveLangForTurn } from "../../lib/channels/engine/lang/resolveLangForTurn";
 import { runPostReplyActions } from "../../lib/conversation/postReplyActions";
 import { runBookingPipeline } from "../../lib/appointments/booking/bookingPipeline";
 import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBookingCourtesyGuard";
@@ -377,223 +376,25 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   let convoCtx = (st.context && typeof st.context === "object") ? st.context : {};
 
   // ===============================
-  // 🌍 LANG RESOLUTION (CLIENT-FIRST)
+  // 🌍 LANG RESOLUTION (CLIENT-FIRST) – refactorizada
   // ===============================
-  const storedLang = await getIdiomaClienteDB(
+  const langOut = await resolveLangForTurn({
     pool,
-    tenant.id,
+    tenant,
     canal,
     contactoNorm,
-    tenantBase
-  );
-
-  // ✅ LANG EARLY-LOCK: si está eligiendo de listas del ctx, NO recalcules idioma este turno
-  const isChoosing = (storedLang === "es" || storedLang === "en")
-    ? isChoosingFromCtxLists(convoCtx, userInput)
-    : false;
-
-  if (isChoosing) {
-    idiomaDestino = storedLang as any;
-    forcedLangThisTurn = idiomaDestino;
-    console.log("🌍 LANG EARLY-LOCK (ctx list pick) =>", { userInput, storedLang });
-  }
-
-  const langRes = forcedLangThisTurn
-    ? {
-        finalLang: forcedLangThisTurn,
-        detectedLang: forcedLangThisTurn,
-        lockedLang: true,
-        inBookingLang: false,
-      }
-    : await resolveTurnLangClientFirst({
-        pool,
-        tenantId: tenant.id,
-        canal,
-        contacto: contactoNorm,
-        userInput,
-        tenantBase,
-        storedLang,
-        detectarIdioma,
-        convoCtx,
-      });
-
-  // Idioma base propuesto por el resolver
-  if (forcedLangThisTurn) {
-    idiomaDestino = forcedLangThisTurn;
-  } else {
-    idiomaDestino = langRes.finalLang;
-  }
-
-  /**
-   * ✅ REGLA EXTRA: saludo bilingüe "Hi hola / hi buenas..."
-   * Caso típico:
-   *   "Hi hola buenas tardes estoy interesada..."
-   *
-   * Si el tenant o el cliente son ES, y el mensaje es un saludo mixto
-   * EN + ES, preferimos ESPAÑOL.
-   */
-  const bilingualGreeting = /^\s*(hi|hello)\s+(hola|buenas|buenos)\b/i.test(
-    userInput || ""
-  );
-
-  if (
-    !langRes.inBookingLang &&
-    bilingualGreeting &&
-    (storedLang === "es" || tenantBase === "es")
-  ) {
-    console.log("🌍 LANG OVERRIDE (bilingual greeting → es)", {
-      userInput,
-      storedLang,
-      tenantBase,
-      prevLang: idiomaDestino,
-    });
-    idiomaDestino = "es";
-  }
-
-  /**
-   * Pequeño extra genérico: si hay caracteres claramente españoles
-   * (á, é, í, ó, ú, ñ, ¿, ¡) y el tenant base es ES, y el detector dijo EN,
-   * inclinamos a ES. Esto es cross-industria.
-   */
-  const hasStrongEsChars = /[áéíóúñ¿¡]/i.test(userInput || "");
-
-  if (
-    !langRes.inBookingLang &&
-    hasStrongEsChars &&
-    idiomaDestino === "en" &&
-    (tenantBase === "es" || storedLang === "es")
-  ) {
-    console.log("🌍 LANG OVERRIDE (accent chars → es)", {
-      userInput,
-      storedLang,
-      tenantBase,
-      prevLang: idiomaDestino,
-    });
-    idiomaDestino = "es";
-  }
-
-  // ✅ Persistir idioma final del turno (sticky)
-  // (pero NO lo sobrescribas si es booking lang locked)
-  if (!langRes.inBookingLang && (idiomaDestino === "es" || idiomaDestino === "en")) {
-    await upsertIdiomaClienteDB(
-      pool,
-      tenant.id,
-      canal,
-      contactoNorm,
-      idiomaDestino
-    );
-  }
-
-  // ✅ NO CAMBIAR IDIOMA por tokens cortos tipo "Indoor cycling", "Deluxe Groom", etc.
-  // Si el hilo ya tiene idioma (storedLang) y el input parece label corto, quédate con storedLang.
-  if (
-    !langRes.inBookingLang &&
-    (storedLang === "es" || storedLang === "en") &&
-    (langRes.detectedLang === "es" || langRes.detectedLang === "en") &&
-    langRes.detectedLang !== storedLang &&
-    looksLikeShortLabel(userInput)
-  ) {
-    idiomaDestino = storedLang as any;
-  }
-
-  console.log("🌍 LANG DEBUG =", {
     userInput,
+    convoCtx,
     tenantBase,
-    storedLang,
-    detectedLang: langRes.detectedLang,
-    lockedLang: langRes.lockedLang,
-    inBookingLang: langRes.inBookingLang,
-    idiomaDestino,
+    forcedLangThisTurn,
   });
 
-  // ✅ LANG LOCK: si ya hay idioma del hilo, NO dejes que tokens cortos lo cambien
-  const threadLang = String((convoCtx as any)?.thread_lang || "").toLowerCase();
-  const threadLocked = (convoCtx as any)?.thread_lang_locked === true;
-
-  if (threadLocked && (threadLang === "es" || threadLang === "en")) {
-    idiomaDestino = threadLang as any;
-  }
-
-  // Tokens de talla (S/M/L) → mantén storedLang
-  const tLower = String(userInput || "").trim().toLowerCase();
-  const isSizeToken = /^(small|medium|large|x-large|xl|xs|peque(n|ñ)o|mediano|grande)$/i.test(
-    tLower
-  );
-
-  if (isSizeToken && (storedLang === "es" || storedLang === "en")) {
-    idiomaDestino = storedLang as any;
-  }
-
-  // ✅ NO CAMBIAR IDIOMA cuando el usuario está seleccionando una opción
-  // Ej: "cycling autopay", "bronze por mes", etc.
-  {
-    const normalizeChoice = (s: string) =>
-      String(s || "")
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-
-    const u = normalizeChoice(userInput);
-
-    const hasRecentList = (() => {
-      const ttlMs = 10 * 60 * 1000;
-      const at1 = Number((convoCtx as any)?.last_plan_list_at || 0);
-      const at2 = Number((convoCtx as any)?.last_package_list_at || 0);
-      const fresh1 = at1 > 0 && Date.now() - at1 <= ttlMs;
-      const fresh2 = at2 > 0 && Date.now() - at2 <= ttlMs;
-
-      const lp = Array.isArray((convoCtx as any)?.last_plan_list)
-        ? (convoCtx as any).last_plan_list
-        : [];
-      const pk = Array.isArray((convoCtx as any)?.last_package_list)
-        ? (convoCtx as any).last_package_list
-        : [];
-
-      return (fresh1 && lp.length > 0) || (fresh2 && pk.length > 0);
-    })();
-
-    const matchesListItem = (() => {
-      if (!u) return false;
-
-      const candidates: Array<{ name?: string; label?: string; text?: string }> = [
-        ...(((convoCtx as any)?.last_plan_list || []) as any[]),
-        ...(((convoCtx as any)?.last_package_list || []) as any[]),
-        ...(((convoCtx as any)?.last_service_list || []) as any[]),
-      ];
-
-      return candidates.some((it) => {
-        const n = normalizeChoice(it?.name || it?.label || it?.text || "");
-        if (!n) return false;
-        return n.includes(u) || u.includes(n);
-      });
-    })();
-
-    if (hasRecentList && matchesListItem) {
-      const locked =
-        storedLang === "es" || storedLang === "en"
-          ? storedLang
-          : (idiomaDestino || tenantBase);
-
-      idiomaDestino = locked as any;
-      console.log("🌍 LANG LOCK (choice token, no flip) =>", {
-        userInput,
-        storedLang,
-        locked,
-        tenantBase,
-      });
-    }
-  }
-
-  // ✅ thread_lang SOLO durante booking
-  if (langRes.inBookingLang && !(convoCtx as any)?.thread_lang) {
-    convoCtx = { ...(convoCtx || {}), thread_lang: idiomaDestino };
-  }
-
-  const promptBase = getPromptPorCanal("whatsapp", tenant, idiomaDestino);
-  let promptBaseMem = promptBase;
+  idiomaDestino = langOut.idiomaDestino;
+  let promptBase = langOut.promptBase;
+  let promptBaseMem = langOut.promptBaseMem;
+  const storedLang = langOut.storedLang;
+  const langRes = langOut.langRes;
+  convoCtx = langOut.convoCtx;
 
   // ===============================
   // 🔁 Helpers de decisión (BACKEND SOLO DECIDE)
