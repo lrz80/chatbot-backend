@@ -1105,6 +1105,11 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
             ? "RULE: Do not invent exact prices. Only mention prices if explicitly present in the provided business info or in SYSTEM_STRUCTURED_DATA, and preserve ranges/qualifiers."
             : "REGLA: No inventes precios exactos. Solo menciona precios si están explícitos en la info del negocio o en DATOS_ESTRUCTURADOS_DEL_SISTEMA, y preserva rangos/calificativos (DESDE).";
 
+        const PRICE_LIST_FORMAT_RULE =
+          idiomaDestino === "en"
+            ? "RULE: When you answer price or plan questions using SYSTEM_STRUCTURED_DATA, format the options as a short bullet list. Start with 0–1 short intro line, then one line per option like '• Plan Gold: $X/month – short benefit'. Avoid long paragraphs and keep at most 4–5 options."
+            : "REGLA: Cuando respondas preguntas de precios o planes usando DATOS_ESTRUCTURADOS_DEL_SISTEMA, presenta las opciones como una lista con viñetas. Puedes poner 0–1 línea de introducción corta y luego una línea por opción, por ejemplo: '• Plan Gold: $X/mes – beneficio breve'. Evita párrafos largos y limita a máximo 4–5 opciones.";
+
         // 🚀 Prompt base + datos estrictos de Fastpath
         const promptConFastpath = [
           promptBaseMem,
@@ -1116,6 +1121,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           NO_NUMERIC_MENUS,
           PRICE_QUALIFIER_RULE,
           NO_PRICE_INVENTION_RULE,
+          PRICE_LIST_FORMAT_RULE,
           "",
           idiomaDestino === "en"
             ? "RULE: You may rephrase for a natural WhatsApp tone, but DO NOT change amounts, ranges, or plan/service names."
@@ -1253,6 +1259,11 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         ? "RULE: Do not invent exact prices. Only mention prices if explicitly present in the provided business info, and preserve ranges/qualifiers."
         : "REGLA: No inventes precios exactos. Solo menciona precios si están explícitos en la info del negocio, y preserva rangos/calificativos (DESDE).";
 
+    const PRICE_LIST_FORMAT_RULE =
+      idiomaDestino === "en"
+        ? "RULE: When you answer price or plan questions using SYSTEM_STRUCTURED_DATA, format the options as a short bullet list. Start with 0–1 short intro line, then one line per option like '• Plan Gold: $X/month – short benefit'. Avoid long paragraphs and keep at most 4–5 options."
+        : "REGLA: Cuando respondas preguntas de precios o planes usando DATOS_ESTRUCTURADOS_DEL_SISTEMA, presenta las opciones como una lista con viñetas. Puedes poner 0–1 línea de introducción corta y luego una línea por opción, por ejemplo: '• Plan Gold: $X/mes – beneficio breve'. Evita párrafos largos y limita a máximo 4–5 opciones.";
+
     // 🚫 ROLLBACK: PROMPT-ONLY (sin DB catalog)
     const fallbackWelcome = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
 
@@ -1265,6 +1276,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         LIST_FOLLOWUP_RULE,
         PRICE_QUALIFIER_RULE,
         NO_PRICE_INVENTION_RULE,
+        PRICE_LIST_FORMAT_RULE,
       ].join("\n"),
       userInput: ["USER_MESSAGE:", event.userInput].join("\n"),
       history,
@@ -1382,6 +1394,11 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         ? "RULE: Do not invent exact prices. Only mention prices if explicitly present in the provided business info, and preserve ranges/qualifiers."
         : "REGLA: No inventes precios exactos. Solo menciona precios si están explícitos en la info del negocio, y preserva rangos/calificativos (DESDE).";
 
+    const PRICE_LIST_FORMAT_RULE =
+      idiomaDestino === "en"
+        ? "RULE: When you answer price or plan questions using SYSTEM_STRUCTURED_DATA, format the options as a short bullet list. Start with 0–1 short intro line, then one line per option like '• Plan Gold: $X/month – short benefit'. Avoid long paragraphs and keep at most 4–5 options."
+        : "REGLA: Cuando respondas preguntas de precios o planes usando DATOS_ESTRUCTURADOS_DEL_SISTEMA, presenta las opciones como una lista con viñetas. Puedes poner 0–1 línea de introducción corta y luego una línea por opción, por ejemplo: '• Plan Gold: $X/mes – beneficio breve'. Evita párrafos largos y limita a máximo 4–5 opciones.";
+
     // 🚫 ROLLBACK: PROMPT-ONLY (sin DB catalog)
     const fallbackWelcome = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
 
@@ -1393,6 +1410,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         NO_NUMERIC_MENUS,
         PRICE_QUALIFIER_RULE,
         NO_PRICE_INVENTION_RULE,
+        PRICE_LIST_FORMAT_RULE,
       ].join("\n"),
       userInput: ["USER_MESSAGE:", event.userInput].join("\n"),
       history,
