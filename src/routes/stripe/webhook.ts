@@ -744,6 +744,10 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       const esTrial = subscription.status === 'trialing';
       const hasTrialFlag = Boolean(subscription.trial_end);
 
+      const isActiveLike =
+        subscription.status === 'active' ||
+        subscription.status === 'trialing'; // si quieres que trial cuente como activa
+
       // ✅ Product(s) actuales y flags combinados
       try {
         const productsUpdated = await getProductsFromSubscription(stripe, subscription);
@@ -772,22 +776,24 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       await pool.query(
         `
         UPDATE tenants
-        SET es_trial           = $1,
-            plan               = $2,
-            membresia_inicio   = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END,
-            membresia_vigencia = $4,
-            trial_ever_claimed = CASE WHEN $5 THEN true ELSE trial_ever_claimed END,
-            plan_limits        = $6
-        WHERE id = $7
+        SET membresia_activa   = $1,
+            es_trial           = $2,
+            plan               = $3,
+            membresia_inicio   = CASE WHEN $2 = false THEN $4 ELSE membresia_inicio END,
+            membresia_vigencia = $5,
+            trial_ever_claimed = CASE WHEN $6 THEN true ELSE trial_ever_claimed END,
+            plan_limits        = $7
+        WHERE id = $8
         `,
         [
-          esTrial,
-          'pro',
-          new Date(subscription.current_period_start * 1000),
-          new Date(subscription.current_period_end * 1000),
-          hasTrialFlag,
-          planLimits,
-          tenantId,
+          isActiveLike,                         // $1 -> membresia_activa
+          esTrial,                              // $2 -> es_trial
+          'pro',                                // $3 -> plan (o deriva del product si luego quieres)
+          new Date(subscription.current_period_start * 1000), // $4
+          new Date(subscription.current_period_end * 1000),   // $5
+          hasTrialFlag,                         // $6
+          planLimits,                           // $7
+          tenantId,                             // $8
         ]
       );
 
