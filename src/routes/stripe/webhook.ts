@@ -351,6 +351,12 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
         const productsA = await getProductsFromSubscription(stripe, subscription);
 
+        // 🔹 Plan desde Stripe: metadata.plan_code → nombre del producto → fallback 'pro'
+        const planCode =
+          (productsA[0]?.metadata as any)?.plan_code ||
+          productsA[0]?.name ||
+          'pro';
+
         let planLimits: Record<string, number> = {};
         if (productsA.length) {
           for (const p of productsA) {
@@ -383,7 +389,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             tenantId,
             vigencia,
             inicio,
-            'pro', // interno si quieres, pero OJO: gate real vendrá de tenant_plan_features
+            planCode,            // ✅ antes 'pro'
             subscription.id,
             esTrial,
             hasTrialFlag,
@@ -464,7 +470,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           amountCents: session.amount_total ?? null,
           currency: session.currency ?? null,
           email: email ?? null,
-          plan: 'pro',
+          plan: planCode,
         });
 
       } catch (err) {
@@ -617,6 +623,12 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
         const planLimits = prod ? limitsFromProduct(prod) : {};
 
+        // 🔹 Plan desde Stripe: metadata.plan_code → nombre del producto → fallback 'pro'
+        const planCode =
+          (prod?.metadata as any)?.plan_code ||
+          prod?.name ||
+          'pro';
+
         await pool.query(
           `
           UPDATE tenants
@@ -634,7 +646,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             tenantId,
             vigencia,
             new Date(subscription.start_date * 1000),
-            'pro', // nombre interno si quieres; PERO gate real viene de tenant_plan_features
+            planCode,              // ✅ antes 'pro'
             subscriptionId,
             esTrial,
             hasTrialFlag,
@@ -661,7 +673,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           amountCents: session.amount_total ?? null,
           currency: session.currency ?? null,
           email,
-          plan: 'pro',
+          plan: planCode,          // ✅ antes 'pro'
         });
 
         const tenantNameRes = await pool.query('SELECT name FROM tenants WHERE id = $1', [tenantId]);
@@ -729,16 +741,30 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
       // Plan limits desde producto (si necesitas)
       let planLimits: Record<string, number> = {};
+      let planCode: string | null = null;
+
       try {
         const p0 = await getProductFromSubscription(stripe, subscription);
-        if (p0) planLimits = limitsFromProduct(p0);
-      } catch {}
+        if (p0) {
+          planLimits = limitsFromProduct(p0);
+
+          // 🔹 Prioridad:
+          // 1) metadata.plan_code (código interno estable)
+          // 2) nombre del producto en Stripe (lo que ves como "Test")
+          planCode =
+            (p0.metadata as any)?.plan_code ||
+            p0.name ||
+            null;
+        }
+      } catch (e) {
+        console.warn("⚠️ No se pudo resolver producto/plan en sub.updated:", e);
+      }
 
       await pool.query(
         `
         UPDATE tenants
         SET es_trial           = $1,
-            plan               = $2,
+            plan               = COALESCE($2, plan), -- ✅ solo se pisa si tenemos nuevo plan
             membresia_inicio   = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END,
             membresia_vigencia = $4,
             trial_ever_claimed = CASE WHEN $5 THEN true ELSE trial_ever_claimed END,
@@ -747,7 +773,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         `,
         [
           esTrial,
-          'pro',
+          planCode, // ✅ antes 'pro'
           new Date(subscription.current_period_start * 1000),
           new Date(subscription.current_period_end * 1000),
           hasTrialFlag,
@@ -756,7 +782,9 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         ]
       );
 
-      console.log(`🔄 Subscripción actualizada tenant ${tenantId}: es_trial=${esTrial}`);
+      console.log(
+        `🔄 Subscripción actualizada tenant ${tenantId}: es_trial=${esTrial}, plan=${planCode ?? "(sin cambio)"}`
+      );
     }
   }
 
@@ -829,12 +857,26 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         console.warn('⚠️ No se pudieron actualizar flags/plan_features (invoice):', e);
       }
 
-      // planLimits si quieres mantener
+      // planLimits + planCode desde el producto de la suscripción
       let planLimits: Record<string, number> = {};
+      let planCode: string | null = null;
+
       try {
         const p0 = await getProductFromSubscription(stripe, subscription);
-        if (p0) planLimits = limitsFromProduct(p0);
-      } catch {}
+        if (p0) {
+          planLimits = limitsFromProduct(p0);
+
+          // 🔹 Prioridad:
+          // 1) metadata.plan_code (código interno estable)
+          // 2) nombre del producto en Stripe (lo que ves como "Test")
+          planCode =
+            (p0.metadata as any)?.plan_code ||
+            p0.name ||
+            null;
+        }
+      } catch (e) {
+        console.warn('⚠️ No se pudo obtener producto/plan en invoice.payment_succeeded:', e);
+      }
 
       await pool.query(
         `
@@ -842,11 +884,16 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         SET membresia_activa   = true,
             membresia_vigencia = $2,
             membresia_inicio   = NOW(),
-            plan               = $3,
+            plan               = COALESCE($3, plan),  -- ✅ solo pisamos si tenemos plan nuevo
             plan_limits        = $4
         WHERE id = $1
         `,
-        [tenantId, nuevaVigencia, 'pro', planLimits]
+        [
+          tenantId,
+          nuevaVigencia,
+          planCode,    // ✅ antes 'pro'
+          planLimits,
+        ]
       );
 
       await resetearCanales(tenantId, planLimits);
