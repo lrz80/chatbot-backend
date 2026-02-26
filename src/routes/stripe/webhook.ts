@@ -141,33 +141,6 @@ const limitsFromProduct = (product: Stripe.Product): PlanLimits => {
   }
 };
 
-// ===============================
-// 📦 Snapshot del plan (para mostrar en dashboard)
-// ===============================
-type PlanSnapshot = {
-  plan_name: string;      // lo que verá el usuario en "Plan Activo"
-  product_id?: string;
-};
-
-const buildPlanSnapshotFromProduct = (
-  product?: Stripe.Product | null
-): PlanSnapshot | null => {
-  if (!product) return null;
-
-  const md = product.metadata || {};
-  const rawName =
-    (product.name && product.name.trim()) ||
-    (typeof md.plan_name === "string" && md.plan_name.trim()) ||
-    "";
-
-  if (!rawName) return null;
-
-  return {
-    plan_name: rawName,
-    product_id: product.id,
-  };
-};
-
 // 🔎 Obtiene el product de Stripe desde la Checkout Session (modo subscription)
 const getProductFromCheckoutSession = async (stripe: Stripe, sessionId: string) => {
   const items = await stripe.checkout.sessions.listLineItems(sessionId, { limit: 1 });
@@ -378,9 +351,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
         const productsA = await getProductsFromSubscription(stripe, subscription);
 
-        const mainProductA = productsA[0] ?? null;
-        const planSnapshotA = buildPlanSnapshotFromProduct(mainProductA);
-
         let planLimits: Record<string, number> = {};
         if (productsA.length) {
           for (const p of productsA) {
@@ -406,20 +376,18 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
               subscription_id      = $5,
               es_trial             = $6,
               trial_ever_claimed   = CASE WHEN $7 THEN true ELSE trial_ever_claimed END,
-              plan_limits          = $8,
-              pricing_snapshot     = COALESCE(pricing_snapshot, '{}'::jsonb) || $9::jsonb
+              plan_limits          = $8
           WHERE id = $1
           `,
           [
             tenantId,
             vigencia,
             inicio,
-            'pro',
+            'pro', // interno si quieres, pero OJO: gate real vendrá de tenant_plan_features
             subscription.id,
             esTrial,
             hasTrialFlag,
             planLimits,
-            planSnapshotA ? JSON.stringify(planSnapshotA) : JSON.stringify({}),
           ]
         );
 
@@ -639,7 +607,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
 
         // ✅ Product + metadata (source of truth)
         const prod = await getProductFromCheckoutSession(stripe, session.id);
-        const planSnapshot = buildPlanSnapshotFromProduct(prod || undefined);
         const flags = prod ? flagsFromProduct(prod) : {
           whatsapp_enabled: true,
           meta_enabled: true,
@@ -660,20 +627,18 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
                 subscription_id    = $5,
                 es_trial           = $6,
                 trial_ever_claimed = CASE WHEN $7 THEN true ELSE trial_ever_claimed END,
-                plan_limits        = $8,
-                pricing_snapshot   = COALESCE(pricing_snapshot, '{}'::jsonb) || $9::jsonb
+                plan_limits        = $8
           WHERE id = $1
           `,
           [
             tenantId,
             vigencia,
             new Date(subscription.start_date * 1000),
-            'pro',
+            'pro', // nombre interno si quieres; PERO gate real viene de tenant_plan_features
             subscriptionId,
             esTrial,
             hasTrialFlag,
             planLimits,
-            planSnapshot ? JSON.stringify(planSnapshot) : JSON.stringify({}),
           ]
         );
 
@@ -744,10 +709,6 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       const esTrial = subscription.status === 'trialing';
       const hasTrialFlag = Boolean(subscription.trial_end);
 
-      const isActiveLike =
-        subscription.status === 'active' ||
-        subscription.status === 'trialing'; // si quieres que trial cuente como activa
-
       // ✅ Product(s) actuales y flags combinados
       try {
         const productsUpdated = await getProductsFromSubscription(stripe, subscription);
@@ -776,24 +737,22 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       await pool.query(
         `
         UPDATE tenants
-        SET membresia_activa   = $1,
-            es_trial           = $2,
-            plan               = $3,
-            membresia_inicio   = CASE WHEN $2 = false THEN $4 ELSE membresia_inicio END,
-            membresia_vigencia = $5,
-            trial_ever_claimed = CASE WHEN $6 THEN true ELSE trial_ever_claimed END,
-            plan_limits        = $7
-        WHERE id = $8
+        SET es_trial           = $1,
+            plan               = $2,
+            membresia_inicio   = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END,
+            membresia_vigencia = $4,
+            trial_ever_claimed = CASE WHEN $5 THEN true ELSE trial_ever_claimed END,
+            plan_limits        = $6
+        WHERE id = $7
         `,
         [
-          isActiveLike,                         // $1 -> membresia_activa
-          esTrial,                              // $2 -> es_trial
-          'pro',                                // $3 -> plan (o deriva del product si luego quieres)
-          new Date(subscription.current_period_start * 1000), // $4
-          new Date(subscription.current_period_end * 1000),   // $5
-          hasTrialFlag,                         // $6
-          planLimits,                           // $7
-          tenantId,                             // $8
+          esTrial,
+          'pro',
+          new Date(subscription.current_period_start * 1000),
+          new Date(subscription.current_period_end * 1000),
+          hasTrialFlag,
+          planLimits,
+          tenantId,
         ]
       );
 
