@@ -74,18 +74,7 @@ router.get('/me', async (req: Request, res: Response) => {
         slug,
         categoria,
         idioma,
-
-        -- plan interno (por si lo necesitas en backend)
-        COALESCE(plan, 'trial') AS plan,
-
-        -- 👇 nombre visible del plan:
-        -- si el webhook ya guardó pricing_snapshot->plan_name, usamos ese
-        -- si no, caemos al plan interno / 'trial'
-        COALESCE(
-          pricing_snapshot->>'plan_name',
-          COALESCE(plan, 'trial')
-        ) AS plan_activo,
-
+        COALESCE(plan, 'trial')            AS plan,
         COALESCE(membresia_activa, false)  AS membresia_activa,
         membresia_inicio,
         prompt,
@@ -278,14 +267,7 @@ router.post('/', async (req: Request, res: Response) => {
         slug,
         categoria,
         idioma,
-
-        COALESCE(plan, 'trial') AS plan,
-
-        COALESCE(
-          pricing_snapshot->>'plan_name',
-          COALESCE(plan, 'trial')
-        ) AS plan_activo,
-
+        COALESCE(plan, 'trial')            AS plan,
         COALESCE(membresia_activa, false)  AS membresia_activa,
         membresia_inicio,
         prompt,
@@ -294,6 +276,7 @@ router.post('/', async (req: Request, res: Response) => {
         settings,
         links,
 
+        -- CAMPOS PLANOS DEL PIXEL PARA QUE EL FRONT NO TENGA QUE NAVEGAR settings.json
         COALESCE(settings->'meta'->>'pixel_id', '') AS meta_pixel_id,
         COALESCE((settings->'meta'->>'pixel_enabled')::boolean, false) AS meta_pixel_enabled
 
