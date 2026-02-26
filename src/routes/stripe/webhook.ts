@@ -371,6 +371,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         const inicio = new Date((subscription.start_date || Math.floor(Date.now() / 1000)) * 1000);
         const esTrial = subscription.status === 'trialing';
         const hasTrialFlag = Boolean(subscription.trial_end);
+        const productId = productsA[0]?.id || null;
 
         await pool.query(
           `
@@ -382,18 +383,20 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
               subscription_id      = $5,
               es_trial             = $6,
               trial_ever_claimed   = CASE WHEN $7 THEN true ELSE trial_ever_claimed END,
-              plan_limits          = $8
+              plan_limits          = $8,
+              stripe_product_id    = $9        -- 👈 NUEVO
           WHERE id = $1
           `,
           [
             tenantId,
             vigencia,
             inicio,
-            planCode,            // ✅ antes 'pro'
+            planCode,
             subscription.id,
             esTrial,
             hasTrialFlag,
             planLimits,
+            productId,                         // 👈 NUEVO
           ]
         );
 
@@ -628,6 +631,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           (prod?.metadata as any)?.plan_code ||
           prod?.name ||
           'pro';
+        const productId = prod?.id || null;
 
         await pool.query(
           `
@@ -639,18 +643,20 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
                 subscription_id    = $5,
                 es_trial           = $6,
                 trial_ever_claimed = CASE WHEN $7 THEN true ELSE trial_ever_claimed END,
-                plan_limits        = $8
+                plan_limits        = $8,
+                stripe_product_id  = $9        -- 👈 NUEVO
           WHERE id = $1
           `,
           [
             tenantId,
             vigencia,
             new Date(subscription.start_date * 1000),
-            planCode,              // ✅ antes 'pro'
+            planCode,
             subscriptionId,
             esTrial,
             hasTrialFlag,
             planLimits,
+            productId,                         // 👈 NUEVO
           ]
         );
 
@@ -742,6 +748,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       // Plan limits desde producto (si necesitas)
       let planLimits: Record<string, number> = {};
       let planCode: string | null = null;
+      let productId: string | null = null; 
 
       try {
         const p0 = await getProductFromSubscription(stripe, subscription);
@@ -755,6 +762,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
             (p0.metadata as any)?.plan_code ||
             p0.name ||
             null;
+          productId = p0.id;
         }
       } catch (e) {
         console.warn("⚠️ No se pudo resolver producto/plan en sub.updated:", e);
@@ -764,11 +772,12 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         `
         UPDATE tenants
         SET es_trial           = $1,
-            plan               = COALESCE($2, plan), -- ✅ solo se pisa si tenemos nuevo plan
+            plan               = COALESCE($2, plan),
             membresia_inicio   = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END,
             membresia_vigencia = $4,
             trial_ever_claimed = CASE WHEN $5 THEN true ELSE trial_ever_claimed END,
-            plan_limits        = $6
+            plan_limits        = $6,
+            stripe_product_id  = COALESCE($8, stripe_product_id)   -- 👈 NUEVO
         WHERE id = $7
         `,
         [
@@ -779,6 +788,7 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
           hasTrialFlag,
           planLimits,
           tenantId,
+          productId,   // 👈 NUEVO ($8)
         ]
       );
 
