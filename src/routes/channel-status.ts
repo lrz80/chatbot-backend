@@ -139,13 +139,24 @@ router.get("/", async (req: Request, res: Response) => {
 
     // 2) Tenant: plan + extra_features
     const { rows } = await pool.query(
-      `SELECT plan, es_trial, trial_ends_at, plan_after_trial, extra_features
-       FROM tenants
-       WHERE id = $1`,
+      `SELECT plan,
+              es_trial,
+              trial_ends_at,
+              plan_after_trial,
+              extra_features,
+              stripe_product_id
+      FROM tenants
+      WHERE id = $1`,
       [tenantId]
     );
     const tenant = rows[0] || {};
-    const extra = (tenant.extra_features as any) || {};
+
+    // 🔴 IMPORTANTE: combinamos extra_features + stripe_product_id del tenant
+    const extra = {
+      ...(tenant.extra_features as any || {}),
+      stripe_product_id: tenant.stripe_product_id,
+    };
+
     const { planName } = resolveEffectivePlan(tenant);
 
     // 3) Plan enabled REAL por Stripe metadata (product_id), no por planName
