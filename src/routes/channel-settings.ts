@@ -162,17 +162,25 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
 
     // 3) Tenant plan + overrides
     const { rows } = await pool.query(
-      `SELECT plan, es_trial, trial_ends_at, plan_after_trial, extra_features
-       FROM tenants
-       WHERE id = $1`,
+      `SELECT plan,
+              es_trial,
+              trial_ends_at,
+              plan_after_trial,
+              extra_features,
+              stripe_product_id
+      FROM tenants
+      WHERE id = $1`,
       [tenant_id]
     );
 
     const tenant = rows[0] || {};
     const { planName, trialActive } = resolveEffectivePlan(tenant);
 
-    // 👇 extra_features (jsonb) para overrides/admin
-    const extra = (tenant.extra_features as any) || {};
+    // 👇 extra_features (jsonb) + stripe_product_id real del tenant
+    const extra = {
+      ...(tenant.extra_features as any || {}),
+      stripe_product_id: tenant.stripe_product_id,
+    };
 
     // ✅ 3.1 Resolver product_id SIN depender del nombre del plan
     const productId = resolveProductId(planName, extra);
