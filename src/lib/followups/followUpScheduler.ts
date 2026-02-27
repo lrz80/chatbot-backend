@@ -48,15 +48,6 @@ function clampLevel(level?: number | null): 1 | 2 | 3 {
   return 2;
 }
 
-function computeDelayMinutes(opts: {
-  baseMinutes: number;
-  interestLevel: 1 | 2 | 3;
-}): number {
-  // 1=base, 2=base*2, 3=base*3
-  const { baseMinutes, interestLevel } = opts;
-  return Math.max(1, Math.round(baseMinutes * interestLevel));
-}
-
 async function getFollowUpSettings(tenantId: string): Promise<FollowUpSettingsRow | null> {
   try {
     const { rows } = await pool.query(
@@ -275,14 +266,8 @@ export async function scheduleFollowUpIfEligible(opts: {
     return { scheduled: false, reason: "no_template", level };
   }
 
-  // ✅ baseMinutes viene de DB; si tu UI configura 1–23 horas,
-  // asegúrate de guardar minutos_espera en minutos (horas*60) en el endpoint.
-  const baseMinutes = Math.max(1, Number(settings.minutos_espera || 60));
-
-  const delayMinutes = computeDelayMinutes({
-    baseMinutes,
-    interestLevel: level,
-  });
+  // 🕒 minutos_espera en DB se interpreta como delay FINAL en MINUTOS
+  const delayMinutes = Math.max(1, Number(settings.minutos_espera || 60));
 
   // ✅ clave: borrar pending antes de reprogramar
   await cancelPendingFollowUps({
