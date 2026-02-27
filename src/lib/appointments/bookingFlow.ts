@@ -514,13 +514,15 @@ if (wantsBooking && !bookingLink && !googleConnected) {
   };
 }
 
-if (booking.step === "idle") {
+// ✅ start.ts se encarga tanto de arrancar booking como de manejar "manage_existing"
+//    (menu 1=cancelar / 2=reprogramar). Hay que llamarlo en ambos casos.
+if (booking.step === "idle" || booking.step === "manage_existing") {
   return handleStartBooking({
-    tenantId,                 // ✅
+    tenantId,
     canal: canal as any,
     contacto,
-    bufferMin,                // ✅ (ya lo tienes calculado arriba)
-    getSlotsForDateWindow,    // ✅
+    bufferMin,
+    getSlotsForDateWindow,
     idioma,
     userText,
     timeZone,

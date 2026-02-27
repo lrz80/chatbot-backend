@@ -4,6 +4,7 @@ export type BookingCtx = {
   booking?: {
     step?:
       | "idle"
+      | "manage_existing"
       | "ask_purpose"
       | "ask_daypart"
       | "offer_slots"
