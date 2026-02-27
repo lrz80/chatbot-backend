@@ -46,8 +46,31 @@ export async function cancelAppointmentById(args: {
   }
 
   // 3) Si hay google_event_id -> borrar en Google primero
-  const googleEventId = String(appt.google_event_id || "").trim();
+  let googleEventId = String(appt.google_event_id || "").trim();
   const googleLink = String(appt.google_event_link || "").trim() || null;
+
+  // 🔁 Fallback: si no guardamos google_event_id, lo derivamos del link
+  if (!googleEventId && googleLink && googleLink.includes("calendar/event")) {
+    try {
+      const url = new URL(googleLink);
+      const eid = url.searchParams.get("eid"); // base64 de "eventId calendarId"
+      if (eid) {
+        const decoded = Buffer.from(eid, "base64").toString("utf8");
+        // formato típico: "<eventId> <calendarId>"
+        const [idFromLink] = decoded.split(" ");
+        if (idFromLink) {
+          googleEventId = idFromLink;
+          console.log("[cancelAppointmentById] eventId derivado desde google_event_link:", {
+            eid,
+            decoded,
+            eventId: googleEventId,
+          });
+        }
+      }
+    } catch (e: any) {
+      console.warn("[cancelAppointmentById] No pude derivar eventId desde google_event_link:", e?.message);
+    }
+  }
 
   if (googleEventId) {
     try {
