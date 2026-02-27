@@ -1,3 +1,4 @@
+// src/lib/conversationState.ts
 import pool from "./db";
 
 export type ConversationState = {
@@ -10,6 +11,9 @@ export type ConversationState = {
   updated_at?: string;
   created_at?: string;
 };
+
+// ⏱ TTL de conversación (15 minutos sin actividad)
+const CONVERSATION_TTL_MS = 15 * 60 * 1000;
 
 export async function getConversationState(
   tenantId: string,
@@ -27,6 +31,33 @@ export async function getConversationState(
   if (!rows[0]) return null;
 
   const row = rows[0] as ConversationState;
+
+  // 🧹 AUTO-RESET por inactividad (TTL)
+  if (row.updated_at) {
+    const last = new Date(row.updated_at).getTime();
+    const now = Date.now();
+
+    if (Number.isFinite(last) && now - last > CONVERSATION_TTL_MS) {
+      console.log("🧹 conversation_state TTL expired, clearing context:", {
+        tenantId,
+        canal,
+        senderId,
+        lastUpdated: row.updated_at,
+      });
+
+      // Borra el estado viejo para que se regenere limpio
+      await pool.query(
+        `
+        DELETE FROM conversation_state
+        WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
+        `,
+        [tenantId, canal, senderId]
+      );
+
+      return null;
+    }
+  }
+
   return {
     ...row,
     context: row.context || {},
@@ -107,6 +138,7 @@ export async function getOrInitConversationState(params: {
   const defaultFlow = params.defaultFlow ?? "generic_sales";
   const defaultStep = params.defaultStep ?? "start";
 
+  // 👇 OJO: getConversationState ya aplica TTL
   const existing = await getConversationState(tenantId, canal, senderId);
 
   if (existing) {
@@ -114,7 +146,10 @@ export async function getOrInitConversationState(params: {
       ...existing,
       active_flow: existing.active_flow ?? defaultFlow,
       active_step: existing.active_step ?? defaultStep,
-      context: (existing.context && typeof existing.context === "object") ? existing.context : {},
+      context:
+        existing.context && typeof existing.context === "object"
+          ? existing.context
+          : {},
     };
   }
 
