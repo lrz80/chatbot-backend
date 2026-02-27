@@ -890,8 +890,20 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
     const PRICE_LIST_FORMAT_RULE =
       idiomaDestino === "en"
-        ? "RULE: When you answer price or plan questions using SYSTEM_STRUCTURED_DATA, format the options as a short bullet list. Start with 0–1 short intro line, then one line per option like '• Plan Gold: $X/month – short benefit'. Avoid long paragraphs and keep at most 4–5 options."
-        : "REGLA: Cuando respondas preguntas de precios o planes usando DATOS_ESTRUCTURADOS_DEL_SISTEMA, presenta las opciones como una lista con viñetas. Puedes poner 0–1 línea de introducción corta y luego una línea por opción, por ejemplo: '• Plan Gold: $X/mes – beneficio breve'. Evita párrafos largos y limita a máximo 4–5 opciones.";
+        ? [
+            "RULE: If your reply mentions any prices or plans from SYSTEM_STRUCTURED_DATA, you MUST format them as a bullet list.",
+            "- You may start with 0–1 very short intro line (e.g. 'Main prices are:').",
+            "- Then put ONE option per line like: '• Plan Gold Autopay: $165.99/month – short benefit'.",
+            "- NEVER put several different prices or plans in one long paragraph.",
+            "- If the user also asks about schedules/hours, answer hours in 1 short sentence and then show the prices as a bullet list."
+          ].join(" ")
+        : [
+            "REGLA: Si tu respuesta menciona precios o planes tomados de DATOS_ESTRUCTURADOS_DEL_SISTEMA, DEBES formatearlos como lista con viñetas.",
+            "- Puedes empezar con 0–1 línea muy corta de introducción (por ejemplo: 'Los precios principales son:').",
+            "- Luego usa UNA línea por opción, por ejemplo: '• Plan Gold Autopay: $165.99/mes – beneficio breve'.",
+            "- NUNCA metas varios precios o planes distintos en un solo párrafo largo.",
+            "- Si el usuario también pregunta por horarios, responde los horarios en 1 frase corta y después muestra los precios como lista con viñetas."
+          ].join(" ");
 
     // 🚫 ROLLBACK: PROMPT-ONLY (sin DB catalog)
     const fallbackWelcome = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
