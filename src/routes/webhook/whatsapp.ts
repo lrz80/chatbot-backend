@@ -65,6 +65,9 @@ import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
 import { looksLikeShortLabel } from "../../lib/channels/engine/lang/looksLikeShortLabel";
 import { runFastpath } from "../../lib/fastpath/runFastpath";
 import { naturalizeSecondaryOptionsLine } from "../../lib/fastpath/naturalizeSecondaryOptions";
+import {
+  handleFastpathHybridTurn,
+} from "../../lib/channels/engine/fastpath/handleFastpathHybridTurn";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -849,187 +852,42 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   }
 
   // ===============================
-  // ⚡ FASTPATH (extraído a módulo reusable)
+  // ⚡ FASTPATH (módulo híbrido reutilizable)
   // ===============================
   {
-    const fp = await runFastpath({
+    const fpRes = await handleFastpathHybridTurn({
       pool,
       tenantId: tenant.id,
       canal,
       idiomaDestino,
       userInput,
       inBooking: Boolean(inBooking0),
-      convoCtx: convoCtx as any,
+      convoCtx,
       infoClave: String(tenant?.info_clave || ""),
-      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
-      maxDisambiguationOptions: 5,
-      lastServiceTtlMs: 60 * 60 * 1000,
+      detectedIntent: detectedIntent || null,
+      intentFallback: INTENCION_FINAL_CANONICA || null,
+      messageId: messageId || null,
+      contactoNorm,
+      promptBaseMem,
     });
 
-    // aplicar patch de contexto
-    if (fp.ctxPatch) transition({ patchCtx: fp.ctxPatch });
-
-    // aplicar efectos (awaiting) fuera del módulo
-    if (fp.handled && fp.awaitingEffect?.type === "set_awaiting_yes_no") {
-      const { setAwaitingState } = await import("../../lib/awaiting/setAwaitingState");
-      await setAwaitingState(pool, {
-        tenantId: tenant.id,
-        canal,
-        senderId: contactoNorm,
-        field: "yes_no",
-        payload: fp.awaitingEffect.payload,
-        ttlSeconds: fp.awaitingEffect.ttlSeconds,
-      });
+    // aplicar patch de contexto devuelto por el helper
+    if (fpRes.ctxPatch) {
+      transition({ patchCtx: fpRes.ctxPatch });
     }
 
-    if (fp.handled) {
-      // ✅ Texto “factual” que viene de Fastpath (precios, includes, listas, etc.)
-      let fastpathText = fp.reply;
-
-      const isPlansList =
-        fp.source === "service_list_db" &&
-        (convoCtx as any)?.last_list_kind === "plan";
-
-      const hasPkgs = (convoCtx as any)?.has_packages_available === true;
-
-      // 🔍 NUEVO: detectar si fastpath ya trae link o viene de info_clave_*
-      const hasLinkInFastpath = /https?:\/\/\S+/i.test(fastpathText);
-      const isInfoClaveSource = String(fp.source || "").startsWith("info_clave");
-
-      // 🛑 BYPASS LLM EN WHATSAPP SI YA TENEMOS LINK O ES INFO_CLAVE
-      if (canal === "whatsapp" && (hasLinkInFastpath || isInfoClaveSource)) {
-        console.log("[WHATSAPP][FASTPATH] Bypass LLM (link/info_clave)", {
-          source: fp.source,
-          hasLinkInFastpath,
-        });
-
-        return await replyAndExit(fastpathText, fp.source, fp.intent);
+    if (fpRes.handled && fpRes.reply) {
+      // actualiza intención final canónica si el helper la refinó
+      if (fpRes.intent) {
+        INTENCION_FINAL_CANONICA = fpRes.intent;
+        lastIntent = fpRes.intent;
       }
 
-      // Para otros canales (meta, sms…), mantenemos la naturalización secundaria
-      if (canal !== "whatsapp" && isPlansList && hasPkgs) {
-        fastpathText = await naturalizeSecondaryOptionsLine({
-          tenantId: tenant.id,
-          idiomaDestino,
-          canal,
-          baseText: fastpathText,
-          primary: "plans",
-          secondaryAvailable: true,
-          maxLines: MAX_WHATSAPP_LINES,
-        });
-      }
-
-      // 🌀 MODO HÍBRIDO SOLO CUANDO NO HAY LINK DIRECTO
-      if (canal === "whatsapp") {
-        const history = await getRecentHistoryForModel({
-          tenantId: tenant.id,
-          canal,
-          fromNumber: contactoNorm,
-          excludeMessageId: messageId,
-          limit: 12,
-        });
-
-        const NO_NUMERIC_MENUS =
-          idiomaDestino === "en"
-            ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."
-            : "REGLA: NO muestres menús numerados ni pidas que respondan con un número. Si necesitas aclarar, haz UNA sola pregunta corta. Las selecciones por número las maneja el sistema, no tú.";
-
-        const PRICE_QUALIFIER_RULE =
-          idiomaDestino === "en"
-            ? "RULE: If a price is described as 'FROM/STARTING AT' (or 'desde'), you MUST keep that qualifier. Never rewrite it as an exact price. Use: 'starts at $X' / 'from $X'."
-            : "REGLA: Si un precio está descrito como 'DESDE' (o 'from/starting at'), DEBES mantener ese calificativo. Nunca lo conviertas en precio exacto. Usa: 'desde $X'.";
-
-        const NO_PRICE_INVENTION_RULE =
-          idiomaDestino === "en"
-            ? "RULE: Do not invent exact prices. Only mention prices if explicitly present in the provided business info or in SYSTEM_STRUCTURED_DATA, and preserve ranges/qualifiers."
-            : "REGLA: No inventes precios exactos. Solo menciona precios si están explícitos en la info del negocio o en DATOS_ESTRUCTURADOS_DEL_SISTEMA, y preserva rangos/calificativos (DESDE).";
-
-        const PRICE_LIST_FORMAT_RULE =
-          idiomaDestino === "en"
-            ? "RULE: When you answer price or plan questions using SYSTEM_STRUCTURED_DATA, format the options as a short bullet list. Start with 0–1 short intro line, then one line per option like '• Plan Gold: $X/month – short benefit'. Avoid long paragraphs and keep at most 4–5 options."
-            : "REGLA: Cuando respondas preguntas de precios o planes usando DATOS_ESTRUCTURADOS_DEL_SISTEMA, presenta las opciones como una lista con viñetas. Puedes poner 0–1 línea de introducción corta y luego una línea por opción, por ejemplo: '• Plan Gold: $X/mes – beneficio breve'. Evita párrafos largos y limita a máximo 4–5 opciones.";
-
-        // 🚀 Prompt base + datos estrictos de Fastpath
-        const promptConFastpath = [
-          promptBaseMem,
-          "",
-          "DATOS_ESTRUCTURADOS_DEL_SISTEMA (úsalos como fuente de verdad, sin cambiar montos ni nombres de planes/servicios):",
-          fastpathText,
-          "",
-          "INSTRUCCIONES_DE_ESTILO_PARA_ESTE TURNO:",
-          NO_NUMERIC_MENUS,
-          PRICE_QUALIFIER_RULE,
-          NO_PRICE_INVENTION_RULE,
-          PRICE_LIST_FORMAT_RULE,
-          "",
-          idiomaDestino === "en"
-            ? "RULE: You may rephrase for a natural WhatsApp tone, but DO NOT change amounts, ranges, or plan/service names."
-            : "REGLA: Puedes re-redactar para que suene natural en WhatsApp, pero NO cambies montos, rangos ni nombres de planes/servicios.",
-        ].join("\n");
-
-        const composed = await answerWithPromptBase({
-          tenantId: tenant.id,
-          promptBase: promptConFastpath,
-          userInput,                     // el mensaje real del cliente
-          history,
-          idiomaDestino,
-          canal: "whatsapp",
-          maxLines: MAX_WHATSAPP_LINES,
-          fallbackText: fastpathText,    // si falla el LLM, enviamos al menos lo de Fastpath
-        });
-
-        // ================================================
-        // PASO 1 — Detect CTA del LLM y preparar awaiting_yes_no_action
-        // ================================================
-        {
-          const text = (composed.text || "").toLowerCase().trim();
-
-          // Detecta si el LLM está haciendo una pregunta YES/NO natural
-          const isYesNoCTA =
-            /\?\s*$/.test(text) &&
-            (
-              /\bte gustar[íi]a\b/.test(text) ||
-              /\bquieres\b/.test(text) ||
-              /\bdeseas\b/.test(text) ||
-              /\bwould you like\b/.test(text) ||
-              /\bdo you want\b/.test(text)
-            );
-
-          if (isYesNoCTA) {
-            // El LLM mencionó un servicio en texto
-            // Intentamos recuperarlo del ctx (fastpath ya resolvió last_service_id)
-            const sid = (convoCtx as any)?.last_service_id || null;
-            const sname = (convoCtx as any)?.last_service_name || null;
-
-            let serviceUrl: string | null = null;
-            if (sid) {
-              const r = await pool.query(
-                `SELECT service_url FROM services WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
-                [sid, tenant.id]
-              );
-              serviceUrl = r.rows[0]?.service_url || null;
-            }
-
-            if (sid && serviceUrl) {
-              transition({
-                patchCtx: {
-                  awaiting_yes_no_action: {
-                    kind: "cta_yes_no_service",
-                    serviceId: sid,
-                    label: sname || "Reserva",
-                    link: serviceUrl
-                  }
-                }
-              });
-            }
-          }
-        }
-
-        return await replyAndExit(composed.text, fp.source, fp.intent);
-      }
-
-      // 🔁 Para otros canales, seguimos devolviendo el texto de Fastpath directamente
-      return await replyAndExit(fastpathText, fp.source, fp.intent);
+      return await replyAndExit(
+        fpRes.reply,
+        fpRes.replySource || "fastpath_hybrid",
+        fpRes.intent || null
+      );
     }
   }
 
