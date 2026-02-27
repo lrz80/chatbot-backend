@@ -54,6 +54,7 @@ import {
 } from "../../lib/channels/engine/fastpath/handleFastpathHybridTurn";
 import { handleStateMachineTurn } from "../../lib/channels/engine/sm/handleStateMachineTurn";
 import { handleUserSignalsTurn } from "../../lib/channels/engine/turn/handleUserSignalsTurn";
+import { handleBookingTurn } from "../../lib/channels/engine/booking/handleBookingTurn";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -69,9 +70,6 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 
 // 🛡️ Cache en memoria para dedupe de inbound (texto+contacto+tenant)
 const inboundDedupCache = new Map<string, number>();
-
-// BOOKING HELPERS
-const BOOKING_TZ = "America/New_York";
 
 // ===============================
 // 🧠 STATE MACHINE (conversational brain)
@@ -556,29 +554,32 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   }
 
   // ===============================
-  // 📅 BOOKING helper (reduce duplicación)
+  // 📅 BOOKING helper (usa módulo genérico)
   // ===============================
   async function tryBooking(mode: "gate" | "guardrail", tag: string) {
-    const bk = await runBookingPipeline({
+    const bookingRes = await handleBookingTurn({
       pool,
       tenantId: tenant.id,
-      canal: "whatsapp",
-      contacto: contactoNorm,
-      idioma: idiomaDestino,
-      userText: userInput,
+      canal,                 // "whatsapp" aquí, pero genérico para otros canales
+      contactoNorm,
+      idiomaDestino,
+      userInput,
       messageId: messageId || null,
 
       ctx: convoCtx,
-      transition,
 
       bookingEnabled,
       promptBase,
 
-      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
+      detectedIntent,
+      intentFallback: INTENCION_FINAL_CANONICA,
 
       mode,
       sourceTag: tag,
 
+      transition,
+
+      // cómo se persiste conversation_state en WhatsApp
       persistState: async (nextCtx) => {
         await setConversationStateCompat(tenant.id, canal, contactoNorm, {
           activeFlow,
@@ -589,10 +590,18 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       },
     });
 
-    if (bk.handled) {
-      await replyAndExit(bk.reply, bk.source, bk.intent);
+    // siempre sincronizamos el contexto local con el que devolvió booking
+    convoCtx = bookingRes.ctx;
+
+    if (bookingRes.handled && bookingRes.reply) {
+      await replyAndExit(
+        bookingRes.reply,
+        bookingRes.source || "booking_pipeline",
+        bookingRes.intent || null
+      );
       return true;
     }
+
     return false;
   }
 
