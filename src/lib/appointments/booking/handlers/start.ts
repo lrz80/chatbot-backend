@@ -10,7 +10,7 @@ import { googleFreeBusy } from "../../../../services/googleCalendar";
 import { extractBusyBlocks } from "../freebusy";
 import { cancelAppointmentById } from "../../cancelAppointment";
 import { findActiveAppointmentsByPhone } from "../../find";
-
+import pool from "../../../db";  // 👈 ruta desde handlers → booking → appointments → lib/db
 
 export type StartBookingDeps = {
   idioma: "es" | "en";
@@ -164,31 +164,44 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
     // 2a) Cancelar
     if (chooseCancel) {
-      console.log("[BOOKING] cancel flow HIT", {
-        tenantId: (deps as any).tenantId,
-        apptId,
-        bookingStep: (deps as any).booking?.step,
-        userText: deps.userText,
-      });
+      const tenantId = (deps as any).tenantId;
 
       const out = await cancelAppointmentById({
-        tenantId: (deps as any).tenantId,
+        tenantId,
         appointmentId: apptId,
       });
 
-      console.log("[BOOKING] cancel result", {
-        tenantId: (deps as any).tenantId,
-        apptId,
-        out,
-      });
-
+      // ⬇️ Si algo falló (DB o Google), construimos un mensaje con teléfono del negocio
       if (!out.ok) {
+        let businessPhone: string | null = null;
+
+        try {
+          const { rows } = await pool.query(
+            `
+            SELECT telefono_negocio
+            FROM tenants
+            WHERE id = $1
+            LIMIT 1
+            `,
+            [tenantId]
+          );
+          businessPhone = rows[0]?.telefono_negocio || null;
+        } catch (e) {
+          console.warn("[BOOKING cancel] error leyendo telefono_negocio:", (e as any)?.message);
+        }
+
+        const replyError =
+          lang === "en"
+            ? businessPhone
+              ? `I couldn’t cancel it right now. Please contact us at ${businessPhone}.`
+              : "I couldn’t cancel it right now. Please try again in a moment."
+            : businessPhone
+              ? `No pude cancelarla en este momento. Por favor comunícate con nosotros al ${businessPhone}.`
+              : "No pude cancelarla en este momento. Intenta de nuevo en unos segundos.";
+
         return {
           handled: true,
-          reply:
-            lang === "en"
-              ? "I couldn’t cancel it right now. Please try again in a moment."
-              : "No pude cancelarla en este momento. Intenta de nuevo en unos segundos.",
+          reply: replyError,
           ctxPatch: {
             booking: {
               ...(deps as any).booking,
@@ -200,6 +213,7 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         };
       }
 
+      // ✅ Éxito: cancelada
       return {
         handled: true,
         reply:

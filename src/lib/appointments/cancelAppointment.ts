@@ -7,8 +7,10 @@ async function getTenantCalendarId(tenantId: string): Promise<string> {
   const { rows } = await pool.query(
     `
     SELECT calendar_id
-    FROM google_calendar_accounts
+    FROM calendar_integrations
     WHERE tenant_id = $1
+      AND provider = 'google'
+      AND status = 'connected'
     LIMIT 1
     `,
     [tenantId]
@@ -104,20 +106,23 @@ export async function cancelAppointmentById(args: {
   }
 
   // 4) Marcar SIEMPRE como cancelled en la DB
-  await pool.query(
+  const updateRes = await pool.query(
     `
     UPDATE appointments
-       SET status = 'cancelled',
-           updated_at = NOW()
-     WHERE id = $1 AND tenant_id = $2
+      SET status = 'cancelled',
+          updated_at = NOW()
+    WHERE id = $1 AND tenant_id = $2
+    RETURNING id, status
     `,
     [appointmentId, tenantId]
   );
 
+  console.log("[CANCEL] DB updated", updateRes.rows[0]);
+
   return {
-    ok: googleError ? false : true,
+    ok: true as const,               // 👈 SIEMPRE true si la DB se actualizó
     canceled: true as const,
     google_event_link: googleLink,
-    googleError,
+    googleError,                     // 👈 solo para logging/monitoring
   };
 }
