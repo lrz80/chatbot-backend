@@ -1,8 +1,8 @@
-//src/lib/appoinments/cancelAppointments.ts
+// src/lib/appointments/cancelAppointment.ts
 import pool from "../db";
 import { googleDeleteEvent } from "../../services/googleCalendar";
 
-// 👇 NUEVO helper
+// 👇 helper: calendarId por tenant, con fallback a "primary"
 async function getTenantCalendarId(tenantId: string): Promise<string> {
   const { rows } = await pool.query(
     `
@@ -14,7 +14,6 @@ async function getTenantCalendarId(tenantId: string): Promise<string> {
     [tenantId]
   );
 
-  // si no hay registro, fallback a "primary"
   return String(rows[0]?.calendar_id || "primary");
 }
 
@@ -24,7 +23,7 @@ export async function cancelAppointmentById(args: {
 }) {
   const { tenantId, appointmentId } = args;
 
-  // 1) Cargar cita (segura por tenant)
+  // 1) Cargar cita (seguro por tenant)
   const { rows } = await pool.query(
     `
     SELECT id, tenant_id, status, google_event_id, google_event_link
@@ -45,36 +44,39 @@ export async function cancelAppointmentById(args: {
     return { ok: true, already: true as const };
   }
 
-  // 3) Si hay google_event_id -> borrar en Google primero
+  // 3) Resolver eventId de Google
   let googleEventId = String(appt.google_event_id || "").trim();
   const googleLink = String(appt.google_event_link || "").trim() || null;
 
-  // 🔁 Fallback: si no guardamos google_event_id, lo derivamos del link
+  // Fallback: derivar eventId desde google_event_link si hace falta
   if (!googleEventId && googleLink && googleLink.includes("calendar/event")) {
     try {
       const url = new URL(googleLink);
-      const eid = url.searchParams.get("eid"); // base64 de "eventId calendarId"
+      const eid = url.searchParams.get("eid"); // base64 "<eventId> <calendarId>"
       if (eid) {
         const decoded = Buffer.from(eid, "base64").toString("utf8");
-        // formato típico: "<eventId> <calendarId>"
         const [idFromLink] = decoded.split(" ");
         if (idFromLink) {
           googleEventId = idFromLink;
-          console.log("[cancelAppointmentById] eventId derivado desde google_event_link:", {
-            eid,
-            decoded,
-            eventId: googleEventId,
-          });
+          console.log(
+            "[cancelAppointmentById] eventId derivado desde google_event_link:",
+            { eid, decoded, eventId: googleEventId }
+          );
         }
       }
     } catch (e: any) {
-      console.warn("[cancelAppointmentById] No pude derivar eventId desde google_event_link:", e?.message);
+      console.warn(
+        "[cancelAppointmentById] No pude derivar eventId desde google_event_link:",
+        e?.message
+      );
     }
   }
 
+  // 3b) Intentar borrar en Google, pero NUNCA salir antes de actualizar la DB
+  let googleError: string | null = null;
+
   if (googleEventId) {
     try {
-      // 👇 resolvemos el mismo calendarId donde se creó la cita
       const calendarId = await getTenantCalendarId(tenantId);
 
       await googleDeleteEvent({
@@ -84,6 +86,11 @@ export async function cancelAppointmentById(args: {
       });
     } catch (e: any) {
       const msg = String(e?.message || "google_delete_failed");
+      googleError = `CANCEL_GOOGLE_${msg}`;
+
+      console.warn("[cancelAppointmentById] Error al borrar en Google:", msg);
+
+      // Logueamos el error, pero NO hacemos return aquí
       await pool.query(
         `
         UPDATE appointments
@@ -91,24 +98,26 @@ export async function cancelAppointmentById(args: {
                updated_at = NOW()
          WHERE id = $1 AND tenant_id = $3
         `,
-        [appointmentId, `CANCEL_GOOGLE_${msg}`, tenantId]
+        [appointmentId, googleError, tenantId]
       );
-
-      return { ok: false, error: "GOOGLE_DELETE_FAILED" as const, detail: msg };
     }
   }
 
-  // 4) Marcar canceled
+  // 4) Marcar SIEMPRE como cancelled en la DB
   await pool.query(
     `
     UPDATE appointments
        SET status = 'cancelled',
-           error_reason = NULL,
            updated_at = NOW()
      WHERE id = $1 AND tenant_id = $2
     `,
     [appointmentId, tenantId]
   );
 
-  return { ok: true, canceled: true as const, google_event_link: googleLink };
+  return {
+    ok: googleError ? false : true,
+    canceled: true as const,
+    google_event_link: googleLink,
+    googleError,
+  };
 }
