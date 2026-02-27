@@ -1,5 +1,22 @@
+//src/lib/appoinments/cancelAppointments.ts
 import pool from "../db";
 import { googleDeleteEvent } from "../../services/googleCalendar";
+
+// 👇 NUEVO helper
+async function getTenantCalendarId(tenantId: string): Promise<string> {
+  const { rows } = await pool.query(
+    `
+    SELECT calendar_id
+    FROM google_calendar_accounts
+    WHERE tenant_id = $1
+    LIMIT 1
+    `,
+    [tenantId]
+  );
+
+  // si no hay registro, fallback a "primary"
+  return String(rows[0]?.calendar_id || "primary");
+}
 
 export async function cancelAppointmentById(args: {
   tenantId: string;
@@ -24,7 +41,7 @@ export async function cancelAppointmentById(args: {
   }
 
   // 2) Idempotencia
-  if (appt.status === "canceled") {
+  if (appt.status === "canceled" || appt.status === "cancelled") {
     return { ok: true, already: true as const };
   }
 
@@ -34,9 +51,12 @@ export async function cancelAppointmentById(args: {
 
   if (googleEventId) {
     try {
+      // 👇 resolvemos el mismo calendarId donde se creó la cita
+      const calendarId = await getTenantCalendarId(tenantId);
+
       await googleDeleteEvent({
         tenantId,
-        calendarId: "primary",
+        calendarId,
         eventId: googleEventId,
       });
     } catch (e: any) {
@@ -59,7 +79,7 @@ export async function cancelAppointmentById(args: {
   await pool.query(
     `
     UPDATE appointments
-       SET status = 'canceled',
+       SET status = 'cancelled',
            error_reason = NULL,
            updated_at = NOW()
      WHERE id = $1 AND tenant_id = $2
