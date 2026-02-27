@@ -457,23 +457,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     // ✅ si hay kind pero no timestamp válido, también lo consideramos fresh
     const kindFresh = Boolean(kind) && (!kindAtOk || Date.now() - kindAt <= ttlMs);
 
-    // 🔎 debug fuerte
-    console.log("🧪 PICK CHECK", {
-      userInput,
-      planLen: planList.length,
-      planAtRaw,
-      planAt,
-      planFresh,
-      pkgLen: pkgList.length,
-      pkgAtRaw,
-      pkgAt,
-      pkgFresh,
-      kind,
-      kindAtRaw,
-      kindAt,
-      kindFresh,
-    });
-
     const healPatch: Partial<FastpathCtx> = {};
 
     if (planList.length > 0 && !planAtOk) healPatch.last_plan_list_at = Date.now();
@@ -1129,7 +1112,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
       // 3) Construir el texto de catálogo
       const catalogText = await buildCatalogContext(pool, tenantId);
-      console.log("🧾 CATALOGO DEBUG\n", catalogText);
 
       // 4) Detectar si el catálogo tiene algún plan que claramente da acceso a varias cosas
       const hasMultiAccessPlan = /todas las clases|todas nuestras clases|todas las sesiones|all classes|all services|any class|unlimited/i.test(
