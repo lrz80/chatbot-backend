@@ -94,8 +94,10 @@ export async function handleStateMachineTurn(
   // ✅ PASA LA FUNCIÓN REAL
   parseDatosCliente,
 
-  // ⚠️ Si todavía no tienes estos helpers aquí, pásalos como null (no undefined)
-  extractPaymentLinkFromPrompt: null,
+  // ✅ Stub seguro: siempre devuelve null → no rompe paymentHumanGuard
+  extractPaymentLinkFromPrompt: (text: string) => null,
+
+  // ✅ De momento sin regex de confirmación de pago
   PAGO_CONFIRM_REGEX: null,
 } as any);
 
