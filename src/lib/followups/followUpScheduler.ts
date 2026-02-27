@@ -28,6 +28,19 @@ type FollowUpSettingsRow = {
   mensaje_general?: string | null;
 };
 
+// ✅ Intenciones GENÉRICAS que sí justifican follow-up (multitenant, nada hardcode por negocio)
+const FOLLOWUP_ELIGIBLE_INTENTS = new Set<string>([
+  "interes",
+  "precio",
+  "cotizacion",
+  "agendar",
+  "reserva",
+  "compra",
+  "membresia",
+  "plan",
+  "paquete",
+]);
+
 function clampLevel(level?: number | null): 1 | 2 | 3 {
   const n = typeof level === "number" ? level : 2;
   if (n <= 1) return 1;
@@ -130,35 +143,137 @@ async function insertScheduledMessage(opts: {
 /**
  * ✅ API pública: un solo follow-up (NO secuencias) con delay según nivel.
  *
- * NUEVO comportamiento:
- * - Si existe follow-up pendiente, lo elimina y reprograma uno nuevo.
- * - Esto permite: “si el cliente vuelve a escribir, resetear el follow-up”.
+ * Comportamiento:
+ * - Respeta flag skip.
+ * - Ignora canal "preview".
+ * - Solo programa follow-up si:
+ *   - hay tenant.id y contacto,
+ *   - la intención es elegible (venta),
+ *   - nivel de interés >= 2,
+ *   - hay settings + plantilla en DB.
  */
 export async function scheduleFollowUpIfEligible(opts: {
   tenant: any;
   canal: FollowUpChannel;
   contactoNorm: string;
-  idiomaDestino: "es" | "en";   // queda por si luego quieres plantillas por idioma
-  intFinal: string | null;      // ya NO decide plantilla (solo debug/analytics)
-  nivel: number | null;         // ✅ esto decide el mensaje
+  idiomaDestino: "es" | "en";   // por si luego quieres plantillas por idioma
+  intFinal?: string | null;     // intención final (para debug/analytics)
+  nivel?: number | null;        // nivel de interés detectado
   userText: string;
-  skip?: boolean;        // si es true, no programa nada
-}): Promise<void> {
-  const { tenant, canal, contactoNorm, nivel } = opts;
+  skip?: boolean;               // si es true, no programa nada
+}): Promise<{
+  scheduled: boolean;
+  reason:
+    | "skip_flag"
+    | "invalid_tenant"
+    | "invalid_contact"
+    | "preview_channel"
+    | "no_intent"
+    | "intent_not_eligible"
+    | "interest_too_low"
+    | "no_settings"
+    | "no_template"
+    | "scheduled";
+  level?: 1 | 2 | 3;
+}> {
+  const {
+    tenant,
+    canal,
+    contactoNorm,
+    intFinal,
+    nivel,
+    userText,
+    skip,
+  } = opts;
 
-  if (!tenant?.id) return;
-  if (!contactoNorm || !String(contactoNorm).trim()) return;
+  // ✅ Respeta flag skip
+  if (skip) {
+    console.log("[FOLLOWUP] skipped: skip_flag", {
+      canal,
+      contactoNorm,
+      intFinal,
+      nivel,
+      userText,
+    });
+    return { scheduled: false, reason: "skip_flag" };
+  }
+
+  if (!tenant?.id) {
+    return { scheduled: false, reason: "invalid_tenant" };
+  }
+
+  if (!contactoNorm || !String(contactoNorm).trim()) {
+    return { scheduled: false, reason: "invalid_contact" };
+  }
 
   // nunca en preview
-  if (canal === "preview") return;
+  if (canal === "preview") {
+    console.log("[FOLLOWUP] skipped: preview_channel", {
+      canal,
+      contactoNorm,
+      intFinal,
+    });
+    return { scheduled: false, reason: "preview_channel" };
+  }
 
-  const level = clampLevel(nivel);
+  // ✅ normalizar nivel de interés
+  const nivelInteres = typeof nivel === "number" ? nivel : 0;
+
+  // ✅ 1) Sin intención -> no hay follow-up
+  if (!intFinal) {
+    console.log("[FOLLOWUP] skipped: no_intent", {
+      canal,
+      contactoNorm,
+      nivelInteres,
+      userText,
+    });
+    return { scheduled: false, reason: "no_intent" };
+  }
+
+  // ✅ 2) Intención debe ser elegible (venta)
+  if (!FOLLOWUP_ELIGIBLE_INTENTS.has(intFinal)) {
+    console.log("[FOLLOWUP] skipped: intent_not_eligible", {
+      intFinal,
+      canal,
+      contactoNorm,
+      nivelInteres,
+    });
+    return { scheduled: false, reason: "intent_not_eligible" };
+  }
+
+  // ✅ 3) Nivel de interés mínimo
+  if (nivelInteres < 2) {
+    console.log("[FOLLOWUP] skipped: interest_too_low", {
+      intFinal,
+      canal,
+      contactoNorm,
+      nivelInteres,
+    });
+    return { scheduled: false, reason: "interest_too_low" };
+  }
+
+  // A partir de aquí, SÍ queremos programar algo
+  const level = clampLevel(nivelInteres);
 
   const settings = await getFollowUpSettings(tenant.id);
-  if (!settings) return;
+  if (!settings) {
+    console.log("[FOLLOWUP] skipped: no_settings", {
+      tenantId: tenant.id,
+      intFinal,
+      level,
+    });
+    return { scheduled: false, reason: "no_settings", level };
+  }
 
   const template = pickTemplateByLevel(settings, level);
-  if (!template) return;
+  if (!template) {
+    console.log("[FOLLOWUP] skipped: no_template", {
+      tenantId: tenant.id,
+      intFinal,
+      level,
+    });
+    return { scheduled: false, reason: "no_template", level };
+  }
 
   // ✅ baseMinutes viene de DB; si tu UI configura 1–23 horas,
   // asegúrate de guardar minutos_espera en minutos (horas*60) en el endpoint.
@@ -183,4 +298,16 @@ export async function scheduleFollowUpIfEligible(opts: {
     contenido: template,
     delayMinutes,
   });
+
+  console.log("[FOLLOWUP] scheduled OK", {
+    tenantId: tenant.id,
+    canal,
+    contactoNorm,
+    intFinal,
+    nivelInteres,
+    level,
+    delayMinutes,
+  });
+
+  return { scheduled: true, reason: "scheduled", level };
 }
