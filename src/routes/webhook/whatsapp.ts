@@ -717,8 +717,9 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
   // ===============================
   // ⚡ FASTPATH (módulo híbrido reutilizable)
+  //    🔒 NO corre si hay booking activo
   // ===============================
-  {
+  if (!inBooking0) {
     const fpRes = await handleFastpathHybridTurn({
       pool,
       tenantId: tenant.id,
@@ -753,12 +754,15 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         fpRes.intent || null
       );
     }
+  } else {
+    console.log("🔒 FASTPATH SKIPPED: booking activo", { bookingStep0 });
   }
 
   // ===============================
   // 🤖 STATE MACHINE TURN (extraído a helper)
+  //    🔒 NO corre si hay booking activo
   // ===============================
-  {
+  if (!inBooking0) {
     const smHandled = await handleStateMachineTurn({
       pool,
       sm,
@@ -784,6 +788,8 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       // SM ya respondió (o hizo silencio con log); no seguimos al fallback
       return;
     }
+  } else {
+    console.log("🔒 SM SKIPPED: booking activo", { bookingStep0 });
   }
 
   // 🛡️ Anti-phishing (Single Exit): NO enviar aquí; capturar y salir por finalize
