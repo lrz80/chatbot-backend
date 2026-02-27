@@ -53,6 +53,12 @@ export async function handleFastpathHybridTurn(
     promptBaseMem,
   } = args;
 
+  const loweredInput = (userInput || "").toLowerCase();
+
+  const isPriceQuestionUser =
+    /\b(precio|precios|price|prices|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates)\b/i
+      .test(loweredInput);
+
   // 1️⃣ Ejecutar Fastpath "puro" (DB, includes, etc.)
   const fp = await runFastpath({
     pool,
@@ -156,10 +162,14 @@ export async function handleFastpathHybridTurn(
         : "REGLA: No inventes precios exactos. Solo menciona precios si están explícitos en la info del negocio o en DATOS_ESTRUCTURADOS_DEL_SISTEMA, y preserva rangos/calificativos (DESDE).";
 
     const PRICE_LIST_FORMAT_RULE =
-      idiomaDestino === "en"
-        ? "RULE: When you answer price or plan questions using SYSTEM_STRUCTURED_DATA, format the options as a short bullet list. Start with 0–1 short intro line, then one line per option like '• Plan Gold: $X/month – short benefit'. Avoid long paragraphs and keep at most 4–5 options."
-        : "REGLA: Cuando respondas preguntas de precios o planes usando DATOS_ESTRUCTURADOS_DEL_SISTEMA, presenta las opciones como una lista con viñetas. Puedes poner 0–1 línea de introducción corta y luego una línea por opción, por ejemplo: '• Plan Gold: $X/mes – beneficio breve'. Evita párrafos largos y limita a máximo 4–5 opciones.";
-
+      isPriceQuestionUser
+        ? (
+            idiomaDestino === "en"
+              ? "RULE: When the user asks about prices or plans and you use SYSTEM_STRUCTURED_DATA, format the pricing options as a short bullet list. Start with one short intro line like 'Here are the main prices:' and then one line per option, e.g. '• Gold Plan – $X/month – short benefit'. Do NOT write long paragraphs and show at most 4–5 bullets."
+              : "REGLA: Cuando el usuario pregunte por precios o planes y uses DATOS_ESTRUCTURADOS_DEL_SISTEMA, presenta las opciones como una lista con viñetas. Empieza con una línea corta como 'Aquí tienes los precios principales:' y luego una línea por opción, por ejemplo: '• Plan Gold – $X/mes – beneficio breve'. NO escribas párrafos largos y muestra como máximo 4–5 viñetas."
+          )
+        : "";
+        
     const promptConFastpath = [
       promptBaseMem,
       "",
