@@ -13,6 +13,7 @@ import {
   upsertIdiomaClienteDB,
   type SelectedChannel,
 } from "../clients/clientDb";
+import { parseDatosCliente } from "../../../../lib/parseDatosCliente";
 
 type StateMachineFn = (args: any) => Promise<any>;
 
@@ -41,6 +42,10 @@ export type HandleStateMachineTurnArgs = {
 
   // helpers de reply que siguen viviendo en el webhook
   replyAndExit: (text: string, source: string, intent?: string | null) => Promise<void>;
+
+  parseDatosCliente: typeof parseDatosCliente;
+  extractPaymentLinkFromPrompt?: ((text: string) => string | null) | null;
+  PAGO_CONFIRM_REGEX?: RegExp | null;
 };
 
 /**
@@ -66,30 +71,33 @@ export async function handleStateMachineTurn(
     tenantId,
     eventUserInput,
     replyAndExit,
+    parseDatosCliente,
+    extractPaymentLinkFromPrompt = null,
+    PAGO_CONFIRM_REGEX = null,
   } = args;
 
   const loweredInput = (userInput || "").toLowerCase();
-
-  const isPriceQuestionUser =
-    /\b(precio|precios|price|prices|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates)\b/i
-      .test(loweredInput);
 
   // ===============================
   // 🔁 Ejecutar State Machine
   // ===============================
   const smResult = await sm({
-    pool,
-    tenantId,
-    canal,
-    contacto: contactoNorm,
-    userInput,
-    messageId,
-    idiomaDestino,
-    promptBase, // el base SIN memoria (para payment link)
-    parseDatosCliente: undefined,         // se inyecta desde el webhook con `as any`
-    extractPaymentLinkFromPrompt: undefined,
-    PAGO_CONFIRM_REGEX: undefined,
-  } as any);
+  pool,
+  tenantId,
+  canal,
+  contacto: contactoNorm,
+  userInput,
+  messageId,
+  idiomaDestino,
+  promptBase,
+
+  // ✅ PASA LA FUNCIÓN REAL
+  parseDatosCliente,
+
+  // ⚠️ Si todavía no tienes estos helpers aquí, pásalos como null (no undefined)
+  extractPaymentLinkFromPrompt: null,
+  PAGO_CONFIRM_REGEX: null,
+} as any);
 
   if (smResult.action === "silence") {
     console.log("🧱 [SM] silence:", smResult.reason);

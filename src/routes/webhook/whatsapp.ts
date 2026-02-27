@@ -45,7 +45,6 @@ import {
 } from "../../lib/channels/engine/clients/clientDb";
 import { resolveLangForTurn } from "../../lib/channels/engine/lang/resolveLangForTurn";
 import { runPostReplyActions } from "../../lib/conversation/postReplyActions";
-import { runBookingPipeline } from "../../lib/appointments/booking/bookingPipeline";
 import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBookingCourtesyGuard";
 import { rememberAfterReply } from "../../lib/memory/rememberAfterReply";
 import { getWhatsAppModeStatus } from "../../lib/whatsapp/getWhatsAppModeStatus";
@@ -55,6 +54,7 @@ import {
 import { handleStateMachineTurn } from "../../lib/channels/engine/sm/handleStateMachineTurn";
 import { handleUserSignalsTurn } from "../../lib/channels/engine/turn/handleUserSignalsTurn";
 import { handleBookingTurn } from "../../lib/channels/engine/booking/handleBookingTurn";
+import { parseDatosCliente } from "../../lib/parseDatosCliente";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -803,6 +803,9 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       tenantId: tenant.id,
       eventUserInput: event.userInput,
       replyAndExit,    // callback local que ya usa finalizeReply por debajo
+      parseDatosCliente,
+      extractPaymentLinkFromPrompt: null,
+      PAGO_CONFIRM_REGEX: null,
     });
 
     if (smHandled) {
