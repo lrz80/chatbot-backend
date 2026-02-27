@@ -697,8 +697,8 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
   if (!dp) {
     const canonicalText =
       effectiveLang === "en"
-        ? "Got you — do you prefer morning or afternoon?"
-        : "Entiendo — ¿te funciona mejor en la mañana o en la tarde?";
+        ? "Got it — what day works best for you, and do you prefer morning or afternoon?"
+      : "Perfecto, ¿para qué día te gustaría y en qué horario, en la mañana o en la tarde?";
 
     const reply = await humanizeBookingReply({
       idioma: effectiveLang,

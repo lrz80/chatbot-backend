@@ -76,8 +76,8 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
       handled: true,
       reply:
         effectiveLang === "en"
-          ? "What day would you like to book? Please send a date (YYYY-MM-DD)."
-          : "¿Para qué día quieres agendar? Envíame una fecha (YYYY-MM-DD).",
+          ? "What day works best for you? Please send a date (YYYY-MM-DD)."
+          : "¿Qué día funciona mejor para ti? Envíame una fecha (YYYY-MM-DD).",
       ctxPatch: {
         booking: { ...hydratedBooking, step: "ask_datetime", timeZone: tz },
         booking_last_touch_at: Date.now(),
@@ -109,8 +109,8 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
         handled: true,
         reply:
           effectiveLang === "en"
-            ? "That time is in the past. Please send a future time."
-            : "Esa hora ya pasó. Envíame una hora futura.",
+            ? "That time isn’t available. Please send another time that works for you 😊"
+            : "Esa hora no está disponible. Por favor envíame otra que te funcione 😊",
         ctxPatch: {
           booking: { ...hydratedBooking, step: "ask_datetime", timeZone: tz },
           booking_last_touch_at: Date.now(),
@@ -207,8 +207,8 @@ export async function handleAskDatetime(deps: AskDatetimeDeps): Promise<{
       handled: true,
       reply:
         effectiveLang === "en"
-          ? "That date/time is in the past. Please send a future date and time (YYYY-MM-DD HH:mm)."
-          : "Esa fecha/hora ya pasó. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
+          ? "That date and time isn’t available. Please send another one that works for you 😊 (YYYY-MM-DD HH:mm)."
+          : "Esa fecha y hora no está disponible. Por favor envíame otra que te funcione 😊 (YYYY-MM-DD HH:mm).",
       ctxPatch: {
         booking: { ...hydratedBooking, step: "ask_datetime", timeZone: tz },
         booking_last_touch_at: Date.now(),

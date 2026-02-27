@@ -825,8 +825,8 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
 
       const canonicalText =
         effectiveLang === "en"
-          ? `Perfect — I can do ${whenTxt}. Before I book it, send in ONE message: ${fieldsEn.join(", ")}. ${exampleEn}`
-          : `Perfecto — puedo ${whenTxt}. Antes de agendarla, envíame en un solo mensaje: ${fieldsEs.join(", ")}. ${exampleEs}`;
+          ? `Perfect — I have ${whenTxt}. To finalize the booking, please send everything in one message: ${fieldsEn.join(", ")}. ${exampleEn}`
+          : `Perfecto, tengo disponible ${whenTxt}. Para completar la reserva, envíame en un solo mensaje: ${fieldsEs.join(", ")}. ${exampleEs}`;
 
       const reply = await humanizeBookingReply({
         idioma: effectiveLang,
