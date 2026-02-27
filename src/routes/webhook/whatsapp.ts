@@ -7,7 +7,6 @@ import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPor
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { enviarWhatsApp } from "../../lib/senders/whatsapp";
 import type { Canal } from '../../lib/detectarIntencion';
-import { esIntencionDeVenta } from '../../lib/detectarIntencion';
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 import { saludoPuroRegex } from '../../lib/saludosConversacionales';
 import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
@@ -515,50 +514,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
         convoCtx,
       });
-      
-      // 👇👇👇 FOLLOW-UP: filtrar intenciones elegibles (venta)
-      const rawIntentForFollowUp =
-        INTENCION_FINAL_CANONICA || lastIntent || detectedIntent || null;
-
-      const nivelInteres =
-        typeof detectedInterest === "number" ? detectedInterest : null;
-
-      // ✅ Solo consideramos follow-up si la intención es de venta
-      const canonicalIntentForFollowUp =
-        rawIntentForFollowUp && esIntencionDeVenta(rawIntentForFollowUp)
-          ? rawIntentForFollowUp
-          : null;
-
-      if (canonicalIntentForFollowUp && (nivelInteres ?? 0) >= 2) {
-        try {
-          const result = await scheduleFollowUpIfEligible({
-            tenant,
-            canal: "whatsapp",            // FollowUpChannel
-            contactoNorm,                 // clave cliente
-            idiomaDestino,
-            intFinal: canonicalIntentForFollowUp, // intención final canon
-            nivel: nivelInteres,
-            userText: userInput || "",
-          });
-
-          console.log("📌 [FOLLOWUP] scheduleFollowUpIfEligible =>", {
-            result,
-            intentForFollowUp: canonicalIntentForFollowUp,
-            detectedInterest: nivelInteres,
-            contacto: contactoNorm,
-          });
-        } catch (e: any) {
-          console.warn("⚠️ scheduleFollowUpIfEligible failed:", e?.message);
-        }
-      } else {
-        console.log("📌 [FOLLOWUP] skipped at caller =>", {
-          rawIntentForFollowUp,
-          canonicalIntentForFollowUp,
-          detectedInterest: nivelInteres,
-          contacto: contactoNorm,
-        });
-      }
-      // 👆👆👆 HASTA AQUÍ
     } catch (e: any) {
       console.warn("⚠️ runPostReplyActions failed:", e?.message);
     }
