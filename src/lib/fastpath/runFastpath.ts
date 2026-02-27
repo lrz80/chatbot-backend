@@ -110,7 +110,8 @@ export type FastpathResult =
         | "price_summary_db_empty"
         | "info_clave_includes_ctx_link"
         | "interest_to_pricing"
-        | "catalog_llm";
+        | "catalog_llm"
+        | "fastpath_dismiss";
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;
@@ -368,6 +369,7 @@ function finalize(
     | "info_clave_includes_ctx_link"
     | "interest_to_pricing"
     | "catalog_llm"
+    | "fastpath_dismiss"
 ): FastpathResult {
   return {
     handled: true,
@@ -398,6 +400,76 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   if (inBooking) return { handled: false };
 
   const intentOut = (detectedIntent || "").trim() || null;
+
+  // ===============================
+  // ✅ Dismiss Fastpath: "no gracias", "no thanks", "I'm good", etc.
+  //    - Limpia contexto de fastpath para que no se quede pegado
+  // ===============================
+  {
+    const hasFastpathContext =
+      (Array.isArray(convoCtx?.last_plan_list) && convoCtx.last_plan_list.length > 0) ||
+      (Array.isArray(convoCtx?.last_package_list) && convoCtx.last_package_list.length > 0) ||
+      !!convoCtx?.last_service_id ||
+      !!convoCtx?.pending_price_lookup ||
+      !!convoCtx?.pending_link_lookup;
+
+    const explicitNoThanks =
+      /\b(no gracias|no, gracias|no por ahora|no quiero|no necesito|estoy bien|todo bien)\b/i.test(q) ||
+      /\b(no thanks|no, thanks|i'm good|im good|all good|not now)\b/i.test(q);
+
+    const plainThanks = /\b(gracias|thanks)\b/i.test(q);
+
+    const isFastpathDismiss = explicitNoThanks || (plainThanks && hasFastpathContext);
+
+    if (isFastpathDismiss) {
+      const now = Date.now();
+
+      const ctxPatch: Partial<FastpathCtx> = {
+        // limpia listas, flags y selección previa
+        last_plan_list: undefined,
+        last_plan_list_at: undefined,
+        last_package_list: undefined,
+        last_package_list_at: undefined,
+        last_list_kind: undefined,
+        last_list_kind_at: undefined,
+
+        last_service_id: null,
+        last_service_name: null,
+        last_service_at: null,
+
+        pending_price_lookup: undefined,
+        pending_price_at: undefined,
+
+        pending_link_lookup: undefined,
+        pending_link_at: undefined,
+        pending_link_options: undefined,
+
+        last_price_option_label: undefined,
+        last_price_option_at: undefined,
+
+        last_selected_kind: null,
+        last_selected_id: null,
+        last_selected_name: null,
+        last_selected_at: null,
+
+        last_bot_action: "fastpath_dismiss",
+        last_bot_action_at: now,
+      };
+
+      const reply =
+        idiomaDestino === "en"
+          ? "Perfect, if you need anything else just let me know 😊"
+          : "Perfecto 😊 si necesitas algo más, aquí estoy para ayudarte.";
+
+      return {
+        handled: true,
+        reply,
+        source: "fastpath_dismiss",
+        intent: intentOut || "fastpath_dismiss",
+        ctxPatch,
+      };
+    }
+  }
 
   // ===============================
   // ✅ INFO GENERAL OVERVIEW (NO ASK)

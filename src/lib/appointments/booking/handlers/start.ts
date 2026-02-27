@@ -164,9 +164,22 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
     // 2a) Cancelar
     if (chooseCancel) {
+      console.log("[BOOKING] cancel flow HIT", {
+        tenantId: (deps as any).tenantId,
+        apptId,
+        bookingStep: (deps as any).booking?.step,
+        userText: deps.userText,
+      });
+
       const out = await cancelAppointmentById({
         tenantId: (deps as any).tenantId,
         appointmentId: apptId,
+      });
+
+      console.log("[BOOKING] cancel result", {
+        tenantId: (deps as any).tenantId,
+        apptId,
+        out,
       });
 
       if (!out.ok) {
