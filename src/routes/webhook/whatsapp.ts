@@ -6,10 +6,6 @@ import twilio from 'twilio';
 import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { enviarWhatsApp } from "../../lib/senders/whatsapp";
-
-// ⬇️ Importa también esIntencionDeVenta para contar ventas correctamente
-import { detectarIntencion, esIntencionDeVenta } from '../../lib/detectarIntencion';
-
 import type { Canal } from '../../lib/detectarIntencion';
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 import { saludoPuroRegex } from '../../lib/saludosConversacionales';
@@ -27,13 +23,9 @@ import { yesNoStateGate } from "../../lib/guards/yesNoStateGate";
 import { buildTurnContext } from "../../lib/conversation/buildTurnContext";
 import { awaitingGate } from "../../lib/guards/awaitingGate";
 import { createStateMachine } from "../../lib/conversation/stateMachine";
-import { detectarEmocion } from "../../lib/detectarEmocion";
-import { applyEmotionTriggers } from "../../lib/guards/emotionTriggers";
 import { scheduleFollowUpIfEligible, cancelPendingFollowUps } from "../../lib/followups/followUpScheduler";
 import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
-import { setHumanOverride } from "../../lib/humanOverride/setHumanOverride";
 import { saveAssistantMessageAndEmit } from "../../lib/channels/engine/messages/saveAssistantMessageAndEmit";
-import { saveUserMessageAndEmit } from "../../lib/channels/engine/messages/saveUserMessageAndEmit";
 import { getRecentHistoryForModel } from "../../lib/channels/engine/messages/getRecentHistoryForModel";
 import { safeSendText } from "../../lib/channels/engine/dedupe/safeSendText";
 import {
@@ -57,11 +49,11 @@ import { runBookingPipeline } from "../../lib/appointments/booking/bookingPipeli
 import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBookingCourtesyGuard";
 import { rememberAfterReply } from "../../lib/memory/rememberAfterReply";
 import { getWhatsAppModeStatus } from "../../lib/whatsapp/getWhatsAppModeStatus";
-import { isExplicitHumanRequest } from "../../lib/security/humanOverrideGate";
 import {
   handleFastpathHybridTurn,
 } from "../../lib/channels/engine/fastpath/handleFastpathHybridTurn";
 import { handleStateMachineTurn } from "../../lib/channels/engine/sm/handleStateMachineTurn";
+import { handleUserSignalsTurn } from "../../lib/channels/engine/turn/handleUserSignalsTurn";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -675,142 +667,39 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   if (!guard.ok) return;
 
   // ===============================
-  // 🎯 Intent detection (evento)
+  // 🔔 USER SIGNALS (intención, emoción, memoria, override)
   // ===============================
-  try {
-    const det = await detectarIntencion(userInput, tenant.id, canal);
-
-    const intent = (det?.intencion || "").toString().trim().toLowerCase();
-    const levelRaw = Number(det?.nivel_interes);
-    const nivel = Number.isFinite(levelRaw) ? Math.min(3, Math.max(1, levelRaw)) : 1;
-
-    console.log("🎯 detectarIntencion =>", { intent, nivel, canal, tenantId: tenant.id, messageId });
-
-    if (intent) {
-      detectedIntent = intent;
-      detectedInterest = nivel;
-      INTENCION_FINAL_CANONICA = intent;
-      lastIntent = intent;
-
-      transition({
-        patchCtx: { last_intent: intent, last_interest_level: nivel },
-      });
-    }
-  } catch (e: any) {
-    console.warn("⚠️ detectarIntencion failed:", e?.message, e?.code, e?.detail);
-  }
-
-  let emotion: string | null = null;
-  try {
-    const emoRaw: any = await detectarEmocion(userInput, idiomaDestino);
-
-    emotion =
-      typeof emoRaw === "string"
-        ? emoRaw
-        : (emoRaw?.emotion || emoRaw?.emocion || emoRaw?.label || null);
-
-    emotion = typeof emotion === "string" ? emotion.trim().toLowerCase() : null;
-  } catch {}
-
-  if (typeof emotion === "string" && emotion.trim()) {
-    transition({ patchCtx: { last_emotion: emotion.trim().toLowerCase() } });
-  }
-
-  await saveUserMessageAndEmit({
-    tenantId: tenant.id,
+  const signals = await handleUserSignalsTurn({
+    pool,
+    tenant,
     canal,
-    fromNumber: contactoNorm, // ✅ usa fromNumber real
-    messageId,
-    content: userInput || '',
-    intent: detectedIntent,
-    interest_level: detectedInterest,
-    emotion,
+    contactoNorm,
+    fromNumber,
+    userInput,
+    messageId: messageId || null,
+    idiomaDestino,
+    promptBase,              // base SIN memoria
+    convoCtx,
+    INTENCION_FINAL_CANONICA,
+    transition,
   });
 
-  // ===============================
-  // 🎭 EMOTION TRIGGERS (acciones, no config)
-  // ===============================
-  try {
-    const trig = await applyEmotionTriggers({
-      tenantId: tenant.id,
-      canal,
-      contacto: contactoNorm,
-      emotion,
-      intent: detectedIntent,
-      interestLevel: detectedInterest,
+  // sincronizar variables locales con lo que devolvió el helper
+  detectedIntent           = signals.detectedIntent;
+  detectedInterest         = signals.detectedInterest;
+  INTENCION_FINAL_CANONICA = signals.INTENCION_FINAL_CANONICA;
+  promptBaseMem            = signals.promptBaseMem;
+  convoCtx                 = signals.convoCtx;
+  // emotion sólo si la necesitas luego
+  const emotion = signals.emotion;
 
-      userMessage: userInput || null,   // ✅
-      messageId: messageId || null,     // ✅
-    });
-
-    // Persistimos señales para SM/LLM/Debug
-    if (trig?.ctxPatch) {
-      transition({ patchCtx: trig.ctxPatch });
-    }
-  } catch (e: any) {
-    console.warn("⚠️ applyEmotionTriggers failed:", e?.message);
-  }
-  
-    // ========================================================
-    // 🚫 Human Override YA NO VIENE de emociones
-    // 🚸 SOLO SI EL USUARIO LO PIDE EXPLÍCITAMENTE (“quiero hablar con alguien”)
-    // ========================================================
-    if (isExplicitHumanRequest(userInput)) {
-      await setHumanOverride({
-        tenantId: tenant.id,
-        canal,
-        contacto: contactoNorm,
-        minutes: 5,
-        reason: "explicit_request",
-        source: "explicit_request",
-        customerPhone: fromNumber || contactoNorm,
-        userMessage: userInput,
-        messageId: messageId || null,
-      });
-
-      return await replyAndExit(
-        "Entiendo. Para ayudarte mejor, te contactará una persona del equipo en un momento.",
-        "human_override_explicit",
-        detectedIntent
-      );
-    }
-  
-  // ===============================
-  // ✅ MEMORIA (3): Retrieval → inyectar memoria del cliente en el prompt
-  // ===============================
-  try {
-    const memRaw = await getMemoryValue<any>({
-      tenantId: tenant.id,
-      canal: "whatsapp",
-      senderId: contactoNorm,
-      key: "facts_summary",
-    });
-
-    const memText =
-      typeof memRaw === "string"
-        ? memRaw
-        : (memRaw && typeof memRaw === "object" && typeof memRaw.text === "string")
-          ? memRaw.text
-          : "";
-
-    console.log("🧠 facts_summary =", memText);
-
-    if (memText.trim()) {
-      promptBaseMem = [
-        promptBase,
-        "",
-        "MEMORIA_DEL_CLIENTE (usa esto solo si ayuda a responder mejor; no lo inventes):",
-        memText.trim(),
-      ].join("\n");
-    }
-
-    if ((convoCtx as any)?.needs_clarify) {
-      promptBaseMem +=
-        "\n\nINSTRUCCION: El usuario está frustrado. Responde con 2 bullets y haz 1 sola pregunta para aclarar.";
-    }
-
-  } catch (e) {
-    console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
+  // Si el helper ya manejó el turno (p.ej. human override explícito), salimos aquí
+  if (signals.handled && signals.humanOverrideReply) {
+    return await replyAndExit(
+      signals.humanOverrideReply,
+      signals.humanOverrideSource || "human_override_explicit",
+      detectedIntent
+    );
   }
 
   // ===============================
