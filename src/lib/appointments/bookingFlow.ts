@@ -651,6 +651,23 @@ if (booking.step === "ask_datetime") {
   if (booking.step === "confirm") {
     const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
 
+    // ===============================
+    // 🔧 Leer modo de link para este tenant
+    // ===============================
+    const { rows } = await pool.query(
+      `SELECT booking_link_mode
+      FROM channel_settings
+      WHERE tenant_id = $1
+      LIMIT 1`,
+      [tenantId]
+    );
+
+    const bookingLinkMode: "meet" | "calendar" =
+      rows[0]?.booking_link_mode === "meet" ? "meet" : "calendar";
+
+    // ===============================
+    // 🧩 Ejecutar confirmación
+    // ===============================
     return handleConfirm({
       tenantId,
       canal,
@@ -668,6 +685,8 @@ if (booking.step === "ask_datetime") {
       markAppointmentFailed,
       markAppointmentConfirmed,
       bookInGoogle: bookInGoogleTenant,
+
+      bookingLinkMode, // ✅ NUEVO
     });
   }
 

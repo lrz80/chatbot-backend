@@ -146,16 +146,21 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
 
     // 2) Toggle por tenant (settings)
     let settingsEnabled = false;
+    let bookingLinkMode: "meet" | "calendar" | null = null;
 
     if (canal === "google_calendar") {
       const { rows: csRows } = await pool.query(
-        `SELECT google_calendar_enabled
+        `SELECT google_calendar_enabled, booking_link_mode
          FROM channel_settings
          WHERE tenant_id = $1
          LIMIT 1`,
         [tenant_id]
       );
+
       settingsEnabled = csRows[0]?.google_calendar_enabled === true;
+
+      const dbMode = String(csRows[0]?.booking_link_mode || "").trim();
+      bookingLinkMode = dbMode === "meet" ? "meet" : "calendar";
     } else {
       settingsEnabled = !!(await getChannelEnabledBySettings(tenant_id, canal));
     }
@@ -206,18 +211,25 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
     return res.json({
       canal,
       enabled,
-      plan_enabled: enabledEffective, // lo efectivo (Stripe PRODUCT metadata OR override)
+      plan_enabled: enabledEffective,
       settings_enabled: settingsEnabled,
       maintenance: maint.maintenance,
       maintenance_message: maint.message,
       maintenance_window:
-        maint.starts_at || maint.ends_at ? { starts_at: maint.starts_at, ends_at: maint.ends_at } : null,
+        maint.starts_at || maint.ends_at
+          ? { starts_at: maint.starts_at, ends_at: maint.ends_at }
+          : null,
       plan_current: planName,
       trial_active: trialActive,
       trial_ends_at: tenant.trial_ends_at || null,
 
       // ✅ debug (para que veas qué product está usando)
       product_id_used: productId || null,
+
+      // ✅ Solo aplica para google_calendar
+      ...(canal === "google_calendar" && {
+        booking_link_mode: bookingLinkMode,
+      }),
     });
   } catch (e) {
     console.error("channel-settings error:", e);
@@ -227,7 +239,7 @@ router.get("/", authenticateUser, async (req: Request, res: Response) => {
 
 /**
  * PATCH /api/channel-settings
- * Body: { canal: "google_calendar", enabled: boolean }
+ * Body: { canal: "google_calendar", enabled: boolean, booking_link_mode?: "meet" | "calendar" }
  */
 router.patch("/", authenticateUser, async (req: Request, res: Response) => {
   try {
@@ -244,15 +256,27 @@ router.patch("/", authenticateUser, async (req: Request, res: Response) => {
       return res.status(400).json({ error: "enabled must be boolean" });
     }
 
+    // 🔧 Nuevo: modo de link, por defecto 'calendar'
+    const bookingLinkModeRaw = String(req.body?.booking_link_mode || "").trim().toLowerCase();
+    const bookingLinkMode: "meet" | "calendar" =
+      bookingLinkModeRaw === "meet" ? "meet" : "calendar";
+
     await pool.query(
-      `INSERT INTO channel_settings (tenant_id, google_calendar_enabled, created_at)
-       VALUES ($1, $2, NOW())
+      `INSERT INTO channel_settings (tenant_id, google_calendar_enabled, booking_link_mode, created_at)
+       VALUES ($1, $2, $3, NOW())
        ON CONFLICT (tenant_id)
-       DO UPDATE SET google_calendar_enabled = EXCLUDED.google_calendar_enabled`,
-      [tenant_id, enabled]
+       DO UPDATE SET
+         google_calendar_enabled = EXCLUDED.google_calendar_enabled,
+         booking_link_mode       = EXCLUDED.booking_link_mode`,
+      [tenant_id, enabled, bookingLinkMode]
     );
 
-    return res.json({ ok: true, canal, google_calendar_enabled: enabled });
+    return res.json({
+      ok: true,
+      canal,
+      google_calendar_enabled: enabled,
+      booking_link_mode: bookingLinkMode,
+    });
   } catch (e) {
     console.error("channel-settings PATCH error:", e);
     return res.status(500).json({ error: "Error actualizando estado de canal" });

@@ -22,6 +22,9 @@ type ConfirmDeps = {
 
   googleConnected: boolean;
 
+  // ✅ nuevo: cómo quiere el tenant que se mande el link
+  bookingLinkMode: "meet" | "calendar";
+
   // DB + side-effects (se inyectan)
   createPendingAppointmentOrGetExisting: (args: {
     tenantId: string;
@@ -120,6 +123,7 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     markAppointmentFailed,
     markAppointmentConfirmed,
     bookInGoogle,
+    bookingLinkMode, 
   } = deps;
 
   const t = String(userText || "").trim().toLowerCase();
@@ -594,25 +598,46 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
     };
   }
 
-    // ✅ Ya sí: confirmado real
-    await markAppointmentConfirmed({
+  // ✅ Ya sí: confirmado real
+  await markAppointmentConfirmed({
     apptId: pending.id,
     google_event_id: gid,
     google_event_link: meet || link,
-    });
+  });
 
-    const apptId = pending.id;
+  const apptId = pending.id;
 
-    return {
-    handled: true,
-    reply:
+  // 👇 lógica multitenant de qué link se le muestra al cliente
+  let publicLink: string | null = null;
+
+  if (bookingLinkMode === "meet") {
+    // Tenants que quieren Meet: si hay meet, usa meet; si no, cae a htmlLink
+    publicLink = meet || link || null;
+  } else {
+    // Tenants que NO quieren Meet: usa siempre el link del evento
+    publicLink = link || meet || null;
+  }
+
+  let replyText: string;
+
+  if (publicLink) {
+    replyText =
       effectiveLang === "en"
-        ? `You're all set — your appointment is confirmed.${meet ? ` Join here: ${meet}` : ""}`.trim()
-        : `Perfecto, tu cita quedó confirmada.${meet ? ` Únete aquí: ${meet}` : ""}`.trim(),
+        ? `You're all set — your appointment is confirmed. Here is your confirmation link: ${publicLink}`
+        : `Perfecto, tu cita quedó confirmada. Aquí tienes el enlace de confirmación: ${publicLink}`;
+  } else {
+    replyText =
+      effectiveLang === "en"
+        ? "You're all set — your appointment is confirmed."
+        : "Perfecto, tu cita quedó confirmada.";
+  }
+
+  return {
+    handled: true,
+    reply: replyText,
     ctxPatch: {
       booking: resetBooking(tz, effectiveLang),
 
-      // ✅ Identificadores para acciones post-agenda (cancel/reprogram)
       last_appointment_id: apptId,
       last_appointment_google_event_id: gid,
       last_appointment_startISO: startISO,
@@ -620,13 +645,13 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
       last_appointment_tz: tz,
       last_appointment_channel: canal,
 
-      // ✅ Link correcto (si hay meet, ese es el que importa)
-      booking_last_event_link: meet || link,
+      // Guardamos el link real (sea meet o calendar)
+      booking_last_event_link: publicLink || meet || link,
 
       booking_completed: true,
       booking_completed_at: new Date().toISOString(),
       booking_last_done_at: Date.now(),
       booking_last_touch_at: Date.now(),
     },
-    };
+  };
 }
