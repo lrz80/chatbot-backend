@@ -580,7 +580,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   if (await tryBooking("gate", "pre_sm")) return;
 
   const bookingStep0 = (convoCtx as any)?.booking?.step;
-  const inBooking0 = bookingStep0 && bookingStep0 !== "idle";
+  let inBooking0 = !!(bookingStep0 && bookingStep0 !== "idle");
 
   const awaiting = (convoCtx as any)?.awaiting || activeStep || null;
 
@@ -673,6 +673,55 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   convoCtx                 = signals.convoCtx;
   // emotion sólo si la necesitas luego
   const emotion = signals.emotion;
+
+  // ===============================
+  // 🎯 Booking vs Info General de Horarios
+  // ===============================
+  const intentNow = INTENCION_FINAL_CANONICA || detectedIntent || null;
+
+  // Intenciones que consideramos **propias de booking**
+  const BOOKING_INTENTS = new Set<string>([
+    "booking_start",
+    "booking_date",
+    "booking_time",
+    "booking_confirm",
+    "booking_change",
+    "booking_horarios",        // horarios ligados a la cita puntual
+  ]);
+
+  // Intención para info general de horarios/precios del negocio
+  const INFO_HORARIOS_INTENTS = new Set<string>([
+    "info_horarios_generales",
+  ]);
+
+  if (inBooking0) {
+    if (intentNow && INFO_HORARIOS_INTENTS.has(intentNow)) {
+      // ✅ El usuario está en booking, pero la intención actual
+      // es ver HORARIOS/PRECIOS GENERALES del negocio.
+      // Dejamos que el fastpath de catálogo responda.
+      console.log("🔓 booking: se permite fastpath para info_horarios_generales", {
+        bookingStep0,
+        intentNow,
+      });
+      inBooking0 = false;
+    } else if (intentNow && !BOOKING_INTENTS.has(intentNow)) {
+      // Si el booking está activo pero la intención ya no es de booking,
+      // puedes optar por soltar el lock para que la conversación siga normal.
+      console.log("🔓 booking: lock liberado porque intent no es de booking", {
+        bookingStep0,
+        intentNow,
+      });
+      inBooking0 = false;
+
+      // Opcional: resetear el flag en contexto
+      if ((convoCtx as any)?.booking) {
+        (convoCtx as any).booking = {
+          ...(convoCtx as any).booking,
+          step: "idle",
+        };
+      }
+    }
+  }
 
   // Si el helper ya manejó el turno (p.ej. human override explícito), salimos aquí
   if (signals.handled && signals.humanOverrideReply) {

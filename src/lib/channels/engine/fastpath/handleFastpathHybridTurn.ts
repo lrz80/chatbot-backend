@@ -55,9 +55,20 @@ export async function handleFastpathHybridTurn(
 
   const loweredInput = (userInput || "").toLowerCase();
 
-  const isPriceQuestionUser =
-    /\b(precio|precios|price|prices|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates)\b/i
-      .test(loweredInput);
+  // Intención “final” de este turno (lo que definimos en handleUserSignalsTurn)
+  const currentIntent = (detectedIntent || intentFallback || null) ?? null;
+
+  const isPriceKeyword =
+  /\b(precio|precios|price|prices|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates)\b/i
+    .test(loweredInput);
+
+  // Intenciones que consideramos “listas de precios/planes/horarios generales”
+  const isPriceIntent =
+    currentIntent === "info_horarios_generales" ||
+    currentIntent === "precio" ||
+    currentIntent === "planes_precios"; // si usas estos nombres, si no los puedes borrar
+
+  const isPriceQuestionUser = isPriceKeyword || isPriceIntent;
 
   // 1️⃣ Ejecutar Fastpath "puro" (DB, includes, etc.)
   const fp = await runFastpath({
