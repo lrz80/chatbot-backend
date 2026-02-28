@@ -34,6 +34,88 @@ export type FastpathHybridResult = {
   ctxPatch?: any;
 };
 
+function formatFastpathPriceAsList(text: string, idiomaDestino: Lang): string {
+  const t = (text || "").trim();
+  if (!t) return t;
+
+  let remaining = t;
+
+  let horariosIntro = "";
+  let horariosBullets: string[] = [];
+  let preciosIntro = "";
+  let preciosBullets: string[] = [];
+
+  // ---- 1) HORARIOS ----
+  // ES: "Los horarios principales son: ..."
+  // EN: "Main schedules are: ..."
+  const horariosMatchEs = remaining.match(/^(Los horarios principales son:)([^.]+)\./i);
+  const horariosMatchEn = remaining.match(/^(Main schedules are:)([^.]+)\./i);
+  const horariosMatch = horariosMatchEs || horariosMatchEn;
+
+  if (horariosMatch) {
+    horariosIntro = horariosMatch[1].trim();
+    const itemsRaw = horariosMatch[2];
+
+    // separa por coma o " y "
+    const parts = itemsRaw
+      .split(/,|\sy\s/i)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    horariosBullets = parts.map((p) => `• ${p}`);
+
+    // recortamos esa parte del texto para procesar precios después
+    remaining = remaining.slice(horariosMatch[0].length).trim();
+  }
+
+  // ---- 2) PRECIOS ----
+  // ES: "Los precios varían según el plan: ..."
+  // EN: "The prices are: ..." / "Prices are: ..."
+  const preciosMatchEs = remaining.match(/^(Los precios[^:]*:)(.+)$/i);
+  const preciosMatchEn = remaining.match(/^(The prices[^:]*:|Prices[^:]*:)(.+)$/i);
+  const preciosMatch = preciosMatchEs || preciosMatchEn;
+
+  if (preciosMatch) {
+    preciosIntro = preciosMatch[1].trim();
+    const body = preciosMatch[2].trim();
+
+    const segments = body
+      .split(/;\s*|\.?\s+y\s+el\s+|\.?\s+y\s+la\s+|\.?\s+y\s+los\s+|\.?\s+y\s+las\s+/i)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    preciosBullets = segments.map((seg) => {
+      let cleaned = seg.replace(/^(y\s+)?(el|la|los|las)\s+/i, "");
+      cleaned = cleaned.replace(/\.*$/, ""); // quita puntos al final
+      return `• ${cleaned}`;
+    });
+  }
+
+  // ---- 3) Construir salida final ----
+  const lines: string[] = [];
+
+  if (horariosIntro) {
+    lines.push(horariosIntro);
+  }
+  if (horariosBullets.length) {
+    lines.push(""); // línea en blanco
+    lines.push(...horariosBullets);
+  }
+
+  if (preciosIntro) {
+    if (lines.length) lines.push(""); // separador
+    lines.push(preciosIntro);
+  }
+  if (preciosBullets.length) {
+    lines.push("");
+    lines.push(...preciosBullets);
+  }
+
+  // Si por algún motivo no pudimos parsear bien, devolvemos texto original
+  const result = lines.join("\n").trim();
+  return result || t;
+}
+
 export async function handleFastpathHybridTurn(
   args: FastpathHybridArgs
 ): Promise<FastpathHybridResult> {
@@ -103,16 +185,18 @@ export async function handleFastpathHybridTurn(
 
   const hasPkgs = (convoCtx as any)?.has_packages_available === true;
 
-  // 🛑 WHATSAPP + PREGUNTA DE PRECIOS: NO PASAR POR LLM
+  // 🛑 WHATSAPP + PREGUNTA DE PRECIOS: usar SOLO fastpath (DB) y formatear a lista
   if (canal === "whatsapp" && isPriceQuestionUser) {
-    console.log("[WHATSAPP][FASTPATH] Price question -> send raw fastpath list", {
+    const formatted = formatFastpathPriceAsList(fastpathText, idiomaDestino);
+
+    console.log("[WHATSAPP][FASTPATH] Price question -> formatted horarios+precios list", {
       source: fp.source,
       intent: fp.intent || detectedIntent || intentFallback || null,
     });
 
     return {
       handled: true,
-      reply: fastpathText,
+      reply: formatted || fastpathText,
       replySource: fp.source,
       intent: fp.intent || detectedIntent || intentFallback || null,
       ctxPatch,
