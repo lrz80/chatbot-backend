@@ -3,6 +3,7 @@ import { DateTime } from "luxon";
 import { wantsToCancel } from "../text";
 import { renderSlotsMessage } from "../time";
 import { getSlotsForDate } from "../slots";
+import { cancelAppointmentById } from "../../cancelAppointment";
 
 type ConfirmDeps = {
   tenantId: string;
@@ -157,6 +158,11 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     start_time: booking?.picked_start || booking?.start_time || null,
     end_time: booking?.picked_end || booking?.end_time || null,
   };
+
+  // ⭐⭐⭐ NUEVO: cita desde la que estamos reprogramando (si aplica)
+  const rescheduleFromApptId = booking?.reschedule_from_appt_id
+    ? String(booking.reschedule_from_appt_id).trim()
+    : null;
 
   const locked = !!hydratedBooking?.picked_start && !!hydratedBooking?.picked_end;
 
@@ -606,6 +612,33 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
   });
 
   const apptId = pending.id;
+
+  // ⭐⭐⭐ NUEVO: si venimos de reprogramar, cancela la cita anterior
+  if (rescheduleFromApptId && rescheduleFromApptId !== String(apptId)) {
+    try {
+      const cancelRes = await cancelAppointmentById({
+        tenantId,
+        appointmentId: rescheduleFromApptId,
+      });
+
+      console.log("[BOOKING] reschedule: canceled previous appt", {
+        tenantId,
+        from: rescheduleFromApptId,
+        to: apptId,
+        cancelOk: cancelRes.ok,
+        cancelError: cancelRes.error,
+      });
+    } catch (e: any) {
+      console.warn("[BOOKING] reschedule: failed to cancel previous appt", {
+        tenantId,
+        from: rescheduleFromApptId,
+        to: apptId,
+        error: e?.message || e,
+      });
+      // 👈 Importante: NO lanzamos error.
+      // La nueva cita ya quedó confirmada; solo falló borrar la vieja.
+    }
+  }
 
   // 👇 lógica multitenant de qué link se le muestra al cliente
   let publicLink: string | null = null;
