@@ -7,7 +7,6 @@ import { runFastpath } from "../../../fastpath/runFastpath";
 import { naturalizeSecondaryOptionsLine } from "../../../fastpath/naturalizeSecondaryOptions";
 import { getRecentHistoryForModel } from "../messages/getRecentHistoryForModel";
 import { answerWithPromptBase } from "../../../answers/answerWithPromptBase";
-import { extractHorariosFromInfoClave } from "../../../fastpath/infoClaveSections";
 
 const MAX_WHATSAPP_LINES = 9999; // mantenemos el mismo valor
 
@@ -60,9 +59,6 @@ export async function handleFastpathHybridTurn(
     /\b(precio|precios|price|prices|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates)\b/i
       .test(loweredInput);
 
-  const isScheduleQuestionUser =
-  /\b(horario|horarios|schedule|schedules|hora|horas)\b/i.test(loweredInput);
-
   // 1️⃣ Ejecutar Fastpath "puro" (DB, includes, etc.)
   const fp = await runFastpath({
     pool,
@@ -99,26 +95,7 @@ export async function handleFastpathHybridTurn(
   }
 
   // 3️⃣ Texto factual base que sale de Fastpath
-  let fastpathText = fp.reply || "";
-
-  // Si el usuario pregunta por horarios, sacamos HORARIOS desde info_clave
-  let horariosSnippet = "";
-  if (isScheduleQuestionUser) {
-    horariosSnippet = extractHorariosFromInfoClave(infoClave || "", idiomaDestino as any);
-  }
-
-  // Si pide horarios y precios → combinamos: HORARIOS(info_clave) + PRECIOS(DB)
-  // Si solo pide horarios → priorizamos horarios(info_clave)
-  // Si solo pide precios → dejamos solo fastpathText (DB)
-  if (isScheduleQuestionUser && isPriceQuestionUser) {
-    if (horariosSnippet) {
-      fastpathText = `${horariosSnippet}\n\n${fastpathText}`.trim();
-    }
-  } else if (isScheduleQuestionUser && !isPriceQuestionUser) {
-    if (horariosSnippet) {
-      fastpathText = horariosSnippet;
-    }
-  }
+  let fastpathText = fp.reply;
 
   const isPlansList =
     fp.source === "service_list_db" &&
