@@ -103,6 +103,22 @@ export async function handleFastpathHybridTurn(
 
   const hasPkgs = (convoCtx as any)?.has_packages_available === true;
 
+  // 🛑 WHATSAPP + PREGUNTA DE PRECIOS: NO PASAR POR LLM
+  if (canal === "whatsapp" && isPriceQuestionUser) {
+    console.log("[WHATSAPP][FASTPATH] Price question -> send raw fastpath list", {
+      source: fp.source,
+      intent: fp.intent || detectedIntent || intentFallback || null,
+    });
+
+    return {
+      handled: true,
+      reply: fastpathText,
+      replySource: fp.source,
+      intent: fp.intent || detectedIntent || intentFallback || null,
+      ctxPatch,
+    };
+  }
+
   // 🔍 detecta si ya trae link o viene de info_clave_*
   const hasLinkInFastpath = /https?:\/\/\S+/i.test(fastpathText);
   const isInfoClaveSource = String(fp.source || "").startsWith("info_clave");
