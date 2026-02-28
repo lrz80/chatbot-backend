@@ -55,20 +55,21 @@ export async function handleFastpathHybridTurn(
 
   const loweredInput = (userInput || "").toLowerCase();
 
-  // Intención “final” de este turno (lo que definimos en handleUserSignalsTurn)
+  // Intención “final” (de signals)
   const currentIntent = (detectedIntent || intentFallback || null) ?? null;
 
-  const isPriceKeyword =
-  /\b(precio|precios|price|prices|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates)\b/i
-    .test(loweredInput);
+  // Palabras clave de precios y horarios (ES/EN, genérico, no por negocio)
+  const isPriceOrScheduleKeyword =
+    /\b(precio|precios|price|prices|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates|horario|horarios|hora|hours?|schedule|schedules)\b/i
+      .test(loweredInput);
 
-  // Intenciones que consideramos “listas de precios/planes/horarios generales”
+  // Intenciones que consideramos “info general de precios/horarios”
   const isPriceIntent =
     currentIntent === "info_horarios_generales" ||
     currentIntent === "precio" ||
-    currentIntent === "planes_precios"; // si usas estos nombres, si no los puedes borrar
+    currentIntent === "planes_precios"; // si no usas estos dos, los puedes quitar
 
-  const isPriceQuestionUser = isPriceKeyword || isPriceIntent;
+  const isPriceQuestionUser = isPriceOrScheduleKeyword || isPriceIntent;
 
   // 1️⃣ Ejecutar Fastpath "puro" (DB, includes, etc.)
   const fp = await runFastpath({
