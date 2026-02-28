@@ -399,16 +399,24 @@ export async function bookingFlowMvp(opts: {
 
   const capability = isCapabilityQuestion(userText);
   const directReq = isDirectBookingRequest(userText);
-
   const specificTime = wantsSpecificTime(userText);
+  const hasCtx = hasAppointmentContext(userText);
 
+  // 🎯 Nueva lógica, mucho más conservadora:
+  // - SOLO dispara booking cuando:
+  //   - hay fecha+hora clara, o
+  //   - dice explícitamente que quiere agendar / reservar / cita, o
+  //   - pregunta por un horario específico tipo “lunes a las 3”
+  //
+  //   👉 ya NO usamos (hasAppointmentContext && !capability),
+  //      porque frases genéricas como “horarios y precios”
+  //      solo quieren información, no iniciar wizard.
   const wantsBooking =
-    hasExplicitDateTime(userText) ||
-    directReq ||
-    (rawWants && !capability) ||
-    (hasAppointmentContext(userText) && !capability) ||
-    // ✅ CLAVE: “tienes disponibilidad para el lunes a las 3?”
-    (specificTime && !capability);
+    hasExplicitDateTime(userText) ||    // “2026-03-02 14:00”, “lunes 2 a las 2pm”
+    directReq ||                        // “quiero agendar una cita”, “puedes reservarme...”
+    (rawWants && !capability) ||        // palabras tipo cita/reserva/agendar detectadas
+    (specificTime && !capability);      // “tienes disponibilidad lunes a las 3?”
+
   console.log("[BOOKING wantsBooking]", {
     userText,
     wantsBooking,
@@ -416,7 +424,7 @@ export async function bookingFlowMvp(opts: {
     rawWants,
     directReq,
     capability,
-    hasAppointmentContext: hasAppointmentContext(userText),
+    hasAppointmentContext: hasCtx,
     hasExplicitDateTime: hasExplicitDateTime(userText),
   });
 
