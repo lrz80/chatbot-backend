@@ -634,19 +634,23 @@ if (booking.step === "ask_email_phone") {
 }
 
 if (booking.step === "ask_datetime") {
-  const effectiveLang = (booking?.lang === "en" || booking?.lang === "es") ? booking.lang : idioma;
-
-  return handleAskDatetime({
+  // Usamos el mismo motor de start.ts también en reprogramaciones.
+  // wantsBooking = true porque ya sabemos que está en modo booking.
+  return handleStartBooking({
     tenantId,
-    canal,
+    canal: canal as any,
     contacto,
-    idioma: effectiveLang, // ✅ STICKY
+    bufferMin,
+    getSlotsForDateWindow,
+    idioma: (booking?.lang as any) || idioma,
     userText,
-    booking,
     timeZone,
+    wantsBooking: true,      // 👈 clave: forzamos que sí está agendando
+    detectPurpose,
     durationMin,
+    minLeadMinutes,
     hours,
-    parseDateTimeExplicit: parseDateTimeExplicitTenant,
+    booking,
   });
 }
 
