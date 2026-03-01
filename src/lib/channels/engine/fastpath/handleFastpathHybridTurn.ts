@@ -38,30 +38,29 @@ function buildMorePlansReply(fastpathText: string, idiomaDestino: Lang): string 
   const lines = fastpathText.split(/\r?\n/).map((l) => l.trim());
 
   const planLines: string[] = [];
-  let skipping = true;
   let reachedSchedules = false;
 
-  for (const line of lines) {
+  for (const raw of lines) {
+    const line = raw.trim();
     if (!line) continue;
 
-    // Saltar saludos y frase de intro
+    // Saltar saludos y frases genéricas
     if (/^(hola|buenas|hi|hello)/i.test(line)) continue;
     if (/^estas son algunas alternativas/i.test(line)) continue;
 
-    // Si llegamos a "Horarios:" / "Schedules:" dejamos de agregar líneas
+    // Cortar cuando empiezan los horarios
     if (/^horarios?:/i.test(line) || /^schedules?:/i.test(line)) {
       reachedSchedules = true;
       break;
     }
 
-    // A partir de la primera línea útil (normalmente bullets), dejamos de "skipping"
-    if (skipping) {
-      skipping = false;
-    }
-
-    if (!skipping && !reachedSchedules) {
+    if (!reachedSchedules) {
       planLines.push(line);
     }
+  }
+
+  if (planLines.length === 0) {
+    return fastpathText;
   }
 
   const header =
@@ -69,12 +68,39 @@ function buildMorePlansReply(fastpathText: string, idiomaDestino: Lang): string 
       ? "Claro, aquí tienes otras opciones de planes:\n"
       : "Sure, here are some additional plan options:\n";
 
-  // Si por alguna razón no encontramos líneas útiles, devolvemos el texto original
-  if (planLines.length === 0) {
-    return fastpathText;
+  return header + planLines.join("\n");
+}
+
+// Quitar el bloque de "Horarios:" y lo que sigue, salvo que el usuario lo haya pedido
+function stripHorariosBlock(fastpathText: string): string {
+  const lines = fastpathText.split(/\r?\n/);
+
+  const result: string[] = [];
+  let skippingSchedules = false;
+
+  for (const raw of lines) {
+    const line = raw.trim();
+
+    if (!skippingSchedules && /^horarios?:/i.test(line)) {
+      // Desde aquí empezaban los horarios → los saltamos
+      skippingSchedules = true;
+      continue;
+    }
+
+    if (skippingSchedules) {
+      // Si aparece un link de reserva / más info, lo volvemos a incluir y dejamos de saltar
+      if (/^(m[aá]s info|más info|reserva aqu[ií]|reserve here|booking link)/i.test(line)) {
+        skippingSchedules = false;
+        if (line) result.push(raw);
+      }
+      // Todo lo demás (líneas de horarios) se salta
+      continue;
+    }
+
+    result.push(raw);
   }
 
-  return header + planLines.join("\n");
+  return result.join("\n").trim();
 }
 
 export async function handleFastpathHybridTurn(
@@ -114,17 +140,23 @@ export async function handleFastpathHybridTurn(
 
   const isPriceQuestionUser = isPriceOrScheduleKeyword || isPriceIntent;
 
+  // 🔍 Señales específicas: planes + horarios en la misma pregunta
+  const asksPlans = /plan|planes|membres/i.test(loweredInput);
+  const asksHorarios = /horario|hora|horarios|hours|schedule/i.test(loweredInput);
+  const wantsPlansAndHours = asksPlans && asksHorarios;
+
   // Pregunta de seguimiento: "otros/más planes"
   const isMorePlansFollowup =
     /\b(otro(?:s)?|mas|más|adicional(?:es)?|otra opcion|otras opciones|another|other|more|additional)\b/.test(
       loweredInput
     ) &&
-    /\b(plan(?:es)?|membres[ií]a|membership)\b/.test(loweredInput);
+    /\b(plan(?:es)?|membres[ií]a|membership|producto(?:s)?)\b/.test(loweredInput);
 
-  // 🔍 Señales específicas: planes + horarios en la misma pregunta
-  const asksPlans = /plan|planes|membres/i.test(loweredInput);
-  const asksHorarios = /horario|hora|horarios|hours|schedule/i.test(loweredInput);
-  const wantsPlansAndHours = asksPlans && asksHorarios;
+  // Pregunta de DETALLE de un plan (qué incluye)
+  const isPlanDetailQuestion =
+    /\b(que incluye|qué incluye|que trae|qué trae|what does .* include|what.*include)\b/.test(
+      loweredInput
+    ) && /\b(plan|membres[ií]a|membership)\b/.test(loweredInput);
 
   // Intención efectiva que verá Fastpath
   const fpIntent = isPriceQuestionUser
@@ -142,7 +174,7 @@ export async function handleFastpathHybridTurn(
     convoCtx: convoCtx as any,
     infoClave,
     detectedIntent: fpIntent,
-    maxDisambiguationOptions: 5,
+    maxDisambiguationOptions: 10,
     lastServiceTtlMs: 60 * 60 * 1000,
   });
 
@@ -175,21 +207,25 @@ export async function handleFastpathHybridTurn(
 
   const hasPkgs = (convoCtx as any)?.has_packages_available === true;
 
-  // 3.5️⃣ WHATSAPP/META + PREGUNTA DE PRECIOS: NO PASAR POR LLM
-  // ⚠️ EXCEPCIÓN 1: si es "planes + horarios", dejamos que pase al modo híbrido
-  // ⚠️ EXCEPCIÓN 2: si es un follow-up tipo "otros/más planes", limpiamos saludo/horarios
+  // 3.5️⃣ WHATSAPP/META + PREGUNTA DE PRECIOS/PLANES: NO PASAR POR LLM
+  // EXCEPCIÓN 1: si es "planes + horarios", dejamos que pase al modo híbrido
+  // EXCEPCIÓN 2: tratamos distinto follow-up ("otros planes") y detalle de plan ("qué incluye")
   if ((canal === "whatsapp" || canal === "meta") && isPriceQuestionUser && !wantsPlansAndHours) {
     console.log("[CHAT][FASTPATH] Price question -> send fastpath", {
       source: fp.source,
       intent: fp.intent || detectedIntent || intentFallback || null,
       isMorePlansFollowup,
+      isPlanDetailQuestion,
     });
 
     let replyText = fastpathText;
 
     if (isMorePlansFollowup) {
-      // Modo "otras opciones": sin saludo, sin bloque de horarios
+      // Modo "otras opciones": solo lista adicional, sin horarios ni saludo
       replyText = buildMorePlansReply(fastpathText, idiomaDestino);
+    } else if (isPlanDetailQuestion) {
+      // Modo "detalle de plan": quitamos horarios; dejamos precio + descripción
+      replyText = stripHorariosBlock(fastpathText);
     }
 
     return {
