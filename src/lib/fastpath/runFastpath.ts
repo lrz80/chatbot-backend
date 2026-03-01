@@ -1182,25 +1182,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         questionType = "other_plans";
       }
 
-      // 🔀 WHATSAPP: para preguntas GENERALES de planes/precios/horarios,
-      // NO usamos el LLM de catálogo. Volvemos al overview clásico
-      // que mezcla horarios (info_clave) + precios principales de DB.
-      // Ejemplos: "cuales son los horarios y precios", "que planes tienen y horarios".
-      if (canal === "whatsapp" && questionType === "price_or_plan") {
-        const reply = await renderInfoGeneralOverview({
-          pool,
-          tenantId,
-          lang: idiomaDestino,
-        });
-
-        return {
-          handled: true,
-          reply,
-          source: "service_list_db",    // seguimos usando la misma source genérica
-          intent: intentOut || "info_general",
-        };
-      }
-
       // 3) Construir el texto de catálogo
       const catalogText = await buildCatalogContext(pool, tenantId);
 
@@ -1213,6 +1194,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         `QUESTION_TYPE: ${questionType}\n` +
         `HAS_MULTI_ACCESS_PLAN: ${hasMultiAccessPlan ? "yes" : "no"}`;
 
+      const infoGeneralBlock = infoClave
+        ? (
+            idiomaDestino === "en"
+              ? `\n\nBUSINESS_GENERAL_INFO (hours, address, etc.):\n${infoClave}`
+              : `\n\nINFO_GENERAL_DEL_NEGOCIO (horarios, dirección, etc.):\n${infoClave}`
+          )
+        : "";
+
       // 5) System message (el que ya ajustamos antes)
       const systemMsg =
         idiomaDestino === "en"
@@ -1224,6 +1213,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - Optionally a PREVIOUS_PLANS_MENTIONED line.
       - The client's question.
       - A CATALOG text for this business, built from the "services" and "service_variants" tables.
+      - Optionally, a BUSINESS_GENERAL_INFO block with general information such as business hours, address, etc. (this comes from another system and is not the catalog).
 
       META TAGS:
       - QUESTION_TYPE can be "combination_and_price" or "price_or_plan".
@@ -1231,20 +1221,27 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - PREVIOUS_PLANS_MENTIONED tells you which plans have ALREADY been described earlier. If it's "none", ignore it. If it's not "none", avoid repeating those plans unless strictly necessary.
 
       GLOBAL RULES:
-      - Answer ONLY using information from the catalog text.
-      - Do NOT invent prices, services, bundles or conditions that are not in the catalog.
+      - Answer ONLY using information from the CATALOG and BUSINESS_GENERAL_INFO blocks.
+      - Do NOT invent prices, services, bundles or conditions that are not in those texts.
       - Be friendly, concise and natural.
       - Keep your answer SHORT: about 5–7 lines / ~600 characters.
 
+      HOW TO HANDLE TIMES AND SCHEDULES:
+      - Business hours and general class schedules, if present, will appear in the BUSINESS_GENERAL_INFO block.
+      - You may use times from BUSINESS_GENERAL_INFO to answer questions about general opening hours or general class schedules.
+      - The CATALOG text may contain time restrictions for specific plans/passes (for example: “valid before 8 a.m.” or “morning-only access”).
+      - Treat those times as restrictions of that specific plan only, NOT as the general schedule of the business.
+      - If the client asks about general hours/schedules and BUSINESS_GENERAL_INFO does not clearly contain a timetable, you MUST NOT invent times or days. In that case, explain the relevant plans/prices and add at most one generic line such as: “Schedules may vary by day; they can share the detailed timetable with you if needed.”
+
       LISTING vs DETAIL MODE:
-      - If the user question is GENERIC (for example: "what other plans do you have?", "what options do you have?", "what plans are there?") and DOES NOT mention a specific plan/pass name:
+      - If the user question is GENERIC (for example: “what other plans do you have?”, “what options do you have?”, “what plans are there?”) and DOES NOT mention a specific plan/pass name:
         - Use LISTING MODE.
         - In LISTING MODE:
           - Show 3–5 options maximum.
-          - For each option, write ONE short line: "• Plan Name: very short description".
+          - For each option, write ONE short line: “• Plan Name: very short description”.
           - You may include ONE link only for the MOST relevant option, not for all.
           - DO NOT write long paragraphs or detailed explanations.
-      - If the question clearly asks for details or price of a SPECIFIC plan (for example: "what does Plan Gold include?", "price of the 7-day pass?"):
+      - If the question clearly asks for details or price of a SPECIFIC plan (for example: “what does Plan Gold include?”, “price of the 7-day pass?”):
         - Use DETAIL MODE.
         - In DETAIL MODE:
           - You can write a short paragraph for that plan and include its price and link.
@@ -1276,27 +1273,35 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - Opcionalmente una línea PREVIOUS_PLANS_MENTIONED.
       - La pregunta del cliente.
       - Un texto de CATALOGO de este negocio, construido desde las tablas "services" y "service_variants".
+      - Opcionalmente, un bloque INFO_GENERAL_DEL_NEGOCIO con información general como horarios, dirección, etc. (esto viene de otro sistema y no es el catálogo).
 
       ETIQUETAS META:
       - QUESTION_TYPE puede ser "combination_and_price" o "price_or_plan".
-      - HAS_MULTI_ACCESS_PLAN es "yes" si el texto del catálogo contiene claramente al menos un plan/pase/paquete que da acceso a varios servicios/categorías o a "todos"/"cualesquiera" los servicios; en caso contrario es "no".
+      - HAS_MULTI_ACCESS_PLAN es "yes" si el texto del catálogo contiene claramente al menos un plan/pase/paquete que da acceso a varios servicios/categorías o a “todos”/“cualesquiera” los servicios; en caso contrario es "no".
       - PREVIOUS_PLANS_MENTIONED indica qué planes YA se explicaron antes. Si es "none", ignóralo. Si no es "none", evita repetir esos planes salvo que sea estrictamente necesario.
 
       REGLAS GENERALES:
-      - Responde SOLO usando la información del catálogo.
-      - NO inventes precios, servicios, paquetes ni condiciones que no aparezcan en el catálogo.
+      - Responde SOLO usando la información que aparece en CATALOGO e INFO_GENERAL_DEL_NEGOCIO.
+      - NO inventes precios, servicios, paquetes ni condiciones que no aparezcan en esos textos.
       - Usa un tono conversacional, claro y natural.
       - Mantén la respuesta CORTA: unas 5–7 líneas / ~600 caracteres.
 
+      CÓMO MANEJAR HORARIOS Y HORAS:
+      - Los horarios del negocio y los horarios generales de clases, si existen, aparecerán en el bloque INFO_GENERAL_DEL_NEGOCIO.
+      - Puedes usar las horas de INFO_GENERAL_DEL_NEGOCIO para responder preguntas sobre horarios de apertura o horarios generales de clases.
+      - El texto de CATALOGO puede contener restricciones horarias de planes/pases concretos (por ejemplo: “válido antes de las 8 a. m.” o “solo en la mañana”).
+      - Esas horas debes tratarlas como restricciones de ese plan específico, NO como el horario general del negocio.
+      - Si el cliente pregunta por horarios generales y INFO_GENERAL_DEL_NEGOCIO no trae claramente un horario completo, NO inventes horas ni días. En ese caso, céntrate en explicar los planes/precios relevantes y, como máximo, añade una frase genérica tipo: “Los horarios pueden variar según el día; te pueden compartir el horario detallado si lo necesitas.”.
+
       MODO LISTA vs MODO DETALLE:
-      - Si la pregunta del cliente es GENÉRICA (por ejemplo: "¿qué otros planes tienes?", "¿qué opciones tienes?", "¿qué planes hay?") y NO menciona el nombre de un plan/pase concreto:
+      - Si la pregunta del cliente es GENÉRICA (por ejemplo: “¿qué otros planes tienes?”, “¿qué opciones tienes?”, “¿qué planes hay?”) y NO menciona el nombre de un plan/pase concreto:
         - Usa MODO LISTA.
         - En MODO LISTA:
           - Muestra como máximo 3–5 opciones.
-          - Para cada opción escribe UNA sola línea: "• Nombre del plan: descripción muy corta".
+          - Para cada opción escribe UNA sola línea: “• Nombre del plan: descripción muy corta”.
           - Puedes incluir SOLO UN enlace para la opción MÁS relevante, no para todas.
           - NO escribas párrafos largos ni explicaciones detalladas.
-      - Si la pregunta pide claramente detalles o precio de un plan ESPECÍFICO (por ejemplo: "¿qué incluye el Plan Gold?", "precio del Pase de 7 días?"):
+      - Si la pregunta pide claramente detalles o precio de un plan ESPECÍFICO (por ejemplo: “¿qué incluye el Plan Gold?”, “precio del Pase de 7 días?”):
         - Usa MODO DETALLE.
         - En MODO DETALLE:
           - Puedes escribir un párrafo corto para ese plan, con su precio y su enlace.
@@ -1313,8 +1318,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         - NO puedes responder que no se pueden combinar servicios/clases.
         - Debes elegir al menos un plan/servicio/pase/paquete del catálogo que claramente:
           - dé acceso a más de un servicio o categoría, O
-          - dé acceso a "todos" o "cualesquiera" servicios del negocio, O
-          - ofrezca uso "ilimitado" de varios servicios o ítems.
+          - dé acceso a “todos” o “cualesquiera” los servicios del negocio, O
+          - ofrezca uso “ilimitado” de varios servicios o ítems.
         - Recomienda esa opción, menciona su nombre, da su precio principal (por ejemplo el precio mensual o de paquete más relevante) e incluye su URL si aparece.
       - Solo si HAS_MULTI_ACCESS_PLAN es "no" puedes responder que cada servicio se maneja/cobra por separado y listar las opciones individuales.
 
@@ -1333,9 +1338,9 @@ CLIENT QUESTION:
 ${userInput}
 
 CATALOG:
-${catalogText}
-          `.trim()
-          : `
+${catalogText}${infoGeneralBlock}
+`.trim()
+    : `
 META:
 ${metaBlock}
 
@@ -1343,8 +1348,8 @@ PREGUNTA DEL CLIENTE:
 ${userInput}
 
 CATALOGO:
-${catalogText}
-          `.trim();
+${catalogText}${infoGeneralBlock}
+`.trim();
 
       const reply = await answerCatalogQuestionLLM({
         idiomaDestino,
