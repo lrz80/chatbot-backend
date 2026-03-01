@@ -1053,8 +1053,24 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ===============================
   // 🧠 MOTOR ÚNICO DE CATÁLOGO
   // ===============================
-  {
-    const isCatalogQuestion =
+    {
+    // 👇 1) Intento de "plan combinado"
+    const isCombinationIntent =
+      q.includes("combinar") ||
+      q.includes("mezclar") ||
+      q.includes("usar ambas") ||
+      q.includes("usar las dos") ||
+      q.includes("combine classes") ||
+      q.includes("use both") ||
+      q.includes("combinada") ||
+      q.includes("combinado") ||
+      q.includes("ambas clases") ||
+      q.includes("ambos tipos") ||
+      q.includes("all inclusive") ||
+      q.includes("todo incluido");
+
+    // 👇 2) Preguntas típicas de precios/planes
+    const isCatalogQuestionBasic =
       q.includes("precio") ||
       q.includes("precios") ||
       q.includes("cuanto cuesta") ||
@@ -1071,10 +1087,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       q.includes("que incluye") ||
       q.includes("qué incluye") ||
       q.includes("incluye") ||
-      q.includes("combinar") ||
-      q.includes("mezclar") ||
-      q.includes("usar ambas") ||
-      q.includes("usar las dos") ||
       q.includes("unlimited") ||
       q.includes("ilimitado") ||
       q.includes("pack") ||
@@ -1084,20 +1096,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       q.includes("prices") ||
       q.includes("membership") ||
       q.includes("bundle") ||
-      q.includes("combine classes") ||
       q.includes("what is included");
+
+    // 👇 3) Cualquier combinación de lo anterior dispara el motor de catálogo
+    const isCatalogQuestion = isCatalogQuestionBasic || isCombinationIntent;
 
     if (!isCatalogQuestion) {
       // deja continuar con el resto del fastpath
     } else {
-      const isCombinationIntent =
-        q.includes("combinar") ||
-        q.includes("mezclar") ||
-        q.includes("usar ambas") ||
-        q.includes("usar las dos") ||
-        q.includes("combine classes") ||
-        q.includes("use both");
-
       const isPriceLike =
         isPriceQuestion(userInput) ||
         q.includes("plan") ||
@@ -1110,15 +1116,24 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         q.includes("bundle");
 
       const isAskingOtherPlans =
-        /\b(otro\s+plan|otros\s+planes|other\s+plans?)\b/.test(q);
+        /\b(otro\s+plan|otros\s+planes|otras\s+opciones|other\s+plans?|more\s+plans?)\b/.test(q);
 
       type QuestionType = "combination_and_price" | "price_or_plan" | "other_plans";
 
-      let questionType: QuestionType = "price_or_plan";
-      if (isCombinationIntent && isPriceLike) {
+      let questionType: QuestionType;
+
+      // PRIORIDAD:
+      // 1) Pregunta de combinación, aunque no diga "precio"
+      if (isCombinationIntent) {
         questionType = "combination_and_price";
-      } else if (isAskingOtherPlans) {
+      }
+      // 2) Pregunta explícita de "otros planes"
+      else if (isAskingOtherPlans) {
         questionType = "other_plans";
+      }
+      // 3) Resto: preguntas normales de precio/plan
+      else {
+        questionType = "price_or_plan";
       }
 
       const asksSchedules =
@@ -1189,10 +1204,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - Answer ONLY using information found in the CATALOG and BUSINESS_GENERAL_INFO blocks.
       - Do NOT invent prices, services, bundles or conditions.
       - Be clear, natural, and concise.
-      - You may use up to TWO short intro lines:
-        - First line: a greeting that may include the client name and time of day (for example: "Hi Ana, good afternoon 😊.").
-        - Second line: a short context line (for example: "Here are some of our plans and schedules 👇").
-      - Apart from those intro lines and an optional closing question/CTA, EVERYTHING must be bullet-listed.
+      - Intro lines:
+        - You may use up to TWO very short intro lines (greeting + context) ONLY if PREVIOUS_PLANS_MENTIONED is "none".
+        - If PREVIOUS_PLANS_MENTIONED is NOT "none" (follow-up questions), you MUST NOT include any greeting or intro line. Start directly with the list or detail.
+      - Apart from those intro lines (when allowed) and an optional closing question/CTA, EVERYTHING must be bullet-listed.
       - NEVER write long paragraphs.
 
       IMPORTANT FORMAT RULE:
@@ -1293,11 +1308,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       REGLAS GENERALES:
       - Responde SOLO con la información de CATALOGO e INFO_GENERAL_DEL_NEGOCIO.
       - NO inventes precios, servicios ni condiciones.
-      - Puedes usar HASTA DOS líneas cortas al inicio:
-        - Primera línea: saludo que puede incluir el nombre y el momento del día
-          (por ejemplo: "Hola Katyuska, buenas tardes 😊.").
-        - Segunda línea: frase corta de contexto (por ejemplo: "Te comparto algunas opciones de planes y horarios 👇").
-      - Cada una de esas líneas debe ser muy corta (1 oración); no escribas párrafos de bienvenida.
+      - Líneas de introducción:
+        - Solo puedes usar HASTA DOS líneas muy cortas al inicio (saludo + contexto) cuando PREVIOUS_PLANS_MENTIONED sea "none".
+        - Si PREVIOUS_PLANS_MENTIONED NO es "none" (es decir, ya se mencionaron planes antes y la pregunta es un seguimiento), está PROHIBIDO usar saludo o introducción. Debes empezar directamente con la lista o el detalle.
+      - Cada una de esas líneas (cuando estén permitidas) debe ser muy corta (1 oración); no escribas párrafos de bienvenida.
       - PROHIBIDO escribir párrafos largos.
 
       FORMATO DE PLANES (OBLIGATORIO):
