@@ -1430,8 +1430,8 @@ ${catalogText}${infoGeneralBlock}
       // 🔁 POST-PROCESO: quitar planes ya mencionados si la pregunta es "otros planes"
       const { finalReply, namesShown } = postProcessCatalogReply({
         reply: rawReply,
-        questionType,       // 👈 usamos el QuestionType que ya calculas arriba
-        prevNames,          // 👈 los nombres que venían en convoCtx.last_catalog_plans
+        questionType,       // 👈 QuestionType calculado arriba
+        prevNames,          // 👈 nombres en convoCtx.last_catalog_plans
       });
 
       const ctxPatch: Partial<FastpathCtx> = {};
@@ -1440,9 +1440,48 @@ ${catalogText}${infoGeneralBlock}
         ctxPatch.last_catalog_at = Date.now();
       }
 
+      // 🔍 Preguntas tipo "¿qué incluye...?" => añadir CTA con link del plan
+      let replyWithLink = finalReply;
+
+      const isIncludesQuestion =
+        /\b(que incluye|qué incluye|que trae|que tiene|what is included|what does.*include)\b/i.test(
+          q
+        );
+
+      if (isIncludesQuestion) {
+        try {
+          // Intentar mapear el texto del usuario a UN servicio concreto
+          const hit = await resolveServiceIdFromText(pool, tenantId, userInput);
+          if (hit?.id) {
+            // Obtener la mejor URL disponible para ese servicio/variante
+            const { serviceUrl, variantUrl } = await getServiceAndVariantUrl(
+              pool,
+              tenantId,
+              hit.id,
+              null
+            );
+
+            const bestUrl = variantUrl || serviceUrl;
+            if (bestUrl) {
+              const linkLine =
+                idiomaDestino === "en"
+                  ? `\n\n👉 You can see all the details or purchase here: ${bestUrl}`
+                  : `\n\n👉 Puedes ver todos los detalles o comprar Aquí: ${bestUrl}`;
+
+              replyWithLink = `${replyWithLink}\n${linkLine}`;
+            }
+          }
+        } catch (e: any) {
+          console.warn(
+            "⚠️ catalog_llm: no se pudo adjuntar link de servicio:",
+            e?.message
+          );
+        }
+      }
+
       return {
         handled: true,
-        reply: finalReply,
+        reply: replyWithLink,
         source: "catalog_llm",
         intent: intentOut || "catalog",
         ctxPatch,
