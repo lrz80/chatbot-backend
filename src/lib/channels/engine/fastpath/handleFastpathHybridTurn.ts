@@ -55,21 +55,26 @@ export async function handleFastpathHybridTurn(
 
   const loweredInput = (userInput || "").toLowerCase();
 
-  // Intención “final” (de signals)
+  // Intención “final” de este turno (signals)
   const currentIntent = (detectedIntent || intentFallback || null) ?? null;
 
-  // Palabras clave de precios y horarios (ES/EN, genérico, no por negocio)
+  // Palabras clave generales de precios / planes / horarios
   const isPriceOrScheduleKeyword =
     /\b(precio|precios|price|prices|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates|horario|horarios|hora|hours?|schedule|schedules)\b/i
       .test(loweredInput);
 
-  // Intenciones que consideramos “info general de precios/horarios”
+  // Intenciones que consideramos “info de precios/planes/horarios del negocio”
   const isPriceIntent =
     currentIntent === "info_horarios_generales" ||
     currentIntent === "precio" ||
-    currentIntent === "planes_precios"; // si no usas estos dos, los puedes quitar
+    currentIntent === "planes_precios"; // quita las que no uses si quieres
 
   const isPriceQuestionUser = isPriceOrScheduleKeyword || isPriceIntent;
+
+  // Intención efectiva que verá Fastpath
+  const fpIntent = isPriceQuestionUser
+    ? (detectedIntent || intentFallback || "precio")
+    : (detectedIntent || intentFallback || null);
 
   // 1️⃣ Ejecutar Fastpath "puro" (DB, includes, etc.)
   const fp = await runFastpath({
@@ -81,7 +86,7 @@ export async function handleFastpathHybridTurn(
     inBooking,
     convoCtx: convoCtx as any,
     infoClave,
-    detectedIntent: detectedIntent || intentFallback || null,
+    detectedIntent: fpIntent,
     maxDisambiguationOptions: 5,
     lastServiceTtlMs: 60 * 60 * 1000,
   });

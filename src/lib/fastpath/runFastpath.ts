@@ -1182,6 +1182,25 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         questionType = "other_plans";
       }
 
+      // 🔀 WHATSAPP: para preguntas GENERALES de planes/precios/horarios,
+      // NO usamos el LLM de catálogo. Volvemos al overview clásico
+      // que mezcla horarios (info_clave) + precios principales de DB.
+      // Ejemplos: "cuales son los horarios y precios", "que planes tienen y horarios".
+      if (canal === "whatsapp" && questionType === "price_or_plan") {
+        const reply = await renderInfoGeneralOverview({
+          pool,
+          tenantId,
+          lang: idiomaDestino,
+        });
+
+        return {
+          handled: true,
+          reply,
+          source: "service_list_db",    // seguimos usando la misma source genérica
+          intent: intentOut || "info_general",
+        };
+      }
+
       // 3) Construir el texto de catálogo
       const catalogText = await buildCatalogContext(pool, tenantId);
 
