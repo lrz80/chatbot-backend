@@ -1250,6 +1250,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               - the main price,
             removing the whole description from the list line.
           - Information about what the plan includes, benefits, etc. may ONLY be used if the client later asks about that specific plan (DETAIL MODE), never in the initial list.
+          - When presenting plans in LISTING MODE, do NOT say “Main plans”, “Featured plans”, “Available plans” or anything that suggests the list is complete.
+          - You MUST always use a neutral phrase indicating these are ONLY SOME options, for example:
+            - “Here are a few available options:”
+            - “A few examples below:”
+          - Never state or imply that the list is exhaustive.
 
       HOW TO HANDLE TIMES AND SCHEDULES:
       - Business hours and general class schedules, if present, will appear in the BUSINESS_GENERAL_INFO block.
@@ -1356,6 +1361,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             eliminando completamente el resto de la descripción en la línea de lista.
           - La información de "qué incluye", beneficios, etc. SOLO se puede usar si el cliente pregunta luego por ese plan específico (MODO DETALLE), nunca en la lista inicial.
         - No escribas bloques grandes de texto continuo.
+        - Cuando presentes una lista de planes en modo LISTA, NO digas “Planes principales”, “Planes destacados”, “Planes disponibles” ni nada que implique que la lista está completa.
+        - Debes usar SIEMPRE una frase neutra que indique que son SOLO ALGUNAS opciones, por ejemplo:
+          - “Aquí tienes algunas opciones disponibles:”
+          - “Estas son algunas alternativas:” 
+        - Nunca afirmes ni sugieras que la lista es exhaustiva.
 
       CÓMO MANEJAR HORARIOS Y HORAS:
       - Los horarios del negocio y los horarios generales de clases, si existen, aparecerán en el bloque INFO_GENERAL_DEL_NEGOCIO.
