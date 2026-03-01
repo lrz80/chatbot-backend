@@ -363,6 +363,19 @@ function postProcessCatalogReply(params: {
   };
 }
 
+function extractPlanGroupToken(raw: string): string | null {
+  const t = normalizeText(raw);
+  if (!t) return null;
+
+  // Busca patrones tipo "plan bronce", "plan gold", etc.
+  const m = t.match(/\bplan\s+([a-z0-9]+)\b/);
+  if (m?.[1]) {
+    return m[1]; // "bronce", "gold", etc.
+  }
+
+  return null;
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -1136,7 +1149,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         questionType = "price_or_plan";
       }
 
-            // ===============================
+      // ===============================
       // 🎯 DETALLE DIRECTO DE UN PLAN/SERVICIO (sin LLM)
       // ===============================
       // Si la pregunta es del tipo "qué incluye X" intentamos resolver
@@ -1147,6 +1160,68 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         );
 
       if (looksLikeDetail) {
+        // 1) Intentar primero detectar un grupo tipo "plan bronce", "plan gold", etc.
+        const groupToken = extractPlanGroupToken(userInput); // "bronce", "gold", ...
+
+        if (groupToken) {
+          const { rows } = await pool.query<{
+            service_id: string;
+            service_name: string;
+          }>(
+            `
+            SELECT s.id   AS service_id,
+                  s.name AS service_name
+            FROM services s
+            WHERE s.tenant_id = $1
+              AND s.active = true
+              AND lower(s.name) LIKE $2
+            ORDER BY s.name
+            `,
+            [tenantId, `%${groupToken}%`]
+          );
+
+          // Si hay varias coincidencias con "bronce", mostramos TODAS
+          if (rows.length > 1) {
+            const header =
+              idiomaDestino === "en"
+                ? `The ${groupToken} plan has these options:`
+                : `El Plan ${groupToken} tiene estas opciones:`;
+
+            const listLines = rows.map((r) => `• ${r.service_name}`);
+
+            const replyGroup = `${header}\n\n${listLines.join("\n")}`;
+
+            const nowTs = Date.now();
+
+            return {
+              handled: true,
+              reply: replyGroup,
+              source: "service_list_db",
+              intent: intentOut || "detalle_servicio",
+              ctxPatch: {
+                // dejamos la lista en contexto por si luego escribe "la primera", etc.
+                last_plan_list: rows.map((r) => ({
+                  id: r.service_id,
+                  name: r.service_name,
+                  url: null,
+                })),
+                last_plan_list_at: nowTs,
+                last_list_kind: "plan",
+                last_list_kind_at: nowTs,
+
+                last_service_id: null,
+                last_service_name: null,
+                last_service_at: null,
+
+                last_bot_action: "sent_details_group",
+                last_bot_action_at: nowTs,
+              } as Partial<FastpathCtx>,
+            };
+          }
+          // Si solo hay 0 ó 1 resultados, seguimos al flujo normal de abajo
+        }
+
+        // 2) Fallback: tu lógica actual de UN solo servicio
         const hit = await resolveServiceIdFromText(pool, tenantId, userInput, {
           mode: "loose",
         });
@@ -1172,7 +1247,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               pool,
               tenantId,
               serviceId,
-              userText: userInput, 
+              userText: userInput,
             });
 
             if (linkPick.ok) {
