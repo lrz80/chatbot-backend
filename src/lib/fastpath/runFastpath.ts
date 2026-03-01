@@ -17,8 +17,8 @@ import {
 
 // DB catalog includes
 import {
-  resolveServiceInfo,          // si ya lo usas
-  getServiceDetailsText,       // 👉 añade esto
+  resolveServiceInfo,
+  getServiceDetailsText,
 } from "../services/resolveServiceInfo";
 
 // Pricing
@@ -80,6 +80,10 @@ export type FastpathCtx = {
   last_selected_name?: string | null;
   last_selected_at?: number | null;
 
+  // ✅ histórico de planes listados por el motor de catálogo
+  last_catalog_plans?: string[] | null;
+  last_catalog_at?: number | null;
+
   [k: string]: any;
 };
 
@@ -91,12 +95,21 @@ export type FastpathAwaitingEffect =
     }
   | { type: "none" };
 
+export type FastpathHint =
+  | {
+      type: "price_summary";
+      payload: {
+        lang: Lang;
+        rows: { service_name: string; min_price: number; max_price: number }[];
+      };
+    };
+
 export type FastpathResult =
   | {
       handled: true;
       reply: string;
       source:
-        | "service_list_db" // ✅ ADD
+        | "service_list_db"
         | "info_clave_includes"
         | "info_clave_missing_includes"
         | "includes_fastpath_db"
@@ -115,12 +128,12 @@ export type FastpathResult =
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;
-      fastpathHint?: FastpathHint;          // 👈 NUEVO
+      fastpathHint?: FastpathHint;
     }
   | {
       handled: false;
       ctxPatch?: Partial<FastpathCtx>;
-      fastpathHint?: FastpathHint;          // opcional también aquí
+      fastpathHint?: FastpathHint;
     };
 
 export type RunFastpathArgs = {
@@ -149,15 +162,6 @@ export type RunFastpathArgs = {
   lastServiceTtlMs?: number; // default 60 min
 };
 
-export type FastpathHint =
-  | {
-      type: "price_summary";
-      payload: {
-        lang: Lang;
-        rows: { service_name: string; min_price: number; max_price: number }[];
-      };
-    };
-
 async function answerCatalogQuestionLLM(params: {
   idiomaDestino: "es" | "en";
   systemMsg: string;
@@ -180,22 +184,19 @@ async function answerCatalogQuestionLLM(params: {
 
 function bestNameMatch(
   userText: string,
-  items: Array<{ id: string; name: string; url: string | null }>
+  items: Array<{ id?: string; name: string; url?: string | null }>
 ) {
   const u = normalizeText(userText);
   if (!u) return null;
 
-  // match por inclusión (simple y multitenant)
-  // si el usuario escribe "bronze cycling" o "plan bronze", etc.
   const hits = items.filter((it) => {
     const n = normalizeText(it.name);
     return n.includes(u) || u.includes(n);
   });
 
-  if (hits.length === 1) return hits[0];
+  if (hits.length === 1) return hits[0] as any;
   if (hits.length > 1) {
-    // si hay varios, elige el que tenga nombre más largo (más específico)
-    return hits.sort((a, b) => normalizeText(b.name).length - normalizeText(a.name).length)[0];
+    return hits.sort((a, b) => normalizeText(b.name).length - normalizeText(a.name).length)[0] as any;
   }
   return null;
 }
@@ -214,12 +215,9 @@ function isFreeOfferQuestion(text: string) {
   const hasFreeWord = /\b(gratis|free)\b/i.test(t);
   const hasTrialWord = /\b(prueba|trial|demo|promocion|promoción)\b/i.test(t);
   const hasClassWord = /\b(clase|class)\b/i.test(t);
-  const hasTryVerb   = /\b(probar|try|testear|probarla|probarlo)\b/i.test(t);
+  const hasTryVerb = /\b(probar|try|testear|probarla|probarlo)\b/i.test(t);
 
-  // Caso A: explícitamente gratis + señal de prueba
   if (hasFreeWord && (hasTrialWord || hasClassWord)) return true;
-
-  // Caso B: verbo de "probar" + palabra de clase, aunque no diga "gratis"
   if (hasTryVerb && hasClassWord) return true;
 
   return false;
@@ -333,9 +331,12 @@ function isTrialQuery(raw: string): boolean {
 }
 
 function isInterestMessage(raw: string): boolean {
-  const t = (raw || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  const t = (raw || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
 
-  // Verbos de interés genéricos, multi-industria
   const patterns = [
     /\bme interesa\b/,
     /\bme interesan\b/,
@@ -348,6 +349,30 @@ function isInterestMessage(raw: string): boolean {
   ];
 
   return patterns.some((re) => re.test(t));
+}
+
+// ✅ helper: extraer nombres de planes desde la respuesta del LLM
+function extractPlanNamesFromReply(text: string): string[] {
+  const lines = String(text || "").split(/\r?\n/);
+  const names: string[] = [];
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    if (/^[•\-\*]/.test(line)) {
+      let withoutBullet = line.replace(/^[•\-\*]\s*/, "");
+      const idx = withoutBullet.indexOf(":");
+      if (idx > 0) {
+        const name = withoutBullet.slice(0, idx).trim();
+        if (name && !names.includes(name)) {
+          names.push(name);
+        }
+      }
+    }
+  }
+
+  return names;
 }
 
 function finalize(
@@ -396,14 +421,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   const q = userInput.toLowerCase().trim();
 
-  // Fastpath solo aplica si NO estás en booking
   if (inBooking) return { handled: false };
 
   const intentOut = (detectedIntent || "").trim() || null;
 
   // ===============================
-  // ✅ Dismiss Fastpath: "no gracias", "no thanks", "I'm good", etc.
-  //    - Limpia contexto de fastpath para que no se quede pegado
+  // ✅ Dismiss Fastpath
   // ===============================
   {
     const hasFastpathContext =
@@ -425,7 +448,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       const now = Date.now();
 
       const ctxPatch: Partial<FastpathCtx> = {
-        // limpia listas, flags y selección previa
         last_plan_list: undefined,
         last_plan_list_at: undefined,
         last_package_list: undefined,
@@ -452,6 +474,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         last_selected_name: null,
         last_selected_at: null,
 
+        // limpia también histórico de catálogo
+        last_catalog_plans: undefined,
+        last_catalog_at: undefined,
+
         last_bot_action: "fastpath_dismiss",
         last_bot_action_at: now,
       };
@@ -472,10 +498,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
-  // ✅ INFO GENERAL OVERVIEW (NO ASK)
+  // ✅ INFO GENERAL OVERVIEW
   // ===============================
   if (intentOut === "info_general") {
-    // Solo limpiar cosas de "listas" (no toques awaiting global)
     const ctxPatch: any = {
       last_list_kind: null,
       last_list_kind_at: null,
@@ -501,7 +526,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
-  // ✅ PICK FROM LAST LIST -> SEND SINGLE LINK (NO HARDCODE)
+  // ✅ PICK FROM LAST LIST
   // ===============================
   {
     const ttlMs = 5 * 60 * 1000;
@@ -510,23 +535,18 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     const planAtRaw = (convoCtx as any)?.last_plan_list_at;
     const planAt = Number(planAtRaw);
     const planAtOk = Number.isFinite(planAt) && planAt > 0;
-
-    // ✅ si hay lista pero NO hay timestamp válido, asumimos fresh (self-heal)
     const planFresh = planList.length > 0 && (!planAtOk || Date.now() - planAt <= ttlMs);
 
     const pkgList = Array.isArray(convoCtx?.last_package_list) ? convoCtx.last_package_list : [];
     const pkgAtRaw = (convoCtx as any)?.last_package_list_at;
     const pkgAt = Number(pkgAtRaw);
     const pkgAtOk = Number.isFinite(pkgAt) && pkgAt > 0;
-
     const pkgFresh = pkgList.length > 0 && (!pkgAtOk || Date.now() - pkgAt <= ttlMs);
 
     const kind = (convoCtx?.last_list_kind as any) || null;
     const kindAtRaw = (convoCtx as any)?.last_list_kind_at;
     const kindAt = Number(kindAtRaw);
     const kindAtOk = Number.isFinite(kindAt) && kindAt > 0;
-
-    // ✅ si hay kind pero no timestamp válido, también lo consideramos fresh
     const kindFresh = Boolean(kind) && (!kindAtOk || Date.now() - kindAt <= ttlMs);
 
     const healPatch: Partial<FastpathCtx> = {};
@@ -536,20 +556,17 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     if (kind && !kindAtOk) healPatch.last_list_kind_at = Date.now();
 
     if (planFresh || pkgFresh) {
-      // 🛑 1) Si el mensaje es de "clase de prueba", NO usamos este flujo
       if (isTrialQuery(userInput)) {
         console.log("🧪 PICK SKIP — trial/demo query, dejar a otras reglas manejarlo");
       } else {
-        // 🧮 índice tipo "1", "2", etc.
         const idx = (() => {
           const t = String(userInput || "").trim();
-          const m = t.match(/^([1-9])$/); // ✅ SOLO si el user manda "1" (y nada más)
+          const m = t.match(/^([1-9])$/);
           return m ? Number(m[1]) : null;
         })();
 
         const msgNorm = normalizeText(userInput);
 
-        // 🧠 ¿menciona explícitamente algún plan/paquete de la última lista?
         const mentionsPlanFromList =
           planFresh &&
           planList.some((p: any) => {
@@ -568,8 +585,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             return !!nameNorm && msgNorm.includes(nameNorm);
           });
 
-        // 🛑 2) Si el usuario NO mandó número NI mencionó un item de la lista,
-        // no hacemos pick y dejamos que otras reglas (precio, trial, etc.) actúen.
         if (!mentionsPlanFromList && !mentionsPackageFromList && idx == null) {
           console.log("🧪 PICK SKIP — no numeric choice or plan/package mention in msg");
         } else {
@@ -583,13 +598,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               const i = idx - 1;
               if (i >= 0 && i < list.length) picked = list[i];
             }
-            if (!picked) picked = bestNameMatch(userInput, list);
-
+            if (!picked) picked = bestNameMatch(userInput, list as any) as any;
             return picked ? { ...picked, kind } : null;
           };
 
-          // ✅ prioridad por “último tipo listado” si está fresco
-          let picked: ({ id: string; name: string; url: string | null; kind: "plan" | "package" }) | null = null;
+          let picked: { id: string; name: string; url: string | null; kind: "plan" | "package" } | null =
+            null;
 
           if (kindFresh && kind === "package") {
             if (pkgFresh) picked = tryPick(pkgList, "package");
@@ -600,14 +614,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           }
 
           if (picked) {
-            // ✅ Si viene de lista de opciones (id compuesto), separar serviceId real
             const rawPickedId = String(picked.id || "");
             const parts = rawPickedId.split("::");
-            const pickedServiceId = parts[0] || rawPickedId; // ✅ siempre termina siendo UUID real
-            const pickedOptionLabel = parts.length > 1 ? parts.slice(1).join("::") : null; // por si label trae ::
+            const pickedServiceId = parts[0] || rawPickedId;
+            const pickedOptionLabel = parts.length > 1 ? parts.slice(1).join("::") : null;
 
             const basePatch: Partial<FastpathCtx> = {
-              // limpiar listas tras elegir (evita loops)
               last_plan_list: undefined,
               last_plan_list_at: undefined,
               last_package_list: undefined,
@@ -615,26 +627,19 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               last_list_kind: undefined,
               last_list_kind_at: undefined,
 
-              // ✅ CANÓNICO: qué fue lo último seleccionado (sirve para "precio" luego)
-              last_selected_kind: picked.kind, // "plan" | "package"
+              last_selected_kind: picked.kind,
               last_selected_id: picked.id,
               last_selected_name: picked.name,
               last_selected_at: Date.now(),
 
-              // ✅ set last_service REAL para price/includes
               last_service_id: pickedServiceId,
-              last_service_name: picked.name, // (nombre mostrado, puede ser label)
+              last_service_name: picked.name,
               last_service_at: Date.now(),
 
-              // ✅ opcional pero recomendado: guardar la opción elegida para el siguiente “precio”
               last_price_option_label: pickedOptionLabel,
               last_price_option_at: Date.now(),
             };
 
-            // ✅ NO HARDCODE:
-            // - si picked.url existe úsalo (service_url guardado en lista)
-            // - si no, intenta resolver el mejor link desde DB (service_url o variant_url)
-            // - si hay varios (ambiguous), abre pending_link_lookup con labels reales del tenant
             let finalUrl: string | null = picked.url ? String(picked.url).trim() : null;
 
             if (!finalUrl) {
@@ -676,14 +681,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               }
             }
 
-            const d = await getServiceDetailsText(tenantId, pickedServiceId, userInput).catch(() => null);
+            const d = await getServiceDetailsText(tenantId, pickedServiceId, userInput).catch(
+              () => null
+            );
 
             const baseName = String(convoCtx?.last_service_name || "") || String(picked.name || "");
             const title = d?.titleSuffix ? `${baseName} — ${d.titleSuffix}` : baseName;
 
             const infoText = d?.text ? String(d.text).trim() : "";
 
-            // Si aún no hay URL, intenta 1 vez más resolver link usando el mismo userInput (ej: "autopay")
             if (!finalUrl) {
               const linkPick2 = await resolveBestLinkForService({
                 pool,
@@ -697,8 +703,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
             const reply =
               idiomaDestino === "en"
-                ? `${title}${infoText ? `\n\n${infoText}` : ""}${finalUrl ? `\n\nHere’s the link:\n${finalUrl}` : ""}`
-                : `${title}${infoText ? `\n\n${infoText}` : ""}${finalUrl ? `\n\nAquí está el link:\n${finalUrl}` : ""}`;
+                ? `${title}${infoText ? `\n\n${infoText}` : ""}${
+                    finalUrl ? `\n\nHere’s the link:\n${finalUrl}` : ""
+                  }`
+                : `${title}${infoText ? `\n\n${infoText}` : ""}${
+                    finalUrl ? `\n\nAquí está el link:\n${finalUrl}` : ""
+                  }`;
 
             return {
               handled: true,
@@ -721,8 +731,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
-  // ✅ ANTI-LOOP: clear pending_link if user changed topic
-  // (NO HARDCODE: only matches against pending_link_options labels)
+  // ✅ ANTI-LOOP PENDING LINK
   // ===============================
   {
     const ttlMs = 5 * 60 * 1000;
@@ -736,7 +745,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     const pendingFresh =
       pending && pendingAt > 0 && Date.now() - pendingAt <= ttlMs && pendingOptions.length > 0;
 
-    // Si expiró TTL, limpia y sigue normal
     if (pending && !pendingFresh) {
       return {
         handled: false,
@@ -749,22 +757,20 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
 
     if (pendingFresh) {
-      const norm = (s: string) =>
+      const normLocal = (s: string) =>
         String(s || "")
           .normalize("NFD")
           .replace(/[\u0300-\u036f]/g, "")
           .toLowerCase()
           .trim();
 
-      const tNorm = norm(userInput);
+      const tNorm = normLocal(userInput);
 
-      // Cancel genérico (esto NO es hardcode de negocio)
       const looksLikeCancel =
         /\b(no|no\s+gracias|gracias|thanks|cancelar|olvidalo|olvidalo|stop)\b/.test(tNorm);
 
-      // (A) si responde con número (1,2,3) es claramente una opción
       const idx = (() => {
-        const m = tNorm.match(/^([1-9])$/); // ✅ solo si el mensaje es SOLO "1"
+        const m = tNorm.match(/^([1-9])$/);
         if (!m) return null;
         const n = Number(m[1]);
         return Number.isFinite(n) ? n : null;
@@ -773,21 +779,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       const looksLikeOptionByIndex =
         idx != null && idx >= 1 && idx <= Math.min(9, pendingOptions.length);
 
-      // (B) match por palabras del label (evita depender de escribir el label completo)
       const labelWordHit = pendingOptions.some((o: any) => {
-        const labelNorm = norm(o?.label || "");
+        const labelNorm = normLocal(o?.label || "");
         if (!labelNorm) return false;
-
-        // Palabras del label con longitud razonable
         const words = labelNorm.split(/\s+/).filter((w) => w.length >= 3);
-
-        // Si el usuario escribió alguna palabra clave del label
         return words.some((w) => tNorm.includes(w));
       });
 
       const looksLikeOptionAnswer = looksLikeOptionByIndex || labelWordHit;
 
-      // Si canceló, o cambió de tema (no parece opción) -> limpia pending y deja seguir pipeline
       if (looksLikeCancel || !looksLikeOptionAnswer) {
         return {
           handled: false,
@@ -798,20 +798,16 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           } as any,
         };
       }
-
-      // Si parece opción, NO limpies aquí; deja que el bloque "RESOLVE PENDING LINK"
-      // lo capture y envíe el link correcto.
     }
   }
 
   // ===============================
-  // ✅ FREE OFFER (DB) -> LIST OPTIONS THEN PICK -> SEND LINK
+  // ✅ FREE OFFER
   // ===============================
   {
     const wantsFreeOffer = isFreeOfferQuestion(userInput);
 
     if (wantsFreeOffer) {
-      // Servicios gratis del tenant (price_base=0) con URL directa
       const { rows } = await pool.query(
         `
         SELECT s.id, s.name, s.service_url
@@ -835,7 +831,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         }))
         .filter((x) => x.name && x.url);
 
-      // Si no hay nada gratis con URL, no inventes "portal": pide especificación genérica
       if (!items.length) {
         const msg =
           idiomaDestino === "en"
@@ -844,7 +839,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         return { handled: true, reply: msg, source: "service_list_db", intent: "free_offer" };
       }
 
-      // Si hay 1 sola opción gratis: manda directo el link de ESA opción
       if (items.length === 1) {
         const one = items[0];
         return {
@@ -860,7 +854,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         };
       }
 
-      // Si hay 2+ opciones: lista y deja que el PICK FROM LAST LIST resuelva
       const reply = renderFreeOfferList({
         lang: idiomaDestino,
         items: items.map((x) => ({ name: x.name })),
@@ -872,7 +865,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         source: "service_list_db",
         intent: "free_offer",
         ctxPatch: {
-          // reutilizamos tu mecanismo de pick: guardamos en last_plan_list (es solo una lista de selección)
           last_plan_list: items.map((x) => ({ id: x.id, name: x.name, url: x.url })),
           last_plan_list_at: Date.now(),
           last_list_kind: "plan",
@@ -883,23 +875,23 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
-  // ✅ INTEREST -> SEND BEST LINK (service_url or variant_url)
+  // ✅ INTEREST -> LINK
   // ===============================
   {
     const t = String(userInput || "").trim();
-
     const tNorm = normalizeText(userInput);
 
-    // intención genérica de “quiero link / web / comprar”, sin copy hardcode
     const wantsLink =
-      /\b(link|enlace|url|web|website|sitio|pagina|página|comprar|buy|pagar|checkout)\b/i.test(tNorm);
+      /\b(link|enlace|url|web|website|sitio|pagina|página|comprar|buy|pagar|checkout)\b/i.test(
+        tNorm
+      );
 
     const pending = Boolean(convoCtx?.pending_link_lookup);
 
-    // ✅ Si ya acabamos de mandar "info + link" por PICK, no repetir aquí
     const lastAct = String(convoCtx?.last_bot_action || "");
     const lastActAt = Number(convoCtx?.last_bot_action_at || 0);
-    const justSentDetails = lastAct === "sent_details" && lastActAt > 0 && Date.now() - lastActAt < 2 * 60 * 1000;
+    const justSentDetails =
+      lastAct === "sent_details" && lastActAt > 0 && Date.now() - lastActAt < 2 * 60 * 1000;
 
     if (justSentDetails && !pending) {
       return { handled: false };
@@ -917,7 +909,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         const serviceId = String(convoCtx.last_service_id);
         const baseName = String(convoCtx?.last_service_name || "").trim();
 
-        // ✅ Trae descripción: intenta variante por texto ("por mes", "autopay"), si no servicio
         const d = await getServiceDetailsText(tenantId, serviceId, userInput).catch(() => null);
 
         const title = d?.titleSuffix
@@ -933,38 +924,37 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         let reply =
           idiomaDestino === "en"
-            ? `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Here it is 😊\n${pick.url}\n\n${outro}`
-            : `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Aquí lo tienes 😊\n${pick.url}\n\n${outro}`;
+            ? `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Here it is 😊\n${
+                pick.url
+              }\n\n${outro}`
+            : `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Aquí lo tienes 😊\n${
+                pick.url
+              }\n\n${outro}`;
 
-          // ===============================
-          // 🔗 LINK DEL SERVICIO / VARIANTE
-          // ===============================
-          const variantId =
-            (convoCtx as any)?.last_variant_id
-              ? String((convoCtx as any).last_variant_id)
-              : null;
+        const variantId =
+          (convoCtx as any)?.last_variant_id ? String((convoCtx as any).last_variant_id) : null;
 
-          try {
-            const { serviceUrl, variantUrl } = await getServiceAndVariantUrl(
-              pool,
-              tenantId,
-              serviceId,
-              variantId
-            );
+        try {
+          const { serviceUrl, variantUrl } = await getServiceAndVariantUrl(
+            pool,
+            tenantId,
+            serviceId,
+            variantId
+          );
 
-            const finalUrl = variantUrl || serviceUrl;
+          const finalUrl = variantUrl || serviceUrl;
 
-            if (finalUrl) {
-              const linkLine =
-                idiomaDestino === "en"
-                  ? `\n\n👉 You can see all the details or purchase here: ${finalUrl}`
-                  : `\n\n👉 Puedes ver todos los detalles o comprarlo aquí: ${finalUrl}`;
+          if (finalUrl) {
+            const linkLine =
+              idiomaDestino === "en"
+                ? `\n\n👉 You can see all the details or purchase here: ${finalUrl}`
+                : `\n\n👉 Puedes ver todos los detalles o comprarlo aquí: ${finalUrl}`;
 
-              reply = `${reply}${linkLine}`;
-            }
-          } catch (e: any) {
-            console.warn("⚠️ runFastpath: no se pudo adjuntar URL de servicio:", e?.message);
+            reply = `${reply}${linkLine}`;
           }
+        } catch (e: any) {
+          console.warn("⚠️ runFastpath: no se pudo adjuntar URL de servicio:", e?.message);
+        }
 
         return {
           handled: true,
@@ -982,7 +972,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       }
 
       if (!pick.ok && pick.reason === "ambiguous") {
-        // 1 sola pregunta corta, sin menús numéricos
         const labels = pick.options
           .slice(0, 3)
           .map((o) => o.label)
@@ -993,7 +982,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             ? `Sure 😊 Which option do you want— ${labels.join(" or ")}?`
             : `Perfecto 😊 ¿Cuál opción quieres— ${labels.join(" o ")}?`;
 
-        // opcional: guarda para que el próximo mensaje “autopay” resuelva directo
         return {
           handled: true,
           reply: q,
@@ -1002,7 +990,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           ctxPatch: {
             pending_link_lookup: true,
             pending_link_at: Date.now(),
-            pending_link_options: pick.options, // si tu ctx permite JSON; si no, omítelo
+            pending_link_options: pick.options,
           } as any,
         };
       }
@@ -1010,9 +998,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // =========================================================
-  // ✅ FOLLOW-UP ROUTER (mantener hilo conversacional)
-  // - si el usuario manda un mensaje corto / follow-up,
-  //   intentamos resolver usando: pending flags + last list + last service
+  // ✅ FOLLOW-UP ROUTER
   // =========================================================
   {
     const t = String(userInput || "").trim();
@@ -1020,7 +1006,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
     const isShort =
       t.length > 0 &&
-      t.length <= 22 &&                 // ajustable
+      t.length <= 22 &&
       !t.includes("?") &&
       !/\b(hola|hi|hello|gracias|thanks)\b/i.test(tLower);
 
@@ -1028,35 +1014,37 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
     const ttlMs = 10 * 60 * 1000;
 
-    // helpers de frescura
     const fresh = (at: any) => {
       const n = Number(at || 0);
       return Number.isFinite(n) && n > 0 && now - n <= ttlMs;
     };
 
-    const pendingPrice = Boolean((convoCtx as any)?.pending_price_lookup) && fresh((convoCtx as any)?.pending_price_at);
-    const pendingLink  = Boolean((convoCtx as any)?.pending_link_lookup)  && fresh((convoCtx as any)?.pending_link_at);
+    const pendingPrice =
+      Boolean((convoCtx as any)?.pending_price_lookup) &&
+      fresh((convoCtx as any)?.pending_price_at);
+    const pendingLink =
+      Boolean((convoCtx as any)?.pending_link_lookup) && fresh((convoCtx as any)?.pending_link_at);
 
     const lastServiceId = String((convoCtx as any)?.last_service_id || "").trim();
     const lastServiceFresh = lastServiceId && fresh((convoCtx as any)?.last_service_at);
 
-    const planList = Array.isArray((convoCtx as any)?.last_plan_list) ? (convoCtx as any).last_plan_list : [];
-    const pkgList  = Array.isArray((convoCtx as any)?.last_package_list) ? (convoCtx as any).last_package_list : [];
+    const planList = Array.isArray((convoCtx as any)?.last_plan_list)
+      ? (convoCtx as any).last_plan_list
+      : [];
+    const pkgList = Array.isArray((convoCtx as any)?.last_package_list)
+      ? (convoCtx as any).last_package_list
+      : [];
     const listFresh =
       (planList.length && fresh((convoCtx as any)?.last_plan_list_at)) ||
-      (pkgList.length  && fresh((convoCtx as any)?.last_package_list_at));
+      (pkgList.length && fresh((convoCtx as any)?.last_package_list_at));
 
-    // 1) Si estamos esperando aclaración de LINK y el user manda algo corto -> tratar como pick
-    if (isShort && pendingLink && Array.isArray((convoCtx as any)?.pending_link_options) && (convoCtx as any).pending_link_options.length) {
-      // Reutiliza tu bestNameMatch sobre options.label
+    if (isShort && pendingLink && Array.isArray((convoCtx as any)?.pending_link_options)) {
       const opts = (convoCtx as any).pending_link_options;
-      const pick = bestNameMatch(t, opts.map((o: any) => ({ name: o.label })));
+      const pick = bestNameMatch(t, opts.map((o: any) => ({ name: o.label })) as any);
 
       if (pick?.name) {
-        // deja que tu lógica existente de resolveBestLinkForService se ejecute luego
-        // solo limpia pending para evitar loops y marca last_bot_action
         return {
-          handled: false, // seguimos el flujo normal, pero con ctxPatch para limpiar pending y no perder hilo
+          handled: false,
           ctxPatch: {
             pending_link_lookup: null,
             pending_link_at: null,
@@ -1068,11 +1056,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       }
     }
 
-    // 2) Si el user manda algo corto y hay una lista fresca -> deja que PICK FROM LAST LIST lo capture
     if (isShort && listFresh) {
-      // no hacemos nada aquí: tu bloque PICK ya lo maneja
+      // deja que PICK FROM LAST LIST lo maneje
     } else {
-      // 3) Si el user manda algo corto y estamos en pending_price_lookup -> resolver como servicio
       if (isShort && pendingPrice) {
         const hit = await resolveServiceIdFromText(pool, tenantId, t);
         if (hit?.id) {
@@ -1091,10 +1077,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         }
       }
 
-      // 4) Si el user manda algo corto y existe last_service_id fresco -> interpretarlo como “seguir hablando de eso”
       if (isShort && lastServiceFresh) {
-        // si el texto parece una opción (autopay / monthly / etc), guárdalo como preferencia
-        // (no hardcode: solo guardamos label)
         return {
           handled: false,
           ctxPatch: {
@@ -1109,10 +1092,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
-  // 🧠 MOTOR ÚNICO DE CATÁLOGO (services + service_variants)
+  // 🧠 MOTOR ÚNICO DE CATÁLOGO
   // ===============================
   {
-    // 1) ¿Es una pregunta de catálogo?
     const isCatalogQuestion =
       q.includes("precio") ||
       q.includes("precios") ||
@@ -1139,7 +1121,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       q.includes("pack") ||
       q.includes("paquete") ||
       q.includes("autopay") ||
-      // inglés
       q.includes("price") ||
       q.includes("prices") ||
       q.includes("membership") ||
@@ -1150,7 +1131,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     if (!isCatalogQuestion) {
       // deja continuar con el resto del fastpath
     } else {
-      // 2) Clasificar tipo de pregunta para META
       const isCombinationIntent =
         q.includes("combinar") ||
         q.includes("mezclar") ||
@@ -1182,27 +1162,42 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         questionType = "other_plans";
       }
 
-      // 3) Construir el texto de catálogo
       const catalogText = await buildCatalogContext(pool, tenantId);
 
-      // 4) Detectar si el catálogo tiene algún plan que claramente da acceso a varias cosas
-      const hasMultiAccessPlan = /todas las clases|todas nuestras clases|todas las sesiones|all classes|all services|any class|unlimited/i.test(
-        catalogText
-      );
+      const hasMultiAccessPlan =
+        /todas las clases|todas nuestras clases|todas las sesiones|all classes|all services|any class|unlimited/i.test(
+          catalogText
+        );
+
+      // ✅ construir PREVIOUS_PLANS_MENTIONED desde el contexto
+      const nowForMeta = Date.now();
+      let previousPlansStr = "none";
+      const prevNames = Array.isArray(convoCtx?.last_catalog_plans)
+        ? convoCtx.last_catalog_plans!
+        : [];
+      const prevAtRaw = (convoCtx as any)?.last_catalog_at;
+      const prevAt = Number(prevAtRaw);
+      const prevFresh =
+        prevNames.length > 0 &&
+        Number.isFinite(prevAt) &&
+        prevAt > 0 &&
+        nowForMeta - prevAt <= 30 * 60 * 1000; // 30 minutos
+
+      if (prevFresh) {
+        previousPlansStr = prevNames.join(" | ");
+      }
 
       const metaBlock =
         `QUESTION_TYPE: ${questionType}\n` +
-        `HAS_MULTI_ACCESS_PLAN: ${hasMultiAccessPlan ? "yes" : "no"}`;
+        `HAS_MULTI_ACCESS_PLAN: ${hasMultiAccessPlan ? "yes" : "no"}\n` +
+        `PREVIOUS_PLANS_MENTIONED: ${previousPlansStr}`;
 
       const infoGeneralBlock = infoClave
-        ? (
-            idiomaDestino === "en"
-              ? `\n\nBUSINESS_GENERAL_INFO (hours, address, etc.):\n${infoClave}`
-              : `\n\nINFO_GENERAL_DEL_NEGOCIO (horarios, dirección, etc.):\n${infoClave}`
-          )
+        ? idiomaDestino === "en"
+          ? `\n\nBUSINESS_GENERAL_INFO (hours, address, etc.):\n${infoClave}`
+          : `\n\nINFO_GENERAL_DEL_NEGOCIO (horarios, dirección, etc.):\n${infoClave}`
         : "";
 
-      // 5) System message (el que ya ajustamos antes)
       const systemMsg =
         idiomaDestino === "en"
           ? `
@@ -1310,7 +1305,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       OUTPUT LANGUAGE:
       - Answer always in English.
       `.trim()
-
           : `
       Eres Aamy, asistente de ventas de una plataforma SaaS multinegocio.
 
@@ -1420,7 +1414,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - Responde siempre en español.
       `.trim();
 
-      // 6) Mensaje de usuario con META + CATALOGO
       const userMsg =
         idiomaDestino === "en"
           ? `
@@ -1433,7 +1426,7 @@ ${userInput}
 CATALOG:
 ${catalogText}${infoGeneralBlock}
 `.trim()
-    : `
+          : `
 META:
 ${metaBlock}
 
@@ -1450,11 +1443,20 @@ ${catalogText}${infoGeneralBlock}
         userMsg,
       });
 
+      // ✅ extrae nombres de planes listados y guárdalos en contexto
+      const namesShown = extractPlanNamesFromReply(reply);
+      const ctxPatch: Partial<FastpathCtx> = {};
+      if (namesShown.length) {
+        ctxPatch.last_catalog_plans = namesShown;
+        ctxPatch.last_catalog_at = Date.now();
+      }
+
       return {
         handled: true,
         reply,
         source: "catalog_llm",
         intent: intentOut || "catalog",
+        ctxPatch,
       };
     }
   }
