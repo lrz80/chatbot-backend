@@ -1189,7 +1189,45 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
             const listLines = rows.map((r) => `• ${r.service_name}`);
 
-            const replyGroup = `${header}\n\n${listLines.join("\n")}`;
+            const total = rows.length;
+
+            // groupToken viene de tu extractGroupToken(userInput)
+            const label = groupToken || ""; // por si viene null/undefined
+
+            let headerEs: string;
+            let headerEn: string;
+
+            if (total === 1) {
+              headerEs = label
+                ? `Tengo una opción disponible en ${label}:`
+                : `Tengo una opción disponible:`;
+              headerEn = label
+                ? `I have one option under ${label}:`
+                : `I have one option available:`;
+            } else if (total === 2) {
+              headerEs = label
+                ? `Dentro de ${label} hay estas dos opciones disponibles:`
+                : `Tengo estas dos opciones disponibles:`;
+              headerEn = label
+                ? `Under ${label} there are two options available:`
+                : `Here are two available options:`;
+            } else {
+              headerEs = label
+                ? `Dentro de ${label} hay varias opciones disponibles:`
+                : `Tengo varias opciones disponibles:`;
+              headerEn = label
+                ? `Under ${label} there are several options available:`
+                : `There are several options available:`;
+            }
+            
+            // cierre neutro, sin “plan”, “membresía”, etc.
+            const closingEs = "¿Qué opción te interesa?";
+            const closingEn = "Which option looks best for you?";
+
+            const replyGroup =
+              idiomaDestino === "en"
+                ? `${headerEn}\n\n${listLines.join("\n")}\n\n${closingEn}`
+                : `${headerEs}\n\n${listLines.join("\n")}\n\n${closingEs}`;
 
             const nowTs = Date.now();
 
