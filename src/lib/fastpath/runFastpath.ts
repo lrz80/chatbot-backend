@@ -1230,8 +1230,16 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - Business hours and general class schedules, if present, will appear in the BUSINESS_GENERAL_INFO block.
       - You may use times from BUSINESS_GENERAL_INFO to answer questions about general opening hours or general class schedules.
       - The CATALOG text may contain time restrictions for specific plans/passes (for example: “valid before 8 a.m.” or “morning-only access”).
-      - Treat those times as restrictions of that specific plan only, NOT as the general schedule of the business.
-      - If the client asks about general hours/schedules and BUSINESS_GENERAL_INFO does not clearly contain a timetable, you MUST NOT invent times or days. In that case, explain the relevant plans/prices and add at most one generic line such as: “Schedules may vary by day; they can share the detailed timetable with you if needed.”
+      - Treat those times as restrictions of THAT SPECIFIC PLAN only, NOT as the general schedule of the business.
+      - VERY IMPORTANT:
+        - Only mention concrete times (e.g. “6:00 a.m.”, “7:30 p.m.”) or time ranges (e.g. “from 6 a.m. to 8 p.m.”, “in the mornings and evenings”) if those exact times or expressions appear explicitly in BUSINESS_GENERAL_INFO.
+        - If BUSINESS_GENERAL_INFO does NOT contain explicit times or day/time expressions, you MUST NOT:
+          - invent or summarize time ranges,
+          - say things like “from early in the morning until the afternoon”, “in the evenings”, “weekends”, “mornings and afternoons”, etc.,
+          - describe a schedule as if you knew it.
+        - In that case, if the client asked about schedules, you may add at most ONE generic line with NO time-of-day words, for example:
+          - “Class times may vary; you can check the updated schedule in this link.”
+          - “Schedules can change, you can see the current timetable in the booking portal.”
 
       LISTING vs DETAIL MODE:
       - If the user question is GENERIC (for example: “what other plans do you have?”, “what options do you have?”, “what plans are there?”) and DOES NOT mention a specific plan/pass name:
@@ -1290,8 +1298,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - Los horarios del negocio y los horarios generales de clases, si existen, aparecerán en el bloque INFO_GENERAL_DEL_NEGOCIO.
       - Puedes usar las horas de INFO_GENERAL_DEL_NEGOCIO para responder preguntas sobre horarios de apertura o horarios generales de clases.
       - El texto de CATALOGO puede contener restricciones horarias de planes/pases concretos (por ejemplo: “válido antes de las 8 a. m.” o “solo en la mañana”).
-      - Esas horas debes tratarlas como restricciones de ese plan específico, NO como el horario general del negocio.
-      - Si el cliente pregunta por horarios generales y INFO_GENERAL_DEL_NEGOCIO no trae claramente un horario completo, NO inventes horas ni días. En ese caso, céntrate en explicar los planes/precios relevantes y, como máximo, añade una frase genérica tipo: “Los horarios pueden variar según el día; te pueden compartir el horario detallado si lo necesitas.”.
+      - Esas horas debes tratarlas como restricciones de ESE PLAN específico, NO como el horario general del negocio.
+      - MUY IMPORTANTE:
+        - Solo menciona horas concretas (por ejemplo “6:00 a. m.”, “7:30 p. m.”) o rangos horarios (por ejemplo “de 6 a. m. a 8 p. m.”, “por la mañana y noche”) si esas horas o expresiones aparecen explícitamente en INFO_GENERAL_DEL_NEGOCIO.
+        - Si INFO_GENERAL_DEL_NEGOCIO NO contiene horas ni expresiones claras de día/hora, NO debes:
+          - inventar ni resumir rangos (“desde temprano en la mañana hasta la tarde”, “por las noches”, “los fines de semana”, etc.),
+          - describir un horario como si lo conocieras.
+        - En ese caso, si el cliente preguntó por horarios, puedes añadir como máximo UNA frase genérica SIN palabras de momento del día, por ejemplo:
+          - “Los horarios pueden variar; puedes ver el horario actualizado en este enlace.”
+          - “Los horarios pueden cambiar; en el portal de reservas verás el calendario al día.”
 
       MODO LISTA vs MODO DETALLE:
       - Si la pregunta del cliente es GENÉRICA (por ejemplo: “¿qué otros planes tienes?”, “¿qué opciones tienes?”, “¿qué planes hay?”) y NO menciona el nombre de un plan/pase concreto:
