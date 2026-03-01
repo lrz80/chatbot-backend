@@ -1279,6 +1279,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         - No descriptions allowed.
         - Only ONE link, for the most relevant option.
         - No paragraphs.
+      - HANDLING PREVIOUS_PLANS_MENTIONED:
+      - If PREVIOUS_PLANS_MENTIONED is not "none", you MUST treat this as a follow-up question like "what other plans do you have?".
+      - In that case:
+        - FIRST, try to list ONLY plans/passes/products that are NOT in PREVIOUS_PLANS_MENTIONED.
+        - Select 3–7 items among those “new” plans, following the quantity rules.
+        - If there are fewer than 3 new items available, you may:
+          - list all remaining new ones, and
+          - optionally add 1–2 previously mentioned plans, clearly marking that they were already mentioned.
+      - Under no circumstances should you repeat exactly the same list of plans as before when PREVIOUS_PLANS_MENTIONED includes those items.
 
       DETAIL MODE:
       - Use DETAIL MODE only when the user asks about ONE specific plan.
@@ -1290,8 +1299,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       PRICE / PLAN QUESTIONS:
       - Always list plans in bullet format.
       - If several options are relevant, compare them using separate bullets.
-      - If PREVIOUS_PLANS_MENTIONED is not "none", avoid repeating them unless needed.
-
+      
       COMBINATIONS / BUNDLES:
       - If QUESTION_TYPE is "combination_and_price" AND HAS_MULTI_ACCESS_PLAN is "yes":
         - You MUST recommend at least one plan that covers multiple services/categories or unlimited usage.
@@ -1380,6 +1388,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         - NO poner variantes extras,
         - NO poner párrafos,
         - incluir SOLO UN enlace (si aplica).
+      - MANEJO DE PREVIOUS_PLANS_MENTIONED:
+        - Si PREVIOUS_PLANS_MENTIONED no es "none", debes entender que el cliente está pidiendo "otros planes" o un seguimiento.
+        - En ese caso:
+          - PRIMERO intenta listar SOLO planes/pases/productos que NO aparezcan en PREVIOUS_PLANS_MENTIONED.
+          - Elige entre 3 y 7 de esos planes “nuevos”, respetando las reglas de cantidad.
+          - Si hay menos de 3 planes nuevos disponibles:
+            - muestra todos los nuevos,
+            - y solo si es necesario añade 1–2 planes que ya se mencionaron, dejando claro que ya se habían comentado antes.
+        - Bajo ninguna circunstancia debes repetir exactamente la misma lista de planes que ya se mostró cuando PREVIOUS_PLANS_MENTIONED contiene esos mismos nombres.
 
       MODO DETALLE:
       - Se usa cuando el cliente pide info de un plan específico.
@@ -1391,7 +1408,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       PRECIOS / SERVICIOS:
       - Siempre usa listas.
       - Comparaciones → una viñeta por opción.
-      - Si PREVIOUS_PLANS_MENTIONED ≠ "none", prioriza otros planes.
 
       COMBINADOS / PAQUETES:
       - Si QUESTION_TYPE = "combination_and_price" y HAS_MULTI_ACCESS_PLAN = "yes":
