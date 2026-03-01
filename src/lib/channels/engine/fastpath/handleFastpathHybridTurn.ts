@@ -67,9 +67,14 @@ export async function handleFastpathHybridTurn(
   const isPriceIntent =
     currentIntent === "info_horarios_generales" ||
     currentIntent === "precio" ||
-    currentIntent === "planes_precios"; // quita las que no uses si quieres
+    currentIntent === "planes_precios";
 
   const isPriceQuestionUser = isPriceOrScheduleKeyword || isPriceIntent;
+
+  // 🔍 Señales específicas: planes + horarios en la misma pregunta
+  const asksPlans = /plan|planes|membres/i.test(loweredInput);
+  const asksHorarios = /horario|hora|horarios|hours|schedule/i.test(loweredInput);
+  const wantsPlansAndHours = asksPlans && asksHorarios;
 
   // Intención efectiva que verá Fastpath
   const fpIntent = isPriceQuestionUser
@@ -120,9 +125,10 @@ export async function handleFastpathHybridTurn(
 
   const hasPkgs = (convoCtx as any)?.has_packages_available === true;
 
-  // 🛑 WHATSAPP + PREGUNTA DE PRECIOS: NO PASAR POR LLM
-  if (canal === "whatsapp" && isPriceQuestionUser) {
-    console.log("[WHATSAPP][FASTPATH] Price question -> send raw fastpath list", {
+  // 3.5️⃣ WHATSAPP/META + PREGUNTA DE PRECIOS: NO PASAR POR LLM
+  // ⚠️ EXCEPCIÓN: si es "planes + horarios", dejamos que pase al modo híbrido
+  if ((canal === "whatsapp" || canal === "meta") && isPriceQuestionUser && !wantsPlansAndHours) {
+    console.log("[CHAT][FASTPATH] Price question -> send raw fastpath list", {
       source: fp.source,
       intent: fp.intent || detectedIntent || intentFallback || null,
     });
@@ -140,9 +146,9 @@ export async function handleFastpathHybridTurn(
   const hasLinkInFastpath = /https?:\/\/\S+/i.test(fastpathText);
   const isInfoClaveSource = String(fp.source || "").startsWith("info_clave");
 
-  // 4️⃣ BYPASS LLM EN WHATSAPP si ya hay link o viene de info_clave
-  if (canal === "whatsapp" && (hasLinkInFastpath || isInfoClaveSource)) {
-    console.log("[WHATSAPP][FASTPATH] Bypass LLM (link/info_clave)", {
+  // 4️⃣ BYPASS LLM EN WHATSAPP/META si ya hay link o viene de info_clave
+  if ((canal === "whatsapp" || canal === "meta") && (hasLinkInFastpath || isInfoClaveSource)) {
+    console.log("[CHAT][FASTPATH] Bypass LLM (link/info_clave)", {
       source: fp.source,
       hasLinkInFastpath,
     });
@@ -169,8 +175,10 @@ export async function handleFastpathHybridTurn(
     });
   }
 
-  // 6️⃣ MODO HÍBRIDO SOLO PARA WHATSAPP
-  if (canal === "whatsapp") {
+  // 6️⃣ MODO HÍBRIDO PARA WHATSAPP Y META (FB/IG)
+  const isWhatsOrMeta = canal === "whatsapp" || canal === "meta";
+
+  if (isWhatsOrMeta) {
     const history = await getRecentHistoryForModel({
       tenantId,
       canal,
@@ -195,24 +203,63 @@ export async function handleFastpathHybridTurn(
         : "REGLA: No inventes precios exactos. Solo menciona precios si están explícitos en la info del negocio o en DATOS_ESTRUCTURADOS_DEL_SISTEMA, y preserva rangos/calificativos (DESDE).";
 
     const PRICE_LIST_FORMAT_RULE =
-        idiomaDestino === "en"
-            ? [
-                "RULE: If your reply mentions any prices or plans from SYSTEM_STRUCTURED_DATA, you MUST format them as a bullet list.",
-                "- You may start with 0–1 very short intro line (e.g. 'Main prices are:').",
-                "- Then put ONE option per line like: '• Plan Gold Autopay: $165.99/month – short benefit'.",
-                "- NEVER put several different prices or plans in one long paragraph.",
-                "- If the user also asks about schedules/hours, answer hours in 1 short sentence and then show the prices as a bullet list."
-            ].join(" ")
-            : [
-                "REGLA: Si tu respuesta menciona precios o planes tomados de DATOS_ESTRUCTURADOS_DEL_SISTEMA, DEBES formatearlos como lista con viñetas.",
-                "- Puedes empezar con 0–1 línea muy corta de introducción (por ejemplo: 'Los precios principales son:').",
-                "- Luego usa UNA línea por opción, por ejemplo: '• Plan Gold Autopay: $165.99/mes – beneficio breve'.",
-                "- NUNCA metas varios precios o planes distintos en un solo párrafo largo.",
-                "- Si el usuario también pregunta por horarios, responde los horarios en 1 frase corta y después muestra los precios como lista con viñetas."
-            ].join(" ");
+      idiomaDestino === "en"
+        ? [
+            "RULE: If your reply mentions any prices or plans from SYSTEM_STRUCTURED_DATA, you MUST format them as a bullet list.",
+            "- You may start with 0–1 very short intro line (e.g. 'Main prices are:').",
+            "- Then put ONE option per line like: '• Plan Gold Autopay: $165.99/month – short benefit'.",
+            "- NEVER put several different prices or plans in one long paragraph.",
+            "- If the user also asks about schedules/hours, answer hours in 1 short sentence and then show the prices as a bullet list.",
+          ].join(" ")
+        : [
+            "REGLA: Si tu respuesta menciona precios o planes tomados de DATOS_ESTRUCTURADOS_DEL_SISTEMA, DEBES formatearlos como lista con viñetas.",
+            "- Puedes empezar con 0–1 línea muy corta de introducción (por ejemplo: 'Los precios principales son:').",
+            "- Luego usa UNA línea por opción, por ejemplo: '• Plan Gold Autopay: $165.99/mes – beneficio breve'.",
+            "- NUNCA metas varios precios o planes distintos en un solo párrafo largo.",
+            "- Si el usuario también pregunta por horarios, responde los horarios en 1 frase corta y después muestra los precios como lista con viñetas.",
+          ].join(" ");
+
+    const CHANNEL_TONE_RULE =
+      idiomaDestino === "en"
+        ? "RULE: You may rephrase for a natural chat/DM tone, but DO NOT change amounts, ranges, or plan/service names."
+        : "REGLA: Puedes re-redactar para que suene natural en chat/DM, pero NO cambies montos, rangos ni nombres de planes/servicios.";
+
+    // Bloque especial solo cuando pidió “planes + horarios”
+    let forcedListBlock = "";
+    if (wantsPlansAndHours && infoClave) {
+      forcedListBlock =
+        idiomaDestino === "es"
+          ? `
+REGLA ESPECIAL PARA ESTE TURNO:
+- El usuario pidió PLANES + HORARIOS.
+- Debes responder SIEMPRE en formato LISTA.
+- Prohibido párrafos largos.
+- Estructura EXACTA:
+  1) "Planes principales:" seguido de 3–5 bullets (un plan por línea).
+  2) "Horarios:" seguido de bullets con horarios extraídos SOLO de BUSINESS_GENERAL_INFO (info_clave).
+  3) El link de reservas en su propia línea.
+  4) CTA final en 1 línea.
+- NO inventes horarios. Usa solo los que aparezcan literalmente en BUSINESS_GENERAL_INFO.
+- NO resumas horarios como "varían" ni "desde temprano". Usa solo los reales.
+          `
+          : `
+SPECIAL RULE FOR THIS TURN:
+- The user asked for PLANS + HOURS.
+- You MUST answer in LIST FORMAT.
+- No long paragraphs.
+- Structure:
+  1) "Main plans:" with 3–5 bullet lines.
+  2) "Schedules:" with bullets using ONLY hours found in BUSINESS_GENERAL_INFO.
+  3) Booking link as a separate line.
+  4) CTA in one line.
+- DO NOT invent hours. Use only literal ones.
+          `;
+    }
 
     const promptConFastpath = [
       promptBaseMem,
+      "",
+      forcedListBlock,
       "",
       "DATOS_ESTRUCTURADOS_DEL_SISTEMA (úsalos como fuente de verdad, sin cambiar montos ni nombres de planes/servicios):",
       fastpathText,
@@ -223,18 +270,16 @@ export async function handleFastpathHybridTurn(
       NO_PRICE_INVENTION_RULE,
       PRICE_LIST_FORMAT_RULE,
       "",
-      idiomaDestino === "en"
-        ? "RULE: You may rephrase for a natural WhatsApp tone, but DO NOT change amounts, ranges, or plan/service names."
-        : "REGLA: Puedes re-redactar para que suene natural en WhatsApp, pero NO cambies montos, rangos ni nombres de planes/servicios.",
+      CHANNEL_TONE_RULE,
     ].join("\n");
 
     const composed = await answerWithPromptBase({
       tenantId,
       promptBase: promptConFastpath,
-      userInput,                  // mensaje real del cliente
+      userInput,              // mensaje real del cliente
       history,
       idiomaDestino,
-      canal: "whatsapp",
+      canal,                  // 👈 aquí usamos el canal real (whatsapp o meta)
       maxLines: MAX_WHATSAPP_LINES,
       fallbackText: fastpathText, // si falla LLM, al menos enviamos Fastpath
     });
@@ -244,13 +289,11 @@ export async function handleFastpathHybridTurn(
     // 7️⃣ Detectar CTA YES/NO del LLM y preparar awaiting_yes_no_action
     const isYesNoCTA =
       /\?\s*$/.test(text) &&
-      (
-        /\bte gustar[íi]a\b/.test(text) ||
+      (/\bte gustar[íi]a\b/.test(text) ||
         /\bquieres\b/.test(text) ||
         /\bdeseas\b/.test(text) ||
         /\bwould you like\b/.test(text) ||
-        /\bdo you want\b/.test(text)
-      );
+        /\bdo you want\b/.test(text));
 
     if (isYesNoCTA) {
       const sid = (convoCtx as any)?.last_service_id || null;
@@ -266,7 +309,6 @@ export async function handleFastpathHybridTurn(
       }
 
       if (sid && serviceUrl) {
-        // definimos awaiting_yes_no_action en ctx
         ctxPatch.awaiting_yes_no_action = {
           kind: "cta_yes_no_service",
           serviceId: sid,
@@ -285,7 +327,7 @@ export async function handleFastpathHybridTurn(
     };
   }
 
-  // 8️⃣ Otros canales (no WhatsApp): devolvemos fastpath “plano”
+  // 8️⃣ Otros canales (no WhatsApp/Meta): devolvemos fastpath “plano”
   return {
     handled: true,
     reply: fastpathText,
