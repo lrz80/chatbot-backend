@@ -252,67 +252,6 @@ function norm(s: any) {
     .trim();
 }
 
-// Tipos aceptados para "plan/paquete" (schema-level, no negocio)
-function isPlanPackageType(tipo: any) {
-  const t = norm(tipo);
-  return (
-    t === "plan" ||
-    t === "plans" ||
-    t === "plan/paquete" ||
-    t === "plan / paquete" ||
-    t === "plan_paquete" ||
-    t === "plan-paquete" ||
-    t === "planpackage" ||
-    t === "plan_package"
-  );
-}
-
-function isPackageCategory(cat: any) {
-  const c = norm(cat);
-  return (
-    c === "package" ||
-    c === "packages" ||
-    c === "paquete" ||
-    c === "paquetes" ||
-    c === "bundle" ||
-    c === "bundles" ||
-    c === "pack" ||
-    c === "packs"
-  );
-}
-
-function isMembershipCategory(cat: any) {
-  const c = norm(cat);
-  return (
-    c === "membresia" ||
-    c === "membresias" ||
-    c === "membership" ||
-    c === "memberships" ||
-    c === "monthly" ||
-    c === "mensual" ||
-    c === "mensuales"
-  );
-}
-
-function isPlansOrPackagesQuestion(text: string) {
-  const t = norm(text);
-  return /\b(plan|planes|membresia|membresias|membership|memberships|monthly|mensual|paquete|paquetes|package|packages|bundle|bundles|pack|packs)\b/.test(
-    t
-  );
-}
-
-function sectionTitle(lang: Lang, key: "plans" | "packages") {
-  if (lang === "en") {
-    return key === "plans"
-      ? "Here are some of our available plans:"
-      : "Here are some of our available packages:";
-  }
-
-  return key === "plans"
-    ? "Aquí tienes algunos de nuestros planes:"
-    : "Aquí tienes algunos de nuestros paquetes:";
-}
-
 function isTrialQuery(raw: string): boolean {
   const normalized = String(raw || "")
     .normalize("NFD")
@@ -328,27 +267,6 @@ function isTrialQuery(raw: string): boolean {
     normalized.includes("trial") ||
     normalized.includes("demo")
   );
-}
-
-function isInterestMessage(raw: string): boolean {
-  const t = (raw || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
-
-  const patterns = [
-    /\bme interesa\b/,
-    /\bme interesan\b/,
-    /\bme llam[aá] la atencion\b/,
-    /\bquiero\b/,
-    /\bquisiera\b/,
-    /\bme gustar[ií]a\b/,
-    /\bme gusta(n)?\b/,
-    /\bcreo que tomar[ií]a\b/,
-  ];
-
-  return patterns.some((re) => re.test(t));
 }
 
 // ✅ helper: extraer nombres de planes desde la respuesta del LLM
@@ -375,32 +293,73 @@ function extractPlanNamesFromReply(text: string): string[] {
   return names;
 }
 
-function finalize(
-  reply: string,
-  intent: string | null,
-  source:
-    | "service_list_db"
-    | "info_clave_includes"
-    | "info_clave_missing_includes"
-    | "includes_fastpath_db"
-    | "includes_fastpath_db_missing"
-    | "includes_fastpath_db_ambiguous"
-    | "price_disambiguation_db"
-    | "price_missing_db"
-    | "price_fastpath_db"
-    | "price_summary_db"
-    | "info_general_overview"
-    | "price_summary_db_empty"
-    | "info_clave_includes_ctx_link"
-    | "interest_to_pricing"
-    | "catalog_llm"
-    | "fastpath_dismiss"
-): FastpathResult {
+// ✅ Post-procesador: elimina planes ya mencionados en PREVIOUS_PLANS_MENTIONED
+function postProcessCatalogReply(params: {
+  reply: string;
+  questionType: "combination_and_price" | "price_or_plan" | "other_plans";
+  prevNames: string[];
+}) {
+  const { reply, questionType, prevNames } = params;
+
+  if (!prevNames.length) {
+    return { finalReply: reply, namesShown: extractPlanNamesFromReply(reply) };
+  }
+
+  const prevSet = new Set(prevNames.map((n) => norm(n)));
+
+  const lines = String(reply || "").split(/\r?\n/);
+  const filteredLines: string[] = [];
+
+  const bulletRegex = /^[•\-\*]\s*/;
+
+  // Vamos a reconstruir la lista de nombres que realmente se quedan tras el filtro
+  const keptNames: string[] = [];
+
+  for (const raw of lines) {
+    const line = raw;
+    const trimmed = line.trim();
+
+    // Si no es bullet, lo dejamos tal cual (saludos, horarios, etc.)
+    if (!trimmed || !bulletRegex.test(trimmed)) {
+      filteredLines.push(line);
+      continue;
+    }
+
+    // Intentar extraer "Nombre del plan" antes de ":"
+    const withoutBullet = trimmed.replace(bulletRegex, "");
+    const colonIdx = withoutBullet.indexOf(":");
+    if (colonIdx <= 0) {
+      // bullet raro sin "Nombre: precio" → lo dejamos pasar
+      filteredLines.push(line);
+      continue;
+    }
+
+    const name = withoutBullet.slice(0, colonIdx).trim();
+    const nameNorm = norm(name);
+
+    // Si la pregunta es "otros planes", evitamos repetir los ya listados
+    if (questionType === "other_plans" && prevSet.has(nameNorm)) {
+      // 🔁 Duplicado → lo filtramos
+      continue;
+    }
+
+    // Lo mantenemos
+    filteredLines.push(line);
+    keptNames.push(name);
+  }
+
+  // Si al filtrar nos quedamos sin bullets nuevos, devolvemos el original
+  // para no mandar una respuesta vacía o solo texto suelto.
+  if (!keptNames.length) {
+    return {
+      finalReply: reply,
+      namesShown: extractPlanNamesFromReply(reply),
+    };
+  }
+
   return {
-    handled: true,
-    reply,
-    source,
-    intent,
+    finalReply: filteredLines.join("\n"),
+    namesShown: keptNames,
   };
 }
 
@@ -1211,7 +1170,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - Optionally, a BUSINESS_GENERAL_INFO block with general information such as business hours, address, schedules, etc.
 
       META TAGS:
-      - QUESTION_TYPE can be "combination_and_price" or "price_or_plan".
+      - QUESTION_TYPE can be "combination_and_price", "price_or_plan", or "other_plans".
       - HAS_MULTI_ACCESS_PLAN is "yes" if the catalog text clearly contains at least one plan/pass/bundle that gives access to multiple services/categories or to "all"/"any"; otherwise "no".
       - PREVIOUS_PLANS_MENTIONED tells you which plans have ALREADY been described. If "none", ignore it; otherwise avoid repeating them unless necessary.
 
@@ -1316,7 +1275,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - Opcionalmente, un bloque INFO_GENERAL_DEL_NEGOCIO con horarios, dirección, etc.
 
       ETIQUETAS META:
-      - QUESTION_TYPE puede ser "combination_and_price" o "price_or_plan".
+      - QUESTION_TYPE puede ser "combination_and_price", "price_or_plan" o "other_plans".
       - HAS_MULTI_ACCESS_PLAN es "yes" si el catálogo contiene un plan/pase que dé acceso a varias categorías o a “todos”; si no, "no".
       - PREVIOUS_PLANS_MENTIONED indica qué planes YA se mencionaron.
 
@@ -1437,14 +1396,19 @@ CATALOGO:
 ${catalogText}${infoGeneralBlock}
 `.trim();
 
-      const reply = await answerCatalogQuestionLLM({
+      const rawReply = await answerCatalogQuestionLLM({
         idiomaDestino,
         systemMsg,
         userMsg,
       });
 
-      // ✅ extrae nombres de planes listados y guárdalos en contexto
-      const namesShown = extractPlanNamesFromReply(reply);
+      // 🔁 POST-PROCESO: quitar planes ya mencionados si la pregunta es "otros planes"
+      const { finalReply, namesShown } = postProcessCatalogReply({
+        reply: rawReply,
+        questionType,       // 👈 usamos el QuestionType que ya calculas arriba
+        prevNames,          // 👈 los nombres que venían en convoCtx.last_catalog_plans
+      });
+
       const ctxPatch: Partial<FastpathCtx> = {};
       if (namesShown.length) {
         ctxPatch.last_catalog_plans = namesShown;
@@ -1453,7 +1417,7 @@ ${catalogText}${infoGeneralBlock}
 
       return {
         handled: true,
-        reply,
+        reply: finalReply,
         source: "catalog_llm",
         intent: intentOut || "catalog",
         ctxPatch,
