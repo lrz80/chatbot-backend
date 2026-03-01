@@ -122,8 +122,10 @@ function scoreTokens(queryTokens: string[], serviceTokens: string[]): number {
 export async function resolveServiceIdFromText(
   pool: Pool,
   tenantId: string,
-  userText: string
+  userText: string,
+  opts?: { mode?: "strict" | "loose" }
 ): Promise<Hit | null> {
+  const mode: "strict" | "loose" = opts?.mode || "strict";
   let t = String(userText || "").trim();
   if (!t) return null;
 
@@ -269,33 +271,94 @@ export async function resolveServiceIdFromText(
   const SINGLE_TOKEN_THRESHOLD = 0.7; // para queries de 1 token (ej. "bronze")
   const MARGIN = 0.2; // diferencia mínima con el segundo para confiar
 
-    // 4) Caso especial: SOLO un token fuerte (ej. "gold", "bronce", "deluxe")
+  // 4) Caso especial: SOLO un token fuerte (ej. "bronze", "gold", "deluxe")
   if (strongTokens.length === 1) {
     const token = strongTokens[0];
 
-    // buscamos candidatos cuyo token list contenga ese token
-    const withToken = scored.filter((s) => s.cand.tokens.includes(token));
+    const withToken = scored.filter(
+      (s) => s.score > 0 && s.cand.tokens.includes(token)
+    );
 
-    if (withToken.length !== 1) {
+    if (mode === "strict") {
+      // Comportamiento anterior: si no hay exactamente 1 candidato → ambiguo
+      if (withToken.length !== 1) {
+        console.log(
+          "[RESOLVE-SERVICE] (strict) 1 token fuerte pero",
+          withToken.length,
+          "candidatos → ambiguo, devolviendo null"
+        );
+        return null;
+      }
+
+      const only = withToken[0];
+
+      if (only.score >= SINGLE_TOKEN_THRESHOLD) {
+        console.log("[RESOLVE-SERVICE] (strict) match único por token fuerte", {
+          userText,
+          token,
+          label: only.cand.label,
+          score: only.score,
+        });
+        return { id: only.cand.serviceId, name: only.cand.label };
+      }
+
       console.log(
-        "[RESOLVE-SERVICE] 1 token fuerte pero",
-        withToken.length,
-        "candidatos → ambiguo, devolviendo null"
+        "[RESOLVE-SERVICE] (strict) 1 token fuerte, 1 candidato pero score bajo, devolviendo null",
+        {
+          userText,
+          token,
+          label: only.cand.label,
+          score: only.score,
+        }
       );
       return null;
     }
 
-    const only = withToken[0];
+    // ======== modo LOOSO (para "qué incluye el plan X") ========
+    if (!withToken.length) {
+      console.log(
+        "[RESOLVE-SERVICE] (loose) 1 token fuerte pero 0 candidatos, devolviendo null",
+        { userText, token }
+      );
+      return null;
+    }
 
-    console.log("[RESOLVE-SERVICE] match único por token fuerte (1-token)", {
+    // Agrupar por serviceId y quedarnos con el mejor de cada servicio
+    const byService = new Map<string, { cand: Candidate; score: number }>();
+
+    for (const s of withToken) {
+      const key = s.cand.serviceId;
+      const prev = byService.get(key);
+      if (!prev || s.score > prev.score) {
+        byService.set(key, s);
+      }
+    }
+
+    const bestList = Array.from(byService.values()).sort((a, b) => b.score - a.score);
+    const bestLoose = bestList[0];
+
+    if (!bestLoose || bestLoose.score < SINGLE_TOKEN_THRESHOLD) {
+      console.log(
+        "[RESOLVE-SERVICE] (loose) mejor candidato por debajo de threshold, devolviendo null",
+        {
+          userText,
+          token,
+          label: bestLoose?.cand.label,
+          score: bestLoose?.score,
+        }
+      );
+      return null;
+    }
+
+    console.log("[RESOLVE-SERVICE] (loose) match por token fuerte", {
       userText,
       token,
-      label: only.cand.label,
-      score: only.score,
+      label: bestLoose.cand.label,
+      score: bestLoose.score,
+      serviceId: bestLoose.cand.serviceId,
     });
 
-    // 💡 ya que solo hay UN servicio con ese token, lo aceptamos sin mirar umbral
-    return { id: only.cand.serviceId, name: only.cand.label };
+    return { id: bestLoose.cand.serviceId, name: bestLoose.cand.label };
   }
 
   // 5) Caso general: 2+ tokens fuertes → usar mejor score con margen

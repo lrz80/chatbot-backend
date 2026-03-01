@@ -1051,92 +1051,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
-  // ✅ DETALLE DIRECTO DE UN PLAN (por nombre)
-  // ===============================
-  {
-    const isDetailLike =
-      /\b(que incluye|qué incluye|incluye|incluyen|detalles? del?\s+plan|info del?\s+plan)\b/i.test(
-        q
-      );
-
-    if (isDetailLike) {
-      const hit = await resolveServiceIdFromText(pool, tenantId, userInput);
-
-      if (hit) {
-        const serviceId = hit.id;
-        const baseName = hit.name;
-
-        // Reutilizamos el helper de detalles
-        const d = await getServiceDetailsText(tenantId, serviceId, userInput).catch(
-          () => null
-        );
-
-        const title = d?.titleSuffix
-          ? `${baseName} — ${d.titleSuffix}`
-          : baseName;
-
-        const infoText = d?.text ? String(d.text).trim() : "";
-
-        // Intentar sacar URL (si tienes variantes en contexto, las respetamos)
-        let finalUrl: string | null = null;
-        try {
-          const variantId =
-            (convoCtx as any)?.last_variant_id
-              ? String((convoCtx as any).last_variant_id)
-              : null;
-
-          const { serviceUrl, variantUrl } = await getServiceAndVariantUrl(
-            pool,
-            tenantId,
-            serviceId,
-            variantId
-          );
-
-          finalUrl = variantUrl || serviceUrl;
-        } catch (e: any) {
-          console.warn(
-            "⚠️ runFastpath: no se pudo obtener URL de servicio para detalle:",
-            e?.message
-          );
-        }
-
-        const linkLine =
-          finalUrl && idiomaDestino === "es"
-            ? `\n\n👉 Aquí puedes ver más detalles:\n${finalUrl}`
-            : finalUrl && idiomaDestino === "en"
-            ? `\n\n👉 You can see more details here:\n${finalUrl}`
-            : "";
-
-        const reply =
-          idiomaDestino === "en"
-            ? `${title}${infoText ? `\n\n${infoText}` : ""}${linkLine}`
-            : `${title}${infoText ? `\n\n${infoText}` : ""}${linkLine}`;
-
-        const ctxPatch: Partial<FastpathCtx> = {
-          last_service_id: serviceId,
-          last_service_name: baseName,
-          last_service_at: Date.now(),
-          last_list_kind: undefined,
-          last_list_kind_at: undefined,
-          last_plan_list: undefined,
-          last_plan_list_at: undefined,
-          last_package_list: undefined,
-          last_package_list_at: undefined,
-        };
-
-        return {
-          handled: true,
-          reply,
-          source: "service_list_db",
-          intent: intentOut || "detalle_servicio",
-          ctxPatch,
-        };
-      }
-      // Si no encontró servicio, dejamos que siga al motor de catálogo
-    }
-  }
-
-  // ===============================
   // 🧠 MOTOR ÚNICO DE CATÁLOGO
   // ===============================
     {
@@ -1220,6 +1134,98 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       // 3) Resto: preguntas normales de precio/plan
       else {
         questionType = "price_or_plan";
+      }
+
+            // ===============================
+      // 🎯 DETALLE DIRECTO DE UN PLAN/SERVICIO (sin LLM)
+      // ===============================
+      // Si la pregunta es del tipo "qué incluye X" intentamos resolver
+      // un servicio concreto y devolvemos sus detalles + link de forma determinista.
+      const looksLikeDetail =
+        /\b(que incluye|qué incluye|incluye|incluyen|what is included|what does.*include)\b/i.test(
+          q
+        );
+
+      if (looksLikeDetail) {
+        const hit = await resolveServiceIdFromText(pool, tenantId, userInput, {
+          mode: "loose",
+        });
+
+        if (hit) {
+          const serviceId = hit.id;
+          const baseName = hit.name;
+
+          const d = await getServiceDetailsText(tenantId, serviceId, userInput).catch(
+            () => null
+          );
+
+          const title = d?.titleSuffix
+            ? `${baseName} — ${d.titleSuffix}`
+            : baseName;
+
+          const infoText = d?.text ? String(d.text).trim() : "";
+
+          let finalUrl: string | null = null;
+
+          try {
+            const linkPick = await resolveBestLinkForService({
+              pool,
+              tenantId,
+              serviceId,
+              userText: userInput, 
+            });
+
+            if (linkPick.ok) {
+              finalUrl = linkPick.url;
+            }
+          } catch (e: any) {
+            console.warn(
+              "⚠️ detalle_servicio: error resolviendo link:",
+              e?.message || e
+            );
+          }
+
+          const reply =
+            idiomaDestino === "en"
+              ? `${title}${infoText ? `\n\n${infoText}` : ""}${
+                  finalUrl
+                    ? `\n\nYou can see more details here:\n${finalUrl}`
+                    : ""
+                }`
+              : `${title}${infoText ? `\n\n${infoText}` : ""}${
+                  finalUrl
+                    ? `\n\nAquí puedes ver más detalles:\n${finalUrl}`
+                    : ""
+                }`;
+
+          const nowTs = Date.now();
+
+          const ctxPatch: Partial<FastpathCtx> = {
+            // limpiamos listas previas de planes/paquetes para que no vuelva a listar
+            last_plan_list: undefined,
+            last_plan_list_at: undefined,
+            last_package_list: undefined,
+            last_package_list_at: undefined,
+            last_list_kind: undefined,
+            last_list_kind_at: undefined,
+
+            // dejamos contexto del último servicio consultado
+            last_service_id: serviceId,
+            last_service_name: baseName,
+            last_service_at: nowTs,
+
+            last_bot_action: "sent_details",
+            last_bot_action_at: nowTs,
+          };
+
+          return {
+            handled: true,
+            reply,
+            source: "service_list_db",
+            intent: intentOut || "detalle_servicio",
+            ctxPatch,
+          };
+        }
       }
 
       const asksSchedules =
@@ -1526,48 +1532,9 @@ ${catalogText}${infoGeneralBlock}
         ctxPatch.last_catalog_at = Date.now();
       }
 
-      // 🔍 Preguntas tipo "¿qué incluye...?" => añadir CTA con link del plan
-      let replyWithLink = finalReply;
-
-      const isIncludesQuestion =
-        /\b(que incluye|qué incluye|que trae|que tiene|what is included|what does.*include)\b/i.test(
-          q
-        );
-
-      if (isIncludesQuestion) {
-        try {
-          // Intentar mapear el texto del usuario a UN servicio concreto
-          const hit = await resolveServiceIdFromText(pool, tenantId, userInput);
-          if (hit?.id) {
-            // Obtener la mejor URL disponible para ese servicio/variante
-            const { serviceUrl, variantUrl } = await getServiceAndVariantUrl(
-              pool,
-              tenantId,
-              hit.id,
-              null
-            );
-
-            const bestUrl = variantUrl || serviceUrl;
-            if (bestUrl) {
-              const linkLine =
-                idiomaDestino === "en"
-                  ? `\n\n👉 You can see all the details or purchase here: ${bestUrl}`
-                  : `\n\n👉 Puedes ver todos los detalles o comprar Aquí: ${bestUrl}`;
-
-              replyWithLink = `${replyWithLink}\n${linkLine}`;
-            }
-          }
-        } catch (e: any) {
-          console.warn(
-            "⚠️ catalog_llm: no se pudo adjuntar link de servicio:",
-            e?.message
-          );
-        }
-      }
-
       return {
         handled: true,
-        reply: replyWithLink,
+        reply: finalReply,
         source: "catalog_llm",
         intent: intentOut || "catalog",
         ctxPatch,
