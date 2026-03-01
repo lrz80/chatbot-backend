@@ -1121,6 +1121,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         questionType = "other_plans";
       }
 
+      const asksSchedules =
+        /\b(horario|horarios|hora|horas|hours?|schedule|schedules)\b/i.test(q);
       const catalogText = await buildCatalogContext(pool, tenantId);
 
       const hasMultiAccessPlan =
@@ -1151,7 +1153,16 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         `HAS_MULTI_ACCESS_PLAN: ${hasMultiAccessPlan ? "yes" : "no"}\n` +
         `PREVIOUS_PLANS_MENTIONED: ${previousPlansStr}`;
 
-      const infoGeneralBlock = infoClave
+      // ⚖️ Solo adjuntar horarios / info general cuando:
+      // - el usuario menciona horarios/horas/schedule, o
+      // - la intención es info_general / info_horarios_generales
+      const shouldAttachInfoGeneral =
+        !!infoClave &&
+        (asksSchedules ||
+          intentOut === "info_general" ||
+          intentOut === "info_horarios_generales");
+
+      const infoGeneralBlock = shouldAttachInfoGeneral
         ? idiomaDestino === "en"
           ? `\n\nBUSINESS_GENERAL_INFO (hours, address, etc.):\n${infoClave}`
           : `\n\nINFO_GENERAL_DEL_NEGOCIO (horarios, dirección, etc.):\n${infoClave}`
