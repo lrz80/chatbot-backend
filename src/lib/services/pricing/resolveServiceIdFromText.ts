@@ -199,18 +199,39 @@ export async function resolveServiceIdFromText(
     return null;
   }
 
-  const candidates: Candidate[] = rows
-    .map((r) => {
-      const label = String(r.label || "").trim();
-      const tokens = tokenize(label);
-      if (!label || !tokens.length) return null;
-      return {
-        serviceId: String(r.service_id),
-        label,
-        tokens,
-      };
-    })
-    .filter(Boolean) as Candidate[];
+  // 🔹 Agrupamos por service_id para que Gold tenga UN solo candidato
+  const grouped = new Map<
+    string,
+    { serviceId: string; labels: string[]; tokenSet: Set<string> }
+  >();
+
+  for (const r of rows) {
+    const label = String(r.label || "").trim();
+    if (!label) continue;
+
+    const tokens = tokenize(label);
+    if (!tokens.length) continue;
+
+    const serviceId = String(r.service_id);
+    let entry = grouped.get(serviceId);
+    if (!entry) {
+      entry = { serviceId, labels: [label], tokenSet: new Set(tokens) };
+      grouped.set(serviceId, entry);
+    } else {
+      entry.labels.push(label);
+      for (const tk of tokens) entry.tokenSet.add(tk);
+    }
+  }
+
+  const candidates: Candidate[] = Array.from(grouped.values()).map((g) => {
+    // tomamos como label "principal" el más corto (suele ser el nombre del servicio)
+    const mainLabel = g.labels.sort((a, b) => a.length - b.length)[0];
+    return {
+      serviceId: g.serviceId,
+      label: mainLabel,
+      tokens: Array.from(g.tokenSet),
+    };
+  });
 
   if (!candidates.length) {
     console.log("[RESOLVE-SERVICE] candidatos sin tokens, devolviendo null");
@@ -248,15 +269,13 @@ export async function resolveServiceIdFromText(
   const SINGLE_TOKEN_THRESHOLD = 0.7; // para queries de 1 token (ej. "bronze")
   const MARGIN = 0.2; // diferencia mínima con el segundo para confiar
 
-  // 4) Caso especial: SOLO un token fuerte (ej. "bronze", "gold", "deluxe")
+    // 4) Caso especial: SOLO un token fuerte (ej. "gold", "bronce", "deluxe")
   if (strongTokens.length === 1) {
     const token = strongTokens[0];
 
-    const withToken = scored.filter(
-      (s) => s.score > 0 && s.cand.tokens.includes(token)
-    );
+    // buscamos candidatos cuyo token list contenga ese token
+    const withToken = scored.filter((s) => s.cand.tokens.includes(token));
 
-    // Si hay 0 o más de 1 servicio con ese token → ambiguo, que lo maneje el LLM
     if (withToken.length !== 1) {
       console.log(
         "[RESOLVE-SERVICE] 1 token fuerte pero",
@@ -268,26 +287,15 @@ export async function resolveServiceIdFromText(
 
     const only = withToken[0];
 
-    if (only.score >= SINGLE_TOKEN_THRESHOLD) {
-      console.log("[RESOLVE-SERVICE] match único por token fuerte", {
-        userText,
-        token,
-        label: only.cand.label,
-        score: only.score,
-      });
-      return { id: only.cand.serviceId, name: only.cand.label };
-    }
+    console.log("[RESOLVE-SERVICE] match único por token fuerte (1-token)", {
+      userText,
+      token,
+      label: only.cand.label,
+      score: only.score,
+    });
 
-    console.log(
-      "[RESOLVE-SERVICE] 1 token fuerte, 1 candidato pero score bajo, devolviendo null",
-      {
-        userText,
-        token,
-        label: only.cand.label,
-        score: only.score,
-      }
-    );
-    return null;
+    // 💡 ya que solo hay UN servicio con ese token, lo aceptamos sin mirar umbral
+    return { id: only.cand.serviceId, name: only.cand.label };
   }
 
   // 5) Caso general: 2+ tokens fuertes → usar mejor score con margen
