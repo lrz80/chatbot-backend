@@ -362,6 +362,9 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   let activeStep = st.active_step || "start";
   let convoCtx = (st.context && typeof st.context === "object") ? st.context : {};
 
+  // Guarda el ctx original antes de pasar por resolveLangForTurn
+  const convoCtxBeforeLang = convoCtx;
+
   // ===============================
   // 🌍 LANG RESOLUTION (CLIENT-FIRST) – refactorizada
   // ===============================
@@ -381,7 +384,12 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   let promptBaseMem = langOut.promptBaseMem;
   const storedLang = langOut.storedLang;
   const langRes = langOut.langRes;
-  convoCtx = langOut.convoCtx;
+  // ❌ ANTES: convoCtx = langOut.convoCtx;
+  // ✅ AHORA: hacemos MERGE para no perder cosas como last_catalog_plans
+  convoCtx = {
+    ...(convoCtxBeforeLang || {}),
+    ...(langOut.convoCtx || {}),
+  };
 
   console.log("🌍 LANG DEBUG =", {
     userInput,
@@ -769,6 +777,12 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   //    🔒 NO corre si hay booking activo
   // ===============================
   if (!inBooking0) {
+    console.log("📦 FASTPATH IN ctx =", {
+      last_catalog_plans: (convoCtx as any)?.last_catalog_plans || null,
+      last_catalog_at: (convoCtx as any)?.last_catalog_at || null,
+      bookingStep0,
+    });
+    
     const fpRes = await handleFastpathHybridTurn({
       pool,
       tenantId: tenant.id,
