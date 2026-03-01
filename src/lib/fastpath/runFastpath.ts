@@ -1229,6 +1229,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         - Your answers MUST be formatted as lists, not as long plain paragraphs.
         - Apart from a 1-line intro and an optional 1-line closing question/CTA, you MUST present plans, prices and schedules as bullet points (for example starting with "•" or "-").
         - Do not write big blocks of continuous text.
+        - When you list plans/passes/products you MUST NOT include long descriptions about who it is for, benefits, what it includes, etc.
+        - For each plan/pass/product you must show only:
+          - the plan NAME, and
+          - a SHORT price summary (for example "from 59.99 USD", "49.99 USD for 7 days").
 
       HOW TO HANDLE TIMES AND SCHEDULES:
       - Business hours and general class schedules, if present, will appear in the BUSINESS_GENERAL_INFO block.
@@ -1252,11 +1256,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - If the user question is GENERIC (for example: "what other plans do you have?", "what options do you have?", "what plans are there?") and DOES NOT mention a specific plan/pass name:
         - Use LISTING MODE.
         - In LISTING MODE:
-          - Show 3–5 options maximum.
-          - For each option, write exactly ONE short line:
-            - "• Plan Name: very short description with main price".
-          - You may include ONE link only for the MOST relevant option, not for all.
-          - Do NOT write long paragraphs or detailed explanations.
+          - Show at most 3–7 options.
+          - For each option write EXACTLY ONE line with this format:
+            - "• Plan name: price summary".
+          - The price summary must be a very short phrase, e.g.:
+            - "from 59.99 USD"
+            - "49.99 USD for 7 days"
+            - "165.99 USD/month (autopay, 3 months)"
+          - Do NOT explain who the plan is for or what it includes.
       - If the question clearly asks for details or price of a SPECIFIC plan (for example: "what does Plan Gold include?", "price of the 7-day pass?"):
         - Use DETAIL MODE.
         - In DETAIL MODE:
@@ -1307,6 +1314,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - REGLA DE FORMATO MUY IMPORTANTE:
         - Tus respuestas DEBEN estar formateadas como listas, no como párrafos largos.
         - Salvo una frase inicial y una frase final opcional (CTA/pregunta), debes presentar planes, precios y horarios en viñetas (por ejemplo empezando con "•" o "-").
+        - Cuando listes planes o pases NO debes incluir descripciones largas de a quién va dirigido, qué incluye, beneficios, etc.
+        - Para cada plan/pase/producto debes mostrar solo:
+          - el NOMBRE del plan, y
+          - un RESUMEN CORTO de precio (por ejemplo "desde 59.99 USD", "49.99 USD por 7 días").
         - No escribas bloques grandes de texto continuo.
 
       CÓMO MANEJAR HORARIOS Y HORAS:
@@ -1326,22 +1337,29 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           - “Los horarios pueden cambiar; en el portal de reservas verás el calendario al día.”
 
       MODO LISTA vs MODO DETALLE:
-      - Independientemente del modo, SIEMPRE debes presentar planes/servicios en formato de lista, no en párrafos.
-      - Si la pregunta del cliente es GENÉRICA (por ejemplo: “¿qué otros planes tienes?”, “¿qué opciones tienes?”, “¿qué planes hay?”) y NO menciona el nombre de un plan/pase concreto:
+      - Independientemente del modo, SIEMPRE debes presentar planes/servicios/productos en formato de lista, no en párrafos.
+
+      - Si la pregunta del cliente es GENÉRICA (por ejemplo: “¿qué otros planes tienes?”, “¿qué opciones tienes?”, “¿qué planes hay?”, “planes y horarios”) y NO menciona el nombre de un plan/pase concreto:
         - Usa MODO LISTA.
         - En MODO LISTA:
-          - Muestra como máximo 3–5 opciones.
-          - Para cada opción escribe EXACTAMENTE UNA línea corta:
-            - “• Nombre del plan: descripción muy corta con el precio principal”.
+          - Muestra como máximo 3–7 opciones.
+          - Para cada opción escribe EXACTAMENTE UNA línea con este formato:
+            - “• Nombre del plan: resumen de precio”.
+          - El resumen de precio debe ser solo una frase muy corta, por ejemplo:
+            - “desde 59.99 USD”
+            - “49.99 USD por 7 días”
+            - “165.99 USD/mes (Autopay, 3 meses)”
+          - NO expliques para quién es el plan ni qué incluye; NO añadas frases como “ideal para conocer las clases”, “pensado para…” etc.
           - Puedes incluir SOLO UN enlace para la opción MÁS relevante, no para todas.
           - NO escribas párrafos largos ni explicaciones detalladas.
+
       - Si la pregunta pide claramente detalles o precio de un plan ESPECÍFICO (por ejemplo: “¿qué incluye el Plan Gold?”, “precio del Pase de 7 días?”):
         - Usa MODO DETALLE.
         - En MODO DETALLE:
-          - Aun así presentas la información en formato de lista:
+          - Puedes dar algo más de detalle, pero igualmente en formato de lista:
             - una viñeta con resumen del plan (nombre + precio + beneficio clave),
             - opcionalmente 1–3 subviñetas con detalles importantes.
-          - Evita descripciones largas en texto corrido.
+          - Evita descripciones muy largas en texto corrido.
 
       PREGUNTAS DE PRECIOS / SERVICIOS / PLANES:
       - Para preguntas de precios, usa los precios del catálogo.
