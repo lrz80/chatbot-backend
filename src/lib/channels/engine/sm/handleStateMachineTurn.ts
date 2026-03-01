@@ -48,10 +48,6 @@ export type HandleStateMachineTurnArgs = {
   PAGO_CONFIRM_REGEX?: RegExp | null;
 };
 
-/**
- * Devuelve true si la SM ya manejó el turno (silence o reply),
- * para que el webhook haga `if (handled) return;`
- */
 export async function handleStateMachineTurn(
   args: HandleStateMachineTurnArgs
 ): Promise<boolean> {
@@ -82,24 +78,24 @@ export async function handleStateMachineTurn(
   // 🔁 Ejecutar State Machine
   // ===============================
   const smResult = await sm({
-  pool,
-  tenantId,
-  canal,
-  contacto: contactoNorm,
-  userInput,
-  messageId,
-  idiomaDestino,
-  promptBase,
+    pool,
+    tenantId,
+    canal,
+    contacto: contactoNorm,
+    userInput,
+    messageId,
+    idiomaDestino,
+    promptBase,
 
-  // ✅ PASA LA FUNCIÓN REAL
-  parseDatosCliente,
+    // ✅ PASA LA FUNCIÓN REAL
+    parseDatosCliente,
 
-  // ✅ Stub seguro: siempre devuelve null → no rompe paymentHumanGuard
-  extractPaymentLinkFromPrompt: (text: string) => null,
+    // ✅ Stub seguro: siempre devuelve null → no rompe paymentHumanGuard
+    extractPaymentLinkFromPrompt: (text: string) => null,
 
-  // ✅ De momento sin regex de confirmación de pago
-  PAGO_CONFIRM_REGEX: null,
-} as any);
+    // ✅ De momento sin regex de confirmación de pago
+    PAGO_CONFIRM_REGEX: null,
+  } as any);
 
   if (smResult.action === "silence") {
     console.log("🧱 [SM] silence:", smResult.reason);
@@ -175,23 +171,24 @@ export async function handleStateMachineTurn(
 
   const PRICE_LIST_FORMAT_RULE =
     idiomaDestino === "en"
-        ? [
-            "RULE: If your reply mentions any prices or plans from SYSTEM_STRUCTURED_DATA, you MUST format them as a bullet list.",
-            "- You may start with 0–1 very short intro line (e.g. 'Main prices are:').",
-            "- Then put ONE option per line like: '• Plan Gold Autopay: $165.99/month – short benefit'.",
-            "- NEVER put several different prices or plans in one long paragraph.",
-            "- If the user also asks about schedules/hours, answer hours in 1 short sentence and then show the prices as a bullet list."
+      ? [
+          "RULE: If your reply mentions any prices or plans from SYSTEM_STRUCTURED_DATA, you MUST format them as a bullet list.",
+          "- You may start with 0–1 very short intro line (e.g. 'Main prices are:').",
+          "- Then put ONE option per line like: '• Plan Gold Autopay: $165.99/month – short benefit'.",
+          "- NEVER put several different prices or plans in one long paragraph.",
+          "- If the user also asks about schedules/hours, answer hours in 1 short sentence and then show the prices as a bullet list.",
         ].join(" ")
-        : [
-            "REGLA: Si tu respuesta menciona precios o planes tomados de DATOS_ESTRUCTURADOS_DEL_SISTEMA, DEBES formatearlos como lista con viñetas.",
-            "- Puedes empezar con 0–1 línea muy corta de introducción (por ejemplo: 'Los precios principales son:').",
-            "- Luego usa UNA línea por opción, por ejemplo: '• Plan Gold Autopay: $165.99/mes – beneficio breve'.",
-            "- NUNCA metas varios precios o planes distintos en un solo párrafo largo.",
-            "- Si el usuario también pregunta por horarios, responde los horarios en 1 frase corta y después muestra los precios como lista con viñetas."
+      : [
+          "REGLA: Si tu respuesta menciona precios o planes tomados de DATOS_ESTRUCTURADOS_DEL_SISTEMA, DEBES formatearlos como lista con viñetas.",
+          "- Puedes empezar con 0–1 línea muy corta de introducción (por ejemplo: 'Los precios principales son:').",
+          "- Luego usa UNA línea por opción, por ejemplo: '• Plan Gold Autopay: $165.99/mes – beneficio breve'.",
+          "- NUNCA metas varios precios o planes distintos en un solo párrafo largo.",
+          "- Si el usuario también pregunta por horarios, responde los horarios en 1 frase corta y después muestra los precios como lista con viñetas.",
         ].join(" ");
 
   // 🚫 PROMPT-ONLY fallback
-  const fallbackWelcome = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
+  // ❌ antes estaba hardcodeado a "whatsapp"
+  const fallbackWelcome = await getBienvenidaPorCanal(canal, tenant, idiomaDestino);
 
   const composed = await answerWithPromptBase({
     tenantId,
@@ -207,14 +204,13 @@ export async function handleStateMachineTurn(
     userInput: ["USER_MESSAGE:", eventUserInput].join("\n"),
     history,
     idiomaDestino,
-    canal: "whatsapp",
+    canal,              // 👈 aquí también usamos el canal real (whatsapp/meta/sms/etc.)
     maxLines: MAX_LINES,
     fallbackText: fallbackWelcome,
   });
 
   const textOut = String(composed.text || "").trim();
 
-  // detector GENÉRICO yes/no (no industria)
   const looksYesNoQuestion =
     /\?\s*$/.test(textOut) &&
     (
