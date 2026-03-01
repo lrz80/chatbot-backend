@@ -34,6 +34,49 @@ export type FastpathHybridResult = {
   ctxPatch?: any;
 };
 
+function buildMorePlansReply(fastpathText: string, idiomaDestino: Lang): string {
+  const lines = fastpathText.split(/\r?\n/).map((l) => l.trim());
+
+  const planLines: string[] = [];
+  let skipping = true;
+  let reachedSchedules = false;
+
+  for (const line of lines) {
+    if (!line) continue;
+
+    // Saltar saludos y frase de intro
+    if (/^(hola|buenas|hi|hello)/i.test(line)) continue;
+    if (/^estas son algunas alternativas/i.test(line)) continue;
+
+    // Si llegamos a "Horarios:" / "Schedules:" dejamos de agregar líneas
+    if (/^horarios?:/i.test(line) || /^schedules?:/i.test(line)) {
+      reachedSchedules = true;
+      break;
+    }
+
+    // A partir de la primera línea útil (normalmente bullets), dejamos de "skipping"
+    if (skipping) {
+      skipping = false;
+    }
+
+    if (!skipping && !reachedSchedules) {
+      planLines.push(line);
+    }
+  }
+
+  const header =
+    idiomaDestino === "es"
+      ? "Claro, aquí tienes otras opciones de planes:\n"
+      : "Sure, here are some additional plan options:\n";
+
+  // Si por alguna razón no encontramos líneas útiles, devolvemos el texto original
+  if (planLines.length === 0) {
+    return fastpathText;
+  }
+
+  return header + planLines.join("\n");
+}
+
 export async function handleFastpathHybridTurn(
   args: FastpathHybridArgs
 ): Promise<FastpathHybridResult> {
@@ -70,6 +113,13 @@ export async function handleFastpathHybridTurn(
     currentIntent === "planes_precios";
 
   const isPriceQuestionUser = isPriceOrScheduleKeyword || isPriceIntent;
+
+  // Pregunta de seguimiento: "otros/más planes"
+  const isMorePlansFollowup =
+    /\b(otro(?:s)?|mas|más|adicional(?:es)?|otra opcion|otras opciones|another|other|more|additional)\b/.test(
+      loweredInput
+    ) &&
+    /\b(plan(?:es)?|membres[ií]a|membership)\b/.test(loweredInput);
 
   // 🔍 Señales específicas: planes + horarios en la misma pregunta
   const asksPlans = /plan|planes|membres/i.test(loweredInput);
@@ -126,16 +176,25 @@ export async function handleFastpathHybridTurn(
   const hasPkgs = (convoCtx as any)?.has_packages_available === true;
 
   // 3.5️⃣ WHATSAPP/META + PREGUNTA DE PRECIOS: NO PASAR POR LLM
-  // ⚠️ EXCEPCIÓN: si es "planes + horarios", dejamos que pase al modo híbrido
+  // ⚠️ EXCEPCIÓN 1: si es "planes + horarios", dejamos que pase al modo híbrido
+  // ⚠️ EXCEPCIÓN 2: si es un follow-up tipo "otros/más planes", limpiamos saludo/horarios
   if ((canal === "whatsapp" || canal === "meta") && isPriceQuestionUser && !wantsPlansAndHours) {
-    console.log("[CHAT][FASTPATH] Price question -> send raw fastpath list", {
+    console.log("[CHAT][FASTPATH] Price question -> send fastpath", {
       source: fp.source,
       intent: fp.intent || detectedIntent || intentFallback || null,
+      isMorePlansFollowup,
     });
+
+    let replyText = fastpathText;
+
+    if (isMorePlansFollowup) {
+      // Modo "otras opciones": sin saludo, sin bloque de horarios
+      replyText = buildMorePlansReply(fastpathText, idiomaDestino);
+    }
 
     return {
       handled: true,
-      reply: fastpathText,
+      reply: replyText,
       replySource: fp.source,
       intent: fp.intent || detectedIntent || intentFallback || null,
       ctxPatch,
