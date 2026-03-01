@@ -376,6 +376,31 @@ function extractPlanGroupToken(raw: string): string | null {
   return null;
 }
 
+function humanizeListReply(reply: string, idioma: "es" | "en") {
+  const closingEs = [
+    "¿Cuál te gustaría probar?",
+    "¿Quieres que te recomiende la mejor según tu objetivo? 😊",
+    "Si quieres te guío según lo que estés buscando 😊",
+    "¿Cuál opción te interesa más?"
+  ];
+
+  const closingEn = [
+    "Which one looks best for you?",
+    "Do you want me to recommend the best option for you? 😊",
+    "If you want, I can guide you based on your goals 😊",
+    "Which option are you leaning toward?"
+  ];
+
+  const pick = idioma === "es"
+    ? closingEs[Math.floor(Math.random() * closingEs.length)]
+    : closingEn[Math.floor(Math.random() * closingEn.length)];
+
+  // Si ya contiene pregunta final, no duplicamos
+  if (/interesa|interested|recommend/i.test(reply)) return reply;
+
+  return `${reply}\n\n${pick}`;
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -1219,7 +1244,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 ? `Under ${label} there are several options available:`
                 : `There are several options available:`;
             }
-            
+
             // cierre neutro, sin “plan”, “membresía”, etc.
             const closingEs = "¿Qué opción te interesa?";
             const closingEn = "Which option looks best for you?";
@@ -1647,7 +1672,7 @@ ${catalogText}${infoGeneralBlock}
 
       return {
         handled: true,
-        reply: finalReply,
+        reply: humanizeListReply(finalReply, idiomaDestino),
         source: "catalog_llm",
         intent: intentOut || "catalog",
         ctxPatch,
