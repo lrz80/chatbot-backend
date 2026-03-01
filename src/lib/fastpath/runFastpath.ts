@@ -1224,8 +1224,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - Answer ONLY using information found in the CATALOG and BUSINESS_GENERAL_INFO blocks.
       - Do NOT invent prices, services, bundles or conditions.
       - Be clear, natural, and concise.
-      - You may use ONE short intro line (e.g., “Here are some options 👇”).
-      - Apart from that intro and an optional closing question/CTA, EVERYTHING must be bullet-listed.
+      - You may use up to TWO short intro lines:
+        - First line: a greeting that may include the client name and time of day (for example: "Hi Ana, good afternoon 😊.").
+        - Second line: a short context line (for example: "Here are some of our plans and schedules 👇").
+      - Apart from those intro lines and an optional closing question/CTA, EVERYTHING must be bullet-listed.
       - NEVER write long paragraphs.
 
       IMPORTANT FORMAT RULE:
@@ -1319,8 +1321,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       REGLAS GENERALES:
       - Responde SOLO con la información de CATALOGO e INFO_GENERAL_DEL_NEGOCIO.
       - NO inventes precios, servicios ni condiciones.
-      - Máximo UNA línea de introducción (ej: “Te comparto algunas opciones 👇”).
-      - SALVO esa introducción y un CTA final, TODO debe ser en viñetas.
+      - Puedes usar HASTA DOS líneas cortas al inicio:
+        - Primera línea: saludo que puede incluir el nombre y el momento del día
+          (por ejemplo: "Hola Katyuska, buenas tardes 😊.").
+        - Segunda línea: frase corta de contexto (por ejemplo: "Te comparto algunas opciones de planes y horarios 👇").
+      - Cada una de esas líneas debe ser muy corta (1 oración); no escribas párrafos de bienvenida.
       - PROHIBIDO escribir párrafos largos.
 
       FORMATO DE PLANES (OBLIGATORIO):
