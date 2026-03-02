@@ -5,10 +5,15 @@ import { normalizeVariantLabel } from "./normalizeVariantLabel";
 type PriceOption = { label: string; amount: number; currency: string };
 
 function formatMoney(amount: number, currency: string) {
-  const a = Math.round(Number(amount) || 0);
+  const n = Number(amount) || 0;
+
+  // ✅ Mantener 2 decimales pero sin .00 cuando es entero
+  const rounded = Math.round(n * 100) / 100;
+  let s = rounded.toFixed(2).replace(/\.00$/, "");
+
   const c = String(currency || "USD").toUpperCase();
-  if (c === "USD") return `$${a}`;
-  return `${a} ${c}`;
+  if (c === "USD") return `$${s}`;
+  return `${s} ${c}`;
 }
 
 function formatPrice(amount: number, currency: string, lang: Lang) {
@@ -61,8 +66,8 @@ function moreLine(extra: number, lang: Lang) {
 
 function questionLine(lang: Lang) {
   return lang === "en"
-    ? "Which one would you like— or tell me what you need and I’ll point you to the best option."
-    : "¿Cuál te interesa— o cuéntame qué necesitas y te recomiendo la mejor opción?";
+    ? "Which one would you like—or tell me what you need and I’ll point you to the best option."
+    : "¿Cuál te interesa—o cuéntame qué necesitas y te recomiendo la mejor opción?";
 }
 
 function linkLine(url: string | null | undefined, lang: Lang) {
@@ -79,7 +84,7 @@ export function renderPriceReply(args: {
   serviceName?: string | null;
   options?: PriceOption[];
   optionsCount?: number;
-  url?: string | null; // ✅ NUEVO
+  url?: string | null; // ✅ link hacia el servicio/plan
 }) {
   const name =
     args.serviceName && String(args.serviceName).trim()
@@ -90,35 +95,46 @@ export function renderPriceReply(args: {
 
   const hasOptions = Array.isArray(args.options) && args.options.length > 0;
 
+  // ✅ Siempre ordenamos las opciones de menor a mayor
+  const sortedOptions: PriceOption[] = hasOptions
+    ? [...(args.options as PriceOption[])].sort(
+        (a, b) => (Number(a.amount) || 0) - (Number(b.amount) || 0)
+      )
+    : [];
+
   const fmtLine = (o: PriceOption) => {
     const m = formatPrice(o.amount, o.currency || args.currency, args.lang);
     const label = normalizeVariantLabel(String(o.label || "").trim(), args.lang);
-    // Mantengo bullets porque WhatsApp los lee bien, pero con copy más humano alrededor
     return `• ${label}: ${m}`;
   };
 
-  // FIXED (services.price_base)
+  // 🔹 Precio simple (services.price_base)
   if (args.mode === "fixed") {
-    // Respuesta humana, especialmente para Gratis/Free
-    return `${opener(args.lang)}\n${fixedLine(name, money, args.lang)}${linkLine(args.url, args.lang)}`;
+    return `${opener(args.lang)}\n${fixedLine(name, money, args.lang)}${linkLine(
+      args.url,
+      args.lang
+    )}`;
   }
 
-  // FROM (variants / ranges)
+  // 🔹 Variantes / rangos (FROM)
   if (hasOptions) {
     const header = fromHeader(name, money, args.lang);
-    const list = args.options!.map(fmtLine).join("\n");
+    const list = sortedOptions.map(fmtLine).join("\n");
 
     const extra =
       typeof args.optionsCount === "number"
-        ? Math.max(0, args.optionsCount - args.options!.length)
+        ? Math.max(0, args.optionsCount - sortedOptions.length)
         : 0;
 
     const more = moreLine(extra, args.lang);
 
-    // Copy humano: intro + header + lista + pregunta flexible
-    return `${opener(args.lang)}\n${header}\n${list}${more}\n\n${questionLine(args.lang)}${linkLine(args.url, args.lang)}`;
+    return `${opener(args.lang)}\n${header}\n${list}${more}\n\n${questionLine(
+      args.lang
+    )}${linkLine(args.url, args.lang)}`;
   }
 
-  // Sin options: también humano
-  return `${opener(args.lang)}\n${fromHeader(name, money, args.lang)}\n\n${questionLine(args.lang)}${linkLine(args.url, args.lang)}`;
+  // 🔹 Sin lista de opciones: fallback humano
+  return `${opener(args.lang)}\n${fromHeader(name, money, args.lang)}\n\n${questionLine(
+    args.lang
+  )}${linkLine(args.url, args.lang)}`;
 }

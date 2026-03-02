@@ -1207,10 +1207,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
           // Si hay varias coincidencias con "bronce", mostramos TODAS
           if (rows.length > 1) {
-            const header =
-              idiomaDestino === "en"
-                ? `The ${groupToken} plan has these options:`
-                : `El Plan ${groupToken} tiene estas opciones:`;
 
             const listLines = rows.map((r) => `• ${r.service_name}`);
 
@@ -1478,7 +1474,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       - DO NOT generalize or invent ranges.
       - If BUSINESS_GENERAL_INFO contains multiple time slots, copy them EXACTLY as bullet points (one per line).
       - If there are NO explicit times, you may add ONE generic line without time-of-day words, for example:
-        - “Schedules may vary; please check the updated timetable in the portal.”
+        - Do NOT mention schedules or hours at all.
       - If CATALOG mentions time restrictions, treat them ONLY as plan-specific restrictions.
 
       LISTING MODE:
@@ -1498,6 +1494,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           - list all remaining new ones, and
           - optionally add 1–2 previously mentioned plans, clearly marking that they were already mentioned.
       - Under no circumstances should you repeat exactly the same list of plans as before when PREVIOUS_PLANS_MENTIONED includes those items.
+      - PRICE / PLAN QUESTIONS:
+        - Always list plans in bullet format.
+        - If several options are relevant, compare them using separate bullets.
+        - When you list several options, you MUST order them from the lowest total price to the highest total price.
+        - Plans or products with price 0 must be written as "free" (for example: "free" instead of "0 USD" or "0.00").
 
       DETAIL MODE:
       - Use DETAIL MODE only when the user asks about ONE specific plan.
@@ -1583,8 +1584,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         - Cópialos EXACTAMENTE como lista, uno por línea.
         - PROHIBIDO resumir (“en varios horarios”, “de mañana a noche”).
       - Si NO contiene horarios:
-        - Puedes poner UNA sola línea genérica SIN palabras de momento del día:
-          - “Los horarios pueden variar; revisa el portal de reservas.”
+        - NO menciones horarios ni hagas comentarios genéricos sobre horarios.
       - Si el CATALOGO tiene restricciones horarias, aplícalas SOLO a ese plan.
 
       MODO LISTA:
@@ -1605,6 +1605,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             - muestra todos los nuevos,
             - y solo si es necesario añade 1–2 planes que ya se mencionaron, dejando claro que ya se habían comentado antes.
         - Bajo ninguna circunstancia debes repetir exactamente la misma lista de planes que ya se mostró cuando PREVIOUS_PLANS_MENTIONED contiene esos mismos nombres.
+      - PRECIOS / SERVICIOS:
+        - Siempre usa listas.
+        - Comparaciones → una viñeta por opción.
+        - Cuando muestres varias opciones, DEBES ordenarlas de menor a mayor precio total.
+        - Si un plan o producto tiene precio 0, debes escribir "gratis" (por ejemplo: "gratis" en lugar de "0 USD" o "0.00").
 
       MODO DETALLE:
       - Se usa cuando el cliente pide info de un plan específico.
