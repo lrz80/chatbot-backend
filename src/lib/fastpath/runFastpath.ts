@@ -1173,14 +1173,19 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       }
     }
 
-    // Opción por nombre: "autopay", "por mes", etc.
+    // Opción por nombre: "autopay", "por mes", "bronce cycling", etc.
     if (!chosen) {
+      const msgTokens = msgNorm
+        .split(/\s+/)
+        .filter((t) => t.length > 1); // quitamos palabras de 1 carácter
+
       chosen = variants.find((v: any) => {
         const nameNorm = normalizeText(v.variant_name || "");
-        return (
-          nameNorm &&
-          (msgNorm.includes(nameNorm) || nameNorm.includes(msgNorm))
-        );
+        if (!nameNorm) return false;
+
+        // Coincidencia por tokens: basta con que al menos un token de la frase
+        // esté contenido en el nombre de la variante.
+        return msgTokens.some((t) => nameNorm.includes(t));
       });
     }
 
@@ -1219,7 +1224,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     ).trim();
 
     const link: string | null =
-      chosen.service_url || service?.service_url || null;
+      chosen.variant_url || service?.service_url || null;
 
     const bullets: string =
       descSource
@@ -1242,7 +1247,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     let reply =
       idiomaDestino === "en"
         ? `Perfect 😊\n\n${title ? `*${title}*` : ""}${
-            bullets ? ` incluye:\n\n${bullets}` : ""
+            bullets ? ` includes:\n\n${bullets}` : ""
           }`
         : `Perfecto 😊\n\n${title ? `*${title}*` : ""}${
             bullets ? ` incluye:\n\n${bullets}` : ""
@@ -1251,7 +1256,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     if (link) {
       reply +=
         idiomaDestino === "en"
-          ? `\n\nAquí puedes ver más detalles:\n${link}`
+          ? `\n\nHere you can see more details:\n${link}`
           : `\n\nAquí puedes ver más detalles:\n${link}`;
     }
 
