@@ -401,6 +401,32 @@ function humanizeListReply(reply: string, idioma: "es" | "en") {
   return `${reply}\n\n${pick}`;
 }
 
+function stripLinkSentences(reply: string): string {
+  const lines = String(reply || "").split(/\r?\n/);
+
+  const filtered = lines.filter((line) => {
+    const l = line.toLowerCase().trim();
+    if (!l) return true;
+
+    // Si la línea habla de links / enlaces / comprar en enlaces, la quitamos
+    if (
+      l.includes("enlace") ||
+      l.includes("enlaces") ||
+      l.includes("link") ||
+      l.includes("links") ||
+      l.includes("comprar en los enlaces") ||
+      l.includes("comprar en los links")
+    ) {
+      return false;
+    }
+
+    return true;
+  });
+
+  // Normaliza saltos de línea
+  return filtered.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -1665,9 +1691,12 @@ ${catalogText}${infoGeneralBlock}
       // 🔁 POST-PROCESO: quitar planes ya mencionados si la pregunta es "otros planes"
       const { finalReply, namesShown } = postProcessCatalogReply({
         reply: rawReply,
-        questionType,       // 👈 QuestionType calculado arriba
-        prevNames,          // 👈 nombres en convoCtx.last_catalog_plans
+        questionType,
+        prevNames,
       });
+
+      // 🔧 limpiamos frases de "enlace / links / comprar en los enlaces"
+      const cleanedReply = stripLinkSentences(finalReply);
 
       const ctxPatch: Partial<FastpathCtx> = {};
       if (namesShown.length) {
@@ -1677,7 +1706,7 @@ ${catalogText}${infoGeneralBlock}
 
       return {
         handled: true,
-        reply: humanizeListReply(finalReply, idiomaDestino),
+        reply: humanizeListReply(cleanedReply, idiomaDestino),
         source: "catalog_llm",
         intent: intentOut || "catalog",
         ctxPatch,
