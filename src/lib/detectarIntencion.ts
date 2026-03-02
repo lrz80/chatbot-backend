@@ -22,6 +22,10 @@ function hasWord(text: string, word: string) {
   return new RegExp(`\\b${w}\\b`, "i").test(text || "");
 }
 
+// ✅ Pregunta de INCLUDES / qué incluye un plan/paquete/membresía
+const INCLUDES_RE =
+  /\b(que\s+incluye|qué\s+incluye|q\s+incluye|incluye\s+el\s+paquete|incluye\s+la\s+membresia|incluye\s+la\s+membresía|incluye\s+el\s+plan|que\s+trae|qué\s+trae|what\s+does\s+.*include|what\s+is\s+included)\b/i;
+  
 /** ---------- Intenciones universales (mínimas y generales) ---------- */
 type UniversalIntent =
   | "saludo"
@@ -303,7 +307,13 @@ export async function detectarIntencion(
     return { intencion: "info_general", nivel_interes: nivel as 2 | 3 };
   }
 
-    // ✅ FAST-PATH: recomendación / "qué me recomiendas" / "primera vez"
+  // ✅ FAST-PATH: "qué incluye" / "qué trae" un plan o paquete
+  if (INCLUDES_RE.test(original)) {
+    // Lo tratamos como info de servicio con interés medio
+    return { intencion: "info_servicio", nivel_interes: 2 };
+  }
+
+  // ✅ FAST-PATH: recomendación / "qué me recomiendas" / "primera vez"
   const RECOMMEND_RE =
     /\b(recom(i|í)end(as|a|ame)?|recommend|what\s+do\s+you\s+recommend|suggest|sugiere|sugerencia|que\s+me\s+recomiendas|cu(al|á)l\s+me\s+recomiendas|que\s+servicio\s+me\s+recomiendas|primera\s+vez|first\s+time)\b/i;
 
