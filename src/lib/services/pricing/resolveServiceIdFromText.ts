@@ -266,9 +266,9 @@ export async function resolveServiceIdFromText(
       : null,
   });
 
-  // Parámetros de decisión
-  const BASE_THRESHOLD = 0.6; // para frases más específicas (>= 2 tokens fuertes)
-  const SINGLE_TOKEN_THRESHOLD = 0.7; // para queries de 1 token (ej. "bronze")
+  // Parámetros de decisión (dependen del modo)
+  const BASE_THRESHOLD = mode === "strict" ? 0.6 : 0.45;       // ↩️ relajamos para modo "loose"
+  const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.7 : 0.5;
   const MARGIN = 0.2; // diferencia mínima con el segundo para confiar
 
   // 4) Caso especial: SOLO un token fuerte (ej. "bronze", "gold", "deluxe")

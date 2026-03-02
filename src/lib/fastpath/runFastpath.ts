@@ -84,6 +84,10 @@ export type FastpathCtx = {
   last_catalog_plans?: string[] | null;
   last_catalog_at?: number | null;
 
+  // selección de servicio/variante para flujo "qué incluye"
+  selectedServiceId?: string | null;
+  expectingVariant?: boolean;
+
   [k: string]: any;
 };
 
@@ -1111,6 +1115,294 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           } as any,
         };
       }
+    }
+  }
+
+  // ===============================
+  // ✅ VARIANTES: SEGUNDO TURNO
+  // El usuario ya vio las opciones y ahora elige una (1, "autopay", etc.)
+  // ===============================
+  if (convoCtx.expectingVariant && convoCtx.selectedServiceId) {
+    const serviceId = String(convoCtx.selectedServiceId);
+
+    // Traemos variantes del servicio
+    const { rows: variants } = await pool.query<any>(
+      `
+      SELECT
+        id,
+        variant_name,
+        description,
+        service_url,
+        price,
+        currency
+      FROM service_variants
+      WHERE service_id = $1
+        AND active = true
+      ORDER BY sort_order NULLS FIRST, created_at ASC
+      `,
+      [serviceId]
+    );
+
+    if (!variants.length) {
+      // No hay variantes, limpiamos bandera y dejamos que el resto del fastpath maneje
+      return {
+        handled: false,
+        ctxPatch: {
+          expectingVariant: false,
+          selectedServiceId: null,
+        } as Partial<FastpathCtx>,
+      };
+    }
+
+    const msgNorm = normalizeText(userInput);
+
+    let chosen: any = null;
+
+    // Opción numérica: "1", "2", etc.
+    const mNum = msgNorm.match(/^([1-9])$/);
+    if (mNum) {
+      const idx = Number(mNum[1]) - 1;
+      if (idx >= 0 && idx < variants.length) {
+        chosen = variants[idx];
+      }
+    }
+
+    // Opción por nombre: "autopay", "por mes", etc.
+    if (!chosen) {
+      chosen = variants.find((v: any) => {
+        const nameNorm = normalizeText(v.variant_name || "");
+        return (
+          nameNorm &&
+          (msgNorm.includes(nameNorm) || nameNorm.includes(msgNorm))
+        );
+      });
+    }
+
+    if (!chosen) {
+      const retryMsg =
+        idiomaDestino === "en"
+          ? "No terminé de entender cuál opción te interesa 🤔. Dime el número o el nombre de la opción."
+          : "No terminé de entender cuál opción te interesa 🤔. Dime el número o el nombre de la opción.";
+      return {
+        handled: true,
+        reply: retryMsg,
+        source: "service_list_db",
+        intent: intentOut || "info_servicio",
+      };
+    }
+
+    // Sacamos datos del servicio base
+    const {
+      rows: [service],
+    } = await pool.query<any>(
+      `
+      SELECT
+        name,
+        description,
+        service_url
+      FROM services
+      WHERE id = $1
+      `,
+      [serviceId]
+    );
+
+    const descSource = (
+      chosen.description ||
+      service?.description ||
+      ""
+    ).trim();
+
+    const link: string | null =
+      chosen.service_url || service?.service_url || null;
+
+    const bullets: string =
+      descSource
+        ? descSource
+            .split(/\r?\n/)
+            .map((l: string) => l.trim())
+            .filter((l: string) => l.length > 0)
+            .map((l: string) => `• ${l}`)
+            .join("\n")
+        : "";
+
+    const baseName = String(service?.name || "").trim();
+    const variantName = String(chosen.variant_name || "").trim();
+
+    const title =
+      baseName && variantName
+        ? `${baseName} — ${variantName}`
+        : baseName || variantName || "";
+
+    let reply =
+      idiomaDestino === "en"
+        ? `Perfect 😊\n\n${title ? `*${title}*` : ""}${
+            bullets ? ` incluye:\n\n${bullets}` : ""
+          }`
+        : `Perfecto 😊\n\n${title ? `*${title}*` : ""}${
+            bullets ? ` incluye:\n\n${bullets}` : ""
+          }`;
+
+    if (link) {
+      reply +=
+        idiomaDestino === "en"
+          ? `\n\nAquí puedes ver más detalles:\n${link}`
+          : `\n\nAquí puedes ver más detalles:\n${link}`;
+    }
+
+    return {
+      handled: true,
+      reply,
+      source: "service_list_db",
+      intent: intentOut || "info_servicio",
+      ctxPatch: {
+        expectingVariant: false,
+        selectedServiceId: serviceId,
+        last_service_id: serviceId,
+        last_service_name: baseName || title || null,
+        last_service_at: Date.now(),
+      } as Partial<FastpathCtx>,
+    };
+  }
+
+  // ===============================
+  // ✅ VARIANTES: PRIMER TURNO
+  // El usuario pregunta "qué incluye X" y detectamos el servicio
+  // ===============================
+  const looksLikeServiceDetail =
+    /\b(incluye|incluyen|qué incluye|que incluye|what is included|what does.*include)\b/i.test(
+      normalizeText(userInput)
+    );
+
+  if (looksLikeServiceDetail) {
+    // Detectar servicio por texto ("plan gold", "paquete gold", etc.)
+    const hit = await resolveServiceIdFromText(pool, tenantId, userInput, {
+      mode: "loose",
+    });
+
+    if (!hit) {
+      // No encontramos servicio claro, dejamos que el motor de catálogo / LLM maneje
+      // (seguimos más abajo con el MOTOR ÚNICO DE CATÁLOGO)
+    } else {
+      const serviceId = hit.id;
+
+      // Traer variantes de ese servicio
+      const { rows: variants } = await pool.query<any>(
+        `
+        SELECT
+          id,
+          variant_name,
+          description,
+          service_url,
+          price,
+          currency
+        FROM service_variants
+        WHERE service_id = $1
+          AND active = true
+        ORDER BY sort_order NULLS FIRST, created_at ASC
+        `,
+        [serviceId]
+      );
+
+      // Traer info básica del servicio
+      const {
+        rows: [service],
+      } = await pool.query<any>(
+        `
+        SELECT
+          name,
+          description,
+          service_url
+        FROM services
+        WHERE id = $1
+        `,
+        [serviceId]
+      );
+
+      const serviceName = String(service?.name || hit.name || "").trim();
+
+      // ⭐ Caso A: tiene variantes → listamos opciones y preguntamos cuál le interesa
+      if (variants.length > 0) {
+        const lines = variants.map((v: any, idx: number) => {
+          const p = v.price as number | null;
+          const currency = (v.currency as string | null) || "USD";
+          const priceText =
+            typeof p === "number" && !Number.isNaN(p)
+              ? `${p} ${currency}`
+              : "";
+
+          return priceText
+            ? `• ${idx + 1}) ${v.variant_name}: ${priceText}`
+            : `• ${idx + 1}) ${v.variant_name}`;
+        });
+
+        const headerEs = `El ${serviceName} tiene estas opciones:`;
+        const headerEn = `The ${serviceName} has these options:`;
+
+        const askEs =
+          "¿Cuál opción te interesa? Puedes responder con el número o el nombre.";
+        const askEn =
+          "Which option are you interested in? You can answer with the number or the name.";
+
+        const reply =
+          idiomaDestino === "en"
+            ? `${headerEn}\n\n${lines.join("\n")}\n\n${askEn}`
+            : `${headerEs}\n\n${lines.join("\n")}\n\n${askEs}`;
+
+        return {
+          handled: true,
+          reply,
+          source: "service_list_db",
+          intent: intentOut || "info_servicio",
+          ctxPatch: {
+            selectedServiceId: serviceId,
+            expectingVariant: true,
+          } as Partial<FastpathCtx>,
+        };
+      }
+
+      // ⭐ Caso B: NO tiene variantes → respondemos directo con descripción + link
+      const descSource = (service?.description || "").trim();
+      const link: string | null = service?.service_url || null;
+
+      const bullets: string =
+        descSource
+          ? descSource
+              .split(/\r?\n/)
+              .map((l: string) => l.trim())
+              .filter((l: string) => l.length > 0)
+              .map((l: string) => `• ${l}`)
+              .join("\n")
+          : "";
+
+      let reply =
+        idiomaDestino === "en"
+          ? `${serviceName || "Este plan"}${
+              bullets ? ` incluye:\n\n${bullets}` : ""
+            }`
+          : `${serviceName || "Este plan"}${
+              bullets ? ` incluye:\n\n${bullets}` : ""
+            }`;
+
+      if (link) {
+        reply +=
+          idiomaDestino === "en"
+            ? `\n\nAquí puedes ver más detalles:\n${link}`
+            : `\n\nAquí puedes ver más detalles:\n${link}`;
+      }
+
+      return {
+        handled: true,
+        reply,
+        source: "service_list_db",
+        intent: intentOut || "info_servicio",
+        ctxPatch: {
+          selectedServiceId: serviceId,
+          expectingVariant: false,
+          last_service_id: serviceId,
+          last_service_name: serviceName,
+          last_service_at: Date.now(),
+        } as Partial<FastpathCtx>,
+      };
     }
   }
 
