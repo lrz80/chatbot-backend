@@ -1132,7 +1132,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         id,
         variant_name,
         description,
-        service_url,
+        variant_url,
         price,
         currency
       FROM service_variants
@@ -1292,7 +1292,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           id,
           variant_name,
           description,
-          service_url,
+          variant_url,
           price,
           currency
         FROM service_variants
