@@ -371,11 +371,17 @@ function extractPlanGroupToken(raw: string): string | null {
   const t = normalizeText(raw);
   if (!t) return null;
 
-  // Busca patrones tipo "plan bronce", "plan gold", etc.
-  const m = t.match(/\bplan\s+([a-z0-9]+)\b/);
-  if (m?.[1]) {
-    return m[1]; // "bronce", "gold", etc.
-  }
+  // "plan bronce", "plan gold"
+  let m = t.match(/\bplan\s+([a-z0-9]+)\b/);
+  if (m?.[1]) return m[1];
+
+  // "paquete bronce"
+  m = t.match(/\bpaquete\s+([a-z0-9]+)\b/);
+  if (m?.[1]) return m[1];
+
+  // "package bronze" (por si preguntan en inglés)
+  m = t.match(/\bpackage\s+([a-z0-9]+)\b/);
+  if (m?.[1]) return m[1];
 
   return null;
 }
