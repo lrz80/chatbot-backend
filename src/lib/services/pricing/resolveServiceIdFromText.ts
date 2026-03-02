@@ -84,6 +84,11 @@ const STOPWORDS = new Set([
   "clases",
   "service",
   "services",
+  // ⬇⬇ NUEVO: que “paquete” no cuente como token fuerte
+  "paquete",
+  "paquetes",
+  "pack",
+  "package",
 ]);
 
 function normalize(raw: string): string {
