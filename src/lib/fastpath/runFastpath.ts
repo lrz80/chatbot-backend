@@ -1280,9 +1280,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // El usuario pregunta "qué incluye X" y detectamos el servicio
   // ===============================
   const looksLikeServiceDetail =
-    /\b(incluye|incluyen|qué incluye|que incluye|what is included|what does.*include)\b/i.test(
-      normalizeText(userInput)
-    );
+    /\b(incluye|incluyen|qué incluye|que incluye|what.*include)\b/i.test(normalizeText(userInput))
+    && /\b(bronce|gold|plata|premium|basic|paquete|plan|membresia|membership)\b/i.test(normalizeText(userInput));
 
   if (looksLikeServiceDetail) {
     // Detectar servicio por texto ("plan gold", "paquete gold", etc.)
