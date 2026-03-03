@@ -1291,15 +1291,17 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const normMsg = normalizeText(userInput);
 
   // Pregunta explícita de detalle: "qué incluye X", "que trae X", etc.
+  // Pregunta explícita de detalle: "qué incluye X", "que trae X", "dame más detalle", "more details", etc.
   const looksLikeExplicitDetail =
-    /\b(que incluye|qué incluye|que trae|qué trae|incluye|incluyen|what\s+is\s+included|what\s+does.*include)\b/i.test(
+    /\b(que incluye|qué incluye|que trae|qué trae|incluye|incluyen|mas detalle|más detalle|dame mas detalle|dame más detalle|detalle|detalles|what\s+is\s+included|what\s+does.*include|more detail|more details|give me more detail|tell me more about)\b/i.test(
       normMsg
     );
 
   // Follow-up elíptico tipo "y el gold?", "y el bronce?"
   // Lo consideramos detalle SI después de "y el/la" viene algo.
   const looksLikeEllipticDetail =
-    /^y\s+(el|la)\s+.+\??$/i.test(normMsg);
+    /^y\s+(el|la)\s+.+\??$/i.test(normMsg) ||        // español
+    /^and\s+(the\s+)?[^?]+(\?)?$/i.test(normMsg);    // inglés
 
   const looksLikeServiceDetail = looksLikeExplicitDetail || looksLikeEllipticDetail;
 

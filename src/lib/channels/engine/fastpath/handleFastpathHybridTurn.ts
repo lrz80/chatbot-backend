@@ -155,8 +155,8 @@ export async function handleFastpathHybridTurn(
   // Pregunta de DETALLE de algo (qué incluye / qué trae)
   // Genérico: sirve para cualquier servicio, plan, producto, paquete, etc.
   const isPlanDetailQuestion =
-    /\b(que incluye|qué incluye|que trae|qué trae|what does .* include|what.*include)\b/.test(
-      loweredInput
+    /\b(que incluye|qué incluye|que trae|qué trae|incluye|incluyen|mas detalle|más detalle|dame mas detalle|dame más detalle|detalle|detalles|what\s+is\s+included|what\s+does.*include|what.*include|more detail|more details|give me more detail|tell me more about)\b/i.test(
+        loweredInput
     );
 
   // Intención efectiva que verá Fastpath
