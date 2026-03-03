@@ -31,7 +31,6 @@ import { resolveServiceList } from "../services/resolveServiceList";
 import { renderServiceListReply } from "../services/renderServiceListReply";
 import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
 import { renderInfoGeneralOverview } from "../fastpath/renderInfoGeneralOverview";
-import { filterRowsByMeaningfulTokens } from "../services/pricing/priceSummaryTokens";
 import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
 import { buildCatalogContext } from "../catalog/buildCatalogContext";
 import OpenAI from "openai";
