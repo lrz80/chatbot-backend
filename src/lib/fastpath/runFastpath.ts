@@ -25,7 +25,6 @@ import {
 // Pricing
 import { getPriceInfoForService } from "../services/pricing/getFromPriceForService";
 import { resolveServiceIdFromText } from "../services/pricing/resolveServiceIdFromText";
-import { renderPriceReply } from "../services/pricing/renderPriceReply";
 import { isGenericPriceQuestion } from "../services/pricing/isGenericPriceQuestion";
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
 import { resolveServiceList } from "../services/resolveServiceList";
