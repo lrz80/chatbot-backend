@@ -6,6 +6,7 @@ import type { Lang } from "../channels/engine/clients/clientDb";
 
 import { detectarIdioma } from "../detectarIdioma";
 import { traducirMensaje } from "../traducirMensaje";
+import { traducirTexto } from "../traducirTexto";
 
 // INFO_CLAVE includes
 import {
@@ -2019,6 +2020,24 @@ ${catalogText}${infoGeneralBlock}
       // 🔧 limpiamos frases de "enlace / links / comprar en los enlaces"
       const cleanedReply = stripLinkSentences(finalReply);
 
+      // 🌎 NUEVO: aseguramos que TODO el catálogo salga en el idiomaDestino
+      let localizedReply = cleanedReply;
+
+      if (idiomaDestino === "en") {
+        try {
+          // tu helper actual: traducir TODO el bloque al inglés,
+          // incluyendo nombres de planes/productos.
+          localizedReply = await traducirTexto(cleanedReply, "en");
+        } catch (e: any) {
+          console.warn(
+            "[FASTPATH][CATALOG] error traduciendo respuesta de catálogo:",
+            e?.message || e
+          );
+        }
+      }
+      // si en el futuro agregas más idiomas, aquí puedes meter más ramas:
+      // else if (idiomaDestino === "es") { ... }
+
       const ctxPatch: Partial<FastpathCtx> = {};
       if (namesShown.length) {
         ctxPatch.last_catalog_plans = namesShown;
@@ -2027,7 +2046,8 @@ ${catalogText}${infoGeneralBlock}
 
       return {
         handled: true,
-        reply: humanizeListReply(cleanedReply, idiomaDestino),
+        // usamos la versión traducida
+        reply: humanizeListReply(localizedReply, idiomaDestino),
         source: "catalog_llm",
         intent: intentOut || "catalog",
         ctxPatch,

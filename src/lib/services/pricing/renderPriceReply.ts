@@ -1,6 +1,7 @@
 // src/lib/services/pricing/renderPriceReply.ts
 import type { Lang } from "../../channels/engine/clients/clientDb";
 import { normalizeVariantLabel } from "./normalizeVariantLabel";
+import { traducirTexto } from "../../traducirTexto";
 
 type PriceOption = { label: string; amount: number; currency: string };
 
@@ -76,7 +77,27 @@ function linkLine(url: string | null | undefined, lang: Lang) {
   return lang === "en" ? `\n\nHere’s the link:\n${u}` : `\n\nAquí está el link:\n${u}`;
 }
 
-export function renderPriceReply(args: {
+// 🔹 Traducir solo si hace falta (por ahora: cuando lang !== "es")
+async function translateIfNeeded(
+  text: string | null | undefined,
+  lang: Lang
+): Promise<string | null> {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+
+  // Si el idioma de salida es español, asumimos que el catálogo base ya está en ES
+  if (lang === "es") return raw;
+
+  try {
+    const translated = await traducirTexto(raw, lang);
+    return translated || raw;
+  } catch (err) {
+    console.error("[renderPriceReply] error traduciendo texto", { text: raw, lang, err });
+    return raw;
+  }
+}
+
+export async function renderPriceReply(args: {
   lang: Lang;
   mode: "fixed" | "from";
   amount: number;
@@ -86,9 +107,12 @@ export function renderPriceReply(args: {
   optionsCount?: number;
   url?: string | null; // ✅ link hacia el servicio/plan
 }) {
+  // 1) Traducimos el nombre del servicio si corresponde
+  const translatedName = await translateIfNeeded(args.serviceName ?? null, args.lang);
+
   const name =
-    args.serviceName && String(args.serviceName).trim()
-      ? String(args.serviceName).trim()
+    translatedName && String(translatedName).trim()
+      ? String(translatedName).trim()
       : null;
 
   const money = formatPrice(args.amount, args.currency, args.lang);
@@ -102,9 +126,14 @@ export function renderPriceReply(args: {
       )
     : [];
 
-  const fmtLine = (o: PriceOption) => {
+  const fmtLine = async (o: PriceOption) => {
     const m = formatPrice(o.amount, o.currency || args.currency, args.lang);
-    const label = normalizeVariantLabel(String(o.label || "").trim(), args.lang);
+
+    // 2) Traducimos también el label de cada variante (si aplica)
+    const rawLabel = String(o.label || "").trim();
+    const translatedLabel = await translateIfNeeded(rawLabel, args.lang);
+    const label = normalizeVariantLabel(translatedLabel || rawLabel, args.lang);
+
     return `• ${label}: ${m}`;
   };
 
@@ -119,7 +148,9 @@ export function renderPriceReply(args: {
   // 🔹 Variantes / rangos (FROM)
   if (hasOptions) {
     const header = fromHeader(name, money, args.lang);
-    const list = sortedOptions.map(fmtLine).join("\n");
+
+    const lines = await Promise.all(sortedOptions.map((o) => fmtLine(o)));
+    const list = lines.join("\n");
 
     const extra =
       typeof args.optionsCount === "number"

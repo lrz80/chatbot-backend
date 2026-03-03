@@ -2,7 +2,7 @@
 
 import type { Pool } from "pg";
 import { detectarIdioma } from "../../detectarIdioma";
-import { traducirMensaje } from "../../traducirMensaje";
+import { traducirTexto } from "../../traducirTexto";
 
 export type Hit = { id: string; name: string };
 
@@ -80,8 +80,8 @@ const STOPWORDS = new Set([
   "monthly",
   "membership",
   "memberships",
-  "clase",
-  "clases",
+  // ⬇⬇ OJO: ya NO ponemos "clase"/"clases" como stopwords
+  // porque son clave para "4 clases", "8 clases", etc.
   "service",
   "services",
   // ⬇⬇ NUEVO: que “paquete” no cuente como token fuerte
@@ -104,7 +104,17 @@ function tokenize(raw: string): string[] {
     .replace(/[^a-z0-9\s]/g, " ")
     .split(/\s+/)
     .map((w) => w.trim())
-    .filter((w) => w.length >= 2 && !STOPWORDS.has(w));
+    .filter((w) => {
+      if (!w) return false;
+
+      // 🔹 Dejamos pasar números como "4", "8", "12"
+      if (/^\d+$/.test(w)) {
+        return true;
+      }
+
+      // 🔹 Para palabras normales, misma lógica de antes:
+      return w.length >= 2 && !STOPWORDS.has(w);
+    });
 }
 
 /**
@@ -147,9 +157,10 @@ export async function resolveServiceIdFromText(
 
   try {
     if (idioma === "es") {
-      tAlt = normalize(await traducirMensaje(t, "en"));
+      // 🔹 usamos traducirTexto en vez de traducirMensaje
+      tAlt = normalize(await traducirTexto(t, "en"));
     } else if (idioma === "en") {
-      tAlt = normalize(await traducirMensaje(t, "es"));
+      tAlt = normalize(await traducirTexto(t, "es"));
     }
   } catch {
     tAlt = "";
