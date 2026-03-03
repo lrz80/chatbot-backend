@@ -1348,12 +1348,18 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           variants: variants.map((v: any) => v.variant_name),
         });
         const lines = variants.map((v: any, idx: number) => {
-          const p = v.price as number | null;
+          const rawPrice = v.price;
+
+          // Postgres suele devolver NUMERIC como string → lo convertimos
+          const numPrice =
+            rawPrice === null || rawPrice === undefined || rawPrice === ""
+              ? NaN
+              : Number(rawPrice);
+
           const currency = (v.currency as string | null) || "USD";
-          const priceText =
-            typeof p === "number" && !Number.isNaN(p)
-              ? `${p} ${currency}`
-              : "";
+
+          const hasPrice = Number.isFinite(numPrice);
+          const priceText = hasPrice ? `${numPrice} ${currency}` : "";
 
           return priceText
             ? `• ${idx + 1}) ${v.variant_name}: ${priceText}`
