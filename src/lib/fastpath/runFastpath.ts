@@ -1144,7 +1144,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       FROM service_variants
       WHERE service_id = $1
         AND active = true
-      ORDER BY sort_order NULLS FIRST, created_at ASC
+      ORDER BY created_at ASC, id ASC
       `,
       [serviceId]
     );
@@ -1310,7 +1310,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         FROM service_variants
         WHERE service_id = $1
           AND active = true
-        ORDER BY sort_order NULLS FIRST, created_at ASC
+        ORDER BY created_at ASC, id ASC
         `,
         [serviceId]
       );
