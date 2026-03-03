@@ -1307,13 +1307,40 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   if (looksLikeServiceDetail) {
     // Detectar servicio por texto ("plan bronce", "basic bath", "deluxe groom", "facial", etc.)
-    const hit = await resolveServiceIdFromText(pool, tenantId, userInput, {
+    // Detectar servicio por texto ("plan bronce", "basic bath", etc.)
+    let hit = await resolveServiceIdFromText(pool, tenantId, userInput, {
       mode: "loose",
     });
 
+    // 🔥 PATCH NUEVO: si es detalle pero no se encontró servicio por texto,
+    // usar SERVICE en contexto (último plan mostrado o seleccionado)
     if (!hit) {
-      // No encontramos servicio claro, dejamos que el motor de catálogo / LLM maneje
-      // (seguimos más abajo con el MOTOR ÚNICO DE CATÁLOGO)
+      // 1) Si venimos de una lista de un solo plan (ej: después de "y el gold?")
+      if (convoCtx?.last_plan_list?.length === 1) {
+        hit = {
+          id: convoCtx.last_plan_list[0].id,
+          name: convoCtx.last_plan_list[0].name,
+        };
+      }
+      // 2) Si hay un servicio seleccionado previamente
+      else if (convoCtx?.selectedServiceId) {
+        hit = {
+          id: convoCtx.selectedServiceId,
+          name: convoCtx.last_service_name || "",
+        };
+      }
+      // 3) Si hay un servicio recordado recientemente
+      else if (convoCtx?.last_service_id) {
+        hit = {
+          id: convoCtx.last_service_id,
+          name: convoCtx.last_service_name || "",
+        };
+      }
+    }
+
+    // Si después de intentar contexto TAMPOCO hay servicio, dejar catálogo/LLM
+    if (!hit) {
+      // No encontramos servicio claro → motor catálogo
     } else {
       const serviceId = hit.id;
 
