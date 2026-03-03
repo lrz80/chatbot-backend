@@ -1189,6 +1189,59 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       });
     }
 
+    // --------------------------------------
+    // 🌎 DETECCIÓN INTELIGENTE DE VARIANTES
+    // (MULTITENANT – sin hardcode por negocio)
+    // --------------------------------------
+    if (!chosen) {
+      const msg = msgNorm; // ya normalizado
+
+      // Palabras universales que significan "mes / mensual"
+      const monthlyTokens = [
+        "por mes",
+        "mensual",
+        "mensualmente",
+        "mes a mes",
+        "per month",
+        "monthly"
+      ];
+
+      // Palabras universales que significan "autopay"
+      const autopayTokens = [
+        "autopay",
+        "auto pay",
+        "pago automatico",
+        "pago automático",
+        "automatic payment",
+        "auto debit",
+        "autodebit",
+        "auto-debit"
+      ];
+
+      const matchTokens = (tokens: string[], variantName: string) => {
+        const vn = normalizeText(variantName);
+        return tokens.some((t) => msg.includes(normalizeText(t)) || vn.includes(normalizeText(t)));
+      };
+
+      // Buscar variante mensual (Por Mes)
+      let monthlyVariant = variants.find((v: any) =>
+        matchTokens(monthlyTokens, v.variant_name || "")
+      );
+
+      // Buscar variante autopay
+      let autopayVariant = variants.find((v: any) =>
+        matchTokens(autopayTokens, v.variant_name || "")
+      );
+
+      if (monthlyVariant && matchTokens(monthlyTokens, msg)) {
+        chosen = monthlyVariant;
+      }
+
+      if (!chosen && autopayVariant && matchTokens(autopayTokens, msg)) {
+        chosen = autopayVariant;
+      }
+    }
+
     if (!chosen) {
       const retryMsg =
         idiomaDestino === "en"
