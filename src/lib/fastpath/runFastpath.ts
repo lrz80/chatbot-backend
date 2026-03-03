@@ -1440,27 +1440,57 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           serviceName,
           variants: variants.map((v: any) => v.variant_name),
         });
-        const lines = variants.map((v: any, idx: number) => {
-          const rawPrice = v.price;
 
-          // Postgres suele devolver NUMERIC como string → lo convertimos
-          const numPrice =
-            rawPrice === null || rawPrice === undefined || rawPrice === ""
-              ? NaN
-              : Number(rawPrice);
+        // Nombre que vamos a mostrar del servicio (traducido si aplica)
+        let displayServiceName = serviceName;
 
-          const currency = (v.currency as string | null) || "USD";
+        // Si el cliente está en inglés, intentamos traducir el nombre del servicio
+        if (idiomaDestino === "en" && serviceName) {
+          try {
+            // 👇 Ajusta la firma si tu helper `traducirMensaje` recibe otros parámetros
+            displayServiceName = await traducirMensaje(serviceName, "en");
+          } catch (e) {
+            console.warn("[FASTPATH-INCLUDES] error traduciendo nombre de servicio:", e);
+          }
+        }
 
-          const hasPrice = Number.isFinite(numPrice);
-          const priceText = hasPrice ? `${numPrice} ${currency}` : "";
+        // Construimos las líneas de variantes (traduciendo el nombre si el cliente está en EN)
+        const lines = await Promise.all(
+          variants.map(async (v: any, idx: number) => {
+            const rawPrice = v.price;
 
-          return priceText
-            ? `• ${idx + 1}) ${v.variant_name}: ${priceText}`
-            : `• ${idx + 1}) ${v.variant_name}`;
-        });
+            // Postgres suele devolver NUMERIC como string → lo convertimos
+            const numPrice =
+              rawPrice === null || rawPrice === undefined || rawPrice === ""
+                ? NaN
+                : Number(rawPrice);
+
+            const currency = (v.currency as string | null) || "USD";
+            const hasPrice = Number.isFinite(numPrice);
+            const priceText = hasPrice ? `${numPrice} ${currency}` : "";
+
+            let displayVariantName = String(v.variant_name || "").trim();
+
+            if (idiomaDestino === "en" && displayVariantName) {
+              try {
+                // 👇 Igual: adapta la firma si tu helper es distinto
+                displayVariantName = await traducirMensaje(displayVariantName, "en");
+              } catch (e) {
+                console.warn(
+                  "[FASTPATH-INCLUDES] error traduciendo nombre de variante:",
+                  e
+                );
+              }
+            }
+
+            return priceText
+              ? `• ${idx + 1}) ${displayVariantName}: ${priceText}`
+              : `• ${idx + 1}) ${displayVariantName}`;
+          })
+        );
 
         const headerEs = `El ${serviceName} tiene estas opciones:`;
-        const headerEn = `The ${serviceName} has these options:`;
+        const headerEn = `The ${displayServiceName} has these options:`;
 
         const askEs =
           "¿Cuál opción te interesa? Puedes responder con el número o el nombre.";
@@ -1488,9 +1518,46 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       const descSource = (service?.description || "").trim();
       const link: string | null = service?.service_url || null;
 
-      const bullets: string =
-        descSource
-          ? descSource
+      let displayServiceName = serviceName;      // puede venir vacío — NO inventamos nada
+      let displayBullets = descSource;
+
+      // --------------------------------------
+      // 🌎 TRADUCCIÓN (solo si el cliente habla EN)
+      // --------------------------------------
+      if (idiomaDestino === "en") {
+        try {
+          if (displayServiceName) {
+            displayServiceName = await traducirMensaje(displayServiceName, "en");
+          }
+        } catch (e) {
+          console.warn("[FASTPATH] error traduciendo nombre (sin variantes):", e);
+        }
+
+        try {
+          if (displayBullets) {
+            const bulletList: string[] = displayBullets
+              .split(/\r?\n/)
+              .map((l: string) => l.trim())
+              .filter((l: string) => l.length > 0);
+
+            const translated: string[] = [];
+            for (const b of bulletList) {
+              translated.push(await traducirMensaje(b, "en"));
+            }
+
+            displayBullets = translated.join("\n");
+          }
+        } catch (e) {
+          console.warn("[FASTPATH] error traduciendo bullets (sin variantes):", e);
+        }
+      }
+
+      // --------------------------------------
+      // Generar bullets visuales
+      // --------------------------------------
+      const bullets =
+        displayBullets
+          ? displayBullets
               .split(/\r?\n/)
               .map((l: string) => l.trim())
               .filter((l: string) => l.length > 0)
@@ -1498,19 +1565,33 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               .join("\n")
           : "";
 
-      let reply =
-        idiomaDestino === "en"
-          ? `${serviceName || "Este plan"}${
-              bullets ? ` incluye:\n\n${bullets}` : ""
-            }`
-          : `${serviceName || "Este plan"}${
-              bullets ? ` incluye:\n\n${bullets}` : ""
-            }`;
+      // --------------------------------------
+      // Respuesta final SIN hardcode de tipo
+      // --------------------------------------
+
+      // ❗ No mostramos "Este plan" ni "This plan"
+      // Si hay nombre → mostramos nombre.
+      // Si NO hay nombre → solo mostramos bullets (sin inventar nada).
+      let reply: string;
+
+      if (idiomaDestino === "en") {
+        reply = displayServiceName
+          ? `${displayServiceName}${bullets ? ` includes:\n\n${bullets}` : ""}`
+          : bullets
+          ? `Includes:\n\n${bullets}`
+          : "";
+      } else {
+        reply = displayServiceName
+          ? `${displayServiceName}${bullets ? ` incluye:\n\n${bullets}` : ""}`
+          : bullets
+          ? `Incluye:\n\n${bullets}`
+          : "";
+      }
 
       if (link) {
         reply +=
           idiomaDestino === "en"
-            ? `\n\nAquí puedes ver más detalles:\n${link}`
+            ? `\n\nHere you can see more details:\n${link}`
             : `\n\nAquí puedes ver más detalles:\n${link}`;
       }
 
