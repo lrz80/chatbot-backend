@@ -1260,6 +1260,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           : `\n\nAquí puedes ver más detalles:\n${link}`;
     }
 
+    console.log("[FASTPATH-INCLUDES] variante elegida", {
+      userInput,
+      serviceId,
+      baseName,
+      variantName,
+      link,
+    });
     return {
       handled: true,
       reply,
@@ -1334,6 +1341,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
       // ⭐ Caso A: tiene variantes → listamos opciones y preguntamos cuál le interesa
       if (variants.length > 0) {
+        console.log("[FASTPATH-INCLUDES] variantes primer turno", {
+          userInput,
+          serviceId,
+          serviceName,
+          variants: variants.map((v: any) => v.variant_name),
+        });
         const lines = variants.map((v: any, idx: number) => {
           const p = v.price as number | null;
           const currency = (v.currency as string | null) || "USD";
