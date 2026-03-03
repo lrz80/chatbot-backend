@@ -152,11 +152,12 @@ export async function handleFastpathHybridTurn(
     ) &&
     /\b(plan(?:es)?|membres[ií]a|membership|producto(?:s)?)\b/.test(loweredInput);
 
-  // Pregunta de DETALLE de un plan (qué incluye)
+  // Pregunta de DETALLE de algo (qué incluye / qué trae)
+  // Genérico: sirve para cualquier servicio, plan, producto, paquete, etc.
   const isPlanDetailQuestion =
     /\b(que incluye|qué incluye|que trae|qué trae|what does .* include|what.*include)\b/.test(
       loweredInput
-    ) && /\b(plan|membres[ií]a|membership)\b/.test(loweredInput);
+    );
 
   // Intención efectiva que verá Fastpath
   const fpIntent = isPriceQuestionUser
@@ -201,6 +202,11 @@ export async function handleFastpathHybridTurn(
   // 3️⃣ Texto factual base que sale de Fastpath
   let fastpathText = fp.reply;
 
+  // Si el usuario preguntó "qué incluye...", NO queremos meter los horarios en el bloque
+  if (isPlanDetailQuestion) {
+    fastpathText = stripHorariosBlock(fastpathText);
+  }
+
   const isPlansList =
     fp.source === "service_list_db" &&
     (convoCtx as any)?.last_list_kind === "plan";
@@ -210,7 +216,12 @@ export async function handleFastpathHybridTurn(
   // 3.5️⃣ WHATSAPP/META + PREGUNTA DE PRECIOS/PLANES: NO PASAR POR LLM
   // EXCEPCIÓN 1: si es "planes + horarios", dejamos que pase al modo híbrido
   // EXCEPCIÓN 2: tratamos distinto follow-up ("otros planes") y detalle de plan ("qué incluye")
-  if ((canal === "whatsapp" || canal === "meta") && isPriceQuestionUser && !wantsPlansAndHours) {
+  if (
+    (canal === "whatsapp" || canal === "meta") &&
+    isPriceQuestionUser &&
+    !wantsPlansAndHours &&
+    !isPlanDetailQuestion
+  ) {
     console.log("[CHAT][FASTPATH] Price question -> send fastpath", {
       source: fp.source,
       intent: fp.intent || detectedIntent || intentFallback || null,
@@ -223,9 +234,6 @@ export async function handleFastpathHybridTurn(
     if (isMorePlansFollowup) {
       // Modo "otras opciones": solo lista adicional, sin horarios ni saludo
       replyText = buildMorePlansReply(fastpathText, idiomaDestino);
-    } else if (isPlanDetailQuestion) {
-      // Modo "detalle de plan": quitamos horarios; dejamos precio + descripción
-      replyText = stripHorariosBlock(fastpathText);
     }
 
     return {

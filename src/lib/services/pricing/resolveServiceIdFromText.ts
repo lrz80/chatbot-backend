@@ -272,8 +272,8 @@ export async function resolveServiceIdFromText(
   });
 
   // Parámetros de decisión (dependen del modo)
-  const BASE_THRESHOLD = mode === "strict" ? 0.6 : 0.45;       // ↩️ relajamos para modo "loose"
-  const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.7 : 0.5;
+  const BASE_THRESHOLD = mode === "strict" ? 0.6 : 0.35;
+  const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.7 : 0.3;
   const MARGIN = 0.2; // diferencia mínima con el segundo para confiar
 
   // 4) Caso especial: SOLO un token fuerte (ej. "bronze", "gold", "deluxe")

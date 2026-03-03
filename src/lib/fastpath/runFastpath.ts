@@ -1278,13 +1278,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ===============================
   // ✅ VARIANTES: PRIMER TURNO
   // El usuario pregunta "qué incluye X" y detectamos el servicio
+  // (GENÉRICO: sirve para cualquier nombre, sin hardcodear bronce/basic/etc.)
   // ===============================
   const looksLikeServiceDetail =
-    /\b(incluye|incluyen|qué incluye|que incluye|what.*include)\b/i.test(normalizeText(userInput))
-    && /\b(bronce|gold|plata|premium|basic|paquete|plan|membresia|membership)\b/i.test(normalizeText(userInput));
+    /\b(que incluye|qué incluye|incluye|incluyen|what\s+is\s+included|what\s+does.*include)\b/i.test(
+      normalizeText(userInput)
+    );
 
   if (looksLikeServiceDetail) {
-    // Detectar servicio por texto ("plan gold", "paquete gold", etc.)
+    // Detectar servicio por texto ("plan bronce", "basic bath", "deluxe groom", "facial", etc.)
     const hit = await resolveServiceIdFromText(pool, tenantId, userInput, {
       mode: "loose",
     });

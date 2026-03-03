@@ -36,7 +36,7 @@ export function findServiceBlock(infoClave: string, userText: string) {
   const scoreLine = (line: string) => {
     if (!isCatalogLine(line)) return 0;
     const ln = normalizeText(line);
-    const tokens = q.split(" ").filter((w) => w.length >= 4); // tokens fuertes
+    const tokens = q.split(" ").filter((w) => w.length >= 3); // tokens fuertes
     let hits = 0;
     for (const w of tokens) if (ln.includes(w)) hits++;
     return hits;
@@ -53,7 +53,8 @@ export function findServiceBlock(infoClave: string, userText: string) {
     }
   }
 
-  if (bestIdx < 0 || bestScore < 2) return null; // umbral mínimo de match
+  // Requerimos solo 1 token fuerte en común (ej. "bronce", "gold", "deluxe")
+  if (bestIdx < 0 || bestScore < 1) return null;
 
   // Toma la línea del servicio + siguientes (donde suele estar Incluye:)
   const block = [lines[bestIdx]];
