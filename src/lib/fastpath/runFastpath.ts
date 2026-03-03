@@ -1287,10 +1287,21 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // El usuario pregunta "qué incluye X" y detectamos el servicio
   // (GENÉRICO: sirve para cualquier nombre, sin hardcodear bronce/basic/etc.)
   // ===============================
-  const looksLikeServiceDetail =
-    /\b(que incluye|qué incluye|incluye|incluyen|what\s+is\s+included|what\s+does.*include)\b/i.test(
-      normalizeText(userInput)
+  // Texto normalizado para detectar intención de detalle
+  const normMsg = normalizeText(userInput);
+
+  // Pregunta explícita de detalle: "qué incluye X", "que trae X", etc.
+  const looksLikeExplicitDetail =
+    /\b(que incluye|qué incluye|que trae|qué trae|incluye|incluyen|what\s+is\s+included|what\s+does.*include)\b/i.test(
+      normMsg
     );
+
+  // Follow-up elíptico tipo "y el gold?", "y el bronce?"
+  // Lo consideramos detalle SI después de "y el/la" viene algo.
+  const looksLikeEllipticDetail =
+    /^y\s+(el|la)\s+.+\??$/i.test(normMsg);
+
+  const looksLikeServiceDetail = looksLikeExplicitDetail || looksLikeEllipticDetail;
 
   if (looksLikeServiceDetail) {
     // Detectar servicio por texto ("plan bronce", "basic bath", "deluxe groom", "facial", etc.)
