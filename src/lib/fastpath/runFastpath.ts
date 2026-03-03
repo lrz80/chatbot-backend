@@ -1361,9 +1361,21 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   if (looksLikeServiceDetail) {
     // Detectar servicio por texto ("plan bronce", "basic bath", "deluxe groom", "facial", etc.)
     // Detectar servicio por texto ("plan bronce", "basic bath", etc.)
-    let hit = await resolveServiceIdFromText(pool, tenantId, userInput, {
+    let hit: any = await resolveServiceIdFromText(pool, tenantId, userInput, {
       mode: "loose",
     });
+
+    // 🛠 FIX: Si el texto coincide con una variante exacta,
+    // NO tratamos esa variante como un servicio independiente.
+    if (hit && hit.isVariant) {
+      const serviceOfVariant = hit.service_id;
+
+      // Reescribimos hit para que el motor trate esto como SERVICIO
+      hit = {
+        id: serviceOfVariant,
+        name: hit.parent_service_name,
+      };
+    }
 
     // 🔥 PATCH NUEVO: si es detalle pero no se encontró servicio por texto,
     // usar SERVICE en contexto (último plan mostrado o seleccionado)
