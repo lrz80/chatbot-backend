@@ -207,6 +207,29 @@ export async function handleFastpathHybridTurn(
     fastpathText = stripHorariosBlock(fastpathText);
   }
 
+  // 3.1️⃣ BYPASS LLM PARA DETALLE DE SERVICIO ("qué incluye X")
+  // Si Fastpath ya resolvió info_servicio (incluye/qué trae), en WhatsApp/Meta
+  // NO queremos pasar por el LLM: mandamos la respuesta tal cual.
+  if (
+    (canal === "whatsapp" || canal === "meta") &&
+    fp.source === "service_list_db" &&
+    (fp.intent === "info_servicio" || isPlanDetailQuestion)
+  ) {
+    console.log("[CHAT][FASTPATH] detalle_servicio directo (sin LLM)", {
+      source: fp.source,
+      intent: fp.intent,
+      isPlanDetailQuestion,
+    });
+
+    return {
+      handled: true,
+      reply: fastpathText,
+      replySource: fp.source,
+      intent: fp.intent || currentIntent || "info_servicio",
+      ctxPatch,
+    };
+  }
+
   const isPlansList =
     fp.source === "service_list_db" &&
     (convoCtx as any)?.last_list_kind === "plan";
