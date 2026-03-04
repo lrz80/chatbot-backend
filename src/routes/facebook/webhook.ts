@@ -770,7 +770,18 @@ async function procesarMensajeMeta(args: {
       PAGO_CONFIRM_REGEX: null,
     });
 
-    if (smHandled) return;
+    if (smHandled) {
+      // ✅ Evita que Meta se quede pegado en generic_sales/start repitiendo el overview
+      if (activeFlow === "generic_sales" && activeStep === "start") {
+        await setConversationStateCompat(tenantId, canal, contactoNorm, {
+          activeFlow,
+          activeStep: "answer",          // o "close" si tu SM usa eso
+          context: convoCtx,
+        });
+        activeStep = "answer";
+      }
+      return;
+    }
   }
 
   // ===============================
