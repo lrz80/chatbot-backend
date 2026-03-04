@@ -26,8 +26,25 @@ router.get('/', authenticateUser, async (req: Request, res: Response) => {
     const params: any[] = [tenantId];
     let canalSQL = '';
     if (canal) {
-      // ⚠️ Si m.canal ya se guarda en minúsculas, mejor: m.canal = $2 (sin LOWER()) para usar índice
-      canalSQL = `AND m.canal = $2`;
+      // Canonicalizamos en SQL igual que /conteo
+      canalSQL = `
+        AND (
+          ($2 = 'whatsapp'  AND (LOWER(COALESCE(m.canal,'')) LIKE '%whatsapp%' OR LOWER(COALESCE(m.canal,'')) LIKE 'wa%'))
+          OR
+          ($2 = 'facebook'  AND (LOWER(COALESCE(m.canal,'')) LIKE '%facebook%' OR LOWER(COALESCE(m.canal,'')) = 'fb'))
+          OR
+          ($2 = 'instagram' AND (LOWER(COALESCE(m.canal,'')) LIKE '%instagram%' OR LOWER(COALESCE(m.canal,'')) = 'ig'))
+          OR
+          ($2 = 'voice'     AND (
+                LOWER(COALESCE(m.canal,'')) LIKE '%voz%'
+            OR LOWER(COALESCE(m.canal,'')) LIKE '%voice%'
+            OR LOWER(COALESCE(m.canal,'')) LIKE '%llamada%'
+            OR LOWER(COALESCE(m.canal,'')) LIKE '%telefono%'
+          ))
+          OR
+          (TRIM(LOWER(COALESCE(m.canal,''))) = $2) -- fallback para otros canales exactos
+        )
+      `;
       params.push(canal);
     }
     params.push(limit, offset);
