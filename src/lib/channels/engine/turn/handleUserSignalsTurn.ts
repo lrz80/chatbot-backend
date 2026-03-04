@@ -318,8 +318,15 @@ export async function handleUserSignalsTurn(
     }
 
     if (!handled && (convoCtx as any)?.needs_clarify) {
-      promptBaseMem +=
-        "\n\nINSTRUCCION: El usuario parece confundido. Responde con máximo 2 bullets y haz solo 1 pregunta para aclarar.";
+
+      if (emotion === "frustration" || emotion === "anger") {
+        promptBaseMem +=
+          "\n\nINSTRUCCION: El usuario parece frustrado. Responde con empatía, usa máximo 2 bullets y haz solo 1 pregunta clara para ayudar.";
+      } else {
+        promptBaseMem +=
+          "\n\nINSTRUCCION: El usuario parece confundido. Responde con máximo 2 bullets y haz solo 1 pregunta para aclarar.";
+      }
+
     }
   } catch (e) {
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
