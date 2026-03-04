@@ -4,32 +4,17 @@ import type { Pool } from "pg";
 import type { Canal } from "../detectarIntencion";
 import type { Lang } from "../channels/engine/clients/clientDb";
 
-import { detectarIdioma } from "../detectarIdioma";
 import { traducirMensaje } from "../traducirMensaje";
 import { traducirTexto } from "../traducirTexto";
 
 // INFO_CLAVE includes
-import {
-  isAskingIncludes,
-  findServiceBlock,
-  extractIncludesLine,
-  normalizeText,
-} from "../infoclave/resolveIncludes";
+import { normalizeText } from "../infoclave/resolveIncludes";
 
 // DB catalog includes
-import {
-  resolveServiceInfo,
-  getServiceDetailsText,
-} from "../services/resolveServiceInfo";
-
+import { getServiceDetailsText } from "../services/resolveServiceInfo";
 
 // Pricing
-import { getPriceInfoForService } from "../services/pricing/getFromPriceForService";
 import { resolveServiceIdFromText } from "../services/pricing/resolveServiceIdFromText";
-import { isGenericPriceQuestion } from "../services/pricing/isGenericPriceQuestion";
-import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
-import { resolveServiceList } from "../services/resolveServiceList";
-import { renderServiceListReply } from "../services/renderServiceListReply";
 import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
 import { renderInfoGeneralOverview } from "../fastpath/renderInfoGeneralOverview";
 import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
@@ -39,9 +24,6 @@ import OpenAI from "openai";
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
-
-// Tipo inferido del helper real (sin duplicar tipos)
-type PriceInfo = Awaited<ReturnType<typeof getPriceInfoForService>>;
 
 export type FastpathCtx = {
   last_service_id?: string | null;
