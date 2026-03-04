@@ -18,6 +18,26 @@ type TransitionFn = (params: {
   patchCtx?: any;
 }) => void;
 
+const PAYMENT_INTENTS = new Set<string>([
+  "pago",
+  "checkout",
+  "payment",
+  "compra",
+  "comprar",
+  "suscripcion",
+  "suscripción",
+  "subscription",
+  "membresia",
+  "membresía",
+  "plan",
+  "paquete",
+  "activar_membresia",
+]);
+
+function normIntent(x?: string | null) {
+  return String(x || "").trim().toLowerCase();
+}
+
 export type HandleUserSignalsArgs = {
   pool: Pool;
   tenant: any;
@@ -40,7 +60,7 @@ export type HandleUserSignalsResult = {
   emotion: string | null;
   promptBaseMem: string;
   convoCtx: any;
-  handled: boolean;                 // true = ya respondió (p.ej. human override)
+  handled: boolean; // true = ya respondió (p.ej. human override)
   humanOverrideReply?: string | null;
   humanOverrideSource?: string | null;
 };
@@ -103,6 +123,44 @@ export async function handleUserSignalsTurn(
     }
   } catch (e: any) {
     console.warn("⚠️ detectarIntencion failed:", e?.message, e?.code, e?.detail);
+  }
+
+  // ===============================
+  // ✅ RESET INTELIGENTE de estado esperando_pago (si cambió de tema)
+  // ===============================
+  try {
+    const intentFinal = normIntent(INTENCION_FINAL_CANONICA || detectedIntent || null);
+
+    const { rows } = await pool.query(
+      `SELECT estado
+         FROM clientes
+        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+        LIMIT 1`,
+      [tenant.id, canal, contactoNorm]
+    );
+
+    const estadoActual = normIntent(rows[0]?.estado || null);
+
+    // Si está esperando pago, pero la intención actual NO es de pago → resetear
+    if (estadoActual === "esperando_pago" && intentFinal && !PAYMENT_INTENTS.has(intentFinal)) {
+      await pool.query(
+        `UPDATE clientes
+            SET estado = NULL,
+                updated_at = NOW()
+          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
+        [tenant.id, canal, contactoNorm]
+      );
+
+      console.log("[PAYMENT_STATE] reset esperando_pago (intent switch)", {
+        tenantId: tenant.id,
+        canal,
+        contactoNorm,
+        intentFinal,
+        prevEstado: estadoActual,
+      });
+    }
+  } catch (e: any) {
+    console.warn("[PAYMENT_STATE] reset check failed:", e?.message);
   }
 
   // ===============================
