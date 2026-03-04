@@ -11,6 +11,7 @@ import { saveUserMessageAndEmit } from "../messages/saveUserMessageAndEmit";
 import { getMemoryValue } from "../../../clientMemory";
 import { setHumanOverride } from "../../../humanOverride/setHumanOverride";
 import { isExplicitHumanRequest } from "../../../security/humanOverrideGate";
+import { supportGate } from "../../../guards/supportGate";
 
 type TransitionFn = (params: {
   flow?: string;
@@ -220,6 +221,45 @@ export async function handleUserSignalsTurn(
   }
 
   // ===============================
+  // 🆘 SUPPORT HANDOFF (GENÉRICO, MULTI-TENANT)
+  // ===============================
+  if (!handled) {
+    const gate = supportGate({
+      canal,
+      idiomaDestino,
+      userInput,
+      detectedIntent,
+      emotion,
+      tenant,
+    });
+
+    if (gate.escalate) {
+      try {
+        await setHumanOverride({
+          tenantId: tenant.id,
+          canal,
+          contacto: contactoNorm,
+          minutes: gate.minutes,
+          reason: gate.reason,
+          source: "support_handoff",
+          customerPhone: fromNumber || contactoNorm,
+          userMessage: userInput,
+          messageId: messageId || null,
+        });
+      } catch (e: any) {
+        console.warn("⚠️ setHumanOverride (support_handoff) failed:", e?.message);
+      }
+
+      // TODO: aquí llamas a tu notifier (Slack/email/whatever) según tenant.settings
+      // await notifySupport({ tenant, canal, contactoNorm, fromNumber, userInput, messageId, detectedIntent, emotion });
+
+      humanOverrideReply = gate.reply;
+      humanOverrideSource = "support_handoff";
+      handled = true;
+    }
+  }
+
+  // ===============================
   // 🙋‍♀️ HUMAN OVERRIDE EXPLÍCITO
   // ===============================
   if (isExplicitHumanRequest(userInput)) {
@@ -277,9 +317,9 @@ export async function handleUserSignalsTurn(
       ].join("\n");
     }
 
-    if ((convoCtx as any)?.needs_clarify) {
+    if (!handled && (convoCtx as any)?.needs_clarify) {
       promptBaseMem +=
-        "\n\nINSTRUCCION: El usuario está frustrado. Responde con 2 bullets y haz 1 sola pregunta para aclarar.";
+        "\n\nINSTRUCCION: El usuario parece confundido. Responde con máximo 2 bullets y haz solo 1 pregunta para aclarar.";
     }
   } catch (e) {
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
