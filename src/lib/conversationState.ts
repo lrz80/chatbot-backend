@@ -12,8 +12,19 @@ export type ConversationState = {
   created_at?: string;
 };
 
-// ⏱ TTL de conversación (15 minutos sin actividad)
-const CONVERSATION_TTL_MS = 15 * 60 * 1000;
+// ⏱ TTL global por canal (sin tenant)
+function getConversationTtlMs(canal: string) {
+  const c = String(canal || "").toLowerCase();
+
+  // Meta: conversaciones tienden a ser más espaciadas
+  if (c === "facebook" || c === "instagram") return 12 * 60 * 60 * 1000; // 12h
+
+  // WhatsApp: más rápido, pero 15 min es demasiado agresivo
+  if (c === "whatsapp") return 3 * 60 * 60 * 1000; // 3h
+
+  // Preview / otros
+  return 30 * 60 * 1000; // 30 min
+}
 
 export async function getConversationState(
   tenantId: string,
@@ -38,7 +49,8 @@ export async function getConversationState(
     const last = new Date(row.updated_at).getTime();
     const now = Date.now();
 
-    if (Number.isFinite(last) && now - last > CONVERSATION_TTL_MS) {
+    const ttlMs = getConversationTtlMs(canal);
+    if (Number.isFinite(last) && now - last > ttlMs) {
       console.log("🧹 conversation_state TTL expired, clearing context:", {
         tenantId,
         canal,
@@ -46,10 +58,14 @@ export async function getConversationState(
         lastUpdated: row.updated_at,
       });
 
-      // Borra el estado viejo para que se regenere limpio
+      // Mejor: resetea (no borra) para evitar "primer turno" falso
       await pool.query(
         `
-        DELETE FROM conversation_state
+        UPDATE conversation_state
+          SET active_flow = NULL,
+              active_step = NULL,
+              context = '{}'::jsonb,
+              updated_at = NOW()
         WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
         `,
         [tenantId, canal, senderId]
