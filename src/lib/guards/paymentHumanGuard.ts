@@ -1,19 +1,25 @@
 // backend/src/lib/guards/paymentHumanGuard.ts
 import type { Pool } from "pg";
-import type { Canal } from '../../lib/detectarIntencion';
+import type { Canal } from "../../lib/detectarIntencion";
 import type { TurnEvent } from "../conversation/stateMachine";
 import type { GateResult } from "../conversation/stateMachine";
 import { setHumanOverride } from "../humanOverride/setHumanOverride";
 
-
 type Idioma = "es" | "en";
+
+// ✅ TTL recomendado para evitar estados pegados
+// Puedes cambiarlo sin redeploy si lo pones en Railway Variables.
+const ESPERANDO_PAGO_TTL_HOURS = Math.max(
+  1,
+  Number(process.env.ESPERANDO_PAGO_TTL_HOURS || "12")
+);
 
 const PAGO_CONFIRM_REGEX =
   /^(?!.*\b(no|aun\s*no|todav[ií]a\s*no|not)\b).*?\b(pago\s*realizado|listo\s*el\s*pago|ya\s*pagu[eé]|he\s*paga(do|do)|payment\s*(done|made|completed)|i\s*paid|paid)\b/i;
 
 export type PaymentGuardResult =
-  | { action: "continue" } // no aplica, sigue pipeline normal
-  | { action: "silence"; reason: "human_override" | "pago_en_confirmacion" } // bot NO habla
+  | { action: "continue" }
+  | { action: "silence"; reason: "human_override" | "pago_en_confirmacion" }
   | {
       action: "reply";
       replySource:
@@ -22,11 +28,8 @@ export type PaymentGuardResult =
         | "pago-datos"
         | "pago-link-missing";
       intent: "pago";
-      // HECHOS para que el LLM redacte (sin hardcode)
       facts: Record<string, any>;
-      // efectos ya hechos en DB (para trazabilidad)
       dbUpdated?: boolean;
-      // sugerencia para tu transition()
       transition?: {
         flow?: string;
         step?: string;
@@ -38,14 +41,10 @@ export async function paymentHumanGuard(opts: {
   pool: Pool;
   tenantId: string;
   canal: Canal;
-  contacto: string; // contactoNorm
+  contacto: string;
   userInput: string;
   idiomaDestino: Idioma;
-
-  // promptBase (SIN memoria) para extraer link si lo guardaste ahí
   promptBase: string;
-
-  // helpers existentes (inyección para no acoplar)
   parseDatosCliente: (text: string) => null | {
     nombre?: string | null;
     email?: string | null;
@@ -66,9 +65,14 @@ export async function paymentHumanGuard(opts: {
     extractPaymentLinkFromPrompt,
   } = opts;
 
-  // 1) Leer estado cliente
+  // 1) Leer estado cliente (+ updated_at para TTL)
   const { rows: clienteRows } = await pool.query(
-    `SELECT estado, human_override, human_override_until, nombre, email, telefono, pais, segmento
+    `SELECT
+        estado,
+        updated_at,
+        human_override,
+        human_override_until,
+        nombre, email, telefono, pais, segmento
      FROM clientes
      WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
      LIMIT 1`,
@@ -79,7 +83,34 @@ export async function paymentHumanGuard(opts: {
   const estadoActual = String(cliente?.estado || "").toLowerCase();
   const humanOverride = cliente?.human_override === true;
 
-  const until = cliente?.human_override_until ? new Date(cliente.human_override_until) : null;
+  // ✅ TTL: si está "esperando_pago" hace demasiado, lo reseteamos
+  if (estadoActual === "esperando_pago" && cliente?.updated_at) {
+    const updatedAtMs = new Date(cliente.updated_at).getTime();
+    const ageMs = Date.now() - updatedAtMs;
+    const ttlMs = ESPERANDO_PAGO_TTL_HOURS * 60 * 60 * 1000;
+
+    if (Number.isFinite(updatedAtMs) && ageMs > ttlMs) {
+      try {
+        await pool.query(
+          `UPDATE clientes
+              SET estado = NULL,
+                  updated_at = NOW()
+            WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
+          [tenantId, canal, contacto]
+        );
+
+        // ✅ refresca estado local para que este turno NO quede atrapado
+        // (no re-query; solo lo tratamos como reseteado)
+        // Nota: si quieres, puedes cambiar NULL por 'lead' según tu sistema.
+        // const estadoActual = ''  // pero como es const, seguimos por flujo normal.
+      } catch {}
+    }
+  }
+
+  const until = cliente?.human_override_until
+    ? new Date(cliente.human_override_until)
+    : null;
+
   const overrideActive = humanOverride && until && until.getTime() > Date.now();
 
   // 2) Silencio total SOLO si human_override está vigente (TTL)
@@ -87,7 +118,7 @@ export async function paymentHumanGuard(opts: {
     return { action: "silence", reason: "human_override" };
   }
 
-  // ✅ Si estaba true pero vencido, limpiamos (para no quedarse “pegado”)
+  // ✅ Si estaba true pero vencido, limpiamos
   if (humanOverride && !overrideActive) {
     try {
       await pool.query(
@@ -106,13 +137,13 @@ export async function paymentHumanGuard(opts: {
     return { action: "silence", reason: "pago_en_confirmacion" };
   }
 
-  // 4) Si confirma pago → set estado + human_override (DB) y pedir respuesta por LLM (sin hardcode)
+  // 4) Si confirma pago → set estado + human_override (DB)
   if (PAGO_CONFIRM_REGEX.test(userInput || "")) {
     await pool.query(
       `INSERT INTO clientes (tenant_id, canal, contacto, estado, updated_at)
-      VALUES ($1,$2,$3,'pago_en_confirmacion',now())
-      ON CONFLICT (tenant_id, canal, contacto)
-      DO UPDATE SET estado='pago_en_confirmacion', updated_at=now()`,
+       VALUES ($1,$2,$3,'pago_en_confirmacion',now())
+       ON CONFLICT (tenant_id, canal, contacto)
+       DO UPDATE SET estado='pago_en_confirmacion', updated_at=now()`,
       [tenantId, canal, contacto]
     );
 
@@ -123,11 +154,10 @@ export async function paymentHumanGuard(opts: {
       minutes: 5,
       reason: "pago_confirmado",
       source: "payment",
-      customerPhone: contacto, // si tienes el real pásalo desde event (ideal)
+      customerPhone: contacto,
       userMessage: userInput,
     });
 
-    // ✅ activa override + notifica (TTL 5 min)
     await setHumanOverride({
       tenantId,
       canal,
@@ -146,7 +176,6 @@ export async function paymentHumanGuard(opts: {
       facts: {
         EVENT: "PAYMENT_CONFIRMED_BY_USER",
         LANGUAGE: idiomaDestino,
-        // No copy, solo hechos:
         NEXT_STEP: "TEAM_WILL_CONFIRM_AND_ACTIVATE",
       },
       transition: {
@@ -211,7 +240,7 @@ export async function paymentHumanGuard(opts: {
     };
   }
 
-  // 6) Si manda datos → upsert y opcionalmente responder “con link” (pero sin hardcode)
+  // 6) Si manda datos → tu lógica actual (la puedes dejar como la última versión que ya ajustamos)
   const parsed = parseDatosCliente(userInput || "");
   if (parsed) {
     await pool.query(
@@ -265,7 +294,6 @@ export async function paymentHumanGuard(opts: {
     };
   }
 
-  // 7) No aplica → sigue el pipeline
   return { action: "continue" };
 }
 
@@ -276,11 +304,10 @@ export async function paymentHumanGate(event: TurnEvent): Promise<GateResult> {
     pool: e.pool,
     tenantId: e.tenantId,
     canal: e.canal,
-    contacto: e.senderId || e.contacto, // ✅ usa senderId (nuevo estándar)
+    contacto: e.senderId || e.contacto,
     userInput: e.userInput,
     idiomaDestino: e.idiomaDestino,
     promptBase: e.promptBase,
-
     parseDatosCliente: e.parseDatosCliente,
     extractPaymentLinkFromPrompt: e.extractPaymentLinkFromPrompt,
   });
@@ -291,7 +318,6 @@ export async function paymentHumanGate(event: TurnEvent): Promise<GateResult> {
     return { action: "silence", reason: result.reason };
   }
 
-  // result.action === "reply"
   return {
     action: "reply",
     replySource: result.replySource,

@@ -89,8 +89,8 @@ const UNIVERSAL: Array<{
   {
     intent: "pago",
     nivel: 3,
-    words: ["pagar", "pago", "pay", "payment", "factura", "invoice", "checkout"],
-    phrases: ["quiero pagar", "como pago", "cómo pago", "send me the link", "link de pago"],
+    words: ["pagar", "checkout", "payment", "invoice"], // quita "pago" y "pay" si te da falsos positivos
+    phrases: ["quiero pagar", "como pago", "cómo pago", "send me the link", "link de pago", "enlace de pago"],
   },
   {
     intent: "cancelar",
@@ -343,6 +343,18 @@ export async function detectarIntencion(
 
   // Venta signal general por palabras (sin hardcode a industria)
   const flagVenta = VENTA_SIGNAL_WORDS.some((w) => textoCore.includes(norm(w)));
+
+  // ✅ Pago: SOLO si hay señal explícita fuerte
+  const PAGO_EXPLICITO_RE =
+    /\b(pagar|pago|payment|checkout|stripe|buy|paid|i\s*paid|ya\s*pague|link\s+de\s+pago|enlace\s+de\s+pago|send\s+me\s+the\s+link|suscrib(ir(me)?|irse)|suscripci[oó]n|subscrib(e|ing)|subscription|sign\s*up)\b/i;
+
+  // Evitar falsos positivos tipo "mensualidad", "inscripción", etc.
+  const PAGO_FALSO_RE =
+    /\b(mensualidad|mensual|inscripci[oó]n|matr[ií]cula|precio|precios|cost|price|cu[aá]nto)\b/i;
+
+  if (PAGO_EXPLICITO_RE.test(original) && !PAGO_FALSO_RE.test(original)) {
+    return { intencion: "pago", nivel_interes: 3 };
+  }
 
   // Reglas universales rápidas
   for (const r of UNIVERSAL) {
