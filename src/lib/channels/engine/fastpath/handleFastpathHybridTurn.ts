@@ -34,6 +34,11 @@ export type FastpathHybridResult = {
   ctxPatch?: any;
 };
 
+function isDmChatChannel(canal: Canal) {
+  const c = String(canal || "").toLowerCase();
+  return c === "whatsapp" || c === "facebook" || c === "instagram";
+}
+
 function buildMorePlansReply(fastpathText: string, idiomaDestino: Lang): string {
   const lines = fastpathText.split(/\r?\n/).map((l) => l.trim());
 
@@ -211,7 +216,7 @@ export async function handleFastpathHybridTurn(
   // Si Fastpath ya resolvió info_servicio (incluye/qué trae), en WhatsApp/Meta
   // NO queremos pasar por el LLM: mandamos la respuesta tal cual.
   if (
-    (canal === "whatsapp" || canal === "meta") &&
+    isDmChatChannel(canal) &&
     fp.source === "service_list_db" &&
     (fp.intent === "info_servicio" || isPlanDetailQuestion)
   ) {
@@ -240,7 +245,7 @@ export async function handleFastpathHybridTurn(
   // EXCEPCIÓN 1: si es "planes + horarios", dejamos que pase al modo híbrido
   // EXCEPCIÓN 2: tratamos distinto follow-up ("otros planes") y detalle de plan ("qué incluye")
   if (
-    (canal === "whatsapp" || canal === "meta") &&
+    isDmChatChannel(canal) &&
     isPriceQuestionUser &&
     !wantsPlansAndHours &&
     !isPlanDetailQuestion
@@ -273,7 +278,7 @@ export async function handleFastpathHybridTurn(
   const isInfoClaveSource = String(fp.source || "").startsWith("info_clave");
 
   // 4️⃣ BYPASS LLM EN WHATSAPP/META si ya hay link o viene de info_clave
-  if ((canal === "whatsapp" || canal === "meta") && (hasLinkInFastpath || isInfoClaveSource)) {
+  if (isDmChatChannel(canal) && (hasLinkInFastpath || isInfoClaveSource)) {
     console.log("[CHAT][FASTPATH] Bypass LLM (link/info_clave)", {
       source: fp.source,
       hasLinkInFastpath,
@@ -302,9 +307,9 @@ export async function handleFastpathHybridTurn(
   }
 
   // 6️⃣ MODO HÍBRIDO PARA WHATSAPP Y META (FB/IG)
-  const isWhatsOrMeta = canal === "whatsapp" || canal === "meta";
+  const isDm = isDmChatChannel(canal);
 
-  if (isWhatsOrMeta) {
+  if (isDm) {
     const history = await getRecentHistoryForModel({
       tenantId,
       canal,
@@ -453,6 +458,8 @@ SPECIAL RULE FOR THIS TURN:
     };
   }
 
+  console.log("[DM_CHANNEL_CHECK]", { canal, isDm });
+  
   // 8️⃣ Otros canales (no WhatsApp/Meta): devolvemos fastpath “plano”
   return {
     handled: true,
