@@ -254,7 +254,7 @@ export async function handleUserSignalsTurn(
   try {
     const memRaw = await getMemoryValue<any>({
       tenantId: tenant.id,
-      canal: "whatsapp",
+      canal,
       senderId: contactoNorm,
       key: "facts_summary",
     });
