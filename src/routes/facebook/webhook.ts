@@ -57,8 +57,6 @@ import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBoo
 import { rememberAfterReply } from "../../lib/memory/rememberAfterReply";
 
 import { safeSendText } from "../../lib/channels/engine/dedupe/safeSendText";
-import { getWhatsAppModeStatus } from "../../lib/whatsapp/getWhatsAppModeStatus";
-import { whatsappModeMembershipGuard } from "../../lib/guards/whatsappModeMembershipGuard";
 
 import {
   looksLikeBookingPayload,
@@ -336,12 +334,6 @@ async function procesarMensajeMeta(args: {
   const isNewLead = await ensureClienteBase(pool, tenantId, canal, contactoNorm);
 
   // ===============================
-  // ⚡ WA mode guard reutilizado (si lo usas como “membresía/pausa” general)
-  // Si esto te estorba en meta, lo apagamos con canal != whatsapp (ver abajo).
-  // ===============================
-  const waModePromise = getWhatsAppModeStatus(tenantId);
-
-  // ===============================
   // 🌍 Idioma: mismo motor WA (resolveLangForTurn)
   // - Forzamos tenantBase (fallback)
   // - forcedLangThisTurn: null (Meta no tiene “hello->en” hardcode aquí; lo maneja detectarIdioma/resolveLangForTurn)
@@ -594,28 +586,6 @@ async function procesarMensajeMeta(args: {
     setReply(text, source, intent);
     await finalizeReply();
     return;
-  }
-
-  // ===============================
-  // (Opcional) Guard “whatsapp mode” reutilizado:
-  // Si tu whatsappModeMembershipGuard es realmente WhatsApp-only,
-  // apágalo aquí en Meta para evitar side-effects.
-  // Por defecto lo dejamos “soft”: sólo aplica si no rompe.
-  // ===============================
-  try {
-    const { mode, status } = await waModePromise;
-    const guard = await whatsappModeMembershipGuard({
-      tenant,
-      tenantId,
-      canal: canalEnvio as any,
-      origen: "meta",
-      mode,
-      status,
-    });
-    if (!guard.ok) return;
-  } catch (e: any) {
-    // Si algo falla, NO bloqueamos Meta
-    console.warn("⚠️ [META] whatsappModeMembershipGuard skipped:", e?.message);
   }
 
   // ===============================
