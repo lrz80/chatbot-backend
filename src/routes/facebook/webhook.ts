@@ -117,7 +117,7 @@ const sm = createStateMachine([
   awaitingGate,
 ]);
 
-const MAX_LINES_META = 16;
+const MAX_LINES_META = 9999;
 
 // ===============================
 // Meta send wrapper -> compatible con safeSendText
@@ -486,7 +486,7 @@ async function procesarMensajeMeta(args: {
     safeSendText({
       pool,
       tenantId: tId,
-      canal: c,
+      canal: canalEnvio, 
       messageId: mId,
       to,
       text,
@@ -511,7 +511,7 @@ async function procesarMensajeMeta(args: {
         lastIntent,
 
         tenantId,
-        canal,
+        canal: canalEnvio as any,
         messageId,
         fromNumber,
         contactoNorm,

@@ -207,18 +207,6 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
     idiomaDestino = "es";
   }
 
-  // ✅ Persistir idioma final del turno (sticky)
-  // (pero NO lo sobrescribas si es booking lang locked)
-  if (!langRes.inBookingLang && (idiomaDestino === "es" || idiomaDestino === "en")) {
-    await upsertIdiomaClienteDB(
-      pool,
-      tenant.id,
-      canal,
-      contactoNorm,
-      idiomaDestino
-    );
-  }
-
   // ✅ LANG LOCK: si ya hay idioma del hilo, respétalo
   const threadLang = String((convoCtx as any)?.thread_lang || "").toLowerCase();
   const threadLocked = (convoCtx as any)?.thread_lang_locked === true;
@@ -267,6 +255,30 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
   // ✅ thread_lang SOLO durante booking (para flows de reserva)
   if (langRes.inBookingLang && !(convoCtx as any)?.thread_lang) {
     convoCtx = { ...(convoCtx || {}), thread_lang: idiomaDestino };
+  }
+
+  // ✅ NO CAMBIAR IDIOMA en mensajes muy cortos (gracias/ok/👍/etc)
+  const trimmed = text.trim();
+  const isVeryShort = trimmed.length <= 8;
+
+  if (
+    !langRes.inBookingLang &&
+    (storedLang === "es" || storedLang === "en") &&
+    isVeryShort
+  ) {
+    // Si el detector quiere flippear en un mensaje corto, no lo permitas
+    idiomaDestino = storedLang as Lang;
+  }
+
+  // ✅ Persistir idioma final del turno (sticky) — AL FINAL
+  if (
+    !langRes.inBookingLang &&
+    (idiomaDestino === "es" || idiomaDestino === "en") &&
+    langRes.shouldPersist !== false
+  ) {
+    if (storedLang !== idiomaDestino) {
+      await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, idiomaDestino);
+    }
   }
 
   const promptBase = getPromptPorCanal(canal, tenant, idiomaDestino);
