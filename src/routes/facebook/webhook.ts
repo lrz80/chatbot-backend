@@ -595,9 +595,9 @@ async function procesarMensajeMeta(args: {
   let inBooking0 = !!(bookingStep0 && bookingStep0 !== "idle");
 
   if (
+    !inBooking0 &&
     saludoPuroRegex.test(userInput) &&
-    !looksLikeBookingPayload(userInput) &&
-    !convoCtx?.last_user_text
+    !looksLikeBookingPayload(userInput)
   ) {
     transition({
       step: "answer",
@@ -689,15 +689,6 @@ async function procesarMensajeMeta(args: {
   promptBaseMem = signals.promptBaseMem;
   convoCtx = signals.convoCtx;
 
-  // 🔧 FIX: mensajes ambiguos tipo "quiero más info"
-  const ambiguousInfo =
-    /\b(mas info|más info|informacion|información|info|cuentame|cuéntame|tell me more)\b/i.test(userInput);
-
-  if (ambiguousInfo) {
-    detectedIntent = "info_general";
-    INTENCION_FINAL_CANONICA = "info_general";
-  }
-  
   // Si el helper ya manejó el turno (override explícito), salimos
   if (signals.handled && signals.humanOverrideReply) {
     await replyAndExit(

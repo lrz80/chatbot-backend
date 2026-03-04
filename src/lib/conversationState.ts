@@ -22,9 +22,10 @@ export async function getConversationState(
 ): Promise<ConversationState | null> {
   const { rows } = await pool.query(
     `SELECT *
-     FROM conversation_state
-     WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
-     LIMIT 1`,
+      FROM conversation_state
+      WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
+      ORDER BY updated_at DESC
+      LIMIT 1`,
     [tenantId, canal, senderId]
   );
 
