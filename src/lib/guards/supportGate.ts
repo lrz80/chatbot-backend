@@ -40,6 +40,7 @@ const DEFAULT_SUPPORT_INTENTS = new Set([
   "fallo_sistema",
   "cobro",
   "charge",
+  "soporte_reserva",
 ]);
 
 const DEFAULT_SUPPORT_KEYWORDS = [

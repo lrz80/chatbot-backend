@@ -42,7 +42,8 @@ type UniversalIntent =
   | "info_general"   // ✅ NUEVO
   | "info_servicio"
   | "no_interesado"
-  | "duda";
+  | "duda"
+  | "soporte_reserva";
 
 const UNIVERSAL: Array<{
   intent: UniversalIntent;
@@ -335,6 +336,22 @@ export async function detectarIntencion(
     return { intencion: "pago", nivel_interes: 3 };
   }
 
+  // ✅ FAST-PATH: cancelación/cambio de reserva (evita caer en info_servicio / venta)
+  // Multitenant: no depende de industria. Detecta "cancelé" + señales de clase/reserva/hora.
+  const CANCEL_RESERVA_RE =
+    /\b(cancel(e|é|acion|ación|ar)|anul(e|é|ar)|no\s+puedo\s+ir|no\s+voy\s+a\s+ir)\b/i;
+
+  const RESERVA_RE =
+    /\b(clase(s)?|class(es)?|spinning|cycling|reserva(r|da)?|booking|cita|appointment|agend(e|é|ada)?|turno)\b/i;
+
+  // Opcional: señales de tiempo (hoy/mañana/hora) suben confianza
+  const TIME_RE =
+    /\b(hoy|mañana|manana|esta\s+tarde|esta\s+noche|a\s+las\s+\d{1,2}|am|pm|\d{1,2}:\d{2})\b/i;
+
+  if (CANCEL_RESERVA_RE.test(original) && (RESERVA_RE.test(original) || TIME_RE.test(original))) {
+    return { intencion: "soporte_reserva", nivel_interes: 2 };
+  }
+
   // 1) Heurísticas universales (solo lo obvio)
   // Prioridad: NO devolver saludo si hay pedido real.
   const flagInfo =
@@ -416,6 +433,7 @@ export async function detectarIntencion(
     "info_servicio",
     "no_interesado",
     "duda",
+    "soporte_reserva",
   ];
 
   const tenantList = tenantIntents
