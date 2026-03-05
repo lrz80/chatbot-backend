@@ -1742,16 +1742,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
       // ✅ Precio/planes genérico: responder desde DB (no LLM)
       if (!asksSchedules && (questionType === "price_or_plan" || questionType === "other_plans")) {
-        // 1) Query DB: min/max por servicio (usa variantes si existen, si no, usa services.price)
         const { rows } = await pool.query<{
           service_name: string;
           min_price: number | string | null;
           max_price: number | string | null;
-        }>(
-          `
-          WITH price_rows AS (
-            -- a) precios desde variantes activas
+        }>(`
+          WITH variant_prices AS (
             SELECT
+              s.id AS service_id,
               s.name AS service_name,
               MIN(v.price)::numeric AS min_price,
               MAX(v.price)::numeric AS max_price
@@ -1762,19 +1760,18 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             WHERE s.tenant_id = $1
               AND s.active = true
               AND v.price IS NOT NULL
-            GROUP BY s.name
-
-            UNION ALL
-
-            -- b) fallback: servicios SIN variantes (o sin precios en variantes) usan services.price
+            GROUP BY s.id, s.name
+          ),
+          base_prices AS (
             SELECT
+              s.id AS service_id,
               s.name AS service_name,
-              MIN(s.price)::numeric AS min_price,
-              MAX(s.price)::numeric AS max_price
+              MIN(s.price_base)::numeric AS min_price,
+              MAX(s.price_base)::numeric AS max_price
             FROM services s
             WHERE s.tenant_id = $1
               AND s.active = true
-              AND s.price IS NOT NULL
+              AND s.price_base IS NOT NULL
               AND NOT EXISTS (
                 SELECT 1
                 FROM service_variants v
@@ -1782,60 +1779,56 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                   AND v.active = true
                   AND v.price IS NOT NULL
               )
-            GROUP BY s.name
+            GROUP BY s.id, s.name
           )
           SELECT service_name, min_price, max_price
-          FROM price_rows
-          `,
-          [tenantId]
-        );
+          FROM (
+            SELECT service_name, min_price, max_price FROM variant_prices
+            UNION ALL
+            SELECT service_name, min_price, max_price FROM base_prices
+          ) x;
+        `, [tenantId]);
 
-        // 2) Render determinístico (ya ordena + limita + gratis/free)
-        let dbReply = renderGenericPriceSummaryReply({
-          lang: idiomaDestino,
-          rows,
-        });
+        // --- other_plans: filtrar ANTES de render (sin postProcess) ---
+        const norm = (s: string) =>
+          String(s || "")
+            .trim()
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "");
 
-        // 3) Si es "otros planes", filtra los prevNames (sin LLM)
-        //    (Tu postProcessCatalogReply ya existe; úsalo si parsea bien bullets)
-        if (questionType === "other_plans") {
-          const { finalReply, namesShown } = postProcessCatalogReply({
-            reply: dbReply,
-            questionType,
-            prevNames,
-          });
+        let rowsToRender = rows;
 
-          dbReply = finalReply;
-
-          const sortedReply = stripLinkSentences(dbReply);
-
-          const ctxPatch: Partial<FastpathCtx> = {};
-          if (namesShown.length) {
-            ctxPatch.last_catalog_plans = namesShown;
-            ctxPatch.last_catalog_at = Date.now();
-          }
-
-          return {
-            handled: true,
-            reply: humanizeListReply(sortedReply, idiomaDestino),
-            source: "catalog_db",
-            intent: "precio",
-            ctxPatch,
-          };
+        if (questionType === "other_plans" && prevFresh && prevNames?.length) {
+          const prevSet = new Set(prevNames.map(norm));
+          rowsToRender = rows.filter((r) => !prevSet.has(norm(r.service_name)));
         }
 
-        // 4) price_or_plan normal
-        const sortedReply = stripLinkSentences(dbReply);
+        // 2) Render determinístico (ya ordena + limita + gratis/free)
+        const dbReply = renderGenericPriceSummaryReply({
+          lang: idiomaDestino,
+          rows: rowsToRender,
+        });
 
-        // namesShown: puedes reusar tu extractor existente si lo tienes;
-        // si no, al menos actualiza timestamp para frescura de lista.
+        const cleanedReply = stripLinkSentences(dbReply);
+
+        // ✅ Guardar los nombres que realmente mostramos (máx 6)
+        const namesShown = (rowsToRender || [])
+          .map((r) => String(r.service_name || "").trim())
+          .filter(Boolean)
+          .slice(0, 6);
+
         const ctxPatch: Partial<FastpathCtx> = {
           last_catalog_at: Date.now(),
         };
 
+        if (namesShown.length) {
+          ctxPatch.last_catalog_plans = namesShown;
+        }
+
         return {
           handled: true,
-          reply: humanizeListReply(sortedReply, idiomaDestino),
+          reply: humanizeListReply(cleanedReply, idiomaDestino),
           source: "catalog_db",
           intent: "precio",
           ctxPatch,
