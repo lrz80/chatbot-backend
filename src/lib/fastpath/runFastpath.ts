@@ -2001,21 +2001,53 @@ ${catalogText}${infoGeneralBlock}
       // 🔧 limpiamos frases de "enlace / links / comprar en los enlaces"
       const cleanedReply = stripLinkSentences(finalReply);
 
-      // 🌎 NUEVO: aseguramos que TODO el catálogo salga en el idiomaDestino
-      let localizedReply = cleanedReply;
+      // ✅ Ya le pedimos al LLM que responda en idiomaDestino.
+      // ✅ NO pasamos por traducirTexto porque altera números/moneda/orden.
+      const localizedReply = cleanedReply;
 
-      if (idiomaDestino === "en") {
-        try {
-          // tu helper actual: traducir TODO el bloque al inglés,
-          // incluyendo nombres de planes/productos.
-          localizedReply = await traducirTexto(cleanedReply, "en");
-        } catch (e: any) {
-          console.warn(
-            "[FASTPATH][CATALOG] error traduciendo respuesta de catálogo:",
-            e?.message || e
-          );
-        }
+      function priceValueFromLine(line: string): number {
+        const l = line.toLowerCase();
+
+        // free/gratis => 0
+        if (/\bfree\b|\bgratis\b/.test(l)) return 0;
+
+        // primero $99.99
+        let m = line.match(/\$?\s*([0-9]+(?:\.[0-9]+)?)/);
+        if (m?.[1]) return Number(m[1]);
+
+        return Number.POSITIVE_INFINITY;
       }
+
+      function sortBulletsByPrice(text: string): string {
+        const lines = String(text || "").split(/\r?\n/);
+
+        const bulletIdx: number[] = [];
+        const bullets: { idx: number; line: string; v: number }[] = [];
+
+        for (let i = 0; i < lines.length; i++) {
+          const t = lines[i].trim();
+          if (/^[•\-\*]\s*/.test(t)) {
+            bulletIdx.push(i);
+            bullets.push({ idx: i, line: lines[i], v: priceValueFromLine(lines[i]) });
+          }
+        }
+
+        // si no hay bullets o solo 1, no hacemos nada
+        if (bullets.length <= 1) return text;
+
+        bullets.sort((a, b) => a.v - b.v);
+
+        // reinsertar bullets en el mismo “slot” donde estaban
+        const sortedLines = [...lines];
+        for (let j = 0; j < bulletIdx.length; j++) {
+          sortedLines[bulletIdx[j]] = bullets[j].line;
+        }
+
+        return sortedLines.join("\n");
+      }
+
+      const sortedReply = sortBulletsByPrice(localizedReply);
+
       // si en el futuro agregas más idiomas, aquí puedes meter más ramas:
       // else if (idiomaDestino === "es") { ... }
 
@@ -2027,8 +2059,7 @@ ${catalogText}${infoGeneralBlock}
 
       return {
         handled: true,
-        // usamos la versión traducida
-        reply: humanizeListReply(localizedReply, idiomaDestino),
+        reply: humanizeListReply(sortedReply, idiomaDestino),
         source: "catalog_llm",
         intent: intentOut || "catalog",
         ctxPatch,

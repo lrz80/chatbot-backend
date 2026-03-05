@@ -44,14 +44,15 @@ export async function traducirTexto(texto: string, idioma: string): Promise<stri
   );
 
   const prompt = `
-Traduce el siguiente texto al idioma "${idioma}".
-Respeta nombres propios, formatos y no inventes nada.
-NO modifiques tokens como __PRICE_0__, __PRICE_1__, etc.
-Devuélvelo sin agregar comentarios.
-NO modifiques ni reordenes tokens __KEEP_N__. Deben permanecer idénticos.
+  Traduce el siguiente texto al idioma "${idioma}".
+  REGLAS OBLIGATORIAS:
+  - NO cambies ningún número (incluyendo decimales), símbolos ($), moneda (USD) ni porcentajes.
+  - NO reordenes líneas. Mantén EXACTAMENTE el mismo orden.
+  - NO cambies el formato de viñetas ni los saltos de línea.
+  - Solo traduce palabras.
 
-Texto:
-${protectedText}
+  Texto:
+  ${texto}
   `.trim();
 
   const response = await client.responses.create({
