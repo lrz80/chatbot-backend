@@ -221,7 +221,11 @@ export async function handleUserSignalsTurn(
   }
 
   // ===============================
-  // 🆘 SUPPORT HANDOFF (GENÉRICO, MULTI-TENANT)
+  // 🆘 SUPPORT + HUMANO (UNIFICADO, MULTI-TENANT)
+  // - Si es soporte -> responde con link del tenant (desde settings)
+  // - Si pide humano explícito -> responde con link + activa humanOverride (TTL)
+  // - humanOverride NO es eterno (minutes)
+  // - evita doble-setHumanOverride (support + explicit)
   // ===============================
   if (!handled) {
     const gate = supportGate({
@@ -234,58 +238,36 @@ export async function handleUserSignalsTurn(
     });
 
     if (gate.escalate) {
-      try {
-        await setHumanOverride({
-          tenantId: tenant.id,
-          canal,
-          contacto: contactoNorm,
-          minutes: gate.minutes,
-          reason: gate.reason,
-          source: "support_handoff",
-          customerPhone: fromNumber || contactoNorm,
-          userMessage: userInput,
-          messageId: messageId || null,
-        });
-      } catch (e: any) {
-        console.warn("⚠️ setHumanOverride (support_handoff) failed:", e?.message);
-      }
-
-      // TODO: aquí llamas a tu notifier (Slack/email/whatever) según tenant.settings
-      // await notifySupport({ tenant, canal, contactoNorm, fromNumber, userInput, messageId, detectedIntent, emotion });
-
+      // ✅ 1) Responder SIEMPRE con el link (multi-tenant)
       humanOverrideReply = gate.reply;
       humanOverrideSource = "support_handoff";
       handled = true;
+
+      // ✅ 2) Activar humanOverride SOLO si el gate lo pide (pedido explícito de humano),
+      // y siempre con TTL (no eterno)
+      if (gate.setHumanOverride) {
+        try {
+          await setHumanOverride({
+            tenantId: tenant.id,
+            canal,
+            contacto: contactoNorm,
+            minutes: gate.minutes, // ✅ TTL configurable por tenant
+            reason: gate.reason,
+            source: "support_handoff",
+            customerPhone: fromNumber || contactoNorm,
+            userMessage: userInput,
+            messageId: messageId || null,
+          });
+        } catch (e: any) {
+          console.warn("⚠️ setHumanOverride (support_handoff) failed:", e?.message);
+        }
+      }
+
+      // ✅ 3) Notificación a soporte (si la tienes)
+      // OJO: si quieres notificar SIEMPRE que haya gate.escalate (aunque no setHumanOverride),
+      // deja esto aquí (recomendado).
+      // await notifySupport({ tenant, canal, contactoNorm, fromNumber, userInput, messageId, detectedIntent, emotion });
     }
-  }
-
-  // ===============================
-  // 🙋‍♀️ HUMAN OVERRIDE EXPLÍCITO
-  // ===============================
-  if (isExplicitHumanRequest(userInput)) {
-    try {
-      await setHumanOverride({
-        tenantId: tenant.id,
-        canal,
-        contacto: contactoNorm,
-        minutes: 5,
-        reason: "explicit_request",
-        source: "explicit_request",
-        customerPhone: fromNumber || contactoNorm,
-        userMessage: userInput,
-        messageId: messageId || null,
-      });
-    } catch (e: any) {
-      console.warn("⚠️ setHumanOverride failed:", e?.message);
-    }
-
-    humanOverrideReply =
-      idiomaDestino === "en"
-        ? "I understand. Someone from the team will contact you shortly to help you personally."
-        : "Entiendo. Para ayudarte mejor, te contactará una persona del equipo en un momento.";
-
-    humanOverrideSource = "human_override_explicit";
-    handled = true;
   }
 
   // ===============================
