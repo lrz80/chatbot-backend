@@ -208,9 +208,11 @@ const VENTA_SIGNAL_WORDS = [
 ];
 
 export function esIntencionDeVenta(intencion: string): boolean {
-  // En un mundo ideal esto sería por “grupo”/metadata en DB.
-  // Como compatibilidad, usamos un set pequeño universal.
   const s = (intencion || "").toLowerCase();
+
+  // ✅ nunca ventas:
+  if (["soporte", "queja", "cancelar", "soporte_reserva"].some(k => s.includes(k))) return false;
+
   return (
     ["precio", "agendar", "pago", "disponibilidad", "clase_prueba"].some((k) => s.includes(k)) ||
     s.includes("comprar")

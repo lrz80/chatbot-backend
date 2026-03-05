@@ -9,8 +9,12 @@ type Row = {
 };
 
 function money(n: number) {
-  // sin locales raros, WhatsApp friendly
-  return `$${Math.round(n)}`;
+  // WhatsApp friendly, pero SIN redondear a entero.
+  // - Si es entero -> $60
+  // - Si tiene centavos -> $59.99
+  if (!Number.isFinite(n)) return "";
+  const isInt = Math.abs(n - Math.trunc(n)) < 1e-9;
+  return isInt ? `$${Math.trunc(n)}` : `$${n.toFixed(2)}`;
 }
 
 // 🔹 Formatea el texto de precio, incluyendo el caso "gratis/free"
@@ -23,16 +27,14 @@ function formatPrice(lang: Lang, minRaw: number, maxRaw: number): string {
     return lang === "en" ? "free" : "gratis";
   }
 
-  // Mismo precio (sin rango)
-  if (Number.isFinite(min) && Number.isFinite(max) && Math.round(min) === Math.round(max)) {
+  // Mismo precio (sin rango) -> comparar exacto a 2 decimales, NO con round()
+  if (Number.isFinite(min) && Number.isFinite(max) && min.toFixed(2) === max.toFixed(2)) {
     return money(min);
   }
 
-  // Rango dentro del servicio (variante) => muestra "desde"
+  // Rango dentro del servicio (variante) => muestra "desde/from"
   if (Number.isFinite(min)) {
-    return lang === "en"
-      ? `from ${money(min)}`
-      : `desde ${money(min)}`;
+    return lang === "en" ? `from ${money(min)}` : `desde ${money(min)}`;
   }
 
   // fallback raro
