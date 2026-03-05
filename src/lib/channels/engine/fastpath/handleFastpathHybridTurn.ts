@@ -351,10 +351,10 @@ export async function handleFastpathHybridTurn(
           ].join(" ");
 
     const CHANNEL_TONE_RULE =
-  idiomaDestino === "en"
-    ? "RULE: You may rephrase for a natural chat/DM tone, but you MUST copy plan/service names and all prices EXACTLY as they appear in SYSTEM_STRUCTURED_DATA. Do not rewrite numbers, currency, frequency, ranges, or qualifiers (FROM/DESDE)."
-    : "REGLA: Puedes re-redactar para que suene natural en chat/DM, pero DEBES copiar nombres de planes/servicios y TODOS los precios EXACTAMENTE como aparecen en DATOS_ESTRUCTURADOS_DEL_SISTEMA. No reescribas números, moneda, frecuencia, rangos ni calificativos (DESDE/FROM).";
-    
+      idiomaDestino === "en"
+        ? "RULE: You may rephrase for a natural chat/DM tone, but you MUST copy plan/service names and all prices EXACTLY as they appear in SYSTEM_STRUCTURED_DATA. Do not rewrite numbers, currency, frequency, ranges, or qualifiers (FROM/DESDE)."
+        : "REGLA: Puedes re-redactar para que suene natural en chat/DM, pero DEBES copiar nombres de planes/servicios y TODOS los precios EXACTAMENTE como aparecen en DATOS_ESTRUCTURADOS_DEL_SISTEMA. No reescribas números, moneda, frecuencia, rangos ni calificativos (DESDE/FROM).";
+
     // Bloque especial solo cuando pidió “planes + horarios”
     let forcedListBlock = "";
     if (wantsPlansAndHours && infoClave) {
@@ -404,6 +404,8 @@ SPECIAL RULE FOR THIS TURN:
       CHANNEL_TONE_RULE,
     ].join("\n");
 
+    console.log("[HYBRID] entering LLM", { intent: fp.intent, source: fp.source });
+    
     const composed = await answerWithPromptBase({
       tenantId,
       promptBase: promptConFastpath,
@@ -414,6 +416,48 @@ SPECIAL RULE FOR THIS TURN:
       maxLines: MAX_WHATSAPP_LINES,
       fallbackText: fastpathText, // si falla LLM, al menos enviamos Fastpath
     });
+
+    // ✅ GUARDRAIL: si el LLM cambió montos/moneda respecto a fastpathText, hacemos rollback a fastpathText
+    const extractMoneyTokens = (s: string) => {
+      const out = new Set<string>();
+      const str = String(s || "");
+      // captura $49, $59.99, 59.99 USD, 149.99, etc.
+      const re = /(\$\s*\d+(?:\.\d{1,2})?)|(\b\d+(?:\.\d{1,2})?\s*(?:usd|eur|gbp)\b)/gi;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(str)) !== null) {
+        out.add(m[0].replace(/\s+/g, " ").trim().toLowerCase());
+      }
+      return out;
+    };
+
+    const fpMoney = extractMoneyTokens(fastpathText);
+    const llmMoney = extractMoneyTokens(composed.text);
+
+    // Si el LLM menciona un token de dinero que NO está en fastpath → rollback
+    let llmChangedPrices = false;
+    for (const t of llmMoney) {
+      if (!fpMoney.has(t)) {
+        llmChangedPrices = true;
+        break;
+      }
+    }
+
+    if (llmChangedPrices) {
+      console.log("[PRICE_GUARD] LLM changed prices -> rollback to fastpath", {
+        fpMoney: Array.from(fpMoney).slice(0, 20),
+        llmMoney: Array.from(llmMoney).slice(0, 20),
+        source: fp.source,
+        intent: fp.intent,
+      });
+
+      return {
+        handled: true,
+        reply: fastpathText,
+        replySource: fp.source,
+        intent: fp.intent || detectedIntent || intentFallback || null,
+        ctxPatch,
+      };
+    }
 
     const text = (composed.text || "").toLowerCase().trim();
 
