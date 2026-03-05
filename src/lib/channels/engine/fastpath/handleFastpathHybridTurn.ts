@@ -134,7 +134,7 @@ export async function handleFastpathHybridTurn(
 
   // Palabras clave generales de precios / planes / horarios
   const isPriceOrScheduleKeyword =
-    /\b(precio|precios|price|prices|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates|horario|horarios|hora|hours?|schedule|schedules)\b/i
+    /\b(precio|precios|price|prices|pricing|plan|plans|planes|membres[ií]a|membres[ií]as|membership|memberships|mensualidad|cu[aá]nto\s+cuesta|cu[eé]sta|costo|costos|cost|tarifa|tarifas|fee|fees|rate|rates|how\s+much|trial|free\s+trial|promo|promotion|discount|monthly|per\s+month|per\s+class|horario|horarios|hora|hours?|schedule|schedules)\b|\$/i
       .test(loweredInput);
 
   // Intenciones que consideramos “info de precios/planes/horarios del negocio”
@@ -146,8 +146,8 @@ export async function handleFastpathHybridTurn(
   const isPriceQuestionUser = isPriceOrScheduleKeyword || isPriceIntent;
 
   // 🔍 Señales específicas: planes + horarios en la misma pregunta
-  const asksPlans = /plan|planes|membres/i.test(loweredInput);
-  const asksHorarios = /horario|hora|horarios|hours|schedule/i.test(loweredInput);
+  const asksPlans = /\b(plan|plans|planes|membres[ií]a|membership)\b/i.test(loweredInput);
+  const asksHorarios = /\b(horario|horarios|hora|hours?|schedule|schedules)\b/i.test(loweredInput);
   const wantsPlansAndHours = asksPlans && asksHorarios;
 
   // Pregunta de seguimiento: "otros/más planes"
@@ -351,10 +351,10 @@ export async function handleFastpathHybridTurn(
           ].join(" ");
 
     const CHANNEL_TONE_RULE =
-      idiomaDestino === "en"
-        ? "RULE: You may rephrase for a natural chat/DM tone, but DO NOT change amounts, ranges, or plan/service names."
-        : "REGLA: Puedes re-redactar para que suene natural en chat/DM, pero NO cambies montos, rangos ni nombres de planes/servicios.";
-
+  idiomaDestino === "en"
+    ? "RULE: You may rephrase for a natural chat/DM tone, but you MUST copy plan/service names and all prices EXACTLY as they appear in SYSTEM_STRUCTURED_DATA. Do not rewrite numbers, currency, frequency, ranges, or qualifiers (FROM/DESDE)."
+    : "REGLA: Puedes re-redactar para que suene natural en chat/DM, pero DEBES copiar nombres de planes/servicios y TODOS los precios EXACTAMENTE como aparecen en DATOS_ESTRUCTURADOS_DEL_SISTEMA. No reescribas números, moneda, frecuencia, rangos ni calificativos (DESDE/FROM).";
+    
     // Bloque especial solo cuando pidió “planes + horarios”
     let forcedListBlock = "";
     if (wantsPlansAndHours && infoClave) {
