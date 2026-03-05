@@ -27,20 +27,13 @@ type AnswerWithPromptBaseParams = {
 function sanitizeChatOutput(text: string) {
   if (!text) return '';
 
-  let t = String(text)
+  let t = text
     .replace(/```[\s\S]*?```/g, '')         // bloques de código
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')     // headers markdown
+    //.replace(/^\s*[-*•]\s+/gm, '')          // bullets
     .replace(/^\s*\d+\)\s+/gm, '')          // 1)
     .replace(/^\s*\d+\.\s+/gm, '')          // 1.
     .replace(/\r\n/g, '\n');
-
-  // ✅ Bullets: solo permitir si el output tiene señales de listado de precios/planes
-  const allowBullets =
-    /\$\s*\d|usd|\/month|per\s+month|monthly|from\s+\$|starts?\s+at\s+\$|desde\s+\$/i.test(t);
-
-  if (!allowBullets) {
-    t = t.replace(/^\s*[-*•]\s+/gm, ''); // quita bullets si NO es respuesta de precios
-  }
 
   // Normaliza saltos de línea
   t = t.replace(/\n{3,}/g, '\n\n').trim();
@@ -61,7 +54,7 @@ function stripUrlsIfPromptHasNone(out: string, promptBase: string) {
 
   return out
     .replace(/https?:\/\/\S+/gi, '')
-    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\s{2,}/g, ' ')
     .trim();
 }
 
