@@ -134,7 +134,7 @@ export async function handleFastpathHybridTurn(
 
   // Palabras clave generales de precios / planes / horarios
   const isPriceOrScheduleKeyword =
-    /\b(precio|precios|price|prices|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates|horario|horarios|hora|hours?|schedule|schedules)\b/i
+    /\b(precio|precios|price|prices|pricing|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates|horario|horarios|hora|hours?|schedule|schedules)\b/i
       .test(loweredInput);
 
   // Intenciones que consideramos “info de precios/planes/horarios del negocio”
@@ -189,7 +189,34 @@ export async function handleFastpathHybridTurn(
     return { handled: false };
   }
 
+  // ✅ declarar ctxPatch primero
   const ctxPatch: any = fp.ctxPatch ? { ...fp.ctxPatch } : {};
+
+  // ✅ HARD BYPASS: si Fastpath ya respondió desde DB con precios/catálogo,
+  // NUNCA pasar por LLM (evita precios inventados).
+  const DB_PRICE_SOURCES = new Set([
+    "catalog_db",
+    "price_summary_db",
+    "price_fastpath_db",
+    "price_disambiguation_db",
+    "price_missing_db",
+    "price_summary_db_empty",
+  ]);
+
+  if (isDmChatChannel(canal) && DB_PRICE_SOURCES.has(fp.source as any)) {
+    console.log("[CHAT][FASTPATH] HARD BYPASS DB_PRICE_SOURCE -> send fastpath (no LLM)", {
+      source: fp.source,
+      intent: fp.intent,
+    });
+
+    return {
+      handled: true,
+      reply: fp.reply,
+      replySource: fp.source,
+      intent: fp.intent || detectedIntent || intentFallback || null,
+      ctxPatch,
+    };
+  }
 
   // 2️⃣ awaitingEffect: set_awaiting_yes_no → lo manejamos aquí
   if (fp.awaitingEffect?.type === "set_awaiting_yes_no") {

@@ -1638,9 +1638,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       q.includes("planes") ||
       q.includes("membresia") ||
       q.includes("membresía") ||
-      q.includes("clases") ||
-      q.includes("servicio") ||
-      q.includes("servicios") ||
       q.includes("que incluye") ||
       q.includes("qué incluye") ||
       q.includes("incluye") ||
@@ -1651,12 +1648,22 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       q.includes("autopay") ||
       q.includes("price") ||
       q.includes("prices") ||
+      q.includes("pricing") ||
       q.includes("membership") ||
       q.includes("bundle") ||
       q.includes("what is included");
 
     // 👇 3) Cualquier combinación de lo anterior dispara el motor de catálogo
-    const isCatalogQuestion = isCatalogQuestionBasic || isCombinationIntent;
+    const isCatalogQuestion =
+      isCatalogQuestionBasic ||
+      isCombinationIntent ||
+      isPriceQuestion(userInput);
+
+    // 🔒 Nunca permitir que el LLM responda precios
+    if (isPriceQuestion(userInput)) {
+      console.log("🚫 BLOCK LLM PRICING — forcing DB path");
+      // dejamos que el flujo continúe para que el branch de DB responda
+    }
 
     if (!isCatalogQuestion) {
       // deja continuar con el resto del fastpath
