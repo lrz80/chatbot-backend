@@ -27,13 +27,20 @@ type AnswerWithPromptBaseParams = {
 function sanitizeChatOutput(text: string) {
   if (!text) return '';
 
-  let t = text
+  let t = String(text)
     .replace(/```[\s\S]*?```/g, '')         // bloques de código
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')     // headers markdown
-    //.replace(/^\s*[-*•]\s+/gm, '')          // bullets
     .replace(/^\s*\d+\)\s+/gm, '')          // 1)
     .replace(/^\s*\d+\.\s+/gm, '')          // 1.
     .replace(/\r\n/g, '\n');
+
+  // ✅ Bullets: solo permitir si el output tiene señales de listado de precios/planes
+  const allowBullets =
+    /\$\s*\d|usd|\/month|per\s+month|monthly|from\s+\$|starts?\s+at\s+\$|desde\s+\$/i.test(t);
+
+  if (!allowBullets) {
+    t = t.replace(/^\s*[-*•]\s+/gm, ''); // quita bullets si NO es respuesta de precios
+  }
 
   // Normaliza saltos de línea
   t = t.replace(/\n{3,}/g, '\n\n').trim();
@@ -56,6 +63,26 @@ function stripUrlsIfPromptHasNone(out: string, promptBase: string) {
     .replace(/https?:\/\/\S+/gi, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+function extractAllowedMoneyValues(text: string) {
+  const s = new Set<string>();
+  const re = /\$\s*\d+(?:[.,]\d{1,2})?/g;
+  const matches = String(text || "").match(re) || [];
+  for (const m of matches) {
+    s.add(m.replace(/\s+/g, "")); // "$ 120" -> "$120"
+  }
+  return s;
+}
+
+function stripHallucinatedMoney(out: string, prompt: string) {
+  const allowed = extractAllowedMoneyValues(prompt);
+  if (!allowed.size) return out; // si el prompt no tiene $, no podemos validar
+
+  return String(out || "").replace(/\$\s*\d+(?:[.,]\d{1,2})?/g, (m) => {
+    const norm = m.replace(/\s+/g, "");
+    return allowed.has(norm) ? m : ""; // elimina montos no permitidos
+  }).replace(/\s{2,}/g, " ").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 /* =========================
@@ -102,7 +129,10 @@ export async function answerWithPromptBase(
     `Reglas generales:
 - Usa EXCLUSIVAMENTE la información explícita en este prompt del negocio. Si algo no está, dilo sin inventar.
 - Responde SIEMPRE en ${idiomaDestino === "en" ? "English" : "Español"}.
-- Formato chat/WhatsApp: máximo ${maxLines} líneas en prosa. Prohibido Markdown, encabezados, viñetas o numeraciones.
+- Formato chat/WhatsApp: máximo ${maxLines} líneas.
+- Prohibido Markdown/headers.
+- Viñetas PERMITIDAS solo si estás listando precios/planes/opciones (por ejemplo cuando mencionas $ o USD). En cualquier otro caso, escribe en prosa sin viñetas.
+- No uses numeraciones tipo "1)" o "1.".
 - Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.
 - Si mencionas enlaces, utiliza solo los que estén presentes en la sección ENLACES_OFICIALES / OFFICIAL_LINKS del prompt del negocio.`,
     "",
@@ -166,6 +196,7 @@ export async function answerWithPromptBase(
   // Sanitizar y limitar formato
   out = sanitizeChatOutput(out);
   out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
+  out = stripHallucinatedMoney(out, promptBaseWithLinks);
 
   // Asegurar idioma de salida (solo ES/EN)
   try {
