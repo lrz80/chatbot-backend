@@ -61,7 +61,7 @@ function stripUrlsIfPromptHasNone(out: string, promptBase: string) {
 
   return out
     .replace(/https?:\/\/\S+/gi, '')
-    .replace(/\s{2,}/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
     .trim();
 }
 
