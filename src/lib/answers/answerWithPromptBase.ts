@@ -102,7 +102,7 @@ export async function answerWithPromptBase(
     `Reglas generales:
 - Usa EXCLUSIVAMENTE la información explícita en este prompt del negocio. Si algo no está, dilo sin inventar.
 - Responde SIEMPRE en ${idiomaDestino === "en" ? "English" : "Español"}.
-- Formato chat/WhatsApp: máximo ${maxLines} líneas en prosa. Prohibido Markdown, encabezados, viñetas o numeraciones.
+- Formato chat/WhatsApp: máximo ${maxLines} líneas en prosa.
 - Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.
 - Si mencionas enlaces, utiliza solo los que estén presentes en la sección ENLACES_OFICIALES / OFFICIAL_LINKS del prompt del negocio.`,
     "",

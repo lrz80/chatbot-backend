@@ -19,6 +19,7 @@ import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
 import { renderInfoGeneralOverview } from "../fastpath/renderInfoGeneralOverview";
 import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
 import { buildCatalogContext } from "../catalog/buildCatalogContext";
+import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
 import OpenAI from "openai";
 
 const openai = new OpenAI({
@@ -110,7 +111,8 @@ export type FastpathResult =
         | "info_clave_includes_ctx_link"
         | "interest_to_pricing"
         | "catalog_llm"
-        | "fastpath_dismiss";
+        | "fastpath_dismiss"
+        | "catalog_db";
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;
@@ -1738,6 +1740,108 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           : `\n\nINFO_GENERAL_DEL_NEGOCIO (horarios, dirección, etc.):\n${infoClave}`
         : "";
 
+      // ✅ Precio/planes genérico: responder desde DB (no LLM)
+      if (!asksSchedules && (questionType === "price_or_plan" || questionType === "other_plans")) {
+        // 1) Query DB: min/max por servicio (usa variantes si existen, si no, usa services.price)
+        const { rows } = await pool.query<{
+          service_name: string;
+          min_price: number | string | null;
+          max_price: number | string | null;
+        }>(
+          `
+          WITH price_rows AS (
+            -- a) precios desde variantes activas
+            SELECT
+              s.name AS service_name,
+              MIN(v.price)::numeric AS min_price,
+              MAX(v.price)::numeric AS max_price
+            FROM services s
+            JOIN service_variants v
+              ON v.service_id = s.id
+            AND v.active = true
+            WHERE s.tenant_id = $1
+              AND s.active = true
+              AND v.price IS NOT NULL
+            GROUP BY s.name
+
+            UNION ALL
+
+            -- b) fallback: servicios SIN variantes (o sin precios en variantes) usan services.price
+            SELECT
+              s.name AS service_name,
+              MIN(s.price)::numeric AS min_price,
+              MAX(s.price)::numeric AS max_price
+            FROM services s
+            WHERE s.tenant_id = $1
+              AND s.active = true
+              AND s.price IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1
+                FROM service_variants v
+                WHERE v.service_id = s.id
+                  AND v.active = true
+                  AND v.price IS NOT NULL
+              )
+            GROUP BY s.name
+          )
+          SELECT service_name, min_price, max_price
+          FROM price_rows
+          `,
+          [tenantId]
+        );
+
+        // 2) Render determinístico (ya ordena + limita + gratis/free)
+        let dbReply = renderGenericPriceSummaryReply({
+          lang: idiomaDestino,
+          rows,
+        });
+
+        // 3) Si es "otros planes", filtra los prevNames (sin LLM)
+        //    (Tu postProcessCatalogReply ya existe; úsalo si parsea bien bullets)
+        if (questionType === "other_plans") {
+          const { finalReply, namesShown } = postProcessCatalogReply({
+            reply: dbReply,
+            questionType,
+            prevNames,
+          });
+
+          dbReply = finalReply;
+
+          const sortedReply = stripLinkSentences(dbReply);
+
+          const ctxPatch: Partial<FastpathCtx> = {};
+          if (namesShown.length) {
+            ctxPatch.last_catalog_plans = namesShown;
+            ctxPatch.last_catalog_at = Date.now();
+          }
+
+          return {
+            handled: true,
+            reply: humanizeListReply(sortedReply, idiomaDestino),
+            source: "catalog_db",
+            intent: "precio",
+            ctxPatch,
+          };
+        }
+
+        // 4) price_or_plan normal
+        const sortedReply = stripLinkSentences(dbReply);
+
+        // namesShown: puedes reusar tu extractor existente si lo tienes;
+        // si no, al menos actualiza timestamp para frescura de lista.
+        const ctxPatch: Partial<FastpathCtx> = {
+          last_catalog_at: Date.now(),
+        };
+
+        return {
+          handled: true,
+          reply: humanizeListReply(sortedReply, idiomaDestino),
+          source: "catalog_db",
+          intent: "precio",
+          ctxPatch,
+        };
+      }
+
       const systemMsg =
         idiomaDestino === "en"
           ? `
@@ -2001,53 +2105,21 @@ ${catalogText}${infoGeneralBlock}
       // 🔧 limpiamos frases de "enlace / links / comprar en los enlaces"
       const cleanedReply = stripLinkSentences(finalReply);
 
-      // ✅ Ya le pedimos al LLM que responda en idiomaDestino.
-      // ✅ NO pasamos por traducirTexto porque altera números/moneda/orden.
-      const localizedReply = cleanedReply;
+      // 🌎 NUEVO: aseguramos que TODO el catálogo salga en el idiomaDestino
+      let localizedReply = cleanedReply;
 
-      function priceValueFromLine(line: string): number {
-        const l = line.toLowerCase();
-
-        // free/gratis => 0
-        if (/\bfree\b|\bgratis\b/.test(l)) return 0;
-
-        // primero $99.99
-        let m = line.match(/\$?\s*([0-9]+(?:\.[0-9]+)?)/);
-        if (m?.[1]) return Number(m[1]);
-
-        return Number.POSITIVE_INFINITY;
-      }
-
-      function sortBulletsByPrice(text: string): string {
-        const lines = String(text || "").split(/\r?\n/);
-
-        const bulletIdx: number[] = [];
-        const bullets: { idx: number; line: string; v: number }[] = [];
-
-        for (let i = 0; i < lines.length; i++) {
-          const t = lines[i].trim();
-          if (/^[•\-\*]\s*/.test(t)) {
-            bulletIdx.push(i);
-            bullets.push({ idx: i, line: lines[i], v: priceValueFromLine(lines[i]) });
-          }
+      if (idiomaDestino === "en") {
+        try {
+          // tu helper actual: traducir TODO el bloque al inglés,
+          // incluyendo nombres de planes/productos.
+          localizedReply = await traducirTexto(cleanedReply, "en");
+        } catch (e: any) {
+          console.warn(
+            "[FASTPATH][CATALOG] error traduciendo respuesta de catálogo:",
+            e?.message || e
+          );
         }
-
-        // si no hay bullets o solo 1, no hacemos nada
-        if (bullets.length <= 1) return text;
-
-        bullets.sort((a, b) => a.v - b.v);
-
-        // reinsertar bullets en el mismo “slot” donde estaban
-        const sortedLines = [...lines];
-        for (let j = 0; j < bulletIdx.length; j++) {
-          sortedLines[bulletIdx[j]] = bullets[j].line;
-        }
-
-        return sortedLines.join("\n");
       }
-
-      const sortedReply = sortBulletsByPrice(localizedReply);
-
       // si en el futuro agregas más idiomas, aquí puedes meter más ramas:
       // else if (idiomaDestino === "es") { ... }
 
@@ -2059,7 +2131,8 @@ ${catalogText}${infoGeneralBlock}
 
       return {
         handled: true,
-        reply: humanizeListReply(sortedReply, idiomaDestino),
+        // usamos la versión traducida
+        reply: humanizeListReply(localizedReply, idiomaDestino),
         source: "catalog_llm",
         intent: intentOut || "catalog",
         ctxPatch,

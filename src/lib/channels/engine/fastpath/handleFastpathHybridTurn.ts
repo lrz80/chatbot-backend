@@ -134,7 +134,7 @@ export async function handleFastpathHybridTurn(
 
   // Palabras clave generales de precios / planes / horarios
   const isPriceOrScheduleKeyword =
-    /\b(precio|precios|price|prices|pricing|plan|plans|planes|membres[ií]a|membres[ií]as|membership|memberships|mensualidad|cu[aá]nto\s+cuesta|cu[eé]sta|costo|costos|cost|tarifa|tarifas|fee|fees|rate|rates|how\s+much|trial|free\s+trial|promo|promotion|discount|monthly|per\s+month|per\s+class|horario|horarios|hora|hours?|schedule|schedules)\b|\$/i
+    /\b(precio|precios|price|prices|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates|horario|horarios|hora|hours?|schedule|schedules)\b/i
       .test(loweredInput);
 
   // Intenciones que consideramos “info de precios/planes/horarios del negocio”
@@ -146,8 +146,8 @@ export async function handleFastpathHybridTurn(
   const isPriceQuestionUser = isPriceOrScheduleKeyword || isPriceIntent;
 
   // 🔍 Señales específicas: planes + horarios en la misma pregunta
-  const asksPlans = /\b(plan|plans|planes|membres[ií]a|membership)\b/i.test(loweredInput);
-  const asksHorarios = /\b(horario|horarios|hora|hours?|schedule|schedules)\b/i.test(loweredInput);
+  const asksPlans = /plan|planes|membres/i.test(loweredInput);
+  const asksHorarios = /horario|hora|horarios|hours|schedule/i.test(loweredInput);
   const wantsPlansAndHours = asksPlans && asksHorarios;
 
   // Pregunta de seguimiento: "otros/más planes"
@@ -189,8 +189,6 @@ export async function handleFastpathHybridTurn(
     return { handled: false };
   }
 
-  console.log("[HP] FASTPATH OUT", { source: fp.source, intent: fp.intent });
-  
   const ctxPatch: any = fp.ctxPatch ? { ...fp.ctxPatch } : {};
 
   // 2️⃣ awaitingEffect: set_awaiting_yes_no → lo manejamos aquí
@@ -242,8 +240,6 @@ export async function handleFastpathHybridTurn(
     (convoCtx as any)?.last_list_kind === "plan";
 
   const hasPkgs = (convoCtx as any)?.has_packages_available === true;
-
-  console.log("[HP] pre-3.5", { canal, isPriceQuestionUser, wantsPlansAndHours, isPlanDetailQuestion, currentIntent, detectedIntent, intentFallback });
 
   // 3.5️⃣ WHATSAPP/META + PREGUNTA DE PRECIOS/PLANES: NO PASAR POR LLM
   // EXCEPCIÓN 1: si es "planes + horarios", dejamos que pase al modo híbrido
@@ -356,8 +352,8 @@ export async function handleFastpathHybridTurn(
 
     const CHANNEL_TONE_RULE =
       idiomaDestino === "en"
-        ? "RULE: You may rephrase for a natural chat/DM tone, but you MUST copy plan/service names and all prices EXACTLY as they appear in SYSTEM_STRUCTURED_DATA. Do not rewrite numbers, currency, frequency, ranges, or qualifiers (FROM/DESDE)."
-        : "REGLA: Puedes re-redactar para que suene natural en chat/DM, pero DEBES copiar nombres de planes/servicios y TODOS los precios EXACTAMENTE como aparecen en DATOS_ESTRUCTURADOS_DEL_SISTEMA. No reescribas números, moneda, frecuencia, rangos ni calificativos (DESDE/FROM).";
+        ? "RULE: You may rephrase for a natural chat/DM tone, but DO NOT change amounts, ranges, or plan/service names."
+        : "REGLA: Puedes re-redactar para que suene natural en chat/DM, pero NO cambies montos, rangos ni nombres de planes/servicios.";
 
     // Bloque especial solo cuando pidió “planes + horarios”
     let forcedListBlock = "";
@@ -408,8 +404,6 @@ SPECIAL RULE FOR THIS TURN:
       CHANNEL_TONE_RULE,
     ].join("\n");
 
-    console.log("[HP] ENTERING LLM HYBRID", { canal, wantsPlansAndHours, isPriceQuestionUser, source: fp.source, intent: fp.intent });
-
     const composed = await answerWithPromptBase({
       tenantId,
       promptBase: promptConFastpath,
@@ -420,48 +414,6 @@ SPECIAL RULE FOR THIS TURN:
       maxLines: MAX_WHATSAPP_LINES,
       fallbackText: fastpathText, // si falla LLM, al menos enviamos Fastpath
     });
-
-    // ✅ GUARDRAIL: si el LLM cambió montos/moneda respecto a fastpathText, hacemos rollback a fastpathText
-    const extractMoneyTokens = (s: string) => {
-      const out = new Set<string>();
-      const str = String(s || "");
-      // captura $49, $59.99, 59.99 USD, 149.99, etc.
-      const re = /(\$\s*\d+(?:\.\d{1,2})?)|(\b\d+(?:\.\d{1,2})?\s*(?:usd|eur|gbp)\b)/gi;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(str)) !== null) {
-        out.add(m[0].replace(/\s+/g, " ").trim().toLowerCase());
-      }
-      return out;
-    };
-
-    const fpMoney = extractMoneyTokens(fastpathText);
-    const llmMoney = extractMoneyTokens(composed.text);
-
-    // Si el LLM menciona un token de dinero que NO está en fastpath → rollback
-    let llmChangedPrices = false;
-    for (const t of llmMoney) {
-      if (!fpMoney.has(t)) {
-        llmChangedPrices = true;
-        break;
-      }
-    }
-
-    if (llmChangedPrices) {
-      console.log("[PRICE_GUARD] LLM changed prices -> rollback to fastpath", {
-        fpMoney: Array.from(fpMoney).slice(0, 20),
-        llmMoney: Array.from(llmMoney).slice(0, 20),
-        source: fp.source,
-        intent: fp.intent,
-      });
-
-      return {
-        handled: true,
-        reply: fastpathText,
-        replySource: fp.source,
-        intent: fp.intent || detectedIntent || intentFallback || null,
-        ctxPatch,
-      };
-    }
 
     const text = (composed.text || "").toLowerCase().trim();
 
