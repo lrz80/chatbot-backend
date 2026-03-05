@@ -557,6 +557,11 @@ async function procesarMensajeMeta(args: {
     try {
       if (!handled || !reply) return;
 
+      // 🔒 NO post-actions (followups/CAPI/etc) cuando es soporte/handoff
+      if ((convoCtx as any)?.__no_followups || replySource === "support_handoff") {
+        return;
+      }
+
       await runPostReplyActions({
         pool,
         tenant,
@@ -688,6 +693,22 @@ async function procesarMensajeMeta(args: {
   INTENCION_FINAL_CANONICA = signals.INTENCION_FINAL_CANONICA;
   promptBaseMem = signals.promptBaseMem;
   convoCtx = signals.convoCtx;
+
+  // 🔴 HARD STOP: soporte/handoff marcó detener pipeline
+  if ((convoCtx as any)?.__stop_pipeline) {
+    // si por alguna razón no envió reply todavía, lo enviamos
+    if (signals.handled && signals.humanOverrideReply) {
+      await replyAndExit(
+        signals.humanOverrideReply,
+        signals.humanOverrideSource || "support_handoff",
+        detectedIntent
+      );
+      return;
+    }
+
+    // si no hay reply, igual NO seguimos (evita LLM/followups por error)
+    return;
+  }
 
   // Si el helper ya manejó el turno (override explícito), salimos
   if (signals.handled && signals.humanOverrideReply) {

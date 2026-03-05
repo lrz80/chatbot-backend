@@ -221,11 +221,7 @@ export async function handleUserSignalsTurn(
   }
 
   // ===============================
-  // 🆘 SUPPORT + HUMANO (UNIFICADO, MULTI-TENANT)
-  // - Si es soporte -> responde con link del tenant (desde settings)
-  // - Si pide humano explícito -> responde con link + activa humanOverride (TTL)
-  // - humanOverride NO es eterno (minutes)
-  // - evita doble-setHumanOverride (support + explicit)
+  // 🆘 SUPPORT + HUMANO (CORTA PIPELINE)
   // ===============================
   if (!handled) {
     const gate = supportGate({
@@ -238,20 +234,32 @@ export async function handleUserSignalsTurn(
     });
 
     if (gate.escalate) {
-      // ✅ 1) Responder SIEMPRE con el link (multi-tenant)
+      // ✅ reply (link soporte)
       humanOverrideReply = gate.reply;
       humanOverrideSource = "support_handoff";
       handled = true;
 
-      // ✅ 2) Activar humanOverride SOLO si el gate lo pide (pedido explícito de humano),
-      // y siempre con TTL (no eterno)
+      // ✅ marca flags para que el resto del engine NO haga fastpath/LLM/followups
+      // (multi-tenant, no hardcode)
+      convoCtx = {
+        ...(convoCtx || {}),
+        __stop_pipeline: true,
+        __no_followups: true,
+        __no_llm: true,
+        __no_fastpath: true,
+        __no_payment_reset: true,
+      };
+
+      transition({ patchCtx: convoCtx });
+
+      // ✅ activar humanOverride SOLO si pidió humano explícitamente (TTL GLOBAL ya viene en gate.minutes)
       if (gate.setHumanOverride) {
         try {
           await setHumanOverride({
             tenantId: tenant.id,
             canal,
             contacto: contactoNorm,
-            minutes: gate.minutes, // ✅ TTL configurable por tenant
+            minutes: gate.minutes, // ✅ GLOBAL (según tu supportGate actual)
             reason: gate.reason,
             source: "support_handoff",
             customerPhone: fromNumber || contactoNorm,
@@ -262,11 +270,6 @@ export async function handleUserSignalsTurn(
           console.warn("⚠️ setHumanOverride (support_handoff) failed:", e?.message);
         }
       }
-
-      // ✅ 3) Notificación a soporte (si la tienes)
-      // OJO: si quieres notificar SIEMPRE que haya gate.escalate (aunque no setHumanOverride),
-      // deja esto aquí (recomendado).
-      // await notifySupport({ tenant, canal, contactoNorm, fromNumber, userInput, messageId, detectedIntent, emotion });
     }
   }
 
