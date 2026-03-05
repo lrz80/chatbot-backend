@@ -189,6 +189,8 @@ export async function handleFastpathHybridTurn(
     return { handled: false };
   }
 
+  console.log("[HP] FASTPATH OUT", { source: fp.source, intent: fp.intent });
+  
   const ctxPatch: any = fp.ctxPatch ? { ...fp.ctxPatch } : {};
 
   // 2️⃣ awaitingEffect: set_awaiting_yes_no → lo manejamos aquí
@@ -240,6 +242,8 @@ export async function handleFastpathHybridTurn(
     (convoCtx as any)?.last_list_kind === "plan";
 
   const hasPkgs = (convoCtx as any)?.has_packages_available === true;
+
+  console.log("[HP] pre-3.5", { canal, isPriceQuestionUser, wantsPlansAndHours, isPlanDetailQuestion, currentIntent, detectedIntent, intentFallback });
 
   // 3.5️⃣ WHATSAPP/META + PREGUNTA DE PRECIOS/PLANES: NO PASAR POR LLM
   // EXCEPCIÓN 1: si es "planes + horarios", dejamos que pase al modo híbrido
@@ -404,8 +408,8 @@ SPECIAL RULE FOR THIS TURN:
       CHANNEL_TONE_RULE,
     ].join("\n");
 
-    console.log("[HYBRID] entering LLM", { intent: fp.intent, source: fp.source });
-    
+    console.log("[HP] ENTERING LLM HYBRID", { canal, wantsPlansAndHours, isPriceQuestionUser, source: fp.source, intent: fp.intent });
+
     const composed = await answerWithPromptBase({
       tenantId,
       promptBase: promptConFastpath,
