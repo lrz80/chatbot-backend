@@ -4,11 +4,12 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 // Cache simple en memoria para no traducir lo mismo 200 veces
 const cache = new Map<string, string>();
+const CACHE_VERSION = "v2_prices_frozen";
 
 export async function traducirTexto(texto: string, idioma: string): Promise<string> {
   if (!texto) return "";
 
-  const key = `${texto}::${idioma}`;
+  const key = `${CACHE_VERSION}::${texto}::${idioma}`;
   if (cache.has(key)) return cache.get(key)!;
 
   // ===============================
