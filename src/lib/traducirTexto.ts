@@ -13,23 +13,42 @@ export async function traducirTexto(texto: string, idioma: string): Promise<stri
   if (cache.has(key)) return cache.get(key)!;
 
   // ===============================
-  // 🔒 PROTEGER PRECIOS Y NÚMEROS
+  // 🔒 PROTEGER TOKENS NO-TRADUCIBLES
   // ===============================
-  const priceRegex =
-    /\$\s?\d+(?:\.\d{1,2})?|\b\d+(?:\.\d{1,2})?\s?(?:usd|eur|gbp)\b|\b\d+\.\d{2}\b/gi;
-
   const protectedTokens: string[] = [];
-  let protectedText = texto.replace(priceRegex, (match) => {
-    const token = `__PRICE_${protectedTokens.length}__`;
+  const freeze = (match: string) => {
+    const token = `__KEEP_${protectedTokens.length}__`;
     protectedTokens.push(match);
     return token;
-  });
+  };
+
+  // 1) URLs
+  let protectedText = texto.replace(/https?:\/\/\S+/gi, freeze);
+
+  // 2) Emails
+  protectedText = protectedText.replace(
+    /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+    freeze
+  );
+
+  // 3) Dinero: $59.99, 59.99 USD, etc.
+  protectedText = protectedText.replace(
+    /(\$\s*\d+(?:\.\d{1,2})?)|(\b\d+(?:\.\d{1,2})?\s*(?:usd|eur|gbp)\b)/gi,
+    freeze
+  );
+
+  // 4) Cualquier número/formatos numéricos (24/7, 7 days, 10:30, 3 months, etc.)
+  protectedText = protectedText.replace(
+    /\b\d+(?:[.,]\d+)?(?:%|\/\d+)?(?::\d{2})?\b/g,
+    freeze
+  );
 
   const prompt = `
 Traduce el siguiente texto al idioma "${idioma}".
 Respeta nombres propios, formatos y no inventes nada.
 NO modifiques tokens como __PRICE_0__, __PRICE_1__, etc.
 Devuélvelo sin agregar comentarios.
+NO modifiques ni reordenes tokens __KEEP_N__. Deben permanecer idénticos.
 
 Texto:
 ${protectedText}
@@ -43,10 +62,11 @@ ${protectedText}
   let translated = response.output_text.trim();
 
   // ===============================
-  // 🔓 RESTAURAR PRECIOS EXACTOS
+  // 🔓 RESTAURAR EXACTO (TODAS las ocurrencias)
   // ===============================
-  protectedTokens.forEach((price, i) => {
-    translated = translated.replace(`__PRICE_${i}__`, price);
+  protectedTokens.forEach((val, i) => {
+    const token = `__KEEP_${i}__`;
+    translated = translated.split(token).join(val);
   });
 
   cache.set(key, translated);
