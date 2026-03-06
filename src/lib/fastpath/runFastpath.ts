@@ -1811,7 +1811,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           rowsToRender = rows.filter((r) => !prevSet.has(norm(r.service_name)));
         }
 
-        // 2) (EN) traducir SOLO nombres, sin tocar precios
+        // 2) (EN) traducir SOLO nombres para render, sin tocar precios
         let rowsLocalized = rowsToRender;
 
         if (idiomaDestino === "en") {
@@ -1821,11 +1821,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               if (!nameEs) return r;
 
               try {
-                // Traduce SOLO el nombre
-                const nameEn = await traducirMensaje(nameEs, "en");
+                const nameEn = await traducirTexto(nameEs, "en", "catalog_label");
                 return { ...r, service_name: nameEn };
               } catch {
-                return r; // fallback seguro
+                return r;
               }
             })
           );
@@ -1838,8 +1837,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const cleanedReply = stripLinkSentences(dbReply);
 
-        // ✅ Guardar los nombres que realmente mostramos (máx 7)
-        const namesShown = (rowsLocalized || [])
+        // ✅ Guardar contexto con nombres ORIGINALES, no traducidos
+        const namesShown = (rowsToRender || [])
           .map((r) => String(r.service_name || "").trim())
           .filter(Boolean)
           .slice(0, 7);

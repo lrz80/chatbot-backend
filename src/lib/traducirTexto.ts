@@ -4,7 +4,7 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 // Cache simple en memoria
 const cache = new Map<string, string>();
-const CACHE_VERSION = "v3_catalog_labels";
+const CACHE_VERSION = "v4_catalog_labels";
 
 export async function traducirTexto(
   texto: string,
