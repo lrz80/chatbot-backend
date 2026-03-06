@@ -143,7 +143,21 @@ export async function handleFastpathHybridTurn(
     currentIntent === "precio" ||
     currentIntent === "planes_precios";
 
-  const isPriceQuestionUser = isPriceOrScheduleKeyword || isPriceIntent;
+  const hasRecentCatalogList =
+    Array.isArray((convoCtx as any)?.last_catalog_plans) &&
+    ((convoCtx as any).last_catalog_plans?.length ?? 0) > 0 &&
+    Number.isFinite(Number((convoCtx as any)?.last_catalog_at)) &&
+    Date.now() - Number((convoCtx as any).last_catalog_at) <= 30 * 60 * 1000; // 30m
+
+  const asksOtherOptionsGeneric =
+    /\b(other options|more options|other ones|more choices|otras opciones|otra opcion|más opciones|mas opciones)\b/i.test(
+      loweredInput
+    );
+
+  const isPriceQuestionUser =
+    isPriceOrScheduleKeyword ||
+    isPriceIntent ||
+    (asksOtherOptionsGeneric && hasRecentCatalogList);
 
   // 🔍 Señales específicas: planes + horarios en la misma pregunta
   const asksPlans = /plan|planes|membres/i.test(loweredInput);
