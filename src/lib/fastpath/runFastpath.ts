@@ -1484,7 +1484,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     // 🔥 PATCH NUEVO: si es detalle pero no se encontró servicio por texto,
     // usar SERVICE en contexto (último plan mostrado o seleccionado)
     if (!hit) {
-      // 1) Si venimos de una lista de un solo plan (ej: después de "y el gold?")
+      // 1) Si venimos de una lista de un solo plan (ej: después de "y el gold?").
       if (convoCtx?.last_plan_list?.length === 1) {
         hit = {
           id: convoCtx.last_plan_list[0].id,
