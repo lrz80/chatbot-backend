@@ -1611,7 +1611,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // 🧠 MOTOR ÚNICO DE CATÁLOGO
   // ===============================
     {
-    // 👇 1) Intento de "plan combinado"
     const isCombinationIntent =
       q.includes("combinar") ||
       q.includes("mezclar") ||
@@ -1626,7 +1625,44 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       q.includes("all inclusive") ||
       q.includes("todo incluido");
 
-    // 👇 2) Preguntas típicas de precios/planes
+    const qNorm = normalizeText(userInput);
+
+    const isAskingOtherCatalogOptions =
+      qNorm.includes("otro plan") ||
+      qNorm.includes("otros planes") ||
+      qNorm.includes("otras opciones") ||
+      qNorm.includes("que otras opciones tienes") ||
+      qNorm.includes("q otras opciones tienes") ||
+      qNorm.includes("que mas tienes") ||
+      qNorm.includes("q mas tienes") ||
+      qNorm.includes("que mas opciones tienes") ||
+      qNorm.includes("q mas opciones tienes") ||
+      qNorm.includes("que otros planes tienes") ||
+      qNorm.includes("q otros planes tienes") ||
+      qNorm.includes("que otros productos") ||
+      qNorm.includes("q otros productos") ||
+      qNorm.includes("otros productos") ||
+      qNorm.includes("que mas productos") ||
+      qNorm.includes("q mas productos") ||
+      qNorm.includes("que otros servicios") ||
+      qNorm.includes("q otros servicios") ||
+      qNorm.includes("otros servicios") ||
+      qNorm.includes("que mas servicios") ||
+      qNorm.includes("q mas servicios") ||
+      qNorm === "otras opciones" ||
+      qNorm === "otros planes" ||
+      qNorm === "otros productos" ||
+      qNorm === "otros servicios" ||
+      qNorm === "que mas" ||
+      qNorm === "q mas" ||
+      qNorm.includes("more plans") ||
+      qNorm.includes("other plans") ||
+      qNorm.includes("other products") ||
+      qNorm.includes("more products") ||
+      qNorm.includes("other services") ||
+      qNorm.includes("more services") ||
+      qNorm.includes("what other options");
+
     const isCatalogQuestionBasic =
       q.includes("precio") ||
       q.includes("precios") ||
@@ -1653,10 +1689,18 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       q.includes("bundle") ||
       q.includes("what is included");
 
-    // 👇 3) Cualquier combinación de lo anterior dispara el motor de catálogo
+    const hasRecentCatalogContext =
+      Array.isArray(convoCtx?.last_catalog_plans) &&
+      convoCtx.last_catalog_plans.length > 0 &&
+      Number.isFinite(Number(convoCtx?.last_catalog_at)) &&
+      Number(convoCtx.last_catalog_at) > 0 &&
+      Date.now() - Number(convoCtx.last_catalog_at) <= 30 * 60 * 1000;
+
     const isCatalogQuestion =
       isCatalogQuestionBasic ||
       isCombinationIntent ||
+      isAskingOtherCatalogOptions ||
+      (hasRecentCatalogContext && isAskingOtherCatalogOptions) ||
       isPriceQuestion(userInput);
 
     // 🔒 Nunca permitir que el LLM responda precios
@@ -1679,9 +1723,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         q.includes("package") ||
         q.includes("bundle");
 
-      const isAskingOtherPlans =
-        /\b(otro\s+plan|otros\s+planes|otras\s+opciones|other\s+plans?|more\s+plans?)\b/.test(q);
-
       type QuestionType = "combination_and_price" | "price_or_plan" | "other_plans";
 
       let questionType: QuestionType;
@@ -1692,7 +1733,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         questionType = "combination_and_price";
       }
       // 2) Pregunta explícita de "otros planes"
-      else if (isAskingOtherPlans) {
+      else if (isAskingOtherCatalogOptions) {
         questionType = "other_plans";
       }
       // 3) Resto: preguntas normales de precio/plan
