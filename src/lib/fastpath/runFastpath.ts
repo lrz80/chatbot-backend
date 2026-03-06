@@ -646,8 +646,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             return !!nameNorm && msgNorm.includes(nameNorm);
           });
 
-        if (!mentionsPlanFromList && !mentionsPackageFromList && idx == null) {
-          console.log("🧪 PICK SKIP — no numeric choice or plan/package mention in msg");
+        const candidateFromPlans = planFresh ? bestNameMatch(userInput, planList as any) : null;
+        const candidateFromPackages = pkgFresh ? bestNameMatch(userInput, pkgList as any) : null;
+
+        if (!candidateFromPlans && !candidateFromPackages && idx == null) {
+          console.log("🧪 PICK SKIP — no numeric choice or fuzzy match in msg");
         } else {
           const tryPick = (
             list: Array<{ id: string; name: string; url: string | null }>,
