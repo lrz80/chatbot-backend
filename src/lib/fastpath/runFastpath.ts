@@ -1991,10 +1991,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const cleanedReply = stripLinkSentences(dbReply);
 
-        const namesShown = rowsLocalized
-          .map((r) => String(r.service_name || "").trim())
-          .filter(Boolean)
-          .slice(0, 7);
+        const namesShown = extractPlanNamesFromReply(cleanedReply);
 
         const ctxPatch: Partial<FastpathCtx> = {
           last_catalog_at: Date.now(),
