@@ -209,9 +209,8 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
 
   // ✅ LANG LOCK: si ya hay idioma del hilo, respétalo
   const threadLang = String((convoCtx as any)?.thread_lang || "").toLowerCase();
-  const threadLocked = (convoCtx as any)?.thread_lang_locked === true;
 
-  if (threadLocked && (threadLang === "es" || threadLang === "en")) {
+  if (threadLang === "es" || threadLang === "en") {
     idiomaDestino = threadLang as Lang;
   }
 
@@ -252,8 +251,8 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
     });
   }
 
-  // ✅ thread_lang SOLO durante booking (para flows de reserva)
-  if (langRes.inBookingLang && !(convoCtx as any)?.thread_lang) {
+  // ✅ thread_lang fijo desde el inicio del hilo
+  if (!(convoCtx as any)?.thread_lang && (idiomaDestino === "es" || idiomaDestino === "en")) {
     convoCtx = { ...(convoCtx || {}), thread_lang: idiomaDestino };
   }
 
@@ -268,6 +267,13 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
   ) {
     // Si el detector quiere flippear en un mensaje corto, no lo permitas
     idiomaDestino = storedLang as Lang;
+  }
+
+  // 🔒 THREAD LANG FINAL LOCK
+  const finalThreadLang = String((convoCtx as any)?.thread_lang || "").toLowerCase();
+
+  if (finalThreadLang === "es" || finalThreadLang === "en") {
+    idiomaDestino = finalThreadLang as Lang;
   }
 
   // ✅ Persistir idioma final del turno (sticky) — AL FINAL
