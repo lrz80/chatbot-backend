@@ -1427,6 +1427,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                   .map((r: any, i: number) => `• ${i + 1}) ${r.name}`)
                   .join("\n")}\n\nRespóndeme con el número o el nombre y te explico qué incluye.`;
 
+          console.log("[FASTPATH_BRANCH] plan_group_disambiguation", {
+            userInput,
+            candidates: rows.map((r:any)=>r.name)
+          });
+          
           return {
             handled: true,
             reply,
@@ -1518,6 +1523,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
       // ⭐ Caso A: tiene variantes → listamos opciones y preguntamos cuál le interesa
       if (variants.length > 0) {
+        console.log("[FASTPATH_BRANCH] service_variant_list", {
+          userInput,
+          serviceId,
+          serviceName,
+          variants: variants.map((v:any)=>v.variant_name)
+        });
+
         console.log("[FASTPATH-INCLUDES] variantes primer turno", {
           userInput,
           serviceId,
@@ -1599,6 +1611,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       }
 
       // ⭐ Caso B: NO tiene variantes → respondemos directo con descripción + link
+      console.log("[FASTPATH_BRANCH] service_detail", {
+        userInput,
+        serviceId,
+        serviceName,
+        serviceUrl: service?.service_url || null
+      });
+
       const descSource = (service?.description || "").trim();
       const link: string | null = service?.service_url || null;
 
@@ -1678,6 +1697,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             ? `\n\nHere you can see more details:\n${link}`
             : `\n\nAquí puedes ver más detalles:\n${link}`;
       }
+
+      console.log("[FASTPATH_REPLY_SENT]", {
+        userInput,
+        serviceId,
+        serviceName,
+        linkIncluded: link || null
+      });
 
       return {
         handled: true,
@@ -2025,8 +2051,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const freshRows = rows.filter((r) => {
           const optionNorm = norm(r.option_name);
-          const serviceNorm = norm(r.service_name);
-          return !prevSet.has(optionNorm) && !prevSet.has(serviceNorm);
+          return !prevSet.has(optionNorm);
         });
 
         const rowsToRender: CatalogVariantRow[] = freshRows.slice(0, 5);
