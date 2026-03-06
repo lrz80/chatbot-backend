@@ -1984,22 +1984,23 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           return !prevSet.has(optionNorm);
         });
 
-        const repeatedRows = rows.filter((r) => {
-          const optionNorm = norm(r.option_name);
-          return prevSet.has(optionNorm);
-        });
+        const rowsToRender: CatalogVariantRow[] = freshRows.slice(0, 5);
 
-        let rowsToRender: CatalogVariantRow[] = [];
+        if (!rowsToRender.length) {
+          const reply =
+            idiomaDestino === "en"
+              ? "I already showed you the main options. You can ask me about any of the options I mentioned and I’ll gladly give you more details 😊"
+              : "Ya te mostré las opciones principales. Puedes preguntarme por alguna de las opciones que te mencioné y con gusto te doy más detalles 😊";
 
-        if (freshRows.length >= 3) {
-          rowsToRender = freshRows.slice(0, 5);
-        } else if (freshRows.length > 0) {
-          rowsToRender = [
-            ...freshRows,
-            ...repeatedRows.slice(0, Math.max(0, 3 - freshRows.length)),
-          ].slice(0, 5);
-        } else {
-          rowsToRender = repeatedRows.slice(0, 3);
+          return {
+            handled: true,
+            reply,
+            source: "catalog_db",
+            intent: "precio",
+            ctxPatch: {
+              last_catalog_at: Date.now(),
+            },
+          };
         }
 
         let rowsLocalized = rowsToRender.map((r) => ({ ...r }));
