@@ -1819,7 +1819,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
       // ⚖️ Solo adjuntar horarios / info general cuando:
       // - el usuario menciona horarios/horas/schedule, o
-      // - la intención es info_general / info_horarios_generales.
+      // - la intención es info_general / info_horarios_generales
       const shouldAttachInfoGeneral =
         !!infoClave &&
         (asksSchedules ||
