@@ -48,6 +48,33 @@ function normalizeChoice(s: string): string {
     .trim();
 }
 
+function detectExplicitLanguageSwitch(text: string): Lang | null {
+  const t = normalizeChoice(text);
+
+  // pedir inglés
+  if (
+    t.includes("english please") ||
+    t.includes("in english") ||
+    t.includes("speak english") ||
+    t.includes("answer in english")
+  ) {
+    return "en";
+  }
+
+  // pedir español
+  if (
+    t.includes("en espanol") ||
+    t.includes("en español") ||
+    t.includes("in spanish") ||
+    t.includes("speak spanish") ||
+    t.includes("answer in spanish")
+  ) {
+    return "es";
+  }
+
+  return null;
+}
+
 function isChoosingFromCtxListsEarly(ctx: any, userText: string): boolean {
   const u = normalizeChoice(userText);
   if (!u) return false;
@@ -165,11 +192,29 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
         convoCtx,
       });
 
-  // Idioma base propuesto por el resolver
-  if (forcedLangThisTurn) {
-    idiomaDestino = forcedLangThisTurn;
-  } else {
-    idiomaDestino = langRes.finalLang;
+    // Idioma base propuesto por el resolver
+    if (forcedLangThisTurn) {
+      idiomaDestino = forcedLangThisTurn;
+    } else {
+      idiomaDestino = langRes.finalLang;
+    }
+
+    // 🌍 Cambio explícito de idioma solicitado por el usuario
+  const explicitLang = detectExplicitLanguageSwitch(text);
+
+  if (explicitLang && explicitLang !== idiomaDestino) {
+    console.log("🌍 LANG EXPLICIT SWITCH", {
+      userInput: text,
+      from: idiomaDestino,
+      to: explicitLang,
+    });
+
+    idiomaDestino = explicitLang;
+
+    convoCtx = {
+      ...(convoCtx || {}),
+      thread_lang: explicitLang,
+    };
   }
 
   // ✅ REGLA EXTRA: saludo bilingüe "Hi hola / hi buenas..."
