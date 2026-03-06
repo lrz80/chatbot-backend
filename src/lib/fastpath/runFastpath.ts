@@ -465,82 +465,6 @@ function renderVariantOptionsReply(args: {
   return `${intro}\n\n${lines.join("\n")}\n\n${ask}`;
 }
 
-async function findServiceCandidatesByLooseName(args: {
-  pool: Pool;
-  tenantId: string;
-  userInput: string;
-  limit?: number;
-}) {
-  const { pool, tenantId, userInput, limit = 5 } = args;
-
-  const qNorm = normalizeText(userInput);
-
-  const stopwords = new Set([
-    "q",
-    "que",
-    "qué",
-    "incluye",
-    "incluyen",
-    "trae",
-    "detalle",
-    "detalles",
-    "dame",
-    "mas",
-    "más",
-    "about",
-    "tell",
-    "more",
-    "detail",
-    "details",
-    "what",
-    "is",
-    "included",
-    "the",
-    "el",
-    "la",
-    "los",
-    "las",
-  ]);
-
-  const tokens = qNorm
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 3)
-    .filter((t) => !stopwords.has(t));
-
-  if (!tokens.length) return [];
-
-  const { rows } = await pool.query(
-    `
-    SELECT id, name
-    FROM services
-    WHERE tenant_id = $1
-      AND active = true
-    ORDER BY created_at ASC, id ASC
-    `,
-    [tenantId]
-  );
-
-  const candidates = (rows || []).filter((r: any) => {
-    const nameNorm = normalizeText(r.name || "");
-    if (!nameNorm) return false;
-
-    return tokens.every((tok) => nameNorm.includes(tok)) ||
-           tokens.some((tok) => nameNorm.includes(tok));
-  });
-
-  const dedup = new Map<string, { id: string; name: string }>();
-
-  for (const r of candidates) {
-    const id = String(r.id || "").trim();
-    const name = String(r.name || "").trim();
-    if (!id || !name) continue;
-    if (!dedup.has(id)) dedup.set(id, { id, name });
-  }
-
-  return Array.from(dedup.values()).slice(0, limit);
-}
-
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -1484,7 +1408,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     // 🔥 PATCH NUEVO: si es detalle pero no se encontró servicio por texto,
     // usar SERVICE en contexto (último plan mostrado o seleccionado)
     if (!hit) {
-      // 1) Si venimos de una lista de un solo plan (ej: después de "y el gold?").
+      // 1) Si venimos de una lista de un solo plan (ej: después de "y el gold?")
       if (convoCtx?.last_plan_list?.length === 1) {
         hit = {
           id: convoCtx.last_plan_list[0].id,
@@ -1503,53 +1427,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         hit = {
           id: convoCtx.last_service_id,
           name: convoCtx.last_service_name || "",
-        };
-      }
-    }
-
-    // ✅ NUEVO: si sigue sin hit, intentar desambiguación por nombre parcial
-    if (!hit) {
-      const candidates = await findServiceCandidatesByLooseName({
-        pool,
-        tenantId,
-        userInput,
-        limit: 4,
-      });
-
-      if (candidates.length >= 2) {
-        const reply =
-          idiomaDestino === "en"
-            ? `Just to make sure 😊 are you asking about:\n\n${candidates
-                .map((c, i) => `• ${i + 1}) ${c.name}`)
-                .join("\n")}\n\nReply with the number or the name and I’ll tell you what it includes.`
-            : `Solo para asegurarme 😊 ¿te refieres a:\n\n${candidates
-                .map((c, i) => `• ${i + 1}) ${c.name}`)
-                .join("\n")}\n\nRespóndeme con el número o el nombre y te digo qué incluye.`;
-
-        return {
-          handled: true,
-          reply,
-          source: "service_list_db",
-          intent: intentOut || "info_servicio",
-          ctxPatch: {
-            last_plan_list: candidates.map((c) => ({
-              id: c.id,
-              name: c.name,
-              url: null,
-            })),
-            last_plan_list_at: Date.now(),
-            last_list_kind: "plan",
-            last_list_kind_at: Date.now(),
-            last_bot_action: "asked_detail_disambiguation",
-            last_bot_action_at: Date.now(),
-          } as Partial<FastpathCtx>,
-        };
-      }
-
-      if (candidates.length === 1) {
-        hit = {
-          id: candidates[0].id,
-          name: candidates[0].name,
         };
       }
     }
