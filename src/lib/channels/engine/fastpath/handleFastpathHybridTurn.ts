@@ -228,7 +228,42 @@ export async function handleFastpathHybridTurn(
 
     if (idiomaDestino === "en") {
       try {
-        localizedReply = await traducirTexto(fp.reply, "en", "catalog_label");
+        const lines = String(fp.reply || "").split(/\r?\n/);
+        const translatedLines: string[] = [];
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+
+          if (!trimmed) {
+            translatedLines.push(line);
+            continue;
+          }
+
+          // Bullet tipo: • Nombre: precio
+          const m = trimmed.match(/^([•\-\*]\s*)(.+?)(:\s*.+)$/);
+          if (m) {
+            const bullet = m[1];
+            const label = m[2];
+            const suffix = m[3]; // precio/rango intacto
+
+            let labelEn = label;
+            try {
+              labelEn = await traducirTexto(label, "en", "catalog_label");
+            } catch {}
+
+            translatedLines.push(`${bullet}${labelEn}${suffix}`);
+            continue;
+          }
+
+          // Header/footer normal
+          try {
+            translatedLines.push(await traducirTexto(line, "en", "default"));
+          } catch {
+            translatedLines.push(line);
+          }
+        }
+
+        localizedReply = translatedLines.join("\n");
       } catch (e: any) {
         console.warn("[FASTPATH][DB_PRICE] error traduciendo respuesta DB:", e?.message || e);
       }
