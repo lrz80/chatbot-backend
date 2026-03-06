@@ -1981,7 +1981,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const freshRows = rows.filter((r) => {
           const optionNorm = norm(r.option_name);
-          return !prevSet.has(optionNorm);
+          const serviceNorm = norm(r.service_name);
+          return !prevSet.has(optionNorm) && !prevSet.has(serviceNorm);
         });
 
         const rowsToRender: CatalogVariantRow[] = freshRows.slice(0, 5);
