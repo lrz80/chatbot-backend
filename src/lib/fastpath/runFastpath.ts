@@ -1418,6 +1418,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         }
 
         if (rows.length > 1) {
+          console.log("[FASTPATH_BRANCH] plan_group_disambiguation", {
+            userInput,
+            candidates: rows.map((r: any) => r.name),
+          });
+
           const reply =
             idiomaDestino === "en"
               ? `Just to confirm 😊 are you asking about:\n\n${rows
@@ -1427,16 +1432,23 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                   .map((r: any, i: number) => `• ${i + 1}) ${r.name}`)
                   .join("\n")}\n\nRespóndeme con el número o el nombre y te explico qué incluye.`;
 
-          console.log("[FASTPATH_BRANCH] plan_group_disambiguation", {
-            userInput,
-            candidates: rows.map((r:any)=>r.name)
-          });
-          
           return {
             handled: true,
             reply,
             source: "service_list_db",
             intent: "info_servicio",
+            ctxPatch: {
+              last_plan_list: rows.map((r: any) => ({
+                id: String(r.id),
+                name: String(r.name || "").trim(),
+                url: null,
+              })),
+              last_plan_list_at: Date.now(),
+              last_list_kind: "plan",
+              last_list_kind_at: Date.now(),
+              last_bot_action: "asked_plan_group_disambiguation",
+              last_bot_action_at: Date.now(),
+            } as Partial<FastpathCtx>,
           };
         }
       }
