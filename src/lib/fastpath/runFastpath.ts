@@ -356,7 +356,7 @@ function extractPlanGroupToken(raw: string): string | null {
   if (!t) return null;
 
   // "plan bronce", "plan gold"
-  let m = t.match(/\bplan\s+([a-z0-9]+)\b/);
+  let m = t.match(/\bplan\s+([a-z0-9áéíóúñ]+)\b/);
   if (m?.[1]) return m[1];
 
   // "paquete bronce"
@@ -1388,10 +1388,54 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   if (looksLikeServiceDetail) {
     // Detectar servicio por texto ("plan bronce", "basic bath", "deluxe groom", "facial", etc.)
-    // Detectar servicio por texto ("plan bronce", "basic bath", etc.)
     let hit: any = await resolveServiceIdFromText(pool, tenantId, userInput, {
       mode: "loose",
     });
+
+    // 🔎 Intentar detectar grupo de plan (ej: "plan bronce")
+    if (!hit) {
+      const planToken = extractPlanGroupToken(userInput);
+
+      if (planToken) {
+        const { rows } = await pool.query(
+          `
+          SELECT id, name
+          FROM services
+          WHERE tenant_id = $1
+            AND active = true
+            AND lower(name) LIKE $2
+          ORDER BY created_at ASC
+          LIMIT 5
+          `,
+          [tenantId, `%${planToken}%`]
+        );
+
+        if (rows.length === 1) {
+          hit = {
+            serviceId: rows[0].id,
+            serviceName: rows[0].name,
+          };
+        }
+
+        if (rows.length > 1) {
+          const reply =
+            idiomaDestino === "en"
+              ? `Just to confirm 😊 are you asking about:\n\n${rows
+                  .map((r: any, i: number) => `• ${i + 1}) ${r.name}`)
+                  .join("\n")}\n\nReply with the number or the name and I'll tell you what it includes.`
+              : `Solo para confirmar 😊 ¿te refieres a:\n\n${rows
+                  .map((r: any, i: number) => `• ${i + 1}) ${r.name}`)
+                  .join("\n")}\n\nRespóndeme con el número o el nombre y te explico qué incluye.`;
+
+          return {
+            handled: true,
+            reply,
+            source: "service_list_db",
+            intent: "info_servicio",
+          };
+        }
+      }
+    }
 
     // 🛠 FIX: Si el texto coincide con una variante exacta,
     // NO tratamos esa variante como un servicio independiente.
@@ -1435,7 +1479,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     if (!hit) {
       // No encontramos servicio claro → motor catálogo
     } else {
-      const serviceId = hit.id;
+      const serviceId = hit.serviceId || hit.id;
 
       // Traer variantes de ese servicio
       const { rows: variants } = await pool.query<any>(
@@ -1470,7 +1514,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         [serviceId]
       );
 
-      const serviceName = String(service?.name || hit.name || "").trim();
+      const serviceName = String(service?.name || hit.serviceName || hit.name || "").trim();
 
       // ⭐ Caso A: tiene variantes → listamos opciones y preguntamos cuál le interesa
       if (variants.length > 0) {
