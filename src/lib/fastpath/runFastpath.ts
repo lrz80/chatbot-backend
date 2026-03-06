@@ -421,6 +421,50 @@ function stripLinkSentences(reply: string): string {
   return filtered.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+type CatalogVariantRow = {
+  option_name: string;
+  service_name: string;
+  variant_name: string | null;
+  price_value: number | string | null;
+};
+
+function renderVariantOptionsReply(args: {
+  lang: Lang;
+  rows: { option_name: string; price_value: number | string | null }[];
+}) {
+  const { lang, rows } = args;
+
+  const intro =
+    rows.length === 1
+      ? lang === "en"
+        ? "Here is another option:"
+        : "Aquí tienes otra opción:"
+      : lang === "en"
+      ? "Here are some other options:"
+      : "Aquí tienes otras opciones:";
+
+  const lines = rows
+    .filter((r) => r.option_name && r.price_value !== null && r.price_value !== undefined)
+    .map((r) => {
+      const n = Number(r.price_value);
+      const priceText =
+        Number.isFinite(n) && n <= 0
+          ? lang === "en"
+            ? "free"
+            : "gratis"
+          : `$${Number(n).toFixed(2)}`;
+
+      return `• ${r.option_name}: ${priceText}`;
+    });
+
+  const ask =
+    lang === "en"
+      ? "Which one are you interested in? 😊"
+      : "¿Cuál de estas opciones te interesa? 😊";
+
+  return `${intro}\n\n${lines.join("\n")}\n\n${ask}`;
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -1789,7 +1833,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         : "";
 
       // ✅ Precio/planes genérico: responder desde DB (no LLM)
-      if (!asksSchedules && (questionType === "price_or_plan" || questionType === "other_plans")) {
+      if (!asksSchedules && questionType === "price_or_plan") {
         const { rows } = await pool.query<{
           service_name: string;
           min_price: number | string | null;
@@ -1837,27 +1881,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           ) x;
         `, [tenantId]);
 
-        // --- other_plans: filtrar ANTES de render (sin postProcess) ---
-        const norm = (s: string) =>
-          String(s || "")
-            .trim()
-            .toLowerCase()
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "");
-
-        let rowsToRender = rows;
-
-        if (questionType === "other_plans" && prevFresh && prevNames?.length) {
-          const prevSet = new Set(prevNames.map(norm));
-          rowsToRender = rows.filter((r) => !prevSet.has(norm(r.service_name)));
-        }
-
-        // 2) (EN) traducir SOLO nombres para render, sin tocar precios.
-        let rowsLocalized = rowsToRender;
+        let rowsLocalized = rows;
 
         if (idiomaDestino === "en") {
           rowsLocalized = await Promise.all(
-            rowsToRender.map(async (r) => {
+            rows.map(async (r) => {
               const nameEs = String(r.service_name || "").trim();
               if (!nameEs) return r;
 
@@ -1878,8 +1906,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const cleanedReply = stripLinkSentences(dbReply);
 
-        // ✅ Guardar contexto con nombres ORIGINALES, no traducidos
-        const namesShown = (rowsToRender || [])
+        const namesShown = (rows || [])
           .map((r) => String(r.service_name || "").trim())
           .filter(Boolean)
           .slice(0, 7);
@@ -1895,6 +1922,122 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         return {
           handled: true,
           reply: humanizeListReply(cleanedReply, idiomaDestino),
+          source: "catalog_db",
+          intent: "precio",
+          ctxPatch,
+        };
+      }
+
+      if (!asksSchedules && questionType === "other_plans") {
+        const { rows } = await pool.query<CatalogVariantRow>(`
+          SELECT
+            CASE
+              WHEN v.variant_name IS NOT NULL AND length(trim(v.variant_name)) > 0
+                THEN s.name || ' — ' || v.variant_name
+              ELSE s.name
+            END AS option_name,
+            s.name AS service_name,
+            v.variant_name,
+            v.price::numeric AS price_value
+          FROM services s
+          JOIN service_variants v
+            ON v.service_id = s.id
+          AND v.active = true
+          WHERE s.tenant_id = $1
+            AND s.active = true
+            AND v.price IS NOT NULL
+
+          UNION ALL
+
+          SELECT
+            s.name AS option_name,
+            s.name AS service_name,
+            NULL::text AS variant_name,
+            s.price_base::numeric AS price_value
+          FROM services s
+          WHERE s.tenant_id = $1
+            AND s.active = true
+            AND s.price_base IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM service_variants v
+              WHERE v.service_id = s.id
+                AND v.active = true
+                AND v.price IS NOT NULL
+            )
+          ORDER BY price_value ASC NULLS LAST, option_name ASC
+        `, [tenantId]);
+
+        const norm = (s: string) =>
+          String(s || "")
+            .trim()
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "");
+
+        const prevSet = new Set(
+          (prevFresh ? prevNames : []).map(norm)
+        );
+
+        const freshRows = rows.filter((r) => {
+          const optionNorm = norm(r.option_name);
+          return !prevSet.has(optionNorm);
+        });
+
+        const repeatedRows = rows.filter((r) => {
+          const optionNorm = norm(r.option_name);
+          return prevSet.has(optionNorm);
+        });
+
+        let rowsToRender: CatalogVariantRow[] = [];
+
+        if (freshRows.length >= 3) {
+          rowsToRender = freshRows.slice(0, 5);
+        } else if (freshRows.length > 0) {
+          rowsToRender = [
+            ...freshRows,
+            ...repeatedRows.slice(0, Math.max(0, 3 - freshRows.length)),
+          ].slice(0, 5);
+        } else {
+          rowsToRender = repeatedRows.slice(0, 3);
+        }
+
+        let rowsLocalized = rowsToRender.map((r) => ({ ...r }));
+
+        if (idiomaDestino === "en") {
+          rowsLocalized = await Promise.all(
+            rowsToRender.map(async (r) => {
+              try {
+                const optionEn = await traducirTexto(String(r.option_name || ""), "en", "catalog_label");
+                return { ...r, option_name: optionEn };
+              } catch {
+                return r;
+              }
+            })
+          );
+        }
+
+        const reply = renderVariantOptionsReply({
+          lang: idiomaDestino,
+          rows: rowsLocalized,
+        });
+
+        const namesShown = rowsToRender
+          .map((r) => String(r.option_name || "").trim())
+          .filter(Boolean)
+          .slice(0, 7);
+
+        const ctxPatch: Partial<FastpathCtx> = {
+          last_catalog_at: Date.now(),
+        };
+
+        if (namesShown.length) {
+          ctxPatch.last_catalog_plans = namesShown;
+        }
+
+        return {
+          handled: true,
+          reply,
           source: "catalog_db",
           intent: "precio",
           ctxPatch,
