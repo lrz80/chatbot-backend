@@ -228,7 +228,7 @@ export async function handleFastpathHybridTurn(
 
     if (idiomaDestino === "en") {
       try {
-        localizedReply = await traducirTexto(fp.reply, "en");
+        localizedReply = await traducirTexto(fp.reply, "en", "catalog_label");
       } catch (e: any) {
         console.warn("[FASTPATH][DB_PRICE] error traduciendo respuesta DB:", e?.message || e);
       }

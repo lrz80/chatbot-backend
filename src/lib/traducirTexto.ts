@@ -2,18 +2,22 @@ import OpenAI from "openai";
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
-// Cache simple en memoria para no traducir lo mismo 200 veces
+// Cache simple en memoria
 const cache = new Map<string, string>();
-const CACHE_VERSION = "v2_prices_frozen";
+const CACHE_VERSION = "v3_catalog_labels";
 
-export async function traducirTexto(texto: string, idioma: string): Promise<string> {
+export async function traducirTexto(
+  texto: string,
+  idioma: string,
+  mode: "default" | "catalog_label" = "default"
+): Promise<string> {
   if (!texto) return "";
 
-  const key = `${CACHE_VERSION}::${texto}::${idioma}`;
+  const key = `${CACHE_VERSION}::${mode}::${texto}::${idioma}`;
   if (cache.has(key)) return cache.get(key)!;
 
   // ===============================
-  // 🔒 PROTEGER TOKENS NO-TRADUCIBLES
+  // 🔒 PROTEGER TOKENS
   // ===============================
   const protectedTokens: string[] = [];
   const freeze = (match: string) => {
@@ -22,38 +26,50 @@ export async function traducirTexto(texto: string, idioma: string): Promise<stri
     return token;
   };
 
-  // 1) URLs
+  // URLs
   let protectedText = texto.replace(/https?:\/\/\S+/gi, freeze);
 
-  // 2) Emails
+  // Emails
   protectedText = protectedText.replace(
     /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
     freeze
   );
 
-  // 3) Dinero: $59.99, 59.99 USD, etc.
+  // Dinero
   protectedText = protectedText.replace(
     /(\$\s*\d+(?:\.\d{1,2})?)|(\b\d+(?:\.\d{1,2})?\s*(?:usd|eur|gbp)\b)/gi,
     freeze
   );
 
-  // 4) Cualquier número/formatos numéricos (24/7, 7 days, 10:30, 3 months, etc.)
+  // Números
   protectedText = protectedText.replace(
     /\b\d+(?:[.,]\d+)?(?:%|\/\d+)?(?::\d{2})?\b/g,
     freeze
   );
 
-  const prompt = `
-  Traduce el siguiente texto al idioma "${idioma}".
-  REGLAS OBLIGATORIAS:
-  - NO cambies ningún número (incluyendo decimales), símbolos ($), moneda (USD) ni porcentajes.
-  - NO reordenes líneas. Mantén EXACTAMENTE el mismo orden.
-  - NO cambies el formato de viñetas ni los saltos de línea.
-  - Solo traduce palabras.
+  const extraRules =
+    mode === "catalog_label"
+      ? `
+REGLAS EXTRA DE CATÁLOGO:
+- Traduce como nombres comerciales naturales de productos, servicios o planes.
+- NO hagas traducción literal palabra por palabra si produce frases poco naturales.
+- Conserva exactamente números, precios, símbolos y tokens __KEEP_X__.
+`
+      : "";
 
-  Texto:
-  ${texto}
-  `.trim();
+  const prompt = `
+Traduce el siguiente texto al idioma "${idioma}".
+
+REGLAS OBLIGATORIAS:
+- NO cambies ningún número, símbolo ($), moneda, porcentaje ni tokens __KEEP_X__.
+- NO reordenes líneas. Mantén EXACTAMENTE el mismo orden.
+- NO cambies el formato de viñetas ni los saltos de línea.
+- Solo traduce palabras.
+${extraRules}
+
+Texto:
+${protectedText}
+`.trim();
 
   const response = await client.responses.create({
     model: "gpt-4.1-mini",
@@ -63,7 +79,7 @@ export async function traducirTexto(texto: string, idioma: string): Promise<stri
   let translated = response.output_text.trim();
 
   // ===============================
-  // 🔓 RESTAURAR EXACTO (TODAS las ocurrencias)
+  // 🔓 RESTAURAR TOKENS
   // ===============================
   protectedTokens.forEach((val, i) => {
     const token = `__KEEP_${i}__`;
