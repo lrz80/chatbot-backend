@@ -1811,7 +1811,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           rowsToRender = rows.filter((r) => !prevSet.has(norm(r.service_name)));
         }
 
-        // 2) (EN) traducir SOLO nombres para render, sin tocar precios
+        // 2) (EN) traducir SOLO nombres para render, sin tocar precios.
         let rowsLocalized = rowsToRender;
 
         if (idiomaDestino === "en") {
