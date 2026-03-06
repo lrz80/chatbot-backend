@@ -465,6 +465,38 @@ function renderVariantOptionsReply(args: {
   return `${intro}\n\n${lines.join("\n")}\n\n${ask}`;
 }
 
+function normalizeForIntent(raw: string): string {
+  return String(raw || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function looksLikeDetailIntent(raw: string): boolean {
+  const t = normalizeForIntent(raw);
+  if (!t) return false;
+
+  const detailSignals = [
+    "incluye",
+    "include",
+    "included",
+    "detalle",
+    "detalles",
+    "que trae",
+    "what include",
+    "what is included",
+    "more detail",
+    "more details",
+    "dime mas",
+    "dame mas detalle",
+  ];
+
+  return detailSignals.some((s) => t.includes(s));
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -1368,18 +1400,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   // ===============================
   // ✅ VARIANTES: PRIMER TURNO
-  // El usuario pregunta "qué incluye X" y detectamos el servicio
   // (GENÉRICO: sirve para cualquier nombre, sin hardcodear bronce/basic/etc.)
   // ===============================
   // Texto normalizado para detectar intención de detalle
-  const normMsg = normalizeText(userInput);
+  const normMsg = normalizeForIntent(userInput);
 
   // Pregunta explícita de detalle: "qué incluye X", "que trae X", etc.
-  // Pregunta explícita de detalle: "qué incluye X", "que trae X", "dame más detalle", "more details", etc.
-  const looksLikeExplicitDetail =
-    /\b(que incluye|qué incluye|que trae|qué trae|incluye|incluyen|mas detalle|más detalle|dame mas detalle|dame más detalle|detalle|detalles|what\s+is\s+included|what\s+does.*include|more detail|more details|give me more detail|tell me more about)\b/i.test(
-      normMsg
-    );
+  const looksLikeExplicitDetail = looksLikeDetailIntent(userInput);
 
   // Follow-up elíptico tipo "y el gold?", "y el bronce?"
   // Lo consideramos detalle SI después de "y el/la" viene algo.
