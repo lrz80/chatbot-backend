@@ -7,6 +7,7 @@ import { runFastpath } from "../../../fastpath/runFastpath";
 import { naturalizeSecondaryOptionsLine } from "../../../fastpath/naturalizeSecondaryOptions";
 import { getRecentHistoryForModel } from "../messages/getRecentHistoryForModel";
 import { answerWithPromptBase } from "../../../answers/answerWithPromptBase";
+import { traducirTexto } from "../../../traducirTexto";
 
 const MAX_WHATSAPP_LINES = 9999; // mantenemos el mismo valor
 
@@ -223,9 +224,19 @@ export async function handleFastpathHybridTurn(
       intent: fp.intent,
     });
 
+    let localizedReply = fp.reply;
+
+    if (idiomaDestino === "en") {
+      try {
+        localizedReply = await traducirTexto(fp.reply, "en");
+      } catch (e: any) {
+        console.warn("[FASTPATH][DB_PRICE] error traduciendo respuesta DB:", e?.message || e);
+      }
+    }
+
     return {
       handled: true,
-      reply: fp.reply,
+      reply: localizedReply,
       replySource: fp.source,
       intent: fp.intent || detectedIntent || intentFallback || null,
       ctxPatch,
