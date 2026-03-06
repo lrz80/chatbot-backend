@@ -1193,6 +1193,135 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
+  // ✅ FOLLOW-UP DE VARIANTE DEL MISMO SERVICIO (GENÉRICO / MULTITENANT)
+  // Si ya estamos parados en un servicio con variantes y el usuario
+  // menciona una variante, responder directo sin relistar.
+  // ===============================
+  {
+    const now = Date.now();
+    const ttlMs = 10 * 60 * 1000;
+
+    const lastServiceId = String((convoCtx as any)?.last_service_id || "").trim();
+    const lastServiceFresh =
+      !!lastServiceId &&
+      Number((convoCtx as any)?.last_service_at || 0) > 0 &&
+      now - Number((convoCtx as any)?.last_service_at || 0) <= ttlMs;
+
+    if (lastServiceFresh) {
+      const { rows: variants } = await pool.query<any>(
+        `
+        SELECT
+          id,
+          variant_name,
+          description,
+          variant_url,
+          price,
+          currency
+        FROM service_variants
+        WHERE service_id = $1
+          AND active = true
+        ORDER BY created_at ASC, id ASC
+        `,
+        [lastServiceId]
+      );
+
+      if (variants.length > 0) {
+        const matchedVariant = bestNameMatch(
+          userInput,
+          variants.map((v: any) => ({
+            id: String(v.id),
+            name: String(v.variant_name || "").trim(),
+            url: v.variant_url ? String(v.variant_url).trim() : null,
+          }))
+        ) as any;
+
+        if (matchedVariant?.name) {
+          const chosen = variants.find(
+            (v: any) => String(v.id) === String(matchedVariant.id)
+          );
+
+          if (chosen) {
+            const {
+              rows: [service],
+            } = await pool.query<any>(
+              `
+              SELECT
+                name,
+                description,
+                service_url
+              FROM services
+              WHERE id = $1
+              `,
+              [lastServiceId]
+            );
+
+            const descSource = (chosen.description || service?.description || "").trim();
+            const link: string | null = chosen.variant_url || service?.service_url || null;
+
+            const bullets: string =
+              descSource
+                ? descSource
+                    .split(/\r?\n/)
+                    .map((l: string) => l.trim())
+                    .filter((l: string) => l.length > 0)
+                    .map((l: string) => `• ${l}`)
+                    .join("\n")
+                : "";
+
+            const baseName = String(service?.name || "").trim();
+            const variantName = String(chosen.variant_name || "").trim();
+
+            const title =
+              baseName && variantName
+                ? `${baseName} — ${variantName}`
+                : baseName || variantName || "";
+
+            let reply =
+              idiomaDestino === "en"
+                ? `Perfect 😊\n\n${title ? `*${title}*` : ""}${bullets ? ` includes:\n\n${bullets}` : ""}`
+                : `Perfecto 😊\n\n${title ? `*${title}*` : ""}${bullets ? ` incluye:\n\n${bullets}` : ""}`;
+
+            if (link) {
+              reply +=
+                idiomaDestino === "en"
+                  ? `\n\nHere you can see more details:\n${link}`
+                  : `\n\nAquí puedes ver más detalles:\n${link}`;
+            }
+
+            console.log("[FASTPATH-VARIANT-FOLLOWUP] direct variant switch", {
+              userInput,
+              serviceId: lastServiceId,
+              baseName,
+              variantName,
+              link,
+            });
+
+            return {
+              handled: true,
+              reply,
+              source: "service_list_db",
+              intent: intentOut || "info_servicio",
+              ctxPatch: {
+                last_service_id: lastServiceId,
+                last_service_name: baseName || null,
+                last_service_at: Date.now(),
+
+                last_variant_id: String(chosen.id || ""),
+                last_variant_name: variantName || null,
+                last_variant_url: link || null,
+                last_variant_at: Date.now(),
+
+                last_price_option_label: variantName || null,
+                last_price_option_at: Date.now(),
+              } as Partial<FastpathCtx>,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  // ===============================
   // ✅ VARIANTES: SEGUNDO TURNO
   // El usuario ya vio las opciones y ahora elige una (1, "autopay", etc.)
   // ===============================
@@ -1261,6 +1390,22 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     // 🌎 DETECCIÓN INTELIGENTE DE VARIANTES
     // (MULTITENANT – sin hardcode por negocio)
     // --------------------------------------
+    if (!chosen) {
+      const matchedVariant = bestNameMatch(
+        userInput,
+        variants.map((v: any) => ({
+          id: String(v.id),
+          name: String(v.variant_name || "").trim(),
+          url: v.variant_url ? String(v.variant_url).trim() : null,
+        }))
+      ) as any;
+
+      if (matchedVariant?.id) {
+        chosen = variants.find((v: any) => String(v.id) === String(matchedVariant.id));
+      }
+    }
+    // Fallback genérico para alias comunes de variantes de pago
+    // (útil cuando el usuario escribe "autopay" pero la DB dice "Autopago", etc.)
     if (!chosen) {
       const msg = msgNorm; // ya normalizado
 
