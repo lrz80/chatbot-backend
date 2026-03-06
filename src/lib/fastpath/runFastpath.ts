@@ -1811,19 +1811,38 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           rowsToRender = rows.filter((r) => !prevSet.has(norm(r.service_name)));
         }
 
-        // 2) Render determinístico (ya ordena + limita + gratis/free)
+        // 2) (EN) traducir SOLO nombres, sin tocar precios
+        let rowsLocalized = rowsToRender;
+
+        if (idiomaDestino === "en") {
+          rowsLocalized = await Promise.all(
+            rowsToRender.map(async (r) => {
+              const nameEs = String(r.service_name || "").trim();
+              if (!nameEs) return r;
+
+              try {
+                // Traduce SOLO el nombre
+                const nameEn = await traducirMensaje(nameEs, "en");
+                return { ...r, service_name: nameEn };
+              } catch {
+                return r; // fallback seguro
+              }
+            })
+          );
+        }
+
         const dbReply = renderGenericPriceSummaryReply({
           lang: idiomaDestino,
-          rows: rowsToRender,
+          rows: rowsLocalized,
         });
 
         const cleanedReply = stripLinkSentences(dbReply);
 
-        // ✅ Guardar los nombres que realmente mostramos (máx 6)
-        const namesShown = (rowsToRender || [])
+        // ✅ Guardar los nombres que realmente mostramos (máx 7)
+        const namesShown = (rowsLocalized || [])
           .map((r) => String(r.service_name || "").trim())
           .filter(Boolean)
-          .slice(0, 6);
+          .slice(0, 7);
 
         const ctxPatch: Partial<FastpathCtx> = {
           last_catalog_at: Date.now(),
