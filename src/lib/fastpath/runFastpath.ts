@@ -71,6 +71,11 @@ export type FastpathCtx = {
   selectedServiceId?: string | null;
   expectingVariant?: boolean;
 
+  last_variant_id?: string | null;
+  last_variant_name?: string | null;
+  last_variant_url?: string | null;
+  last_variant_at?: number | null;
+
   [k: string]: any;
 };
 
@@ -1391,9 +1396,18 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       ctxPatch: {
         expectingVariant: false,
         selectedServiceId: serviceId,
+
         last_service_id: serviceId,
         last_service_name: baseName || title || null,
         last_service_at: Date.now(),
+
+        last_variant_id: String(chosen.id || ""),
+        last_variant_name: variantName || null,
+        last_variant_url: link || null,
+        last_variant_at: Date.now(),
+
+        last_price_option_label: variantName || null,
+        last_price_option_at: Date.now(),
       } as Partial<FastpathCtx>,
     };
   }
