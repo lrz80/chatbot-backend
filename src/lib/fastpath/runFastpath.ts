@@ -1469,25 +1469,23 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       };
     }
 
+    const explicitGroupToken = extractPlanGroupToken(userInput);
+    const hasExplicitNewTarget = !!explicitGroupToken;
+
     // 🔥 PATCH NUEVO: si es detalle pero no se encontró servicio por texto,
     // usar SERVICE en contexto (último plan mostrado o seleccionado)
-    if (!hit) {
-      // 1) Si venimos de una lista de un solo plan (ej: después de "y el gold?")
+    if (!hit && !hasExplicitNewTarget) {
       if (convoCtx?.last_plan_list?.length === 1) {
         hit = {
           id: convoCtx.last_plan_list[0].id,
           name: convoCtx.last_plan_list[0].name,
         };
-      }
-      // 2) Si hay un servicio seleccionado previamente
-      else if (convoCtx?.selectedServiceId) {
+      } else if (convoCtx?.selectedServiceId) {
         hit = {
           id: convoCtx.selectedServiceId,
           name: convoCtx.last_service_name || "",
         };
-      }
-      // 3) Si hay un servicio recordado recientemente
-      else if (convoCtx?.last_service_id) {
+      } else if (convoCtx?.last_service_id) {
         hit = {
           id: convoCtx.last_service_id,
           name: convoCtx.last_service_name || "",
