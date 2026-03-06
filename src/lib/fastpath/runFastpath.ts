@@ -1991,7 +1991,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const cleanedReply = stripLinkSentences(dbReply);
 
-        const namesShown = (rows || [])
+        const namesShown = rowsLocalized
           .map((r) => String(r.service_name || "").trim())
           .filter(Boolean)
           .slice(0, 7);
