@@ -1832,7 +1832,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           : `\n\nINFO_GENERAL_DEL_NEGOCIO (horarios, dirección, etc.):\n${infoClave}`
         : "";
 
-      // ✅ Precio/planes genérico: responder desde DB (no LLM)
+      // ✅ Precio/planes genérico: responder desde DB (no LLM).
       if (!asksSchedules && questionType === "price_or_plan") {
         const { rows } = await pool.query<{
           service_name: string;
