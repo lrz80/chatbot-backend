@@ -112,7 +112,7 @@ export async function resolveBestLinkForService(args: {
       });
 
       // Umbrales (genéricos): debe haber match decente y no ser empate
-      const strongEnough = best.score >= 0.34; // ajustable
+      const strongEnough = best.score >= 0.40; // ajustable
       const clearlyBetter = !second || best.score - second.score >= 0.12;
 
       // Caso 1: coincidencia clara => variante específica
@@ -131,13 +131,27 @@ export async function resolveBestLinkForService(args: {
         return { ok: true, url: serviceUrl };
       }
 
-      console.log("🔗 [LINK-RESOLVER] ambiguous & no serviceUrl -> best.variant anyway", {
+      // 🚨 Caso 3: ambigüedad real y NO hay service_url
+      const bestScore = Number(best?.score || 0);
+      const secondScore = Number(second?.score || 0);
+
+      if (bestScore <= 0 || bestScore === secondScore) {
+        console.log("🔗 [LINK-RESOLVER] ambiguous -> ask variant", {
+          options,
+        });
+
+        return {
+          ok: false,
+          reason: "ambiguous",
+          options,
+        };
+      }
+
+      // si no es empate y hay leve señal, usamos la mejor
+      console.log("🔗 [LINK-RESOLVER] weak but usable match -> best.variant", {
         url: best.url,
       });
 
-      // 🚨 Caso 3: ambigüedad y NO hay service_url
-      // En este caso escogemos igualmente la mejor variante,
-      // aunque la similitud sea baja, para que SIEMPRE haya link.
       return { ok: true, url: best.url };
     }
 
