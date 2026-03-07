@@ -22,6 +22,7 @@ import { buildCatalogContext } from "../catalog/buildCatalogContext";
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
 import OpenAI from "openai";
 import { extractQueryFrames, type QueryFrame } from "./extractQueryFrames";
+import { resolveServiceMatchesFromText } from "../services/pricing/resolveServiceMatchesFromText";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -619,8 +620,24 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             ) x
           `, [tenantId]);
 
-          let targetHit: any = await resolveServiceIdFromText(pool, tenantId, targetText, {
-            mode: "loose",
+          const targetMatches = await resolveServiceMatchesFromText(
+            pool,
+            tenantId,
+            targetText,
+            {
+              minScore: 0.3,
+              maxResults: 4,
+              relativeWindow: 0.12,
+            }
+          );
+
+          const targetHit: any = targetMatches.length === 1 ? targetMatches[0] : null;
+
+          console.log("[MULTIQ][PRICE] resolve attempt", {
+            part,
+            targetText,
+            targetMatches,
+            targetHit,
           });
 
           console.log("[MULTIQ][PRICE] resolve attempt", {
@@ -633,7 +650,84 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 }
               : null,
           });
-          
+
+          if (!targetHit && targetMatches.length >= 2) {
+            const { rows: allPriceRows } = await pool.query<{
+              service_id: string;
+              service_name: string;
+              min_price: number | string | null;
+              max_price: number | string | null;
+            }>(`
+              WITH variant_prices AS (
+                SELECT
+                  s.id AS service_id,
+                  s.name AS service_name,
+                  MIN(v.price)::numeric AS min_price,
+                  MAX(v.price)::numeric AS max_price
+                FROM services s
+                JOIN service_variants v
+                  ON v.service_id = s.id
+                 AND v.active = true
+                WHERE s.tenant_id = $1
+                  AND s.active = true
+                  AND v.price IS NOT NULL
+                GROUP BY s.id, s.name
+              ),
+              base_prices AS (
+                SELECT
+                  s.id AS service_id,
+                  s.name AS service_name,
+                  MIN(s.price_base)::numeric AS min_price,
+                  MAX(s.price_base)::numeric AS max_price
+                FROM services s
+                WHERE s.tenant_id = $1
+                  AND s.active = true
+                  AND s.price_base IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM service_variants v
+                    WHERE v.service_id = s.id
+                      AND v.active = true
+                      AND v.price IS NOT NULL
+                  )
+                GROUP BY s.id, s.name
+              )
+              SELECT service_id, service_name, min_price, max_price
+              FROM (
+                SELECT service_id, service_name, min_price, max_price FROM variant_prices
+                UNION ALL
+                SELECT service_id, service_name, min_price, max_price FROM base_prices
+              ) x
+            `, [tenantId]);
+
+            const matchedPriceLines = targetMatches
+              .map((m) => {
+                const row = allPriceRows.find((r) => String(r.service_id) === String(m.id));
+                if (!row) return null;
+
+                const min = row.min_price === null ? null : Number(row.min_price);
+                const max = row.max_price === null ? null : Number(row.max_price);
+
+                let priceText =
+                  idiomaDestino === "en" ? "price available" : "precio disponible";
+
+                if (Number.isFinite(min) && Number.isFinite(max)) {
+                  priceText =
+                    min === max
+                      ? `$${min}`
+                      : `${idiomaDestino === "en" ? "from" : "desde"} $${min}`;
+                }
+
+                return `• ${row.service_name}: ${priceText}`;
+              })
+              .filter(Boolean) as string[];
+
+            if (matchedPriceLines.length) {
+              subReplies.push(matchedPriceLines.join("\n"));
+              continue;
+            }
+          }
+
           if (targetHit) {
             const targetServiceId = String(targetHit.serviceId || targetHit.id || "");
             const targetServiceName = String(
