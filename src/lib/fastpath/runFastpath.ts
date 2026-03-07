@@ -1458,7 +1458,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     if (!chosen) {
       const retryMsg =
         idiomaDestino === "en"
-          ? "No terminé de entender cuál opción te interesa 🤔. Dime el número o el nombre de la opción."
+          ? "I’m not fully sure which option you want 🤔. Tell me the number or the name of the option."
           : "No terminé de entender cuál opción te interesa 🤔. Dime el número o el nombre de la opción.";
       return {
         handled: true,
@@ -1543,7 +1543,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         selectedServiceId: serviceId,
 
         last_service_id: serviceId,
-        last_service_name: baseName || title || null,
+        last_service_name: baseName || null,
         last_service_at: Date.now(),
 
         last_variant_id: String(chosen.id || ""),
