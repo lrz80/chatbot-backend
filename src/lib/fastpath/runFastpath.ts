@@ -1613,11 +1613,21 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       mode: "loose",
     });
 
-    // 🔎 Intentar detectar grupo de plan (ej: "plan bronce")
+    // 🔎 Intentar detectar target de catálogo SOLO en mensajes cortos/elípticos
     if (!hit) {
-      const planToken = extractCatalogTargetToken(userInput);
-      console.log("[PLAN_GROUP_TOKEN] userInput =", userInput);
-      console.log("[PLAN_GROUP_TOKEN] extracted =", planToken);
+      const textForToken = normalizeText(userInput);
+      const tokenWordCount = textForToken.split(/\s+/).filter(Boolean).length;
+
+      const canUseCatalogTargetFallback =
+        tokenWordCount <= 6 && !textForToken.includes("\n");
+
+      const planToken = canUseCatalogTargetFallback
+        ? extractCatalogTargetToken(userInput)
+        : null;
+
+      console.log("[CATALOG_TARGET_TOKEN] userInput =", userInput);
+      console.log("[CATALOG_TARGET_TOKEN] canUseFallback =", canUseCatalogTargetFallback);
+      console.log("[CATALOG_TARGET_TOKEN] extracted =", planToken);
 
       if (planToken) {
         const { rows } = await pool.query(
@@ -1633,7 +1643,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           [tenantId, `%${planToken}%`]
         );
 
-        console.log("[PLAN_GROUP_TOKEN] candidate rows =", rows.map((r: any) => r.name));
+        console.log(
+          "[CATALOG_TARGET_TOKEN] candidate rows =",
+          rows.map((r: any) => r.name)
+        );
 
         if (rows.length === 1) {
           hit = {
