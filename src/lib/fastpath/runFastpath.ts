@@ -534,6 +534,20 @@ function looksLikeDetailIntent(raw: string): boolean {
   return detailSignals.some((s) => t.includes(s));
 }
 
+function splitUserQuestions(raw: string): string[] {
+  return String(raw || "")
+    .split(/\n+|[?]+/g)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((s) => s.length >= 4);
+}
+
+function looksMultiQuestion(raw: string): boolean {
+  const text = String(raw || "");
+  const parts = splitUserQuestions(text);
+  return parts.length >= 2 || text.includes("\n");
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -554,6 +568,398 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   if (inBooking) return { handled: false };
 
   const intentOut = (detectedIntent || "").trim() || null;
+
+  // ===============================
+  // ✅ MULTI-QUESTION SPLIT + ANSWER
+  // Responder varias preguntas del mismo mensaje en una sola salida.
+  // MULTITENANT: sin hardcode por negocio ni por tipo de variante.
+  // ===============================
+  {
+    const parts = splitUserQuestions(userInput);
+
+    if (looksMultiQuestion(userInput) && parts.length >= 2) {
+      const subReplies: string[] = [];
+      const seen = new Set<string>();
+
+      for (const part of parts.slice(0, 2)) {
+        const partNorm = normalizeText(part);
+        if (!partNorm || seen.has(partNorm)) continue;
+        seen.add(partNorm);
+
+        // =========================================================
+        // 1) PREGUNTA DE PRECIO
+        // =========================================================
+        if (isPriceQuestion(part)) {
+          const { rows } = await pool.query<{
+            service_name: string;
+            min_price: number | string | null;
+            max_price: number | string | null;
+          }>(`
+            WITH variant_prices AS (
+              SELECT
+                s.id AS service_id,
+                s.name AS service_name,
+                MIN(v.price)::numeric AS min_price,
+                MAX(v.price)::numeric AS max_price
+              FROM services s
+              JOIN service_variants v
+                ON v.service_id = s.id
+              AND v.active = true
+              WHERE s.tenant_id = $1
+                AND s.active = true
+                AND v.price IS NOT NULL
+              GROUP BY s.id, s.name
+            ),
+            base_prices AS (
+              SELECT
+                s.id AS service_id,
+                s.name AS service_name,
+                MIN(s.price_base)::numeric AS min_price,
+                MAX(s.price_base)::numeric AS max_price
+              FROM services s
+              WHERE s.tenant_id = $1
+                AND s.active = true
+                AND s.price_base IS NOT NULL
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM service_variants v
+                  WHERE v.service_id = s.id
+                    AND v.active = true
+                    AND v.price IS NOT NULL
+                )
+              GROUP BY s.id, s.name
+            )
+            SELECT service_name, min_price, max_price
+            FROM (
+              SELECT service_name, min_price, max_price FROM variant_prices
+              UNION ALL
+              SELECT service_name, min_price, max_price FROM base_prices
+            ) x
+          `, [tenantId]);
+
+          // Intentar resolver target específico dentro de la parte
+          let targetHit: any = await resolveServiceIdFromText(pool, tenantId, part, {
+            mode: "loose",
+          });
+
+          if (!targetHit) {
+            const textForToken = normalizeText(part);
+            const tokenWordCount = textForToken.split(/\s+/).filter(Boolean).length;
+            const canUseCatalogTargetFallback =
+              tokenWordCount <= 6 && !textForToken.includes("\n");
+
+            const token = canUseCatalogTargetFallback
+              ? extractCatalogTargetToken(part)
+              : null;
+
+            if (token) {
+              const { rows: tokenRows } = await pool.query(
+                `
+                SELECT id, name
+                FROM services
+                WHERE tenant_id = $1
+                  AND active = true
+                  AND lower(name) LIKE $2
+                ORDER BY created_at ASC
+                LIMIT 5
+                `,
+                [tenantId, `%${token}%`]
+              );
+
+              if (tokenRows.length === 1) {
+                targetHit = {
+                  serviceId: tokenRows[0].id,
+                  serviceName: tokenRows[0].name,
+                };
+              }
+            }
+          }
+
+          if (targetHit) {
+            const targetServiceId = String(targetHit.serviceId || targetHit.id || "");
+            const targetServiceName = String(
+              targetHit.serviceName || targetHit.name || ""
+            ).trim();
+
+            const { rows: variants } = await pool.query<any>(
+              `
+              SELECT
+                id,
+                variant_name,
+                description,
+                variant_url,
+                price,
+                currency
+              FROM service_variants
+              WHERE service_id = $1
+                AND active = true
+              ORDER BY created_at ASC, id ASC
+              `,
+              [targetServiceId]
+            );
+
+            let chosenVariant: any = null;
+
+            // ✅ MULTITENANT: intentar matchear cualquier variant_name
+            if (variants.length > 0) {
+              const matchedVariant = bestNameMatch(
+                part,
+                variants.map((v: any) => ({
+                  id: String(v.id),
+                  name: String(v.variant_name || "").trim(),
+                  url: v.variant_url ? String(v.variant_url).trim() : null,
+                }))
+              ) as any;
+
+              if (matchedVariant?.id) {
+                chosenVariant = variants.find(
+                  (v: any) => String(v.id) === String(matchedVariant.id)
+                );
+              }
+            }
+
+            // Si se resolvió una variante específica, responder esa
+            if (chosenVariant) {
+              const priceNum =
+                chosenVariant.price === null ||
+                chosenVariant.price === undefined ||
+                chosenVariant.price === ""
+                  ? null
+                  : Number(chosenVariant.price);
+
+              const baseName = targetServiceName || "";
+              const variantName = String(chosenVariant.variant_name || "").trim();
+              const link = chosenVariant.variant_url
+                ? String(chosenVariant.variant_url).trim()
+                : null;
+
+              let block =
+                idiomaDestino === "en"
+                  ? `• ${baseName} — ${variantName}: ${
+                      Number.isFinite(priceNum) ? `$${priceNum}` : "price available"
+                    }`
+                  : `• ${baseName} — ${variantName}: ${
+                      Number.isFinite(priceNum) ? `$${priceNum}` : "precio disponible"
+                    }`;
+
+              if (link) {
+                block += `\n  Link: ${link}`;
+              }
+
+              subReplies.push(block);
+              continue;
+            }
+
+            // Si tiene variantes pero no se pudo escoger una, mostrar resumen de variantes
+            if (variants.length > 0) {
+              const lines = variants
+                .map((v: any) => {
+                  const numPrice =
+                    v.price === null || v.price === undefined || v.price === ""
+                      ? NaN
+                      : Number(v.price);
+                  const label = String(v.variant_name || "").trim();
+
+                  return Number.isFinite(numPrice)
+                    ? `• ${targetServiceName} — ${label}: $${numPrice}`
+                    : `• ${targetServiceName} — ${label}`;
+                })
+                .slice(0, 4);
+
+              if (lines.length) {
+                subReplies.push(lines.join("\n"));
+                continue;
+              }
+            }
+
+            // Si no tiene variantes, intentar precio base
+            const row = rows.find(
+              (r) =>
+                normalizeText(String(r.service_name || "")) ===
+                normalizeText(targetServiceName)
+            );
+
+            if (row) {
+              const min = row.min_price === null ? null : Number(row.min_price);
+              const max = row.max_price === null ? null : Number(row.max_price);
+
+              let priceText =
+                idiomaDestino === "en" ? "price available" : "precio disponible";
+
+              if (Number.isFinite(min) && Number.isFinite(max)) {
+                priceText = min === max ? `$${min}` : `${idiomaDestino === "en" ? "from" : "desde"} $${min}`;
+              }
+
+              subReplies.push(`• ${targetServiceName}: ${priceText}`);
+              continue;
+            }
+          }
+
+          // Fallback si no hubo target claro
+          const compact = renderGenericPriceSummaryReply({
+            lang: idiomaDestino,
+            rows: rows.slice(0, 3),
+          });
+          subReplies.push(stripLinkSentences(compact));
+          continue;
+        }
+
+        // =========================================================
+        // 2) PREGUNTA DE DETALLE / INFO_SERVICIO
+        // =========================================================
+        const partLooksLikeDetail =
+          looksLikeDetailIntent(part) ||
+          /^y\s+(el|la)\s+.+\??$/i.test(normalizeForIntent(part)) ||
+          /^and\s+(the\s+)?[^?]+(\?)?$/i.test(normalizeForIntent(part));
+
+        if (partLooksLikeDetail) {
+          let hit: any = await resolveServiceIdFromText(pool, tenantId, part, {
+            mode: "loose",
+          });
+
+          if (!hit) {
+            const textForToken = normalizeText(part);
+            const tokenWordCount = textForToken.split(/\s+/).filter(Boolean).length;
+            const canUseCatalogTargetFallback =
+              tokenWordCount <= 6 && !textForToken.includes("\n");
+
+            const token = canUseCatalogTargetFallback
+              ? extractCatalogTargetToken(part)
+              : null;
+
+            if (token) {
+              const { rows: tokenRows } = await pool.query(
+                `
+                SELECT id, name
+                FROM services
+                WHERE tenant_id = $1
+                  AND active = true
+                  AND lower(name) LIKE $2
+                ORDER BY created_at ASC
+                LIMIT 5
+                `,
+                [tenantId, `%${token}%`]
+              );
+
+              if (tokenRows.length === 1) {
+                hit = {
+                  serviceId: tokenRows[0].id,
+                  serviceName: tokenRows[0].name,
+                };
+              }
+            }
+          }
+
+          if (hit) {
+            const serviceId = String(hit.serviceId || hit.id || "");
+            const serviceName = String(hit.serviceName || hit.name || "").trim();
+
+            const { rows: variants } = await pool.query<any>(
+              `
+              SELECT
+                id,
+                variant_name,
+                description,
+                variant_url,
+                price,
+                currency
+              FROM service_variants
+              WHERE service_id = $1
+                AND active = true
+              ORDER BY created_at ASC, id ASC
+              `,
+              [serviceId]
+            );
+
+            // ✅ MULTITENANT: si hay variantes, intentar match específico por variant_name
+            if (variants.length > 0) {
+              const matchedVariant = bestNameMatch(
+                part,
+                variants.map((v: any) => ({
+                  id: String(v.id),
+                  name: String(v.variant_name || "").trim(),
+                  url: v.variant_url ? String(v.variant_url).trim() : null,
+                }))
+              ) as any;
+
+              if (matchedVariant?.id) {
+                const chosen = variants.find(
+                  (v: any) => String(v.id) === String(matchedVariant.id)
+                );
+
+                if (chosen) {
+                  const descSource = (chosen.description || "").trim();
+                  const link = chosen.variant_url
+                    ? String(chosen.variant_url).trim()
+                    : null;
+
+                  let block = `• ${serviceName} — ${String(chosen.variant_name || "").trim()}`;
+                  if (descSource) block += `\n  ${descSource}`;
+                  if (link) block += `\n  Link: ${link}`;
+
+                  subReplies.push(block);
+                  continue;
+                }
+              }
+
+              // Si no se pudo elegir una variante exacta, mostrar opciones compactas
+              const lines = variants
+                .map((v: any) => {
+                  const numPrice =
+                    v.price === null || v.price === undefined || v.price === ""
+                      ? NaN
+                      : Number(v.price);
+                  const label = String(v.variant_name || "").trim();
+
+                  return Number.isFinite(numPrice)
+                    ? `• ${serviceName} — ${label}: $${numPrice}`
+                    : `• ${serviceName} — ${label}`;
+                })
+                .slice(0, 4);
+
+              subReplies.push(lines.join("\n"));
+              continue;
+            }
+
+            const {
+              rows: [service],
+            } = await pool.query<any>(
+              `
+              SELECT name, description, service_url
+              FROM services
+              WHERE id = $1
+              `,
+              [serviceId]
+            );
+
+            const desc = String(service?.description || "").trim();
+            const link = service?.service_url ? String(service.service_url).trim() : null;
+
+            let block = `• ${serviceName}`;
+            if (desc) block += `\n  ${desc}`;
+            if (link) block += `\n  Link: ${link}`;
+
+            subReplies.push(block);
+            continue;
+          }
+        }
+      }
+
+      if (subReplies.length >= 2) {
+        const intro =
+          idiomaDestino === "en"
+            ? "Here’s both:"
+            : "Te respondo las dos 😊";
+
+        return {
+          handled: true,
+          reply: `${intro}\n\n${subReplies.join("\n\n")}`,
+          source: "service_list_db",
+          intent: intentOut || "info_servicio",
+        };
+      }
+    }
+  }
 
   // ===============================
   // ✅ Dismiss Fastpath
