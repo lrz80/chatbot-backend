@@ -9,7 +9,8 @@ export type Hit = { id: string; name: string };
 type Candidate = {
   serviceId: string;
   label: string;
-  tokens: string[];
+  serviceTokens: string[];
+  variantTokens: string[];
 };
 
 const STOPWORDS = new Set([
@@ -112,7 +113,11 @@ function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
   const df = new Map<string, number>();
 
   for (const cand of candidates) {
-    const seen = new Set(cand.tokens);
+    const seen = new Set([
+      ...(cand.serviceTokens || []),
+      ...(cand.variantTokens || []),
+    ]);
+
     for (const t of seen) {
       df.set(t, (df.get(t) || 0) + 1);
     }
@@ -212,12 +217,14 @@ export async function resolveServiceIdFromText(
   const { rows } = await pool.query<{
     service_id: string;
     label: string;
+    label_type: "service" | "variant";
   }>(
     `
     WITH base AS (
       SELECT
         s.id   AS service_id,
-        s.name AS label
+        s.name AS label,
+        'service'::text AS label_type
       FROM services s
       WHERE
         s.tenant_id = $1
@@ -228,7 +235,8 @@ export async function resolveServiceIdFromText(
 
       SELECT
         s.id           AS service_id,
-        v.variant_name AS label
+        v.variant_name AS label,
+        'variant'::text AS label_type
       FROM service_variants v
       JOIN services s ON s.id = v.service_id
       WHERE
@@ -237,7 +245,7 @@ export async function resolveServiceIdFromText(
         AND v.active = true
         AND v.variant_name IS NOT NULL
     )
-    SELECT service_id, label
+    SELECT service_id, label, label_type
     FROM base
     `,
     [tenantId]
@@ -251,7 +259,12 @@ export async function resolveServiceIdFromText(
   // 🔹 Agrupamos por service_id para que Gold tenga UN solo candidato
   const grouped = new Map<
     string,
-    { serviceId: string; labels: string[]; tokenSet: Set<string> }
+    {
+      serviceId: string;
+      serviceLabel: string | null;
+      serviceTokenSet: Set<string>;
+      variantTokenSet: Set<string>;
+    }
   >();
 
   for (const r of rows) {
@@ -263,24 +276,31 @@ export async function resolveServiceIdFromText(
 
     const serviceId = String(r.service_id);
     let entry = grouped.get(serviceId);
+
     if (!entry) {
-      entry = { serviceId, labels: [label], tokenSet: new Set(tokens) };
+      entry = {
+        serviceId,
+        serviceLabel: null,
+        serviceTokenSet: new Set<string>(),
+        variantTokenSet: new Set<string>(),
+      };
       grouped.set(serviceId, entry);
+    }
+
+    if (r.label_type === "service") {
+      entry.serviceLabel = label;
+      for (const tk of tokens) entry.serviceTokenSet.add(tk);
     } else {
-      entry.labels.push(label);
-      for (const tk of tokens) entry.tokenSet.add(tk);
+      for (const tk of tokens) entry.variantTokenSet.add(tk);
     }
   }
 
-  const candidates: Candidate[] = Array.from(grouped.values()).map((g) => {
-    // tomamos como label "principal" el más corto (suele ser el nombre del servicio)
-    const mainLabel = g.labels.sort((a, b) => a.length - b.length)[0];
-    return {
-      serviceId: g.serviceId,
-      label: mainLabel,
-      tokens: Array.from(g.tokenSet),
-    };
-  });
+  const candidates: Candidate[] = Array.from(grouped.values()).map((g) => ({
+    serviceId: g.serviceId,
+    label: g.serviceLabel || "Service",
+    serviceTokens: Array.from(g.serviceTokenSet),
+    variantTokens: Array.from(g.variantTokenSet),
+  }));
 
   const dfMap = buildTenantTokenDf(candidates);
   const totalCandidates = candidates.length;
@@ -294,12 +314,37 @@ export async function resolveServiceIdFromText(
   type Scored = { cand: Candidate; score: number };
 
   const scored: Scored[] = candidates.map((cand) => {
-    const s1 = scoreTokensWeighted(qTokens1, cand.tokens, dfMap, totalCandidates);
-    const s2 = qTokens2.length
-      ? scoreTokensWeighted(qTokens2, cand.tokens, dfMap, totalCandidates)
+    const serviceScore1 = scoreTokensWeighted(
+      qTokens1,
+      cand.serviceTokens.length ? cand.serviceTokens : cand.variantTokens,
+      dfMap,
+      totalCandidates
+    );
+
+    const serviceScore2 = qTokens2.length
+      ? scoreTokensWeighted(
+          qTokens2,
+          cand.serviceTokens.length ? cand.serviceTokens : cand.variantTokens,
+          dfMap,
+          totalCandidates
+        )
       : 0;
 
-    return { cand, score: Math.max(s1, s2) };
+    const variantScore1 = cand.variantTokens.length
+      ? scoreTokensWeighted(qTokens1, cand.variantTokens, dfMap, totalCandidates)
+      : 0;
+
+    const variantScore2 = qTokens2.length && cand.variantTokens.length
+      ? scoreTokensWeighted(qTokens2, cand.variantTokens, dfMap, totalCandidates)
+      : 0;
+
+    const baseScore = Math.max(serviceScore1, serviceScore2);
+    const variantScore = Math.max(variantScore1, variantScore2);
+
+    // prioridad al nombre del servicio; las variantes solo ayudan, no penalizan
+    const score = Math.max(baseScore, variantScore * 0.9);
+
+    return { cand, score };
   });
 
   scored.sort((a, b) => b.score - a.score);
@@ -328,9 +373,13 @@ export async function resolveServiceIdFromText(
   if (strongTokens.length === 1) {
     const token = strongTokens[0];
 
-    const withToken = scored.filter(
-      (s) => s.score > 0 && s.cand.tokens.includes(token)
-    );
+    const withToken = scored.filter((s) => {
+      const allTokens = [
+        ...(s.cand.serviceTokens || []),
+        ...(s.cand.variantTokens || []),
+      ];
+      return s.score > 0 && allTokens.includes(token);
+    });
 
     if (mode === "strict") {
       // Comportamiento anterior: si no hay exactamente 1 candidato → ambiguo
@@ -367,7 +416,7 @@ export async function resolveServiceIdFromText(
       return null;
     }
 
-    // ======== modo LOOSO (para "qué incluye el plan X") ========
+    // ======== modo LOOSE (para "qué incluye el plan X") ========
     if (!withToken.length) {
       console.log(
         "[RESOLVE-SERVICE] (loose) 1 token fuerte pero 0 candidatos, devolviendo null",
