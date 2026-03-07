@@ -21,6 +21,7 @@ import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
 import { buildCatalogContext } from "../catalog/buildCatalogContext";
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
 import OpenAI from "openai";
+import { extractQueryFrames, type QueryFrame } from "./extractQueryFrames";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -192,15 +193,6 @@ function bestNameMatch(
     return hits.sort((a, b) => normalizeText(b.name).length - normalizeText(a.name).length)[0] as any;
   }
   return null;
-}
-
-// Detector genérico (no industria)
-function isPriceQuestion(text: string) {
-  const t = String(text || "").toLowerCase();
-
-  return /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|cu[aá]nto\s+ser[ií]a|cu[aá]nto\s+sale|costo|cost|price|pricing|how\s+much|starts?\s+at|from|desde|mensual|monthly|por\s+mes|per\s+month)\b/i.test(
-    t
-  );
 }
 
 function isFreeOfferQuestion(text: string) {
@@ -513,40 +505,20 @@ function normalizeForIntent(raw: string): string {
     .trim();
 }
 
+function isPriceQuestion(text: string) {
+  return extractQueryFrames(text).some((f) => f.askedAttribute === "price");
+}
+
 function looksLikeDetailIntent(raw: string): boolean {
-  const t = normalizeForIntent(raw);
-  if (!t) return false;
-
-  const detailSignals = [
-    "incluye",
-    "include",
-    "included",
-    "detalle",
-    "detalles",
-    "que trae",
-    "what include",
-    "what is included",
-    "more detail",
-    "more details",
-    "dime mas",
-    "dame mas detalle",
-  ];
-
-  return detailSignals.some((s) => t.includes(s));
+  return extractQueryFrames(raw).some((f) => f.askedAttribute === "includes");
 }
 
 function splitUserQuestions(raw: string): string[] {
-  return String(raw || "")
-    .split(/\n+|[?]+/g)
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .filter((s) => s.length >= 4);
+  return extractQueryFrames(raw).map((f) => f.raw);
 }
 
 function looksMultiQuestion(raw: string): boolean {
-  const text = String(raw || "");
-  const parts = splitUserQuestions(text);
-  return parts.length >= 2 || text.includes("\n");
+  return extractQueryFrames(raw).length >= 2 || String(raw || "").includes("\n");
 }
 
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
@@ -572,25 +544,28 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   // ===============================
   // ✅ MULTI-QUESTION SPLIT + ANSWER
-  // Responder varias preguntas del mismo mensaje en una sola salida.
-  // MULTITENANT: sin hardcode por negocio ni por tipo de variante.
+  // Ahora basado en frames neutrales:
+  // atributo pedido + entidad referida + modificadores
   // ===============================
   {
-    const parts = splitUserQuestions(userInput);
+    const frames = extractQueryFrames(userInput);
 
-    if (looksMultiQuestion(userInput) && parts.length >= 2) {
+    if (frames.length >= 2) {
       const subReplies: string[] = [];
       const seen = new Set<string>();
 
-      for (const part of parts.slice(0, 2)) {
+      for (const frame of frames.slice(0, 2)) {
+        const part = frame.raw;
         const partNorm = normalizeText(part);
         if (!partNorm || seen.has(partNorm)) continue;
         seen.add(partNorm);
 
+        const targetText = frame.referencedEntityText || part;
+
         // =========================================================
         // 1) PREGUNTA DE PRECIO
         // =========================================================
-        if (isPriceQuestion(part)) {
+        if (frame.askedAttribute === "price") {
           const { rows } = await pool.query<{
             service_name: string;
             min_price: number | string | null;
@@ -638,43 +613,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             ) x
           `, [tenantId]);
 
-          // Intentar resolver target específico dentro de la parte
-          let targetHit: any = await resolveServiceIdFromText(pool, tenantId, part, {
+          let targetHit: any = await resolveServiceIdFromText(pool, tenantId, targetText, {
             mode: "loose",
           });
-
-          if (!targetHit) {
-            const textForToken = normalizeText(part);
-            const tokenWordCount = textForToken.split(/\s+/).filter(Boolean).length;
-            const canUseCatalogTargetFallback =
-              tokenWordCount <= 6 && !textForToken.includes("\n");
-
-            const token = canUseCatalogTargetFallback
-              ? extractCatalogTargetToken(part)
-              : null;
-
-            if (token) {
-              const { rows: tokenRows } = await pool.query(
-                `
-                SELECT id, name
-                FROM services
-                WHERE tenant_id = $1
-                  AND active = true
-                  AND lower(name) LIKE $2
-                ORDER BY created_at ASC
-                LIMIT 5
-                `,
-                [tenantId, `%${token}%`]
-              );
-
-              if (tokenRows.length === 1) {
-                targetHit = {
-                  serviceId: tokenRows[0].id,
-                  serviceName: tokenRows[0].name,
-                };
-              }
-            }
-          }
 
           if (targetHit) {
             const targetServiceId = String(targetHit.serviceId || targetHit.id || "");
@@ -701,7 +642,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
             let chosenVariant: any = null;
 
-            // ✅ MULTITENANT: intentar matchear cualquier variant_name
             if (variants.length > 0) {
               const matchedVariant = bestNameMatch(
                 part,
@@ -719,7 +659,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               }
             }
 
-            // Si se resolvió una variante específica, responder esa
             if (chosenVariant) {
               const priceNum =
                 chosenVariant.price === null ||
@@ -751,7 +690,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               continue;
             }
 
-            // Si tiene variantes pero no se pudo escoger una, mostrar resumen de variantes
             if (variants.length > 0) {
               const lines = variants
                 .map((v: any) => {
@@ -773,7 +711,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               }
             }
 
-            // Si no tiene variantes, intentar precio base
             const row = rows.find(
               (r) =>
                 normalizeText(String(r.service_name || "")) ===
@@ -788,7 +725,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 idiomaDestino === "en" ? "price available" : "precio disponible";
 
               if (Number.isFinite(min) && Number.isFinite(max)) {
-                priceText = min === max ? `$${min}` : `${idiomaDestino === "en" ? "from" : "desde"} $${min}`;
+                priceText =
+                  min === max
+                    ? `$${min}`
+                    : `${idiomaDestino === "en" ? "from" : "desde"} $${min}`;
               }
 
               subReplies.push(`• ${targetServiceName}: ${priceText}`);
@@ -796,7 +736,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             }
           }
 
-          // Fallback si no hubo target claro
           const compact = renderGenericPriceSummaryReply({
             lang: idiomaDestino,
             rows: rows.slice(0, 3),
@@ -806,50 +745,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         }
 
         // =========================================================
-        // 2) PREGUNTA DE DETALLE / INFO_SERVICIO
+        // 2) PREGUNTA DE DETALLE / INCLUDES
         // =========================================================
-        const partLooksLikeDetail =
-          looksLikeDetailIntent(part) ||
-          /^y\s+(el|la)\s+.+\??$/i.test(normalizeForIntent(part)) ||
-          /^and\s+(the\s+)?[^?]+(\?)?$/i.test(normalizeForIntent(part));
-
-        if (partLooksLikeDetail) {
-          let hit: any = await resolveServiceIdFromText(pool, tenantId, part, {
+        if (frame.askedAttribute === "includes") {
+          let hit: any = await resolveServiceIdFromText(pool, tenantId, targetText, {
             mode: "loose",
           });
-
-          if (!hit) {
-            const textForToken = normalizeText(part);
-            const tokenWordCount = textForToken.split(/\s+/).filter(Boolean).length;
-            const canUseCatalogTargetFallback =
-              tokenWordCount <= 6 && !textForToken.includes("\n");
-
-            const token = canUseCatalogTargetFallback
-              ? extractCatalogTargetToken(part)
-              : null;
-
-            if (token) {
-              const { rows: tokenRows } = await pool.query(
-                `
-                SELECT id, name
-                FROM services
-                WHERE tenant_id = $1
-                  AND active = true
-                  AND lower(name) LIKE $2
-                ORDER BY created_at ASC
-                LIMIT 5
-                `,
-                [tenantId, `%${token}%`]
-              );
-
-              if (tokenRows.length === 1) {
-                hit = {
-                  serviceId: tokenRows[0].id,
-                  serviceName: tokenRows[0].name,
-                };
-              }
-            }
-          }
 
           if (hit) {
             const serviceId = String(hit.serviceId || hit.id || "");
@@ -872,7 +773,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               [serviceId]
             );
 
-            // ✅ MULTITENANT: si hay variantes, intentar match específico por variant_name
             if (variants.length > 0) {
               const matchedVariant = bestNameMatch(
                 part,
@@ -902,24 +802,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                   continue;
                 }
               }
-
-              // Si no se pudo elegir una variante exacta, mostrar opciones compactas
-              const lines = variants
-                .map((v: any) => {
-                  const numPrice =
-                    v.price === null || v.price === undefined || v.price === ""
-                      ? NaN
-                      : Number(v.price);
-                  const label = String(v.variant_name || "").trim();
-
-                  return Number.isFinite(numPrice)
-                    ? `• ${serviceName} — ${label}: $${numPrice}`
-                    : `• ${serviceName} — ${label}`;
-                })
-                .slice(0, 4);
-
-              subReplies.push(lines.join("\n"));
-              continue;
             }
 
             const {
