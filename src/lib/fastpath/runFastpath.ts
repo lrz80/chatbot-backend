@@ -356,21 +356,53 @@ function postProcessCatalogReply(params: {
   };
 }
 
-function extractPlanGroupToken(raw: string): string | null {
+function extractCatalogTargetToken(raw: string): string | null {
   const t = normalizeText(raw);
   if (!t) return null;
 
-  // "plan bronce", "plan gold"
-  let m = t.match(/\bplan\s+([a-z0-9áéíóúñ]+)\b/);
+  // Patrones útiles, pero genéricos
+  let m = t.match(/\b(?:plan|paquete|package|servicio|service)\s+([a-z0-9áéíóúñ]+)\b/);
   if (m?.[1]) return m[1];
 
-  // "paquete bronce"
-  m = t.match(/\bpaquete\s+([a-z0-9]+)\b/);
+  m = t.match(/\b(?:y\s+)?(?:el|la|los|las)\s+([a-z0-9áéíóúñ]+)\b/);
   if (m?.[1]) return m[1];
 
-  // "package bronze" (por si preguntan en inglés)
-  m = t.match(/\bpackage\s+([a-z0-9]+)\b/);
-  if (m?.[1]) return m[1];
+  // Fallback general: quitar palabras funcionales y quedarse con el último token útil
+  const tokens = t
+    .split(/\s+/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .filter(
+      (x) =>
+        ![
+          "que",
+          "q",
+          "incluye",
+          "incluyen",
+          "detalle",
+          "detalles",
+          "el",
+          "la",
+          "los",
+          "las",
+          "y",
+          "de",
+          "del",
+          "un",
+          "una",
+          "the",
+          "a",
+          "an",
+          "what",
+          "include",
+          "includes",
+          "more",
+          "about",
+        ].includes(x)
+    );
+
+  if (tokens.length === 1) return tokens[0];
+  if (tokens.length >= 2) return tokens[tokens.length - 1];
 
   return null;
 }
@@ -1583,7 +1615,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
     // 🔎 Intentar detectar grupo de plan (ej: "plan bronce")
     if (!hit) {
-      const planToken = extractPlanGroupToken(userInput);
+      const planToken = extractCatalogTargetToken(userInput);
       console.log("[PLAN_GROUP_TOKEN] userInput =", userInput);
       console.log("[PLAN_GROUP_TOKEN] extracted =", planToken);
 
@@ -1602,7 +1634,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         );
 
         console.log("[PLAN_GROUP_TOKEN] candidate rows =", rows.map((r: any) => r.name));
-        
+
         if (rows.length === 1) {
           hit = {
             serviceId: rows[0].id,
@@ -1659,7 +1691,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       };
     }
 
-    const explicitGroupToken = extractPlanGroupToken(userInput);
+    const explicitGroupToken = extractCatalogTargetToken(userInput);
     const hasExplicitNewTarget = !!explicitGroupToken;
 
     // 🔥 PATCH NUEVO: si es detalle pero no se encontró servicio por texto,
