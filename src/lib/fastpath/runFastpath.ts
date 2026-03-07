@@ -1584,6 +1584,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     // 🔎 Intentar detectar grupo de plan (ej: "plan bronce")
     if (!hit) {
       const planToken = extractPlanGroupToken(userInput);
+      console.log("[PLAN_GROUP_TOKEN] userInput =", userInput);
+      console.log("[PLAN_GROUP_TOKEN] extracted =", planToken);
 
       if (planToken) {
         const { rows } = await pool.query(
@@ -1599,6 +1601,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           [tenantId, `%${planToken}%`]
         );
 
+        console.log("[PLAN_GROUP_TOKEN] candidate rows =", rows.map((r: any) => r.name));
+        
         if (rows.length === 1) {
           hit = {
             serviceId: rows[0].id,
