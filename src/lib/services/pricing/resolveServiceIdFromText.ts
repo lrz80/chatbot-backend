@@ -341,8 +341,21 @@ export async function resolveServiceIdFromText(
     const baseScore = Math.max(serviceScore1, serviceScore2);
     const variantScore = Math.max(variantScore1, variantScore2);
 
-    // prioridad al nombre del servicio; las variantes solo ayudan, no penalizan
-    const score = Math.max(baseScore, variantScore * 0.9);
+    const qSet = new Set([...qTokens1, ...qTokens2]);
+    const exactServiceHits = cand.serviceTokens.filter((t) => qSet.has(t)).length;
+    const exactVariantHits = cand.variantTokens.filter((t) => qSet.has(t)).length;
+
+    let score = baseScore;
+
+    // bono por match directo en nombre del servicio
+    if (exactServiceHits > 0) {
+      score += exactServiceHits * 0.25;
+    }
+
+    // las variantes ayudan, pero menos
+    if (exactVariantHits > 0) {
+      score += exactVariantHits * 0.08;
+    }
 
     return { cand, score };
   });
