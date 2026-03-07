@@ -108,6 +108,19 @@ function normalize(raw: string): string {
     .trim();
 }
 
+function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
+  const df = new Map<string, number>();
+
+  for (const cand of candidates) {
+    const seen = new Set(cand.tokens);
+    for (const t of seen) {
+      df.set(t, (df.get(t) || 0) + 1);
+    }
+  }
+
+  return df;
+}
+
 function tokenize(raw: string): string[] {
   return normalize(raw)
     .replace(/[^a-z0-9\s]/g, " ")
@@ -126,21 +139,30 @@ function tokenize(raw: string): string[] {
     });
 }
 
-/**
- * Score determinista simple:
- * score = (# tokens en común) / (# tokens del servicio)
- */
-function scoreTokens(queryTokens: string[], serviceTokens: string[]): number {
-  if (!queryTokens.length || !serviceTokens.length) return 0;
+function scoreTokensWeighted(
+  queryTokens: string[],
+  serviceTokens: string[],
+  dfMap: Map<string, number>,
+  totalCandidates: number
+): number {
+  if (!queryTokens.length || !serviceTokens.length || totalCandidates <= 0) return 0;
 
   const qSet = new Set(queryTokens);
-  let common = 0;
+
+  let matchedWeight = 0;
+  let totalWeight = 0;
 
   for (const t of serviceTokens) {
-    if (qSet.has(t)) common += 1;
+    const df = dfMap.get(t) || 1;
+
+    // cuanto más común es el token en el tenant, menos pesa
+    const weight = Math.log(1 + totalCandidates / df);
+
+    totalWeight += weight;
+    if (qSet.has(t)) matchedWeight += weight;
   }
 
-  return common / serviceTokens.length; // 1.0 = todos los tokens del servicio aparecen en la query
+  return totalWeight > 0 ? matchedWeight / totalWeight : 0;
 }
 
 export async function resolveServiceIdFromText(
@@ -260,6 +282,9 @@ export async function resolveServiceIdFromText(
     };
   });
 
+  const dfMap = buildTenantTokenDf(candidates);
+  const totalCandidates = candidates.length;
+
   if (!candidates.length) {
     console.log("[RESOLVE-SERVICE] candidatos sin tokens, devolviendo null");
     return null;
@@ -269,8 +294,11 @@ export async function resolveServiceIdFromText(
   type Scored = { cand: Candidate; score: number };
 
   const scored: Scored[] = candidates.map((cand) => {
-    const s1 = scoreTokens(qTokens1, cand.tokens);
-    const s2 = qTokens2.length ? scoreTokens(qTokens2, cand.tokens) : 0;
+    const s1 = scoreTokensWeighted(qTokens1, cand.tokens, dfMap, totalCandidates);
+    const s2 = qTokens2.length
+      ? scoreTokensWeighted(qTokens2, cand.tokens, dfMap, totalCandidates)
+      : 0;
+
     return { cand, score: Math.max(s1, s2) };
   });
 

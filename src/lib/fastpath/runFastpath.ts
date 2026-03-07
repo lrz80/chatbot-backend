@@ -197,7 +197,8 @@ function bestNameMatch(
 // Detector genérico (no industria)
 function isPriceQuestion(text: string) {
   const t = String(text || "").toLowerCase();
-  return /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|costo|cost|price|how\s+much|starts?\s+at|from|desde)\b/i.test(
+
+  return /\b(precio|precios|cu[aá]nto\s+cuesta|cu[aá]nto\s+vale|cu[aá]nto\s+ser[ií]a|cu[aá]nto\s+sale|costo|cost|price|pricing|how\s+much|starts?\s+at|from|desde|mensual|monthly|por\s+mes|per\s+month)\b/i.test(
     t
   );
 }
