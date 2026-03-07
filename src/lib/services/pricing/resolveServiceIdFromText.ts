@@ -1,5 +1,3 @@
-// src/lib/services/pricing/resolveServiceIdFromText.ts
-
 import type { Pool } from "pg";
 import { detectarIdioma } from "../../detectarIdioma";
 import { traducirTexto } from "../../traducirTexto";
@@ -9,12 +7,12 @@ export type Hit = { id: string; name: string };
 type Candidate = {
   serviceId: string;
   label: string;
-  serviceTokens: string[];
-  variantTokens: string[];
+  serviceNameTokens: string[];
+  catalogTokens: string[];
 };
 
-const STOPWORDS = new Set([
-  // ES artículos / conectores
+const FUNCTION_WORDS = new Set([
+  // ES
   "de",
   "del",
   "la",
@@ -40,16 +38,21 @@ const STOPWORDS = new Set([
   "esa",
   "esto",
   "eso",
-  "de",
-  "del",
-  "la",
-  "el",
   "le",
-  "los",
-  "las",
   "lo",
   "al",
-  // EN artículos / conectores
+  "como",
+  "con",
+  "sin",
+  "sobre",
+  "mi",
+  "tu",
+  "su",
+  "me",
+  "te",
+  "se",
+
+  // EN
   "the",
   "a",
   "an",
@@ -61,34 +64,18 @@ const STOPWORDS = new Set([
   "of",
   "what",
   "does",
-  // precio / genérico
-  "precio",
-  "precios",
-  "cuanto",
-  "cuanta",
-  "cuestan",
-  "cuesta",
-  "vale",
-  "costo",
-  "price",
-  "prices",
-  "cost",
-  "how",
-  "much",
-  // includes
-  "include",
-  "includes",
-  "incluye",
-  "incluyen",
-  // ⬇⬇ OJO: ya NO ponemos "clase"/"clases" como stopwords
-  // porque son clave para "4 clases", "8 clases", etc.
-  "service",
-  "services",
-  // ⬇⬇ NUEVO: que “paquete” no cuente como token fuerte
-  "paquete",
-  "paquetes",
-  "pack",
-  "package",
+  "do",
+  "is",
+  "are",
+  "with",
+  "without",
+  "about",
+  "my",
+  "your",
+  "their",
+  "me",
+  "you",
+  "it",
 ]);
 
 function normalize(raw: string): string {
@@ -99,15 +86,23 @@ function normalize(raw: string): string {
     .trim();
 }
 
+function tokenize(raw: string): string[] {
+  return normalize(raw)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter((w) => {
+      if (!w) return false;
+      if (/^\d+$/.test(w)) return true;
+      return w.length >= 2 && !FUNCTION_WORDS.has(w);
+    });
+}
+
 function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
   const df = new Map<string, number>();
 
   for (const cand of candidates) {
-    const seen = new Set([
-      ...(cand.serviceTokens || []),
-      ...(cand.variantTokens || []),
-    ]);
-
+    const seen = new Set([...(cand.catalogTokens || [])]);
     for (const t of seen) {
       df.set(t, (df.get(t) || 0) + 1);
     }
@@ -116,70 +111,21 @@ function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
   return df;
 }
 
-function tokenize(raw: string): string[] {
-  return normalize(raw)
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .map((w) => w.trim())
-    .filter((w) => {
-      if (!w) return false;
-
-      // 🔹 Dejamos pasar números como "4", "8", "12"
-      if (/^\d+$/.test(w)) {
-        return true;
-      }
-
-      // 🔹 Para palabras normales, misma lógica de antes:
-      return w.length >= 2 && !STOPWORDS.has(w);
-    });
-}
-
-function extractNonDiscardedTokens(raw: string): string[] {
-  return normalize(raw)
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .map((w) => w.trim())
-    .filter(Boolean);
-}
-
-function tokenOverlapScore(queryRawTokens: string[], candidateRawTokens: string[]): number {
-  if (!queryRawTokens.length || !candidateRawTokens.length) return 0;
-
-  const q = new Set(queryRawTokens);
-  let hits = 0;
-
-  for (const t of candidateRawTokens) {
-    if (q.has(t)) hits++;
-  }
-
-  return hits / Math.max(candidateRawTokens.length, 1);
-}
-
-function buildCandidateRawLabelTokens(label: string): string[] {
-  return normalize(label)
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .map((w) => w.trim())
-    .filter(Boolean);
-}
-
 function scoreTokensWeighted(
   queryTokens: string[],
-  serviceTokens: string[],
+  candidateTokens: string[],
   dfMap: Map<string, number>,
   totalCandidates: number
 ): number {
-  if (!queryTokens.length || !serviceTokens.length || totalCandidates <= 0) return 0;
+  if (!queryTokens.length || !candidateTokens.length || totalCandidates <= 0) return 0;
 
   const qSet = new Set(queryTokens);
 
   let matchedWeight = 0;
   let totalWeight = 0;
 
-  for (const t of serviceTokens) {
+  for (const t of candidateTokens) {
     const df = dfMap.get(t) || 1;
-
-    // cuanto más común es el token en el tenant, menos pesa
     const weight = Math.log(1 + totalCandidates / df);
 
     totalWeight += weight;
@@ -189,6 +135,12 @@ function scoreTokensWeighted(
   return totalWeight > 0 ? matchedWeight / totalWeight : 0;
 }
 
+function countExactHits(queryTokens: string[], candidateTokens: string[]): number {
+  if (!queryTokens.length || !candidateTokens.length) return 0;
+  const qSet = new Set(queryTokens);
+  return candidateTokens.filter((t) => qSet.has(t)).length;
+}
+
 export async function resolveServiceIdFromText(
   pool: Pool,
   tenantId: string,
@@ -196,10 +148,9 @@ export async function resolveServiceIdFromText(
   opts?: { mode?: "strict" | "loose" }
 ): Promise<Hit | null> {
   const mode: "strict" | "loose" = opts?.mode || "strict";
-  let t = String(userText || "").trim();
+  const t = String(userText || "").trim();
   if (!t) return null;
 
-  // 1) Idioma + posible traducción cruzada ES <-> EN
   let idioma: "es" | "en" | string = "es";
   try {
     idioma = (await detectarIdioma(t)) as any;
@@ -212,7 +163,6 @@ export async function resolveServiceIdFromText(
 
   try {
     if (idioma === "es") {
-      // 🔹 usamos traducirTexto en vez de traducirMensaje
       tAlt = normalize(await traducirTexto(t, "en"));
     } else if (idioma === "en") {
       tAlt = normalize(await traducirTexto(t, "es"));
@@ -223,55 +173,36 @@ export async function resolveServiceIdFromText(
 
   const qTokens1 = tokenize(tNorm);
   const qTokens2 = tAlt ? tokenize(tAlt) : [];
-  const queryRawTokens = Array.from(
-    new Set([
-      ...extractNonDiscardedTokens(tNorm),
-      ...extractNonDiscardedTokens(tAlt || ""),
-    ])
-  );
+  const queryTokens = Array.from(new Set([...qTokens1, ...qTokens2]));
 
-  // tokens "fuertes" = unión de ambos sets
-  const strongTokens = Array.from(new Set([...qTokens1, ...qTokens2]));
-
-  if (!qTokens1.length && !qTokens2.length) {
-    console.log("[RESOLVE-SERVICE] sin tokens fuertes, devolviendo null");
+  if (!queryTokens.length) {
+    console.log("[RESOLVE-SERVICE] sin tokens útiles, devolviendo null");
     return null;
   }
 
-  // 2) Traer candidatos desde DB (services + service_variants)
   const { rows } = await pool.query<{
     service_id: string;
-    label: string;
-    label_type: "service" | "variant";
+    service_name: string | null;
+    service_description: string | null;
+    variant_name: string | null;
+    variant_description: string | null;
   }>(
     `
-    WITH base AS (
-      SELECT
-        s.id   AS service_id,
-        s.name AS label,
-        'service'::text AS label_type
-      FROM services s
-      WHERE
-        s.tenant_id = $1
-        AND s.active = true
-        AND s.name IS NOT NULL
-
-      UNION ALL
-
-      SELECT
-        s.id           AS service_id,
-        v.variant_name AS label,
-        'variant'::text AS label_type
-      FROM service_variants v
-      JOIN services s ON s.id = v.service_id
-      WHERE
-        s.tenant_id = $1
-        AND s.active = true
-        AND v.active = true
-        AND v.variant_name IS NOT NULL
-    )
-    SELECT service_id, label, label_type
-    FROM base
+    SELECT
+      s.id AS service_id,
+      s.name AS service_name,
+      s.description AS service_description,
+      v.variant_name,
+      v.description AS variant_description
+    FROM services s
+    LEFT JOIN service_variants v
+      ON v.service_id = s.id
+     AND v.active = true
+    WHERE
+      s.tenant_id = $1
+      AND s.active = true
+      AND s.name IS NOT NULL
+    ORDER BY s.created_at ASC, v.created_at ASC NULLS LAST, v.id ASC NULLS LAST
     `,
     [tenantId]
   );
@@ -281,131 +212,90 @@ export async function resolveServiceIdFromText(
     return null;
   }
 
-  // 🔹 Agrupamos por service_id para que Gold tenga UN solo candidato
   const grouped = new Map<
     string,
     {
       serviceId: string;
       serviceLabel: string | null;
-      serviceTokenSet: Set<string>;
-      variantTokenSet: Set<string>;
+      serviceNameTokenSet: Set<string>;
+      catalogTokenSet: Set<string>;
     }
   >();
 
   for (const r of rows) {
-    const label = String(r.label || "").trim();
-    if (!label) continue;
+    const serviceId = String(r.service_id || "");
+    const serviceName = String(r.service_name || "").trim();
+    if (!serviceId || !serviceName) continue;
 
-    const tokens = tokenize(label);
-    if (!tokens.length) continue;
-
-    const serviceId = String(r.service_id);
     let entry = grouped.get(serviceId);
-
     if (!entry) {
       entry = {
         serviceId,
-        serviceLabel: null,
-        serviceTokenSet: new Set<string>(),
-        variantTokenSet: new Set<string>(),
+        serviceLabel: serviceName,
+        serviceNameTokenSet: new Set<string>(),
+        catalogTokenSet: new Set<string>(),
       };
       grouped.set(serviceId, entry);
     }
 
-    if (r.label_type === "service") {
-      entry.serviceLabel = label;
-      for (const tk of tokens) entry.serviceTokenSet.add(tk);
-    } else {
-      for (const tk of tokens) entry.variantTokenSet.add(tk);
-    }
+    const serviceNameTokens = tokenize(serviceName);
+    const serviceDescTokens = tokenize(String(r.service_description || ""));
+    const variantNameTokens = tokenize(String(r.variant_name || ""));
+    const variantDescTokens = tokenize(String(r.variant_description || ""));
+
+    for (const tk of serviceNameTokens) entry.serviceNameTokenSet.add(tk);
+    for (const tk of serviceNameTokens) entry.catalogTokenSet.add(tk);
+    for (const tk of serviceDescTokens) entry.catalogTokenSet.add(tk);
+    for (const tk of variantNameTokens) entry.catalogTokenSet.add(tk);
+    for (const tk of variantDescTokens) entry.catalogTokenSet.add(tk);
   }
 
   const candidates: Candidate[] = Array.from(grouped.values()).map((g) => ({
     serviceId: g.serviceId,
     label: g.serviceLabel || "Service",
-    serviceTokens: Array.from(g.serviceTokenSet),
-    variantTokens: Array.from(g.variantTokenSet),
+    serviceNameTokens: Array.from(g.serviceNameTokenSet),
+    catalogTokens: Array.from(g.catalogTokenSet),
   }));
-
-  const dfMap = buildTenantTokenDf(candidates);
-  const totalCandidates = candidates.length;
 
   if (!candidates.length) {
     console.log("[RESOLVE-SERVICE] candidatos sin tokens, devolviendo null");
     return null;
   }
 
-  // 3) Scoring determinista para todos los candidatos
+  const dfMap = buildTenantTokenDf(candidates);
+  const totalCandidates = candidates.length;
+
   type Scored = { cand: Candidate; score: number };
 
   const scored: Scored[] = candidates.map((cand) => {
-    const serviceScore1 = scoreTokensWeighted(
-      qTokens1,
-      cand.serviceTokens.length ? cand.serviceTokens : cand.variantTokens,
+    const nameScore = scoreTokensWeighted(
+      queryTokens,
+      cand.serviceNameTokens,
       dfMap,
       totalCandidates
     );
 
-    const serviceScore2 = qTokens2.length
-      ? scoreTokensWeighted(
-          qTokens2,
-          cand.serviceTokens.length ? cand.serviceTokens : cand.variantTokens,
-          dfMap,
-          totalCandidates
-        )
-      : 0;
+    const catalogScore = scoreTokensWeighted(
+      queryTokens,
+      cand.catalogTokens,
+      dfMap,
+      totalCandidates
+    );
 
-    const variantScore1 = cand.variantTokens.length
-      ? scoreTokensWeighted(qTokens1, cand.variantTokens, dfMap, totalCandidates)
-      : 0;
+    const exactNameHits = countExactHits(queryTokens, cand.serviceNameTokens);
+    const exactCatalogHits = countExactHits(queryTokens, cand.catalogTokens);
 
-    const variantScore2 = qTokens2.length && cand.variantTokens.length
-      ? scoreTokensWeighted(qTokens2, cand.variantTokens, dfMap, totalCandidates)
-      : 0;
+    let score = 0;
 
-    const baseScore = Math.max(serviceScore1, serviceScore2);
-    const variantScore = Math.max(variantScore1, variantScore2);
+    // Peso principal: el nombre del servicio
+    score += nameScore * 0.65;
 
-    const qSet = new Set([...qTokens1, ...qTokens2]);
-    const exactServiceHits = cand.serviceTokens.filter((t) => qSet.has(t)).length;
-    const exactVariantHits = cand.variantTokens.filter((t) => qSet.has(t)).length;
+    // Peso secundario: descripción + variantes del catálogo
+    score += catalogScore * 0.35;
 
-        let score = baseScore;
-
-    if (exactServiceHits > 0) {
-      score += exactServiceHits * 0.25;
-    }
-
-    if (exactVariantHits > 0) {
-      score += exactVariantHits * 0.08;
-    }
-
-    const candidateRawTokens = buildCandidateRawLabelTokens(cand.label);
-    const rawOverlap = tokenOverlapScore(queryRawTokens, candidateRawTokens);
-
-    score += rawOverlap * 0.35;
-
-    const genericPenaltyTokens = new Set([
-      "clase",
-      "clases",
-      "class",
-      "classes",
-      "servicio",
-      "service",
-      "producto",
-      "product",
-    ]);
-
-    const candidateSpecificHits = candidateRawTokens.filter(
-      (t) => queryRawTokens.includes(t) && !genericPenaltyTokens.has(t)
-    ).length;
-
-    const candidateGenericHits = candidateRawTokens.filter(
-      (t) => queryRawTokens.includes(t) && genericPenaltyTokens.has(t)
-    ).length;
-
-    score += candidateSpecificHits * 0.18;
-    score -= candidateGenericHits * 0.10;
+    // Premios por cobertura exacta real del catálogo
+    score += exactNameHits * 0.22;
+    score += exactCatalogHits * 0.06;
 
     return { cand, score };
   });
@@ -418,8 +308,7 @@ export async function resolveServiceIdFromText(
   console.log("[RESOLVE-SERVICE] debug", {
     userText,
     idioma,
-    strongTokens,
-    queryRawTokens,
+    queryTokens,
     best: best
       ? {
           label: best.cand.label,
@@ -436,28 +325,22 @@ export async function resolveServiceIdFromText(
       : null,
   });
 
-  // Parámetros de decisión (dependen del modo)
-  const BASE_THRESHOLD = mode === "strict" ? 0.6 : 0.30;
+  const BASE_THRESHOLD = mode === "strict" ? 0.6 : 0.3;
   const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.7 : 0.3;
   const MARGIN = mode === "strict" ? 0.2 : 0.1;
 
-  // 4) Caso especial: SOLO un token fuerte (ej. "bronze", "gold", "deluxe")
-  if (strongTokens.length === 1) {
-    const token = strongTokens[0];
+  if (queryTokens.length === 1) {
+    const token = queryTokens[0];
 
     const withToken = scored.filter((s) => {
-      const allTokens = [
-        ...(s.cand.serviceTokens || []),
-        ...(s.cand.variantTokens || []),
-      ];
+      const allTokens = [...(s.cand.catalogTokens || [])];
       return s.score > 0 && allTokens.includes(token);
     });
 
     if (mode === "strict") {
-      // Comportamiento anterior: si no hay exactamente 1 candidato → ambiguo
       if (withToken.length !== 1) {
         console.log(
-          "[RESOLVE-SERVICE] (strict) 1 token fuerte pero",
+          "[RESOLVE-SERVICE] (strict) 1 token útil pero",
           withToken.length,
           "candidatos → ambiguo, devolviendo null"
         );
@@ -467,7 +350,7 @@ export async function resolveServiceIdFromText(
       const only = withToken[0];
 
       if (only.score >= SINGLE_TOKEN_THRESHOLD) {
-        console.log("[RESOLVE-SERVICE] (strict) match único por token fuerte", {
+        console.log("[RESOLVE-SERVICE] (strict) match único por token útil", {
           userText,
           token,
           label: only.cand.label,
@@ -477,7 +360,7 @@ export async function resolveServiceIdFromText(
       }
 
       console.log(
-        "[RESOLVE-SERVICE] (strict) 1 token fuerte, 1 candidato pero score bajo, devolviendo null",
+        "[RESOLVE-SERVICE] (strict) 1 token útil, 1 candidato pero score bajo, devolviendo null",
         {
           userText,
           token,
@@ -488,18 +371,15 @@ export async function resolveServiceIdFromText(
       return null;
     }
 
-    // ======== modo LOOSE (para "qué incluye el plan X") ========
     if (!withToken.length) {
       console.log(
-        "[RESOLVE-SERVICE] (loose) 1 token fuerte pero 0 candidatos, devolviendo null",
+        "[RESOLVE-SERVICE] (loose) 1 token útil pero 0 candidatos, devolviendo null",
         { userText, token }
       );
       return null;
     }
 
-    // Agrupar por serviceId y quedarnos con el mejor de cada servicio
     const byService = new Map<string, { cand: Candidate; score: number }>();
-
     for (const s of withToken) {
       const key = s.cand.serviceId;
       const prev = byService.get(key);
@@ -524,7 +404,7 @@ export async function resolveServiceIdFromText(
       return null;
     }
 
-    console.log("[RESOLVE-SERVICE] (loose) match por token fuerte", {
+    console.log("[RESOLVE-SERVICE] (loose) match por token útil", {
       userText,
       token,
       label: bestLoose.cand.label,
@@ -535,7 +415,6 @@ export async function resolveServiceIdFromText(
     return { id: bestLoose.cand.serviceId, name: bestLoose.cand.label };
   }
 
-  // 5) Caso general: 2+ tokens fuertes → usar mejor score con margen
   if (!best || best.score < BASE_THRESHOLD) {
     console.log("[RESOLVE-SERVICE] best.score por debajo del umbral, devolviendo null", {
       userText,
@@ -559,7 +438,7 @@ export async function resolveServiceIdFromText(
     return null;
   }
 
-  console.log("[RESOLVE-SERVICE] match aceptado (>=2 tokens fuertes)", {
+  console.log("[RESOLVE-SERVICE] match aceptado (>=2 tokens útiles)", {
     userText,
     label: best.cand.label,
     score: best.score,
