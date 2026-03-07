@@ -832,7 +832,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         const intro =
           idiomaDestino === "en"
             ? "Here’s what I found:"
-            : "Te respondo esto 😊";
+            : "Esto fue lo que consegui 😊";
 
         return {
           handled: true,

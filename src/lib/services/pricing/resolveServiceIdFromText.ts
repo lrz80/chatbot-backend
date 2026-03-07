@@ -80,16 +80,6 @@ const STOPWORDS = new Set([
   "includes",
   "incluye",
   "incluyen",
-  // términos genéricos de planes / servicios
-  "plan",
-  "planes",
-  "membresia",
-  "membresias",
-  "mensual",
-  "mensuales",
-  "monthly",
-  "membership",
-  "memberships",
   // ⬇⬇ OJO: ya NO ponemos "clase"/"clases" como stopwords
   // porque son clave para "4 clases", "8 clases", etc.
   "service",
@@ -142,6 +132,35 @@ function tokenize(raw: string): string[] {
       // 🔹 Para palabras normales, misma lógica de antes:
       return w.length >= 2 && !STOPWORDS.has(w);
     });
+}
+
+function extractNonDiscardedTokens(raw: string): string[] {
+  return normalize(raw)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter(Boolean);
+}
+
+function tokenOverlapScore(queryRawTokens: string[], candidateRawTokens: string[]): number {
+  if (!queryRawTokens.length || !candidateRawTokens.length) return 0;
+
+  const q = new Set(queryRawTokens);
+  let hits = 0;
+
+  for (const t of candidateRawTokens) {
+    if (q.has(t)) hits++;
+  }
+
+  return hits / Math.max(candidateRawTokens.length, 1);
+}
+
+function buildCandidateRawLabelTokens(label: string): string[] {
+  return normalize(label)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((w) => w.trim())
+    .filter(Boolean);
 }
 
 function scoreTokensWeighted(
@@ -204,6 +223,12 @@ export async function resolveServiceIdFromText(
 
   const qTokens1 = tokenize(tNorm);
   const qTokens2 = tAlt ? tokenize(tAlt) : [];
+  const queryRawTokens = Array.from(
+    new Set([
+      ...extractNonDiscardedTokens(tNorm),
+      ...extractNonDiscardedTokens(tAlt || ""),
+    ])
+  );
 
   // tokens "fuertes" = unión de ambos sets
   const strongTokens = Array.from(new Set([...qTokens1, ...qTokens2]));
@@ -345,17 +370,42 @@ export async function resolveServiceIdFromText(
     const exactServiceHits = cand.serviceTokens.filter((t) => qSet.has(t)).length;
     const exactVariantHits = cand.variantTokens.filter((t) => qSet.has(t)).length;
 
-    let score = baseScore;
+        let score = baseScore;
 
-    // bono por match directo en nombre del servicio
     if (exactServiceHits > 0) {
       score += exactServiceHits * 0.25;
     }
 
-    // las variantes ayudan, pero menos
     if (exactVariantHits > 0) {
       score += exactVariantHits * 0.08;
     }
+
+    const candidateRawTokens = buildCandidateRawLabelTokens(cand.label);
+    const rawOverlap = tokenOverlapScore(queryRawTokens, candidateRawTokens);
+
+    score += rawOverlap * 0.35;
+
+    const genericPenaltyTokens = new Set([
+      "clase",
+      "clases",
+      "class",
+      "classes",
+      "servicio",
+      "service",
+      "producto",
+      "product",
+    ]);
+
+    const candidateSpecificHits = candidateRawTokens.filter(
+      (t) => queryRawTokens.includes(t) && !genericPenaltyTokens.has(t)
+    ).length;
+
+    const candidateGenericHits = candidateRawTokens.filter(
+      (t) => queryRawTokens.includes(t) && genericPenaltyTokens.has(t)
+    ).length;
+
+    score += candidateSpecificHits * 0.18;
+    score -= candidateGenericHits * 0.10;
 
     return { cand, score };
   });
@@ -369,6 +419,7 @@ export async function resolveServiceIdFromText(
     userText,
     idioma,
     strongTokens,
+    queryRawTokens,
     best: best
       ? { label: best.cand.label, score: best.score, serviceId: best.cand.serviceId }
       : null,
