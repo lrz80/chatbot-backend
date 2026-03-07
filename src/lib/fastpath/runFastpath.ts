@@ -561,6 +561,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         seen.add(partNorm);
 
         const targetText = frame.referencedEntityText || part;
+        console.log("[MULTIQ][PRICE] frame input", {
+          raw: frame.raw,
+          referencedEntityText: frame.referencedEntityText,
+          targetText,
+          askedAttribute: frame.askedAttribute,
+        });
 
         // =========================================================
         // 1) PREGUNTA DE PRECIO
@@ -617,6 +623,17 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             mode: "loose",
           });
 
+          console.log("[MULTIQ][PRICE] resolve attempt", {
+            part,
+            targetText,
+            targetHit: targetHit
+              ? {
+                  serviceId: targetHit.serviceId || targetHit.id,
+                  serviceName: targetHit.serviceName || targetHit.name,
+                }
+              : null,
+          });
+          
           if (targetHit) {
             const targetServiceId = String(targetHit.serviceId || targetHit.id || "");
             const targetServiceName = String(
@@ -738,7 +755,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
           const compact = renderGenericPriceSummaryReply({
             lang: idiomaDestino,
-            rows: rows.slice(0, 3),
+            rows: rows.slice(0, 5),
           });
           subReplies.push(stripLinkSentences(compact));
           continue;
