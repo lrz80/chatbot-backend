@@ -421,10 +421,18 @@ export async function resolveServiceIdFromText(
     strongTokens,
     queryRawTokens,
     best: best
-      ? { label: best.cand.label, score: best.score, serviceId: best.cand.serviceId }
+      ? {
+          label: best.cand.label,
+          score: best.score,
+          serviceId: best.cand.serviceId,
+        }
       : null,
     second: second
-      ? { label: second.cand.label, score: second.score, serviceId: second.cand.serviceId }
+      ? {
+          label: second.cand.label,
+          score: second.score,
+          serviceId: second.cand.serviceId,
+        }
       : null,
   });
 
