@@ -294,7 +294,7 @@ export async function resolveServiceIdFromText(
   // Parámetros de decisión (dependen del modo)
   const BASE_THRESHOLD = mode === "strict" ? 0.6 : 0.30;
   const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.7 : 0.3;
-  const MARGIN = 0.2; // diferencia mínima con el segundo para confiar
+  const MARGIN = mode === "strict" ? 0.2 : 0.1;
 
   // 4) Caso especial: SOLO un token fuerte (ej. "bronze", "gold", "deluxe")
   if (strongTokens.length === 1) {

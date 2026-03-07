@@ -948,8 +948,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       if (subReplies.length >= 2) {
         const intro =
           idiomaDestino === "en"
-            ? "Here’s both:"
-            : "Te respondo las dos 😊";
+            ? "Here’s what I found:"
+            : "Te respondo esto 😊";
 
         return {
           handled: true,
