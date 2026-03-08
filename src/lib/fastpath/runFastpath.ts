@@ -2614,6 +2614,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       // ✅ Precio/planes genérico: responder desde DB (no LLM).
       if (!asksSchedules && questionType === "price_or_plan") {
         const { rows } = await pool.query<{
+          service_id: string;
           service_name: string;
           min_price: number | string | null;
           max_price: number | string | null;
@@ -2652,13 +2653,147 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               )
             GROUP BY s.id, s.name
           )
-          SELECT service_name, min_price, max_price
+          SELECT service_id, service_name, min_price, max_price
           FROM (
-            SELECT service_name, min_price, max_price FROM variant_prices
+            SELECT service_id, service_name, min_price, max_price FROM variant_prices
             UNION ALL
-            SELECT service_name, min_price, max_price FROM base_prices
+            SELECT service_id, service_name, min_price, max_price FROM base_prices
           ) x;
         `, [tenantId]);
+
+        // =========================================================
+        // ✅ SINGLE PRICE TARGET RESOLUTION
+        // Intenta resolver una referencia concreta antes de listar catálogo.
+        // NO toca el flujo multi-question.
+        // =========================================================
+        const singleHit = await resolveServiceIdFromText(pool, tenantId, userInput, {
+          mode: "loose",
+        });
+
+        console.log("[PRICE][single] resolve output", {
+          userInput,
+          singleHit,
+        });
+
+        if (singleHit?.id) {
+          const targetServiceId = String(singleHit.id || "").trim();
+          const targetServiceName = String(singleHit.name || "").trim();
+
+          const { rows: variants } = await pool.query<any>(
+            `
+            SELECT
+              id,
+              variant_name,
+              description,
+              variant_url,
+              price,
+              currency
+            FROM service_variants
+            WHERE service_id = $1
+              AND active = true
+            ORDER BY created_at ASC, id ASC
+            `,
+            [targetServiceId]
+          );
+
+          let chosenVariant: any = null;
+
+          if (variants.length > 0) {
+            const matchedVariant = bestNameMatch(
+              userInput,
+              variants.map((v: any) => ({
+                id: String(v.id),
+                name: String(v.variant_name || "").trim(),
+                url: v.variant_url ? String(v.variant_url).trim() : null,
+              }))
+            ) as any;
+
+            if (matchedVariant?.id) {
+              chosenVariant = variants.find(
+                (v: any) => String(v.id) === String(matchedVariant.id)
+              );
+            }
+          }
+
+          // ✅ Si resolvió variante concreta, responder exacto
+          if (chosenVariant) {
+            const priceNum =
+              chosenVariant.price === null ||
+              chosenVariant.price === undefined ||
+              chosenVariant.price === ""
+                ? null
+                : Number(chosenVariant.price);
+
+            const baseName = targetServiceName || "";
+            const variantName = String(chosenVariant.variant_name || "").trim();
+
+            const priceText =
+              Number.isFinite(priceNum)
+                ? `$${priceNum!.toFixed(2)}`
+                : idiomaDestino === "en"
+                ? "price available"
+                : "precio disponible";
+
+            const reply =
+              idiomaDestino === "en"
+                ? `• ${baseName} — ${variantName}: ${priceText}`
+                : `• ${baseName} — ${variantName}: ${priceText}`;
+
+            return {
+              handled: true,
+              reply,
+              source: "price_fastpath_db",
+              intent: "precio",
+              ctxPatch: {
+                last_service_id: targetServiceId,
+                last_service_name: baseName || null,
+                last_service_at: Date.now(),
+
+                last_variant_id: String(chosenVariant.id || ""),
+                last_variant_name: variantName || null,
+                last_variant_url: chosenVariant.variant_url
+                  ? String(chosenVariant.variant_url).trim()
+                  : null,
+                last_variant_at: Date.now(),
+
+                last_price_option_label: variantName || null,
+                last_price_option_at: Date.now(),
+              } as Partial<FastpathCtx>,
+            };
+          }
+
+          // ✅ Si resolvió servicio, pero no variante exacta, responder precio del servicio
+          const matchedRow = rows.find(
+            (r) => String(r.service_id || "") === targetServiceId
+          );
+
+          if (matchedRow) {
+            const min = matchedRow.min_price === null ? null : Number(matchedRow.min_price);
+            const max = matchedRow.max_price === null ? null : Number(matchedRow.max_price);
+
+            let priceText =
+              idiomaDestino === "en" ? "price available" : "precio disponible";
+
+            if (Number.isFinite(min) && Number.isFinite(max)) {
+              priceText =
+                min === max
+                  ? `$${min!.toFixed(2)}`
+                  : `${idiomaDestino === "en" ? "from" : "desde"} $${min!.toFixed(2)}`;
+            }
+
+            return {
+              handled: true,
+              reply: `• ${targetServiceName}: ${priceText}`,
+              source: "price_fastpath_db",
+              intent: "precio",
+              ctxPatch: {
+                last_service_id: targetServiceId,
+                last_service_name: targetServiceName || null,
+                last_service_at: Date.now(),
+              } as Partial<FastpathCtx>,
+            };
+          }
+        }
 
         let rowsLocalized = rows;
 
