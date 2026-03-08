@@ -631,18 +631,79 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             }
           );
 
-          const targetHit: any = targetMatches.length === 1 ? targetMatches[0] : null;
+          const top1 = targetMatches[0] || null;
+          const top2 = targetMatches[1] || null;
+
+          function localTokens(raw: string): string[] {
+            return normalizeText(String(raw || ""))
+              .replace(/[^a-z0-9\s]/g, " ")
+              .split(/\s+/)
+              .map((x) => x.trim())
+              .filter(Boolean);
+          }
+
+          const NOISE_TOKENS = new Set([
+            "de","del","la","el","los","las","un","una","unos","unas",
+            "para","por","en","y","o","u","a","que","q","este","esta",
+            "ese","esa","esto","eso","le","lo","al","como","con","sin",
+            "sobre","mi","tu","su","me","te","se",
+            "the","a","an","and","or","to","for","in","of","what","does",
+            "do","is","are","with","without","about","my","your","their",
+            "me","you","it",
+            "precio","precios","cuanto","cuanta","cuánto","cuánta",
+            "cuesta","cuestan","vale","valen","costo","costos",
+            "mensual","mensuales","mes","meses","mensualidad","desde",
+            "price","prices","pricing","cost","costs","how","much",
+            "monthly","month","months","from","starting","starts",
+            "what","which","quiero","quieres","want","looking"
+          ]);
+
+          const queryTokens = localTokens(targetText).filter((t) => !NOISE_TOKENS.has(t));
+          const top1Tokens = top1 ? localTokens(String(top1.name || "")) : [];
+          const top2Tokens = top2 ? localTokens(String(top2.name || "")) : [];
+
+          const top1MeaningHits = queryTokens.filter((t) => top1Tokens.includes(t)).length;
+          const top2MeaningHits = queryTokens.filter((t) => top2Tokens.includes(t)).length;
+
+          const scoreGap =
+            top1 && top2
+              ? Number(top1.score || 0) - Number(top2.score || 0)
+              : top1
+              ? Number(top1.score || 0)
+              : 0;
+
+          const targetHit: any =
+            top1 &&
+            (
+              targetMatches.length === 1 ||
+              top1MeaningHits > top2MeaningHits ||
+              (top1MeaningHits > 0 && scoreGap >= 0.05)
+            )
+              ? top1
+              : null;
 
           console.log("[MULTIQ][PRICE] resolve attempt", {
             part,
             targetText,
+            queryTokens,
             targetMatches,
-            targetHit,
-          });
-
-          console.log("[MULTIQ][PRICE] resolve attempt", {
-            part,
-            targetText,
+            top1: top1
+              ? {
+                  id: top1.id,
+                  name: top1.name,
+                  score: top1.score,
+                  meaningHits: top1MeaningHits,
+                }
+              : null,
+            top2: top2
+              ? {
+                  id: top2.id,
+                  name: top2.name,
+                  score: top2.score,
+                  meaningHits: top2MeaningHits,
+                }
+              : null,
+            scoreGap,
             targetHit: targetHit
               ? {
                   serviceId: targetHit.serviceId || targetHit.id,
