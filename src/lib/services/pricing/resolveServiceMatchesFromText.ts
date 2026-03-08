@@ -1,4 +1,3 @@
-//src/lib/services/pricing/resolveServiceMatchesFromText.ts
 import type { Pool } from "pg";
 import { detectarIdioma } from "../../detectarIdioma";
 import { traducirTexto } from "../../traducirTexto";
@@ -18,69 +17,62 @@ type Candidate = {
 
 const FUNCTION_WORDS = new Set([
   // ES
-  "de",
-  "del",
-  "la",
-  "el",
-  "los",
-  "las",
-  "un",
-  "una",
-  "unos",
-  "unas",
-  "para",
-  "por",
-  "en",
-  "y",
-  "o",
-  "u",
-  "a",
-  "que",
-  "q",
-  "este",
-  "esta",
-  "ese",
-  "esa",
-  "esto",
-  "eso",
-  "le",
-  "lo",
-  "al",
-  "como",
-  "con",
-  "sin",
-  "sobre",
-  "mi",
-  "tu",
-  "su",
-  "me",
-  "te",
-  "se",
+  "de","del","la","el","los","las","un","una","unos","unas",
+  "para","por","en","y","o","u","a","que","q","este","esta",
+  "ese","esa","esto","eso","le","lo","al","como","con","sin",
+  "sobre","mi","tu","su","me","te","se",
 
   // EN
-  "the",
-  "a",
-  "an",
-  "and",
-  "or",
-  "to",
-  "for",
-  "in",
-  "of",
+  "the","a","an","and","or","to","for","in","of","what","does",
+  "do","is","are","with","without","about","my","your","their",
+  "me","you","it",
+]);
+
+// Tokens universales de ATRIBUTO de consulta.
+// No son de negocio. Son del lenguaje.
+const ATTRIBUTE_TOKENS = new Set([
+  // ES pricing
+  "precio",
+  "precios",
+  "cuanto",
+  "cuanta",
+  "cuánto",
+  "cuánta",
+  "cuesta",
+  "cuestan",
+  "vale",
+  "valen",
+  "costo",
+  "costos",
+  "mensual",
+  "mensuales",
+  "mes",
+  "meses",
+  "mensualidad",
+  "desde",
+
+  // EN pricing
+  "price",
+  "prices",
+  "pricing",
+  "cost",
+  "costs",
+  "how",
+  "much",
+  "monthly",
+  "month",
+  "months",
+  "from",
+  "starting",
+  "starts",
+
+  // universales de pregunta
   "what",
-  "does",
-  "do",
-  "is",
-  "are",
-  "with",
-  "without",
-  "about",
-  "my",
-  "your",
-  "their",
-  "me",
-  "you",
-  "it",
+  "which",
+  "quiero",
+  "quieres",
+  "want",
+  "looking",
 ]);
 
 function normalize(raw: string): string {
@@ -107,7 +99,7 @@ function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
   const df = new Map<string, number>();
 
   for (const cand of candidates) {
-    const seen = new Set([...(cand.catalogTokens || [])]);
+    const seen = new Set(cand.catalogTokens || []);
     for (const t of seen) {
       df.set(t, (df.get(t) || 0) + 1);
     }
@@ -146,35 +138,20 @@ function countExactHits(queryTokens: string[], candidateTokens: string[]): numbe
   return candidateTokens.filter((t) => qSet.has(t)).length;
 }
 
-function pickAnchorToken(
+function pickAnchorTokens(
   queryTokens: string[],
   dfMap: Map<string, number>,
   totalCandidates: number
-): string | null {
-  if (!queryTokens.length || totalCandidates <= 0) return null;
+): string[] {
+  if (!queryTokens.length || totalCandidates <= 0) return [];
 
-  const ATTRIBUTE_TOKENS = new Set([
-    "precio",
-    "cuanto",
-    "cuánto",
-    "coste",
-    "costo",
-    "valor",
-    "mensual",
-    "monthly",
-    "price",
-    "cost",
-    "how",
-    "much"
-    ]);
-
-    const scored = queryTokens
+  const candidates = queryTokens
     .filter((t) => !ATTRIBUTE_TOKENS.has(t))
     .map((token) => {
       const df = dfMap.get(token) || 0;
       if (df <= 0) return null;
 
-      // ignorar tokens demasiado comunes en el catálogo
+      // ignorar términos demasiado comunes del catálogo
       const ratio = df / totalCandidates;
       if (ratio >= 0.8) return null;
 
@@ -184,27 +161,13 @@ function pickAnchorToken(
     })
     .filter(Boolean) as Array<{ token: string; df: number; ratio: number; idf: number }>;
 
-  if (!scored.length) return null;
+  if (!candidates.length) return [];
 
-  scored.sort((a, b) => b.idf - a.idf);
+  candidates.sort((a, b) => b.idf - a.idf);
 
-  return scored[0]?.token || null;
-}
-
-function getRareQueryTokens(
-  queryTokens: string[],
-  dfMap: Map<string, number>,
-  totalCandidates: number
-): string[] {
-  if (!queryTokens.length || totalCandidates <= 0) return [];
-
-  return queryTokens.filter((t) => {
-    const df = dfMap.get(t) || 0;
-    if (!df) return false;
-
-    const ratio = df / totalCandidates;
-    return ratio <= 0.35;
-  });
+  // Tomamos hasta 2 anchors por si la consulta trae algo como:
+  // "gold cycling" / "small deluxe" / etc.
+  return candidates.slice(0, 2).map((x) => x.token);
 }
 
 export async function resolveServiceMatchesFromText(
@@ -219,7 +182,7 @@ export async function resolveServiceMatchesFromText(
 ): Promise<ServiceMatch[]> {
   const minScore = opts?.minScore ?? 0.3;
   const maxResults = opts?.maxResults ?? 5;
-  const relativeWindow = opts?.relativeWindow ?? 0.12;
+  const relativeWindow = opts?.relativeWindow ?? 0.16;
 
   const t = String(userText || "").trim();
   if (!t) return [];
@@ -334,8 +297,7 @@ export async function resolveServiceMatchesFromText(
 
   const dfMap = buildTenantTokenDf(candidates);
   const totalCandidates = candidates.length;
-  const rareQueryTokens = getRareQueryTokens(queryTokens, dfMap, totalCandidates);
-  const anchorToken = pickAnchorToken(queryTokens, dfMap, totalCandidates);
+  const anchorTokens = pickAnchorTokens(queryTokens, dfMap, totalCandidates);
 
   const scored = candidates
     .map((cand) => {
@@ -355,32 +317,27 @@ export async function resolveServiceMatchesFromText(
 
       const exactNameHits = countExactHits(queryTokens, cand.serviceNameTokens);
       const exactCatalogHits = countExactHits(queryTokens, cand.catalogTokens);
-      const anchorHits = anchorToken
-        ? countExactHits([anchorToken], cand.catalogTokens)
+      const anchorHits = anchorTokens.length
+        ? countExactHits(anchorTokens, cand.catalogTokens)
         : 0;
 
       let score = 0;
-      score += nameScore * 0.55;
-      score += catalogScore * 0.45;
-      score += exactNameHits * 0.20;
-      score += exactCatalogHits * 0.08;
+      score += nameScore * 0.50;
+      score += catalogScore * 0.50;
+      score += exactNameHits * 0.18;
+      score += exactCatalogHits * 0.10;
+      score += anchorHits * 0.45;
 
-      if (anchorToken) {
-        score += anchorHits * 0.40;
-
-        if (anchorHits === 0) {
-          score -= 0.45;
-        }
+      // si hay anchors y el candidato no contiene ninguno, penalizar fuerte
+      if (anchorTokens.length > 0 && anchorHits === 0) {
+        score -= 0.60;
       }
 
       return {
         id: cand.serviceId,
         name: cand.label,
         score,
-        nameScore,
-        catalogScore,
-        exactNameHits,
-        exactCatalogHits,
+        anchorHits,
       };
     })
     .sort((a, b) => b.score - a.score);
@@ -390,6 +347,7 @@ export async function resolveServiceMatchesFromText(
     console.log("[RESOLVE-SERVICE-MATCHES] best por debajo de threshold", {
       userText,
       queryTokens,
+      anchorTokens,
       best: best ? { name: best.name, score: best.score } : null,
       minScore,
     });
@@ -400,12 +358,8 @@ export async function resolveServiceMatchesFromText(
     .filter((x) => x.score >= minScore)
     .filter((x) => best.score - x.score <= relativeWindow)
     .filter((x) => {
-      if (!anchorToken) return true;
-
-      const cand = candidates.find((c) => c.serviceId === x.id);
-      if (!cand) return false;
-
-      return cand.catalogTokens.includes(anchorToken);
+      if (!anchorTokens.length) return true;
+      return x.anchorHits > 0;
     })
     .slice(0, maxResults)
     .map((x) => ({
@@ -418,7 +372,7 @@ export async function resolveServiceMatchesFromText(
     userText,
     idioma,
     queryTokens,
-    anchorToken,
+    anchorTokens,
     best: best ? { name: best.name, score: best.score } : null,
     matches,
   });

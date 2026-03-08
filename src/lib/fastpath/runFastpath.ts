@@ -626,8 +626,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             targetText,
             {
               minScore: 0.3,
-              maxResults: 4,
-              relativeWindow: 0.12,
+              maxResults: 6,
+              relativeWindow: 0.20,
             }
           );
 
