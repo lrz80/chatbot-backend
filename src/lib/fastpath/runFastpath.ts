@@ -2134,6 +2134,182 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     !looksLikeExplicitDetail;
 
   if (looksLikeServiceDetail && !looksLikeEllipticPriceFollowup) {
+        // =========================================================
+    // ✅ PRIORIDAD: si el usuario pregunta "qué incluye" y ya
+    // venimos de una variante concreta reciente, responder ESA
+    // variante directamente en vez de volver a listar opciones.
+    // =========================================================
+    {
+      const now = Date.now();
+      const variantTtlMs = 10 * 60 * 1000;
+
+      const lastVariantId = String((convoCtx as any)?.last_variant_id || "").trim();
+      const lastVariantAt = Number((convoCtx as any)?.last_variant_at || 0);
+
+      const lastVariantFresh =
+        !!lastVariantId &&
+        Number.isFinite(lastVariantAt) &&
+        lastVariantAt > 0 &&
+        now - lastVariantAt <= variantTtlMs;
+
+      const explicitTargetToken = extractCatalogTargetToken(userInput);
+
+      // "q incluye", "que incluye", "what includes", etc.
+      // pero SIN target nuevo explícito tipo "qué incluye el gold"
+      const isGenericIncludesFollowup =
+        looksLikeExplicitDetail && !explicitTargetToken;
+
+      if (isGenericIncludesFollowup && lastVariantFresh) {
+        const { rows: variantRows } = await pool.query<any>(
+          `
+          SELECT
+            v.id,
+            v.service_id,
+            v.variant_name,
+            v.description,
+            v.variant_url,
+            s.name AS service_name,
+            s.description AS service_description,
+            s.service_url
+          FROM service_variants v
+          JOIN services s
+            ON s.id = v.service_id
+          WHERE v.id = $1
+            AND v.active = true
+          LIMIT 1
+          `,
+          [lastVariantId]
+        );
+
+        const chosen = variantRows[0];
+
+        if (chosen) {
+          const baseName = String(chosen.service_name || "").trim();
+          const variantName = String(chosen.variant_name || "").trim();
+
+          const descSource = String(
+            chosen.description || chosen.service_description || ""
+          ).trim();
+
+          const link =
+            chosen.variant_url
+              ? String(chosen.variant_url).trim()
+              : chosen.service_url
+              ? String(chosen.service_url).trim()
+              : null;
+
+          let displayBaseName = baseName;
+          let displayVariantName = variantName;
+          let displayBullets = descSource;
+
+          if (idiomaDestino === "en") {
+            try {
+              if (displayBaseName) {
+                displayBaseName = await traducirMensaje(displayBaseName, "en");
+              }
+            } catch (e) {
+              console.warn("[FASTPATH-INCLUDES] error traduciendo service_name desde last_variant:", e);
+            }
+
+            try {
+              if (displayVariantName) {
+                displayVariantName = await traducirMensaje(displayVariantName, "en");
+              }
+            } catch (e) {
+              console.warn("[FASTPATH-INCLUDES] error traduciendo variant_name desde last_variant:", e);
+            }
+
+            try {
+              if (displayBullets) {
+                const bulletList: string[] = displayBullets
+                  .split(/\r?\n/)
+                  .map((l: string) => l.trim())
+                  .filter((l: string) => l.length > 0);
+
+                const translated: string[] = [];
+                for (const b of bulletList) {
+                  translated.push(await traducirMensaje(b, "en"));
+                }
+
+                displayBullets = translated.join("\n");
+              }
+            } catch (e) {
+              console.warn("[FASTPATH-INCLUDES] error traduciendo bullets desde last_variant:", e);
+            }
+          }
+
+          const bullets =
+            displayBullets
+              ? displayBullets
+                  .split(/\r?\n/)
+                  .map((l: string) => l.trim())
+                  .filter((l: string) => l.length > 0)
+                  .map((l: string) => `• ${l}`)
+                  .join("\n")
+              : "";
+
+          const title =
+            displayBaseName && displayVariantName
+              ? `${displayBaseName} — ${displayVariantName}`
+              : displayBaseName || displayVariantName || "";
+
+          let reply =
+            idiomaDestino === "en"
+              ? title
+                ? `${title}${bullets ? ` includes:\n\n${bullets}` : ""}`
+                : bullets
+                ? `Includes:\n\n${bullets}`
+                : ""
+              : title
+              ? `${title}${bullets ? ` incluye:\n\n${bullets}` : ""}`
+              : bullets
+              ? `Incluye:\n\n${bullets}`
+              : "";
+
+          if (link) {
+            reply +=
+              idiomaDestino === "en"
+                ? `\n\nHere’s the link:\n${link}`
+                : `\n\nAquí tienes el link:\n${link}`;
+          } else {
+            reply +=
+              idiomaDestino === "en"
+                ? `\n\nIf you need anything else, just let me know. 😊`
+                : `\n\nSi necesitas algo más, avísame. 😊`;
+          }
+
+          console.log("[FASTPATH-INCLUDES] using last_variant_id directly", {
+            userInput,
+            lastVariantId,
+            serviceId: chosen.service_id,
+            baseName,
+            variantName,
+            link,
+          });
+
+          return {
+            handled: true,
+            reply,
+            source: "service_list_db",
+            intent: intentOut || "info_servicio",
+            ctxPatch: {
+              selectedServiceId: String(chosen.service_id || ""),
+              expectingVariant: false,
+
+              last_service_id: String(chosen.service_id || ""),
+              last_service_name: baseName || null,
+              last_service_at: Date.now(),
+
+              last_variant_id: String(chosen.id || ""),
+              last_variant_name: variantName || null,
+              last_variant_url: link || null,
+              last_variant_at: Date.now(),
+            } as Partial<FastpathCtx>,
+          };
+        }
+      }
+    }
+    
     // Detectar servicio por texto ("plan bronce", "basic bath", "deluxe groom", "facial", etc.)
     let hit: any = await resolveServiceIdFromText(pool, tenantId, userInput, {
       mode: "loose",
