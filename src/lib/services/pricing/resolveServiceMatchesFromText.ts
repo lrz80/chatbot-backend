@@ -108,6 +108,19 @@ function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
   return df;
 }
 
+function buildServiceNameTokenDf(candidates: Candidate[]): Map<string, number> {
+  const df = new Map<string, number>();
+
+  for (const cand of candidates) {
+    const seen = new Set(cand.serviceNameTokens || []);
+    for (const t of seen) {
+      df.set(t, (df.get(t) || 0) + 1);
+    }
+  }
+
+  return df;
+}
+
 function scoreTokensWeighted(
   queryTokens: string[],
   candidateTokens: string[],
@@ -140,34 +153,54 @@ function countExactHits(queryTokens: string[], candidateTokens: string[]): numbe
 
 function pickAnchorTokens(
   queryTokens: string[],
-  dfMap: Map<string, number>,
+  serviceNameDfMap: Map<string, number>,
+  catalogDfMap: Map<string, number>,
   totalCandidates: number
 ): string[] {
   if (!queryTokens.length || totalCandidates <= 0) return [];
 
-  const candidates = queryTokens
+  const scored = queryTokens
     .filter((t) => !ATTRIBUTE_TOKENS.has(t))
     .map((token) => {
-      const df = dfMap.get(token) || 0;
-      if (df <= 0) return null;
+      const nameDf = serviceNameDfMap.get(token) || 0;
+      const catalogDf = catalogDfMap.get(token) || 0;
 
-      // ignorar términos demasiado comunes del catálogo
-      const ratio = df / totalCandidates;
-      if (ratio >= 0.8) return null;
+      if (catalogDf <= 0) return null;
 
-      const idf = Math.log(1 + totalCandidates / df);
+      const catalogRatio = catalogDf / totalCandidates;
+      if (catalogRatio >= 0.8) return null;
 
-      return { token, df, ratio, idf };
+      const catalogIdf = Math.log(1 + totalCandidates / catalogDf);
+      const nameIdf =
+        nameDf > 0 ? Math.log(1 + totalCandidates / nameDf) : 0;
+
+      // Preferimos anchors que discriminen mejor por NOMBRE de servicio,
+      // y secundariamente por catálogo completo.
+      const combined = nameIdf * 0.7 + catalogIdf * 0.3;
+
+      return {
+        token,
+        nameDf,
+        catalogDf,
+        nameIdf,
+        catalogIdf,
+        combined,
+      };
     })
-    .filter(Boolean) as Array<{ token: string; df: number; ratio: number; idf: number }>;
+    .filter(Boolean) as Array<{
+      token: string;
+      nameDf: number;
+      catalogDf: number;
+      nameIdf: number;
+      catalogIdf: number;
+      combined: number;
+    }>;
 
-  if (!candidates.length) return [];
+  if (!scored.length) return [];
 
-  candidates.sort((a, b) => b.idf - a.idf);
+  scored.sort((a, b) => b.combined - a.combined);
 
-  // Tomamos hasta 2 anchors por si la consulta trae algo como:
-  // "gold cycling" / "small deluxe" / etc.
-  return candidates.slice(0, 2).map((x) => x.token);
+  return scored.slice(0, 2).map((x) => x.token);
 }
 
 export async function resolveServiceMatchesFromText(
@@ -295,23 +328,29 @@ export async function resolveServiceMatchesFromText(
 
   if (!candidates.length) return [];
 
-  const dfMap = buildTenantTokenDf(candidates);
+  const catalogDfMap = buildTenantTokenDf(candidates);
+  const serviceNameDfMap = buildServiceNameTokenDf(candidates);
   const totalCandidates = candidates.length;
-  const anchorTokens = pickAnchorTokens(queryTokens, dfMap, totalCandidates);
+  const anchorTokens = pickAnchorTokens(
+    queryTokens,
+    serviceNameDfMap,
+    catalogDfMap,
+    totalCandidates
+  );
 
   const scored = candidates
     .map((cand) => {
       const nameScore = scoreTokensWeighted(
         queryTokens,
         cand.serviceNameTokens,
-        dfMap,
+        serviceNameDfMap,
         totalCandidates
       );
 
       const catalogScore = scoreTokensWeighted(
         queryTokens,
         cand.catalogTokens,
-        dfMap,
+        catalogDfMap,
         totalCandidates
       );
 
