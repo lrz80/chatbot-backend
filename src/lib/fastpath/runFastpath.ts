@@ -2850,10 +2850,19 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 ? "price available"
                 : "precio disponible";
 
+            const directLink =
+              chosenVariant.variant_url
+                ? String(chosenVariant.variant_url).trim()
+                : null;
+
             const reply =
               idiomaDestino === "en"
-                ? `The ${baseName} — ${variantName}: option costs ${priceText}\n\nIf you want, I can also share the link.😊`
-                : `El ${baseName} — ${variantName}: cuesta ${priceText}\n\nSi quieres, también te paso el link.😊`;
+                ? `${baseName} — ${variantName} costs ${priceText} ${
+                    directLink ? `\n\nHere’s the link:\n${directLink}` : "\n\nIf you need anything else, just let me know. 😊"
+                  }`
+                : `${baseName} — ${variantName} cuesta ${priceText} ${
+                    directLink ? `\n\nAquí tienes el link:\n${directLink}` : "\n\nSi necesitas algo más, dejame saber. 😊"
+                  }`;
 
             return {
               handled: true,
