@@ -2078,7 +2078,23 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   const looksLikeServiceDetail = looksLikeExplicitDetail || looksLikeEllipticDetail;
 
-  if (looksLikeServiceDetail) {
+  const recentPriceContext =
+    (
+      String((convoCtx as any)?.last_bot_action || "") === "followup_set_service_for_price" ||
+      Boolean((convoCtx as any)?.last_price_option_label) ||
+      Boolean((convoCtx as any)?.last_variant_id) ||
+      String(detectedIntent || "").trim() === "precio"
+    );
+
+  const looksLikeEllipticPriceFollowup =
+    recentPriceContext &&
+    (
+      /^y\s+(el|la|los|las)\s+.+\??$/i.test(normMsg) ||
+      /^and\s+(the\s+)?[^?]+(\?)?$/i.test(normMsg)
+    ) &&
+    !looksLikeExplicitDetail;
+
+  if (looksLikeServiceDetail && !looksLikeEllipticPriceFollowup) {
     // Detectar servicio por texto ("plan bronce", "basic bath", "deluxe groom", "facial", etc.)
     let hit: any = await resolveServiceIdFromText(pool, tenantId, userInput, {
       mode: "loose",
