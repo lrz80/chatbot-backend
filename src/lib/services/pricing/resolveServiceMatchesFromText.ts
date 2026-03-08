@@ -75,6 +75,27 @@ const ATTRIBUTE_TOKENS = new Set([
   "looking",
 ]);
 
+const GENERIC_CATALOG_TOKENS = new Set([
+  // ES
+  "clase", "clases",
+  "plan", "planes",
+  "paquete", "paquetes",
+  "pase", "pases",
+  "servicio", "servicios",
+  "programa", "programas",
+  "membresia", "membresias",
+  "membresía", "membresías",
+
+  // EN
+  "class", "classes",
+  "plan", "plans",
+  "package", "packages",
+  "pass", "passes",
+  "service", "services",
+  "program", "programs",
+  "membership", "memberships",
+]);
+
 function normalize(raw: string): string {
   return String(raw || "")
     .normalize("NFD")
@@ -171,28 +192,30 @@ function pickAnchorTokens(
       if (spread >= 0.8) return null;
 
       const specificity = Math.log(1 + totalCandidates / catalogDf);
-
-      // Qué tanto ese token vive en campos de entidad
-      // versus aparecer tirado en descripciones
-      const entityPresence = catalogDf > 0 ? entityDf / catalogDf : 0;
-
-      // Bonus si sí aparece en entity fields
       const entityBonus = entityDf > 0 ? Math.log(1 + totalCandidates / entityDf) : 0;
 
+      const isGenericCatalog = GENERIC_CATALOG_TOKENS.has(token);
+
+      // Penalización estructural para tokens genéricos de catálogo
+      const genericPenalty = isGenericCatalog ? 1.25 : 0;
+
+      // Bonus si vive realmente en campos de entidad
+      const entityPresence = catalogDf > 0 ? entityDf / catalogDf : 0;
+
       const combined =
-        specificity * 0.45 +
-        entityPresence * 0.90 +
-        entityBonus * 0.35 -
-        spread * 0.25;
+        specificity * 0.55 +
+        entityBonus * 0.35 +
+        entityPresence * 0.60 -
+        genericPenalty;
 
       return {
         token,
         entityDf,
         catalogDf,
-        spread,
         specificity,
-        entityPresence,
         entityBonus,
+        entityPresence,
+        isGenericCatalog,
         combined,
       };
     })
@@ -200,16 +223,22 @@ function pickAnchorTokens(
       token: string;
       entityDf: number;
       catalogDf: number;
-      spread: number;
       specificity: number;
-      entityPresence: number;
       entityBonus: number;
+      entityPresence: number;
+      isGenericCatalog: boolean;
       combined: number;
     }>;
 
   if (!scored.length) return [];
 
   scored.sort((a, b) => b.combined - a.combined);
+
+  // Si el mejor token es genérico pero existe otro no genérico cercano, gana el no genérico
+  const nonGeneric = scored.filter((x) => !x.isGenericCatalog);
+  if (nonGeneric.length > 0) {
+    return nonGeneric.slice(0, 2).map((x) => x.token);
+  }
 
   return scored.slice(0, 2).map((x) => x.token);
 }
@@ -354,52 +383,56 @@ export async function resolveServiceMatchesFromText(
   );
 
   const scored = candidates
-  .map((cand) => {
-    const entityScore = scoreTokensWeighted(
-      queryTokens,
-      cand.entityTokens,
-      entityDfMap,
-      totalCandidates
-    );
+    .map((cand) => {
+      const entityScore = scoreTokensWeighted(
+        queryTokens,
+        cand.entityTokens,
+        entityDfMap,
+        totalCandidates
+      );
 
-    const catalogScore = scoreTokensWeighted(
-      queryTokens,
-      cand.catalogTokens,
-      catalogDfMap,
-      totalCandidates
-    );
+      const catalogScore = scoreTokensWeighted(
+        queryTokens,
+        cand.catalogTokens,
+        catalogDfMap,
+        totalCandidates
+      );
 
-    const exactEntityHits = countExactHits(queryTokens, cand.entityTokens);
-    const exactCatalogHits = countExactHits(queryTokens, cand.catalogTokens);
+      const exactEntityHits = countExactHits(queryTokens, cand.entityTokens);
+      const exactCatalogHits = countExactHits(queryTokens, cand.catalogTokens);
 
-    // OJO: anchor contra entityTokens, no contra catalogTokens
-    const anchorHits = anchorTokens.length
-      ? countExactHits(anchorTokens, cand.entityTokens)
-      : 0;
+      const anchorHits = anchorTokens.length
+        ? countExactHits(anchorTokens, cand.entityTokens)
+        : 0;
 
-    let score = 0;
-    score += entityScore * 0.65;
-    score += catalogScore * 0.35;
-    score += exactEntityHits * 0.22;
-    score += exactCatalogHits * 0.06;
-    score += anchorHits * 0.55;
+      const nonGenericQueryTokens = queryTokens.filter(
+        (t) => !ATTRIBUTE_TOKENS.has(t) && !GENERIC_CATALOG_TOKENS.has(t)
+      );
+      const discriminativeHits = countExactHits(nonGenericQueryTokens, cand.entityTokens);
 
-    // Si el anchor existe pero no aparece en la parte que nombra la entidad,
-    // penaliza fuerte.
-    if (anchorTokens.length > 0 && anchorHits === 0) {
-      score -= 0.75;
-    }
+      let score = 0;
+      score += entityScore * 0.65;
+      score += catalogScore * 0.35;
+      score += exactEntityHits * 0.22;
+      score += exactCatalogHits * 0.06;
+      score += anchorHits * 0.30;
+      score += discriminativeHits * 0.42;
 
-    return {
-      id: cand.serviceId,
-      name: cand.label,
-      score,
-      anchorHits,
-      exactEntityHits,
-      exactCatalogHits,
-    };
-  })
-  .sort((a, b) => b.score - a.score);
+      if (anchorTokens.length > 0 && anchorHits === 0) {
+        score -= 0.28;
+      }
+
+      return {
+        id: cand.serviceId,
+        name: cand.label,
+        score,
+        anchorHits,
+        exactEntityHits,
+        exactCatalogHits,
+        discriminativeHits,
+      };
+    })
+    .sort((a, b) => b.score - a.score);
     
   const best = scored[0];
   if (!best || best.score < minScore) {
