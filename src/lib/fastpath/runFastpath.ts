@@ -35,6 +35,8 @@ export type FastpathCtx = {
 
   pending_price_lookup?: boolean;
   pending_price_at?: number | null;
+  pending_price_target_text?: string | null;
+  pending_price_raw_user_text?: string | null;
 
   // ✅ listas para selección posterior
   last_plan_list?: Array<{ id: string; name: string; url: string | null }>;
@@ -1654,7 +1656,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       // deja que PICK FROM LAST LIST lo maneje
     } else {
       if (isShort && pendingPrice) {
-        const hit = await resolveServiceIdFromText(pool, tenantId, t);
+        const pendingTargetText = String((convoCtx as any)?.pending_price_target_text || "").trim();
+        const textForResolution = pendingTargetText || t;
+
+        const hit = await resolveServiceIdFromText(pool, tenantId, textForResolution, {
+          mode: "loose",
+        });
+
         if (hit?.id) {
           return {
             handled: false,
@@ -1664,6 +1672,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               last_service_at: now,
               pending_price_lookup: null,
               pending_price_at: null,
+              pending_price_target_text: null,
+              pending_price_raw_user_text: null,
               last_bot_action: "followup_set_service_for_price",
               last_bot_action_at: now,
             } as any,
@@ -2145,6 +2155,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               last_plan_list_at: Date.now(),
               last_list_kind: "plan",
               last_list_kind_at: Date.now(),
+
+              pending_price_lookup: true,
+              pending_price_at: Date.now(),
+              pending_price_target_text: userInput,
+              pending_price_raw_user_text: userInput,
+
               last_bot_action: "asked_plan_group_disambiguation",
               last_bot_action_at: Date.now(),
             } as Partial<FastpathCtx>,
