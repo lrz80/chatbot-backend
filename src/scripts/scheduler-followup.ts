@@ -113,22 +113,55 @@ async function postponeJob(jobId: string, minutes = 5) {
 }
 
 async function resolveIdiomaDestino(job: Job): Promise<"es" | "en"> {
-  // Idioma a partir del último mensaje del usuario (si existe)
-  const { rows: lastRows } = await pool.query(
-    `SELECT content
-       FROM messages
+  // 1) Intentar idioma persistido del cliente
+  try {
+    const { rows: langRows } = await pool.query(
+      `
+      SELECT preferred_lang
+      FROM client_memory
       WHERE tenant_id = $1
         AND canal = $2
-        AND role = 'user'
-        AND from_number = $3
-      ORDER BY timestamp DESC
-      LIMIT 1`,
-    [job.tenant_id, job.canal, job.contacto]
-  );
+        AND contacto = $3
+      LIMIT 1
+      `,
+      [job.tenant_id, job.canal, job.contacto]
+    );
 
-  const pista = lastRows[0]?.content || job.contenido;
-  const idDet = await detectarIdioma(pista).catch(() => "es");
-  return String(idDet || "").toLowerCase().startsWith("en") ? "en" : "es";
+    const stored = String(langRows[0]?.preferred_lang || "")
+      .toLowerCase()
+      .split(/[-_]/)[0];
+
+    if (stored === "en") return "en";
+    if (stored === "es") return "es";
+  } catch {
+    // ignore y seguir fallback
+  }
+
+  // 2) Fallback: último mensaje del usuario
+  try {
+    const { rows: lastRows } = await pool.query(
+      `SELECT content
+         FROM messages
+        WHERE tenant_id = $1
+          AND canal = $2
+          AND role = 'user'
+          AND from_number = $3
+        ORDER BY timestamp DESC
+        LIMIT 1`,
+      [job.tenant_id, job.canal, job.contacto]
+    );
+
+    const pista = lastRows[0]?.content || "";
+    if (pista.trim()) {
+      const idDet = await detectarIdioma(pista).catch(() => "es");
+      return String(idDet || "").toLowerCase().startsWith("en") ? "en" : "es";
+    }
+  } catch {
+    // ignore
+  }
+
+  // 3) Default seguro
+  return "es";
 }
 
 async function maybeTranslate(contenido: string, idiomaDestino: "es" | "en") {

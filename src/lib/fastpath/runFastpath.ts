@@ -508,8 +508,47 @@ function normalizeForIntent(raw: string): string {
     .trim();
 }
 
-function isPriceQuestion(text: string) {
-  return extractQueryFrames(text).some((f) => f.askedAttribute === "price");
+function isEllipticPriceFollowup(raw: string, convoCtx: FastpathCtx): boolean {
+  const t = normalizeText(String(raw || ""));
+  if (!t) return false;
+
+  const hasRecentPriceContext =
+    !!convoCtx?.last_service_id &&
+    (
+      !!convoCtx?.last_variant_id ||
+      !!convoCtx?.last_price_option_label ||
+      !!convoCtx?.last_service_name
+    );
+
+  if (!hasRecentPriceContext) return false;
+
+  // ejemplos:
+  // y el de 12
+  // y la de 8
+  // el de 4
+  // la de 12
+  // y 12?
+  const hasShortEllipticShape =
+    /^(y\s+)?(el|la|los|las)\s+de\s+\d{1,3}\b/.test(t) ||
+    /^(y\s+)?\d{1,3}\b/.test(t);
+
+  if (!hasShortEllipticShape) return false;
+
+  return true;
+}
+
+function isPriceQuestion(text: string, convoCtx?: FastpathCtx) {
+  const framesSayPrice = extractQueryFrames(text).some(
+    (f) => f.askedAttribute === "price"
+  );
+
+  if (framesSayPrice) return true;
+
+  if (convoCtx && isEllipticPriceFollowup(text, convoCtx)) {
+    return true;
+  }
+
+  return false;
 }
 
 function looksLikeDetailIntent(raw: string): boolean {
@@ -2556,10 +2595,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       isCombinationIntent ||
       isAskingOtherCatalogOptions ||
       (hasRecentCatalogContext && isAskingOtherCatalogOptions) ||
-      isPriceQuestion(userInput);
+      isPriceQuestion(userInput, convoCtx);
 
     // 🔒 Nunca permitir que el LLM responda precios
-    if (isPriceQuestion(userInput)) {
+    if (isPriceQuestion(userInput, convoCtx)) {
       console.log("🚫 BLOCK LLM PRICING — forcing DB path");
       // dejamos que el flujo continúe para que el branch de DB responda
     }
@@ -2568,7 +2607,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       // deja continuar con el resto del fastpath
     } else {
       const isPriceLike =
-        isPriceQuestion(userInput) ||
+        isPriceQuestion(userInput, convoCtx) ||
         q.includes("plan") ||
         q.includes("planes") ||
         q.includes("membresia") ||
@@ -2696,15 +2735,29 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         // =========================================================
         // ✅ SINGLE PRICE TARGET RESOLUTION
         // Intenta resolver una referencia concreta antes de listar catálogo.
-        // NO toca el flujo multi-question.
+        // Si es follow-up elíptico de precio, reutiliza el último servicio.
         // =========================================================
-        const singleHit = await resolveServiceIdFromText(pool, tenantId, userInput, {
-          mode: "loose",
-        });
+        const ellipticPriceFollowup = isEllipticPriceFollowup(userInput, convoCtx);
+
+        const singleHit = ellipticPriceFollowup && convoCtx?.last_service_id
+          ? {
+              id: String(convoCtx.last_service_id),
+              name: String(convoCtx.last_service_name || "").trim(),
+            }
+          : await resolveServiceIdFromText(pool, tenantId, userInput, {
+              mode: "loose",
+            });
 
         console.log("[PRICE][single] resolve output", {
           userInput,
+          ellipticPriceFollowup,
           singleHit,
+          ctxLastService: convoCtx?.last_service_id
+            ? {
+                id: convoCtx.last_service_id,
+                name: convoCtx.last_service_name || null,
+              }
+            : null,
         });
 
         if (singleHit?.id) {
@@ -2739,7 +2792,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               chosenVariant =
                 variants.find((v: any) => {
                   const vName = normalizeText(String(v.variant_name || ""));
-                  return vName.includes(numberInMsg);
+                  return new RegExp(`\\b${numberInMsg}\\b`).test(vName);
                 }) || null;
             }
 
@@ -2799,8 +2852,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
             const reply =
               idiomaDestino === "en"
-                ? `${baseName} — ${variantName}: ${priceText}\n\nIf you want, I can also share the booking link.`
-                : `${baseName} — ${variantName}: ${priceText}\n\nSi quieres, también te paso el link para reservar.`;
+                ? `${baseName} — ${variantName}: ${priceText}\n\nIf you want, I can also share the link.`
+                : `${baseName} — ${variantName}: ${priceText}\n\nSi quieres, también te paso el link.`;
 
             return {
               handled: true,
@@ -3020,6 +3073,16 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           ctxPatch,
         };
       }
+
+      console.log("[PRICE][pre-llm-catalog-check]", {
+        userInput,
+        detectedIntent,
+        isPriceQuestion: isPriceQuestion(userInput, convoCtx),
+        ellipticPriceFollowup: isEllipticPriceFollowup(userInput, convoCtx),
+        last_service_id: convoCtx?.last_service_id ?? null,
+        last_service_name: convoCtx?.last_service_name ?? null,
+        last_variant_name: convoCtx?.last_variant_name ?? null,
+      });
 
       const systemMsg =
         idiomaDestino === "en"
