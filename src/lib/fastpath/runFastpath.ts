@@ -2749,6 +2749,23 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
           // ✅ Si resolvió variante concreta, responder exacto
           if (chosenVariant) {
+            console.log("[PRICE][chosenVariant]", {
+              userInput,
+              targetServiceId,
+              targetServiceName,
+              chosenVariant: {
+                id: chosenVariant?.id,
+                variant_name: chosenVariant?.variant_name,
+                price: chosenVariant?.price,
+                variant_url: chosenVariant?.variant_url,
+              },
+              allVariants: variants.map((v: any) => ({
+                id: v.id,
+                variant_name: v.variant_name,
+                price: v.price,
+              })),
+            });
+            
             const priceNum =
               chosenVariant.price === null ||
               chosenVariant.price === undefined ||
