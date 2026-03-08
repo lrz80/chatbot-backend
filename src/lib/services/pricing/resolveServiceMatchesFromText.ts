@@ -146,6 +146,35 @@ function countExactHits(queryTokens: string[], candidateTokens: string[]): numbe
   return candidateTokens.filter((t) => qSet.has(t)).length;
 }
 
+function pickAnchorToken(
+  queryTokens: string[],
+  dfMap: Map<string, number>,
+  totalCandidates: number
+): string | null {
+  if (!queryTokens.length || totalCandidates <= 0) return null;
+
+  const scored = queryTokens
+    .map((token) => {
+      const df = dfMap.get(token) || 0;
+      if (df <= 0) return null;
+
+      // ignorar tokens demasiado comunes en el catálogo
+      const ratio = df / totalCandidates;
+      if (ratio >= 0.8) return null;
+
+      const idf = Math.log(1 + totalCandidates / df);
+
+      return { token, df, ratio, idf };
+    })
+    .filter(Boolean) as Array<{ token: string; df: number; ratio: number; idf: number }>;
+
+  if (!scored.length) return null;
+
+  scored.sort((a, b) => b.idf - a.idf);
+
+  return scored[0]?.token || null;
+}
+
 function getRareQueryTokens(
   queryTokens: string[],
   dfMap: Map<string, number>,
@@ -290,6 +319,7 @@ export async function resolveServiceMatchesFromText(
   const dfMap = buildTenantTokenDf(candidates);
   const totalCandidates = candidates.length;
   const rareQueryTokens = getRareQueryTokens(queryTokens, dfMap, totalCandidates);
+  const anchorToken = pickAnchorToken(queryTokens, dfMap, totalCandidates);
 
   const scored = candidates
     .map((cand) => {
@@ -309,17 +339,22 @@ export async function resolveServiceMatchesFromText(
 
       const exactNameHits = countExactHits(queryTokens, cand.serviceNameTokens);
       const exactCatalogHits = countExactHits(queryTokens, cand.catalogTokens);
-      const rareHits = countExactHits(rareQueryTokens, cand.catalogTokens);
+      const anchorHits = anchorToken
+        ? countExactHits([anchorToken], cand.catalogTokens)
+        : 0;
 
       let score = 0;
       score += nameScore * 0.55;
       score += catalogScore * 0.45;
       score += exactNameHits * 0.20;
       score += exactCatalogHits * 0.08;
-      score += rareHits * 0.28;
 
-      if (rareQueryTokens.length > 0 && rareHits === 0) {
-        score -= 0.35;
+      if (anchorToken) {
+        score += anchorHits * 0.40;
+
+        if (anchorHits === 0) {
+          score -= 0.45;
+        }
       }
 
       return {
@@ -348,6 +383,14 @@ export async function resolveServiceMatchesFromText(
   const matches = scored
     .filter((x) => x.score >= minScore)
     .filter((x) => best.score - x.score <= relativeWindow)
+    .filter((x) => {
+      if (!anchorToken) return true;
+
+      const cand = candidates.find((c) => c.serviceId === x.id);
+      if (!cand) return false;
+
+      return cand.catalogTokens.includes(anchorToken);
+    })
     .slice(0, maxResults)
     .map((x) => ({
       id: x.id,
@@ -359,7 +402,7 @@ export async function resolveServiceMatchesFromText(
     userText,
     idioma,
     queryTokens,
-    rareQueryTokens,
+    anchorToken,
     best: best ? { name: best.name, score: best.score } : null,
     matches,
   });
