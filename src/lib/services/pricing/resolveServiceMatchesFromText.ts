@@ -180,67 +180,96 @@ function pickAnchorTokens(
 ): string[] {
   if (!queryTokens.length || totalCandidates <= 0) return [];
 
-  const scored = queryTokens
-    .filter((t) => !ATTRIBUTE_TOKENS.has(t))
+  const usable = queryTokens.filter((t) => !ATTRIBUTE_TOKENS.has(t));
+  if (!usable.length) return [];
+
+  // ===============================
+  // 1) PRIORIDAD TOTAL: tokens respaldados por ENTITY
+  // ===============================
+  const entityBacked = usable
     .map((token) => {
       const entityDf = entityDfMap.get(token) || 0;
-      const catalogDf = catalogDfMap.get(token) || 0;
+      if (entityDf <= 0) return null;
 
-      if (catalogDf <= 0) return null;
-
-      const spread = catalogDf / totalCandidates;
-      if (spread >= 0.8) return null;
-
-      const specificity = Math.log(1 + totalCandidates / catalogDf);
-      const entityBonus = entityDf > 0 ? Math.log(1 + totalCandidates / entityDf) : 0;
-
+      const catalogDf = catalogDfMap.get(token) || entityDf;
       const isGenericCatalog = GENERIC_CATALOG_TOKENS.has(token);
-
-      // Penalización estructural para tokens genéricos de catálogo
-      const genericPenalty = isGenericCatalog ? 1.25 : 0;
-
-      // Bonus si vive realmente en campos de entidad
-      const entityPresence = catalogDf > 0 ? entityDf / catalogDf : 0;
-
-      const combined =
-        specificity * 0.55 +
-        entityBonus * 0.35 +
-        entityPresence * 0.60 -
-        genericPenalty;
 
       return {
         token,
         entityDf,
         catalogDf,
-        specificity,
-        entityBonus,
-        entityPresence,
         isGenericCatalog,
-        combined,
       };
     })
     .filter(Boolean) as Array<{
       token: string;
       entityDf: number;
       catalogDf: number;
-      specificity: number;
-      entityBonus: number;
-      entityPresence: number;
       isGenericCatalog: boolean;
-      combined: number;
     }>;
 
-  if (!scored.length) return [];
+  if (entityBacked.length > 0) {
+    entityBacked.sort((a, b) => {
+      // 1) no genérico gana
+      if (a.isGenericCatalog !== b.isGenericCatalog) {
+        return a.isGenericCatalog ? 1 : -1;
+      }
 
-  scored.sort((a, b) => b.combined - a.combined);
+      // 2) menor DF en entity gana
+      if (a.entityDf !== b.entityDf) {
+        return a.entityDf - b.entityDf;
+      }
 
-  // Si el mejor token es genérico pero existe otro no genérico cercano, gana el no genérico
-  const nonGeneric = scored.filter((x) => !x.isGenericCatalog);
-  if (nonGeneric.length > 0) {
-    return nonGeneric.slice(0, 2).map((x) => x.token);
+      // 3) menor DF en catálogo gana
+      if (a.catalogDf !== b.catalogDf) {
+        return a.catalogDf - b.catalogDf;
+      }
+
+      // 4) token más largo como desempate
+      return b.token.length - a.token.length;
+    });
+
+    return entityBacked.slice(0, 2).map((x) => x.token);
   }
 
-  return scored.slice(0, 2).map((x) => x.token);
+  // ===============================
+  // 2) FALLBACK: catálogo
+  // Solo si no hubo ningún token de entidad
+  // ===============================
+  const catalogBacked = usable
+    .map((token) => {
+      const catalogDf = catalogDfMap.get(token) || 0;
+      if (catalogDf <= 0) return null;
+
+      const isGenericCatalog = GENERIC_CATALOG_TOKENS.has(token);
+
+      return {
+        token,
+        catalogDf,
+        isGenericCatalog,
+      };
+    })
+    .filter(Boolean) as Array<{
+      token: string;
+      catalogDf: number;
+      isGenericCatalog: boolean;
+    }>;
+
+  if (!catalogBacked.length) return [];
+
+  catalogBacked.sort((a, b) => {
+    if (a.isGenericCatalog !== b.isGenericCatalog) {
+      return a.isGenericCatalog ? 1 : -1;
+    }
+
+    if (a.catalogDf !== b.catalogDf) {
+      return a.catalogDf - b.catalogDf;
+    }
+
+    return b.token.length - a.token.length;
+  });
+
+  return catalogBacked.slice(0, 2).map((x) => x.token);
 }
 
 export async function resolveServiceMatchesFromText(
@@ -446,14 +475,33 @@ export async function resolveServiceMatchesFromText(
     return [];
   }
 
-  const matches = scored
-    .filter((x) => x.score >= minScore)
-    .filter((x) => best.score - x.score <= relativeWindow)
-    .filter((x) => {
-      if (!anchorTokens.length) return true;
-      return x.anchorHits > 0;
-    })
-    .slice(0, maxResults)
+  const eligible = scored.filter((x) => x.score >= minScore);
+
+  // 1) candidatos que sí pegan con tokens discriminantes de la query
+  const discriminativeFirst = eligible.filter((x) => x.discriminativeHits > 0);
+
+  // 2) luego los demás candidatos razonables
+  const remaining = eligible.filter((x) => x.discriminativeHits <= 0);
+
+  // 3) combinamos dando prioridad a los discriminativos
+  const merged = [...discriminativeFirst, ...remaining];
+
+  // 4) dedupe por id
+  const seen = new Set<string>();
+  const deduped = merged.filter((x) => {
+    if (seen.has(x.id)) return false;
+    seen.add(x.id);
+    return true;
+  });
+
+  // 5) si hay matches discriminativos, no mates la lista por relativeWindow demasiado agresivo
+  const relaxedWindow = discriminativeFirst.length > 0
+    ? Math.max(relativeWindow, 0.5)
+    : relativeWindow;
+
+  const matches = deduped
+    .filter((x) => best.score - x.score <= relaxedWindow)
+    .slice(0, Math.min(maxResults, 4))
     .map((x) => ({
       id: x.id,
       name: x.name,
