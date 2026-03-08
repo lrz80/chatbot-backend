@@ -2850,10 +2850,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 ? "price available"
                 : "precio disponible";
 
+            const variantLabel = String(chosenVariant.variant_name || "").trim();
+
             const reply =
               idiomaDestino === "en"
-                ? `${baseName} — ${variantName}: ${priceText}\n\nIf you want, I can also share the link.`
-                : `${baseName} — ${variantName}: ${priceText}\n\nSi quieres, también te paso el link.`;
+                ? `The ${variantLabel.toLowerCase()} option costs ${priceText} 😊\n\nIf you want, I can send you the link.`
+                : `El ${variantLabel.toLowerCase()} cuesta ${priceText} 😊\n\nSi quieres, te paso el link.`;
 
             return {
               handled: true,
