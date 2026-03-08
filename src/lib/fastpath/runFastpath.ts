@@ -2731,19 +2731,33 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           let chosenVariant: any = null;
 
           if (variants.length > 0) {
-            const matchedVariant = bestNameMatch(
-              userInput,
-              variants.map((v: any) => ({
-                id: String(v.id),
-                name: String(v.variant_name || "").trim(),
-                url: v.variant_url ? String(v.variant_url).trim() : null,
-              }))
-            ) as any;
+            const msgNorm = normalizeText(userInput);
 
-            if (matchedVariant?.id) {
-              chosenVariant = variants.find(
-                (v: any) => String(v.id) === String(matchedVariant.id)
-              );
+            const numberInMsg = msgNorm.match(/\b(\d{1,3})\b/)?.[1] || null;
+
+            if (numberInMsg) {
+              chosenVariant =
+                variants.find((v: any) => {
+                  const vName = normalizeText(String(v.variant_name || ""));
+                  return vName.includes(numberInMsg);
+                }) || null;
+            }
+
+            if (!chosenVariant) {
+              const matchedVariant = bestNameMatch(
+                userInput,
+                variants.map((v: any) => ({
+                  id: String(v.id),
+                  name: String(v.variant_name || "").trim(),
+                  url: v.variant_url ? String(v.variant_url).trim() : null,
+                }))
+              ) as any;
+
+              if (matchedVariant?.id) {
+                chosenVariant = variants.find(
+                  (v: any) => String(v.id) === String(matchedVariant.id)
+                );
+              }
             }
           }
 
@@ -2765,7 +2779,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 price: v.price,
               })),
             });
-            
+
             const priceNum =
               chosenVariant.price === null ||
               chosenVariant.price === undefined ||
@@ -2785,8 +2799,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
             const reply =
               idiomaDestino === "en"
-                ? `• ${baseName} — ${variantName}: ${priceText}`
-                : `• ${baseName} — ${variantName}: ${priceText}`;
+                ? `${baseName} — ${variantName}: ${priceText}\n\nIf you want, I can also share the booking link.`
+                : `${baseName} — ${variantName}: ${priceText}\n\nSi quieres, también te paso el link para reservar.`;
 
             return {
               handled: true,
