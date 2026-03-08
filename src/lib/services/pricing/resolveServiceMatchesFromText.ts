@@ -11,8 +11,8 @@ export type ServiceMatch = {
 type Candidate = {
   serviceId: string;
   label: string;
-  serviceNameTokens: string[];
-  catalogTokens: string[];
+  entityTokens: string[];   // service_name + variant_name
+  catalogTokens: string[];  // entity + descriptions
 };
 
 const FUNCTION_WORDS = new Set([
@@ -108,11 +108,11 @@ function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
   return df;
 }
 
-function buildServiceNameTokenDf(candidates: Candidate[]): Map<string, number> {
+function buildEntityTokenDf(candidates: Candidate[]): Map<string, number> {
   const df = new Map<string, number>();
 
   for (const cand of candidates) {
-    const seen = new Set(cand.serviceNameTokens || []);
+    const seen = new Set(cand.entityTokens || []);
     for (const t of seen) {
       df.set(t, (df.get(t) || 0) + 1);
     }
@@ -153,7 +153,7 @@ function countExactHits(queryTokens: string[], candidateTokens: string[]): numbe
 
 function pickAnchorTokens(
   queryTokens: string[],
-  serviceNameDfMap: Map<string, number>,
+  entityDfMap: Map<string, number>,
   catalogDfMap: Map<string, number>,
   totalCandidates: number
 ): string[] {
@@ -162,37 +162,48 @@ function pickAnchorTokens(
   const scored = queryTokens
     .filter((t) => !ATTRIBUTE_TOKENS.has(t))
     .map((token) => {
-      const nameDf = serviceNameDfMap.get(token) || 0;
+      const entityDf = entityDfMap.get(token) || 0;
       const catalogDf = catalogDfMap.get(token) || 0;
 
       if (catalogDf <= 0) return null;
 
-      const catalogRatio = catalogDf / totalCandidates;
-      if (catalogRatio >= 0.8) return null;
+      const spread = catalogDf / totalCandidates;
+      if (spread >= 0.8) return null;
 
-      const catalogIdf = Math.log(1 + totalCandidates / catalogDf);
-      const nameIdf =
-        nameDf > 0 ? Math.log(1 + totalCandidates / nameDf) : 0;
+      const specificity = Math.log(1 + totalCandidates / catalogDf);
 
-      // Preferimos anchors que discriminen mejor por NOMBRE de servicio,
-      // y secundariamente por catálogo completo.
-      const combined = nameIdf * 0.7 + catalogIdf * 0.3;
+      // Qué tanto ese token vive en campos de entidad
+      // versus aparecer tirado en descripciones
+      const entityPresence = catalogDf > 0 ? entityDf / catalogDf : 0;
+
+      // Bonus si sí aparece en entity fields
+      const entityBonus = entityDf > 0 ? Math.log(1 + totalCandidates / entityDf) : 0;
+
+      const combined =
+        specificity * 0.45 +
+        entityPresence * 0.90 +
+        entityBonus * 0.35 -
+        spread * 0.25;
 
       return {
         token,
-        nameDf,
+        entityDf,
         catalogDf,
-        nameIdf,
-        catalogIdf,
+        spread,
+        specificity,
+        entityPresence,
+        entityBonus,
         combined,
       };
     })
     .filter(Boolean) as Array<{
       token: string;
-      nameDf: number;
+      entityDf: number;
       catalogDf: number;
-      nameIdf: number;
-      catalogIdf: number;
+      spread: number;
+      specificity: number;
+      entityPresence: number;
+      entityBonus: number;
       combined: number;
     }>;
 
@@ -284,12 +295,12 @@ export async function resolveServiceMatchesFromText(
   const grouped = new Map<
     string,
     {
-      serviceId: string;
-      serviceLabel: string | null;
-      serviceNameTokenSet: Set<string>;
-      catalogTokenSet: Set<string>;
+        serviceId: string;
+        serviceLabel: string | null;
+        entityTokenSet: Set<string>;
+        catalogTokenSet: Set<string>;
     }
-  >();
+    >();
 
   for (const r of rows) {
     const serviceId = String(r.service_id || "");
@@ -301,7 +312,7 @@ export async function resolveServiceMatchesFromText(
       entry = {
         serviceId,
         serviceLabel: serviceName,
-        serviceNameTokenSet: new Set<string>(),
+        entityTokenSet: new Set<string>(),
         catalogTokenSet: new Set<string>(),
       };
       grouped.set(serviceId, entry);
@@ -312,7 +323,11 @@ export async function resolveServiceMatchesFromText(
     const variantNameTokens = tokenize(String(r.variant_name || ""));
     const variantDescTokens = tokenize(String(r.variant_description || ""));
 
-    for (const tk of serviceNameTokens) entry.serviceNameTokenSet.add(tk);
+    // entity = lo que nombra la oferta
+    for (const tk of serviceNameTokens) entry.entityTokenSet.add(tk);
+    for (const tk of variantNameTokens) entry.entityTokenSet.add(tk);
+
+    // catalog = todo el universo textual
     for (const tk of serviceNameTokens) entry.catalogTokenSet.add(tk);
     for (const tk of serviceDescTokens) entry.catalogTokenSet.add(tk);
     for (const tk of variantNameTokens) entry.catalogTokenSet.add(tk);
@@ -322,65 +337,70 @@ export async function resolveServiceMatchesFromText(
   const candidates: Candidate[] = Array.from(grouped.values()).map((g) => ({
     serviceId: g.serviceId,
     label: g.serviceLabel || "",
-    serviceNameTokens: Array.from(g.serviceNameTokenSet),
+    entityTokens: Array.from(g.entityTokenSet),
     catalogTokens: Array.from(g.catalogTokenSet),
   }));
 
   if (!candidates.length) return [];
 
   const catalogDfMap = buildTenantTokenDf(candidates);
-  const serviceNameDfMap = buildServiceNameTokenDf(candidates);
+  const entityDfMap = buildEntityTokenDf(candidates);
   const totalCandidates = candidates.length;
   const anchorTokens = pickAnchorTokens(
     queryTokens,
-    serviceNameDfMap,
+    entityDfMap,
     catalogDfMap,
     totalCandidates
   );
 
   const scored = candidates
-    .map((cand) => {
-      const nameScore = scoreTokensWeighted(
-        queryTokens,
-        cand.serviceNameTokens,
-        serviceNameDfMap,
-        totalCandidates
-      );
+  .map((cand) => {
+    const entityScore = scoreTokensWeighted(
+      queryTokens,
+      cand.entityTokens,
+      entityDfMap,
+      totalCandidates
+    );
 
-      const catalogScore = scoreTokensWeighted(
-        queryTokens,
-        cand.catalogTokens,
-        catalogDfMap,
-        totalCandidates
-      );
+    const catalogScore = scoreTokensWeighted(
+      queryTokens,
+      cand.catalogTokens,
+      catalogDfMap,
+      totalCandidates
+    );
 
-      const exactNameHits = countExactHits(queryTokens, cand.serviceNameTokens);
-      const exactCatalogHits = countExactHits(queryTokens, cand.catalogTokens);
-      const anchorHits = anchorTokens.length
-        ? countExactHits(anchorTokens, cand.catalogTokens)
-        : 0;
+    const exactEntityHits = countExactHits(queryTokens, cand.entityTokens);
+    const exactCatalogHits = countExactHits(queryTokens, cand.catalogTokens);
 
-      let score = 0;
-      score += nameScore * 0.50;
-      score += catalogScore * 0.50;
-      score += exactNameHits * 0.18;
-      score += exactCatalogHits * 0.10;
-      score += anchorHits * 0.45;
+    // OJO: anchor contra entityTokens, no contra catalogTokens
+    const anchorHits = anchorTokens.length
+      ? countExactHits(anchorTokens, cand.entityTokens)
+      : 0;
 
-      // si hay anchors y el candidato no contiene ninguno, penalizar fuerte
-      if (anchorTokens.length > 0 && anchorHits === 0) {
-        score -= 0.60;
-      }
+    let score = 0;
+    score += entityScore * 0.65;
+    score += catalogScore * 0.35;
+    score += exactEntityHits * 0.22;
+    score += exactCatalogHits * 0.06;
+    score += anchorHits * 0.55;
 
-      return {
-        id: cand.serviceId,
-        name: cand.label,
-        score,
-        anchorHits,
-      };
-    })
-    .sort((a, b) => b.score - a.score);
+    // Si el anchor existe pero no aparece en la parte que nombra la entidad,
+    // penaliza fuerte.
+    if (anchorTokens.length > 0 && anchorHits === 0) {
+      score -= 0.75;
+    }
 
+    return {
+      id: cand.serviceId,
+      name: cand.label,
+      score,
+      anchorHits,
+      exactEntityHits,
+      exactCatalogHits,
+    };
+  })
+  .sort((a, b) => b.score - a.score);
+    
   const best = scored[0];
   if (!best || best.score < minScore) {
     console.log("[RESOLVE-SERVICE-MATCHES] best por debajo de threshold", {
@@ -412,8 +432,14 @@ export async function resolveServiceMatchesFromText(
     idioma,
     queryTokens,
     anchorTokens,
-    best: best ? { name: best.name, score: best.score } : null,
-    matches,
+    scored: scored.slice(0, 5).map((x) => ({
+      id: x.id,
+      name: x.name,
+      score: x.score,
+      anchorHits: x.anchorHits,
+      exactEntityHits: x.exactEntityHits,
+      exactCatalogHits: x.exactCatalogHits,
+    })),
   });
 
   return matches;
