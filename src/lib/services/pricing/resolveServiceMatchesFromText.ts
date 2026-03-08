@@ -146,6 +146,22 @@ function countExactHits(queryTokens: string[], candidateTokens: string[]): numbe
   return candidateTokens.filter((t) => qSet.has(t)).length;
 }
 
+function getRareQueryTokens(
+  queryTokens: string[],
+  dfMap: Map<string, number>,
+  totalCandidates: number
+): string[] {
+  if (!queryTokens.length || totalCandidates <= 0) return [];
+
+  return queryTokens.filter((t) => {
+    const df = dfMap.get(t) || 0;
+    if (!df) return false;
+
+    const ratio = df / totalCandidates;
+    return ratio <= 0.35;
+  });
+}
+
 export async function resolveServiceMatchesFromText(
   pool: Pool,
   tenantId: string,
@@ -273,6 +289,7 @@ export async function resolveServiceMatchesFromText(
 
   const dfMap = buildTenantTokenDf(candidates);
   const totalCandidates = candidates.length;
+  const rareQueryTokens = getRareQueryTokens(queryTokens, dfMap, totalCandidates);
 
   const scored = candidates
     .map((cand) => {
@@ -292,12 +309,18 @@ export async function resolveServiceMatchesFromText(
 
       const exactNameHits = countExactHits(queryTokens, cand.serviceNameTokens);
       const exactCatalogHits = countExactHits(queryTokens, cand.catalogTokens);
+      const rareHits = countExactHits(rareQueryTokens, cand.catalogTokens);
 
       let score = 0;
-      score += nameScore * 0.65;
-      score += catalogScore * 0.35;
-      score += exactNameHits * 0.22;
-      score += exactCatalogHits * 0.06;
+      score += nameScore * 0.55;
+      score += catalogScore * 0.45;
+      score += exactNameHits * 0.20;
+      score += exactCatalogHits * 0.08;
+      score += rareHits * 0.28;
+
+      if (rareQueryTokens.length > 0 && rareHits === 0) {
+        score -= 0.35;
+      }
 
       return {
         id: cand.serviceId,
@@ -336,6 +359,7 @@ export async function resolveServiceMatchesFromText(
     userText,
     idioma,
     queryTokens,
+    rareQueryTokens,
     best: best ? { name: best.name, score: best.score } : null,
     matches,
   });
