@@ -464,64 +464,79 @@ export async function resolveServiceMatchesFromText(
     .sort((a, b) => b.score - a.score);
     
   const best = scored[0];
-  if (!best || best.score < minScore) {
-    console.log("[RESOLVE-SERVICE-MATCHES] best por debajo de threshold", {
-      userText,
-      queryTokens,
-      anchorTokens,
-      best: best ? { name: best.name, score: best.score } : null,
-      minScore,
+    if (!best || best.score < minScore) {
+      console.log("[RESOLVE-SERVICE-MATCHES] best por debajo de threshold", {
+        userText,
+        queryTokens,
+        anchorTokens,
+        best: best ? { name: best.name, score: best.score } : null,
+        minScore,
+      });
+      return [];
+    }
+
+    const eligible = scored.filter((x) => x.score >= minScore);
+
+    const discriminativeFirst = eligible.filter((x) => x.discriminativeHits > 0);
+    const remaining = eligible.filter((x) => x.discriminativeHits <= 0);
+
+    const merged = [...discriminativeFirst, ...remaining];
+
+    const seen = new Set<string>();
+    const deduped = merged.filter((x) => {
+      if (seen.has(x.id)) return false;
+      seen.add(x.id);
+      return true;
     });
-    return [];
-  }
 
-  const eligible = scored.filter((x) => x.score >= minScore);
+    const relaxedWindow =
+      discriminativeFirst.length > 0
+        ? Math.max(relativeWindow, 0.5)
+        : relativeWindow;
 
-  // 1) candidatos que sí pegan con tokens discriminantes de la query
-  const discriminativeFirst = eligible.filter((x) => x.discriminativeHits > 0);
-
-  // 2) luego los demás candidatos razonables
-  const remaining = eligible.filter((x) => x.discriminativeHits <= 0);
-
-  // 3) combinamos dando prioridad a los discriminativos
-  const merged = [...discriminativeFirst, ...remaining];
-
-  // 4) dedupe por id
-  const seen = new Set<string>();
-  const deduped = merged.filter((x) => {
-    if (seen.has(x.id)) return false;
-    seen.add(x.id);
-    return true;
-  });
-
-  // 5) si hay matches discriminativos, no mates la lista por relativeWindow demasiado agresivo
-  const relaxedWindow = discriminativeFirst.length > 0
-    ? Math.max(relativeWindow, 0.5)
-    : relativeWindow;
-
-  const matches = deduped
-    .filter((x) => best.score - x.score <= relaxedWindow)
-    .slice(0, Math.min(maxResults, 4))
-    .map((x) => ({
-      id: x.id,
-      name: x.name,
-      score: x.score,
+    let matches = deduped
+      .filter((x) => best.score - x.score <= relaxedWindow)
+      .slice(0, Math.min(maxResults, 4))
+      .map((x) => ({
+        id: x.id,
+        name: x.name,
+        score: x.score,
     }));
 
-  console.log("[RESOLVE-SERVICE-MATCHES] debug", {
-    userText,
-    idioma,
-    queryTokens,
-    anchorTokens,
-    scored: scored.slice(0, 5).map((x) => ({
-      id: x.id,
-      name: x.name,
-      score: x.score,
-      anchorHits: x.anchorHits,
-      exactEntityHits: x.exactEntityHits,
-      exactCatalogHits: x.exactCatalogHits,
-    })),
-  });
+    // Garantizar que los matches con token discriminante entren si existen
+    const mustInclude = eligible.filter((x) => x.discriminativeHits > 0);
+    const matchMap = new Map(matches.map((m) => [m.id, m]));
 
-  return matches;
+    for (const item of mustInclude) {
+      if (!matchMap.has(item.id)) {
+        matchMap.set(item.id, {
+          id: item.id,
+          name: item.name,
+          score: item.score,
+        });
+      }
+    }
+
+    matches = Array.from(matchMap.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.min(maxResults, 4));
+
+    console.log("[RESOLVE-SERVICE-MATCHES] debug", {
+      userText,
+      idioma,
+      queryTokens,
+      anchorTokens,
+      scored: scored.slice(0, 8).map((x) => ({
+        id: x.id,
+        name: x.name,
+        score: x.score,
+        anchorHits: x.anchorHits,
+        exactEntityHits: x.exactEntityHits,
+        exactCatalogHits: x.exactCatalogHits,
+        discriminativeHits: x.discriminativeHits,
+      })),
+      matches,
+    });
+
+    return matches;
 }
