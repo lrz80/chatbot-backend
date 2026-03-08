@@ -153,7 +153,23 @@ function pickAnchorToken(
 ): string | null {
   if (!queryTokens.length || totalCandidates <= 0) return null;
 
-  const scored = queryTokens
+  const ATTRIBUTE_TOKENS = new Set([
+    "precio",
+    "cuanto",
+    "cuánto",
+    "coste",
+    "costo",
+    "valor",
+    "mensual",
+    "monthly",
+    "price",
+    "cost",
+    "how",
+    "much"
+    ]);
+
+    const scored = queryTokens
+    .filter((t) => !ATTRIBUTE_TOKENS.has(t))
     .map((token) => {
       const df = dfMap.get(token) || 0;
       if (df <= 0) return null;
