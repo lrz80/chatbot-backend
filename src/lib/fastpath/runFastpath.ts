@@ -2857,11 +2857,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
             const reply =
               idiomaDestino === "en"
-                ? `${baseName} — ${variantName} costs ${priceText} ${
-                    directLink ? `\n\nHere’s the link:\n${directLink}` : "\n\nIf you need anything else, just let me know. 😊"
+                ? `${baseName} — ${variantName} costs ${priceText} 😊${
+                    directLink
+                      ? `\n\nHere’s the link:\n${directLink}`
+                      : `\n\nIf you need anything else, I’m here to help. 😊`
                   }`
-                : `${baseName} — ${variantName} cuesta ${priceText} ${
-                    directLink ? `\n\nAquí tienes el link:\n${directLink}` : "\n\nSi necesitas algo más, dejame saber. 😊"
+                : `${baseName} — ${variantName} cuesta ${priceText} 😊${
+                    directLink
+                      ? `\n\nAquí tienes el link:\n${directLink}`
+                      : `\n\nSi necesitas algo más, aquí estoy para ayudarte. 😊`
                   }`;
 
             return {
