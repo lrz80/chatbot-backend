@@ -54,7 +54,7 @@ router.post('/register', async (req: Request, res: Response) => {
     const owner_name = `${nombre} ${apellido}`;
     const slug = slugifyTenantName(owner_name, uid);
     const token_verificacion = jwt.sign({ uid, email }, JWT_SECRET, { expiresIn: '10m' });
-    const verification_link = `${process.env.FRONTEND_URL}/auth/verify-email?token=${token_verificacion}`;
+    const verification_link = `${process.env.BACKEND_URL}/api/auth/verify-email?token=${token_verificacion}`;
 
     console.log("🌐 Enlace de verificación:", verification_link);
 
@@ -265,7 +265,7 @@ router.post("/resend-verification", async (req: Request, res: Response) => {
       { expiresIn: "10m" }
     );
 
-    const verification_link = `${process.env.FRONTEND_URL}/auth/verify-email?token=${token_verificacion}`;
+    const verification_link = `${process.env.BACKEND_URL}/api/auth/verify-email?token=${token_verificacion}`;
 
     await pool.query(
       "UPDATE users SET token_verificacion = $1 WHERE uid = $2",
