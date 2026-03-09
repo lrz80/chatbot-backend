@@ -21,20 +21,16 @@ router.get('/', async (req: Request, res: Response) => {
 
     // 🔍 Obtenemos membresia_inicio del tenant
     const tenantRes = await pool.query(
-      'SELECT membresia_inicio, plan, plan_limits FROM tenants WHERE id = $1',
+      'SELECT membresia_inicio, created_at, plan, plan_limits FROM tenants WHERE id = $1',
       [tenantId]
     );
     const tenantRow = tenantRes.rows[0];
-    const membresiaInicio = tenantRow?.membresia_inicio;
+    const membresiaInicio = tenantRow?.membresia_inicio ?? tenantRow?.created_at ?? new Date();
     const tenantPlan = tenantRow?.plan || 'starter';
-
-    if (!membresiaInicio) {
-      return res.status(400).json({ error: 'Membresía no configurada' });
-    }
 
     const limites = tenantRow?.plan_limits || {};
 
-    // 🔁 mismo cálculo que el webhook
+    // 🔁 si no hay membresia_inicio todavía, usa created_at o ahora
     const ciclo = cycleStartForNow(membresiaInicio);
 
     const cicloEnd = new Date(ciclo);
