@@ -1,16 +1,16 @@
 import type { Pool } from "pg";
 import type { Lang } from "../channels/engine/clients/clientDb";
 
-function lineJoin(lines: string[]) {
-  return lines.filter(Boolean).join("\n");
-}
-
 function normCat(s: unknown) {
   return String(s || "")
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ")
     .replace(/-/g, " ");
+}
+
+function unique(arr: string[]) {
+  return Array.from(new Set(arr));
 }
 
 export async function renderInfoGeneralOverview(args: {
@@ -20,9 +20,9 @@ export async function renderInfoGeneralOverview(args: {
 }): Promise<string> {
   const { pool, tenantId, lang } = args;
 
-  // 1) Tenant: nombre + info_clave (para horarios)
+  // 1️⃣ Tenant name
   const tRes = await pool.query(
-    `SELECT name, info_clave
+    `SELECT name
      FROM tenants
      WHERE id = $1
      LIMIT 1`,
@@ -30,9 +30,8 @@ export async function renderInfoGeneralOverview(args: {
   );
 
   const tenantName = String(tRes.rows?.[0]?.name || "").trim();
-  const infoClave = String(tRes.rows?.[0]?.info_clave || "").trim();
 
-  // 2) Servicios: traer catálogo (ACTIVOS) + category para filtrar Add-ons
+  // 2️⃣ Servicios activos
   const sRes = await pool.query(
     `SELECT name, category
      FROM services
@@ -50,14 +49,15 @@ export async function renderInfoGeneralOverview(args: {
     }))
     .filter((r) => r.name);
 
-  // 3) Filtros genéricos (sin hardcode por negocio)
+  // 3️⃣ Filtros genéricos
   const isPlan = (n: string) =>
     /\b(plan|membership|membres[ií]a|suscripci[oó]n|subscription)\b/i.test(n);
 
   const isPackage = (n: string) =>
     /\b(paquete|pack|bundle)\b/i.test(n) || /\b\d+\s*clases?\b/i.test(n);
 
-  const isTrial = (n: string) => /\b(prueba|trial|demo|gratis|free)\b/i.test(n);
+  const isTrial = (n: string) =>
+    /\b(prueba|trial|demo|gratis|free)\b/i.test(n);
 
   const isSingleClass = (n: string) =>
     /\b(clase\s+u[nñ]ica|single\s+class|drop[-\s]?in)\b/i.test(n);
@@ -65,107 +65,113 @@ export async function renderInfoGeneralOverview(args: {
   const isVariantNoise = (n: string) =>
     /\b(autopay|por\s+mes|mensual|per\s+month|monthly)\b/i.test(n);
 
-  const isAddonCategory = (cat: string) => {
-    // acepta: "add on", "addon", "add-on"
-    return cat === "add on" || cat === "addon";
-  };
+  const isAddonCategory = (cat: string) =>
+    cat === "add on" || cat === "addon";
 
-  // ✅ Solo servicios principales: excluye add-ons por category + excluye planes/paquetes/etc por nombre
-  const mainServices = rows
-    .filter((r) => {
-      if (isAddonCategory(r.category)) return false;
+  const mainServices = unique(
+    rows
+      .filter((r) => {
+        if (isAddonCategory(r.category)) return false;
 
-      const n = r.name;
-      if (isPlan(n)) return false;
-      if (isPackage(n)) return false;
-      if (isTrial(n)) return false;
-      if (isSingleClass(n)) return false;
-      if (isVariantNoise(n)) return false;
+        const n = r.name;
 
-      return true;
-    })
-    .map((r) => r.name);
+        if (isPlan(n)) return false;
+        if (isPackage(n)) return false;
+        if (isTrial(n)) return false;
+        if (isSingleClass(n)) return false;
+        if (isVariantNoise(n)) return false;
 
-  // 4) Horarios: extraer sección de info_clave si existe
-  let horarios = "";
-  if (infoClave) {
-    const m = infoClave.match(/(?:^|\n)\s*(horarios?|hours?)\s*:\s*\n?([\s\S]*?)$/i);
-    const raw = (m?.[2] || "").trim();
+        return true;
+      })
+      .map((r) => r.name)
+  );
 
-    if (raw) {
-      const stopHeaders = [
-        "reserva",
-        "reservas",
-        "booking",
-        "book",
-        "enlace",
-        "link",
-        "contacto",
-        "contact",
-        "telefono",
-        "teléfono",
-        "whatsapp",
-        "soporte",
-        "support",
-        "politicas",
-        "políticas",
-        "terms",
-        "condiciones",
-        "rules",
-        "reglas",
-        "notas",
-        "nota",
-        "faq",
-        "preguntas",
-      ];
-
-      const lines = raw.split("\n");
-      const kept: string[] = [];
-
-      for (const line of lines) {
-        const l = String(line || "").trim();
-
-        if (!l) {
-          kept.push(line);
-          continue;
-        }
-
-        const isHeaderLine = stopHeaders.some((h) =>
-          new RegExp(`^${h}\\s*:?\\s*$`, "i").test(l)
-        );
-
-        if (isHeaderLine) break;
-        kept.push(line);
-      }
-
-      horarios = kept.join("\n").trim();
-    }
-  }
-
-  // 5) Render más humano + CTA
   const greet =
     lang === "en"
       ? `Hi${tenantName ? `! Welcome to ${tenantName}` : ""} 😊`
       : `Hola${tenantName ? `! Bienvenido a ${tenantName}` : ""} 😊`;
 
-  const intro = lang === "en" ? `Here’s what we offer:` : `Esto es lo que ofrecemos:`;
+  const count = mainServices.length;
 
-  const servicesBlock =
-    mainServices.length > 0
-      ? lineJoin([intro, ...mainServices.slice(0, 30).map((s) => `• ${s}`)])
-      : lang === "en"
-        ? `Here’s an overview of our services.`
-        : `Aquí tienes un resumen de nuestros servicios.`;
+  // =========================
+  // MODO 0: sin servicios claros
+  // =========================
+  if (count === 0) {
+    return lang === "en"
+      ? `${greet}
 
-  const hoursHeader =
-    lang === "en" ? `\nAnd these are our hours:` : `\nY estos son nuestros horarios:`;
+I can help you with information about our services and guide you based on what you need.
 
-  const hoursBlock = horarios ? lineJoin([hoursHeader, horarios]) : "";
+What type of service are you looking for?`
+      : `${greet}
 
-  const cta =
-    lang === "en"
-      ? `\nWould you like to see our pricing? 😊`
-      : `\n¿Te gustaría conocer nuestros precios? 😊`;
+Puedo orientarte sobre nuestros servicios y ayudarte según lo que necesites.
 
-  return lineJoin([greet, servicesBlock, hoursBlock, cta]).trim();
+¿Qué tipo de servicio estás buscando?`;
+  }
+
+  // =========================
+  // MODO 1: solo un servicio
+  // =========================
+  if (count === 1) {
+    const s = mainServices[0];
+
+    return lang === "en"
+      ? `${greet}
+
+We mainly help with:
+• ${s}
+
+Would you like more details about it or prefer to see pricing?`
+      : `${greet}
+
+Principalmente te podemos ayudar con:
+• ${s}
+
+¿Te gustaría conocer más detalles o prefieres ver precios?`;
+  }
+
+  // =========================
+  // MODO 2: catálogo pequeño
+  // =========================
+  if (count <= 4) {
+    const list = mainServices.map((s) => `• ${s}`).join("\n");
+
+    return lang === "en"
+      ? `${greet}
+
+I can help you with these options:
+
+${list}
+
+Which one are you interested in?`
+      : `${greet}
+
+Te puedo ayudar con estas opciones:
+
+${list}
+
+¿Cuál te interesa?`;
+  }
+
+  // =========================
+  // MODO 3: catálogo grande
+  // =========================
+  const examples = mainServices.slice(0, 3).map((s) => `• ${s}`).join("\n");
+
+  return lang === "en"
+    ? `${greet}
+
+We offer several services. Some examples are:
+
+${examples}
+
+What type of service are you interested in?`
+    : `${greet}
+
+Ofrecemos varios servicios. Algunos ejemplos son:
+
+${examples}
+
+¿Qué tipo de servicio te interesa?`;
 }
