@@ -266,6 +266,8 @@ router.post("/resend-verification", async (req: Request, res: Response) => {
     );
 
     const verification_link = `${process.env.BACKEND_URL}/api/auth/verify-email?token=${token_verificacion}`;
+    console.log("BACKEND_URL =", process.env.BACKEND_URL);
+    console.log("verification_link =", verification_link);
 
     await pool.query(
       "UPDATE users SET token_verificacion = $1 WHERE uid = $2",
