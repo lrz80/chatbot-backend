@@ -245,7 +245,7 @@ router.post("/resend-verification", async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      "SELECT uid, email, verificado FROM users WHERE email = $1",
+      "SELECT uid, email, verificado, verification_last_sent FROM users WHERE email = $1",
       [email]
     );
 
@@ -259,6 +259,18 @@ router.post("/resend-verification", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "La cuenta ya está verificada" });
     }
 
+    // 🚨 LIMITADOR DE TIEMPO (60 segundos)
+    if (user.verification_last_sent) {
+      const diff =
+        Date.now() - new Date(user.verification_last_sent).getTime();
+
+      if (diff < 60000) {
+        return res.status(429).json({
+          error: "Debes esperar unos segundos antes de reenviar el correo.",
+        });
+      }
+    }
+
     const token_verificacion = jwt.sign(
       { uid: user.uid, email: user.email },
       JWT_SECRET,
@@ -266,20 +278,19 @@ router.post("/resend-verification", async (req: Request, res: Response) => {
     );
 
     const verification_link = `${process.env.BACKEND_URL}/api/auth/verify-email?token=${token_verificacion}`;
-    console.log("BACKEND_URL =", process.env.BACKEND_URL);
-    console.log("verification_link =", verification_link);
 
     await pool.query(
-      "UPDATE users SET token_verificacion = $1 WHERE uid = $2",
+      `UPDATE users 
+       SET token_verificacion = $1,
+           verification_last_sent = NOW()
+       WHERE uid = $2`,
       [token_verificacion, user.uid]
     );
 
     await sendVerificationEmail(user.email, verification_link, "es");
 
-    return res.status(200).json({
-      success: true,
-      message: "Correo de verificación reenviado",
-    });
+    return res.status(200).json({ success: true });
+
   } catch (error) {
     console.error("❌ Error al reenviar verificación:", error);
     return res.status(500).json({ error: "Error interno del servidor" });
