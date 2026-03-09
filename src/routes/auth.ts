@@ -117,7 +117,7 @@ router.get("/verify-email", async (req: Request, res: Response) => {
 
     // ✅ Redireccionar al frontend
     const baseUrl = process.env.FRONTEND_URL || "https://www.aamy.ai";
-    res.redirect(`${process.env.FRONTEND_URL}/auth/verify-email?token=${token}`);
+    res.redirect(`${process.env.FRONTEND_URL}/login?verified=1`);
 
   } catch (err) {
     console.error("❌ Error al verificar email:", err);
