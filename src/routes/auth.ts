@@ -236,4 +236,52 @@ router.post('/validate', async (req: Request, res: Response) => {
   }
 });
 
+router.post("/resend-verification", async (req: Request, res: Response) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: "Correo requerido" });
+  }
+
+  try {
+    const result = await pool.query(
+      "SELECT uid, email, verificado FROM users WHERE email = $1",
+      [email]
+    );
+
+    const user = result.rows[0];
+
+    if (!user) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    if (user.verificado) {
+      return res.status(400).json({ error: "La cuenta ya está verificada" });
+    }
+
+    const token_verificacion = jwt.sign(
+      { uid: user.uid, email: user.email },
+      JWT_SECRET,
+      { expiresIn: "10m" }
+    );
+
+    const verification_link = `${process.env.FRONTEND_URL}/auth/verify-email?token=${token_verificacion}`;
+
+    await pool.query(
+      "UPDATE users SET token_verificacion = $1 WHERE uid = $2",
+      [token_verificacion, user.uid]
+    );
+
+    await sendVerificationEmail(user.email, verification_link, "es");
+
+    return res.status(200).json({
+      success: true,
+      message: "Correo de verificación reenviado",
+    });
+  } catch (error) {
+    console.error("❌ Error al reenviar verificación:", error);
+    return res.status(500).json({ error: "Error interno del servidor" });
+  }
+});
+
 export default router;
