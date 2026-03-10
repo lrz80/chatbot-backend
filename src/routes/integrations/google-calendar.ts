@@ -195,7 +195,6 @@ router.post("/disconnect", authenticateUser, async (req, res) => {
       SET
         status = 'revoked',
         connected_email = NULL,
-        calendar_id = NULL,
         updated_at = NOW()
       WHERE tenant_id = $1
         AND provider = 'google'
@@ -234,11 +233,6 @@ router.get("/callback", async (req: Request, res: Response) => {
     const decoded = verifyState(String(state));
     const tenantId = decoded?.tenantId;
     if (!tenantId) return res.status(400).send("Invalid state");
-
-    const gate = await canUseChannel(tenantId, "google_calendar");
-    if (!gate.settings_enabled) {
-      return res.status(403).send("Google Calendar is disabled");
-    }
 
     const clientId = process.env.GOOGLE_CLIENT_ID!;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
