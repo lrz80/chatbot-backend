@@ -689,11 +689,8 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // emotion sólo si la necesitas luego
   const emotion = signals.emotion;
 
-  // ===============================
-  // ✅ PENDING CTA ACCEPTANCE (multitenant, sin hardcode)
-  // Si el assistant dejó una CTA operativa pendiente
-  // y el usuario responde afirmativamente,
-  // activamos el flow correspondiente y dejamos que ese flow responda.
+    // ===============================
+  // ✅ PENDING CTA ACCEPTANCE
   // ===============================
   {
     const normalizedInput = String(userInput || "").trim().toLowerCase();
@@ -712,12 +709,10 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         userInput,
       });
 
-      // limpiar CTA pendiente
       (convoCtx as any).pending_cta = null;
 
-      // activar el estimate flow sin asumir preguntas ni negocio
-      const prevEstimate = (convoCtx as any)?.estimate || {};
-      (convoCtx as any).estimate = {
+      const prevEstimate = (convoCtx as any)?.estimateFlow || {};
+      (convoCtx as any).estimateFlow = {
         ...prevEstimate,
         active: true,
         step: prevEstimate.step && prevEstimate.step !== "idle"
@@ -1239,12 +1234,12 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         createdAt: new Date().toISOString(),
       };
 
-      console.log("[PENDING_CTA][SET]", {
+      console.log("[PENDING_CTA][SET][sm-fallback]", {
         tenantId: event.tenantId,
+        contacto: contactoNorm,
         canal: "whatsapp",
-        contactoNorm,
         pendingCta: (convoCtx as any).pending_cta,
-        replyPreview: composed.text.slice(0, 180),
+        replyPreview: composed.text.slice(0, 200),
       });
     }
 
