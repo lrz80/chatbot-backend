@@ -457,6 +457,21 @@ SPECIAL RULE FOR THIS TURN:
       fallbackText: fastpathText, // si falla LLM, al menos enviamos Fastpath
     });
 
+    if (composed.pendingCta) {
+      ctxPatch.pending_cta = {
+        ...composed.pendingCta,
+        createdAt: new Date().toISOString(),
+      };
+
+      console.log("[PENDING_CTA][SET][fastpath_hybrid]", {
+        tenantId,
+        canal,
+        contactoNorm,
+        pendingCta: ctxPatch.pending_cta,
+        replyPreview: composed.text.slice(0, 200),
+      });
+    }
+
     const text = (composed.text || "").toLowerCase().trim();
 
     // 7️⃣ Detectar CTA YES/NO del LLM y preparar awaiting_yes_no_action
