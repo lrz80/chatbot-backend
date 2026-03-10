@@ -59,6 +59,7 @@ import { parseDatosCliente } from "../../lib/parseDatosCliente";
 import { isEstimateFlowEnabled } from "../../lib/estimateFlow/isEstimateFlowEnabled";
 import { handleEstimateFlowTurn } from "../../lib/estimateFlow/handleEstimateFlowTurn";
 import { getEstimateFlowState } from "../../lib/estimateFlow/getEstimateFlowState";
+import { saveEstimateRequest } from "../../lib/estimateFlow/saveEstimateRequest";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -761,6 +762,28 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       });
 
       if (estimateTurn.handled) {
+        // ✅ si ya llegó al final, guardar lead en DB
+        if (estimateTurn.nextState.step === "ready_to_schedule") {
+          try {
+            const saved = await saveEstimateRequest({
+              pool,
+              tenantId: tenant.id,
+              canal,
+              contacto: contactoNorm,
+              state: estimateTurn.nextState,
+            });
+
+            console.log("[estimateFlow] saveEstimateRequest =", {
+              tenantId: tenant.id,
+              contacto: contactoNorm,
+              ok: saved?.ok || false,
+              reason: (saved as any)?.reason || null,
+            });
+          } catch (e: any) {
+            console.warn("[estimateFlow] saveEstimateRequest error:", e?.message);
+          }
+        }
+
         transition({
           flow: "estimate_flow",
           step: estimateTurn.nextState.step,
