@@ -826,6 +826,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
               nextEstimateState = {
                 ...estimateTurn.nextState,
+                active: false,
                 step: "scheduled",
                 calendarEventId: String(event?.id || ""),
                 calendarEventLink: String(event?.htmlLink || event?.meetLink || ""),
@@ -896,6 +897,12 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
             } catch (e2: any) {
               console.warn("[estimateFlow] saveEstimateRequest fallback error:", e2?.message);
             }
+          
+            nextEstimateState = {
+              ...estimateTurn.nextState,
+              active: false,
+              step: "scheduled",
+            };
           }
         }
 

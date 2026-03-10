@@ -804,6 +804,7 @@ async function procesarMensajeMeta(args: {
 
               nextEstimateState = {
                 ...estimateTurn.nextState,
+                active: false,
                 step: "scheduled",
                 calendarEventId: String(event?.id || ""),
                 calendarEventLink: String(event?.htmlLink || event?.meetLink || ""),
@@ -874,6 +875,12 @@ async function procesarMensajeMeta(args: {
             } catch (e2: any) {
               console.warn("[estimateFlow] saveEstimateRequest fallback error:", e2?.message);
             }
+          
+            nextEstimateState = {
+              ...estimateTurn.nextState,
+              active: false,
+              step: "scheduled",
+            };
           }
         }
 

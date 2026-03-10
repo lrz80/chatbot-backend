@@ -16,6 +16,8 @@ export function updateEstimateFlowState(
     phone: patch.phone ?? prev?.phone ?? null,
     address: patch.address ?? prev?.address ?? null,
     jobType: patch.jobType ?? prev?.jobType ?? null,
+    preferredDate: patch.preferredDate ?? prev?.preferredDate ?? null,
+    preferredTime: patch.preferredTime ?? prev?.preferredTime ?? null,
 
     startedAt: prev?.startedAt ?? patch.startedAt ?? now,
     updatedAt: now,
