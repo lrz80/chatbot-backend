@@ -146,6 +146,25 @@ async function buildCatalogDbContext(tenantId: string): Promise<string> {
   }
 }
 
+async function getBookingActiveForTenant(tenantId: string): Promise<boolean> {
+  try {
+    const { rows } = await pool.query<{ enabled: boolean | null }>(
+      `
+      SELECT enabled
+      FROM appointment_settings
+      WHERE tenant_id = $1
+      LIMIT 1
+      `,
+      [tenantId]
+    );
+
+    return rows[0]?.enabled === true;
+  } catch (e) {
+    console.warn("⚠️ No se pudo leer appointment_settings.enabled:", e);
+    return false;
+  }
+}
+
 /* =========================
    Main function
 ========================= */
@@ -185,8 +204,14 @@ export async function answerWithPromptBase(
   // ⬇️ NUEVO: grounding desde DB real
   const catalogDbContext = await buildCatalogDbContext(tenantId);
 
+  // ⬇️ NUEVO: estado real de agenda automática
+  const bookingActive = await getBookingActiveForTenant(tenantId);
+  const bookingStateBlock = `BOOKING_ACTIVE: ${bookingActive ? "true" : "false"}`;
+
   const systemPrompt = [
     promptBaseWithLinks,
+    "",
+    bookingStateBlock,
     "",
     catalogDbContext,
     "",
@@ -201,7 +226,12 @@ export async function answerWithPromptBase(
 - Si SERVICIOS_VALIDOS_DB / VARIANTES_VALIDAS_DB están presentes, esas listas son la fuente de verdad para lo que el negocio sí ofrece.
 - No confirmes como disponible ningún servicio, material, tratamiento, variante, subtipo o paquete que NO aparezca explícitamente en el prompt del negocio o en SERVICIOS_VALIDOS_DB / VARIANTES_VALIDAS_DB.
 - NO asumas equivalencias entre servicios parecidos. Ejemplo: si el cliente menciona un tipo específico de piso y ese nombre exacto no aparece, NO lo presentes como disponible.
-- Si el cliente pide algo que NO aparece de forma explícita en el prompt o en SERVICIOS_VALIDOS_DB / VARIANTES_VALIDAS_DB, acláralo con honestidad y menciona SOLO opciones que sí estén explícitamente disponibles.`,
+- Si el cliente pide algo que NO aparece de forma explícita en el prompt o en SERVICIOS_VALIDOS_DB / VARIANTES_VALIDAS_DB, acláralo con honestidad y menciona SOLO opciones que sí estén explícitamente disponibles.
+- NUNCA inventes horarios, disponibilidad, días libres, citas, agendas, calendarios ni espacios disponibles.
+- Si el usuario pregunta por agendar, reservar, disponibilidad o citas, SOLO puedes mencionar horarios o fechas si están explícitamente presentes en el prompt del negocio o fueron proporcionados por el sistema de booking.
+- Si NO hay horarios o fechas explícitas en el prompt del negocio o en datos del sistema, NO generes propuestas como "martes a las 10:00 AM" o "esta semana tengo disponibilidad".
+- Si BOOKING_ACTIVE es false, está PROHIBIDO ofrecer horarios, días disponibles, citas o agendas.
+- Si BOOKING_ACTIVE es false y el usuario quiere agendar, explica que el negocio coordinará el horario directamente y continúa ayudando sin inventar agenda.`,
     "",
     `Modo vendedor (aplicable a cualquier tipo de negocio):
 - Entiende primero qué necesita la persona.
