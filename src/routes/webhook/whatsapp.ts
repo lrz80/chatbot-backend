@@ -690,6 +690,65 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   const emotion = signals.emotion;
 
   // ===============================
+  // ✅ PENDING CTA ACCEPTANCE (multitenant, sin hardcode)
+  // Si el assistant dejó una CTA operativa pendiente
+  // y el usuario responde afirmativamente,
+  // activamos el flow correspondiente y dejamos que ese flow responda.
+  // ===============================
+  {
+    const normalizedInput = String(userInput || "").trim().toLowerCase();
+
+    const isAffirmative =
+      /^(si|sí|si por favor|sí por favor|yes|yes please|ok|okay|dale|claro|sure)$/i.test(normalizedInput);
+
+    const pendingCtaType = String((convoCtx as any)?.pending_cta?.type || "").trim();
+
+    if (pendingCtaType === "estimate_offer" && isAffirmative) {
+      console.log("[PENDING_CTA][ACCEPTED]", {
+        tenantId: tenant.id,
+        canal,
+        contactoNorm,
+        pendingCtaType,
+        userInput,
+      });
+
+      // limpiar CTA pendiente
+      (convoCtx as any).pending_cta = null;
+
+      // activar el estimate flow sin asumir preguntas ni negocio
+      const prevEstimate = (convoCtx as any)?.estimate || {};
+      (convoCtx as any).estimate = {
+        ...prevEstimate,
+        active: true,
+        step: prevEstimate.step && prevEstimate.step !== "idle"
+          ? prevEstimate.step
+          : "start",
+      };
+    }
+
+    if (pendingCtaType === "booking_offer" && isAffirmative) {
+      console.log("[PENDING_CTA][ACCEPTED]", {
+        tenantId: tenant.id,
+        canal,
+        contactoNorm,
+        pendingCtaType,
+        userInput,
+      });
+
+      (convoCtx as any).pending_cta = null;
+
+      const prevBooking = (convoCtx as any)?.booking || {};
+      (convoCtx as any).booking = {
+        ...prevBooking,
+        active: true,
+        step: prevBooking.step && prevBooking.step !== "idle"
+          ? prevBooking.step
+          : "start",
+      };
+    }
+  }
+
+  // ===============================
   // 🎯 Booking vs Info General de Horarios
   // ===============================
   const intentNow = INTENCION_FINAL_CANONICA || detectedIntent || null;
@@ -1174,19 +1233,19 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       fallbackText: fallbackWelcome,
     });
 
-    // ✅ guardar CTA pendiente inferida desde la salida del assistant
     if (composed.pendingCta) {
-      console.log("[PENDING_CTA][SET][sm-fallback]", {
-        tenantId: event.tenantId,
-        contacto: contactoNorm,
-        canal: "whatsapp",
-        pendingCta: composed.pendingCta,
-        replyPreview: composed.text.slice(0, 200),
-      });
+      (convoCtx as any).pending_cta = {
+        ...composed.pendingCta,
+        createdAt: new Date().toISOString(),
+      };
 
-      // aquí llamas tu helper real de persistencia/contexto
-      // ejemplo:
-      // await setPendingCta(convoCtx, composed.pendingCta);
+      console.log("[PENDING_CTA][SET]", {
+        tenantId: event.tenantId,
+        canal: "whatsapp",
+        contactoNorm,
+        pendingCta: (convoCtx as any).pending_cta,
+        replyPreview: composed.text.slice(0, 180),
+      });
     }
 
     setReply(composed.text, "sm-fallback");

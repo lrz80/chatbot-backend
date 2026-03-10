@@ -699,6 +699,60 @@ async function procesarMensajeMeta(args: {
   promptBaseMem = signals.promptBaseMem;
   convoCtx = signals.convoCtx;
 
+  // ===============================
+  // ✅ PENDING CTA ACCEPTANCE
+  // ===============================
+  {
+    const normalizedInput = String(userInput || "").trim().toLowerCase();
+
+    const isAffirmative =
+      /^(si|sí|si por favor|sí por favor|yes|yes please|ok|okay|dale|claro|sure)$/i.test(normalizedInput);
+
+    const pendingCtaType = String((convoCtx as any)?.pending_cta?.type || "").trim();
+
+    if (pendingCtaType === "estimate_offer" && isAffirmative) {
+      console.log("[PENDING_CTA][ACCEPTED]", {
+        tenantId,
+        canal,
+        contactoNorm,
+        pendingCtaType,
+        userInput,
+      });
+
+      (convoCtx as any).pending_cta = null;
+
+      const prevEstimate = (convoCtx as any)?.estimateFlow || {};
+      (convoCtx as any).estimateFlow = {
+        ...prevEstimate,
+        active: true,
+        step: prevEstimate.step && prevEstimate.step !== "idle"
+          ? prevEstimate.step
+          : "start",
+      };
+    }
+
+    if (pendingCtaType === "booking_offer" && isAffirmative) {
+      console.log("[PENDING_CTA][ACCEPTED]", {
+        tenantId,
+        canal,
+        contactoNorm,
+        pendingCtaType,
+        userInput,
+      });
+
+      (convoCtx as any).pending_cta = null;
+
+      const prevBooking = (convoCtx as any)?.booking || {};
+      (convoCtx as any).booking = {
+        ...prevBooking,
+        active: true,
+        step: prevBooking.step && prevBooking.step !== "idle"
+          ? prevBooking.step
+          : "start",
+      };
+    }
+  }
+
   // 🔴 HARD STOP: soporte/handoff marcó detener pipeline
   if ((convoCtx as any)?.__stop_pipeline) {
     // si por alguna razón no envió reply todavía, lo enviamos
@@ -1129,19 +1183,19 @@ async function procesarMensajeMeta(args: {
       fallbackText: bienvenida,
     });
 
-    // ✅ guardar CTA pendiente inferida desde la salida del assistant
     if (composed.pendingCta) {
+      (convoCtx as any).pending_cta = {
+        ...composed.pendingCta,
+        createdAt: new Date().toISOString(),
+      };
+
       console.log("[PENDING_CTA][SET][sm-fallback]", {
         tenantId,
         contacto: contactoNorm,
         canal: canalEnvio as any,
-        pendingCta: composed.pendingCta,
+        pendingCta: (convoCtx as any).pending_cta,
         replyPreview: composed.text.slice(0, 200),
       });
-
-      // aquí llamas tu helper real de persistencia/contexto
-      // ejemplo:
-      // await setPendingCta(convoCtx, composed.pendingCta);
     }
 
     setReply(composed.text, "sm-fallback");
