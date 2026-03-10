@@ -51,7 +51,15 @@ function looksLikeStartEstimateIntent(text: string) {
     /\bagendar estimado\b/.test(t) ||
     /\bschedule estimate\b/.test(t) ||
     /\bfree estimate\b/.test(t) ||
-    /\bon site estimate\b/.test(t)
+    /\bon site estimate\b/.test(t) ||
+
+    // ✅ nuevo: disparadores explícitos naturales
+    /\bquiero agendar\b/.test(t) ||
+    /\bquiero reservar\b/.test(t) ||
+    /\bagendar\b/.test(t) ||
+    /\breservar\b/.test(t) ||
+    /\bschedule\b/.test(t) ||
+    /\bbook\b/.test(t)
   );
 }
 
