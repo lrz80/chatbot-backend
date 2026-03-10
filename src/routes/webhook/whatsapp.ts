@@ -754,17 +754,32 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     const estimateEnabled = await isEstimateFlowEnabled(pool, tenant.id);
 
     if (estimateEnabled) {
-      const estimateState = getEstimateFlowState(convoCtx);
+      let estimateState = getEstimateFlowState(convoCtx);
+
+      // ✅ idioma sticky dentro del flow, igual que el booking viejo
+      if (!estimateState.lang || estimateState.lang !== idiomaDestino) {
+        estimateState = {
+          ...estimateState,
+          lang: idiomaDestino,
+        };
+      }
+
+      const effectiveEstimateLang: "es" | "en" =
+        (estimateState.lang as "es" | "en") || idiomaDestino;
 
       const estimateTurn = handleEstimateFlowTurn({
         userInput,
-        lang: idiomaDestino,
+        lang: effectiveEstimateLang,
         currentState: estimateState,
         contactoFallback: contactoNorm,
       });
 
       if (estimateTurn.handled) {
-        let nextEstimateState = estimateTurn.nextState;
+        let nextEstimateState = {
+          ...estimateTurn.nextState,
+          lang: (estimateTurn.nextState.lang as "es" | "en") || effectiveEstimateLang,
+        };
+
         let finalReply = estimateTurn.reply;
 
         // ✅ si ya llegó al final, validar disponibilidad y crear evento en Google Calendar
@@ -792,12 +807,13 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
             if (Array.isArray(busy) && busy.length > 0) {
               finalReply =
-                idiomaDestino === "en"
+                effectiveEstimateLang === "en"
                   ? "That time is no longer available for the estimate. Please send me another date or time and I’ll try again."
                   : "Ese horario ya no está disponible para el estimado. Envíame otra fecha u hora y lo intento de nuevo.";
 
               nextEstimateState = {
                 ...estimateTurn.nextState,
+                lang: effectiveEstimateLang,
                 step: "awaiting_date",
               };
             } else {
@@ -826,6 +842,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
               nextEstimateState = {
                 ...estimateTurn.nextState,
+                lang: effectiveEstimateLang,
                 active: false,
                 step: "scheduled",
                 calendarEventId: String(event?.id || ""),
@@ -833,7 +850,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
               };
 
               finalReply =
-                idiomaDestino === "en"
+                effectiveEstimateLang === "en"
                   ? [
                       "Perfect 😊 Your estimate has been scheduled successfully.",
                       `• Date: ${preferredDate}`,
@@ -875,7 +892,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
             console.warn("[estimateFlow] calendar scheduling error:", e?.message);
 
             finalReply =
-              idiomaDestino === "en"
+              effectiveEstimateLang === "en"
                 ? "I couldn’t schedule the estimate automatically right now. I already saved your information and the team can follow up with you."
                 : "No pude agendar el estimado automáticamente en este momento. Ya guardé tu información y el equipo puede continuar contigo.";
 
@@ -897,9 +914,10 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
             } catch (e2: any) {
               console.warn("[estimateFlow] saveEstimateRequest fallback error:", e2?.message);
             }
-          
+
             nextEstimateState = {
               ...estimateTurn.nextState,
+              lang: effectiveEstimateLang,
               active: false,
               step: "scheduled",
             };
@@ -911,6 +929,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           step: nextEstimateState.step,
           patchCtx: {
             estimateFlow: nextEstimateState,
+            estimate_flow_last_touch_at: Date.now(),
             last_bot_action: "estimate_flow_turn",
             last_reply_source: "estimate_flow",
           },

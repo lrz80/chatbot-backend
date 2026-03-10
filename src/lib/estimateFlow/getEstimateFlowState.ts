@@ -3,6 +3,8 @@
 import type { EstimateFlowState } from "./types";
 import { createEmptyEstimateFlowState } from "./types";
 
+const ESTIMATE_FLOW_TTL_MS = 30 * 60 * 1000; // 30 minutos
+
 export function getEstimateFlowState(convoCtx: any): EstimateFlowState {
   const raw = convoCtx?.estimateFlow;
 
@@ -10,9 +12,23 @@ export function getEstimateFlowState(convoCtx: any): EstimateFlowState {
     return createEmptyEstimateFlowState();
   }
 
+  const updatedAt = typeof raw.updatedAt === "number" ? raw.updatedAt : null;
+  const active = Boolean(raw.active);
+
+  const expired =
+    active &&
+    updatedAt &&
+    Number.isFinite(updatedAt) &&
+    (Date.now() - updatedAt) > ESTIMATE_FLOW_TTL_MS;
+
+  if (expired) {
+    return createEmptyEstimateFlowState();
+  }
+
   return {
-    active: Boolean(raw.active),
+    active,
     step: raw.step || "idle",
+    lang: raw.lang ?? null,
     name: raw.name ?? null,
     phone: raw.phone ?? null,
     address: raw.address ?? null,
@@ -22,6 +38,6 @@ export function getEstimateFlowState(convoCtx: any): EstimateFlowState {
     calendarEventId: raw.calendarEventId ?? null,
     calendarEventLink: raw.calendarEventLink ?? null,
     startedAt: raw.startedAt ?? null,
-    updatedAt: raw.updatedAt ?? null,
+    updatedAt,
   };
 }

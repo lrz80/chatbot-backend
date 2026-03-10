@@ -12,12 +12,17 @@ export function updateEstimateFlowState(
     active: patch.active ?? prev?.active ?? false,
     step: patch.step ?? prev?.step ?? "idle",
 
+    lang: patch.lang ?? prev?.lang ?? null,
+
     name: patch.name ?? prev?.name ?? null,
     phone: patch.phone ?? prev?.phone ?? null,
     address: patch.address ?? prev?.address ?? null,
     jobType: patch.jobType ?? prev?.jobType ?? null,
     preferredDate: patch.preferredDate ?? prev?.preferredDate ?? null,
     preferredTime: patch.preferredTime ?? prev?.preferredTime ?? null,
+
+    calendarEventId: patch.calendarEventId ?? prev?.calendarEventId ?? null,
+    calendarEventLink: patch.calendarEventLink ?? prev?.calendarEventLink ?? null,
 
     startedAt: prev?.startedAt ?? patch.startedAt ?? now,
     updatedAt: now,

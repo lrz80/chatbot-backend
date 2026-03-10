@@ -15,6 +15,8 @@ export type EstimateFlowState = {
   active: boolean;
   step: EstimateFlowStep;
 
+  lang?: "es" | "en" | null;
+
   name?: string | null;
   phone?: string | null;
   address?: string | null;
@@ -33,6 +35,7 @@ export function createEmptyEstimateFlowState(): EstimateFlowState {
   return {
     active: false,
     step: "idle",
+    lang: null,
     name: null,
     phone: null,
     address: null,
