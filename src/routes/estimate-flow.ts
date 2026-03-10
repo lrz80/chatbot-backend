@@ -78,6 +78,8 @@ router.patch("/status", async (req: Request, res: Response) => {
 
     const estimateFlowEnabled = Boolean(req.body?.estimate_flow_enabled);
 
+    await pool.query("BEGIN");
+
     const { rows } = await pool.query(
       `UPDATE tenants
        SET estimate_flow_enabled = $2
@@ -86,11 +88,30 @@ router.patch("/status", async (req: Request, res: Response) => {
       [tenantId, estimateFlowEnabled]
     );
 
+    // ✅ si activan estimate flow, apaga booking automático
+    if (estimateFlowEnabled) {
+      await pool.query(
+        `
+        UPDATE channel_settings
+        SET settings_enabled = false
+        WHERE tenant_id = $1
+          AND canal = 'google_calendar'
+        `,
+        [tenantId]
+      );
+    }
+
+    await pool.query("COMMIT");
+
     return res.json({
       ok: true,
       estimate_flow_enabled: !!rows?.[0]?.estimate_flow_enabled,
     });
   } catch (e: any) {
+    try {
+      await pool.query("ROLLBACK");
+    } catch {}
+
     console.error("❌ PATCH /estimate-flow/status error:", e);
     return res.status(500).json({
       ok: false,

@@ -261,6 +261,8 @@ router.patch("/", authenticateUser, async (req: Request, res: Response) => {
     const bookingLinkMode: "meet" | "calendar" =
       bookingLinkModeRaw === "meet" ? "meet" : "calendar";
 
+    await pool.query("BEGIN");
+
     await pool.query(
       `INSERT INTO channel_settings (tenant_id, google_calendar_enabled, booking_link_mode, created_at)
        VALUES ($1, $2, $3, NOW())
@@ -271,16 +273,35 @@ router.patch("/", authenticateUser, async (req: Request, res: Response) => {
       [tenant_id, enabled, bookingLinkMode]
     );
 
+    // ✅ Si se activa booking automático, apagar estimate flow
+    if (enabled === true) {
+      await pool.query(
+        `
+        UPDATE tenants
+        SET estimate_flow_enabled = false
+        WHERE id = $1
+        `,
+        [tenant_id]
+      );
+    }
+
+    await pool.query("COMMIT");
+
     return res.json({
       ok: true,
       canal,
       google_calendar_enabled: enabled,
       booking_link_mode: bookingLinkMode,
+      estimate_flow_enabled: enabled === true ? false : undefined,
     });
-  } catch (e) {
-    console.error("channel-settings PATCH error:", e);
-    return res.status(500).json({ error: "Error actualizando estado de canal" });
-  }
+    } catch (e) {
+      try {
+        await pool.query("ROLLBACK");
+      } catch {}
+
+      console.error("channel-settings PATCH error:", e);
+      return res.status(500).json({ error: "Error actualizando estado de canal" });
+    }
 });
 
 export default router;
