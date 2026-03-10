@@ -242,6 +242,18 @@ async function getBookingActiveForTenant(tenantId: string): Promise<boolean> {
   }
 }
 
+function hasExplicitPriceSignals(text: string): boolean {
+  const t = String(text || "");
+
+  return (
+    /\$\s?\d/.test(t) ||                         // $29.99
+    /\b\d+(?:[.,]\d{1,2})?\s?(usd|d[oó]lares?)\b/i.test(t) || // 29.99 USD / 29 dólares
+    /\bdesde\s+\$\s?\d/i.test(t) ||             // desde $59.99
+    /\bfrom\s+\$\s?\d/i.test(t) ||              // from $59.99
+    /\bstarting at\s+\$\s?\d/i.test(t)          // starting at $59.99
+  );
+}
+
 /* =========================
    Main function
 ========================= */
@@ -285,10 +297,31 @@ export async function answerWithPromptBase(
   const bookingActive = await getBookingActiveForTenant(tenantId);
   const bookingStateBlock = `BOOKING_ACTIVE: ${bookingActive ? "true" : "false"}`;
 
+    const promptHasExplicitPrices =
+    hasExplicitPriceSignals(promptBaseWithLinks) ||
+    hasExplicitPriceSignals(catalogDbContext);
+
+  const hardNoGuessPricesRule =
+    promptHasExplicitPrices
+      ? ""
+      : idiomaDestino === "en"
+        ? `CRITICAL PRICE RULE:
+  - The provided business data for this turn does NOT contain explicit prices.
+  - Therefore, you MUST NOT mention, guess, infer, estimate, suggest, or invent any numeric amount or price.
+  - Do NOT output values like $19, $29, $59, 29.99, etc.
+  - If the user refers to a plan, trial, package, or membership and no price is explicitly present in the provided business data, respond naturally WITHOUT mentioning any amount.`
+          : `REGLA CRÍTICA DE PRECIOS:
+  - Los datos del negocio disponibles en este turno NO contienen precios explícitos.
+  - Por lo tanto, NO puedes mencionar, adivinar, inferir, estimar ni inventar ningún monto o precio numérico.
+  - NO escribas valores como $19, $29, $59, 29.99, etc.
+  - Si el usuario menciona un plan, prueba, paquete o membresía y no hay un precio explícito en los datos provistos del negocio, responde de forma natural SIN mencionar ningún monto.`;
+
   const systemPrompt = [
     promptBaseWithLinks,
     "",
     bookingStateBlock,
+    "",
+    hardNoGuessPricesRule,
     "",
     catalogDbContext,
     "",
