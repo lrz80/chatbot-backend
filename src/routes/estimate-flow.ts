@@ -12,20 +12,27 @@ async function getTenantIdFromCookie(req: Request): Promise<string | null> {
     if (!token) return null;
 
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-    const userId = decoded?.id;
+
+    const userId =
+      decoded?.id ||
+      decoded?.uid ||
+      decoded?.user_id;
 
     if (!userId) return null;
 
     const { rows } = await pool.query(
-      `SELECT tenant_id
-       FROM users
-       WHERE id = $1
-       LIMIT 1`,
+      `
+      SELECT tenant_id
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+      `,
       [userId]
     );
 
     return rows?.[0]?.tenant_id || null;
-  } catch (e) {
+  } catch (err) {
+    console.error("❌ estimate-flow auth error:", err);
     return null;
   }
 }
