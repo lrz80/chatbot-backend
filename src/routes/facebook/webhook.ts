@@ -57,13 +57,15 @@ import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBoo
 import { rememberAfterReply } from "../../lib/memory/rememberAfterReply";
 
 import { safeSendText } from "../../lib/channels/engine/dedupe/safeSendText";
-
 import {
   looksLikeBookingPayload,
   pickSelectedChannelFromText,
 } from "../../lib/channels/engine/parsers/parsers";
-
 import { parseDatosCliente } from "../../lib/parseDatosCliente";
+
+import { isEstimateFlowEnabled } from "../../lib/estimateFlow/isEstimateFlowEnabled";
+import { handleEstimateFlowTurn } from "../../lib/estimateFlow/handleEstimateFlowTurn";
+import { getEstimateFlowState } from "../../lib/estimateFlow/getEstimateFlowState";
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -718,6 +720,42 @@ async function procesarMensajeMeta(args: {
       detectedIntent
     );
     return;
+  }
+
+  // ===============================
+  // 🏠 ESTIMATE FLOW (separado de booking)
+  // ===============================
+  {
+    const estimateEnabled = await isEstimateFlowEnabled(pool, tenant.id);
+
+    if (estimateEnabled) {
+      const estimateState = getEstimateFlowState(convoCtx);
+
+      const estimateTurn = handleEstimateFlowTurn({
+        userInput,
+        lang: idiomaDestino,
+        currentState: estimateState,
+        contactoFallback: contactoNorm,
+      });
+
+      if (estimateTurn.handled) {
+        transition({
+          flow: "estimate_flow",
+          step: estimateTurn.nextState.step,
+          patchCtx: {
+            estimateFlow: estimateTurn.nextState,
+            last_bot_action: "estimate_flow_turn",
+            last_reply_source: "estimate_flow",
+          },
+        });
+
+        return await replyAndExit(
+          estimateTurn.reply,
+          "estimate_flow",
+          "estimate_flow"
+        );
+      }
+    }
   }
 
   // ===============================
