@@ -92,10 +92,11 @@ router.patch("/status", async (req: Request, res: Response) => {
     if (estimateFlowEnabled) {
       await pool.query(
         `
-        UPDATE channel_settings
-        SET settings_enabled = false
-        WHERE tenant_id = $1
-          AND canal = 'google_calendar'
+        INSERT INTO channel_settings (tenant_id, google_calendar_enabled, created_at)
+        VALUES ($1, false, NOW())
+        ON CONFLICT (tenant_id)
+        DO UPDATE SET
+        google_calendar_enabled = false
         `,
         [tenantId]
       );
@@ -107,10 +108,10 @@ router.patch("/status", async (req: Request, res: Response) => {
       ok: true,
       estimate_flow_enabled: !!rows?.[0]?.estimate_flow_enabled,
     });
-  } catch (e: any) {
+    } catch (e) {
     try {
       await pool.query("ROLLBACK");
-    } catch {}
+    } catch (_) {}
 
     console.error("❌ PATCH /estimate-flow/status error:", e);
     return res.status(500).json({
