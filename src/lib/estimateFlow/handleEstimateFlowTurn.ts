@@ -9,7 +9,7 @@ type HandleEstimateFlowTurnArgs = {
   userInput: string;
   lang: Lang;
   currentState?: EstimateFlowState | null;
-  contactoFallback?: string | null; // por si quieres usar el número inbound como fallback
+  contactoFallback?: string | null;
 };
 
 type HandleEstimateFlowTurnResult =
@@ -55,6 +55,15 @@ function looksLikeStartEstimateIntent(text: string) {
   );
 }
 
+function isValidDateInput(text: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(cleanText(text));
+}
+
+function isValidTimeInput(text: string) {
+  const t = cleanText(text).toUpperCase();
+  return /^(0?[1-9]|1[0-2]):[0-5][0-9]\s?(AM|PM)$/.test(t);
+}
+
 function askName(lang: Lang) {
   return lang === "en"
     ? "Sure 😊 To schedule your estimate, first tell me your full name."
@@ -79,14 +88,28 @@ function askJobType(lang: Lang) {
     : "Entendido. ¿Qué tipo de trabajo necesitas exactamente?";
 }
 
+function askDate(lang: Lang) {
+  return lang === "en"
+    ? "Perfect. What date works best for the estimate? Please send it in YYYY-MM-DD format."
+    : "Perfecto. ¿Qué fecha te funciona mejor para el estimado? Envíamela en formato YYYY-MM-DD.";
+}
+
+function askTime(lang: Lang) {
+  return lang === "en"
+    ? "Great. What time works best for you? Please send it like 10:30 AM."
+    : "Excelente. ¿Qué hora te funciona mejor? Envíamela por ejemplo así: 10:30 AM.";
+}
+
 function readyMessage(args: {
   lang: Lang;
   name?: string | null;
   phone?: string | null;
   address?: string | null;
   jobType?: string | null;
+  preferredDate?: string | null;
+  preferredTime?: string | null;
 }) {
-  const { lang, name, phone, address, jobType } = args;
+  const { lang, name, phone, address, jobType, preferredDate, preferredTime } = args;
 
   if (lang === "en") {
     return [
@@ -95,8 +118,10 @@ function readyMessage(args: {
       phone ? `• Phone: ${phone}` : "",
       address ? `• Address: ${address}` : "",
       jobType ? `• Work type: ${jobType}` : "",
+      preferredDate ? `• Date: ${preferredDate}` : "",
+      preferredTime ? `• Time: ${preferredTime}` : "",
       "",
-      "Now I can continue with the next step to schedule the estimate.",
+      "Now I’m going to try to schedule the estimate automatically.",
     ]
       .filter(Boolean)
       .join("\n");
@@ -108,8 +133,10 @@ function readyMessage(args: {
     phone ? `• Teléfono: ${phone}` : "",
     address ? `• Dirección: ${address}` : "",
     jobType ? `• Tipo de trabajo: ${jobType}` : "",
+    preferredDate ? `• Fecha: ${preferredDate}` : "",
+    preferredTime ? `• Hora: ${preferredTime}` : "",
     "",
-    "Ahora ya puedo seguir con el próximo paso para agendar el estimado.",
+    "Ahora voy a intentar agendar el estimado automáticamente.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -211,6 +238,60 @@ export function handleEstimateFlowTurn(
   if (state.step === "awaiting_job_type") {
     const nextState = updateEstimateFlowState(state, {
       jobType: text,
+      step: "awaiting_date",
+    });
+
+    return {
+      handled: true,
+      reply: askDate(lang),
+      nextState,
+    };
+  }
+
+  // =========================
+  // 6) CAPTURA DE FECHA
+  // =========================
+  if (state.step === "awaiting_date") {
+    if (!isValidDateInput(text)) {
+      return {
+        handled: true,
+        reply:
+          lang === "en"
+            ? "Please send the date in YYYY-MM-DD format. Example: 2026-03-15"
+            : "Por favor envíame la fecha en formato YYYY-MM-DD. Ejemplo: 2026-03-15",
+        nextState: state,
+      };
+    }
+
+    const nextState = updateEstimateFlowState(state, {
+      preferredDate: text,
+      step: "awaiting_time",
+    });
+
+    return {
+      handled: true,
+      reply: askTime(lang),
+      nextState,
+    };
+  }
+
+  // =========================
+  // 7) CAPTURA DE HORA
+  // =========================
+  if (state.step === "awaiting_time") {
+    if (!isValidTimeInput(text)) {
+      return {
+        handled: true,
+        reply:
+          lang === "en"
+            ? "Please send the time like 10:30 AM"
+            : "Por favor envíame la hora así: 10:30 AM",
+        nextState: state,
+      };
+    }
+
+    const nextState = updateEstimateFlowState(state, {
+      preferredTime: text.toUpperCase(),
       step: "ready_to_schedule",
     });
 
@@ -221,20 +302,20 @@ export function handleEstimateFlowTurn(
         name: state.name,
         phone: state.phone,
         address: state.address,
-        jobType: text,
+        jobType: state.jobType,
+        preferredDate: state.preferredDate,
+        preferredTime: text.toUpperCase(),
       }),
       nextState,
     };
   }
 
-  // =========================
-  // 6) YA LISTO
-  // =========================
   if (state.step === "ready_to_schedule") {
-    return {
-      handled: false,
-      nextState: state,
-    };
+    return { handled: false, nextState: state };
+  }
+
+  if (state.step === "scheduled") {
+    return { handled: false, nextState: state };
   }
 
   return { handled: false };

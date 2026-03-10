@@ -15,7 +15,7 @@ export async function saveEstimateRequest(args: SaveEstimateRequestArgs) {
   const { pool, tenantId, canal, contacto, state } = args;
 
   if (!state?.active) return { ok: false, reason: "inactive_state" };
-  if (state.step !== "ready_to_schedule") {
+  if (state.step !== "ready_to_schedule" && state.step !== "scheduled") {
     return { ok: false, reason: "not_ready" };
   }
 
@@ -28,9 +28,13 @@ export async function saveEstimateRequest(args: SaveEstimateRequestArgs) {
       nombre,
       telefono,
       direccion,
-      tipo_trabajo
+      tipo_trabajo,
+      preferred_date,
+      preferred_time,
+      calendar_event_id,
+      calendar_event_link
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
     `,
     [
       tenantId,
@@ -40,6 +44,10 @@ export async function saveEstimateRequest(args: SaveEstimateRequestArgs) {
       state.phone || null,
       state.address || null,
       state.jobType || null,
+      state.preferredDate || null,
+      state.preferredTime || null,
+      state.calendarEventId || null,
+      state.calendarEventLink || null,
     ]
   );
 

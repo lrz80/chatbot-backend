@@ -67,6 +67,8 @@ import { isEstimateFlowEnabled } from "../../lib/estimateFlow/isEstimateFlowEnab
 import { handleEstimateFlowTurn } from "../../lib/estimateFlow/handleEstimateFlowTurn";
 import { getEstimateFlowState } from "../../lib/estimateFlow/getEstimateFlowState";
 import { saveEstimateRequest } from "../../lib/estimateFlow/saveEstimateRequest";
+import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
+import { buildEstimateSlot } from "../../lib/estimateFlow/buildEstimateSlot";
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -740,40 +742,153 @@ async function procesarMensajeMeta(args: {
       });
 
       if (estimateTurn.handled) {
-        // ✅ si ya llegó al final, guardar lead en DB
+        let nextEstimateState = estimateTurn.nextState;
+        let finalReply = estimateTurn.reply;
+
+        // ✅ si ya llegó al final, validar disponibilidad y crear evento en Google Calendar
         if (estimateTurn.nextState.step === "ready_to_schedule") {
           try {
-            const saved = await saveEstimateRequest({
-              pool,
-              tenantId: tenant.id,
-              canal,
-              contacto: contactoNorm,
-              state: estimateTurn.nextState,
+            const preferredDate = String(estimateTurn.nextState.preferredDate || "").trim();
+            const preferredTime = String(estimateTurn.nextState.preferredTime || "").trim();
+
+            const { startISO, endISO } = buildEstimateSlot({
+              date: preferredDate,
+              time: preferredTime,
+              durationMinutes: 60, // luego lo hacemos configurable
             });
 
-            console.log("[estimateFlow] saveEstimateRequest =", {
+            const timeZone = String(tenant?.timezone || "America/New_York");
+
+            const freeBusy = await googleFreeBusy({
               tenantId: tenant.id,
-              contacto: contactoNorm,
-              ok: saved?.ok || false,
-              reason: (saved as any)?.reason || null,
+              timeMin: startISO,
+              timeMax: endISO,
+              calendarIds: ["primary"],
             });
+
+            const busy = freeBusy?.calendars?.combined?.busy || [];
+
+            if (Array.isArray(busy) && busy.length > 0) {
+              finalReply =
+                idiomaDestino === "en"
+                  ? "That time is no longer available for the estimate. Please send me another date or time and I’ll try again."
+                  : "Ese horario ya no está disponible para el estimado. Envíame otra fecha u hora y lo intento de nuevo.";
+
+              nextEstimateState = {
+                ...estimateTurn.nextState,
+                step: "awaiting_date",
+              };
+            } else {
+              const summary = `Estimado — ${estimateTurn.nextState.jobType || "Visita técnica"}`;
+
+              const description = [
+                `Cliente: ${estimateTurn.nextState.name || ""}`,
+                `Teléfono: ${estimateTurn.nextState.phone || ""}`,
+                `Dirección: ${estimateTurn.nextState.address || ""}`,
+                `Trabajo: ${estimateTurn.nextState.jobType || ""}`,
+                `Canal: ${canal}`,
+                `Contacto: ${contactoNorm}`,
+              ]
+                .filter(Boolean)
+                .join("\n");
+
+              const event = await googleCreateEvent({
+                tenantId: tenant.id,
+                calendarId: "primary",
+                summary,
+                description,
+                startISO,
+                endISO,
+                timeZone,
+              });
+
+              nextEstimateState = {
+                ...estimateTurn.nextState,
+                step: "scheduled",
+                calendarEventId: String(event?.id || ""),
+                calendarEventLink: String(event?.htmlLink || event?.meetLink || ""),
+              };
+
+              finalReply =
+                idiomaDestino === "en"
+                  ? [
+                      "Perfect 😊 Your estimate has been scheduled successfully.",
+                      `• Date: ${preferredDate}`,
+                      `• Time: ${preferredTime}`,
+                      event?.htmlLink ? `• Calendar link: ${event.htmlLink}` : "",
+                    ]
+                      .filter(Boolean)
+                      .join("\n")
+                  : [
+                      "Perfecto 😊 Tu estimado quedó agendado correctamente.",
+                      `• Fecha: ${preferredDate}`,
+                      `• Hora: ${preferredTime}`,
+                      event?.htmlLink ? `• Link del calendario: ${event.htmlLink}` : "",
+                    ]
+                      .filter(Boolean)
+                      .join("\n");
+            }
+
+            // ✅ guardar lead en DB después de intentar agendar
+            try {
+              const saved = await saveEstimateRequest({
+                pool,
+                tenantId: tenant.id,
+                canal,
+                contacto: contactoNorm,
+                state: nextEstimateState,
+              });
+
+              console.log("[estimateFlow] saveEstimateRequest =", {
+                tenantId: tenant.id,
+                contacto: contactoNorm,
+                ok: saved?.ok || false,
+                reason: (saved as any)?.reason || null,
+              });
+            } catch (e: any) {
+              console.warn("[estimateFlow] saveEstimateRequest error:", e?.message);
+            }
           } catch (e: any) {
-            console.warn("[estimateFlow] saveEstimateRequest error:", e?.message);
+            console.warn("[estimateFlow] calendar scheduling error:", e?.message);
+
+            finalReply =
+              idiomaDestino === "en"
+                ? "I couldn’t schedule the estimate automatically right now. I already saved your information and the team can follow up with you."
+                : "No pude agendar el estimado automáticamente en este momento. Ya guardé tu información y el equipo puede continuar contigo.";
+
+            try {
+              const saved = await saveEstimateRequest({
+                pool,
+                tenantId: tenant.id,
+                canal,
+                contacto: contactoNorm,
+                state: estimateTurn.nextState,
+              });
+
+              console.log("[estimateFlow] saveEstimateRequest fallback =", {
+                tenantId: tenant.id,
+                contacto: contactoNorm,
+                ok: saved?.ok || false,
+                reason: (saved as any)?.reason || null,
+              });
+            } catch (e2: any) {
+              console.warn("[estimateFlow] saveEstimateRequest fallback error:", e2?.message);
+            }
           }
         }
 
         transition({
           flow: "estimate_flow",
-          step: estimateTurn.nextState.step,
+          step: nextEstimateState.step,
           patchCtx: {
-            estimateFlow: estimateTurn.nextState,
+            estimateFlow: nextEstimateState,
             last_bot_action: "estimate_flow_turn",
             last_reply_source: "estimate_flow",
           },
         });
 
         return await replyAndExit(
-          estimateTurn.reply,
+          finalReply,
           "estimate_flow",
           "estimate_flow"
         );

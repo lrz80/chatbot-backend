@@ -17,6 +17,10 @@ export function getEstimateFlowState(convoCtx: any): EstimateFlowState {
     phone: raw.phone ?? null,
     address: raw.address ?? null,
     jobType: raw.jobType ?? null,
+    preferredDate: raw.preferredDate ?? null,
+    preferredTime: raw.preferredTime ?? null,
+    calendarEventId: raw.calendarEventId ?? null,
+    calendarEventLink: raw.calendarEventLink ?? null,
     startedAt: raw.startedAt ?? null,
     updatedAt: raw.updatedAt ?? null,
   };

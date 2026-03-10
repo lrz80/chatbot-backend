@@ -6,7 +6,10 @@ export type EstimateFlowStep =
   | "awaiting_phone"
   | "awaiting_address"
   | "awaiting_job_type"
-  | "ready_to_schedule";
+  | "awaiting_date"
+  | "awaiting_time"
+  | "ready_to_schedule"
+  | "scheduled";
 
 export type EstimateFlowState = {
   active: boolean;
@@ -16,6 +19,11 @@ export type EstimateFlowState = {
   phone?: string | null;
   address?: string | null;
   jobType?: string | null;
+
+  preferredDate?: string | null; // YYYY-MM-DD
+  preferredTime?: string | null; // HH:MM AM/PM
+  calendarEventId?: string | null;
+  calendarEventLink?: string | null;
 
   startedAt?: number | null;
   updatedAt?: number | null;
@@ -29,6 +37,10 @@ export function createEmptyEstimateFlowState(): EstimateFlowState {
     phone: null,
     address: null,
     jobType: null,
+    preferredDate: null,
+    preferredTime: null,
+    calendarEventId: null,
+    calendarEventLink: null,
     startedAt: null,
     updatedAt: null,
   };
