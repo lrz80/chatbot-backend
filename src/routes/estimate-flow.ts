@@ -24,7 +24,7 @@ async function getTenantIdFromCookie(req: Request): Promise<string | null> {
       `
       SELECT tenant_id
       FROM users
-      WHERE id = $1
+      WHERE uid = $1
       LIMIT 1
       `,
       [userId]
