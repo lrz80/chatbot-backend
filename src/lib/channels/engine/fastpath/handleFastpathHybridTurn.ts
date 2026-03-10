@@ -218,10 +218,27 @@ export async function handleFastpathHybridTurn(
     "price_summary_db_empty",
   ]);
 
-  if (isDmChatChannel(canal) && DB_PRICE_SOURCES.has(fp.source as any)) {
+  const looksLikeNarrativeMessage =
+    /\b(gracias|muchas gracias|thank you|thanks|los veo pronto|see you soon|dios mediante|god willing|ahorita|ahora mismo|cuando pueda|cuando tenga|creo que|me voy a anotar|i think|maybe later|not right now)\b/i.test(
+      loweredInput
+    );
+
+  const shouldAllowHardPriceBypass =
+    isPriceQuestionUser ||
+    isPlanDetailQuestion ||
+    wantsPlansAndHours;
+
+  if (
+    isDmChatChannel(canal) &&
+    DB_PRICE_SOURCES.has(fp.source as any) &&
+    shouldAllowHardPriceBypass &&
+    !looksLikeNarrativeMessage
+  ) {
     console.log("[CHAT][FASTPATH] HARD BYPASS DB_PRICE_SOURCE -> send fastpath (no LLM)", {
       source: fp.source,
       intent: fp.intent,
+      shouldAllowHardPriceBypass,
+      looksLikeNarrativeMessage,
     });
 
     return {
