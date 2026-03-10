@@ -1174,6 +1174,21 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       fallbackText: fallbackWelcome,
     });
 
+    // ✅ guardar CTA pendiente inferida desde la salida del assistant
+    if (composed.pendingCta) {
+      console.log("[PENDING_CTA][SET][sm-fallback]", {
+        tenantId: event.tenantId,
+        contacto: contactoNorm,
+        canal: "whatsapp",
+        pendingCta: composed.pendingCta,
+        replyPreview: composed.text.slice(0, 200),
+      });
+
+      // aquí llamas tu helper real de persistencia/contexto
+      // ejemplo:
+      // await setPendingCta(convoCtx, composed.pendingCta);
+    }
+
     setReply(composed.text, "sm-fallback");
     await finalizeReply();
     return;

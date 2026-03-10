@@ -1129,6 +1129,21 @@ async function procesarMensajeMeta(args: {
       fallbackText: bienvenida,
     });
 
+    // ✅ guardar CTA pendiente inferida desde la salida del assistant
+    if (composed.pendingCta) {
+      console.log("[PENDING_CTA][SET][sm-fallback]", {
+        tenantId,
+        contacto: contactoNorm,
+        canal: canalEnvio as any,
+        pendingCta: composed.pendingCta,
+        replyPreview: composed.text.slice(0, 200),
+      });
+
+      // aquí llamas tu helper real de persistencia/contexto
+      // ejemplo:
+      // await setPendingCta(convoCtx, composed.pendingCta);
+    }
+
     setReply(composed.text, "sm-fallback");
     await finalizeReply();
     return;

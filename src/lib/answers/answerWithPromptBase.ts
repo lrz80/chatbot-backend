@@ -20,6 +20,17 @@ type AnswerWithPromptBaseParams = {
   fallbackText?: string;    // por si el LLM falla
 };
 
+type PendingCtaType =
+  | "estimate_offer"
+  | "booking_offer";
+
+type PendingCta =
+  | {
+      type: PendingCtaType;
+      awaitsConfirmation: true;
+    }
+  | null;
+
 /* =========================
    Helpers defensivos
 ========================= */
@@ -66,6 +77,72 @@ function cleanOneLine(s: string) {
 
 function uniqueStrings(arr: string[]) {
   return Array.from(new Set(arr.map((x) => cleanOneLine(x)).filter(Boolean)));
+}
+
+function inferPendingCtaFromAssistantReply(
+  text: string,
+  idiomaDestino: "es" | "en"
+): PendingCta {
+  const t = String(text || "").toLowerCase().trim();
+  if (!t) return null;
+
+  // Estimate / estimate booking
+  const estimatePatternsEs = [
+    /te gustar[ií]a agendar un estimado/i,
+    /te gustar[ií]a agendar.*estimado/i,
+    /quieres agendar un estimado/i,
+    /deseas agendar un estimado/i,
+  ];
+
+  const estimatePatternsEn = [
+    /would you like to schedule an estimate/i,
+    /would you like to book an estimate/i,
+    /do you want to schedule an estimate/i,
+  ];
+
+  // Generic booking CTA
+  const bookingPatternsEs = [
+    /si quieres,\s*te ayudo a reservar/i,
+    /te gustar[ií]a reservar/i,
+    /quieres reservar/i,
+    /deseas reservar/i,
+    /quieres agendar/i,
+    /te ayudo a agendar/i,
+  ];
+
+  const bookingPatternsEn = [
+    /if you want,\s*i can help you book/i,
+    /would you like to book/i,
+    /do you want to book/i,
+    /would you like to schedule/i,
+    /do you want to schedule/i,
+  ];
+
+  const estimatePatterns =
+    idiomaDestino === "en"
+      ? estimatePatternsEn
+      : estimatePatternsEs;
+
+  const bookingPatterns =
+    idiomaDestino === "en"
+      ? bookingPatternsEn
+      : bookingPatternsEs;
+
+  if (estimatePatterns.some((rx) => rx.test(t))) {
+    return {
+      type: "estimate_offer",
+      awaitsConfirmation: true,
+    };
+  }
+
+  if (bookingPatterns.some((rx) => rx.test(t))) {
+    return {
+      type: "booking_offer",
+      awaitsConfirmation: true,
+    };
+  }
+
+  return null;
 }
 
 async function buildCatalogDbContext(tenantId: string): Promise<string> {
@@ -171,7 +248,7 @@ async function getBookingActiveForTenant(tenantId: string): Promise<boolean> {
 
 export async function answerWithPromptBase(
   params: AnswerWithPromptBaseParams
-): Promise<{ text: string }> {
+): Promise<{ text: string; pendingCta: PendingCta }> {
   const {
     tenantId,
     promptBase,
@@ -320,5 +397,10 @@ export async function answerWithPromptBase(
     console.warn("⚠️ No se pudo ajustar el idioma en answerWithPromptBase:", e);
   }
 
-  return { text: out };
+  const pendingCta = inferPendingCtaFromAssistantReply(out, idiomaDestino);
+
+  return {
+    text: out,
+    pendingCta,
+  };
 }
