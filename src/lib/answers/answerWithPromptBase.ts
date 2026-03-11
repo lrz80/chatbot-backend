@@ -18,6 +18,7 @@ type AnswerWithPromptBaseParams = {
   canal: string;            // ej: 'whatsapp', 'meta', 'sms'
   maxLines?: number;        // límite de líneas para formato chat
   fallbackText?: string;    // por si el LLM falla
+  extraContext?: string;
 };
 
 type PendingCtaType =
@@ -270,6 +271,7 @@ export async function answerWithPromptBase(
     canal,
     maxLines = 9999,
     fallbackText = '',
+    extraContext = '',
   } = params;
 
   const openai = new OpenAI({
@@ -325,10 +327,13 @@ export async function answerWithPromptBase(
     "",
     catalogDbContext,
     "",
+    extraContext ? `DATOS_ESTRUCTURADOS_DEL_TURNO:\n${extraContext}` : "",
+    "",
     `Canal: ${canal}. Ajusta el tono al canal (WhatsApp = breve, claro y directo).`,
     "",
     `Reglas generales:
-- Usa EXCLUSIVAMENTE la información explícita en este prompt del negocio y en SERVICIOS_VALIDOS_DB / VARIANTES_VALIDAS_DB si están presentes. Si algo no está, dilo sin inventar.
+- Usa EXCLUSIVAMENTE la información explícita en este prompt del negocio, en SERVICIOS_VALIDOS_DB / VARIANTES_VALIDAS_DB si están presentes, y en DATOS_ESTRUCTURADOS_DEL_TURNO si existen. Si algo no está, dilo sin inventar.
+- Si DATOS_ESTRUCTURADOS_DEL_TURNO existen, esos datos tienen prioridad máxima para responder este turno.
 - Responde SIEMPRE en ${idiomaDestino === "en" ? "English" : "Español"}.
 - Formato chat/WhatsApp: máximo ${maxLines} líneas en prosa.
 - Si el usuario hace varias preguntas, respóndelas TODAS en un solo mensaje.

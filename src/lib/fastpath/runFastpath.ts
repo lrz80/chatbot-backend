@@ -23,6 +23,7 @@ import { renderGenericPriceSummaryReply } from "../services/pricing/renderGeneri
 import OpenAI from "openai";
 import { extractQueryFrames, type QueryFrame } from "./extractQueryFrames";
 import { resolveServiceMatchesFromText } from "../services/pricing/resolveServiceMatchesFromText";
+import { answerWithPromptBase } from "../answers/answerWithPromptBase";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -121,7 +122,9 @@ export type FastpathResult =
         | "interest_to_pricing"
         | "catalog_llm"
         | "fastpath_dismiss"
-        | "catalog_db";
+        | "catalog_db"
+        |"price_fastpath_db_llm_render"
+        |"price_fastpath_db_no_price_llm_render";
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;
@@ -150,6 +153,7 @@ export type RunFastpathArgs = {
 
   // multi-tenant: info_clave viene del tenant
   infoClave: string;
+  promptBase: string;
 
   // intent detectada (si existe) para logging/guardado
   detectedIntent?: string | null;
@@ -573,6 +577,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     inBooking,
     convoCtx,
     infoClave,
+    promptBase,
     detectedIntent,
     maxDisambiguationOptions = 5,
     lastServiceTtlMs = 60 * 60 * 1000,
@@ -2968,16 +2973,21 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             })),
           });
 
+          const pricedVariants = variants.filter((v: any) => {
+            const n = Number(v.price);
+            return Number.isFinite(n) && n > 0;
+          });
+
           let chosenVariant: any = null;
 
-          if (variants.length > 0) {
+          if (pricedVariants.length > 0) {
             const msgNorm = normalizeText(userInput);
 
             const numberInMsg = msgNorm.match(/\b(\d{1,3})\b/)?.[1] || null;
 
             if (numberInMsg) {
               chosenVariant =
-                variants.find((v: any) => {
+                pricedVariants.find((v: any) => {
                   const vName = normalizeText(String(v.variant_name || ""));
                   return new RegExp(`\\b${numberInMsg}\\b`).test(vName);
                 }) || null;
@@ -2986,7 +2996,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             if (!chosenVariant) {
               const matchedVariant = bestNameMatch(
                 userInput,
-                variants.map((v: any) => ({
+                pricedVariants.map((v: any) => ({
                   id: String(v.id),
                   name: String(v.variant_name || "").trim(),
                   url: v.variant_url ? String(v.variant_url).trim() : null,
@@ -2994,7 +3004,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               ) as any;
 
               if (matchedVariant?.id) {
-                chosenVariant = variants.find(
+                chosenVariant = pricedVariants.find(
                   (v: any) => String(v.id) === String(matchedVariant.id)
                 );
               }
@@ -3005,6 +3015,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               targetServiceId,
               targetServiceName,
               variantsCount: variants.length,
+              pricedVariantsCount: pricedVariants.length,
               chosenVariant: chosenVariant
                 ? {
                     id: chosenVariant.id,
@@ -3015,7 +3026,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 : null,
             });
             
-          // ✅ Si resolvió variante concreta, responder exacto
+          // ✅ Si resolvió variante concreta, responder natural usando DB + answerWithPromptBase
           if (chosenVariant) {
             console.log("[PRICE][chosenVariant]", {
               userInput,
@@ -3027,7 +3038,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 price: chosenVariant?.price,
                 variant_url: chosenVariant?.variant_url,
               },
-              allVariants: variants.map((v: any) => ({
+              allVariants: pricedVariants.map((v: any) => ({
                 id: v.id,
                 variant_name: v.variant_name,
                 price: v.price,
@@ -3043,6 +3054,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
             const baseName = targetServiceName || "";
             const variantName = String(chosenVariant.variant_name || "").trim();
+            const resolvedCurrency = String(chosenVariant.currency || "USD");
+            const directLink =
+              chosenVariant.variant_url
+                ? String(chosenVariant.variant_url).trim()
+                : null;
 
             const priceText =
               Number.isFinite(priceNum)
@@ -3051,28 +3067,55 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 ? "price available"
                 : "precio disponible";
 
-            const directLink =
-              chosenVariant.variant_url
-                ? String(chosenVariant.variant_url).trim()
-                : null;
+            console.log("[PRICE][single][LLM_RENDER] fixed_price", {
+              targetServiceId,
+              targetServiceName,
+              variantName,
+              priceNum,
+              resolvedCurrency,
+            });
 
-            const reply =
-              idiomaDestino === "en"
-                ? `${baseName} — ${variantName} costs ${priceText} 😊${
-                    directLink
-                      ? `\n\nHere’s the link:\n${directLink}`
-                      : `\n\nIf you need anything else, I’m here to help. 😊`
-                  }`
-                : `${baseName} — ${variantName} cuesta ${priceText} 😊${
-                    directLink
-                      ? `\n\nAquí tienes el link:\n${directLink}`
-                      : `\n\nSi necesitas algo más, aquí estoy para ayudarte. 😊`
-                  }`;
+            const extraContext = [
+              "PRECIO_DB_RESUELTO:",
+              `- service_name: ${baseName}`,
+              `- variant_name: ${variantName || "(none)"}`,
+              `- pricing_mode: fixed`,
+              `- price: ${priceNum ?? ""}`,
+              `- currency: ${resolvedCurrency}`,
+              `- direct_link: ${directLink || ""}`,
+              `- source_of_truth: database`,
+              "",
+              "REGLAS_CRITICAS_DEL_TURNO:",
+              "- Debes responder usando EXCLUSIVAMENTE estos datos resueltos desde DB.",
+              "- NO puedes inventar otros precios, rangos, variantes ni servicios alternativos.",
+              "- NO puedes mezclar este servicio con otros del catálogo.",
+              "- Si mencionas el precio, debe corresponder únicamente al servicio/variante resuelto.",
+              "- Redacta de forma natural, humana, breve y comercial para WhatsApp.",
+            ].join("\n");
+
+            const aiPriceReply = await answerWithPromptBase({
+              tenantId,
+              promptBase,
+              userInput,
+              history: [],
+              idiomaDestino,
+              canal,
+              maxLines: 6,
+              fallbackText:
+                idiomaDestino === "en"
+                  ? `${baseName}${variantName ? ` — ${variantName}` : ""} costs ${priceText}${
+                      directLink ? `\n\nHere’s the link:\n${directLink}` : ""
+                    }`
+                  : `${baseName}${variantName ? ` — ${variantName}` : ""} cuesta ${priceText}${
+                      directLink ? `\n\nAquí tienes el link:\n${directLink}` : ""
+                    }`,
+              extraContext,
+            });
 
             return {
               handled: true,
-              reply,
-              source: "price_fastpath_db",
+              reply: aiPriceReply.text,
+              source: "price_fastpath_db_llm_render",
               intent: "precio",
               ctxPatch: {
                 last_service_id: targetServiceId,
@@ -3081,9 +3124,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
                 last_variant_id: String(chosenVariant.id || ""),
                 last_variant_name: variantName || null,
-                last_variant_url: chosenVariant.variant_url
-                  ? String(chosenVariant.variant_url).trim()
-                  : null,
+                last_variant_url: directLink || null,
                 last_variant_at: Date.now(),
 
                 last_price_option_label: variantName || null,
@@ -3092,7 +3133,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             };
           }
 
-          // ✅ Si resolvió servicio, pero no variante exacta, responder precio del servicio
+          // ✅ Si resolvió servicio, pero no variante exacta, responder natural usando DB + answerWithPromptBase
           const matchedRow = rows.find(
             (r) => String(r.service_id || "") === targetServiceId
           );
@@ -3101,20 +3142,104 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             const min = matchedRow.min_price === null ? null : Number(matchedRow.min_price);
             const max = matchedRow.max_price === null ? null : Number(matchedRow.max_price);
 
-            let priceText =
-              idiomaDestino === "en" ? "price available" : "precio disponible";
+            const hasExplicitServicePrice =
+              Number.isFinite(min) && Number.isFinite(max);
 
-            if (Number.isFinite(min) && Number.isFinite(max)) {
-              priceText =
-                min === max
-                  ? `$${min!.toFixed(2)}`
-                  : `${idiomaDestino === "en" ? "from" : "desde"} $${min!.toFixed(2)}`;
+            if (!hasExplicitServicePrice) {
+              console.log("[PRICE][single][LLM_RENDER] no_explicit_price", {
+                targetServiceId,
+                targetServiceName,
+              });
+
+              const extraContext = [
+                "PRECIO_DB_RESUELTO:",
+                `- service_name: ${targetServiceName}`,
+                `- pricing_mode: no_explicit_price`,
+                `- source_of_truth: database`,
+                "",
+                "REGLAS_CRITICAS_DEL_TURNO:",
+                "- El servicio sí existe en DB.",
+                "- En este turno NO existe un precio explícito utilizable para este servicio.",
+                "- NO puedes inventar montos, rangos ni precios aproximados.",
+                "- NO puedes mencionar otros servicios como alternativa de precio, a menos que el usuario los pida.",
+                "- Responde de forma natural, útil y comercial, manteniéndote en el servicio resuelto.",
+              ].join("\n");
+
+              const aiNoPriceReply = await answerWithPromptBase({
+                tenantId,
+                promptBase,
+                userInput,
+                history: [],
+                idiomaDestino,
+                canal,
+                maxLines: 6,
+                fallbackText:
+                  idiomaDestino === "en"
+                    ? `We do offer ${targetServiceName}, but I don't currently have an explicit price configured for that service.`
+                    : `Sí ofrecemos ${targetServiceName}, pero ahora mismo no tengo un precio explícito configurado para ese servicio.`,
+                extraContext,
+              });
+
+              return {
+                handled: true,
+                reply: aiNoPriceReply.text,
+                source: "price_fastpath_db_no_price_llm_render",
+                intent: "precio",
+                ctxPatch: {
+                  last_service_id: targetServiceId,
+                  last_service_name: targetServiceName || null,
+                  last_service_at: Date.now(),
+                } as Partial<FastpathCtx>,
+              };
             }
+
+            const priceText =
+              min === max
+                ? `$${min!.toFixed(2)}`
+                : `${idiomaDestino === "en" ? "from" : "desde"} $${min!.toFixed(2)}`;
+
+            console.log("[PRICE][single][LLM_RENDER] service_price", {
+              targetServiceId,
+              targetServiceName,
+              min,
+              max,
+            });
+
+            const extraContext = [
+              "PRECIO_DB_RESUELTO:",
+              `- service_name: ${targetServiceName}`,
+              `- pricing_mode: ${min === max ? "fixed" : "from_price"}`,
+              `- min_price: ${min ?? ""}`,
+              `- max_price: ${max ?? ""}`,
+              `- source_of_truth: database`,
+              "",
+              "REGLAS_CRITICAS_DEL_TURNO:",
+              "- Debes responder usando EXCLUSIVAMENTE estos datos resueltos desde DB.",
+              "- NO puedes inventar otros precios, rangos, variantes ni servicios alternativos.",
+              "- NO puedes mezclar este servicio con otros del catálogo.",
+              "- Si mencionas el precio, debe corresponder únicamente al servicio resuelto.",
+              "- Redacta de forma natural, humana, breve y comercial para WhatsApp.",
+            ].join("\n");
+
+            const aiServicePriceReply = await answerWithPromptBase({
+              tenantId,
+              promptBase,
+              userInput,
+              history: [],
+              idiomaDestino,
+              canal,
+              maxLines: 6,
+              fallbackText:
+                idiomaDestino === "en"
+                  ? `${targetServiceName} costs ${priceText}.`
+                  : `${targetServiceName} cuesta ${priceText}.`,
+              extraContext,
+            });
 
             return {
               handled: true,
-              reply: `• ${targetServiceName}: ${priceText}`,
-              source: "price_fastpath_db",
+              reply: aiServicePriceReply.text,
+              source: "price_fastpath_db_llm_render",
               intent: "precio",
               ctxPatch: {
                 last_service_id: targetServiceId,

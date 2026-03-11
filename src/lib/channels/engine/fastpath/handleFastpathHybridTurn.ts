@@ -194,6 +194,7 @@ export async function handleFastpathHybridTurn(
     inBooking,
     convoCtx: convoCtx as any,
     infoClave,
+    promptBase: promptBaseMem,
     detectedIntent: fpIntent,
     maxDisambiguationOptions: 10,
     lastServiceTtlMs: 60 * 60 * 1000,
