@@ -134,8 +134,8 @@ function isValidTimeInput(text: string) {
 
 function askName(lang: Lang) {
   return lang === "en"
-    ? "Sure 😊 To schedule your estimate, first tell me your full name."
-    : "Claro 😊 Para agendar tu estimado, primero dime tu nombre completo.";
+    ? "Sure 😊 To schedule, first tell me your full name."
+    : "Claro 😊 Para agendar, primero dime tu nombre completo.";
 }
 
 function askPhone(lang: Lang, name?: string | null) {
@@ -146,20 +146,20 @@ function askPhone(lang: Lang, name?: string | null) {
 
 function askAddress(lang: Lang) {
   return lang === "en"
-    ? "Thanks. What is the address where the work would be done?"
-    : "Gracias. ¿Cuál es la dirección donde sería el trabajo?";
+    ? "Thanks. What is the address?"
+    : "Gracias. ¿Cuál es la dirección?";
 }
 
 function askJobType(lang: Lang) {
   return lang === "en"
-    ? "Got it. What type of work do you need exactly?"
-    : "Entendido. ¿Qué tipo de trabajo necesitas exactamente?";
+    ? "Got it. What type of service do you need exactly?"
+    : "Entendido. ¿Qué tipo de servicio necesitas exactamente?";
 }
 
 function askDate(lang: Lang) {
   return lang === "en"
-    ? "Perfect. What date works best for the estimate? Please send it in YYYY-MM-DD format."
-    : "Perfecto. ¿Qué fecha te funciona mejor para el estimado? Envíamela en formato YYYY-MM-DD.";
+    ? "Perfect. What date works best? Please send it in YYYY-MM-DD format."
+    : "Perfecto. ¿Qué fecha te funciona mejor? Envíamela en formato YYYY-MM-DD.";
 }
 
 function askSlotChoice(lang: Lang) {
@@ -181,7 +181,7 @@ function readyMessage(args: {
 
   if (lang === "en") {
     return [
-      "Perfect 😊 I already have the information for your estimate:",
+      "Perfect 😊 I already have the information:",
       name ? `• Name: ${name}` : "",
       phone ? `• Phone: ${phone}` : "",
       address ? `• Address: ${address}` : "",
@@ -189,14 +189,14 @@ function readyMessage(args: {
       preferredDate ? `• Date: ${preferredDate}` : "",
       preferredTime ? `• Time: ${preferredTime}` : "",
       "",
-      "Now I’m going to try to schedule the estimate automatically.",
+      "Now I’m going to try to schedule automatically.",
     ]
       .filter(Boolean)
       .join("\n");
   }
 
   return [
-    "Perfecto 😊 Ya tengo la información para tu estimado:",
+    "Perfecto 😊 Ya tengo la información:",
     name ? `• Nombre: ${name}` : "",
     phone ? `• Teléfono: ${phone}` : "",
     address ? `• Dirección: ${address}` : "",
@@ -204,7 +204,7 @@ function readyMessage(args: {
     preferredDate ? `• Fecha: ${preferredDate}` : "",
     preferredTime ? `• Hora: ${preferredTime}` : "",
     "",
-    "Ahora voy a intentar agendar el estimado automáticamente.",
+    "Ahora voy a intentar agendar automáticamente.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -268,8 +268,8 @@ export function handleEstimateFlowTurn(
         handled: true,
         reply:
           lang === "en"
-            ? "Please send me a valid phone number so I can continue with the estimate."
-            : "Por favor envíame un número de teléfono válido para poder continuar con el estimado.",
+            ? "Please send me a valid phone number."
+            : "Por favor envíame un número de teléfono válido.",
         nextState: state,
       };
     }
@@ -355,67 +355,89 @@ export function handleEstimateFlowTurn(
   // =========================
   // 7) ESPERANDO ELECCIÓN DE SLOT
   // =========================
-  if (state.step === "awaiting_slot_choice") {
-    console.log("[estimateFlow][awaiting_slot_choice]", {
-      text,
-      step: state.step,
-      offeredSlots: (state as any).offeredSlots,
-      offeredSlotsLen: Array.isArray((state as any).offeredSlots)
-        ? (state as any).offeredSlots.length
-        : null,
-    });
+ if (state.step === "awaiting_slot_choice") {
+  console.log("[estimateFlow][awaiting_slot_choice]", {
+    text,
+    step: state.step,
+    offeredSlots: (state as any).offeredSlots,
+    offeredSlotsLen: Array.isArray((state as any).offeredSlots)
+      ? (state as any).offeredSlots.length
+      : null,
+  });
 
-    const raw = cleanText(text);
+  const raw = cleanText(text);
+  const normalizedRaw = raw.toLowerCase().replace(/\s+/g, " ").trim();
 
-    // acepta: "2", "2.", "#2", "opcion 2", "option 2", "numero 2"
-    const match = raw.match(/\b(\d{1,2})\b/);
-    const idx = match ? Number(match[1]) : NaN;
+  const offeredSlots = Array.isArray((state as any).offeredSlots)
+    ? (state as any).offeredSlots
+    : [];
 
-    if (!Number.isFinite(idx) || idx < 1) {
-      return {
-        handled: true,
-        reply: askSlotChoice(lang),
-        nextState: state,
-      };
-    }
+  const match = normalizedRaw.match(/\b(\d{1,2})\b/);
+  const idx = match ? Number(match[1]) : NaN;
 
-    const offeredSlots = Array.isArray((state as any).offeredSlots)
-      ? (state as any).offeredSlots
-      : [];
+  let picked: any = null;
 
-    const picked = offeredSlots[idx - 1];
+  if (Number.isFinite(idx) && idx >= 1 && idx <= offeredSlots.length) {
+    picked = offeredSlots[idx - 1];
+  }
 
-    if (!picked?.startISO || !picked?.endISO) {
-      return {
-        handled: true,
-        reply:
-          lang === "en"
-            ? "That option is no longer valid. Please choose one of the available time options."
-            : "Esa opción ya no es válida. Por favor elige uno de los horarios disponibles.",
-        nextState: state,
-      };
-    }
+  if (!picked) {
+    const normalizeHourText = (s: string) =>
+      String(s || "")
+        .toLowerCase()
+        .replace(/\./g, "")
+        .replace(/\s+/g, " ")
+        .replace(/a las\s+/g, "")
+        .replace(/esta bien/g, "")
+        .replace(/me funciona/g, "")
+        .replace(/me sirve/g, "")
+        .replace(/de la tarde/g, "pm")
+        .replace(/de la manana/g, "am")
+        .replace(/de la mañana/g, "am")
+        .trim();
 
-    const nextState = updateEstimateFlowState(state, {
-      selectedSlot: picked,
-      preferredTime: picked.label || null,
-      step: "ready_to_schedule",
-    });
+    const normalizedInputHour = normalizeHourText(normalizedRaw);
 
+    picked =
+      offeredSlots.find((slot: any) => {
+        const label = normalizeHourText(slot?.label || "");
+        if (!label) return false;
+
+        return (
+          normalizedInputHour.includes(label) ||
+          label.includes(normalizedInputHour)
+        );
+      }) || null;
+  }
+
+  if (!picked?.startISO || !picked?.endISO) {
     return {
       handled: true,
-      reply: readyMessage({
-        lang,
-        name: state.name,
-        phone: state.phone,
-        address: state.address,
-        jobType: state.jobType,
-        preferredDate: state.preferredDate,
-        preferredTime: picked.label || null,
-      }),
-      nextState,
+      reply: askSlotChoice(lang),
+      nextState: state,
     };
   }
+
+  const nextState = updateEstimateFlowState(state, {
+    selectedSlot: picked,
+    preferredTime: picked.label || null,
+    step: "ready_to_schedule",
+  });
+
+  return {
+    handled: true,
+    reply: readyMessage({
+      lang,
+      name: state.name,
+      phone: state.phone,
+      address: state.address,
+      jobType: state.jobType,
+      preferredDate: state.preferredDate,
+      preferredTime: picked.label || null,
+    }),
+    nextState,
+  };
+}
 
   if (state.step === "offering_slots") {
     return { handled: false, nextState: state };
