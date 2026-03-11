@@ -2957,6 +2957,17 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             [targetServiceId]
           );
 
+          console.log("[PRICE][single] variants fetched", {
+            targetServiceId,
+            targetServiceName,
+            variants: variants.map((v: any) => ({
+              id: v.id,
+              variant_name: v.variant_name,
+              price: v.price,
+              currency: v.currency,
+            })),
+          });
+
           let chosenVariant: any = null;
 
           if (variants.length > 0) {
@@ -2990,6 +3001,20 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             }
           }
 
+            console.log("[PRICE][single] final reply inputs", {
+              targetServiceId,
+              targetServiceName,
+              variantsCount: variants.length,
+              chosenVariant: chosenVariant
+                ? {
+                    id: chosenVariant.id,
+                    variant_name: chosenVariant.variant_name,
+                    price: chosenVariant.price,
+                    currency: chosenVariant.currency,
+                  }
+                : null,
+            });
+            
           // ✅ Si resolvió variante concreta, responder exacto
           if (chosenVariant) {
             console.log("[PRICE][chosenVariant]", {
