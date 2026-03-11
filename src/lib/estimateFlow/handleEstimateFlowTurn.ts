@@ -93,6 +93,30 @@ function wantsRescheduleEstimate(text: string) {
   );
 }
 
+function wantsExitFlow(text: string) {
+  const t = cleanText(text).toLowerCase();
+
+  return (
+    /^gracias[.!]*$/.test(t) ||
+    /^muchas gracias[.!]*$/.test(t) ||
+    /^ok[.!]*$/.test(t) ||
+    /^okay[.!]*$/.test(t) ||
+    /^dale[.!]*$/.test(t) ||
+    /^perfecto[.!]*$/.test(t) ||
+    /^perfect[.!]*$/.test(t) ||
+    /^no gracias[.!]*$/.test(t) ||
+    /^no, gracias[.!]*$/.test(t) ||
+    /^ya no[.!]*$/.test(t) ||
+    /^olvidalo[.!]*$/.test(t) ||
+    /^olvídalo[.!]*$/.test(t) ||
+    /^never mind[.!]*$/.test(t) ||
+    /^cancela eso[.!]*$/.test(t) ||
+    /^déjalo así[.!]*$/.test(t) ||
+    /^dejalo asi[.!]*$/.test(t)
+  );
+}
+
+
 function parseFlexibleDateInput(text: string, lang: Lang): string | null {
   const raw = cleanText(text);
   if (!raw) return null;
@@ -247,6 +271,17 @@ export function handleEstimateFlowTurn(
   const state = currentState?.active
     ? currentState
     : createEmptyEstimateFlowState();
+
+  if (state.active && wantsExitFlow(text)) {
+    return {
+      handled: true,
+      reply:
+        lang === "en"
+          ? "No problem 😊 If you want to schedule later, just write: I want to schedule."
+          : "No hay problema 😊 Si luego quieres agendar, solo escribe: Quiero agendar.",
+      nextState: createEmptyEstimateFlowState(),
+    };
+  }
 
   // =========================
   // 1) ARRANQUE DEL FLUJO
