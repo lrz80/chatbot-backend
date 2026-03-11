@@ -32,14 +32,13 @@ router.get(
         hasta,
       } = req.query;
 
-      // Construcción dinámica del WHERE
-      const where = [`a.tenant_id = $1`];
+      const where = [`x.tenant_id = $1`];
       const params: any[] = [tenantId];
       let idx = 2;
 
       if (canal) {
         const c = String(Array.isArray(canal) ? canal[0] : canal).trim().toLowerCase();
-        where.push(`LOWER(a.channel) = $${idx++}`);
+        where.push(`LOWER(x.channel) = $${idx++}`);
         params.push(c);
       }
 
@@ -47,71 +46,93 @@ router.get(
         const raw = String(Array.isArray(estado) ? estado[0] : estado).trim().toLowerCase();
 
         const map: Record<string, string> = {
-          // español -> db
-          "pendiente": "pending",
-          "confirmada": "confirmed",
-          "cancelada": "cancelled",
-          "atendida": "attended",
+          pendiente: "pending",
+          confirmada: "confirmed",
+          cancelada: "cancelled",
+          atendida: "attended",
+          scheduled: "scheduled",
 
-          // por si llegan ya en inglés/db
-          "pending": "pending",
-          "confirmed": "confirmed",
-          "cancelled": "cancelled",
-          "attended": "attended",
+          pending: "pending",
+          confirmed: "confirmed",
+          cancelled: "cancelled",
+          attended: "attended",
         };
 
         const s = map[raw];
         if (s) {
-          where.push(`a.status = $${idx++}`);
+          where.push(`x.status = $${idx++}`);
           params.push(s);
         }
       }
 
       if (cliente) {
         const q = String(Array.isArray(cliente) ? cliente[0] : cliente).trim();
-        where.push(`a.customer_name ILIKE $${idx++}`);
+        where.push(`x.customer_name ILIKE $${idx++}`);
         params.push(`%${q}%`);
       }
 
       if (telefono) {
         const q = String(Array.isArray(telefono) ? telefono[0] : telefono).trim();
-        where.push(`a.customer_phone ILIKE $${idx++}`);
+        where.push(`x.customer_phone ILIKE $${idx++}`);
         params.push(`%${q}%`);
       }
 
       if (desde) {
-        where.push(`a.start_time >= $${idx++}`);
+        where.push(`x.start_time >= $${idx++}`);
         params.push(desde);
       }
 
       if (hasta) {
-        where.push(`a.start_time <= $${idx++}`);
+        where.push(`x.start_time <= $${idx++}`);
         params.push(hasta);
       }
 
       const whereSQL = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
       const query = `
-        SELECT
-          a.id,
-          a.tenant_id,
-          a.service_id,
-          s.name AS service_name,
-          a.channel,
-          a.customer_name,
-          a.customer_phone,
-          a.customer_email,
-          a.start_time,
-          a.end_time,
-          a.status,
-          a.created_at,
-          a.updated_at
-        FROM appointments a
-        LEFT JOIN services s ON s.id = a.service_id
+        SELECT *
+        FROM (
+          SELECT
+            a.id::text AS id,
+            a.tenant_id,
+            a.service_id,
+            s.name AS service_name,
+            a.channel,
+            a.customer_name,
+            a.customer_phone,
+            a.customer_email,
+            a.start_time,
+            a.end_time,
+            a.status,
+            a.created_at,
+            a.updated_at,
+            'appointment'::text AS source
+          FROM appointments a
+          LEFT JOIN services s ON s.id = a.service_id
+
+          UNION ALL
+
+          SELECT
+            er.id::text AS id,
+            er.tenant_id,
+            NULL::uuid AS service_id,
+            er.tipo_trabajo AS service_name,
+            er.canal AS channel,
+            er.nombre AS customer_name,
+            er.telefono AS customer_phone,
+            NULL::text AS customer_email,
+            er.scheduled_start_at AS start_time,
+            er.scheduled_end_at AS end_time,
+            er.status,
+            er.created_at,
+            er.created_at AS updated_at,
+            'estimate_request'::text AS source
+          FROM estimate_requests er
+        ) x
         ${whereSQL}
         ORDER BY
-          (a.start_time < NOW()) ASC,
-          a.start_time ASC
+          (x.start_time < NOW()) ASC,
+          x.start_time ASC
         LIMIT 200
       `;
 
