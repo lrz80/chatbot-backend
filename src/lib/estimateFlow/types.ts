@@ -7,6 +7,8 @@ export type EstimateFlowStep =
   | "awaiting_date"
   | "offering_slots"
   | "awaiting_slot_choice"
+  | "awaiting_cancel_confirmation"
+  | "awaiting_reschedule_confirmation"
   | "ready_to_schedule"
   | "scheduled";
 

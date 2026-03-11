@@ -65,6 +65,34 @@ function looksLikeStartEstimateIntent(text: string) {
   );
 }
 
+function wantsCancelEstimate(text: string) {
+  const t = cleanText(text).toLowerCase();
+
+  return (
+    /\bcancelar\b/.test(t) ||
+    /\bcancela\b/.test(t) ||
+    /\bcancel\b/.test(t) ||
+    /\bcancel my estimate\b/.test(t) ||
+    /\bcancel my appointment\b/.test(t) ||
+    /\bquitar la cita\b/.test(t) ||
+    /\bdelete appointment\b/.test(t)
+  );
+}
+
+function wantsRescheduleEstimate(text: string) {
+  const t = cleanText(text).toLowerCase();
+
+  return (
+    /\breagendar\b/.test(t) ||
+    /\breprogramar\b/.test(t) ||
+    /\bcambiar la cita\b/.test(t) ||
+    /\bcambiar el horario\b/.test(t) ||
+    /\bchange appointment\b/.test(t) ||
+    /\breschedule\b/.test(t) ||
+    /\bmove the appointment\b/.test(t)
+  );
+}
+
 function parseFlexibleDateInput(text: string, lang: Lang): string | null {
   const raw = cleanText(text);
   if (!raw) return null;
@@ -224,6 +252,40 @@ export function handleEstimateFlowTurn(
   // 1) ARRANQUE DEL FLUJO
   // =========================
   if (!state.active) {
+    if (wantsCancelEstimate(text)) {
+      const nextState = updateEstimateFlowState(state, {
+        active: true,
+        step: "awaiting_cancel_confirmation",
+        phone: contactoFallback ? normalizePhone(contactoFallback) : null,
+      });
+
+      return {
+        handled: true,
+        reply:
+          lang === "en"
+            ? "I can help with that. Please reply YES to cancel your appointment."
+            : "Puedo ayudarte con eso. Responde SI para cancelar tu cita.",
+        nextState,
+      };
+    }
+
+    if (wantsRescheduleEstimate(text)) {
+      const nextState = updateEstimateFlowState(state, {
+        active: true,
+        step: "awaiting_reschedule_confirmation",
+        phone: contactoFallback ? normalizePhone(contactoFallback) : null,
+      });
+
+      return {
+        handled: true,
+        reply:
+          lang === "en"
+            ? "Sure. Please reply YES to reschedule your appointment."
+            : "Claro. Responde SI para reprogramar tu cita.",
+        nextState,
+      };
+    }
+
     if (!looksLikeStartEstimateIntent(text)) {
       return { handled: false };
     }
