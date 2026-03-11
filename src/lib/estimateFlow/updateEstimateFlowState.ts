@@ -21,6 +21,10 @@ export function updateEstimateFlowState(
     preferredDate: patch.preferredDate ?? prev?.preferredDate ?? null,
     preferredTime: patch.preferredTime ?? prev?.preferredTime ?? null,
 
+    // 👇 ESTO ES LO QUE FALTABA
+    offeredSlots: patch.offeredSlots ?? prev?.offeredSlots ?? [],
+    selectedSlot: patch.selectedSlot ?? prev?.selectedSlot ?? null,
+
     calendarEventId: patch.calendarEventId ?? prev?.calendarEventId ?? null,
     calendarEventLink: patch.calendarEventLink ?? prev?.calendarEventLink ?? null,
 
