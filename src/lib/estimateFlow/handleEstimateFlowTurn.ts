@@ -252,36 +252,19 @@ export function handleEstimateFlowTurn(
   // 1) ARRANQUE DEL FLUJO
   // =========================
   if (!state.active) {
-    if (wantsCancelEstimate(text)) {
+    if (wantsCancelEstimate(text) || wantsRescheduleEstimate(text)) {
       const nextState = updateEstimateFlowState(state, {
         active: true,
-        step: "awaiting_cancel_confirmation",
+        step: "manage_existing",
         phone: contactoFallback ? normalizePhone(contactoFallback) : null,
-      });
+    });
 
       return {
         handled: true,
         reply:
           lang === "en"
-            ? "I can help with that. Please reply YES to cancel your appointment."
-            : "Puedo ayudarte con eso. Responde SI para cancelar tu cita.",
-        nextState,
-      };
-    }
-
-    if (wantsRescheduleEstimate(text)) {
-      const nextState = updateEstimateFlowState(state, {
-        active: true,
-        step: "awaiting_reschedule_confirmation",
-        phone: contactoFallback ? normalizePhone(contactoFallback) : null,
-      });
-
-      return {
-        handled: true,
-        reply:
-          lang === "en"
-            ? "Sure. Please reply YES to reschedule your appointment."
-            : "Claro. Responde SI para reprogramar tu cita.",
+            ? "I can help with that. Reply with:\n1. Cancel appointment\n2. Reschedule appointment"
+            : "Puedo ayudarte con eso. Responde con:\n1. Cancelar cita\n2. Reagendar cita",
         nextState,
       };
     }
