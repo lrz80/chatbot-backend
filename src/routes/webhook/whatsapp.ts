@@ -824,6 +824,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       const estimateTurn = handleEstimateFlowTurn({
         userInput,
         lang: effectiveEstimateLang,
+        canal,
         currentState: estimateState,
         contactoFallback: contactoNorm,
       });

@@ -802,6 +802,7 @@ async function procesarMensajeMeta(args: {
       const estimateTurn = handleEstimateFlowTurn({
         userInput,
         lang: effectiveEstimateLang,
+        canal,
         currentState: estimateState,
         contactoFallback: contactoNorm,
       });

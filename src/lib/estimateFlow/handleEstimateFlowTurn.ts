@@ -8,6 +8,7 @@ import { updateEstimateFlowState } from "./updateEstimateFlowState";
 type HandleEstimateFlowTurnArgs = {
   userInput: string;
   lang: Lang;
+  canal?: string | null;
   currentState?: EstimateFlowState | null;
   contactoFallback?: string | null;
 };
@@ -153,7 +154,7 @@ function readyMessage(args: {
 export function handleEstimateFlowTurn(
   args: HandleEstimateFlowTurnArgs
 ): HandleEstimateFlowTurnResult {
-  const { userInput, lang, currentState, contactoFallback } = args;
+  const { userInput, lang, canal, currentState, contactoFallback } = args;
 
   const text = cleanText(userInput);
   const state = currentState?.active
@@ -185,14 +186,16 @@ export function handleEstimateFlowTurn(
   // 2) CAPTURA DE NOMBRE
   // =========================
   if (state.step === "awaiting_name") {
+    const alreadyHasPhone = !!cleanText(state.phone || "");
+
     const nextState = updateEstimateFlowState(state, {
       name: text,
-      step: "awaiting_phone",
+      step: alreadyHasPhone ? "awaiting_address" : "awaiting_phone",
     });
 
     return {
       handled: true,
-      reply: askPhone(lang, text),
+      reply: alreadyHasPhone ? askAddress(lang) : askPhone(lang, text),
       nextState,
     };
   }
