@@ -2064,8 +2064,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       "- Debes responder usando EXCLUSIVAMENTE los datos de VARIANTE_DB_RESUELTA.",
       "- NO puedes inventar beneficios, condiciones, precios o detalles que no estén explícitamente presentes en detail_text.",
       "- NO puedes mezclar esta variante con otras variantes, planes o servicios.",
-      "- Mantén la respuesta natural, breve y adecuada al canal.",
-      "- Puedes explicar esta variante y cerrar con una sola frase suave.",
+      "- Debes conservar el contenido importante de detail_text; NO lo resumas a una sola frase genérica si detail_text contiene varios puntos relevantes.",
+      "- Si detail_text contiene múltiples líneas o puntos, preséntalos de forma clara en formato chat.",
+      "- Si direct_link existe, DEBES incluirlo textualmente al final de la respuesta.",
+      "- Mantén la respuesta natural y adecuada al canal, pero sin perder información importante.",
+      "- Cierra con una sola frase suave y breve.",
     ].join("\n");
 
     console.log("[FASTPATH-INCLUDES][LLM_RENDER] variant_second_turn", {
@@ -2083,7 +2086,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       history: [],
       idiomaDestino,
       canal,
-      maxLines: 10,
+      maxLines: 20,
       fallbackText:
         idiomaDestino === "en"
           ? `${title ? `${title}` : ""}${bullets ? `\n\n${bullets}` : ""}${
