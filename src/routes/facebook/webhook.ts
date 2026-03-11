@@ -812,6 +812,7 @@ async function procesarMensajeMeta(args: {
 
       if (estimateTurn.handled) {
         let nextEstimateState = {
+          ...estimateState,
           ...estimateTurn.nextState,
           lang: (estimateTurn.nextState.lang as "es" | "en") || effectiveEstimateLang,
         };

@@ -295,6 +295,15 @@ export function handleEstimateFlowTurn(
   // 7) ESPERANDO ELECCIÓN DE SLOT
   // =========================
   if (state.step === "awaiting_slot_choice") {
+    console.log("[estimateFlow][awaiting_slot_choice]", {
+      text,
+      step: state.step,
+      offeredSlots: (state as any).offeredSlots,
+      offeredSlotsLen: Array.isArray((state as any).offeredSlots)
+        ? (state as any).offeredSlots.length
+        : null,
+    });
+
     const raw = cleanText(text);
     const idx = Number(raw);
 

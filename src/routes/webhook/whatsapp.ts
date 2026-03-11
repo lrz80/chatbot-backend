@@ -833,6 +833,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
       if (estimateTurn.handled) {
         let nextEstimateState = {
+          ...estimateState,
           ...estimateTurn.nextState,
           lang: (estimateTurn.nextState.lang as "es" | "en") || effectiveEstimateLang,
         };
@@ -1105,6 +1106,16 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
             };
           }
         }
+
+        console.log("[estimateFlow][before_transition]", {
+          currentStep: estimateState.step,
+          nextStep: nextEstimateState.step,
+          offeredSlots: (nextEstimateState as any).offeredSlots,
+          offeredSlotsLen: Array.isArray((nextEstimateState as any).offeredSlots)
+            ? (nextEstimateState as any).offeredSlots.length
+            : null,
+          selectedSlot: (nextEstimateState as any).selectedSlot || null,
+        });
 
         transition({
           flow: "estimate_flow",

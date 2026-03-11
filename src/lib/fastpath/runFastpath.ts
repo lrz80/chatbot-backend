@@ -2188,7 +2188,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     !looksLikeExplicitDetail;
 
   if (looksLikeServiceDetail && !looksLikeEllipticPriceFollowup) {
-        // =========================================================
+    // =========================================================
     // ✅ PRIORIDAD: si el usuario pregunta "qué incluye" y ya
     // venimos de una variante concreta reciente, responder ESA
     // variante directamente en vez de volver a listar opciones.
