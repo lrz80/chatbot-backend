@@ -305,7 +305,10 @@ export function handleEstimateFlowTurn(
     });
 
     const raw = cleanText(text);
-    const idx = Number(raw);
+
+    // acepta: "2", "2.", "#2", "opcion 2", "option 2", "numero 2"
+    const match = raw.match(/\b(\d{1,2})\b/);
+    const idx = match ? Number(match[1]) : NaN;
 
     if (!Number.isFinite(idx) || idx < 1) {
       return {
