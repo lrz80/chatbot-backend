@@ -188,36 +188,86 @@ router.put(
         });
       }
 
-      const { rows } = await pool.query(
-        `
-        UPDATE appointments
-        SET status = $1, updated_at = NOW()
-        WHERE id = $2 AND tenant_id = $3
-        RETURNING
-          id,
-          tenant_id,
-          service_id,
-          channel,
-          customer_name,
-          customer_phone,
-          customer_email,
-          start_time,
-          end_time,
-          status,
-          created_at,
-          updated_at
-        `,
-        [status, id, tenantId]
-      );
+            let appt: any = null;
 
-      if (!rows[0]) {
+      // 1) intentar actualizar cita normal
+      {
+        const { rows } = await pool.query(
+          `
+          UPDATE appointments
+          SET status = $1, updated_at = NOW()
+          WHERE id = $2 AND tenant_id = $3
+          RETURNING
+            id,
+            tenant_id,
+            service_id,
+            channel,
+            customer_name,
+            customer_phone,
+            customer_email,
+            start_time,
+            end_time,
+            status,
+            created_at,
+            updated_at,
+            google_event_id,
+            google_event_link,
+            'appointment'::text AS source
+          `,
+          [status, id, tenantId]
+        );
+
+        if (rows[0]) {
+          appt = rows[0];
+        }
+      }
+
+      // 2) si no era cita normal, intentar estimate_request
+      if (!appt) {
+        const estimateStatus =
+          status === "confirmed"
+            ? "scheduled"
+            : status;
+
+        const { rows } = await pool.query(
+          `
+          UPDATE estimate_requests
+          SET status = $1
+          WHERE id = $2 AND tenant_id = $3
+          RETURNING
+            id::text AS id,
+            tenant_id,
+            NULL::uuid AS service_id,
+            canal AS channel,
+            nombre AS customer_name,
+            telefono AS customer_phone,
+            NULL::text AS customer_email,
+            scheduled_start_at AS start_time,
+            scheduled_end_at AS end_time,
+            CASE
+              WHEN status = 'scheduled' THEN 'confirmed'
+              ELSE status
+            END AS status,
+            created_at,
+            created_at AS updated_at,
+            calendar_event_id AS google_event_id,
+            calendar_event_link AS google_event_link,
+            'estimate_request'::text AS source
+          `,
+          [estimateStatus, id, tenantId]
+        );
+
+        if (rows[0]) {
+          appt = rows[0];
+        }
+      }
+
+      if (!appt) {
         return res.status(404).json({
           ok: false,
           error: "APPOINTMENT_NOT_FOUND",
         });
       }
-
-      const appt = rows[0];
 
       // ─────────────────────────────────────────────
       // Enviar mensaje al cliente (Cloud API si existe, si no Twilio)
