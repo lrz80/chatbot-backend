@@ -259,7 +259,7 @@ export function handleEstimateFlowTurn(
     };
   }
 
-    // =========================
+  // =========================
   // 6) CAPTURA DE FECHA
   // =========================
   if (state.step === "awaiting_date") {
@@ -282,7 +282,11 @@ export function handleEstimateFlowTurn(
     });
 
     return {
-      handled: false,
+      handled: true,
+      reply:
+        lang === "en"
+          ? "Perfect. Let me check the available times for that date."
+          : "Perfecto. Déjame revisar los horarios disponibles para esa fecha.",
       nextState,
     };
   }
