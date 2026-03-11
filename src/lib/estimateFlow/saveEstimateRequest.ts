@@ -31,20 +31,13 @@ export async function saveEstimateRequest(args: SaveEstimateRequestArgs) {
       tipo_trabajo,
       preferred_date,
       preferred_time,
+      scheduled_start_at,
+      scheduled_end_at,
       calendar_event_id,
-      calendar_event_link
+      calendar_event_link,
+      status
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-    ON CONFLICT (tenant_id, canal, contacto)
-    DO UPDATE SET
-      nombre = EXCLUDED.nombre,
-      telefono = EXCLUDED.telefono,
-      direccion = EXCLUDED.direccion,
-      tipo_trabajo = EXCLUDED.tipo_trabajo,
-      preferred_date = EXCLUDED.preferred_date,
-      preferred_time = EXCLUDED.preferred_time,
-      calendar_event_id = EXCLUDED.calendar_event_id,
-      calendar_event_link = EXCLUDED.calendar_event_link
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     `,
     [
       tenantId,
@@ -56,8 +49,11 @@ export async function saveEstimateRequest(args: SaveEstimateRequestArgs) {
       state.jobType || null,
       state.preferredDate || null,
       state.preferredTime || null,
+      (state as any)?.selectedSlot?.startISO || null,
+      (state as any)?.selectedSlot?.endISO || null,
       state.calendarEventId || null,
       state.calendarEventLink || null,
+      state.step === "scheduled" ? "scheduled" : "pending",
     ]
   );
 
