@@ -3138,6 +3138,57 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             (r) => String(r.service_id || "") === targetServiceId
           );
 
+          const hasServicePriceRow = !!matchedRow;
+
+          if (pricedVariants.length === 0 && !hasServicePriceRow) {
+            console.log("[PRICE][single][LLM_RENDER] no_price_policy_fallback", {
+              targetServiceId,
+              targetServiceName,
+            });
+
+            const extraContext = [
+              "PRECIO_DB_RESUELTO:",
+              `- service_name: ${targetServiceName}`,
+              `- pricing_mode: no_explicit_price`,
+              `- source_of_truth: database`,
+              "",
+              "REGLAS_CRITICAS_DEL_TURNO:",
+              "- El servicio fue resuelto correctamente desde DB.",
+              "- Este servicio NO tiene precio explícito en variantes ni en price_base.",
+              "- NO puedes inventar montos, rangos, estimados, visitas, evaluaciones ni cotizaciones si no están explícitamente configurados.",
+              "- NO puedes cambiar a otros servicios del catálogo.",
+              "- Debes responder SOLO sobre este servicio.",
+              "- Si no hay precio disponible, dilo de forma natural y breve sin asumir la causa.",
+            ].join("\n");
+
+            const aiNoPricePolicyReply = await answerWithPromptBase({
+              tenantId,
+              promptBase,
+              userInput,
+              history: [],
+              idiomaDestino,
+              canal,
+              maxLines: 6,
+              fallbackText:
+                idiomaDestino === "en"
+                  ? `We do offer ${targetServiceName}, but I don't currently have a price available for that service.`
+                  : `Sí ofrecemos ${targetServiceName}, pero ahora mismo no tengo un precio disponible para ese servicio.`,
+              extraContext,
+            });
+
+            return {
+              handled: true,
+              reply: aiNoPricePolicyReply.text,
+              source: "price_fastpath_db_no_price_llm_render",
+              intent: "precio",
+              ctxPatch: {
+                last_service_id: targetServiceId,
+                last_service_name: targetServiceName || null,
+                last_service_at: Date.now(),
+              } as Partial<FastpathCtx>,
+            };
+          }
+
           if (matchedRow) {
             const min = matchedRow.min_price === null ? null : Number(matchedRow.min_price);
             const max = matchedRow.max_price === null ? null : Number(matchedRow.max_price);
