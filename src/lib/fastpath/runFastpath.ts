@@ -1917,18 +1917,16 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       }
     }
 
-    // Opción por nombre: "autopay", "por mes", "bronce cycling", etc.
+    // Opción por nombre: "autopay", "por mes", etc.
     if (!chosen) {
       const msgTokens = msgNorm
         .split(/\s+/)
-        .filter((t) => t.length > 1); // quitamos palabras de 1 carácter
+        .filter((t) => t.length > 1);
 
       chosen = variants.find((v: any) => {
         const nameNorm = normalizeText(v.variant_name || "");
         if (!nameNorm) return false;
 
-        // Coincidencia por tokens: basta con que al menos un token de la frase
-        // esté contenido en el nombre de la variante.
         return msgTokens.some((t) => nameNorm.includes(t));
       });
     }
@@ -1951,22 +1949,20 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         chosen = variants.find((v: any) => String(v.id) === String(matchedVariant.id));
       }
     }
-    // Fallback genérico para alias comunes de variantes de pago
-    // (útil cuando el usuario escribe "autopay" pero la DB dice "Autopago", etc.)
-    if (!chosen) {
-      const msg = msgNorm; // ya normalizado
 
-      // Palabras universales que significan "mes / mensual"
+    // Fallback genérico para alias comunes de variantes de pago
+    if (!chosen) {
+      const msg = msgNorm;
+
       const monthlyTokens = [
         "por mes",
         "mensual",
         "mensualmente",
         "mes a mes",
         "per month",
-        "monthly"
+        "monthly",
       ];
 
-      // Palabras universales que significan "autopay"
       const autopayTokens = [
         "autopay",
         "auto pay",
@@ -1975,7 +1971,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         "automatic payment",
         "auto debit",
         "autodebit",
-        "auto-debit"
+        "auto-debit",
       ];
 
       const matchTokens = (tokens: string[], variantName: string) => {
@@ -1983,13 +1979,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         return tokens.some((t) => msg.includes(normalizeText(t)) || vn.includes(normalizeText(t)));
       };
 
-      // Buscar variante mensual (Por Mes)
-      let monthlyVariant = variants.find((v: any) =>
+      const monthlyVariant = variants.find((v: any) =>
         matchTokens(monthlyTokens, v.variant_name || "")
       );
 
-      // Buscar variante autopay
-      let autopayVariant = variants.find((v: any) =>
+      const autopayVariant = variants.find((v: any) =>
         matchTokens(autopayTokens, v.variant_name || "")
       );
 
@@ -2007,6 +2001,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         idiomaDestino === "en"
           ? "I’m not fully sure which option you want 🤔. Tell me the number or the name of the option."
           : "No terminé de entender cuál opción te interesa 🤔. Dime el número o el nombre de la opción.";
+
       return {
         handled: true,
         reply: retryMsg,
@@ -2030,14 +2025,22 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       [serviceId]
     );
 
-    const descSource = (
-      chosen.description ||
-      service?.description ||
-      ""
+    const descSource = String(
+      chosen.description || service?.description || ""
     ).trim();
 
     const link: string | null =
-      chosen.variant_url || service?.service_url || null;
+      chosen.variant_url ? String(chosen.variant_url).trim()
+      : service?.service_url ? String(service.service_url).trim()
+      : null;
+
+    const baseName = String(service?.name || "").trim();
+    const variantName = String(chosen.variant_name || "").trim();
+
+    const title =
+      baseName && variantName
+        ? `${baseName} — ${variantName}`
+        : baseName || variantName || "";
 
     const bullets: string =
       descSource
@@ -2049,40 +2052,52 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             .join("\n")
         : "";
 
-    const baseName = String(service?.name || "").trim();
-    const variantName = String(chosen.variant_name || "").trim();
+    const extraContext = [
+      "VARIANTE_DB_RESUELTA:",
+      `- service_name: ${baseName}`,
+      `- variant_name: ${variantName}`,
+      `- detail_text: ${descSource || ""}`,
+      `- direct_link: ${link || ""}`,
+      `- source_of_truth: database`,
+      "",
+      "REGLAS_CRITICAS_DEL_TURNO:",
+      "- Debes responder usando EXCLUSIVAMENTE los datos de VARIANTE_DB_RESUELTA.",
+      "- NO puedes inventar beneficios, condiciones, precios o detalles que no estén explícitamente presentes en detail_text.",
+      "- NO puedes mezclar esta variante con otras variantes, planes o servicios.",
+      "- Mantén la respuesta natural, breve y adecuada al canal.",
+      "- Puedes explicar esta variante y cerrar con una sola frase suave.",
+    ].join("\n");
 
-    const title =
-      baseName && variantName
-        ? `${baseName} — ${variantName}`
-        : baseName || variantName || "";
-
-    let reply =
-      idiomaDestino === "en"
-        ? `Perfect 😊\n\n${title ? `*${title}*` : ""}${
-            bullets ? ` includes:\n\n${bullets}` : ""
-          }`
-        : `Perfecto 😊\n\n${title ? `*${title}*` : ""}${
-            bullets ? ` incluye:\n\n${bullets}` : ""
-          }`;
-
-    if (link) {
-      reply +=
-        idiomaDestino === "en"
-          ? `\n\nHere you can see more details:\n${link}`
-          : `\n\nAquí puedes ver más detalles:\n${link}`;
-    }
-
-    console.log("[FASTPATH-INCLUDES] variante elegida", {
+    console.log("[FASTPATH-INCLUDES][LLM_RENDER] variant_second_turn", {
       userInput,
       serviceId,
       baseName,
       variantName,
-      link,
+      hasLink: !!link,
     });
+
+    const aiVariantReply = await answerWithPromptBase({
+      tenantId,
+      promptBase,
+      userInput,
+      history: [],
+      idiomaDestino,
+      canal,
+      maxLines: 10,
+      fallbackText:
+        idiomaDestino === "en"
+          ? `${title ? `${title}` : ""}${bullets ? `\n\n${bullets}` : ""}${
+              link ? `\n\nHere you can see more details:\n${link}` : ""
+            }`
+          : `${title ? `${title}` : ""}${bullets ? `\n\n${bullets}` : ""}${
+              link ? `\n\nAquí puedes ver más detalles:\n${link}` : ""
+            }`,
+      extraContext,
+    });
+
     return {
       handled: true,
-      reply,
+      reply: aiVariantReply.text,
       source: "service_list_db",
       intent: intentOut || "info_servicio",
       ctxPatch: {
@@ -3351,7 +3366,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           "",
           "REGLAS_CRITICAS_DEL_TURNO:",
           "- Estas opciones fueron resueltas desde DB y son la fuente de verdad.",
-          "- Debes mencionar SOLO opciones presentes en CATALOGO_DB_RESUELTO.",
+          "- Debes mencionar EXCLUSIVAMENTE opciones presentes en CATALOGO_DB_RESUELTO.",
+          "- NO menciones planes, productos o servicios que no aparezcan exactamente en esa lista.",
+          "- NO uses información de contexto previo ni del prompt del negocio para agregar más planes, productos o servicios.",
           "- NO puedes inventar planes, precios, variantes ni condiciones adicionales.",
           "- Mantén la respuesta breve, natural y comercial para WhatsApp.",
           "- Presenta algunas opciones claras y cierra con una sola pregunta suave.",
