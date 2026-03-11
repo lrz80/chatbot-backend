@@ -123,7 +123,10 @@ router.get(
             NULL::text AS customer_email,
             er.scheduled_start_at AS start_time,
             er.scheduled_end_at AS end_time,
-            er.status,
+            CASE
+              WHEN er.status = 'scheduled' THEN 'confirmed'
+              ELSE er.status
+            END AS status,
             er.created_at,
             er.created_at AS updated_at,
             'estimate_request'::text AS source
