@@ -4,6 +4,7 @@ import type { Lang } from "../channels/engine/clients/clientDb";
 import type { EstimateFlowState } from "./types";
 import { createEmptyEstimateFlowState } from "./types";
 import { updateEstimateFlowState } from "./updateEstimateFlowState";
+import { DateTime } from "luxon";
 
 type HandleEstimateFlowTurnArgs = {
   userInput: string;
@@ -64,8 +65,66 @@ function looksLikeStartEstimateIntent(text: string) {
   );
 }
 
-function isValidDateInput(text: string) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(cleanText(text));
+function parseFlexibleDateInput(text: string, lang: Lang): string | null {
+  const raw = cleanText(text);
+  if (!raw) return null;
+
+  const now = DateTime.now().setZone("America/New_York").startOf("day");
+  const lower = raw.toLowerCase();
+
+  if (lower === "today" || lower === "hoy") {
+    return now.toFormat("yyyy-MM-dd");
+  }
+
+  if (lower === "tomorrow" || lower === "mañana" || lower === "manana") {
+    return now.plus({ days: 1 }).toFormat("yyyy-MM-dd");
+  }
+
+  const formats = [
+    "yyyy-MM-dd",
+    "M/d/yyyy",
+    "M/d/yy",
+    "MM/dd/yyyy",
+    "MM/dd/yy",
+    "d/M/yyyy",
+    "d/M/yy",
+    "dd/MM/yyyy",
+    "dd/MM/yy",
+    "MMMM d yyyy",
+    "MMMM d, yyyy",
+    "MMM d yyyy",
+    "MMM d, yyyy",
+    "d MMMM yyyy",
+    "d MMM yyyy",
+    "MMMM d",
+    "MMM d",
+    "d MMMM",
+    "d MMM",
+  ];
+
+  for (const fmt of formats) {
+    const dt = DateTime.fromFormat(raw, fmt, { zone: "America/New_York", locale: lang === "es" ? "es" : "en" });
+    if (dt.isValid) {
+      const normalized = dt.year ? dt : dt.set({ year: now.year });
+      return normalized.toFormat("yyyy-MM-dd");
+    }
+  }
+
+  const iso = DateTime.fromISO(raw, { zone: "America/New_York" });
+  if (iso.isValid) {
+    return iso.toFormat("yyyy-MM-dd");
+  }
+
+  const jsDate = DateTime.fromJSDate(new Date(raw), { zone: "America/New_York" });
+  if (jsDate.isValid) {
+    return jsDate.toFormat("yyyy-MM-dd");
+  }
+
+  return null;
+}
+
+function isValidDateInput(text: string, lang: Lang) {
+  return !!parseFlexibleDateInput(text, lang);
 }
 
 function isValidTimeInput(text: string) {
@@ -263,19 +322,21 @@ export function handleEstimateFlowTurn(
   // 6) CAPTURA DE FECHA
   // =========================
   if (state.step === "awaiting_date") {
-    if (!isValidDateInput(text)) {
+    const parsedDate = parseFlexibleDateInput(text, lang);
+
+    if (!parsedDate) {
       return {
         handled: true,
         reply:
           lang === "en"
-            ? "Please send the date in YYYY-MM-DD format. Example: 2026-03-15"
-            : "Por favor envíame la fecha en formato YYYY-MM-DD. Ejemplo: 2026-03-15",
+            ? "Please send me a valid date. For example: 03/15/2026."
+            : "Por favor envíame una fecha válida. Por ejemplo: 03/15/2026.",
         nextState: state,
       };
     }
 
     const nextState = updateEstimateFlowState(state, {
-      preferredDate: text,
+      preferredDate: parsedDate,
       offeredSlots: [],
       selectedSlot: null,
       step: "offering_slots",
