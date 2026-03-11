@@ -2089,18 +2089,49 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       maxLines: 20,
       fallbackText:
         idiomaDestino === "en"
-          ? `${title ? `${title}` : ""}${bullets ? `\n\n${bullets}` : ""}${
-              link ? `\n\nHere you can see more details:\n${link}` : ""
-            }`
-          : `${title ? `${title}` : ""}${bullets ? `\n\n${bullets}` : ""}${
-              link ? `\n\nAquí puedes ver más detalles:\n${link}` : ""
-            }`,
+          ? `${title ? `${title}` : ""}${
+              bullets ? `\n\n${bullets}` : ""
+            }${link ? `\n\nHere you can see more details:\n${link}` : ""}`
+          : `${title ? `${title}` : ""}${
+              bullets ? `\n\n${bullets}` : ""
+            }${link ? `\n\nAquí puedes ver más detalles:\n${link}` : ""}`,
       extraContext,
     });
 
+    let finalReply = String(aiVariantReply.text || "").trim();
+
+    // ✅ Guardrail 1: si hay link y el LLM no lo incluyó, lo añadimos
+    if (link && !finalReply.includes(link)) {
+      finalReply +=
+        idiomaDestino === "en"
+          ? `\n\nHere you can see more details:\n${link}`
+          : `\n\nAquí puedes ver más detalles:\n${link}`;
+    }
+
+    // ✅ Guardrail 2: si el LLM colapsó demasiado el detail_text, reforzamos con bullets reales
+    const detailLines = String(descSource || "")
+      .split(/\r?\n/)
+      .map((l: string) => l.trim())
+      .filter((l: string) => l.length > 0);
+
+    const looksTooShort =
+      detailLines.length >= 3 &&
+      finalReply.split(/\r?\n/).filter((l) => l.trim().length > 0).length <= 4;
+
+    if (looksTooShort && bullets) {
+      finalReply =
+        idiomaDestino === "en"
+          ? `${title ? `${title}` : ""}\n\n${bullets}${
+              link ? `\n\nHere you can see more details:\n${link}` : ""
+            }`
+          : `${title ? `${title}` : ""}\n\n${bullets}${
+              link ? `\n\nAquí puedes ver más detalles:\n${link}` : ""
+            }`;
+    }
+
     return {
       handled: true,
-      reply: aiVariantReply.text,
+      reply: finalReply,
       source: "service_list_db",
       intent: intentOut || "info_servicio",
       ctxPatch: {
