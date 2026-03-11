@@ -103,10 +103,10 @@ function askDate(lang: Lang) {
     : "Perfecto. ¿Qué fecha te funciona mejor para el estimado? Envíamela en formato YYYY-MM-DD.";
 }
 
-function askTime(lang: Lang) {
+function askSlotChoice(lang: Lang) {
   return lang === "en"
-    ? "Great. What time works best for you? Please send it like 10:30 AM."
-    : "Excelente. ¿Qué hora te funciona mejor? Envíamela por ejemplo así: 10:30 AM.";
+    ? "Please reply with the number of the time that works best for you."
+    : "Por favor respóndeme con el número del horario que te funciona mejor.";
 }
 
 function readyMessage(args: {
@@ -186,7 +186,7 @@ export function handleEstimateFlowTurn(
   // 2) CAPTURA DE NOMBRE
   // =========================
   if (state.step === "awaiting_name") {
-    const alreadyHasPhone = !!cleanText(state.phone || "");
+    const alreadyHasPhone = isLikelyPhone(cleanText(state.phone || ""));
 
     const nextState = updateEstimateFlowState(state, {
       name: text,
@@ -259,7 +259,7 @@ export function handleEstimateFlowTurn(
     };
   }
 
-  // =========================
+    // =========================
   // 6) CAPTURA DE FECHA
   // =========================
   if (state.step === "awaiting_date") {
@@ -276,33 +276,52 @@ export function handleEstimateFlowTurn(
 
     const nextState = updateEstimateFlowState(state, {
       preferredDate: text,
-      step: "awaiting_time",
+      offeredSlots: [],
+      selectedSlot: null,
+      step: "offering_slots",
     });
 
     return {
-      handled: true,
-      reply: askTime(lang),
+      handled: false,
       nextState,
     };
   }
 
   // =========================
-  // 7) CAPTURA DE HORA
+  // 7) ESPERANDO ELECCIÓN DE SLOT
   // =========================
-  if (state.step === "awaiting_time") {
-    if (!isValidTimeInput(text)) {
+  if (state.step === "awaiting_slot_choice") {
+    const raw = cleanText(text);
+    const idx = Number(raw);
+
+    if (!Number.isFinite(idx) || idx < 1) {
+      return {
+        handled: true,
+        reply: askSlotChoice(lang),
+        nextState: state,
+      };
+    }
+
+    const offeredSlots = Array.isArray((state as any).offeredSlots)
+      ? (state as any).offeredSlots
+      : [];
+
+    const picked = offeredSlots[idx - 1];
+
+    if (!picked?.startISO || !picked?.endISO) {
       return {
         handled: true,
         reply:
           lang === "en"
-            ? "Please send the time like 10:30 AM"
-            : "Por favor envíame la hora así: 10:30 AM",
+            ? "That option is no longer valid. Please choose one of the available time options."
+            : "Esa opción ya no es válida. Por favor elige uno de los horarios disponibles.",
         nextState: state,
       };
     }
 
     const nextState = updateEstimateFlowState(state, {
-      preferredTime: text.toUpperCase(),
+      selectedSlot: picked,
+      preferredTime: picked.label || null,
       step: "ready_to_schedule",
     });
 
@@ -315,10 +334,14 @@ export function handleEstimateFlowTurn(
         address: state.address,
         jobType: state.jobType,
         preferredDate: state.preferredDate,
-        preferredTime: text.toUpperCase(),
+        preferredTime: picked.label || null,
       }),
       nextState,
     };
+  }
+
+  if (state.step === "offering_slots") {
+    return { handled: false, nextState: state };
   }
 
   if (state.step === "ready_to_schedule") {

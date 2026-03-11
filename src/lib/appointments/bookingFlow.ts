@@ -33,7 +33,6 @@ import {
 } from "./booking/time";
 import { extractBusyBlocks } from "./booking/freebusy";
 import { handleOfferSlots } from "./booking/handlers/offerSlots";
-import { handleAskDatetime } from "./booking/handlers/askDatetime";
 import { handleAskDaypart } from "./booking/handlers/askDaypart";
 import { handleAskAll } from "./booking/handlers/askAll";
 import { handleConfirm } from "./booking/handlers/confirm";

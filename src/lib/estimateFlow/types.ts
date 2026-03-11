@@ -1,5 +1,3 @@
-// backend/src/lib/estimateFlow/types.ts
-
 export type EstimateFlowStep =
   | "idle"
   | "awaiting_name"
@@ -7,9 +5,16 @@ export type EstimateFlowStep =
   | "awaiting_address"
   | "awaiting_job_type"
   | "awaiting_date"
-  | "awaiting_time"
+  | "offering_slots"
+  | "awaiting_slot_choice"
   | "ready_to_schedule"
   | "scheduled";
+
+export type EstimateFlowSlot = {
+  startISO: string;
+  endISO: string;
+  label?: string | null;
+};
 
 export type EstimateFlowState = {
   active: boolean;
@@ -23,9 +28,12 @@ export type EstimateFlowState = {
   jobType?: string | null;
 
   preferredDate?: string | null; // YYYY-MM-DD
-  preferredTime?: string | null; // HH:MM AM/PM
+  preferredTime?: string | null; // label visible del slot elegido
   calendarEventId?: string | null;
   calendarEventLink?: string | null;
+
+  offeredSlots?: EstimateFlowSlot[] | null;
+  selectedSlot?: EstimateFlowSlot | null;
 
   startedAt?: number | null;
   updatedAt?: number | null;
@@ -44,6 +52,8 @@ export function createEmptyEstimateFlowState(): EstimateFlowState {
     preferredTime: null,
     calendarEventId: null,
     calendarEventLink: null,
+    offeredSlots: [],
+    selectedSlot: null,
     startedAt: null,
     updatedAt: null,
   };

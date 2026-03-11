@@ -70,6 +70,9 @@ import { saveEstimateRequest } from "../../lib/estimateFlow/saveEstimateRequest"
 import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
 import { buildEstimateSlot } from "../../lib/estimateFlow/buildEstimateSlot";
 
+import { getBusinessHours } from "../../lib/appointments/booking/db";
+import { getSlotsForDate } from "../../lib/appointments/booking/slots";
+
 type CanalEnvio = "facebook" | "instagram";
 
 const router = express.Router();
@@ -815,111 +818,236 @@ async function procesarMensajeMeta(args: {
 
         let finalReply = estimateTurn.reply;
 
-        // ✅ si ya llegó al final, validar disponibilidad y crear evento en Google Calendar
-        if (estimateTurn.nextState.step === "ready_to_schedule") {
+        // ✅ si ya llegó a offering_slots, calcular horarios reales disponibles
+        if (estimateTurn.nextState.step === "offering_slots") {
           try {
             const preferredDate = String(estimateTurn.nextState.preferredDate || "").trim();
-            const preferredTime = String(estimateTurn.nextState.preferredTime || "").trim();
-
-            const { startISO, endISO } = buildEstimateSlot({
-              date: preferredDate,
-              time: preferredTime,
-              durationMinutes: 60, // luego lo hacemos configurable
-            });
-
             const timeZone = String(tenant?.timezone || "America/New_York");
 
-            const freeBusy = await googleFreeBusy({
+            const hours = await getBusinessHours(tenant.id);
+
+            const { rows: calendarRows } = await pool.query(
+              `
+              SELECT calendar_id
+              FROM calendar_integrations
+              WHERE tenant_id = $1
+                AND provider = 'google'
+                AND status = 'connected'
+              LIMIT 1
+              `,
+              [tenant.id]
+            );
+
+            const calendarId = calendarRows[0]?.calendar_id || "primary";
+
+            const slots = await getSlotsForDate({
               tenantId: tenant.id,
-              timeMin: startISO,
-              timeMax: endISO,
-              calendarIds: ["primary"],
+              timeZone,
+              dateISO: preferredDate,
+              durationMin: 60,
+              bufferMin: 0,
+              hours,
+              minLeadMinutes: 0,
+              calendarId,
             });
 
-            const busy = freeBusy?.calendars?.combined?.busy || [];
-
-            if (Array.isArray(busy) && busy.length > 0) {
+            if (!slots.length) {
               finalReply =
                 effectiveEstimateLang === "en"
-                  ? "That time is no longer available for the estimate. Please send me another date or time and I’ll try again."
-                  : "Ese horario ya no está disponible para el estimado. Envíame otra fecha u hora y lo intento de nuevo.";
+                  ? "I don’t have available times for that date. Please send me another date in YYYY-MM-DD format."
+                  : "No tengo horarios disponibles para esa fecha. Por favor envíame otra fecha en formato YYYY-MM-DD.";
 
               nextEstimateState = {
                 ...estimateTurn.nextState,
                 lang: effectiveEstimateLang,
+                offeredSlots: [],
+                selectedSlot: null,
                 step: "awaiting_date",
               };
             } else {
-              const summary = `Estimado — ${estimateTurn.nextState.jobType || "Visita técnica"}`;
+              const limitedSlots = slots.slice(0, 3).map((slot) => {
+                const dt = require("luxon").DateTime.fromISO(slot.startISO, { zone: timeZone });
+                const label =
+                  effectiveEstimateLang === "en"
+                    ? dt.toFormat("h:mm a")
+                    : dt.setLocale("es").toFormat("h:mm a");
 
-              const description = [
-                `Cliente: ${estimateTurn.nextState.name || ""}`,
-                `Teléfono: ${estimateTurn.nextState.phone || ""}`,
-                `Dirección: ${estimateTurn.nextState.address || ""}`,
-                `Trabajo: ${estimateTurn.nextState.jobType || ""}`,
-                `Canal: ${canal}`,
-                `Contacto: ${contactoNorm}`,
-              ]
-                .filter(Boolean)
-                .join("\n");
-
-              const event = await googleCreateEvent({
-                tenantId: tenant.id,
-                calendarId: "primary",
-                summary,
-                description,
-                startISO,
-                endISO,
-                timeZone,
+                return {
+                  startISO: slot.startISO,
+                  endISO: slot.endISO,
+                  label,
+                };
               });
-
-              nextEstimateState = {
-                ...estimateTurn.nextState,
-                lang: effectiveEstimateLang,
-                active: false,
-                step: "scheduled",
-                calendarEventId: String(event?.id || ""),
-                calendarEventLink: String(event?.htmlLink || event?.meetLink || ""),
-              };
 
               finalReply =
                 effectiveEstimateLang === "en"
                   ? [
-                      "Perfect 😊 Your estimate has been scheduled successfully.",
-                      `• Date: ${preferredDate}`,
-                      `• Time: ${preferredTime}`,
-                      event?.htmlLink ? `• Calendar link: ${event.htmlLink}` : "",
-                    ]
-                      .filter(Boolean)
-                      .join("\n")
+                      `These are the available times I have for ${preferredDate}:`,
+                      ...limitedSlots.map((s, i) => `${i + 1}. ${s.label}`),
+                      "",
+                      "Reply with the number of the time that works best for you.",
+                    ].join("\n")
                   : [
-                      "Perfecto 😊 Tu estimado quedó agendado correctamente.",
-                      `• Fecha: ${preferredDate}`,
-                      `• Hora: ${preferredTime}`,
-                      event?.htmlLink ? `• Link del calendario: ${event.htmlLink}` : "",
-                    ]
-                      .filter(Boolean)
-                      .join("\n");
+                      `Estos son los horarios disponibles que tengo para ${preferredDate}:`,
+                      ...limitedSlots.map((s, i) => `${i + 1}. ${s.label}`),
+                      "",
+                      "Respóndeme con el número del horario que te funciona mejor.",
+                    ].join("\n");
+
+              nextEstimateState = {
+                ...estimateTurn.nextState,
+                lang: effectiveEstimateLang,
+                offeredSlots: limitedSlots,
+                selectedSlot: null,
+                step: "awaiting_slot_choice",
+              };
             }
+          } catch (e: any) {
+            console.warn("[estimateFlow] offering_slots error:", e?.message);
 
-            // ✅ guardar lead en DB después de intentar agendar
-            try {
-              const saved = await saveEstimateRequest({
-                pool,
+            finalReply =
+              effectiveEstimateLang === "en"
+                ? "I couldn’t check available times right now. Please send me another date later."
+                : "No pude consultar los horarios disponibles en este momento. Por favor inténtalo con otra fecha más tarde.";
+
+            nextEstimateState = {
+              ...estimateTurn.nextState,
+              lang: effectiveEstimateLang,
+              offeredSlots: [],
+              selectedSlot: null,
+              step: "awaiting_date",
+            };
+          }
+        }
+
+        // ✅ si ya llegó al final, validar el slot seleccionado y crear evento en Google Calendar
+        if (estimateTurn.nextState.step === "ready_to_schedule") {
+          try {
+            const preferredDate = String(estimateTurn.nextState.preferredDate || "").trim();
+            const selectedSlot = (estimateTurn.nextState as any)?.selectedSlot || null;
+
+            if (!selectedSlot?.startISO || !selectedSlot?.endISO) {
+              finalReply =
+                effectiveEstimateLang === "en"
+                  ? "I couldn’t identify the selected time. Please choose one of the available options again."
+                  : "No pude identificar el horario seleccionado. Por favor elige nuevamente una de las opciones disponibles.";
+
+              nextEstimateState = {
+                ...estimateTurn.nextState,
+                lang: effectiveEstimateLang,
+                step: "awaiting_slot_choice",
+              };
+            } else {
+              const timeZone = String(tenant?.timezone || "America/New_York");
+
+              const { rows: calendarRows } = await pool.query(
+                `
+                SELECT calendar_id
+                FROM calendar_integrations
+                WHERE tenant_id = $1
+                  AND provider = 'google'
+                  AND status = 'connected'
+                LIMIT 1
+                `,
+                [tenant.id]
+              );
+
+              const calendarId = calendarRows[0]?.calendar_id || "primary";
+
+              const { validateSlotStillFree } = await import("../../lib/appointments/booking/slots");
+
+              const stillFree = await validateSlotStillFree({
                 tenantId: tenant.id,
-                canal,
-                contacto: contactoNorm,
-                state: nextEstimateState,
+                calendarId,
+                slot: {
+                  startISO: selectedSlot.startISO,
+                  endISO: selectedSlot.endISO,
+                },
               });
 
-              console.log("[estimateFlow] saveEstimateRequest =", {
-                tenantId: tenant.id,
-                contacto: contactoNorm,
-                ok: saved?.ok || false,
-                reason: (saved as any)?.reason || null,
-              });
-            } catch (e: any) {
-              console.warn("[estimateFlow] saveEstimateRequest error:", e?.message);
+              if (!stillFree) {
+                finalReply =
+                  effectiveEstimateLang === "en"
+                    ? "That time is no longer available. Please choose another available time."
+                    : "Ese horario ya no está disponible. Por favor elige otro horario disponible.";
+
+                nextEstimateState = {
+                  ...estimateTurn.nextState,
+                  lang: effectiveEstimateLang,
+                  selectedSlot: null,
+                  step: "offering_slots",
+                };
+              } else {
+                const summary = `Estimado — ${estimateTurn.nextState.jobType || "Visita técnica"}`;
+
+                const description = [
+                  `Cliente: ${estimateTurn.nextState.name || ""}`,
+                  `Teléfono: ${estimateTurn.nextState.phone || ""}`,
+                  `Dirección: ${estimateTurn.nextState.address || ""}`,
+                  `Trabajo: ${estimateTurn.nextState.jobType || ""}`,
+                  `Canal: ${canal}`,
+                  `Contacto: ${contactoNorm}`,
+                ]
+                  .filter(Boolean)
+                  .join("\n");
+
+                const event = await googleCreateEvent({
+                  tenantId: tenant.id,
+                  calendarId,
+                  summary,
+                  description,
+                  startISO: selectedSlot.startISO,
+                  endISO: selectedSlot.endISO,
+                  timeZone,
+                });
+
+                nextEstimateState = {
+                  ...estimateTurn.nextState,
+                  lang: effectiveEstimateLang,
+                  active: false,
+                  step: "scheduled",
+                  calendarEventId: String(event?.id || ""),
+                  calendarEventLink: String(event?.htmlLink || event?.meetLink || ""),
+                };
+
+                finalReply =
+                  effectiveEstimateLang === "en"
+                    ? [
+                        "Perfect 😊 Your estimate has been scheduled successfully.",
+                        `• Date: ${preferredDate}`,
+                        `• Time: ${selectedSlot.label || ""}`,
+                        event?.htmlLink ? `• Calendar link: ${event.htmlLink}` : "",
+                      ]
+                        .filter(Boolean)
+                        .join("\n")
+                    : [
+                        "Perfecto 😊 Tu estimado quedó agendado correctamente.",
+                        `• Fecha: ${preferredDate}`,
+                        `• Hora: ${selectedSlot.label || ""}`,
+                        event?.htmlLink ? `• Link del calendario: ${event.htmlLink}` : "",
+                      ]
+                        .filter(Boolean)
+                        .join("\n");
+              }
+
+              try {
+                const saved = await saveEstimateRequest({
+                  pool,
+                  tenantId: tenant.id,
+                  canal,
+                  contacto: contactoNorm,
+                  state: nextEstimateState,
+                });
+
+                console.log("[estimateFlow] saveEstimateRequest =", {
+                  tenantId: tenant.id,
+                  contacto: contactoNorm,
+                  ok: saved?.ok || false,
+                  reason: (saved as any)?.reason || null,
+                });
+              } catch (e: any) {
+                console.warn("[estimateFlow] saveEstimateRequest error:", e?.message);
+              }
             }
           } catch (e: any) {
             console.warn("[estimateFlow] calendar scheduling error:", e?.message);

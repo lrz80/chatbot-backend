@@ -37,6 +37,8 @@ export function getEstimateFlowState(convoCtx: any): EstimateFlowState {
     preferredTime: raw.preferredTime ?? null,
     calendarEventId: raw.calendarEventId ?? null,
     calendarEventLink: raw.calendarEventLink ?? null,
+    offeredSlots: Array.isArray(raw.offeredSlots) ? raw.offeredSlots : [],
+    selectedSlot: raw.selectedSlot ?? null,
     startedAt: raw.startedAt ?? null,
     updatedAt,
   };
