@@ -14,7 +14,7 @@ type SaveEstimateRequestArgs = {
 export async function saveEstimateRequest(args: SaveEstimateRequestArgs) {
   const { pool, tenantId, canal, contacto, state } = args;
 
-  if (!state?.active) return { ok: false, reason: "inactive_state" };
+  if (!state) return { ok: false, reason: "missing_state" };
   if (state.step !== "ready_to_schedule" && state.step !== "scheduled") {
     return { ok: false, reason: "not_ready" };
   }
@@ -35,6 +35,16 @@ export async function saveEstimateRequest(args: SaveEstimateRequestArgs) {
       calendar_event_link
     )
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    ON CONFLICT (tenant_id, canal, contacto)
+    DO UPDATE SET
+      nombre = EXCLUDED.nombre,
+      telefono = EXCLUDED.telefono,
+      direccion = EXCLUDED.direccion,
+      tipo_trabajo = EXCLUDED.tipo_trabajo,
+      preferred_date = EXCLUDED.preferred_date,
+      preferred_time = EXCLUDED.preferred_time,
+      calendar_event_id = EXCLUDED.calendar_event_id,
+      calendar_event_link = EXCLUDED.calendar_event_link
     `,
     [
       tenantId,
