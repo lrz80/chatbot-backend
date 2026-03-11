@@ -3328,6 +3328,52 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const namesShown = extractPlanNamesFromReply(cleanedReply);
 
+        const catalogLines = rowsLocalized.slice(0, 6).map((r) => {
+          const min = r.min_price === null ? null : Number(r.min_price);
+          const max = r.max_price === null ? null : Number(r.max_price);
+
+          let priceText =
+            idiomaDestino === "en" ? "price available" : "precio disponible";
+
+          if (Number.isFinite(min) && Number.isFinite(max)) {
+            priceText =
+              min === max
+                ? `$${min!.toFixed(2)}`
+                : `${idiomaDestino === "en" ? "from" : "desde"} $${min!.toFixed(2)}`;
+          }
+
+          return `- ${String(r.service_name || "").trim()} | ${priceText}`;
+        });
+
+        const extraContext = [
+          "CATALOGO_DB_RESUELTO:",
+          ...catalogLines,
+          "",
+          "REGLAS_CRITICAS_DEL_TURNO:",
+          "- Estas opciones fueron resueltas desde DB y son la fuente de verdad.",
+          "- Debes mencionar SOLO opciones presentes en CATALOGO_DB_RESUELTO.",
+          "- NO puedes inventar planes, precios, variantes ni condiciones adicionales.",
+          "- Mantén la respuesta breve, natural y comercial para WhatsApp.",
+          "- Presenta algunas opciones claras y cierra con una sola pregunta suave.",
+        ].join("\n");
+
+        console.log("[PRICE][catalog_db][LLM_RENDER]", {
+          rowsCount: rowsLocalized.length,
+          namesShown,
+        });
+
+        const aiCatalogReply = await answerWithPromptBase({
+          tenantId,
+          promptBase,
+          userInput,
+          history: [],
+          idiomaDestino,
+          canal,
+          maxLines: 8,
+          fallbackText: humanizeListReply(cleanedReply, idiomaDestino),
+          extraContext,
+        });
+
         const ctxPatch: Partial<FastpathCtx> = {
           last_catalog_at: Date.now(),
         };
@@ -3338,7 +3384,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         return {
           handled: true,
-          reply: humanizeListReply(cleanedReply, idiomaDestino),
+          reply: aiCatalogReply.text,
           source: "catalog_db",
           intent: "precio",
           ctxPatch,
