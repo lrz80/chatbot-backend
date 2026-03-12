@@ -122,6 +122,17 @@ function wantsExitFlow(text: string) {
   );
 }
 
+function wantsManageExistingEstimate(text: string) {
+  const t = cleanText(text).toLowerCase();
+
+  return (
+    /\bcita\b/.test(t) ||
+    /\bappointment\b/.test(t) ||
+    /\breserva\b/.test(t) ||
+    /\bbooking\b/.test(t)
+  );
+}
+
 function parseFlexibleDateInput(
   text: string,
   lang: Lang,
@@ -315,7 +326,39 @@ export function handleEstimateFlowTurn(
   // =========================
   if (!state.active) {
     // ✅ cancelación directa
-    if (wantsCancelEstimate(text) || wantsRescheduleEstimate(text)) {
+    if (wantsRescheduleEstimate(text)) {
+      const nextState = updateEstimateFlowState(state, {
+        active: true,
+        action: "reschedule",
+        step: "awaiting_date",
+        phone: contactoFallback ? normalizePhone(contactoFallback) : null,
+      });
+
+      return {
+        handled: true,
+        reply:
+          lang === "en"
+            ? "Sure 😊 Tell me the new date you want for your appointment."
+            : "Claro 😊 Dime qué nueva fecha te gustaría para tu cita.",
+        nextState,
+      };
+    }
+
+    if (wantsCancelEstimate(text)) {
+      const nextState = updateEstimateFlowState(state, {
+        active: true,
+        action: "cancel",
+        step: "ready_to_cancel",
+        phone: contactoFallback ? normalizePhone(contactoFallback) : null,
+      });
+
+      return {
+        handled: false,
+        nextState,
+      };
+    }
+
+    if (wantsManageExistingEstimate(text)) {
       const nextState = updateEstimateFlowState(state, {
         active: true,
         step: "manage_existing",
