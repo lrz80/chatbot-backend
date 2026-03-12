@@ -407,16 +407,81 @@ export async function runEstimateFlowTurn({
             step: "offering_slots",
           };
         } else {
-          const summary = `Estimado — ${
-            estimateTurn.nextState?.jobType || "Visita técnica"
-          }`;
+          const isReschedule = nextEstimateState.action === "reschedule";
+
+          let previousScheduledRow: any = null;
+
+          if (isReschedule) {
+            const { rows } = await pool.query(
+              `
+              SELECT
+                id,
+                nombre,
+                telefono,
+                direccion,
+                tipo_trabajo,
+                preferred_date,
+                preferred_time,
+                scheduled_start_at,
+                scheduled_end_at,
+                calendar_event_id,
+                calendar_event_link,
+                status
+              FROM estimate_requests
+              WHERE tenant_id = $1
+                AND contacto = $2
+                AND canal = $3
+                AND status = 'scheduled'
+              ORDER BY scheduled_start_at DESC NULLS LAST, created_at DESC
+              LIMIT 1
+              `,
+              [tenant.id, contactoNorm, canal]
+            );
+
+            previousScheduledRow = rows[0] || null;
+          }
+
+          const resolvedName =
+            String(
+              nextEstimateState?.name ||
+                previousScheduledRow?.nombre ||
+                estimateState?.name ||
+                ""
+            ).trim() || null;
+
+          const resolvedPhone =
+            String(
+              nextEstimateState?.phone ||
+                previousScheduledRow?.telefono ||
+                estimateState?.phone ||
+                contactoNorm ||
+                ""
+            ).trim() || null;
+
+          const resolvedAddress =
+            String(
+              nextEstimateState?.address ||
+                previousScheduledRow?.direccion ||
+                estimateState?.address ||
+                ""
+            ).trim() || null;
+
+          const resolvedJobType =
+            String(
+              nextEstimateState?.jobType ||
+                previousScheduledRow?.tipo_trabajo ||
+                estimateState?.jobType ||
+                "Visita técnica"
+            ).trim();
+
+          const summary = `Estimado — ${resolvedJobType}`;
 
           const description = [
             "Agendado por Aamy",
-            `Cliente: ${estimateTurn.nextState?.name || ""}`,
-            `Teléfono: ${estimateTurn.nextState?.phone || ""}`,
-            `Dirección: ${estimateTurn.nextState?.address || ""}`,
-            `Trabajo: ${estimateTurn.nextState?.jobType || ""}`,
+            resolvedName ? `Cliente: ${resolvedName}` : "",
+            resolvedPhone ? `Teléfono: ${resolvedPhone}` : "",
+            resolvedAddress ? `Dirección: ${resolvedAddress}` : "",
+            resolvedJobType ? `Trabajo: ${resolvedJobType}` : "",
             `Canal: ${canal}`,
             `Contacto: ${contactoNorm}`,
           ]
@@ -433,11 +498,61 @@ export async function runEstimateFlowTurn({
             timeZone,
           });
 
+          // si era reagendado, borrar la cita anterior y marcarla cancelada
+          if (isReschedule && previousScheduledRow?.calendar_event_id) {
+            try {
+              await googleDeleteEvent({
+                tenantId: tenant.id,
+                calendarId,
+                eventId: String(previousScheduledRow.calendar_event_id),
+              });
+            } catch (e: any) {
+              const msg = String(e?.message || "").toLowerCase();
+              const status = Number(e?.status || e?.response?.status || 0);
+
+              const alreadyDeleted =
+                status === 410 ||
+                msg.includes("resource has been deleted") ||
+                msg.includes("410");
+
+              if (!alreadyDeleted) {
+                // rollback de la nueva para no dejar duplicadas si falla borrar la vieja
+                try {
+                  if (event?.id) {
+                    await googleDeleteEvent({
+                      tenantId: tenant.id,
+                      calendarId,
+                      eventId: String(event.id),
+                    });
+                  }
+                } catch (rollbackErr: any) {
+                  console.warn("[estimateFlow] reschedule rollback error:", rollbackErr?.message);
+                }
+
+                throw e;
+              }
+            }
+
+            await pool.query(
+              `
+              UPDATE estimate_requests
+              SET status = 'cancelled'
+              WHERE id = $1
+              `,
+              [previousScheduledRow.id]
+            );
+          }
+
           nextEstimateState = {
             ...nextEstimateState,
             lang: effectiveEstimateLang,
             active: false,
             step: "scheduled",
+            action: null,
+            name: resolvedName,
+            phone: resolvedPhone,
+            address: resolvedAddress,
+            jobType: resolvedJobType,
             calendarEventId: String(event?.id || ""),
             calendarEventLink: String(event?.htmlLink || event?.meetLink || ""),
           };
@@ -445,7 +560,9 @@ export async function runEstimateFlowTurn({
           finalReply =
             effectiveEstimateLang === "en"
               ? [
-                  "Perfect 😊 Your appointment has been scheduled successfully.",
+                  isReschedule
+                    ? "Perfect 😊 Your appointment has been rescheduled successfully."
+                    : "Perfect 😊 Your appointment has been scheduled successfully.",
                   `• Date: ${preferredDate}`,
                   `• Time: ${selectedSlot.label || ""}`,
                   event?.htmlLink ? `• Calendar link: ${event.htmlLink}` : "",
@@ -453,7 +570,9 @@ export async function runEstimateFlowTurn({
                   .filter(Boolean)
                   .join("\n")
               : [
-                  "Perfecto 😊 Tu cita quedó agendada correctamente.",
+                  isReschedule
+                    ? "Perfecto 😊 Tu cita fue reagendada correctamente."
+                    : "Perfecto 😊 Tu cita quedó agendada correctamente.",
                   `• Fecha: ${preferredDate}`,
                   `• Hora: ${selectedSlot.label || ""}`,
                   event?.htmlLink ? `• Link del calendario: ${event.htmlLink}` : "",
