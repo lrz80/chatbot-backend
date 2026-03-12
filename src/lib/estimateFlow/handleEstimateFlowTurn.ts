@@ -12,6 +12,7 @@ type HandleEstimateFlowTurnArgs = {
   canal?: string | null;
   currentState?: EstimateFlowState | null;
   contactoFallback?: string | null;
+  timeZone?: string | null;
 };
 
 type HandleEstimateFlowTurnResult =
@@ -117,18 +118,27 @@ function wantsExitFlow(text: string) {
 }
 
 
-function parseFlexibleDateInput(text: string, lang: Lang): string | null {
+function parseFlexibleDateInput(
+  text: string,
+  lang: Lang,
+  timeZone: string
+): string | null {
   const raw = cleanText(text);
   if (!raw) return null;
 
-  const now = DateTime.now().setZone("America/New_York").startOf("day");
+  const now = DateTime.now().setZone(timeZone).startOf("day");
   const lower = raw.toLowerCase();
 
-  if (lower === "today" || lower === "hoy") {
+  // ✅ lenguaje natural
+  if (/\bhoy\b/.test(lower) || /\btoday\b/.test(lower)) {
     return now.toFormat("yyyy-MM-dd");
   }
 
-  if (lower === "tomorrow" || lower === "mañana" || lower === "manana") {
+  if (
+    /\bmañana\b/.test(lower) ||
+    /\bmanana\b/.test(lower) ||
+    /\btomorrow\b/.test(lower)
+  ) {
     return now.plus({ days: 1 }).toFormat("yyyy-MM-dd");
   }
 
@@ -155,19 +165,26 @@ function parseFlexibleDateInput(text: string, lang: Lang): string | null {
   ];
 
   for (const fmt of formats) {
-    const dt = DateTime.fromFormat(raw, fmt, { zone: "America/New_York", locale: lang === "es" ? "es" : "en" });
+    const dt = DateTime.fromFormat(raw, fmt, {
+      zone: timeZone,
+      locale: lang === "es" ? "es" : "en",
+    });
+
     if (dt.isValid) {
-      const normalized = dt.year ? dt : dt.set({ year: now.year });
+      const normalized = /\b\d{4}\b/.test(raw)
+        ? dt
+        : dt.set({ year: now.year });
+
       return normalized.toFormat("yyyy-MM-dd");
     }
   }
 
-  const iso = DateTime.fromISO(raw, { zone: "America/New_York" });
+  const iso = DateTime.fromISO(raw, { zone: timeZone });
   if (iso.isValid) {
     return iso.toFormat("yyyy-MM-dd");
   }
 
-  const jsDate = DateTime.fromJSDate(new Date(raw), { zone: "America/New_York" });
+  const jsDate = DateTime.fromJSDate(new Date(raw), { zone: timeZone });
   if (jsDate.isValid) {
     return jsDate.toFormat("yyyy-MM-dd");
   }
@@ -175,8 +192,8 @@ function parseFlexibleDateInput(text: string, lang: Lang): string | null {
   return null;
 }
 
-function isValidDateInput(text: string, lang: Lang) {
-  return !!parseFlexibleDateInput(text, lang);
+function isValidDateInput(text: string, lang: Lang, timeZone: string) {
+  return !!parseFlexibleDateInput(text, lang, timeZone);
 }
 
 function isValidTimeInput(text: string) {
@@ -265,7 +282,8 @@ function readyMessage(args: {
 export function handleEstimateFlowTurn(
   args: HandleEstimateFlowTurnArgs
 ): HandleEstimateFlowTurnResult {
-  const { userInput, lang, canal, currentState, contactoFallback } = args;
+  const { userInput, lang, canal, currentState, contactoFallback, timeZone } = args;
+  const effectiveTimeZone = String(timeZone || "America/New_York");
 
   const text = cleanText(userInput);
   const state = currentState?.active
@@ -402,7 +420,11 @@ export function handleEstimateFlowTurn(
   // 6) CAPTURA DE FECHA
   // =========================
   if (state.step === "awaiting_date") {
-    const parsedDate = parseFlexibleDateInput(text, lang);
+    const parsedDate = parseFlexibleDateInput(
+      text,
+      lang,
+      effectiveTimeZone
+    );
 
     if (!parsedDate) {
       return {

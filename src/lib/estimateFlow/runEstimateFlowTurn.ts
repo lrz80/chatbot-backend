@@ -64,6 +64,7 @@ export async function runEstimateFlowTurn({
     canal,
     currentState: estimateState,
     contactoFallback: contactoNorm,
+    timeZone: String(tenant?.timezone || "America/New_York"),
   });
 
   if (!estimateTurn.handled) {
