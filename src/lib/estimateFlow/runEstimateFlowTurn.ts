@@ -161,9 +161,7 @@ export async function runEstimateFlowTurn({
       await pool.query(
         `
         UPDATE estimate_requests
-        SET
-          status = 'cancelled',
-          updated_at = NOW()
+        SET status = 'cancelled'
         WHERE id = $1
         `,
         [row.id]
