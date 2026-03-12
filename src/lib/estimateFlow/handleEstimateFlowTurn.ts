@@ -340,6 +340,68 @@ export function handleEstimateFlowTurn(
   }
 
   // =========================
+  // MANEJO DE CITA EXISTENTE
+  // =========================
+  if (state.step === "manage_existing") {
+    const choice = cleanText(text).toLowerCase();
+
+    const wantsCancelChoice =
+      choice === "1" ||
+      /\bcancelar\b/.test(choice) ||
+      /\bcancela\b/.test(choice) ||
+      /\bcancel\b/.test(choice) ||
+      /\bquitar\b/.test(choice) ||
+      /\beliminar\b/.test(choice) ||
+      /\bdelete\b/.test(choice);
+
+    const wantsRescheduleChoice =
+      choice === "2" ||
+      /\breagendar\b/.test(choice) ||
+      /\breprogramar\b/.test(choice) ||
+      /\bcambiar\b/.test(choice) ||
+      /\breschedule\b/.test(choice) ||
+      /\bmove\b/.test(choice);
+
+    if (wantsCancelChoice) {
+      const nextState = updateEstimateFlowState(state, {
+        action: "cancel",
+        step: "ready_to_cancel",
+      });
+
+      return {
+        handled: true,
+        reply:
+          lang === "en"
+            ? "Perfect. Let me verify your appointment and cancel it."
+            : "Perfecto. Déjame verificar tu cita para cancelarla.",
+        nextState,
+      };
+    }
+
+    if (wantsRescheduleChoice) {
+      const nextState = updateEstimateFlowState(state, {
+        action: "reschedule",
+        step: "awaiting_date",
+      });
+
+      return {
+        handled: true,
+        reply: askDate(lang),
+        nextState,
+      };
+    }
+
+    return {
+      handled: true,
+      reply:
+        lang === "en"
+          ? "Please reply with:\n1. Cancel appointment\n2. Reschedule appointment"
+          : "Por favor responde con:\n1. Cancelar cita\n2. Reagendar cita",
+      nextState: state,
+    };
+  }
+
+  // =========================
   // 2) CAPTURA DE NOMBRE
   // =========================
   if (state.step === "awaiting_name") {
@@ -546,6 +608,10 @@ export function handleEstimateFlowTurn(
   }
 
   if (state.step === "ready_to_schedule") {
+    return { handled: false, nextState: state };
+  }
+
+  if (state.step === "ready_to_cancel") {
     return { handled: false, nextState: state };
   }
 

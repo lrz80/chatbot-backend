@@ -9,6 +9,7 @@ export type EstimateFlowStep =
   | "awaiting_slot_choice"
   | "manage_existing"
   | "ready_to_schedule"
+  | "ready_to_cancel"
   | "scheduled";
 
 export type EstimateFlowSlot = {
@@ -38,6 +39,8 @@ export type EstimateFlowState = {
 
   startedAt?: number | null;
   updatedAt?: number | null;
+
+  action?: "cancel" | "reschedule" | null;
 };
 
 export function createEmptyEstimateFlowState(): EstimateFlowState {
@@ -45,6 +48,7 @@ export function createEmptyEstimateFlowState(): EstimateFlowState {
     active: false,
     step: "idle",
     lang: null,
+    action: null,
     name: null,
     phone: null,
     address: null,
