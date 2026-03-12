@@ -309,32 +309,20 @@ export function handleEstimateFlowTurn(
   // =========================
   if (!state.active) {
     // ✅ cancelación directa
-    if (wantsCancelEstimate(text)) {
+    if (wantsCancelEstimate(text) || wantsRescheduleEstimate(text)) {
       const nextState = updateEstimateFlowState(state, {
         active: true,
-        action: "cancel",
-        step: "ready_to_cancel",
+        step: "manage_existing",
         phone: contactoFallback ? normalizePhone(contactoFallback) : null,
-      });
-
-      return {
-        handled: false,
-        nextState,
-      };
-    }
-
-    // ✅ reagendado directo
-    if (wantsRescheduleEstimate(text)) {
-      const nextState = updateEstimateFlowState(state, {
-        active: true,
-        action: "reschedule",
-        step: "awaiting_date",
-        phone: contactoFallback ? normalizePhone(contactoFallback) : null,
+        action: null,
       });
 
       return {
         handled: true,
-        reply: askDate(lang),
+        reply:
+          lang === "en"
+            ? "I can help with that 😊\n\nWould you like to:\n1. Cancel your appointment\n\nOr would you prefer:\n2. Reschedule?"
+            : "Puedo ayudarte con eso 😊\n\n¿Te gustaría:\n1. Cancelar tu cita\n\nO prefieres:\n2. Reagendar?",
         nextState,
       };
     }
