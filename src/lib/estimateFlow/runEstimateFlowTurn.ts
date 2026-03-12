@@ -109,6 +109,16 @@ export async function runEstimateFlowTurn({
 
       const calendarId = calendarRows[0]?.calendar_id || "primary";
 
+      const normalizedContacto = String(contactoNorm || "").trim();
+      const contactoDigits = normalizedContacto.replace(/\D/g, "");
+
+      console.log("[estimateFlow][cancel][lookup_input]", {
+        tenantId: tenant.id,
+        contactoNorm,
+        contactoDigits,
+        canal,
+      });
+
       const { rows: estimateRows } = await pool.query(
         `
         SELECT
@@ -116,18 +126,42 @@ export async function runEstimateFlowTurn({
           calendar_event_id,
           scheduled_start_at,
           scheduled_end_at,
-          status
+          status,
+          contacto,
+          telefono,
+          canal
         FROM estimate_requests
         WHERE tenant_id = $1
-          AND contacto = $2
-          AND canal = $3
           AND calendar_event_id IS NOT NULL
           AND status = 'scheduled'
+          AND (
+            regexp_replace(coalesce(contacto, ''), '\D', '', 'g') = $2
+            OR regexp_replace(coalesce(telefono, ''), '\D', '', 'g') = $2
+          )
         ORDER BY scheduled_start_at DESC NULLS LAST, created_at DESC
         LIMIT 1
         `,
-        [tenant.id, contactoNorm, canal]
+        [tenant.id, contactoDigits]
       );
+
+      console.log("[estimateFlow][cancel][existing_lookup]", {
+        tenantId: tenant.id,
+        contactoNorm,
+        contactoDigits,
+        canal,
+        found: !!estimateRows[0],
+        existing: estimateRows[0]
+          ? {
+              id: estimateRows[0].id,
+              calendar_event_id: estimateRows[0].calendar_event_id,
+              contacto: estimateRows[0].contacto,
+              telefono: estimateRows[0].telefono,
+              canal: estimateRows[0].canal,
+              status: estimateRows[0].status,
+              scheduled_start_at: estimateRows[0].scheduled_start_at,
+            }
+          : null,
+      });
 
       const row = estimateRows[0];
       const calendarEventId = String(row?.calendar_event_id || "").trim();
@@ -161,6 +195,13 @@ export async function runEstimateFlowTurn({
           calendarId,
           eventId: calendarEventId,
         });
+
+        console.log("[estimateFlow][cancel][delete_event]", {
+          tenantId: tenant.id,
+          contactoNorm,
+          calendarEventId,
+        });
+
       } catch (e: any) {
         const msg = String(e?.message || "").toLowerCase();
         const status = Number(e?.status || e?.response?.status || 0);
@@ -414,6 +455,16 @@ export async function runEstimateFlowTurn({
 
           if (isReschedule) {
             const normalizedContacto = String(contactoNorm || "").trim();
+            const contactoDigits = normalizedContacto.replace(/\D/g, "");
+
+            console.log("[estimateFlow][reschedule][lookup_input]", {
+              tenantId: tenant.id,
+              contactoNorm,
+              contactoDigits,
+              canal,
+              nextEstimateState,
+              estimateState,
+            });
 
             const { rows: existingRows } = await pool.query(
               `
@@ -436,14 +487,35 @@ export async function runEstimateFlowTurn({
               WHERE tenant_id = $1
                 AND status = 'scheduled'
                 AND (
-                  contacto = $2
-                  OR telefono = $2
+                  regexp_replace(coalesce(contacto, ''), '\D', '', 'g') = $2
+                  OR regexp_replace(coalesce(telefono, ''), '\D', '', 'g') = $2
                 )
               ORDER BY scheduled_start_at DESC NULLS LAST, created_at DESC
               LIMIT 1
               `,
-              [tenant.id, normalizedContacto]
+              [tenant.id, contactoDigits]
             );
+
+            console.log("[estimateFlow][reschedule][existing_lookup]", {
+              tenantId: tenant.id,
+              contactoNorm,
+              canal,
+              found: !!existingRows[0],
+              existing: existingRows[0]
+                ? {
+                    id: existingRows[0].id,
+                    calendar_event_id: existingRows[0].calendar_event_id,
+                    nombre: existingRows[0].nombre,
+                    telefono: existingRows[0].telefono,
+                    direccion: existingRows[0].direccion,
+                    tipo_trabajo: existingRows[0].tipo_trabajo,
+                    contacto: existingRows[0].contacto,
+                    canal: existingRows[0].canal,
+                    status: existingRows[0].status,
+                    scheduled_start_at: existingRows[0].scheduled_start_at,
+                  }
+                : null,
+            });
 
             const existing = existingRows[0] || null;
 
@@ -517,6 +589,13 @@ export async function runEstimateFlowTurn({
                     calendarId,
                     eventId: oldEventId,
                   });
+
+                  console.log("[estimateFlow][reschedule][delete_old_event]", {
+                    tenantId: tenant.id,
+                    contactoNorm,
+                    oldEventId,
+                  });
+
                 } catch (e: any) {
                   const msg = String(e?.message || "").toLowerCase();
                   const status = Number(e?.status || e?.response?.status || 0);
@@ -544,6 +623,18 @@ export async function runEstimateFlowTurn({
                 startISO: selectedSlot.startISO,
                 endISO: selectedSlot.endISO,
                 timeZone,
+              });
+
+              console.log("[estimateFlow][reschedule][create_new_event]", {
+                tenantId: tenant.id,
+                contactoNorm,
+                newEventId: String(event?.id || ""),
+                newEventLink: String(event?.htmlLink || event?.meetLink || ""),
+                resolvedName,
+                resolvedPhone,
+                resolvedAddress,
+                resolvedJobType,
+                selectedSlot,
               });
 
               await pool.query(
