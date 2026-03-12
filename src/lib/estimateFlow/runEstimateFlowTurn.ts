@@ -152,11 +152,31 @@ export async function runEstimateFlowTurn({
         };
       }
 
-      await googleDeleteEvent({
-        tenantId: tenant.id,
-        calendarId,
-        eventId: calendarEventId,
-      });
+      try {
+        await googleDeleteEvent({
+          tenantId: tenant.id,
+          calendarId,
+          eventId: calendarEventId,
+        });
+      } catch (e: any) {
+        const msg = String(e?.message || "").toLowerCase();
+        const status = Number(e?.status || e?.response?.status || 0);
+
+        const alreadyDeleted =
+          status === 410 ||
+          msg.includes("resource has been deleted") ||
+          msg.includes("410");
+
+        if (!alreadyDeleted) {
+          throw e;
+        }
+
+        console.warn("[estimateFlow] cancel already deleted in Google Calendar", {
+          tenantId: tenant.id,
+          contactoNorm,
+          calendarEventId,
+        });
+      }
 
       await pool.query(
         `
