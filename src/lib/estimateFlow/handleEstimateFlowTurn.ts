@@ -325,13 +325,15 @@ export function handleEstimateFlowTurn(
   // 1) ARRANQUE DEL FLUJO
   // =========================
   if (!state.active) {
-    // ✅ cancelación directa
+    const normalizedPhone = state.phone || (contactoFallback ? normalizePhone(contactoFallback) : null);
+
+    // ✅ si pide reagendar / mover / cambiar, ir directo a reagendar
     if (wantsRescheduleEstimate(text)) {
       const nextState = updateEstimateFlowState(state, {
         active: true,
         action: "reschedule",
         step: "awaiting_date",
-        phone: contactoFallback ? normalizePhone(contactoFallback) : null,
+        phone: normalizedPhone,
       });
 
       return {
@@ -344,16 +346,21 @@ export function handleEstimateFlowTurn(
       };
     }
 
+    // ✅ si pide cancelar, NO cancelar directo; ofrecer cancelar o reagendar
     if (wantsCancelEstimate(text)) {
       const nextState = updateEstimateFlowState(state, {
         active: true,
-        action: "cancel",
-        step: "ready_to_cancel",
-        phone: contactoFallback ? normalizePhone(contactoFallback) : null,
+        step: "manage_existing",
+        phone: normalizedPhone,
+        action: null,
       });
 
       return {
-        handled: false,
+        handled: true,
+        reply:
+          lang === "en"
+            ? "I can help with that 😊\n\nWhat would you like to do?\n1. Cancel your appointment\n2. Reschedule your appointment\n\nPlease reply with the number of the option you prefer."
+            : "Puedo ayudarte con eso 😊\n\n¿Qué deseas hacer?\n1. Cancelar tu cita\n2. Reagendar tu cita\n\nRespóndeme con el número de la opción que prefieres.",
         nextState,
       };
     }
@@ -362,7 +369,7 @@ export function handleEstimateFlowTurn(
       const nextState = updateEstimateFlowState(state, {
         active: true,
         step: "manage_existing",
-        phone: contactoFallback ? normalizePhone(contactoFallback) : null,
+        phone: normalizedPhone,
         action: null,
       });
 
@@ -370,8 +377,8 @@ export function handleEstimateFlowTurn(
         handled: true,
         reply:
           lang === "en"
-            ? "I can help with that 😊\n\nWould you like to:\n1. Cancel your appointment\n\nOr would you prefer:\n2. Reschedule?"
-            : "Puedo ayudarte con eso 😊\n\n¿Te gustaría:\n1. Cancelar tu cita\n\nO prefieres:\n2. Reagendar?",
+            ? "I can help with that 😊\n\nWhat would you like to do?\n1. Cancel your appointment\n2. Reschedule your appointment\n\nPlease reply with the number of the option you prefer."
+            : "Puedo ayudarte con eso 😊\n\n¿Qué deseas hacer?\n1. Cancelar tu cita\n2. Reagendar tu cita\n\nRespóndeme con el número de la opción que prefieres.",
         nextState,
       };
     }
@@ -383,7 +390,7 @@ export function handleEstimateFlowTurn(
     const nextState = updateEstimateFlowState(state, {
       active: true,
       step: "awaiting_name",
-      phone: contactoFallback ? normalizePhone(contactoFallback) : null,
+      phone: normalizedPhone,
     });
 
     return {
@@ -434,6 +441,7 @@ export function handleEstimateFlowTurn(
       const nextState = updateEstimateFlowState(state, {
         action: "reschedule",
         step: "awaiting_date",
+        phone: state.phone || (contactoFallback ? normalizePhone(contactoFallback) : null),
       });
 
       return {
@@ -447,8 +455,8 @@ export function handleEstimateFlowTurn(
       handled: true,
       reply:
         lang === "en"
-          ? "Please reply with:\n1. Cancel appointment\n2. Reschedule appointment"
-          : "Por favor responde con:\n1. Cancelar cita\n2. Reagendar cita",
+          ? "Please reply with the number of the option you prefer:\n1. Cancel appointment\n2. Reschedule appointment"
+          : "Por favor respóndeme con el número de la opción que prefieres:\n1. Cancelar cita\n2. Reagendar cita",
       nextState: state,
     };
   }

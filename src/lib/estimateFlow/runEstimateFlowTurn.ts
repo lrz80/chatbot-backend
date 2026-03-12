@@ -12,7 +12,6 @@ import { getSlotsForDate } from "../appointments/booking/slots";
 import {
   googleCreateEvent,
   googleDeleteEvent,
-  googleUpdateEvent,
 } from "../../services/googleCalendar";
 
 type Lang = "es" | "en";
@@ -414,6 +413,8 @@ export async function runEstimateFlowTurn({
           const isReschedule = nextEstimateState.action === "reschedule";
 
           if (isReschedule) {
+            const normalizedContacto = String(contactoNorm || "").trim();
+
             const { rows: existingRows } = await pool.query(
               `
               SELECT
@@ -428,16 +429,20 @@ export async function runEstimateFlowTurn({
                 preferred_time,
                 scheduled_start_at,
                 scheduled_end_at,
-                status
+                status,
+                contacto,
+                canal
               FROM estimate_requests
               WHERE tenant_id = $1
-                AND contacto = $2
-                AND canal = $3
                 AND status = 'scheduled'
+                AND (
+                  contacto = $2
+                  OR telefono = $2
+                )
               ORDER BY scheduled_start_at DESC NULLS LAST, created_at DESC
               LIMIT 1
               `,
-              [tenant.id, contactoNorm, canal]
+              [tenant.id, normalizedContacto]
             );
 
             const existing = existingRows[0] || null;
@@ -458,16 +463,16 @@ export async function runEstimateFlowTurn({
             } else {
               const resolvedName =
                 String(
-                  nextEstimateState?.name ||
-                    existing?.nombre ||
+                  existing?.nombre ||
+                    nextEstimateState?.name ||
                     estimateState?.name ||
                     ""
                 ).trim() || null;
 
               const resolvedPhone =
                 String(
-                  nextEstimateState?.phone ||
-                    existing?.telefono ||
+                  existing?.telefono ||
+                    nextEstimateState?.phone ||
                     estimateState?.phone ||
                     contactoNorm ||
                     ""
@@ -475,16 +480,16 @@ export async function runEstimateFlowTurn({
 
               const resolvedAddress =
                 String(
-                  nextEstimateState?.address ||
-                    existing?.direccion ||
+                  existing?.direccion ||
+                    nextEstimateState?.address ||
                     estimateState?.address ||
                     ""
                 ).trim() || null;
 
               const resolvedJobType =
                 String(
-                  nextEstimateState?.jobType ||
-                    existing?.tipo_trabajo ||
+                  existing?.tipo_trabajo ||
+                    nextEstimateState?.jobType ||
                     estimateState?.jobType ||
                     "Visita técnica"
                 ).trim();
@@ -503,10 +508,37 @@ export async function runEstimateFlowTurn({
                 .filter(Boolean)
                 .join("\n");
 
-              const event = await googleUpdateEvent({
+              const oldEventId = String(existing.calendar_event_id || "").trim();
+
+              if (oldEventId) {
+                try {
+                  await googleDeleteEvent({
+                    tenantId: tenant.id,
+                    calendarId,
+                    eventId: oldEventId,
+                  });
+                } catch (e: any) {
+                  const msg = String(e?.message || "").toLowerCase();
+                  const status = Number(e?.status || e?.response?.status || 0);
+
+                  const alreadyDeleted =
+                    status === 410 ||
+                    msg.includes("resource has been deleted") ||
+                    msg.includes("410");
+
+                  if (!alreadyDeleted) throw e;
+
+                  console.warn("[estimateFlow] reschedule old event already deleted", {
+                    tenantId: tenant.id,
+                    contactoNorm,
+                    oldEventId,
+                  });
+                }
+              }
+
+              const event = await googleCreateEvent({
                 tenantId: tenant.id,
                 calendarId,
-                eventId: String(existing.calendar_event_id),
                 summary,
                 description,
                 startISO: selectedSlot.startISO,
@@ -518,20 +550,31 @@ export async function runEstimateFlowTurn({
                 `
                 UPDATE estimate_requests
                 SET
-                  preferred_date = $1,
-                  preferred_time = $2,
-                  scheduled_start_at = $3,
-                  scheduled_end_at = $4,
-                  calendar_event_link = $5,
-                  status = 'scheduled'
-                WHERE id = $6
+                  nombre = $1,
+                  telefono = $2,
+                  direccion = $3,
+                  tipo_trabajo = $4,
+                  preferred_date = $5,
+                  preferred_time = $6,
+                  scheduled_start_at = $7,
+                  scheduled_end_at = $8,
+                  calendar_event_id = $9,
+                  calendar_event_link = $10,
+                  status = 'scheduled',
+                  updated_at = NOW()
+                WHERE id = $11
                 `,
                 [
+                  resolvedName,
+                  resolvedPhone,
+                  resolvedAddress,
+                  resolvedJobType,
                   preferredDate,
                   selectedSlot.label || null,
                   selectedSlot.startISO,
                   selectedSlot.endISO,
-                  String(event?.htmlLink || event?.meetLink || existing?.calendar_event_link || ""),
+                  String(event?.id || ""),
+                  String(event?.htmlLink || event?.meetLink || ""),
                   existing.id,
                 ]
               );
@@ -546,10 +589,8 @@ export async function runEstimateFlowTurn({
                 phone: resolvedPhone,
                 address: resolvedAddress,
                 jobType: resolvedJobType,
-                calendarEventId: String(existing.calendar_event_id || ""),
-                calendarEventLink: String(
-                  event?.htmlLink || event?.meetLink || existing?.calendar_event_link || ""
-                ),
+                calendarEventId: String(event?.id || ""),
+                calendarEventLink: String(event?.htmlLink || event?.meetLink || ""),
               };
 
               finalReply =
