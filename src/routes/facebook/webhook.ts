@@ -982,6 +982,7 @@ async function procesarMensajeMeta(args: {
                 const summary = `Estimado — ${estimateTurn.nextState.jobType || "Visita técnica"}`;
 
                 const description = [
+                  "Agendado por Aamy",
                   `Cliente: ${estimateTurn.nextState.name || ""}`,
                   `Teléfono: ${estimateTurn.nextState.phone || ""}`,
                   `Dirección: ${estimateTurn.nextState.address || ""}`,
@@ -1014,7 +1015,7 @@ async function procesarMensajeMeta(args: {
                 finalReply =
                   effectiveEstimateLang === "en"
                     ? [
-                        "Perfect 😊 Your estimate has been scheduled successfully.",
+                        "Perfect 😊 Your appointment has been scheduled successfully.",
                         `• Date: ${preferredDate}`,
                         `• Time: ${selectedSlot.label || ""}`,
                         event?.htmlLink ? `• Calendar link: ${event.htmlLink}` : "",
@@ -1022,7 +1023,7 @@ async function procesarMensajeMeta(args: {
                         .filter(Boolean)
                         .join("\n")
                     : [
-                        "Perfecto 😊 Tu estimado quedó agendado correctamente.",
+                        "Perfecto 😊 Tu cita quedó agendada correctamente.",
                         `• Fecha: ${preferredDate}`,
                         `• Hora: ${selectedSlot.label || ""}`,
                         event?.htmlLink ? `• Link del calendario: ${event.htmlLink}` : "",
