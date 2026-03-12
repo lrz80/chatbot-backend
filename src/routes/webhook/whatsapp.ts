@@ -684,7 +684,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // emotion sólo si la necesitas luego
   const emotion = signals.emotion;
 
-    // ===============================
+  // ===============================
   // ✅ PENDING CTA ACCEPTANCE
   // ===============================
   {

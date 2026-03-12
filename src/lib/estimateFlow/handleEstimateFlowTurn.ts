@@ -85,8 +85,14 @@ function wantsRescheduleEstimate(text: string) {
   return (
     /\breagendar\b/.test(t) ||
     /\breprogramar\b/.test(t) ||
+    /\bcambiar cita\b/.test(t) ||
     /\bcambiar la cita\b/.test(t) ||
+    /\bcambiar mi cita\b/.test(t) ||
+    /\bcambiar una cita\b/.test(t) ||
     /\bcambiar el horario\b/.test(t) ||
+    /\bquiero cambiar mi cita\b/.test(t) ||
+    /\bquiero reagendar\b/.test(t) ||
+    /\bquiero reprogramar\b/.test(t) ||
     /\bchange appointment\b/.test(t) ||
     /\breschedule\b/.test(t) ||
     /\bmove the appointment\b/.test(t)
