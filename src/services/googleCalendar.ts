@@ -394,3 +394,111 @@ export async function googleDeleteEvent(params: {
   throw new Error("google_delete_event_failed");
 }
 
+export async function googleUpdateEvent(params: {
+  tenantId: string;
+  calendarId?: string; // default primary
+  eventId: string;     // google event id
+  summary: string;
+  description?: string;
+  startISO: string;
+  endISO: string;
+  timeZone: string;
+}) {
+  let accessToken: string;
+
+  try {
+    accessToken = await getGoogleAccessToken(params.tenantId);
+  } catch (e: any) {
+    const msg = String(e?.message || "");
+    if (
+      msg === "google_not_connected" ||
+      msg === "google_refresh_failed" ||
+      msg === "google_refresh_token_invalid" ||
+      msg === "google_oauth_not_configured"
+    ) {
+      throw new Error("google_not_connected");
+    }
+    throw e;
+  }
+
+  const calendarId = encodeURIComponent(params.calendarId || "primary");
+  const eventId = encodeURIComponent(String(params.eventId || "").trim());
+
+  if (!eventId) throw new Error("missing_event_id");
+
+  const resp = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events/${eventId}?conferenceDataVersion=1`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        summary: params.summary,
+        description: params.description || "",
+        start: { dateTime: params.startISO, timeZone: params.timeZone },
+        end: { dateTime: params.endISO, timeZone: params.timeZone },
+      }),
+    }
+  );
+
+  const json = await resp.json().catch(() => ({} as any));
+
+  const meetLink =
+    json?.hangoutLink ||
+    json?.conferenceData?.entryPoints?.find((e: any) => e?.entryPointType === "video")?.uri;
+
+  if (meetLink && typeof json?.description === "string" && !json.description.includes(meetLink)) {
+    json.description = `${json.description}\n\nGoogle Meet: ${meetLink}`.trim();
+  }
+
+  json.meetLink = meetLink || null;
+
+  if (!resp.ok) {
+    console.error("Google update event failed:", { status: resp.status, body: json });
+
+    if (resp.status === 401 || resp.status === 403) {
+      await markGoogleDisconnected(params.tenantId, `update_${resp.status}`);
+      throw new Error("google_not_connected");
+    }
+
+    if (resp.status === 404) {
+      throw new Error("google_event_not_found");
+    }
+
+    throw new Error("google_update_event_failed");
+  }
+
+  const verified =
+    params.eventId
+      ? await googleGetEvent({
+          accessToken,
+          calendarId,
+          eventId: String(params.eventId || "").trim(),
+        })
+      : null;
+
+  console.log("🟣 [GCAL UPDATE]", {
+    tenantId: params.tenantId,
+    calendarId: params.calendarId || "primary",
+    eventId: json?.id || params.eventId,
+    htmlLink_update: json?.htmlLink,
+    status_update: json?.status,
+    organizer_update: json?.organizer?.email,
+    creator_update: json?.creator?.email,
+  });
+
+  console.log("🟢 [GCAL GET VERIFY AFTER UPDATE]", {
+    tenantId: params.tenantId,
+    calendarId: params.calendarId || "primary",
+    eventId: verified?.id || params.eventId || null,
+    htmlLink_get: verified?.htmlLink || null,
+    status_get: verified?.status || null,
+    organizer_get: verified?.organizer?.email || null,
+    creator_get: verified?.creator?.email || null,
+    icaluid_get: verified?.iCalUID || null,
+  });
+
+  return verified || json;
+}

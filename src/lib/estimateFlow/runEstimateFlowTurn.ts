@@ -9,7 +9,11 @@ import { saveEstimateRequest } from "./saveEstimateRequest";
 
 import { getBusinessHours } from "../../lib/appointments/booking/db";
 import { getSlotsForDate } from "../appointments/booking/slots";
-import { googleCreateEvent, googleDeleteEvent } from "../../services/googleCalendar";
+import {
+  googleCreateEvent,
+  googleDeleteEvent,
+  googleUpdateEvent,
+} from "../../services/googleCalendar";
 
 type Lang = "es" | "en";
 
@@ -409,13 +413,13 @@ export async function runEstimateFlowTurn({
         } else {
           const isReschedule = nextEstimateState.action === "reschedule";
 
-          let previousScheduledRow: any = null;
-
           if (isReschedule) {
-            const { rows } = await pool.query(
+            const { rows: existingRows } = await pool.query(
               `
               SELECT
                 id,
+                calendar_event_id,
+                calendar_event_link,
                 nombre,
                 telefono,
                 direccion,
@@ -424,8 +428,6 @@ export async function runEstimateFlowTurn({
                 preferred_time,
                 scheduled_start_at,
                 scheduled_end_at,
-                calendar_event_id,
-                calendar_event_link,
                 status
               FROM estimate_requests
               WHERE tenant_id = $1
@@ -438,166 +440,216 @@ export async function runEstimateFlowTurn({
               [tenant.id, contactoNorm, canal]
             );
 
-            previousScheduledRow = rows[0] || null;
-          }
+            const existing = existingRows[0] || null;
 
-          const resolvedName =
-            String(
-              nextEstimateState?.name ||
-                previousScheduledRow?.nombre ||
-                estimateState?.name ||
-                ""
-            ).trim() || null;
+            if (!existing?.id || !existing?.calendar_event_id) {
+              finalReply =
+                effectiveEstimateLang === "en"
+                  ? "I couldn’t find your current appointment to reschedule. Please schedule a new one instead."
+                  : "No pude encontrar tu cita actual para reagendarla. Por favor agenda una nueva.";
 
-          const resolvedPhone =
-            String(
-              nextEstimateState?.phone ||
-                previousScheduledRow?.telefono ||
-                estimateState?.phone ||
-                contactoNorm ||
-                ""
-            ).trim() || null;
+              nextEstimateState = {
+                ...nextEstimateState,
+                lang: effectiveEstimateLang,
+                active: false,
+                step: "idle",
+                action: null,
+              };
+            } else {
+              const resolvedName =
+                String(
+                  nextEstimateState?.name ||
+                    existing?.nombre ||
+                    estimateState?.name ||
+                    ""
+                ).trim() || null;
 
-          const resolvedAddress =
-            String(
-              nextEstimateState?.address ||
-                previousScheduledRow?.direccion ||
-                estimateState?.address ||
-                ""
-            ).trim() || null;
+              const resolvedPhone =
+                String(
+                  nextEstimateState?.phone ||
+                    existing?.telefono ||
+                    estimateState?.phone ||
+                    contactoNorm ||
+                    ""
+                ).trim() || null;
 
-          const resolvedJobType =
-            String(
-              nextEstimateState?.jobType ||
-                previousScheduledRow?.tipo_trabajo ||
-                estimateState?.jobType ||
-                "Visita técnica"
-            ).trim();
+              const resolvedAddress =
+                String(
+                  nextEstimateState?.address ||
+                    existing?.direccion ||
+                    estimateState?.address ||
+                    ""
+                ).trim() || null;
 
-          const summary = `Estimado — ${resolvedJobType}`;
+              const resolvedJobType =
+                String(
+                  nextEstimateState?.jobType ||
+                    existing?.tipo_trabajo ||
+                    estimateState?.jobType ||
+                    "Visita técnica"
+                ).trim();
 
-          const description = [
-            "Agendado por Aamy",
-            resolvedName ? `Cliente: ${resolvedName}` : "",
-            resolvedPhone ? `Teléfono: ${resolvedPhone}` : "",
-            resolvedAddress ? `Dirección: ${resolvedAddress}` : "",
-            resolvedJobType ? `Trabajo: ${resolvedJobType}` : "",
-            `Canal: ${canal}`,
-            `Contacto: ${contactoNorm}`,
-          ]
-            .filter(Boolean)
-            .join("\n");
+              const summary = `Estimado — ${resolvedJobType}`;
 
-          const event = await googleCreateEvent({
-            tenantId: tenant.id,
-            calendarId,
-            summary,
-            description,
-            startISO: selectedSlot.startISO,
-            endISO: selectedSlot.endISO,
-            timeZone,
-          });
+              const description = [
+                "Agendado por Aamy",
+                resolvedName ? `Cliente: ${resolvedName}` : "",
+                resolvedPhone ? `Teléfono: ${resolvedPhone}` : "",
+                resolvedAddress ? `Dirección: ${resolvedAddress}` : "",
+                resolvedJobType ? `Trabajo: ${resolvedJobType}` : "",
+                `Canal: ${canal}`,
+                `Contacto: ${contactoNorm}`,
+              ]
+                .filter(Boolean)
+                .join("\n");
 
-          // si era reagendado, borrar la cita anterior y marcarla cancelada
-          if (isReschedule && previousScheduledRow?.calendar_event_id) {
-            try {
-              await googleDeleteEvent({
+              const event = await googleUpdateEvent({
                 tenantId: tenant.id,
                 calendarId,
-                eventId: String(previousScheduledRow.calendar_event_id),
+                eventId: String(existing.calendar_event_id),
+                summary,
+                description,
+                startISO: selectedSlot.startISO,
+                endISO: selectedSlot.endISO,
+                timeZone,
+              });
+
+              await pool.query(
+                `
+                UPDATE estimate_requests
+                SET
+                  preferred_date = $1,
+                  preferred_time = $2,
+                  scheduled_start_at = $3,
+                  scheduled_end_at = $4,
+                  calendar_event_link = $5,
+                  status = 'scheduled'
+                WHERE id = $6
+                `,
+                [
+                  preferredDate,
+                  selectedSlot.label || null,
+                  selectedSlot.startISO,
+                  selectedSlot.endISO,
+                  String(event?.htmlLink || event?.meetLink || existing?.calendar_event_link || ""),
+                  existing.id,
+                ]
+              );
+
+              nextEstimateState = {
+                ...nextEstimateState,
+                lang: effectiveEstimateLang,
+                active: false,
+                step: "scheduled",
+                action: null,
+                name: resolvedName,
+                phone: resolvedPhone,
+                address: resolvedAddress,
+                jobType: resolvedJobType,
+                calendarEventId: String(existing.calendar_event_id || ""),
+                calendarEventLink: String(
+                  event?.htmlLink || event?.meetLink || existing?.calendar_event_link || ""
+                ),
+              };
+
+              finalReply =
+                effectiveEstimateLang === "en"
+                  ? [
+                      "Perfect 😊 Your appointment has been rescheduled successfully.",
+                      `• Date: ${preferredDate}`,
+                      `• Time: ${selectedSlot.label || ""}`,
+                      nextEstimateState.calendarEventLink
+                        ? `• Calendar link: ${nextEstimateState.calendarEventLink}`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join("\n")
+                  : [
+                      "Perfecto 😊 Tu cita fue reagendada correctamente.",
+                      `• Fecha: ${preferredDate}`,
+                      `• Hora: ${selectedSlot.label || ""}`,
+                      nextEstimateState.calendarEventLink
+                        ? `• Link del calendario: ${nextEstimateState.calendarEventLink}`
+                        : "",
+                    ]
+                      .filter(Boolean)
+                      .join("\n");
+            }
+          } else {
+            const summary = `Estimado — ${
+              estimateTurn.nextState?.jobType || "Visita técnica"
+            }`;
+
+            const description = [
+              "Agendado por Aamy",
+              `Cliente: ${estimateTurn.nextState?.name || ""}`,
+              `Teléfono: ${estimateTurn.nextState?.phone || ""}`,
+              `Dirección: ${estimateTurn.nextState?.address || ""}`,
+              `Trabajo: ${estimateTurn.nextState?.jobType || ""}`,
+              `Canal: ${canal}`,
+              `Contacto: ${contactoNorm}`,
+            ]
+              .filter(Boolean)
+              .join("\n");
+
+            const event = await googleCreateEvent({
+              tenantId: tenant.id,
+              calendarId,
+              summary,
+              description,
+              startISO: selectedSlot.startISO,
+              endISO: selectedSlot.endISO,
+              timeZone,
+            });
+
+            nextEstimateState = {
+              ...nextEstimateState,
+              lang: effectiveEstimateLang,
+              active: false,
+              step: "scheduled",
+              action: null,
+              calendarEventId: String(event?.id || ""),
+              calendarEventLink: String(event?.htmlLink || event?.meetLink || ""),
+            };
+
+            finalReply =
+              effectiveEstimateLang === "en"
+                ? [
+                    "Perfect 😊 Your appointment has been scheduled successfully.",
+                    `• Date: ${preferredDate}`,
+                    `• Time: ${selectedSlot.label || ""}`,
+                    event?.htmlLink ? `• Calendar link: ${event.htmlLink}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join("\n")
+                : [
+                    "Perfecto 😊 Tu cita quedó agendada correctamente.",
+                    `• Fecha: ${preferredDate}`,
+                    `• Hora: ${selectedSlot.label || ""}`,
+                    event?.htmlLink ? `• Link del calendario: ${event.htmlLink}` : "",
+                  ]
+                    .filter(Boolean)
+                    .join("\n");
+
+            try {
+              const saved = await saveEstimateRequest({
+                pool,
+                tenantId: tenant.id,
+                canal,
+                contacto: contactoNorm,
+                state: nextEstimateState,
+              });
+
+              console.log("[estimateFlow] saveEstimateRequest =", {
+                tenantId: tenant.id,
+                contacto: contactoNorm,
+                ok: saved?.ok || false,
+                reason: (saved as any)?.reason || null,
               });
             } catch (e: any) {
-              const msg = String(e?.message || "").toLowerCase();
-              const status = Number(e?.status || e?.response?.status || 0);
-
-              const alreadyDeleted =
-                status === 410 ||
-                msg.includes("resource has been deleted") ||
-                msg.includes("410");
-
-              if (!alreadyDeleted) {
-                // rollback de la nueva para no dejar duplicadas si falla borrar la vieja
-                try {
-                  if (event?.id) {
-                    await googleDeleteEvent({
-                      tenantId: tenant.id,
-                      calendarId,
-                      eventId: String(event.id),
-                    });
-                  }
-                } catch (rollbackErr: any) {
-                  console.warn("[estimateFlow] reschedule rollback error:", rollbackErr?.message);
-                }
-
-                throw e;
-              }
+              console.warn("[estimateFlow] saveEstimateRequest error:", e?.message);
             }
-
-            await pool.query(
-              `
-              UPDATE estimate_requests
-              SET status = 'cancelled'
-              WHERE id = $1
-              `,
-              [previousScheduledRow.id]
-            );
           }
-
-          nextEstimateState = {
-            ...nextEstimateState,
-            lang: effectiveEstimateLang,
-            active: false,
-            step: "scheduled",
-            action: null,
-            name: resolvedName,
-            phone: resolvedPhone,
-            address: resolvedAddress,
-            jobType: resolvedJobType,
-            calendarEventId: String(event?.id || ""),
-            calendarEventLink: String(event?.htmlLink || event?.meetLink || ""),
-          };
-
-          finalReply =
-            effectiveEstimateLang === "en"
-              ? [
-                  isReschedule
-                    ? "Perfect 😊 Your appointment has been rescheduled successfully."
-                    : "Perfect 😊 Your appointment has been scheduled successfully.",
-                  `• Date: ${preferredDate}`,
-                  `• Time: ${selectedSlot.label || ""}`,
-                  event?.htmlLink ? `• Calendar link: ${event.htmlLink}` : "",
-                ]
-                  .filter(Boolean)
-                  .join("\n")
-              : [
-                  isReschedule
-                    ? "Perfecto 😊 Tu cita fue reagendada correctamente."
-                    : "Perfecto 😊 Tu cita quedó agendada correctamente.",
-                  `• Fecha: ${preferredDate}`,
-                  `• Hora: ${selectedSlot.label || ""}`,
-                  event?.htmlLink ? `• Link del calendario: ${event.htmlLink}` : "",
-                ]
-                  .filter(Boolean)
-                  .join("\n");
-        }
-
-        try {
-          const saved = await saveEstimateRequest({
-            pool,
-            tenantId: tenant.id,
-            canal,
-            contacto: contactoNorm,
-            state: nextEstimateState,
-          });
-
-          console.log("[estimateFlow] saveEstimateRequest =", {
-            tenantId: tenant.id,
-            contacto: contactoNorm,
-            ok: saved?.ok || false,
-            reason: (saved as any)?.reason || null,
-          });
-        } catch (e: any) {
-          console.warn("[estimateFlow] saveEstimateRequest error:", e?.message);
         }
       }
     } catch (e: any) {
