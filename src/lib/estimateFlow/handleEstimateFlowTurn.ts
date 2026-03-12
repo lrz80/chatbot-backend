@@ -56,7 +56,6 @@ function looksLikeStartEstimateIntent(text: string) {
     /\bfree estimate\b/.test(t) ||
     /\bon site estimate\b/.test(t) ||
 
-    // ✅ nuevo: disparadores explícitos naturales
     /\bquiero agendar\b/.test(t) ||
     /\bquiero reservar\b/.test(t) ||
     /\bagendar\b/.test(t) ||
@@ -117,7 +116,6 @@ function wantsExitFlow(text: string) {
   );
 }
 
-
 function parseFlexibleDateInput(
   text: string,
   lang: Lang,
@@ -129,7 +127,6 @@ function parseFlexibleDateInput(
   const now = DateTime.now().setZone(timeZone).startOf("day");
   const lower = raw.toLowerCase();
 
-  // ✅ lenguaje natural
   if (/\bhoy\b/.test(lower) || /\btoday\b/.test(lower)) {
     return now.toFormat("yyyy-MM-dd");
   }
@@ -290,7 +287,13 @@ export function handleEstimateFlowTurn(
     ? currentState
     : createEmptyEstimateFlowState();
 
-  if (state.active && wantsExitFlow(text)) {
+  // ✅ IMPORTANTE:
+  // no limpiar el flujo si ya está listo para ejecutar una acción real
+  const isExecutionStep =
+    state.step === "ready_to_cancel" ||
+    state.step === "ready_to_schedule";
+
+  if (state.active && !isExecutionStep && wantsExitFlow(text)) {
     return {
       handled: true,
       reply:
@@ -305,19 +308,33 @@ export function handleEstimateFlowTurn(
   // 1) ARRANQUE DEL FLUJO
   // =========================
   if (!state.active) {
-    if (wantsCancelEstimate(text) || wantsRescheduleEstimate(text)) {
+    // ✅ cancelación directa
+    if (wantsCancelEstimate(text)) {
       const nextState = updateEstimateFlowState(state, {
         active: true,
-        step: "manage_existing",
+        action: "cancel",
+        step: "ready_to_cancel",
         phone: contactoFallback ? normalizePhone(contactoFallback) : null,
-    });
+      });
+
+      return {
+        handled: false,
+        nextState,
+      };
+    }
+
+    // ✅ reagendado directo
+    if (wantsRescheduleEstimate(text)) {
+      const nextState = updateEstimateFlowState(state, {
+        active: true,
+        action: "reschedule",
+        step: "awaiting_date",
+        phone: contactoFallback ? normalizePhone(contactoFallback) : null,
+      });
 
       return {
         handled: true,
-        reply:
-          lang === "en"
-            ? "I can help with that. Reply with:\n1. Cancel appointment\n2. Reschedule appointment"
-            : "Puedo ayudarte con eso. Responde con:\n1. Cancelar cita\n2. Reagendar cita",
+        reply: askDate(lang),
         nextState,
       };
     }
@@ -368,12 +385,10 @@ export function handleEstimateFlowTurn(
         step: "ready_to_cancel",
       });
 
+      // ✅ no responder texto intermedio engañoso;
+      // dejar que el webhook haga la cancelación real inmediatamente
       return {
-        handled: true,
-        reply:
-          lang === "en"
-            ? "Perfect. Let me verify your appointment and cancel it."
-            : "Perfecto. Déjame verificar tu cita para cancelarla.",
+        handled: false,
         nextState,
       };
     }
@@ -397,6 +412,14 @@ export function handleEstimateFlowTurn(
         lang === "en"
           ? "Please reply with:\n1. Cancel appointment\n2. Reschedule appointment"
           : "Por favor responde con:\n1. Cancelar cita\n2. Reagendar cita",
+      nextState: state,
+    };
+  }
+
+  // ✅ si ya está listo para cancelar, entregar control al webhook
+  if (state.step === "ready_to_cancel") {
+    return {
+      handled: false,
       nextState: state,
     };
   }
@@ -519,99 +542,95 @@ export function handleEstimateFlowTurn(
   // =========================
   // 7) ESPERANDO ELECCIÓN DE SLOT
   // =========================
- if (state.step === "awaiting_slot_choice") {
-  console.log("[estimateFlow][awaiting_slot_choice]", {
-    text,
-    step: state.step,
-    offeredSlots: (state as any).offeredSlots,
-    offeredSlotsLen: Array.isArray((state as any).offeredSlots)
-      ? (state as any).offeredSlots.length
-      : null,
-  });
+  if (state.step === "awaiting_slot_choice") {
+    console.log("[estimateFlow][awaiting_slot_choice]", {
+      text,
+      step: state.step,
+      offeredSlots: (state as any).offeredSlots,
+      offeredSlotsLen: Array.isArray((state as any).offeredSlots)
+        ? (state as any).offeredSlots.length
+        : null,
+    });
 
-  const raw = cleanText(text);
-  const normalizedRaw = raw.toLowerCase().replace(/\s+/g, " ").trim();
+    const raw = cleanText(text);
+    const normalizedRaw = raw.toLowerCase().replace(/\s+/g, " ").trim();
 
-  const offeredSlots = Array.isArray((state as any).offeredSlots)
-    ? (state as any).offeredSlots
-    : [];
+    const offeredSlots = Array.isArray((state as any).offeredSlots)
+      ? (state as any).offeredSlots
+      : [];
 
-  const match = normalizedRaw.match(/\b(\d{1,2})\b/);
-  const idx = match ? Number(match[1]) : NaN;
+    const match = normalizedRaw.match(/\b(\d{1,2})\b/);
+    const idx = match ? Number(match[1]) : NaN;
 
-  let picked: any = null;
+    let picked: any = null;
 
-  if (Number.isFinite(idx) && idx >= 1 && idx <= offeredSlots.length) {
-    picked = offeredSlots[idx - 1];
-  }
+    if (Number.isFinite(idx) && idx >= 1 && idx <= offeredSlots.length) {
+      picked = offeredSlots[idx - 1];
+    }
 
-  if (!picked) {
-    const normalizeHourText = (s: string) =>
-      String(s || "")
-        .toLowerCase()
-        .replace(/\./g, "")
-        .replace(/\s+/g, " ")
-        .replace(/a las\s+/g, "")
-        .replace(/esta bien/g, "")
-        .replace(/me funciona/g, "")
-        .replace(/me sirve/g, "")
-        .replace(/de la tarde/g, "pm")
-        .replace(/de la manana/g, "am")
-        .replace(/de la mañana/g, "am")
-        .trim();
+    if (!picked) {
+      const normalizeHourText = (s: string) =>
+        String(s || "")
+          .toLowerCase()
+          .replace(/\./g, "")
+          .replace(/\s+/g, " ")
+          .replace(/a las\s+/g, "")
+          .replace(/esta bien/g, "")
+          .replace(/me funciona/g, "")
+          .replace(/me sirve/g, "")
+          .replace(/de la tarde/g, "pm")
+          .replace(/de la manana/g, "am")
+          .replace(/de la mañana/g, "am")
+          .trim();
 
-    const normalizedInputHour = normalizeHourText(normalizedRaw);
+      const normalizedInputHour = normalizeHourText(normalizedRaw);
 
-    picked =
-      offeredSlots.find((slot: any) => {
-        const label = normalizeHourText(slot?.label || "");
-        if (!label) return false;
+      picked =
+        offeredSlots.find((slot: any) => {
+          const label = normalizeHourText(slot?.label || "");
+          if (!label) return false;
 
-        return (
-          normalizedInputHour.includes(label) ||
-          label.includes(normalizedInputHour)
-        );
-      }) || null;
-  }
+          return (
+            normalizedInputHour.includes(label) ||
+            label.includes(normalizedInputHour)
+          );
+        }) || null;
+    }
 
-  if (!picked?.startISO || !picked?.endISO) {
+    if (!picked?.startISO || !picked?.endISO) {
+      return {
+        handled: true,
+        reply: askSlotChoice(lang),
+        nextState: state,
+      };
+    }
+
+    const nextState = updateEstimateFlowState(state, {
+      selectedSlot: picked,
+      preferredTime: picked.label || null,
+      step: "ready_to_schedule",
+    });
+
     return {
       handled: true,
-      reply: askSlotChoice(lang),
-      nextState: state,
+      reply: readyMessage({
+        lang,
+        name: state.name,
+        phone: state.phone,
+        address: state.address,
+        jobType: state.jobType,
+        preferredDate: state.preferredDate,
+        preferredTime: picked.label || null,
+      }),
+      nextState,
     };
   }
-
-  const nextState = updateEstimateFlowState(state, {
-    selectedSlot: picked,
-    preferredTime: picked.label || null,
-    step: "ready_to_schedule",
-  });
-
-  return {
-    handled: true,
-    reply: readyMessage({
-      lang,
-      name: state.name,
-      phone: state.phone,
-      address: state.address,
-      jobType: state.jobType,
-      preferredDate: state.preferredDate,
-      preferredTime: picked.label || null,
-    }),
-    nextState,
-  };
-}
 
   if (state.step === "offering_slots") {
     return { handled: false, nextState: state };
   }
 
   if (state.step === "ready_to_schedule") {
-    return { handled: false, nextState: state };
-  }
-
-  if (state.step === "ready_to_cancel") {
     return { handled: false, nextState: state };
   }
 

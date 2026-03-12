@@ -9,7 +9,7 @@ import { saveEstimateRequest } from "./saveEstimateRequest";
 
 import { getBusinessHours } from "../../lib/appointments/booking/db";
 import { getSlotsForDate } from "../appointments/booking/slots";
-import { googleCreateEvent } from "../../services/googleCalendar";
+import { googleCreateEvent, googleDeleteEvent } from "../../services/googleCalendar";
 
 type Lang = "es" | "en";
 
@@ -67,26 +67,162 @@ export async function runEstimateFlowTurn({
     timeZone: String(tenant?.timezone || "America/New_York"),
   });
 
-  if (!estimateTurn.handled) {
+  const nextStep = estimateTurn.nextState?.step;
+
+  const shouldContinueEvenIfNotHandled =
+    nextStep === "ready_to_cancel" ||
+    nextStep === "offering_slots" ||
+    nextStep === "ready_to_schedule";
+
+  if (!estimateTurn.handled && !shouldContinueEvenIfNotHandled) {
     return { handled: false };
   }
 
   let nextEstimateState = {
     ...estimateState,
-    ...estimateTurn.nextState,
+    ...(estimateTurn.nextState || {}),
     lang:
-      (estimateTurn.nextState.lang as Lang) || effectiveEstimateLang,
+      ((estimateTurn.nextState as any)?.lang as Lang) || effectiveEstimateLang,
   };
 
-  let finalReply = estimateTurn.reply;
+  let finalReply = estimateTurn.handled ? estimateTurn.reply : "";
+
+  // =========================================================
+  // ready_to_cancel
+  // =========================================================
+  if (nextStep === "ready_to_cancel") {
+    try {
+      const { rows: calendarRows } = await pool.query(
+        `
+        SELECT calendar_id
+        FROM calendar_integrations
+        WHERE tenant_id = $1
+          AND provider = 'google'
+          AND status = 'connected'
+        LIMIT 1
+        `,
+        [tenant.id]
+      );
+
+      const calendarId = calendarRows[0]?.calendar_id || "primary";
+
+      const { rows: estimateRows } = await pool.query(
+        `
+        SELECT
+          id,
+          calendar_event_id,
+          scheduled_start_at,
+          scheduled_end_at,
+          status
+        FROM estimate_requests
+        WHERE tenant_id = $1
+          AND contacto = $2
+          AND canal = $3
+          AND calendar_event_id IS NOT NULL
+          AND status = 'scheduled'
+        ORDER BY scheduled_start_at DESC NULLS LAST, created_at DESC
+        LIMIT 1
+        `,
+        [tenant.id, contactoNorm, canal]
+      );
+
+      const row = estimateRows[0];
+      const calendarEventId = String(row?.calendar_event_id || "").trim();
+
+      if (!calendarEventId) {
+        finalReply =
+          effectiveEstimateLang === "en"
+            ? "I couldn’t find a scheduled appointment to cancel."
+            : "No pude encontrar una cita agendada para cancelar.";
+
+        nextEstimateState = {
+          ...nextEstimateState,
+          lang: effectiveEstimateLang,
+          active: false,
+          step: "cancelled",
+          action: null,
+          calendarEventId: null,
+          calendarEventLink: null,
+        };
+
+        return {
+          handled: true,
+          finalReply,
+          nextEstimateState,
+        };
+      }
+
+      await googleDeleteEvent({
+        tenantId: tenant.id,
+        calendarId,
+        eventId: calendarEventId,
+      });
+
+      await pool.query(
+        `
+        UPDATE estimate_requests
+        SET
+          status = 'cancelled',
+          updated_at = NOW()
+        WHERE id = $1
+        `,
+        [row.id]
+      );
+
+      nextEstimateState = {
+        ...nextEstimateState,
+        lang: effectiveEstimateLang,
+        active: false,
+        step: "cancelled",
+        action: null,
+        calendarEventId: null,
+        calendarEventLink: null,
+      };
+
+      finalReply =
+        effectiveEstimateLang === "en"
+          ? "Perfect 😊 Your appointment has been canceled successfully."
+          : "Perfecto 😊 Tu cita fue cancelada correctamente.";
+    } catch (e: any) {
+      console.warn("[estimateFlow] cancel error:", e?.message);
+
+      finalReply =
+        effectiveEstimateLang === "en"
+          ? "I couldn’t cancel the appointment right now. Please try again in a moment."
+          : "No pude cancelar la cita en este momento. Por favor inténtalo nuevamente en un momento.";
+
+      nextEstimateState = {
+        ...nextEstimateState,
+        lang: effectiveEstimateLang,
+        active: true,
+        step: "ready_to_cancel",
+      };
+    }
+
+    console.log("[estimateFlow][before_transition]", {
+      currentStep: estimateState.step,
+      nextStep: nextEstimateState.step,
+      offeredSlots: (nextEstimateState as any).offeredSlots,
+      offeredSlotsLen: Array.isArray((nextEstimateState as any).offeredSlots)
+        ? (nextEstimateState as any).offeredSlots.length
+        : null,
+      selectedSlot: (nextEstimateState as any).selectedSlot || null,
+    });
+
+    return {
+      handled: true,
+      finalReply,
+      nextEstimateState,
+    };
+  }
 
   // =========================================================
   // offering_slots
   // =========================================================
-  if (estimateTurn.nextState.step === "offering_slots") {
+  if (nextStep === "offering_slots") {
     try {
       const preferredDate = String(
-        estimateTurn.nextState.preferredDate || ""
+        estimateTurn.nextState?.preferredDate || ""
       ).trim();
 
       const timeZone = String(tenant?.timezone || "America/New_York");
@@ -125,7 +261,7 @@ export async function runEstimateFlowTurn({
             : "No tengo horarios disponibles para esa fecha. Por favor envíame otra fecha en formato YYYY-MM-DD.";
 
         nextEstimateState = {
-          ...estimateTurn.nextState,
+          ...nextEstimateState,
           lang: effectiveEstimateLang,
           offeredSlots: [],
           selectedSlot: null,
@@ -163,7 +299,7 @@ export async function runEstimateFlowTurn({
               ].join("\n");
 
         nextEstimateState = {
-          ...estimateTurn.nextState,
+          ...nextEstimateState,
           lang: effectiveEstimateLang,
           offeredSlots: limitedSlots,
           selectedSlot: null,
@@ -179,7 +315,7 @@ export async function runEstimateFlowTurn({
           : "No pude consultar los horarios disponibles en este momento. Por favor inténtalo con otra fecha más tarde.";
 
       nextEstimateState = {
-        ...estimateTurn.nextState,
+        ...nextEstimateState,
         lang: effectiveEstimateLang,
         offeredSlots: [],
         selectedSlot: null,
@@ -191,10 +327,10 @@ export async function runEstimateFlowTurn({
   // =========================================================
   // ready_to_schedule
   // =========================================================
-  if (estimateTurn.nextState.step === "ready_to_schedule") {
+  if (nextStep === "ready_to_schedule") {
     try {
       const preferredDate = String(
-        estimateTurn.nextState.preferredDate || ""
+        estimateTurn.nextState?.preferredDate || ""
       ).trim();
 
       const selectedSlot = (estimateTurn.nextState as any)?.selectedSlot || null;
@@ -206,7 +342,7 @@ export async function runEstimateFlowTurn({
             : "No pude identificar el horario seleccionado. Por favor elige nuevamente una de las opciones disponibles.";
 
         nextEstimateState = {
-          ...estimateTurn.nextState,
+          ...nextEstimateState,
           lang: effectiveEstimateLang,
           step: "awaiting_slot_choice",
         };
@@ -247,22 +383,22 @@ export async function runEstimateFlowTurn({
               : "Ese horario ya no está disponible. Por favor elige otro horario disponible.";
 
           nextEstimateState = {
-            ...estimateTurn.nextState,
+            ...nextEstimateState,
             lang: effectiveEstimateLang,
             selectedSlot: null,
             step: "offering_slots",
           };
         } else {
           const summary = `Estimado — ${
-            estimateTurn.nextState.jobType || "Visita técnica"
+            estimateTurn.nextState?.jobType || "Visita técnica"
           }`;
 
           const description = [
             "Agendado por Aamy",
-            `Cliente: ${estimateTurn.nextState.name || ""}`,
-            `Teléfono: ${estimateTurn.nextState.phone || ""}`,
-            `Dirección: ${estimateTurn.nextState.address || ""}`,
-            `Trabajo: ${estimateTurn.nextState.jobType || ""}`,
+            `Cliente: ${estimateTurn.nextState?.name || ""}`,
+            `Teléfono: ${estimateTurn.nextState?.phone || ""}`,
+            `Dirección: ${estimateTurn.nextState?.address || ""}`,
+            `Trabajo: ${estimateTurn.nextState?.jobType || ""}`,
             `Canal: ${canal}`,
             `Contacto: ${contactoNorm}`,
           ]
@@ -280,7 +416,7 @@ export async function runEstimateFlowTurn({
           });
 
           nextEstimateState = {
-            ...estimateTurn.nextState,
+            ...nextEstimateState,
             lang: effectiveEstimateLang,
             active: false,
             step: "scheduled",
@@ -341,7 +477,7 @@ export async function runEstimateFlowTurn({
           tenantId: tenant.id,
           canal,
           contacto: contactoNorm,
-          state: estimateTurn.nextState,
+          state: nextEstimateState,
         });
 
         console.log("[estimateFlow] saveEstimateRequest fallback =", {
@@ -355,7 +491,7 @@ export async function runEstimateFlowTurn({
       }
 
       nextEstimateState = {
-        ...estimateTurn.nextState,
+        ...nextEstimateState,
         lang: effectiveEstimateLang,
         active: false,
         step: "scheduled",

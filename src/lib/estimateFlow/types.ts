@@ -10,7 +10,8 @@ export type EstimateFlowStep =
   | "manage_existing"
   | "ready_to_schedule"
   | "ready_to_cancel"
-  | "scheduled";
+  | "scheduled"
+  | "cancelled";
 
 export type EstimateFlowSlot = {
   startISO: string;
