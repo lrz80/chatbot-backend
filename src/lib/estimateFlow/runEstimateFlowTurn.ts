@@ -681,8 +681,7 @@ export async function runEstimateFlowTurn({
                   scheduled_end_at = $8,
                   calendar_event_id = $9,
                   calendar_event_link = $10,
-                  status = 'scheduled',
-                  updated_at = NOW()
+                  status = 'scheduled'
                 WHERE id = $11
                 `,
                 [
