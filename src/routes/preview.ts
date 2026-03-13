@@ -1,5 +1,3 @@
-//src/routes/preview.ts
-
 import { Router, Request, Response } from 'express';
 import pool from '../lib/db';
 import { authenticateUser } from '../middleware/auth';
@@ -29,7 +27,7 @@ function normalizarTexto(texto: string): string {
  * Handler reutilizable para las vistas previas de WhatsApp y Meta.
  * - Orden: Flows → FAQs → OpenAI
  * - Filtrado por canal en Flows y FAQs
- * - Multi-idioma: detección + traducción (las funciones *Traducido ya lo manejan)
+ * - Multi-idioma: detección + traducción
  * - Sin side effects (no incrementa used ni escribe en DB)
  */
 async function handlePreview(
@@ -51,8 +49,11 @@ async function handlePreview(
     const tenant = tenantRes.rows[0];
     if (!tenant) return res.status(404).json({ error: 'Negocio no encontrado' });
 
+    const tenantBase = (tenant?.idioma === 'en' ? 'en' : 'es') as 'es' | 'en';
+
     // 🌐 Detección de idioma de entrada
-    const idioma = await detectarIdioma(message);
+    const detectedInput = await detectarIdioma(message);
+    const idioma = detectedInput.lang || tenantBase;
 
     // 🧠 Prompt y bienvenida por canal + idioma
     const prompt = await getPromptPorCanal(canalReal, tenant, idioma);
@@ -64,13 +65,12 @@ async function handlePreview(
     }
 
     // 🎛️ Canales a considerar por tipo
-    // Para Meta unificamos 'meta' | 'facebook' | 'instagram' (igual que en tus webhooks reales)
     const canalesFaq =
       canalReal === 'meta' ? ['meta', 'facebook', 'instagram'] : ['whatsapp'];
     const canalesFlow =
       canalReal === 'meta' ? ['meta', 'facebook', 'instagram'] : ['whatsapp'];
 
-    // 📚 Cargar FAQs por canal (multi-idioma lo maneja buscarRespuestaSimilitudFaqsTraducido)
+    // 📚 Cargar FAQs por canal
     let faqs: Array<{ pregunta: string; respuesta: string }> = [];
     try {
       const faqsRes = await pool.query(
@@ -89,7 +89,6 @@ async function handlePreview(
     }
 
     // 🧭 Cargar Flows por canal
-    // Asumimos que tu tabla `flows` tiene columna `canal`. Si no, quita el filtro canal y déjalo solo por tenant.
     let flows: any[] = [];
     try {
       const flowsRes = await pool.query(
@@ -113,24 +112,33 @@ async function handlePreview(
 
     // ✅ ORDEN: Flows → FAQs → OpenAI
 
-    // 1) Flujos guiados (puede devolver texto o estructura con botones/opciones)
+    // 1) Flujos guiados
     let respuesta: any = await buscarRespuestaDesdeFlowsTraducido(flows, message, idioma);
     if (respuesta) {
       if (typeof respuesta === 'object' && respuesta !== null) {
-        // Respuesta estructurada (texto + opciones/botones)
         return res.status(200).json({ response: respuesta, kind: 'flow' });
       }
-      // Si fue solo texto, homogenizamos idioma de salida
-      const idiomaFlow = await detectarIdioma(respuesta);
-      if (idiomaFlow !== idioma) respuesta = await traducirMensaje(respuesta, idioma);
+
+      const detectedFlow = await detectarIdioma(respuesta);
+      const idiomaFlow = detectedFlow.lang || idioma;
+
+      if (idiomaFlow !== idioma) {
+        respuesta = await traducirMensaje(respuesta, idioma);
+      }
+
       return res.status(200).json({ response: respuesta, kind: 'flow' });
     }
 
-    // 2) FAQs (similaridad + multi-idioma manejado en la función *Traducido)
+    // 2) FAQs
     respuesta = await buscarRespuestaSimilitudFaqsTraducido(faqs, message, idioma);
     if (respuesta) {
-      const idiomaFaq = await detectarIdioma(respuesta);
-      if (idiomaFaq !== idioma) respuesta = await traducirMensaje(respuesta, idioma);
+      const detectedFaq = await detectarIdioma(respuesta);
+      const idiomaFaq = detectedFaq.lang || idioma;
+
+      if (idiomaFaq !== idioma) {
+        respuesta = await traducirMensaje(respuesta, idioma);
+      }
+
       return res.status(200).json({ response: respuesta, kind: 'faq' });
     }
 
@@ -152,9 +160,17 @@ async function handlePreview(
       ],
     });
 
-    let texto = completion.choices[0]?.message?.content?.trim() ?? bienvenida ?? 'Lo siento, no entendí eso.';
-    const idiomaAI = await detectarIdioma(texto);
-    if (idiomaAI !== idioma) texto = await traducirMensaje(texto, idioma);
+    let texto =
+      completion.choices[0]?.message?.content?.trim() ??
+      bienvenida ??
+      'Lo siento, no entendí eso.';
+
+    const detectedAI = await detectarIdioma(texto);
+    const idiomaAI = detectedAI.lang || idioma;
+
+    if (idiomaAI !== idioma) {
+      texto = await traducirMensaje(texto, idioma);
+    }
 
     return res.status(200).json({ response: texto, kind: 'ai' });
   } catch (err) {
