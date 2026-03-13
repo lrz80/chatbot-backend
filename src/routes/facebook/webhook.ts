@@ -64,16 +64,8 @@ import {
 import { parseDatosCliente } from "../../lib/parseDatosCliente";
 
 import { runEstimateFlowTurn } from "../../lib/estimateFlow/runEstimateFlowTurn";
-
-import { isEstimateFlowEnabled } from "../../lib/estimateFlow/isEstimateFlowEnabled";
-import { handleEstimateFlowTurn } from "../../lib/estimateFlow/handleEstimateFlowTurn";
-import { getEstimateFlowState } from "../../lib/estimateFlow/getEstimateFlowState";
-import { saveEstimateRequest } from "../../lib/estimateFlow/saveEstimateRequest";
-import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
-import { buildEstimateSlot } from "../../lib/estimateFlow/buildEstimateSlot";
-
-import { getBusinessHours } from "../../lib/appointments/booking/db";
-import { getSlotsForDate } from "../../lib/appointments/booking/slots";
+import { detectarIdioma } from "../../lib/detectarIdioma";
+import { traducirMensaje } from "../../lib/traducirMensaje";
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -474,6 +466,33 @@ async function procesarMensajeMeta(args: {
     if (intent !== undefined) lastIntent = intent;
   }
 
+  async function ensureReplyLanguage(text: string, targetLang: Lang): Promise<string> {
+    const raw = String(text || "").trim();
+    if (!raw) return raw;
+
+    try {
+      const detected = await detectarIdioma(raw);
+      const outLang = detected?.lang;
+
+      // Si no se pudo detectar, no tocamos
+      if (outLang !== "es" && outLang !== "en") {
+        return raw;
+      }
+
+      // Ya está en el idioma correcto
+      if (outLang === targetLang) {
+        return raw;
+      }
+
+      // Traducir al idioma del turno
+      const translated = await traducirMensaje(raw, targetLang);
+      return String(translated || raw).trim() || raw;
+    } catch (e: any) {
+      console.warn("⚠️ [META] ensureReplyLanguage failed:", e?.message || e);
+      return raw;
+    }
+  }
+
   const setConversationStateCompat = async (
     tId: string,
     c: any,
@@ -598,7 +617,8 @@ async function procesarMensajeMeta(args: {
   }
 
   async function replyAndExit(text: string, source: string, intent?: string | null) {
-    setReply(text, source, intent);
+    const finalText = await ensureReplyLanguage(text, idiomaDestino);
+    setReply(finalText, source, intent);
     await finalizeReply();
     return;
   }
@@ -1040,7 +1060,8 @@ async function procesarMensajeMeta(args: {
       });
     }
 
-    setReply(composed.text, "sm-fallback");
+    const finalFallbackText = await ensureReplyLanguage(composed.text, idiomaDestino);
+    setReply(finalFallbackText, "sm-fallback");
     await finalizeReply();
     return;
   }
