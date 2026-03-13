@@ -451,6 +451,17 @@ export async function runEstimateFlowTurn({
             step: "offering_slots",
           };
         } else {
+          console.log("[estimateFlow][ready_to_schedule][state_check]", {
+            tenantId: tenant.id,
+            contactoNorm,
+            estimateState,
+            estimateTurnNextState: estimateTurn.nextState,
+            nextEstimateState,
+            action_in_estimateState: estimateState?.action || null,
+            action_in_turn_next: estimateTurn.nextState?.action || null,
+            action_in_nextEstimateState: nextEstimateState?.action || null,
+          });
+
           const isReschedule = nextEstimateState.action === "reschedule";
 
           if (isReschedule) {
@@ -819,6 +830,12 @@ export async function runEstimateFlowTurn({
       };
     }
   }
+
+  console.log("[estimateFlow][action_check]", {
+    action_in_state: estimateState?.action || null,
+    action_in_turn: estimateTurn?.nextState?.action || null,
+    action_in_next: nextEstimateState?.action || null,
+  });
 
   console.log("[estimateFlow][before_transition]", {
     currentStep: estimateState.step,
