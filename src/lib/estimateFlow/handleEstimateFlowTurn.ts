@@ -476,6 +476,7 @@ export function handleEstimateFlowTurn(
     const alreadyHasPhone = isLikelyPhone(cleanText(state.phone || ""));
 
     const nextState = updateEstimateFlowState(state, {
+      action: state.action || null,
       name: text,
       step: alreadyHasPhone ? "awaiting_address" : "awaiting_phone",
     });
@@ -503,6 +504,7 @@ export function handleEstimateFlowTurn(
     }
 
     const nextState = updateEstimateFlowState(state, {
+      action: state.action || null,
       phone: normalizePhone(text),
       step: "awaiting_address",
     });
@@ -519,6 +521,7 @@ export function handleEstimateFlowTurn(
   // =========================
   if (state.step === "awaiting_address") {
     const nextState = updateEstimateFlowState(state, {
+      action: state.action || null,
       address: text,
       step: "awaiting_job_type",
     });
@@ -535,6 +538,7 @@ export function handleEstimateFlowTurn(
   // =========================
   if (state.step === "awaiting_job_type") {
     const nextState = updateEstimateFlowState(state, {
+      action: state.action || null,
       jobType: text,
       step: "awaiting_date",
     });
@@ -568,6 +572,7 @@ export function handleEstimateFlowTurn(
     }
 
     const nextState = updateEstimateFlowState(state, {
+      action: state.action || null,
       preferredDate: parsedDate,
       offeredSlots: [],
       selectedSlot: null,
@@ -651,6 +656,7 @@ export function handleEstimateFlowTurn(
     }
 
     const nextState = updateEstimateFlowState(state, {
+      action: state.action || null,
       selectedSlot: picked,
       preferredTime: picked.label || null,
       step: "ready_to_schedule",
