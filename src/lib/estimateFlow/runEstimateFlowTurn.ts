@@ -135,8 +135,8 @@ export async function runEstimateFlowTurn({
           AND calendar_event_id IS NOT NULL
           AND status = 'scheduled'
           AND (
-            regexp_replace(coalesce(contacto::text, ''), '[^0-9]', '', 'g')
-            OR regexp_replace(coalesce(telefono::text, ''), '[^0-9]', '', 'g')
+            regexp_replace(coalesce(contacto::text, ''), '[^0-9]', '', 'g') = $2
+            OR regexp_replace(coalesce(telefono::text, ''), '[^0-9]', '', 'g') = $2
           )
         ORDER BY scheduled_start_at DESC NULLS LAST, created_at DESC
         LIMIT 1
