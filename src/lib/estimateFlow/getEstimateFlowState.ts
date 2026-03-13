@@ -29,6 +29,7 @@ export function getEstimateFlowState(convoCtx: any): EstimateFlowState {
     active,
     step: raw.step || "idle",
     lang: raw.lang ?? null,
+    action: raw.action ?? null,
     name: raw.name ?? null,
     phone: raw.phone ?? null,
     address: raw.address ?? null,
