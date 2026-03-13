@@ -1,5 +1,3 @@
-// backend/src/lib/channels/engine/lang/resolveLangForTurn.ts
-
 import { Pool } from "pg";
 import { detectarIdioma } from "../../../detectarIdioma";
 import type { Canal } from "../../../detectarIntencion";
@@ -30,6 +28,8 @@ export type LangResolutionResult = {
   langRes: {
     finalLang: Lang;
     detectedLang: Lang | null;
+    detectedConfidence?: number;
+    detectedSource?: "heuristic" | "openai" | "none";
     lockedLang: Lang | null;
     inBookingLang: boolean;
     shouldPersist?: boolean;
@@ -51,7 +51,6 @@ function normalizeChoice(s: string): string {
 function detectExplicitLanguageSwitch(text: string): Lang | null {
   const t = normalizeChoice(text);
 
-  // pedir inglés
   if (
     t.includes("english please") ||
     t.includes("in english") ||
@@ -61,7 +60,6 @@ function detectExplicitLanguageSwitch(text: string): Lang | null {
     return "en";
   }
 
-  // pedir español
   if (
     t.includes("en espanol") ||
     t.includes("en español") ||
@@ -88,7 +86,6 @@ function isChoosingFromCtxListsEarly(ctx: any, userText: string): boolean {
 
   if (!candidates.length) return false;
 
-  // Respuesta tipo "1", "2" para escoger
   if (/^[1-9]$/.test(u)) return true;
 
   return candidates.some((it) => {
@@ -132,22 +129,41 @@ function hasRecentListAndMatch(ctx: any, userText: string): boolean {
   });
 }
 
-function isStrongLanguageTurn(text: string, detectedLang: Lang | null): boolean {
-  const t = String(text || "").trim();
-  if (!t) return false;
+function isAmbiguousTurn(text: string, ctx: any): boolean {
+  const raw = String(text || "").trim();
+  const t = normalizeChoice(raw);
 
-  const words = t.split(/\s+/).filter(Boolean);
-  const wordCount = words.length;
+  if (!t) return true;
 
-  if (detectedLang !== "es" && detectedLang !== "en") return false;
+  if (/^[0-9]+$/.test(t)) return true;
+  if (looksLikeShortLabel(raw)) return true;
+  if (hasRecentListAndMatch(ctx, raw)) return true;
 
-  // Mensajes muy cortos no deben forzar cambio
-  if (wordCount <= 2 && t.length < 12) return false;
+  // tokens muy cortos / ambiguos
+  if (t.length <= 3) return true;
 
-  return true;
+  return false;
 }
 
-export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangResolutionResult> {
+function isStrongDetectedTurn(args: {
+  text: string;
+  detectedLang: Lang | null;
+  detectedConfidence?: number;
+  ctx: any;
+  inBookingLang: boolean;
+}): boolean {
+  const { text, detectedLang, detectedConfidence = 0, ctx, inBookingLang } = args;
+
+  if (inBookingLang) return false;
+  if (detectedLang !== "es" && detectedLang !== "en") return false;
+  if (isAmbiguousTurn(text, ctx)) return false;
+
+  return detectedConfidence >= 0.8;
+}
+
+export async function resolveLangForTurn(
+  args: ResolveLangArgs
+): Promise<LangResolutionResult> {
   const {
     pool,
     tenant,
@@ -161,10 +177,6 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
 
   const text = String(userInput || "");
 
-  // ===============================
-  // 🌍 LANG RESOLUTION (CLIENT-FIRST)
-  // ===============================
-
   const storedLang = await getIdiomaClienteDB(
     pool,
     tenant.id,
@@ -175,7 +187,6 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
 
   let idiomaDestino: Lang = tenantBase;
 
-  // ✅ LANG EARLY-LOCK: si está eligiendo de listas del ctx, NO recalcules idioma este turno
   const isChoosing =
     storedLang === "es" || storedLang === "en"
       ? isChoosingFromCtxListsEarly(convoCtx, text)
@@ -184,17 +195,23 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
   if (isChoosing) {
     idiomaDestino = storedLang as Lang;
     forcedLangThisTurn = idiomaDestino;
-    console.log("🌍 LANG EARLY-LOCK (ctx list pick) =>", { userInput, storedLang });
+
+    console.log("🌍 LANG EARLY-LOCK (ctx list pick) =>", {
+      userInput,
+      storedLang,
+    });
   }
 
   const langRes = forcedLangThisTurn
     ? {
         finalLang: forcedLangThisTurn,
-        detectedLang: forcedLangThisTurn,
-        lockedLang: forcedLangThisTurn,   // 👈 mismo tipo: Lang
+        detectedLang: null,
+        detectedConfidence: 0,
+        detectedSource: "none" as const,
+        lockedLang: forcedLangThisTurn,
         inBookingLang: false,
-        shouldPersist: true,
-        }
+        shouldPersist: false,
+      }
     : await resolveTurnLangClientFirst({
         pool,
         tenantId: tenant.id,
@@ -207,84 +224,79 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
         convoCtx,
       });
 
-    // Idioma base propuesto por el resolver
-    if (forcedLangThisTurn) {
-      idiomaDestino = forcedLangThisTurn;
-    } else {
-      idiomaDestino = langRes.finalLang;
-    }
+  idiomaDestino = forcedLangThisTurn ? forcedLangThisTurn : langRes.finalLang;
 
-    // 🌍 Cambio explícito de idioma solicitado por el usuario
   const explicitLang = detectExplicitLanguageSwitch(text);
 
-  if (explicitLang && explicitLang !== idiomaDestino) {
-    console.log("🌍 LANG EXPLICIT SWITCH", {
-      userInput: text,
-      from: idiomaDestino,
-      to: explicitLang,
-    });
+  const threadLang = String((convoCtx as any)?.thread_lang || "").toLowerCase();
+  const ambiguousTurn = isAmbiguousTurn(text, convoCtx);
 
+  const strongDetectedTurn = isStrongDetectedTurn({
+    text,
+    detectedLang: langRes.detectedLang,
+    detectedConfidence: langRes.detectedConfidence,
+    ctx: convoCtx,
+    inBookingLang: langRes.inBookingLang,
+  });
+
+  // 1) Forced lang manda
+  if (forcedLangThisTurn) {
+    idiomaDestino = forcedLangThisTurn;
+  }
+  // 2) Switch explícito del usuario
+  else if (explicitLang) {
     idiomaDestino = explicitLang;
-
     convoCtx = {
       ...(convoCtx || {}),
       thread_lang: explicitLang,
     };
-  }
 
-  // ✅ REGLA EXTRA: saludo bilingüe "Hi hola / hi buenas..."
-  const bilingualGreeting = /^\s*(hi|hello)\s+(hola|buenas|buenos)\b/i.test(text);
-
-  if (
-    !langRes.inBookingLang &&
-    bilingualGreeting &&
-    (storedLang === "es" || tenantBase === "es")
-  ) {
-    console.log("🌍 LANG OVERRIDE (bilingual greeting → es)", {
-      userInput,
-      storedLang,
-      tenantBase,
-      prevLang: idiomaDestino,
+    console.log("🌍 LANG EXPLICIT SWITCH", {
+      userInput: text,
+      to: explicitLang,
     });
-    idiomaDestino = "es";
   }
+  // 3) Turno fuerte detectado
+  else if (strongDetectedTurn && langRes.detectedLang) {
+    idiomaDestino = langRes.detectedLang;
 
-  // ✅ Override por caracteres claramente españoles
-  const hasStrongEsChars = /[áéíóúñ¿¡]/i.test(text);
-
-  if (
-    !langRes.inBookingLang &&
-    hasStrongEsChars &&
-    idiomaDestino === "en" &&
-    (tenantBase === "es" || storedLang === "es")
-  ) {
-    console.log("🌍 LANG OVERRIDE (accent chars → es)", {
-      userInput,
-      storedLang,
-      tenantBase,
-      prevLang: idiomaDestino,
+    console.log("🌍 LANG STRONG DETECTED TURN", {
+      userInput: text,
+      detectedLang: langRes.detectedLang,
+      detectedConfidence: langRes.detectedConfidence,
+      detectedSource: langRes.detectedSource,
+      prev: storedLang,
     });
-    idiomaDestino = "es";
   }
-
-  // ✅ LANG LOCK: si ya hay idioma del hilo, respétalo
-  const threadLang = String((convoCtx as any)?.thread_lang || "").toLowerCase();
-
-  if (threadLang === "es" || threadLang === "en") {
+  // 4) Si el turno es ambiguo, conserva thread_lang si existe
+  else if ((threadLang === "es" || threadLang === "en") && ambiguousTurn) {
     idiomaDestino = threadLang as Lang;
   }
+  // 5) Si hay thread_lang previo, úsalo como fallback principal
+  else if (threadLang === "es" || threadLang === "en") {
+    idiomaDestino = threadLang as Lang;
+  }
+  // 6) Luego storedLang
+  else if (storedLang === "es" || storedLang === "en") {
+    idiomaDestino = storedLang as Lang;
+  }
+  // 7) Luego tenantBase
+  else {
+    idiomaDestino = tenantBase;
+  }
 
-  // Tokens de talla (S/M/L) → mantén storedLang
+  // Size tokens: mantener idioma previo
   const tLower = text.trim().toLowerCase();
-  const isSizeToken = /^(small|medium|large|x-large|xl|xs|peque(n|ñ)o|mediano|grande)$/i.test(
-    tLower
-  );
+  const isSizeToken =
+    /^(small|medium|large|x-large|xl|xs|peque(n|ñ)o|mediano|grande)$/i.test(
+      tLower
+    );
 
   if (isSizeToken && (storedLang === "es" || storedLang === "en")) {
     idiomaDestino = storedLang as Lang;
   }
 
-  // ✅ NO CAMBIAR IDIOMA por short label (elegir de listas)
+  // Si es short label y detector quiso flippear, no cambies
   if (
     !langRes.inBookingLang &&
     (storedLang === "es" || storedLang === "en") &&
@@ -295,14 +307,15 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
     idiomaDestino = storedLang as Lang;
   }
 
-  // ✅ NO CAMBIAR IDIOMA cuando el usuario está seleccionando una opción con lista reciente
+  // Si está escogiendo desde lista reciente, no flippear
   if (hasRecentListAndMatch(convoCtx, text)) {
     const locked =
       storedLang === "es" || storedLang === "en"
         ? storedLang
-        : (idiomaDestino || tenantBase);
+        : idiomaDestino || tenantBase;
 
     idiomaDestino = locked as Lang;
+
     console.log("🌍 LANG LOCK (choice token, no flip) =>", {
       userInput,
       storedLang,
@@ -311,47 +324,35 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
     });
   }
 
-  // ✅ thread_lang fijo desde el inicio del hilo
+  // Guardar thread_lang con el idioma final del turno
   if (idiomaDestino === "es" || idiomaDestino === "en") {
-    convoCtx = { ...(convoCtx || {}), thread_lang: idiomaDestino };
+    convoCtx = {
+      ...(convoCtx || {}),
+      thread_lang: idiomaDestino,
+    };
   }
 
-  // ✅ NO CAMBIAR IDIOMA en mensajes muy cortos (gracias/ok/👍/etc)
-  const trimmed = text.trim();
-  const isVeryShort = trimmed.length <= 8;
-
-  if (
-    !langRes.inBookingLang &&
-    (storedLang === "es" || storedLang === "en") &&
-    isVeryShort
-  ) {
-    // Si el detector quiere flippear en un mensaje corto, no lo permitas
-    idiomaDestino = storedLang as Lang;
-  }
-
-  // 🔒 THREAD LANG FINAL LOCK
-  const finalThreadLang = String((convoCtx as any)?.thread_lang || "").toLowerCase();
-
-  const currentTurnShowsStrongLang =
-    !langRes.inBookingLang &&
-    isStrongLanguageTurn(text, langRes.detectedLang);
-
-  if (
-    (finalThreadLang === "es" || finalThreadLang === "en") &&
-    !currentTurnShowsStrongLang
-  ) {
-    idiomaDestino = finalThreadLang as Lang;
-  }
-
-  // ✅ Persistir idioma final del turno (sticky) — AL FINAL
-  if (
+  // Persistir solo si hubo señal fuerte o switch explícito
+  const shouldPersistDetectedTurn =
     !langRes.inBookingLang &&
     (idiomaDestino === "es" || idiomaDestino === "en") &&
-    langRes.shouldPersist !== false
-  ) {
-    if (storedLang !== idiomaDestino) {
-      await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, idiomaDestino);
-    }
+    !ambiguousTurn &&
+    (
+      explicitLang !== null ||
+      (
+        (langRes.detectedLang === "es" || langRes.detectedLang === "en") &&
+        (langRes.detectedConfidence ?? 0) >= 0.8
+      )
+    );
+
+  if (shouldPersistDetectedTurn && storedLang !== idiomaDestino) {
+    await upsertIdiomaClienteDB(
+      pool,
+      tenant.id,
+      canal,
+      contactoNorm,
+      idiomaDestino
+    );
   }
 
   const promptBase = getPromptPorCanal(canal, tenant, idiomaDestino);
@@ -363,6 +364,10 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
     idiomaDestino,
     storedLang,
     detectedLang: langRes.detectedLang,
+    detectedConfidence: langRes.detectedConfidence,
+    detectedSource: langRes.detectedSource,
+    ambiguousTurn,
+    strongDetectedTurn,
     inBookingLang: langRes.inBookingLang,
   });
 

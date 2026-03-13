@@ -1,7 +1,11 @@
-// backend/src/lib/channels/engine/lang/resolveTurnLang.ts
 import type { Pool } from "pg";
 import type { Lang } from "../clients/clientDb";
-import { upsertIdiomaClienteDB } from "../clients/clientDb";
+
+type DetectIdiomaResult = {
+  lang: Lang | null;
+  confidence: number;
+  source: "heuristic" | "openai" | "none";
+};
 
 type ResolveArgs = {
   pool: Pool;
@@ -13,26 +17,26 @@ type ResolveArgs = {
   userInput: string;
 
   tenantBase: Lang;
-  storedLang: Lang;
+  storedLang: Lang | null;
 
-  detectarIdioma: (text: string) => Promise<Lang>;
+  detectarIdioma: (text: string) => Promise<DetectIdiomaResult>;
 
   // booking context
   convoCtx: any;
 };
 
-export async function resolveTurnLangClientFirst(args: ResolveArgs): Promise<{
+export async function resolveTurnLangClientFirst(
+  args: ResolveArgs
+): Promise<{
   finalLang: Lang;
   detectedLang: Lang | null;
+  detectedConfidence: number;
+  detectedSource: "heuristic" | "openai" | "none";
   lockedLang: Lang | null;
   inBookingLang: boolean;
   shouldPersist: boolean;
 }> {
   const {
-    pool,
-    tenantId,
-    canal,
-    contacto,
     userInput,
     tenantBase,
     storedLang,
@@ -40,28 +44,33 @@ export async function resolveTurnLangClientFirst(args: ResolveArgs): Promise<{
     convoCtx,
   } = args;
 
-  // detectar idioma del mensaje (solo si NO es corto/ambiguo)
   let detectedLang: Lang | null = null;
+  let detectedConfidence = 0;
+  let detectedSource: "heuristic" | "openai" | "none" = "none";
 
   try {
-    const t0 = String(userInput || "").trim().toLowerCase();
+    const detected = await detectarIdioma(userInput);
 
-    const isAmbiguousShort =
-      t0.length <= 2 ||
-      /^(ok|okay|k|👍|yes|no|si|sí|hola|hello|hi|hey|thanks|thank you)$/i.test(t0);
-
-    if (!isAmbiguousShort) {
-      detectedLang = await detectarIdioma(userInput);
-    }
-  } catch {}
+    detectedLang = detected?.lang ?? null;
+    detectedConfidence = Number(detected?.confidence ?? 0);
+    detectedSource = detected?.source ?? "none";
+  } catch (err) {
+    console.error("[resolveTurnLangClientFirst] detectarIdioma error", err);
+  }
 
   // lock SOLO durante booking
   const bookingStepLang = (convoCtx as any)?.booking?.step;
-  const inBookingLang = bookingStepLang && bookingStepLang !== "idle";
+  const inBookingLang = !!(bookingStepLang && bookingStepLang !== "idle");
 
-  const lockedLang =
-    inBookingLang
-      ? ((convoCtx as any)?.booking?.lang || (convoCtx as any)?.thread_lang || null)
+  const rawLockedLang = inBookingLang
+    ? ((convoCtx as any)?.booking?.lang ||
+        (convoCtx as any)?.thread_lang ||
+        null)
+    : null;
+
+  const lockedLang: Lang | null =
+    rawLockedLang === "es" || rawLockedLang === "en"
+      ? rawLockedLang
       : null;
 
   let finalLang: Lang = tenantBase;
@@ -69,14 +78,23 @@ export async function resolveTurnLangClientFirst(args: ResolveArgs): Promise<{
 
   if (lockedLang === "en" || lockedLang === "es") {
     finalLang = lockedLang;
-  } else if (!detectedLang) {
-    finalLang = storedLang || tenantBase;
-  } else {
+  } else if (detectedLang === "en" || detectedLang === "es") {
     finalLang = detectedLang;
-    shouldPersist = true;
-    // persist sticky
-    await upsertIdiomaClienteDB(pool, tenantId, canal, contacto, finalLang);
+    // OJO: aquí solo proponemos. La persistencia real se decide en resolveLangForTurn.ts
+    shouldPersist = detectedConfidence >= 0.8;
+  } else if (storedLang === "en" || storedLang === "es") {
+    finalLang = storedLang;
+  } else {
+    finalLang = tenantBase;
   }
 
-  return { finalLang, detectedLang, lockedLang, inBookingLang: !!inBookingLang, shouldPersist };
+  return {
+    finalLang,
+    detectedLang,
+    detectedConfidence,
+    detectedSource,
+    lockedLang,
+    inBookingLang,
+    shouldPersist,
+  };
 }

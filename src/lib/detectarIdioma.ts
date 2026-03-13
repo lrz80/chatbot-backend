@@ -1,37 +1,54 @@
 import OpenAI from "openai";
 
-export async function detectarIdioma(texto: string): Promise<"es" | "en"> {
-  const t = String(texto || "").trim().toLowerCase();
+export type Lang = "es" | "en";
 
-  // Mensajes demasiado cortos o ambiguos → NO CAMBIAN idioma
-  if (t.length <= 2 || /^(ok|okay|k|👍|yes|no|si|sí)$/i.test(t)) {
-    return "es";
+export type DetectIdiomaResult = {
+  lang: Lang | null;
+  confidence: number;
+  source: "heuristic" | "openai" | "none";
+};
+
+export async function detectarIdioma(texto: string): Promise<DetectIdiomaResult> {
+  const raw = String(texto || "").trim();
+  const t = raw.toLowerCase();
+
+  if (!t) {
+    return { lang: null, confidence: 0, source: "none" };
   }
 
-  // Saludos claros: sí determinan idioma
-  if (/^(hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches)$/i.test(t)) return "es";
-  if (/^(hello|hi|hey)$/i.test(t)) return "en";
+  // Heurísticas mínimas, no política conversacional
+  if (/[ñáéíóúü¿¡]/.test(t)) {
+    return { lang: "es", confidence: 0.95, source: "heuristic" };
+  }
 
-  // Heurísticas rápidas
-  if (/[ñáéíóúü¿¡]/.test(t)) return "es";
-  if (/\b(hola|buenas|precio|información|agendar|reservar)\b/.test(t)) return "es";
-  if (/\b(hello|hi|please|info|information|class|schedule|book)\b/.test(t)) return "en";
+  if (/\b(the|and|with|from|this|that|please|thank)\b/.test(t)) {
+    return { lang: "en", confidence: 0.85, source: "heuristic" };
+  }
 
-  // OpenAI (solo ES o EN)
+  if (/\b(el|la|los|las|con|para|por|gracias|hola)\b/.test(t)) {
+    return { lang: "es", confidence: 0.85, source: "heuristic" };
+  }
+
+  if (t.length < 4) {
+    return { lang: null, confidence: 0, source: "none" };
+  }
+
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
 
   const res = await openai.chat.completions.create({
-    model: "gpt-4",
-    messages: [
-      {
-        role: "user",
-        content: `Detecta si este texto está en español o inglés. Responde solo "es" o "en": "${texto}"`,
-      },
-    ],
+    model: "gpt-4o-mini",
     temperature: 0,
+    messages: [
+      { role: "system", content: "Detect the language of the text. Reply only 'es' or 'en'." },
+      { role: "user", content: raw },
+    ],
   });
 
   const out = res.choices[0]?.message?.content?.trim().toLowerCase();
 
-  return out === "en" ? "en" : "es";
+  if (out === "es" || out === "en") {
+    return { lang: out, confidence: 0.9, source: "openai" };
+  }
+
+  return { lang: null, confidence: 0, source: "none" };
 }
