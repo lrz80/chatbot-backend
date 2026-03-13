@@ -14,6 +14,8 @@ export function updateEstimateFlowState(
 
     lang: patch.lang ?? prev?.lang ?? null,
 
+    action: patch.action ?? prev?.action ?? null,
+
     name: patch.name ?? prev?.name ?? null,
     phone: patch.phone ?? prev?.phone ?? null,
     address: patch.address ?? prev?.address ?? null,
@@ -21,7 +23,6 @@ export function updateEstimateFlowState(
     preferredDate: patch.preferredDate ?? prev?.preferredDate ?? null,
     preferredTime: patch.preferredTime ?? prev?.preferredTime ?? null,
 
-    // 👇 ESTO ES LO QUE FALTABA
     offeredSlots: patch.offeredSlots ?? prev?.offeredSlots ?? [],
     selectedSlot: patch.selectedSlot ?? prev?.selectedSlot ?? null,
 
