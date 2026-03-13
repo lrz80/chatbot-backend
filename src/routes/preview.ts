@@ -8,6 +8,7 @@ import {
   buscarRespuestaSimilitudFaqsTraducido,
   buscarRespuestaDesdeFlowsTraducido,
 } from '../lib/respuestasTraducidas';
+import { procesarMensajeWhatsApp } from './webhook/whatsapp';
 
 const router = Router();
 
@@ -185,7 +186,41 @@ async function handlePreview(
  * - /preview/meta     → usa canalReal = 'meta' (unifica facebook/instagram)
  */
 router.post('/whatsapp', authenticateUser, async (req, res) => {
-  return handlePreview(req as AuthenticatedRequest, res, 'whatsapp');
+  try {
+    const tenant_id = (req as AuthenticatedRequest).user?.tenant_id;
+    const { message } = req.body as { message: string };
+
+    if (!tenant_id) {
+      return res.status(401).json({ error: 'Tenant no autenticado' });
+    }
+
+    if (!message || typeof message !== 'string') {
+      return res.status(400).json({ error: 'Mensaje inválido' });
+    }
+
+    // ⚠️ Por ahora llamamos el motor real de WhatsApp con un body simulado.
+    // En el siguiente paso extraeremos el engine para que devuelva la respuesta
+    // sin side effects.
+    await procesarMensajeWhatsApp(
+      {
+        Body: message,
+        From: `whatsapp-preview:${tenant_id}`,
+        MessageSid: `preview-${Date.now()}`,
+      },
+      {
+        canal: 'whatsapp',
+        origen: 'twilio',
+      }
+    );
+
+    return res.status(200).json({
+      response: 'Preview ejecutado. Falta conectar la respuesta directa del engine.',
+      kind: 'preview_stub',
+    });
+  } catch (err) {
+    console.error('❌ Error en preview whatsapp:', err);
+    return res.status(500).json({ error: 'Error interno del servidor' });
+  }
 });
 
 router.post('/meta', authenticateUser, async (req, res) => {
