@@ -57,6 +57,7 @@ import { handleBookingTurn } from "../../lib/channels/engine/booking/handleBooki
 import { parseDatosCliente } from "../../lib/parseDatosCliente";
 
 import { runEstimateFlowTurn } from "../../lib/estimateFlow/runEstimateFlowTurn";
+import { traducirMensaje } from '../../lib/traducirMensaje';
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -349,6 +350,37 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     });
   };
 
+  async function ensureReplyLanguage(
+    text: string,
+    targetLang: Lang,
+    fallbackLang: Lang
+  ): Promise<string> {
+    const raw = String(text || "").trim();
+    if (!raw) return raw;
+
+    try {
+      const detected = await detectarIdioma(raw);
+      const replyLang = detected.lang;
+
+      // Si no pudimos detectar, no inventamos nada aquí.
+      // Dejamos pasar el texto original.
+      if (replyLang !== "es" && replyLang !== "en") {
+        return raw;
+      }
+
+      // Ya está en el idioma correcto
+      if (replyLang === targetLang) {
+        return raw;
+      }
+
+      // Traducir al idioma del turno actual
+      return await traducirMensaje(raw, targetLang);
+    } catch (e: any) {
+      console.warn("⚠️ ensureReplyLanguage failed:", e?.message || e);
+      return raw;
+    }
+  }
+
   // ===============================
   // 🧠 conversation_state – inicio del turno (Flow/Step/Context)
   // ===============================
@@ -531,7 +563,13 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   }
 
   async function replyAndExit(text: string, source: string, intent?: string | null) {
-    setReply(text, source, intent);
+    const finalText = await ensureReplyLanguage(
+      text,
+      idiomaDestino,
+      tenantBase
+    );
+
+    setReply(finalText, source, intent);
     await finalizeReply();
     return;
   }
@@ -1076,7 +1114,13 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       });
     }
 
-    setReply(composed.text, "sm-fallback");
+    const finalFallbackText = await ensureReplyLanguage(
+      composed.text,
+      idiomaDestino,
+      tenantBase
+    );
+
+    setReply(finalFallbackText, "sm-fallback");
     await finalizeReply();
     return;
   }
