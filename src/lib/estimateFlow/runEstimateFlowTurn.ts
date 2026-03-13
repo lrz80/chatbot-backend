@@ -502,7 +502,14 @@ export async function runEstimateFlowTurn({
                   regexp_replace(coalesce(contacto::text, ''), '[^0-9]', '', 'g') = $2
                   OR regexp_replace(coalesce(telefono::text, ''), '[^0-9]', '', 'g') = $2
                 )
-              ORDER BY scheduled_start_at DESC NULLS LAST, created_at DESC
+              ORDER BY
+                (
+                  CASE WHEN nombre IS NOT NULL AND btrim(nombre) <> '' THEN 1 ELSE 0 END +
+                  CASE WHEN direccion IS NOT NULL AND btrim(direccion) <> '' THEN 1 ELSE 0 END +
+                  CASE WHEN tipo_trabajo IS NOT NULL AND btrim(tipo_trabajo) <> '' THEN 1 ELSE 0 END
+                ) DESC,
+                scheduled_start_at DESC NULLS LAST,
+                created_at DESC
               LIMIT 1
               `,
               [tenant.id, contactoDigits]
@@ -606,23 +613,34 @@ export async function runEstimateFlowTurn({
                     tenantId: tenant.id,
                     contactoNorm,
                     oldEventId,
+                    outcome: "deleted",
                   });
-
                 } catch (e: any) {
-                  const msg = String(e?.message || "").toLowerCase();
-                  const status = Number(e?.status || e?.response?.status || 0);
+                  const raw = JSON.stringify(e || {});
+                  const msg = String(e?.message || raw || "").toLowerCase();
+                  const status = Number(
+                    e?.status ||
+                    e?.response?.status ||
+                    e?.body?.error?.code ||
+                    0
+                  );
 
                   const alreadyDeleted =
                     status === 410 ||
                     msg.includes("resource has been deleted") ||
+                    msg.includes("google_delete_event_failed") ||
+                    msg.includes('"code":410') ||
                     msg.includes("410");
 
-                  if (!alreadyDeleted) throw e;
+                  if (!alreadyDeleted) {
+                    throw e;
+                  }
 
-                  console.warn("[estimateFlow] reschedule old event already deleted", {
+                  console.warn("[estimateFlow][reschedule] old event already deleted in Google, continuing", {
                     tenantId: tenant.id,
                     contactoNorm,
                     oldEventId,
+                    status,
                   });
                 }
               }
