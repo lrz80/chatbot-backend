@@ -252,34 +252,29 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
   const isNewLead = await ensureClienteBase(pool, tenant.id, canal, contactoNorm);
 
-  // ✅ FORZAR IDIOMA EN PRIMER MENSAJE (o saludo claro)
-  // Evita que "hello" use el storedLang viejo en ES.
+  // ✅ FORZAR IDIOMA SOLO en saludo inicial claro
+  // No usar detectarIdioma aquí para forzar cualquier turno.
+  // La resolución general la hace resolveLangForTurn().
   try {
     const t0 = String(userInput || "").trim().toLowerCase();
     const isClearHello = /^(hello|hi|hey)\b/i.test(t0);
     const isClearHola = /^(hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches)\b/i.test(t0);
 
-    let forced: Lang | null = null;
+    let forcedLang: Lang | null = null;
 
-    if (!isClearHello && !isClearHola) {
-      const detected = await detectarIdioma(userInput);
-      forced = detected.lang;
-    }
+    if (isClearHello) forcedLang = "en";
+    else if (isClearHola) forcedLang = "es";
 
-    if (isNewLead || isClearHello || isClearHola || forced) {
-      const forcedLang: Lang =
-        isClearHello ? "en" :
-        isClearHola ? "es" :
-        (forced === "en" || forced === "es" ? forced : tenantBase);
-
+    // Solo forzamos si realmente es saludo claro.
+    // isNewLead por sí solo NO debe forzar idioma si el mensaje no lo deja claro.
+    if (forcedLang) {
       await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, forcedLang);
       idiomaDestino = forcedLang;
       forcedLangThisTurn = forcedLang;
 
-      console.log("🌍 LANG FORCED (first/hello) =", {
+      console.log("🌍 LANG FORCED (clear greeting) =", {
         isNewLead,
         userInput,
-        forced,
         forcedLang,
         idiomaDestino,
       });
