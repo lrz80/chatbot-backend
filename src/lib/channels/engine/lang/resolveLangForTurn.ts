@@ -132,6 +132,21 @@ function hasRecentListAndMatch(ctx: any, userText: string): boolean {
   });
 }
 
+function isStrongLanguageTurn(text: string, detectedLang: Lang | null): boolean {
+  const t = String(text || "").trim();
+  if (!t) return false;
+
+  const words = t.split(/\s+/).filter(Boolean);
+  const wordCount = words.length;
+
+  if (detectedLang !== "es" && detectedLang !== "en") return false;
+
+  // Mensajes muy cortos no deben forzar cambio
+  if (wordCount <= 2 && t.length < 12) return false;
+
+  return true;
+}
+
 export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangResolutionResult> {
   const {
     pool,
@@ -297,7 +312,7 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
   }
 
   // ✅ thread_lang fijo desde el inicio del hilo
-  if (!(convoCtx as any)?.thread_lang && (idiomaDestino === "es" || idiomaDestino === "en")) {
+  if (idiomaDestino === "es" || idiomaDestino === "en") {
     convoCtx = { ...(convoCtx || {}), thread_lang: idiomaDestino };
   }
 
@@ -317,7 +332,14 @@ export async function resolveLangForTurn(args: ResolveLangArgs): Promise<LangRes
   // 🔒 THREAD LANG FINAL LOCK
   const finalThreadLang = String((convoCtx as any)?.thread_lang || "").toLowerCase();
 
-  if (finalThreadLang === "es" || finalThreadLang === "en") {
+  const currentTurnShowsStrongLang =
+    !langRes.inBookingLang &&
+    isStrongLanguageTurn(text, langRes.detectedLang);
+
+  if (
+    (finalThreadLang === "es" || finalThreadLang === "en") &&
+    !currentTurnShowsStrongLang
+  ) {
     idiomaDestino = finalThreadLang as Lang;
   }
 
