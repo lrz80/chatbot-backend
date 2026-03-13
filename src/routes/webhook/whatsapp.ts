@@ -256,24 +256,25 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   try {
     const t0 = String(userInput || "").trim().toLowerCase();
     const isClearHello = /^(hello|hi|hey)\b/i.test(t0);
-    const isClearHola  = /^(hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches)\b/i.test(t0);
+    const isClearHola = /^(hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches)\b/i.test(t0);
 
-    if (isNewLead || isClearHello || isClearHola) {
-      // detectarIdioma aquí debe devolver es|en
-      const forced = await detectarIdioma(userInput);
+    let forced: Lang | null = null;
 
-      // Si el saludo es clarísimo, sobreescribe por seguridad
+    if (!isClearHello && !isClearHola) {
+      const detected = await detectarIdioma(userInput);
+      forced = detected.lang;
+    }
+
+    if (isNewLead || isClearHello || isClearHola || forced) {
       const forcedLang: Lang =
         isClearHello ? "en" :
-        isClearHola  ? "es" :
-        forced;
+        isClearHola ? "es" :
+        (forced === "en" || forced === "es" ? forced : tenantBase);
 
-      // Guardar idioma sticky ANTES de bienvenida
       await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, forcedLang);
       idiomaDestino = forcedLang;
       forcedLangThisTurn = forcedLang;
 
-      // Si estás en booking y tienes thread_lang, no lo toques aquí.
       console.log("🌍 LANG FORCED (first/hello) =", {
         isNewLead,
         userInput,
@@ -283,7 +284,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       });
     }
   } catch (e: any) {
-    console.warn("⚠️ LANG FORCE failed:", e?.message);
+    console.error("❌ LANG FORCED ERROR:", e?.message || e);
   }
 
   await capiLeadFirstInbound({
