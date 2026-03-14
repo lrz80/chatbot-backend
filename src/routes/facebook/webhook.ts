@@ -140,6 +140,16 @@ async function detectServiceMentioned(tenantId: string, text: string) {
   }
 }
 
+function shouldHydrateLastServiceFromMemory(userInput: string): boolean {
+  const t = String(userInput || "").trim();
+  if (!t) return false;
+
+  const tokenCount = t.split(/\s+/).filter(Boolean).length;
+
+  // solo follow-ups cortos / elípticos
+  return tokenCount <= 4 || t.length <= 28;
+}
+
 // ===============================
 // STATE MACHINE (mismo stack WA)
 // ===============================

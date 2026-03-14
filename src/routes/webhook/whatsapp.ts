@@ -96,6 +96,16 @@ async function detectServiceMentioned(tenantId: string, text: string) {
   }
 }
 
+function shouldHydrateLastServiceFromMemory(userInput: string): boolean {
+  const t = String(userInput || "").trim();
+  if (!t) return false;
+
+  const tokenCount = t.split(/\s+/).filter(Boolean).length;
+
+  // solo follow-ups cortos / elípticos
+  return tokenCount <= 4 || t.length <= 28;
+}
+
 const MAX_WHATSAPP_LINES = 9999; // 14–16 es el sweet spot
 
 const router = Router();
@@ -976,18 +986,49 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           last_service_name: String(lastServiceMem.service_name || "").trim() || null,
           last_service_at: Number(lastServiceMem.at || Date.now()),
         };
-
-        console.log("🧠 hydrated last_service from memory =", {
-          tenantId: tenant.id,
-          canal,
-          contactoNorm,
-          service_id: convoCtx.last_service_id,
-          service_name: convoCtx.last_service_name,
-        });
       }
     } catch (e: any) {
       console.warn("⚠️ hydrate last_service from memory failed:", e?.message || e);
     }
+
+    try {
+      const shouldHydrate =
+        !convoCtx?.last_service_id &&
+        shouldHydrateLastServiceFromMemory(userInput);
+
+      if (shouldHydrate) {
+        const lastServiceMem = await getMemoryValue<{
+          service_id?: string;
+          service_name?: string;
+          at?: number;
+        }>({
+          tenantId: tenant.id,
+          canal,
+          senderId: contactoNorm,
+          key: "last_service",
+        });
+
+        if (lastServiceMem && String(lastServiceMem.service_id || "").trim()) {
+          convoCtx = {
+            ...(convoCtx || {}),
+            last_service_id: String(lastServiceMem.service_id || "").trim(),
+            last_service_name: String(lastServiceMem.service_name || "").trim() || null,
+            last_service_at: Number(lastServiceMem.at || Date.now()),
+          };
+
+          console.log("🧠 hydrated last_service from memory =", {
+            tenantId: tenant.id,
+            canal,
+            contactoNorm,
+            service_id: convoCtx.last_service_id,
+            service_name: convoCtx.last_service_name,
+          });
+        }
+      }
+    } catch (e: any) {
+      console.warn("⚠️ hydrate last_service from memory failed:", e?.message || e);
+    }
+
     console.log("📦 FASTPATH IN ctx =", {
       last_catalog_plans: (convoCtx as any)?.last_catalog_plans || null,
       last_catalog_at: (convoCtx as any)?.last_catalog_at || null,
@@ -1048,7 +1089,9 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       const shouldPersistLastService =
         fpRes.replySource !== "catalog_db" &&
         fpRes.replySource !== "price_summary_db" &&
-        fpRes.replySource !== "price_summary_db_empty";
+        fpRes.replySource !== "price_summary_db_empty" &&
+        fpRes.replySource !== "price_fastpath_db_llm_render" &&
+        fpRes.replySource !== "price_fastpath_db_no_price_llm_render";
 
       if (shouldPersistLastService) {
         try {
