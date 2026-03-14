@@ -39,13 +39,18 @@ type PendingCta =
 function sanitizeChatOutput(text: string) {
   if (!text) return '';
 
-  let t = text
-    .replace(/```[\s\S]*?```/g, '')         // bloques de código
-    .replace(/^\s{0,3}#{1,6}\s+/gm, '')     // headers markdown
-    //.replace(/^\s*[-*•]\s+/gm, '')        // bullets (los dejamos)
-    .replace(/^\s*\d+\)\s+/gm, '')          // 1)
-    .replace(/^\s*\d+\.\s+/gm, '')          // 1.
+  let t = String(text)
+    .replace(/```[\s\S]*?```/g, '')          // bloques de código
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')      // headers markdown
+    .replace(/^\s*\d+\)\s+/gm, '')           // 1)
+    .replace(/^\s*\d+\.\s+/gm, '')           // 1.
     .replace(/\r\n/g, '\n');
+
+  // ✅ Quitar prefijos artificiales del modelo
+  t = t
+    .replace(/^\s*text\s*:\s*/i, '')
+    .replace(/^\s*message\s*:\s*/i, '')
+    .replace(/^\s*reply\s*:\s*/i, '');
 
   // Normaliza saltos de línea
   t = t.replace(/\n{3,}/g, '\n\n').trim();
@@ -414,19 +419,11 @@ export async function answerWithPromptBase(
 
   // Asegurar idioma de salida (solo ES/EN)
   try {
-    const raw = await detectarIdioma(out);
-
-    const norm = String(raw || "")
-      .toLowerCase()
-      .split(/[-_]/)[0];
-
-    const langOut: "es" | "en" | null =
-      norm === "en" ? "en" :
-      norm === "es" ? "es" :
-      null;
+    const detected = await detectarIdioma(out);
+    const langOut = detected?.lang ?? null;
 
     // Solo traducimos si el detector devuelve ES/EN y es diferente al idiomaDestino
-    if (langOut && langOut !== idiomaDestino) {
+    if ((langOut === "es" || langOut === "en") && langOut !== idiomaDestino) {
       out = await traducirMensaje(out, idiomaDestino);
       out = sanitizeChatOutput(out);
       out = capLines(out, maxLines);
