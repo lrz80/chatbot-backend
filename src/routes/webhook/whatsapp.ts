@@ -11,7 +11,7 @@ import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 import { saludoPuroRegex } from '../../lib/saludosConversacionales';
 import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
-import { getMemoryValue } from "../../lib/clientMemory";
+import { getMemoryValue, setMemoryValue } from "../../lib/clientMemory";
 import {
   setConversationState as setConversationStateDB,
   getOrInitConversationState,
@@ -65,6 +65,36 @@ export type WhatsAppContext = {
   canal?: string;
   origen?: "twilio" | "meta";
 };
+
+async function detectServiceMentioned(tenantId: string, text: string) {
+  try {
+    const { rows } = await pool.query<{ id: string; name: string }>(
+      `
+      SELECT id, name
+      FROM services
+      WHERE tenant_id = $1
+        AND active = true
+      `,
+      [tenantId]
+    );
+
+    const lower = String(text || "").toLowerCase();
+
+    for (const r of rows) {
+      const name = String(r.name || "").toLowerCase().trim();
+      if (!name) continue;
+
+      if (lower.includes(name)) {
+        return r;
+      }
+    }
+
+    return null;
+  } catch (e) {
+    console.warn("⚠️ detectServiceMentioned error:", e);
+    return null;
+  }
+}
 
 const MAX_WHATSAPP_LINES = 9999; // 14–16 es el sweet spot
 
@@ -730,7 +760,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   } catch (e: any) {
     console.warn("⚠️ reset estado pago failed:", e?.message);
   }
-  
+
   // sincronizar variables locales con lo que devolvió el helper
   detectedIntent           = signals.detectedIntent;
   detectedInterest         = signals.detectedInterest;
@@ -1129,6 +1159,34 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         pendingCta: (convoCtx as any).pending_cta,
         replyPreview: composed.text.slice(0, 200),
       });
+    }
+
+    try {
+      const mentioned = await detectServiceMentioned(tenant.id, composed.text);
+
+      if (mentioned) {
+        await setMemoryValue({
+          tenantId: tenant.id,
+          canal,
+          senderId: contactoNorm,
+          key: "last_service",
+          value: {
+            service_id: mentioned.id,
+            service_name: mentioned.name,
+            at: Date.now(),
+          },
+        });
+
+        console.log("🧠 last_service saved =", {
+          tenantId: tenant.id,
+          canal,
+          contactoNorm,
+          service_id: mentioned.id,
+          service_name: mentioned.name,
+        });
+      }
+    } catch (e: any) {
+      console.warn("⚠️ save last_service failed:", e?.message || e);
     }
 
     const finalFallbackText = await ensureReplyLanguage(

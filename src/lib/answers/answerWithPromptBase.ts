@@ -260,39 +260,6 @@ function hasExplicitPriceSignals(text: string): boolean {
   );
 }
 
-async function detectServiceMentioned(tenantId: string, text: string) {
-  try {
-    const { rows } = await pool.query<{
-      id: string;
-      name: string;
-    }>(
-      `
-      SELECT id, name
-      FROM services
-      WHERE tenant_id = $1
-      AND active = true
-      `,
-      [tenantId]
-    );
-
-    const lower = text.toLowerCase();
-
-    for (const r of rows) {
-      const name = String(r.name || "").toLowerCase().trim();
-      if (!name) continue;
-
-      if (lower.includes(name)) {
-        return r;
-      }
-    }
-
-    return null;
-  } catch (e) {
-    console.warn("⚠️ detectServiceMentioned error:", e);
-    return null;
-  }
-}
-
 /* =========================
    Main function
 ========================= */
@@ -466,27 +433,6 @@ export async function answerWithPromptBase(
   }
 
   const pendingCta = inferPendingCtaFromAssistantReply(out, idiomaDestino);
-
-  // ===============================
-  // Persist last mentioned service
-  // ===============================
-  try {
-    const mentioned = await detectServiceMentioned(tenantId, out);
-
-    if (mentioned) {
-      await pool.query(
-        `
-        UPDATE client_memory
-        SET last_service_id = $2,
-            last_service_at = NOW()
-        WHERE tenant_id = $1
-        `,
-        [tenantId, mentioned.id]
-      );
-    }
-  } catch (e) {
-    console.warn("⚠️ persist last_service_id error:", e);
-  }
 
   return {
     text: out,
