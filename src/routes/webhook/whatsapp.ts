@@ -980,8 +980,35 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       transition({ patchCtx: fpRes.ctxPatch });
     }
 
+    try {
+      const mentioned = await detectServiceMentioned(tenant.id, fpRes.reply || "");
+
+      if (mentioned) {
+        await setMemoryValue({
+          tenantId: tenant.id,
+          canal,
+          senderId: contactoNorm,
+          key: "last_service",
+          value: {
+            service_id: mentioned.id,
+            service_name: mentioned.name,
+            at: Date.now(),
+          },
+        });
+
+        console.log("🧠 last_service saved (fastpath) =", {
+          tenantId: tenant.id,
+          canal,
+          contactoNorm,
+          service_id: mentioned.id,
+          service_name: mentioned.name,
+        });
+      }
+    } catch (e: any) {
+      console.warn("⚠️ save last_service from fastpath failed:", e?.message || e);
+    }
+
     if (fpRes.handled && fpRes.reply) {
-      // actualiza intención final canónica si el helper la refinó
       if (fpRes.intent) {
         INTENCION_FINAL_CANONICA = fpRes.intent;
         lastIntent = fpRes.intent;
