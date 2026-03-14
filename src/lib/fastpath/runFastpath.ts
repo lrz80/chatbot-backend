@@ -2789,6 +2789,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
     const qNorm = normalizeText(userInput);
 
+    const asksIncludesOnly =
+      looksLikeDetailIntent(userInput) ||
+      /\b(q incluye|que incluye|qué incluye|incluye|what includes|what is included)\b/i.test(q);
+
     const isAskingOtherCatalogOptions =
       qNorm.includes("otro plan") ||
       qNorm.includes("otros planes") ||
@@ -2836,9 +2840,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       q.includes("planes") ||
       q.includes("membresia") ||
       q.includes("membresía") ||
-      q.includes("que incluye") ||
-      q.includes("qué incluye") ||
-      q.includes("incluye") ||
       q.includes("unlimited") ||
       q.includes("ilimitado") ||
       q.includes("pack") ||
@@ -2848,8 +2849,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       q.includes("prices") ||
       q.includes("pricing") ||
       q.includes("membership") ||
-      q.includes("bundle") ||
-      q.includes("what is included");
+      q.includes("bundle");
 
     const hasRecentCatalogContext =
       Array.isArray(convoCtx?.last_catalog_plans) &&
@@ -2951,7 +2951,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         : "";
 
       // ✅ Precio/planes genérico: responder desde DB (no LLM).
-      if (!asksSchedules && questionType === "price_or_plan") {
+      if (!asksSchedules && !asksIncludesOnly && questionType === "price_or_plan") {
         const { rows } = await pool.query<{
           service_id: string;
           service_name: string;
