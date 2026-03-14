@@ -513,32 +513,61 @@ function normalizeForIntent(raw: string): string {
 }
 
 function isEllipticPriceFollowup(raw: string, convoCtx: FastpathCtx): boolean {
-  const t = normalizeText(String(raw || ""));
-  if (!t) return false;
+  const text = normalizeText(String(raw || ""));
+  if (!text) return false;
 
-  const hasRecentPriceContext =
-    !!convoCtx?.last_service_id &&
-    (
-      !!convoCtx?.last_variant_id ||
-      !!convoCtx?.last_price_option_label ||
-      !!convoCtx?.last_service_name
-    );
+  const hasRecentServiceContext =
+    !!String(convoCtx?.last_service_id || "").trim() ||
+    !!String(convoCtx?.selectedServiceId || "").trim();
 
-  if (!hasRecentPriceContext) return false;
+  if (!hasRecentServiceContext) return false;
 
-  // ejemplos:
-  // y el de 12
-  // y la de 8
-  // el de 4
-  // la de 12
-  // y 12?
-  const hasShortEllipticShape =
-    /^(y\s+)?(el|la|los|las)\s+de\s+\d{1,3}\b/.test(t) ||
-    /^(y\s+)?\d{1,3}\b/.test(t);
+  // Mensajes elípticos suelen ser cortos
+  const tokens = text.split(/\s+/).filter(Boolean);
+  if (tokens.length > 6) return false;
 
-  if (!hasShortEllipticShape) return false;
+  // Si parece introducir una entidad nueva, ya no es follow-up elíptico
+  // Eso lo debe resolver el matcher normal de servicio
+  const hasLikelyEntityPhrase =
+    /\b(del|de la|de el|of|for)\b/.test(text) ||
+    /\b(plan|paquete|package|service|servicio|bath|groom|grooming|haircut)\b/.test(text);
 
-  return true;
+  if (hasLikelyEntityPhrase) return false;
+
+  // Señales genéricas de precio
+  const priceIntentTokens = new Set([
+    "price",
+    "pricing",
+    "cost",
+    "costs",
+    "precio",
+    "precios",
+    "costo",
+    "costos",
+    "cuanto",
+    "cuanta",
+    "cuesta",
+    "cuestan",
+    "vale",
+    "valen",
+    "monthly",
+    "month",
+    "mensual",
+    "mensualmente",
+    "mes",
+  ]);
+
+  const hasPriceSignal = tokens.some((t) => priceIntentTokens.has(t));
+  if (hasPriceSignal) return true;
+
+  // También aceptar follow-ups ultra cortos numéricos o tipo "y el de 12"
+  const shortEllipticShape =
+    /^(y\s+)?(el|la|los|las)\s+de\s+\d{1,3}\b/.test(text) ||
+    /^(y\s+)?\d{1,3}\b/.test(text);
+
+  if (shortEllipticShape) return true;
+
+  return false;
 }
 
 function isPriceQuestion(text: string, convoCtx?: FastpathCtx) {
@@ -2616,6 +2645,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           ctxPatch: {
             selectedServiceId: serviceId,
             expectingVariant: true,
+
+            last_service_id: serviceId,
+            last_service_name: serviceName || null,
+            last_service_at: Date.now(),
+
+            last_variant_id: null,
+            last_variant_name: null,
+            last_variant_url: null,
+            last_variant_at: null,
           } as Partial<FastpathCtx>,
         };
       }
@@ -2969,14 +3007,22 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         // =========================================================
         const ellipticPriceFollowup = isEllipticPriceFollowup(userInput, convoCtx);
 
-        const singleHit = ellipticPriceFollowup && convoCtx?.last_service_id
-          ? {
-              id: String(convoCtx.last_service_id),
-              name: String(convoCtx.last_service_name || "").trim(),
-            }
-          : await resolveServiceIdFromText(pool, tenantId, userInput, {
-              mode: "loose",
-            });
+        const ctxServiceId =
+          String(convoCtx?.last_service_id || "").trim() ||
+          String(convoCtx?.selectedServiceId || "").trim();
+
+        const ctxServiceName =
+          String(convoCtx?.last_service_name || "").trim();
+
+        const singleHit =
+          ellipticPriceFollowup && ctxServiceId
+            ? {
+                id: ctxServiceId,
+                name: ctxServiceName,
+              }
+            : await resolveServiceIdFromText(pool, tenantId, userInput, {
+                mode: "loose",
+              });
 
         console.log("[PRICE][single] resolve output", {
           userInput,
