@@ -40,12 +40,4 @@ pool.on("error", (err) => {
   console.error("❌ PG pool error:", err);
 });
 
-setInterval(() => {
-  console.log("📊 PG pool stats", {
-    total: pool.totalCount,
-    idle: pool.idleCount,
-    waiting: pool.waitingCount,
-  });
-}, 30000);
-
 export default pool;
