@@ -66,7 +66,7 @@ import { parseDatosCliente } from "../../lib/parseDatosCliente";
 import { runEstimateFlowTurn } from "../../lib/estimateFlow/runEstimateFlowTurn";
 import { detectarIdioma } from "../../lib/detectarIdioma";
 import { traducirMensaje } from "../../lib/traducirMensaje";
-import { getMemoryValue, setMemoryValue } from "../../lib/clientMemory";
+import { getMemoryValue } from "../../lib/clientMemory";
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -108,46 +108,6 @@ async function isMetaSubChannelEnabled(
   if (canalEnvio === "instagram") return row.instagram_enabled !== false;
 
   return true;
-}
-
-async function detectServiceMentioned(tenantId: string, text: string) {
-  try {
-    const { rows } = await pool.query<{ id: string; name: string }>(
-      `
-      SELECT id, name
-      FROM services
-      WHERE tenant_id = $1
-        AND active = true
-      `,
-      [tenantId]
-    );
-
-    const lower = String(text || "").toLowerCase();
-
-    for (const r of rows) {
-      const name = String(r.name || "").toLowerCase().trim();
-      if (!name) continue;
-
-      if (lower.includes(name)) {
-        return r;
-      }
-    }
-
-    return null;
-  } catch (e) {
-    console.warn("⚠️ detectServiceMentioned error:", e);
-    return null;
-  }
-}
-
-function shouldHydrateLastServiceFromMemory(userInput: string): boolean {
-  const t = String(userInput || "").trim();
-  if (!t) return false;
-
-  const tokenCount = t.split(/\s+/).filter(Boolean).length;
-
-  // solo follow-ups cortos / elípticos
-  return tokenCount <= 4 || t.length <= 28;
 }
 
 // ===============================
@@ -1121,34 +1081,6 @@ async function procesarMensajeMeta(args: {
         pendingCta: (convoCtx as any).pending_cta,
         replyPreview: composed.text.slice(0, 200),
       });
-    }
-
-    try {
-      const mentioned = await detectServiceMentioned(tenant.id, composed.text);
-
-      if (mentioned) {
-        await setMemoryValue({
-          tenantId: tenant.id,
-          canal,
-          senderId: contactoNorm,
-          key: "last_service",
-          value: {
-            service_id: mentioned.id,
-            service_name: mentioned.name,
-            at: Date.now(),
-          },
-        });
-
-        console.log("🧠 last_service saved =", {
-          tenantId: tenant.id,
-          canal,
-          contactoNorm,
-          service_id: mentioned.id,
-          service_name: mentioned.name,
-        });
-      }
-    } catch (e: any) {
-      console.warn("⚠️ save last_service failed:", e?.message || e);
     }
 
     const finalFallbackText = await ensureReplyLanguage(composed.text, idiomaDestino);
