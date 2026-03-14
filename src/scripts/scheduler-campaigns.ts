@@ -242,7 +242,15 @@ async function finalizeFailed(campaignId: number, note?: string) {
 // Main worker
 // ===============================
 async function ejecutarCampañasProgramadas() {
-  const campañas = await claimCampaigns(10);
+  let campañas: CampaignRow[] = [];
+
+  try {
+    campañas = await claimCampaigns(10);
+  } catch (err: any) {
+    console.error("❌ claimCampaigns failed:", err?.message || err);
+    return;
+  }
+
   if (campañas.length === 0) return;
 
   for (const c of campañas) {

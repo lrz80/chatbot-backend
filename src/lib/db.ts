@@ -23,11 +23,14 @@ const pool = new Pool({
 
   // ✅ Pool conservador para evitar demasiadas conexiones concurrentes
   // Ajusta si tienes varias instancias o alta concurrencia.
-  max: Number(process.env.PG_POOL_MAX ?? 10),
+  max: Number(process.env.PG_POOL_MAX ?? 4),
 
   // ✅ Timeouts razonables para evitar conexiones colgadas
   idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS ?? 30_000),
-  connectionTimeoutMillis: Number(process.env.PG_CONN_TIMEOUT_MS ?? 10_000),
+  connectionTimeoutMillis: Number(process.env.PG_CONN_TIMEOUT_MS ?? 20_000),
+
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 10000,
 
   ssl: shouldUseSSL ? { rejectUnauthorized: false } : undefined,
 });
@@ -36,5 +39,13 @@ const pool = new Pool({
 pool.on("error", (err) => {
   console.error("❌ PG pool error:", err);
 });
+
+setInterval(() => {
+  console.log("📊 PG pool stats", {
+    total: pool.totalCount,
+    idle: pool.idleCount,
+    waiting: pool.waitingCount,
+  });
+}, 30000);
 
 export default pool;
