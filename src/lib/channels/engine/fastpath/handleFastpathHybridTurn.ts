@@ -369,6 +369,30 @@ export async function handleFastpathHybridTurn(
   // 6️⃣ MODO HÍBRIDO PARA WHATSAPP Y META (FB/IG)
   const isDm = isDmChatChannel(canal);
 
+  const hasStructuredServiceResolution =
+  !!String(ctxPatch?.last_service_id || "").trim() ||
+  !!String(ctxPatch?.selectedServiceId || "").trim();
+
+  const isServiceIntent =
+    (fp.intent || detectedIntent || intentFallback || null) === "info_servicio";
+
+  if (isDm && isServiceIntent && !hasStructuredServiceResolution) {
+    console.log("[FASTPATH_HYBRID] info_servicio sin resolución estructural -> NO LLM", {
+      source: fp.source,
+      intent: fp.intent || detectedIntent || intentFallback || null,
+      hasStructuredServiceResolution,
+      ctxPatch,
+    });
+
+    return {
+      handled: true,
+      reply: fastpathText,
+      replySource: fp.source,
+      intent: fp.intent || detectedIntent || intentFallback || null,
+      ctxPatch,
+    };
+  }
+
   if (isDm) {
     const history = await getRecentHistoryForModel({
       tenantId,
