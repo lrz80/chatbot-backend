@@ -142,6 +142,12 @@ function countExactHits(queryTokens: string[], candidateTokens: string[]): numbe
   return candidateTokens.filter((t) => qSet.has(t)).length;
 }
 
+function uniqueOverlapTokens(queryTokens: string[], candidateTokens: string[]): string[] {
+  if (!queryTokens.length || !candidateTokens.length) return [];
+  const qSet = new Set(queryTokens);
+  return Array.from(new Set(candidateTokens.filter((t) => qSet.has(t))));
+}
+
 export async function resolveServiceIdFromText(
   pool: Pool,
   tenantId: string,
@@ -266,7 +272,14 @@ export async function resolveServiceIdFromText(
   const dfMap = buildTenantTokenDf(candidates);
   const totalCandidates = candidates.length;
 
-  type Scored = { cand: Candidate; score: number };
+  type Scored = {
+    cand: Candidate;
+    score: number;
+    exactNameHits: number;
+    exactCatalogHits: number;
+    overlapNameTokens: string[];
+    overlapCatalogTokens: string[];
+  };
 
   const scored: Scored[] = candidates.map((cand) => {
     const nameScore = scoreTokensWeighted(
@@ -286,19 +299,29 @@ export async function resolveServiceIdFromText(
     const exactNameHits = countExactHits(queryTokens, cand.serviceNameTokens);
     const exactCatalogHits = countExactHits(queryTokens, cand.catalogTokens);
 
+    const overlapNameTokens = uniqueOverlapTokens(queryTokens, cand.serviceNameTokens);
+    const overlapCatalogTokens = uniqueOverlapTokens(queryTokens, cand.catalogTokens);
+
     let score = 0;
 
-    // Peso principal: el nombre del servicio
-    score += nameScore * 0.65;
+    // Peso principal: nombre del servicio
+    score += nameScore * 0.70;
 
-    // Peso secundario: descripción + variantes del catálogo
-    score += catalogScore * 0.35;
+    // Peso secundario: resto del catálogo
+    score += catalogScore * 0.30;
 
-    // Premios por cobertura exacta real del catálogo
-    score += exactNameHits * 0.22;
-    score += exactCatalogHits * 0.06;
+    // Bonus moderado por evidencia múltiple, no por hits aislados
+    if (exactNameHits >= 2) score += 0.18;
+    if (exactCatalogHits >= 2) score += 0.08;
 
-    return { cand, score };
+    return {
+      cand,
+      score,
+      exactNameHits,
+      exactCatalogHits,
+      overlapNameTokens,
+      overlapCatalogTokens,
+    };
   });
 
   scored.sort((a, b) => b.score - a.score);
@@ -315,6 +338,10 @@ export async function resolveServiceIdFromText(
           label: best.cand.label,
           score: best.score,
           serviceId: best.cand.serviceId,
+          exactNameHits: best.exactNameHits,
+          exactCatalogHits: best.exactCatalogHits,
+          overlapNameTokens: best.overlapNameTokens,
+          overlapCatalogTokens: best.overlapCatalogTokens,
         }
       : null,
     second: second
@@ -322,6 +349,10 @@ export async function resolveServiceIdFromText(
           label: second.cand.label,
           score: second.score,
           serviceId: second.cand.serviceId,
+          exactNameHits: second.exactNameHits,
+          exactCatalogHits: second.exactCatalogHits,
+          overlapNameTokens: second.overlapNameTokens,
+          overlapCatalogTokens: second.overlapCatalogTokens,
         }
       : null,
   });
@@ -350,7 +381,12 @@ export async function resolveServiceIdFromText(
 
       const only = withToken[0];
 
-      if (only.score >= SINGLE_TOKEN_THRESHOLD) {
+      const enoughEvidence =
+        only.score >= SINGLE_TOKEN_THRESHOLD &&
+        only.exactNameHits >= 1 &&
+        withToken.length === 1;
+
+      if (enoughEvidence) {
         console.log("[RESOLVE-SERVICE] (strict) match único por token útil", {
           userText,
           token,
@@ -361,7 +397,7 @@ export async function resolveServiceIdFromText(
       }
 
       console.log(
-        "[RESOLVE-SERVICE] (strict) 1 token útil, 1 candidato pero score bajo, devolviendo null",
+        "[RESOLVE-SERVICE] (strict) evidencia insuficiente con 1 token útil, devolviendo null",
         {
           userText,
           token,
@@ -372,55 +408,23 @@ export async function resolveServiceIdFromText(
       return null;
     }
 
-    if (!withToken.length) {
-      console.log(
-        "[RESOLVE-SERVICE] (loose) 1 token útil pero 0 candidatos, devolviendo null",
-        { userText, token }
-      );
-      return null;
-    }
-
-    const byService = new Map<string, { cand: Candidate; score: number }>();
-    for (const s of withToken) {
-      const key = s.cand.serviceId;
-      const prev = byService.get(key);
-      if (!prev || s.score > prev.score) {
-        byService.set(key, s);
-      }
-    }
-
-    const bestList = Array.from(byService.values()).sort((a, b) => b.score - a.score);
-    const bestLoose = bestList[0];
-
-    if (!bestLoose || bestLoose.score < SINGLE_TOKEN_THRESHOLD) {
-      console.log(
-        "[RESOLVE-SERVICE] (loose) mejor candidato por debajo de threshold, devolviendo null",
-        {
-          userText,
-          token,
-          label: bestLoose?.cand.label,
-          score: bestLoose?.score,
-        }
-      );
-      return null;
-    }
-
-    console.log("[RESOLVE-SERVICE] (loose) match por token útil", {
-      userText,
-      token,
-      label: bestLoose.cand.label,
-      score: bestLoose.score,
-      serviceId: bestLoose.cand.serviceId,
-    });
-
-    return { id: bestLoose.cand.serviceId, name: bestLoose.cand.label };
+    // En modo loose, 1 token útil NO resuelve automáticamente.
+    // Se deja al caller decidir desambiguación o fallback.
+    console.log(
+      "[RESOLVE-SERVICE] (loose) 1 token útil → no auto-resolver, devolviendo null",
+      { userText, token, candidates: withToken.length }
+    );
+    return null;
   }
 
-  if (!best || best.score < BASE_THRESHOLD) {
-    console.log("[RESOLVE-SERVICE] best.score por debajo del umbral, devolviendo null", {
+  const bestEvidenceCount = Math.max(best?.exactNameHits || 0, best?.exactCatalogHits || 0);
+
+  if (!best || best.score < BASE_THRESHOLD || bestEvidenceCount < 2) {
+    console.log("[RESOLVE-SERVICE] evidencia insuficiente, devolviendo null", {
       userText,
       bestScore: best?.score,
       threshold: BASE_THRESHOLD,
+      bestEvidenceCount,
     });
     return null;
   }
