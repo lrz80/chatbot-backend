@@ -1009,6 +1009,30 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     }
 
     if (fpRes.handled && fpRes.reply) {
+
+      try {
+        const mentioned = await detectServiceMentioned(tenant.id, fpRes.reply);
+
+        if (mentioned) {
+          await setMemoryValue({
+            tenantId: tenant.id,
+            canal,
+            senderId: contactoNorm,
+            key: "last_service",
+            value: {
+              service_id: mentioned.id,
+              service_name: mentioned.name,
+              at: Date.now()
+            }
+          });
+
+          console.log("🧠 last_service saved (fastpath)", mentioned.name);
+        }
+
+      } catch (e: any) {
+        console.warn("⚠️ last_service save failed", e?.message);
+      }
+
       if (fpRes.intent) {
         INTENCION_FINAL_CANONICA = fpRes.intent;
         lastIntent = fpRes.intent;
