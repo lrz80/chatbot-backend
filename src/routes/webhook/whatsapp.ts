@@ -953,6 +953,41 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   //    🔒 NO corre si hay booking activo
   // ===============================
   if (!inBooking0) {
+    try {
+      const lastServiceMem = await getMemoryValue<{
+        service_id?: string;
+        service_name?: string;
+        at?: number;
+      }>({
+        tenantId: tenant.id,
+        canal,
+        senderId: contactoNorm,
+        key: "last_service",
+      });
+
+      if (
+        lastServiceMem &&
+        !convoCtx?.last_service_id &&
+        String(lastServiceMem.service_id || "").trim()
+      ) {
+        convoCtx = {
+          ...(convoCtx || {}),
+          last_service_id: String(lastServiceMem.service_id || "").trim(),
+          last_service_name: String(lastServiceMem.service_name || "").trim() || null,
+          last_service_at: Number(lastServiceMem.at || Date.now()),
+        };
+
+        console.log("🧠 hydrated last_service from memory =", {
+          tenantId: tenant.id,
+          canal,
+          contactoNorm,
+          service_id: convoCtx.last_service_id,
+          service_name: convoCtx.last_service_name,
+        });
+      }
+    } catch (e: any) {
+      console.warn("⚠️ hydrate last_service from memory failed:", e?.message || e);
+    }
     console.log("📦 FASTPATH IN ctx =", {
       last_catalog_plans: (convoCtx as any)?.last_catalog_plans || null,
       last_catalog_at: (convoCtx as any)?.last_catalog_at || null,
@@ -1010,27 +1045,40 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
     if (fpRes.handled && fpRes.reply) {
 
-      try {
-        const mentioned = await detectServiceMentioned(tenant.id, fpRes.reply);
+      const shouldPersistLastService =
+        fpRes.replySource !== "catalog_db" &&
+        fpRes.replySource !== "price_summary_db" &&
+        fpRes.replySource !== "price_summary_db_empty";
 
-        if (mentioned) {
-          await setMemoryValue({
-            tenantId: tenant.id,
-            canal,
-            senderId: contactoNorm,
-            key: "last_service",
-            value: {
+      if (shouldPersistLastService) {
+        try {
+          const mentioned = await detectServiceMentioned(tenant.id, fpRes.reply);
+
+          if (mentioned) {
+            await setMemoryValue({
+              tenantId: tenant.id,
+              canal,
+              senderId: contactoNorm,
+              key: "last_service",
+              value: {
+                service_id: mentioned.id,
+                service_name: mentioned.name,
+                at: Date.now(),
+              },
+            });
+
+            console.log("🧠 last_service saved (fastpath) =", {
+              tenantId: tenant.id,
+              canal,
+              contactoNorm,
               service_id: mentioned.id,
               service_name: mentioned.name,
-              at: Date.now()
-            }
-          });
-
-          console.log("🧠 last_service saved (fastpath)", mentioned.name);
+              source: fpRes.replySource || null,
+            });
+          }
+        } catch (e: any) {
+          console.warn("⚠️ save last_service from fastpath failed:", e?.message || e);
         }
-
-      } catch (e: any) {
-        console.warn("⚠️ last_service save failed", e?.message);
       }
 
       if (fpRes.intent) {
