@@ -40,6 +40,57 @@ function isDmChatChannel(canal: Canal) {
   return c === "whatsapp" || c === "facebook" || c === "instagram";
 }
 
+function firstNonEmptyString(...values: any[]): string | null {
+  for (const value of values) {
+    const v = String(value ?? "").trim();
+    if (v) return v;
+  }
+  return null;
+}
+
+function getStructuredServiceSelection(ctxPatch: any, convoCtx: any) {
+  const serviceId = firstNonEmptyString(
+    ctxPatch?.last_service_id,
+    ctxPatch?.selectedServiceId,
+    ctxPatch?.selected_service_id,
+    ctxPatch?.serviceId,
+    convoCtx?.last_service_id,
+    convoCtx?.selectedServiceId,
+    convoCtx?.selected_service_id,
+    convoCtx?.serviceId
+  );
+
+  const serviceName = firstNonEmptyString(
+    ctxPatch?.last_service_name,
+    ctxPatch?.selectedServiceName,
+    ctxPatch?.selected_service_name,
+    ctxPatch?.serviceName,
+    convoCtx?.last_service_name,
+    convoCtx?.selectedServiceName,
+    convoCtx?.selected_service_name,
+    convoCtx?.serviceName
+  );
+
+  const serviceLabel = firstNonEmptyString(
+    ctxPatch?.last_service_label,
+    ctxPatch?.selectedServiceLabel,
+    ctxPatch?.selected_service_label,
+    ctxPatch?.serviceLabel,
+    convoCtx?.last_service_label,
+    convoCtx?.selectedServiceLabel,
+    convoCtx?.selected_service_label,
+    convoCtx?.serviceLabel,
+    serviceName
+  );
+
+  return {
+    serviceId,
+    serviceName,
+    serviceLabel,
+    hasResolution: !!serviceId || !!serviceName || !!serviceLabel,
+  };
+}
+
 function buildMorePlansReply(fastpathText: string, idiomaDestino: Lang): string {
   const lines = fastpathText.split(/\r?\n/).map((l) => l.trim());
 
@@ -208,6 +259,26 @@ export async function handleFastpathHybridTurn(
   // ✅ declarar ctxPatch primero
   const ctxPatch: any = fp.ctxPatch ? { ...fp.ctxPatch } : {};
 
+  const structuredService = getStructuredServiceSelection(ctxPatch, convoCtx);
+
+  // Canonicalizar siempre el servicio resuelto para follow-ups posteriores
+  if (structuredService.serviceId) {
+    ctxPatch.last_service_id = structuredService.serviceId;
+  }
+
+  if (structuredService.serviceName) {
+    ctxPatch.last_service_name = structuredService.serviceName;
+  }
+
+  if (structuredService.serviceLabel) {
+    ctxPatch.last_service_label = structuredService.serviceLabel;
+  }
+
+  if (structuredService.hasResolution) {
+    ctxPatch.last_entity_kind = "service";
+    ctxPatch.last_entity_at = Date.now();
+  }
+
   // ✅ HARD BYPASS: si Fastpath ya respondió desde DB con precios/catálogo,
   // NUNCA pasar por LLM (evita precios inventados).
   const DB_PRICE_SOURCES = new Set([
@@ -369,18 +440,27 @@ export async function handleFastpathHybridTurn(
   // 6️⃣ MODO HÍBRIDO PARA WHATSAPP Y META (FB/IG)
   const isDm = isDmChatChannel(canal);
 
-  const hasStructuredServiceResolution =
-  !!String(ctxPatch?.last_service_id || "").trim() ||
-  !!String(ctxPatch?.selectedServiceId || "").trim();
-
   const isServiceIntent =
     (fp.intent || detectedIntent || intentFallback || null) === "info_servicio";
 
-  if (isDm && isServiceIntent && !hasStructuredServiceResolution) {
-    console.log("[FASTPATH_HYBRID] info_servicio sin resolución estructural -> NO LLM", {
+  const SERVICE_GROUNDED_SOURCES = new Set([
+    "service_list_db",
+    "catalog_db",
+    "price_summary_db",
+    "price_fastpath_db",
+    "price_disambiguation_db",
+  ]);
+
+  const hasStructuredServiceResolution = structuredService.hasResolution;
+  const hasGroundedServiceSource = SERVICE_GROUNDED_SOURCES.has(String(fp.source || ""));
+
+  if (isDm && isServiceIntent && (!hasStructuredServiceResolution || !hasGroundedServiceSource)) {
+    console.log("[FASTPATH_HYBRID] info_servicio sin grounding estructural -> NO LLM", {
       source: fp.source,
       intent: fp.intent || detectedIntent || intentFallback || null,
       hasStructuredServiceResolution,
+      hasGroundedServiceSource,
+      structuredService,
       ctxPatch,
     });
 
