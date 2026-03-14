@@ -31,9 +31,23 @@ export async function setMemoryValue(params: {
 }): Promise<void> {
   const { tenantId, canal, senderId, key, value } = params;
 
-  // ✅ GUARD: no permitir overwrite con null / undefined / "" (string vacío)
+  // permitir borrar memoria si value === null
+  if (value === null) {
+    await pool.query(
+      `
+      DELETE FROM client_memory
+      WHERE tenant_id = $1
+        AND canal = $2
+        AND sender_id = $3
+        AND "key" = $4
+      `,
+      [tenantId, canal, senderId, key]
+    );
+    return;
+  }
+
+  // prevenir basura
   if (
-    value === null ||
     value === undefined ||
     (typeof value === "string" && value.trim() === "")
   ) {

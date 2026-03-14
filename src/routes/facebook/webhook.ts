@@ -718,6 +718,28 @@ async function procesarMensajeMeta(args: {
     transition,
   });
 
+  // ===============================
+  // 🧹 RESET estado pago si cambia la intención
+  // ===============================
+  try {
+    if (
+      INTENCION_FINAL_CANONICA &&
+      INTENCION_FINAL_CANONICA !== "pago"
+    ) {
+      await pool.query(
+        `UPDATE clientes
+        SET estado = NULL
+        WHERE tenant_id = $1
+        AND canal = $2
+        AND contacto = $3
+        AND estado = 'esperando_pago'`,
+        [tenant.id, canal, contactoNorm]
+      );
+    }
+  } catch (e: any) {
+    console.warn("⚠️ reset estado pago failed:", e?.message);
+  }
+
   detectedIntent = signals.detectedIntent;
   detectedInterest = signals.detectedInterest;
   INTENCION_FINAL_CANONICA = signals.INTENCION_FINAL_CANONICA;

@@ -709,6 +709,28 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     transition,
   });
 
+  // ===============================
+  // 🧹 RESET estado pago si cambia la intención
+  // ===============================
+  try {
+    if (
+      INTENCION_FINAL_CANONICA &&
+      INTENCION_FINAL_CANONICA !== "pago"
+    ) {
+      await pool.query(
+        `UPDATE clientes
+        SET estado = NULL
+        WHERE tenant_id = $1
+        AND canal = $2
+        AND contacto = $3
+        AND estado = 'esperando_pago'`,
+        [tenant.id, canal, contactoNorm]
+      );
+    }
+  } catch (e: any) {
+    console.warn("⚠️ reset estado pago failed:", e?.message);
+  }
+  
   // sincronizar variables locales con lo que devolvió el helper
   detectedIntent           = signals.detectedIntent;
   detectedInterest         = signals.detectedInterest;

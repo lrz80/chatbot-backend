@@ -75,9 +75,21 @@ export async function getConversationState(
     }
   }
 
+  const ctx = row.context || {};
+
+  // limpieza defensiva de estados de pago pegados
+  if (
+    ctx?.estado === "esperando_pago" &&
+    ctx?.intent_actual !== "pago"
+  ) {
+    console.log("🧹 clearing stale payment state");
+
+    ctx.estado = null;
+  }
+
   return {
     ...row,
-    context: row.context || {},
+    context: ctx,
   };
 }
 
