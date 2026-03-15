@@ -339,6 +339,24 @@ function buildUserPrompt(userInput: string) {
   ].join("\n");
 }
 
+function enforceClarifyOnlyOutput(
+  text: string,
+  idiomaDestino: "es" | "en"
+): string {
+  const out = String(text || "").trim();
+
+  const isQuestion = /\?\s*$/.test(out);
+  const shortEnough = out.split(/\s+/).filter(Boolean).length <= 30;
+
+  if (isQuestion && shortEnough) {
+    return out;
+  }
+
+  return idiomaDestino === "en"
+    ? "Which specific service do you mean?"
+    : "¿A cuál servicio te refieres exactamente?";
+}
+
 /* =========================
    Main function
 ========================= */
@@ -462,6 +480,18 @@ export async function answerWithPromptBase(
   out = sanitizeChatOutput(out);
   out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
   out = capLines(out, maxLines);
+
+  if (effectivePolicy.mode === "clarify_only") {
+    const forced =
+      idiomaDestino === "en"
+        ? "Which specific service do you mean?"
+        : "¿A cuál servicio te refieres exactamente?";
+
+    return {
+      text: capLines(sanitizeChatOutput(forced), maxLines),
+      pendingCta: null,
+    };
+  }
 
   try {
     if (out) {
