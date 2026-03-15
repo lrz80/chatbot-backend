@@ -346,6 +346,15 @@ function buildUserPrompt(userInput: string) {
 export async function answerWithPromptBase(
   params: AnswerWithPromptBaseParams
 ): Promise<{ text: string; pendingCta: PendingCta }> {
+  console.log("[ANSWER_WITH_PROMPT_BASE][VERSION]", {
+    tenantId: params.tenantId,
+    canal: params.canal,
+    userInput: params.userInput,
+    hasResponsePolicy: Boolean(params.responsePolicy),
+    responsePolicyMode: params.responsePolicy?.mode ?? null,
+    reasoningNotes: params.responsePolicy?.reasoningNotes ?? null,
+  });
+
   const {
     tenantId,
     promptBase,

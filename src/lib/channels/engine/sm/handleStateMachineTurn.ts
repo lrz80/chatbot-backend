@@ -190,6 +190,22 @@ export async function handleStateMachineTurn(
   // ❌ antes estaba hardcodeado a "whatsapp"
   const fallbackWelcome = await getBienvenidaPorCanal(canal, tenant, idiomaDestino);
 
+  const resolvedEntityId = null;
+  const resolvedEntityLabel = null;
+  const hasResolvedEntity = false;
+
+  console.log("[SM][ANSWER_WITH_PROMPT_BASE][POLICY]", {
+    tenantId,
+    canal,
+    userInput: eventUserInput,
+    resolvedEntityId,
+    resolvedEntityLabel,
+    hasResolvedEntity,
+    smAction: smResult.action,
+    smIntent: smResult.intent ?? null,
+    smReplySource: smResult.replySource ?? null,
+  });
+
   const composed = await answerWithPromptBase({
     tenantId,
     promptBase: [
@@ -204,9 +220,24 @@ export async function handleStateMachineTurn(
     userInput: ["USER_MESSAGE:", eventUserInput].join("\n"),
     history,
     idiomaDestino,
-    canal,              // 👈 aquí también usamos el canal real (whatsapp/meta/sms/etc.)
+    canal,
     maxLines: MAX_LINES,
     fallbackText: fallbackWelcome,
+
+    responsePolicy: {
+      mode: "clarify_only",
+      resolvedEntityType: null,
+      resolvedEntityId,
+      resolvedEntityLabel,
+      canMentionSpecificPrice: false,
+      canSelectSpecificCatalogItem: false,
+      canOfferBookingTimes: false,
+      canUseCatalogLists: false,
+      canUseOfficialLinks: true,
+      unresolvedEntity: true,
+      clarificationTarget: "service",
+      reasoningNotes: "state_machine_reply_without_structured_resolution",
+    },
   });
 
   const textOut = String(composed.text || "").trim();
