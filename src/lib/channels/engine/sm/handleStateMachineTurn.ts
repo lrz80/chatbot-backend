@@ -14,6 +14,7 @@ import {
   type SelectedChannel,
 } from "../clients/clientDb";
 import { parseDatosCliente } from "../../../../lib/parseDatosCliente";
+import { resolveServiceIdFromText } from "../../../services/pricing/resolveServiceIdFromText";
 
 type StateMachineFn = (args: any) => Promise<any>;
 
@@ -235,6 +236,109 @@ export async function handleStateMachineTurn(
   const resolvedEntityLabel = null;
   const hasResolvedEntity = false;
 
+  let serviceRecommendationBlock = "";
+
+  const canRecommendFromDb =
+    (smResult.intent || null) === "info_servicio" && !hasResolvedEntity;
+
+  if (canRecommendFromDb) {
+    const { rows } = await pool.query<{
+      service_id: string;
+      service_name: string | null;
+      service_description: string | null;
+      variant_name: string | null;
+      variant_description: string | null;
+    }>(
+      `
+      SELECT
+        s.id AS service_id,
+        s.name AS service_name,
+        s.description AS service_description,
+        v.variant_name,
+        v.description AS variant_description
+      FROM services s
+      LEFT JOIN service_variants v
+        ON v.service_id = s.id
+       AND v.active = true
+      WHERE
+        s.tenant_id = $1
+        AND s.active = true
+        AND s.name IS NOT NULL
+      ORDER BY s.created_at ASC, v.created_at ASC NULLS LAST, v.id ASC NULLS LAST
+      `,
+      [tenantId]
+    );
+
+    const grouped = new Map<
+      string,
+      {
+        id: string;
+        name: string;
+        snippets: string[];
+      }
+    >();
+
+    for (const r of rows) {
+      const id = String(r.service_id || "").trim();
+      const name = String(r.service_name || "").trim();
+      if (!id || !name) continue;
+
+      let entry = grouped.get(id);
+      if (!entry) {
+        entry = { id, name, snippets: [] };
+        grouped.set(id, entry);
+      }
+
+      const parts = [
+        String(r.service_description || "").trim(),
+        String(r.variant_name || "").trim(),
+        String(r.variant_description || "").trim(),
+      ].filter(Boolean);
+
+      for (const p of parts) {
+        if (!entry.snippets.includes(p)) entry.snippets.push(p);
+      }
+    }
+
+    const serviceCandidates = Array.from(grouped.values()).slice(0, 8);
+
+    serviceRecommendationBlock =
+      idiomaDestino === "en"
+        ? [
+            "SYSTEM_STRUCTURED_SERVICE_CANDIDATES:",
+            ...serviceCandidates.map((s, idx) => {
+              const extra = s.snippets.slice(0, 2).join(" | ");
+              return `${idx + 1}. ${s.name}${extra ? ` — ${extra}` : ""}`;
+            }),
+            "",
+            "RULE:",
+            "- If you recommend a service, you MUST recommend ONLY from the candidate list above.",
+            "- Do NOT invent service names.",
+            "- Do NOT merge or rename services.",
+            "- If the list is insufficient or ambiguous, ask one short clarification question instead of inventing.",
+          ].join("\n")
+        : [
+            "CANDIDATOS_DE_SERVICIO_ESTRUCTURADOS_DEL_SISTEMA:",
+            ...serviceCandidates.map((s, idx) => {
+              const extra = s.snippets.slice(0, 2).join(" | ");
+              return `${idx + 1}. ${s.name}${extra ? ` — ${extra}` : ""}`;
+            }),
+            "",
+            "REGLA:",
+            "- Si recomiendas un servicio, DEBES recomendar SOLO uno de la lista de candidatos anterior.",
+            "- No inventes nombres de servicios.",
+            "- No mezcles ni renombres servicios.",
+            "- Si la lista no alcanza o hay ambigüedad, haz una sola pregunta corta de aclaración en vez de inventar.",
+          ].join("\n");
+
+    console.log("[SM][DB_SERVICE_CANDIDATES_FOR_LLM]", {
+      tenantId,
+      canal,
+      userInput: eventUserInput,
+      candidates: serviceCandidates.map((s) => s.name),
+    });
+  }
+
   console.log("[SM][ANSWER_WITH_PROMPT_BASE][POLICY]", {
     tenantId,
     canal,
@@ -251,6 +355,8 @@ export async function handleStateMachineTurn(
     tenantId,
     promptBase: [
       promptBaseMem,
+      "",
+      serviceRecommendationBlock,
       "",
       NO_NUMERIC_MENUS,
       LIST_FOLLOWUP_RULE,
