@@ -273,6 +273,8 @@ export async function handleFastpathHybridTurn(
 
   const structuredService = getStructuredServiceSelection(ctxPatch, convoCtx);
 
+  console.log("[STRUCTURED_SERVICE][CALLER]", structuredService);
+  
   console.log("[FASTPATH_HYBRID][STRUCTURED_SERVICE_CHECK]", {
     tenantId,
     canal,
@@ -647,15 +649,35 @@ SPECIAL RULE FOR THIS TURN:
       CHANNEL_TONE_RULE,
     ].join("\n");
 
+    const hasResolvedEntity = Boolean(
+      structuredService?.serviceId ||
+      structuredService?.serviceLabel
+    );
+
     const composed = await answerWithPromptBase({
       tenantId,
       promptBase: promptConFastpath,
-      userInput,              // mensaje real del cliente
+      userInput,
       history,
       idiomaDestino,
-      canal,                  // 👈 aquí usamos el canal real (whatsapp o meta)
+      canal,
       maxLines: MAX_WHATSAPP_LINES,
-      fallbackText: fastpathText, // si falla LLM, al menos enviamos Fastpath
+      fallbackText: fastpathText,
+
+      responsePolicy: {
+        mode: hasResolvedEntity ? "grounded_only" : "clarify_only",
+        resolvedEntityType: hasResolvedEntity ? "service" : null,
+        resolvedEntityId: structuredService?.serviceId ?? null,
+        resolvedEntityLabel: structuredService?.serviceLabel ?? null,
+        canMentionSpecificPrice: hasResolvedEntity,
+        canSelectSpecificCatalogItem: hasResolvedEntity,
+        canOfferBookingTimes: false,
+        canUseCatalogLists: hasResolvedEntity,
+        canUseOfficialLinks: true,
+        unresolvedEntity: !hasResolvedEntity,
+        clarificationTarget: hasResolvedEntity ? null : "service",
+        reasoningNotes: null,
+      },
     });
 
     if (composed.pendingCta) {
