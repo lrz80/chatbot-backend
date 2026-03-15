@@ -1193,10 +1193,115 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       hasResolvedEntity,
     });
 
+    let serviceRecommendationBlock = "";
+    let validServiceNames: string[] = [];
+
+    if (
+      (INTENCION_FINAL_CANONICA === "info_servicio" || detectedIntent === "info_servicio") &&
+      !hasResolvedEntity
+    ) {
+      const { rows: serviceRows } = await pool.query<{
+        service_id: string;
+        service_name: string | null;
+        service_description: string | null;
+        variant_name: string | null;
+        variant_description: string | null;
+      }>(
+        `
+        SELECT
+          s.id AS service_id,
+          s.name AS service_name,
+          s.description AS service_description,
+          v.variant_name,
+          v.description AS variant_description
+        FROM services s
+        LEFT JOIN service_variants v
+          ON v.service_id = s.id
+         AND v.active = true
+        WHERE
+          s.tenant_id = $1
+          AND s.active = true
+          AND s.name IS NOT NULL
+        ORDER BY s.created_at ASC, v.created_at ASC NULLS LAST, v.id ASC NULLS LAST
+        `,
+        [event.tenantId]
+      );
+
+      const grouped = new Map<
+        string,
+        {
+          id: string;
+          name: string;
+          snippets: string[];
+        }
+      >();
+
+      for (const r of serviceRows) {
+        const id = String(r.service_id || "").trim();
+        const name = String(r.service_name || "").trim();
+        if (!id || !name) continue;
+
+        let entry = grouped.get(id);
+        if (!entry) {
+          entry = { id, name, snippets: [] };
+          grouped.set(id, entry);
+        }
+
+        const parts = [
+          String(r.service_description || "").trim(),
+          String(r.variant_name || "").trim(),
+          String(r.variant_description || "").trim(),
+        ].filter(Boolean);
+
+        for (const p of parts) {
+          if (!entry.snippets.includes(p)) entry.snippets.push(p);
+        }
+      }
+
+      const serviceCandidates = Array.from(grouped.values()).slice(0, 8);
+      validServiceNames = serviceCandidates.map((s) => s.name);
+
+      serviceRecommendationBlock =
+        idiomaDestino === "en"
+          ? [
+              "SYSTEM_STRUCTURED_SERVICE_CANDIDATES:",
+              ...serviceCandidates.map((s, idx) => {
+                const extra = s.snippets.slice(0, 2).join(" | ");
+                return `${idx + 1}. ${s.name}${extra ? ` — ${extra}` : ""}`;
+              }),
+              "",
+              "STRICT RULES:",
+              "- If you recommend a service, recommend ONLY one service name that appears EXACTLY in the candidate list above.",
+              "- Never invent, translate, merge, generalize, or rename service names.",
+              "- If none is clearly appropriate, ask ONE short clarification question instead.",
+            ].join("\n")
+          : [
+              "CANDIDATOS_DE_SERVICIO_ESTRUCTURADOS_DEL_SISTEMA:",
+              ...serviceCandidates.map((s, idx) => {
+                const extra = s.snippets.slice(0, 2).join(" | ");
+                return `${idx + 1}. ${s.name}${extra ? ` — ${extra}` : ""}`;
+              }),
+              "",
+              "REGLAS ESTRICTAS:",
+              "- Si recomiendas un servicio, recomienda SOLO un nombre de servicio que aparezca EXACTAMENTE en la lista anterior.",
+              "- Nunca inventes, traduzcas, mezcles, generalices ni renombres servicios.",
+              "- Si ninguno encaja claramente, haz UNA sola pregunta corta de aclaración.",
+            ].join("\n");
+
+      console.log("[WHATSAPP][SM_FALLBACK][DB_SERVICE_CANDIDATES_FOR_LLM]", {
+        tenantId: event.tenantId,
+        canal: "whatsapp",
+        userInput: event.userInput,
+        validServiceNames,
+      });
+    }
+
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
       promptBase: [
         promptBaseMem,
+        "",
+        serviceRecommendationBlock,
         "",
         NO_NUMERIC_MENUS,
         PRICE_QUALIFIER_RULE,
