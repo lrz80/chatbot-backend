@@ -1275,17 +1275,25 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           return firstSentence.slice(0, 140).trim();
         }
 
+        function compactSnippet(text: string): string {
+          const clean = String(text || "").replace(/\s+/g, " ").trim();
+          if (!clean) return "";
+
+          const words = clean.split(/\s+/).slice(0, 6).join(" ");
+          return words.trim();
+        }
+
         function buildOptionLabel(serviceId: string, fallbackName: string): string {
           const entry = grouped.get(serviceId);
           if (!entry) return fallbackName;
 
           const snippet =
-            firstUsefulSnippet(entry.description) ||
-            firstUsefulSnippet(entry.variantDescriptions[0] || "") ||
+            compactSnippet(entry.description) ||
+            compactSnippet(entry.variantDescriptions[0] || "") ||
             String(entry.variants[0] || "").trim();
 
           return snippet
-            ? `${entry.name} — ${snippet}`
+            ? `${entry.name} (${snippet})`
             : entry.name;
         }
 
@@ -1304,20 +1312,24 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
                 optionsBlock,
                 "",
                 "STRICT RULES:",
-                "- Ask the user to choose ONE of the options above.",
+                "- Write a very short clarification message.",
+                "- Do not explain the options in long sentences.",
+                "- Show each option on its own line with a bullet.",
+                "- Ask the user to choose ONE option only.",
                 "- Do not invent or recommend any other service.",
-                "- Mention the options clearly.",
-                "- Ask one short question.",
+                "- Maximum 4 lines total.",
               ].join("\n")
             : [
                 "OPCIONES_DE_SERVICIO_AMBIGUAS_DEL_SISTEMA:",
                 optionsBlock,
                 "",
                 "REGLAS ESTRICTAS:",
-                "- Pide al usuario que elija UNA de las opciones anteriores.",
+                "- Escribe una aclaración muy corta.",
+                "- No expliques las opciones con frases largas.",
+                "- Muestra cada opción en su propia línea con viñeta.",
+                "- Pide al usuario que elija UNA sola opción.",
                 "- No inventes ni recomiendes otros servicios.",
-                "- Menciona claramente las opciones.",
-                "- Haz una sola pregunta corta.",
+                "- Máximo 4 líneas en total.",
               ].join("\n");
 
         const clarifyComposed = await answerWithPromptBase({
@@ -1336,8 +1348,8 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           maxLines: MAX_WHATSAPP_LINES,
           fallbackText:
             idiomaDestino === "en"
-              ? `Do you mean one of these options: ${options.join(" / ")}?`
-              : `¿Te refieres a una de estas opciones: ${options.join(" / ")}?`,
+              ? `Which one do you mean?\n• ${options.join("\n• ")}`
+              : `¿Cuál quieres decir?\n• ${options.join("\n• ")}`,
           responsePolicy: {
             mode: "grounded_only",
             resolvedEntityType: null,

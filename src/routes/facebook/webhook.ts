@@ -67,6 +67,9 @@ import { runEstimateFlowTurn } from "../../lib/estimateFlow/runEstimateFlowTurn"
 import { detectarIdioma } from "../../lib/detectarIdioma";
 import { traducirMensaje } from "../../lib/traducirMensaje";
 import { getMemoryValue } from "../../lib/clientMemory";
+import {
+  resolveServiceCandidatesFromText,
+} from "../../lib/services/pricing/resolveServiceIdFromText";
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -1053,6 +1056,249 @@ async function procesarMensajeMeta(args: {
 
     const { answerWithPromptBase } = await import("../../lib/answers/answerWithPromptBase");
 
+    const structuredService =
+      (convoCtx as any)?.structuredService ?? null;
+
+    const resolvedEntityId =
+      structuredService?.serviceId ??
+      structuredService?.id ??
+      (convoCtx as any)?.last_service_id ??
+      (convoCtx as any)?.selectedServiceId ??
+      null;
+
+    const resolvedEntityLabel =
+      structuredService?.serviceLabel ??
+      structuredService?.label ??
+      structuredService?.serviceName ??
+      (convoCtx as any)?.last_service_name ??
+      null;
+
+    const hasResolvedEntity = Boolean(
+      resolvedEntityId || resolvedEntityLabel
+    );
+
+    console.log("[META][SM_FALLBACK][STRUCTURED_SERVICE]", {
+      resolvedEntityId,
+      resolvedEntityLabel,
+      hasResolvedEntity,
+    });
+
+    if (
+      (INTENCION_FINAL_CANONICA === "info_servicio" || detectedIntent === "info_servicio") &&
+      !hasResolvedEntity
+    ) {
+      const resolved = await resolveServiceCandidatesFromText(
+        pool,
+        tenantId,
+        userInput,
+        { mode: "loose" }
+      );
+
+      if (resolved.ambiguous && resolved.candidates.length >= 2) {
+        const MAX_OPTIONS = 4;
+        const topCandidates = resolved.candidates.slice(0, MAX_OPTIONS);
+
+        const { rows: detailRows } = await pool.query<{
+          id: string;
+          name: string | null;
+          description: string | null;
+          variant_name: string | null;
+          variant_description: string | null;
+        }>(
+          `
+          SELECT
+            s.id,
+            s.name,
+            s.description,
+            v.variant_name,
+            v.description AS variant_description
+          FROM services s
+          LEFT JOIN service_variants v
+            ON v.service_id = s.id
+           AND v.active = true
+          WHERE s.tenant_id = $1
+            AND s.id = ANY($2::uuid[])
+          ORDER BY s.created_at ASC, v.created_at ASC NULLS LAST, v.id ASC NULLS LAST
+          `,
+          [tenantId, topCandidates.map((c) => c.id)]
+        );
+
+        const grouped = new Map<
+          string,
+          {
+            name: string;
+            description: string;
+            variants: string[];
+            variantDescriptions: string[];
+          }
+        >();
+
+        for (const r of detailRows) {
+          const id = String(r.id || "").trim();
+          if (!id) continue;
+
+          let entry = grouped.get(id);
+          if (!entry) {
+            entry = {
+              name: String(r.name || "").trim(),
+              description: String(r.description || "").trim(),
+              variants: [],
+              variantDescriptions: [],
+            };
+            grouped.set(id, entry);
+          }
+
+          const vn = String(r.variant_name || "").trim();
+          const vd = String(r.variant_description || "").trim();
+
+          if (vn && !entry.variants.includes(vn)) entry.variants.push(vn);
+          if (vd && !entry.variantDescriptions.includes(vd)) entry.variantDescriptions.push(vd);
+        }
+
+        function firstUsefulSnippet(text: string): string {
+          const clean = String(text || "").replace(/\s+/g, " ").trim();
+          if (!clean) return "";
+          const firstSentence = clean.split(/(?<=[.!?])\s+/)[0]?.trim() || clean;
+          return firstSentence.slice(0, 140).trim();
+        }
+
+        function compactSnippet(text: string): string {
+          const clean = String(text || "").replace(/\s+/g, " ").trim();
+          if (!clean) return "";
+
+          const words = clean.split(/\s+/).slice(0, 6).join(" ");
+          return words.trim();
+        }
+
+        function buildOptionLabel(serviceId: string, fallbackName: string): string {
+          const entry = grouped.get(serviceId);
+          if (!entry) return fallbackName;
+
+          const snippet =
+            compactSnippet(entry.description) ||
+            compactSnippet(entry.variantDescriptions[0] || "") ||
+            String(entry.variants[0] || "").trim();
+
+          return snippet
+            ? `${entry.name} (${snippet})`
+            : entry.name;
+        }
+
+        const options = topCandidates.map((c) =>
+          buildOptionLabel(c.id, c.name)
+        );
+
+        const optionsBlock = options
+          .map((opt, i) => `OPTION_${i + 1}: ${opt}`)
+          .join("\n");
+
+        const ambiguityBlock =
+          idiomaDestino === "en"
+            ? [
+                "SYSTEM_AMBIGUOUS_SERVICE_OPTIONS:",
+                optionsBlock,
+                "",
+                "STRICT RULES:",
+                "- Write a very short clarification message.",
+                "- Do not explain the options in long sentences.",
+                "- Show each option on its own line with a bullet.",
+                "- Ask the user to choose ONE option only.",
+                "- Do not invent or recommend any other service.",
+                "- Maximum 4 lines total.",
+              ].join("\n")
+            : [
+                "OPCIONES_DE_SERVICIO_AMBIGUAS_DEL_SISTEMA:",
+                optionsBlock,
+                "",
+                "REGLAS ESTRICTAS:",
+                "- Escribe una aclaración muy corta.",
+                "- No expliques las opciones con frases largas.",
+                "- Muestra cada opción en su propia línea con viñeta.",
+                "- Pide al usuario que elija UNA sola opción.",
+                "- No inventes ni recomiendes otros servicios.",
+                "- Máximo 4 líneas en total.",
+              ].join("\n");
+
+        const clarifyComposed = await answerWithPromptBase({
+          tenantId,
+          promptBase: [
+            promptBaseMem,
+            "",
+            ambiguityBlock,
+            "",
+            NO_NUMERIC_MENUS,
+          ].join("\n"),
+          userInput: ["USER_MESSAGE:", userInput].join("\n"),
+          history,
+          idiomaDestino,
+          canal: canalEnvio as any,
+          maxLines: MAX_LINES_META,
+          fallbackText:
+            idiomaDestino === "en"
+              ? `Which one do you mean?\n• ${options.join("\n• ")}`
+              : `¿Cuál quieres decir?\n• ${options.join("\n• ")}`,
+          responsePolicy: {
+            mode: "grounded_only",
+            resolvedEntityType: null,
+            resolvedEntityId: null,
+            resolvedEntityLabel: null,
+            canMentionSpecificPrice: false,
+            canSelectSpecificCatalogItem: false,
+            canOfferBookingTimes: false,
+            canUseCatalogLists: true,
+            canUseOfficialLinks: false,
+            unresolvedEntity: true,
+            clarificationTarget: "service",
+            reasoningNotes: "meta_ambiguous_service_clarification",
+          },
+        });
+
+        const clarifyText = String(clarifyComposed.text || "").trim();
+        const normalizedClarify = clarifyText.toLowerCase();
+
+        const mentionsAtLeastOneOption = options.some((opt) =>
+          normalizedClarify.includes(opt.toLowerCase())
+        );
+
+        if (!mentionsAtLeastOneOption) {
+          console.log("[META][AMBIGUOUS_SERVICE][LLM_CLARIFICATION_FALLBACK]", {
+            tenantId,
+            canal: canalEnvio,
+            userInput,
+            clarifyText,
+            options,
+          });
+
+          setReply(
+            idiomaDestino === "en"
+              ? `Do you mean one of these options: ${options.join(" / ")}?`
+              : `¿Te refieres a una de estas opciones: ${options.join(" / ")}?`,
+            "sm-fallback-ambiguous-service",
+            "info_servicio"
+          );
+          await finalizeReply();
+          return;
+        }
+
+        console.log("[META][SM_FALLBACK][AMBIGUOUS_SERVICE -> ASK_CLARIFICATION]", {
+          tenantId,
+          canal: canalEnvio,
+          userInput,
+          candidates: topCandidates,
+          options,
+          replyPreview: clarifyText.slice(0, 200),
+        });
+
+        setReply(
+          clarifyText,
+          "sm-fallback-ambiguous-service",
+          "info_servicio"
+        );
+        await finalizeReply();
+        return;
+      }
+    }
+
     const composed = await answerWithPromptBase({
       tenantId,
       promptBase: [
@@ -1069,6 +1315,21 @@ async function procesarMensajeMeta(args: {
       canal: canalEnvio as any,
       maxLines: MAX_LINES_META,
       fallbackText: bienvenida,
+
+      responsePolicy: {
+        mode: hasResolvedEntity ? "grounded_only" : "clarify_only",
+        resolvedEntityType: hasResolvedEntity ? "service" : null,
+        resolvedEntityId,
+        resolvedEntityLabel,
+        canMentionSpecificPrice: hasResolvedEntity,
+        canSelectSpecificCatalogItem: hasResolvedEntity,
+        canOfferBookingTimes: false,
+        canUseCatalogLists: hasResolvedEntity,
+        canUseOfficialLinks: true,
+        unresolvedEntity: !hasResolvedEntity,
+        clarificationTarget: hasResolvedEntity ? null : "service",
+        reasoningNotes: "meta_sm_fallback",
+      },
     });
 
     if (composed.pendingCta) {
