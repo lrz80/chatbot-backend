@@ -236,6 +236,79 @@ export async function handleFastpathHybridTurn(
     ? (detectedIntent || intentFallback || "precio")
     : (detectedIntent || intentFallback || null);
 
+    // ============================================
+  // PRE-RESOLVE DE SERVICIO DESDE EL MENSAJE DEL USUARIO
+  // Esto cubre el caso donde Fastpath no maneja el turno
+  // pero el usuario sí mencionó un servicio de forma suficiente.
+  // ============================================
+  const preResolvedCtxPatch: any = {};
+
+  const shouldTryPreResolveService =
+    currentIntent === "info_servicio" ||
+    currentIntent === "precio" ||
+    currentIntent === "planes_precios";
+
+  const alreadyHasStructuredService = !!firstNonEmptyString(
+    convoCtx?.last_service_id,
+    convoCtx?.selectedServiceId,
+    convoCtx?.selected_service_id,
+    convoCtx?.serviceId,
+    convoCtx?.last_service_name,
+    convoCtx?.selectedServiceName,
+    convoCtx?.selected_service_name,
+    convoCtx?.serviceName
+  );
+
+  if (shouldTryPreResolveService && !alreadyHasStructuredService) {
+    try {
+      const preResolved = await resolveServiceIdFromText(
+        pool,
+        tenantId,
+        userInput,
+        { mode: "loose" }
+      );
+
+      if (preResolved?.id) {
+        preResolvedCtxPatch.last_service_id = String(preResolved.id);
+        preResolvedCtxPatch.last_service_name =
+          String(preResolved.name || "").trim() || null;
+        preResolvedCtxPatch.last_service_label =
+          String(preResolved.name || "").trim() || null;
+        preResolvedCtxPatch.selectedServiceId = String(preResolved.id);
+        preResolvedCtxPatch.last_entity_kind = "service";
+        preResolvedCtxPatch.last_entity_at = Date.now();
+
+        console.log("[FASTPATH_HYBRID][PRE_RESOLVE_SERVICE]", {
+          tenantId,
+          canal,
+          contactoNorm,
+          userInput,
+          intent: currentIntent,
+          serviceId: preResolvedCtxPatch.last_service_id,
+          serviceName: preResolvedCtxPatch.last_service_name,
+        });
+      } else {
+        console.log("[FASTPATH_HYBRID][PRE_RESOLVE_SERVICE] no match", {
+          tenantId,
+          canal,
+          contactoNorm,
+          userInput,
+          intent: currentIntent,
+        });
+      }
+    } catch (e: any) {
+      console.warn(
+        "[FASTPATH_HYBRID][PRE_RESOLVE_SERVICE] failed:",
+        e?.message || e
+      );
+    }
+  }
+
+  const convoCtxForFastpath = {
+    ...(convoCtx || {}),
+    ...preResolvedCtxPatch,
+  };
+
   // 1️⃣ Ejecutar Fastpath "puro" (DB, includes, etc.)
   const fp = await runFastpath({
     pool,
@@ -244,7 +317,7 @@ export async function handleFastpathHybridTurn(
     idiomaDestino,
     userInput,
     inBooking,
-    convoCtx: convoCtx as any,
+    convoCtx: convoCtxForFastpath as any,
     infoClave,
     promptBase: promptBaseMem,
     detectedIntent: fpIntent,
@@ -265,16 +338,27 @@ export async function handleFastpathHybridTurn(
 
   // Si no manejó nada, devolvemos directo
   if (!fp.handled) {
-    return { handled: false };
+    console.log("[FASTPATH_HYBRID][RETURN_UNHANDLED_WITH_CTX]", {
+      tenantId,
+      canal,
+      userInput,
+      preResolvedCtxPatch,
+    });
+
+    return {
+      handled: false,
+      ctxPatch: Object.keys(preResolvedCtxPatch).length ? preResolvedCtxPatch : undefined,
+      intent: detectedIntent || intentFallback || null,
+    };
   }
 
   // ✅ declarar ctxPatch primero
   const ctxPatch: any = fp.ctxPatch ? { ...fp.ctxPatch } : {};
 
-  const structuredService = getStructuredServiceSelection(ctxPatch, convoCtx);
+  const structuredService = getStructuredServiceSelection(ctxPatch, convoCtxForFastpath);
 
   console.log("[STRUCTURED_SERVICE][CALLER]", structuredService);
-  
+
   console.log("[FASTPATH_HYBRID][STRUCTURED_SERVICE_CHECK]", {
     tenantId,
     canal,
