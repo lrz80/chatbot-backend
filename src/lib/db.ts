@@ -34,10 +34,6 @@ const pool = new Pool({
   allowExitOnIdle: false,
 });
 
-pool.on("connect", () => {
-  console.log("✅ PG client conectado");
-});
-
 pool.on("error", (err) => {
   console.error("❌ PG pool error:", err);
 });

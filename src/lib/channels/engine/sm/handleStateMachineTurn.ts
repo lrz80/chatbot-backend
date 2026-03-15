@@ -108,6 +108,47 @@ export async function handleStateMachineTurn(
   }
 
   // ===============================
+  // 🚫 NO dejar que SM secuestre turnos sin estado activo real
+  // ===============================
+  const smIntent = String(smResult.intent || "").trim().toLowerCase();
+  const smReplySource = String(smResult.replySource || "").trim().toLowerCase();
+
+  const SM_REPLY_REQUIRES_ACTIVE_STATE = new Set([
+    "pago",
+    "datos_cliente",
+    "booking",
+    "reserva",
+    "checkout",
+  ]);
+
+  const looksStatefulReply =
+    SM_REPLY_REQUIRES_ACTIVE_STATE.has(smIntent) ||
+    smReplySource.startsWith("pago") ||
+    smReplySource.startsWith("booking") ||
+    smReplySource.startsWith("checkout");
+
+  const hasActiveTransition =
+    !!smResult?.transition &&
+    (
+      !!smResult.transition.nextState ||
+      !!smResult.transition.state ||
+      !!smResult.transition.effects?.length
+    );
+
+  if (looksStatefulReply && !hasActiveTransition) {
+    console.log("[SM][SKIP_REPLY_NO_ACTIVE_STATE]", {
+      tenantId,
+      canal,
+      contactoNorm,
+      userInput: eventUserInput,
+      smIntent,
+      smReplySource,
+      hasActiveTransition,
+    });
+    return false;
+  }
+
+  // ===============================
   // 🎯 SM => REPLY
   // ===============================
 

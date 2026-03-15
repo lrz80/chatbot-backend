@@ -94,7 +94,7 @@ function tokenize(raw: string): string[] {
     .map((w) => w.trim())
     .filter((w) => {
       if (!w) return false;
-      if (/^\d+$/.test(w)) return true;
+      if (/^\d+$/.test(w)) return false;
       return w.length >= 2 && !FUNCTION_WORDS.has(w);
     });
 }
