@@ -783,9 +783,17 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   detectedInterest         = signals.detectedInterest;
   INTENCION_FINAL_CANONICA = signals.INTENCION_FINAL_CANONICA;
   promptBaseMem            = signals.promptBaseMem;
-  convoCtx                 = signals.convoCtx;
-  // emotion sólo si la necesitas luego
-  const emotion = signals.emotion;
+  convoCtx = {
+    ...(convoCtx || {}),
+    ...(signals.convoCtx || {}),
+  };
+
+  console.log("🧠 CONVOCTX after signals merge =", {
+    last_service_id: (convoCtx as any)?.last_service_id || null,
+    last_service_name: (convoCtx as any)?.last_service_name || null,
+    selectedServiceId: (convoCtx as any)?.selectedServiceId || null,
+    last_catalog_plans: (convoCtx as any)?.last_catalog_plans || null,
+  });
 
   // ===============================
   // ✅ PENDING CTA ACCEPTANCE
@@ -1007,6 +1015,14 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         INTENCION_FINAL_CANONICA = fpRes.intent;
         lastIntent = fpRes.intent;
       }
+
+      console.log("🧠 CONVOCTX after fastpath patch =", {
+        last_service_id: (convoCtx as any)?.last_service_id || null,
+        last_service_name: (convoCtx as any)?.last_service_name || null,
+        selectedServiceId: (convoCtx as any)?.selectedServiceId || null,
+        fpIntent: fpRes.intent || null,
+        fpSource: fpRes.replySource || null,
+      });
 
       return await replyAndExit(
         fpRes.reply,

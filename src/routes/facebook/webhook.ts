@@ -745,7 +745,10 @@ async function procesarMensajeMeta(args: {
   detectedInterest = signals.detectedInterest;
   INTENCION_FINAL_CANONICA = signals.INTENCION_FINAL_CANONICA;
   promptBaseMem = signals.promptBaseMem;
-  convoCtx = signals.convoCtx;
+  convoCtx = {
+    ...(convoCtx || {}),
+    ...(signals.convoCtx || {}),
+  };
 
   // ===============================
   // ✅ PENDING CTA ACCEPTANCE
