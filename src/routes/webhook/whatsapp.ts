@@ -1234,34 +1234,22 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           .map((c) => nameById.get(String(c.id)) || c.name)
           .filter(Boolean);
 
-        const ambiguityBlock =
-          idiomaDestino === "en"
-            ? [
-                "SYSTEM_AMBIGUOUS_SERVICE_OPTIONS:",
-                ...options.map((opt, i) => `OPTION_${i + 1}: ${opt}`),
-                "",
-                "STRICT RULES:",
-                "- Write one short clarification message for chat.",
-                "- Ask which option the user means.",
-                "- Show the options as bullet lines.",
-                "- Mention ONLY the options above.",
-                "- Do NOT invent, rename, merge, explain, or recommend services.",
-                "- Maximum 4 lines total.",
-              ].join("\n")
-            : [
-                "OPCIONES_DE_SERVICIO_AMBIGUAS_DEL_SISTEMA:",
-                ...options.map((opt, i) => `OPCION_${i + 1}: ${opt}`),
-                "",
-                "REGLAS ESTRICTAS:",
-                "- Escribe una sola aclaración corta para chat.",
-                "- Pregunta a cuál opción se refiere el usuario.",
-                "- Muestra las opciones en líneas con viñetas.",
-                "- Menciona SOLO las opciones anteriores.",
-                "- No inventes, renombres, mezcles, expliques ni recomiendes servicios.",
-                "- Máximo 4 líneas en total.",
-              ].join("\n");
+        const ambiguityBlock = [
+          "AMBIGUOUS_SERVICE_OPTIONS:",
+          ...options.map((opt) => `• ${opt}`),
+          "",
+          "TASK:",
+          "Write a short clarification message asking which option the user means.",
+          "",
+          "RULES:",
+          "- Mention the options exactly as written.",
+          "- Do not recommend any option.",
+          "- Do not explain the services.",
+          "- Do not rename the options.",
+          "- Maximum 4 lines.",
+        ].join("\n");
 
-        async function composeAmbiguousClarification() {
+        async function composeClarification() {
           return await answerWithPromptBase({
             tenantId: event.tenantId,
             promptBase: [
@@ -1294,7 +1282,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           });
         }
 
-        const try1 = await composeAmbiguousClarification();
+        const try1 = await composeClarification();
         let clarifyText = String(try1.text || "").trim();
 
         const includesEnoughOptions = (text: string) => {
@@ -1306,7 +1294,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         };
 
         if (!includesEnoughOptions(clarifyText)) {
-          const try2 = await composeAmbiguousClarification();
+          const try2 = await composeClarification();
           clarifyText = String(try2.text || "").trim();
         }
 
