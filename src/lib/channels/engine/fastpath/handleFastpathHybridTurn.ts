@@ -463,7 +463,53 @@ export async function handleFastpathHybridTurn(
       hasGroundedServiceSource,
       structuredService,
       ctxPatch,
+      fastpathPreview: String(fastpathText || "").slice(0, 200),
     });
+
+    // ===============================
+    // ✅ POST-RESOLVE DE SERVICIO DESDE fastpathText
+    // Para casos donde Fastpath/LLM recomienda un servicio en texto
+    // pero no dejó resolución estructurada en ctxPatch.
+    // ===============================
+    if (!structuredService.hasResolution && fastpathText) {
+      try {
+        const postResolved = await resolveServiceIdFromText(
+          pool,
+          tenantId,
+          fastpathText,
+          { mode: "loose" }
+        );
+
+        if (postResolved?.id) {
+          ctxPatch.last_service_id = String(postResolved.id);
+          ctxPatch.last_service_name = String(postResolved.name || "").trim() || null;
+          ctxPatch.last_service_label = String(postResolved.name || "").trim() || null;
+          ctxPatch.last_entity_kind = "service";
+          ctxPatch.last_entity_at = Date.now();
+
+          console.log("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE][EARLY_RETURN]", {
+            tenantId,
+            canal,
+            contactoNorm,
+            userInput,
+            source: fp.source,
+            serviceId: ctxPatch.last_service_id,
+            serviceName: ctxPatch.last_service_name,
+          });
+        } else {
+          console.log("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE][EARLY_RETURN] no match", {
+            tenantId,
+            canal,
+            contactoNorm,
+            userInput,
+            source: fp.source,
+            fastpathPreview: String(fastpathText || "").slice(0, 200),
+          });
+        }
+      } catch (e: any) {
+        console.warn("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE][EARLY_RETURN] failed:", e?.message || e);
+      }
+    }
 
     return {
       handled: true,
