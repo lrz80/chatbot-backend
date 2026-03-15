@@ -19,7 +19,8 @@ type Candidate = {
   serviceId: string;
   label: string;
   serviceNameTokens: string[];
-  catalogTokens: string[];
+  supportTokens: string[];   // description + variants
+  catalogTokens: string[];   // union total
 };
 
 const FUNCTION_WORDS = new Set([
@@ -130,17 +131,17 @@ function scoreTokensWeighted(
 ): number {
   if (!queryTokens.length || !candidateTokens.length || totalCandidates <= 0) return 0;
 
-  const qSet = new Set(queryTokens);
+  const candidateSet = new Set(candidateTokens);
 
   let matchedWeight = 0;
   let totalWeight = 0;
 
-  for (const t of candidateTokens) {
+  for (const t of queryTokens) {
     const df = dfMap.get(t) || 1;
     const weight = Math.log(1 + totalCandidates / df);
 
     totalWeight += weight;
-    if (qSet.has(t)) matchedWeight += weight;
+    if (candidateSet.has(t)) matchedWeight += weight;
   }
 
   return totalWeight > 0 ? matchedWeight / totalWeight : 0;
@@ -231,12 +232,13 @@ export async function resolveServiceCandidatesFromText(
     return { hit: null, ambiguous: false, candidates: [] };
   }
 
-  const grouped = new Map<
+    const grouped = new Map<
     string,
     {
       serviceId: string;
       serviceLabel: string | null;
       serviceNameTokenSet: Set<string>;
+      supportTokenSet: Set<string>;
       catalogTokenSet: Set<string>;
     }
   >();
@@ -252,6 +254,7 @@ export async function resolveServiceCandidatesFromText(
         serviceId,
         serviceLabel: serviceName,
         serviceNameTokenSet: new Set<string>(),
+        supportTokenSet: new Set<string>(),
         catalogTokenSet: new Set<string>(),
       };
       grouped.set(serviceId, entry);
@@ -263,6 +266,11 @@ export async function resolveServiceCandidatesFromText(
     const variantDescTokens = tokenize(String(r.variant_description || ""));
 
     for (const tk of serviceNameTokens) entry.serviceNameTokenSet.add(tk);
+
+    for (const tk of serviceDescTokens) entry.supportTokenSet.add(tk);
+    for (const tk of variantNameTokens) entry.supportTokenSet.add(tk);
+    for (const tk of variantDescTokens) entry.supportTokenSet.add(tk);
+
     for (const tk of serviceNameTokens) entry.catalogTokenSet.add(tk);
     for (const tk of serviceDescTokens) entry.catalogTokenSet.add(tk);
     for (const tk of variantNameTokens) entry.catalogTokenSet.add(tk);
@@ -273,6 +281,7 @@ export async function resolveServiceCandidatesFromText(
     serviceId: g.serviceId,
     label: g.serviceLabel || "",
     serviceNameTokens: Array.from(g.serviceNameTokenSet),
+    supportTokens: Array.from(g.supportTokenSet),
     catalogTokens: Array.from(g.catalogTokenSet),
   }));
 
@@ -301,6 +310,13 @@ export async function resolveServiceCandidatesFromText(
       totalCandidates
     );
 
+    const supportScore = scoreTokensWeighted(
+      queryTokens,
+      cand.supportTokens,
+      dfMap,
+      totalCandidates
+    );
+
     const catalogScore = scoreTokensWeighted(
       queryTokens,
       cand.catalogTokens,
@@ -314,11 +330,24 @@ export async function resolveServiceCandidatesFromText(
     const overlapNameTokens = uniqueOverlapTokens(queryTokens, cand.serviceNameTokens);
     const overlapCatalogTokens = uniqueOverlapTokens(queryTokens, cand.catalogTokens);
 
+    const queryCoverage =
+      queryTokens.length > 0
+        ? overlapCatalogTokens.length / queryTokens.length
+        : 0;
+
     let score = 0;
-    score += nameScore * 0.7;
-    score += catalogScore * 0.3;
-    if (exactNameHits >= 2) score += 0.18;
-    if (exactCatalogHits >= 2) score += 0.08;
+
+    // Menos sesgo al nombre corto, más peso a descripción/variantes
+    score += nameScore * 0.30;
+    score += supportScore * 0.45;
+    score += catalogScore * 0.25;
+
+    // Bonus por evidencia múltiple real
+    if (exactNameHits >= 2) score += 0.10;
+    if (exactCatalogHits >= 2) score += 0.10;
+
+    // Bonus por cubrir más del query
+    score += queryCoverage * 0.15;
 
     return {
       cand,
