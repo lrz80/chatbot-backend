@@ -91,7 +91,19 @@ router.post("/", async (req: Request, res: Response) => {
     res.type("text/xml").send(new MessagingResponse().toString());
 
     // Procesa el mensaje aparte (no bloquea la respuesta a Twilio)
+    console.log("🔥 webhook POST recibido", {
+      at: new Date().toISOString(),
+      hasBody: !!req.body,
+      messageSid: req.body?.MessageSid || null,
+      from: req.body?.From || null,
+    });
+
     setTimeout(() => {
+      console.log("🔥 entrando a procesarMensajeWhatsApp", {
+        at: new Date().toISOString(),
+        messageSid: req.body?.MessageSid || null,
+      });
+
       procesarMensajeWhatsApp(req.body).catch((err) => {
         console.error("❌ procesarMensajeWhatsApp failed (async):", err);
       });
@@ -984,7 +996,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     });
 
     console.log("B8 despues handleFastpathHybridTurn");
-    
+
     // aplicar patch de contexto devuelto por el helper
     if (fpRes.ctxPatch) {
       transition({ patchCtx: fpRes.ctxPatch });
