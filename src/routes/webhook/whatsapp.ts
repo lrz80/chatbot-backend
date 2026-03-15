@@ -1165,6 +1165,34 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     // 🚫 ROLLBACK: PROMPT-ONLY (sin DB catalog)
     const fallbackWelcome = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
 
+    const structuredService =
+      (convoCtx as any)?.structuredService ??
+      null;
+
+    const resolvedEntityId =
+      structuredService?.serviceId ??
+      structuredService?.id ??
+      (convoCtx as any)?.last_service_id ??
+      (convoCtx as any)?.selectedServiceId ??
+      null;
+
+    const resolvedEntityLabel =
+      structuredService?.serviceLabel ??
+      structuredService?.label ??
+      structuredService?.serviceName ??
+      (convoCtx as any)?.last_service_name ??
+      null;
+
+    const hasResolvedEntity = Boolean(
+      resolvedEntityId || resolvedEntityLabel
+    );
+
+    console.log("[WHATSAPP][SM_FALLBACK][STRUCTURED_SERVICE]", {
+      resolvedEntityId,
+      resolvedEntityLabel,
+      hasResolvedEntity,
+    });
+
     const composed = await answerWithPromptBase({
       tenantId: event.tenantId,
       promptBase: [
@@ -1181,6 +1209,21 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       canal: "whatsapp",
       maxLines: MAX_WHATSAPP_LINES,
       fallbackText: fallbackWelcome,
+
+      responsePolicy: {
+        mode: hasResolvedEntity ? "grounded_only" : "clarify_only",
+        resolvedEntityType: hasResolvedEntity ? "service" : null,
+        resolvedEntityId,
+        resolvedEntityLabel,
+        canMentionSpecificPrice: hasResolvedEntity,
+        canSelectSpecificCatalogItem: hasResolvedEntity,
+        canOfferBookingTimes: false,
+        canUseCatalogLists: hasResolvedEntity,
+        canUseOfficialLinks: true,
+        unresolvedEntity: !hasResolvedEntity,
+        clarificationTarget: hasResolvedEntity ? null : "service",
+        reasoningNotes: "whatsapp_sm_fallback",
+      },
     });
 
     if (composed.pendingCta) {
