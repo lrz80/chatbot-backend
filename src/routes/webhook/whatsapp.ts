@@ -58,6 +58,7 @@ import { parseDatosCliente } from "../../lib/parseDatosCliente";
 
 import { runEstimateFlowTurn } from "../../lib/estimateFlow/runEstimateFlowTurn";
 import { traducirMensaje } from '../../lib/traducirMensaje';
+import { queryWithTimeout } from "../../lib/dbQuery";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -136,7 +137,11 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     intent?: string | null;
   } | null = null;
 
+  console.log("A0 antes buildTurnContext");
+
   const turn = await buildTurnContext({ pool, body, context });
+
+  console.log("A0.1 despues buildTurnContext");
 
   // canal puede venir en el contexto (meta/preview) o por defecto 'whatsapp'
   const canal: Canal = (context?.canal as Canal) || "whatsapp";
@@ -237,20 +242,29 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   }
 
   if (messageId) {
-    const r = await pool.query(
-      `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
-      VALUES ($1, $2, $3, NOW())
-      ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
-      RETURNING 1`,
-      [tenant.id, canal, messageId]
-    );
+    console.log("A1 antes dedupe interactions");
+
+  const r = await queryWithTimeout(
+    `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
+    VALUES ($1, $2, $3, NOW())
+    ON CONFLICT (tenant_id, canal, message_id) DO NOTHING
+    RETURNING 1`,
+    [tenant.id, canal, messageId],
+    12000
+  );
+
+  console.log("A2 despues dedupe interactions");
     if (r.rowCount === 0) {
       console.log("⏩ inbound dedupe: ya procesado messageId", messageId);
       return;
     }
   }
 
+  console.log("B1 antes ensureClienteBase");
+
   const isNewLead = await ensureClienteBase(pool, tenant.id, canal, contactoNorm);
+
+  console.log("B2 despues ensureClienteBase");
 
   // ✅ FORZAR IDIOMA SOLO en saludo inicial claro
   // No usar detectarIdioma aquí para forzar cualquier turno.
@@ -398,6 +412,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // ===============================
   // 🌍 LANG RESOLUTION (CLIENT-FIRST) – refactorizada
   // ===============================
+  console.log("B3 antes resolveLangForTurn");
   const langOut = await resolveLangForTurn({
     pool,
     tenant,
@@ -408,6 +423,8 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     tenantBase,
     forcedLangThisTurn,
   });
+
+  console.log("B4 despues resolveLangForTurn");
 
   idiomaDestino = langOut.idiomaDestino;
   let promptBase = langOut.promptBase;
@@ -449,13 +466,18 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // ✅ google_calendar_enabled flag (source of truth)
   let bookingEnabled = false;
   try {
-    const { rows } = await pool.query(
-      `SELECT google_calendar_enabled
-      FROM channel_settings
-      WHERE tenant_id = $1
-      LIMIT 1`,
-      [tenant.id]
-    );
+    console.log("A3 antes select channel_settings");
+
+  const { rows } = await queryWithTimeout(
+    `SELECT google_calendar_enabled
+    FROM channel_settings
+    WHERE tenant_id = $1
+    LIMIT 1`,
+    [tenant.id],
+    12000
+  );
+
+  console.log("A4 despues select channel_settings");
     bookingEnabled = rows[0]?.google_calendar_enabled === true;
   } catch (e: any) {
     console.warn("⚠️ No se pudo leer google_calendar_enabled:", e?.message);
@@ -632,13 +654,18 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // 🔎 DEBUG: estado de flujo (clientes)
   // ===============================
   try {
-    const { rows } = await pool.query(
+    console.log("A5 antes select clientes state");
+
+    const { rows } = await queryWithTimeout(
       `SELECT estado, human_override, info_explicada, selected_channel
       FROM clientes
       WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
       LIMIT 1`,
-      [tenant.id, canal, contactoNorm]
+      [tenant.id, canal, contactoNorm],
+      12000
     );
+
+    console.log("A6 despues select clientes state");
 
     console.log("🧩 CLIENTE STATE (pre-flow) =", {
       tenantId: tenant.id,
@@ -694,6 +721,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // ===============================
   // 🔔 USER SIGNALS (intención, emoción, memoria, override)
   // ===============================
+  console.log("B5 antes handleUserSignalsTurn");
   const signals = await handleUserSignalsTurn({
     pool,
     tenant,
@@ -709,6 +737,8 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     transition,
   });
 
+  console.log("B6 despues handleUserSignalsTurn");
+
   // ===============================
   // 🧹 RESET estado pago si cambia la intención
   // ===============================
@@ -717,15 +747,20 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       INTENCION_FINAL_CANONICA &&
       INTENCION_FINAL_CANONICA !== "pago"
     ) {
-      await pool.query(
+      console.log("A7 antes reset estado pago");
+
+      await queryWithTimeout(
         `UPDATE clientes
         SET estado = NULL
         WHERE tenant_id = $1
         AND canal = $2
         AND contacto = $3
         AND estado = 'esperando_pago'`,
-        [tenant.id, canal, contactoNorm]
+        [tenant.id, canal, contactoNorm],
+        12000
       );
+
+      console.log("A8 despues reset estado pago");
     }
   } catch (e: any) {
     console.warn("⚠️ reset estado pago failed:", e?.message);
@@ -930,6 +965,8 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       bookingStep0,
     });
     
+    console.log("B7 antes handleFastpathHybridTurn");
+
     const fpRes = await handleFastpathHybridTurn({
       pool,
       tenantId: tenant.id,
@@ -946,6 +983,8 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       promptBaseMem,
     });
 
+    console.log("B8 despues handleFastpathHybridTurn");
+    
     // aplicar patch de contexto devuelto por el helper
     if (fpRes.ctxPatch) {
       transition({ patchCtx: fpRes.ctxPatch });
