@@ -59,6 +59,9 @@ import { parseDatosCliente } from "../../lib/parseDatosCliente";
 import { runEstimateFlowTurn } from "../../lib/estimateFlow/runEstimateFlowTurn";
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { queryWithTimeout } from "../../lib/dbQuery";
+import {
+  resolveServiceCandidatesFromText,
+} from "../../lib/services/pricing/resolveServiceIdFromText";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -1193,6 +1196,38 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       hasResolvedEntity,
     });
 
+        if (
+      (INTENCION_FINAL_CANONICA === "info_servicio" || detectedIntent === "info_servicio") &&
+      !hasResolvedEntity
+    ) {
+      const resolved = await resolveServiceCandidatesFromText(
+        pool,
+        event.tenantId,
+        event.userInput,
+        { mode: "loose" }
+      );
+
+      if (resolved.ambiguous && resolved.candidates.length >= 2) {
+        const options = resolved.candidates.slice(0, 2).map((c) => c.name);
+
+        const clarificationText =
+          idiomaDestino === "en"
+            ? `Do you mean ${options.join(" or ")}?`
+            : `¿Te refieres a ${options.join(" o ")}?`;
+
+        console.log("[WHATSAPP][SM_FALLBACK][AMBIGUOUS_SERVICE -> ASK_CLARIFICATION]", {
+          tenantId: event.tenantId,
+          canal: "whatsapp",
+          userInput: event.userInput,
+          candidates: resolved.candidates,
+        });
+
+        setReply(clarificationText, "sm-fallback-ambiguous-service", "info_servicio");
+        await finalizeReply();
+        return;
+      }
+    }
+
     let serviceRecommendationBlock = "";
     let validServiceNames: string[] = [];
 
@@ -1330,6 +1365,33 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         reasoningNotes: "whatsapp_sm_fallback",
       },
     });
+
+    if (validServiceNames.length > 0) {
+      const normalizedReply = String(composed.text || "").toLowerCase();
+
+      const matchedValidName = validServiceNames.find((name) =>
+        normalizedReply.includes(name.toLowerCase())
+      );
+
+      if (!matchedValidName) {
+        const clarificationText =
+          idiomaDestino === "en"
+            ? `Sure — what service do you mean exactly? For example: ${validServiceNames.slice(0, 4).join(", ")}.`
+            : `Claro — ¿a cuál servicio te refieres exactamente? Por ejemplo: ${validServiceNames.slice(0, 4).join(", ")}.`;
+
+        console.log("[WHATSAPP][SM_FALLBACK][INVALID_SERVICE_RECOMMENDATION_BLOCKED]", {
+          tenantId: event.tenantId,
+          canal: "whatsapp",
+          userInput: event.userInput,
+          replyPreview: String(composed.text || "").slice(0, 200),
+          validServiceNames,
+        });
+
+        setReply(clarificationText, "sm-fallback-invalid-service", "info_servicio");
+        await finalizeReply();
+        return;
+      }
+    }
 
     if (composed.pendingCta) {
       (convoCtx as any).pending_cta = {

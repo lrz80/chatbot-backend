@@ -5,6 +5,16 @@ import { traducirTexto } from "../../traducirTexto";
 
 export type Hit = { id: string; name: string };
 
+export type ResolveServiceResult = {
+  hit: Hit | null;
+  ambiguous: boolean;
+  candidates: Array<{
+    id: string;
+    name: string;
+    score: number;
+  }>;
+};
+
 type Candidate = {
   serviceId: string;
   label: string;
@@ -148,15 +158,17 @@ function uniqueOverlapTokens(queryTokens: string[], candidateTokens: string[]): 
   return Array.from(new Set(candidateTokens.filter((t) => qSet.has(t))));
 }
 
-export async function resolveServiceIdFromText(
+export async function resolveServiceCandidatesFromText(
   pool: Pool,
   tenantId: string,
   userText: string,
   opts?: { mode?: "strict" | "loose" }
-): Promise<Hit | null> {
+): Promise<ResolveServiceResult> {
   const mode: "strict" | "loose" = opts?.mode || "strict";
   const t = String(userText || "").trim();
-  if (!t) return null;
+  if (!t) {
+    return { hit: null, ambiguous: false, candidates: [] };
+  }
 
   let idioma: "es" | "en" | string = "es";
   try {
@@ -184,7 +196,7 @@ export async function resolveServiceIdFromText(
 
   if (!queryTokens.length) {
     console.log("[RESOLVE-SERVICE] sin tokens útiles, devolviendo null");
-    return null;
+    return { hit: null, ambiguous: false, candidates: [] };
   }
 
   const { rows } = await pool.query<{
@@ -216,7 +228,7 @@ export async function resolveServiceIdFromText(
 
   if (!rows.length) {
     console.log("[RESOLVE-SERVICE] sin candidatos en DB, devolviendo null");
-    return null;
+    return { hit: null, ambiguous: false, candidates: [] };
   }
 
   const grouped = new Map<
@@ -266,7 +278,7 @@ export async function resolveServiceIdFromText(
 
   if (!candidates.length) {
     console.log("[RESOLVE-SERVICE] candidatos sin tokens, devolviendo null");
-    return null;
+    return { hit: null, ambiguous: false, candidates: [] };
   }
 
   const dfMap = buildTenantTokenDf(candidates);
@@ -303,14 +315,8 @@ export async function resolveServiceIdFromText(
     const overlapCatalogTokens = uniqueOverlapTokens(queryTokens, cand.catalogTokens);
 
     let score = 0;
-
-    // Peso principal: nombre del servicio
-    score += nameScore * 0.70;
-
-    // Peso secundario: resto del catálogo
-    score += catalogScore * 0.30;
-
-    // Bonus moderado por evidencia múltiple, no por hits aislados
+    score += nameScore * 0.7;
+    score += catalogScore * 0.3;
     if (exactNameHits >= 2) score += 0.18;
     if (exactCatalogHits >= 2) score += 0.08;
 
@@ -361,6 +367,15 @@ export async function resolveServiceIdFromText(
   const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.7 : 0.3;
   const MARGIN = mode === "strict" ? 0.2 : 0.1;
 
+  const topCandidates = scored
+    .filter((s) => s.score > 0)
+    .slice(0, 3)
+    .map((s) => ({
+      id: s.cand.serviceId,
+      name: s.cand.label,
+      score: s.score,
+    }));
+
   if (queryTokens.length === 1) {
     const token = queryTokens[0];
 
@@ -376,7 +391,15 @@ export async function resolveServiceIdFromText(
           withToken.length,
           "candidatos → ambiguo, devolviendo null"
         );
-        return null;
+        return {
+          hit: null,
+          ambiguous: withToken.length > 1,
+          candidates: withToken.slice(0, 3).map((s) => ({
+            id: s.cand.serviceId,
+            name: s.cand.label,
+            score: s.score,
+          })),
+        };
       }
 
       const only = withToken[0];
@@ -393,7 +416,11 @@ export async function resolveServiceIdFromText(
           label: only.cand.label,
           score: only.score,
         });
-        return { id: only.cand.serviceId, name: only.cand.label };
+        return {
+          hit: { id: only.cand.serviceId, name: only.cand.label },
+          ambiguous: false,
+          candidates: topCandidates,
+        };
       }
 
       console.log(
@@ -405,16 +432,26 @@ export async function resolveServiceIdFromText(
           score: only.score,
         }
       );
-      return null;
+      return {
+        hit: null,
+        ambiguous: false,
+        candidates: topCandidates,
+      };
     }
 
-    // En modo loose, 1 token útil NO resuelve automáticamente.
-    // Se deja al caller decidir desambiguación o fallback.
     console.log(
       "[RESOLVE-SERVICE] (loose) 1 token útil → no auto-resolver, devolviendo null",
       { userText, token, candidates: withToken.length }
     );
-    return null;
+    return {
+      hit: null,
+      ambiguous: withToken.length > 1,
+      candidates: withToken.slice(0, 3).map((s) => ({
+        id: s.cand.serviceId,
+        name: s.cand.label,
+        score: s.score,
+      })),
+    };
   }
 
   const bestEvidenceCount = Math.max(best?.exactNameHits || 0, best?.exactCatalogHits || 0);
@@ -426,7 +463,17 @@ export async function resolveServiceIdFromText(
       threshold: BASE_THRESHOLD,
       bestEvidenceCount,
     });
-    return null;
+
+    const ambiguous =
+      !!second &&
+      second.score > 0 &&
+      Math.abs((best?.score || 0) - second.score) < MARGIN;
+
+    return {
+      hit: null,
+      ambiguous,
+      candidates: topCandidates,
+    };
   }
 
   if (second && second.score > 0 && Math.abs(best.score - second.score) < MARGIN) {
@@ -440,7 +487,11 @@ export async function resolveServiceIdFromText(
         requiredMargin: MARGIN,
       }
     );
-    return null;
+    return {
+      hit: null,
+      ambiguous: true,
+      candidates: topCandidates,
+    };
   }
 
   console.log("[RESOLVE-SERVICE] match aceptado (>=2 tokens útiles)", {
@@ -449,5 +500,24 @@ export async function resolveServiceIdFromText(
     score: best.score,
   });
 
-  return { id: best.cand.serviceId, name: best.cand.label };
+  return {
+    hit: { id: best.cand.serviceId, name: best.cand.label },
+    ambiguous: false,
+    candidates: topCandidates,
+  };
+}
+
+export async function resolveServiceIdFromText(
+  pool: Pool,
+  tenantId: string,
+  userText: string,
+  opts?: { mode?: "strict" | "loose" }
+): Promise<Hit | null> {
+  const result = await resolveServiceCandidatesFromText(
+    pool,
+    tenantId,
+    userText,
+    opts
+  );
+  return result.hit;
 }
