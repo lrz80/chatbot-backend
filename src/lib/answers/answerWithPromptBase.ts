@@ -482,15 +482,9 @@ export async function answerWithPromptBase(
   out = capLines(out, maxLines);
 
   if (effectivePolicy.mode === "clarify_only") {
-    const forced =
-      idiomaDestino === "en"
-        ? "Which specific service do you mean?"
-        : "¿A cuál servicio te refieres exactamente?";
-
-    return {
-      text: capLines(sanitizeChatOutput(forced), maxLines),
-      pendingCta: null,
-    };
+    out = enforceClarifyOnlyOutput(out, idiomaDestino);
+    out = sanitizeChatOutput(out);
+    out = capLines(out, maxLines);
   }
 
   try {
