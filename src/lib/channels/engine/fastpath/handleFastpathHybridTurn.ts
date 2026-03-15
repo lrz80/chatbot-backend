@@ -252,6 +252,17 @@ export async function handleFastpathHybridTurn(
     lastServiceTtlMs: 60 * 60 * 1000,
   });
 
+  console.log("[FASTPATH_HYBRID][ENTRY_AFTER_RUN]", {
+    tenantId,
+    canal,
+    userInput,
+    fpHandled: fp.handled,
+    fpSource: fp.handled ? fp.source : null,
+    fpIntent: fp.handled ? fp.intent : null,
+    fpReplyPreview: fp.handled ? String(fp.reply || "").slice(0, 200) : null,
+    fpCtxPatchKeys: fp.handled && fp.ctxPatch ? Object.keys(fp.ctxPatch) : [],
+  });
+
   // Si no manejó nada, devolvemos directo
   if (!fp.handled) {
     return { handled: false };
@@ -261,6 +272,18 @@ export async function handleFastpathHybridTurn(
   const ctxPatch: any = fp.ctxPatch ? { ...fp.ctxPatch } : {};
 
   const structuredService = getStructuredServiceSelection(ctxPatch, convoCtx);
+
+  console.log("[FASTPATH_HYBRID][STRUCTURED_SERVICE_CHECK]", {
+    tenantId,
+    canal,
+    userInput,
+    fpSource: fp.handled ? fp.source : null,
+    fpIntent: fp.handled ? fp.intent : null,
+    structuredService,
+    ctxPatchKeys: Object.keys(ctxPatch || {}),
+    convoCtxLastServiceId: (convoCtx as any)?.last_service_id || null,
+    convoCtxSelectedServiceId: (convoCtx as any)?.selectedServiceId || null,
+  });
 
   // Canonicalizar siempre el servicio resuelto para follow-ups posteriores
   if (structuredService.serviceId) {
@@ -414,6 +437,15 @@ export async function handleFastpathHybridTurn(
     console.log("[CHAT][FASTPATH] Bypass LLM (link/info_clave)", {
       source: fp.source,
       hasLinkInFastpath,
+    });
+
+    console.log("[FASTPATH_HYBRID][RETURN_HARD_PRICE_BYPASS]", {
+      tenantId,
+      canal,
+      userInput,
+      fpSource: fp.source,
+      fpIntent: fp.intent,
+      ctxPatch,
     });
 
     return {
@@ -722,6 +754,16 @@ SPECIAL RULE FOR THIS TURN:
         };
       }
     }
+
+    console.log("[FASTPATH_HYBRID][RETURN_DM_FINAL]", {
+      tenantId,
+      canal,
+      userInput,
+      fpSource: fp.source,
+      fpIntent: fp.intent,
+      replyPreview: String(composed.text || "").slice(0, 200),
+      ctxPatch,
+    });
 
     return {
       handled: true,
