@@ -8,6 +8,7 @@ import { naturalizeSecondaryOptionsLine } from "../../../fastpath/naturalizeSeco
 import { getRecentHistoryForModel } from "../messages/getRecentHistoryForModel";
 import { answerWithPromptBase } from "../../../answers/answerWithPromptBase";
 import { traducirTexto } from "../../../traducirTexto";
+import { resolveServiceIdFromText } from "../../../services/pricing/resolveServiceIdFromText";
 
 const MAX_WHATSAPP_LINES = 9999; // mantenemos el mismo valor
 
@@ -592,6 +593,54 @@ SPECIAL RULE FOR THIS TURN:
         pendingCta: ctxPatch.pending_cta,
         replyPreview: composed.text.slice(0, 200),
       });
+    }
+
+    // ===============================
+    // ✅ POST-RESOLVE DE SERVICIO RECOMENDADO POR LLM
+    // Si el LLM mencionó claramente un servicio pero Fastpath no dejó
+    // resolución estructurada, intentamos resolverlo desde el texto final.
+    // ===============================
+    if (
+      isServiceIntent &&
+      !structuredService.hasResolution &&
+      composed.text
+    ) {
+      try {
+        const postResolved = await resolveServiceIdFromText(
+          pool,
+          tenantId,
+          composed.text,
+          { mode: "loose" }
+        );
+
+        if (postResolved?.id) {
+          ctxPatch.last_service_id = String(postResolved.id);
+          ctxPatch.last_service_name = String(postResolved.name || "").trim() || null;
+          ctxPatch.last_service_label = String(postResolved.name || "").trim() || null;
+          ctxPatch.last_entity_kind = "service";
+          ctxPatch.last_entity_at = Date.now();
+
+          console.log("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE]", {
+            tenantId,
+            canal,
+            contactoNorm,
+            userInput,
+            resolvedFromReply: composed.text.slice(0, 200),
+            serviceId: ctxPatch.last_service_id,
+            serviceName: ctxPatch.last_service_name,
+          });
+        } else {
+          console.log("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE] no match", {
+            tenantId,
+            canal,
+            contactoNorm,
+            userInput,
+            replyPreview: composed.text.slice(0, 200),
+          });
+        }
+      } catch (e: any) {
+        console.warn("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE] failed:", e?.message || e);
+      }
     }
 
     const text = (composed.text || "").toLowerCase().trim();
