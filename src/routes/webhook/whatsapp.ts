@@ -1196,7 +1196,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       hasResolvedEntity,
     });
 
-        if (
+    if (
       (INTENCION_FINAL_CANONICA === "info_servicio" || detectedIntent === "info_servicio") &&
       !hasResolvedEntity
     ) {
@@ -1208,21 +1208,193 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       );
 
       if (resolved.ambiguous && resolved.candidates.length >= 2) {
-        const options = resolved.candidates.slice(0, 2).map((c) => c.name);
+        const MAX_OPTIONS = 4; // seguro para WhatsApp UX
+        const topCandidates = resolved.candidates.slice(0, MAX_OPTIONS);
 
-        const clarificationText =
+        const { rows: detailRows } = await pool.query<{
+          id: string;
+          name: string | null;
+          description: string | null;
+          variant_name: string | null;
+          variant_description: string | null;
+        }>(
+          `
+          SELECT
+            s.id,
+            s.name,
+            s.description,
+            v.variant_name,
+            v.description AS variant_description
+          FROM services s
+          LEFT JOIN service_variants v
+            ON v.service_id = s.id
+          AND v.active = true
+          WHERE s.tenant_id = $1
+            AND s.id = ANY($2::uuid[])
+          ORDER BY s.created_at ASC, v.created_at ASC NULLS LAST, v.id ASC NULLS LAST
+          `,
+          [event.tenantId, topCandidates.map((c) => c.id)]
+        );
+
+        const grouped = new Map<
+          string,
+          {
+            name: string;
+            description: string;
+            variants: string[];
+            variantDescriptions: string[];
+          }
+        >();
+
+        for (const r of detailRows) {
+          const id = String(r.id || "").trim();
+          if (!id) continue;
+
+          let entry = grouped.get(id);
+          if (!entry) {
+            entry = {
+              name: String(r.name || "").trim(),
+              description: String(r.description || "").trim(),
+              variants: [],
+              variantDescriptions: [],
+            };
+            grouped.set(id, entry);
+          }
+
+          const vn = String(r.variant_name || "").trim();
+          const vd = String(r.variant_description || "").trim();
+
+          if (vn && !entry.variants.includes(vn)) entry.variants.push(vn);
+          if (vd && !entry.variantDescriptions.includes(vd)) entry.variantDescriptions.push(vd);
+        }
+
+        function firstUsefulSnippet(text: string): string {
+          const clean = String(text || "").replace(/\s+/g, " ").trim();
+          if (!clean) return "";
+          const firstSentence = clean.split(/(?<=[.!?])\s+/)[0]?.trim() || clean;
+          return firstSentence.slice(0, 140).trim();
+        }
+
+        function buildOptionLabel(serviceId: string, fallbackName: string): string {
+          const entry = grouped.get(serviceId);
+          if (!entry) return fallbackName;
+
+          const snippet =
+            firstUsefulSnippet(entry.description) ||
+            firstUsefulSnippet(entry.variantDescriptions[0] || "") ||
+            String(entry.variants[0] || "").trim();
+
+          return snippet
+            ? `${entry.name} — ${snippet}`
+            : entry.name;
+        }
+
+        const options = topCandidates.map((c) =>
+          buildOptionLabel(c.id, c.name)
+        );
+
+        const optionsBlock = options
+          .map((opt, i) => `OPTION_${i + 1}: ${opt}`)
+          .join("\n");
+
+        const ambiguityBlock =
           idiomaDestino === "en"
-            ? `Do you mean ${options.join(" or ")}?`
-            : `¿Te refieres a ${options.join(" o ")}?`;
+            ? [
+                "SYSTEM_AMBIGUOUS_SERVICE_OPTIONS:",
+                optionsBlock,
+                "",
+                "STRICT RULES:",
+                "- Ask the user to choose ONE of the options above.",
+                "- Do not invent or recommend any other service.",
+                "- Mention the options clearly.",
+                "- Ask one short question.",
+              ].join("\n")
+            : [
+                "OPCIONES_DE_SERVICIO_AMBIGUAS_DEL_SISTEMA:",
+                optionsBlock,
+                "",
+                "REGLAS ESTRICTAS:",
+                "- Pide al usuario que elija UNA de las opciones anteriores.",
+                "- No inventes ni recomiendes otros servicios.",
+                "- Menciona claramente las opciones.",
+                "- Haz una sola pregunta corta.",
+              ].join("\n");
+
+        const clarifyComposed = await answerWithPromptBase({
+          tenantId: event.tenantId,
+          promptBase: [
+            promptBaseMem,
+            "",
+            ambiguityBlock,
+            "",
+            NO_NUMERIC_MENUS,
+          ].join("\n"),
+          userInput: ["USER_MESSAGE:", event.userInput].join("\n"),
+          history,
+          idiomaDestino,
+          canal: "whatsapp",
+          maxLines: MAX_WHATSAPP_LINES,
+          fallbackText:
+            idiomaDestino === "en"
+              ? `Do you mean one of these options: ${options.join(" / ")}?`
+              : `¿Te refieres a una de estas opciones: ${options.join(" / ")}?`,
+          responsePolicy: {
+            mode: "grounded_only",
+            resolvedEntityType: null,
+            resolvedEntityId: null,
+            resolvedEntityLabel: null,
+            canMentionSpecificPrice: false,
+            canSelectSpecificCatalogItem: false,
+            canOfferBookingTimes: false,
+            canUseCatalogLists: true,
+            canUseOfficialLinks: false,
+            unresolvedEntity: true,
+            clarificationTarget: "service",
+            reasoningNotes: "whatsapp_ambiguous_service_clarification",
+          },
+        });
+
+        const clarifyText = String(clarifyComposed.text || "").trim();
+        const normalizedClarify = clarifyText.toLowerCase();
+
+        const mentionsAtLeastOneOption = options.some((opt) =>
+          normalizedClarify.includes(opt.toLowerCase())
+        );
+
+        if (!mentionsAtLeastOneOption) {
+          console.log("[WHATSAPP][AMBIGUOUS_SERVICE][LLM_CLARIFICATION_FALLBACK]", {
+            tenantId: event.tenantId,
+            canal: "whatsapp",
+            userInput: event.userInput,
+            clarifyText,
+            options,
+          });
+
+          setReply(
+            idiomaDestino === "en"
+              ? `Do you mean one of these options: ${options.join(" / ")}?`
+              : `¿Te refieres a una de estas opciones: ${options.join(" / ")}?`,
+            "sm-fallback-ambiguous-service",
+            "info_servicio"
+          );
+          await finalizeReply();
+          return;
+        }
 
         console.log("[WHATSAPP][SM_FALLBACK][AMBIGUOUS_SERVICE -> ASK_CLARIFICATION]", {
           tenantId: event.tenantId,
           canal: "whatsapp",
           userInput: event.userInput,
-          candidates: resolved.candidates,
+          candidates: topCandidates,
+          options,
+          replyPreview: clarifyText.slice(0, 200),
         });
 
-        setReply(clarificationText, "sm-fallback-ambiguous-service", "info_servicio");
+        setReply(
+          clarifyText,
+          "sm-fallback-ambiguous-service",
+          "info_servicio"
+        );
         await finalizeReply();
         return;
       }
