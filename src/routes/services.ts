@@ -211,8 +211,9 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
       price_base,
       service_url,
       active,
-      variants, // ✅
+      variants,
       tipo,
+      catalog_role,
     } = req.body || {};
 
     if (!name || !String(name).trim()) {
@@ -231,9 +232,9 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
       INSERT INTO services (
         tenant_id, category, name, description,
         duration_min, price_base,
-        service_url, active, tipo
+        service_url, active, tipo, catalog_role
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
       RETURNING *
       `,
       [
@@ -245,7 +246,8 @@ router.post("/", authenticateUser, async (req: any, res: Response) => {
         price_base ?? null,
         service_url ? String(service_url).trim() : null,
         active ?? true,
-        (tipo === "plan" ? "plan" : "service")
+        (tipo === "plan" ? "plan" : "service"),
+        (catalog_role === "addon" ? "addon" : "primary"),
       ]
     );
 
@@ -351,6 +353,7 @@ router.put("/:id", authenticateUser, async (req: any, res: Response) => {
       service_url,
       active,
       tipo,
+      catalog_role,
     } = req.body || {};
 
     if (!name || !String(name).trim()) {
@@ -363,18 +366,19 @@ router.put("/:id", authenticateUser, async (req: any, res: Response) => {
     const { rows } = await pool.query(
       `
       UPDATE services
-         SET category = $3,
-             name = $4,
-             description = $5,
-             duration_min = $6,
-             price_base = $7,
-             service_url = $8,
-             active = $9,
-             tipo = $10,
-             updated_at = NOW()
-       WHERE id = $1
-         AND tenant_id = $2
-       RETURNING *
+        SET category = $3,
+            name = $4,
+            description = $5,
+            duration_min = $6,
+            price_base = $7,
+            service_url = $8,
+            active = $9,
+            tipo = $10,
+            catalog_role = $11,
+            updated_at = NOW()
+      WHERE id = $1
+        AND tenant_id = $2
+      RETURNING *
       `,
       [
         id,
@@ -386,7 +390,8 @@ router.put("/:id", authenticateUser, async (req: any, res: Response) => {
         price_base ?? null,
         service_url ? String(service_url).trim() : null,
         active ?? true,
-        (tipo === "plan" ? "plan" : "service")
+        (tipo === "plan" ? "plan" : "service"),
+        (catalog_role === "addon" ? "addon" : "primary"),
       ]
     );
 

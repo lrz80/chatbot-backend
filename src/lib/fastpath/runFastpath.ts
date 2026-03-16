@@ -649,12 +649,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         // =========================================================
         if (frame.askedAttribute === "price") {
           const { rows } = await pool.query<{
-          service_id: string;
-          service_name: string;
-          min_price: number | string | null;
-          max_price: number | string | null;
-          parent_service_id: string | null;
-        }>(`
+            service_id: string;
+            service_name: string;
+            min_price: number | string | null;
+            max_price: number | string | null;
+            parent_service_id: string | null;
+            category: string | null;
+          }>(`
           WITH variant_prices AS (
             SELECT
               s.id AS service_id,
