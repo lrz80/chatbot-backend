@@ -3444,14 +3444,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           "CATALOGO_DB_RESUELTO:",
           ...catalogLines,
           "",
-          "REGLAS_CRITICAS_DEL_TURNO:",
-          "- Estas opciones fueron resueltas desde DB y son la fuente de verdad.",
-          "- Debes mencionar EXCLUSIVAMENTE opciones presentes en CATALOGO_DB_RESUELTO.",
-          "- NO menciones planes, productos o servicios que no aparezcan exactamente en esa lista.",
-          "- NO uses información de contexto previo ni del prompt del negocio para agregar más planes, productos o servicios.",
-          "- NO puedes inventar planes, precios, variantes ni condiciones adicionales.",
-          "- Mantén la respuesta breve, natural y comercial para WhatsApp.",
-          "- Presenta algunas opciones claras y cierra con una sola pregunta suave.",
+          "REGLAS_DEL_TURNO:",
+          "- Los precios deben salir únicamente del CATALOGO_DB_RESUELTO.",
+          "- No inventes precios ni servicios.",
+          "- No listes todo el catálogo si el usuario preguntó de forma general.",
+          "- Selecciona solo algunas opciones representativas.",
+          "- Presenta la información de forma conversacional.",
+          "- Después de mostrar precios, guía la conversación para que el cliente indique qué servicio busca.",
         ].join("\n");
 
         console.log("[PRICE][catalog_db][LLM_RENDER]", {
