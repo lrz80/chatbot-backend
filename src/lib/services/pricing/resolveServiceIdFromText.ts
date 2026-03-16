@@ -471,9 +471,9 @@ export async function resolveServiceCandidatesFromText(
       : null,
   });
 
-  const BASE_THRESHOLD = mode === "strict" ? 0.52 : 0.3;
-  const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.62 : 0.3;
-  const MARGIN = mode === "strict" ? 0.2 : 0.1;
+  const BASE_THRESHOLD = mode === "strict" ? 0.16 : 0.12;
+  const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.45 : 0.25;
+  const MARGIN = mode === "strict" ? 0.08 : 0.05;
 
   const topCandidates = scored
     .filter((s) => s.score > 0)
@@ -567,9 +567,16 @@ export async function resolveServiceCandidatesFromText(
     best?.exactCatalogHits || 0
   );
 
+  const secondScore = second?.score || 0;
+  const marginVsSecond = best ? best.score - secondScore : 0;
+
   const enoughEvidence =
     bestEvidenceCount >= 2 ||
-    (best?.score || 0) >= 0.68;
+    (best?.score || 0) >= 0.22 ||
+    (
+      (best?.score || 0) >= 0.16 &&
+      marginVsSecond >= 0.01
+    );
 
   if (!best || best.score < BASE_THRESHOLD || !enoughEvidence) {
     console.log("[RESOLVE-SERVICE] evidencia insuficiente, devolviendo null", {
@@ -577,6 +584,8 @@ export async function resolveServiceCandidatesFromText(
       bestScore: best?.score,
       threshold: BASE_THRESHOLD,
       bestEvidenceCount,
+      secondScore,
+      marginVsSecond,
     });
 
     const ambiguous =
