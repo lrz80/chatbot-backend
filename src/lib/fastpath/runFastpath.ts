@@ -655,56 +655,69 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             max_price: number | string | null;
             parent_service_id: string | null;
             category: string | null;
+            catalog_role: string | null;
           }>(`
-          WITH variant_prices AS (
+            WITH variant_prices AS (
+              SELECT
+                s.id AS service_id,
+                s.name AS service_name,
+                s.parent_service_id,
+                s.category,
+                s.catalog_role,
+                MIN(v.price)::numeric AS min_price,
+                MAX(v.price)::numeric AS max_price
+              FROM services s
+              JOIN service_variants v
+                ON v.service_id = s.id
+              AND v.active = true
+              WHERE s.tenant_id = $1
+                AND s.active = true
+                AND v.price IS NOT NULL
+              GROUP BY s.id, s.name, s.parent_service_id, s.category, s.catalog_role
+            ),
+            base_prices AS (
+              SELECT
+                s.id AS service_id,
+                s.name AS service_name,
+                s.parent_service_id,
+                s.category,
+                s.catalog_role,
+                MIN(s.price_base)::numeric AS min_price,
+                MAX(s.price_base)::numeric AS max_price
+              FROM services s
+              WHERE s.tenant_id = $1
+                AND s.active = true
+                AND s.price_base IS NOT NULL
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM service_variants v
+                  WHERE v.service_id = s.id
+                    AND v.active = true
+                    AND v.price IS NOT NULL
+                )
+              GROUP BY s.id, s.name, s.parent_service_id, s.category, s.catalog_role
+            )
             SELECT
-              s.id AS service_id,
-              s.name AS service_name,
-              s.parent_service_id,
-              MIN(v.price)::numeric AS min_price,
-              MAX(v.price)::numeric AS max_price
-            FROM services s
-            JOIN service_variants v
-              ON v.service_id = s.id
-            AND v.active = true
-            WHERE s.tenant_id = $1
-              AND s.active = true
-              AND v.price IS NOT NULL
-            GROUP BY s.id, s.name, s.parent_service_id
-          ),
-          base_prices AS (
-            SELECT
-              s.id AS service_id,
-              s.name AS service_name,
-              s.parent_service_id,
-              MIN(s.price_base)::numeric AS min_price,
-              MAX(s.price_base)::numeric AS max_price
-            FROM services s
-            WHERE s.tenant_id = $1
-              AND s.active = true
-              AND s.price_base IS NOT NULL
-              AND NOT EXISTS (
-                SELECT 1
-                FROM service_variants v
-                WHERE v.service_id = s.id
-                  AND v.active = true
-                  AND v.price IS NOT NULL
-              )
-            GROUP BY s.id, s.name, s.parent_service_id
-          )
-          SELECT service_id, service_name, min_price, max_price, parent_service_id
-          FROM (
-            SELECT service_id, service_name, min_price, max_price, parent_service_id FROM variant_prices
-            UNION ALL
-            SELECT service_id, service_name, min_price, max_price, parent_service_id FROM base_prices
-          ) x
-          ORDER BY
-            CASE
-              WHEN category ILIKE '%add%' THEN 1
-              ELSE 0
-            END,
-            min_price ASC NULLS LAST;
-        `, [tenantId]);
+              service_id,
+              service_name,
+              min_price,
+              max_price,
+              parent_service_id,
+              category,
+              catalog_role
+            FROM (
+              SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role FROM variant_prices
+              UNION ALL
+              SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role FROM base_prices
+            ) x
+            ORDER BY
+              CASE
+                WHEN COALESCE(catalog_role, 'primary') = 'primary' THEN 0
+                ELSE 1
+              END,
+              min_price ASC NULLS LAST,
+              service_name ASC
+          `, [tenantId]);
 
           const targetMatches = await resolveServiceMatchesFromText(
             pool,
@@ -2970,6 +2983,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           max_price: number | string | null;
           parent_service_id: string | null;
           category: string | null;
+          catalog_role: string | null;
         }>(`
           WITH variant_prices AS (
             SELECT
@@ -2977,6 +2991,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               s.name AS service_name,
               s.parent_service_id,
               s.category,
+              s.catalog_role,
               MIN(v.price)::numeric AS min_price,
               MAX(v.price)::numeric AS max_price
             FROM services s
@@ -2986,7 +3001,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             WHERE s.tenant_id = $1
               AND s.active = true
               AND v.price IS NOT NULL
-            GROUP BY s.id, s.name, s.parent_service_id, s.category
+            GROUP BY s.id, s.name, s.parent_service_id, s.category, s.catalog_role
           ),
           base_prices AS (
             SELECT
@@ -2994,6 +3009,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               s.name AS service_name,
               s.parent_service_id,
               s.category,
+              s.catalog_role,
               MIN(s.price_base)::numeric AS min_price,
               MAX(s.price_base)::numeric AS max_price
             FROM services s
@@ -3007,13 +3023,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                   AND v.active = true
                   AND v.price IS NOT NULL
               )
-            GROUP BY s.id, s.name, s.parent_service_id, s.category
+            GROUP BY s.id, s.name, s.parent_service_id, s.category, s.catalog_role
           )
-          SELECT service_id, service_name, min_price, max_price, parent_service_id, category
+          SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role
           FROM (
-            SELECT service_id, service_name, min_price, max_price, parent_service_id, category FROM variant_prices
+            SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role FROM variant_prices
             UNION ALL
-            SELECT service_id, service_name, min_price, max_price, parent_service_id, category FROM base_prices
+            SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role FROM base_prices
           ) x;
         `, [tenantId]);
 
@@ -3413,28 +3429,30 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           }
         }
 
-        let rowsLocalized = rows;
+        const rowsPrioritized = [...rows].sort((a, b) => {
+          const aRole = String(a.catalog_role || "primary").trim().toLowerCase();
+          const bRole = String(b.catalog_role || "primary").trim().toLowerCase();
 
-        const rowsPrioritized = [...rowsLocalized].sort((a, b) => {
-          const aCategory = String(a.category || "").trim().toLowerCase();
-          const bCategory = String(b.category || "").trim().toLowerCase();
+          const aPrimary = aRole === "primary";
+          const bPrimary = bRole === "primary";
 
-          const aIsAddon = aCategory.includes("add");
-          const bIsAddon = bCategory.includes("add");
-
-          if (aIsAddon !== bIsAddon) {
-            return aIsAddon ? 1 : -1;
+          if (aPrimary !== bPrimary) {
+            return aPrimary ? -1 : 1;
           }
 
           const aMin = a.min_price === null ? Number.POSITIVE_INFINITY : Number(a.min_price);
           const bMin = b.min_price === null ? Number.POSITIVE_INFINITY : Number(b.min_price);
 
-          return aMin - bMin;
+          if (aMin !== bMin) return aMin - bMin;
+
+          return String(a.service_name || "").localeCompare(String(b.service_name || ""));
         });
+
+        let rowsLocalized = rowsPrioritized;
 
         if (idiomaDestino === "en") {
           rowsLocalized = await Promise.all(
-            rows.map(async (r) => {
+            rowsPrioritized.map(async (r) => {
               const nameEs = String(r.service_name || "").trim();
               if (!nameEs) return r;
 
@@ -3450,14 +3468,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const dbReply = renderGenericPriceSummaryReply({
           lang: idiomaDestino,
-          rows: rowsPrioritized,
+          rows: rowsLocalized,
         });
 
         const cleanedReply = stripLinkSentences(dbReply);
 
         const namesShown = extractPlanNamesFromReply(cleanedReply);
 
-        const catalogLines = rowsPrioritized.slice(0, 6).map((r) => {
+        const catalogLines = rowsLocalized.slice(0, 6).map((r) => {
           const min = r.min_price === null ? null : Number(r.min_price);
           const max = r.max_price === null ? null : Number(r.max_price);
 
@@ -3488,7 +3506,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         ].join("\n");
 
         console.log("[PRICE][catalog_db][LLM_RENDER]", {
-          rowsCount: rowsPrioritized.length,
+          rowsCount: rowsLocalized.length,
           namesShown,
         });
 
