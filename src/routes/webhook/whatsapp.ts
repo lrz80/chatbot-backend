@@ -1306,6 +1306,17 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
             options,
             clarifyText,
           });
+
+          const listOnlyText = [
+            ...options.map((opt) => `• ${opt}`)
+          ].join("\n");
+
+          setReply(
+            listOnlyText,
+            "sm-fallback-ambiguous-service",
+            "info_servicio"
+          );
+          await finalizeReply();
           return;
         }
 
