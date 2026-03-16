@@ -3447,6 +3447,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               "- NO puedes mezclar este servicio con otros del catálogo.",
               "- Si mencionas el precio, debe corresponder únicamente al servicio resuelto.",
               "- Redacta de forma natural, humana, breve y comercial para WhatsApp.",
+              "",
+              "CONTINUIDAD_CONVERSACIONAL:",
+              "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
+              "- Debes guiar al usuario hacia el siguiente paso (más información, reserva, o aclaración).",
+              "- Evita respuestas que solo informen el precio sin invitar a continuar.",
             ].join("\n");
 
             const aiServicePriceReply = await answerWithPromptBase({
