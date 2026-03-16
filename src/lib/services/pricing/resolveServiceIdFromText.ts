@@ -128,6 +128,52 @@ function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
   return df;
 }
 
+function getTokenWeight(
+  token: string,
+  dfMap: Map<string, number>,
+  totalCandidates: number
+): number {
+  if (!token || totalCandidates <= 0) return 0;
+  const df = dfMap.get(token) || 1;
+  return Math.log(1 + totalCandidates / df);
+}
+
+function getDominantQueryTokens(
+  queryTokens: string[],
+  dfMap: Map<string, number>,
+  totalCandidates: number
+): string[] {
+  if (!queryTokens.length || totalCandidates <= 0) return [];
+
+  const weighted = queryTokens.map((t) => ({
+    token: t,
+    weight: getTokenWeight(t, dfMap, totalCandidates),
+  }));
+
+  const maxWeight = Math.max(...weighted.map((x) => x.weight), 0);
+  if (maxWeight <= 0) return [];
+
+  // Tokens "dominantes" = cerca del máximo de discriminación del turno
+  // Evita hardcode por vertical y funciona por catálogo del tenant.
+  return weighted
+    .filter((x) => x.weight >= maxWeight * 0.85)
+    .map((x) => x.token);
+}
+
+function countOverlap(tokensA: string[], tokensB: string[]): number {
+  if (!tokensA.length || !tokensB.length) return 0;
+  const b = new Set(tokensB);
+  let count = 0;
+  for (const t of tokensA) {
+    if (b.has(t)) count++;
+  }
+  return count;
+}
+
+function uniqueUnion(arrays: string[][]): string[] {
+  return Array.from(new Set(arrays.flat().filter(Boolean)));
+}
+
 function normalizeLabel(raw: string): string {
   return normalize(raw).replace(/[\s_-]+/g, " ").trim();
 }
@@ -336,6 +382,12 @@ export async function resolveServiceCandidatesFromText(
   const dfMap = buildTenantTokenDf(candidates);
   const totalCandidates = candidates.length;
 
+  const dominantQueryTokens = getDominantQueryTokens(
+    queryTokens,
+    dfMap,
+    totalCandidates
+  );
+
   type Scored = {
     cand: Candidate;
     score: number;
@@ -343,6 +395,10 @@ export async function resolveServiceCandidatesFromText(
     exactCatalogHits: number;
     overlapNameTokens: string[];
     overlapCatalogTokens: string[];
+    overlapSupportTokens: string[];
+    allOverlapTokens: string[];
+    dominantOverlapTokens: string[];
+    dominantOverlapCount: number;
   };
 
   const scored: Scored[] = candidates.map((cand) => {
@@ -386,10 +442,23 @@ export async function resolveServiceCandidatesFromText(
 
     const overlapNameTokens = uniqueOverlapTokens(queryTokens, cand.serviceNameTokens);
     const overlapCatalogTokens = uniqueOverlapTokens(queryTokens, cand.catalogTokens);
+    const overlapSupportTokens = uniqueOverlapTokens(queryTokens, cand.supportTokens);
+
+    const allOverlapTokens = uniqueUnion([
+      overlapNameTokens,
+      overlapCatalogTokens,
+      overlapSupportTokens,
+    ]);
+
+    const dominantOverlapTokens = dominantQueryTokens.filter((t) =>
+      allOverlapTokens.includes(t)
+    );
+
+    const dominantOverlapCount = dominantOverlapTokens.length;
 
     const queryCoverage =
       queryTokens.length > 0
-        ? overlapCatalogTokens.length / queryTokens.length
+        ? allOverlapTokens.length / queryTokens.length
         : 0;
 
     let score = 0;
@@ -407,8 +476,18 @@ export async function resolveServiceCandidatesFromText(
     if (exactNameHits >= 2) score += 0.08;
     if (exactCatalogHits >= 2) score += 0.08;
 
-    // cobertura del query
+    // cobertura real del query usando todas las fuentes útiles
     score += queryCoverage * 0.12;
+
+    // bonificación por tokens dominantes del turno
+    if (dominantOverlapCount > 0) {
+      score += Math.min(0.18, dominantOverlapCount * 0.12);
+    }
+
+    // penalización si solo matchea tokens genéricos y no matchea ninguno dominante
+    if (dominantQueryTokens.length > 0 && dominantOverlapCount === 0 && allOverlapTokens.length > 0) {
+      score -= 0.14;
+    }
 
     // ajustes universales multitenant-safe
     const categoryNorm = normalizeLabel(cand.category || "");
@@ -432,6 +511,10 @@ export async function resolveServiceCandidatesFromText(
       exactCatalogHits,
       overlapNameTokens,
       overlapCatalogTokens,
+      overlapSupportTokens,
+      allOverlapTokens,
+      dominantOverlapTokens,
+      dominantOverlapCount,
     };
   });
 
@@ -456,6 +539,11 @@ export async function resolveServiceCandidatesFromText(
           exactCatalogHits: best.exactCatalogHits,
           overlapNameTokens: best.overlapNameTokens,
           overlapCatalogTokens: best.overlapCatalogTokens,
+          overlapSupportTokens: best.overlapSupportTokens,
+          allOverlapTokens: best.allOverlapTokens,
+          dominantQueryTokens,
+          dominantOverlapTokens: best.dominantOverlapTokens,
+          dominantOverlapCount: best.dominantOverlapCount,
         }
       : null,
     second: second
@@ -467,6 +555,11 @@ export async function resolveServiceCandidatesFromText(
           exactCatalogHits: second.exactCatalogHits,
           overlapNameTokens: second.overlapNameTokens,
           overlapCatalogTokens: second.overlapCatalogTokens,
+          overlapSupportTokens: second.overlapSupportTokens,
+          allOverlapTokens: second.allOverlapTokens,
+          dominantQueryTokens,
+          dominantOverlapTokens: second.dominantOverlapTokens,
+          dominantOverlapCount: second.dominantOverlapCount,
         }
       : null,
   });
@@ -601,16 +694,57 @@ export async function resolveServiceCandidatesFromText(
   }
 
   if (second && second.score > 0 && Math.abs(best.score - second.score) < MARGIN) {
+    const bestHasDominant = best.dominantOverlapCount > 0;
+    const secondHasDominant = second.dominantOverlapCount > 0;
+
+    // Si el best sí matchea los tokens dominantes del turno
+    // y el second no, no es ambigüedad real: aceptamos best.
+    if (bestHasDominant && !secondHasDominant) {
+      console.log(
+        "[RESOLVE-SERVICE] desempate por dominant query tokens, aceptando best",
+        {
+          userText,
+          best: {
+            label: best.cand.label,
+            score: best.score,
+            dominantOverlapTokens: best.dominantOverlapTokens,
+          },
+          second: {
+            label: second.cand.label,
+            score: second.score,
+            dominantOverlapTokens: second.dominantOverlapTokens,
+          },
+          margin: Math.abs(best.score - second.score),
+          requiredMargin: MARGIN,
+        }
+      );
+
+      return {
+        hit: { id: best.cand.serviceId, name: best.cand.label },
+        ambiguous: false,
+        candidates: topCandidates,
+      };
+    }
+
     console.log(
       "[RESOLVE-SERVICE] empate entre best y second (margin pequeño), devolviendo null",
       {
         userText,
-        best: { label: best.cand.label, score: best.score },
-        second: { label: second.cand.label, score: second.score },
+        best: {
+          label: best.cand.label,
+          score: best.score,
+          dominantOverlapTokens: best.dominantOverlapTokens,
+        },
+        second: {
+          label: second.cand.label,
+          score: second.score,
+          dominantOverlapTokens: second.dominantOverlapTokens,
+        },
         margin: Math.abs(best.score - second.score),
         requiredMargin: MARGIN,
       }
     );
+
     return {
       hit: null,
       ambiguous: true,
