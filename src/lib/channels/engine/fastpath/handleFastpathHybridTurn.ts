@@ -391,8 +391,7 @@ export async function handleFastpathHybridTurn(
 
   // ✅ HARD BYPASS: si Fastpath ya respondió desde DB con precios/catálogo,
   // NUNCA pasar por LLM (evita precios inventados).
-  const DB_PRICE_SOURCES = new Set([
-    "catalog_db",
+  const HARD_BYPASS_PRICE_SOURCES = new Set([
     "price_summary_db",
     "price_fastpath_db",
     "price_disambiguation_db",
@@ -412,7 +411,7 @@ export async function handleFastpathHybridTurn(
 
   if (
     isDmChatChannel(canal) &&
-    DB_PRICE_SOURCES.has(fp.source as any) &&
+    HARD_BYPASS_PRICE_SOURCES.has(fp.source as any) &&
     shouldAllowHardPriceBypass &&
     !looksLikeNarrativeMessage
   ) {
