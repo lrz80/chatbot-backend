@@ -107,18 +107,9 @@ export function renderGenericPriceSummaryReply(args: {
       : "Para ayudarte, dime qué producto o servicio te interesa.";
   }
 
-  const primary = normalized.filter((r) => r.catalog_role === "primary");
-  const secondary = normalized.filter((r) => r.catalog_role !== "primary");
-
-  primary.sort((a, b) => {
-    return getSortPrice(a.minP, a.maxP) - getSortPrice(b.minP, b.maxP);
-  });
-
-  secondary.sort((a, b) => {
-    return getSortPrice(a.minP, a.maxP) - getSortPrice(b.minP, b.maxP);
-  });
-
-  const selected = [...primary, ...secondary].slice(0, 6);
+  // runFastpath ya envía los servicios en el orden correcto.
+  // Aquí NO debemos reordenar.
+  const selected = normalized.slice(0, 6);
 
   const clean = selected.map((r) => {
     const priceText = formatPrice(lang, r.minP, r.maxP);
