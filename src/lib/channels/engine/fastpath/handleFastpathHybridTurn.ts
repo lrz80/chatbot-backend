@@ -716,6 +716,40 @@ SPECIAL RULE FOR THIS TURN:
           `;
     }
 
+    const SALES_OPENING_RULE =
+      idiomaDestino === "en"
+        ? [
+            "SALES OPENING RULE:",
+            "- If the user asks generally about prices/options/plans, do NOT start cold or robotic.",
+            "- Start with ONE short, natural, sales-oriented line.",
+            "- Good style: highlight that these are some of the main or most requested options.",
+            "- Avoid flat intros like 'Here are the prices' unless you make them sound warm and conversational.",
+          ].join("\n")
+        : [
+            "REGLA DE APERTURA COMERCIAL:",
+            "- Si el usuario pregunta de forma general por precios/opciones/planes, NO empieces frío ni robótico.",
+            "- Empieza con UNA sola línea corta, natural y comercial.",
+            "- Buen estilo: resalta que son algunas de las opciones principales o más solicitadas.",
+            "- Evita aperturas planas como 'Aquí tienes los precios' si no suenan conversacionales.",
+          ].join("\n");
+
+    const SALES_CTA_RULE =
+      idiomaDestino === "en"
+        ? [
+            "SALES CTA RULE:",
+            "- Always close with ONE short next-step CTA.",
+            "- The CTA should feel consultative and sales-oriented, not generic.",
+            "- Examples of direction only: offer help choosing, invite the user to ask for more info, or invite booking.",
+            "- Do NOT sound pushy.",
+          ].join("\n")
+        : [
+            "REGLA DE CTA COMERCIAL:",
+            "- Cierra siempre con UN solo CTA corto para continuar la conversación.",
+            "- El CTA debe sonar consultivo y vendedor, no genérico.",
+            "- Como dirección: ofrece ayudar a elegir, invitar a pedir más información o invitar a agendar.",
+            "- No suenes agresivo ni forzado.",
+          ].join("\n");
+
     const promptConFastpath = [
       promptBaseMem,
       "",
@@ -729,9 +763,14 @@ SPECIAL RULE FOR THIS TURN:
       PRICE_QUALIFIER_RULE,
       NO_PRICE_INVENTION_RULE,
       PRICE_LIST_FORMAT_RULE,
-      "",
       CHANNEL_TONE_RULE,
+      "",
+      SALES_OPENING_RULE,
+      "",
+      SALES_CTA_RULE,
     ].join("\n");
+
+    const isCatalogDbReply = String(fp.source || "") === "catalog_db";
 
     const hasResolvedEntity = Boolean(
       structuredService?.serviceId ||
@@ -749,18 +788,24 @@ SPECIAL RULE FOR THIS TURN:
       fallbackText: fastpathText,
 
       responsePolicy: {
-        mode: hasResolvedEntity ? "grounded_only" : "clarify_only",
+        mode: isCatalogDbReply
+          ? "grounded_only"
+          : hasResolvedEntity
+          ? "grounded_only"
+          : "clarify_only",
         resolvedEntityType: hasResolvedEntity ? "service" : null,
         resolvedEntityId: structuredService?.serviceId ?? null,
         resolvedEntityLabel: structuredService?.serviceLabel ?? null,
-        canMentionSpecificPrice: hasResolvedEntity,
-        canSelectSpecificCatalogItem: hasResolvedEntity,
+        canMentionSpecificPrice: isCatalogDbReply || hasResolvedEntity,
+        canSelectSpecificCatalogItem: isCatalogDbReply || hasResolvedEntity,
         canOfferBookingTimes: false,
-        canUseCatalogLists: hasResolvedEntity,
+        canUseCatalogLists: isCatalogDbReply || hasResolvedEntity,
         canUseOfficialLinks: true,
-        unresolvedEntity: !hasResolvedEntity,
-        clarificationTarget: hasResolvedEntity ? null : "service",
-        reasoningNotes: null,
+        unresolvedEntity: !isCatalogDbReply && !hasResolvedEntity,
+        clarificationTarget: !isCatalogDbReply && !hasResolvedEntity ? "service" : null,
+        reasoningNotes: isCatalogDbReply
+          ? "Catalog DB reply: keep facts grounded, but allow persuasive conversational rewrite and CTA."
+          : null,
       },
     });
 
