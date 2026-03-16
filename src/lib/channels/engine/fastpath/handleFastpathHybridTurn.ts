@@ -488,7 +488,8 @@ export async function handleFastpathHybridTurn(
     isDmChatChannel(canal) &&
     isPriceQuestionUser &&
     !wantsPlansAndHours &&
-    !isPlanDetailQuestion
+    !isPlanDetailQuestion &&
+    fp.source !== "catalog_db"
   ) {
     console.log("[CHAT][FASTPATH] Price question -> send fastpath", {
       source: fp.source,
