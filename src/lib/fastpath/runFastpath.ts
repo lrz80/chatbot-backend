@@ -698,7 +698,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             SELECT service_id, service_name, min_price, max_price, parent_service_id FROM base_prices
           ) x
           ORDER BY
-            CASE WHEN parent_service_id IS NULL THEN 0 ELSE 1 END,
+            CASE
+              WHEN category ILIKE '%add%' THEN 1
+              ELSE 0
+            END,
             min_price ASC NULLS LAST;
         `, [tenantId]);
 
