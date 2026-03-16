@@ -1350,10 +1350,17 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
             const candidateIntro = String(introRes.text || "").trim();
 
+            const normalizedIntro = String(candidateIntro || "").trim();
+
             const introLooksValid =
-              candidateIntro.length > 0 &&
-              candidateIntro.length <= 180 &&
-              !candidateIntro.includes("?");
+              normalizedIntro.length > 0 &&
+              normalizedIntro.length <= 160 &&
+              !normalizedIntro.includes("?") &&
+              !normalizedIntro.includes("\n") &&
+              !normalizedIntro.startsWith("•") &&
+              !normalizedIntro.startsWith("-") &&
+              !options.some((opt) => normalizedIntro.includes(opt)) &&
+              (/[.!…]$/.test(normalizedIntro) || normalizedIntro.split(/\s+/).length <= 20);
 
             if (introLooksValid) {
               introText = candidateIntro;
@@ -1468,10 +1475,17 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
             const candidateIntro = String(introRes.text || "").trim();
 
+            const normalizedIntro = String(candidateIntro || "").trim();
+
             const introLooksValid =
-              candidateIntro.length > 0 &&
-              candidateIntro.length <= 180 &&
-              !candidateIntro.includes("?");
+              normalizedIntro.length > 0 &&
+              normalizedIntro.length <= 160 &&
+              !normalizedIntro.includes("?") &&
+              !normalizedIntro.includes("\n") &&
+              !normalizedIntro.startsWith("•") &&
+              !normalizedIntro.startsWith("-") &&
+              !options.some((opt) => normalizedIntro.includes(opt)) &&
+              (/[.!…]$/.test(normalizedIntro) || normalizedIntro.split(/\s+/).length <= 20);
 
             if (introLooksValid) {
               introText = candidateIntro;
@@ -1489,8 +1503,8 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
           const closingText =
             idiomaDestino === "en"
-              ? "Which one fits best?"
-              : "¿Cuál encaja mejor con lo que buscas?";
+              ? "Which of these options are you looking for??"
+              : "¿Cuál de estas opciones buscas?";
 
           const finalText = [introText, "", listOnlyText, "", closingText].join("\n");
 
