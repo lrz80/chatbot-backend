@@ -821,6 +821,21 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
       (convoCtx as any).pending_cta = null;
 
+      // ✅ limpiar contexto de selección anterior para que no contamine
+      (convoCtx as any).expectingVariant = false;
+      (convoCtx as any).selectedServiceId = null;
+
+      (convoCtx as any).last_variant_id = null;
+      (convoCtx as any).last_variant_name = null;
+      (convoCtx as any).last_variant_url = null;
+      (convoCtx as any).last_variant_at = null;
+
+      (convoCtx as any).last_price_option_label = null;
+      (convoCtx as any).last_price_option_at = null;
+
+      (convoCtx as any).last_bot_action = "estimate_cta_accepted";
+      (convoCtx as any).last_bot_action_at = Date.now();
+
       const prevEstimate = (convoCtx as any)?.estimateFlow || {};
       (convoCtx as any).estimateFlow = {
         ...prevEstimate,
@@ -841,6 +856,21 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       });
 
       (convoCtx as any).pending_cta = null;
+
+      // ✅ limpiar contexto de selección anterior para que no contamine
+      (convoCtx as any).expectingVariant = false;
+      (convoCtx as any).selectedServiceId = null;
+
+      (convoCtx as any).last_variant_id = null;
+      (convoCtx as any).last_variant_name = null;
+      (convoCtx as any).last_variant_url = null;
+      (convoCtx as any).last_variant_at = null;
+
+      (convoCtx as any).last_price_option_label = null;
+      (convoCtx as any).last_price_option_at = null;
+
+      (convoCtx as any).last_bot_action = "booking_cta_accepted";
+      (convoCtx as any).last_bot_action_at = Date.now();
 
       const prevBooking = (convoCtx as any)?.booking || {};
       (convoCtx as any).booking = {
