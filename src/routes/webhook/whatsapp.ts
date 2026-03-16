@@ -1209,8 +1209,12 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       );
 
       if (resolved.ambiguous && resolved.candidates.length >= 2) {
-        const MAX_OPTIONS = 3;
+        const MAX_OPTIONS = 2;
         const topCandidates = resolved.candidates.slice(0, MAX_OPTIONS);
+
+        const candidateIds = topCandidates
+          .map((c) => String(c.id))
+          .filter(Boolean);
 
         const { rows: serviceRows } = await pool.query<{
           id: string;
@@ -1224,7 +1228,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
             AND s.active = true
           ORDER BY s.created_at ASC
           `,
-          [event.tenantId, topCandidates.map((c) => c.id)]
+          [event.tenantId, candidateIds]
         );
 
         const nameById = new Map(
@@ -1232,93 +1236,274 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         );
 
         const options = topCandidates
-          .map((c) => nameById.get(String(c.id)) || c.name)
-          .filter(Boolean);
+          .map((c) => {
+            const dbName = nameById.get(String(c.id));
+            const fallbackName = String(c.name || "").trim();
+            return dbName || fallbackName || "";
+          })
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0)
+          .slice(0, MAX_OPTIONS);
 
-        const ambiguityBlock = [
-          "AMBIGUOUS_SERVICE_OPTIONS:",
-          ...options.map((opt) => `• ${opt}`),
-          "",
-          "TASK:",
-          "Write a short clarification message that reflects the user's request in natural language and asks which option they want.",
-          "",
-          "RULES:",
-          "- Mention the options exactly as written.",
-          "- Acknowledge the user's intent using their wording when helpful (for example, if they asked about a cut, mention 'corte').",
-          "- You may briefly orient the user by saying which option is more aligned with what they asked, but do not sound overly certain.",
-          "- Keep it concise and natural for WhatsApp.",
-          "- Maximum 4 lines.",
-        ].join("\n");
+        console.log("[WHATSAPP][AMBIGUOUS_SERVICE][OPTIONS_RESOLVED]", {
+          tenantId: event.tenantId,
+          canal: "whatsapp",
+          userInput: event.userInput,
+          rawCandidates: resolved.candidates.map((c) => ({
+            id: c.id,
+            name: c.name,
+            score: c.score,
+          })),
+          options,
+        });
 
-        async function composeClarification() {
-          return await answerWithPromptBase({
-            tenantId: event.tenantId,
-            promptBase: [
-              promptBaseMem,
-              "",
-              ambiguityBlock,
-              "",
-              NO_NUMERIC_MENUS,
-            ].join("\n"),
-            userInput: ["USER_MESSAGE:", event.userInput].join("\n"),
-            history,
-            idiomaDestino,
-            canal: "whatsapp",
-            maxLines: 4,
-            fallbackText: "",
-            responsePolicy: {
-              mode: "grounded_only",
-              resolvedEntityType: null,
-              resolvedEntityId: null,
-              resolvedEntityLabel: null,
-              canMentionSpecificPrice: false,
-              canSelectSpecificCatalogItem: false,
-              canOfferBookingTimes: false,
-              canUseCatalogLists: true,
-              canUseOfficialLinks: false,
-              unresolvedEntity: true,
-              clarificationTarget: "service",
-              reasoningNotes: "whatsapp_ambiguous_service_clarification",
-            },
-          });
-        }
-
-        const try1 = await composeClarification();
-        let clarifyText = String(try1.text || "").trim();
-
-        const includesEnoughOptions = (text: string) => {
-          const norm = String(text || "").toLowerCase();
-          const mentioned = options.filter((opt) =>
-            norm.includes(opt.toLowerCase())
-          );
-          return mentioned.length >= Math.min(2, options.length);
-        };
-
-        if (!includesEnoughOptions(clarifyText)) {
-          const try2 = await composeClarification();
-          clarifyText = String(try2.text || "").trim();
-        }
-
-        if (!includesEnoughOptions(clarifyText)) {
-          console.log("[WHATSAPP][AMBIGUOUS_SERVICE][LLM_INVALID_AFTER_RETRY]", {
+        // ===============================
+        // 0 OPCIONES REALES
+        // Este branch ya no aplica. Dejamos seguir el pipeline normal.
+        // IMPORTANTE: no hacer finalizeReply aquí.
+        // ===============================
+        if (options.length === 0) {
+          console.log("[WHATSAPP][AMBIGUOUS_SERVICE][COLLAPSED_TO_ZERO_OPTIONS]", {
             tenantId: event.tenantId,
             canal: "whatsapp",
             userInput: event.userInput,
-            options,
-            clarifyText,
           });
+        } else if (options.length === 1) {
+          // ===============================
+          // 1 OPCIÓN REAL
+          // Ya no hay ambigüedad real, así que no preguntamos.
+          // ===============================
+          let introText =
+            idiomaDestino === "en"
+              ? "I found the closest option for what you're looking for."
+              : "Encontré la opción más cercana a lo que estás buscando.";
+
+          try {
+            const introPrompt =
+              idiomaDestino === "en"
+                ? [
+                    "TASK:",
+                    "Write ONE short, warm, human WhatsApp sentence presenting a single matching service option.",
+                    "",
+                    "CONTEXT:",
+                    "- The user's request matched one valid service after ambiguity collapse.",
+                    "- The service name will be shown immediately after this sentence.",
+                    "",
+                    "RULES:",
+                    "- Do NOT mention prices.",
+                    "- Do NOT recommend booking.",
+                    "- Do NOT ask a question.",
+                    "- Do NOT mention links, appointments, or schedules.",
+                    "- Do NOT mention any business vertical or industry.",
+                    "- Maximum 1 sentence.",
+                    "- Sound natural and confident.",
+                  ].join("\n")
+                : [
+                    "TAREA:",
+                    "Escribe UNA sola frase corta, cálida y humana para WhatsApp presentando una única opción de servicio válida.",
+                    "",
+                    "CONTEXTO:",
+                    "- La solicitud del usuario coincidió con una sola opción válida después del colapso de ambigüedad.",
+                    "- El nombre del servicio se mostrará justo después de esta frase.",
+                    "",
+                    "REGLAS:",
+                    "- No menciones precios.",
+                    "- No recomiendes reservar.",
+                    "- No hagas una pregunta.",
+                    "- No menciones links, citas ni horarios.",
+                    "- No menciones ningún vertical o industria.",
+                    "- Máximo 1 frase.",
+                    "- Debe sonar natural y segura.",
+                  ].join("\n");
+
+            const introRes = await answerWithPromptBase({
+              tenantId: event.tenantId,
+              promptBase: [promptBaseMem, "", introPrompt, "", NO_NUMERIC_MENUS].join("\n"),
+              userInput: [
+                "USER_MESSAGE:",
+                event.userInput,
+                "",
+                "MATCHED_OPTION:",
+                `- ${options[0]}`,
+              ].join("\n"),
+              history,
+              idiomaDestino,
+              canal: "whatsapp",
+              maxLines: 1,
+              fallbackText: introText,
+              responsePolicy: {
+                mode: "clarify_only",
+                resolvedEntityType: null,
+                resolvedEntityId: null,
+                resolvedEntityLabel: null,
+                canMentionSpecificPrice: false,
+                canSelectSpecificCatalogItem: false,
+                canOfferBookingTimes: false,
+                canUseCatalogLists: false,
+                canUseOfficialLinks: false,
+                unresolvedEntity: true,
+                clarificationTarget: "service",
+                reasoningNotes:
+                  "whatsapp_single_service_after_ambiguity_collapse",
+              },
+            });
+
+            const candidateIntro = String(introRes.text || "").trim();
+
+            const introLooksValid =
+              candidateIntro.length > 0 &&
+              candidateIntro.length <= 180 &&
+              !candidateIntro.includes("?");
+
+            if (introLooksValid) {
+              introText = candidateIntro;
+            }
+          } catch (err) {
+            console.log("[WHATSAPP][AMBIGUOUS_SERVICE][SINGLE_OPTION_INTRO_FAILED]", {
+              tenantId: event.tenantId,
+              canal: "whatsapp",
+              userInput: event.userInput,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+
+          const finalText = [introText, "", `• ${options[0]}`].join("\n");
+
+          console.log(
+            "[WHATSAPP][SM_FALLBACK][AMBIGUOUS_SERVICE -> COLLAPSED_SINGLE_OPTION]",
+            {
+              tenantId: event.tenantId,
+              canal: "whatsapp",
+              userInput: event.userInput,
+              options,
+              replyPreview: finalText,
+            }
+          );
+
+          setReply(
+            finalText,
+            "sm-fallback-single-service-after-ambiguity-collapse",
+            "info_servicio"
+          );
+          await finalizeReply();
+          return;
+        } else {
+          // ===============================
+          // 2+ OPCIONES REALES
+          // Ahora sí hay ambigüedad real y pedimos aclaración.
+          // ===============================
+          let introText =
+            idiomaDestino === "en"
+              ? "I found a couple of options that match what you're looking for."
+              : "Encontré un par de opciones que encajan con lo que estás buscando.";
+
+          try {
+            const introPrompt =
+              idiomaDestino === "en"
+                ? [
+                    "TASK:",
+                    "Write ONE short, warm, human WhatsApp sentence to introduce a small set of service options.",
+                    "",
+                    "CONTEXT:",
+                    "- The user's request matched multiple possible services from the tenant catalog.",
+                    "- We will show the options immediately after this sentence.",
+                    "",
+                    "RULES:",
+                    "- Do NOT mention any specific industry or business type.",
+                    "- Do NOT mention prices.",
+                    "- Do NOT recommend one option over another.",
+                    "- Do NOT ask a question.",
+                    "- Do NOT mention booking, appointments, links, or schedules.",
+                    "- Maximum 1 sentence.",
+                    "- Sound natural, warm, and neutral.",
+                  ].join("\n")
+                : [
+                    "TAREA:",
+                    "Escribe UNA sola frase corta, cálida y humana para WhatsApp que introduzca un pequeño grupo de opciones de servicio.",
+                    "",
+                    "CONTEXTO:",
+                    "- La solicitud del usuario coincidió con varios servicios posibles del catálogo del tenant.",
+                    "- Justo después de esta frase se mostrarán las opciones.",
+                    "",
+                    "REGLAS:",
+                    "- NO menciones ninguna industria ni tipo de negocio.",
+                    "- NO menciones precios.",
+                    "- NO recomiendes una opción sobre otra.",
+                    "- NO hagas una pregunta.",
+                    "- NO menciones reservas, citas, links ni horarios.",
+                    "- Máximo 1 frase.",
+                    "- Debe sonar natural, amable y neutral.",
+                  ].join("\n");
+
+            const introRes = await answerWithPromptBase({
+              tenantId: event.tenantId,
+              promptBase: [promptBaseMem, "", introPrompt, "", NO_NUMERIC_MENUS].join("\n"),
+              userInput: [
+                "USER_MESSAGE:",
+                event.userInput,
+                "",
+                "CANDIDATE_OPTIONS:",
+                options.map((o) => `- ${o}`).join("\n"),
+              ].join("\n"),
+              history,
+              idiomaDestino,
+              canal: "whatsapp",
+              maxLines: 1,
+              fallbackText: introText,
+              responsePolicy: {
+                mode: "clarify_only",
+                resolvedEntityType: null,
+                resolvedEntityId: null,
+                resolvedEntityLabel: null,
+                canMentionSpecificPrice: false,
+                canSelectSpecificCatalogItem: false,
+                canOfferBookingTimes: false,
+                canUseCatalogLists: false,
+                canUseOfficialLinks: false,
+                unresolvedEntity: true,
+                clarificationTarget: "service",
+                reasoningNotes: "whatsapp_ambiguous_service_intro_only_multitenant",
+              },
+            });
+
+            const candidateIntro = String(introRes.text || "").trim();
+
+            const introLooksValid =
+              candidateIntro.length > 0 &&
+              candidateIntro.length <= 180 &&
+              !candidateIntro.includes("?");
+
+            if (introLooksValid) {
+              introText = candidateIntro;
+            }
+          } catch (err) {
+            console.log("[WHATSAPP][AMBIGUOUS_SERVICE][INTRO_ONLY_FAILED]", {
+              tenantId: event.tenantId,
+              canal: "whatsapp",
+              userInput: event.userInput,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
 
           const listOnlyText = options.map((opt) => `• ${opt}`).join("\n");
 
-          const intro = "Te puedo ayudar con estas opciones:";
+          const closingText =
+            idiomaDestino === "en"
+              ? "Which one fits best?"
+              : "¿Cuál encaja mejor con lo que buscas?";
 
-          const finalText = [
-            intro,
-            "",
-            listOnlyText,
-            "",
-            "¿Cuál de estas opciones buscas?"
-          ].join("\n");
+          const finalText = [introText, "", listOnlyText, "", closingText].join("\n");
+
+          console.log(
+            "[WHATSAPP][SM_FALLBACK][AMBIGUOUS_SERVICE -> INTRO_PLUS_FIXED_OPTIONS_MULTITENANT]",
+            {
+              tenantId: event.tenantId,
+              canal: "whatsapp",
+              userInput: event.userInput,
+              options,
+              replyPreview: finalText,
+            }
+          );
 
           setReply(
             finalText,
@@ -1328,22 +1513,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           await finalizeReply();
           return;
         }
-
-        console.log("[WHATSAPP][SM_FALLBACK][AMBIGUOUS_SERVICE -> ASK_CLARIFICATION]", {
-          tenantId: event.tenantId,
-          canal: "whatsapp",
-          userInput: event.userInput,
-          options,
-          replyPreview: clarifyText.slice(0, 200),
-        });
-
-        setReply(
-          clarifyText,
-          "sm-fallback-ambiguous-service",
-          "info_servicio"
-        );
-        await finalizeReply();
-        return;
       }
     }
 
