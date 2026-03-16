@@ -3268,6 +3268,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               "- NO puedes mezclar este servicio con otros del catálogo.",
               "- Si mencionas el precio, debe corresponder únicamente al servicio/variante resuelto.",
               "- Redacta de forma natural, humana, breve y comercial para WhatsApp.",
+              "",
+              "CONTINUIDAD_CONVERSACIONAL:",
+              "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
+              "- Debes guiar al usuario hacia el siguiente paso (más información, reserva, o aclaración).",
+              "- Evita respuestas que solo informen el precio sin invitar a continuar.",
             ].join("\n");
 
             const aiPriceReply = await answerWithPromptBase({
@@ -3336,6 +3341,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               "- NO puedes cambiar a otros servicios del catálogo.",
               "- Debes responder SOLO sobre este servicio.",
               "- Si no hay precio disponible, dilo de forma natural y breve sin asumir la causa.",
+              "",
+              "CONTINUIDAD_CONVERSACIONAL:",
+              "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
+              "- Debes guiar al usuario hacia el siguiente paso (más información, reserva, o aclaración).",
+              "- Evita respuestas que solo informen el precio sin invitar a continuar.",
             ].join("\n");
 
             const aiNoPricePolicyReply = await answerWithPromptBase({
@@ -3391,6 +3401,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 "- NO puedes inventar montos, rangos ni precios aproximados.",
                 "- NO puedes mencionar otros servicios como alternativa de precio, a menos que el usuario los pida.",
                 "- Responde de forma natural, útil y comercial, manteniéndote en el servicio resuelto.",
+                "",
+                "CONTINUIDAD_CONVERSACIONAL:",
+                "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
+                "- Debes guiar al usuario hacia el siguiente paso (más información, reserva, o aclaración).",
+                "- Evita respuestas que solo informen el precio sin invitar a continuar.",
               ].join("\n");
 
               const aiNoPriceReply = await answerWithPromptBase({
@@ -3548,6 +3563,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           "- NO puedes resumir varios bullets en uno solo.",
           "- SOLO puedes suavizar el encabezado o la línea final.",
           "- Si no puedes mejorar sin alterar el contenido, devuelve el CATALOGO_DB_CANONICO tal cual.",
+          "",
+          "CONTINUIDAD_CONVERSACIONAL:",
+          "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
+          "- Debes guiar al usuario hacia el siguiente paso (más información, reserva, o aclaración).",
+          "- Evita respuestas que solo informen el precio sin invitar a continuar.",
         ].join("\n");
 
         const aiCatalogReply = await answerWithPromptBase({
