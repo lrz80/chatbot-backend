@@ -145,16 +145,22 @@ function getDominantQueryTokens(
 ): string[] {
   if (!queryTokens.length || totalCandidates <= 0) return [];
 
-  const weighted = queryTokens.map((t) => ({
-    token: t,
-    weight: getTokenWeight(t, dfMap, totalCandidates),
-  }));
+  const weighted = queryTokens
+    .map((t) => {
+      const df = dfMap.get(t) || 0;
+      return {
+        token: t,
+        df,
+        weight: df > 0 ? getTokenWeight(t, dfMap, totalCandidates) : 0,
+      };
+    })
+    .filter((x) => x.df > 0);
+
+  if (!weighted.length) return [];
 
   const maxWeight = Math.max(...weighted.map((x) => x.weight), 0);
   if (maxWeight <= 0) return [];
 
-  // Tokens "dominantes" = cerca del máximo de discriminación del turno
-  // Evita hardcode por vertical y funciona por catálogo del tenant.
   return weighted
     .filter((x) => x.weight >= maxWeight * 0.85)
     .map((x) => x.token);
@@ -450,6 +456,21 @@ export async function resolveServiceCandidatesFromText(
       overlapSupportTokens,
     ]);
 
+    if (allOverlapTokens.length === 0) {
+      return {
+        cand,
+        score: 0,
+        exactNameHits,
+        exactCatalogHits,
+        overlapNameTokens,
+        overlapCatalogTokens,
+        overlapSupportTokens,
+        allOverlapTokens,
+        dominantOverlapTokens: [],
+        dominantOverlapCount: 0,
+      };
+    }
+
     const dominantOverlapTokens = dominantQueryTokens.filter((t) =>
       allOverlapTokens.includes(t)
     );
@@ -569,7 +590,7 @@ export async function resolveServiceCandidatesFromText(
   const MARGIN = mode === "strict" ? 0.08 : 0.05;
 
   const topCandidates = scored
-    .filter((s) => s.score > 0)
+    .filter((s) => s.allOverlapTokens.length > 0)
     .slice(0, 3)
     .map((s) => ({
       id: s.cand.serviceId,
@@ -663,12 +684,17 @@ export async function resolveServiceCandidatesFromText(
   const secondScore = second?.score || 0;
   const marginVsSecond = best ? best.score - secondScore : 0;
 
+  const bestOverlapCount = best?.allOverlapTokens.length || 0;
+
   const enoughEvidence =
-    bestEvidenceCount >= 2 ||
-    (best?.score || 0) >= 0.22 ||
+    bestOverlapCount > 0 &&
     (
-      (best?.score || 0) >= 0.16 &&
-      marginVsSecond >= 0.01
+      bestEvidenceCount >= 2 ||
+      (best?.score || 0) >= 0.22 ||
+      (
+        (best?.score || 0) >= 0.16 &&
+        marginVsSecond >= 0.01
+      )
     );
 
   if (!best || best.score < BASE_THRESHOLD || !enoughEvidence) {
@@ -682,7 +708,10 @@ export async function resolveServiceCandidatesFromText(
     });
 
     const ambiguous =
+      !!best &&
       !!second &&
+      best.allOverlapTokens.length > 0 &&
+      second.allOverlapTokens.length > 0 &&
       second.score > 0 &&
       Math.abs((best?.score || 0) - second.score) < MARGIN;
 
@@ -693,7 +722,13 @@ export async function resolveServiceCandidatesFromText(
     };
   }
 
-  if (second && second.score > 0 && Math.abs(best.score - second.score) < MARGIN) {
+  if (
+    second &&
+    second.score > 0 &&
+    best.allOverlapTokens.length > 0 &&
+    second.allOverlapTokens.length > 0 &&
+    Math.abs(best.score - second.score) < MARGIN
+  ) {
     const bestHasDominant = best.dominantOverlapCount > 0;
     const secondHasDominant = second.dominantOverlapCount > 0;
 
