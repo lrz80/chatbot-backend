@@ -118,8 +118,8 @@ export function renderGenericPriceSummaryReply(args: {
 
   const header =
     lang === "en"
-      ? "Here are some options:"
-      : "Aquí tienes algunas opciones:";
+      ? "Here are some of our most requested options:"
+      : "Estas son algunas de nuestras opciones más solicitadas:";
 
   const footer =
     lang === "en"

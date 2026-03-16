@@ -3489,10 +3489,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             return aPrimary ? -1 : 1;
           }
 
-          const aMin = a.min_price === null ? Number.POSITIVE_INFINITY : Number(a.min_price);
-          const bMin = b.min_price === null ? Number.POSITIVE_INFINITY : Number(b.min_price);
+          const aSortPrice =
+            a.min_price === null ? Number.NEGATIVE_INFINITY : Number(a.min_price);
+          const bSortPrice =
+            b.min_price === null ? Number.NEGATIVE_INFINITY : Number(b.min_price);
 
-          if (aMin !== bMin) return aMin - bMin;
+          if (aSortPrice !== bSortPrice) {
+            return bSortPrice - aSortPrice;
+          }
 
           return String(a.service_name || "").localeCompare(String(b.service_name || ""));
         });
@@ -3574,6 +3578,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         if (namesShown.length) {
           ctxPatch.last_catalog_plans = namesShown;
         }
+
+        console.log("[PRICE][catalog_db][FINAL_REPLY_BEFORE_RETURN]", {
+          replyPreview: finalReply,
+        });
 
         return {
           handled: true,
