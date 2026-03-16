@@ -1312,11 +1312,13 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
           const intro = "Te puedo ayudar con estas opciones:";
 
-          const finalText = `${intro}
-
-          ${listOnlyText}
-
-          ¿Cuál de estas opciones buscas?`;
+          const finalText = [
+            intro,
+            "",
+            listOnlyText,
+            "",
+            "¿Cuál de estas opciones buscas?"
+          ].join("\n");
 
           setReply(
             finalText,
