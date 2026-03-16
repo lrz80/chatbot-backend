@@ -35,6 +35,35 @@ function formatPrice(lang: Lang, minRaw: number, maxRaw: number): string {
   return lang === "en" ? "ask for price" : "consulta el precio";
 }
 
+function normalizeCatalogRole(role: string | null | undefined): "primary" | "secondary" {
+  const v = String(role || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+
+  if (
+    v === "primary" ||
+    v === "servicio principal" ||
+    v === "principal" ||
+    v === "main"
+  ) {
+    return "primary";
+  }
+
+  if (
+    v === "secondary" ||
+    v === "complemento" ||
+    v === "complemento / extra" ||
+    v === "extra" ||
+    v === "addon"
+  ) {
+    return "secondary";
+  }
+
+  return "primary";
+}
+
 function getSortPrice(minP: number, maxP: number) {
   if (Number.isFinite(minP)) return minP;
   if (Number.isFinite(maxP)) return maxP;
@@ -59,7 +88,7 @@ export function renderGenericPriceSummaryReply(args: {
         minP,
         maxP,
         category: r.category || null,
-        catalog_role: String(r.catalog_role || "primary").trim().toLowerCase(),
+        catalog_role: normalizeCatalogRole(r.catalog_role),
       };
     })
     .filter((r) => {
