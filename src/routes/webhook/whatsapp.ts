@@ -1307,12 +1307,21 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
             clarifyText,
           });
 
-          const listOnlyText = [
-            ...options.map((opt) => `• ${opt}`)
-          ].join("\n");
+          const listOnlyText = options.map((opt) => `• ${opt}`).join("\n");
+
+          const intro =
+            clarifyText && clarifyText.length > 0
+              ? clarifyText
+              : "Te puedo ayudar con estas opciones:";
+
+          const finalText = `${intro}
+
+      ${listOnlyText}
+
+      ¿Cuál de estas opciones buscas?`;
 
           setReply(
-            listOnlyText,
+            finalText,
             "sm-fallback-ambiguous-service",
             "info_servicio"
           );
