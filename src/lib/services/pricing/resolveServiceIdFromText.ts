@@ -18,9 +18,14 @@ export type ResolveServiceResult = {
 type Candidate = {
   serviceId: string;
   label: string;
+  category: string;
+  tipo: string;
+  parentServiceId: string | null;
   serviceNameTokens: string[];
-  supportTokens: string[];   // description + variants
-  catalogTokens: string[];   // union total
+  supportTokens: string[];
+  catalogTokens: string[];
+  categoryTokens: string[];
+  tipoTokens: string[];
 };
 
 const FUNCTION_WORDS = new Set([
@@ -123,6 +128,10 @@ function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
   return df;
 }
 
+function normalizeLabel(raw: string): string {
+  return normalize(raw).replace(/[\s_-]+/g, " ").trim();
+}
+
 function scoreTokensWeighted(
   queryTokens: string[],
   candidateTokens: string[],
@@ -204,20 +213,28 @@ export async function resolveServiceCandidatesFromText(
     service_id: string;
     service_name: string | null;
     service_description: string | null;
+    service_category: string | null;
+    service_tipo: string | null;
+    parent_service_id: string | null;
     variant_name: string | null;
     variant_description: string | null;
+    size_token: string | null;
   }>(
     `
     SELECT
       s.id AS service_id,
       s.name AS service_name,
       s.description AS service_description,
+      s.category AS service_category,
+      s.tipo AS service_tipo,
+      s.parent_service_id,
       v.variant_name,
-      v.description AS variant_description
+      v.description AS variant_description,
+      v.size_token
     FROM services s
     LEFT JOIN service_variants v
       ON v.service_id = s.id
-     AND v.active = true
+    AND v.active = true
     WHERE
       s.tenant_id = $1
       AND s.active = true
@@ -232,14 +249,19 @@ export async function resolveServiceCandidatesFromText(
     return { hit: null, ambiguous: false, candidates: [] };
   }
 
-    const grouped = new Map<
+  const grouped = new Map<
     string,
     {
       serviceId: string;
       serviceLabel: string | null;
+      category: string | null;
+      tipo: string | null;
+      parentServiceId: string | null;
       serviceNameTokenSet: Set<string>;
       supportTokenSet: Set<string>;
       catalogTokenSet: Set<string>;
+      categoryTokenSet: Set<string>;
+      tipoTokenSet: Set<string>;
     }
   >();
 
@@ -253,9 +275,14 @@ export async function resolveServiceCandidatesFromText(
       entry = {
         serviceId,
         serviceLabel: serviceName,
+        category: String(r.service_category || "").trim(),
+        tipo: String(r.service_tipo || "").trim(),
+        parentServiceId: r.parent_service_id ? String(r.parent_service_id) : null,
         serviceNameTokenSet: new Set<string>(),
         supportTokenSet: new Set<string>(),
         catalogTokenSet: new Set<string>(),
+        categoryTokenSet: new Set<string>(),
+        tipoTokenSet: new Set<string>(),
       };
       grouped.set(serviceId, entry);
     }
@@ -264,6 +291,9 @@ export async function resolveServiceCandidatesFromText(
     const serviceDescTokens = tokenize(String(r.service_description || ""));
     const variantNameTokens = tokenize(String(r.variant_name || ""));
     const variantDescTokens = tokenize(String(r.variant_description || ""));
+    const categoryTokens = tokenize(String(r.service_category || ""));
+    const tipoTokens = tokenize(String(r.service_tipo || ""));
+    const sizeTokenTokens = tokenize(String(r.size_token || ""));
 
     for (const tk of serviceNameTokens) entry.serviceNameTokenSet.add(tk);
 
@@ -275,14 +305,27 @@ export async function resolveServiceCandidatesFromText(
     for (const tk of serviceDescTokens) entry.catalogTokenSet.add(tk);
     for (const tk of variantNameTokens) entry.catalogTokenSet.add(tk);
     for (const tk of variantDescTokens) entry.catalogTokenSet.add(tk);
+
+    for (const tk of categoryTokens) entry.catalogTokenSet.add(tk);
+    for (const tk of tipoTokens) entry.catalogTokenSet.add(tk);
+    for (const tk of sizeTokenTokens) entry.catalogTokenSet.add(tk);
+    for (const tk of categoryTokens) entry.categoryTokenSet.add(tk);
+    for (const tk of tipoTokens) entry.tipoTokenSet.add(tk);
+
+    for (const tk of sizeTokenTokens) entry.supportTokenSet.add(tk);
   }
 
   const candidates: Candidate[] = Array.from(grouped.values()).map((g) => ({
     serviceId: g.serviceId,
     label: g.serviceLabel || "",
+    category: g.category || "",
+    tipo: g.tipo || "",
+    parentServiceId: g.parentServiceId,
     serviceNameTokens: Array.from(g.serviceNameTokenSet),
     supportTokens: Array.from(g.supportTokenSet),
     catalogTokens: Array.from(g.catalogTokenSet),
+    categoryTokens: Array.from(g.categoryTokenSet),
+    tipoTokens: Array.from(g.tipoTokenSet),
   }));
 
   if (!candidates.length) {
@@ -324,6 +367,20 @@ export async function resolveServiceCandidatesFromText(
       totalCandidates
     );
 
+    const categoryScore = scoreTokensWeighted(
+      queryTokens,
+      cand.categoryTokens,
+      dfMap,
+      totalCandidates
+    );
+
+    const tipoScore = scoreTokensWeighted(
+      queryTokens,
+      cand.tipoTokens,
+      dfMap,
+      totalCandidates
+    );
+
     const exactNameHits = countExactHits(queryTokens, cand.serviceNameTokens);
     const exactCatalogHits = countExactHits(queryTokens, cand.catalogTokens);
 
@@ -337,17 +394,36 @@ export async function resolveServiceCandidatesFromText(
 
     let score = 0;
 
-    // Menos sesgo al nombre corto, más peso a descripción/variantes
-    score += nameScore * 0.30;
-    score += supportScore * 0.45;
-    score += catalogScore * 0.25;
+    // texto
+    score += nameScore * 0.28;
+    score += supportScore * 0.32;
+    score += catalogScore * 0.18;
 
-    // Bonus por evidencia múltiple real
-    if (exactNameHits >= 2) score += 0.10;
-    if (exactCatalogHits >= 2) score += 0.10;
+    // estructura del catálogo
+    score += categoryScore * 0.12;
+    score += tipoScore * 0.10;
 
-    // Bonus por cubrir más del query
-    score += queryCoverage * 0.15;
+    // evidencia múltiple
+    if (exactNameHits >= 2) score += 0.08;
+    if (exactCatalogHits >= 2) score += 0.08;
+
+    // cobertura del query
+    score += queryCoverage * 0.12;
+
+    // ajustes universales multitenant-safe
+    const tipoNorm = normalizeLabel(cand.tipo || "");
+    const hasParent = !!cand.parentServiceId;
+
+    const isAddOn =
+      tipoNorm === "add on" ||
+      tipoNorm === "addon" ||
+      tipoNorm === "add-on";
+
+    if (isAddOn) score -= 0.18;
+    if (hasParent) score -= 0.08;
+
+    const isPrimary = !isAddOn && !hasParent;
+    if (isPrimary) score += 0.06;
 
     return {
       cand,
@@ -373,6 +449,9 @@ export async function resolveServiceCandidatesFromText(
           label: best.cand.label,
           score: best.score,
           serviceId: best.cand.serviceId,
+          category: best.cand.category,
+          tipo: best.cand.tipo,
+          parentServiceId: best.cand.parentServiceId,
           exactNameHits: best.exactNameHits,
           exactCatalogHits: best.exactCatalogHits,
           overlapNameTokens: best.overlapNameTokens,
@@ -392,8 +471,8 @@ export async function resolveServiceCandidatesFromText(
       : null,
   });
 
-  const BASE_THRESHOLD = mode === "strict" ? 0.6 : 0.3;
-  const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.7 : 0.3;
+  const BASE_THRESHOLD = mode === "strict" ? 0.52 : 0.3;
+  const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.62 : 0.3;
   const MARGIN = mode === "strict" ? 0.2 : 0.1;
 
   const topCandidates = scored
@@ -483,9 +562,16 @@ export async function resolveServiceCandidatesFromText(
     };
   }
 
-  const bestEvidenceCount = Math.max(best?.exactNameHits || 0, best?.exactCatalogHits || 0);
+  const bestEvidenceCount = Math.max(
+    best?.exactNameHits || 0,
+    best?.exactCatalogHits || 0
+  );
 
-  if (!best || best.score < BASE_THRESHOLD || bestEvidenceCount < 2) {
+  const enoughEvidence =
+    bestEvidenceCount >= 2 ||
+    (best?.score || 0) >= 0.68;
+
+  if (!best || best.score < BASE_THRESHOLD || !enoughEvidence) {
     console.log("[RESOLVE-SERVICE] evidencia insuficiente, devolviendo null", {
       userText,
       bestScore: best?.score,
