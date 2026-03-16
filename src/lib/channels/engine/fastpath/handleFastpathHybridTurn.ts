@@ -489,7 +489,9 @@ export async function handleFastpathHybridTurn(
     isPriceQuestionUser &&
     !wantsPlansAndHours &&
     !isPlanDetailQuestion &&
-    fp.source !== "catalog_db"
+    fp.source !== "catalog_db" &&
+    fp.source !== "price_fastpath_db_llm_render" &&
+    fp.source !== "price_fastpath_db_no_price_llm_render"
   ) {
     console.log("[CHAT][FASTPATH] Price question -> send fastpath", {
       source: fp.source,
