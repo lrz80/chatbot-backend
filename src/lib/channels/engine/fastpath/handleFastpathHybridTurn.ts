@@ -681,8 +681,8 @@ export async function handleFastpathHybridTurn(
 
     const CHANNEL_TONE_RULE =
       idiomaDestino === "en"
-        ? "RULE: You may rephrase for a natural chat/DM tone, but DO NOT change amounts, ranges, or plan/service names."
-        : "REGLA: Puedes re-redactar para que suene natural en chat/DM, pero NO cambies montos, rangos ni nombres de planes/servicios.";
+        ? "RULE: You may rephrase for a natural, warm, sales-oriented chat/DM tone, but DO NOT change amounts, ranges, or plan/service names."
+        : "REGLA: Puedes re-redactar para que suene natural, cálido y vendedor en chat/DM, pero NO cambies montos, rangos ni nombres de planes/servicios.";
 
     // Bloque especial solo cuando pidió “planes + horarios”
     let forcedListBlock = "";
@@ -722,15 +722,21 @@ SPECIAL RULE FOR THIS TURN:
             "SALES OPENING RULE:",
             "- If the user asks generally about prices/options/plans, do NOT start cold or robotic.",
             "- Start with ONE short, natural, sales-oriented line.",
-            "- Good style: highlight that these are some of the main or most requested options.",
-            "- Avoid flat intros like 'Here are the prices' unless you make them sound warm and conversational.",
+            "- Good style: open like a sales advisor, not like a catalog.",
+            "- The first line should sound useful, warm, and oriented toward helping the user choose.",
+            "- Avoid flat intros like 'Here are the prices' or 'these are the prices'.",
+            "- Prefer openings like: 'To give you a better idea, these are some of the main options.'",
+            "- Or a short natural variation of that style, without sounding repetitive.",
           ].join("\n")
         : [
             "REGLA DE APERTURA COMERCIAL:",
             "- Si el usuario pregunta de forma general por precios/opciones/planes, NO empieces frío ni robótico.",
             "- Empieza con UNA sola línea corta, natural y comercial.",
-            "- Buen estilo: resalta que son algunas de las opciones principales o más solicitadas.",
-            "- Evita aperturas planas como 'Aquí tienes los precios' si no suenan conversacionales.",
+            "- Buen estilo: abre como un asesor comercial, no como un catálogo.",
+            "- La primera línea debe sonar útil, cálida y orientada a ayudar a elegir.",
+            "- Evita aperturas planas como 'Aquí tienes los precios' o 'estos son los precios'.",
+            "- Prefiere aperturas como: 'Para que tengas una idea, estas son algunas de las opciones principales.'",
+            "- O una variante breve y natural del mismo estilo, sin sonar repetitivo.",
           ].join("\n");
 
     const SALES_CTA_RULE =
@@ -739,14 +745,18 @@ SPECIAL RULE FOR THIS TURN:
             "SALES CTA RULE:",
             "- Always close with ONE short next-step CTA.",
             "- The CTA should feel consultative and sales-oriented, not generic.",
-            "- Examples of direction only: offer help choosing, invite the user to ask for more info, or invite booking.",
-            "- Do NOT sound pushy.",
+            "- It should naturally invite the next step: helping the user choose, recommending an option, or moving toward booking.",
+            "- Avoid weak closings like 'let me know' with no context.",
+            "- Prefer closings that help the user decide or move forward.",
+            "- Do NOT sound pushy or forced.",
           ].join("\n")
         : [
             "REGLA DE CTA COMERCIAL:",
             "- Cierra siempre con UN solo CTA corto para continuar la conversación.",
             "- El CTA debe sonar consultivo y vendedor, no genérico.",
-            "- Como dirección: ofrece ayudar a elegir, invitar a pedir más información o invitar a agendar.",
+            "- Debe invitar al siguiente paso de forma natural: ayudar a elegir, recomendar una opción o avanzar a reservar.",
+            "- Evita cierres débiles como 'déjame saber' sin contexto.",
+            "- Prefiere cierres que ayuden a decidir o avanzar.",
             "- No suenes agresivo ni forzado.",
           ].join("\n");
 
