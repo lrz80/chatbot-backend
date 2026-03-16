@@ -411,19 +411,19 @@ export async function resolveServiceCandidatesFromText(
     score += queryCoverage * 0.12;
 
     // ajustes universales multitenant-safe
-    const tipoNorm = normalizeLabel(cand.tipo || "");
+    const categoryNorm = normalizeLabel(cand.category || "");
     const hasParent = !!cand.parentServiceId;
 
     const isAddOn =
-      tipoNorm === "add on" ||
-      tipoNorm === "addon" ||
-      tipoNorm === "add-on";
+      categoryNorm === "add on" ||
+      categoryNorm === "addon" ||
+      categoryNorm === "add-on";
 
-    if (isAddOn) score -= 0.18;
+    if (isAddOn) score -= 0.22;
     if (hasParent) score -= 0.08;
 
     const isPrimary = !isAddOn && !hasParent;
-    if (isPrimary) score += 0.06;
+    if (isPrimary) score += 0.08;
 
     return {
       cand,
