@@ -78,6 +78,7 @@ const MessagingResponse = twilio.twiml.MessagingResponse;
 // 🛡️ Cache en memoria para dedupe de inbound (texto+contacto+tenant)
 const inboundDedupCache = new Map<string, number>();
 
+
 // ===============================
 // 🧠 STATE MACHINE (conversational brain)
 // ===============================
@@ -1126,6 +1127,32 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     limit: 12,
   });
 
+  async function generateIntro() {
+    const res = await answerWithPromptBase({
+      tenantId: event.tenantId,
+      promptBase: [
+        promptBaseMem,
+        "",
+        "TASK:",
+        "Write ONE short neutral line introducing service options.",
+        "",
+        "RULES:",
+        "- Do not recommend any option.",
+        "- Do not explain services.",
+        "- Maximum 1 line.",
+      ].join("\n"),
+
+      userInput: "User needs to choose between multiple services.",
+      history: [],
+      idiomaDestino,
+      canal: "whatsapp",
+      maxLines: 1,
+      fallbackText: "Te puedo ayudar con estas opciones:",
+    });
+
+    return String(res.text || "").trim();
+  }
+
   // ===============================
   // ✅ FALLBACK ÚNICO (solo si SM no respondió)
   // ===============================
@@ -1309,10 +1336,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
           const listOnlyText = options.map((opt) => `• ${opt}`).join("\n");
 
-          const intro =
-            clarifyText && clarifyText.length > 0
-              ? clarifyText
-              : "Te puedo ayudar con estas opciones:";
+          const intro = await generateIntro();
 
           const finalText = `${intro}
 
