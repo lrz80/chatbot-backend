@@ -1240,13 +1240,13 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           ...options.map((opt) => `• ${opt}`),
           "",
           "TASK:",
-          "Write a short clarification message asking which option the user means.",
+          "Write a short clarification message that reflects the user's request in natural language and asks which option they want.",
           "",
           "RULES:",
           "- Mention the options exactly as written.",
-          "- Do not recommend any option.",
-          "- Do not explain the services.",
-          "- Do not rename the options.",
+          "- Acknowledge the user's intent using their wording when helpful (for example, if they asked about a cut, mention 'corte').",
+          "- You may briefly orient the user by saying which option is more aligned with what they asked, but do not sound overly certain.",
+          "- Keep it concise and natural for WhatsApp.",
           "- Maximum 4 lines.",
         ].join("\n");
 
