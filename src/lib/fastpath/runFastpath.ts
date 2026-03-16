@@ -2957,11 +2957,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           service_name: string;
           min_price: number | string | null;
           max_price: number | string | null;
+          parent_service_id: string | null;
         }>(`
           WITH variant_prices AS (
             SELECT
               s.id AS service_id,
               s.name AS service_name,
+              s.parent_service_id,
               MIN(v.price)::numeric AS min_price,
               MAX(v.price)::numeric AS max_price
             FROM services s
@@ -2971,12 +2973,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             WHERE s.tenant_id = $1
               AND s.active = true
               AND v.price IS NOT NULL
-            GROUP BY s.id, s.name
+            GROUP BY s.id, s.name, s.parent_service_id
           ),
           base_prices AS (
             SELECT
               s.id AS service_id,
               s.name AS service_name,
+              s.parent_service_id,
               MIN(s.price_base)::numeric AS min_price,
               MAX(s.price_base)::numeric AS max_price
             FROM services s
@@ -2990,13 +2993,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                   AND v.active = true
                   AND v.price IS NOT NULL
               )
-            GROUP BY s.id, s.name
+            GROUP BY s.id, s.name, s.parent_service_id
           )
-          SELECT service_id, service_name, min_price, max_price
+          SELECT service_id, service_name, min_price, max_price, parent_service_id
           FROM (
-            SELECT service_id, service_name, min_price, max_price FROM variant_prices
+            SELECT service_id, service_name, min_price, max_price, parent_service_id FROM variant_prices
             UNION ALL
-            SELECT service_id, service_name, min_price, max_price FROM base_prices
+            SELECT service_id, service_name, min_price, max_price, parent_service_id FROM base_prices
           ) x;
         `, [tenantId]);
 
@@ -3398,6 +3401,20 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         let rowsLocalized = rows;
 
+        const rowsPrioritized = [...rowsLocalized].sort((a, b) => {
+        const aIsPrimary = !a.parent_service_id;
+        const bIsPrimary = !b.parent_service_id;
+
+        if (aIsPrimary !== bIsPrimary) {
+          return aIsPrimary ? -1 : 1;
+        }
+
+        const aMin = a.min_price === null ? Number.POSITIVE_INFINITY : Number(a.min_price);
+        const bMin = b.min_price === null ? Number.POSITIVE_INFINITY : Number(b.min_price);
+
+        return aMin - bMin;
+      });
+
         if (idiomaDestino === "en") {
           rowsLocalized = await Promise.all(
             rows.map(async (r) => {
@@ -3416,14 +3433,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const dbReply = renderGenericPriceSummaryReply({
           lang: idiomaDestino,
-          rows: rowsLocalized,
+          rows: rowsPrioritized,
         });
 
         const cleanedReply = stripLinkSentences(dbReply);
 
         const namesShown = extractPlanNamesFromReply(cleanedReply);
 
-        const catalogLines = rowsLocalized.slice(0, 6).map((r) => {
+        const catalogLines = rowsPrioritized.slice(0, 6).map((r) => {
           const min = r.min_price === null ? null : Number(r.min_price);
           const max = r.max_price === null ? null : Number(r.max_price);
 
@@ -3454,7 +3471,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         ].join("\n");
 
         console.log("[PRICE][catalog_db][LLM_RENDER]", {
-          rowsCount: rowsLocalized.length,
+          rowsCount: rowsPrioritized.length,
           namesShown,
         });
 
