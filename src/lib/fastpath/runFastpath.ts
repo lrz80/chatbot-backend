@@ -596,6 +596,55 @@ function looksMultiQuestion(raw: string): boolean {
   return extractQueryFrames(raw).length >= 2 || String(raw || "").includes("\n");
 }
 
+function normalizeCatalogRole(role: string | null | undefined): "primary" | "secondary" {
+  const v = String(role || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase();
+
+  if (
+    v === "primary" ||
+    v === "servicio principal" ||
+    v === "principal" ||
+    v === "main"
+  ) {
+    return "primary";
+  }
+
+  if (
+    v === "secondary" ||
+    v === "complemento" ||
+    v === "complemento / extra" ||
+    v === "extra" ||
+    v === "addon"
+  ) {
+    return "secondary";
+  }
+
+  return "primary";
+}
+
+function extractBulletLines(text: string): string[] {
+  return String(text || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("•") || line.startsWith("-"));
+}
+
+function sameBulletStructure(a: string, b: string): boolean {
+  const aBullets = extractBulletLines(a);
+  const bBullets = extractBulletLines(b);
+
+  if (aBullets.length !== bBullets.length) return false;
+
+  for (let i = 0; i < aBullets.length; i++) {
+    if (aBullets[i] !== bBullets[i]) return false;
+  }
+
+  return true;
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -3430,8 +3479,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         }
 
         const rowsPrioritized = [...rows].sort((a, b) => {
-          const aRole = String(a.catalog_role || "primary").trim().toLowerCase();
-          const bRole = String(b.catalog_role || "primary").trim().toLowerCase();
+          const aRole = normalizeCatalogRole(a.catalog_role);
+          const bRole = normalizeCatalogRole(b.catalog_role);
 
           const aPrimary = aRole === "primary";
           const bPrimary = bRole === "primary";
@@ -3472,43 +3521,25 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         });
 
         const cleanedReply = stripLinkSentences(dbReply);
-
+        const canonicalReply = humanizeListReply(cleanedReply, idiomaDestino);
         const namesShown = extractPlanNamesFromReply(cleanedReply);
 
-        const catalogLines = rowsLocalized.slice(0, 6).map((r) => {
-          const min = r.min_price === null ? null : Number(r.min_price);
-          const max = r.max_price === null ? null : Number(r.max_price);
-
-          let priceText =
-            idiomaDestino === "en" ? "price available" : "precio disponible";
-
-          if (Number.isFinite(min) && Number.isFinite(max)) {
-            priceText =
-              min === max
-                ? `$${min!.toFixed(2)}`
-                : `${idiomaDestino === "en" ? "from" : "desde"} $${min!.toFixed(2)}`;
-          }
-
-          return `- ${String(r.service_name || "").trim()} | ${priceText}`;
-        });
-
         const extraContext = [
-          "CATALOGO_DB_RESUELTO:",
-          ...catalogLines,
+          "CATALOGO_DB_CANONICO:",
+          canonicalReply,
           "",
-          "REGLAS_DEL_TURNO:",
-          "- Los precios deben salir únicamente del CATALOGO_DB_RESUELTO.",
-          "- No inventes precios ni servicios.",
-          "- No listes todo el catálogo si el usuario preguntó de forma general.",
-          "- Selecciona solo algunas opciones representativas.",
-          "- Presenta la información de forma conversacional.",
-          "- Después de mostrar precios, guía la conversación para que el cliente indique qué servicio busca.",
+          "REGLAS_CRITICAS_DEL_TURNO:",
+          "- Debes usar EXCLUSIVAMENTE los servicios y precios del CATALOGO_DB_CANONICO.",
+          "- Debes conservar EXACTAMENTE el mismo orden de los bullets.",
+          "- Debes conservar EXACTAMENTE los mismos nombres de servicios.",
+          "- Debes conservar EXACTAMENTE los mismos precios.",
+          "- NO puedes agregar servicios.",
+          "- NO puedes quitar servicios.",
+          "- NO puedes reordenar bullets.",
+          "- NO puedes resumir varios bullets en uno solo.",
+          "- SOLO puedes suavizar el encabezado o la línea final.",
+          "- Si no puedes mejorar sin alterar el contenido, devuelve el CATALOGO_DB_CANONICO tal cual.",
         ].join("\n");
-
-        console.log("[PRICE][catalog_db][LLM_RENDER]", {
-          rowsCount: rowsLocalized.length,
-          namesShown,
-        });
 
         const aiCatalogReply = await answerWithPromptBase({
           tenantId,
@@ -3518,8 +3549,22 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           idiomaDestino,
           canal,
           maxLines: 8,
-          fallbackText: humanizeListReply(cleanedReply, idiomaDestino),
+          fallbackText: canonicalReply,
           extraContext,
+        });
+
+        const modelReply = String(aiCatalogReply?.text || "").trim();
+        const finalReply =
+          modelReply && sameBulletStructure(canonicalReply, modelReply)
+            ? modelReply
+            : canonicalReply;
+
+        console.log("[PRICE][catalog_db][SAFE_RENDER]", {
+          rowsCount: rowsLocalized.length,
+          namesShown,
+          usedModelReply: finalReply === modelReply,
+          canonicalPreview: canonicalReply.slice(0, 220),
+          modelPreview: modelReply.slice(0, 220),
         });
 
         const ctxPatch: Partial<FastpathCtx> = {
@@ -3532,7 +3577,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         return {
           handled: true,
-          reply: aiCatalogReply.text,
+          reply: finalReply,
           source: "catalog_db",
           intent: "precio",
           ctxPatch,
