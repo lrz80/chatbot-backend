@@ -1314,9 +1314,9 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
           const finalText = `${intro}
 
-      ${listOnlyText}
+          ${listOnlyText}
 
-      ¿Cuál de estas opciones buscas?`;
+          ¿Cuál de estas opciones buscas?`;
 
           setReply(
             finalText,
