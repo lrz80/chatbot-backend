@@ -284,37 +284,6 @@ async function procesarMensajeMeta(args: {
 
   if (!estaActiva) return;
 
-  // ===============================
-  // 🛡️ DEDUPE inbound (memoria corto) + (DB interactions) como WA
-  // ===============================
-  {
-    const text = String(userInput || "").trim();
-    const contactKey = String(senderId || "").trim();
-
-    if (tenantId && text && contactKey) {
-      const normalize = (s: string) =>
-        String(s || "")
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .toLowerCase()
-          .replace(/\s+/g, " ")
-          .trim();
-
-      const normText = normalize(text);
-      const key = `${tenantId}:${canalEnvio}:${contactKey}:${normText}`;
-
-      const now = Date.now();
-      const ttlMs = 15_000;
-
-      const last = inboundDedupCache.get(key);
-      if (typeof last === "number" && now - last >= 0 && now - last < ttlMs) {
-        console.log("🚫 [META] inbound dedupe (mem): omit", { key, diffMs: now - last });
-        return;
-      }
-      inboundDedupCache.set(key, now);
-    }
-  }
-
   {
     const r = await pool.query(
       `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
@@ -413,6 +382,57 @@ async function procesarMensajeMeta(args: {
   let activeFlow = st.active_flow || "generic_sales";
   let activeStep = st.active_step || "start";
   let convoCtx = st.context && typeof st.context === "object" ? st.context : {};
+
+  // ===============================
+  // 🛡️ DEDUPE inbound (memoria corta, contextual)
+  // Evita duplicados reales de Meta SIN bloquear picks válidos
+  // como "1" -> "1" en pasos distintos.
+  // ===============================
+  {
+    const text = String(userInput || "").trim();
+    const contactKey = String(senderId || "").trim();
+
+    if (tenantId && text && contactKey) {
+      const normalize = (s: string) =>
+        String(s || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim();
+
+      const normText = normalize(text);
+
+      const stepFingerprint = [
+        String(activeFlow || ""),
+        String(activeStep || ""),
+        String((convoCtx as any)?.last_bot_action || ""),
+        Boolean((convoCtx as any)?.pending_link_lookup) ? "pending_link" : "",
+        Boolean((convoCtx as any)?.expectingVariant) ? "expecting_variant" : "",
+        String((convoCtx as any)?.selectedServiceId || ""),
+        String((convoCtx as any)?.last_service_id || ""),
+      ]
+        .filter(Boolean)
+        .join("|");
+
+      const key = `${tenantId}:${canalEnvio}:${contactKey}:${normText}:${stepFingerprint}`;
+
+      const now = Date.now();
+      const ttlMs = 15_000;
+
+      const last = inboundDedupCache.get(key);
+      if (typeof last === "number" && now - last >= 0 && now - last < ttlMs) {
+        console.log("🚫 [META] inbound dedupe (mem): omit", {
+          key,
+          diffMs: now - last,
+          stepFingerprint,
+        });
+        return;
+      }
+
+      inboundDedupCache.set(key, now);
+    }
+  }
 
   const convoCtxBeforeLang = convoCtx;
 
