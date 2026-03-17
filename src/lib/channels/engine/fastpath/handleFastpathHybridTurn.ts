@@ -357,6 +357,39 @@ export async function handleFastpathHybridTurn(
 
   const structuredService = getStructuredServiceSelection(ctxPatch, convoCtxForFastpath);
 
+  const shouldBypassStructuredRewrite =
+    isDmChatChannel(canal) &&
+    Boolean(fp.reply) &&
+    (
+      String(ctxPatch?.last_bot_action || "") === "asked_link_option" ||
+      Boolean(ctxPatch?.pending_link_lookup) ||
+      (Array.isArray(ctxPatch?.pending_link_options) && ctxPatch.pending_link_options.length > 0)
+    );
+
+  if (shouldBypassStructuredRewrite) {
+    console.log("[FASTPATH_HYBRID][BYPASS_STRUCTURED_REWRITE]", {
+      tenantId,
+      canal,
+      userInput,
+      fpSource: fp.source,
+      fpIntent: fp.intent,
+      replyPreview: String(fp.reply || "").slice(0, 200),
+      last_bot_action: ctxPatch?.last_bot_action || null,
+      pending_link_lookup: ctxPatch?.pending_link_lookup || false,
+      pending_link_options_count: Array.isArray(ctxPatch?.pending_link_options)
+        ? ctxPatch.pending_link_options.length
+        : 0,
+    });
+
+    return {
+      handled: true,
+      reply: fp.reply,
+      replySource: fp.source,
+      intent: fp.intent || detectedIntent || intentFallback || null,
+      ctxPatch,
+    };
+  }
+
   console.log("[STRUCTURED_SERVICE][CALLER]", structuredService);
 
   console.log("[FASTPATH_HYBRID][STRUCTURED_SERVICE_CHECK]", {
