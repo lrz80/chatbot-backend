@@ -1327,27 +1327,92 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         const optionLabel = String(pickedOption.label || "").trim();
         const finalUrl = String(pickedOption.url || "").trim();
 
-        const d = serviceId
-          ? await getServiceDetailsText(tenantId, serviceId, optionLabel).catch(() => null)
-          : null;
+        let variantId: string | null = null;
+        let variantName = optionLabel;
+        let variantDescription = "";
+        let serviceDescription = "";
+
+        if (serviceId) {
+          const { rows: variantRows } = await pool.query<any>(
+            `
+            SELECT
+              v.id,
+              v.variant_name,
+              v.description,
+              v.variant_url,
+              s.description AS service_description
+            FROM service_variants v
+            JOIN services s
+              ON s.id = v.service_id
+            WHERE v.service_id = $1
+              AND v.active = true
+              AND (
+                lower(trim(coalesce(v.variant_url, ''))) = lower(trim($2))
+                OR lower(trim(coalesce(v.variant_name, ''))) = lower(trim($3))
+              )
+            ORDER BY
+              CASE
+                WHEN lower(trim(coalesce(v.variant_url, ''))) = lower(trim($2)) THEN 0
+                ELSE 1
+              END,
+              v.created_at ASC,
+              v.id ASC
+            LIMIT 1
+            `,
+            [serviceId, finalUrl, optionLabel]
+          );
+
+          const variant = variantRows[0];
+
+          if (variant) {
+            variantId = String(variant.id || "").trim() || null;
+            variantName = String(variant.variant_name || optionLabel || "").trim();
+            serviceDescription = String(variant.service_description || "").trim();
+            variantDescription = String(variant.description || "").trim() || serviceDescription;
+          } else {
+            const { rows: serviceRows } = await pool.query<any>(
+              `
+              SELECT description
+              FROM services
+              WHERE id = $1
+              LIMIT 1
+              `,
+              [serviceId]
+            );
+
+            serviceDescription = String(serviceRows[0]?.description || "").trim();
+            variantDescription = serviceDescription;
+          }
+        }
 
         const title =
-          d?.titleSuffix
-            ? `${baseName || ""}${baseName ? " — " : ""}${String(d.titleSuffix).trim()}`
-            : baseName || optionLabel;
+          baseName && variantName
+            ? `${baseName} — ${variantName}`
+            : baseName || variantName || "";
 
-        const infoText = d?.text ? String(d.text).trim() : "";
+        const bullets =
+          variantDescription
+            ? variantDescription
+                .split(/\r?\n/)
+                .map((l: string) => l.trim())
+                .filter((l: string) => l.length > 0)
+                .map((l: string) => `• ${l}`)
+                .join("\n")
+            : "";
 
         const reply =
           idiomaDestino === "en"
-            ? `${title ? `${title}` : ""}${infoText ? `\n\n${infoText}` : ""}\n\nHere’s the link:\n${finalUrl}`
-            : `${title ? `${title}` : ""}${infoText ? `\n\n${infoText}` : ""}\n\nAquí está el link:\n${finalUrl}`;
+            ? `${title}${bullets ? `\n\n${bullets}` : ""}\n\nHere’s the link:\n${finalUrl}`
+            : `${title}${bullets ? `\n\n${bullets}` : ""}\n\nAquí está el link:\n${finalUrl}`;
 
-        console.log("[FASTPATH][PENDING_LINK_SELECTION][RESOLVED]", {
+        console.log("[FASTPATH][PENDING_LINK_SELECTION][VARIANT_REPLY]", {
           userInput,
-          pickedOption,
           serviceId,
           baseName,
+          optionLabel,
+          variantName,
+          hasVariantDescription: !!variantDescription,
+          finalUrl,
         });
 
         return {
@@ -1363,7 +1428,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             last_price_option_label: optionLabel || null,
             last_price_option_at: Date.now(),
 
-            last_variant_name: optionLabel || null,
+            last_variant_id: variantId,
+            last_variant_name: variantName || null,
             last_variant_url: finalUrl || null,
             last_variant_at: Date.now(),
 
