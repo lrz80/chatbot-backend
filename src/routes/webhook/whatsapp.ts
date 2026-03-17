@@ -829,9 +829,33 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       .toLowerCase()
       .trim();
 
+    const hasActiveSelectionContext =
+      Boolean((convoCtx as any)?.pending_link_lookup) ||
+      Boolean((convoCtx as any)?.pending_price_lookup) ||
+      Boolean((convoCtx as any)?.expectingVariant) ||
+      (Array.isArray((convoCtx as any)?.pending_link_options) &&
+        (convoCtx as any).pending_link_options.length > 0) ||
+      (Array.isArray((convoCtx as any)?.last_plan_list) &&
+        (convoCtx as any).last_plan_list.length > 0);
+
+    const isShortFreeText =
+      typeof userInput === "string" &&
+      userInput.trim().length > 0 &&
+      userInput.trim().length <= 20;
+
+    const hasQuestionMark = /[?¿]/.test(userInput);
+
+    const isClearlyLongSentence =
+      userInput.trim().split(/\s+/).length >= 5;
+
     const looksLikeSelectionReply =
       /^[1-9]$/.test(normalizedInput) ||
-      /^(si|sí|yes|ok|okay|dale|claro|esa|ese|la primera|el primero|that one|the first)$/i.test(normalizedInput);
+      (
+        hasActiveSelectionContext &&
+        isShortFreeText &&
+        !hasQuestionMark &&
+        !isClearlyLongSentence
+      );
 
     if (
       intentNow &&
