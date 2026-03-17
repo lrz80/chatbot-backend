@@ -372,6 +372,33 @@ async function procesarMensajeMeta(args: {
   let idiomaDestino: Lang = tenantBase;
   let forcedLangThisTurn: Lang | null = null;
 
+  // ✅ FORZAR IDIOMA SOLO en saludo inicial claro (igual WA)
+  try {
+    const t0 = String(userInput || "").trim().toLowerCase();
+    const isClearHello = /^(hello|hi|hey)\b/i.test(t0);
+    const isClearHola = /^(hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches)\b/i.test(t0);
+
+    let forcedLang: Lang | null = null;
+
+    if (isClearHello) forcedLang = "en";
+    else if (isClearHola) forcedLang = "es";
+
+    if (forcedLang) {
+      await upsertIdiomaClienteDB(pool, tenantId, canal, contactoNorm, forcedLang);
+      idiomaDestino = forcedLang;
+      forcedLangThisTurn = forcedLang;
+
+      console.log("🌍 [META] LANG FORCED (clear greeting) =", {
+        isNewLead,
+        userInput,
+        forcedLang,
+        idiomaDestino,
+      });
+    }
+  } catch (e: any) {
+    console.error("❌ [META] LANG FORCED ERROR:", e?.message || e);
+  }
+
   // ===============================
   // 🧠 conversation_state (igual WA)
   // ===============================
@@ -388,6 +415,16 @@ async function procesarMensajeMeta(args: {
   let convoCtx = st.context && typeof st.context === "object" ? st.context : {};
 
   const convoCtxBeforeLang = convoCtx;
+
+  // 🔍 MEMORIA – inicio del turno (igual WA)
+  const memStart = await getMemoryValue<string>({
+    tenantId,
+    canal,
+    senderId: contactoNorm,
+    key: "facts_summary",
+  });
+
+  console.log("🧠 [META] facts_summary (start of turn) =", memStart);
 
   // Prompt base: en meta priorizamos meta_configs si existe; si no, prompt por canal
   // OJO: resolveLangForTurn construye promptBase usando getPromptPorCanal internamente,
@@ -417,6 +454,16 @@ async function procesarMensajeMeta(args: {
     ...(convoCtxBeforeLang || {}),
     ...(langOut.convoCtx || {}),
   };
+
+  console.log("🌍 [META] LANG DEBUG =", {
+    userInput,
+    tenantBase,
+    storedLang: langOut.storedLang,
+    detectedLang: langOut.langRes?.detectedLang,
+    lockedLang: langOut.langRes?.lockedLang,
+    inBookingLang: langOut.langRes?.inBookingLang,
+    idiomaDestino,
+  });
 
   // ✅ Override prompt/bienvenida por meta_configs si existen
   const promptMeta =
