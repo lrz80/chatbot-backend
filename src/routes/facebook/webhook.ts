@@ -836,7 +836,9 @@ async function procesarMensajeMeta(args: {
       Boolean((convoCtx as any)?.selectedServiceId) ||
       Boolean((convoCtx as any)?.last_plan_list?.length) ||
       Boolean((convoCtx as any)?.last_package_list?.length) ||
-      Boolean((convoCtx as any)?.pending_link_lookup);
+      Boolean((convoCtx as any)?.pending_link_lookup) ||
+      Boolean((convoCtx as any)?.last_service_id) ||
+      Boolean((convoCtx as any)?.structuredService);
 
     const NEW_INTENT_RESET_SET = new Set<string>([
       "agendar",
@@ -895,6 +897,15 @@ async function procesarMensajeMeta(args: {
       (convoCtx as any).pending_link_lookup = null;
       (convoCtx as any).pending_link_at = null;
       (convoCtx as any).pending_link_options = null;
+
+      (convoCtx as any).last_service_id = null;
+      (convoCtx as any).last_service_name = null;
+      (convoCtx as any).last_service_label = null;
+
+      (convoCtx as any).last_entity_kind = null;
+      (convoCtx as any).last_entity_at = null;
+
+      (convoCtx as any).structuredService = null;
     }
   }
 
