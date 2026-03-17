@@ -20,6 +20,7 @@ type Candidate = {
   label: string;
   category: string;
   tipo: string;
+  catalogRole: string;
   parentServiceId: string | null;
   serviceNameTokens: string[];
   supportTokens: string[];
@@ -267,6 +268,7 @@ export async function resolveServiceCandidatesFromText(
     service_description: string | null;
     service_category: string | null;
     service_tipo: string | null;
+    service_catalog_role: string | null;
     parent_service_id: string | null;
     variant_name: string | null;
     variant_description: string | null;
@@ -279,6 +281,7 @@ export async function resolveServiceCandidatesFromText(
       s.description AS service_description,
       s.category AS service_category,
       s.tipo AS service_tipo,
+      s.catalog_role AS service_catalog_role,
       s.parent_service_id,
       v.variant_name,
       v.description AS variant_description,
@@ -308,6 +311,7 @@ export async function resolveServiceCandidatesFromText(
       serviceLabel: string | null;
       category: string | null;
       tipo: string | null;
+      catalogRole: string | null;
       parentServiceId: string | null;
       serviceNameTokenSet: Set<string>;
       supportTokenSet: Set<string>;
@@ -329,6 +333,7 @@ export async function resolveServiceCandidatesFromText(
         serviceLabel: serviceName,
         category: String(r.service_category || "").trim(),
         tipo: String(r.service_tipo || "").trim(),
+        catalogRole: String(r.service_catalog_role || "").trim(),
         parentServiceId: r.parent_service_id ? String(r.parent_service_id) : null,
         serviceNameTokenSet: new Set<string>(),
         supportTokenSet: new Set<string>(),
@@ -372,6 +377,7 @@ export async function resolveServiceCandidatesFromText(
     label: g.serviceLabel || "",
     category: g.category || "",
     tipo: g.tipo || "",
+    catalogRole: g.catalogRole || "",
     parentServiceId: g.parentServiceId,
     serviceNameTokens: Array.from(g.serviceNameTokenSet),
     supportTokens: Array.from(g.supportTokenSet),
@@ -512,17 +518,34 @@ export async function resolveServiceCandidatesFromText(
 
     // ajustes universales multitenant-safe
     const categoryNorm = normalizeLabel(cand.category || "");
+    const catalogRoleNorm = normalizeLabel(cand.catalogRole || "");
     const hasParent = !!cand.parentServiceId;
 
-    const isAddOn =
+    const isAddOnCategory =
       categoryNorm === "add on" ||
       categoryNorm === "addon" ||
       categoryNorm === "add-on";
 
-    if (isAddOn) score -= 0.22;
-    if (hasParent) score -= 0.08;
+    const isExtraRole =
+      catalogRoleNorm === "complemento / extra" ||
+      catalogRoleNorm === "complemento extra" ||
+      catalogRoleNorm === "extra" ||
+      catalogRoleNorm === "addon" ||
+      catalogRoleNorm === "add on" ||
+      catalogRoleNorm === "add-on";
 
-    const isPrimary = !isAddOn && !hasParent;
+    const isPrimaryRole =
+      catalogRoleNorm === "servicio principal" ||
+      catalogRoleNorm === "primary service";
+
+    const isAddOn = isAddOnCategory || isExtraRole;
+
+    if (isAddOn) score -= 0.45;
+    if (hasParent) score -= 0.12;
+
+    if (isPrimaryRole) score += 0.18;
+
+    const isPrimary = isPrimaryRole || (!isAddOn && !hasParent);
     if (isPrimary) score += 0.08;
 
     return {
@@ -555,6 +578,7 @@ export async function resolveServiceCandidatesFromText(
           serviceId: best.cand.serviceId,
           category: best.cand.category,
           tipo: best.cand.tipo,
+          catalogRole: best.cand.catalogRole,
           parentServiceId: best.cand.parentServiceId,
           exactNameHits: best.exactNameHits,
           exactCatalogHits: best.exactCatalogHits,
@@ -572,6 +596,9 @@ export async function resolveServiceCandidatesFromText(
           label: second.cand.label,
           score: second.score,
           serviceId: second.cand.serviceId,
+          category: second.cand.category,
+          tipo: second.cand.tipo,
+          catalogRole: second.cand.catalogRole,
           exactNameHits: second.exactNameHits,
           exactCatalogHits: second.exactCatalogHits,
           overlapNameTokens: second.overlapNameTokens,
