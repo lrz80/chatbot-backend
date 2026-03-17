@@ -1382,7 +1382,65 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               last_price_option_at: Date.now(),
             };
 
-            let finalUrl: string | null = picked.url ? String(picked.url).trim() : null;
+            const pendingLinkOptions = Array.isArray((convoCtx as any)?.pending_link_options)
+              ? (convoCtx as any).pending_link_options
+              : [];
+
+            const pendingLinkLookupActive =
+              Boolean((convoCtx as any)?.pending_link_lookup) &&
+              pendingLinkOptions.length > 0;
+
+            const numericChoice =
+              idx != null && idx >= 1 && idx <= pendingLinkOptions.length
+                ? pendingLinkOptions[idx - 1]
+                : null;
+
+            const namedChoice =
+              !numericChoice && pendingLinkLookupActive
+                ? (bestNameMatch(userInput, pendingLinkOptions as any) as any)
+                : null;
+
+            const directPendingChoice = numericChoice || namedChoice;
+
+            let finalUrl: string | null =
+              directPendingChoice?.url
+                ? String(directPendingChoice.url).trim()
+                : picked.url
+                ? String(picked.url).trim()
+                : null;
+
+            if (directPendingChoice?.url) {
+              const d = await getServiceDetailsText(tenantId, pickedServiceId, userInput).catch(
+                () => null
+              );
+
+              const baseName =
+                String(convoCtx?.last_service_name || "") || String(picked.name || "");
+              const title = d?.titleSuffix ? `${baseName} — ${d.titleSuffix}` : baseName;
+              const infoText = d?.text ? String(d.text).trim() : "";
+
+              const reply =
+                idiomaDestino === "en"
+                  ? `${title}${infoText ? `\n\n${infoText}` : ""}\n\nHere’s the link:\n${finalUrl}`
+                  : `${title}${infoText ? `\n\n${infoText}` : ""}\n\nAquí está el link:\n${finalUrl}`;
+
+              return {
+                handled: true,
+                reply,
+                source: "service_list_db",
+                intent: intentOut || "seleccion",
+                ctxPatch: {
+                  ...basePatch,
+                  pending_link_lookup: undefined,
+                  pending_link_at: undefined,
+                  pending_link_options: undefined,
+                  last_price_option_label: String(directPendingChoice.label || "").trim() || null,
+                  last_price_option_at: Date.now(),
+                  last_bot_action: "sent_link_option",
+                  last_bot_action_at: Date.now(),
+                } as any,
+              };
+            }
 
             if (!finalUrl) {
               const linkPick = await resolveBestLinkForService({
