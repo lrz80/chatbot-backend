@@ -7,8 +7,8 @@ import { runFastpath } from "../../../fastpath/runFastpath";
 import { naturalizeSecondaryOptionsLine } from "../../../fastpath/naturalizeSecondaryOptions";
 import { getRecentHistoryForModel } from "../messages/getRecentHistoryForModel";
 import { answerWithPromptBase } from "../../../answers/answerWithPromptBase";
-import { traducirTexto } from "../../../traducirTexto";
 import { resolveServiceIdFromText } from "../../../services/pricing/resolveServiceIdFromText";
+import { stripMarkdownLinksForDm } from "../../format/stripMarkdownLinks";
 
 const MAX_WHATSAPP_LINES = 9999; // mantenemos el mismo valor
 
@@ -928,9 +928,11 @@ SPECIAL RULE FOR THIS TURN:
       ctxPatch,
     });
 
+    const finalDmReply = stripMarkdownLinksForDm(composed.text);
+
     return {
       handled: true,
-      reply: composed.text,
+      reply: finalDmReply,
       replySource: fp.source,
       intent: fp.intent || detectedIntent || intentFallback || null,
       ctxPatch,
