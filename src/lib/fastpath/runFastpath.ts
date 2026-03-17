@@ -1400,10 +1400,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                   .map((o) => o.label)
                   .filter(Boolean);
 
+                const optionsList = linkPick.options
+                  .slice(0, 3)
+                  .map((o, i) => `• ${i + 1}) ${String(o.label || "").trim()}`)
+                  .join("\n");
+
                 const q =
                   idiomaDestino === "en"
-                    ? `Just to make sure 😊 are you asking about ${labels.join(" or ")}?`
-                    : `Solo para asegurarme 😊 ¿hablas de ${labels.join(" o ")}?`;
+                    ? `Just to make sure 😊 are you referring to:\n\n${optionsList}\n\nReply with the number or the name.`
+                    : `Solo para asegurarme 😊 ¿te refieres a:\n\n${optionsList}\n\nRespóndeme con el número o el nombre.`;
 
                 return {
                   handled: true,
