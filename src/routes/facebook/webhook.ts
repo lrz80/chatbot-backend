@@ -1150,28 +1150,39 @@ async function procesarMensajeMeta(args: {
   // ⚡ FASTPATH (igual WA)
   // ===============================
   inBooking0 = !!((convoCtx as any)?.booking?.step && (convoCtx as any)?.booking?.step !== "idle");
+
   if (!inBooking0) {
+    const convoCtxForFastpath = signals?.convoCtx || convoCtx;
+
     const fpRes = await handleFastpathHybridTurn({
       pool,
-      tenantId,
+      tenantId: tenant.id,
       canal,
       idiomaDestino,
       userInput,
       inBooking: Boolean(inBooking0),
-      convoCtx,
+      convoCtx: convoCtxForFastpath,
       infoClave: String(tenant?.info_clave || ""),
-      detectedIntent: detectedIntent || null,
-      intentFallback: INTENCION_FINAL_CANONICA || null,
+      detectedIntent: signals?.detectedIntent || detectedIntent || null,
+      intentFallback: signals?.INTENCION_FINAL_CANONICA || INTENCION_FINAL_CANONICA || null,
       messageId: messageId || null,
       contactoNorm,
-      promptBaseMem,
-
+      promptBaseMem: signals?.promptBaseMem || promptBaseMem,
       referentialFollowup: signals?.referentialFollowup === true,
       followupNeedsAnchor: signals?.followupNeedsAnchor === true,
       followupEntityKind: signals?.followupEntityKind || null,
     });
 
-    if (fpRes.ctxPatch) transition({ patchCtx: fpRes.ctxPatch });
+    const convoCtxAfterFastpath = fpRes?.ctxPatch
+      ? {
+          ...(convoCtxForFastpath || {}),
+          ...(fpRes.ctxPatch || {}),
+        }
+      : convoCtxForFastpath;
+
+    if (fpRes.ctxPatch) {
+      transition({ patchCtx: fpRes.ctxPatch });
+    }
 
     if (fpRes.handled && fpRes.reply) {
       if (fpRes.intent) {
@@ -1179,7 +1190,19 @@ async function procesarMensajeMeta(args: {
         lastIntent = fpRes.intent;
       }
 
-      await replyAndExit(fpRes.reply, fpRes.replySource || "fastpath_hybrid", fpRes.intent || null);
+      console.log("[META][CONVOCTX after fastpath patch]", {
+        last_service_id: (convoCtxAfterFastpath as any)?.last_service_id || null,
+        last_service_name: (convoCtxAfterFastpath as any)?.last_service_name || null,
+        selectedServiceId: (convoCtxAfterFastpath as any)?.selectedServiceId || null,
+        fpIntent: fpRes.intent || null,
+        fpSource: fpRes.replySource || null,
+      });
+
+      await replyAndExit(
+        fpRes.reply,
+        fpRes.replySource || "fastpath_hybrid",
+        fpRes.intent || null
+      );
       return;
     }
   }

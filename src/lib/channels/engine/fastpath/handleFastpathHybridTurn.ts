@@ -398,16 +398,23 @@ export async function handleFastpathHybridTurn(
 
   // Si no manejó nada, devolvemos directo
   if (!fp.handled) {
+    const unhandledCtxPatch = {
+      ...(forcedAnchorCtxPatch || {}),
+      ...(preResolvedCtxPatch || {}),
+    };
+
     console.log("[FASTPATH_HYBRID][RETURN_UNHANDLED_WITH_CTX]", {
       tenantId,
       canal,
       userInput,
+      forcedAnchorCtxPatch,
       preResolvedCtxPatch,
+      unhandledCtxPatch,
     });
 
     return {
       handled: false,
-      ctxPatch: Object.keys(preResolvedCtxPatch).length ? preResolvedCtxPatch : undefined,
+      ctxPatch: Object.keys(unhandledCtxPatch).length ? unhandledCtxPatch : undefined,
       intent: detectedIntent || intentFallback || null,
     };
   }
@@ -460,8 +467,8 @@ export async function handleFastpathHybridTurn(
     fpIntent: fp.handled ? fp.intent : null,
     structuredService,
     ctxPatchKeys: Object.keys(ctxPatch || {}),
-    convoCtxLastServiceId: (convoCtx as any)?.last_service_id || null,
-    convoCtxSelectedServiceId: (convoCtx as any)?.selectedServiceId || null,
+    convoCtxLastServiceId: (convoCtxForFastpath as any)?.last_service_id || null,
+    convoCtxSelectedServiceId: (convoCtxForFastpath as any)?.selectedServiceId || null,
   });
 
   // Canonicalizar siempre el servicio resuelto para follow-ups posteriores
