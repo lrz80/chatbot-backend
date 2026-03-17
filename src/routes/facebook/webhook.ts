@@ -825,6 +825,80 @@ async function procesarMensajeMeta(args: {
   };
 
   // ===============================
+  // 🧹 RESET de selección vieja si entra una intención nueva clara
+  // SIN usar detectedInterest ni regex de vertical
+  // ===============================
+  {
+    const intentNow = INTENCION_FINAL_CANONICA || detectedIntent || null;
+
+    const hasStaleSelectionContext =
+      Boolean((convoCtx as any)?.expectingVariant) ||
+      Boolean((convoCtx as any)?.selectedServiceId) ||
+      Boolean((convoCtx as any)?.last_plan_list?.length) ||
+      Boolean((convoCtx as any)?.last_package_list?.length) ||
+      Boolean((convoCtx as any)?.pending_link_lookup);
+
+    const NEW_INTENT_RESET_SET = new Set<string>([
+      "agendar",
+      "booking_start",
+      "info_servicio",
+      "precio",
+      "planes_precios",
+    ]);
+
+    const normalizedInput = String(userInput || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .trim();
+
+    // Si parece respuesta corta a una lista/opción previa, NO limpiar
+    const looksLikeSelectionReply =
+      /^[1-9]$/.test(normalizedInput) ||
+      /^(si|sí|yes|ok|okay|dale|claro|esa|ese|la primera|el primero|that one|the first)$/i.test(normalizedInput);
+
+    if (
+      intentNow &&
+      NEW_INTENT_RESET_SET.has(intentNow) &&
+      hasStaleSelectionContext &&
+      !looksLikeSelectionReply
+    ) {
+      console.log("[META][RESET_STALE_SELECTION_CONTEXT_INTENT_BASED]", {
+        tenantId,
+        canal,
+        contactoNorm,
+        userInput,
+        intentNow,
+        expectingVariant: (convoCtx as any)?.expectingVariant || false,
+        selectedServiceId: (convoCtx as any)?.selectedServiceId || null,
+        lastPlanListCount: Array.isArray((convoCtx as any)?.last_plan_list)
+          ? (convoCtx as any).last_plan_list.length
+          : 0,
+        lastPackageListCount: Array.isArray((convoCtx as any)?.last_package_list)
+          ? (convoCtx as any).last_package_list.length
+          : 0,
+        pendingLinkLookup: Boolean((convoCtx as any)?.pending_link_lookup),
+      });
+
+      (convoCtx as any).expectingVariant = false;
+      (convoCtx as any).selectedServiceId = null;
+
+      (convoCtx as any).last_plan_list = null;
+      (convoCtx as any).last_plan_list_at = null;
+
+      (convoCtx as any).last_package_list = null;
+      (convoCtx as any).last_package_list_at = null;
+
+      (convoCtx as any).last_list_kind = null;
+      (convoCtx as any).last_list_kind_at = null;
+
+      (convoCtx as any).pending_link_lookup = null;
+      (convoCtx as any).pending_link_at = null;
+      (convoCtx as any).pending_link_options = null;
+    }
+  }
+
+  // ===============================
   // ✅ PENDING CTA ACCEPTANCE
   // ===============================
   {
