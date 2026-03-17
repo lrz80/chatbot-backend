@@ -1132,6 +1132,9 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       messageId: messageId || null,
       contactoNorm,
       promptBaseMem,
+      referentialFollowup: signals?.referentialFollowup === true,
+      followupNeedsAnchor: signals?.followupNeedsAnchor === true,
+      followupEntityKind: signals?.followupEntityKind || null,
     });
 
     console.log("B8 despues handleFastpathHybridTurn");

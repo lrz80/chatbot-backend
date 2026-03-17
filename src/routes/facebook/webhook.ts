@@ -1165,6 +1165,10 @@ async function procesarMensajeMeta(args: {
       messageId: messageId || null,
       contactoNorm,
       promptBaseMem,
+
+      referentialFollowup: signals?.referentialFollowup === true,
+      followupNeedsAnchor: signals?.followupNeedsAnchor === true,
+      followupEntityKind: signals?.followupEntityKind || null,
     });
 
     if (fpRes.ctxPatch) transition({ patchCtx: fpRes.ctxPatch });

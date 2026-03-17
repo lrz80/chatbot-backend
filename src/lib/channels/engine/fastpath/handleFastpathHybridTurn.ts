@@ -22,10 +22,13 @@ export type FastpathHybridArgs = {
   convoCtx: any;
   infoClave: string;
   detectedIntent: string | null;
-  intentFallback: string | null;           // INTENCION_FINAL_CANONICA
+  intentFallback: string | null;
   messageId: string | null;
   contactoNorm: string;
   promptBaseMem: string;
+  referentialFollowup?: boolean;
+  followupNeedsAnchor?: boolean;
+  followupEntityKind?: "service" | "plan" | "package" | null;
 };
 
 export type FastpathHybridResult = {
@@ -178,6 +181,9 @@ export async function handleFastpathHybridTurn(
     messageId,
     contactoNorm,
     promptBaseMem,
+    referentialFollowup,
+    followupNeedsAnchor,
+    followupEntityKind,
   } = args;
 
   const loweredInput = (userInput || "").toLowerCase();
@@ -304,8 +310,62 @@ export async function handleFastpathHybridTurn(
     }
   }
 
+  const anchoredServiceId = firstNonEmptyString(
+    convoCtx?.selectedServiceId,
+    convoCtx?.last_service_id,
+    convoCtx?.selected_service_id,
+    convoCtx?.serviceId
+  );
+
+  const anchoredServiceName = firstNonEmptyString(
+    convoCtx?.selectedServiceName,
+    convoCtx?.last_service_name,
+    convoCtx?.selected_service_name,
+    convoCtx?.serviceName
+  );
+
+  const anchoredServiceLabel = firstNonEmptyString(
+    convoCtx?.selectedServiceLabel,
+    convoCtx?.last_service_label,
+    convoCtx?.selected_service_label,
+    convoCtx?.serviceLabel,
+    anchoredServiceName
+  );
+
+  const shouldForceAnchoredService =
+    shouldTryPreResolveService &&
+    !!anchoredServiceId &&
+    (followupNeedsAnchor === true || referentialFollowup === true) &&
+    (!followupEntityKind || followupEntityKind === "service");
+
+  const forcedAnchorCtxPatch: any = {};
+
+  if (shouldForceAnchoredService) {
+    forcedAnchorCtxPatch.last_service_id = anchoredServiceId;
+    forcedAnchorCtxPatch.selectedServiceId = anchoredServiceId;
+    forcedAnchorCtxPatch.last_service_name = anchoredServiceName || null;
+    forcedAnchorCtxPatch.last_service_label =
+      anchoredServiceLabel || anchoredServiceName || null;
+    forcedAnchorCtxPatch.last_entity_kind = "service";
+    forcedAnchorCtxPatch.last_entity_at = Date.now();
+
+    console.log("[FASTPATH_HYBRID][FORCED_ANCHORED_SERVICE]", {
+      tenantId,
+      canal,
+      contactoNorm,
+      userInput,
+      anchoredServiceId,
+      anchoredServiceName,
+      anchoredServiceLabel,
+      referentialFollowup,
+      followupNeedsAnchor,
+      followupEntityKind,
+    });
+  }
+
   const convoCtxForFastpath = {
     ...(convoCtx || {}),
+    ...forcedAnchorCtxPatch,
     ...preResolvedCtxPatch,
   };
 
@@ -929,8 +989,21 @@ SPECIAL RULE FOR THIS TURN:
         /\bdo you want\b/.test(text));
 
     if (isYesNoCTA) {
-      const sid = (convoCtx as any)?.last_service_id || null;
-      const sname = (convoCtx as any)?.last_service_name || null;
+      const sid =
+        firstNonEmptyString(
+          ctxPatch?.last_service_id,
+          ctxPatch?.selectedServiceId,
+          convoCtx?.last_service_id,
+          convoCtx?.selectedServiceId
+        ) || null;
+
+      const sname =
+        firstNonEmptyString(
+          ctxPatch?.last_service_name,
+          ctxPatch?.selectedServiceName,
+          convoCtx?.last_service_name,
+          convoCtx?.selectedServiceName
+        ) || null;
 
       let serviceUrl: string | null = null;
       if (sid) {

@@ -64,6 +64,10 @@ export type HandleUserSignalsResult = {
   handled: boolean; // true = ya respondió (p.ej. human override)
   humanOverrideReply?: string | null;
   humanOverrideSource?: string | null;
+
+  referentialFollowup?: boolean;
+  followupNeedsAnchor?: boolean;
+  followupEntityKind?: "service" | "plan" | "package" | null;
 };
 
 export async function handleUserSignalsTurn(
@@ -317,6 +321,27 @@ export async function handleUserSignalsTurn(
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
   }
 
+    const hasAnchoredService = Boolean(
+      convoCtx?.last_service_id ||
+      convoCtx?.selectedServiceId ||
+      convoCtx?.selected_service_id ||
+      convoCtx?.serviceId
+    );
+
+    const intentFinalForFollowup = normIntent(
+      detectedIntent || INTENCION_FINAL_CANONICA || null
+    );
+
+    const referentialFollowup =
+      hasAnchoredService &&
+      (intentFinalForFollowup === "info_servicio" ||
+        intentFinalForFollowup === "precio");
+
+    const followupNeedsAnchor = referentialFollowup === true;
+
+    const followupEntityKind =
+      referentialFollowup ? "service" : null;
+
   return {
     detectedIntent,
     detectedInterest,
@@ -327,5 +352,8 @@ export async function handleUserSignalsTurn(
     handled,
     humanOverrideReply,
     humanOverrideSource,
+    referentialFollowup,
+    followupNeedsAnchor,
+    followupEntityKind,
   };
 }
