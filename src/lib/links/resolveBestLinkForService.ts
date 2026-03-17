@@ -90,6 +90,31 @@ export async function resolveBestLinkForService(args: {
     }))
     .filter((o) => o.url);
 
+  // ===============================
+  // ✅ PRIORIDAD 0: selección numérica directa
+  // ===============================
+  const rawInput = String(userText || "").trim();
+  const numericIndex = parseInt(rawInput, 10);
+
+  if (
+    Number.isFinite(numericIndex) &&
+    numericIndex >= 1 &&
+    numericIndex <= options.length
+  ) {
+    const selected = options[numericIndex - 1];
+
+    console.log("🔗 [LINK-RESOLVER] numeric selection detected", {
+      userText,
+      index: numericIndex,
+      selected: selected?.label,
+    });
+
+    return {
+      ok: true,
+      url: selected.url,
+    };
+  }
+
   // ✅ Si hay variantes con URL, intentamos usarla primero
   if (options.length) {
     // Si solo hay 1, listo
