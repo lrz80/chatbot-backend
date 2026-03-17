@@ -1265,6 +1265,117 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
+  // ✅ RESOLVER SELECCIÓN PENDIENTE DE LINK/VARIANTE
+  // PRIORIDAD MÁXIMA: si ya preguntamos "Por Mes / Autopago",
+  // el siguiente "1", "2" o nombre debe resolverse AQUÍ,
+  // sin volver a pasar por PICK FROM LAST LIST ni por resolveBestLinkForService.
+  // ===============================
+  {
+    const ttlMs = 5 * 60 * 1000;
+
+    const pendingLinkLookup = Boolean(convoCtx?.pending_link_lookup);
+    const pendingLinkAt = Number(convoCtx?.pending_link_at || 0);
+    const pendingLinkOptions = Array.isArray(convoCtx?.pending_link_options)
+      ? convoCtx.pending_link_options
+      : [];
+
+    const pendingFresh =
+      pendingLinkLookup &&
+      pendingLinkOptions.length > 0 &&
+      Number.isFinite(pendingLinkAt) &&
+      pendingLinkAt > 0 &&
+      Date.now() - pendingLinkAt <= ttlMs;
+
+    if (pendingFresh) {
+      const msgNorm = normalizeText(userInput);
+
+      const idx = (() => {
+        const m = String(userInput || "").trim().match(/^([1-9])$/);
+        return m ? Number(m[1]) : null;
+      })();
+
+      let pickedOption: { label: string; url: string } | null = null;
+
+      // 1) Selección numérica directa
+      if (idx != null) {
+        const i = idx - 1;
+        if (i >= 0 && i < pendingLinkOptions.length) {
+          pickedOption = pendingLinkOptions[i];
+        }
+      }
+
+      // 2) Selección por nombre
+      if (!pickedOption) {
+        const byName = bestNameMatch(
+          userInput,
+          pendingLinkOptions.map((o: any) => ({
+            name: String(o.label || "").trim(),
+            url: String(o.url || "").trim(),
+          }))
+        ) as any;
+
+        if (byName?.name) {
+          pickedOption = pendingLinkOptions.find(
+            (o: any) => normalizeText(String(o.label || "")) === normalizeText(String(byName.name || ""))
+          ) || null;
+        }
+      }
+
+      if (pickedOption?.url) {
+        const serviceId = String(convoCtx?.last_service_id || "").trim();
+        const baseName = String(convoCtx?.last_service_name || "").trim();
+        const optionLabel = String(pickedOption.label || "").trim();
+        const finalUrl = String(pickedOption.url || "").trim();
+
+        const d = serviceId
+          ? await getServiceDetailsText(tenantId, serviceId, optionLabel).catch(() => null)
+          : null;
+
+        const title =
+          d?.titleSuffix
+            ? `${baseName || ""}${baseName ? " — " : ""}${String(d.titleSuffix).trim()}`
+            : baseName || optionLabel;
+
+        const infoText = d?.text ? String(d.text).trim() : "";
+
+        const reply =
+          idiomaDestino === "en"
+            ? `${title ? `${title}` : ""}${infoText ? `\n\n${infoText}` : ""}\n\nHere’s the link:\n${finalUrl}`
+            : `${title ? `${title}` : ""}${infoText ? `\n\n${infoText}` : ""}\n\nAquí está el link:\n${finalUrl}`;
+
+        console.log("[FASTPATH][PENDING_LINK_SELECTION][RESOLVED]", {
+          userInput,
+          pickedOption,
+          serviceId,
+          baseName,
+        });
+
+        return {
+          handled: true,
+          reply,
+          source: "service_list_db",
+          intent: intentOut || "seleccion",
+          ctxPatch: {
+            pending_link_lookup: undefined,
+            pending_link_at: undefined,
+            pending_link_options: undefined,
+
+            last_price_option_label: optionLabel || null,
+            last_price_option_at: Date.now(),
+
+            last_variant_name: optionLabel || null,
+            last_variant_url: finalUrl || null,
+            last_variant_at: Date.now(),
+
+            last_bot_action: "sent_link_option",
+            last_bot_action_at: Date.now(),
+          } as Partial<FastpathCtx>,
+        };
+      }
+    }
+  }
+
+  // ===============================
   // ✅ PICK FROM LAST LIST
   // ===============================
   {
