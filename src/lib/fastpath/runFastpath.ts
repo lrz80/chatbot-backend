@@ -1975,9 +1975,20 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // El usuario ya vio las opciones y ahora elige una (1, "autopay", etc.)
   // ===============================
   const msgNorm = normalizeText(userInput);
+
+  const explicitDetailIntentNow = looksLikeDetailIntent(userInput);
+  const explicitTargetTokenNow = extractCatalogTargetToken(userInput);
+
+  const isNumericSelection = /^([1-9])$/.test(msgNorm);
+
+  const isNamedVariantSelection =
+    msgNorm.length > 0 &&
+    msgNorm.length <= 24 &&
+    !explicitDetailIntentNow &&
+    !/[?¿]/.test(String(userInput || ""));
+
   const isShortVariantSelection =
-    /^([1-9])$/.test(msgNorm) ||
-    msgNorm.length <= 24;
+    isNumericSelection || isNamedVariantSelection;
 
   const hasVariantSelectionContext =
     Boolean(convoCtx.expectingVariant) ||
@@ -1993,7 +2004,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       )
     );
 
-  if (convoCtx.selectedServiceId && hasVariantSelectionContext && isShortVariantSelection) {
+  const shouldSkipVariantSelection =
+    explicitDetailIntentNow || !!explicitTargetTokenNow;
+
+  if (
+    !shouldSkipVariantSelection &&
+    convoCtx.selectedServiceId &&
+    hasVariantSelectionContext &&
+    isShortVariantSelection
+  ) {
     const serviceId = String(convoCtx.selectedServiceId);
 
     // Traemos variantes del servicio
