@@ -70,6 +70,9 @@ import { getMemoryValue } from "../../lib/clientMemory";
 import {
   resolveServiceCandidatesFromText,
 } from "../../lib/services/pricing/resolveServiceIdFromText";
+import {
+  cancelPendingFollowUps,
+} from "../../lib/followups/followUpScheduler";
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -338,6 +341,27 @@ async function procesarMensajeMeta(args: {
   const fromNumber = senderId;
 
   const isNewLead = await ensureClienteBase(pool, tenantId, canal, contactoNorm);
+
+  // ✅ FOLLOW-UP RESET: si el cliente volvió a escribir, cancela cualquier follow-up pendiente
+  try {
+    const deleted = await cancelPendingFollowUps({
+      tenantId,
+      canal: canal as any,
+      contacto: contactoNorm,
+    });
+
+    if (deleted > 0) {
+      console.log("🧹 [META] follow-ups pendientes cancelados por nuevo inbound:", {
+        tenantId,
+        canal,
+        contacto: contactoNorm,
+        deleted,
+        messageId,
+      });
+    }
+  } catch (e: any) {
+    console.warn("⚠️ [META] cancelPendingFollowUps failed:", e?.message);
+  }
 
   // ===============================
   // 🌍 Idioma: mismo motor WA (resolveLangForTurn)
@@ -775,6 +799,18 @@ async function procesarMensajeMeta(args: {
 
       (convoCtx as any).pending_cta = null;
 
+      // ✅ limpiar contexto de selección anterior para que no contamine
+      (convoCtx as any).expectingVariant = false;
+      (convoCtx as any).selectedServiceId = null;
+
+      (convoCtx as any).last_variant_id = null;
+      (convoCtx as any).last_variant_name = null;
+      (convoCtx as any).last_variant_url = null;
+      (convoCtx as any).last_variant_at = null;
+
+      (convoCtx as any).last_price_option_label = null;
+      (convoCtx as any).last_price_option_at = null;
+
       const prevEstimate = (convoCtx as any)?.estimateFlow || {};
       (convoCtx as any).estimateFlow = {
         ...prevEstimate,
@@ -796,6 +832,18 @@ async function procesarMensajeMeta(args: {
 
       (convoCtx as any).pending_cta = null;
 
+      // ✅ limpiar contexto de selección anterior para que no contamine
+      (convoCtx as any).expectingVariant = false;
+      (convoCtx as any).selectedServiceId = null;
+
+      (convoCtx as any).last_variant_id = null;
+      (convoCtx as any).last_variant_name = null;
+      (convoCtx as any).last_variant_url = null;
+      (convoCtx as any).last_variant_at = null;
+
+      (convoCtx as any).last_price_option_label = null;
+      (convoCtx as any).last_price_option_at = null;
+
       const prevBooking = (convoCtx as any)?.booking || {};
       (convoCtx as any).booking = {
         ...prevBooking,
@@ -804,6 +852,50 @@ async function procesarMensajeMeta(args: {
           ? prevBooking.step
           : "start",
       };
+    }
+  }
+
+  // ===============================
+  // 🎯 Booking vs Info General de Horarios
+  // ===============================
+  const intentNow = INTENCION_FINAL_CANONICA || detectedIntent || null;
+
+  const BOOKING_INTENTS = new Set<string>([
+    "booking_start",
+    "booking_date",
+    "booking_time",
+    "booking_confirm",
+    "booking_change",
+    "booking_horarios",
+  ]);
+
+  const INFO_HORARIOS_INTENTS = new Set<string>([
+    "info_horarios_generales",
+  ]);
+
+  let bookingStepNow = (convoCtx as any)?.booking?.step;
+  let inBookingNow = !!(bookingStepNow && bookingStepNow !== "idle");
+
+  if (inBookingNow) {
+    if (intentNow && INFO_HORARIOS_INTENTS.has(intentNow)) {
+      console.log("🔓 [META] booking: se permite fastpath para info_horarios_generales", {
+        bookingStepNow,
+        intentNow,
+      });
+      inBookingNow = false;
+    } else if (intentNow && !BOOKING_INTENTS.has(intentNow)) {
+      console.log("🔓 [META] booking: lock liberado porque intent no es de booking", {
+        bookingStepNow,
+        intentNow,
+      });
+      inBookingNow = false;
+
+      if ((convoCtx as any)?.booking) {
+        (convoCtx as any).booking = {
+          ...(convoCtx as any).booking,
+          step: "idle",
+        };
+      }
     }
   }
 
