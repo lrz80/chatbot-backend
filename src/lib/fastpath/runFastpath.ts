@@ -1974,7 +1974,26 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ✅ VARIANTES: SEGUNDO TURNO
   // El usuario ya vio las opciones y ahora elige una (1, "autopay", etc.)
   // ===============================
-  if (convoCtx.expectingVariant && convoCtx.selectedServiceId) {
+  const msgNorm = normalizeText(userInput);
+  const isShortVariantSelection =
+    /^([1-9])$/.test(msgNorm) ||
+    msgNorm.length <= 24;
+
+  const hasVariantSelectionContext =
+    Boolean(convoCtx.expectingVariant) ||
+    Boolean(
+      convoCtx.selectedServiceId &&
+      (
+        convoCtx.last_service_id ||
+        convoCtx.last_service_name ||
+        convoCtx.last_variant_name ||
+        convoCtx.last_price_option_label ||
+        (Array.isArray(convoCtx.last_catalog_plans) && convoCtx.last_catalog_plans.length > 0) ||
+        (Array.isArray(convoCtx.pending_link_options) && convoCtx.pending_link_options.length > 0)
+      )
+    );
+
+  if (convoCtx.selectedServiceId && hasVariantSelectionContext && isShortVariantSelection) {
     const serviceId = String(convoCtx.selectedServiceId);
 
     // Traemos variantes del servicio
@@ -2005,8 +2024,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         } as Partial<FastpathCtx>,
       };
     }
-
-    const msgNorm = normalizeText(userInput);
 
     let chosen: any = null;
 
@@ -2727,6 +2744,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             last_variant_name: null,
             last_variant_url: null,
             last_variant_at: null,
+
+            last_variant_options: variants.map((v: any, idx: number) => ({
+              index: idx + 1,
+              id: String(v.id || ""),
+              name: String(v.variant_name || "").trim(),
+              url: v.variant_url ? String(v.variant_url).trim() : null,
+            })),
+            last_variant_options_at: Date.now(),
           } as Partial<FastpathCtx>,
         };
       }
@@ -3268,6 +3293,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               "- NO puedes mezclar este servicio con otros del catálogo.",
               "- Si mencionas el precio, debe corresponder únicamente al servicio/variante resuelto.",
               "- Redacta de forma natural, humana, breve y comercial para WhatsApp.",
+              "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
               "",
               "CONTINUIDAD_CONVERSACIONAL:",
               "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
@@ -3341,6 +3367,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               "- NO puedes cambiar a otros servicios del catálogo.",
               "- Debes responder SOLO sobre este servicio.",
               "- Si no hay precio disponible, dilo de forma natural y breve sin asumir la causa.",
+              "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
               "",
               "CONTINUIDAD_CONVERSACIONAL:",
               "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
@@ -3401,6 +3428,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 "- NO puedes inventar montos, rangos ni precios aproximados.",
                 "- NO puedes mencionar otros servicios como alternativa de precio, a menos que el usuario los pida.",
                 "- Responde de forma natural, útil y comercial, manteniéndote en el servicio resuelto.",
+                "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
                 "",
                 "CONTINUIDAD_CONVERSACIONAL:",
                 "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
@@ -3462,6 +3490,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               "- NO puedes mezclar este servicio con otros del catálogo.",
               "- Si mencionas el precio, debe corresponder únicamente al servicio resuelto.",
               "- Redacta de forma natural, humana, breve y comercial para WhatsApp.",
+              "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
               "",
               "CONTINUIDAD_CONVERSACIONAL:",
               "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
@@ -3563,6 +3592,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           "- NO puedes resumir varios bullets en uno solo.",
           "- SOLO puedes suavizar el encabezado o la línea final.",
           "- Si no puedes mejorar sin alterar el contenido, devuelve el CATALOGO_DB_CANONICO tal cual.",
+          "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
           "",
           "CONTINUIDAD_CONVERSACIONAL:",
           "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
