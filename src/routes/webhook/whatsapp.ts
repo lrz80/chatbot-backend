@@ -800,6 +800,73 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   });
 
   // ===============================
+  // 🧹 RESET de selección vieja si entra una intención nueva clara
+  // SIN usar detectedInterest ni regex de vertical
+  // ===============================
+  {
+    const intentNow = INTENCION_FINAL_CANONICA || detectedIntent || null;
+
+    const hasStaleSelectionContext =
+      Boolean((convoCtx as any)?.expectingVariant) ||
+      Boolean((convoCtx as any)?.selectedServiceId) ||
+      Boolean((convoCtx as any)?.last_plan_list?.length) ||
+      Boolean((convoCtx as any)?.last_package_list?.length) ||
+      Boolean((convoCtx as any)?.pending_link_lookup) ||
+      Boolean((convoCtx as any)?.last_service_id) ||
+      Boolean((convoCtx as any)?.structuredService);
+
+    const NEW_INTENT_RESET_SET = new Set<string>([
+      "agendar",
+      "booking_start",
+      "info_servicio",
+      "precio",
+      "planes_precios",
+    ]);
+
+    const normalizedInput = String(userInput || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .trim();
+
+    const looksLikeSelectionReply =
+      /^[1-9]$/.test(normalizedInput) ||
+      /^(si|sí|yes|ok|okay|dale|claro|esa|ese|la primera|el primero|that one|the first)$/i.test(normalizedInput);
+
+    if (
+      intentNow &&
+      NEW_INTENT_RESET_SET.has(intentNow) &&
+      hasStaleSelectionContext &&
+      !looksLikeSelectionReply
+    ) {
+      (convoCtx as any).expectingVariant = false;
+      (convoCtx as any).selectedServiceId = null;
+
+      (convoCtx as any).last_plan_list = null;
+      (convoCtx as any).last_plan_list_at = null;
+
+      (convoCtx as any).last_package_list = null;
+      (convoCtx as any).last_package_list_at = null;
+
+      (convoCtx as any).last_list_kind = null;
+      (convoCtx as any).last_list_kind_at = null;
+
+      (convoCtx as any).pending_link_lookup = null;
+      (convoCtx as any).pending_link_at = null;
+      (convoCtx as any).pending_link_options = null;
+
+      (convoCtx as any).last_service_id = null;
+      (convoCtx as any).last_service_name = null;
+      (convoCtx as any).last_service_label = null;
+
+      (convoCtx as any).last_entity_kind = null;
+      (convoCtx as any).last_entity_at = null;
+
+      (convoCtx as any).structuredService = null;
+    }
+  }
+
+  // ===============================
   // ✅ PENDING CTA ACCEPTANCE
   // ===============================
   {
