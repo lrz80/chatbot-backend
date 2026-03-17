@@ -29,7 +29,6 @@ function scoreLabelVsText(label: string, userText: string) {
   let inter = 0;
   for (const t of a) if (b.has(t)) inter++;
 
-  // Jaccard
   const union = a.size + b.size - inter;
   return union ? inter / union : 0;
 }
@@ -48,7 +47,6 @@ export async function resolveBestLinkForService(args: {
     userText,
   });
 
-  // 1) Cargar service_url (pero NO devolverlo todavía)
   const s = await pool.query(
     `
     SELECT NULLIF(TRIM(COALESCE(service_url,'')), '') AS service_url
@@ -64,7 +62,6 @@ export async function resolveBestLinkForService(args: {
     serviceUrl,
   });
 
-  // 2) variant_url(s)  ✅ multitenant-safe
   const v = await pool.query(
     `
     SELECT
@@ -90,86 +87,88 @@ export async function resolveBestLinkForService(args: {
     }))
     .filter((o) => o.url);
 
-  // ✅ Si hay variantes con URL, intentamos usarla primero
   if (options.length) {
-    // Si solo hay 1, listo
     if (options.length === 1) return { ok: true, url: options[0].url };
 
     const t = String(userText || "").trim();
+
     if (t) {
-      // Pick por similitud label<->texto
-      const scored = options
-        .map((o) => ({ ...o, score: scoreLabelVsText(o.label, t) }))
-        .sort((a, b) => b.score - a.score);
+      // 🚫 Si el input es solo un número, este resolver NO debe decidir.
+      // El número pertenece al flujo conversacional superior.
+      const isPureNumber = /^[1-9]$/.test(t);
 
-      const best = scored[0];
-      const second = scored[1];
+      if (isPureNumber) {
+        console.log("🔗 [LINK-RESOLVER] skip scoring for pure numeric input");
+      } else {
+        const scored = options
+          .map((o) => ({ ...o, score: scoreLabelVsText(o.label, t) }))
+          .sort((a, b) => b.score - a.score);
 
-      console.log("🔗 [LINK-RESOLVER] scored options", {
-        scored,
-        best,
-        second,
-      });
+        const best = scored[0];
+        const second = scored[1];
 
-      // Umbrales (genéricos): debe haber match decente y no ser empate
-      const strongEnough = best.score >= 0.40; // ajustable
-      const clearlyBetter = !second || best.score - second.score >= 0.12;
+        console.log("🔗 [LINK-RESOLVER] scored options", {
+          scored,
+          best,
+          second,
+        });
 
-      // Caso 1: coincidencia clara => variante específica
-      if (strongEnough && clearlyBetter) {
-        console.log("🔗 [LINK-RESOLVER] strong match -> best.variant", {
+        const strongEnough = best.score >= 0.40;
+        const clearlyBetter = !second || best.score - second.score >= 0.12;
+
+        if (strongEnough && clearlyBetter) {
+          console.log("🔗 [LINK-RESOLVER] strong match -> best.variant", {
+            url: best.url,
+          });
+          return { ok: true, url: best.url };
+        }
+
+        if (serviceUrl) {
+          console.log("🔗 [LINK-RESOLVER] ambiguous but has serviceUrl -> fallback service", {
+            url: serviceUrl,
+          });
+          return { ok: true, url: serviceUrl };
+        }
+
+        const bestScore = Number(best?.score || 0);
+        const secondScore = Number(second?.score || 0);
+
+        if (bestScore <= 0 || bestScore === secondScore) {
+          console.log("🔗 [LINK-RESOLVER] ambiguous -> ask variant", {
+            options,
+          });
+
+          return {
+            ok: false,
+            reason: "ambiguous",
+            options,
+          };
+        }
+
+        console.log("🔗 [LINK-RESOLVER] weak but usable match -> best.variant", {
           url: best.url,
         });
+
         return { ok: true, url: best.url };
       }
-
-      // Caso 2: ambigüedad pero el servicio tiene service_url genérico
-      if (serviceUrl) {
-        console.log("🔗 [LINK-RESOLVER] ambiguous but has serviceUrl -> fallback service", {
-          url: serviceUrl,
-        });
-        return { ok: true, url: serviceUrl };
-      }
-
-      // 🚨 Caso 3: ambigüedad real y NO hay service_url
-      const bestScore = Number(best?.score || 0);
-      const secondScore = Number(second?.score || 0);
-
-      if (bestScore <= 0 || bestScore === secondScore) {
-        console.log("🔗 [LINK-RESOLVER] ambiguous -> ask variant", {
-          options,
-        });
-
-        return {
-          ok: false,
-          reason: "ambiguous",
-          options,
-        };
-      }
-
-      // si no es empate y hay leve señal, usamos la mejor
-      console.log("🔗 [LINK-RESOLVER] weak but usable match -> best.variant", {
-        url: best.url,
-      });
-
-      return { ok: true, url: best.url };
     }
 
-    // ===========================
-    // Sin userText:
-    // ===========================
+    // Sin texto útil o con input numérico:
+    // NO adivinamos variante aquí.
     if (serviceUrl) {
-      console.log("🔗 [LINK-RESOLVER] no variants, using serviceUrl", {
+      console.log("🔗 [LINK-RESOLVER] fallback serviceUrl", {
         url: serviceUrl,
       });
       return { ok: true, url: serviceUrl };
     }
 
-    // sin service_url: usar la primera variante como fallback
-    return { ok: true, url: options[0].url };
+    return {
+      ok: false,
+      reason: "ambiguous",
+      options,
+    };
   }
 
-  // 3) Sin variantes -> usar service_url si existe
   if (serviceUrl) return { ok: true, url: serviceUrl };
 
   console.log("🔗 [LINK-RESOLVER] no link found at all");
