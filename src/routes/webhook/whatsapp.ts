@@ -189,29 +189,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     .replace(/\s+/g, " ")
     .trim();
 
-  const isChoosingFromCtxLists = (ctx: any, userText: string) => {
-    const u = normalizeChoice(userText);
-    if (!u) return false;
-
-    const candidates: Array<{ name?: string; label?: string; text?: string }> = [
-      ...((ctx?.last_plan_list || []) as any[]),
-      ...((ctx?.last_package_list || []) as any[]),
-      ...((ctx?.last_service_list || []) as any[]),
-      ...((ctx?.pending_link_options || []) as any[]), // ✅ importante para tu flujo ambiguous
-    ];
-
-    if (!candidates.length) return false;
-
-    // Si el user manda "1" o "2" para escoger
-    if (/^[1-9]$/.test(u)) return true;
-
-    return candidates.some((it) => {
-      const n = normalizeChoice(it?.name || it?.label || it?.text || "");
-      if (!n) return false;
-      return n.includes(u) || u.includes(n);
-    });
-  };
-
   const origen = turn.origen;
 
   const numero = turn.numero;
@@ -219,43 +196,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
   const fromNumber = turn.fromNumber;
   const contactoNorm = turn.contactoNorm;
-
-  // ===============================
-  // 🛡️ GATE ANTI-DUPLICADOS (texto + contacto + tenant)
-  // ===============================
-  {
-    const text = String(userInput || "").trim();
-    const contactKey = String(contactoNorm || fromNumber || numero || "").trim();
-
-    if (tenant && text && contactKey) {
-      const normalize = (s: string) =>
-        String(s || "")
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .toLowerCase()
-          .replace(/\s+/g, " ")
-          .trim();
-
-      const normText = normalize(text);
-      const key = `${tenant.id}:${canal}:${contactKey}:${normText}`;
-
-      const now = Date.now();
-      const ttlMs = 15_000; // ventana de 15s para evitar reintentos de Twilio
-
-      const last = inboundDedupCache.get(key);
-
-      if (typeof last === "number" && now - last >= 0 && now - last < ttlMs) {
-        console.log("🚫 inbound dedupe: mensaje duplicado reciente, se omite procesamiento", {
-          key,
-          diffMs: now - last,
-        });
-        // No seguimos con fastpath / LLM / Twilio send
-        return;
-      }
-
-      inboundDedupCache.set(key, now);
-    }
-  }
 
   if (messageId) {
     console.log("A1 antes dedupe interactions");
@@ -421,6 +361,72 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   let activeFlow = st.active_flow || "generic_sales";
   let activeStep = st.active_step || "start";
   let convoCtx = (st.context && typeof st.context === "object") ? st.context : {};
+
+  // ===============================
+  // 🛡️ GATE ANTI-DUPLICADOS (texto + contacto + tenant)
+  // ✅ contextual: no bloquea picks cortos entre pasos distintos
+  // ===============================
+  {
+    const text = String(userInput || "").trim();
+    const contactKey = String(contactoNorm || fromNumber || numero || "").trim();
+
+    if (tenant && text && contactKey) {
+      const normalize = (s: string) =>
+        String(s || "")
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim();
+
+      const normText = normalize(text);
+
+      // respuestas cortas reutilizables en flujos distintos:
+      // 1, 2, si, ok, por mes, autopago, etc.
+      const tokenCount = normText.split(/\s+/).filter(Boolean).length;
+
+      const isReusableShortReply =
+        /^[1-9]$/.test(normText) ||
+        tokenCount <= 2;
+
+      // fingerprint del paso actual para no confundir:
+      // "1" en elegir plan != "1" en elegir variante != "1" en elegir link
+      const dedupeStepFingerprint = [
+        String(activeFlow || ""),
+        String(activeStep || ""),
+        String((convoCtx as any)?.last_bot_action || ""),
+        Boolean((convoCtx as any)?.pending_link_lookup) ? "pending_link" : "",
+        Boolean((convoCtx as any)?.expectingVariant) ? "expecting_variant" : "",
+        String((convoCtx as any)?.selectedServiceId || ""),
+        String((convoCtx as any)?.last_service_id || ""),
+        String((convoCtx as any)?.last_variant_id || ""),
+        String((convoCtx as any)?.last_selected_id || ""),
+      ]
+        .filter(Boolean)
+        .join("|");
+
+      const key = isReusableShortReply
+        ? `${tenant.id}:${canal}:${contactKey}:${normText}:${dedupeStepFingerprint}`
+        : `${tenant.id}:${canal}:${contactKey}:${normText}`;
+
+      const now = Date.now();
+      const ttlMs = 15_000; // ventana de 15s para evitar reintentos reales
+
+      const last = inboundDedupCache.get(key);
+
+      if (typeof last === "number" && now - last >= 0 && now - last < ttlMs) {
+        console.log("🚫 inbound dedupe: mensaje duplicado reciente, se omite procesamiento", {
+          key,
+          diffMs: now - last,
+          isReusableShortReply,
+          dedupeStepFingerprint,
+        });
+        return;
+      }
+
+      inboundDedupCache.set(key, now);
+    }
+  }
 
   // Guarda el ctx original antes de pasar por resolveLangForTurn
   const convoCtxBeforeLang = convoCtx;
