@@ -62,6 +62,7 @@ import { queryWithTimeout } from "../../lib/dbQuery";
 import {
   resolveServiceCandidatesFromText,
 } from "../../lib/services/pricing/resolveServiceIdFromText";
+import { stripMarkdownLinksForDm } from "../../lib/channels/format/stripMarkdownLinks";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -1893,7 +1894,9 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       tenantBase
     );
 
-    setReply(finalFallbackText, "sm-fallback");
+    const finalFallbackTextClean = stripMarkdownLinksForDm(finalFallbackText);
+
+    setReply(finalFallbackTextClean, "sm-fallback");
     await finalizeReply();
     return;
   }

@@ -73,6 +73,7 @@ import {
 import {
   cancelPendingFollowUps,
 } from "../../lib/followups/followUpScheduler";
+import { stripMarkdownLinksForDm } from "../../lib/channels/format/stripMarkdownLinks";
 
 type CanalEnvio = "facebook" | "instagram";
 
@@ -1922,8 +1923,14 @@ async function procesarMensajeMeta(args: {
       });
     }
 
-    const finalFallbackText = await ensureReplyLanguage(composed.text, idiomaDestino);
-    setReply(finalFallbackText, "sm-fallback");
+    const finalFallbackText = await ensureReplyLanguage(
+      composed.text,
+      idiomaDestino
+    );
+
+    const finalFallbackTextClean = stripMarkdownLinksForDm(finalFallbackText);
+
+    setReply(finalFallbackTextClean, "sm-fallback");
     await finalizeReply();
     return;
   }
