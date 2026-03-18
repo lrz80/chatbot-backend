@@ -360,7 +360,11 @@ export async function handleFastpathHybridTurn(
       currentIntent === "precio" ||
       currentIntent === "planes_precios"
     ) &&
-    catalogReferenceClassification.kind !== "catalog_overview";
+    (
+      catalogReferenceClassification.kind === "entity_specific" ||
+      catalogReferenceClassification.kind === "referential_followup" ||
+      catalogReferenceClassification.kind === "variant_specific"
+    );
 
   // IMPORTANTE:
   // Aunque ya exista un servicio previo en convoCtx, igual intentamos resolver
