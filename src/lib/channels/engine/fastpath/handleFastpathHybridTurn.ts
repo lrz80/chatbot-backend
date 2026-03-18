@@ -7,7 +7,10 @@ import { runFastpath } from "../../../fastpath/runFastpath";
 import { naturalizeSecondaryOptionsLine } from "../../../fastpath/naturalizeSecondaryOptions";
 import { getRecentHistoryForModel } from "../messages/getRecentHistoryForModel";
 import { answerWithPromptBase } from "../../../answers/answerWithPromptBase";
-import { resolveServiceIdFromText } from "../../../services/pricing/resolveServiceIdFromText";
+import {
+  resolveServiceIdFromText,
+  resolveServiceCandidatesFromText,
+} from "../../../services/pricing/resolveServiceIdFromText";
 import { stripMarkdownLinksForDm } from "../../format/stripMarkdownLinks";
 
 const MAX_WHATSAPP_LINES = 9999; // mantenemos el mismo valor
@@ -50,6 +53,66 @@ function firstNonEmptyString(...values: any[]): string | null {
     if (v) return v;
   }
   return null;
+}
+
+function normalizeLoose(raw: string): string {
+  return String(raw || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeLoose(raw: string): string[] {
+  const STOP = new Set([
+    "de","del","la","el","los","las","un","una","unos","unas",
+    "para","por","en","y","o","u","a","que","q","este","esta",
+    "ese","esa","esto","eso","le","lo","al","como","con","sin",
+    "sobre","mi","tu","su","me","te","se",
+    "hola","buenas","buenos","dias","dia","tardes","noches",
+    "what","which","do","does","you","your","the","a","an","and",
+    "or","to","for","in","of","with","without","about","my",
+    "services","service","servicios","servicio",
+    "offer","offers","offering","ofrecen","ofrece","tienen","tiene"
+  ]);
+
+  return normalizeLoose(raw)
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .filter((t) => t.length >= 2 && !STOP.has(t));
+}
+
+function looksLikeConcreteServiceTurn(params: {
+  userInput: string;
+  detectedIntent: string | null;
+  intentFallback: string | null;
+  resolvedCandidates?: Array<{ score?: number; name?: string }> | null;
+}): boolean {
+  const { userInput, detectedIntent, intentFallback, resolvedCandidates } = params;
+
+  const finalIntent = detectedIntent || intentFallback || null;
+
+  if (finalIntent === "precio" || finalIntent === "planes_precios") {
+    return true;
+  }
+
+  const meaningfulTokens = tokenizeLoose(userInput);
+
+  // Si después de quitar saludos/ruido/catálogo general no quedan tokens útiles,
+  // no es turno para resolver servicio específico.
+  if (meaningfulTokens.length === 0) return false;
+
+  // Si solo queda 1 token útil y además no hay candidatos fuertes,
+  // tampoco lo tratamos como entidad concreta.
+  const topScore = Number(resolvedCandidates?.[0]?.score || 0);
+  if (meaningfulTokens.length === 1 && topScore < 0.45) {
+    return false;
+  }
+
+  return true;
 }
 
 function getStructuredServiceSelection(ctxPatch: any, convoCtx: any) {
@@ -249,7 +312,9 @@ export async function handleFastpathHybridTurn(
   // ============================================
   const preResolvedCtxPatch: any = {};
 
-  const shouldTryPreResolveService =
+  // Solo intentamos pre-resolver entidad cuando el turno parece
+  // realmente sobre un servicio concreto, no sobre catálogo general.
+  const shouldTryPreResolveServiceBase =
     currentIntent === "info_servicio" ||
     currentIntent === "precio" ||
     currentIntent === "planes_precios";
@@ -261,19 +326,29 @@ export async function handleFastpathHybridTurn(
   let explicitResolvedServiceId: string | null = null;
   let explicitResolvedServiceName: string | null = null;
 
-  if (shouldTryPreResolveService) {
+  let shouldTryPreResolveService = false;
+
+  if (shouldTryPreResolveServiceBase) {
     try {
-      const preResolved = await resolveServiceIdFromText(
+      const candidateResult = await resolveServiceCandidatesFromText(
         pool,
         tenantId,
         userInput,
         { mode: "loose" }
       );
 
-      if (preResolved?.id) {
+      shouldTryPreResolveService = looksLikeConcreteServiceTurn({
+        userInput,
+        detectedIntent: currentIntent,
+        intentFallback,
+        resolvedCandidates: candidateResult?.candidates || [],
+      });
+
+      if (shouldTryPreResolveService && candidateResult?.hit?.id) {
         explicitServiceResolved = true;
-        explicitResolvedServiceId = String(preResolved.id);
-        explicitResolvedServiceName = String(preResolved.name || "").trim() || null;
+        explicitResolvedServiceId = String(candidateResult.hit.id);
+        explicitResolvedServiceName =
+          String(candidateResult.hit.name || "").trim() || null;
 
         preResolvedCtxPatch.last_service_id = explicitResolvedServiceId;
         preResolvedCtxPatch.last_service_name = explicitResolvedServiceName;
@@ -290,17 +365,21 @@ export async function handleFastpathHybridTurn(
           contactoNorm,
           userInput,
           intent: currentIntent,
+          shouldTryPreResolveService,
           explicitServiceResolved,
           serviceId: explicitResolvedServiceId,
           serviceName: explicitResolvedServiceName,
+          candidates: candidateResult?.candidates || [],
         });
       } else {
-        console.log("[FASTPATH_HYBRID][PRE_RESOLVE_SERVICE] no match", {
+        console.log("[FASTPATH_HYBRID][PRE_RESOLVE_SERVICE] skipped_or_no_match", {
           tenantId,
           canal,
           contactoNorm,
           userInput,
           intent: currentIntent,
+          shouldTryPreResolveService,
+          candidates: candidateResult?.candidates || [],
         });
       }
     } catch (e: any) {
