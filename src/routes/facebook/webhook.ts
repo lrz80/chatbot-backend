@@ -1839,13 +1839,50 @@ async function procesarMensajeMeta(args: {
         canUseOfficialLinks: true,
         unresolvedEntity: !hasResolvedEntity,
         clarificationTarget: hasResolvedEntity ? null : "service",
+
+        singleResolvedEntityOnly: hasResolvedEntity,
+        allowAlternativeEntities: false,
+        allowCrossSellEntities: false,
+        allowAddOnSuggestions: false,
+
         reasoningNotes: "meta_sm_fallback",
       },
     });
 
-    if (validServiceNames.length > 0) {
-      const normalizedReply = String(composed.text || "").toLowerCase();
+    const normalizedReply = String(composed.text || "").toLowerCase();
 
+    if (hasResolvedEntity && resolvedEntityLabel) {
+      const resolvedNameNorm = String(resolvedEntityLabel).toLowerCase();
+      const mentionsResolvedEntity = normalizedReply.includes(resolvedNameNorm);
+
+      const mentionsOtherValidService =
+        validServiceNames.length > 0 &&
+        validServiceNames.some((name) => {
+          const n = String(name || "").toLowerCase();
+          return n !== resolvedNameNorm && normalizedReply.includes(n);
+        });
+
+      if (!mentionsResolvedEntity || mentionsOtherValidService) {
+        console.log("[META][SM_FALLBACK][ENTITY_LOCK_VIOLATION_BLOCKED]", {
+          tenantId,
+          canal: canalEnvio,
+          userInput,
+          resolvedEntityId,
+          resolvedEntityLabel,
+          replyPreview: String(composed.text || "").slice(0, 240),
+          validServiceNames,
+        });
+
+        const clarificationText =
+          idiomaDestino === "en"
+            ? `I recommend ${resolvedEntityLabel}. I can also tell you the price or what it includes.`
+            : `Te recomiendo ${resolvedEntityLabel}. También te puedo decir el precio o lo que incluye.`;
+
+        setReply(clarificationText, "sm-fallback-entity-lock-blocked", "info_servicio");
+        await finalizeReply();
+        return;
+      }
+    } else if (validServiceNames.length > 0) {
       const matchedValidName = validServiceNames.find((name) =>
         normalizedReply.includes(name.toLowerCase())
       );
