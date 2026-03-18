@@ -3278,22 +3278,27 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       // 1) Pregunta de combinación, aunque no diga "precio"
       if (isCombinationIntent) {
         questionType = "combination_and_price";
-      }
-      // 2) Pregunta explícita de "otros planes"
-      else if (isAskingOtherCatalogOptions) {
+      } else if (isAskingOtherCatalogOptions) {
         questionType = "other_plans";
-      }
-      // 3) Si el clasificador ya dijo overview, tratamos esto como catálogo plural
-      else if (isCatalogOverviewTurn) {
+      } else if (isCatalogOverviewTurn) {
         questionType = "price_or_plan";
-      }
-      // 4) Resto: preguntas normales de precio/plan
-      else {
+      } else if (isCatalogFamilyTurn) {
+        questionType = "price_or_plan";
+      } else {
         questionType = "price_or_plan";
       }
 
       if (isCatalogOverviewTurn) {
         console.log("[CATALOG_OVERVIEW][RUN_FASTPATH]", {
+          userInput,
+          questionType,
+          detectedIntent,
+          catalogReferenceKind: catalogReferenceClassification?.kind ?? "none",
+        });
+      }
+
+      if (isCatalogFamilyTurn) {
+        console.log("[CATALOG_FAMILY][RUN_FASTPATH]", {
           userInput,
           questionType,
           detectedIntent,
