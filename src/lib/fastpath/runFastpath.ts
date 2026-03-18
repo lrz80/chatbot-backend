@@ -2588,7 +2588,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     ) &&
     !looksLikeExplicitDetail;
 
-  if (looksLikeServiceDetail && !looksLikeEllipticPriceFollowup) {
+  if (
+    !isCatalogOverviewTurn &&
+    looksLikeServiceDetail &&
+    !looksLikeEllipticPriceFollowup
+  ) {
     // =========================================================
     // ✅ PRIORIDAD: si el usuario pregunta "qué incluye" y ya
     // venimos de una variante concreta reciente, responder ESA
