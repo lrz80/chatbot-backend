@@ -64,6 +64,9 @@ import {
 } from "../../lib/services/pricing/resolveServiceIdFromText";
 import { stripMarkdownLinksForDm } from "../../lib/channels/format/stripMarkdownLinks";
 
+import { buildCatalogReferenceClassificationInput } from "../../lib/catalog/buildCatalogReferenceClassificationInput";
+import { classifyCatalogReferenceTurn } from "../../lib/catalog/classifyCatalogReferenceTurn";
+
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
   tenant?: any;
@@ -758,6 +761,26 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     last_catalog_plans: (convoCtx as any)?.last_catalog_plans || null,
   });
 
+  const whatsappCatalogReferenceClassificationInput =
+    buildCatalogReferenceClassificationInput({
+      userText: event.userInput,
+      convoCtx,
+    });
+
+  const whatsappCatalogReferenceClassification =
+    classifyCatalogReferenceTurn(
+      whatsappCatalogReferenceClassificationInput
+    );
+
+  console.log("[WHATSAPP][CATALOG_REFERENCE_CLASSIFIER]", {
+    tenantId: event.tenantId,
+    canal: "whatsapp",
+    contactoNorm,
+    userInput: event.userInput,
+    classificationInput: whatsappCatalogReferenceClassificationInput,
+    classification: whatsappCatalogReferenceClassification,
+  });
+
   // ===============================
   // 🧹 RESET de selección vieja si entra una intención nueva clara
   // SIN usar detectedInterest ni regex de vertical
@@ -1222,6 +1245,12 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // ✅ FALLBACK ÚNICO (solo si SM no respondió)
   // ===============================
   if (!replied) {
+    const catalogReferenceKind =
+      whatsappCatalogReferenceClassification?.kind ?? "none";
+
+    const shouldBlockConcreteServiceFallback =
+      catalogReferenceKind === "catalog_overview" ||
+      catalogReferenceKind === "catalog_family";
 
     if (await tryBooking("guardrail", "sm_fallback")) return;
 
@@ -1288,9 +1317,19 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       hasResolvedEntity,
     });
 
+    if (shouldBlockConcreteServiceFallback && !hasResolvedEntity) {
+      console.log("[WHATSAPP][SM_FALLBACK][BLOCK_CONCRETE_SERVICE_RECOMMENDATION]", {
+        tenantId: event.tenantId,
+        canal: "whatsapp",
+        userInput: event.userInput,
+        catalogReferenceKind,
+      });
+    }
+
     if (
       (INTENCION_FINAL_CANONICA === "info_servicio" || detectedIntent === "info_servicio") &&
-      !hasResolvedEntity
+      !hasResolvedEntity &&
+      !shouldBlockConcreteServiceFallback
     ) {
       const resolved = await resolveServiceCandidatesFromText(
         pool,
@@ -1624,9 +1663,35 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     let serviceRecommendationBlock = "";
     let validServiceNames: string[] = [];
 
-    if (
+    const nonConcreteClarificationBlock =
+      shouldBlockConcreteServiceFallback &&
       (INTENCION_FINAL_CANONICA === "info_servicio" || detectedIntent === "info_servicio") &&
       !hasResolvedEntity
+        ? idiomaDestino === "en"
+          ? [
+              "STRICT TURN RULES:",
+              "- Do NOT recommend or assume one specific service.",
+              "- Do NOT select a concrete catalog item.",
+              "- Do NOT mention a specific service name unless the user clearly selected one before.",
+              "- Ask ONE short clarification question only.",
+              "- The clarification must help narrow the user's need, not force a booking.",
+              "- Do NOT use numbered menus.",
+            ].join("\n")
+          : [
+              "REGLAS ESTRICTAS DEL TURNO:",
+              "- No recomiendes ni asumas un servicio específico.",
+              "- No selecciones un ítem concreto del catálogo.",
+              "- No menciones un nombre de servicio específico a menos que el usuario ya lo haya elegido claramente antes.",
+              "- Haz UNA sola pregunta corta de aclaración.",
+              "- La aclaración debe ayudar a precisar la necesidad del usuario, no forzar una reserva.",
+              "- No uses menús numerados.",
+            ].join("\n")
+        : "";
+
+    if (
+      (INTENCION_FINAL_CANONICA === "info_servicio" || detectedIntent === "info_servicio") &&
+      !hasResolvedEntity &&
+      !shouldBlockConcreteServiceFallback
     ) {
       const { rows: serviceRows } = await pool.query<{
         service_id: string;
@@ -1730,6 +1795,8 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         promptBaseMem,
         "",
         serviceRecommendationBlock,
+        "",
+        nonConcreteClarificationBlock,
         "",
         NO_NUMERIC_MENUS,
         PRICE_QUALIFIER_RULE,
