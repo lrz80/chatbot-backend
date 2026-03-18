@@ -672,6 +672,24 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   const intentOut = (detectedIntent || "").trim() || null;
 
+  const catalogReferenceKind =
+    catalogReferenceClassification?.kind ?? "none";
+
+  const isCatalogOverviewTurn =
+    catalogReferenceKind === "catalog_overview";
+
+  const isCatalogFamilyTurn =
+    catalogReferenceKind === "catalog_family";
+
+  const isEntitySpecificTurn =
+    catalogReferenceKind === "entity_specific";
+
+  const isVariantSpecificTurn =
+    catalogReferenceKind === "variant_specific";
+
+  const isReferentialFollowupTurn =
+    catalogReferenceKind === "referential_followup";
+
   // ===============================
   // ✅ MULTI-QUESTION SPLIT + ANSWER
   // Ahora basado en frames neutrales:
@@ -3135,9 +3153,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // 🧠 MOTOR ÚNICO DE CATÁLOGO
   // ===============================
     {
-    const isCatalogOverviewTurn =
-      catalogReferenceClassification?.kind === "catalog_overview";
-
     const isCombinationIntent =
       q.includes("combinar") ||
       q.includes("mezclar") ||
