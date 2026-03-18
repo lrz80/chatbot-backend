@@ -195,7 +195,7 @@ export function classifyCatalogReferenceTurn(
     return result;
   }
 
-  if (!hasAnyContext && tokenCount >= 7) {
+  if (!hasAnyContext && tokenCount >= 6) {
     notes.push("no_prior_context");
     notes.push("long_turn_without_context");
     notes.push("default_to_catalog_family_for_concrete_request_without_anchor");
