@@ -13,6 +13,9 @@ import {
 } from "../../../services/pricing/resolveServiceIdFromText";
 import { stripMarkdownLinksForDm } from "../../format/stripMarkdownLinks";
 
+import { buildCatalogReferenceClassificationInput } from "../../../catalog/buildCatalogReferenceClassificationInput";
+import { classifyCatalogReferenceTurn } from "../../../catalog/classifyCatalogReferenceTurn";
+
 const MAX_WHATSAPP_LINES = 9999; // mantenemos el mismo valor
 
 export type FastpathHybridArgs = {
@@ -270,6 +273,27 @@ export async function handleFastpathHybridTurn(
   // Intención “final” de este turno (signals)
   const currentIntent = (detectedIntent || intentFallback || null) ?? null;
 
+    const catalogReferenceClassificationInput =
+    buildCatalogReferenceClassificationInput({
+      userText: userInput,
+      convoCtx,
+    });
+
+  const catalogReferenceClassification = classifyCatalogReferenceTurn(
+    catalogReferenceClassificationInput
+  );
+
+  console.log("[CATALOG_REFERENCE_CLASSIFIER]", {
+    tenantId,
+    canal,
+    contactoNorm,
+    userInput,
+    detectedIntent,
+    intentFallback,
+    classificationInput: catalogReferenceClassificationInput,
+    classification: catalogReferenceClassification,
+  });
+  
   // Palabras clave generales de precios / planes / horarios
   const isPriceOrScheduleKeyword =
     /\b(precio|precios|price|prices|pricing|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates|horario|horarios|hora|hours?|schedule|schedules)\b/i
