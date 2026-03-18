@@ -42,6 +42,15 @@ function pickFirstStringArray(source: AnyRecord, keys: string[]): string[] {
   return [];
 }
 
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 function extractPresentedEntityIds(source: AnyRecord): string[] {
   const direct = pickFirstStringArray(source, [
     "lastPresentedEntityIds",
@@ -79,6 +88,21 @@ export function buildCatalogReferenceContext(
   convoCtx: unknown
 ): CatalogReferenceContext {
   const ctx = asRecord(convoCtx);
+
+  const now = Date.now();
+  const entityTtlMs = 10 * 60 * 1000;
+
+  const lastEntityAt = asNumber(
+    ctx["last_entity_at"] ??
+      ctx["lastEntityAt"] ??
+      ctx["last_service_at"] ??
+      ctx["lastServiceAt"]
+  );
+
+  const entityContextFresh =
+    Number.isFinite(lastEntityAt as number) &&
+    (lastEntityAt as number) > 0 &&
+    now - (lastEntityAt as number) <= entityTtlMs;
 
   const lastEntityId = pickFirstString(ctx, [
     "lastEntityId",
@@ -118,8 +142,8 @@ export function buildCatalogReferenceContext(
   ]);
 
   return {
-    lastEntityId,
-    lastEntityName: lastEntityId ? rawLastEntityName : null,
+    lastEntityId: entityContextFresh ? lastEntityId : null,
+    lastEntityName: entityContextFresh && lastEntityId ? rawLastEntityName : null,
     lastFamilyKey,
     lastPresentedEntityIds,
     lastPresentedFamilyKeys,
