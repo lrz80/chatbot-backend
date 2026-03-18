@@ -661,6 +661,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     infoClave,
     promptBase,
     detectedIntent,
+    catalogReferenceClassification,
     maxDisambiguationOptions = 5,
     lastServiceTtlMs = 60 * 60 * 1000,
   } = args;
@@ -3375,6 +3376,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         // Intenta resolver una referencia concreta antes de listar catálogo.
         // Si es follow-up elíptico de precio, reutiliza el último servicio.
         // =========================================================
+        const shouldSkipSinglePriceTargetResolution =
+          catalogReferenceClassification?.kind === "catalog_overview";
+
         const ellipticPriceFollowup = isEllipticPriceFollowup(userInput, convoCtx);
 
         const ctxServiceId =
@@ -3384,15 +3388,23 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         const ctxServiceName =
           String(convoCtx?.last_service_name || "").trim();
 
-        const singleHit =
-          ellipticPriceFollowup && ctxServiceId
-            ? {
-                id: ctxServiceId,
-                name: ctxServiceName,
-              }
-            : await resolveServiceIdFromText(pool, tenantId, userInput, {
-                mode: "loose",
-              });
+        const singleHit = shouldSkipSinglePriceTargetResolution
+          ? null
+          : ellipticPriceFollowup && ctxServiceId
+          ? {
+              id: ctxServiceId,
+              name: ctxServiceName,
+            }
+          : await resolveServiceIdFromText(pool, tenantId, userInput, {
+              mode: "loose",
+            });
+
+        if (shouldSkipSinglePriceTargetResolution) {
+          console.log("[PRICE][single] skipped_by_catalog_reference_classification", {
+            userInput,
+            catalogReferenceKind: catalogReferenceClassification?.kind ?? "none",
+          });
+        }
 
         console.log("[PRICE][single] resolve output", {
           userInput,
