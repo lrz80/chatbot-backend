@@ -759,8 +759,28 @@ export async function resolveServiceCandidatesFromText(
     const bestHasDominant = best.dominantOverlapCount > 0;
     const secondHasDominant = second.dominantOverlapCount > 0;
 
-    // Si el best sí matchea los tokens dominantes del turno
-    // y el second no, no es ambigüedad real: aceptamos best.
+    const bestCategoryNorm = normalizeLabel(best.cand.category || "");
+    const secondCategoryNorm = normalizeLabel(second.cand.category || "");
+
+    const bestTipoNorm = normalizeLabel(best.cand.tipo || "");
+    const secondTipoNorm = normalizeLabel(second.cand.tipo || "");
+
+    const sameFamily =
+      (!!bestCategoryNorm &&
+        !!secondCategoryNorm &&
+        bestCategoryNorm === secondCategoryNorm) ||
+      (!!bestTipoNorm &&
+        !!secondTipoNorm &&
+        bestTipoNorm === secondTipoNorm);
+
+    const strongExplicitEvidence =
+      best.exactNameHits >= 2 ||
+      best.exactCatalogHits >= 2 ||
+      best.dominantOverlapCount >= 2 ||
+      best.allOverlapTokens.length >= 2;
+
+    // Caso 1:
+    // best matchea tokens dominantes y second no -> aceptamos best
     if (bestHasDominant && !secondHasDominant) {
       console.log(
         "[RESOLVE-SERVICE] desempate por dominant query tokens, aceptando best",
@@ -788,6 +808,49 @@ export async function resolveServiceCandidatesFromText(
       };
     }
 
+    // Caso 2:
+    // En modo loose, si ambos candidatos pertenecen a la misma familia/categoría
+    // y el usuario dio evidencia explícita suficientemente fuerte,
+    // aceptamos best en vez de devolver null.
+    if (mode === "loose" && sameFamily && strongExplicitEvidence) {
+      console.log(
+        "[RESOLVE-SERVICE] empate dentro de la misma familia en modo loose, aceptando best",
+        {
+          userText,
+          best: {
+            label: best.cand.label,
+            score: best.score,
+            category: best.cand.category,
+            tipo: best.cand.tipo,
+            exactNameHits: best.exactNameHits,
+            exactCatalogHits: best.exactCatalogHits,
+            dominantOverlapTokens: best.dominantOverlapTokens,
+            allOverlapTokens: best.allOverlapTokens,
+          },
+          second: {
+            label: second.cand.label,
+            score: second.score,
+            category: second.cand.category,
+            tipo: second.cand.tipo,
+            exactNameHits: second.exactNameHits,
+            exactCatalogHits: second.exactCatalogHits,
+            dominantOverlapTokens: second.dominantOverlapTokens,
+            allOverlapTokens: second.allOverlapTokens,
+          },
+          sameFamily,
+          strongExplicitEvidence,
+          margin: Math.abs(best.score - second.score),
+          requiredMargin: MARGIN,
+        }
+      );
+
+      return {
+        hit: { id: best.cand.serviceId, name: best.cand.label },
+        ambiguous: false,
+        candidates: topCandidates,
+      };
+    }
+
     console.log(
       "[RESOLVE-SERVICE] empate entre best y second (margin pequeño), devolviendo null",
       {
@@ -795,13 +858,21 @@ export async function resolveServiceCandidatesFromText(
         best: {
           label: best.cand.label,
           score: best.score,
+          category: best.cand.category,
+          tipo: best.cand.tipo,
           dominantOverlapTokens: best.dominantOverlapTokens,
+          allOverlapTokens: best.allOverlapTokens,
         },
         second: {
           label: second.cand.label,
           score: second.score,
+          category: second.cand.category,
+          tipo: second.cand.tipo,
           dominantOverlapTokens: second.dominantOverlapTokens,
+          allOverlapTokens: second.allOverlapTokens,
         },
+        sameFamily,
+        strongExplicitEvidence,
         margin: Math.abs(best.score - second.score),
         requiredMargin: MARGIN,
       }
