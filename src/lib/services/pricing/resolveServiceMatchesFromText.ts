@@ -22,11 +22,13 @@ const FUNCTION_WORDS = new Set([
   "para","por","en","y","o","u","a","que","q","este","esta",
   "ese","esa","esto","eso","le","lo","al","como","con","sin",
   "sobre","mi","tu","su","me","te","se",
+  "hola","buenos","buenas","dias","dia","tardes","noches",
 
   // EN
   "the","a","an","and","or","to","for","in","of","what","does",
   "do","is","are","with","without","about","my","your","their",
   "me","you","it",
+  "hello","hi","morning","afternoon","evening",
 ]);
 
 // Tokens universales de ATRIBUTO de consulta.
@@ -37,8 +39,6 @@ const ATTRIBUTE_TOKENS = new Set([
   "precios",
   "cuanto",
   "cuanta",
-  "cuánto",
-  "cuánta",
   "cuesta",
   "cuestan",
   "vale",
@@ -51,6 +51,16 @@ const ATTRIBUTE_TOKENS = new Set([
   "meses",
   "mensualidad",
   "desde",
+
+  // ES general / disponibilidad
+  "horario",
+  "horarios",
+  "ofrecen",
+  "ofrece",
+  "tienen",
+  "tiene",
+  "disponible",
+  "disponibles",
 
   // EN pricing
   "price",
@@ -67,7 +77,18 @@ const ATTRIBUTE_TOKENS = new Set([
   "starting",
   "starts",
 
-  // universales de pregunta
+  // EN general / availability
+  "schedule",
+  "schedules",
+  "hours",
+  "offer",
+  "offers",
+  "have",
+  "has",
+  "available",
+  "availability",
+
+  // universales de consulta
   "what",
   "which",
   "quiero",
@@ -316,6 +337,18 @@ export async function resolveServiceMatchesFromText(
 
   if (!queryTokens.length) {
     console.log("[RESOLVE-SERVICE-MATCHES] sin tokens útiles, devolviendo []");
+    return [];
+  }
+
+  const discriminativeQueryTokens = queryTokens.filter(
+    (t) => !ATTRIBUTE_TOKENS.has(t) && !GENERIC_CATALOG_TOKENS.has(t)
+  );
+
+  if (!discriminativeQueryTokens.length) {
+    console.log("[RESOLVE-SERVICE-MATCHES] query general sin tokens discriminativos, devolviendo []", {
+      userText,
+      queryTokens,
+    });
     return [];
   }
 

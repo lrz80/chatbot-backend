@@ -71,11 +71,23 @@ function tokenizeLoose(raw: string): string[] {
     "para","por","en","y","o","u","a","que","q","este","esta",
     "ese","esa","esto","eso","le","lo","al","como","con","sin",
     "sobre","mi","tu","su","me","te","se",
+
     "hola","buenas","buenos","dias","dia","tardes","noches",
+
     "what","which","do","does","you","your","the","a","an","and",
     "or","to","for","in","of","with","without","about","my",
-    "services","service","servicios","servicio",
-    "offer","offers","offering","ofrecen","ofrece","tienen","tiene"
+
+    // términos genéricos de intención / catálogo, NO entidad
+    "servicios","servicio","services","service",
+    "ofrecen","ofrece","offer","offers","offering",
+    "tienen","tiene","have","has",
+
+    "precio","precios","price","prices","pricing",
+    "horario","horarios","schedule","schedules","hours","hour",
+    "plan","planes","membership","memberships",
+    "membresia","membresias","suscripcion","suscripciones",
+    "mensual","mensuales","monthly","month","months",
+    "paquete","paquetes","package","packages","bundle","bundles"
   ]);
 
   return normalizeLoose(raw)
@@ -95,24 +107,28 @@ function looksLikeConcreteServiceTurn(params: {
 
   const finalIntent = detectedIntent || intentFallback || null;
 
-  if (finalIntent === "precio" || finalIntent === "planes_precios") {
-    return true;
-  }
+  // Solo estos intents pueden intentar entidad concreta,
+  // pero NO la fuerzan por sí solos.
+  const intentAllowsEntityResolution =
+    finalIntent === "info_servicio" ||
+    finalIntent === "precio" ||
+    finalIntent === "planes_precios";
+
+  if (!intentAllowsEntityResolution) return false;
 
   const meaningfulTokens = tokenizeLoose(userInput);
+  const topScore = Number(resolvedCandidates?.[0]?.score || 0);
 
-  // Si después de quitar saludos/ruido/catálogo general no quedan tokens útiles,
-  // no es turno para resolver servicio específico.
+  // Si no quedan tokens semánticos concretos, es consulta general.
   if (meaningfulTokens.length === 0) return false;
 
-  // Si solo queda 1 token útil y además no hay candidatos fuertes,
-  // tampoco lo tratamos como entidad concreta.
-  const topScore = Number(resolvedCandidates?.[0]?.score || 0);
-  if (meaningfulTokens.length === 1 && topScore < 0.45) {
-    return false;
+  // Con 1 token útil, exigimos señal fuerte.
+  if (meaningfulTokens.length === 1) {
+    return topScore >= 0.55;
   }
 
-  return true;
+  // Con 2+ tokens útiles, aceptamos si hay candidato razonable.
+  return topScore >= 0.30;
 }
 
 function getStructuredServiceSelection(ctxPatch: any, convoCtx: any) {
