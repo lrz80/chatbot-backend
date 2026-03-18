@@ -36,6 +36,11 @@ type ResponsePolicy = {
   unresolvedEntity?: boolean;
   clarificationTarget?: string | null;
   reasoningNotes?: string | null;
+
+  singleResolvedEntityOnly?: boolean;
+  allowAlternativeEntities?: boolean;
+  allowCrossSellEntities?: boolean;
+  allowAddOnSuggestions?: boolean;
 };
 
 type AnswerWithPromptBaseParams = {
@@ -294,6 +299,11 @@ function normalizeResponsePolicy(
     unresolvedEntity: policy?.unresolvedEntity ?? false,
     clarificationTarget: policy?.clarificationTarget ?? null,
     reasoningNotes: policy?.reasoningNotes ?? null,
+
+    singleResolvedEntityOnly: policy?.singleResolvedEntityOnly ?? false,
+    allowAlternativeEntities: policy?.allowAlternativeEntities ?? true,
+    allowCrossSellEntities: policy?.allowCrossSellEntities ?? true,
+    allowAddOnSuggestions: policy?.allowAddOnSuggestions ?? true,
   };
 }
 
@@ -326,6 +336,45 @@ function buildInstructionBlock(
     "- if_structured_turn_data_exists_then_it_has_highest_priority",
     "- answer_as_business = true",
   ].join("\n");
+}
+
+function buildEntityLockBlock(
+  idiomaDestino: "es" | "en",
+  policy: Required<ResponsePolicy>
+): string {
+  const lines: string[] = ["ENTITY_LOCK_RULES:"];
+
+  if (policy.singleResolvedEntityOnly) {
+    if (idiomaDestino === "en") {
+      lines.push("- the_system_has_resolved_exactly_one_entity = true");
+      lines.push("- talk_only_about_the_resolved_entity = true");
+      lines.push("- do_not_introduce_second_entity = true");
+      lines.push("- do_not_compare_with_other_services_or_plans = true");
+      lines.push("- do_not_suggest_add_ons_or_extras = true");
+      lines.push("- do_not_use_or_followed_by_another_service = true");
+    } else {
+      lines.push("- el_sistema_ya_resolvio_exactamente_una_entidad = true");
+      lines.push("- habla_solo_de_la_entidad_resuelta = true");
+      lines.push("- no_introduzcas_una_segunda_entidad = true");
+      lines.push("- no_compares_con_otros_servicios_o_planes = true");
+      lines.push("- no_sugieras_add_ons_complementos_o_extras = true");
+      lines.push("- no_uses_o_seguido_de_otro_servicio = true");
+    }
+  }
+
+  if (!policy.allowAlternativeEntities) {
+    lines.push("- alternative_entities_allowed = false");
+  }
+
+  if (!policy.allowCrossSellEntities) {
+    lines.push("- cross_sell_entities_allowed = false");
+  }
+
+  if (!policy.allowAddOnSuggestions) {
+    lines.push("- addon_suggestions_allowed = false");
+  }
+
+  return lines.join("\n");
 }
 
 function buildUserPrompt(userInput: string) {
@@ -416,6 +465,8 @@ export async function answerWithPromptBase(
     buildResponsePolicyBlock(effectivePolicy),
     "",
     buildInstructionBlock(idiomaDestino, maxLines),
+    "",
+    buildEntityLockBlock(idiomaDestino, effectivePolicy),
     "",
     catalogDbContext,
     "",

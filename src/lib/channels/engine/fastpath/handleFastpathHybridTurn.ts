@@ -915,6 +915,12 @@ SPECIAL RULE FOR THIS TURN:
         canUseOfficialLinks: true,
         unresolvedEntity: !isCatalogDbReply && !hasResolvedEntity,
         clarificationTarget: !isCatalogDbReply && !hasResolvedEntity ? "service" : null,
+
+        singleResolvedEntityOnly: hasResolvedEntity,
+        allowAlternativeEntities: false,
+        allowCrossSellEntities: false,
+        allowAddOnSuggestions: false,
+
         reasoningNotes: isCatalogDbReply
           ? "Catalog DB reply: keep facts grounded, but allow persuasive conversational rewrite and CTA."
           : null,
