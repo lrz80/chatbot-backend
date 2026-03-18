@@ -3600,6 +3600,92 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             };
           }
 
+          // ✅ Si hay varias variantes con precio y el usuario NO eligió una,
+          // listar variantes para que seleccione en vez de resumir por rango.
+          if (pricedVariants.length > 1 && !chosenVariant) {
+            console.log("[PRICE][single] multiple priced variants -> list for selection", {
+              targetServiceId,
+              targetServiceName,
+              pricedVariants: pricedVariants.map((v: any, idx: number) => ({
+                index: idx + 1,
+                id: v.id,
+                variant_name: v.variant_name,
+                price: v.price,
+                currency: v.currency,
+                variant_url: v.variant_url,
+              })),
+            });
+
+            const lines = pricedVariants.map((v: any, idx: number) => {
+              const rawPrice =
+                v.price === null || v.price === undefined || v.price === ""
+                  ? NaN
+                  : Number(v.price);
+
+              const currency = String(v.currency || "USD").trim();
+              const variantName = String(v.variant_name || "").trim();
+
+              let priceText =
+                idiomaDestino === "en" ? "price available" : "precio disponible";
+
+              if (Number.isFinite(rawPrice)) {
+                if (currency === "USD") {
+                  priceText = `$${rawPrice.toFixed(2)}`;
+                } else {
+                  priceText = `${rawPrice.toFixed(2)} ${currency}`;
+                }
+              }
+
+              return `• ${idx + 1}) ${variantName}: ${priceText}`;
+            });
+
+            const header =
+              idiomaDestino === "en"
+                ? `${targetServiceName} has these options:`
+                : `${targetServiceName} tiene estas opciones:`;
+
+            const ask =
+              idiomaDestino === "en"
+                ? "Which option are you interested in? You can reply with the number or the name."
+                : "¿Cuál opción te interesa? Puedes responder con el número o el nombre.";
+
+            return {
+              handled: true,
+              reply: `${header}\n\n${lines.join("\n")}\n\n${ask}`,
+              source: "price_disambiguation_db",
+              intent: "precio",
+              ctxPatch: {
+                selectedServiceId: targetServiceId,
+                expectingVariant: true,
+
+                last_service_id: targetServiceId,
+                last_service_name: targetServiceName || null,
+                last_service_at: Date.now(),
+
+                last_variant_id: null,
+                last_variant_name: null,
+                last_variant_url: null,
+                last_variant_at: null,
+
+                last_variant_options: pricedVariants.map((v: any, idx: number) => ({
+                  index: idx + 1,
+                  id: String(v.id || ""),
+                  name: String(v.variant_name || "").trim(),
+                  url: v.variant_url ? String(v.variant_url).trim() : null,
+                  price:
+                    v.price === null || v.price === undefined || v.price === ""
+                      ? null
+                      : Number(v.price),
+                  currency: String(v.currency || "USD").trim(),
+                })),
+                last_variant_options_at: Date.now(),
+
+                last_price_option_label: null,
+                last_price_option_at: null,
+              } as Partial<FastpathCtx>,
+            };
+          }
+
           // ✅ Si resolvió servicio, pero no variante exacta, responder natural usando DB + answerWithPromptBase
           const matchedRow = rows.find(
             (r) => String(r.service_id || "") === targetServiceId
