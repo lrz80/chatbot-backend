@@ -41,7 +41,7 @@ function buildSignals(params: {
 
   const tokens = tokenizeUserText(userText);
 
-  const hasLastEntity = Boolean(context.lastEntityId || context.lastEntityName);
+    const hasLastEntity = Boolean(context.lastEntityId);
   const hasLastFamily = Boolean(context.lastFamilyKey);
   const hasPresentedEntities = context.lastPresentedEntityIds.length > 0;
   const hasPresentedFamilies = context.lastPresentedFamilyKeys.length > 0;
@@ -123,7 +123,7 @@ export function classifyCatalogReferenceTurn(
   }
 
   const tokenCount = tokens.length;
-  const hasLastEntity = Boolean(context.lastEntityId || context.lastEntityName);
+  const hasLastEntity = Boolean(context.lastEntityId);
   const hasLastFamily = Boolean(context.lastFamilyKey);
   const hasPresentedEntities = context.lastPresentedEntityIds.length > 0;
   const hasPresentedFamilies = context.lastPresentedFamilyKeys.length > 0;
