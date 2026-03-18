@@ -210,11 +210,11 @@ export function classifyCatalogReferenceTurn(
   if (!hasAnyContext && tokenCount >= 3) {
     notes.push("no_prior_context");
     notes.push("mid_length_turn_without_context");
-    notes.push("defer_family_scope_until_active_routing");
+    notes.push("default_to_catalog_overview_without_anchor");
 
-    result.kind = "catalog_family";
+    result.kind = "catalog_overview";
     result.confidence = 0.51;
-    result.shouldResolveFamily = true;
+    result.shouldResolvePluralCatalog = true;
     result.debug.notes = notes;
     return result;
   }
