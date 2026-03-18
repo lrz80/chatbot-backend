@@ -154,11 +154,8 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     intent?: string | null;
   } | null = null;
 
-  console.log("A0 antes buildTurnContext");
 
   const turn = await buildTurnContext({ pool, body, context });
-
-  console.log("A0.1 despues buildTurnContext");
 
   // canal puede venir en el contexto (meta/preview) o por defecto 'whatsapp'
   const canal: Canal = (context?.canal as Canal) || "whatsapp";
@@ -199,7 +196,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   const contactoNorm = turn.contactoNorm;
 
   if (messageId) {
-    console.log("A1 antes dedupe interactions");
 
   const r = await queryWithTimeout(
     `INSERT INTO interactions (tenant_id, canal, message_id, created_at)
@@ -210,18 +206,13 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     12000
   );
 
-  console.log("A2 despues dedupe interactions");
     if (r.rowCount === 0) {
       console.log("⏩ inbound dedupe: ya procesado messageId", messageId);
       return;
     }
   }
 
-  console.log("B1 antes ensureClienteBase");
-
   const isNewLead = await ensureClienteBase(pool, tenant.id, canal, contactoNorm);
-
-  console.log("B2 despues ensureClienteBase");
 
   // ✅ FORZAR IDIOMA SOLO en saludo inicial claro
   // No usar detectarIdioma aquí para forzar cualquier turno.
@@ -242,13 +233,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       await upsertIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, forcedLang);
       idiomaDestino = forcedLang;
       forcedLangThisTurn = forcedLang;
-
-      console.log("🌍 LANG FORCED (clear greeting) =", {
-        isNewLead,
-        userInput,
-        forcedLang,
-        idiomaDestino,
-      });
     }
   } catch (e: any) {
     console.error("❌ LANG FORCED ERROR:", e?.message || e);
@@ -435,7 +419,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // ===============================
   // 🌍 LANG RESOLUTION (CLIENT-FIRST) – refactorizada
   // ===============================
-  console.log("B3 antes resolveLangForTurn");
   const langOut = await resolveLangForTurn({
     pool,
     tenant,
@@ -446,8 +429,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     tenantBase,
     forcedLangThisTurn,
   });
-
-  console.log("B4 despues resolveLangForTurn");
 
   idiomaDestino = langOut.idiomaDestino;
   let promptBase = langOut.promptBase;
@@ -460,16 +441,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     ...(convoCtxBeforeLang || {}),
     ...(langOut.convoCtx || {}),
   };
-
-  console.log("🌍 LANG DEBUG =", {
-    userInput,
-    tenantBase,
-    storedLang,
-    detectedLang: langRes.detectedLang,
-    lockedLang: langRes.lockedLang,
-    inBookingLang: langRes.inBookingLang,
-    idiomaDestino,
-  });
 
   // ===============================
   // 🔁 Helpers de decisión (BACKEND SOLO DECIDE)
@@ -489,7 +460,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // ✅ google_calendar_enabled flag (source of truth)
   let bookingEnabled = false;
   try {
-    console.log("A3 antes select channel_settings");
 
   const { rows } = await queryWithTimeout(
     `SELECT google_calendar_enabled
@@ -500,7 +470,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     12000
   );
 
-  console.log("A4 despues select channel_settings");
     bookingEnabled = rows[0]?.google_calendar_enabled === true;
   } catch (e: any) {
     console.warn("⚠️ No se pudo leer google_calendar_enabled:", e?.message);
@@ -677,7 +646,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // 🔎 DEBUG: estado de flujo (clientes)
   // ===============================
   try {
-    console.log("A5 antes select clientes state");
 
     const { rows } = await queryWithTimeout(
       `SELECT estado, human_override, info_explicada, selected_channel
@@ -688,17 +656,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       12000
     );
 
-    console.log("A6 despues select clientes state");
-
-    console.log("🧩 CLIENTE STATE (pre-flow) =", {
-      tenantId: tenant.id,
-      canal,
-      contacto: contactoNorm,
-      estado: rows[0]?.estado ?? null,
-      human_override: rows[0]?.human_override ?? null,
-      info_explicada: rows[0]?.info_explicada ?? null,
-      selected_channel: rows[0]?.selected_channel ?? null,
-    });
   } catch (e: any) {
     console.warn("⚠️ No se pudo leer state de clientes:", e?.message);
   }
@@ -744,7 +701,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   // ===============================
   // 🔔 USER SIGNALS (intención, emoción, memoria, override)
   // ===============================
-  console.log("B5 antes handleUserSignalsTurn");
   const signals = await handleUserSignalsTurn({
     pool,
     tenant,
@@ -760,8 +716,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     transition,
   });
 
-  console.log("B6 despues handleUserSignalsTurn");
-
   // ===============================
   // 🧹 RESET estado pago si cambia la intención
   // ===============================
@@ -770,7 +724,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       INTENCION_FINAL_CANONICA &&
       INTENCION_FINAL_CANONICA !== "pago"
     ) {
-      console.log("A7 antes reset estado pago");
 
       await queryWithTimeout(
         `UPDATE clientes
@@ -783,7 +736,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         12000
       );
 
-      console.log("A8 despues reset estado pago");
     }
   } catch (e: any) {
     console.warn("⚠️ reset estado pago failed:", e?.message);
@@ -1140,8 +1092,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       followupNeedsAnchor: signals?.followupNeedsAnchor === true,
       followupEntityKind: signals?.followupEntityKind || null,
     });
-
-    console.log("B8 despues handleFastpathHybridTurn");
 
     const convoCtxAfterFastpath = fpRes?.ctxPatch
       ? {
