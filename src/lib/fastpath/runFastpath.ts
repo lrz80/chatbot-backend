@@ -3135,6 +3135,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // 🧠 MOTOR ÚNICO DE CATÁLOGO
   // ===============================
     {
+    const isCatalogOverviewTurn =
+      catalogReferenceClassification?.kind === "catalog_overview";
+
     const isCombinationIntent =
       q.includes("combinar") ||
       q.includes("mezclar") ||
@@ -3221,6 +3224,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       Date.now() - Number(convoCtx.last_catalog_at) <= 30 * 60 * 1000;
 
     const isCatalogQuestion =
+      isCatalogOverviewTurn ||
       isCatalogQuestionBasic ||
       isCombinationIntent ||
       isAskingOtherCatalogOptions ||
@@ -3260,9 +3264,22 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       else if (isAskingOtherCatalogOptions) {
         questionType = "other_plans";
       }
-      // 3) Resto: preguntas normales de precio/plan
+      // 3) Si el clasificador ya dijo overview, tratamos esto como catálogo plural
+      else if (isCatalogOverviewTurn) {
+        questionType = "price_or_plan";
+      }
+      // 4) Resto: preguntas normales de precio/plan
       else {
         questionType = "price_or_plan";
+      }
+
+      if (isCatalogOverviewTurn) {
+        console.log("[CATALOG_OVERVIEW][RUN_FASTPATH]", {
+          userInput,
+          questionType,
+          detectedIntent,
+          catalogReferenceKind: catalogReferenceClassification?.kind ?? "none",
+        });
       }
 
       const asksSchedules =
