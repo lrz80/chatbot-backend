@@ -69,6 +69,13 @@ const FUNCTION_WORDS = new Set([
   "me",
   "te",
   "se",
+  "hola",
+  "buenos",
+  "buenas",
+  "dias",
+  "dia",
+  "tardes",
+  "noches",
 
   // EN
   "the",
@@ -94,6 +101,111 @@ const FUNCTION_WORDS = new Set([
   "me",
   "you",
   "it",
+  "hello",
+  "hi",
+  "morning",
+  "afternoon",
+  "evening",
+]);
+
+const ATTRIBUTE_TOKENS = new Set([
+  // ES pricing
+  "precio",
+  "precios",
+  "cuanto",
+  "cuanta",
+  "cuesta",
+  "cuestan",
+  "vale",
+  "valen",
+  "costo",
+  "costos",
+  "mensual",
+  "mensuales",
+  "mes",
+  "meses",
+  "mensualidad",
+  "desde",
+
+  // ES general / disponibilidad
+  "horario",
+  "horarios",
+  "ofrecen",
+  "ofrece",
+  "tienen",
+  "tiene",
+  "disponible",
+  "disponibles",
+
+  // EN pricing
+  "price",
+  "prices",
+  "pricing",
+  "cost",
+  "costs",
+  "how",
+  "much",
+  "monthly",
+  "month",
+  "months",
+  "from",
+  "starting",
+  "starts",
+
+  // EN general / availability
+  "schedule",
+  "schedules",
+  "hours",
+  "offer",
+  "offers",
+  "have",
+  "has",
+  "available",
+  "availability",
+
+  // universales de consulta
+  "what",
+  "which",
+  "quiero",
+  "quieres",
+  "want",
+  "looking",
+]);
+
+const GENERIC_CATALOG_TOKENS = new Set([
+  // ES
+  "clase",
+  "clases",
+  "plan",
+  "planes",
+  "paquete",
+  "paquetes",
+  "pase",
+  "pases",
+  "servicio",
+  "servicios",
+  "programa",
+  "programas",
+  "membresia",
+  "membresias",
+  "membresía",
+  "membresías",
+
+  // EN
+  "class",
+  "classes",
+  "plan",
+  "plans",
+  "package",
+  "packages",
+  "pass",
+  "passes",
+  "service",
+  "services",
+  "program",
+  "programs",
+  "membership",
+  "memberships",
 ]);
 
 function normalize(raw: string): string {
@@ -262,6 +374,18 @@ export async function resolveServiceCandidatesFromText(
     return { hit: null, ambiguous: false, candidates: [] };
   }
 
+  const discriminativeQueryTokens = queryTokens.filter(
+    (t) => !ATTRIBUTE_TOKENS.has(t) && !GENERIC_CATALOG_TOKENS.has(t)
+  );
+
+  if (!discriminativeQueryTokens.length) {
+    console.log("[RESOLVE-SERVICE] query general sin tokens discriminativos, devolviendo null", {
+      userText,
+      queryTokens,
+    });
+    return { hit: null, ambiguous: false, candidates: [] };
+  }
+
   const { rows } = await pool.query<{
     service_id: string;
     service_name: string | null;
@@ -395,7 +519,7 @@ export async function resolveServiceCandidatesFromText(
   const totalCandidates = candidates.length;
 
   const dominantQueryTokens = getDominantQueryTokens(
-    queryTokens,
+    discriminativeQueryTokens,
     dfMap,
     totalCandidates
   );
@@ -483,9 +607,13 @@ export async function resolveServiceCandidatesFromText(
 
     const dominantOverlapCount = dominantOverlapTokens.length;
 
+    const discriminativeOverlapTokens = allOverlapTokens.filter(
+      (t) => discriminativeQueryTokens.includes(t)
+    );
+
     const queryCoverage =
-      queryTokens.length > 0
-        ? allOverlapTokens.length / queryTokens.length
+      discriminativeQueryTokens.length > 0
+        ? discriminativeOverlapTokens.length / discriminativeQueryTokens.length
         : 0;
 
     let score = 0;
@@ -711,10 +839,11 @@ export async function resolveServiceCandidatesFromText(
   const secondScore = second?.score || 0;
   const marginVsSecond = best ? best.score - secondScore : 0;
 
-  const bestOverlapCount = best?.allOverlapTokens.length || 0;
+  const bestDiscriminativeOverlapCount =
+    best?.allOverlapTokens.filter((t) => discriminativeQueryTokens.includes(t)).length || 0;
 
   const enoughEvidence =
-    bestOverlapCount > 0 &&
+    bestDiscriminativeOverlapCount > 0 &&
     (
       bestEvidenceCount >= 2 ||
       (best?.score || 0) >= 0.22 ||
