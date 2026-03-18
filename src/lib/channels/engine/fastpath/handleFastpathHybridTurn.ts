@@ -242,7 +242,7 @@ export async function handleFastpathHybridTurn(
     ? (detectedIntent || intentFallback || "precio")
     : (detectedIntent || intentFallback || null);
 
-    // ============================================
+  // ============================================
   // PRE-RESOLVE DE SERVICIO DESDE EL MENSAJE DEL USUARIO
   // Esto cubre el caso donde Fastpath no maneja el turno
   // pero el usuario sí mencionó un servicio de forma suficiente.
@@ -254,18 +254,14 @@ export async function handleFastpathHybridTurn(
     currentIntent === "precio" ||
     currentIntent === "planes_precios";
 
-  const alreadyHasStructuredService = !!firstNonEmptyString(
-    convoCtx?.last_service_id,
-    convoCtx?.selectedServiceId,
-    convoCtx?.selected_service_id,
-    convoCtx?.serviceId,
-    convoCtx?.last_service_name,
-    convoCtx?.selectedServiceName,
-    convoCtx?.selected_service_name,
-    convoCtx?.serviceName
-  );
+  // IMPORTANTE:
+  // Aunque ya exista un servicio previo en convoCtx, igual intentamos resolver
+  // el texto ACTUAL para detectar si el usuario cambió explícitamente de servicio.
+  let explicitServiceResolved = false;
+  let explicitResolvedServiceId: string | null = null;
+  let explicitResolvedServiceName: string | null = null;
 
-  if (shouldTryPreResolveService && !alreadyHasStructuredService) {
+  if (shouldTryPreResolveService) {
     try {
       const preResolved = await resolveServiceIdFromText(
         pool,
@@ -275,12 +271,16 @@ export async function handleFastpathHybridTurn(
       );
 
       if (preResolved?.id) {
-        preResolvedCtxPatch.last_service_id = String(preResolved.id);
-        preResolvedCtxPatch.last_service_name =
-          String(preResolved.name || "").trim() || null;
-        preResolvedCtxPatch.last_service_label =
-          String(preResolved.name || "").trim() || null;
-        preResolvedCtxPatch.selectedServiceId = String(preResolved.id);
+        explicitServiceResolved = true;
+        explicitResolvedServiceId = String(preResolved.id);
+        explicitResolvedServiceName = String(preResolved.name || "").trim() || null;
+
+        preResolvedCtxPatch.last_service_id = explicitResolvedServiceId;
+        preResolvedCtxPatch.last_service_name = explicitResolvedServiceName;
+        preResolvedCtxPatch.last_service_label = explicitResolvedServiceName;
+        preResolvedCtxPatch.selectedServiceId = explicitResolvedServiceId;
+        preResolvedCtxPatch.selectedServiceName = explicitResolvedServiceName;
+        preResolvedCtxPatch.selectedServiceLabel = explicitResolvedServiceName;
         preResolvedCtxPatch.last_entity_kind = "service";
         preResolvedCtxPatch.last_entity_at = Date.now();
 
@@ -290,8 +290,9 @@ export async function handleFastpathHybridTurn(
           contactoNorm,
           userInput,
           intent: currentIntent,
-          serviceId: preResolvedCtxPatch.last_service_id,
-          serviceName: preResolvedCtxPatch.last_service_name,
+          explicitServiceResolved,
+          serviceId: explicitResolvedServiceId,
+          serviceName: explicitResolvedServiceName,
         });
       } else {
         console.log("[FASTPATH_HYBRID][PRE_RESOLVE_SERVICE] no match", {
@@ -334,6 +335,7 @@ export async function handleFastpathHybridTurn(
 
   const shouldForceAnchoredService =
     shouldTryPreResolveService &&
+    !explicitServiceResolved &&
     !!anchoredServiceId &&
     (followupNeedsAnchor === true || referentialFollowup === true) &&
     (!followupEntityKind || followupEntityKind === "service");
@@ -474,14 +476,17 @@ export async function handleFastpathHybridTurn(
   // Canonicalizar siempre el servicio resuelto para follow-ups posteriores
   if (structuredService.serviceId) {
     ctxPatch.last_service_id = structuredService.serviceId;
+    ctxPatch.selectedServiceId = structuredService.serviceId;
   }
 
   if (structuredService.serviceName) {
     ctxPatch.last_service_name = structuredService.serviceName;
+    ctxPatch.selectedServiceName = structuredService.serviceName;
   }
 
   if (structuredService.serviceLabel) {
     ctxPatch.last_service_label = structuredService.serviceLabel;
+    ctxPatch.selectedServiceLabel = structuredService.serviceLabel;
   }
 
   if (structuredService.hasResolution) {
