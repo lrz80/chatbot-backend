@@ -154,24 +154,24 @@ ${list}
 ¿Cuál te interesa?`;
   }
 
-  // =========================
+    // =========================
   // MODO 3: catálogo grande
   // =========================
-  const examples = mainServices.slice(0, 3).map((s) => `• ${s}`).join("\n");
+  const examples = mainServices.slice(0, 7).map((s) => `• ${s}`).join("\n");
 
   return lang === "en"
     ? `${greet}
 
-We offer several services. Some examples are:
+We offer several services, including:
 
 ${examples}
 
-What type of service are you interested in?`
+If one catches your eye, I can also tell you more details.`
     : `${greet}
 
-Ofrecemos varios servicios. Algunos ejemplos son:
+Ofrecemos varios servicios, incluyendo:
 
 ${examples}
 
-¿Qué tipo de servicio te interesa?`;
+Si te interesa alguno en particular, también te puedo dar más detalles.`;
 }
