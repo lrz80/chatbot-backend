@@ -21,7 +21,8 @@ type ResolvedEntityType =
 type ResponseMode =
   | "normal"
   | "clarify_only"
-  | "grounded_only";
+  | "grounded_only"
+  | "grounded_frame_only";
 
 type ResponsePolicy = {
   mode?: ResponseMode;
@@ -41,6 +42,15 @@ type ResponsePolicy = {
   allowAlternativeEntities?: boolean;
   allowCrossSellEntities?: boolean;
   allowAddOnSuggestions?: boolean;
+
+  preserveExactBody?: boolean;
+  preserveExactOrder?: boolean;
+  preserveExactBullets?: boolean;
+  preserveExactNumbers?: boolean;
+  preserveExactLinks?: boolean;
+  allowIntro?: boolean;
+  allowOutro?: boolean;
+  allowBodyRewrite?: boolean;
 };
 
 type AnswerWithPromptBaseParams = {
@@ -304,6 +314,15 @@ function normalizeResponsePolicy(
     allowAlternativeEntities: policy?.allowAlternativeEntities ?? true,
     allowCrossSellEntities: policy?.allowCrossSellEntities ?? true,
     allowAddOnSuggestions: policy?.allowAddOnSuggestions ?? true,
+
+    preserveExactBody: policy?.preserveExactBody ?? false,
+    preserveExactOrder: policy?.preserveExactOrder ?? false,
+    preserveExactBullets: policy?.preserveExactBullets ?? false,
+    preserveExactNumbers: policy?.preserveExactNumbers ?? false,
+    preserveExactLinks: policy?.preserveExactLinks ?? false,
+    allowIntro: policy?.allowIntro ?? true,
+    allowOutro: policy?.allowOutro ?? true,
+    allowBodyRewrite: policy?.allowBodyRewrite ?? true,
   };
 }
 
@@ -316,11 +335,12 @@ function buildResponsePolicyBlock(policy: Required<ResponsePolicy>): string {
 
 function buildInstructionBlock(
   idiomaDestino: "es" | "en",
-  maxLines: number
+  maxLines: number,
+  policy: Required<ResponsePolicy>
 ): string {
   const responseLanguage = idiomaDestino === "en" ? "English" : "Español";
 
-  return [
+  const base = [
     "OUTPUT_RULES:",
     `- response_language = ${responseLanguage}`,
     `- max_lines = ${maxLines}`,
@@ -335,7 +355,23 @@ function buildInstructionBlock(
     "- if_response_policy_disallows_official_links_then_do_not include_links",
     "- if_structured_turn_data_exists_then_it_has_highest_priority",
     "- answer_as_business = true",
-  ].join("\n");
+  ];
+
+  if (policy.mode === "grounded_frame_only") {
+    base.push(
+      "- grounded_frame_only = true",
+      "- fallback_text_is_canonical_body = true",
+      "- do_not_rewrite_or_summarize_the_canonical_body = true",
+      "- do_not_change_order_of_items_in_canonical_body = true",
+      "- do_not_change_bullets_in_canonical_body = true",
+      "- do_not_change_numbers_prices_or_links_in_canonical_body = true",
+      "- you_may_only_add_a_short_intro_before_the_canonical_body_if_allowed = true",
+      "- you_may_only_add_a_short_outro_after_the_canonical_body_if_allowed = true",
+      "- never_replace_the_canonical_body_with_new_text = true"
+    );
+  }
+
+  return base.join("\n");
 }
 
 function buildEntityLockBlock(
@@ -386,6 +422,120 @@ function buildUserPrompt(userInput: string) {
     "- Produce the final customer-facing reply.",
     "- Obey RESPONSE_POLICY_JSON and OUTPUT_RULES.",
   ].join("\n");
+}
+
+function extractUrls(text: string): string[] {
+  return Array.from(new Set(String(text || "").match(/https?:\/\/\S+/gi) || []));
+}
+
+function extractNumbers(text: string): string[] {
+  return Array.from(
+    new Set(String(text || "").match(/\$?\d+(?:[.,]\d{1,2})?/g) || [])
+  );
+}
+
+function normalizeLineForCompare(line: string): string {
+  return String(line || "").replace(/\s+/g, " ").trim();
+}
+
+function extractMeaningfulLines(text: string): string[] {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+}
+
+function startsWithBullet(line: string): boolean {
+  return /^[-•*]/.test(String(line || "").trim());
+}
+
+function preserveCanonicalBodyOrFallback(args: {
+  modelText: string;
+  fallbackText: string;
+  policy: Required<ResponsePolicy>;
+  idiomaDestino: "es" | "en";
+}): string {
+  const { modelText, fallbackText, policy } = args;
+
+  const canonicalBody = String(fallbackText || "").trim();
+  const candidate = String(modelText || "").trim();
+
+  if (!canonicalBody) return candidate;
+
+  if (policy.mode !== "grounded_frame_only" || !policy.preserveExactBody) {
+    return candidate || canonicalBody;
+  }
+
+  const canonicalLines = extractMeaningfulLines(canonicalBody);
+  const candidateLines = extractMeaningfulLines(candidate);
+
+  const canonicalBullets = canonicalLines.filter(startsWithBullet);
+  const candidateBullets = candidateLines.filter(startsWithBullet);
+
+  if (policy.preserveExactBullets) {
+    if (canonicalBullets.length !== candidateBullets.length) {
+      return canonicalBody;
+    }
+
+    for (let i = 0; i < canonicalBullets.length; i++) {
+      if (
+        normalizeLineForCompare(canonicalBullets[i]) !==
+        normalizeLineForCompare(candidateBullets[i])
+      ) {
+        return canonicalBody;
+      }
+    }
+  }
+
+  if (policy.preserveExactOrder) {
+    let lastIndex = -1;
+    for (const line of canonicalLines) {
+      const idx = candidateLines.findIndex(
+        (c, i) =>
+          i > lastIndex &&
+          normalizeLineForCompare(c) === normalizeLineForCompare(line)
+      );
+      if (idx === -1) return canonicalBody;
+      lastIndex = idx;
+    }
+  }
+
+  if (policy.preserveExactNumbers) {
+    const canonicalNumbers = extractNumbers(canonicalBody);
+    const candidateNumbers = extractNumbers(candidate);
+
+    if (canonicalNumbers.join("|") !== candidateNumbers.join("|")) {
+      return canonicalBody;
+    }
+  }
+
+  if (policy.preserveExactLinks) {
+    const canonicalUrls = extractUrls(canonicalBody);
+    const candidateUrls = extractUrls(candidate);
+
+    if (canonicalUrls.join("|") !== candidateUrls.join("|")) {
+      return canonicalBody;
+    }
+  }
+
+  const normalizedCanonical = normalizeLineForCompare(canonicalBody);
+  const normalizedCandidate = normalizeLineForCompare(candidate);
+
+  if (normalizedCandidate === normalizedCanonical) {
+    return canonicalBody;
+  }
+
+  const canonicalAppearsInsideCandidate = canonicalLines.every((line) =>
+    candidateLines.some(
+      (c) => normalizeLineForCompare(c) === normalizeLineForCompare(line)
+    )
+  );
+
+  if (!canonicalAppearsInsideCandidate) {
+    return canonicalBody;
+  }
+
+  return candidate;
 }
 
 /* =========================
@@ -464,7 +614,7 @@ export async function answerWithPromptBase(
     "",
     buildResponsePolicyBlock(effectivePolicy),
     "",
-    buildInstructionBlock(idiomaDestino, maxLines),
+    buildInstructionBlock(idiomaDestino, maxLines, effectivePolicy),
     "",
     buildEntityLockBlock(idiomaDestino, effectivePolicy),
     "",
@@ -513,6 +663,13 @@ export async function answerWithPromptBase(
   out = sanitizeChatOutput(out);
   out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
   out = capLines(out, maxLines);
+
+  out = preserveCanonicalBodyOrFallback({
+    modelText: out,
+    fallbackText,
+    policy: effectivePolicy,
+    idiomaDestino,
+  });
 
   try {
     if (out) {

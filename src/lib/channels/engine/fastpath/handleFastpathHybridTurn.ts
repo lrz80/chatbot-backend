@@ -519,7 +519,17 @@ export async function handleFastpathHybridTurn(
   // ✅ declarar ctxPatch primero
   const ctxPatch: any = fp.ctxPatch ? { ...fp.ctxPatch } : {};
 
-  const structuredService = getStructuredServiceSelection(ctxPatch, convoCtxForFastpath);
+  const shouldUseConvoCtxForStructuredService =
+    fp.source === "price_fastpath_db_llm_render" ||
+    fp.source === "price_fastpath_db_no_price_llm_render" ||
+    fp.source === "price_fastpath_db" ||
+    fp.source === "price_disambiguation_db" ||
+    fp.source === "price_missing_db" ||
+    (fp.source === "service_list_db" && fp.intent === "info_servicio");
+
+  const structuredService = shouldUseConvoCtxForStructuredService
+    ? getStructuredServiceSelection(ctxPatch, convoCtxForFastpath)
+    : getStructuredServiceSelection(ctxPatch, {});
 
   const shouldBypassStructuredRewrite =
     isDmChatChannel(canal) &&
@@ -568,23 +578,27 @@ export async function handleFastpathHybridTurn(
     convoCtxSelectedServiceId: (convoCtxForFastpath as any)?.selectedServiceId || null,
   });
 
-  // Canonicalizar siempre el servicio resuelto para follow-ups posteriores
-  if (structuredService.serviceId) {
+  const shouldPersistStructuredService =
+    structuredService.hasResolution &&
+    fp.source !== "catalog_db" &&
+    !(fp.intent === "info_general");
+
+  if (shouldPersistStructuredService && structuredService.serviceId) {
     ctxPatch.last_service_id = structuredService.serviceId;
     ctxPatch.selectedServiceId = structuredService.serviceId;
   }
 
-  if (structuredService.serviceName) {
+  if (shouldPersistStructuredService && structuredService.serviceName) {
     ctxPatch.last_service_name = structuredService.serviceName;
     ctxPatch.selectedServiceName = structuredService.serviceName;
   }
 
-  if (structuredService.serviceLabel) {
+  if (shouldPersistStructuredService && structuredService.serviceLabel) {
     ctxPatch.last_service_label = structuredService.serviceLabel;
     ctxPatch.selectedServiceLabel = structuredService.serviceLabel;
   }
 
-  if (structuredService.hasResolution) {
+  if (shouldPersistStructuredService) {
     ctxPatch.last_entity_kind = "service";
     ctxPatch.last_entity_at = Date.now();
   }
@@ -983,11 +997,16 @@ SPECIAL RULE FOR THIS TURN:
     ].join("\n");
 
     const isCatalogDbReply = String(fp.source || "") === "catalog_db";
+    const isPriceDisambiguationReply =
+      String(fp.source || "") === "price_disambiguation_db";
 
     const hasResolvedEntity = Boolean(
       structuredService?.serviceId ||
       structuredService?.serviceLabel
     );
+
+    const shouldUseGroundedFrameOnly =
+      isCatalogDbReply || isPriceDisambiguationReply;
 
     const composed = await answerWithPromptBase({
       tenantId,
@@ -1000,14 +1019,23 @@ SPECIAL RULE FOR THIS TURN:
       fallbackText: fastpathText,
 
       responsePolicy: {
-        mode: isCatalogDbReply
-          ? "grounded_only"
+        mode: shouldUseGroundedFrameOnly
+          ? "grounded_frame_only"
           : hasResolvedEntity
           ? "grounded_only"
           : "clarify_only",
-        resolvedEntityType: hasResolvedEntity ? "service" : null,
-        resolvedEntityId: structuredService?.serviceId ?? null,
-        resolvedEntityLabel: structuredService?.serviceLabel ?? null,
+
+        resolvedEntityType:
+          hasResolvedEntity && !isCatalogDbReply ? "service" : null,
+        resolvedEntityId:
+          hasResolvedEntity && !isCatalogDbReply
+            ? structuredService?.serviceId ?? null
+            : null,
+        resolvedEntityLabel:
+          hasResolvedEntity && !isCatalogDbReply
+            ? structuredService?.serviceLabel ?? null
+            : null,
+
         canMentionSpecificPrice: isCatalogDbReply || hasResolvedEntity,
         canSelectSpecificCatalogItem: isCatalogDbReply || hasResolvedEntity,
         canOfferBookingTimes: false,
@@ -1016,13 +1044,24 @@ SPECIAL RULE FOR THIS TURN:
         unresolvedEntity: !isCatalogDbReply && !hasResolvedEntity,
         clarificationTarget: !isCatalogDbReply && !hasResolvedEntity ? "service" : null,
 
-        singleResolvedEntityOnly: hasResolvedEntity,
+        singleResolvedEntityOnly: hasResolvedEntity && !isCatalogDbReply,
         allowAlternativeEntities: false,
         allowCrossSellEntities: false,
         allowAddOnSuggestions: false,
 
+        preserveExactBody: shouldUseGroundedFrameOnly,
+        preserveExactOrder: shouldUseGroundedFrameOnly,
+        preserveExactBullets: shouldUseGroundedFrameOnly,
+        preserveExactNumbers: shouldUseGroundedFrameOnly,
+        preserveExactLinks: shouldUseGroundedFrameOnly,
+        allowIntro: true,
+        allowOutro: true,
+        allowBodyRewrite: !shouldUseGroundedFrameOnly,
+
         reasoningNotes: isCatalogDbReply
-          ? "Catalog DB reply: keep facts grounded, but allow persuasive conversational rewrite and CTA."
+          ? "Catalog DB reply: improve framing only, never alter the canonical body."
+          : isPriceDisambiguationReply
+          ? "Variant/price disambiguation reply: improve framing only, never alter the canonical body."
           : null,
       },
     });
@@ -1049,6 +1088,7 @@ SPECIAL RULE FOR THIS TURN:
     // ===============================
     if (
       isServiceIntent &&
+      !isCatalogDbReply &&
       !structuredService.hasResolution &&
       composed.text
     ) {
