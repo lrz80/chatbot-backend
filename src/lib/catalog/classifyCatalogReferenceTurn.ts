@@ -198,11 +198,11 @@ export function classifyCatalogReferenceTurn(
   if (!hasAnyContext && tokenCount >= 7) {
     notes.push("no_prior_context");
     notes.push("long_turn_without_context");
-    notes.push("defer_catalog_scope_until_active_routing");
+    notes.push("default_to_catalog_family_for_concrete_request_without_anchor");
 
-    result.kind = "catalog_overview";
-    result.confidence = 0.55;
-    result.shouldResolvePluralCatalog = true;
+    result.kind = "catalog_family";
+    result.confidence = 0.58;
+    result.shouldResolveFamily = true;
     result.debug.notes = notes;
     return result;
   }
