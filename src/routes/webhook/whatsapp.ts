@@ -1311,6 +1311,13 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       resolvedEntityId || resolvedEntityLabel
     );
 
+    const clarificationTarget =
+      catalogReferenceKind === "catalog_family"
+        ? "family"
+        : hasResolvedEntity
+        ? null
+        : "service";
+
     console.log("[WHATSAPP][SM_FALLBACK][STRUCTURED_SERVICE]", {
       resolvedEntityId,
       resolvedEntityLabel,
@@ -1667,7 +1674,29 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       shouldBlockConcreteServiceFallback &&
       (INTENCION_FINAL_CANONICA === "info_servicio" || detectedIntent === "info_servicio") &&
       !hasResolvedEntity
-        ? idiomaDestino === "en"
+        ? catalogReferenceKind === "catalog_family"
+          ? idiomaDestino === "en"
+            ? [
+                "STRICT TURN RULES:",
+                "- Do NOT recommend or assume one specific service.",
+                "- Do NOT select a concrete catalog item.",
+                "- Ask ONE short clarification question only.",
+                "- The clarification must narrow the user's need within a family/group of services.",
+                "- Prefer clarifying the type of result they want, not naming a service for them.",
+                "- Do NOT use numbered menus.",
+                "- Do NOT ask more than one question.",
+              ].join("\n")
+            : [
+                "REGLAS ESTRICTAS DEL TURNO:",
+                "- No recomiendes ni asumas un servicio específico.",
+                "- No selecciones un ítem concreto del catálogo.",
+                "- Haz UNA sola pregunta corta de aclaración.",
+                "- La aclaración debe precisar la necesidad del usuario dentro de una familia o grupo de servicios.",
+                "- Prefiere aclarar el resultado que busca, no nombrarle tú un servicio concreto.",
+                "- No uses menús numerados.",
+                "- No hagas más de una pregunta.",
+              ].join("\n")
+          : idiomaDestino === "en"
           ? [
               "STRICT TURN RULES:",
               "- Do NOT recommend or assume one specific service.",
@@ -1821,7 +1850,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         canUseCatalogLists: hasResolvedEntity,
         canUseOfficialLinks: true,
         unresolvedEntity: !hasResolvedEntity,
-        clarificationTarget: hasResolvedEntity ? null : "service",
+        clarificationTarget: hasResolvedEntity ? null : clarificationTarget,
 
         singleResolvedEntityOnly: hasResolvedEntity,
         allowAlternativeEntities: false,
