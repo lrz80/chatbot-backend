@@ -25,6 +25,8 @@ import { extractQueryFrames, type QueryFrame } from "./extractQueryFrames";
 import { resolveServiceMatchesFromText } from "../services/pricing/resolveServiceMatchesFromText";
 import { answerWithPromptBase } from "../answers/answerWithPromptBase";
 
+import type { CatalogReferenceClassification } from "../catalog/types";
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
@@ -161,6 +163,8 @@ export type RunFastpathArgs = {
   // knobs
   maxDisambiguationOptions?: number; // default 5
   lastServiceTtlMs?: number; // default 60 min
+
+  catalogReferenceClassification?: CatalogReferenceClassification;
 };
 
 async function answerCatalogQuestionLLM(params: {

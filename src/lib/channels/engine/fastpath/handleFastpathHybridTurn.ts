@@ -505,6 +505,7 @@ export async function handleFastpathHybridTurn(
     infoClave,
     promptBase: promptBaseMem,
     detectedIntent: fpIntent,
+    catalogReferenceClassification,
     maxDisambiguationOptions: 10,
     lastServiceTtlMs: 60 * 60 * 1000,
   });
