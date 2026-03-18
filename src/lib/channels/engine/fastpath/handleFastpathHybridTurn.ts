@@ -293,7 +293,7 @@ export async function handleFastpathHybridTurn(
     classificationInput: catalogReferenceClassificationInput,
     classification: catalogReferenceClassification,
   });
-  
+
   // Palabras clave generales de precios / planes / horarios
   const isPriceOrScheduleKeyword =
     /\b(precio|precios|price|prices|pricing|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates|horario|horarios|hora|hours?|schedule|schedules)\b/i
@@ -355,9 +355,12 @@ export async function handleFastpathHybridTurn(
   // Solo intentamos pre-resolver entidad cuando el turno parece
   // realmente sobre un servicio concreto, no sobre catálogo general.
   const shouldTryPreResolveServiceBase =
-    currentIntent === "info_servicio" ||
-    currentIntent === "precio" ||
-    currentIntent === "planes_precios";
+    (
+      currentIntent === "info_servicio" ||
+      currentIntent === "precio" ||
+      currentIntent === "planes_precios"
+    ) &&
+    catalogReferenceClassification.kind !== "catalog_overview";
 
   // IMPORTANTE:
   // Aunque ya exista un servicio previo en convoCtx, igual intentamos resolver
