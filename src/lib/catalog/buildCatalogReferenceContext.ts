@@ -19,20 +19,11 @@ function asStringArray(value: unknown): string[] {
     .filter((item): item is string => Boolean(item));
 }
 
-function asUniqueStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-
-  const items = value
-    .map((item) => (typeof item === "string" ? item.trim() : ""))
-    .filter((item): item is string => Boolean(item));
-
-  return Array.from(new Set(items));
-}
-
 function asObjectArray(value: unknown): AnyRecord[] {
   if (!Array.isArray(value)) return [];
-  return value
-    .filter((item): item is AnyRecord => Boolean(item) && typeof item === "object");
+  return value.filter(
+    (item): item is AnyRecord => Boolean(item) && typeof item === "object"
+  );
 }
 
 function pickFirstString(source: AnyRecord, keys: string[]): string | null {
@@ -74,7 +65,7 @@ function extractPresentedEntityIds(source: AnyRecord): string[] {
 }
 
 function extractPresentedFamilyKeys(source: AnyRecord): string[] {
-  const direct = pickFirstStringArray(source, [
+  return pickFirstStringArray(source, [
     "lastPresentedFamilyKeys",
     "last_presented_family_keys",
     "presentedFamilyKeys",
@@ -82,29 +73,6 @@ function extractPresentedFamilyKeys(source: AnyRecord): string[] {
     "lastCatalogFamilyKeys",
     "last_catalog_family_keys",
   ]);
-
-  if (direct.length > 0) return direct;
-
-  const directCatalogNames = asUniqueStringArray(source["last_catalog_plans"]);
-  if (directCatalogNames.length > 0) {
-    return ["presented_catalog_list"];
-  }
-
-  const planObjects = asObjectArray(source["last_catalog_plans"]);
-  const familyKeys = planObjects
-    .map((item) =>
-      asString(
-        item.familyKey ??
-          item.family_key ??
-          item.category ??
-          item.tipo ??
-          item.catalogRole ??
-          item.catalog_role
-      )
-    )
-    .filter((value): value is string => Boolean(value));
-
-  return Array.from(new Set(familyKeys));
 }
 
 export function buildCatalogReferenceContext(
