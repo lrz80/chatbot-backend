@@ -3902,7 +3902,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               ? detailLines.map((l: string) => `• ${l}`).join("\n")
               : "";
 
-            const canonicalReply =
+            const canonicalBody =
               idiomaDestino === "en"
                 ? `${baseName} — ${variantName}\nPrice: ${priceText}${
                     bulletsText ? `\n\nIncludes:\n${bulletsText}` : ""
@@ -3911,48 +3911,59 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                     bulletsText ? `\n\nIncluye:\n${bulletsText}` : ""
                   }`;
 
-            const commercialFallback =
+            const wrapperFallback =
               idiomaDestino === "en"
-                ? `Perfect 😊\n\n${baseName} for ${variantName} is ${priceText}.${
-                    detailLines.length
-                      ? `\n\nIt includes:\n${bulletsText}`
-                      : ""
-                  }`
-                : `Perfecto 😊\n\nEl ${baseName} para ${variantName} tiene un precio de ${priceText}.${
-                    detailLines.length
-                      ? `\n\nIncluye:\n${bulletsText}`
-                      : ""
-                  }`;
+                ? {
+                    intro: "Perfect 😊",
+                    outro: "If you need anything else, just let me know 😊",
+                  }
+                : {
+                    intro: "Perfecto 😊",
+                    outro: "Si necesitas algo más, avísame 😊",
+                  };
 
-            const extraContext = [
-              "PRECIO_DB_RESUELTO:",
-              `- service_name: ${baseName}`,
-              `- variant_name: ${variantName}`,
-              `- price_text: ${priceText}`,
-              `- detail_text: ${serviceDescription || ""}`,
-              `- source_of_truth: database`,
+            const wrapperInstruction =
+              idiomaDestino === "en"
+                ? [
+                    "You are rendering a WhatsApp sales reply.",
+                    "IMPORTANT: You are NOT allowed to rewrite the canonical body.",
+                    "You may ONLY produce:",
+                    "- a very short natural intro",
+                    "- a very short natural outro",
+                    "Do NOT change product/service facts.",
+                    "Do NOT restate or paraphrase the body.",
+                    "Do NOT add prices, conditions, benefits, links, durations, or names not already resolved.",
+                    'Return valid JSON with exactly this shape: {"intro":"...","outro":"..."}',
+                  ].join("\n")
+                : [
+                    "Estás renderizando una respuesta comercial para WhatsApp.",
+                    "IMPORTANTE: NO puedes reescribir el cuerpo canónico.",
+                    "Solo puedes producir:",
+                    "- un intro muy breve y natural",
+                    "- un cierre muy breve y natural",
+                    "NO cambies hechos del servicio o producto.",
+                    "NO repitas ni parafrasees el cuerpo.",
+                    "NO agregues precios, condiciones, beneficios, links, duraciones ni nombres no resueltos.",
+                    'Devuelve JSON válido con esta forma exacta: {"intro":"...","outro":"..."}',
+                  ].join("\n");
+
+            const wrapperContext = [
+              "CANONICAL_BODY_START",
+              canonicalBody,
+              "CANONICAL_BODY_END",
               "",
-              "REGLAS_CRITICAS_DEL_TURNO:",
-              "- Debes conservar EXACTAMENTE el mismo service_name.",
-              "- Debes conservar EXACTAMENTE el mismo variant_name.",
-              "- Debes conservar EXACTAMENTE el mismo price_text.",
-              "- NO puedes cambiar el precio.",
-              "- NO puedes cambiar la variante.",
-              "- NO puedes mencionar otra variante.",
-              "- SOLO puedes usar detalles que estén explícitamente en detail_text.",
-              "- NO puedes inventar beneficios, resultados, duración, promociones ni condiciones no presentes.",
-              "- NO debes enviar el link automáticamente en este turno.",
-              "- La respuesta debe sonar natural, cálida y comercial para WhatsApp.",
-              "- La respuesta NO debe sonar como ficha técnica ni como bot robótico.",
-              "- Debes mencionar qué incluye usando únicamente detail_text.",
-              "- Puedes reorganizar el wording para que suene más vendedor, pero sin alterar los datos.",
-              "- Puedes cerrar con una invitación breve y natural a continuar, pero NO con un CTA fijo repetitivo.",
-              "- No conviertas el cierre en una pregunta obligatoria de sí/no.",
-              "- Si no puedes mejorar sin alterar los datos, devuelve el fallbackText tal cual.",
-              "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
+              "REGLAS_CRITICAS:",
+              "- El cuerpo canónico se insertará después por el sistema.",
+              "- No debes reescribirlo.",
+              "- intro: máximo 1 línea.",
+              "- outro: máximo 1 línea.",
+              "- El intro debe sonar natural, cálido y vendedor.",
+              "- El cierre debe sonar natural y comercial, sin sonar robótico.",
+              "- No hagas preguntas obligatorias de sí/no.",
+              "- No menciones links en intro ni outro.",
             ].join("\n");
 
-            console.log("[PRICE][single][LLM_RENDER] fixed_price_with_includes_guarded", {
+            console.log("[PRICE][single][LLM_RENDER_WRAPPER_ONLY]", {
               targetServiceId,
               targetServiceName,
               variantName,
@@ -3961,80 +3972,47 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               hasDetailText: !!serviceDescription,
             });
 
-            const rendererUserInput =
-              idiomaDestino === "en"
-                ? `The user selected the resolved option for ${baseName}. The resolved variant is ${variantName}. Respond naturally for WhatsApp using the exact grounded price and included details already resolved.`
-                : `El usuario seleccionó la opción resuelta para ${baseName}. La variante resuelta es ${variantName}. Responde de forma natural para WhatsApp usando el precio exacto y los detalles incluidos ya resueltos.`;
-
-            const aiPriceReply = await answerWithPromptBase({
+            const wrapperReply = await answerWithPromptBase({
               tenantId,
-              promptBase,
-              userInput: rendererUserInput,
+              promptBase: `${promptBase}\n\n${wrapperInstruction}`,
+              userInput:
+                idiomaDestino === "en"
+                  ? "Render only the intro and outro wrapper."
+                  : "Renderiza solo el intro y el cierre.",
               history: [],
               idiomaDestino,
               canal,
-              maxLines: 8,
-              fallbackText: commercialFallback,
-              extraContext,
+              maxLines: 4,
+              fallbackText: JSON.stringify(wrapperFallback),
+              extraContext: wrapperContext,
             });
 
-            function normalizeStrict(s: string) {
-              return String(s || "")
-                .normalize("NFD")
-                .replace(/[\u0300-\u036f]/g, "")
-                .toLowerCase()
-                .replace(/\s+/g, " ")
-                .trim();
+            let intro = wrapperFallback.intro;
+            let outro = wrapperFallback.outro;
+
+            try {
+              const parsed = JSON.parse(String(wrapperReply.text || "").trim());
+
+              if (parsed && typeof parsed === "object") {
+                const parsedIntro = String(parsed.intro || "").trim();
+                const parsedOutro = String(parsed.outro || "").trim();
+
+                if (parsedIntro) intro = parsedIntro;
+                if (parsedOutro) outro = parsedOutro;
+              }
+            } catch {
+              // fallback silencioso
             }
 
-            const modelReply = String(aiPriceReply.text || "").trim();
-            const modelNorm = normalizeStrict(modelReply);
+            const finalReply = [intro, canonicalBody, outro]
+              .filter((x) => String(x || "").trim().length > 0)
+              .join("\n\n");
 
-            const mustContainVariant = normalizeStrict(variantName);
-            const mustContainPrice = normalizeStrict(priceText);
-
-            const variantPreserved = modelNorm.includes(mustContainVariant);
-            const pricePreserved = modelNorm.includes(mustContainPrice);
-
-            const significantDetailLines = detailLines.filter(
-              (line) => normalizeStrict(line).length >= 20
-            );
-
-            const preservedCount = significantDetailLines.filter((line) => {
-              const lineNorm = normalizeStrict(line);
-              return modelNorm.includes(lineNorm);
-            }).length;
-
-            const minRequired =
-              significantDetailLines.length <= 2
-                ? significantDetailLines.length
-                : Math.ceil(significantDetailLines.length * 0.6);
-
-            const detailPreserved =
-              !significantDetailLines.length ||
-              preservedCount >= minRequired;
-
-            const linkNotInjected = !/https?:\/\//i.test(modelReply);
-
-            const finalReply =
-              variantPreserved &&
-              pricePreserved &&
-              detailPreserved &&
-              linkNotInjected
-                ? modelReply
-                : canonicalReply;
-
-            console.log("[PRICE][single][LLM_GUARD_RESULT]", {
-              variantPreserved,
-              pricePreserved,
-              detailPreserved,
-              preservedCount,
-              minRequired,
-              linkNotInjected,
-              usedModelReply: finalReply === modelReply,
-              canonicalReply,
-              commercialFallback,
-              modelReply,
+            console.log("[PRICE][single][WRAPPER_RESULT]", {
+              intro,
+              outro,
+              canonicalBodyPreview: canonicalBody.slice(0, 220),
+              finalReplyPreview: finalReply.slice(0, 260),
             });
 
             return {
