@@ -3812,6 +3812,19 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                     bulletsText ? `\n\nIncluye:\n${bulletsText}` : ""
                   }`;
 
+            const commercialFallback =
+              idiomaDestino === "en"
+                ? `Perfect 😊\n\n${baseName} for ${variantName} is ${priceText}.${
+                    detailLines.length
+                      ? `\n\nIt includes:\n${bulletsText}`
+                      : ""
+                  }`
+                : `Perfecto 😊\n\nEl ${baseName} para ${variantName} tiene un precio de ${priceText}.${
+                    detailLines.length
+                      ? `\n\nIncluye:\n${bulletsText}`
+                      : ""
+                  }`;
+
             const extraContext = [
               "PRECIO_DB_RESUELTO:",
               `- service_name: ${baseName}`,
@@ -3828,13 +3841,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               "- NO puedes cambiar la variante.",
               "- NO puedes mencionar otra variante.",
               "- SOLO puedes usar detalles que estén explícitamente en detail_text.",
-              "- NO puedes inventar beneficios, condiciones, duración, resultados ni promociones.",
+              "- NO puedes inventar beneficios, resultados, duración, promociones ni condiciones no presentes.",
               "- NO debes enviar el link automáticamente en este turno.",
-              "- Debes redactar la respuesta como un mensaje comercial natural de WhatsApp.",
-              "- La respuesta debe ayudar a vender, no sonar robótica.",
-              "- Debes mencionar qué incluye, pero solo usando la información real de detail_text.",
-              "- Debes cerrar con una invitación breve para avanzar en la conversación o en la reserva.",
-              "- Ese cierre NO debe ser fijo ni repetitivo: redáctalo de forma natural según el contexto.",
+              "- La respuesta debe sonar natural, cálida y comercial para WhatsApp.",
+              "- La respuesta NO debe sonar como ficha técnica ni como bot robótico.",
+              "- Debes mencionar qué incluye usando únicamente detail_text.",
+              "- Puedes reorganizar el wording para que suene más vendedor, pero sin alterar los datos.",
+              "- Puedes cerrar con una invitación breve y natural a continuar, pero NO con un CTA fijo repetitivo.",
+              "- No conviertas el cierre en una pregunta obligatoria de sí/no.",
               "- Si no puedes mejorar sin alterar los datos, devuelve el fallbackText tal cual.",
               "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
             ].join("\n");
@@ -3856,7 +3870,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               idiomaDestino,
               canal,
               maxLines: 8,
-              fallbackText: canonicalReply,
+              fallbackText: commercialFallback,
               extraContext,
             });
 
@@ -3878,15 +3892,18 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             const variantPreserved = modelNorm.includes(mustContainVariant);
             const pricePreserved = modelNorm.includes(mustContainPrice);
 
+            const significantDetailLines = detailLines.filter(
+              (line) => normalizeStrict(line).length >= 20
+            );
+
             const detailPreserved =
-              !detailLines.length ||
-              detailLines.some((line) => {
+              !significantDetailLines.length ||
+              significantDetailLines.some((line) => {
                 const lineNorm = normalizeStrict(line);
-                return lineNorm.length >= 8 && modelNorm.includes(lineNorm);
+                return modelNorm.includes(lineNorm);
               });
 
-            const linkNotInjected =
-              !/https?:\/\//i.test(modelReply);
+            const linkNotInjected = !/https?:\/\//i.test(modelReply);
 
             const finalReply =
               variantPreserved &&
@@ -3895,6 +3912,17 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               linkNotInjected
                 ? modelReply
                 : canonicalReply;
+
+            console.log("[PRICE][single][LLM_GUARD_RESULT]", {
+              variantPreserved,
+              pricePreserved,
+              detailPreserved,
+              linkNotInjected,
+              usedModelReply: finalReply === modelReply,
+              canonicalReply,
+              commercialFallback,
+              modelReply,
+            });
 
             console.log("[PRICE][single][LLM_GUARD_RESULT]", {
               variantPreserved,
