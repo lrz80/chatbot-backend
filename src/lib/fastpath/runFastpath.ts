@@ -3576,16 +3576,45 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         const ctxServiceName =
           String(convoCtx?.last_service_name || "").trim();
 
-        const singleHit = shouldSkipSinglePriceTargetResolution
-          ? null
-          : ellipticPriceFollowup && ctxServiceId
-          ? {
-              id: ctxServiceId,
-              name: ctxServiceName,
-            }
-          : await resolveServiceIdFromText(pool, tenantId, userInput, {
-              mode: "loose",
-            });
+        const matches =
+          shouldSkipSinglePriceTargetResolution || ellipticPriceFollowup
+            ? []
+            : await resolveServiceMatchesFromText(pool, tenantId, userInput, {
+                minScore: 0.25,
+                maxResults: 5,
+                relativeWindow: 0.25,
+              });
+
+        const top = matches[0] || null;
+        const second = matches[1] || null;
+
+        const topScore = Number(top?.score || 0);
+        const secondScore = Number(second?.score || 0);
+
+        const hasStrongAmbiguity =
+          matches.length >= 2 &&
+          top &&
+          second &&
+          topScore >= 0.45 &&
+          secondScore >= 0.45 &&
+          Math.abs(topScore - secondScore) < 0.15;
+
+        const singleHit =
+          hasStrongAmbiguity
+            ? null
+            : shouldSkipSinglePriceTargetResolution
+            ? null
+            : ellipticPriceFollowup && ctxServiceId
+            ? {
+                id: ctxServiceId,
+                name: ctxServiceName,
+              }
+            : top
+            ? {
+                id: String(top.id || ""),
+                name: String(top.name || "").trim(),
+              }
+            : null;
 
         if (shouldSkipSinglePriceTargetResolution) {
           console.log("[PRICE][single] skipped_by_catalog_reference_classification", {
@@ -3597,6 +3626,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         console.log("[PRICE][single] resolve output", {
           userInput,
           ellipticPriceFollowup,
+          hasStrongAmbiguity,
+          matches: matches.map((m: any) => ({
+            id: String(m.id || m.serviceId || ""),
+            name: String(m.name || m.serviceName || "").trim(),
+            score: Number(m.score || 0),
+          })),
           singleHit,
           ctxLastService: convoCtx?.last_service_id
             ? {
@@ -3605,6 +3640,55 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               }
             : null,
         });
+
+        if (hasStrongAmbiguity) {
+          const options = matches.slice(0, 4).map((m: any, idx: number) => ({
+            index: idx + 1,
+            id: String(m.id || m.serviceId || ""),
+            name: String(m.name || m.serviceName || "").trim(),
+          }));
+
+          const header =
+            idiomaDestino === "en"
+              ? `I found multiple matching options:`
+              : `Encontré varias opciones que coinciden:`;
+
+          const ask =
+            idiomaDestino === "en"
+              ? `Which one are you interested in? You can reply with the number or the name.`
+              : `¿Cuál te interesa? Puedes responder con el número o el nombre.`;
+
+          const lines = options.map((o) => `• ${o.index}) ${o.name}`);
+
+          return {
+            handled: true,
+            reply: `${header}\n\n${lines.join("\n")}\n\n${ask}`,
+            source: "price_disambiguation_db",
+            intent: "precio",
+            ctxPatch: {
+              last_plan_list: options.map((o) => ({
+                id: o.id,
+                name: o.name,
+                url: null,
+              })),
+              last_plan_list_at: Date.now(),
+              last_list_kind: "plan",
+              last_list_kind_at: Date.now(),
+
+              last_service_id: null,
+              last_service_name: null,
+              selectedServiceId: null,
+
+              last_selected_kind: null,
+              last_selected_id: null,
+              last_selected_name: null,
+              last_selected_at: null,
+
+              last_bot_action: "asked_entity_disambiguation",
+              last_bot_action_at: Date.now(),
+            } as Partial<FastpathCtx>,
+          };
+        }
 
         if (singleHit?.id) {
           const targetServiceId = String(singleHit.id || "").trim();
@@ -3926,16 +4010,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               usedModelReply: finalReply === modelReply,
               canonicalReply,
               commercialFallback,
-              modelReply,
-            });
-
-            console.log("[PRICE][single][LLM_GUARD_RESULT]", {
-              variantPreserved,
-              pricePreserved,
-              detailPreserved,
-              linkNotInjected,
-              usedModelReply: finalReply === modelReply,
-              canonicalReply,
               modelReply,
             });
 
