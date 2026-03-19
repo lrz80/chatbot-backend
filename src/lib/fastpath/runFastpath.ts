@@ -3766,8 +3766,20 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             const variantName = String(chosenVariant.variant_name || "").trim();
             const resolvedCurrency = String(chosenVariant.currency || "USD");
 
+            const {
+              rows: [serviceBase],
+            } = await pool.query<any>(
+              `
+              SELECT description
+              FROM services
+              WHERE id = $1
+              LIMIT 1
+              `,
+              [targetServiceId]
+            );
+
             const serviceDescription = String(
-              chosenVariant.description || ""
+              chosenVariant.description || serviceBase?.description || ""
             ).trim();
 
             let priceText =
