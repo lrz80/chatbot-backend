@@ -23,6 +23,17 @@ function sanitizeContext(
       ? context.lastPresentedFamilyKeys.filter((v): v is string => Boolean(v))
       : [],
     expectingVariantForEntityId: context?.expectingVariantForEntityId ?? null,
+
+    presentedVariantOptions: Array.isArray(context?.presentedVariantOptions)
+    ? context.presentedVariantOptions.map((opt: any) => ({
+        index: Number(opt?.index || 0),
+        variantId: String(opt?.variantId || ""),
+        label: String(opt?.label || ""),
+        aliases: Array.isArray(opt?.aliases)
+          ? opt.aliases.filter((v: any): v is string => Boolean(v))
+          : [],
+      }))
+    : [],
   };
 }
 

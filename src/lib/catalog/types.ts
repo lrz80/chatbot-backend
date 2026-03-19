@@ -1,3 +1,4 @@
+//src/lib/catalog/types.ts
 export type CatalogReferenceKind =
   | "catalog_overview"
   | "catalog_family"
@@ -22,6 +23,13 @@ export type CatalogReferenceContext = {
   lastPresentedEntityIds: string[];
   lastPresentedFamilyKeys: string[];
   expectingVariantForEntityId: string | null;
+
+  presentedVariantOptions: Array<{
+    index: number;
+    variantId: string;
+    label: string;
+    aliases: string[];
+  }> | null;
 };
 
 export type CatalogReferenceExplicitEntityCandidate = {

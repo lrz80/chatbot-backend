@@ -2090,7 +2090,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         }
       }
 
-      if (isShort && lastServiceFresh) {
+      const hasExplicitVariantSelectionContext =
+        Boolean(convoCtx?.expectingVariant) &&
+        Boolean(convoCtx?.selectedServiceId);
+
+      if (isShort && lastServiceFresh && !hasExplicitVariantSelectionContext) {
         return {
           handled: false,
           ctxPatch: {
@@ -2276,6 +2280,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     hasVariantSelectionContext &&
     isShortVariantSelection
   ) {
+    console.log("[VARIANT_SECOND_TURN][ENTRY]", {
+      userInput,
+      expectingVariant: convoCtx.expectingVariant,
+      selectedServiceId: convoCtx.selectedServiceId,
+      hasVariantSelectionContext,
+      isShortVariantSelection,
+      shouldSkipVariantSelection,
+    });
+
     const serviceId = String(convoCtx.selectedServiceId);
 
     // Traemos variantes del servicio
@@ -2529,6 +2542,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               link ? `\n\nAquí puedes ver más detalles:\n${link}` : ""
             }`;
     }
+
+    console.log("[VARIANT_SECOND_TURN][CHOSEN]", {
+      userInput,
+      serviceId,
+      chosenVariantId: chosen?.id,
+      chosenVariantName: chosen?.variant_name,
+    });
 
     return {
       handled: true,

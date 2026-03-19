@@ -84,6 +84,38 @@ function extractPresentedFamilyKeys(source: AnyRecord): string[] {
   ]);
 }
 
+function extractPresentedVariantOptions(source: AnyRecord) {
+  const raw = source["presentedVariantOptions"] 
+    ?? source["presented_variant_options"]
+    ?? null;
+
+  if (!Array.isArray(raw)) return null;
+
+  const cleaned = raw
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+
+      const rec = item as AnyRecord;
+
+      const index = asNumber(rec.index);
+      const variantId = asString(rec.variantId ?? rec.variant_id);
+      const label = asString(rec.label);
+      const aliases = asStringArray(rec.aliases);
+
+      if (!index || !variantId || !label) return null;
+
+      return {
+        index,
+        variantId,
+        label,
+        aliases
+      };
+    })
+    .filter((x): x is { index: number; variantId: string; label: string; aliases: string[] } => Boolean(x));
+
+  return cleaned.length > 0 ? cleaned : null;
+}
+
 export function buildCatalogReferenceContext(
   convoCtx: unknown
 ): CatalogReferenceContext {
@@ -141,6 +173,8 @@ export function buildCatalogReferenceContext(
     "expected_variant_of_entity_id",
   ]);
 
+  const presentedVariantOptions = extractPresentedVariantOptions(ctx);
+
   return {
     lastEntityId: entityContextFresh ? lastEntityId : null,
     lastEntityName: entityContextFresh && lastEntityId ? rawLastEntityName : null,
@@ -148,5 +182,6 @@ export function buildCatalogReferenceContext(
     lastPresentedEntityIds,
     lastPresentedFamilyKeys,
     expectingVariantForEntityId,
+    presentedVariantOptions, // 🔥 ESTE ES EL FIX
   };
 }
