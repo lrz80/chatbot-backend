@@ -3678,11 +3678,24 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               last_service_id: null,
               last_service_name: null,
               selectedServiceId: null,
+              selectedServiceName: null,
 
               last_selected_kind: null,
               last_selected_id: null,
               last_selected_name: null,
               last_selected_at: null,
+
+              last_variant_id: null,
+              last_variant_name: null,
+              last_variant_url: null,
+              last_variant_at: null,
+
+              last_price_option_label: null,
+              last_price_option_at: null,
+
+              last_service_label: null,
+              selectedServiceLabel: null,
+              last_entity_kind: null,
 
               last_bot_action: "asked_entity_disambiguation",
               last_bot_action_at: Date.now(),

@@ -588,9 +588,21 @@ export async function handleFastpathHybridTurn(
     fp.source === "price_missing_db" ||
     (fp.source === "service_list_db" && fp.intent === "info_servicio");
 
-  const structuredService = shouldUseConvoCtxForStructuredService
+  const structuredServiceBase = shouldUseConvoCtxForStructuredService
     ? getStructuredServiceSelection(ctxPatch, convoCtxForFastpath)
     : getStructuredServiceSelection(ctxPatch, {});
+
+  const shouldIgnoreStructuredService =
+    fp.source === "price_disambiguation_db";
+
+  const structuredService = shouldIgnoreStructuredService
+    ? {
+        serviceId: null,
+        serviceName: null,
+        serviceLabel: null,
+        hasResolution: false,
+      }
+    : structuredServiceBase;
 
   const shouldBypassStructuredRewrite =
     isDmChatChannel(canal) &&
@@ -642,6 +654,7 @@ export async function handleFastpathHybridTurn(
   const shouldPersistStructuredService =
     structuredService.hasResolution &&
     fp.source !== "catalog_db" &&
+    fp.source !== "price_disambiguation_db" &&
     !(fp.intent === "info_general");
 
   if (shouldPersistStructuredService && structuredService.serviceId) {
