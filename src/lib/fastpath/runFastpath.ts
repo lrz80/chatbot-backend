@@ -2291,6 +2291,127 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
     const serviceId = String(convoCtx.selectedServiceId);
 
+    const askedPriceVariant =
+      String((convoCtx as any)?.last_bot_action || "") === "asked_price_variant";
+
+    const storedVariantOptions = Array.isArray((convoCtx as any)?.last_variant_options)
+      ? (convoCtx as any).last_variant_options
+      : [];
+
+    if (askedPriceVariant && storedVariantOptions.length > 0) {
+      let chosenOption: any = null;
+
+      const mNum = msgNorm.match(/^([1-9])$/);
+      if (mNum) {
+        const pickedIndex = Number(mNum[1]);
+        chosenOption =
+          storedVariantOptions.find((v: any) => Number(v.index) === pickedIndex) || null;
+      }
+
+      if (!chosenOption) {
+        chosenOption =
+          bestNameMatch(
+            userInput,
+            storedVariantOptions.map((v: any) => ({
+              id: String(v.id || ""),
+              name: String(v.name || "").trim(),
+              url: v.url ? String(v.url).trim() : null,
+            }))
+          ) || null;
+      }
+
+      if (chosenOption?.id) {
+        const {
+          rows: [chosenRow],
+        } = await pool.query<any>(
+          `
+          SELECT
+            v.id,
+            v.variant_name,
+            v.description,
+            v.variant_url,
+            v.price,
+            v.currency,
+            s.name AS service_name,
+            s.service_url
+          FROM service_variants v
+          JOIN services s
+            ON s.id = v.service_id
+          WHERE v.id = $1
+            AND v.active = true
+          LIMIT 1
+          `,
+          [String(chosenOption.id)]
+        );
+
+        if (chosenRow) {
+          const baseName = String(chosenRow.service_name || "").trim();
+          const variantName = String(chosenRow.variant_name || "").trim();
+          const priceNum =
+            chosenRow.price === null || chosenRow.price === undefined || chosenRow.price === ""
+              ? null
+              : Number(chosenRow.price);
+
+          const currency = String(chosenRow.currency || "USD").trim();
+          const link =
+            chosenRow.variant_url
+              ? String(chosenRow.variant_url).trim()
+              : chosenRow.service_url
+              ? String(chosenRow.service_url).trim()
+              : null;
+
+          let priceText =
+            idiomaDestino === "en" ? "price available" : "precio disponible";
+
+          if (Number.isFinite(priceNum)) {
+            priceText =
+              currency === "USD"
+                ? `$${priceNum!.toFixed(2)}`
+                : `${priceNum!.toFixed(2)} ${currency}`;
+          }
+
+          const reply =
+            idiomaDestino === "en"
+              ? `Perfect. The price for ${baseName} — ${variantName} is ${priceText}.${link ? `\n\nHere’s the link:\n${link}` : ""}`
+              : `Perfecto. El precio de ${baseName} — ${variantName} es ${priceText}.${link ? `\n\nAquí tienes el link:\n${link}` : ""}`;
+
+          console.log("[VARIANT_SECOND_TURN][PRICE_SELECTION]", {
+            userInput,
+            pickedIndex: mNum ? Number(mNum[1]) : null,
+            chosenVariantId: chosenRow.id,
+            chosenVariantName: variantName,
+            price: chosenRow.price,
+          });
+
+          return {
+            handled: true,
+            reply,
+            source: "price_fastpath_db",
+            intent: "precio",
+            ctxPatch: {
+              expectingVariant: false,
+              selectedServiceId: serviceId,
+
+              last_service_id: serviceId,
+              last_service_name: baseName || null,
+              last_service_at: Date.now(),
+
+              last_variant_id: String(chosenRow.id || ""),
+              last_variant_name: variantName || null,
+              last_variant_url: link || null,
+              last_variant_at: Date.now(),
+
+              last_price_option_label: variantName || null,
+              last_price_option_at: Date.now(),
+
+              last_bot_action: "answered_price_variant",
+              last_bot_action_at: Date.now(),
+            } as Partial<FastpathCtx>,
+          };
+        }
+      }
+    }
+
     // Traemos variantes del servicio
     const { rows: variants } = await pool.query<any>(
       `
@@ -3759,6 +3880,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
                 last_price_option_label: null,
                 last_price_option_at: null,
+
+                last_bot_action: "asked_price_variant",
+                last_bot_action_at: Date.now(),
               } as Partial<FastpathCtx>,
             };
           }
