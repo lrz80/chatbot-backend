@@ -3957,10 +3957,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               "- No debes reescribirlo.",
               "- intro: máximo 1 línea.",
               "- outro: máximo 1 línea.",
-              "- El intro debe sonar natural, cálido y vendedor.",
+              "- El intro debe sonar natural, cálido y breve.",
               "- El cierre debe sonar natural y comercial, sin sonar robótico.",
               "- No hagas preguntas obligatorias de sí/no.",
               "- No menciones links en intro ni outro.",
+              "- No uses saludo tipo 'Hola' si la conversación ya está en curso.",
+              "- No digas 'te recomiendo' si el usuario ya eligió una opción concreta.",
+              "- El intro debe funcionar como confirmación breve de la selección, no como nueva recomendación.",
             ].join("\n");
 
             console.log("[PRICE][single][LLM_RENDER_WRAPPER_ONLY]", {
@@ -3977,8 +3980,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               promptBase: `${promptBase}\n\n${wrapperInstruction}`,
               userInput:
                 idiomaDestino === "en"
-                  ? "Render only the intro and outro wrapper."
-                  : "Renderiza solo el intro y el cierre.",
+                  ? "Render only a short confirmation intro and a soft commercial closing."
+                  : "Renderiza solo un intro breve de confirmación y un cierre comercial suave.",
               history: [],
               idiomaDestino,
               canal,
