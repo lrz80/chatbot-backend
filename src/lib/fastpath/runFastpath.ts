@@ -3862,10 +3862,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               hasDetailText: !!serviceDescription,
             });
 
+            const rendererUserInput =
+              idiomaDestino === "en"
+                ? `The user selected the resolved option for ${baseName}. The resolved variant is ${variantName}. Respond using the exact grounded price and included details.`
+                : `El usuario seleccionó la opción resuelta para ${baseName}. La variante resuelta es ${variantName}. Responde usando el precio exacto y los detalles incluidos ya resueltos.`;
+
             const aiPriceReply = await answerWithPromptBase({
               tenantId,
               promptBase,
-              userInput,
+              userInput: rendererUserInput,
               history: [],
               idiomaDestino,
               canal,
