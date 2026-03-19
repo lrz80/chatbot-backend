@@ -1144,7 +1144,7 @@ SPECIAL RULE FOR THIS TURN:
 
     // ===============================
     // ✅ BYPASS DIRECTO PARA PRECIOS GROUNDED DEL FASTPATH
-    // No post-resolve, no regex CTA, no awaiting_yes_no_action.
+    // No post-resolve, no awaiting inferido, no re-render final.
     // ===============================
     if (
       fp?.source === "price_fastpath_db_llm_render" ||
@@ -1153,6 +1153,7 @@ SPECIAL RULE FOR THIS TURN:
       console.log("[FASTPATH_HYBRID][RETURN_PRICE_FASTPATH_DIRECT]", {
         tenantId,
         canal,
+        contactoNorm,
         userInput,
         fpSource: fp.source,
         fpIntent: fp.intent,
@@ -1220,50 +1221,12 @@ SPECIAL RULE FOR THIS TURN:
       }
     }
 
-    const text = (composed.text || "").toLowerCase().trim();
+    // 7️⃣ awaiting_yes_no_action SOLO por señal estructurada, nunca por regex del texto
+    if (fp?.awaitingEffect?.type === "set_awaiting_yes_no") {
+      const payload = fp.awaitingEffect.payload || null;
 
-    // 7️⃣ Detectar CTA YES/NO del LLM y preparar awaiting_yes_no_action
-    const isYesNoCTA =
-      /\?\s*$/.test(text) &&
-      (/\bte gustar[íi]a\b/.test(text) ||
-        /\bquieres\b/.test(text) ||
-        /\bdeseas\b/.test(text) ||
-        /\bwould you like\b/.test(text) ||
-        /\bdo you want\b/.test(text));
-
-    if (isYesNoCTA) {
-      const sid =
-        firstNonEmptyString(
-          ctxPatch?.last_service_id,
-          ctxPatch?.selectedServiceId,
-          convoCtx?.last_service_id,
-          convoCtx?.selectedServiceId
-        ) || null;
-
-      const sname =
-        firstNonEmptyString(
-          ctxPatch?.last_service_name,
-          ctxPatch?.selectedServiceName,
-          convoCtx?.last_service_name,
-          convoCtx?.selectedServiceName
-        ) || null;
-
-      let serviceUrl: string | null = null;
-      if (sid) {
-        const r = await pool.query(
-          `SELECT service_url FROM services WHERE id=$1 AND tenant_id=$2 LIMIT 1`,
-          [sid, tenantId]
-        );
-        serviceUrl = r.rows[0]?.service_url || null;
-      }
-
-      if (sid && serviceUrl) {
-        ctxPatch.awaiting_yes_no_action = {
-          kind: "cta_yes_no_service",
-          serviceId: sid,
-          label: sname || "Reserva",
-          link: serviceUrl,
-        };
+      if (payload?.kind) {
+        ctxPatch.awaiting_yes_no_action = payload;
       }
     }
 
