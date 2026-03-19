@@ -329,11 +329,6 @@ export async function handleFastpathHybridTurn(
     classification: catalogReferenceClassification,
   });
 
-  // Palabras clave generales de precios / planes / horarios
-  const isPriceOrScheduleKeyword =
-    /\b(precio|precios|price|prices|pricing|plan|planes|membres[ií]a|membership|mensualidad|cu[eé]sta|costo|costos|tarifa|tarifas|fee|fees|rate|rates|horario|horarios|hora|hours?|schedule|schedules)\b/i
-      .test(loweredInput);
-
   // Intenciones que consideramos “info de precios/planes/horarios del negocio”
   const isPriceIntent =
     currentIntent === "info_horarios_generales" ||
@@ -352,7 +347,6 @@ export async function handleFastpathHybridTurn(
     );
 
   const isPriceQuestionUser =
-    isPriceOrScheduleKeyword ||
     isPriceIntent ||
     (asksOtherOptionsGeneric && hasRecentCatalogList);
 
