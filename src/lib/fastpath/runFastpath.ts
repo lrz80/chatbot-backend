@@ -3735,7 +3735,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             });
             
           // ✅ Si resolvió variante concreta, responder con answerWithPromptBase
-          // pero SIN permitir que cambie la fuente de verdad.
+          // usando precio + includes reales desde DB, sin link automático
+          // y con guardrail para no alterar la fuente de verdad.
           if (chosenVariant) {
             console.log("[PRICE][chosenVariant]", {
               userInput,
@@ -3764,10 +3765,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             const baseName = targetServiceName || "";
             const variantName = String(chosenVariant.variant_name || "").trim();
             const resolvedCurrency = String(chosenVariant.currency || "USD");
-            const directLink =
-              chosenVariant.variant_url
-                ? String(chosenVariant.variant_url).trim()
-                : null;
+
+            const serviceDescription = String(
+              chosenVariant.description || ""
+            ).trim();
 
             let priceText =
               idiomaDestino === "en" ? "price available" : "precio disponible";
@@ -3779,17 +3780,32 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                   : `${priceNum!.toFixed(2)} ${resolvedCurrency}`;
             }
 
+            const detailLines = serviceDescription
+              ? serviceDescription
+                  .split(/\r?\n/)
+                  .map((l: string) => l.trim())
+                  .filter((l: string) => l.length > 0)
+              : [];
+
+            const bulletsText = detailLines.length
+              ? detailLines.map((l: string) => `• ${l}`).join("\n")
+              : "";
+
             const canonicalReply =
               idiomaDestino === "en"
-                ? `The price for ${baseName} — ${variantName} is ${priceText}.${directLink ? `\n\nHere’s the link:\n${directLink}` : ""}`
-                : `El precio de ${baseName} — ${variantName} es ${priceText}.${directLink ? `\n\nAquí tienes el link:\n${directLink}` : ""}`;
+                ? `${baseName} — ${variantName}\nPrice: ${priceText}${
+                    bulletsText ? `\n\nIncludes:\n${bulletsText}` : ""
+                  }`
+                : `${baseName} — ${variantName}\nPrecio: ${priceText}${
+                    bulletsText ? `\n\nIncluye:\n${bulletsText}` : ""
+                  }`;
 
             const extraContext = [
               "PRECIO_DB_RESUELTO:",
               `- service_name: ${baseName}`,
               `- variant_name: ${variantName}`,
               `- price_text: ${priceText}`,
-              `- direct_link: ${directLink || ""}`,
+              `- detail_text: ${serviceDescription || ""}`,
               `- source_of_truth: database`,
               "",
               "REGLAS_CRITICAS_DEL_TURNO:",
@@ -3799,20 +3815,25 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               "- NO puedes cambiar el precio.",
               "- NO puedes cambiar la variante.",
               "- NO puedes mencionar otra variante.",
-              "- NO puedes agregar inclusiones, beneficios o detalles no pedidos.",
-              "- SOLO puedes mejorar el tono y hacer la redacción más natural.",
+              "- SOLO puedes usar detalles que estén explícitamente en detail_text.",
+              "- NO puedes inventar beneficios, condiciones, duración, resultados ni promociones.",
+              "- NO debes enviar el link automáticamente en este turno.",
+              "- Debes redactar la respuesta como un mensaje comercial natural de WhatsApp.",
+              "- La respuesta debe ayudar a vender, no sonar robótica.",
+              "- Debes mencionar qué incluye, pero solo usando la información real de detail_text.",
+              "- Debes cerrar con una invitación breve para avanzar en la conversación o en la reserva.",
+              "- Ese cierre NO debe ser fijo ni repetitivo: redáctalo de forma natural según el contexto.",
               "- Si no puedes mejorar sin alterar los datos, devuelve el fallbackText tal cual.",
               "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
-              "- Puedes cerrar con una sola invitación breve para continuar.",
             ].join("\n");
 
-            console.log("[PRICE][single][LLM_RENDER] fixed_price_guarded", {
+            console.log("[PRICE][single][LLM_RENDER] fixed_price_with_includes_guarded", {
               targetServiceId,
               targetServiceName,
               variantName,
               priceNum,
               resolvedCurrency,
-              directLink,
+              hasDetailText: !!serviceDescription,
             });
 
             const aiPriceReply = await answerWithPromptBase({
@@ -3822,7 +3843,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               history: [],
               idiomaDestino,
               canal,
-              maxLines: 4,
+              maxLines: 8,
               fallbackText: canonicalReply,
               extraContext,
             });
@@ -3841,19 +3862,33 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
             const mustContainVariant = normalizeStrict(variantName);
             const mustContainPrice = normalizeStrict(priceText);
+
             const variantPreserved = modelNorm.includes(mustContainVariant);
             const pricePreserved = modelNorm.includes(mustContainPrice);
-            const linkPreserved = directLink ? modelReply.includes(directLink) : true;
+
+            const detailPreserved =
+              !detailLines.length ||
+              detailLines.some((line) => {
+                const lineNorm = normalizeStrict(line);
+                return lineNorm.length >= 8 && modelNorm.includes(lineNorm);
+              });
+
+            const linkNotInjected =
+              !/https?:\/\//i.test(modelReply);
 
             const finalReply =
-              variantPreserved && pricePreserved && linkPreserved
+              variantPreserved &&
+              pricePreserved &&
+              detailPreserved &&
+              linkNotInjected
                 ? modelReply
                 : canonicalReply;
 
             console.log("[PRICE][single][LLM_GUARD_RESULT]", {
               variantPreserved,
               pricePreserved,
-              linkPreserved,
+              detailPreserved,
+              linkNotInjected,
               usedModelReply: finalReply === modelReply,
               canonicalReply,
               modelReply,
@@ -3871,7 +3906,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
                 last_variant_id: String(chosenVariant.id || ""),
                 last_variant_name: variantName || null,
-                last_variant_url: directLink || null,
+                last_variant_url: null,
                 last_variant_at: Date.now(),
 
                 last_price_option_label: variantName || null,
