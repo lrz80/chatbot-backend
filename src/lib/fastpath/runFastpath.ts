@@ -3628,8 +3628,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           ellipticPriceFollowup,
           hasStrongAmbiguity,
           matches: matches.map((m: any) => ({
-            id: String(m.id || m.serviceId || ""),
-            name: String(m.name || m.serviceName || "").trim(),
+            id: String(m.id || ""),
+            name: String(m.name || "").trim(),
             score: Number(m.score || 0),
           })),
           singleHit,
@@ -3644,8 +3644,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         if (hasStrongAmbiguity) {
           const options = matches.slice(0, 4).map((m: any, idx: number) => ({
             index: idx + 1,
-            id: String(m.id || m.serviceId || ""),
-            name: String(m.name || m.serviceName || "").trim(),
+            id: String(m.id || ""),
+            name: String(m.name || "").trim(),
           }));
 
           const header =
