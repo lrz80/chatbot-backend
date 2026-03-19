@@ -3648,16 +3648,46 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           if (pricedVariants.length > 0) {
             const msgNorm = normalizeText(userInput);
 
-            const numberInMsg = msgNorm.match(/\b(\d{1,3})\b/)?.[1] || null;
+            const storedVariantOptions = Array.isArray((convoCtx as any)?.last_variant_options)
+              ? (convoCtx as any).last_variant_options
+              : [];
 
-            if (numberInMsg) {
-              chosenVariant =
-                pricedVariants.find((v: any) => {
-                  const vName = normalizeText(String(v.variant_name || ""));
-                  return new RegExp(`\\b${numberInMsg}\\b`).test(vName);
-                }) || null;
+            const isAwaitingPriceVariantSelection =
+              String((convoCtx as any)?.last_bot_action || "") === "asked_price_variant" &&
+              Boolean((convoCtx as any)?.expectingVariant) &&
+              storedVariantOptions.length > 0;
+
+            // 1) Si venimos de una lista numerada de precio, usar SIEMPRE el índice mostrado
+            const numericSelection = msgNorm.match(/^([1-9])$/)?.[1] || null;
+
+            if (isAwaitingPriceVariantSelection && numericSelection) {
+              const pickedIndex = Number(numericSelection);
+
+              const pickedFromContext =
+                storedVariantOptions.find((opt: any) => Number(opt.index) === pickedIndex) || null;
+
+              if (pickedFromContext?.id) {
+                chosenVariant =
+                  pricedVariants.find(
+                    (v: any) => String(v.id) === String(pickedFromContext.id)
+                  ) || null;
+              }
+
+              console.log("[PRICE][single][INDEX_SELECTION_FROM_CONTEXT]", {
+                userInput,
+                pickedIndex,
+                pickedFromContext,
+                chosenVariant: chosenVariant
+                  ? {
+                      id: chosenVariant.id,
+                      variant_name: chosenVariant.variant_name,
+                      price: chosenVariant.price,
+                    }
+                  : null,
+              });
             }
 
+            // 2) Si no hubo selección por índice contextual, intentar por nombre exacto / fuzzy
             if (!chosenVariant) {
               const matchedVariant = bestNameMatch(
                 userInput,
@@ -3672,6 +3702,19 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 chosenVariant = pricedVariants.find(
                   (v: any) => String(v.id) === String(matchedVariant.id)
                 );
+              }
+            }
+
+            // 3) Fallback viejo SOLO si no estamos en selección contextual numerada
+            if (!chosenVariant && !isAwaitingPriceVariantSelection) {
+              const numberInMsg = msgNorm.match(/\b(\d{1,3})\b/)?.[1] || null;
+
+              if (numberInMsg) {
+                chosenVariant =
+                  pricedVariants.find((v: any) => {
+                    const vName = normalizeText(String(v.variant_name || ""));
+                    return new RegExp(`\\b${numberInMsg}\\b`).test(vName);
+                  }) || null;
               }
             }
           }
