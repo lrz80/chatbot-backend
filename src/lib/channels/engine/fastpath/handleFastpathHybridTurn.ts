@@ -1069,6 +1069,41 @@ SPECIAL RULE FOR THIS TURN:
     const shouldUseGroundedFrameOnly =
       isCatalogDbReply || isPriceDisambiguationReply;
 
+    // ===============================
+    // ✅ BYPASS TEMPRANO PARA PRECIOS GROUNDED DEL FASTPATH
+    // No volver a pasar por answerWithPromptBase.
+    // ===============================
+    if (
+      fp?.handled &&
+      (
+        fp?.source === "price_fastpath_db_llm_render" ||
+        fp?.source === "price_fastpath_db"
+      ) &&
+      typeof fastpathText === "string" &&
+      fastpathText.trim().length > 0
+    ) {
+      console.log("[FASTPATH_HYBRID][BYPASS_BEFORE_COMPOSED]", {
+        tenantId,
+        canal,
+        contactoNorm,
+        userInput,
+        fpSource: fp.source,
+        fpIntent: fp.intent,
+        replyPreview: String(fastpathText).slice(0, 300),
+        ctxPatch,
+      });
+
+      const finalDmReply = stripMarkdownLinksForDm(fastpathText);
+
+      return {
+        handled: true,
+        reply: finalDmReply,
+        replySource: fp.source,
+        intent: fp.intent || detectedIntent || intentFallback || null,
+        ctxPatch,
+      };
+    }
+
     const composed = await answerWithPromptBase({
       tenantId,
       promptBase: promptConFastpath,
@@ -1140,36 +1175,6 @@ SPECIAL RULE FOR THIS TURN:
         pendingCta: ctxPatch.pending_cta,
         replyPreview: composed.text.slice(0, 200),
       });
-    }
-
-    // ===============================
-    // ✅ BYPASS DIRECTO PARA PRECIOS GROUNDED DEL FASTPATH
-    // No post-resolve, no awaiting inferido, no re-render final.
-    // ===============================
-    if (
-      fp?.source === "price_fastpath_db_llm_render" ||
-      fp?.source === "price_fastpath_db"
-    ) {
-      console.log("[FASTPATH_HYBRID][RETURN_PRICE_FASTPATH_DIRECT]", {
-        tenantId,
-        canal,
-        contactoNorm,
-        userInput,
-        fpSource: fp.source,
-        fpIntent: fp.intent,
-        replyPreview: String(composed.text || "").slice(0, 200),
-        ctxPatch,
-      });
-
-      const finalDmReply = stripMarkdownLinksForDm(composed.text);
-
-      return {
-        handled: true,
-        reply: finalDmReply,
-        replySource: fp.source,
-        intent: fp.intent || detectedIntent || intentFallback || null,
-        ctxPatch,
-      };
     }
 
     // ===============================
