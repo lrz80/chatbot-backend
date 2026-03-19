@@ -1143,6 +1143,35 @@ SPECIAL RULE FOR THIS TURN:
     }
 
     // ===============================
+    // ✅ BYPASS DIRECTO PARA PRECIOS GROUNDED DEL FASTPATH
+    // No post-resolve, no regex CTA, no awaiting_yes_no_action.
+    // ===============================
+    if (
+      fp?.source === "price_fastpath_db_llm_render" ||
+      fp?.source === "price_fastpath_db"
+    ) {
+      console.log("[FASTPATH_HYBRID][RETURN_PRICE_FASTPATH_DIRECT]", {
+        tenantId,
+        canal,
+        userInput,
+        fpSource: fp.source,
+        fpIntent: fp.intent,
+        replyPreview: String(composed.text || "").slice(0, 200),
+        ctxPatch,
+      });
+
+      const finalDmReply = stripMarkdownLinksForDm(composed.text);
+
+      return {
+        handled: true,
+        reply: finalDmReply,
+        replySource: fp.source,
+        intent: fp.intent || detectedIntent || intentFallback || null,
+        ctxPatch,
+      };
+    }
+
+    // ===============================
     // ✅ POST-RESOLVE DE SERVICIO RECOMENDADO POR LLM
     // Si el LLM mencionó claramente un servicio pero Fastpath no dejó
     // resolución estructurada, intentamos resolverlo desde el texto final.
