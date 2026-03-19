@@ -3691,7 +3691,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 : null,
             });
             
-          // ✅ Si resolvió variante concreta, responder natural usando DB + answerWithPromptBase
+          // ✅ Si resolvió variante concreta, responder con answerWithPromptBase
+          // pero SIN permitir que cambie la fuente de verdad.
           if (chosenVariant) {
             console.log("[PRICE][chosenVariant]", {
               userInput,
@@ -3725,44 +3726,51 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 ? String(chosenVariant.variant_url).trim()
                 : null;
 
-            const priceText =
-              Number.isFinite(priceNum)
-                ? `$${priceNum!.toFixed(2)}`
-                : idiomaDestino === "en"
-                ? "price available"
-                : "precio disponible";
+            let priceText =
+              idiomaDestino === "en" ? "price available" : "precio disponible";
 
-            console.log("[PRICE][single][LLM_RENDER] fixed_price", {
+            if (Number.isFinite(priceNum)) {
+              priceText =
+                resolvedCurrency === "USD"
+                  ? `$${priceNum!.toFixed(2)}`
+                  : `${priceNum!.toFixed(2)} ${resolvedCurrency}`;
+            }
+
+            const canonicalReply =
+              idiomaDestino === "en"
+                ? `The price for ${baseName} — ${variantName} is ${priceText}.${directLink ? `\n\nHere’s the link:\n${directLink}` : ""}`
+                : `El precio de ${baseName} — ${variantName} es ${priceText}.${directLink ? `\n\nAquí tienes el link:\n${directLink}` : ""}`;
+
+            const extraContext = [
+              "PRECIO_DB_RESUELTO:",
+              `- service_name: ${baseName}`,
+              `- variant_name: ${variantName}`,
+              `- price_text: ${priceText}`,
+              `- direct_link: ${directLink || ""}`,
+              `- source_of_truth: database`,
+              "",
+              "REGLAS_CRITICAS_DEL_TURNO:",
+              "- Debes conservar EXACTAMENTE el mismo service_name.",
+              "- Debes conservar EXACTAMENTE el mismo variant_name.",
+              "- Debes conservar EXACTAMENTE el mismo price_text.",
+              "- NO puedes cambiar el precio.",
+              "- NO puedes cambiar la variante.",
+              "- NO puedes mencionar otra variante.",
+              "- NO puedes agregar inclusiones, beneficios o detalles no pedidos.",
+              "- SOLO puedes mejorar el tono y hacer la redacción más natural.",
+              "- Si no puedes mejorar sin alterar los datos, devuelve el fallbackText tal cual.",
+              "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
+              "- Puedes cerrar con una sola invitación breve para continuar.",
+            ].join("\n");
+
+            console.log("[PRICE][single][LLM_RENDER] fixed_price_guarded", {
               targetServiceId,
               targetServiceName,
               variantName,
               priceNum,
               resolvedCurrency,
+              directLink,
             });
-
-            const extraContext = [
-              "PRECIO_DB_RESUELTO:",
-              `- service_name: ${baseName}`,
-              `- variant_name: ${variantName || "(none)"}`,
-              `- pricing_mode: fixed`,
-              `- price: ${priceNum ?? ""}`,
-              `- currency: ${resolvedCurrency}`,
-              `- direct_link: ${directLink || ""}`,
-              `- source_of_truth: database`,
-              "",
-              "REGLAS_CRITICAS_DEL_TURNO:",
-              "- Debes responder usando EXCLUSIVAMENTE estos datos resueltos desde DB.",
-              "- NO puedes inventar otros precios, rangos, variantes ni servicios alternativos.",
-              "- NO puedes mezclar este servicio con otros del catálogo.",
-              "- Si mencionas el precio, debe corresponder únicamente al servicio/variante resuelto.",
-              "- Redacta de forma natural, humana, breve y comercial para WhatsApp.",
-              "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
-              "",
-              "CONTINUIDAD_CONVERSACIONAL:",
-              "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
-              "- Debes guiar al usuario hacia el siguiente paso (más información, reserva, o aclaración).",
-              "- Evita respuestas que solo informen el precio sin invitar a continuar.",
-            ].join("\n");
 
             const aiPriceReply = await answerWithPromptBase({
               tenantId,
@@ -3771,21 +3779,46 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               history: [],
               idiomaDestino,
               canal,
-              maxLines: 6,
-              fallbackText:
-                idiomaDestino === "en"
-                  ? `${baseName}${variantName ? ` — ${variantName}` : ""} costs ${priceText}${
-                      directLink ? `\n\nHere’s the link:\n${directLink}` : ""
-                    }`
-                  : `${baseName}${variantName ? ` — ${variantName}` : ""} cuesta ${priceText}${
-                      directLink ? `\n\nAquí tienes el link:\n${directLink}` : ""
-                    }`,
+              maxLines: 4,
+              fallbackText: canonicalReply,
               extraContext,
+            });
+
+            function normalizeStrict(s: string) {
+              return String(s || "")
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, "")
+                .toLowerCase()
+                .replace(/\s+/g, " ")
+                .trim();
+            }
+
+            const modelReply = String(aiPriceReply.text || "").trim();
+            const modelNorm = normalizeStrict(modelReply);
+
+            const mustContainVariant = normalizeStrict(variantName);
+            const mustContainPrice = normalizeStrict(priceText);
+            const variantPreserved = modelNorm.includes(mustContainVariant);
+            const pricePreserved = modelNorm.includes(mustContainPrice);
+            const linkPreserved = directLink ? modelReply.includes(directLink) : true;
+
+            const finalReply =
+              variantPreserved && pricePreserved && linkPreserved
+                ? modelReply
+                : canonicalReply;
+
+            console.log("[PRICE][single][LLM_GUARD_RESULT]", {
+              variantPreserved,
+              pricePreserved,
+              linkPreserved,
+              usedModelReply: finalReply === modelReply,
+              canonicalReply,
+              modelReply,
             });
 
             return {
               handled: true,
-              reply: aiPriceReply.text,
+              reply: finalReply,
               source: "price_fastpath_db_llm_render",
               intent: "precio",
               ctxPatch: {
