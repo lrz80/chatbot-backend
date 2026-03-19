@@ -273,15 +273,49 @@ export async function handleFastpathHybridTurn(
   // Intención “final” de este turno (signals)
   const currentIntent = (detectedIntent || intentFallback || null) ?? null;
 
-    const catalogReferenceClassificationInput =
+  let explicitEntityCandidateForClassification: {
+    id: string;
+    name: string;
+    score: number;
+  } | null = null;
+
+  try {
+    const entityCandidateResult = await resolveServiceCandidatesFromText(
+      pool,
+      tenantId,
+      userInput,
+      { mode: "loose" }
+    );
+
+    const topCandidate = entityCandidateResult?.candidates?.[0];
+
+    if (
+      topCandidate?.id &&
+      Number(topCandidate?.score || 0) >= 0.3
+    ) {
+      explicitEntityCandidateForClassification = {
+        id: String(topCandidate.id),
+        name: String(topCandidate.name || "").trim(),
+        score: Number(topCandidate.score || 0),
+      };
+    }
+  } catch (e: any) {
+    console.warn(
+      "[CATALOG_REFERENCE_CLASSIFIER][EXPLICIT_ENTITY_CANDIDATE] failed:",
+      e?.message || e
+    );
+  }
+
+  const catalogReferenceClassificationInput =
     buildCatalogReferenceClassificationInput({
       userText: userInput,
       convoCtx,
     });
 
-  const catalogReferenceClassification = classifyCatalogReferenceTurn(
-    catalogReferenceClassificationInput
-  );
+  const catalogReferenceClassification = classifyCatalogReferenceTurn({
+    ...catalogReferenceClassificationInput,
+    explicitEntityCandidate: explicitEntityCandidateForClassification,
+  });
 
   console.log("[CATALOG_REFERENCE_CLASSIFIER]", {
     tenantId,
@@ -290,6 +324,7 @@ export async function handleFastpathHybridTurn(
     userInput,
     detectedIntent,
     intentFallback,
+    explicitEntityCandidateForClassification,
     classificationInput: catalogReferenceClassificationInput,
     classification: catalogReferenceClassification,
   });

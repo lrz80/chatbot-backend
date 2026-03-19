@@ -110,6 +110,7 @@ export function classifyCatalogReferenceTurn(
 ): CatalogReferenceClassification {
   const userText = normalizeUserText(input?.userText || "");
   const context = sanitizeContext(input?.context);
+  const explicitEntityCandidate = input?.explicitEntityCandidate ?? null;
   const tokens = tokenizeUserText(userText);
   const signals = buildSignals({ userText, context });
 
@@ -136,6 +137,23 @@ export function classifyCatalogReferenceTurn(
     hasExpectedVariant;
 
   notes.push(`token_count:${tokenCount}`);
+
+  if (explicitEntityCandidate?.id) {
+    notes.push("explicit_entity_candidate_from_catalog_matcher");
+    notes.push(`explicit_entity_score:${Number(explicitEntityCandidate.score || 0)}`);
+
+    result.kind = "entity_specific";
+    result.confidence = Math.max(0.8, Math.min(0.96, Number(explicitEntityCandidate.score || 0)));
+    result.signals.hasSpecificEntityCandidate = true;
+    result.shouldUseContextFirst = false;
+    result.shouldResolvePluralCatalog = false;
+    result.shouldResolveFamily = false;
+    result.shouldResolveEntity = true;
+    result.shouldResolveVariant = false;
+    result.shouldAskDisambiguation = false;
+    result.debug.notes = notes;
+    return result;
+  }
 
   if (hasExpectedVariant && tokenCount > 0 && tokenCount <= 4) {
     notes.push("context_expected_variant");

@@ -24,9 +24,16 @@ export type CatalogReferenceContext = {
   expectingVariantForEntityId: string | null;
 };
 
+export type CatalogReferenceExplicitEntityCandidate = {
+  id: string;
+  name: string;
+  score: number;
+} | null;
+
 export type CatalogReferenceClassificationInput = {
   userText: string;
   context: CatalogReferenceContext;
+  explicitEntityCandidate?: CatalogReferenceExplicitEntityCandidate;
 };
 
 export type CatalogReferenceClassification = {
