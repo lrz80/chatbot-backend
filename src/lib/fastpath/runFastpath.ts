@@ -2123,7 +2123,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       Number((convoCtx as any)?.last_service_at || 0) > 0 &&
       now - Number((convoCtx as any)?.last_service_at || 0) <= ttlMs;
 
-    if (lastServiceFresh) {
+    const isAwaitingPriceVariantSelection =
+      String((convoCtx as any)?.last_bot_action || "") === "asked_price_variant" &&
+      Boolean((convoCtx as any)?.expectingVariant) &&
+      Array.isArray((convoCtx as any)?.last_variant_options) &&
+      (convoCtx as any).last_variant_options.length > 0;
+
+    if (lastServiceFresh && !isAwaitingPriceVariantSelection) {
       const { rows: variants } = await pool.query<any>(
         `
         SELECT
