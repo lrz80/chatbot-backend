@@ -1423,10 +1423,25 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 .join("\n")
             : "";
 
+        const intro =
+          idiomaDestino === "en"
+            ? "Perfect 😊"
+            : "Perfecto 😊";
+
+        const linkLabel =
+          idiomaDestino === "en"
+            ? "Here’s the link:"
+            : "Aquí tienes el link:";
+
+        const outro =
+          idiomaDestino === "en"
+            ? "If you need anything else, just let me know 😊"
+            : "Si necesitas algo más, avísame 😊";
+
         const reply =
           idiomaDestino === "en"
-            ? `${title}${bullets ? `\n\n${bullets}` : ""}\n\nHere’s the link:\n${finalUrl}`
-            : `${title}${bullets ? `\n\n${bullets}` : ""}\n\nAquí está el link:\n${finalUrl}`;
+            ? `${intro}\n\n${title}${bullets ? `\n\n${bullets}` : ""}\n\n${linkLabel}\n${finalUrl}\n\n${outro}`
+            : `${intro}\n\n${title}${bullets ? `\n\n${bullets}` : ""}\n\n${linkLabel}\n${finalUrl}\n\n${outro}`;
 
         console.log("[FASTPATH][PENDING_LINK_SELECTION][VARIANT_REPLY]", {
           userInput,
