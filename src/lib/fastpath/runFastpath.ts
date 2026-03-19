@@ -3948,8 +3948,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
             const rendererUserInput =
               idiomaDestino === "en"
-                ? `The user selected the resolved option for ${baseName}. The resolved variant is ${variantName}. Respond using the exact grounded price and included details.`
-                : `El usuario seleccionó la opción resuelta para ${baseName}. La variante resuelta es ${variantName}. Responde usando el precio exacto y los detalles incluidos ya resueltos.`;
+                ? `The user selected the resolved option for ${baseName}. The resolved variant is ${variantName}. Respond naturally for WhatsApp using the exact grounded price and included details already resolved.`
+                : `El usuario seleccionó la opción resuelta para ${baseName}. La variante resuelta es ${variantName}. Responde de forma natural para WhatsApp usando el precio exacto y los detalles incluidos ya resueltos.`;
 
             const aiPriceReply = await answerWithPromptBase({
               tenantId,
@@ -3985,12 +3985,19 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               (line) => normalizeStrict(line).length >= 20
             );
 
+            const preservedCount = significantDetailLines.filter((line) => {
+              const lineNorm = normalizeStrict(line);
+              return modelNorm.includes(lineNorm);
+            }).length;
+
+            const minRequired =
+              significantDetailLines.length <= 2
+                ? significantDetailLines.length
+                : Math.ceil(significantDetailLines.length * 0.6);
+
             const detailPreserved =
               !significantDetailLines.length ||
-              significantDetailLines.some((line) => {
-                const lineNorm = normalizeStrict(line);
-                return modelNorm.includes(lineNorm);
-              });
+              preservedCount >= minRequired;
 
             const linkNotInjected = !/https?:\/\//i.test(modelReply);
 
@@ -4006,6 +4013,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               variantPreserved,
               pricePreserved,
               detailPreserved,
+              preservedCount,
+              minRequired,
               linkNotInjected,
               usedModelReply: finalReply === modelReply,
               canonicalReply,
