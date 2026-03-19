@@ -3644,25 +3644,117 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         if (hasStrongAmbiguity) {
           const options = matches.slice(0, 4).map((m: any, idx: number) => ({
             index: idx + 1,
-            id: String(m.id || ""),
-            name: String(m.name || "").trim(),
+            id: String(m.id || m.serviceId || ""),
+            name: String(m.name || m.serviceName || "").trim(),
           }));
-
-          const header =
-            idiomaDestino === "en"
-              ? `I found multiple matching options:`
-              : `Encontré varias opciones que coinciden:`;
-
-          const ask =
-            idiomaDestino === "en"
-              ? `Which one are you interested in? You can reply with the number or the name.`
-              : `¿Cuál te interesa? Puedes responder con el número o el nombre.`;
 
           const lines = options.map((o) => `• ${o.index}) ${o.name}`);
 
+          const canonicalReply =
+            idiomaDestino === "en"
+              ? `I found multiple matching options:\n\n${lines.join("\n")}\n\nWhich one are you interested in? You can reply with the number or the name.`
+              : `Encontré varias opciones que coinciden:\n\n${lines.join("\n")}\n\n¿Cuál te interesa? Puedes responder con el número o el nombre.`;
+
+          const commercialFallback =
+            idiomaDestino === "en"
+              ? `To give you the correct price, I first need to know which option you mean 😊\n\n${lines.join("\n")}\n\nYou can reply with the number or the name.`
+              : `Para darte el precio correcto, primero necesito saber a cuál opción te refieres 😊\n\n${lines.join("\n")}\n\nPuedes responder con el número o el nombre.`;
+
+          const rendererUserInput =
+            idiomaDestino === "en"
+              ? `The user asked for the price of an ambiguous catalog item. Present the resolved options naturally, preserve all options exactly, and ask them to choose one.`
+              : `El usuario pidió el precio de un elemento ambiguo del catálogo. Presenta las opciones resueltas de forma natural, conserva todas las opciones exactamente y pídele que elija una.`;
+
+          const extraContext = [
+            "DISAMBIGUACION_DB_RESUELTA:",
+            `- source_of_truth: database`,
+            `- options_count: ${options.length}`,
+            ...options.map((o) => `- option_${o.index}: ${o.name}`),
+            "",
+            "REGLAS_CRITICAS_DEL_TURNO:",
+            "- Debes conservar EXACTAMENTE todas las opciones.",
+            "- Debes conservar EXACTAMENTE el mismo orden de las opciones.",
+            "- Debes conservar EXACTAMENTE la numeración de las opciones.",
+            "- NO puedes renombrar opciones.",
+            "- NO puedes eliminar opciones.",
+            "- NO puedes agregar opciones nuevas.",
+            "- SOLO puedes mejorar el framing para que suene más natural y útil en WhatsApp.",
+            "- La respuesta debe sonar humana, clara y comercial, no robótica.",
+            "- Debes cerrar pidiendo que elija una opción.",
+            "- Puedes pedir que responda con el número o con el nombre.",
+            "- Si no puedes mejorar sin alterar las opciones, devuelve el fallbackText tal cual.",
+            "- Si el usuario ya está en conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
+          ].join("\n");
+
+          console.log("[PRICE][entity_disambiguation][LLM_RENDER]", {
+            userInput,
+            options,
+          });
+
+          const aiDisambiguationReply = await answerWithPromptBase({
+            tenantId,
+            promptBase,
+            userInput: rendererUserInput,
+            history: [],
+            idiomaDestino,
+            canal,
+            maxLines: 8,
+            fallbackText: commercialFallback,
+            extraContext,
+          });
+
+          function normalizeStrict(s: string) {
+            return String(s || "")
+              .normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .toLowerCase()
+              .replace(/\s+/g, " ")
+              .trim();
+          }
+
+          const modelReply = String(aiDisambiguationReply.text || "").trim();
+          const modelNorm = normalizeStrict(modelReply);
+
+          const optionsPreserved = options.every((o) => {
+            const expected = normalizeStrict(`${o.index}) ${o.name}`);
+            const alt = normalizeStrict(o.name);
+            return modelNorm.includes(expected) || modelNorm.includes(alt);
+          });
+
+          const orderPreserved = (() => {
+            let lastPos = -1;
+            for (const o of options) {
+              const idxText = normalizeStrict(`${o.index}) ${o.name}`);
+              const nameText = normalizeStrict(o.name);
+              const pos =
+                modelNorm.indexOf(idxText) >= 0
+                  ? modelNorm.indexOf(idxText)
+                  : modelNorm.indexOf(nameText);
+
+              if (pos < 0) return false;
+              if (pos < lastPos) return false;
+              lastPos = pos;
+            }
+            return true;
+          })();
+
+          const finalReply =
+            optionsPreserved && orderPreserved
+              ? modelReply
+              : canonicalReply;
+
+          console.log("[PRICE][entity_disambiguation][LLM_GUARD_RESULT]", {
+            optionsPreserved,
+            orderPreserved,
+            usedModelReply: finalReply === modelReply,
+            canonicalReply,
+            commercialFallback,
+            modelReply,
+          });
+
           return {
             handled: true,
-            reply: `${header}\n\n${lines.join("\n")}\n\n${ask}`,
+            reply: finalReply,
             source: "price_disambiguation_db",
             intent: "precio",
             ctxPatch: {
