@@ -692,6 +692,20 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const isReferentialFollowupTurn =
     catalogReferenceKind === "referential_followup";
 
+  const isStructuredCatalogTurn =
+    catalogReferenceKind === "catalog_overview" ||
+    catalogReferenceKind === "catalog_family" ||
+    catalogReferenceKind === "entity_specific" ||
+    catalogReferenceKind === "variant_specific" ||
+    catalogReferenceKind === "referential_followup";
+
+  const isFreshCatalogPriceTurn =
+    isPriceQuestion(userInput, convoCtx) ||
+    (
+      (detectedIntent || "").trim() === "precio" &&
+      isStructuredCatalogTurn
+    );
+
   // ===============================
   // ✅ MULTI-QUESTION SPLIT + ANSWER
   // Ahora basado en frames neutrales:
@@ -1749,61 +1763,23 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ✅ ANTI-LOOP PENDING LINK
   // ===============================
   {
-    const ttlMs = 5 * 60 * 1000;
+    if (isFreshCatalogPriceTurn) {
+      // turno nuevo de catálogo/precio -> no dejar que un pending_link viejo
+      // secuestre la entrada antes del motor principal
+    } else {
 
-    const pending = Boolean(convoCtx?.pending_link_lookup);
-    const pendingAt = Number(convoCtx?.pending_link_at || 0);
-    const pendingOptions = Array.isArray(convoCtx?.pending_link_options)
-      ? convoCtx.pending_link_options
-      : [];
+      const ttlMs = 5 * 60 * 1000;
 
-    const pendingFresh =
-      pending && pendingAt > 0 && Date.now() - pendingAt <= ttlMs && pendingOptions.length > 0;
+      const pending = Boolean(convoCtx?.pending_link_lookup);
+      const pendingAt = Number(convoCtx?.pending_link_at || 0);
+      const pendingOptions = Array.isArray(convoCtx?.pending_link_options)
+        ? convoCtx.pending_link_options
+        : [];
 
-    if (pending && !pendingFresh) {
-      return {
-        handled: false,
-        ctxPatch: {
-          pending_link_lookup: undefined,
-          pending_link_at: undefined,
-          pending_link_options: undefined,
-        } as any,
-      };
-    }
+      const pendingFresh =
+        pending && pendingAt > 0 && Date.now() - pendingAt <= ttlMs && pendingOptions.length > 0;
 
-    if (pendingFresh) {
-      const normLocal = (s: string) =>
-        String(s || "")
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .toLowerCase()
-          .trim();
-
-      const tNorm = normLocal(userInput);
-
-      const looksLikeCancel =
-        /\b(no|no\s+gracias|gracias|thanks|cancelar|olvidalo|olvidalo|stop)\b/.test(tNorm);
-
-      const idx = (() => {
-        const m = tNorm.match(/^([1-9])$/);
-        if (!m) return null;
-        const n = Number(m[1]);
-        return Number.isFinite(n) ? n : null;
-      })();
-
-      const looksLikeOptionByIndex =
-        idx != null && idx >= 1 && idx <= Math.min(9, pendingOptions.length);
-
-      const labelWordHit = pendingOptions.some((o: any) => {
-        const labelNorm = normLocal(o?.label || "");
-        if (!labelNorm) return false;
-        const words = labelNorm.split(/\s+/).filter((w) => w.length >= 3);
-        return words.some((w) => tNorm.includes(w));
-      });
-
-      const looksLikeOptionAnswer = looksLikeOptionByIndex || labelWordHit;
-
-      if (looksLikeCancel || !looksLikeOptionAnswer) {
+      if (pending && !pendingFresh) {
         return {
           handled: false,
           ctxPatch: {
@@ -1813,9 +1789,52 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           } as any,
         };
       }
+
+      if (pendingFresh) {
+        const normLocal = (s: string) =>
+          String(s || "")
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase()
+            .trim();
+
+        const tNorm = normLocal(userInput);
+
+        const looksLikeCancel =
+          /\b(no|no\s+gracias|gracias|thanks|cancelar|olvidalo|olvidalo|stop)\b/.test(tNorm);
+
+        const idx = (() => {
+          const m = tNorm.match(/^([1-9])$/);
+          if (!m) return null;
+          const n = Number(m[1]);
+          return Number.isFinite(n) ? n : null;
+        })();
+
+        const looksLikeOptionByIndex =
+          idx != null && idx >= 1 && idx <= Math.min(9, pendingOptions.length);
+
+        const labelWordHit = pendingOptions.some((o: any) => {
+          const labelNorm = normLocal(o?.label || "");
+          if (!labelNorm) return false;
+          const words = labelNorm.split(/\s+/).filter((w) => w.length >= 3);
+          return words.some((w) => tNorm.includes(w));
+        });
+
+        const looksLikeOptionAnswer = looksLikeOptionByIndex || labelWordHit;
+
+        if (looksLikeCancel || !looksLikeOptionAnswer) {
+          return {
+            handled: false,
+            ctxPatch: {
+              pending_link_lookup: undefined,
+              pending_link_at: undefined,
+              pending_link_options: undefined,
+            } as any,
+          };
+        }
+      }
     }
   }
-
   // ===============================
   // ✅ FREE OFFER
   // ===============================
@@ -2016,243 +2035,250 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ✅ FOLLOW-UP ROUTER
   // =========================================================
   {
-    const t = String(userInput || "").trim();
-    const tLower = t.toLowerCase();
-
-    const isShort =
-      t.length > 0 &&
-      t.length <= 22 &&
-      !t.includes("?") &&
-      !/\b(hola|hi|hello|gracias|thanks)\b/i.test(tLower);
-
-    const now = Date.now();
-
-    const ttlMs = 10 * 60 * 1000;
-
-    const fresh = (at: any) => {
-      const n = Number(at || 0);
-      return Number.isFinite(n) && n > 0 && now - n <= ttlMs;
-    };
-
-    const pendingPrice =
-      Boolean((convoCtx as any)?.pending_price_lookup) &&
-      fresh((convoCtx as any)?.pending_price_at);
-    const pendingLink =
-      Boolean((convoCtx as any)?.pending_link_lookup) && fresh((convoCtx as any)?.pending_link_at);
-
-    const lastServiceId = String((convoCtx as any)?.last_service_id || "").trim();
-    const lastServiceFresh = lastServiceId && fresh((convoCtx as any)?.last_service_at);
-
-    const planList = Array.isArray((convoCtx as any)?.last_plan_list)
-      ? (convoCtx as any).last_plan_list
-      : [];
-    const pkgList = Array.isArray((convoCtx as any)?.last_package_list)
-      ? (convoCtx as any).last_package_list
-      : [];
-    const listFresh =
-      (planList.length && fresh((convoCtx as any)?.last_plan_list_at)) ||
-      (pkgList.length && fresh((convoCtx as any)?.last_package_list_at));
-
-    if (isShort && pendingLink && Array.isArray((convoCtx as any)?.pending_link_options)) {
-      const opts = (convoCtx as any).pending_link_options;
-      const pick = bestNameMatch(t, opts.map((o: any) => ({ name: o.label })) as any);
-
-      if (pick?.name) {
-        return {
-          handled: false,
-          ctxPatch: {
-            pending_link_lookup: null,
-            pending_link_at: null,
-            pending_link_options: null,
-            last_bot_action: "followup_link_pick",
-            last_bot_action_at: now,
-          } as any,
-        };
-      }
-    }
-
-    if (isShort && listFresh) {
-      // deja que PICK FROM LAST LIST lo maneje
+    if (isFreshCatalogPriceTurn) {
+      // turno nuevo de catálogo/precio -> no reinterpretar como follow-up corto viejo
     } else {
-      if (isShort && pendingPrice) {
-        const pendingTargetText = String((convoCtx as any)?.pending_price_target_text || "").trim();
-        const textForResolution = pendingTargetText || t;
+      const t = String(userInput || "").trim();
+      const tLower = t.toLowerCase();
 
-        const hit = await resolveServiceIdFromText(pool, tenantId, textForResolution, {
-          mode: "loose",
-        });
+      const isShort =
+        t.length > 0 &&
+        t.length <= 22 &&
+        !t.includes("?") &&
+        !/\b(hola|hi|hello|gracias|thanks)\b/i.test(tLower);
 
-        if (hit?.id) {
+      const now = Date.now();
+
+      const ttlMs = 10 * 60 * 1000;
+
+      const fresh = (at: any) => {
+        const n = Number(at || 0);
+        return Number.isFinite(n) && n > 0 && now - n <= ttlMs;
+      };
+
+      const pendingPrice =
+        Boolean((convoCtx as any)?.pending_price_lookup) &&
+        fresh((convoCtx as any)?.pending_price_at);
+      const pendingLink =
+        Boolean((convoCtx as any)?.pending_link_lookup) && fresh((convoCtx as any)?.pending_link_at);
+
+      const lastServiceId = String((convoCtx as any)?.last_service_id || "").trim();
+      const lastServiceFresh = lastServiceId && fresh((convoCtx as any)?.last_service_at);
+
+      const planList = Array.isArray((convoCtx as any)?.last_plan_list)
+        ? (convoCtx as any).last_plan_list
+        : [];
+      const pkgList = Array.isArray((convoCtx as any)?.last_package_list)
+        ? (convoCtx as any).last_package_list
+        : [];
+      const listFresh =
+        (planList.length && fresh((convoCtx as any)?.last_plan_list_at)) ||
+        (pkgList.length && fresh((convoCtx as any)?.last_package_list_at));
+
+      if (isShort && pendingLink && Array.isArray((convoCtx as any)?.pending_link_options)) {
+        const opts = (convoCtx as any).pending_link_options;
+        const pick = bestNameMatch(t, opts.map((o: any) => ({ name: o.label })) as any);
+
+        if (pick?.name) {
           return {
             handled: false,
             ctxPatch: {
-              last_service_id: hit.id,
-              last_service_name: hit.name,
-              last_service_at: now,
-              pending_price_lookup: null,
-              pending_price_at: null,
-              pending_price_target_text: null,
-              pending_price_raw_user_text: null,
-              last_bot_action: "followup_set_service_for_price",
+              pending_link_lookup: null,
+              pending_link_at: null,
+              pending_link_options: null,
+              last_bot_action: "followup_link_pick",
               last_bot_action_at: now,
             } as any,
           };
         }
       }
 
-      const hasExplicitVariantSelectionContext =
-        Boolean(convoCtx?.expectingVariant) &&
-        Boolean(convoCtx?.selectedServiceId);
+      if (isShort && listFresh) {
+        // deja que PICK FROM LAST LIST lo maneje
+      } else {
+        if (isShort && pendingPrice) {
+          const pendingTargetText = String((convoCtx as any)?.pending_price_target_text || "").trim();
+          const textForResolution = pendingTargetText || t;
 
-      if (isShort && lastServiceFresh && !hasExplicitVariantSelectionContext) {
-        return {
-          handled: false,
-          ctxPatch: {
-            last_price_option_label: t,
-            last_price_option_at: now,
-            last_bot_action: "followup_option_label",
-            last_bot_action_at: now,
-          } as any,
-        };
+          const hit = await resolveServiceIdFromText(pool, tenantId, textForResolution, {
+            mode: "loose",
+          });
+
+          if (hit?.id) {
+            return {
+              handled: false,
+              ctxPatch: {
+                last_service_id: hit.id,
+                last_service_name: hit.name,
+                last_service_at: now,
+                pending_price_lookup: null,
+                pending_price_at: null,
+                pending_price_target_text: null,
+                pending_price_raw_user_text: null,
+                last_bot_action: "followup_set_service_for_price",
+                last_bot_action_at: now,
+              } as any,
+            };
+          }
+        }
+
+        const hasExplicitVariantSelectionContext =
+          Boolean(convoCtx?.expectingVariant) &&
+          Boolean(convoCtx?.selectedServiceId);
+
+        if (isShort && lastServiceFresh && !hasExplicitVariantSelectionContext) {
+          return {
+            handled: false,
+            ctxPatch: {
+              last_price_option_label: t,
+              last_price_option_at: now,
+              last_bot_action: "followup_option_label",
+              last_bot_action_at: now,
+            } as any,
+          };
+        }
       }
     }
   }
-
   // ===============================
   // ✅ FOLLOW-UP DE VARIANTE DEL MISMO SERVICIO (GENÉRICO / MULTITENANT)
   // Si ya estamos parados en un servicio con variantes y el usuario
   // menciona una variante, responder directo sin relistar.
   // ===============================
   {
-    const now = Date.now();
-    const ttlMs = 10 * 60 * 1000;
+    if (
+      !isFreshCatalogPriceTurn &&
+      (convoCtx as any)?.expectingVariant === true
+    ) {
+      const now = Date.now();
+      const ttlMs = 10 * 60 * 1000;
 
-    const lastServiceId = String((convoCtx as any)?.last_service_id || "").trim();
-    const lastServiceFresh =
-      !!lastServiceId &&
-      Number((convoCtx as any)?.last_service_at || 0) > 0 &&
-      now - Number((convoCtx as any)?.last_service_at || 0) <= ttlMs;
+      const lastServiceId = String((convoCtx as any)?.last_service_id || "").trim();
+      const lastServiceFresh =
+        !!lastServiceId &&
+        Number((convoCtx as any)?.last_service_at || 0) > 0 &&
+        now - Number((convoCtx as any)?.last_service_at || 0) <= ttlMs;
 
-    const isAwaitingPriceVariantSelection =
-      String((convoCtx as any)?.last_bot_action || "") === "asked_price_variant" &&
-      Boolean((convoCtx as any)?.expectingVariant) &&
-      Array.isArray((convoCtx as any)?.last_variant_options) &&
-      (convoCtx as any).last_variant_options.length > 0;
+      const isAwaitingPriceVariantSelection =
+        String((convoCtx as any)?.last_bot_action || "") === "asked_price_variant" &&
+        Boolean((convoCtx as any)?.expectingVariant) &&
+        Array.isArray((convoCtx as any)?.last_variant_options) &&
+        (convoCtx as any).last_variant_options.length > 0;
 
-    if (lastServiceFresh && !isAwaitingPriceVariantSelection) {
-      const { rows: variants } = await pool.query<any>(
-        `
-        SELECT
-          id,
-          variant_name,
-          description,
-          variant_url,
-          price,
-          currency
-        FROM service_variants
-        WHERE service_id = $1
-          AND active = true
-        ORDER BY created_at ASC, id ASC
-        `,
-        [lastServiceId]
-      );
+      if (lastServiceFresh && !isAwaitingPriceVariantSelection) {
+        const { rows: variants } = await pool.query<any>(
+          `
+          SELECT
+            id,
+            variant_name,
+            description,
+            variant_url,
+            price,
+            currency
+          FROM service_variants
+          WHERE service_id = $1
+            AND active = true
+          ORDER BY created_at ASC, id ASC
+          `,
+          [lastServiceId]
+        );
 
-      if (variants.length > 0) {
-        const matchedVariant = bestNameMatch(
-          userInput,
-          variants.map((v: any) => ({
-            id: String(v.id),
-            name: String(v.variant_name || "").trim(),
-            url: v.variant_url ? String(v.variant_url).trim() : null,
-          }))
-        ) as any;
+        if (variants.length > 0) {
+          const matchedVariant = bestNameMatch(
+            userInput,
+            variants.map((v: any) => ({
+              id: String(v.id),
+              name: String(v.variant_name || "").trim(),
+              url: v.variant_url ? String(v.variant_url).trim() : null,
+            }))
+          ) as any;
 
-        if (matchedVariant?.name) {
-          const chosen = variants.find(
-            (v: any) => String(v.id) === String(matchedVariant.id)
-          );
-
-          if (chosen) {
-            const {
-              rows: [service],
-            } = await pool.query<any>(
-              `
-              SELECT
-                name,
-                description,
-                service_url
-              FROM services
-              WHERE id = $1
-              `,
-              [lastServiceId]
+          if (matchedVariant?.name) {
+            const chosen = variants.find(
+              (v: any) => String(v.id) === String(matchedVariant.id)
             );
 
-            const descSource = (chosen.description || service?.description || "").trim();
-            const link: string | null = chosen.variant_url || service?.service_url || null;
+            if (chosen) {
+              const {
+                rows: [service],
+              } = await pool.query<any>(
+                `
+                SELECT
+                  name,
+                  description,
+                  service_url
+                FROM services
+                WHERE id = $1
+                `,
+                [lastServiceId]
+              );
 
-            const bullets: string =
-              descSource
-                ? descSource
-                    .split(/\r?\n/)
-                    .map((l: string) => l.trim())
-                    .filter((l: string) => l.length > 0)
-                    .map((l: string) => `• ${l}`)
-                    .join("\n")
-                : "";
+              const descSource = (chosen.description || service?.description || "").trim();
+              const link: string | null = chosen.variant_url || service?.service_url || null;
 
-            const baseName = String(service?.name || "").trim();
-            const variantName = String(chosen.variant_name || "").trim();
+              const bullets: string =
+                descSource
+                  ? descSource
+                      .split(/\r?\n/)
+                      .map((l: string) => l.trim())
+                      .filter((l: string) => l.length > 0)
+                      .map((l: string) => `• ${l}`)
+                      .join("\n")
+                  : "";
 
-            const title =
-              baseName && variantName
-                ? `${baseName} — ${variantName}`
-                : baseName || variantName || "";
+              const baseName = String(service?.name || "").trim();
+              const variantName = String(chosen.variant_name || "").trim();
 
-            let reply =
-              idiomaDestino === "en"
-                ? `Perfect 😊\n\n${title ? `*${title}*` : ""}${bullets ? ` includes:\n\n${bullets}` : ""}`
-                : `Perfecto 😊\n\n${title ? `*${title}*` : ""}${bullets ? ` incluye:\n\n${bullets}` : ""}`;
+              const title =
+                baseName && variantName
+                  ? `${baseName} — ${variantName}`
+                  : baseName || variantName || "";
 
-            if (link) {
-              reply +=
+              let reply =
                 idiomaDestino === "en"
-                  ? `\n\nHere you can see more details:\n${link}`
-                  : `\n\nAquí puedes ver más detalles:\n${link}`;
+                  ? `Perfect 😊\n\n${title ? `*${title}*` : ""}${bullets ? ` includes:\n\n${bullets}` : ""}`
+                  : `Perfecto 😊\n\n${title ? `*${title}*` : ""}${bullets ? ` incluye:\n\n${bullets}` : ""}`;
+
+              if (link) {
+                reply +=
+                  idiomaDestino === "en"
+                    ? `\n\nHere you can see more details:\n${link}`
+                    : `\n\nAquí puedes ver más detalles:\n${link}`;
+              }
+
+              console.log("[FASTPATH-VARIANT-FOLLOWUP] direct variant switch", {
+                userInput,
+                serviceId: lastServiceId,
+                baseName,
+                variantName,
+                link,
+              });
+
+              return {
+                handled: true,
+                reply,
+                source: "service_list_db",
+                intent: intentOut || "info_servicio",
+                ctxPatch: {
+                  last_service_id: lastServiceId,
+                  last_service_name: baseName || null,
+                  last_service_at: Date.now(),
+
+                  last_variant_id: String(chosen.id || ""),
+                  last_variant_name: variantName || null,
+                  last_variant_url: link || null,
+                  last_variant_at: Date.now(),
+
+                  last_price_option_label: variantName || null,
+                  last_price_option_at: Date.now(),
+                } as Partial<FastpathCtx>,
+              };
             }
-
-            console.log("[FASTPATH-VARIANT-FOLLOWUP] direct variant switch", {
-              userInput,
-              serviceId: lastServiceId,
-              baseName,
-              variantName,
-              link,
-            });
-
-            return {
-              handled: true,
-              reply,
-              source: "service_list_db",
-              intent: intentOut || "info_servicio",
-              ctxPatch: {
-                last_service_id: lastServiceId,
-                last_service_name: baseName || null,
-                last_service_at: Date.now(),
-
-                last_variant_id: String(chosen.id || ""),
-                last_variant_name: variantName || null,
-                last_variant_url: link || null,
-                last_variant_at: Date.now(),
-
-                last_price_option_label: variantName || null,
-                last_price_option_at: Date.now(),
-              } as Partial<FastpathCtx>,
-            };
           }
         }
       }
     }
   }
-
   // ===============================
   // ✅ VARIANTES: SEGUNDO TURNO
   // El usuario ya vio las opciones y ahora elige una (1, "autopay", etc.)
