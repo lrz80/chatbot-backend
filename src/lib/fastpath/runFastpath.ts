@@ -1579,13 +1579,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             const pickedOptionLabel = parts.length > 1 ? parts.slice(1).join("::") : null;
 
             const basePatch: Partial<FastpathCtx> = {
-              last_plan_list: undefined,
-              last_plan_list_at: undefined,
-              last_package_list: undefined,
-              last_package_list_at: undefined,
-              last_list_kind: undefined,
-              last_list_kind_at: undefined,
-
               last_selected_kind: picked.kind,
               last_selected_id: picked.id,
               last_selected_name: picked.name,
