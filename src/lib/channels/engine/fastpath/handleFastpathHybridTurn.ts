@@ -315,6 +315,7 @@ export async function handleFastpathHybridTurn(
   const catalogReferenceClassification = classifyCatalogReferenceTurn({
     ...catalogReferenceClassificationInput,
     explicitEntityCandidate: explicitEntityCandidateForClassification,
+    detectedIntent: detectedIntent || intentFallback || null,
   });
 
   console.log("[CATALOG_REFERENCE_CLASSIFIER]", {

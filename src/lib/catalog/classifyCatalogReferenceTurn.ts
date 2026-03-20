@@ -122,6 +122,7 @@ export function classifyCatalogReferenceTurn(
   const userText = normalizeUserText(input?.userText || "");
   const context = sanitizeContext(input?.context);
   const explicitEntityCandidate = input?.explicitEntityCandidate ?? null;
+  const detectedIntent = String(input?.detectedIntent || "").trim() || null;
   const tokens = tokenizeUserText(userText);
   const signals = buildSignals({ userText, context });
 
@@ -148,6 +149,20 @@ export function classifyCatalogReferenceTurn(
     hasExpectedVariant;
 
   notes.push(`token_count:${tokenCount}`);
+
+  const catalogCapableIntents = new Set([
+    "precio",
+    "planes_precios",
+    "info_servicio",
+    "catalogo",
+    "catalog",
+  ]);
+
+  if (detectedIntent && !catalogCapableIntents.has(detectedIntent)) {
+    notes.push(`non_catalog_intent:${detectedIntent}`);
+    result.debug.notes = notes;
+    return result;
+  }
 
   if (explicitEntityCandidate?.id) {
     notes.push("explicit_entity_candidate_from_catalog_matcher");

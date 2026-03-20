@@ -770,9 +770,10 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     });
 
   const whatsappCatalogReferenceClassification =
-    classifyCatalogReferenceTurn(
-      whatsappCatalogReferenceClassificationInput
-    );
+    classifyCatalogReferenceTurn({
+      ...whatsappCatalogReferenceClassificationInput,
+      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
+    });
 
   console.log("[WHATSAPP][CATALOG_REFERENCE_CLASSIFIER]", {
     tenantId: event.tenantId,

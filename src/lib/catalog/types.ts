@@ -42,6 +42,7 @@ export type CatalogReferenceClassificationInput = {
   userText: string;
   context: CatalogReferenceContext;
   explicitEntityCandidate?: CatalogReferenceExplicitEntityCandidate;
+  detectedIntent?: string | null;
 };
 
 export type CatalogReferenceClassification = {
