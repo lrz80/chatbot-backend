@@ -1863,7 +1863,14 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
     const normalizedReply = String(composed.text || "").toLowerCase();
 
-    if (hasResolvedEntity && resolvedEntityLabel) {
+    const isBusinessGeneralIntent =
+      detectedIntent === "ubicacion" ||
+      detectedIntent === "horarios" ||
+      detectedIntent === "info_general" ||
+      detectedIntent === "info_horarios_generales" ||
+      detectedIntent === "contacto";
+
+    if (!isBusinessGeneralIntent && hasResolvedEntity && resolvedEntityLabel) {
       const resolvedNameNorm = String(resolvedEntityLabel).toLowerCase();
       const mentionsResolvedEntity = normalizedReply.includes(resolvedNameNorm);
 
@@ -1883,6 +1890,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
           resolvedEntityLabel,
           replyPreview: String(composed.text || "").slice(0, 240),
           validServiceNames,
+          detectedIntent,
         });
 
         const clarificationText =
@@ -1894,6 +1902,16 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         await finalizeReply();
         return;
       }
+    } else if (isBusinessGeneralIntent) {
+      console.log("[WHATSAPP][SM_FALLBACK][ENTITY_LOCK_BYPASS_GENERAL_INFO]", {
+        tenantId: event.tenantId,
+        canal: "whatsapp",
+        userInput: event.userInput,
+        detectedIntent,
+        resolvedEntityId,
+        resolvedEntityLabel,
+        replyPreview: String(composed.text || "").slice(0, 240),
+      });
     } else if (validServiceNames.length > 0) {
       const matchedValidName = validServiceNames.find((name) =>
         normalizedReply.includes(name.toLowerCase())
