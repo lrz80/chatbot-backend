@@ -3399,27 +3399,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       qNorm.includes("more services") ||
       qNorm.includes("what other options");
 
-    const isCatalogQuestionBasic =
-      q.includes("precio") ||
-      q.includes("precios") ||
-      q.includes("cuanto cuesta") ||
-      q.includes("cuánto cuesta") ||
-      q.includes("costo") ||
-      q.includes("cuesta") ||
-      q.includes("plan") ||
-      q.includes("planes") ||
-      q.includes("membresia") ||
-      q.includes("membresía") ||
-      q.includes("unlimited") ||
-      q.includes("ilimitado") ||
-      q.includes("pack") ||
-      q.includes("paquete") ||
-      q.includes("autopay") ||
-      q.includes("price") ||
-      q.includes("prices") ||
-      q.includes("pricing") ||
-      q.includes("membership") ||
-      q.includes("bundle");
+    const isCatalogQuestionBasic = false;
 
     const hasRecentCatalogContext = catalogRoutingSignal.hasFreshCatalogContext;
 
