@@ -3404,8 +3404,22 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       Number(convoCtx.last_catalog_at) > 0 &&
       Date.now() - Number(convoCtx.last_catalog_at) <= 30 * 60 * 1000;
 
+    const intentAllowsCatalogRouting =
+      intentOut === "precio" ||
+      intentOut === "planes_precios" ||
+      intentOut === "info_servicio" ||
+      intentOut === "catalogo" ||
+      intentOut === "catalog";
+
     const isCatalogQuestion =
-      isCatalogOverviewTurn ||
+      (
+        isCatalogOverviewTurn ||
+        isCatalogFamilyTurn ||
+        isEntitySpecificTurn ||
+        isVariantSpecificTurn ||
+        isReferentialFollowupTurn
+      ) &&
+      intentAllowsCatalogRouting ||
       isCatalogQuestionBasic ||
       isCombinationIntent ||
       isAskingOtherCatalogOptions ||
@@ -3450,7 +3464,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         questionType = "price_or_plan";
       }
 
-      if (isCatalogOverviewTurn) {
+      if (isCatalogOverviewTurn && intentAllowsCatalogRouting) {
         console.log("[CATALOG_OVERVIEW][RUN_FASTPATH]", {
           userInput,
           questionType,
@@ -3459,7 +3473,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         });
       }
 
-      if (isCatalogFamilyTurn) {
+      if (isCatalogFamilyTurn && intentAllowsCatalogRouting) {
         console.log("[CATALOG_FAMILY][RUN_FASTPATH]", {
           userInput,
           questionType,
