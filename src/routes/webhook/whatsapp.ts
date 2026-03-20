@@ -1090,15 +1090,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
   if (!inBooking0) {
     const convoCtxForFastpath = signals?.convoCtx || convoCtx;
 
-    console.log("📦 FASTPATH IN ctx =", {
-      last_catalog_plans: (convoCtxForFastpath as any)?.last_catalog_plans || null,
-      last_catalog_at: (convoCtxForFastpath as any)?.last_catalog_at || null,
-      last_service_id: (convoCtxForFastpath as any)?.last_service_id || null,
-      last_service_name: (convoCtxForFastpath as any)?.last_service_name || null,
-      selectedServiceId: (convoCtxForFastpath as any)?.selectedServiceId || null,
-      bookingStep0,
-    });
-
     const fpRes = await handleFastpathHybridTurn({
       pool,
       tenantId: tenant.id,
@@ -1119,37 +1110,12 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
       followupEntityKind: signals?.followupEntityKind || null,
     });
 
-    console.log("[WHATSAPP][HYBRID_RESULT_CTX_PATCH]", {
-      tenantId: tenant.id,
-      canal: "whatsapp",
-      userInput,
-      handled: fpRes?.handled ?? false,
-      ctxPatch: fpRes?.ctxPatch ?? null,
-    });
-
     const convoCtxAfterFastpath = fpRes?.ctxPatch
       ? {
           ...(convoCtxForFastpath || {}),
           ...(fpRes.ctxPatch || {}),
         }
       : convoCtxForFastpath;
-
-    console.log("[WHATSAPP][CTX_AFTER_HYBRID_PATCH]", {
-      tenantId: tenant?.id ?? null,
-      canal: "whatsapp",
-      userInput,
-      convoCtx: {
-        last_plan_list: Array.isArray((convoCtx as any)?.last_plan_list)
-          ? (convoCtx as any).last_plan_list
-          : null,
-        last_plan_list_at: (convoCtx as any)?.last_plan_list_at ?? null,
-        last_list_kind: (convoCtx as any)?.last_list_kind ?? null,
-        last_service_id: (convoCtx as any)?.last_service_id ?? null,
-        last_service_name: (convoCtx as any)?.last_service_name ?? null,
-        selectedServiceId: (convoCtx as any)?.selectedServiceId ?? null,
-        last_bot_action: (convoCtx as any)?.last_bot_action ?? null,
-      },
-    });
 
     // aplicar patch de contexto devuelto por el helper
     if (fpRes.ctxPatch) {
@@ -1161,14 +1127,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         INTENCION_FINAL_CANONICA = fpRes.intent;
         lastIntent = fpRes.intent;
       }
-
-      console.log("🧠 CONVOCTX after fastpath patch =", {
-        last_service_id: (convoCtxAfterFastpath as any)?.last_service_id || null,
-        last_service_name: (convoCtxAfterFastpath as any)?.last_service_name || null,
-        selectedServiceId: (convoCtxAfterFastpath as any)?.selectedServiceId || null,
-        fpIntent: fpRes.intent || null,
-        fpSource: fpRes.replySource || null,
-      });
 
       return await replyAndExit(
         fpRes.reply,
