@@ -67,6 +67,8 @@ import { stripMarkdownLinksForDm } from "../../lib/channels/format/stripMarkdown
 import { buildCatalogReferenceClassificationInput } from "../../lib/catalog/buildCatalogReferenceClassificationInput";
 import { classifyCatalogReferenceTurn } from "../../lib/catalog/classifyCatalogReferenceTurn";
 
+import { isBusinessGeneralIntent } from "../../lib/channels/engine/intents/isBusinessGeneralIntent";
+
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
   tenant?: any;
@@ -1863,14 +1865,12 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
 
     const normalizedReply = String(composed.text || "").toLowerCase();
 
-    const isBusinessGeneralIntent =
-      detectedIntent === "ubicacion" ||
-      detectedIntent === "horarios" ||
-      detectedIntent === "info_general" ||
-      detectedIntent === "info_horarios_generales" ||
-      detectedIntent === "contacto";
+    const shouldBypassEntityLockForGeneralIntent = isBusinessGeneralIntent({
+      detectedIntent,
+      canal: "whatsapp",
+    });
 
-    if (!isBusinessGeneralIntent && hasResolvedEntity && resolvedEntityLabel) {
+    if (!shouldBypassEntityLockForGeneralIntent && hasResolvedEntity && resolvedEntityLabel) {
       const resolvedNameNorm = String(resolvedEntityLabel).toLowerCase();
       const mentionsResolvedEntity = normalizedReply.includes(resolvedNameNorm);
 
@@ -1902,7 +1902,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         await finalizeReply();
         return;
       }
-    } else if (isBusinessGeneralIntent) {
+    } else if (shouldBypassEntityLockForGeneralIntent) {
       console.log("[WHATSAPP][SM_FALLBACK][ENTITY_LOCK_BYPASS_GENERAL_INFO]", {
         tenantId: event.tenantId,
         canal: "whatsapp",
