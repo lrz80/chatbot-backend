@@ -27,6 +27,8 @@ import { answerWithPromptBase } from "../answers/answerWithPromptBase";
 
 import type { CatalogReferenceClassification } from "../catalog/types";
 
+import { buildCatalogRoutingSignal } from "../../lib/catalog/buildCatalogRoutingSignal";
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
@@ -3319,6 +3321,28 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // 🧠 MOTOR ÚNICO DE CATÁLOGO
   // ===============================
     {
+    const catalogRoutingSignal = buildCatalogRoutingSignal({
+      intentOut,
+      catalogReferenceClassification,
+      convoCtx,
+    });
+
+    console.log("[CATALOG][ROUTING_SIGNAL]", {
+      userInput,
+      intentOut,
+      signal: {
+        shouldRouteCatalog: catalogRoutingSignal.shouldRouteCatalog,
+        routeIntent: catalogRoutingSignal.routeIntent,
+        referenceKind: catalogRoutingSignal.referenceKind,
+        source: catalogRoutingSignal.source,
+        allowsDbCatalogPath: catalogRoutingSignal.allowsDbCatalogPath,
+        hasFreshCatalogContext: catalogRoutingSignal.hasFreshCatalogContext,
+        previousCatalogPlans: catalogRoutingSignal.previousCatalogPlans,
+        targetServiceId: catalogRoutingSignal.targetServiceId,
+        targetServiceName: catalogRoutingSignal.targetServiceName,
+      },
+    });
+
     const isCombinationIntent =
       q.includes("combinar") ||
       q.includes("mezclar") ||
@@ -3397,34 +3421,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       q.includes("membership") ||
       q.includes("bundle");
 
-    const hasRecentCatalogContext =
-      Array.isArray(convoCtx?.last_catalog_plans) &&
-      convoCtx.last_catalog_plans.length > 0 &&
-      Number.isFinite(Number(convoCtx?.last_catalog_at)) &&
-      Number(convoCtx.last_catalog_at) > 0 &&
-      Date.now() - Number(convoCtx.last_catalog_at) <= 30 * 60 * 1000;
+    const hasRecentCatalogContext = catalogRoutingSignal.hasFreshCatalogContext;
 
-    const intentAllowsCatalogRouting =
-      intentOut === "precio" ||
-      intentOut === "planes_precios" ||
-      intentOut === "info_servicio" ||
-      intentOut === "catalogo" ||
-      intentOut === "catalog";
+    const intentAllowsCatalogRouting = catalogRoutingSignal.allowsDbCatalogPath;
 
     const isCatalogQuestion =
-      (
-        isCatalogOverviewTurn ||
-        isCatalogFamilyTurn ||
-        isEntitySpecificTurn ||
-        isVariantSpecificTurn ||
-        isReferentialFollowupTurn
-      ) &&
-      intentAllowsCatalogRouting ||
-      isCatalogQuestionBasic ||
-      isCombinationIntent ||
-      isAskingOtherCatalogOptions ||
-      (hasRecentCatalogContext && isAskingOtherCatalogOptions) ||
-      isPriceQuestion(userInput, convoCtx);
+      catalogRoutingSignal.shouldRouteCatalog || isPriceQuestion(userInput, convoCtx);
 
     // 🔒 Nunca permitir que el LLM responda precios
     if (isPriceQuestion(userInput, convoCtx)) {
