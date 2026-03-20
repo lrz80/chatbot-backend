@@ -544,6 +544,37 @@ export async function handleFastpathHybridTurn(
     lastServiceTtlMs: 60 * 60 * 1000,
   });
 
+  console.log("[FASTPATH_HYBRID][CTX_PATCH_DEBUG]", {
+    tenantId,
+    canal,
+    userInput,
+    fpHandled: fp?.handled ?? false,
+    fpSource: fp?.handled ? fp.source : null,
+    convoCtxBeforeRun: {
+      last_plan_list: Array.isArray((convoCtx as any)?.last_plan_list)
+        ? (convoCtx as any).last_plan_list
+        : null,
+      last_plan_list_at: (convoCtx as any)?.last_plan_list_at ?? null,
+      last_list_kind: (convoCtx as any)?.last_list_kind ?? null,
+      last_service_id: (convoCtx as any)?.last_service_id ?? null,
+      last_service_name: (convoCtx as any)?.last_service_name ?? null,
+      selectedServiceId: (convoCtx as any)?.selectedServiceId ?? null,
+      last_bot_action: (convoCtx as any)?.last_bot_action ?? null,
+    },
+    convoCtxForFastpath: {
+      last_plan_list: Array.isArray((convoCtxForFastpath as any)?.last_plan_list)
+        ? (convoCtxForFastpath as any).last_plan_list
+        : null,
+      last_plan_list_at: (convoCtxForFastpath as any)?.last_plan_list_at ?? null,
+      last_list_kind: (convoCtxForFastpath as any)?.last_list_kind ?? null,
+      last_service_id: (convoCtxForFastpath as any)?.last_service_id ?? null,
+      last_service_name: (convoCtxForFastpath as any)?.last_service_name ?? null,
+      selectedServiceId: (convoCtxForFastpath as any)?.selectedServiceId ?? null,
+      last_bot_action: (convoCtxForFastpath as any)?.last_bot_action ?? null,
+    },
+    fpCtxPatch: fp?.ctxPatch ?? null,
+  });
+
   console.log("[FASTPATH_HYBRID][ENTRY_AFTER_RUN]", {
     tenantId,
     canal,
@@ -580,6 +611,16 @@ export async function handleFastpathHybridTurn(
 
   // ✅ declarar ctxPatch primero
   const ctxPatch: any = fp.ctxPatch ? { ...fp.ctxPatch } : {};
+
+  console.log("[FASTPATH_HYBRID][CTX_AFTER_MERGE_DEBUG]", {
+    tenantId,
+    canal,
+    userInput,
+    outgoingCtxPatchBase: {
+      ...ctxPatch,
+    },
+    structuredSource: fp?.source ?? null,
+  });
 
   const shouldUseConvoCtxForStructuredService =
     fp.source === "price_fastpath_db_llm_render" ||
