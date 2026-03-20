@@ -3394,12 +3394,33 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
     const isCatalogQuestionBasic = false;
 
-    const hasRecentCatalogContext = catalogRoutingSignal.hasFreshCatalogContext;
+    const hasRecentCatalogContext =
+      catalogRoutingSignal.hasFreshCatalogContext ||
+      (Array.isArray((convoCtx as any)?.last_plan_list) &&
+        (convoCtx as any).last_plan_list.length > 0) ||
+      (Array.isArray((convoCtx as any)?.last_package_list) &&
+        (convoCtx as any).last_package_list.length > 0) ||
+      (Array.isArray((convoCtx as any)?.pending_link_options) &&
+        (convoCtx as any).pending_link_options.length > 0) ||
+      Boolean((convoCtx as any)?.pending_link_lookup) ||
+      Boolean((convoCtx as any)?.expectingVariant);
 
     const intentAllowsCatalogRouting = catalogRoutingSignal.allowsDbCatalogPath;
 
+    const hasStructuredCatalogState =
+      hasRecentCatalogContext ||
+      (
+        (intentAllowsCatalogRouting || isPriceQuestion(userInput, convoCtx)) &&
+        (
+          Boolean((convoCtx as any)?.selectedServiceId) ||
+          Boolean((convoCtx as any)?.last_service_id)
+        )
+      );
+
     const isCatalogQuestion =
-      catalogRoutingSignal.shouldRouteCatalog || isPriceQuestion(userInput, convoCtx);
+      catalogRoutingSignal.shouldRouteCatalog ||
+      isPriceQuestion(userInput, convoCtx) ||
+      hasStructuredCatalogState;
 
     // 🔒 Nunca permitir que el LLM responda precios
     if (isPriceQuestion(userInput, convoCtx)) {

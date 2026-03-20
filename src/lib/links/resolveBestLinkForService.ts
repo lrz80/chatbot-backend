@@ -41,12 +41,6 @@ export async function resolveBestLinkForService(args: {
 }): Promise<LinkPick> {
   const { pool, tenantId, serviceId, userText } = args;
 
-  console.log("🔗 [LINK-RESOLVER] start", {
-    tenantId,
-    serviceId,
-    userText,
-  });
-
   const s = await pool.query(
     `
     SELECT NULLIF(TRIM(COALESCE(service_url,'')), '') AS service_url
@@ -57,10 +51,6 @@ export async function resolveBestLinkForService(args: {
     [tenantId, serviceId]
   );
   const serviceUrl = s.rows?.[0]?.service_url ? String(s.rows[0].service_url) : "";
-
-  console.log("🔗 [LINK-RESOLVER] service row", {
-    serviceUrl,
-  });
 
   const v = await pool.query(
     `
@@ -98,7 +88,7 @@ export async function resolveBestLinkForService(args: {
       const isPureNumber = /^[1-9]$/.test(t);
 
       if (isPureNumber) {
-        console.log("🔗 [LINK-RESOLVER] skip scoring for pure numeric input");
+        
       } else {
         const scored = options
           .map((o) => ({ ...o, score: scoreLabelVsText(o.label, t) }))
@@ -107,26 +97,16 @@ export async function resolveBestLinkForService(args: {
         const best = scored[0];
         const second = scored[1];
 
-        console.log("🔗 [LINK-RESOLVER] scored options", {
-          scored,
-          best,
-          second,
-        });
-
         const strongEnough = best.score >= 0.40;
         const clearlyBetter = !second || best.score - second.score >= 0.12;
 
         if (strongEnough && clearlyBetter) {
-          console.log("🔗 [LINK-RESOLVER] strong match -> best.variant", {
-            url: best.url,
-          });
+          
           return { ok: true, url: best.url };
         }
 
         if (serviceUrl) {
-          console.log("🔗 [LINK-RESOLVER] ambiguous but has serviceUrl -> fallback service", {
-            url: serviceUrl,
-          });
+          
           return { ok: true, url: serviceUrl };
         }
 
@@ -134,9 +114,6 @@ export async function resolveBestLinkForService(args: {
         const secondScore = Number(second?.score || 0);
 
         if (bestScore <= 0 || bestScore === secondScore) {
-          console.log("🔗 [LINK-RESOLVER] ambiguous -> ask variant", {
-            options,
-          });
 
           return {
             ok: false,
@@ -145,10 +122,6 @@ export async function resolveBestLinkForService(args: {
           };
         }
 
-        console.log("🔗 [LINK-RESOLVER] weak but usable match -> best.variant", {
-          url: best.url,
-        });
-
         return { ok: true, url: best.url };
       }
     }
@@ -156,9 +129,7 @@ export async function resolveBestLinkForService(args: {
     // Sin texto útil o con input numérico:
     // NO adivinamos variante aquí.
     if (serviceUrl) {
-      console.log("🔗 [LINK-RESOLVER] fallback serviceUrl", {
-        url: serviceUrl,
-      });
+      
       return { ok: true, url: serviceUrl };
     }
 
@@ -171,6 +142,5 @@ export async function resolveBestLinkForService(args: {
 
   if (serviceUrl) return { ok: true, url: serviceUrl };
 
-  console.log("🔗 [LINK-RESOLVER] no link found at all");
   return { ok: false, reason: "no_link" };
 }
