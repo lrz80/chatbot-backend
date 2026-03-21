@@ -2178,7 +2178,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         now - Number((convoCtx as any)?.last_service_at || 0) <= ttlMs;
 
       const isAwaitingPriceVariantSelection =
-        String((convoCtx as any)?.last_bot_action || "") === "asked_price_variant" &&
+        convoCtx.expectedVariantIntent === "price_or_plan" &&
         Boolean((convoCtx as any)?.expectingVariant) &&
         Array.isArray((convoCtx as any)?.last_variant_options) &&
         (convoCtx as any).last_variant_options.length > 0;
@@ -2450,6 +2450,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             intent: "precio",
             ctxPatch: {
               expectingVariant: false,
+              expectedVariantIntent: null,
+              lastResolvedIntent: "price_or_plan",
+
               selectedServiceId: serviceId,
 
               last_service_id: serviceId,
@@ -2738,6 +2741,10 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       intent: intentOut || "info_servicio",
       ctxPatch: {
         expectingVariant: false,
+        expectedVariantIntent: null,
+
+        lastResolvedIntent: "price_or_plan",
+
         selectedServiceId: serviceId,
 
         last_service_id: serviceId,
@@ -2955,6 +2962,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             ctxPatch: {
               selectedServiceId: String(chosen.service_id || ""),
               expectingVariant: false,
+              expectedVariantIntent: null,
 
               last_service_id: String(chosen.service_id || ""),
               last_service_name: baseName || null,
@@ -3222,6 +3230,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           ctxPatch: {
             selectedServiceId: serviceId,
             expectingVariant: true,
+            expectedVariantIntent: "includes",
 
             last_service_id: serviceId,
             last_service_name: serviceName || null,
@@ -3346,6 +3355,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         ctxPatch: {
           selectedServiceId: serviceId,
           expectingVariant: false,
+          expectedVariantIntent: null,
           last_service_id: serviceId,
           last_service_name: serviceName,
           last_service_at: Date.now(),
@@ -4523,6 +4533,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             intent: "precio",
             ctxPatch: {
               last_catalog_at: Date.now(),
+              lastResolvedIntent: "other_plans",
             },
           };
         }
@@ -4861,7 +4872,15 @@ ${catalogText}${infoGeneralBlock}
       // si en el futuro agregas más idiomas, aquí puedes meter más ramas:
       // else if (idiomaDestino === "es") { ... }
 
-      const ctxPatch: Partial<FastpathCtx> = {};
+      const ctxPatch: Partial<FastpathCtx> = {
+        lastResolvedIntent:
+          questionType === "combination_and_price"
+            ? "combination_and_price"
+            : questionType === "other_plans"
+            ? "other_plans"
+            : "price_or_plan",
+      };
+
       if (namesShown.length) {
         ctxPatch.last_catalog_plans = namesShown;
         ctxPatch.last_catalog_at = Date.now();
