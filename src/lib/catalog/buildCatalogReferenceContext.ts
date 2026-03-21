@@ -1,4 +1,7 @@
-import type { CatalogReferenceContext } from "./types";
+import type {
+  CatalogReferenceContext,
+  CatalogReferenceIntent,
+} from "./types";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -51,6 +54,26 @@ function asNumber(value: unknown): number | null {
   return null;
 }
 
+function asCatalogReferenceIntent(
+  value: unknown
+): CatalogReferenceIntent | null {
+  const v = typeof value === "string" ? value.trim().toLowerCase() : "";
+
+  if (!v) return null;
+
+  const allowed: CatalogReferenceIntent[] = [
+    "price_or_plan",
+    "includes",
+    "schedule",
+    "other_plans",
+    "combination_and_price",
+  ];
+
+  return allowed.includes(v as CatalogReferenceIntent)
+    ? (v as CatalogReferenceIntent)
+    : null;
+}
+
 function extractPresentedEntityIds(source: AnyRecord): string[] {
   const direct = pickFirstStringArray(source, [
     "lastPresentedEntityIds",
@@ -85,9 +108,10 @@ function extractPresentedFamilyKeys(source: AnyRecord): string[] {
 }
 
 function extractPresentedVariantOptions(source: AnyRecord) {
-  const raw = source["presentedVariantOptions"] 
-    ?? source["presented_variant_options"]
-    ?? null;
+  const raw =
+    source["presentedVariantOptions"] ??
+    source["presented_variant_options"] ??
+    null;
 
   if (!Array.isArray(raw)) return null;
 
@@ -102,16 +126,25 @@ function extractPresentedVariantOptions(source: AnyRecord) {
       const label = asString(rec.label);
       const aliases = asStringArray(rec.aliases);
 
-      if (!index || !variantId || !label) return null;
+      if (!Number.isFinite(index) || !variantId || !label) return null;
 
       return {
         index,
         variantId,
         label,
-        aliases
+        aliases,
       };
     })
-    .filter((x): x is { index: number; variantId: string; label: string; aliases: string[] } => Boolean(x));
+    .filter(
+      (
+        x
+      ): x is {
+        index: number;
+        variantId: string;
+        label: string;
+        aliases: string[];
+      } => Boolean(x)
+    );
 
   return cleaned.length > 0 ? cleaned : null;
 }
@@ -175,13 +208,35 @@ export function buildCatalogReferenceContext(
 
   const presentedVariantOptions = extractPresentedVariantOptions(ctx);
 
+  const lastFamilyName = pickFirstString(ctx, [
+    "lastFamilyName",
+    "last_family_name",
+    "familyName",
+    "family_name",
+  ]);
+
+  const lastResolvedIntent = asCatalogReferenceIntent(
+    ctx["lastResolvedIntent"] ??
+      ctx["last_resolved_intent"] ??
+      ctx["resolvedIntent"] ??
+      ctx["resolved_intent"]
+  );
+
+  const expectedVariantIntent = asCatalogReferenceIntent(
+    ctx["expectedVariantIntent"] ?? ctx["expected_variant_intent"]
+  );
+
   return {
     lastEntityId: entityContextFresh ? lastEntityId : null,
-    lastEntityName: entityContextFresh && lastEntityId ? rawLastEntityName : null,
+    lastEntityName:
+      entityContextFresh && lastEntityId ? rawLastEntityName : null,
     lastFamilyKey,
+    lastFamilyName,
     lastPresentedEntityIds,
     lastPresentedFamilyKeys,
     expectingVariantForEntityId,
-    presentedVariantOptions, // 🔥 ESTE ES EL FIX
+    expectedVariantIntent,
+    lastResolvedIntent,
+    presentedVariantOptions,
   };
 }

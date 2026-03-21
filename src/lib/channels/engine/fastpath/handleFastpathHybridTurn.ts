@@ -273,6 +273,20 @@ export async function handleFastpathHybridTurn(
   // Intención “final” de este turno (signals)
   const currentIntent = (detectedIntent || intentFallback || null) ?? null;
 
+  const normalizedCurrentIntent = String(currentIntent || "").trim().toLowerCase();
+
+  const CATALOG_ROUTING_INTENTS = new Set([
+    "precio",
+    "planes_precios",
+    "info_horarios_generales",
+    "schedule",
+  ]);
+
+  const shouldRouteCatalog =
+    CATALOG_ROUTING_INTENTS.has(normalizedCurrentIntent) ||
+    referentialFollowup === true ||
+    followupNeedsAnchor === true;
+
   let explicitEntityCandidateForClassification: {
     id: string;
     name: string;
@@ -306,17 +320,29 @@ export async function handleFastpathHybridTurn(
     );
   }
 
+  const catalogReferenceIntent =
+  CATALOG_ROUTING_INTENTS.has(normalizedCurrentIntent)
+    ? normalizedCurrentIntent
+    : null;
+
   const catalogReferenceClassificationInput =
     buildCatalogReferenceClassificationInput({
       userText: userInput,
       convoCtx,
+      detectedIntent: catalogReferenceIntent,
     });
 
-  const catalogReferenceClassification = classifyCatalogReferenceTurn({
-    ...catalogReferenceClassificationInput,
-    explicitEntityCandidate: explicitEntityCandidateForClassification,
-    detectedIntent: detectedIntent || intentFallback || null,
-  });
+  const catalogReferenceClassification = shouldRouteCatalog
+    ? classifyCatalogReferenceTurn({
+        ...catalogReferenceClassificationInput,
+        explicitEntityCandidate: explicitEntityCandidateForClassification,
+        detectedIntent: catalogReferenceIntent,
+      })
+    : classifyCatalogReferenceTurn({
+        ...catalogReferenceClassificationInput,
+        explicitEntityCandidate: explicitEntityCandidateForClassification,
+        detectedIntent: null,
+      });
 
   console.log("[CATALOG_REFERENCE_CLASSIFIER]", {
     tenantId,
@@ -330,11 +356,24 @@ export async function handleFastpathHybridTurn(
     classification: catalogReferenceClassification,
   });
 
-  // Intenciones que consideramos “info de precios/planes/horarios del negocio”
+  // Intenciones que deben rutear al catálogo
+  const isCatalogIntent = CATALOG_ROUTING_INTENTS.has(normalizedCurrentIntent);
+
+  // Este flag sigue existiendo solo para la lógica de salida/precio,
+  // pero ya no decide el routing al catálogo por sí solo.
   const isPriceIntent =
-    currentIntent === "info_horarios_generales" ||
-    currentIntent === "precio" ||
-    currentIntent === "planes_precios";
+    normalizedCurrentIntent === "precio" ||
+    normalizedCurrentIntent === "planes_precios";
+
+  const asksPlans = /\b(plan|planes|membres[ií]a|membership|memberships)\b/i.test(
+    loweredInput
+  );
+
+  const asksHorarios = /\b(horario|hora|horarios|hours|schedule|schedules)\b/i.test(
+    loweredInput
+  );
+
+  const wantsPlansAndHours = asksPlans && asksHorarios;
 
   const hasRecentCatalogList =
     Array.isArray((convoCtx as any)?.last_catalog_plans) &&
@@ -348,13 +387,18 @@ export async function handleFastpathHybridTurn(
     );
 
   const isPriceQuestionUser =
-    isPriceIntent ||
-    (asksOtherOptionsGeneric && hasRecentCatalogList);
+  isPriceIntent ||
+  (asksOtherOptionsGeneric && hasRecentCatalogList);
 
-  // 🔍 Señales específicas: planes + horarios en la misma pregunta
-  const asksPlans = /plan|planes|membres/i.test(loweredInput);
-  const asksHorarios = /horario|hora|horarios|hours|schedule/i.test(loweredInput);
-  const wantsPlansAndHours = asksPlans && asksHorarios;
+  const shouldForceCatalogRouting =
+    isCatalogIntent ||
+    (asksOtherOptionsGeneric && hasRecentCatalogList) ||
+    wantsPlansAndHours;
+
+  // Intención efectiva que verá Fastpath
+  const fpIntent = shouldForceCatalogRouting
+    ? (detectedIntent || intentFallback || "precio")
+    : (detectedIntent || intentFallback || null);
 
   // Pregunta de seguimiento: "otros/más planes"
   const isMorePlansFollowup =
@@ -370,11 +414,6 @@ export async function handleFastpathHybridTurn(
         loweredInput
     );
 
-  // Intención efectiva que verá Fastpath
-  const fpIntent = isPriceQuestionUser
-    ? (detectedIntent || intentFallback || "precio")
-    : (detectedIntent || intentFallback || null);
-
   // ============================================
   // PRE-RESOLVE DE SERVICIO DESDE EL MENSAJE DEL USUARIO
   // Esto cubre el caso donde Fastpath no maneja el turno
@@ -386,9 +425,11 @@ export async function handleFastpathHybridTurn(
   // realmente sobre un servicio concreto, no sobre catálogo general.
   const shouldTryPreResolveServiceBase =
     (
-      currentIntent === "info_servicio" ||
-      currentIntent === "precio" ||
-      currentIntent === "planes_precios"
+      normalizedCurrentIntent === "info_servicio" ||
+      normalizedCurrentIntent === "precio" ||
+      normalizedCurrentIntent === "planes_precios" ||
+      normalizedCurrentIntent === "info_horarios_generales" ||
+      normalizedCurrentIntent === "schedule"
     ) &&
     (
       catalogReferenceClassification.kind === "entity_specific" ||
@@ -734,7 +775,7 @@ export async function handleFastpathHybridTurn(
   }
 
   // 3️⃣ Texto factual base que sale de Fastpath
-  let fastpathText = fp.reply;
+  let fastpathText = String(fp.reply || "");
 
   // Si el usuario preguntó "qué incluye...", NO queremos meter los horarios en el bloque
   if (isPlanDetailQuestion) {

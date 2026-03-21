@@ -75,6 +75,7 @@ const CATALOG_INTENTS = new Set([
   "catalogo",
   "catalog",
   "info_horarios_generales",
+  "schedule",
   "other_plans",
   "catalog_alternatives",
   "combination_and_price",
@@ -117,6 +118,36 @@ function mapClassificationToRouteIntent(
   return "unknown";
 }
 
+function mapIntentOutToRouteIntent(intentOut?: string | null): CatalogRouteIntent {
+  const intent = String(intentOut || "").trim().toLowerCase();
+
+  if (intent === "other_plans" || intent === "catalog_alternatives") {
+    return "catalog_alternatives";
+  }
+
+  if (intent === "combination_and_price" || intent === "catalog_combination") {
+    return "catalog_combination";
+  }
+
+  if (intent === "info_horarios_generales" || intent === "schedule") {
+    return "catalog_schedule";
+  }
+
+  if (intent === "precio" || intent === "planes_precios") {
+    return "catalog_price";
+  }
+
+  if (intent === "info_servicio") {
+    return "entity_detail";
+  }
+
+  if (intent === "catalogo" || intent === "catalog") {
+    return "catalog_overview";
+  }
+
+  return "unknown";
+}
+
 export function buildCatalogRoutingSignal({
   intentOut,
   catalogReferenceClassification,
@@ -131,7 +162,7 @@ export function buildCatalogRoutingSignal({
       ? catalogReferenceClassification.kind
       : "none";
 
-  const normalizedIntentOut = String(intentOut || "").trim();
+  const normalizedIntentOut = String(intentOut || "").trim().toLowerCase();
   const allowsDbCatalogPath = CATALOG_INTENTS.has(normalizedIntentOut);
 
   const hasFreshCatalogContext = isFreshCatalogContext(convoCtx);
@@ -202,7 +233,7 @@ export function buildCatalogRoutingSignal({
   if (allowsDbCatalogPath) {
     return {
       shouldRouteCatalog: true,
-      routeIntent: "catalog_price",
+      routeIntent: mapIntentOutToRouteIntent(normalizedIntentOut),
       referenceKind: "none",
       source: "intent_layer",
       allowsDbCatalogPath,
