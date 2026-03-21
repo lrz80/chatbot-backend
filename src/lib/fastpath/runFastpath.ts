@@ -85,6 +85,24 @@ export type FastpathCtx = {
   last_variant_url?: string | null;
   last_variant_at?: number | null;
 
+  lastResolvedIntent?:
+    | "price_or_plan"
+    | "other_plans"
+    | "combination_and_price"
+    | "includes"
+    | "schedule"
+    | "unknown"
+    | null;
+
+  expectedVariantIntent?:
+    | "price_or_plan"
+    | "other_plans"
+    | "combination_and_price"
+    | "includes"
+    | "schedule"
+    | "unknown"
+    | null;
+
   [k: string]: any;
 };
 
@@ -3359,64 +3377,31 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         previousCatalogPlans: catalogRoutingSignal.previousCatalogPlans,
         targetServiceId: catalogRoutingSignal.targetServiceId,
         targetServiceName: catalogRoutingSignal.targetServiceName,
+        targetVariantId: catalogRoutingSignal.targetVariantId,
+        targetVariantName: catalogRoutingSignal.targetVariantName,
+        targetFamilyKey: catalogRoutingSignal.targetFamilyKey,
+        targetFamilyName: catalogRoutingSignal.targetFamilyName,
+        targetLevel: catalogRoutingSignal.targetLevel,
+        disambiguationType: catalogRoutingSignal.disambiguationType,
+        anchorShift: catalogRoutingSignal.anchorShift,
       },
     });
 
-    const isCombinationIntent =
-      q.includes("combinar") ||
-      q.includes("mezclar") ||
-      q.includes("usar ambas") ||
-      q.includes("usar las dos") ||
-      q.includes("combine classes") ||
-      q.includes("use both") ||
-      q.includes("combinada") ||
-      q.includes("combinado") ||
-      q.includes("ambas clases") ||
-      q.includes("ambos tipos") ||
-      q.includes("all inclusive") ||
-      q.includes("todo incluido");
+    const routeIntent = String(catalogRoutingSignal.routeIntent || "").trim();
 
-    const qNorm = normalizeText(userInput);
+    const isCombinationIntent =
+      routeIntent === "catalog_combination";
 
     const asksIncludesOnly =
-      looksLikeDetailIntent(userInput) ||
-      /\b(q incluye|que incluye|qué incluye|incluye|what includes|what is included)\b/i.test(q);
+      routeIntent === "catalog_includes" ||
+      routeIntent === "entity_detail" ||
+      routeIntent === "variant_detail";
 
     const isAskingOtherCatalogOptions =
-      qNorm.includes("otro plan") ||
-      qNorm.includes("otros planes") ||
-      qNorm.includes("otras opciones") ||
-      qNorm.includes("que otras opciones tienes") ||
-      qNorm.includes("q otras opciones tienes") ||
-      qNorm.includes("que mas tienes") ||
-      qNorm.includes("q mas tienes") ||
-      qNorm.includes("que mas opciones tienes") ||
-      qNorm.includes("q mas opciones tienes") ||
-      qNorm.includes("que otros planes tienes") ||
-      qNorm.includes("q otros planes tienes") ||
-      qNorm.includes("que otros productos") ||
-      qNorm.includes("q otros productos") ||
-      qNorm.includes("otros productos") ||
-      qNorm.includes("que mas productos") ||
-      qNorm.includes("q mas productos") ||
-      qNorm.includes("que otros servicios") ||
-      qNorm.includes("q otros servicios") ||
-      qNorm.includes("otros servicios") ||
-      qNorm.includes("que mas servicios") ||
-      qNorm.includes("q mas servicios") ||
-      qNorm === "otras opciones" ||
-      qNorm === "otros planes" ||
-      qNorm === "otros productos" ||
-      qNorm === "otros servicios" ||
-      qNorm === "que mas" ||
-      qNorm === "q mas" ||
-      qNorm.includes("more plans") ||
-      qNorm.includes("other plans") ||
-      qNorm.includes("other products") ||
-      qNorm.includes("more products") ||
-      qNorm.includes("other services") ||
-      qNorm.includes("more services") ||
-      qNorm.includes("what other options");
+      routeIntent === "catalog_alternatives";
+
+    const asksSchedules =
+      routeIntent === "catalog_schedule";
 
     const isCatalogQuestionBasic = false;
 
@@ -3457,61 +3442,42 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     if (!isCatalogQuestion) {
       // deja continuar con el resto del fastpath
     } else {
-      const isPriceLike =
-        isPriceQuestion(userInput, convoCtx) ||
-        q.includes("plan") ||
-        q.includes("planes") ||
-        q.includes("membresia") ||
-        q.includes("membresía") ||
-        q.includes("membership") ||
-        q.includes("paquete") ||
-        q.includes("package") ||
-        q.includes("bundle");
 
       type QuestionType = "combination_and_price" | "price_or_plan" | "other_plans";
 
       let questionType: QuestionType;
 
-      // PRIORIDAD:
-      // 1) Pregunta de combinación, aunque no diga "precio"
-      if (isCombinationIntent) {
+      if (routeIntent === "catalog_combination") {
         questionType = "combination_and_price";
-      } else if (isAskingOtherCatalogOptions) {
+      } else if (routeIntent === "catalog_alternatives") {
         questionType = "other_plans";
-      } else if (isCatalogOverviewTurn) {
-        questionType = "price_or_plan";
-      } else if (isCatalogFamilyTurn) {
-        questionType = "price_or_plan";
       } else {
         questionType = "price_or_plan";
       }
 
-      if (isCatalogOverviewTurn && intentAllowsCatalogRouting) {
+      if (routeIntent === "catalog_overview" && intentAllowsCatalogRouting) {
         console.log("[CATALOG_OVERVIEW][RUN_FASTPATH]", {
           userInput,
           questionType,
           detectedIntent,
           catalogReferenceKind: catalogReferenceClassification?.kind ?? "none",
+          routeIntent,
         });
       }
 
-      if (isCatalogFamilyTurn && intentAllowsCatalogRouting) {
+      if (routeIntent === "catalog_family" && intentAllowsCatalogRouting) {
         console.log("[CATALOG_FAMILY][RUN_FASTPATH]", {
           userInput,
           questionType,
           detectedIntent,
           catalogReferenceKind: catalogReferenceClassification?.kind ?? "none",
+          routeIntent,
         });
       }
 
-      const asksSchedules =
-        /\b(horario|horarios|hora|horas|hours?|schedule|schedules)\b/i.test(q);
       const catalogText = await buildCatalogContext(pool, tenantId);
 
-      const hasMultiAccessPlan =
-        /todas las clases|todas nuestras clases|todas las sesiones|all classes|all services|any class|unlimited/i.test(
-          catalogText
-        );
+      const hasMultiAccessPlan = false;
 
       // ✅ construir PREVIOUS_PLANS_MENTIONED desde el contexto
       const nowForMeta = Date.now();
@@ -3541,9 +3507,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       // - la intención es info_general / info_horarios_generales
       const shouldAttachInfoGeneral =
         !!infoClave &&
-        (asksSchedules ||
+        (
+          asksSchedules ||
+          routeIntent === "catalog_schedule" ||
           intentOut === "info_general" ||
-          intentOut === "info_horarios_generales");
+          intentOut === "info_horarios_generales"
+        );
 
       const infoGeneralBlock = shouldAttachInfoGeneral
         ? idiomaDestino === "en"
@@ -3616,7 +3585,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         // Si es follow-up elíptico de precio, reutiliza el último servicio.
         // =========================================================
         const shouldSkipSinglePriceTargetResolution =
-          catalogReferenceClassification?.kind === "catalog_overview";
+          routeIntent === "catalog_overview";
 
         const ellipticPriceFollowup = isEllipticPriceFollowup(userInput, convoCtx);
 
@@ -3788,7 +3757,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               : [];
 
             const isAwaitingPriceVariantSelection =
-              String((convoCtx as any)?.last_bot_action || "") === "asked_price_variant" &&
+              convoCtx.expectedVariantIntent === "price_or_plan" &&
               Boolean((convoCtx as any)?.expectingVariant) &&
               storedVariantOptions.length > 0;
 
@@ -4071,6 +4040,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
                 last_price_option_label: variantName || null,
                 last_price_option_at: Date.now(),
+
+                expectedVariantIntent: null,
+                lastResolvedIntent: "price_or_plan",
               } as Partial<FastpathCtx>,
             };
           }
@@ -4132,6 +4104,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               ctxPatch: {
                 selectedServiceId: targetServiceId,
                 expectingVariant: true,
+                expectedVariantIntent: "price_or_plan",
 
                 last_service_id: targetServiceId,
                 last_service_name: targetServiceName || null,
@@ -4222,6 +4195,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 last_service_id: targetServiceId,
                 last_service_name: targetServiceName || null,
                 last_service_at: Date.now(),
+                lastResolvedIntent: "price_or_plan",
+                expectedVariantIntent: null,
               } as Partial<FastpathCtx>,
             };
           }
@@ -4283,6 +4258,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                   last_service_id: targetServiceId,
                   last_service_name: targetServiceName || null,
                   last_service_at: Date.now(),
+                  lastResolvedIntent: "price_or_plan",
+                  expectedVariantIntent: null,
                 } as Partial<FastpathCtx>,
               };
             }
@@ -4345,6 +4322,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
                 last_service_id: targetServiceId,
                 last_service_name: targetServiceName || null,
                 last_service_at: Date.now(),
+                lastResolvedIntent: "price_or_plan",
+                expectedVariantIntent: null,
               } as Partial<FastpathCtx>,
             };
           }
@@ -4451,6 +4430,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const ctxPatch: Partial<FastpathCtx> = {
           last_catalog_at: Date.now(),
+          lastResolvedIntent: "price_or_plan",
         };
 
         if (namesShown.length) {
@@ -4574,6 +4554,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
         const ctxPatch: Partial<FastpathCtx> = {
           last_catalog_at: Date.now(),
+          lastResolvedIntent: "other_plans",
         };
 
         if (namesShown.length) {
