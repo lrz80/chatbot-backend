@@ -1,3 +1,4 @@
+//src/lib/catalog/classifyCatalogReferenceTurn.ts
 import type {
   CatalogAnchorShift,
   CatalogDisambiguationType,
@@ -71,6 +72,7 @@ function mapDetectedIntentToCatalogIntent(
     case "info_servicio":
       return "includes";
 
+    case "horario":
     case "info_horarios_generales":
       return "schedule";
 
@@ -350,6 +352,7 @@ export function classifyCatalogReferenceTurn(
     "info_servicio",
     "catalogo",
     "catalog",
+    "horario",
     "info_horarios_generales",
     "other_plans",
     "catalog_alternatives",
