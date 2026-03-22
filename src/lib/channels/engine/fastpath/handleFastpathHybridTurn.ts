@@ -16,6 +16,8 @@ import { stripMarkdownLinksForDm } from "../../format/stripMarkdownLinks";
 import { buildCatalogReferenceClassificationInput } from "../../../catalog/buildCatalogReferenceClassificationInput";
 import { classifyCatalogReferenceTurn } from "../../../catalog/classifyCatalogReferenceTurn";
 
+import { buildCatalogRoutingSignal } from "../../../catalog/buildCatalogRoutingSignal";
+
 const MAX_WHATSAPP_LINES = 9999; // mantenemos el mismo valor
 
 export type FastpathHybridArgs = {
@@ -56,82 +58,6 @@ function firstNonEmptyString(...values: any[]): string | null {
     if (v) return v;
   }
   return null;
-}
-
-function normalizeLoose(raw: string): string {
-  return String(raw || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function tokenizeLoose(raw: string): string[] {
-  const STOP = new Set([
-    "de","del","la","el","los","las","un","una","unos","unas",
-    "para","por","en","y","o","u","a","que","q","este","esta",
-    "ese","esa","esto","eso","le","lo","al","como","con","sin",
-    "sobre","mi","tu","su","me","te","se",
-
-    "hola","buenas","buenos","dias","dia","tardes","noches",
-
-    "what","which","do","does","you","your","the","a","an","and",
-    "or","to","for","in","of","with","without","about","my",
-
-    // términos genéricos de intención / catálogo, NO entidad
-    "servicios","servicio","services","service",
-    "ofrecen","ofrece","offer","offers","offering",
-    "tienen","tiene","have","has",
-
-    "precio","precios","price","prices","pricing",
-    "horario","horarios","schedule","schedules","hours","hour",
-    "plan","planes","membership","memberships",
-    "membresia","membresias","suscripcion","suscripciones",
-    "mensual","mensuales","monthly","month","months",
-    "paquete","paquetes","package","packages","bundle","bundles"
-  ]);
-
-  return normalizeLoose(raw)
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter(Boolean)
-    .filter((t) => t.length >= 2 && !STOP.has(t));
-}
-
-function looksLikeConcreteServiceTurn(params: {
-  userInput: string;
-  detectedIntent: string | null;
-  intentFallback: string | null;
-  resolvedCandidates?: Array<{ score?: number; name?: string }> | null;
-}): boolean {
-  const { userInput, detectedIntent, intentFallback, resolvedCandidates } = params;
-
-  const finalIntent = detectedIntent || intentFallback || null;
-
-  // Solo estos intents pueden intentar entidad concreta,
-  // pero NO la fuerzan por sí solos.
-  const intentAllowsEntityResolution =
-    finalIntent === "info_servicio" ||
-    finalIntent === "precio" ||
-    finalIntent === "planes_precios";
-
-  if (!intentAllowsEntityResolution) return false;
-
-  const meaningfulTokens = tokenizeLoose(userInput);
-  const topScore = Number(resolvedCandidates?.[0]?.score || 0);
-
-  // Si no quedan tokens semánticos concretos, es consulta general.
-  if (meaningfulTokens.length === 0) return false;
-
-  // Con 1 token útil, exigimos señal fuerte.
-  if (meaningfulTokens.length === 1) {
-    return topScore >= 0.55;
-  }
-
-  // Con 2+ tokens útiles, aceptamos si hay candidato razonable.
-  return topScore >= 0.30;
 }
 
 function getStructuredServiceSelection(ctxPatch: any, convoCtx: any) {
@@ -175,75 +101,6 @@ function getStructuredServiceSelection(ctxPatch: any, convoCtx: any) {
     serviceLabel,
     hasResolution: !!serviceId || !!serviceName || !!serviceLabel,
   };
-}
-
-function buildMorePlansReply(fastpathText: string, idiomaDestino: Lang): string {
-  const lines = fastpathText.split(/\r?\n/).map((l) => l.trim());
-
-  const planLines: string[] = [];
-  let reachedSchedules = false;
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-
-    // Saltar saludos y frases genéricas
-    if (/^(hola|buenas|hi|hello)/i.test(line)) continue;
-    if (/^estas son algunas alternativas/i.test(line)) continue;
-
-    // Cortar cuando empiezan los horarios
-    if (/^horarios?:/i.test(line) || /^schedules?:/i.test(line)) {
-      reachedSchedules = true;
-      break;
-    }
-
-    if (!reachedSchedules) {
-      planLines.push(line);
-    }
-  }
-
-  if (planLines.length === 0) {
-    return fastpathText;
-  }
-
-  const header =
-    idiomaDestino === "es"
-      ? "Claro, aquí tienes otras opciones de planes:\n"
-      : "Sure, here are some additional plan options:\n";
-
-  return header + planLines.join("\n");
-}
-
-// Quitar el bloque de "Horarios:" y lo que sigue, salvo que el usuario lo haya pedido
-function stripHorariosBlock(fastpathText: string): string {
-  const lines = fastpathText.split(/\r?\n/);
-
-  const result: string[] = [];
-  let skippingSchedules = false;
-
-  for (const raw of lines) {
-    const line = raw.trim();
-
-    if (!skippingSchedules && /^horarios?:/i.test(line)) {
-      // Desde aquí empezaban los horarios → los saltamos
-      skippingSchedules = true;
-      continue;
-    }
-
-    if (skippingSchedules) {
-      // Si aparece un link de reserva / más info, lo volvemos a incluir y dejamos de saltar
-      if (/^(m[aá]s info|más info|reserva aqu[ií]|reserve here|booking link)/i.test(line)) {
-        skippingSchedules = false;
-        if (line) result.push(raw);
-      }
-      // Todo lo demás (líneas de horarios) se salta
-      continue;
-    }
-
-    result.push(raw);
-  }
-
-  return result.join("\n").trim();
 }
 
 export async function handleFastpathHybridTurn(
@@ -356,63 +213,31 @@ export async function handleFastpathHybridTurn(
     classification: catalogReferenceClassification,
   });
 
-  // Intenciones que deben rutear al catálogo
-  const isCatalogIntent = CATALOG_ROUTING_INTENTS.has(normalizedCurrentIntent);
-
-  // Este flag sigue existiendo solo para la lógica de salida/precio,
-  // pero ya no decide el routing al catálogo por sí solo.
-  const isPriceIntent =
-    normalizedCurrentIntent === "precio" ||
-    normalizedCurrentIntent === "planes_precios";
-
-  const asksPlans = /\b(plan|planes|membres[ií]a|membership|memberships)\b/i.test(
-    loweredInput
-  );
-
-  const asksHorarios = /\b(horario|hora|horarios|hours|schedule|schedules)\b/i.test(
-    loweredInput
-  );
-
-  const wantsPlansAndHours = asksPlans && asksHorarios;
-
-  const hasRecentCatalogList =
-    Array.isArray((convoCtx as any)?.last_catalog_plans) &&
-    ((convoCtx as any).last_catalog_plans?.length ?? 0) > 0 &&
-    Number.isFinite(Number((convoCtx as any)?.last_catalog_at)) &&
-    Date.now() - Number((convoCtx as any).last_catalog_at) <= 30 * 60 * 1000; // 30m
-
-  const asksOtherOptionsGeneric =
-    /\b(other options|more options|other ones|more choices|otras opciones|otra opcion|más opciones|mas opciones)\b/i.test(
-      loweredInput
-    );
+  const catalogRoutingSignal = buildCatalogRoutingSignal({
+    intentOut: detectedIntent || intentFallback || null,
+    catalogReferenceClassification,
+    convoCtx,
+  });
 
   const isPriceQuestionUser =
-  isPriceIntent ||
-  (asksOtherOptionsGeneric && hasRecentCatalogList);
+    catalogRoutingSignal.routeIntent === "catalog_price" ||
+    catalogRoutingSignal.routeIntent === "catalog_alternatives";
 
-  const shouldForceCatalogRouting =
-    isCatalogIntent ||
-    (asksOtherOptionsGeneric && hasRecentCatalogList) ||
-    wantsPlansAndHours;
+  const shouldForceCatalogRouting = catalogRoutingSignal.shouldRouteCatalog;
 
-  // Intención efectiva que verá Fastpath
-  const fpIntent = shouldForceCatalogRouting
-    ? (detectedIntent || intentFallback || "precio")
-    : (detectedIntent || intentFallback || null);
+  const wantsPlansAndHours =
+    catalogRoutingSignal.routeIntent === "catalog_schedule";
 
-  // Pregunta de seguimiento: "otros/más planes"
   const isMorePlansFollowup =
-    /\b(otro(?:s)?|mas|más|adicional(?:es)?|otra opcion|otras opciones|another|other|more|additional)\b/.test(
-      loweredInput
-    ) &&
-    /\b(plan(?:es)?|membres[ií]a|membership|producto(?:s)?)\b/.test(loweredInput);
+    catalogRoutingSignal.routeIntent === "catalog_alternatives";
 
-  // Pregunta de DETALLE de algo (qué incluye / qué trae)
-  // Genérico: sirve para cualquier servicio, plan, producto, paquete, etc.
   const isPlanDetailQuestion =
-    /\b(que incluye|qué incluye|que trae|qué trae|incluye|incluyen|mas detalle|más detalle|dame mas detalle|dame más detalle|detalle|detalles|what\s+is\s+included|what\s+does.*include|what.*include|more detail|more details|give me more detail|tell me more about)\b/i.test(
-        loweredInput
-    );
+    catalogReferenceClassification.intent === "includes" ||
+    normalizedCurrentIntent === "info_servicio";
+
+  const fpIntent = shouldForceCatalogRouting
+  ? (detectedIntent || intentFallback || "precio")
+  : (detectedIntent || intentFallback || null);
 
   // ============================================
   // PRE-RESOLVE DE SERVICIO DESDE EL MENSAJE DEL USUARIO
@@ -455,12 +280,21 @@ export async function handleFastpathHybridTurn(
         { mode: "loose" }
       );
 
-      shouldTryPreResolveService = looksLikeConcreteServiceTurn({
-        userInput,
-        detectedIntent: currentIntent,
-        intentFallback,
-        resolvedCandidates: candidateResult?.candidates || [],
-      });
+      shouldTryPreResolveService =
+        shouldTryPreResolveServiceBase &&
+        Boolean(candidateResult?.hit?.id) &&
+        (
+          catalogReferenceClassification.kind === "entity_specific" ||
+          catalogReferenceClassification.kind === "variant_specific" ||
+          (
+            catalogReferenceClassification.kind === "referential_followup" &&
+            Boolean(
+              catalogReferenceClassification.targetServiceId ||
+              convoCtx?.last_service_id ||
+              convoCtx?.selectedServiceId
+            )
+          )
+        );
 
       if (shouldTryPreResolveService && candidateResult?.hit?.id) {
         explicitServiceResolved = true;
@@ -729,27 +563,21 @@ export async function handleFastpathHybridTurn(
     "price_summary_db_empty",
   ]);
 
-  const looksLikeNarrativeMessage =
-    /\b(gracias|muchas gracias|thank you|thanks|los veo pronto|see you soon|dios mediante|god willing|ahorita|ahora mismo|cuando pueda|cuando tenga|creo que|me voy a anotar|i think|maybe later|not right now)\b/i.test(
-      loweredInput
-    );
-
   const shouldAllowHardPriceBypass =
-    isPriceQuestionUser ||
-    isPlanDetailQuestion ||
-    wantsPlansAndHours;
+    catalogRoutingSignal.routeIntent === "catalog_price" ||
+    catalogRoutingSignal.routeIntent === "catalog_alternatives" ||
+    catalogRoutingSignal.routeIntent === "catalog_schedule" ||
+    isPlanDetailQuestion;
 
   if (
     isDmChatChannel(canal) &&
     HARD_BYPASS_PRICE_SOURCES.has(fp.source as any) &&
-    shouldAllowHardPriceBypass &&
-    !looksLikeNarrativeMessage
+    shouldAllowHardPriceBypass
   ) {
     console.log("[CHAT][FASTPATH] HARD BYPASS DB_PRICE_SOURCE -> send fastpath (no LLM)", {
       source: fp.source,
       intent: fp.intent,
       shouldAllowHardPriceBypass,
-      looksLikeNarrativeMessage,
     });
 
     return {
@@ -776,11 +604,6 @@ export async function handleFastpathHybridTurn(
 
   // 3️⃣ Texto factual base que sale de Fastpath
   let fastpathText = String(fp.reply || "");
-
-  // Si el usuario preguntó "qué incluye...", NO queremos meter los horarios en el bloque
-  if (isPlanDetailQuestion) {
-    fastpathText = stripHorariosBlock(fastpathText);
-  }
 
   // 3.1️⃣ BYPASS LLM PARA DETALLE DE SERVICIO ("qué incluye X")
   // Si Fastpath ya resolvió info_servicio (incluye/qué trae), en WhatsApp/Meta
@@ -833,8 +656,7 @@ export async function handleFastpathHybridTurn(
     let replyText = fastpathText;
 
     if (isMorePlansFollowup) {
-      // Modo "otras opciones": solo lista adicional, sin horarios ni saludo
-      replyText = buildMorePlansReply(fastpathText, idiomaDestino);
+      replyText = fastpathText;
     }
 
     return {
@@ -847,14 +669,12 @@ export async function handleFastpathHybridTurn(
   }
 
   // 🔍 detecta si ya trae link o viene de info_clave_*
-  const hasLinkInFastpath = /https?:\/\/\S+/i.test(fastpathText);
   const isInfoClaveSource = String(fp.source || "").startsWith("info_clave");
 
   // 4️⃣ BYPASS LLM EN WHATSAPP/META si ya hay link o viene de info_clave
-  if (isDmChatChannel(canal) && (hasLinkInFastpath || isInfoClaveSource)) {
+  if (isDmChatChannel(canal) && isInfoClaveSource) {
     console.log("[CHAT][FASTPATH] Bypass LLM (link/info_clave)", {
       source: fp.source,
-      hasLinkInFastpath,
     });
 
     console.log("[FASTPATH_HYBRID][RETURN_HARD_PRICE_BYPASS]", {

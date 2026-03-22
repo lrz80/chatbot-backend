@@ -82,6 +82,10 @@ const CATALOG_INTENTS = new Set([
   "catalog_combination",
 ]);
 
+function normalizeText(input?: string | null): string {
+  return String(input || "").trim().toLowerCase();
+}
+
 function isFreshCatalogContext(convoCtx?: CatalogRoutingConvoCtx | null): boolean {
   const lastCatalogPlans = Array.isArray(convoCtx?.last_catalog_plans)
     ? convoCtx!.last_catalog_plans
@@ -100,7 +104,7 @@ function isFreshCatalogContext(convoCtx?: CatalogRoutingConvoCtx | null): boolea
 function mapClassificationToRouteIntent(
   classification?: CatalogReferenceClassification | null
 ): CatalogRouteIntent {
-  const intent = String(classification?.intent || "").trim();
+  const intent = normalizeText(classification?.intent || "");
   const kind = classification?.kind || "none";
 
   if (intent === "other_plans") return "catalog_alternatives";
@@ -119,7 +123,7 @@ function mapClassificationToRouteIntent(
 }
 
 function mapIntentOutToRouteIntent(intentOut?: string | null): CatalogRouteIntent {
-  const intent = String(intentOut || "").trim().toLowerCase();
+  const intent = normalizeText(intentOut);
 
   if (intent === "other_plans" || intent === "catalog_alternatives") {
     return "catalog_alternatives";
@@ -162,9 +166,8 @@ export function buildCatalogRoutingSignal({
       ? catalogReferenceClassification.kind
       : "none";
 
-  const normalizedIntentOut = String(intentOut || "").trim().toLowerCase();
+  const normalizedIntentOut = normalizeText(intentOut);
   const allowsDbCatalogPath = CATALOG_INTENTS.has(normalizedIntentOut);
-
   const hasFreshCatalogContext = isFreshCatalogContext(convoCtx);
 
   const previousCatalogPlans = Array.isArray(convoCtx?.last_catalog_plans)

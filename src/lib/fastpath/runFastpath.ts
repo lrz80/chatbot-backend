@@ -226,20 +226,6 @@ function bestNameMatch(
   return null;
 }
 
-function isFreeOfferQuestion(text: string) {
-  const t = String(text || "").toLowerCase();
-
-  const hasFreeWord = /\b(gratis|free)\b/i.test(t);
-  const hasTrialWord = /\b(prueba|trial|demo|promocion|promoción)\b/i.test(t);
-  const hasClassWord = /\b(clase|class)\b/i.test(t);
-  const hasTryVerb = /\b(probar|try|testear|probarla|probarlo)\b/i.test(t);
-
-  if (hasFreeWord && (hasTrialWord || hasClassWord)) return true;
-  if (hasTryVerb && hasClassWord) return true;
-
-  return false;
-}
-
 function renderFreeOfferList(args: { lang: Lang; items: { name: string }[] }) {
   const { lang, items } = args;
 
@@ -267,23 +253,6 @@ function norm(s: any) {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
-}
-
-function isTrialQuery(raw: string): boolean {
-  const normalized = String(raw || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
-
-  return (
-    normalized.includes("clase de prueba") ||
-    normalized.includes("clase prueba") ||
-    normalized.includes("prueba gratis") ||
-    normalized.includes("clase gratis") ||
-    normalized.includes("free class") ||
-    normalized.includes("trial") ||
-    normalized.includes("demo")
-  );
 }
 
 // ✅ helper: extraer nombres de planes desde la respuesta del LLM
@@ -380,108 +349,6 @@ function postProcessCatalogReply(params: {
   };
 }
 
-function extractCatalogTargetToken(raw: string): string | null {
-  const t = normalizeText(raw);
-  if (!t) return null;
-
-  // Patrones útiles, pero genéricos
-  let m = t.match(/\b(?:plan|paquete|package|servicio|service)\s+([a-z0-9áéíóúñ]+)\b/);
-  if (m?.[1]) return m[1];
-
-  m = t.match(/\b(?:y\s+)?(?:el|la|los|las)\s+([a-z0-9áéíóúñ]+)\b/);
-  if (m?.[1]) return m[1];
-
-  // Fallback general: quitar palabras funcionales y quedarse con el último token útil
-  const tokens = t
-    .split(/\s+/)
-    .map((x) => x.trim())
-    .filter(Boolean)
-    .filter(
-      (x) =>
-        ![
-          "que",
-          "q",
-          "incluye",
-          "incluyen",
-          "detalle",
-          "detalles",
-          "el",
-          "la",
-          "los",
-          "las",
-          "y",
-          "de",
-          "del",
-          "un",
-          "una",
-          "the",
-          "a",
-          "an",
-          "what",
-          "include",
-          "includes",
-          "more",
-          "about",
-        ].includes(x)
-    );
-
-  if (tokens.length === 1) return tokens[0];
-  if (tokens.length >= 2) return tokens[tokens.length - 1];
-
-  return null;
-}
-
-function humanizeListReply(reply: string, idioma: "es" | "en") {
-  const closingEs = [
-    "¿Cuál te gustaría probar?",
-    "¿Quieres que te recomiende la mejor según tu objetivo? 😊",
-    "Si quieres te guío según lo que estés buscando 😊",
-    "¿Cuál opción te interesa más?"
-  ];
-
-  const closingEn = [
-    "Which one looks best for you?",
-    "Do you want me to recommend the best option for you? 😊",
-    "If you want, I can guide you based on your goals 😊",
-    "Which option are you leaning toward?"
-  ];
-
-  const pick = idioma === "es"
-    ? closingEs[Math.floor(Math.random() * closingEs.length)]
-    : closingEn[Math.floor(Math.random() * closingEn.length)];
-
-  // Si ya contiene pregunta final, no duplicamos
-  if (/interesa|interested|recommend/i.test(reply)) return reply;
-
-  return `${reply}\n\n${pick}`;
-}
-
-function stripLinkSentences(reply: string): string {
-  const lines = String(reply || "").split(/\r?\n/);
-
-  const filtered = lines.filter((line) => {
-    const l = line.toLowerCase().trim();
-    if (!l) return true;
-
-    // Si la línea habla de links / enlaces / comprar en enlaces, la quitamos
-    if (
-      l.includes("enlace") ||
-      l.includes("enlaces") ||
-      l.includes("link") ||
-      l.includes("links") ||
-      l.includes("comprar en los enlaces") ||
-      l.includes("comprar en los links")
-    ) {
-      return false;
-    }
-
-    return true;
-  });
-
-  // Normaliza saltos de línea
-  return filtered.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-}
-
 type CatalogVariantRow = {
   option_name: string;
   service_name: string;
@@ -524,100 +391,6 @@ function renderVariantOptionsReply(args: {
       : "¿Cuál de estas opciones te interesa? 😊";
 
   return `${intro}\n\n${lines.join("\n")}\n\n${ask}`;
-}
-
-function normalizeForIntent(raw: string): string {
-  return String(raw || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function isEllipticPriceFollowup(raw: string, convoCtx: FastpathCtx): boolean {
-  const text = normalizeText(String(raw || ""));
-  if (!text) return false;
-
-  const hasRecentServiceContext =
-    !!String(convoCtx?.last_service_id || "").trim() ||
-    !!String(convoCtx?.selectedServiceId || "").trim();
-
-  if (!hasRecentServiceContext) return false;
-
-  // Mensajes elípticos suelen ser cortos
-  const tokens = text.split(/\s+/).filter(Boolean);
-  if (tokens.length > 6) return false;
-
-  // Si parece introducir una entidad nueva, ya no es follow-up elíptico
-  // Eso lo debe resolver el matcher normal de servicio
-  const hasLikelyEntityPhrase =
-    /\b(del|de la|de el|of|for)\b/.test(text) ||
-    /\b(plan|paquete|package|service|servicio|bath|groom|grooming|haircut)\b/.test(text);
-
-  if (hasLikelyEntityPhrase) return false;
-
-  // Señales genéricas de precio
-  const priceIntentTokens = new Set([
-    "price",
-    "pricing",
-    "cost",
-    "costs",
-    "precio",
-    "precios",
-    "costo",
-    "costos",
-    "cuanto",
-    "cuanta",
-    "cuesta",
-    "cuestan",
-    "vale",
-    "valen",
-    "monthly",
-    "month",
-    "mensual",
-    "mensualmente",
-    "mes",
-  ]);
-
-  const hasPriceSignal = tokens.some((t) => priceIntentTokens.has(t));
-  if (hasPriceSignal) return true;
-
-  // También aceptar follow-ups ultra cortos numéricos o tipo "y el de 12"
-  const shortEllipticShape =
-    /^(y\s+)?(el|la|los|las)\s+de\s+\d{1,3}\b/.test(text) ||
-    /^(y\s+)?\d{1,3}\b/.test(text);
-
-  if (shortEllipticShape) return true;
-
-  return false;
-}
-
-function isPriceQuestion(text: string, convoCtx?: FastpathCtx) {
-  const framesSayPrice = extractQueryFrames(text).some(
-    (f) => f.askedAttribute === "price"
-  );
-
-  if (framesSayPrice) return true;
-
-  if (convoCtx && isEllipticPriceFollowup(text, convoCtx)) {
-    return true;
-  }
-
-  return false;
-}
-
-function looksLikeDetailIntent(raw: string): boolean {
-  return extractQueryFrames(raw).some((f) => f.askedAttribute === "includes");
-}
-
-function splitUserQuestions(raw: string): string[] {
-  return extractQueryFrames(raw).map((f) => f.raw);
-}
-
-function looksMultiQuestion(raw: string): boolean {
-  return extractQueryFrames(raw).length >= 2 || String(raw || "").includes("\n");
 }
 
 function normalizeCatalogRole(role: string | null | undefined): "primary" | "secondary" {
@@ -717,10 +490,19 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     catalogReferenceKind === "variant_specific" ||
     catalogReferenceKind === "referential_followup";
 
+  const catalogIntentNorm = String(detectedIntent || "").trim().toLowerCase();
+  const catalogRouteIntent = buildCatalogRoutingSignal({
+    intentOut: detectedIntent || null,
+    catalogReferenceClassification,
+    convoCtx,
+  }).routeIntent;
+
   const isFreshCatalogPriceTurn =
-    isPriceQuestion(userInput, convoCtx) ||
+    catalogRouteIntent === "catalog_price" ||
+    catalogRouteIntent === "catalog_schedule" ||
+    catalogRouteIntent === "catalog_alternatives" ||
     (
-      (detectedIntent || "").trim() === "precio" &&
+      catalogIntentNorm === "precio" &&
       isStructuredCatalogTurn
     );
 
@@ -1117,7 +899,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
             lang: idiomaDestino,
             rows: rows.slice(0, 5),
           });
-          subReplies.push(stripLinkSentences(compact));
+          subReplies.push(compact);
           continue;
         }
 
@@ -1544,8 +1326,21 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     if (kind && !kindAtOk) healPatch.last_list_kind_at = Date.now();
 
     if (planFresh || pkgFresh) {
-      if (isTrialQuery(userInput)) {
-        console.log("🧪 PICK SKIP — trial/demo query, dejar a otras reglas manejarlo");
+      const classifiedIntentNorm = String(
+        catalogReferenceClassification?.intent || ""
+      ).trim().toLowerCase();
+
+      const detectedIntentNorm = String(detectedIntent || "").trim().toLowerCase();
+
+      const isTrialLikeTurn =
+        detectedIntentNorm === "info_servicio" &&
+        classifiedIntentNorm === "price_or_plan" &&
+        !catalogReferenceClassification?.targetServiceId &&
+        !convoCtx?.last_service_id &&
+        !convoCtx?.selectedServiceId;
+
+      if (isTrialLikeTurn) {
+        console.log("🧪 PICK SKIP — structured trial/demo-like turn, dejar a otras reglas manejarlo");
       } else {
         const idx = (() => {
           const t = String(userInput || "").trim();
@@ -1695,11 +1490,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
               if (linkPick.ok) {
                 finalUrl = linkPick.url;
               } else if (linkPick.reason === "ambiguous") {
-                const labels = linkPick.options
-                  .slice(0, 3)
-                  .map((o) => o.label)
-                  .filter(Boolean);
-
                 const optionsList = linkPick.options
                   .slice(0, 3)
                   .map((o, i) => `• ${i + 1}) ${String(o.label || "").trim()}`)
@@ -1734,7 +1524,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
             const baseName = String(convoCtx?.last_service_name || "") || String(picked.name || "");
             const title = d?.titleSuffix ? `${baseName} — ${d.titleSuffix}` : baseName;
-
             const infoText = d?.text ? String(d.text).trim() : "";
 
             if (!finalUrl) {
@@ -1776,7 +1565,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       }
     }
   }
-
   // ===============================
   // ✅ ANTI-LOOP PENDING LINK
   // ===============================
@@ -1857,7 +1645,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ✅ FREE OFFER
   // ===============================
   {
-    const wantsFreeOffer = isFreeOfferQuestion(userInput);
+    const wantsFreeOffer =
+      String(detectedIntent || "").trim().toLowerCase() === "precio" &&
+      String(catalogReferenceClassification?.intent || "").trim().toLowerCase() === "price_or_plan" &&
+      Boolean(
+        catalogReferenceClassification?.targetServiceId ||
+        convoCtx?.last_service_id ||
+        convoCtx?.selectedServiceId
+      );
 
     if (wantsFreeOffer) {
       const { rows } = await pool.query(
@@ -1930,13 +1725,21 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ✅ INTEREST -> LINK
   // ===============================
   {
-    const t = String(userInput || "").trim();
-    const tNorm = normalizeText(userInput);
+    const catalogRouteIntent = buildCatalogRoutingSignal({
+      intentOut: detectedIntent || null,
+      catalogReferenceClassification,
+      convoCtx,
+    }).routeIntent;
 
     const wantsLink =
-      /\b(link|enlace|url|web|website|sitio|pagina|página|comprar|buy|pagar|checkout)\b/i.test(
-        tNorm
-      );
+      Boolean(convoCtx?.pending_link_lookup) ||
+      Boolean(convoCtx?.last_service_id) &&
+        (
+          catalogRouteIntent === "catalog_price" ||
+          catalogRouteIntent === "catalog_alternatives" ||
+          catalogRouteIntent === "catalog_schedule" ||
+          String(detectedIntent || "").trim().toLowerCase() === "precio"
+        );
 
     const pending = Boolean(convoCtx?.pending_link_lookup);
 
@@ -2303,8 +2106,31 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ===============================
   const msgNorm = normalizeText(userInput);
 
-  const explicitDetailIntentNow = looksLikeDetailIntent(userInput);
-  const explicitTargetTokenNow = extractCatalogTargetToken(userInput);
+  const explicitDetailIntentNow =
+    String(catalogReferenceClassification?.intent || "").trim().toLowerCase() === "includes" ||
+    String(detectedIntent || "").trim().toLowerCase() === "info_servicio";
+
+  const explicitTargetServiceIdNow =
+    catalogReferenceClassification?.targetServiceId ||
+    convoCtx?.last_service_id ||
+    convoCtx?.selectedServiceId ||
+    null;
+
+  const explicitTargetVariantIdNow =
+    catalogReferenceClassification?.targetVariantId ||
+    convoCtx?.last_variant_id ||
+    null;
+
+  const explicitTargetFamilyKeyNow =
+    catalogReferenceClassification?.targetFamilyKey ||
+    convoCtx?.last_family_key ||
+    null;
+
+  const hasExplicitStructuredTargetNow = Boolean(
+    explicitTargetServiceIdNow ||
+    explicitTargetVariantIdNow ||
+    explicitTargetFamilyKeyNow
+  );
 
   const isNumericSelection = /^([1-9])$/.test(msgNorm);
 
@@ -2332,7 +2158,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     );
 
   const shouldSkipVariantSelection =
-    explicitDetailIntentNow || !!explicitTargetTokenNow;
+    explicitDetailIntentNow || !!hasExplicitStructuredTargetNow;
 
   if (
     !shouldSkipVariantSelection &&
@@ -2764,38 +2590,48 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   // ===============================
   // ✅ VARIANTES: PRIMER TURNO
-  // (GENÉRICO: sirve para cualquier nombre, sin hardcodear bronce/basic/etc.)
+  // (sin regex ni texto raw; solo señales estructuradas)
   // ===============================
-  // Texto normalizado para detectar intención de detalle
-  const normMsg = normalizeForIntent(userInput);
+  const detectedIntentNorm = String(detectedIntent || "").trim().toLowerCase();
+  const classifiedIntentNorm = String(
+    catalogReferenceClassification?.intent || ""
+  ).trim().toLowerCase();
+  const referenceKind = String(
+    catalogReferenceClassification?.kind || "none"
+  ).trim().toLowerCase();
 
-  // Pregunta explícita de detalle: "qué incluye X", "que trae X", etc.
-  const looksLikeExplicitDetail = looksLikeDetailIntent(userInput);
+  const looksLikeExplicitDetail =
+    classifiedIntentNorm === "includes" ||
+    detectedIntentNorm === "info_servicio";
 
-  // Follow-up elíptico tipo "y el gold?", "y el bronce?"
-  // Lo consideramos detalle SI después de "y el/la" viene algo.
   const looksLikeEllipticDetail =
-    /^y\s+(el|la)\s+.+\??$/i.test(normMsg) ||        // español
-    /^and\s+(the\s+)?[^?]+(\?)?$/i.test(normMsg);    // inglés
+    referenceKind === "referential_followup" &&
+    (
+      classifiedIntentNorm === "includes" ||
+      detectedIntentNorm === "info_servicio" ||
+      Boolean(
+        catalogReferenceClassification?.targetServiceId ||
+        catalogReferenceClassification?.targetVariantId ||
+        convoCtx?.last_service_id ||
+        convoCtx?.last_variant_id
+      )
+    );
 
-  const looksLikeServiceDetail = looksLikeExplicitDetail || looksLikeEllipticDetail;
+  const looksLikeServiceDetail =
+    looksLikeExplicitDetail || looksLikeEllipticDetail;
 
   const recentPriceContext =
-    (
-      String((convoCtx as any)?.last_bot_action || "") === "followup_set_service_for_price" ||
-      Boolean((convoCtx as any)?.last_price_option_label) ||
-      Boolean((convoCtx as any)?.last_variant_id) ||
-      String(detectedIntent || "").trim() === "precio"
-    );
+    String((convoCtx as any)?.last_bot_action || "") === "followup_set_service_for_price" ||
+    Boolean((convoCtx as any)?.last_price_option_label) ||
+    Boolean((convoCtx as any)?.last_variant_id) ||
+    detectedIntentNorm === "precio" ||
+    classifiedIntentNorm === "price_or_plan";
 
   const looksLikeEllipticPriceFollowup =
     recentPriceContext &&
-    (
-      /^y\s+(el|la|los|las)\s+.+\??$/i.test(normMsg) ||
-      /^and\s+(the\s+)?[^?]+(\?)?$/i.test(normMsg)
-    ) &&
-    !looksLikeExplicitDetail;
-
+    referenceKind === "referential_followup" &&
+    classifiedIntentNorm !== "includes";
+    
   if (
     !isCatalogOverviewTurn &&
     looksLikeServiceDetail &&
@@ -2819,12 +2655,32 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         lastVariantAt > 0 &&
         now - lastVariantAt <= variantTtlMs;
 
-      const explicitTargetToken = extractCatalogTargetToken(userInput);
+      const explicitTargetServiceId =
+        catalogReferenceClassification?.targetServiceId ||
+        convoCtx?.last_service_id ||
+        convoCtx?.selectedServiceId ||
+        null;
+
+      const explicitTargetVariantId =
+        catalogReferenceClassification?.targetVariantId ||
+        convoCtx?.last_variant_id ||
+        null;
+
+      const explicitTargetFamilyKey =
+        catalogReferenceClassification?.targetFamilyKey ||
+        convoCtx?.last_family_key ||
+        null;
+
+      const hasExplicitStructuredTarget = Boolean(
+        explicitTargetServiceId ||
+        explicitTargetVariantId ||
+        explicitTargetFamilyKey
+      );
 
       // "q incluye", "que incluye", "what includes", etc.
       // pero SIN target nuevo explícito tipo "qué incluye el gold"
       const isGenericIncludesFollowup =
-        looksLikeExplicitDetail && !explicitTargetToken;
+        looksLikeExplicitDetail && !hasExplicitStructuredTarget;
 
       if (isGenericIncludesFollowup && lastVariantFresh) {
         const { rows: variantRows } = await pool.query<any>(
@@ -2992,7 +2848,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         tokenWordCount <= 6 && !textForToken.includes("\n");
 
       const planToken = canUseCatalogTargetFallback
-        ? extractCatalogTargetToken(userInput)
+        ? (
+            catalogReferenceClassification?.targetServiceId ||
+            catalogReferenceClassification?.targetVariantId ||
+            catalogReferenceClassification?.targetFamilyKey ||
+            convoCtx?.last_service_id ||
+            convoCtx?.last_variant_id ||
+            convoCtx?.last_family_key ||
+            null
+          )
         : null;
 
       console.log("[CATALOG_TARGET_TOKEN] userInput =", userInput);
@@ -3080,7 +2944,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       };
     }
 
-    const explicitGroupToken = extractCatalogTargetToken(userInput);
+    const explicitGroupToken =
+      catalogReferenceClassification?.targetFamilyKey ||
+      catalogReferenceClassification?.targetServiceId ||
+      catalogReferenceClassification?.targetVariantId ||
+      convoCtx?.last_family_key ||
+      convoCtx?.last_service_id ||
+      convoCtx?.last_variant_id ||
+      null;
     const hasExplicitNewTarget = !!explicitGroupToken;
 
     // 🔥 PATCH NUEVO: si es detalle pero no se encontró servicio por texto,
@@ -3428,10 +3299,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
     const intentAllowsCatalogRouting = catalogRoutingSignal.allowsDbCatalogPath;
 
+    const isCatalogPriceLikeTurn =
+      catalogRoutingSignal.routeIntent === "catalog_price" ||
+      catalogRoutingSignal.routeIntent === "catalog_schedule" ||
+      catalogRoutingSignal.routeIntent === "catalog_alternatives";
+
     const hasStructuredCatalogState =
       hasRecentCatalogContext ||
       (
-        (intentAllowsCatalogRouting || isPriceQuestion(userInput, convoCtx)) &&
+        (intentAllowsCatalogRouting || isCatalogPriceLikeTurn) &&
         (
           Boolean((convoCtx as any)?.selectedServiceId) ||
           Boolean((convoCtx as any)?.last_service_id)
@@ -3440,11 +3316,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
     const isCatalogQuestion =
       catalogRoutingSignal.shouldRouteCatalog ||
-      isPriceQuestion(userInput, convoCtx) ||
+      isCatalogPriceLikeTurn ||
       hasStructuredCatalogState;
 
     // 🔒 Nunca permitir que el LLM responda precios
-    if (isPriceQuestion(userInput, convoCtx)) {
+    if (isCatalogPriceLikeTurn) {
       console.log("🚫 BLOCK LLM PRICING — forcing DB path");
       // dejamos que el flujo continúe para que el branch de DB responda
     }
@@ -3597,7 +3473,15 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         const shouldSkipSinglePriceTargetResolution =
           routeIntent === "catalog_overview";
 
-        const ellipticPriceFollowup = isEllipticPriceFollowup(userInput, convoCtx);
+        const ellipticPriceFollowup =
+          catalogRoutingSignal.shouldRouteCatalog &&
+          (
+            catalogRoutingSignal.referenceKind === "referential_followup" ||
+            catalogRoutingSignal.routeIntent === "catalog_alternatives" ||
+            catalogRoutingSignal.routeIntent === "catalog_schedule" ||
+            catalogRoutingSignal.routeIntent === "catalog_price" ||
+            catalogReferenceClassification?.intent === "includes"
+          );
 
         const ctxServiceId =
           String(convoCtx?.last_service_id || "").trim() ||
@@ -4385,8 +4269,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
           rows: rowsLocalized,
         });
 
-        const cleanedReply = stripLinkSentences(dbReply);
-        const canonicalReply = humanizeListReply(cleanedReply, idiomaDestino);
+        const cleanedReply = dbReply;
+        const canonicalReply = cleanedReply;
         const namesShown = extractPlanNamesFromReply(cleanedReply);
 
         const extraContext = [
@@ -4584,8 +4468,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       console.log("[PRICE][pre-llm-catalog-check]", {
         userInput,
         detectedIntent,
-        isPriceQuestion: isPriceQuestion(userInput, convoCtx),
-        ellipticPriceFollowup: isEllipticPriceFollowup(userInput, convoCtx),
+        catalogRouteIntent,
+        isCatalogPriceLikeTurn,
         last_service_id: convoCtx?.last_service_id ?? null,
         last_service_name: convoCtx?.last_service_name ?? null,
         last_variant_name: convoCtx?.last_variant_name ?? null,
@@ -4851,8 +4735,7 @@ ${catalogText}${infoGeneralBlock}
         prevNames,
       });
 
-      // 🔧 limpiamos frases de "enlace / links / comprar en los enlaces"
-      const cleanedReply = stripLinkSentences(finalReply);
+      const cleanedReply = finalReply;
 
       // 🌎 NUEVO: aseguramos que TODO el catálogo salga en el idiomaDestino
       let localizedReply = cleanedReply;
@@ -4888,8 +4771,7 @@ ${catalogText}${infoGeneralBlock}
 
       return {
         handled: true,
-        // usamos la versión traducida
-        reply: humanizeListReply(localizedReply, idiomaDestino),
+        reply: localizedReply,
         source: "catalog_llm",
         intent: intentOut || "catalog",
         ctxPatch,
