@@ -124,6 +124,30 @@ export async function runCatalogFastpath(
   void hasRecentCatalogContext;
   void hasStructuredCatalogState;
 
+  const referenceKind = String(
+    input.catalogReferenceClassification?.kind || "none"
+  )
+    .trim()
+    .toLowerCase();
+
+  const hasExplicitCatalogRouting =
+    catalogRoutingSignal.shouldRouteCatalog === true ||
+    referenceKind === "catalog_overview" ||
+    referenceKind === "catalog_family";
+
+  const hasExplicitCatalogIntent =
+    String(input.intentOut || "").trim().toLowerCase() === "precio" ||
+    String(input.intentOut || "").trim().toLowerCase() === "planes_precios" ||
+    String(input.intentOut || "").trim().toLowerCase() === "catalogo" ||
+    String(input.intentOut || "").trim().toLowerCase() === "catalog" ||
+    String(input.intentOut || "").trim().toLowerCase() === "other_plans" ||
+    String(input.intentOut || "").trim().toLowerCase() === "catalog_alternatives" ||
+    String(input.intentOut || "").trim().toLowerCase() === "combination_and_price" ||
+    String(input.intentOut || "").trim().toLowerCase() === "catalog_combination";
+
+  const allowGenericCatalogDbFallback =
+    hasExplicitCatalogRouting || hasExplicitCatalogIntent;
+
   if (isCatalogPriceLikeTurn) {
     console.log("🚫 BLOCK LLM PRICING — forcing DB path");
   }
@@ -215,6 +239,21 @@ export async function runCatalogFastpath(
 
   //PRICE OR PLAN
   if (!asksSchedules && !asksIncludesOnly && questionType === "price_or_plan") {
+    if (!allowGenericCatalogDbFallback) {
+      console.log("[CATALOG_DB][BLOCKED_GENERIC_FALLBACK]", {
+        userInput: input.userInput,
+        intentOut: input.intentOut,
+        routeIntent,
+        referenceKind,
+        shouldRouteCatalog: catalogRoutingSignal.shouldRouteCatalog,
+        hasStructuredTarget: input.hasStructuredTarget,
+      });
+
+      return {
+        handled: false,
+      };
+    }
+    
     const { rows } = await input.pool.query<{
       service_id: string;
       service_name: string;
