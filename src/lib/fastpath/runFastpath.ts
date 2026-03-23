@@ -308,8 +308,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   // ===============================
   // ✅ INFO GENERAL OVERVIEW
+  // solo si hay browse explícito de catálogo
   // ===============================
-  if (intentOut === "info_general") {
+  if (
+    intentOut === "info_general" &&
+    catalogReferenceClassification?.kind === "catalog_overview"
+  ) {
     const ctxPatch: any = {
       last_list_kind: null,
       last_list_kind_at: null,
