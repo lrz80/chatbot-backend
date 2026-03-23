@@ -12,27 +12,41 @@ export type CatalogStructuredSignals = {
   shouldResolveFromStructuredTarget: boolean;
 };
 
+function allowsContextCarryover(referenceKind: string): boolean {
+  return (
+    referenceKind === "referential_followup" ||
+    referenceKind === "entity_specific" ||
+    referenceKind === "variant_specific" ||
+    referenceKind === "catalog_family"
+  );
+}
+
 export function getCatalogStructuredSignals(
   input: CatalogStructuredSignalsInput
 ): CatalogStructuredSignals {
   const referenceKind = String(
     input.catalogReferenceClassification?.kind || "none"
-  ).trim().toLowerCase();
+  )
+    .trim()
+    .toLowerCase();
+
+  const useContextCarryover = allowsContextCarryover(referenceKind);
 
   const targetServiceId =
     input.catalogReferenceClassification?.targetServiceId ||
-    input.convoCtx?.last_service_id ||
-    input.convoCtx?.selectedServiceId ||
+    (useContextCarryover
+      ? input.convoCtx?.last_service_id || input.convoCtx?.selectedServiceId
+      : null) ||
     null;
 
   const targetVariantId =
     input.catalogReferenceClassification?.targetVariantId ||
-    input.convoCtx?.last_variant_id ||
+    (useContextCarryover ? input.convoCtx?.last_variant_id : null) ||
     null;
 
   const targetFamilyKey =
     input.catalogReferenceClassification?.targetFamilyKey ||
-    input.convoCtx?.last_family_key ||
+    (useContextCarryover ? input.convoCtx?.last_family_key : null) ||
     null;
 
   const hasStructuredTarget =
@@ -42,7 +56,8 @@ export function getCatalogStructuredSignals(
     referenceKind === "variant_specific" ||
     referenceKind === "catalog_family";
 
-  const shouldResolveFromStructuredTarget = Boolean(targetServiceId);
+  const shouldResolveFromStructuredTarget =
+    useContextCarryover && Boolean(targetServiceId);
 
   return {
     referenceKind,
