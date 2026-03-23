@@ -257,27 +257,21 @@ export function buildCatalogRoutingSignal({
 
   if (hasFreshCatalogContext) {
     return {
-      shouldRouteCatalog: true,
-      routeIntent: "referential_followup",
+      shouldRouteCatalog: false,
+      routeIntent: "unknown",
       referenceKind: "none",
-      source: "context",
+      source: "none",
       allowsDbCatalogPath,
       hasFreshCatalogContext,
       previousCatalogPlans,
 
-      targetServiceId,
-      targetServiceName,
-      targetVariantId,
-      targetVariantName,
-      targetFamilyKey,
-      targetFamilyName,
-      targetLevel: targetServiceId
-        ? "service"
-        : targetVariantId
-        ? "variant"
-        : targetFamilyKey
-        ? "family"
-        : "none",
+      targetServiceId: null,
+      targetServiceName: null,
+      targetVariantId: null,
+      targetVariantName: null,
+      targetFamilyKey: null,
+      targetFamilyName: null,
+      targetLevel: "none",
       disambiguationType: "none",
       anchorShift: "none",
     };
