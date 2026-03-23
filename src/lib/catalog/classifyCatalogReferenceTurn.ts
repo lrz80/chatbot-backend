@@ -9,6 +9,8 @@ import type {
   CatalogReferenceSignals,
 } from "./types";
 
+import { isExplicitCatalogBrowseIntent } from "./isExplicitCatalogBrowseIntent";
+
 function normalizeUserText(input: string): string {
   return String(input || "").trim();
 }
@@ -176,7 +178,7 @@ function buildSignals(params: {
     !hasFamilyCandidate &&
     !hasReferentialDependency &&
     !hasConversationDependency &&
-    tokens.length >= 3;
+    false;
 
   const hasDisambiguationRisk =
     context.lastPresentedEntityIds.length > 1 ||
@@ -575,15 +577,15 @@ export function classifyCatalogReferenceTurn(
   }
 
   // =========================================================
-  // 8) NO CONTEXT + FAMILY ONLY IF EXPLICIT FAMILY EXISTS
-  //    ✅ no usar longitud como proxy de family
+  // 8) NO CONTEXT + EXPLICIT CATALOG BROWSE ONLY
+  //    ✅ no usar longitud como proxy de catálogo
   // =========================================================
-  if (!hasAnyContext && tokenCount >= 3) {
+  if (!hasAnyContext && isExplicitCatalogBrowseIntent(detectedIntent)) {
     notes.push("no_prior_context");
-    notes.push("default_to_catalog_overview_without_anchor");
+    notes.push("explicit_catalog_browse_intent");
 
     result.kind = "catalog_overview";
-    result.confidence = tokenCount >= 6 ? 0.58 : 0.51;
+    result.confidence = 0.62;
 
     result.shouldResolvePluralCatalog = true;
     result.targetLevel = "catalog";
