@@ -37,23 +37,42 @@ type HandleFreeOfferResult =
       ctxPatch?: Partial<FastpathCtx>;
     };
 
-function wantsFreeOfferTurn(args: {
+function normalizeValue(value: string | null | undefined): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function wantsExplicitFreeOfferTurn(args: {
   detectedIntent?: string | null;
   catalogReferenceClassification?: any;
-  convoCtx: Partial<FastpathCtx> | null | undefined;
 }): boolean {
-  const { detectedIntent, catalogReferenceClassification, convoCtx } = args;
+  const detectedIntent = normalizeValue(args.detectedIntent);
+  const classificationIntent = normalizeValue(
+    args.catalogReferenceClassification?.intent
+  );
+  const referenceKind = normalizeValue(args.catalogReferenceClassification?.kind);
+
+  const hasExplicitFreeIntent =
+    detectedIntent === "free_offer" ||
+    detectedIntent === "trial" ||
+    detectedIntent === "clase_prueba" ||
+    detectedIntent === "free_trial";
+
+  const hasExplicitFreeClassification =
+    classificationIntent === "free_offer" ||
+    classificationIntent === "trial" ||
+    classificationIntent === "clase_prueba" ||
+    classificationIntent === "free_trial";
+
+  const hasCompatibleReferenceKind =
+    referenceKind === "entity_specific" ||
+    referenceKind === "variant_specific" ||
+    referenceKind === "referential_followup" ||
+    referenceKind === "catalog_overview" ||
+    referenceKind === "catalog_family";
 
   return (
-    String(detectedIntent || "").trim().toLowerCase() === "precio" &&
-    String(catalogReferenceClassification?.intent || "")
-      .trim()
-      .toLowerCase() === "price_or_plan" &&
-    Boolean(
-      catalogReferenceClassification?.targetServiceId ||
-        convoCtx?.last_service_id ||
-        convoCtx?.selectedServiceId
-    )
+    (hasExplicitFreeIntent || hasExplicitFreeClassification) &&
+    hasCompatibleReferenceKind
   );
 }
 
@@ -104,14 +123,12 @@ export async function handleFreeOffer(
     idiomaDestino,
     detectedIntent,
     catalogReferenceClassification,
-    convoCtx,
     renderFreeOfferList,
   } = input;
 
-  const shouldHandle = wantsFreeOfferTurn({
+  const shouldHandle = wantsExplicitFreeOfferTurn({
     detectedIntent,
     catalogReferenceClassification,
-    convoCtx,
   });
 
   if (!shouldHandle) {
