@@ -20,8 +20,8 @@ import { renderInfoGeneralOverview } from "../fastpath/renderInfoGeneralOverview
 import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
 import { buildCatalogContext } from "../catalog/buildCatalogContext";
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
-import OpenAI from "openai";
-import { extractQueryFrames, type QueryFrame } from "./extractQueryFrames";
+import { answerCatalogQuestionLLM } from "./llm/answerCatalogQuestionLLM";
+import { extractQueryFrames } from "./extractQueryFrames";
 import { resolveServiceMatchesFromText } from "../services/pricing/resolveServiceMatchesFromText";
 import { answerWithPromptBase } from "../answers/answerWithPromptBase";
 
@@ -48,9 +48,14 @@ import { handleInterestToLink } from "./handlers/catalog/handleInterestToLink";
 import { resolveFirstTurnServiceDetailTarget } from "./handlers/catalog/resolveFirstTurnServiceDetailTarget";
 import { handleFirstTurnVariantDetail } from "./handlers/catalog/handleFirstTurnVariantDetail";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+import {
+  bestNameMatch,
+  extractPlanNamesFromReply,
+  postProcessCatalogReply,
+  sameBulletStructure,
+} from "./helpers/catalogTextMatching";
+import { renderFreeOfferList } from "./helpers/catalogRendering";
+import { normalizeCatalogRole } from "../catalog/normalizeCatalogRole";
 
 export type FastpathCtx = {
   last_service_id?: string | null;
@@ -206,217 +211,6 @@ export type RunFastpathArgs = {
   catalogReferenceClassification?: CatalogReferenceClassification;
 };
 
-async function answerCatalogQuestionLLM(params: {
-  idiomaDestino: "es" | "en";
-  systemMsg: string;
-  userMsg: string;
-}) {
-  const { systemMsg, userMsg } = params;
-
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4.1-mini", // o el modelo que estás usando en producción
-    messages: [
-      { role: "system", content: systemMsg },
-      { role: "user", content: userMsg },
-    ],
-    temperature: 0.4,
-  });
-
-  const reply = completion.choices[0]?.message?.content ?? "";
-  return reply.trim();
-}
-
-function bestNameMatch(
-  userText: string,
-  items: Array<{ id?: string; name: string; url?: string | null }>
-) {
-  const u = normalizeText(userText);
-  if (!u) return null;
-
-  const hits = items.filter((it) => {
-    const n = normalizeText(it.name);
-    return n.includes(u) || u.includes(n);
-  });
-
-  if (hits.length === 1) return hits[0] as any;
-  if (hits.length > 1) {
-    return hits.sort((a, b) => normalizeText(b.name).length - normalizeText(a.name).length)[0] as any;
-  }
-  return null;
-}
-
-function renderFreeOfferList(args: { lang: Lang; items: { name: string }[] }) {
-  const { lang, items } = args;
-
-  const intro =
-    lang === "en"
-      ? "Sure! Here are the free/trial options 😊"
-      : "¡Claro! Aquí tienes las opciones gratis/de prueba 😊";
-
-  const ask =
-    lang === "en"
-      ? "Which one are you interested in? Reply with the number or the name."
-      : "¿Cuál te interesa? Responde con el número o el nombre.";
-
-  const listText = items
-    .slice(0, 6)
-    .map((x, i) => `• ${i + 1}) ${x.name}`)
-    .join("\n");
-
-  return `${intro}\n\n${listText}\n\n${ask}`;
-}
-
-function norm(s: any) {
-  return String(s || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
-}
-
-// ✅ helper: extraer nombres de planes desde la respuesta del LLM
-function extractPlanNamesFromReply(text: string): string[] {
-  const lines = String(text || "").split(/\r?\n/);
-  const names: string[] = [];
-
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-
-    if (/^[•\-\*]/.test(line)) {
-      let withoutBullet = line.replace(/^[•\-\*]\s*/, "");
-      const idx = withoutBullet.indexOf(":");
-      if (idx > 0) {
-        const name = withoutBullet.slice(0, idx).trim();
-        if (name && !names.includes(name)) {
-          names.push(name);
-        }
-      }
-    }
-  }
-
-  return names;
-}
-
-// ✅ Post-procesador: elimina planes ya mencionados en PREVIOUS_PLANS_MENTIONED
-function postProcessCatalogReply(params: {
-  reply: string;
-  questionType: "combination_and_price" | "price_or_plan" | "other_plans";
-  prevNames: string[];
-}) {
-  const { reply, questionType, prevNames } = params;
-
-  if (!prevNames.length) {
-    return { finalReply: reply, namesShown: extractPlanNamesFromReply(reply) };
-  }
-
-  const prevSet = new Set(prevNames.map((n) => norm(n)));
-
-  const lines = String(reply || "").split(/\r?\n/);
-  const filteredLines: string[] = [];
-
-  const bulletRegex = /^[•\-\*]\s*/;
-
-  // Vamos a reconstruir la lista de nombres que realmente se quedan tras el filtro
-  const keptNames: string[] = [];
-
-  for (const raw of lines) {
-    const line = raw;
-    const trimmed = line.trim();
-
-    // Si no es bullet, lo dejamos tal cual (saludos, horarios, etc.)
-    if (!trimmed || !bulletRegex.test(trimmed)) {
-      filteredLines.push(line);
-      continue;
-    }
-
-    // Intentar extraer "Nombre del plan" antes de ":"
-    const withoutBullet = trimmed.replace(bulletRegex, "");
-    const colonIdx = withoutBullet.indexOf(":");
-    if (colonIdx <= 0) {
-      // bullet raro sin "Nombre: precio" → lo dejamos pasar
-      filteredLines.push(line);
-      continue;
-    }
-
-    const name = withoutBullet.slice(0, colonIdx).trim();
-    const nameNorm = norm(name);
-
-    // Si la pregunta es "otros planes", evitamos repetir los ya listados
-    if (questionType === "other_plans" && prevSet.has(nameNorm)) {
-      // 🔁 Duplicado → lo filtramos
-      continue;
-    }
-
-    // Lo mantenemos
-    filteredLines.push(line);
-    keptNames.push(name);
-  }
-
-  // Si al filtrar nos quedamos sin bullets nuevos, devolvemos el original
-  // para no mandar una respuesta vacía o solo texto suelto.
-  if (!keptNames.length) {
-    return {
-      finalReply: reply,
-      namesShown: extractPlanNamesFromReply(reply),
-    };
-  }
-
-  return {
-    finalReply: filteredLines.join("\n"),
-    namesShown: keptNames,
-  };
-}
-
-function normalizeCatalogRole(role: string | null | undefined): "primary" | "secondary" {
-  const v = String(role || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toLowerCase();
-
-  if (
-    v === "primary" ||
-    v === "servicio principal" ||
-    v === "principal" ||
-    v === "main"
-  ) {
-    return "primary";
-  }
-
-  if (
-    v === "secondary" ||
-    v === "complemento" ||
-    v === "complemento / extra" ||
-    v === "extra" ||
-    v === "addon"
-  ) {
-    return "secondary";
-  }
-
-  return "primary";
-}
-
-function extractBulletLines(text: string): string[] {
-  return String(text || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith("•") || line.startsWith("-"));
-}
-
-function sameBulletStructure(a: string, b: string): boolean {
-  const aBullets = extractBulletLines(a);
-  const bBullets = extractBulletLines(b);
-
-  if (aBullets.length !== bBullets.length) return false;
-
-  for (let i = 0; i < aBullets.length; i++) {
-    if (aBullets[i] !== bBullets[i]) return false;
-  }
-
-  return true;
-}
-
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -431,7 +225,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     detectedIntent,
     catalogReferenceClassification,
     maxDisambiguationOptions = 5,
-    lastServiceTtlMs = 60 * 60 * 1000,
   } = args;
 
   let convoCtx = initialConvoCtx;
@@ -467,12 +260,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     catalogReferenceKind === "variant_specific" ||
     catalogReferenceKind === "referential_followup";
 
-  const {
-    catalogIntentNorm,
-    catalogRoutingSignal,
-    catalogRouteIntent,
-    isFreshCatalogPriceTurn,
-  } = getCatalogRoutingState({
+  const { isFreshCatalogPriceTurn } = getCatalogRoutingState({
     detectedIntent,
     isStructuredCatalogTurn,
     catalogReferenceClassification,
@@ -495,7 +283,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       resolveServiceMatchesFromText,
       resolveServiceIdFromText,
       bestNameMatch,
-      renderGenericPriceSummaryReply,
     });
 
     if (multiQuestionResult.handled) {
@@ -714,9 +501,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ✅ VARIANTES: PRIMER TURNO
   // (sin regex ni texto raw; solo señales estructuradas)
   // ===============================
-  const {
-    hasStructuredTarget,
-  } = getCatalogStructuredSignals({
+  const { hasStructuredTarget } = getCatalogStructuredSignals({
     catalogReferenceClassification,
     convoCtx,
   });
