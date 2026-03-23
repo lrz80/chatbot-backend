@@ -100,14 +100,6 @@ router.post("/", async (req: Request, res: Response) => {
     // Responde a Twilio de inmediato
     res.type("text/xml").send(new MessagingResponse().toString());
 
-    // Procesa el mensaje aparte (no bloquea la respuesta a Twilio)
-    console.log("🔥 webhook POST recibido", {
-      at: new Date().toISOString(),
-      hasBody: !!req.body,
-      messageSid: req.body?.MessageSid || null,
-      from: req.body?.From || null,
-    });
-
     setTimeout(() => {
       console.log("🔥 entrando a procesarMensajeWhatsApp", {
         at: new Date().toISOString(),
@@ -130,7 +122,6 @@ export async function procesarMensajeWhatsApp(
   body: any,
   context?: WhatsAppContext
 ): Promise<void> {
-console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString() });
 
   const decisionFlags = {
     channelSelected: false,
@@ -265,8 +256,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     messageId,
     origen,
   };
-
-  console.log("🔎 numero normalizado =", { numero, numeroSinMas });
 
   // ✅ FOLLOW-UP RESET: si el cliente volvió a escribir, cancela cualquier follow-up pendiente
   try {
@@ -687,8 +676,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     key: "facts_summary",
   });
 
-  console.log("🧠 facts_summary (start of turn) =", memStart);
-
   const { mode, status } = await waModePromise;
 
   const guard = await whatsappModeMembershipGuard({
@@ -755,13 +742,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     ...(convoCtx || {}),
     ...(signals.convoCtx || {}),
   };
-
-  console.log("🧠 CONVOCTX after signals merge =", {
-    last_service_id: (convoCtx as any)?.last_service_id || null,
-    last_service_name: (convoCtx as any)?.last_service_name || null,
-    selectedServiceId: (convoCtx as any)?.selectedServiceId || null,
-    last_catalog_plans: (convoCtx as any)?.last_catalog_plans || null,
-  });
 
   const whatsappCatalogReferenceClassificationInput =
     buildCatalogReferenceClassificationInput({
@@ -887,14 +867,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     const pendingCtaType = String((convoCtx as any)?.pending_cta?.type || "").trim();
 
     if (pendingCtaType === "estimate_offer" && isAffirmative) {
-      console.log("[PENDING_CTA][ACCEPTED]", {
-        tenantId: tenant.id,
-        canal,
-        contactoNorm,
-        pendingCtaType,
-        userInput,
-      });
-
+      
       (convoCtx as any).pending_cta = null;
 
       // ✅ limpiar contexto de selección anterior para que no contamine
@@ -923,14 +896,7 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
     }
 
     if (pendingCtaType === "booking_offer" && isAffirmative) {
-      console.log("[PENDING_CTA][ACCEPTED]", {
-        tenantId: tenant.id,
-        canal,
-        contactoNorm,
-        pendingCtaType,
-        userInput,
-      });
-
+      
       (convoCtx as any).pending_cta = null;
 
       // ✅ limpiar contexto de selección anterior para que no contamine
@@ -1126,23 +1092,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         }
       : convoCtxForFastpath;
 
-    console.log("[WHATSAPP][CTX_AFTER_HYBRID_PATCH]", {
-      tenantId: tenant?.id ?? null,
-      canal: "whatsapp",
-      userInput,
-      convoCtx: {
-        last_plan_list: Array.isArray((convoCtxAfterFastpath as any)?.last_plan_list)
-          ? (convoCtxAfterFastpath as any).last_plan_list
-          : null,
-        last_plan_list_at: (convoCtxAfterFastpath as any)?.last_plan_list_at ?? null,
-        last_list_kind: (convoCtxAfterFastpath as any)?.last_list_kind ?? null,
-        last_service_id: (convoCtxAfterFastpath as any)?.last_service_id ?? null,
-        last_service_name: (convoCtxAfterFastpath as any)?.last_service_name ?? null,
-        selectedServiceId: (convoCtxAfterFastpath as any)?.selectedServiceId ?? null,
-        last_bot_action: (convoCtxAfterFastpath as any)?.last_bot_action ?? null,
-      },
-    });
-
     // aplicar patch de contexto devuelto por el helper
     if (fpRes.ctxPatch) {
       transition({ patchCtx: fpRes.ctxPatch });
@@ -1153,14 +1102,6 @@ console.log("🧨🧨🧨 PROD HIT WHATSAPP ROUTE", { ts: new Date().toISOString
         INTENCION_FINAL_CANONICA = fpRes.intent;
         lastIntent = fpRes.intent;
       }
-
-      console.log("🧠 CONVOCTX after fastpath patch =", {
-        last_service_id: (convoCtxAfterFastpath as any)?.last_service_id || null,
-        last_service_name: (convoCtxAfterFastpath as any)?.last_service_name || null,
-        selectedServiceId: (convoCtxAfterFastpath as any)?.selectedServiceId || null,
-        fpIntent: fpRes.intent || null,
-        fpSource: fpRes.replySource || null,
-      });
 
       return await replyAndExit(
         fpRes.reply,
