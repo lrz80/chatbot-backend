@@ -311,27 +311,12 @@ export async function handleFastpathHybridTurn(
         preResolvedCtxPatch.last_entity_kind = "service";
         preResolvedCtxPatch.last_entity_at = Date.now();
 
-        console.log("[FASTPATH_HYBRID][PRE_RESOLVE_SERVICE]", {
+        console.log("[FASTPATH_HYBRID][PRE_RESOLVE_SERVICE][HIT]", {
           tenantId,
           canal,
-          contactoNorm,
-          userInput,
           intent: currentIntent,
-          shouldTryPreResolveService,
-          explicitServiceResolved,
           serviceId: explicitResolvedServiceId,
           serviceName: explicitResolvedServiceName,
-          candidates: candidateResult?.candidates || [],
-        });
-      } else {
-        console.log("[FASTPATH_HYBRID][PRE_RESOLVE_SERVICE] skipped_or_no_match", {
-          tenantId,
-          canal,
-          contactoNorm,
-          userInput,
-          intent: currentIntent,
-          shouldTryPreResolveService,
-          candidates: candidateResult?.candidates || [],
         });
       }
     } catch (e: any) {
@@ -382,18 +367,20 @@ export async function handleFastpathHybridTurn(
     forcedAnchorCtxPatch.last_entity_kind = "service";
     forcedAnchorCtxPatch.last_entity_at = Date.now();
 
-    console.log("[FASTPATH_HYBRID][FORCED_ANCHORED_SERVICE]", {
-      tenantId,
-      canal,
-      contactoNorm,
-      userInput,
-      anchoredServiceId,
-      anchoredServiceName,
-      anchoredServiceLabel,
-      referentialFollowup,
-      followupNeedsAnchor,
-      followupEntityKind,
-    });
+    if (process.env.DEBUG_FASTPATH === "true") {
+      console.log("[FASTPATH_HYBRID][FORCED_ANCHORED_SERVICE]", {
+        tenantId,
+        canal,
+        contactoNorm,
+        userInput,
+        anchoredServiceId,
+        anchoredServiceName,
+        anchoredServiceLabel,
+        referentialFollowup,
+        followupNeedsAnchor,
+        followupEntityKind,
+      });
+    }
   }
 
   const convoCtxForFastpath = {
@@ -419,16 +406,18 @@ export async function handleFastpathHybridTurn(
     lastServiceTtlMs: 60 * 60 * 1000,
   });
 
-  console.log("[FASTPATH_HYBRID][ENTRY_AFTER_RUN]", {
-    tenantId,
-    canal,
-    userInput,
-    fpHandled: fp.handled,
-    fpSource: fp.handled ? fp.source : null,
-    fpIntent: fp.handled ? fp.intent : null,
-    fpReplyPreview: fp.handled ? String(fp.reply || "").slice(0, 200) : null,
-    fpCtxPatchKeys: fp.handled && fp.ctxPatch ? Object.keys(fp.ctxPatch) : [],
-  });
+  if (process.env.DEBUG_FASTPATH === "true") {
+    console.log("[FASTPATH_HYBRID][ENTRY_AFTER_RUN]", {
+      tenantId,
+      canal,
+      userInput,
+      fpHandled: fp.handled,
+      fpSource: fp.handled ? fp.source : null,
+      fpIntent: fp.handled ? fp.intent : null,
+      fpReplyPreview: fp.handled ? String(fp.reply || "").slice(0, 200) : null,
+      fpCtxPatchKeys: fp.handled && fp.ctxPatch ? Object.keys(fp.ctxPatch) : [],
+    });
+  }
 
   // Si no manejó nada, devolvemos directo
   if (!fp.handled) {
@@ -437,14 +426,16 @@ export async function handleFastpathHybridTurn(
       ...(preResolvedCtxPatch || {}),
     };
 
-    console.log("[FASTPATH_HYBRID][RETURN_UNHANDLED_WITH_CTX]", {
-      tenantId,
-      canal,
-      userInput,
-      forcedAnchorCtxPatch,
-      preResolvedCtxPatch,
-      unhandledCtxPatch,
-    });
+    if (process.env.DEBUG_FASTPATH === "true") {
+      console.log("[FASTPATH_HYBRID][RETURN_UNHANDLED_WITH_CTX]", {
+        tenantId,
+        canal,
+        userInput,
+        forcedAnchorCtxPatch,
+        preResolvedCtxPatch,
+        unhandledCtxPatch,
+      });
+    }
 
     return {
       handled: false,
