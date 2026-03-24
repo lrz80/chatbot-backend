@@ -635,7 +635,8 @@ export async function runCatalogFastpath(
       extraContext,
     });
 
-    const finalReply = canonicalReply;
+    const modelReply = String(aiCatalogReply?.text || "").trim();
+    const finalReply = modelReply || canonicalReply;
 
     const ctxPatch: any = {
       last_catalog_at: Date.now(),
