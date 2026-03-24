@@ -137,6 +137,7 @@ export async function handleFastpathHybridTurn(
     "planes_precios",
     "info_horarios_generales",
     "schedule",
+    "info_servicio",
   ]);
 
   const shouldRouteCatalog =
@@ -231,7 +232,8 @@ export async function handleFastpathHybridTurn(
   const isMorePlansFollowup =
     catalogRoutingSignal.routeIntent === "catalog_alternatives";
 
-  const isPlanDetailQuestion =
+  const isCatalogDetailQuestion =
+    catalogRoutingSignal.routeIntent === "catalog_includes" ||
     catalogReferenceClassification.intent === "includes" ||
     normalizedCurrentIntent === "info_servicio";
 
@@ -249,6 +251,7 @@ export async function handleFastpathHybridTurn(
   // Solo intentamos pre-resolver entidad cuando el turno parece
   // realmente sobre un servicio concreto, no sobre catálogo general.
   const shouldTryPreResolveServiceBase =
+    !catalogReferenceClassification?.targetServiceId &&
     (
       normalizedCurrentIntent === "info_servicio" ||
       normalizedCurrentIntent === "precio" ||
@@ -437,7 +440,29 @@ export async function handleFastpathHybridTurn(
     fp.source === "price_missing_db" ||
     (fp.source === "service_list_db" && fp.intent === "info_servicio");
 
-  const structuredServiceBase = shouldUseConvoCtxForStructuredService
+  const routingTargetServiceId = firstNonEmptyString(
+    catalogRoutingSignal?.targetServiceId,
+    catalogReferenceClassification?.targetServiceId
+  );
+
+  const routingTargetServiceName = firstNonEmptyString(
+    catalogRoutingSignal?.targetServiceName,
+    catalogReferenceClassification?.targetServiceName
+  );
+
+  const routingStructuredService =
+    routingTargetServiceId || routingTargetServiceName
+      ? {
+          serviceId: routingTargetServiceId,
+          serviceName: routingTargetServiceName,
+          serviceLabel: routingTargetServiceName,
+          hasResolution: true,
+        }
+      : null;
+
+  const structuredServiceBase = routingStructuredService
+    ? routingStructuredService
+    : shouldUseConvoCtxForStructuredService
     ? getStructuredServiceSelection(ctxPatch, convoCtxForFastpath)
     : getStructuredServiceSelection(ctxPatch, {});
 
@@ -515,7 +540,7 @@ export async function handleFastpathHybridTurn(
     catalogRoutingSignal.routeIntent === "catalog_price" ||
     catalogRoutingSignal.routeIntent === "catalog_alternatives" ||
     catalogRoutingSignal.routeIntent === "catalog_schedule" ||
-    isPlanDetailQuestion;
+    isCatalogDetailQuestion;
 
   if (
     isDmChatChannel(canal) &&
@@ -559,12 +584,12 @@ export async function handleFastpathHybridTurn(
   if (
     isDmChatChannel(canal) &&
     fp.source === "service_list_db" &&
-    (fp.intent === "info_servicio" || isPlanDetailQuestion)
+    (fp.intent === "info_servicio" || isCatalogDetailQuestion)
   ) {
     console.log("[CHAT][FASTPATH] detalle_servicio directo (sin LLM)", {
       source: fp.source,
       intent: fp.intent,
-      isPlanDetailQuestion,
+      isCatalogDetailQuestion,
     });
 
     return {
@@ -589,7 +614,7 @@ export async function handleFastpathHybridTurn(
     isDmChatChannel(canal) &&
     isPriceQuestionUser &&
     !wantsPlansAndHours &&
-    !isPlanDetailQuestion &&
+    !isCatalogDetailQuestion &&
     fp.source !== "catalog_db" &&
     fp.source !== "price_fastpath_db_llm_render" &&
     fp.source !== "price_fastpath_db_no_price_llm_render"
@@ -598,7 +623,7 @@ export async function handleFastpathHybridTurn(
       source: fp.source,
       intent: fp.intent || detectedIntent || intentFallback || null,
       isMorePlansFollowup,
-      isPlanDetailQuestion,
+      isCatalogDetailQuestion,
     });
 
     let replyText = fastpathText;
@@ -674,43 +699,6 @@ export async function handleFastpathHybridTurn(
   const hasGroundedServiceSource = SERVICE_GROUNDED_SOURCES.has(String(fp.source || ""));
 
   if (isDm && isServiceIntent && (!hasStructuredServiceResolution || !hasGroundedServiceSource)) {
-    
-    // ===============================
-    // ✅ POST-RESOLVE DE SERVICIO DESDE fastpathText
-    // Para casos donde Fastpath/LLM recomienda un servicio en texto
-    // pero no dejó resolución estructurada en ctxPatch.
-    // ===============================
-    if (!structuredService.hasResolution && fastpathText) {
-      try {
-        const postResolved = await resolveServiceIdFromText(
-          pool,
-          tenantId,
-          fastpathText,
-          { mode: "loose" }
-        );
-
-        if (postResolved?.id) {
-          ctxPatch.last_service_id = String(postResolved.id);
-          ctxPatch.last_service_name = String(postResolved.name || "").trim() || null;
-          ctxPatch.last_service_label = String(postResolved.name || "").trim() || null;
-          ctxPatch.last_entity_kind = "service";
-          ctxPatch.last_entity_at = Date.now();
-
-        } else {
-          console.log("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE][EARLY_RETURN] no match", {
-            tenantId,
-            canal,
-            contactoNorm,
-            userInput,
-            source: fp.source,
-            fastpathPreview: String(fastpathText || "").slice(0, 200),
-          });
-        }
-      } catch (e: any) {
-        console.warn("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE][EARLY_RETURN] failed:", e?.message || e);
-      }
-    }
-
     return {
       handled: true,
       reply: fastpathText,
@@ -963,55 +951,6 @@ SPECIAL RULE FOR THIS TURN:
         createdAt: new Date().toISOString(),
       };
 
-    }
-
-    // ===============================
-    // ✅ POST-RESOLVE DE SERVICIO RECOMENDADO POR LLM
-    // Si el LLM mencionó claramente un servicio pero Fastpath no dejó
-    // resolución estructurada, intentamos resolverlo desde el texto final.
-    // ===============================
-    if (
-      isServiceIntent &&
-      !isCatalogDbReply &&
-      !structuredService.hasResolution &&
-      composed.text
-    ) {
-      try {
-        const postResolved = await resolveServiceIdFromText(
-          pool,
-          tenantId,
-          composed.text,
-          { mode: "loose" }
-        );
-
-        if (postResolved?.id) {
-          ctxPatch.last_service_id = String(postResolved.id);
-          ctxPatch.last_service_name = String(postResolved.name || "").trim() || null;
-          ctxPatch.last_service_label = String(postResolved.name || "").trim() || null;
-          ctxPatch.last_entity_kind = "service";
-          ctxPatch.last_entity_at = Date.now();
-
-          console.log("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE]", {
-            tenantId,
-            canal,
-            contactoNorm,
-            userInput,
-            resolvedFromReply: composed.text.slice(0, 200),
-            serviceId: ctxPatch.last_service_id,
-            serviceName: ctxPatch.last_service_name,
-          });
-        } else {
-          console.log("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE] no match", {
-            tenantId,
-            canal,
-            contactoNorm,
-            userInput,
-            replyPreview: composed.text.slice(0, 200),
-          });
-        }
-      } catch (e: any) {
-        console.warn("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE] failed:", e?.message || e);
-      }
     }
 
     // 7️⃣ awaiting_yes_no_action SOLO por señal estructurada, nunca por regex del texto
