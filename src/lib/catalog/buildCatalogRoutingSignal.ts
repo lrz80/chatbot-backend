@@ -138,6 +138,9 @@ function mapIntentOutToRouteIntent(intentOut?: string | null): CatalogRouteInten
   if (
     intent === "info_horarios_generales" ||
     intent === "schedule" ||
+    intent === "horario_y_precios" ||
+    intent === "horario_y_precio" ||
+    intent === "horarios_y_precio" ||
     intent === "horarios_y_precios" ||
     intent === "schedule_and_price"
   ) {
