@@ -129,15 +129,35 @@ function hasRecentListAndMatch(ctx: any, userText: string): boolean {
   });
 }
 
+function hasClearNaturalLanguageSignal(text: string): boolean {
+  const t = normalizeChoice(text);
+  if (!t) return false;
+
+  const tokens = t.split(" ").filter(Boolean);
+  const meaningfulTokens = tokens.filter((token) => token.length >= 4);
+
+  // Frases naturales de 2+ palabras con contenido suficiente
+  // no deben tratarse como "short label" o turno ambiguo.
+  return tokens.length >= 2 && meaningfulTokens.length >= 1 && t.length >= 8;
+}
+
 function isAmbiguousTurn(text: string, ctx: any): boolean {
   const raw = String(text || "").trim();
   const t = normalizeChoice(raw);
 
   if (!t) return true;
 
+  // Selecciones numéricas siguen siendo ambiguas
   if (/^[0-9]+$/.test(t)) return true;
-  if (looksLikeShortLabel(raw)) return true;
+
+  // Si está escogiendo de una lista reciente, conserva idioma previo
   if (hasRecentListAndMatch(ctx, raw)) return true;
+
+  // Una frase natural clara no debe tratarse como short label ambiguo
+  // Ej: "horarios y precios", "where are you located", "quiero más información"
+  if (hasClearNaturalLanguageSignal(raw)) return false;
+
+  if (looksLikeShortLabel(raw)) return true;
 
   // tokens muy cortos / ambiguos
   if (t.length <= 3) return true;

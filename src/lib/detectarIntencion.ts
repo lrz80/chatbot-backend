@@ -154,7 +154,7 @@ function sanitizeLlmOutput(parsed: LlmIntentOutput | null | undefined): Intento 
   const rawIntent = String(parsed.intencion || "").trim().toLowerCase();
   if (!rawIntent) return null;
 
-  const nivel = Number(parsed.nivel_interes ?? 1);
+  const nivelRaw = Number(parsed.nivel_interes ?? 1);
 
   const facets: IntentFacets = {
     asksPrices: Boolean(parsed.facets?.asksPrices),
@@ -163,7 +163,19 @@ function sanitizeLlmOutput(parsed: LlmIntentOutput | null | undefined): Intento 
     asksAvailability: Boolean(parsed.facets?.asksAvailability),
   };
 
-  return makeIntent(rawIntent, nivel, facets);
+  const hasAnyFacet =
+    facets.asksPrices ||
+    facets.asksSchedules ||
+    facets.asksLocation ||
+    facets.asksAvailability;
+
+  // Si el modelo marcó facets útiles, "duda" ya no es una salida válida.
+  // Para consultas multi-facet genéricas, usamos info_general como intención principal segura.
+  if (rawIntent === "duda" && hasAnyFacet) {
+    return makeIntent("info_general", Math.max(2, nivelRaw || 1), facets);
+  }
+
+  return makeIntent(rawIntent, nivelRaw, facets);
 }
 
 function buildUniversalIntentGuide(): string {
