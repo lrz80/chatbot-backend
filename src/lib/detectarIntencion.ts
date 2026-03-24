@@ -478,15 +478,16 @@ export async function detectarIntencion(
     "saludo",
     "precio",
     "horario",
+    "horarios_y_precios",
     "ubicacion",
     "disponibilidad",
     "agendar",
-    "clase_prueba", // ✅ NUEVO
+    "clase_prueba",
     "pago",
     "cancelar",
     "soporte",
     "queja",
-    "info_general",  // ✅ NUEVO
+    "info_general",
     "info_servicio",
     "no_interesado",
     "duda",
