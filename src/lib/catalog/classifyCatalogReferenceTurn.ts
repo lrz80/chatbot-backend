@@ -496,10 +496,22 @@ export function classifyCatalogReferenceTurn(
     return result;
   }
 
+
   // =========================================================
   // 5) REFERENTIAL FOLLOW-UP WITH ENTITY CONTEXT
   // =========================================================
-  if ((hasPresentedEntities || hasLastEntity) && tokenCount > 0 && tokenCount <= 6) {
+  if (
+    (hasPresentedEntities || hasLastEntity) &&
+    tokenCount > 0 &&
+    tokenCount <= 6 &&
+    (
+      signals.hasReferentialDependency ||
+      signals.hasSpecificEntityCandidate ||
+      signals.hasVariantCandidate ||
+      signals.hasFamilyCandidate ||
+      context.expectingVariantForEntityId
+    )
+  ) {
     notes.push("context_entity_available");
     notes.push("short_turn_with_entity_context");
 
