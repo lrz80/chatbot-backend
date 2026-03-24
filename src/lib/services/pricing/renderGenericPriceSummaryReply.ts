@@ -109,22 +109,12 @@ export function renderGenericPriceSummaryReply(args: {
 
   // runFastpath ya envía los servicios en el orden correcto.
   // Aquí NO debemos reordenar.
-  const selected = normalized.slice(0, 6);
+  const selected = normalized.slice(0, 3);
 
   const clean = selected.map((r) => {
     const priceText = formatPrice(lang, r.minP, r.maxP);
     return `• ${r.name}: ${priceText}`;
   });
 
-  const header =
-    lang === "en"
-      ? "Here are some of our most requested options:"
-      : "Estas son algunas de nuestras opciones más solicitadas:";
-
-  const footer =
-    lang === "en"
-      ? "Which of these options are you interested in? 😊"
-      : "¿Cuál de estas opciones te interesa? 😊";
-
-  return [header, "", ...clean, "", footer].join("\n");
+  return clean.join("\n");
 }
