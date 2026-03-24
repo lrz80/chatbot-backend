@@ -607,39 +607,7 @@ export async function runCatalogFastpath(
 
     const namesShown = input.extractPlanNamesFromReply(canonicalPriceReply);
 
-    const extraContext = [
-      "CATALOGO_DB_CANONICO:",
-      canonicalPriceReply,
-      "",
-      input.idiomaDestino === "en"
-        ? "SCHEDULES_CANONICOS:"
-        : "HORARIOS_CANONICOS:",
-      input.infoClave?.trim() || "",
-      "",
-      "REGLAS_CRITICAS_DEL_TURNO:",
-      "- Debes usar EXCLUSIVAMENTE los precios del CATALOGO_DB_CANONICO.",
-      "- Debes conservar EXACTAMENTE los mismos nombres y precios.",
-      "- NO puedes agregar servicios.",
-      "- NO puedes quitar servicios.",
-      "- NO puedes inventar horarios.",
-      "- Si hay horarios canónicos, cópialos tal cual.",
-      "- SOLO puedes suavizar el encabezado o la línea final.",
-    ].join("\n");
-
-    const aiCatalogReply = await input.answerWithPromptBase({
-      tenantId: input.tenantId,
-      promptBase: input.promptBase,
-      userInput: input.userInput,
-      history: [],
-      idiomaDestino: input.idiomaDestino,
-      canal: input.canal,
-      maxLines: 14,
-      fallbackText: canonicalReply,
-      extraContext,
-    });
-
-    const modelReply = String(aiCatalogReply?.text || "").trim();
-    const finalReply = modelReply || canonicalReply;
+    const finalReply = canonicalReply;
 
     const ctxPatch: any = {
       last_catalog_at: Date.now(),
