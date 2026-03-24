@@ -76,6 +76,8 @@ const CATALOG_INTENTS = new Set([
   "catalog",
   "info_horarios_generales",
   "schedule",
+  "horarios_y_precios",
+  "schedule_and_price",
   "other_plans",
   "catalog_alternatives",
   "combination_and_price",
@@ -133,7 +135,12 @@ function mapIntentOutToRouteIntent(intentOut?: string | null): CatalogRouteInten
     return "catalog_combination";
   }
 
-  if (intent === "info_horarios_generales" || intent === "schedule") {
+  if (
+    intent === "info_horarios_generales" ||
+    intent === "schedule" ||
+    intent === "horarios_y_precios" ||
+    intent === "schedule_and_price"
+  ) {
     return "catalog_schedule";
   }
 
@@ -211,10 +218,21 @@ export function buildCatalogRoutingSignal({
   const disambiguationType = catalogReferenceClassification?.disambiguationType || "none";
   const anchorShift = catalogReferenceClassification?.anchorShift || "none";
 
-  if (referenceKind !== "none") {
+    if (referenceKind !== "none") {
+    const classificationRouteIntent =
+      mapClassificationToRouteIntent(catalogReferenceClassification);
+
+    const intentRouteIntent = mapIntentOutToRouteIntent(normalizedIntentOut);
+
+    const resolvedRouteIntent =
+      classificationRouteIntent === "catalog_price" &&
+      intentRouteIntent === "catalog_schedule"
+        ? "catalog_schedule"
+        : classificationRouteIntent;
+
     return {
       shouldRouteCatalog: true,
-      routeIntent: mapClassificationToRouteIntent(catalogReferenceClassification),
+      routeIntent: resolvedRouteIntent,
       referenceKind,
       source: "catalog_classifier",
       allowsDbCatalogPath,
