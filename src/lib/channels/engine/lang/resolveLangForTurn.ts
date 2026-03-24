@@ -316,8 +316,10 @@ export async function resolveLangForTurn(
     idiomaDestino = storedLang as Lang;
   }
 
-  // Si es short label y detector quiso flippear, no cambies
+  // Si es short label y detector quiso flippear, no cambies,
+  // PERO solo cuando NO hubo una detección fuerte del turno actual.
   if (
+    !strongDetectedTurn &&
     !langRes.inBookingLang &&
     (storedLang === "es" || storedLang === "en") &&
     (langRes.detectedLang === "es" || langRes.detectedLang === "en") &&
