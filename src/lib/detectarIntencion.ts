@@ -31,15 +31,16 @@ type UniversalIntent =
   | "saludo"
   | "precio"
   | "horario"
+  | "horarios_y_precios"
   | "ubicacion"
   | "disponibilidad"
   | "agendar"
-  | "clase_prueba" // ✅ NUEVO: trial / free class / class pass / demo
+  | "clase_prueba"
   | "pago"
   | "cancelar"
   | "soporte"
   | "queja"
-  | "info_general"   // ✅ NUEVO
+  | "info_general"
   | "info_servicio"
   | "no_interesado"
   | "duda"
@@ -320,11 +321,41 @@ export async function detectarIntencion(
   const RECOMMEND_RE =
     /\b(recom(i|í)end(as|a|ame)?|recommend|what\s+do\s+you\s+recommend|suggest|sugiere|sugerencia|que\s+me\s+recomiendas|cu(al|á)l\s+me\s+recomiendas|que\s+servicio\s+me\s+recomiendas|primera\s+vez|first\s+time)\b/i;
 
-  const SERVICE_QUERY_RE =
-    /\b(servicio(s)?|service(s)?|groom(ing)?|bañ(o|os)|bath|corte|cut)\b/i;
+  const CATALOG_ENTITY_TERMS = [
+    "servicio",
+    "servicios",
+    "service",
+    "services",
+    "plan",
+    "planes",
+    "package",
+    "packages",
+    "paquete",
+    "paquetes",
+    "membership",
+    "memberships",
+    "membresia",
+    "membresía",
+    "opcion",
+    "opciones",
+    "option",
+    "options",
+    "producto",
+    "productos",
+    "product",
+    "products",
+  ];
 
-  // Si piden recomendación o preguntan "qué servicio", es info_servicio con interés alto
-  if (RECOMMEND_RE.test(original) || (SERVICE_QUERY_RE.test(original) && !/\b(precio|cost|price|cu(a|á)nto)\b/i.test(original))) {
+  const asksGenericCatalogEntity = CATALOG_ENTITY_TERMS.some((term) =>
+    hasWord(textoCore, term)
+  );
+
+  const asksExplicitPrice = ["precio", "precios", "cost", "price", "cuanto", "cuánto"].some(
+    (term) => hasWord(textoCore, term)
+  );
+
+  // Si piden recomendación o preguntan por una entidad de catálogo sin pedir precio explícito
+  if (RECOMMEND_RE.test(original) || (asksGenericCatalogEntity && !asksExplicitPrice)) {
     return { intencion: "info_servicio", nivel_interes: 3 };
   }
 
@@ -344,7 +375,7 @@ export async function detectarIntencion(
     /\b(cancel(e|é|acion|ación|ar)|anul(e|é|ar)|no\s+puedo\s+ir|no\s+voy\s+a\s+ir)\b/i;
 
   const RESERVA_RE =
-    /\b(clase(s)?|class(es)?|spinning|cycling|reserva(r|da)?|booking|cita|appointment|agend(e|é|ada)?|turno)\b/i;
+    /\b(clase(s)?|class(es)?|reserva(r|da)?|booking|cita|appointment|agend(a|ar|e|é|ada)?|turno|slot)\b/i;
 
   // Opcional: señales de tiempo (hoy/mañana/hora) suben confianza
   const TIME_RE =
@@ -373,6 +404,30 @@ export async function detectarIntencion(
 
   if (PAGO_EXPLICITO_RE.test(original) && !PAGO_FALSO_RE.test(original)) {
     return { intencion: "pago", nivel_interes: 3 };
+  }
+
+  const asksSchedules =
+    UNIVERSAL.some(
+      (r) =>
+        r.intent === "horario" &&
+        (
+          (r.words || []).some((w) => hasWord(textoCore, w)) ||
+          (r.phrases || []).some((p) => textoCore.includes(norm(p)))
+        )
+    );
+
+  const asksPrices =
+    UNIVERSAL.some(
+      (r) =>
+        r.intent === "precio" &&
+        (
+          (r.words || []).some((w) => hasWord(textoCore, w)) ||
+          (r.phrases || []).some((p) => textoCore.includes(norm(p)))
+        )
+    );
+
+  if (asksSchedules && asksPrices) {
+    return { intencion: "horarios_y_precios", nivel_interes: 2 };
   }
 
   // Reglas universales rápidas
@@ -468,6 +523,7 @@ Reglas:
 - "disponibilidad" es para stock/cupos/disponibilidad de fechas sin confirmar cita.
 - "info_general" es para: "quiero más info", "qué ofrecen", overview, catálogo general, sin servicio mencionado.
 - Si el usuario dice "quiero suscribirme / suscripción / activar membresía / sign up / subscribe", clasifica como "pago" con nivel_interes 3.
+- Si el usuario pide horarios y precios en el mismo mensaje, clasifica como "horarios_y_precios" con nivel_interes 2.
 - Devuelve también nivel_interes (1 bajo, 2 medio, 3 alto) basado en cercanía a compra:
   3: quiere agendar, pagar, comprar, link, cotización directa.
   2: pregunta precio, disponibilidad, detalles para decidir.
