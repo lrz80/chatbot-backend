@@ -505,9 +505,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ✅ VARIANTES: PRIMER TURNO
   // (sin regex ni texto raw; solo señales estructuradas)
   // ===============================
+  const catalogRouteIntent = String(intentOut || "").trim().toLowerCase() || null;
+  
   const { hasStructuredTarget } = getCatalogStructuredSignals({
     catalogReferenceClassification,
     convoCtx,
+    catalogRouteIntent,
   });
 
   {

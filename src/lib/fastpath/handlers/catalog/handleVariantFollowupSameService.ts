@@ -10,6 +10,7 @@ export type HandleVariantFollowupSameServiceInput = {
   convoCtx: any;
   catalogReferenceClassification?: any;
   isFreshCatalogPriceTurn: boolean;
+  catalogRouteIntent?: string | null;
 };
 
 function splitLines(text: string): string[] {
@@ -37,6 +38,7 @@ export async function handleVariantFollowupSameService(
   } = getCatalogStructuredSignals({
     catalogReferenceClassification: input.catalogReferenceClassification,
     convoCtx: input.convoCtx,
+    catalogRouteIntent: input.catalogRouteIntent,
   });
 
   const now = Date.now();

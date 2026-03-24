@@ -1,6 +1,7 @@
 export type CatalogStructuredSignalsInput = {
   catalogReferenceClassification?: any;
   convoCtx: any;
+  catalogRouteIntent?: string | null;
 };
 
 export type CatalogStructuredSignals = {
@@ -21,6 +22,17 @@ function allowsContextCarryover(referenceKind: string): boolean {
   );
 }
 
+function routeNeedsFreshGeneralScope(catalogRouteIntent?: string | null): boolean {
+  const route = String(catalogRouteIntent || "").trim().toLowerCase();
+
+  return (
+    route === "catalog_price" ||
+    route === "catalog_schedule" ||
+    route === "catalog_overview" ||
+    route === "catalog_alternatives"
+  );
+}
+
 export function getCatalogStructuredSignals(
   input: CatalogStructuredSignalsInput
 ): CatalogStructuredSignals {
@@ -30,7 +42,9 @@ export function getCatalogStructuredSignals(
     .trim()
     .toLowerCase();
 
-  const useContextCarryover = allowsContextCarryover(referenceKind);
+  const useContextCarryover =
+    allowsContextCarryover(referenceKind) &&
+    !routeNeedsFreshGeneralScope(input.catalogRouteIntent);
 
   const targetServiceId =
     input.catalogReferenceClassification?.targetServiceId ||

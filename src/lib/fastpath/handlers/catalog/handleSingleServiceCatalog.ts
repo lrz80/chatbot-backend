@@ -17,6 +17,7 @@ export type HandleSingleServiceCatalogInput = {
   answerWithPromptBase: (input: any) => Promise<{ text: string }>;
   promptBase: string;
   canal: any;
+  catalogRouteIntent?: string | null;
 };
 
 export async function handleSingleServiceCatalog(
@@ -32,6 +33,7 @@ export async function handleSingleServiceCatalog(
   } = getCatalogStructuredSignals({
     catalogReferenceClassification: input.catalogReferenceClassification,
     convoCtx: input.convoCtx,
+    catalogRouteIntent: input.catalogRouteIntent,
   });
 
     const shouldSkipSinglePriceTargetResolution =
