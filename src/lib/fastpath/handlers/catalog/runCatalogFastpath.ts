@@ -4,7 +4,16 @@ import type { FastpathResult } from "../../runFastpath";
 import { getCatalogIntentFlags } from "./getCatalogIntentFlags";
 import { getCatalogTurnState } from "./getCatalogTurnState";
 import { handleSingleServiceCatalog } from "./handleSingleServiceCatalog";
-import { extractSchedulesOnly } from "../../helpers/extractSchedulesOnly";
+import {
+  composeCatalogReplyBlocks,
+  withSectionTitle,
+} from "./helpers/catalogReplyBlocks";
+import {
+  buildAvailabilityBlockFromInfoClave,
+  buildLocationBlockFromInfoClave,
+} from "./helpers/catalogBusinessInfoBlocks";
+import { buildPriceBlock } from "./helpers/catalogPriceBlock";
+import { buildScheduleBlock } from "./helpers/catalogScheduleBlock";
 
 type CatalogFacets = {
   asksPrices?: boolean;
@@ -166,8 +175,85 @@ export async function runCatalogFastpath(
     intentOutNorm === "combination_and_price" ||
     intentOutNorm === "catalog_combination";
 
+  const isLocationOnlyTurn =
+    asksLocation &&
+    !asksPrices &&
+    !asksSchedules &&
+    !asksAvailability &&
+    !asksIncludesOnly &&
+    !isCombinationIntent &&
+    !isAskingOtherCatalogOptions;
+
+  const isAvailabilityOnlyTurn =
+    asksAvailability &&
+    !asksPrices &&
+    !asksSchedules &&
+    !asksLocation &&
+    !asksIncludesOnly &&
+    !isCombinationIntent &&
+    !isAskingOtherCatalogOptions;
+
+  if (isLocationOnlyTurn || isAvailabilityOnlyTurn) {
+    const locationBody = asksLocation
+      ? buildLocationBlockFromInfoClave(input.infoClave)
+      : "";
+
+    const availabilityBody = asksAvailability
+      ? buildAvailabilityBlockFromInfoClave(input.infoClave)
+      : "";
+
+    const locationBlock = withSectionTitle(
+      input.idiomaDestino,
+      "Ubicación:",
+      "Location:",
+      locationBody
+    );
+
+    const availabilityBlock = withSectionTitle(
+      input.idiomaDestino,
+      "Disponibilidad:",
+      "Availability:",
+      availabilityBody
+    );
+
+    const finalReply = composeCatalogReplyBlocks({
+      idiomaDestino: input.idiomaDestino,
+      asksPrices,
+      asksSchedules,
+      asksLocation,
+      asksAvailability,
+      locationBlock,
+      availabilityBlock,
+      includeClosingLine: true,
+    });
+
+    if (finalReply.trim()) {
+      return {
+        handled: true,
+        reply: finalReply,
+        source: "catalog_db",
+        intent: asksLocation ? "ubicacion" : "disponibilidad",
+        ctxPatch: {
+          last_catalog_at: Date.now(),
+          lastResolvedIntent: asksLocation ? "location_only" : "availability_only",
+        } as any,
+      };
+    }
+
+    console.log("[CATALOG][SKIP_NON_PRICE_INFO_ONLY_EMPTY]", {
+      userInput: input.userInput,
+      intentOut: input.intentOut,
+      facets: input.facets || {},
+      routeIntent,
+    });
+
+    return {
+      handled: false,
+    };
+  }
+
   const hasFacetDrivenCatalogIntent =
-    asksPrices || asksSchedules || asksLocation || asksAvailability;
+    asksPrices || asksSchedules;
 
   const allowGenericCatalogDbFallback =
     hasExplicitCatalogRouting ||
@@ -420,14 +506,14 @@ export async function runCatalogFastpath(
       );
     }
 
-    const dbReply = input.renderGenericPriceSummaryReply({
-      lang: input.idiomaDestino,
+    const priceBlock = buildPriceBlock({
+      idiomaDestino: input.idiomaDestino,
       rows: rowsLocalized,
+      renderGenericPriceSummaryReply: input.renderGenericPriceSummaryReply,
     });
 
-    const cleanedReply = dbReply;
-    const canonicalReply = cleanedReply;
-    const namesShown = input.extractPlanNamesFromReply(cleanedReply);
+    const canonicalReply = priceBlock;
+    const namesShown = input.extractPlanNamesFromReply(priceBlock);
 
     const extraContext = [
       "CATALOGO_DB_CANONICO:",
@@ -626,30 +712,29 @@ export async function runCatalogFastpath(
       );
     }
 
-    const canonicalPriceReply = input.renderGenericPriceSummaryReply({
-      lang: input.idiomaDestino,
+    const priceBlock = buildPriceBlock({
+      idiomaDestino: input.idiomaDestino,
       rows: rowsLocalized,
-    }).trim();
+      renderGenericPriceSummaryReply: input.renderGenericPriceSummaryReply,
+    });
 
-    const schedulesOnly = extractSchedulesOnly(input.infoClave);
+    const scheduleBlock = buildScheduleBlock({
+      idiomaDestino: input.idiomaDestino,
+      infoClave: input.infoClave,
+    });
 
-    const openingLine =
-      input.idiomaDestino === "en"
-        ? "Of course — here are the schedules and prices so you can compare the available options."
-        : "Claro, aquí tienes los horarios y precios para que compares las opciones disponibles.";
+    const canonicalReply = composeCatalogReplyBlocks({
+      idiomaDestino: input.idiomaDestino,
+      asksPrices,
+      asksSchedules,
+      asksLocation,
+      asksAvailability,
+      priceBlock,
+      scheduleBlock,
+      includeClosingLine: true,
+    });
 
-    const closingLine =
-      input.idiomaDestino === "en"
-        ? "If you'd like, I can help you identify which option fits you best."
-        : "Si quieres, te ayudo a identificar qué opción te conviene más.";
-
-    const canonicalReply = schedulesOnly
-      ? `${openingLine}\n\n${canonicalPriceReply}\n\n${
-          input.idiomaDestino === "en" ? "Schedules:" : "Horarios:"
-        }\n${schedulesOnly}\n\n${closingLine}`
-      : `${openingLine}\n\n${canonicalPriceReply}\n\n${closingLine}`;
-
-    const namesShown = input.extractPlanNamesFromReply(canonicalPriceReply);
+    const namesShown = input.extractPlanNamesFromReply(priceBlock);
 
     const finalReply = canonicalReply;
 
