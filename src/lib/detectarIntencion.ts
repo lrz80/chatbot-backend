@@ -2,564 +2,395 @@
 import OpenAI from "openai";
 import pool from "./db";
 import type { Canal } from "./types/canal";
+
 export type { Canal };
 
+export type IntentFacets = {
+  asksPrices?: boolean;
+  asksSchedules?: boolean;
+  asksLocation?: boolean;
+  asksAvailability?: boolean;
+};
 
-export type Intento = { intencion: string; nivel_interes: number };
+export type Intento = {
+  intencion: string;
+  nivel_interes: number;
 
-/** ---------- Normalización ---------- */
-const stripDiacritics = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-const norm = (s: string) => stripDiacritics((s || "").toLowerCase().trim());
+  // compatibilidad con callers viejos
+  intent: string;
+  nivel: number;
 
-function stripLeadingGreeting(t: string) {
-  const re =
-    /^(hola|hello|hi|hey|buenos dias|buenas tardes|buenas noches|buen día|buenas)[\s,!.:-]*/i;
-  return (t || "").replace(re, "").trim();
-}
+  // nuevo contrato estructurado
+  facets: IntentFacets;
+};
 
-function hasWord(text: string, word: string) {
-  const w = stripDiacritics((word || "").toLowerCase());
-  return new RegExp(`\\b${w}\\b`, "i").test(text || "");
-}
-
-// ✅ Pregunta de INCLUDES / qué incluye un plan/paquete/membresía
-const INCLUDES_RE =
-  /\b(que\s+incluye|qué\s+incluye|q\s+incluye|incluye\s+el\s+paquete|incluye\s+la\s+membresia|incluye\s+la\s+membresía|incluye\s+el\s+plan|que\s+trae|qué\s+trae|what\s+does\s+.*include|what\s+is\s+included)\b/i;
-  
-/** ---------- Intenciones universales (mínimas y generales) ---------- */
-type UniversalIntent =
-  | "saludo"
-  | "precio"
-  | "horario"
-  | "horarios_y_precios"
-  | "ubicacion"
-  | "disponibilidad"
-  | "agendar"
-  | "clase_prueba"
-  | "pago"
-  | "cancelar"
-  | "soporte"
-  | "queja"
-  | "info_general"
-  | "info_servicio"
-  | "no_interesado"
-  | "duda"
-  | "soporte_reserva";
-
-const UNIVERSAL: Array<{
-  intent: UniversalIntent;
-  nivel: 1 | 2 | 3;
-  words?: string[];
-  phrases?: string[];
-}> = [
-  {
-    intent: "saludo",
-    nivel: 1,
-    words: ["hola", "hello", "hi", "hey", "saludos"],
-    phrases: ["buenos dias", "buenas tardes", "buenas noches"],
-  },
-  {
-    intent: "precio",
-    nivel: 2,
-    words: ["precio", "precios", "cost", "price", "tarifa", "fee", "quote", "cotizacion", "cotización"],
-    phrases: ["cuanto cuesta", "how much", "cuánto vale", "me das precio", "me das una cotizacion", "me das una cotización"],
-  },
-  {
-    intent: "horario",
-    nivel: 2,
-    words: ["horario", "horarios", "schedule", "hours", "abren", "cierran"],
-    phrases: ["a que hora", "a qué hora", "hora de apertura", "hora de cierre", "what time", "what are your hours"],
-  },
-  {
-    intent: "ubicacion",
-    nivel: 2,
-    words: ["ubicacion", "ubicación", "direccion", "dirección", "location", "address"],
-    phrases: ["donde estan", "dónde están", "donde queda", "cómo llegar", "where are you", "how to get"],
-  },
-  {
-    intent: "agendar",
-    nivel: 3,
-    words: ["agendar", "agenda", "cita", "turno", "appointment", "book", "reservar", "reserva", "schedule"],
-    phrases: ["quiero una cita", "quiero agendar", "quiero reservar", "book an appointment", "i want to book"],
-  },
-  {
-    intent: "disponibilidad",
-    nivel: 2,
-    words: ["disponibilidad", "disponible", "available", "stock", "cupo", "cupos"],
-    phrases: ["tienen disponible", "hay disponibilidad", "is it available", "do you have availability"],
-  },
-  {
-    intent: "pago",
-    nivel: 3,
-    words: ["pagar", "checkout", "payment", "invoice"], // quita "pago" y "pay" si te da falsos positivos
-    phrases: ["quiero pagar", "como pago", "cómo pago", "send me the link", "link de pago", "enlace de pago"],
-  },
-  {
-    intent: "cancelar",
-    nivel: 2,
-    words: ["cancelar", "cancel", "anular"],
-    phrases: ["cancela mi", "ya no quiero", "i want to cancel"],
-  },
-  {
-    intent: "soporte",
-    nivel: 2,
-    words: ["problema", "error", "no funciona", "help", "ayuda", "support", "soporte"],
-    phrases: ["necesito ayuda", "tengo un problema", "it doesn't work", "no me sirve"],
-  },
-  {
-    intent: "queja",
-    nivel: 2,
-    words: ["queja", "reclamo", "reclamacion", "reclamación", "molesto", "enojado", "angry", "complaint"],
-    phrases: ["esto es una falta", "muy mal servicio", "i'm upset", "estoy molesto"],
-  },
-  {
-    intent: "no_interesado",
-    nivel: 1,
-    phrases: ["no me interesa", "no gracias", "not interested", "i am not interested"],
-  },
-    {
-    intent: "clase_prueba",
-    nivel: 3,
-    words: [
-      "prueba",
-      "trial",
-      "demo",
-      "free",
-      "gratis",
-      "freebie",
-      "intro",
-      "introductory",
-      "complimentary", // ✅ NUEVO
-      "compliment",    // por si escriben mal
-      "comp",          // shorthand común en gyms/fitness
-    ],
-    phrases: [
-      "clase de prueba",
-      "clase gratis",
-      "primera clase",
-      "primera clase gratis",
-      "free class",
-      "trial class",
-      "book a free class",
-      "first class",
-      "first class free",
-      "intro class",
-      "introductory class",
-      "complimentary class",     // ✅ NUEVO
-      "complimentary session",   // ✅ NUEVO
-      "free session",            // ✅ NUEVO
-    ],
-  },
-];
-
-/** Señales de “quiero info” genérica (sin sesgo por industria) */
-const INFO_PHRASES = [
-  "mas informacion",
-  "más informacion",
-  "quiero informacion",
-  "quiero información",
-  "necesito saber mas",
-  "necesito saber más",
-  "quiero saber mas",
-  "quiero saber más",
-  "quisiera saber mas",
-  "quisiera saber más",
-  "quiero detalles",
-  "me puedes explicar",
-  "en que consiste",
-  "en qué consiste",
-  "tell me more",
-  "more info",
-  "more information",
-  "information please",
-];
-
-/** ---------- Venta: definición general (no por industria) ---------- */
-const VENTA_SIGNAL_WORDS = [
-  "comprar",
-  "compra",
-  "pagar",
-  "pago",
-  "precio",
-  "precios",
-  "cotizacion",
-  "cotización",
-  "quote",
-  "checkout",
-  "orden",
-  "order",
-  "reservar",
-  "agendar",
-  "cita",
-  "appointment",
-  "book",
-  "suscripcion",
-  "suscripción",
-  "plan",
-  "planes",
-  "membership",
-  "membresia",
-  "membresía",
-  "contratar",
-  "contrato",
-  "hire",
-  "sign up",
-  "signup",
-  "join",
-];
-
-export function esIntencionDeVenta(intencion: string): boolean {
-  const s = (intencion || "").toLowerCase();
-
-  // ✅ nunca ventas:
-  if (["soporte", "queja", "cancelar", "soporte_reserva"].some(k => s.includes(k))) return false;
-
-  return (
-    ["precio", "agendar", "pago", "disponibilidad", "clase_prueba"].some((k) => s.includes(k)) ||
-    s.includes("comprar")
-  );
-}
-
-/** ---------- Cargar contexto + intenciones del tenant ---------- */
 type TenantIntentRow = {
   nombre: string;
-  ejemplos?: string[];
-  respuesta?: string;
+  ejemplos?: string[] | string | null;
+  respuesta?: string | null;
   canal?: string | null;
   idioma?: string | null;
   prioridad?: number | null;
   activo?: boolean | null;
 };
 
-function canalesDe(canal?: string) {
-  const c = (canal || "whatsapp").toLowerCase();
+type LlmIntentOutput = {
+  intencion?: unknown;
+  nivel_interes?: unknown;
+  facets?: {
+    asksPrices?: unknown;
+    asksSchedules?: unknown;
+    asksLocation?: unknown;
+    asksAvailability?: unknown;
+  } | null;
+};
+
+const UNIVERSAL_INTENTS = [
+  "saludo",
+  "precio",
+  "horario",
+  "ubicacion",
+  "disponibilidad",
+  "agendar",
+  "clase_prueba",
+  "pago",
+  "cancelar",
+  "soporte",
+  "queja",
+  "info_general",
+  "info_servicio",
+  "no_interesado",
+  "duda",
+  "soporte_reserva",
+] as const;
+
+const SALES_INTENTS = new Set<string>([
+  "precio",
+  "agendar",
+  "pago",
+  "disponibilidad",
+  "clase_prueba",
+]);
+
+function makeIntent(
+  intencion: string,
+  nivel_interes: number,
+  facets: IntentFacets = {}
+): Intento {
+  const cleanIntent = String(intencion || "duda").trim().toLowerCase();
+  const cleanNivelRaw = Number(nivel_interes);
+  const cleanNivel = Number.isFinite(cleanNivelRaw)
+    ? Math.max(1, Math.min(3, cleanNivelRaw))
+    : 1;
+
+  return {
+    intencion: cleanIntent,
+    nivel_interes: cleanNivel,
+    intent: cleanIntent,
+    nivel: cleanNivel,
+    facets: {
+      asksPrices: Boolean(facets.asksPrices),
+      asksSchedules: Boolean(facets.asksSchedules),
+      asksLocation: Boolean(facets.asksLocation),
+      asksAvailability: Boolean(facets.asksAvailability),
+    },
+  };
+}
+
+function canalesDe(canal?: string): string[] {
+  const c = String(canal || "whatsapp").trim().toLowerCase();
   return c === "meta" ? ["meta", "facebook", "instagram"] : [c];
 }
 
-async function loadTenantContext(tenantId: string, canal: Canal) {
+function normalizeExamples(value: TenantIntentRow["ejemplos"]): string[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item || "").trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+
+  return [];
+}
+
+function safeJsonParseObject(raw: string): Record<string, unknown> | null {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // seguimos abajo
+  }
+
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    const candidate = text.slice(firstBrace, lastBrace + 1);
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function sanitizeLlmOutput(parsed: LlmIntentOutput | null | undefined): Intento | null {
+  if (!parsed || typeof parsed !== "object") return null;
+
+  const rawIntent = String(parsed.intencion || "").trim().toLowerCase();
+  if (!rawIntent) return null;
+
+  const nivel = Number(parsed.nivel_interes ?? 1);
+
+  const facets: IntentFacets = {
+    asksPrices: Boolean(parsed.facets?.asksPrices),
+    asksSchedules: Boolean(parsed.facets?.asksSchedules),
+    asksLocation: Boolean(parsed.facets?.asksLocation),
+    asksAvailability: Boolean(parsed.facets?.asksAvailability),
+  };
+
+  return makeIntent(rawIntent, nivel, facets);
+}
+
+function buildUniversalIntentGuide(): string {
+  return [
+    `- saludo: saludo puro o apertura conversacional sin pedido claro`,
+    `- precio: pregunta enfocada en precios, costos, tarifas o cotización`,
+    `- horario: pregunta enfocada en horarios u horas de atención`,
+    `- ubicacion: pregunta enfocada en dirección o ubicación`,
+    `- disponibilidad: pregunta enfocada en disponibilidad, cupos, fechas o stock`,
+    `- agendar: intención de reservar, agendar, bookear o concretar cita`,
+    `- clase_prueba: intención de clase de prueba, sesión introductoria o trial`,
+    `- pago: intención de pagar, activar, suscribirse o completar checkout`,
+    `- cancelar: intención de cancelar algo no relacionado a soporte de reserva`,
+    `- soporte: ayuda, problema técnico u operativo`,
+    `- queja: molestia, reclamo o insatisfacción`,
+    `- info_general: overview general del negocio o varias dudas generales`,
+    `- info_servicio: pregunta sobre un servicio, plan, paquete, producto u oferta concreta`,
+    `- no_interesado: rechazo claro o desinterés`,
+    `- duda: mensaje ambiguo o insuficiente`,
+    `- soporte_reserva: cambio, cancelación o problema relacionado con una reserva/cita ya existente`,
+  ].join("\n");
+}
+
+async function loadTenantContext(tenantId: string, canal: Canal): Promise<string> {
   let tenantInfo = `Canal: ${canal}`;
+
   try {
     const res = await pool.query(
-      `SELECT name AS nombre, categoria, funciones_asistente, info_clave
-       FROM tenants
-       WHERE id = $1
-       LIMIT 1`,
+      `
+      SELECT
+        name AS nombre,
+        categoria,
+        funciones_asistente,
+        info_clave
+      FROM tenants
+      WHERE id = $1
+      LIMIT 1
+      `,
       [tenantId]
     );
+
     if (res.rows?.length) {
       const t = res.rows[0];
-      tenantInfo = `
-Negocio: ${t.nombre || ""}
-Categoría: ${t.categoria || ""}
-Funciones del asistente: ${t.funciones_asistente || ""}
-Información clave: ${t.info_clave || ""}
-Canal: ${canal}
-      `.trim();
+      tenantInfo = [
+        `Negocio: ${String(t.nombre || "").trim()}`,
+        `Categoría: ${String(t.categoria || "").trim()}`,
+        `Funciones del asistente: ${String(t.funciones_asistente || "").trim()}`,
+        `Información clave: ${String(t.info_clave || "").trim()}`,
+        `Canal: ${String(canal || "").trim()}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
     }
-  } catch (e) {
-    console.error("❌ Error cargando tenant context:", e);
+  } catch (error) {
+    console.error("❌ Error cargando tenant context:", error);
   }
+
   return tenantInfo;
 }
 
-async function loadTenantIntents(tenantId: string, canal: string) {
+async function loadTenantIntents(
+  tenantId: string,
+  canal: Canal
+): Promise<TenantIntentRow[]> {
   const canales = canalesDe(canal);
 
   const { rows } = await pool.query(
-    `SELECT nombre, ejemplos, respuesta, canal, idioma, prioridad, activo
-     FROM intenciones
-     WHERE tenant_id = $1
-       AND canal = ANY($2)
-       AND (activo IS NULL OR activo = TRUE)
-     ORDER BY COALESCE(prioridad, 0) ASC, id ASC
-     LIMIT 50`,
+    `
+    SELECT nombre, ejemplos, respuesta, canal, idioma, prioridad, activo
+    FROM intenciones
+    WHERE tenant_id = $1
+      AND canal = ANY($2)
+      AND (activo IS NULL OR activo = TRUE)
+    ORDER BY COALESCE(prioridad, 0) ASC, id ASC
+    LIMIT 100
+    `,
     [tenantId, canales]
   );
 
   return (rows || []) as TenantIntentRow[];
 }
 
-/** ---------- Heurísticas mínimas + fallback LLM robusto ---------- */
+function buildTenantIntentGuide(rows: TenantIntentRow[]): string {
+  if (!rows.length) return "- (ninguna)";
+
+  return rows
+    .map((row) => {
+      const nombre = String(row.nombre || "").trim().toLowerCase();
+      const ejemplos = normalizeExamples(row.ejemplos);
+      const respuesta = String(row.respuesta || "").trim();
+
+      const parts = [`- ${nombre}`];
+
+      if (ejemplos.length) {
+        parts.push(`ejemplos: ${ejemplos.join(" | ")}`);
+      }
+
+      if (respuesta) {
+        parts.push(`respuesta_referencial: ${respuesta}`);
+      }
+
+      return parts.join(" | ");
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function classifyIntentWithModel(input: {
+  openai: OpenAI;
+  mensaje: string;
+  tenantInfo: string;
+  tenantIntents: TenantIntentRow[];
+}): Promise<Intento | null> {
+  const tenantIntentGuide = buildTenantIntentGuide(input.tenantIntents);
+  const universalIntentGuide = buildUniversalIntentGuide();
+
+  const prompt = `
+Eres un clasificador de intención para una plataforma SaaS multitenant.
+
+Tu trabajo es devolver una sola intención principal y facets estructuradas.
+No uses respuestas narrativas.
+No inventes nuevos campos.
+No devuelvas texto extra fuera del JSON.
+
+Mensaje del cliente:
+"""${input.mensaje}"""
+
+Contexto del negocio:
+${input.tenantInfo}
+
+Intenciones universales permitidas:
+${UNIVERSAL_INTENTS.map((i) => `- ${i}`).join("\n")}
+
+Definición de intenciones universales:
+${universalIntentGuide}
+
+Intenciones específicas configuradas por el tenant:
+${tenantIntentGuide}
+
+Reglas:
+- Debes elegir UNA intención principal.
+- Puedes elegir una intención universal o una intención específica del tenant si es claramente mejor.
+- Si el mensaje combina varias cosas, conserva una intención principal razonable y usa facets para lo demás.
+- No uses intents compuestos.
+- No conviertas la combinación de varios temas en un nombre de intent nuevo.
+- Usa facets independientes:
+  - asksPrices
+  - asksSchedules
+  - asksLocation
+  - asksAvailability
+- Puede haber varios facets en true al mismo tiempo.
+- Si el mensaje es ambiguo y no alcanza para clasificar con confianza, usa "duda".
+- nivel_interes:
+  - 1 = curiosidad vaga, saludo, rechazo o duda general
+  - 2 = pide información para evaluar
+  - 3 = quiere avanzar, reservar, pagar o concretar
+
+Devuelve SOLO JSON con esta forma exacta:
+{
+  "intencion": "string",
+  "nivel_interes": 1,
+  "facets": {
+    "asksPrices": false,
+    "asksSchedules": false,
+    "asksLocation": false,
+    "asksAvailability": false
+  }
+}
+  `.trim();
+
+  try {
+    const completion = await input.openai.chat.completions.create({
+      model: "gpt-4.1-mini",
+      temperature: 0,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const raw = String(completion.choices[0]?.message?.content || "").trim();
+    const parsedObj = safeJsonParseObject(raw) as LlmIntentOutput | null;
+    return sanitizeLlmOutput(parsedObj);
+  } catch (error) {
+    console.error("❌ Error clasificando intención con modelo:", error);
+    return null;
+  }
+}
+
+export function esIntencionDeVenta(intencion: string): boolean {
+  const value = String(intencion || "").trim().toLowerCase();
+
+  if (!value) return false;
+  if (value === "soporte" || value === "queja" || value === "cancelar" || value === "soporte_reserva") {
+    return false;
+  }
+
+  return SALES_INTENTS.has(value) || value.includes("comprar");
+}
+
 export async function detectarIntencion(
   mensaje: string,
   tenantId: string,
   canal: Canal = "whatsapp"
 ): Promise<Intento> {
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || "" });
+  const original = String(mensaje || "").trim();
 
-  const original = (mensaje || "").trim();
-  const texto = norm(original);
-  const textoCore = norm(stripLeadingGreeting(original)) || texto;
-
-  // ✅ FAST-PATH: clase de prueba / trial (debe ganar contra "info_servicio")
-  const TRIAL_RE =
-    /\b(clase\s*(de)?\s*prueba|clase\s*gratis|primera\s*clase(\s*gratis)?|free\s*class|trial\s*class|book\s*(a)?\s*free\s*class|intro(\s*class)?|introductory\s*class|complimentary(\s*(class|session))?|comp(ed)?\s*(class|session)?)\b/i;
-
-  if (TRIAL_RE.test(original)) {
-    return { intencion: "clase_prueba", nivel_interes: 3 };
+  if (!original) {
+    return makeIntent("duda", 1);
   }
 
-  // ✅ “más info” (ES/EN) debe ganar contra "pago" si NO hay señales explícitas de checkout/pago
-  const MORE_INFO_RE =
-    /\b(mas\s*inf(o(rmacion)?)?|m[aá]s\s*inf(o(rmaci[oó]n)?)?|informaci[oó]n\s*adicional|more\s*info|more\s*information|more\s*details|tell\s*me\s*more)\b/i;
+  const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY || "",
+  });
 
-  const STRONG_INFO_RE =
-  /\b(i\s*need|need|quiero|quisiera|necesito)\b/i;
-
-  if (MORE_INFO_RE.test(original)) {
-    const nivel = STRONG_INFO_RE.test(original) ? 3 : 2;
-    return { intencion: "info_general", nivel_interes: nivel as 2 | 3 };
-  }
-
-  // ✅ FAST-PATH: "qué incluye" / "qué trae" un plan o paquete
-  if (INCLUDES_RE.test(original)) {
-    // Lo tratamos como info de servicio con interés medio
-    return { intencion: "info_servicio", nivel_interes: 2 };
-  }
-
-  // ✅ FAST-PATH: recomendación / "qué me recomiendas" / "primera vez"
-  const RECOMMEND_RE =
-    /\b(recom(i|í)end(as|a|ame)?|recommend|what\s+do\s+you\s+recommend|suggest|sugiere|sugerencia|que\s+me\s+recomiendas|cu(al|á)l\s+me\s+recomiendas|que\s+servicio\s+me\s+recomiendas|primera\s+vez|first\s+time)\b/i;
-
-  const CATALOG_ENTITY_TERMS = [
-    "servicio",
-    "servicios",
-    "service",
-    "services",
-    "plan",
-    "planes",
-    "package",
-    "packages",
-    "paquete",
-    "paquetes",
-    "membership",
-    "memberships",
-    "membresia",
-    "membresía",
-    "opcion",
-    "opciones",
-    "option",
-    "options",
-    "producto",
-    "productos",
-    "product",
-    "products",
-  ];
-
-  const asksGenericCatalogEntity = CATALOG_ENTITY_TERMS.some((term) =>
-    hasWord(textoCore, term)
-  );
-
-  const asksExplicitPrice = ["precio", "precios", "cost", "price", "cuanto", "cuánto"].some(
-    (term) => hasWord(textoCore, term)
-  );
-
-  // Si piden recomendación o preguntan por una entidad de catálogo sin pedir precio explícito
-  if (RECOMMEND_RE.test(original) || (asksGenericCatalogEntity && !asksExplicitPrice)) {
-    return { intencion: "info_servicio", nivel_interes: 3 };
-  }
-
-  // ✅ FAST-PATH: intención de activar/suscribirse (ES/EN) — antes de flagVenta fallbacks
-  const NEG_RE = /\b(no|aun\s*no|todav[ií]a\s*no|not)\b/i;
-
-  const SUBSCRIBE_RE =
-    /\b(suscrib(ir(me)?|irse)|suscripci[oó]n|subscrib(e|ing)|subscription|sign\s*up|enroll|activar(\s+mi)?\s+(membres[ií]a|plan)|activate(\s+my)?\s+(plan|membership)|start(\s+my)?\s+(plan|membership)|quiero\s+(empezar|iniciar))\b/i;
-
-  if (SUBSCRIBE_RE.test(original) && !NEG_RE.test(original)) {
-    return { intencion: "pago", nivel_interes: 3 };
-  }
-
-  // ✅ FAST-PATH: cancelación/cambio de reserva (evita caer en info_servicio / venta)
-  // Multitenant: no depende de industria. Detecta "cancelé" + señales de clase/reserva/hora.
-  const CANCEL_RESERVA_RE =
-    /\b(cancel(e|é|acion|ación|ar)|anul(e|é|ar)|no\s+puedo\s+ir|no\s+voy\s+a\s+ir)\b/i;
-
-  const RESERVA_RE =
-    /\b(clase(s)?|class(es)?|reserva(r|da)?|booking|cita|appointment|agend(a|ar|e|é|ada)?|turno|slot)\b/i;
-
-  // Opcional: señales de tiempo (hoy/mañana/hora) suben confianza
-  const TIME_RE =
-    /\b(hoy|mañana|manana|esta\s+tarde|esta\s+noche|a\s+las\s+\d{1,2}|am|pm|\d{1,2}:\d{2})\b/i;
-
-  if (CANCEL_RESERVA_RE.test(original) && (RESERVA_RE.test(original) || TIME_RE.test(original))) {
-    return { intencion: "soporte_reserva", nivel_interes: 2 };
-  }
-
-  // 1) Heurísticas universales (solo lo obvio)
-  // Prioridad: NO devolver saludo si hay pedido real.
-  const flagInfo =
-    INFO_PHRASES.some((p) => textoCore.includes(norm(p))) ||
-    ["info", "informacion", "información", "information", "details", "detalle"].some((w) => hasWord(textoCore, w));
-
-  // Venta signal general por palabras (sin hardcode a industria)
-  const flagVenta = VENTA_SIGNAL_WORDS.some((w) => textoCore.includes(norm(w)));
-
-  // ✅ Pago: SOLO si hay señal explícita fuerte
-  const PAGO_EXPLICITO_RE =
-    /\b(pagar|pago|payment|checkout|stripe|buy|paid|i\s*paid|ya\s*pague|link\s+de\s+pago|enlace\s+de\s+pago|send\s+me\s+the\s+link|suscrib(ir(me)?|irse)|suscripci[oó]n|subscrib(e|ing)|subscription|sign\s*up)\b/i;
-
-  // Evitar falsos positivos tipo "mensualidad", "inscripción", etc.
-  const PAGO_FALSO_RE =
-    /\b(mensualidad|mensual|inscripci[oó]n|matr[ií]cula|precio|precios|cost|price|cu[aá]nto)\b/i;
-
-  if (PAGO_EXPLICITO_RE.test(original) && !PAGO_FALSO_RE.test(original)) {
-    return { intencion: "pago", nivel_interes: 3 };
-  }
-
-  const asksSchedules =
-    UNIVERSAL.some(
-      (r) =>
-        r.intent === "horario" &&
-        (
-          (r.words || []).some((w) => hasWord(textoCore, w)) ||
-          (r.phrases || []).some((p) => textoCore.includes(norm(p)))
-        )
-    );
-
-  const asksPrices =
-    UNIVERSAL.some(
-      (r) =>
-        r.intent === "precio" &&
-        (
-          (r.words || []).some((w) => hasWord(textoCore, w)) ||
-          (r.phrases || []).some((p) => textoCore.includes(norm(p)))
-        )
-    );
-
-  if (asksSchedules && asksPrices) {
-    return { intencion: "horarios_y_precios", nivel_interes: 2 };
-  }
-
-  // Reglas universales rápidas
-  for (const r of UNIVERSAL) {
-    const hitWord = (r.words || []).some((w) => hasWord(textoCore, w));
-    const hitPhrase = (r.phrases || []).some((p) => textoCore.includes(norm(p)));
-    if (hitWord || hitPhrase) {
-      // Si el clasificador cae en "saludo" pero hay info/venta, no retornes saludo
-      if (r.intent === "saludo" && (flagInfo || flagVenta)) break;
-      return { intencion: r.intent, nivel_interes: r.nivel };
-    }
-  }
-
-  // 2) Si pide info y además hay señal de venta, prioriza algo más cercano a decisión
-  if (flagVenta) {
-    if (["precio", "precios", "price", "cost", "cotizacion", "cotización", "quote"]
-        .some((w) => textoCore.includes(norm(w)))) {
-      return { intencion: "precio", nivel_interes: 2 };
-    }
-
-    if (["agendar", "reservar", "appointment", "book", "cita"]
-        .some((w) => textoCore.includes(norm(w)))) {
-      return { intencion: "agendar", nivel_interes: 3 };
-    }
-
-    // ✅ Pago: SOLO si hay señal explícita (pagar/checkout/link/stripe/paid/suscripción)
-    const pagoExplicitRe =
-      /\b(pagar|pago|payment|checkout|stripe|buy|paid|i\s*paid|ya\s*pague|link\s+de\s+pago|enlace\s+de\s+pago|suscrib(ir(me)?|irse)|suscripci[oó]n|subscrib(e|ing)|subscription|sign\s*up)\b/i;
-
-    if (pagoExplicitRe.test(original)) {
-      return { intencion: "pago", nivel_interes: 3 };
-    }
-
-    // si hay señal de compra genérica pero nada explícito, mejor info_servicio con interés alto
-    return { intencion: "info_servicio", nivel_interes: 3 };
-  }
-
-  // 3) Si solo pide info genérica: info_servicio con interés medio
-  if (flagInfo) return { intencion: "info_general", nivel_interes: 2 };
-
-  // 4) Fallback LLM con intenciones dinámicas por tenant
   const [tenantInfo, tenantIntents] = await Promise.all([
     loadTenantContext(tenantId, canal),
     loadTenantIntents(tenantId, canal),
   ]);
 
-  const universalList = [
-    "saludo",
-    "precio",
-    "horario",
-    "horarios_y_precios",
-    "ubicacion",
-    "disponibilidad",
-    "agendar",
-    "clase_prueba",
-    "pago",
-    "cancelar",
-    "soporte",
-    "queja",
-    "info_general",
-    "info_servicio",
-    "no_interesado",
-    "duda",
-    "soporte_reserva",
-  ];
+  const classified = await classifyIntentWithModel({
+    openai,
+    mensaje: original,
+    tenantInfo,
+    tenantIntents,
+  });
 
-  const tenantList = tenantIntents
-    .map(i => ({
-      intent: norm(i.nombre),
-      ejemplos: Array.isArray(i.ejemplos) ? i.ejemplos.join(" | ") : (i.ejemplos || "")
-    }))
-    .filter(x => x.intent);
-
-  const prompt = `
-Eres un clasificador de intención de mensajes de clientes para cualquier tipo de negocio (multitenant).
-Debes elegir UNA intención.
-
-Contexto del negocio:
-${tenantInfo}
-
-Mensaje del cliente:
-"${original}"
-
-Intenciones universales:
-${universalList.map((x) => `- ${x}`).join("\n")}
-
-Intenciones específicas del negocio (si aplican):
-${tenantList.length ? tenantList.map((x) => `- ${x.intent} (ejemplos: ${x.ejemplos || "N/A"})`).join("\n") : "- (ninguna)"}
-
-Reglas:
-- Si hay saludo + pedido real, NO devuelvas "saludo".
-- "info_servicio" es para preguntas generales tipo: qué ofrecen, cómo funciona, detalles, catálogo, etc.
-- "agendar" es para citas/reservas/booking/visita.
-- "disponibilidad" es para stock/cupos/disponibilidad de fechas sin confirmar cita.
-- "info_general" es para: "quiero más info", "qué ofrecen", overview, catálogo general, sin servicio mencionado.
-- Si el usuario dice "quiero suscribirme / suscripción / activar membresía / sign up / subscribe", clasifica como "pago" con nivel_interes 3.
-- Si el usuario pide horarios y precios en el mismo mensaje, clasifica como "horarios_y_precios" con nivel_interes 2.
-- Devuelve también nivel_interes (1 bajo, 2 medio, 3 alto) basado en cercanía a compra:
-  3: quiere agendar, pagar, comprar, link, cotización directa.
-  2: pregunta precio, disponibilidad, detalles para decidir.
-  1: saludo, curiosidad vaga, duda general sin señales.
-
-Salida: SOLO JSON sin texto extra:
-{"intencion":"...","nivel_interes":1|2|3}
-  `.trim();
-
-  try {
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4-turbo",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.1,
-    });
-
-    const raw = (completion.choices[0]?.message?.content || "{}").replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(raw) as Intento;
-
-    if (parsed?.intencion) {
-      const intencion = String(parsed.intencion || "").toLowerCase().trim();
-
-      // Backstop: nunca regreses saludo si hay señales claras
-      if (intencion === "saludo" && (flagInfo || flagVenta)) {
-        return { intencion: flagVenta ? "info_servicio" : "info_servicio", nivel_interes: Math.max(2, parsed.nivel_interes || 2) };
-      }
-
-      return {
-        intencion,
-        nivel_interes: Math.min(3, Math.max(1, Number(parsed.nivel_interes) || 1)),
-      };
-    }
-  } catch (e) {
-    console.error("❌ Error en fallback LLM:", e);
+  if (classified) {
+    return classified;
   }
 
-  return { intencion: "duda", nivel_interes: 1 };
+  return makeIntent("duda", 1);
 }

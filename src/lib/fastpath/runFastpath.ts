@@ -57,6 +57,13 @@ import {
 import { renderFreeOfferList } from "./helpers/catalogRendering";
 import { normalizeCatalogRole } from "../catalog/normalizeCatalogRole";
 
+type IntentFacets = {
+  asksPrices?: boolean;
+  asksSchedules?: boolean;
+  asksLocation?: boolean;
+  asksAvailability?: boolean;
+};
+
 export type FastpathCtx = {
   last_service_id?: string | null;
   last_service_name?: string | null;
@@ -203,6 +210,7 @@ export type RunFastpathArgs = {
 
   // intent detectada (si existe) para logging/guardado
   detectedIntent?: string | null;
+  detectedFacets?: IntentFacets | null;
 
   // knobs
   maxDisambiguationOptions?: number; // default 5
@@ -223,6 +231,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     infoClave,
     promptBase,
     detectedIntent,
+    detectedFacets,
     catalogReferenceClassification,
     maxDisambiguationOptions = 5,
   } = args;
@@ -506,7 +515,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // (sin regex ni texto raw; solo señales estructuradas)
   // ===============================
   const catalogRouteIntent = String(intentOut || "").trim().toLowerCase() || null;
-  
+
   const { hasStructuredTarget } = getCatalogStructuredSignals({
     catalogReferenceClassification,
     convoCtx,
@@ -555,6 +564,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     canal,
     hasStructuredTarget,
     catalogReferenceClassification,
+    facets: detectedFacets || {},
     buildCatalogRoutingSignal,
     buildCatalogContext,
     normalizeCatalogRole,

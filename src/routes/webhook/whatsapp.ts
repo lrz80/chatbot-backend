@@ -78,6 +78,13 @@ export type WhatsAppContext = {
 
 const MAX_WHATSAPP_LINES = 9999; // 14–16 es el sweet spot
 
+type IntentFacets = {
+  asksPrices?: boolean;
+  asksSchedules?: boolean;
+  asksLocation?: boolean;
+  asksAvailability?: boolean;
+};
+
 const router = Router();
 const MessagingResponse = twilio.twiml.MessagingResponse;
 
@@ -135,6 +142,7 @@ export async function procesarMensajeWhatsApp(
   // 🎯 Intent detection (evento)
   let detectedIntent: string | null = null;
   let detectedInterest: number | null = null;
+  let detectedFacets: IntentFacets | null = null;
 
   let replied = false;
 
@@ -726,6 +734,7 @@ export async function procesarMensajeWhatsApp(
   // sincronizar variables locales con lo que devolvió el helper
   detectedIntent           = signals.detectedIntent;
   detectedInterest         = signals.detectedInterest;
+  detectedFacets           = (signals as any).detectedFacets || (signals as any).facets || null;
   INTENCION_FINAL_CANONICA = signals.INTENCION_FINAL_CANONICA;
   promptBaseMem            = signals.promptBaseMem;
   convoCtx = {
@@ -1056,6 +1065,11 @@ export async function procesarMensajeWhatsApp(
       convoCtx: convoCtxForFastpath,
       infoClave: String(tenant?.info_clave || ""),
       detectedIntent: signals?.detectedIntent || detectedIntent || null,
+      detectedFacets:
+        (signals as any)?.detectedFacets ||
+        (signals as any)?.facets ||
+        detectedFacets ||
+        {},
       intentFallback:
         signals?.INTENCION_FINAL_CANONICA || INTENCION_FINAL_CANONICA || null,
       messageId: messageId || null,

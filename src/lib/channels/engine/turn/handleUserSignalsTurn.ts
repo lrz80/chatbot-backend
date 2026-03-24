@@ -10,8 +10,14 @@ import { applyEmotionTriggers } from "../../../guards/emotionTriggers";
 import { saveUserMessageAndEmit } from "../messages/saveUserMessageAndEmit";
 import { getMemoryValue } from "../../../clientMemory";
 import { setHumanOverride } from "../../../humanOverride/setHumanOverride";
-import { isExplicitHumanRequest } from "../../../security/humanOverrideGate";
 import { supportGate } from "../../../guards/supportGate";
+
+type IntentFacets = {
+  asksPrices?: boolean;
+  asksSchedules?: boolean;
+  asksLocation?: boolean;
+  asksAvailability?: boolean;
+};
 
 type TransitionFn = (params: {
   flow?: string;
@@ -39,6 +45,15 @@ function normIntent(x?: string | null) {
   return String(x || "").trim().toLowerCase();
 }
 
+function normalizeFacets(input: any): IntentFacets {
+  return {
+    asksPrices: Boolean(input?.asksPrices),
+    asksSchedules: Boolean(input?.asksSchedules),
+    asksLocation: Boolean(input?.asksLocation),
+    asksAvailability: Boolean(input?.asksAvailability),
+  };
+}
+
 export type HandleUserSignalsArgs = {
   pool: Pool;
   tenant: any;
@@ -57,6 +72,7 @@ export type HandleUserSignalsArgs = {
 export type HandleUserSignalsResult = {
   detectedIntent: string | null;
   detectedInterest: number | null;
+  detectedFacets: IntentFacets;
   INTENCION_FINAL_CANONICA: string | null;
   emotion: string | null;
   promptBaseMem: string;
@@ -90,6 +106,7 @@ export async function handleUserSignalsTurn(
 
   let detectedIntent: string | null = null;
   let detectedInterest: number | null = null;
+  let detectedFacets: IntentFacets = {};
   let emotion: string | null = null;
   let promptBaseMem = promptBase;
 
@@ -103,15 +120,21 @@ export async function handleUserSignalsTurn(
   try {
     const det = await detectarIntencion(userInput, tenant.id, canal);
 
-    const intent = (det?.intencion || "").toString().trim().toLowerCase();
-    const levelRaw = Number(det?.nivel_interes);
+    const intent = String(det?.intencion || det?.intent || "")
+      .trim()
+      .toLowerCase();
+
+    const levelRaw = Number(det?.nivel_interes ?? det?.nivel);
     const nivel = Number.isFinite(levelRaw)
       ? Math.min(3, Math.max(1, levelRaw))
       : 1;
 
+    detectedFacets = normalizeFacets(det?.facets);
+
     console.log("🎯 detectarIntencion =>", {
       intent,
       nivel,
+      facets: detectedFacets,
       canal,
       tenantId: tenant.id,
       messageId,
@@ -123,7 +146,10 @@ export async function handleUserSignalsTurn(
       INTENCION_FINAL_CANONICA = intent;
 
       transition({
-        patchCtx: { last_intent: intent, last_interest_level: nivel },
+        patchCtx: {
+          last_intent: intent,
+          last_interest_level: nivel,
+        },
       });
     }
   } catch (e: any) {
@@ -146,8 +172,11 @@ export async function handleUserSignalsTurn(
 
     const estadoActual = normIntent(rows[0]?.estado || null);
 
-    // Si está esperando pago, pero la intención actual NO es de pago → resetear
-    if (estadoActual === "esperando_pago" && intentFinal && !PAYMENT_INTENTS.has(intentFinal)) {
+    if (
+      estadoActual === "esperando_pago" &&
+      intentFinal &&
+      !PAYMENT_INTENTS.has(intentFinal)
+    ) {
       await pool.query(
         `UPDATE clientes
             SET estado = NULL,
@@ -194,7 +223,7 @@ export async function handleUserSignalsTurn(
   await saveUserMessageAndEmit({
     tenantId: tenant.id,
     canal,
-    fromNumber: contactoNorm, // usamos contacto normalizado como key
+    fromNumber: contactoNorm,
     messageId,
     content: userInput || "",
     intent: detectedIntent,
@@ -238,13 +267,10 @@ export async function handleUserSignalsTurn(
     });
 
     if (gate.escalate) {
-      // ✅ reply (link soporte)
       humanOverrideReply = gate.reply;
       humanOverrideSource = "support_handoff";
       handled = true;
 
-      // ✅ marca flags para que el resto del engine NO haga fastpath/LLM/followups
-      // (multi-tenant, no hardcode)
       convoCtx = {
         ...(convoCtx || {}),
         __stop_pipeline: true,
@@ -256,14 +282,13 @@ export async function handleUserSignalsTurn(
 
       transition({ patchCtx: convoCtx });
 
-      // ✅ activar humanOverride SOLO si pidió humano explícitamente (TTL GLOBAL ya viene en gate.minutes)
       if (gate.setHumanOverride) {
         try {
           await setHumanOverride({
             tenantId: tenant.id,
             canal,
             contacto: contactoNorm,
-            minutes: gate.minutes, // ✅ GLOBAL (según tu supportGate actual)
+            minutes: gate.minutes,
             reason: gate.reason,
             source: "support_handoff",
             customerPhone: fromNumber || contactoNorm,
@@ -291,7 +316,9 @@ export async function handleUserSignalsTurn(
     const memText =
       typeof memRaw === "string"
         ? memRaw
-        : memRaw && typeof memRaw === "object" && typeof memRaw.text === "string"
+        : memRaw &&
+          typeof memRaw === "object" &&
+          typeof memRaw.text === "string"
         ? memRaw.text
         : "";
 
@@ -307,7 +334,6 @@ export async function handleUserSignalsTurn(
     }
 
     if (!handled && (convoCtx as any)?.needs_clarify) {
-
       if (emotion === "frustration" || emotion === "anger") {
         promptBaseMem +=
           "\n\nINSTRUCCION: El usuario parece frustrado. Responde con empatía, usa máximo 2 bullets y haz solo 1 pregunta clara para ayudar.";
@@ -315,36 +341,35 @@ export async function handleUserSignalsTurn(
         promptBaseMem +=
           "\n\nINSTRUCCION: El usuario parece confundido. Responde con máximo 2 bullets y haz solo 1 pregunta para aclarar.";
       }
-
     }
   } catch (e) {
     console.warn("⚠️ No se pudo cargar memoria (getMemoryValue):", e);
   }
 
-    const hasAnchoredService = Boolean(
-      convoCtx?.last_service_id ||
+  const hasAnchoredService = Boolean(
+    convoCtx?.last_service_id ||
       convoCtx?.selectedServiceId ||
       convoCtx?.selected_service_id ||
       convoCtx?.serviceId
-    );
+  );
 
-    const intentFinalForFollowup = normIntent(
-      detectedIntent || INTENCION_FINAL_CANONICA || null
-    );
+  const intentFinalForFollowup = normIntent(
+    detectedIntent || INTENCION_FINAL_CANONICA || null
+  );
 
-    const referentialFollowup =
-      hasAnchoredService &&
-      (intentFinalForFollowup === "info_servicio" ||
-        intentFinalForFollowup === "precio");
+  const referentialFollowup =
+    hasAnchoredService &&
+    (intentFinalForFollowup === "info_servicio" ||
+      intentFinalForFollowup === "precio");
 
-    const followupNeedsAnchor = referentialFollowup === true;
+  const followupNeedsAnchor = referentialFollowup === true;
 
-    const followupEntityKind =
-      referentialFollowup ? "service" : null;
+  const followupEntityKind = referentialFollowup ? "service" : null;
 
   return {
     detectedIntent,
     detectedInterest,
+    detectedFacets,
     INTENCION_FINAL_CANONICA,
     emotion,
     promptBaseMem,

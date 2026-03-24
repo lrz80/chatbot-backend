@@ -20,6 +20,13 @@ import { buildCatalogRoutingSignal } from "../../../catalog/buildCatalogRoutingS
 
 const MAX_WHATSAPP_LINES = 9999; // mantenemos el mismo valor
 
+type IntentFacets = {
+  asksPrices?: boolean;
+  asksSchedules?: boolean;
+  asksLocation?: boolean;
+  asksAvailability?: boolean;
+};
+
 export type FastpathHybridArgs = {
   pool: Pool;
   tenantId: string;
@@ -30,6 +37,7 @@ export type FastpathHybridArgs = {
   convoCtx: any;
   infoClave: string;
   detectedIntent: string | null;
+  detectedFacets?: IntentFacets | null;
   intentFallback: string | null;
   messageId: string | null;
   contactoNorm: string;
@@ -116,6 +124,7 @@ export async function handleFastpathHybridTurn(
     convoCtx,
     infoClave,
     detectedIntent,
+    detectedFacets,
     intentFallback,
     messageId,
     contactoNorm,
@@ -386,6 +395,7 @@ export async function handleFastpathHybridTurn(
     infoClave,
     promptBase: promptBaseMem,
     detectedIntent: fpIntent,
+    detectedFacets: detectedFacets || {},
     catalogReferenceClassification,
     maxDisambiguationOptions: 10,
     lastServiceTtlMs: 60 * 60 * 1000,

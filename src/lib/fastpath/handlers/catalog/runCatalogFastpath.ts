@@ -6,6 +6,13 @@ import { getCatalogTurnState } from "./getCatalogTurnState";
 import { handleSingleServiceCatalog } from "./handleSingleServiceCatalog";
 import { extractSchedulesOnly } from "../../helpers/extractSchedulesOnly";
 
+type CatalogFacets = {
+  asksPrices?: boolean;
+  asksSchedules?: boolean;
+  asksLocation?: boolean;
+  asksAvailability?: boolean;
+};
+
 export type RunCatalogFastpathInput = {
   pool: Pool;
   tenantId: string;
@@ -22,6 +29,7 @@ export type RunCatalogFastpathInput = {
   hasStructuredTarget: boolean;
 
   catalogReferenceClassification?: any;
+  facets?: CatalogFacets | null;
 
   buildCatalogRoutingSignal: (input: {
     intentOut: string | null;
@@ -32,7 +40,7 @@ export type RunCatalogFastpathInput = {
   buildCatalogContext: (pool: Pool, tenantId: string) => Promise<string>;
 
   normalizeCatalogRole: (value: string | null | undefined) => string;
-    traducirTexto: (
+  traducirTexto: (
     texto: string,
     idiomaDestino: string,
     modo?: any
@@ -80,6 +88,7 @@ export async function runCatalogFastpath(
   console.log("[CATALOG][ROUTING_SIGNAL]", {
     userInput: input.userInput,
     intentOut: input.intentOut,
+    facets: input.facets || {},
     signal: {
       shouldRouteCatalog: catalogRoutingSignal.shouldRouteCatalog,
       routeIntent: catalogRoutingSignal.routeIntent,
@@ -107,12 +116,17 @@ export async function runCatalogFastpath(
     asksIncludesOnly,
     isAskingOtherCatalogOptions,
     asksSchedules,
+    asksPrices,
+    asksLocation,
+    asksAvailability,
   } = getCatalogIntentFlags({
     routeIntent,
+    facets: input.facets || {},
   });
 
   void isCombinationIntent;
   void isAskingOtherCatalogOptions;
+  void asksAvailability;
 
   const {
     hasRecentCatalogContext,
@@ -135,29 +149,36 @@ export async function runCatalogFastpath(
     .trim()
     .toLowerCase();
 
+  const intentOutNorm = String(input.intentOut || "").trim().toLowerCase();
+
   const hasExplicitCatalogRouting =
     catalogRoutingSignal.shouldRouteCatalog === true ||
     referenceKind === "catalog_overview" ||
     referenceKind === "catalog_family";
 
   const hasExplicitCatalogIntent =
-    String(input.intentOut || "").trim().toLowerCase() === "precio" ||
-    String(input.intentOut || "").trim().toLowerCase() === "planes_precios" ||
-    String(input.intentOut || "").trim().toLowerCase() === "catalogo" ||
-    String(input.intentOut || "").trim().toLowerCase() === "catalog" ||
-    String(input.intentOut || "").trim().toLowerCase() === "other_plans" ||
-    String(input.intentOut || "").trim().toLowerCase() === "catalog_alternatives" ||
-    String(input.intentOut || "").trim().toLowerCase() === "combination_and_price" ||
-    String(input.intentOut || "").trim().toLowerCase() === "catalog_combination";
+    intentOutNorm === "precio" ||
+    intentOutNorm === "planes_precios" ||
+    intentOutNorm === "catalogo" ||
+    intentOutNorm === "catalog" ||
+    intentOutNorm === "other_plans" ||
+    intentOutNorm === "catalog_alternatives" ||
+    intentOutNorm === "combination_and_price" ||
+    intentOutNorm === "catalog_combination";
+
+  const hasFacetDrivenCatalogIntent =
+    asksPrices || asksSchedules || asksLocation || asksAvailability;
 
   const allowGenericCatalogDbFallback =
-    hasExplicitCatalogRouting || hasExplicitCatalogIntent;
+    hasExplicitCatalogRouting ||
+    hasExplicitCatalogIntent ||
+    hasFacetDrivenCatalogIntent;
 
   if (isCatalogPriceLikeTurn) {
     console.log("🚫 BLOCK LLM PRICING — forcing DB path");
   }
 
-  if (!isCatalogQuestion) {
+  if (!isCatalogQuestion && !hasFacetDrivenCatalogIntent) {
     return {
       handled: false,
     };
@@ -175,7 +196,7 @@ export async function runCatalogFastpath(
     questionType = "combination_and_price";
   } else if (routeIntent === "catalog_alternatives") {
     questionType = "other_plans";
-  } else if (routeIntent === "catalog_schedule" || asksSchedules) {
+  } else if (asksSchedules) {
     questionType = "schedule_and_price";
   } else {
     questionType = "price_or_plan";
@@ -188,6 +209,7 @@ export async function runCatalogFastpath(
       detectedIntent: input.detectedIntent,
       catalogReferenceKind: input.catalogReferenceClassification?.kind ?? "none",
       routeIntent,
+      facets: input.facets || {},
     });
   }
 
@@ -198,6 +220,7 @@ export async function runCatalogFastpath(
       detectedIntent: input.detectedIntent,
       catalogReferenceKind: input.catalogReferenceClassification?.kind ?? "none",
       routeIntent,
+      facets: input.facets || {},
     });
   }
 
@@ -228,24 +251,32 @@ export async function runCatalogFastpath(
   const metaBlock =
     `QUESTION_TYPE: ${questionType}\n` +
     `HAS_MULTI_ACCESS_PLAN: ${hasMultiAccessPlan ? "yes" : "no"}\n` +
-    `PREVIOUS_PLANS_MENTIONED: ${previousPlansStr}`;
+    `PREVIOUS_PLANS_MENTIONED: ${previousPlansStr}\n` +
+    `ASKS_PRICES: ${asksPrices ? "yes" : "no"}\n` +
+    `ASKS_SCHEDULES: ${asksSchedules ? "yes" : "no"}\n` +
+    `ASKS_LOCATION: ${asksLocation ? "yes" : "no"}\n` +
+    `ASKS_AVAILABILITY: ${asksAvailability ? "yes" : "no"}`;
 
-  const shouldAttachInfoGeneral =
-    !!input.infoClave &&
+  const shouldAttachBusinessInfo =
+    Boolean(input.infoClave) &&
     (
       asksSchedules ||
+      asksLocation ||
+      asksAvailability ||
       routeIntent === "catalog_schedule" ||
-      input.intentOut === "info_general" ||
-      input.intentOut === "info_horarios_generales"
+      intentOutNorm === "info_general" ||
+      intentOutNorm === "info_horarios_generales" ||
+      intentOutNorm === "ubicacion" ||
+      intentOutNorm === "disponibilidad"
     );
 
-  const infoGeneralBlock = shouldAttachInfoGeneral
+  const infoGeneralBlock = shouldAttachBusinessInfo
     ? input.idiomaDestino === "en"
-      ? `\n\nBUSINESS_GENERAL_INFO (hours, address, etc.):\n${input.infoClave}`
-      : `\n\nINFO_GENERAL_DEL_NEGOCIO (horarios, dirección, etc.):\n${input.infoClave}`
+      ? `\n\nBUSINESS_GENERAL_INFO (hours, address, availability, etc.):\n${input.infoClave}`
+      : `\n\nINFO_GENERAL_DEL_NEGOCIO (horarios, dirección, disponibilidad, etc.):\n${input.infoClave}`
     : "";
 
-  //PRICE OR PLAN
+  // PRICE OR PLAN
   if (!asksSchedules && !asksIncludesOnly && questionType === "price_or_plan") {
     if (!allowGenericCatalogDbFallback) {
       console.log("[CATALOG_DB][BLOCKED_GENERIC_FALLBACK]", {
@@ -255,13 +286,14 @@ export async function runCatalogFastpath(
         referenceKind,
         shouldRouteCatalog: catalogRoutingSignal.shouldRouteCatalog,
         hasStructuredTarget: input.hasStructuredTarget,
+        facets: input.facets || {},
       });
 
       return {
         handled: false,
       };
     }
-    
+
     const { rows } = await input.pool.query<{
       service_id: string;
       service_name: string;
@@ -444,6 +476,7 @@ export async function runCatalogFastpath(
       usedModelReply: finalReply === modelReply,
       canonicalPreview: canonicalReply.slice(0, 220),
       modelPreview: modelReply.slice(0, 220),
+      facets: input.facets || {},
     });
 
     const ctxPatch: any = {
@@ -478,6 +511,7 @@ export async function runCatalogFastpath(
         referenceKind,
         shouldRouteCatalog: catalogRoutingSignal.shouldRouteCatalog,
         hasStructuredTarget: input.hasStructuredTarget,
+        facets: input.facets || {},
       });
 
       return {
@@ -631,6 +665,7 @@ export async function runCatalogFastpath(
     console.log("[SCHEDULE_AND_PRICE][FINAL_REPLY]", {
       canonicalReply,
       finalReply,
+      facets: input.facets || {},
     });
 
     return {
@@ -642,7 +677,7 @@ export async function runCatalogFastpath(
     };
   }
 
-  //OTHER PLANS
+  // OTHER PLANS
   if (!asksSchedules && questionType === "other_plans") {
     const { rows } = await input.pool.query<any>(
       `
@@ -788,6 +823,7 @@ export async function runCatalogFastpath(
     last_service_id: input.convoCtx?.last_service_id ?? null,
     last_service_name: input.convoCtx?.last_service_name ?? null,
     last_variant_name: input.convoCtx?.last_variant_name ?? null,
+    facets: input.facets || {},
   });
 
   const systemMsg =
@@ -806,6 +842,7 @@ META TAGS:
 - QUESTION_TYPE can be "combination_and_price", "price_or_plan", or "other_plans".
 - HAS_MULTI_ACCESS_PLAN is "yes" if the catalog text clearly contains at least one plan/pass/bundle that gives access to multiple services/categories or to "all"/"any"; otherwise "no".
 - PREVIOUS_PLANS_MENTIONED tells you which plans have ALREADY been described. If "none", ignore it; otherwise avoid repeating them unless necessary.
+- ASKS_PRICES / ASKS_SCHEDULES / ASKS_LOCATION / ASKS_AVAILABILITY indicate which information blocks were requested.
 
 GLOBAL RULES:
 - Answer ONLY using information found in the CATALOG and BUSINESS_GENERAL_INFO blocks.
@@ -854,9 +891,16 @@ HANDLING TIMES & SCHEDULES:
 - You may use explicit times from BUSINESS_GENERAL_INFO.
 - DO NOT generalize or invent ranges.
 - If BUSINESS_GENERAL_INFO contains multiple time slots, copy them EXACTLY as bullet points (one per line).
-- If there are NO explicit times, you may add ONE generic line without time-of-day words, for example:
-  - Do NOT mention schedules or hours at all.
+- If there are NO explicit times, do not mention schedules or hours at all.
 - If CATALOG mentions time restrictions, treat them ONLY as plan-specific restrictions.
+
+HANDLING LOCATION:
+- If ASKS_LOCATION is "yes" and BUSINESS_GENERAL_INFO contains an address/location, include it exactly as provided.
+- Do not invent addresses or directions.
+
+HANDLING AVAILABILITY:
+- If ASKS_AVAILABILITY is "yes" and BUSINESS_GENERAL_INFO contains availability-related information, include it exactly as provided.
+- Do not invent availability.
 
 LISTING MODE:
 - Use LISTING MODE when the user asks generically (“plans?”, “options?”, “plans and schedules?”).
@@ -879,7 +923,7 @@ LISTING MODE:
   - Always list plans in bullet format.
   - If several options are relevant, compare them using separate bullets.
   - When you list several options, you MUST order them from the lowest total price to the highest total price.
-  - Plans or products with price 0 must be written as "free" (for example: "free" instead of "0 USD" or "0.00").
+  - Plans or products with price 0 must be written as "free".
 
 DETAIL MODE:
 - Use DETAIL MODE only when the user asks about ONE specific plan.
@@ -888,16 +932,12 @@ DETAIL MODE:
   - 1–3 sub-bullets with key details.
 - Keep it compact.
 
-PRICE / PLAN QUESTIONS:
-- Always list plans in bullet format.
-- If several options are relevant, compare them using separate bullets.
-
 COMBINATIONS / BUNDLES:
 - If QUESTION_TYPE is "combination_and_price" AND HAS_MULTI_ACCESS_PLAN is "yes":
   - You MUST recommend at least one plan that covers multiple services/categories or unlimited usage.
   - Mention name + price + URL if available.
 - If HAS_MULTI_ACCESS_PLAN is "no":
-  - You may list individual services separately (in bullets).
+  - You may list individual services separately.
 
 OUTPUT LANGUAGE:
 - Answer always in English.
@@ -916,57 +956,56 @@ ETIQUETAS META:
 - QUESTION_TYPE puede ser "combination_and_price", "price_or_plan" o "other_plans".
 - HAS_MULTI_ACCESS_PLAN es "yes" si el catálogo contiene un plan/pase que dé acceso a varias categorías o a “todos”; si no, "no".
 - PREVIOUS_PLANS_MENTIONED indica qué planes YA se mencionaron.
+- ASKS_PRICES / ASKS_SCHEDULES / ASKS_LOCATION / ASKS_AVAILABILITY indican qué bloques pidió el cliente.
 
 REGLAS GENERALES:
 - Responde SOLO con la información de CATALOGO e INFO_GENERAL_DEL_NEGOCIO.
 - NO inventes precios, servicios ni condiciones.
 - Líneas de introducción:
   - Solo puedes usar HASTA DOS líneas muy cortas al inicio (saludo + contexto) cuando PREVIOUS_PLANS_MENTIONED sea "none".
-  - Si PREVIOUS_PLANS_MENTIONED NO es "none" (es decir, ya se mencionaron planes antes y la pregunta es un seguimiento), está PROHIBIDO usar saludo o introducción. Debes empezar directamente con la lista o el detalle.
-- Cada una de esas líneas (cuando estén permitidas) debe ser muy corta (1 oración); no escribas párrafos de bienvenida.
+  - Si PREVIOUS_PLANS_MENTIONED NO es "none", está PROHIBIDO usar saludo o introducción. Debes empezar directamente con la lista o el detalle.
+- Cada una de esas líneas, cuando estén permitidas, debe ser muy corta.
 - PROHIBIDO escribir párrafos largos.
 
-FORMATO DE PLANES (OBLIGATORIO):
+FORMATO DE PLANES OBLIGATORIO:
 - Cada plan/pase/producto debe ir en UNA sola línea:
   • “• Nombre del plan: resumen de precio”.
 - Después de ":" SOLO puede ir un resumen de precio:
   - números,
   - símbolo de moneda,
-  - palabras muy cortas: “desde”, “por”, “USD/mes”, “USD por 7 días”,
-  - condiciones cortas: “(Autopay, 3 meses)”, “(sin compromiso)”.
-- PROHIBIDO agregar descripciones:
-  - “acceso”, “ilimitado”, “clases”, “durante”, “ideal para…”, etc.
+  - palabras muy cortas,
+  - condiciones cortas.
+- PROHIBIDO agregar descripciones.
 - Si el nombre del plan viene con descripción, usa SOLO:
   - nombre,
   - precio.
 - Los beneficios/inclusiones SOLO se pueden mencionar en MODO DETALLE.
 
-REGLA DE CANTIDAD (OBLIGATORIA):
+REGLA DE CANTIDAD OBLIGATORIA:
 - En MODO LISTA solo se pueden mostrar entre 3 y 7 opciones.
 - Está TOTALMENTE PROHIBIDO listar TODO el catálogo.
-- Si hay más de 7, elige solo las opciones más relevantes:
-  - precios representativos,
-  - planes más comunes,
-  - o los que responden mejor a la intención del usuario.
+- Si hay más de 7, elige solo las opciones más relevantes.
 - JAMÁS muestres más de 7 ítems.
-- Si un plan tiene varias variantes (Autopay / Mensual / Paquete), SOLO muestra UNA.
-- Otras variantes solo pueden mostrarse si el cliente pregunta específicamente por ese plan.
+- Si un plan tiene varias variantes, SOLO muestra UNA en la lista inicial.
 
 FRASES NEUTRAS PARA LISTAS:
 - NO digas “Planes principales”, “Planes destacados”, “Todos los planes”, etc.
-- Debes usar SIEMPRE frases neutras que indiquen que solo muestras una parte:
-  - “Algunos de nuestros planes:”
-  - “Aquí tienes algunas opciones:”
-  - “Estas son algunas alternativas:”
-- Nunca sugieras que la lista es completa.
+- Debes usar frases neutras que indiquen que solo muestras una parte.
 
 CÓMO MANEJAR HORARIOS:
 - Si INFO_GENERAL_DEL_NEGOCIO contiene horarios explícitos:
-  - Cópialos EXACTAMENTE como lista, uno por línea.
-  - PROHIBIDO resumir (“en varios horarios”, “de mañana a noche”).
+  - cópialos EXACTAMENTE como lista, uno por línea.
 - Si NO contiene horarios:
-  - NO menciones horarios ni hagas comentarios genéricos sobre horarios.
+  - NO menciones horarios ni hagas comentarios genéricos.
 - Si el CATALOGO tiene restricciones horarias, aplícalas SOLO a ese plan.
+
+CÓMO MANEJAR UBICACIÓN:
+- Si ASKS_LOCATION = "yes" y INFO_GENERAL_DEL_NEGOCIO contiene dirección o ubicación, inclúyela exactamente como está.
+- NO inventes dirección ni referencias.
+
+CÓMO MANEJAR DISPONIBILIDAD:
+- Si ASKS_AVAILABILITY = "yes" y INFO_GENERAL_DEL_NEGOCIO contiene disponibilidad, inclúyela exactamente como está.
+- NO inventes disponibilidad.
 
 MODO LISTA:
 - Se usa cuando la pregunta es general.
@@ -974,41 +1013,29 @@ MODO LISTA:
   - mostrar 3–7 opciones,
   - usar exactamente “• Nombre del plan: precio”,
   - NO poner descripciones,
-  - NO poner variantes extras,
   - NO poner párrafos,
-  - incluir SOLO UN enlace (si aplica).
+  - incluir SOLO UN enlace si aplica.
 - MANEJO DE PREVIOUS_PLANS_MENTIONED:
-  - Si PREVIOUS_PLANS_MENTIONED no es "none", debes entender que el cliente está pidiendo "otros planes" o un seguimiento.
+  - Si PREVIOUS_PLANS_MENTIONED no es "none", debes entender que el cliente está pidiendo seguimiento u otras opciones.
   - En ese caso:
-    - PRIMERO intenta listar SOLO planes/pases/productos que NO aparezcan en PREVIOUS_PLANS_MENTIONED.
-    - Elige entre 3 y 7 de esos planes “nuevos”, respetando las reglas de cantidad.
-    - Si hay menos de 3 planes nuevos disponibles:
-      - muestra todos los nuevos,
-      - y solo si es necesario añade 1–2 planes que ya se mencionaron, dejando claro que ya se habían comentado antes.
-  - Bajo ninguna circunstancia debes repetir exactamente la misma lista de planes que ya se mostró cuando PREVIOUS_PLANS_MENTIONED contiene esos mismos nombres.
+    - primero intenta listar SOLO planes nuevos,
+    - si hay pocos, puedes completar con 1–2 ya mencionados.
 - PRECIOS / SERVICIOS:
   - Siempre usa listas.
-  - Comparaciones → una viñeta por opción.
-  - Cuando muestres varias opciones, DEBES ordenarlas de menor a mayor precio total.
-  - Si un plan o producto tiene precio 0, debes escribir "gratis" (por ejemplo: "gratis" en lugar de "0 USD" o "0.00").
+  - Cuando muestres varias opciones, ordénalas de menor a mayor precio total.
+  - Si un plan o producto tiene precio 0, debes escribir "gratis".
 
 MODO DETALLE:
 - Se usa cuando el cliente pide info de un plan específico.
 - Igual en viñetas:
   - una línea principal con nombre + precio,
   - 1–3 subviñetas con detalles concretos.
-- Sin párrafos largos.
-
-PRECIOS / SERVICIOS:
-- Siempre usa listas.
-- Comparaciones → una viñeta por opción.
 
 COMBINADOS / PAQUETES:
 - Si QUESTION_TYPE = "combination_and_price" y HAS_MULTI_ACCESS_PLAN = "yes":
-  - Debes recomendar un plan que cubra varias categorías o acceso amplio.
-  - Incluye precio y URL si está en catálogo.
+  - debes recomendar un plan que cubra varias categorías o acceso amplio.
 - Si HAS_MULTI_ACCESS_PLAN = "no":
-  - Puedes listar servicios individuales.
+  - puedes listar servicios individuales.
 
 IDIOMA DE SALIDA:
 - Responde siempre en español.
@@ -1065,12 +1092,7 @@ ${catalogText}${infoGeneralBlock}
   }
 
   const ctxPatch: any = {
-    lastResolvedIntent:
-      questionType === "combination_and_price"
-        ? "combination_and_price"
-        : questionType === "other_plans"
-        ? "other_plans"
-        : "price_or_plan",
+    lastResolvedIntent: questionType,
   };
 
   if (namesShown.length) {
