@@ -4,6 +4,7 @@ import type { FastpathResult } from "../../runFastpath";
 import { getCatalogIntentFlags } from "./getCatalogIntentFlags";
 import { getCatalogTurnState } from "./getCatalogTurnState";
 import { handleSingleServiceCatalog } from "./handleSingleServiceCatalog";
+import { extractSchedulesOnly } from "../../helpers/extractSchedulesOnly";
 
 export type RunCatalogFastpathInput = {
   pool: Pool;
@@ -596,10 +597,12 @@ export async function runCatalogFastpath(
       rows: rowsLocalized,
     }).trim();
 
-    const canonicalReply = input.infoClave?.trim()
+    const schedulesOnly = extractSchedulesOnly(input.infoClave);
+
+    const canonicalReply = schedulesOnly
       ? `${canonicalPriceReply}\n\n${
           input.idiomaDestino === "en" ? "Schedules:" : "Horarios:"
-        }\n${input.infoClave.trim()}`
+        }\n${schedulesOnly}`
       : canonicalPriceReply;
 
     const namesShown = input.extractPlanNamesFromReply(canonicalPriceReply);
