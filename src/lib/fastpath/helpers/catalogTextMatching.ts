@@ -56,7 +56,11 @@ export function extractPlanNamesFromReply(text: string): string[] {
 
 export function postProcessCatalogReply(params: {
   reply: string;
-  questionType: "combination_and_price" | "price_or_plan" | "other_plans";
+  questionType:
+    | "combination_and_price"
+    | "price_or_plan"
+    | "schedule_and_price"
+    | "other_plans";
   prevNames: string[];
 }) {
   const { reply, questionType, prevNames } = params;

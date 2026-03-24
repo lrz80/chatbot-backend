@@ -55,7 +55,11 @@ export type RunCatalogFastpathInput = {
 
   postProcessCatalogReply: (input: {
     reply: string;
-    questionType: "combination_and_price" | "price_or_plan" | "other_plans";
+    questionType:
+      | "combination_and_price"
+      | "price_or_plan"
+      | "schedule_and_price"
+      | "other_plans";
     prevNames: string[];
   }) => {
     finalReply: string;
@@ -161,6 +165,7 @@ export async function runCatalogFastpath(
   type QuestionType =
     | "combination_and_price"
     | "price_or_plan"
+    | "schedule_and_price"
     | "other_plans";
 
   let questionType: QuestionType;
@@ -169,6 +174,8 @@ export async function runCatalogFastpath(
     questionType = "combination_and_price";
   } else if (routeIntent === "catalog_alternatives") {
     questionType = "other_plans";
+  } else if (routeIntent === "catalog_schedule" || asksSchedules) {
+    questionType = "schedule_and_price";
   } else {
     questionType = "price_or_plan";
   }
@@ -450,6 +457,195 @@ export async function runCatalogFastpath(
     console.log("[PRICE][catalog_db][FINAL_REPLY_BEFORE_RETURN]", {
       replyPreview: finalReply,
     });
+
+    return {
+      handled: true,
+      reply: finalReply,
+      source: "catalog_db",
+      intent: "precio",
+      ctxPatch,
+    };
+  }
+
+  // SCHEDULE + PRICE
+  if (questionType === "schedule_and_price") {
+    if (!allowGenericCatalogDbFallback) {
+      console.log("[CATALOG_DB][BLOCKED_SCHEDULE_PRICE_FALLBACK]", {
+        userInput: input.userInput,
+        intentOut: input.intentOut,
+        routeIntent,
+        referenceKind,
+        shouldRouteCatalog: catalogRoutingSignal.shouldRouteCatalog,
+        hasStructuredTarget: input.hasStructuredTarget,
+      });
+
+      return {
+        handled: false,
+      };
+    }
+
+    const { rows } = await input.pool.query<{
+      service_id: string;
+      service_name: string;
+      min_price: number | string | null;
+      max_price: number | string | null;
+      parent_service_id: string | null;
+      category: string | null;
+      catalog_role: string | null;
+    }>(
+      `
+      WITH variant_prices AS (
+        SELECT
+          s.id AS service_id,
+          s.name AS service_name,
+          s.parent_service_id,
+          s.category,
+          s.catalog_role,
+          MIN(v.price)::numeric AS min_price,
+          MAX(v.price)::numeric AS max_price
+        FROM services s
+        JOIN service_variants v
+          ON v.service_id = s.id
+         AND v.active = true
+        WHERE s.tenant_id = $1
+          AND s.active = true
+          AND v.price IS NOT NULL
+        GROUP BY s.id, s.name, s.parent_service_id, s.category, s.catalog_role
+      ),
+      base_prices AS (
+        SELECT
+          s.id AS service_id,
+          s.name AS service_name,
+          s.parent_service_id,
+          s.category,
+          s.catalog_role,
+          MIN(s.price_base)::numeric AS min_price,
+          MAX(s.price_base)::numeric AS max_price
+        FROM services s
+        WHERE s.tenant_id = $1
+          AND s.active = true
+          AND s.price_base IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM service_variants v
+            WHERE v.service_id = s.id
+              AND v.active = true
+              AND v.price IS NOT NULL
+          )
+        GROUP BY s.id, s.name, s.parent_service_id, s.category, s.catalog_role
+      )
+      SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role
+      FROM (
+        SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role FROM variant_prices
+        UNION ALL
+        SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role FROM base_prices
+      ) x;
+      `,
+      [input.tenantId]
+    );
+
+    const rowsPrioritized = [...rows].sort((a, b) => {
+      const aRole = input.normalizeCatalogRole(a.catalog_role);
+      const bRole = input.normalizeCatalogRole(b.catalog_role);
+
+      const aPrimary = aRole === "primary";
+      const bPrimary = bRole === "primary";
+
+      if (aPrimary !== bPrimary) {
+        return aPrimary ? -1 : 1;
+      }
+
+      const aSortPrice =
+        a.min_price === null ? Number.NEGATIVE_INFINITY : Number(a.min_price);
+      const bSortPrice =
+        b.min_price === null ? Number.NEGATIVE_INFINITY : Number(b.min_price);
+
+      if (aSortPrice !== bSortPrice) {
+        return bSortPrice - aSortPrice;
+      }
+
+      return String(a.service_name || "").localeCompare(
+        String(b.service_name || "")
+      );
+    });
+
+    let rowsLocalized = rowsPrioritized;
+
+    if (input.idiomaDestino === "en") {
+      rowsLocalized = await Promise.all(
+        rowsPrioritized.map(async (r) => {
+          const nameEs = String(r.service_name || "").trim();
+          if (!nameEs) return r;
+
+          try {
+            const nameEn = await input.traducirTexto(
+              nameEs,
+              "en",
+              "catalog_label"
+            );
+            return { ...r, service_name: nameEn };
+          } catch {
+            return r;
+          }
+        })
+      );
+    }
+
+    const canonicalPriceReply = input.renderGenericPriceSummaryReply({
+      lang: input.idiomaDestino,
+      rows: rowsLocalized,
+    }).trim();
+
+    const canonicalReply = input.infoClave?.trim()
+      ? `${canonicalPriceReply}\n\n${
+          input.idiomaDestino === "en" ? "Schedules:" : "Horarios:"
+        }\n${input.infoClave.trim()}`
+      : canonicalPriceReply;
+
+    const namesShown = input.extractPlanNamesFromReply(canonicalPriceReply);
+
+    const extraContext = [
+      "CATALOGO_DB_CANONICO:",
+      canonicalPriceReply,
+      "",
+      input.idiomaDestino === "en"
+        ? "SCHEDULES_CANONICOS:"
+        : "HORARIOS_CANONICOS:",
+      input.infoClave?.trim() || "",
+      "",
+      "REGLAS_CRITICAS_DEL_TURNO:",
+      "- Debes usar EXCLUSIVAMENTE los precios del CATALOGO_DB_CANONICO.",
+      "- Debes conservar EXACTAMENTE los mismos nombres y precios.",
+      "- NO puedes agregar servicios.",
+      "- NO puedes quitar servicios.",
+      "- NO puedes inventar horarios.",
+      "- Si hay horarios canónicos, cópialos tal cual.",
+      "- SOLO puedes suavizar el encabezado o la línea final.",
+    ].join("\n");
+
+    const aiCatalogReply = await input.answerWithPromptBase({
+      tenantId: input.tenantId,
+      promptBase: input.promptBase,
+      userInput: input.userInput,
+      history: [],
+      idiomaDestino: input.idiomaDestino,
+      canal: input.canal,
+      maxLines: 14,
+      fallbackText: canonicalReply,
+      extraContext,
+    });
+
+    const modelReply = String(aiCatalogReply?.text || "").trim();
+    const finalReply = modelReply || canonicalReply;
+
+    const ctxPatch: any = {
+      last_catalog_at: Date.now(),
+      lastResolvedIntent: "schedule_and_price",
+    };
+
+    if (namesShown.length) {
+      ctxPatch.last_catalog_plans = namesShown;
+    }
 
     return {
       handled: true,
