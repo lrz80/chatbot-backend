@@ -635,8 +635,7 @@ export async function runCatalogFastpath(
       extraContext,
     });
 
-    const modelReply = String(aiCatalogReply?.text || "").trim();
-    const finalReply = modelReply || canonicalReply;
+    const finalReply = canonicalReply;
 
     const ctxPatch: any = {
       last_catalog_at: Date.now(),
@@ -646,6 +645,11 @@ export async function runCatalogFastpath(
     if (namesShown.length) {
       ctxPatch.last_catalog_plans = namesShown;
     }
+
+    console.log("[SCHEDULE_AND_PRICE][FINAL_REPLY]", {
+      canonicalReply,
+      finalReply,
+    });
 
     return {
       handled: true,
