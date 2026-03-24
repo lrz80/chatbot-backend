@@ -599,11 +599,21 @@ export async function runCatalogFastpath(
 
     const schedulesOnly = extractSchedulesOnly(input.infoClave);
 
+    const openingLine =
+      input.idiomaDestino === "en"
+        ? "Of course — here are the schedules and prices so you can compare the available options."
+        : "Claro, aquí tienes los horarios y precios para que compares las opciones disponibles.";
+
+    const closingLine =
+      input.idiomaDestino === "en"
+        ? "If you'd like, I can help you identify which option fits you best."
+        : "Si quieres, te ayudo a identificar qué opción te conviene más.";
+
     const canonicalReply = schedulesOnly
-      ? `${canonicalPriceReply}\n\n${
+      ? `${openingLine}\n\n${canonicalPriceReply}\n\n${
           input.idiomaDestino === "en" ? "Schedules:" : "Horarios:"
-        }\n${schedulesOnly}`
-      : canonicalPriceReply;
+        }\n${schedulesOnly}\n\n${closingLine}`
+      : `${openingLine}\n\n${canonicalPriceReply}\n\n${closingLine}`;
 
     const namesShown = input.extractPlanNamesFromReply(canonicalPriceReply);
 
