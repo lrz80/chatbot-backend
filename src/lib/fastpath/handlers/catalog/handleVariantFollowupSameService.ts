@@ -61,7 +61,7 @@ export async function handleVariantFollowupSameService(
     return { handled: false };
   }
 
-  if (!targetVariantId) {
+  if (!targetVariantId || String(input.userInput || "").trim().length > 6) {
     return { handled: false };
   }
 

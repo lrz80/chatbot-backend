@@ -355,6 +355,7 @@ export function classifyCatalogReferenceTurn(
     "catalogo",
     "catalog",
     "horario",
+    "horarios_y_precios",
     "info_horarios_generales",
     "other_plans",
     "catalog_alternatives",
