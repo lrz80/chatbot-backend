@@ -18,52 +18,84 @@ export type CatalogDetailSignals = {
   looksLikeEllipticPriceFollowup: boolean;
 };
 
+function normalizeSignal(value: string | null | undefined): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isIncludesIntent(value: string): boolean {
+  return value === "includes";
+}
+
+function isServiceDetailIntent(value: string): boolean {
+  return value === "info_servicio";
+}
+
+function isPriceIntent(value: string): boolean {
+  return value === "precio";
+}
+
+function isPriceOrPlanIntent(value: string): boolean {
+  return value === "price_or_plan";
+}
+
+function isReferentialFollowupKind(value: string): boolean {
+  return value === "referential_followup";
+}
+
+function hasStructuredTarget(input: GetCatalogDetailSignalsInput): boolean {
+  return Boolean(
+    input.targetServiceId || input.targetVariantId || input.targetFamilyKey
+  );
+}
+
+function hasRecentPriceState(convoCtx: any): boolean {
+  return (
+    normalizeSignal(convoCtx?.last_bot_action) ===
+      "followup_set_service_for_price" ||
+    Boolean(convoCtx?.last_price_option_label) ||
+    Boolean(convoCtx?.last_variant_id)
+  );
+}
+
 export function getCatalogDetailSignals(
   input: GetCatalogDetailSignalsInput
 ): CatalogDetailSignals {
-  const detectedIntentNorm = String(
-    input.detectedIntent || ""
-  ).trim().toLowerCase();
+  const detectedIntentNorm = normalizeSignal(input.detectedIntent);
 
-  const classifiedIntentNorm = String(
-    input.catalogReferenceClassification?.intent || ""
-  ).trim().toLowerCase();
+  const classifiedIntentNorm = normalizeSignal(
+    input.catalogReferenceClassification?.intent
+  );
 
-  const referenceKind = String(
+  const referenceKind = normalizeSignal(
     input.catalogReferenceClassification?.kind || "none"
-  ).trim().toLowerCase();
+  );
 
   const looksLikeExplicitDetail =
-    classifiedIntentNorm === "includes" ||
-    detectedIntentNorm === "info_servicio";
+    isIncludesIntent(classifiedIntentNorm) ||
+    isServiceDetailIntent(detectedIntentNorm);
 
   const looksLikeEllipticDetail =
-    referenceKind === "referential_followup" &&
+    isReferentialFollowupKind(referenceKind) &&
     (
-      classifiedIntentNorm === "includes" ||
-      detectedIntentNorm === "info_servicio" ||
-      Boolean(
-        input.targetServiceId ||
-        input.targetVariantId ||
-        input.targetFamilyKey
-      )
+      isIncludesIntent(classifiedIntentNorm) ||
+      isServiceDetailIntent(detectedIntentNorm) ||
+      hasStructuredTarget(input)
     );
 
   const looksLikeServiceDetail =
     looksLikeExplicitDetail || looksLikeEllipticDetail;
 
   const recentPriceContext =
-    String((input.convoCtx as any)?.last_bot_action || "") ===
-      "followup_set_service_for_price" ||
-    Boolean((input.convoCtx as any)?.last_price_option_label) ||
-    Boolean((input.convoCtx as any)?.last_variant_id) ||
-    detectedIntentNorm === "precio" ||
-    classifiedIntentNorm === "price_or_plan";
+    hasRecentPriceState(input.convoCtx) ||
+    (
+      isReferentialFollowupKind(referenceKind) &&
+      (isPriceIntent(detectedIntentNorm) || isPriceOrPlanIntent(classifiedIntentNorm))
+    );
 
   const looksLikeEllipticPriceFollowup =
     recentPriceContext &&
-    referenceKind === "referential_followup" &&
-    classifiedIntentNorm !== "includes";
+    isReferentialFollowupKind(referenceKind) &&
+    !isIncludesIntent(classifiedIntentNorm);
 
   return {
     detectedIntentNorm,

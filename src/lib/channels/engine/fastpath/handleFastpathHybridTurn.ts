@@ -311,13 +311,6 @@ export async function handleFastpathHybridTurn(
         preResolvedCtxPatch.last_entity_kind = "service";
         preResolvedCtxPatch.last_entity_at = Date.now();
 
-        console.log("[FASTPATH_HYBRID][PRE_RESOLVE_SERVICE][HIT]", {
-          tenantId,
-          canal,
-          intent: currentIntent,
-          serviceId: explicitResolvedServiceId,
-          serviceName: explicitResolvedServiceName,
-        });
       }
     } catch (e: any) {
       console.warn(
@@ -368,18 +361,7 @@ export async function handleFastpathHybridTurn(
     forcedAnchorCtxPatch.last_entity_at = Date.now();
 
     if (process.env.DEBUG_FASTPATH === "true") {
-      console.log("[FASTPATH_HYBRID][FORCED_ANCHORED_SERVICE]", {
-        tenantId,
-        canal,
-        contactoNorm,
-        userInput,
-        anchoredServiceId,
-        anchoredServiceName,
-        anchoredServiceLabel,
-        referentialFollowup,
-        followupNeedsAnchor,
-        followupEntityKind,
-      });
+    
     }
   }
 
@@ -481,19 +463,6 @@ export async function handleFastpathHybridTurn(
     );
 
   if (shouldBypassStructuredRewrite) {
-    console.log("[FASTPATH_HYBRID][BYPASS_STRUCTURED_REWRITE]", {
-      tenantId,
-      canal,
-      userInput,
-      fpSource: fp.source,
-      fpIntent: fp.intent,
-      replyPreview: String(fp.reply || "").slice(0, 200),
-      last_bot_action: ctxPatch?.last_bot_action || null,
-      pending_link_lookup: ctxPatch?.pending_link_lookup || false,
-      pending_link_options_count: Array.isArray(ctxPatch?.pending_link_options)
-        ? ctxPatch.pending_link_options.length
-        : 0,
-    });
 
     return {
       handled: true,
@@ -505,18 +474,6 @@ export async function handleFastpathHybridTurn(
   }
 
   console.log("[STRUCTURED_SERVICE][CALLER]", structuredService);
-
-  console.log("[FASTPATH_HYBRID][STRUCTURED_SERVICE_CHECK]", {
-    tenantId,
-    canal,
-    userInput,
-    fpSource: fp.handled ? fp.source : null,
-    fpIntent: fp.handled ? fp.intent : null,
-    structuredService,
-    ctxPatchKeys: Object.keys(ctxPatch || {}),
-    convoCtxLastServiceId: (convoCtxForFastpath as any)?.last_service_id || null,
-    convoCtxSelectedServiceId: (convoCtxForFastpath as any)?.selectedServiceId || null,
-  });
 
   const shouldPersistStructuredService =
     structuredService.hasResolution &&
@@ -717,16 +674,7 @@ export async function handleFastpathHybridTurn(
   const hasGroundedServiceSource = SERVICE_GROUNDED_SOURCES.has(String(fp.source || ""));
 
   if (isDm && isServiceIntent && (!hasStructuredServiceResolution || !hasGroundedServiceSource)) {
-    console.log("[FASTPATH_HYBRID] info_servicio sin grounding estructural -> NO LLM", {
-      source: fp.source,
-      intent: fp.intent || detectedIntent || intentFallback || null,
-      hasStructuredServiceResolution,
-      hasGroundedServiceSource,
-      structuredService,
-      ctxPatch,
-      fastpathPreview: String(fastpathText || "").slice(0, 200),
-    });
-
+    
     // ===============================
     // ✅ POST-RESOLVE DE SERVICIO DESDE fastpathText
     // Para casos donde Fastpath/LLM recomienda un servicio en texto
@@ -748,15 +696,6 @@ export async function handleFastpathHybridTurn(
           ctxPatch.last_entity_kind = "service";
           ctxPatch.last_entity_at = Date.now();
 
-          console.log("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE][EARLY_RETURN]", {
-            tenantId,
-            canal,
-            contactoNorm,
-            userInput,
-            source: fp.source,
-            serviceId: ctxPatch.last_service_id,
-            serviceName: ctxPatch.last_service_name,
-          });
         } else {
           console.log("[FASTPATH_HYBRID][POST_RESOLVE_SERVICE][EARLY_RETURN] no match", {
             tenantId,
@@ -948,16 +887,6 @@ SPECIAL RULE FOR THIS TURN:
       typeof fastpathText === "string" &&
       fastpathText.trim().length > 0
     ) {
-      console.log("[FASTPATH_HYBRID][BYPASS_BEFORE_COMPOSED]", {
-        tenantId,
-        canal,
-        contactoNorm,
-        userInput,
-        fpSource: fp.source,
-        fpIntent: fp.intent,
-        replyPreview: String(fastpathText).slice(0, 300),
-        ctxPatch,
-      });
 
       const finalDmReply = stripMarkdownLinksForDm(fastpathText);
 
@@ -1034,13 +963,6 @@ SPECIAL RULE FOR THIS TURN:
         createdAt: new Date().toISOString(),
       };
 
-      console.log("[PENDING_CTA][SET][fastpath_hybrid]", {
-        tenantId,
-        canal,
-        contactoNorm,
-        pendingCta: ctxPatch.pending_cta,
-        replyPreview: composed.text.slice(0, 200),
-      });
     }
 
     // ===============================
@@ -1100,16 +1022,6 @@ SPECIAL RULE FOR THIS TURN:
         ctxPatch.awaiting_yes_no_action = payload;
       }
     }
-
-    console.log("[FASTPATH_HYBRID][RETURN_DM_FINAL]", {
-      tenantId,
-      canal,
-      userInput,
-      fpSource: fp.source,
-      fpIntent: fp.intent,
-      replyPreview: String(composed.text || "").slice(0, 200),
-      ctxPatch,
-    });
 
     const finalDmReply = stripMarkdownLinksForDm(composed.text);
 

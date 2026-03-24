@@ -236,14 +236,6 @@ app.get('/', (_req, res) => {
   res.send('Backend corriendo 🟢');
 });
 
-// —— Ping keep-alive (ignora errores) ————————————
-setInterval(() => {
-  // En Node 18+ existe fetch global
-  fetch('https://api.aamy.ai/')
-    .then(() => console.log('🔁 Ping backend OK'))
-    .catch(() => console.warn('⚠️ Ping backend fallido'));
-}, 1000 * 30);
-
 // —— Handler de errores (incluye CORS en errores) ————
 app.use(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars

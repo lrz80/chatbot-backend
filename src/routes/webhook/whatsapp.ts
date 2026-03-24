@@ -101,11 +101,7 @@ router.post("/", async (req: Request, res: Response) => {
     res.type("text/xml").send(new MessagingResponse().toString());
 
     setTimeout(() => {
-      console.log("🔥 entrando a procesarMensajeWhatsApp", {
-        at: new Date().toISOString(),
-        messageSid: req.body?.MessageSid || null,
-      });
-
+      
       procesarMensajeWhatsApp(req.body).catch((err) => {
         console.error("❌ procesarMensajeWhatsApp failed (async):", err);
       });
@@ -266,13 +262,7 @@ export async function procesarMensajeWhatsApp(
     });
 
     if (deleted > 0) {
-      console.log("🧹 follow-ups pendientes cancelados por nuevo inbound:", {
-        tenantId: tenant.id,
-        canal,
-        contacto: contactoNorm,
-        deleted,
-        messageId,
-      });
+      
     }
   } catch (e: any) {
     console.warn("⚠️ cancelPendingFollowUps failed:", e?.message);
@@ -1056,15 +1046,6 @@ export async function procesarMensajeWhatsApp(
   if (!inBooking0) {
     const convoCtxForFastpath = signals?.convoCtx || convoCtx;
 
-    console.log("📦 FASTPATH IN ctx =", {
-      last_catalog_plans: (convoCtxForFastpath as any)?.last_catalog_plans || null,
-      last_catalog_at: (convoCtxForFastpath as any)?.last_catalog_at || null,
-      last_service_id: (convoCtxForFastpath as any)?.last_service_id || null,
-      last_service_name: (convoCtxForFastpath as any)?.last_service_name || null,
-      selectedServiceId: (convoCtxForFastpath as any)?.selectedServiceId || null,
-      bookingStep0,
-    });
-
     const fpRes = await handleFastpathHybridTurn({
       pool,
       tenantId: tenant.id,
@@ -1279,19 +1260,8 @@ export async function procesarMensajeWhatsApp(
         ? null
         : "service";
 
-    console.log("[WHATSAPP][SM_FALLBACK][STRUCTURED_SERVICE]", {
-      resolvedEntityId,
-      resolvedEntityLabel,
-      hasResolvedEntity,
-    });
-
     if (shouldBlockConcreteServiceFallback && !hasResolvedEntity) {
-      console.log("[WHATSAPP][SM_FALLBACK][BLOCK_CONCRETE_SERVICE_RECOMMENDATION]", {
-        tenantId: event.tenantId,
-        canal: "whatsapp",
-        userInput: event.userInput,
-        catalogReferenceKind,
-      });
+      
     }
 
     if (
@@ -1343,29 +1313,13 @@ export async function procesarMensajeWhatsApp(
           .filter((v) => v.length > 0)
           .slice(0, MAX_OPTIONS);
 
-        console.log("[WHATSAPP][AMBIGUOUS_SERVICE][OPTIONS_RESOLVED]", {
-          tenantId: event.tenantId,
-          canal: "whatsapp",
-          userInput: event.userInput,
-          rawCandidates: resolved.candidates.map((c) => ({
-            id: c.id,
-            name: c.name,
-            score: c.score,
-          })),
-          options,
-        });
-
         // ===============================
         // 0 OPCIONES REALES
         // Este branch ya no aplica. Dejamos seguir el pipeline normal.
         // IMPORTANTE: no hacer finalizeReply aquí.
         // ===============================
         if (options.length === 0) {
-          console.log("[WHATSAPP][AMBIGUOUS_SERVICE][COLLAPSED_TO_ZERO_OPTIONS]", {
-            tenantId: event.tenantId,
-            canal: "whatsapp",
-            userInput: event.userInput,
-          });
+          
         } else if (options.length === 1) {
           // ===============================
           // 1 OPCIÓN REAL
@@ -1464,26 +1418,10 @@ export async function procesarMensajeWhatsApp(
               introText = candidateIntro;
             }
           } catch (err) {
-            console.log("[WHATSAPP][AMBIGUOUS_SERVICE][SINGLE_OPTION_INTRO_FAILED]", {
-              tenantId: event.tenantId,
-              canal: "whatsapp",
-              userInput: event.userInput,
-              error: err instanceof Error ? err.message : String(err),
-            });
+            
           }
 
           const finalText = [introText, "", `• ${options[0]}`].join("\n");
-
-          console.log(
-            "[WHATSAPP][SM_FALLBACK][AMBIGUOUS_SERVICE -> COLLAPSED_SINGLE_OPTION]",
-            {
-              tenantId: event.tenantId,
-              canal: "whatsapp",
-              userInput: event.userInput,
-              options,
-              replyPreview: finalText,
-            }
-          );
 
           setReply(
             finalText,
@@ -1589,12 +1527,7 @@ export async function procesarMensajeWhatsApp(
               introText = candidateIntro;
             }
           } catch (err) {
-            console.log("[WHATSAPP][AMBIGUOUS_SERVICE][INTRO_ONLY_FAILED]", {
-              tenantId: event.tenantId,
-              canal: "whatsapp",
-              userInput: event.userInput,
-              error: err instanceof Error ? err.message : String(err),
-            });
+            
           }
 
           const listOnlyText = options.map((opt) => `• ${opt}`).join("\n");
@@ -1605,17 +1538,6 @@ export async function procesarMensajeWhatsApp(
               : "¿Cuál de estas opciones buscas?";
 
           const finalText = [introText, "", listOnlyText, "", closingText].join("\n");
-
-          console.log(
-            "[WHATSAPP][SM_FALLBACK][AMBIGUOUS_SERVICE -> INTRO_PLUS_FIXED_OPTIONS_MULTITENANT]",
-            {
-              tenantId: event.tenantId,
-              canal: "whatsapp",
-              userInput: event.userInput,
-              options,
-              replyPreview: finalText,
-            }
-          );
 
           setReply(
             finalText,
@@ -1771,12 +1693,6 @@ export async function procesarMensajeWhatsApp(
               "- Si ninguno encaja claramente, haz UNA sola pregunta corta de aclaración.",
             ].join("\n");
 
-      console.log("[WHATSAPP][SM_FALLBACK][DB_SERVICE_CANDIDATES_FOR_LLM]", {
-        tenantId: event.tenantId,
-        canal: "whatsapp",
-        userInput: event.userInput,
-        validServiceNames,
-      });
     }
 
     const composed = await answerWithPromptBase({
@@ -1841,17 +1757,7 @@ export async function procesarMensajeWhatsApp(
         });
 
       if (!mentionsResolvedEntity || mentionsOtherValidService) {
-        console.log("[WHATSAPP][SM_FALLBACK][ENTITY_LOCK_VIOLATION_BLOCKED]", {
-          tenantId: event.tenantId,
-          canal: "whatsapp",
-          userInput: event.userInput,
-          resolvedEntityId,
-          resolvedEntityLabel,
-          replyPreview: String(composed.text || "").slice(0, 240),
-          validServiceNames,
-          detectedIntent,
-        });
-
+        
         const clarificationText =
           idiomaDestino === "en"
             ? `I recommend ${resolvedEntityLabel}. I can also tell you the price or what it includes.`
@@ -1862,15 +1768,7 @@ export async function procesarMensajeWhatsApp(
         return;
       }
     } else if (shouldBypassEntityLockForGeneralIntent) {
-      console.log("[WHATSAPP][SM_FALLBACK][ENTITY_LOCK_BYPASS_GENERAL_INFO]", {
-        tenantId: event.tenantId,
-        canal: "whatsapp",
-        userInput: event.userInput,
-        detectedIntent,
-        resolvedEntityId,
-        resolvedEntityLabel,
-        replyPreview: String(composed.text || "").slice(0, 240),
-      });
+      
     } else if (validServiceNames.length > 0) {
       const matchedValidName = validServiceNames.find((name) =>
         normalizedReply.includes(name.toLowerCase())
@@ -1881,14 +1779,6 @@ export async function procesarMensajeWhatsApp(
           idiomaDestino === "en"
             ? `Sure — what service do you mean exactly? For example: ${validServiceNames.slice(0, 4).join(", ")}.`
             : `Claro — ¿a cuál servicio te refieres exactamente? Por ejemplo: ${validServiceNames.slice(0, 4).join(", ")}.`;
-
-        console.log("[WHATSAPP][SM_FALLBACK][INVALID_SERVICE_RECOMMENDATION_BLOCKED]", {
-          tenantId: event.tenantId,
-          canal: "whatsapp",
-          userInput: event.userInput,
-          replyPreview: String(composed.text || "").slice(0, 200),
-          validServiceNames,
-        });
 
         setReply(clarificationText, "sm-fallback-invalid-service", "info_servicio");
         await finalizeReply();
@@ -1902,13 +1792,6 @@ export async function procesarMensajeWhatsApp(
         createdAt: new Date().toISOString(),
       };
 
-      console.log("[PENDING_CTA][SET][sm-fallback]", {
-        tenantId: event.tenantId,
-        contacto: contactoNorm,
-        canal: "whatsapp",
-        pendingCta: (convoCtx as any).pending_cta,
-        replyPreview: composed.text.slice(0, 200),
-      });
     }
 
     const finalFallbackText = await ensureReplyLanguage(
