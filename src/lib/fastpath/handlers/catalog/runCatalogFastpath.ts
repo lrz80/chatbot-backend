@@ -158,6 +158,15 @@ export async function runCatalogFastpath(
     .trim()
     .toLowerCase();
 
+  const shouldTrySingleServiceCatalog =
+    input.hasStructuredTarget ||
+    Boolean(catalogRoutingSignal.targetServiceId) ||
+    Boolean(catalogRoutingSignal.targetVariantId) ||
+    referenceKind === "entity_specific" ||
+    referenceKind === "variant_specific" ||
+    referenceKind === "referential_followup" ||
+    referenceKind === "catalog_family";
+
   const intentOutNorm = String(input.intentOut || "").trim().toLowerCase();
 
   const hasExplicitCatalogRouting =
@@ -442,23 +451,25 @@ export async function runCatalogFastpath(
       [input.tenantId]
     );
 
-    const singleServiceCatalogResult = await handleSingleServiceCatalog({
-      pool: input.pool,
-      tenantId: input.tenantId,
-      userInput: input.userInput,
-      idiomaDestino: input.idiomaDestino,
-      convoCtx: input.convoCtx,
-      routeIntent,
-      catalogRoutingSignal,
-      catalogReferenceClassification: input.catalogReferenceClassification,
-      rows,
-      answerWithPromptBase: input.answerWithPromptBase,
-      promptBase: input.promptBase,
-      canal: input.canal,
-    });
+    if (shouldTrySingleServiceCatalog) {
+      const singleServiceCatalogResult = await handleSingleServiceCatalog({
+        pool: input.pool,
+        tenantId: input.tenantId,
+        userInput: input.userInput,
+        idiomaDestino: input.idiomaDestino,
+        convoCtx: input.convoCtx,
+        routeIntent,
+        catalogRoutingSignal,
+        catalogReferenceClassification: input.catalogReferenceClassification,
+        rows,
+        answerWithPromptBase: input.answerWithPromptBase,
+        promptBase: input.promptBase,
+        canal: input.canal,
+      });
 
-    if (singleServiceCatalogResult.handled) {
-      return singleServiceCatalogResult;
+      if (singleServiceCatalogResult.handled) {
+        return singleServiceCatalogResult;
+      }
     }
 
     const rowsPrioritized = [...rows].sort((a, b) => {
