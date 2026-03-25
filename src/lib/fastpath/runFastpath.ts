@@ -320,44 +320,56 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   // ===============================
   // ✅ INFO GENERAL OVERVIEW
-  // solo si hay browse explícito de catálogo
+  // browse general de catálogo sin entidad resuelta
   // ===============================
-  if (
-    intentOut === "info_general" &&
-    catalogReferenceClassification?.kind === "catalog_overview"
-  ) {
-    const ctxPatch: any = {
-      last_list_kind: null,
-      last_list_kind_at: null,
-      last_plan_list: null,
-      last_plan_list_at: null,
-      last_package_list: null,
-      last_package_list_at: null,
-    };
+  {
+    const wantsCatalogOverview =
+      !catalogReferenceClassification?.targetServiceId &&
+      !catalogReferenceClassification?.targetVariantId &&
+      !detectedFacets?.asksPrices &&
+      !detectedFacets?.asksSchedules &&
+      !detectedFacets?.asksLocation &&
+      !detectedFacets?.asksAvailability &&
+      (
+        catalogReferenceClassification?.kind === "catalog_overview" ||
+        intentOut === "info_general" ||
+        intentOut === "info_servicio"
+      );
 
-    const canonicalReply = await renderInfoGeneralOverview({
-      pool,
-      tenantId,
-      lang: idiomaDestino,
-    });
+    if (wantsCatalogOverview) {
+      const ctxPatch: any = {
+        last_list_kind: null,
+        last_list_kind_at: null,
+        last_plan_list: null,
+        last_plan_list_at: null,
+        last_package_list: null,
+        last_package_list_at: null,
+      };
 
-    const reply = await renderCatalogReplyWithSalesFrame({
-      lang: idiomaDestino,
-      userInput,
-      canonicalReply,
-      answerCatalogQuestionLLM,
-      mode: "grounded_frame_only",
-      maxIntroLines: 1,
-      maxClosingLines: 1,
-    });
+      const canonicalReply = await renderInfoGeneralOverview({
+        pool,
+        tenantId,
+        lang: idiomaDestino,
+      });
 
-    return {
-      handled: true,
-      source: "service_list_db",
-      intent: intentOut,
-      reply,
-      ctxPatch,
-    };
+      const reply = await renderCatalogReplyWithSalesFrame({
+        lang: idiomaDestino,
+        userInput,
+        canonicalReply,
+        answerCatalogQuestionLLM,
+        mode: "grounded_frame_only",
+        maxIntroLines: 1,
+        maxClosingLines: 1,
+      });
+
+      return {
+        handled: true,
+        source: "service_list_db",
+        intent: intentOut,
+        reply,
+        ctxPatch,
+      };
+    }
   }
 
   // ===============================
