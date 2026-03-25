@@ -175,53 +175,51 @@ export async function runCatalogFastpath(
     intentOutNorm === "combination_and_price" ||
     intentOutNorm === "catalog_combination";
 
-  const isLocationOnlyTurn =
-    asksLocation &&
+  const locationBody = asksLocation
+  ? buildLocationBlockFromInfoClave(input.infoClave)
+  : "";
+
+  const availabilityBody = asksAvailability
+    ? buildAvailabilityBlockFromInfoClave(input.infoClave)
+    : "";
+
+  const scheduleBlock =
+    asksSchedules
+      ? buildScheduleBlock({
+          idiomaDestino: input.idiomaDestino,
+          infoClave: input.infoClave,
+        })
+      : "";
+
+  const locationBlock = withSectionTitle(
+    input.idiomaDestino,
+    "Ubicación:",
+    "Location:",
+    locationBody
+  );
+
+  const availabilityBlock = withSectionTitle(
+    input.idiomaDestino,
+    "Disponibilidad:",
+    "Availability:",
+    availabilityBody
+  );
+
+  const isBusinessInfoFacetTurn =
     !asksPrices &&
-    !asksSchedules &&
-    !asksAvailability &&
+    (asksSchedules || asksLocation || asksAvailability) &&
     !asksIncludesOnly &&
     !isCombinationIntent &&
     !isAskingOtherCatalogOptions;
 
-  const isAvailabilityOnlyTurn =
-    asksAvailability &&
-    !asksPrices &&
-    !asksSchedules &&
-    !asksLocation &&
-    !asksIncludesOnly &&
-    !isCombinationIntent &&
-    !isAskingOtherCatalogOptions;
-
-  if (isLocationOnlyTurn || isAvailabilityOnlyTurn) {
-    const locationBody = asksLocation
-      ? buildLocationBlockFromInfoClave(input.infoClave)
-      : "";
-
-    const availabilityBody = asksAvailability
-      ? buildAvailabilityBlockFromInfoClave(input.infoClave)
-      : "";
-
-    const locationBlock = withSectionTitle(
-      input.idiomaDestino,
-      "Ubicación:",
-      "Location:",
-      locationBody
-    );
-
-    const availabilityBlock = withSectionTitle(
-      input.idiomaDestino,
-      "Disponibilidad:",
-      "Availability:",
-      availabilityBody
-    );
-
+  if (isBusinessInfoFacetTurn) {
     const finalReply = composeCatalogReplyBlocks({
       idiomaDestino: input.idiomaDestino,
       asksPrices,
       asksSchedules,
       asksLocation,
       asksAvailability,
+      scheduleBlock,
       locationBlock,
       availabilityBlock,
       includeClosingLine: true,
@@ -232,15 +230,19 @@ export async function runCatalogFastpath(
         handled: true,
         reply: finalReply,
         source: "catalog_db",
-        intent: asksLocation ? "ubicacion" : "disponibilidad",
+        intent: asksLocation
+          ? "ubicacion"
+          : asksSchedules
+          ? "horario"
+          : "disponibilidad",
         ctxPatch: {
           last_catalog_at: Date.now(),
-          lastResolvedIntent: asksLocation ? "location_only" : "availability_only",
+          lastResolvedIntent: "business_info_facets",
         } as any,
       };
     }
 
-    console.log("[CATALOG][SKIP_NON_PRICE_INFO_ONLY_EMPTY]", {
+    console.log("[CATALOG][SKIP_BUSINESS_INFO_FACETS_EMPTY]", {
       userInput: input.userInput,
       intentOut: input.intentOut,
       facets: input.facets || {},
@@ -253,7 +255,7 @@ export async function runCatalogFastpath(
   }
 
   const hasFacetDrivenCatalogIntent =
-    asksPrices || asksSchedules;
+    asksPrices || asksSchedules || asksLocation || asksAvailability;
 
   const allowGenericCatalogDbFallback =
     hasExplicitCatalogRouting ||
@@ -723,6 +725,28 @@ export async function runCatalogFastpath(
       infoClave: input.infoClave,
     });
 
+    const locationBody = asksLocation
+      ? buildLocationBlockFromInfoClave(input.infoClave)
+      : "";
+
+    const availabilityBody = asksAvailability
+      ? buildAvailabilityBlockFromInfoClave(input.infoClave)
+      : "";
+
+    const locationBlock = withSectionTitle(
+      input.idiomaDestino,
+      "Ubicación:",
+      "Location:",
+      locationBody
+    );
+
+    const availabilityBlock = withSectionTitle(
+      input.idiomaDestino,
+      "Disponibilidad:",
+      "Availability:",
+      availabilityBody
+    );
+
     const canonicalReply = composeCatalogReplyBlocks({
       idiomaDestino: input.idiomaDestino,
       asksPrices,
@@ -731,6 +755,8 @@ export async function runCatalogFastpath(
       asksAvailability,
       priceBlock,
       scheduleBlock,
+      locationBlock,
+      availabilityBlock,
       includeClosingLine: true,
     });
 
