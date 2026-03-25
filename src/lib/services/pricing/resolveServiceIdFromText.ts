@@ -1,4 +1,3 @@
-//src/lib/services/pricing/resolveServiceIdFromText.ts
 import type { Pool } from "pg";
 import { detectarIdioma } from "../../detectarIdioma";
 import { traducirTexto } from "../../traducirTexto";
@@ -35,203 +34,142 @@ type Candidate = {
   supportTokens: string[];
 };
 
-const FUNCTION_WORDS = new Set([
-  // ES
-  "de",
-  "del",
-  "la",
-  "el",
-  "los",
-  "las",
-  "un",
-  "una",
-  "unos",
-  "unas",
-  "para",
-  "por",
-  "en",
-  "y",
-  "o",
-  "u",
-  "a",
-  "que",
-  "q",
-  "este",
-  "esta",
-  "ese",
-  "esa",
-  "esto",
-  "eso",
-  "le",
-  "lo",
-  "al",
-  "como",
-  "con",
-  "sin",
-  "sobre",
-  "mi",
-  "tu",
-  "su",
-  "me",
-  "te",
-  "se",
-  "hola",
-  "buenos",
-  "buenas",
-  "dias",
-  "dia",
-  "tardes",
-  "noches",
+type Scored = {
+  cand: Candidate;
+  score: number;
+  exactNameHits: number;
+  exactVariantHits: number;
 
-  // EN
-  "the",
-  "a",
-  "an",
-  "and",
-  "or",
-  "to",
-  "for",
-  "in",
-  "of",
-  "what",
-  "does",
-  "do",
-  "is",
-  "are",
-  "with",
-  "without",
-  "about",
-  "my",
-  "your",
-  "their",
-  "me",
-  "you",
-  "it",
-  "hello",
-  "hi",
-  "morning",
-  "afternoon",
-  "evening",
-]);
+  overlapNameTokens: string[];
+  overlapVariantTokens: string[];
+  overlapCategoryTokens: string[];
+  overlapTipoTokens: string[];
+  overlapSupportTokens: string[];
 
-const ATTRIBUTE_TOKENS = new Set([
-  // ES pricing
-  "precio",
-  "precios",
-  "cuanto",
-  "cuanta",
-  "cuesta",
-  "cuestan",
-  "vale",
-  "valen",
-  "costo",
-  "costos",
-  "mensual",
-  "mensuales",
-  "mes",
-  "meses",
-  "mensualidad",
-  "desde",
+  allOverlapTokens: string[];
+  dominantOverlapTokens: string[];
+  dominantOverlapCount: number;
 
-  // ES general / disponibilidad
-  "horario",
-  "horarios",
-  "ofrecen",
-  "ofrece",
-  "tienen",
-  "tiene",
-  "disponible",
-  "disponibles",
+  hasResolvableEntityEvidence: boolean;
+};
 
-  // EN pricing
-  "price",
-  "prices",
-  "pricing",
-  "cost",
-  "costs",
-  "how",
-  "much",
-  "monthly",
-  "month",
-  "months",
-  "from",
-  "starting",
-  "starts",
+function stripDiacritics(raw: string): string {
+  const normalized = String(raw || "").normalize("NFD");
+  let out = "";
 
-  // EN general / availability
-  "schedule",
-  "schedules",
-  "hours",
-  "offer",
-  "offers",
-  "have",
-  "has",
-  "available",
-  "availability",
+  for (const ch of normalized) {
+    const code = ch.charCodeAt(0);
+    const isCombiningMark = code >= 0x0300 && code <= 0x036f;
+    if (!isCombiningMark) out += ch;
+  }
 
-  // universales de consulta
-  "what",
-  "which",
-  "quiero",
-  "quieres",
-  "want",
-  "looking",
-]);
-
-const GENERIC_CATALOG_TOKENS = new Set([
-  // ES
-  "clase",
-  "clases",
-  "plan",
-  "planes",
-  "paquete",
-  "paquetes",
-  "pase",
-  "pases",
-  "servicio",
-  "servicios",
-  "programa",
-  "programas",
-  "membresia",
-  "membresias",
-  "membresía",
-  "membresías",
-
-  // EN
-  "class",
-  "classes",
-  "plan",
-  "plans",
-  "package",
-  "packages",
-  "pass",
-  "passes",
-  "service",
-  "services",
-  "program",
-  "programs",
-  "membership",
-  "memberships",
-]);
+  return out;
+}
 
 function normalize(raw: string): string {
-  return String(raw || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
+  return stripDiacritics(String(raw || "")).toLowerCase().trim();
+}
+
+function isAsciiLetterOrDigit(ch: string): boolean {
+  if (!ch) return false;
+  const code = ch.charCodeAt(0);
+  const isDigit = code >= 48 && code <= 57;
+  const isLower = code >= 97 && code <= 122;
+  return isDigit || isLower;
+}
+
+function sanitizeWord(raw: string): string {
+  const text = normalize(raw);
+  let out = "";
+
+  for (const ch of text) {
+    if (isAsciiLetterOrDigit(ch)) out += ch;
+  }
+
+  return out.trim();
 }
 
 function tokenize(raw: string): string[] {
-  return normalize(raw)
-    .replace(/[^a-z0-9\s]/g, " ")
-    .split(/\s+/)
-    .map((w) => w.trim())
-    .filter((w) => {
-      if (!w) return false;
-      if (/^\d+$/.test(w)) return false;
-      return w.length >= 2 && !FUNCTION_WORDS.has(w);
-    });
+  const text = normalize(raw);
+  if (!text) return [];
+
+  const tokens: string[] = [];
+  const seen = new Set<string>();
+
+  const SegmenterCtor = (Intl as any)?.Segmenter;
+
+  if (typeof SegmenterCtor === "function") {
+    const segmenter = new SegmenterCtor("es", { granularity: "word" });
+    for (const part of segmenter.segment(text)) {
+      if (!part?.isWordLike) continue;
+      const token = sanitizeWord(part.segment);
+      if (!token) continue;
+      if (token.length < 2) continue;
+      if (/^\d+$/.test(token)) continue;
+      if (!seen.has(token)) {
+        seen.add(token);
+        tokens.push(token);
+      }
+    }
+    return tokens;
+  }
+
+  let current = "";
+  for (const ch of text) {
+    if (isAsciiLetterOrDigit(ch)) {
+      current += ch;
+    } else if (current) {
+      if (current.length >= 2 && !/^\d+$/.test(current) && !seen.has(current)) {
+        seen.add(current);
+        tokens.push(current);
+      }
+      current = "";
+    }
+  }
+
+  if (current.length >= 2 && !/^\d+$/.test(current) && !seen.has(current)) {
+    seen.add(current);
+    tokens.push(current);
+  }
+
+  return tokens;
+}
+
+function uniqueUnion(arrays: string[][]): string[] {
+  return Array.from(new Set(arrays.flat().filter(Boolean)));
+}
+
+function normalizeLabel(raw: string): string {
+  const text = normalize(raw);
+  let out = "";
+  let prevSpace = false;
+
+  for (const ch of text) {
+    const isSeparator = ch === " " || ch === "_" || ch === "-";
+    if (isSeparator) {
+      if (!prevSpace) {
+        out += " ";
+        prevSpace = true;
+      }
+      continue;
+    }
+    out += ch;
+    prevSpace = false;
+  }
+
+  return out.trim();
+}
+
+function countExactHits(queryTokens: string[], candidateTokens: string[]): number {
+  if (!queryTokens.length || !candidateTokens.length) return 0;
+  const qSet = new Set(queryTokens);
+  return candidateTokens.filter((t) => qSet.has(t)).length;
+}
+
+function uniqueOverlapTokens(queryTokens: string[], candidateTokens: string[]): string[] {
+  if (!queryTokens.length || !candidateTokens.length) return [];
+  const qSet = new Set(queryTokens);
+  return Array.from(new Set(candidateTokens.filter((t) => qSet.has(t))));
 }
 
 function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
@@ -245,8 +183,8 @@ function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
       ...(cand.tipoTokens || []),
     ]);
 
-    for (const t of seen) {
-      df.set(t, (df.get(t) || 0) + 1);
+    for (const token of seen) {
+      df.set(token, (df.get(token) || 0) + 1);
     }
   }
 
@@ -263,6 +201,27 @@ function getTokenWeight(
   return Math.log(1 + totalCandidates / df);
 }
 
+function scoreTokensWeighted(
+  queryTokens: string[],
+  candidateTokens: string[],
+  dfMap: Map<string, number>,
+  totalCandidates: number
+): number {
+  if (!queryTokens.length || !candidateTokens.length || totalCandidates <= 0) return 0;
+
+  const candidateSet = new Set(candidateTokens);
+  let matchedWeight = 0;
+  let totalWeight = 0;
+
+  for (const token of queryTokens) {
+    const weight = getTokenWeight(token, dfMap, totalCandidates);
+    totalWeight += weight;
+    if (candidateSet.has(token)) matchedWeight += weight;
+  }
+
+  return totalWeight > 0 ? matchedWeight / totalWeight : 0;
+}
+
 function getDominantQueryTokens(
   queryTokens: string[],
   dfMap: Map<string, number>,
@@ -271,12 +230,12 @@ function getDominantQueryTokens(
   if (!queryTokens.length || totalCandidates <= 0) return [];
 
   const weighted = queryTokens
-    .map((t) => {
-      const df = dfMap.get(t) || 0;
+    .map((token) => {
+      const df = dfMap.get(token) || 0;
       return {
-        token: t,
+        token,
         df,
-        weight: df > 0 ? getTokenWeight(t, dfMap, totalCandidates) : 0,
+        weight: df > 0 ? getTokenWeight(token, dfMap, totalCandidates) : 0,
       };
     })
     .filter((x) => x.df > 0);
@@ -291,58 +250,11 @@ function getDominantQueryTokens(
     .map((x) => x.token);
 }
 
-function countOverlap(tokensA: string[], tokensB: string[]): number {
-  if (!tokensA.length || !tokensB.length) return 0;
-  const b = new Set(tokensB);
-  let count = 0;
-  for (const t of tokensA) {
-    if (b.has(t)) count++;
-  }
-  return count;
-}
-
-function uniqueUnion(arrays: string[][]): string[] {
-  return Array.from(new Set(arrays.flat().filter(Boolean)));
-}
-
-function normalizeLabel(raw: string): string {
-  return normalize(raw).replace(/[\s_-]+/g, " ").trim();
-}
-
-function scoreTokensWeighted(
-  queryTokens: string[],
-  candidateTokens: string[],
-  dfMap: Map<string, number>,
-  totalCandidates: number
-): number {
-  if (!queryTokens.length || !candidateTokens.length || totalCandidates <= 0) return 0;
-
-  const candidateSet = new Set(candidateTokens);
-
-  let matchedWeight = 0;
-  let totalWeight = 0;
-
-  for (const t of queryTokens) {
-    const df = dfMap.get(t) || 1;
-    const weight = Math.log(1 + totalCandidates / df);
-
-    totalWeight += weight;
-    if (candidateSet.has(t)) matchedWeight += weight;
-  }
-
-  return totalWeight > 0 ? matchedWeight / totalWeight : 0;
-}
-
-function countExactHits(queryTokens: string[], candidateTokens: string[]): number {
-  if (!queryTokens.length || !candidateTokens.length) return 0;
-  const qSet = new Set(queryTokens);
-  return candidateTokens.filter((t) => qSet.has(t)).length;
-}
-
-function uniqueOverlapTokens(queryTokens: string[], candidateTokens: string[]): string[] {
-  if (!queryTokens.length || !candidateTokens.length) return [];
-  const qSet = new Set(queryTokens);
-  return Array.from(new Set(candidateTokens.filter((t) => qSet.has(t))));
+function buildObservedQueryTokens(
+  rawQueryTokens: string[],
+  dfMap: Map<string, number>
+): string[] {
+  return rawQueryTokens.filter((token) => dfMap.has(token));
 }
 
 export async function resolveServiceCandidatesFromText(
@@ -352,49 +264,41 @@ export async function resolveServiceCandidatesFromText(
   opts?: { mode?: "strict" | "loose" }
 ): Promise<ResolveServiceResult> {
   const mode: "strict" | "loose" = opts?.mode || "strict";
-  const t = String(userText || "").trim();
-  if (!t) {
+  const input = String(userText || "").trim();
+
+  if (!input) {
     return { hit: null, ambiguous: false, candidates: [] };
   }
 
   let idioma: "es" | "en" | string = "es";
   try {
-    idioma = (await detectarIdioma(t)) as any;
+    idioma = (await detectarIdioma(input)) as any;
   } catch {
     idioma = "es";
   }
 
-  const tNorm = normalize(t);
-  let tAlt = "";
+  const textNorm = normalize(input);
+  let translatedAlt = "";
 
   try {
     if (idioma === "es") {
-      tAlt = normalize(await traducirTexto(t, "en"));
+      translatedAlt = normalize(await traducirTexto(input, "en"));
     } else if (idioma === "en") {
-      tAlt = normalize(await traducirTexto(t, "es"));
+      translatedAlt = normalize(await traducirTexto(input, "es"));
     }
   } catch {
-    tAlt = "";
+    translatedAlt = "";
   }
 
-  const qTokens1 = tokenize(tNorm);
-  const qTokens2 = tAlt ? tokenize(tAlt) : [];
-  const queryTokens = Array.from(new Set([...qTokens1, ...qTokens2]));
+  const queryTokens = Array.from(
+    new Set([
+      ...tokenize(textNorm),
+      ...(translatedAlt ? tokenize(translatedAlt) : []),
+    ])
+  );
 
   if (!queryTokens.length) {
     console.log("[RESOLVE-SERVICE] sin tokens útiles, devolviendo null");
-    return { hit: null, ambiguous: false, candidates: [] };
-  }
-
-  const discriminativeQueryTokens = queryTokens.filter(
-    (t) => !ATTRIBUTE_TOKENS.has(t) && !GENERIC_CATALOG_TOKENS.has(t)
-  );
-
-  if (!discriminativeQueryTokens.length) {
-    console.log("[RESOLVE-SERVICE] query general sin tokens discriminativos, devolviendo null", {
-      userText,
-      queryTokens,
-    });
     return { hit: null, ambiguous: false, candidates: [] };
   }
 
@@ -425,7 +329,7 @@ export async function resolveServiceCandidatesFromText(
     FROM services s
     LEFT JOIN service_variants v
       ON v.service_id = s.id
-    AND v.active = true
+     AND v.active = true
     WHERE
       s.tenant_id = $1
       AND s.active = true
@@ -460,20 +364,21 @@ export async function resolveServiceCandidatesFromText(
     }
   >();
 
-  for (const r of rows) {
-    const serviceId = String(r.service_id || "");
-    const serviceName = String(r.service_name || "").trim();
+  for (const row of rows) {
+    const serviceId = String(row.service_id || "");
+    const serviceName = String(row.service_name || "").trim();
     if (!serviceId || !serviceName) continue;
 
     let entry = grouped.get(serviceId);
+
     if (!entry) {
       entry = {
         serviceId,
         serviceLabel: serviceName,
-        category: String(r.service_category || "").trim(),
-        tipo: String(r.service_tipo || "").trim(),
-        catalogRole: String(r.service_catalog_role || "").trim(),
-        parentServiceId: r.parent_service_id ? String(r.parent_service_id) : null,
+        category: String(row.service_category || "").trim(),
+        tipo: String(row.service_tipo || "").trim(),
+        catalogRole: String(row.service_catalog_role || "").trim(),
+        parentServiceId: row.parent_service_id ? String(row.parent_service_id) : null,
 
         serviceNameTokenSet: new Set<string>(),
         variantNameTokenSet: new Set<string>(),
@@ -487,40 +392,39 @@ export async function resolveServiceCandidatesFromText(
     }
 
     const serviceNameTokens = tokenize(serviceName);
-    const serviceDescTokens = tokenize(String(r.service_description || ""));
-    const variantNameTokens = tokenize(String(r.variant_name || ""));
-    const variantDescTokens = tokenize(String(r.variant_description || ""));
-    const categoryTokens = tokenize(String(r.service_category || ""));
-    const tipoTokens = tokenize(String(r.service_tipo || ""));
-    const sizeTokenTokens = tokenize(String(r.size_token || ""));
+    const serviceDescTokens = tokenize(String(row.service_description || ""));
+    const variantNameTokens = tokenize(String(row.variant_name || ""));
+    const variantDescTokens = tokenize(String(row.variant_description || ""));
+    const categoryTokens = tokenize(String(row.service_category || ""));
+    const tipoTokens = tokenize(String(row.service_tipo || ""));
+    const sizeTokenTokens = tokenize(String(row.size_token || ""));
 
-    for (const tk of serviceNameTokens) entry.serviceNameTokenSet.add(tk);
-    for (const tk of variantNameTokens) entry.variantNameTokenSet.add(tk);
+    for (const token of serviceNameTokens) entry.serviceNameTokenSet.add(token);
+    for (const token of variantNameTokens) entry.variantNameTokenSet.add(token);
 
-    for (const tk of categoryTokens) entry.categoryTokenSet.add(tk);
-    for (const tk of tipoTokens) entry.tipoTokenSet.add(tk);
+    for (const token of categoryTokens) entry.categoryTokenSet.add(token);
+    for (const token of tipoTokens) entry.tipoTokenSet.add(token);
 
-    // soporte: nunca debe resolver por sí solo
-    for (const tk of serviceDescTokens) entry.supportTokenSet.add(tk);
-    for (const tk of variantDescTokens) entry.supportTokenSet.add(tk);
-    for (const tk of sizeTokenTokens) entry.supportTokenSet.add(tk);
+    for (const token of serviceDescTokens) entry.supportTokenSet.add(token);
+    for (const token of variantDescTokens) entry.supportTokenSet.add(token);
+    for (const token of sizeTokenTokens) entry.supportTokenSet.add(token);
   }
 
-  const candidates: Candidate[] = Array.from(grouped.values()).map((g) => ({
-    serviceId: g.serviceId,
-    label: g.serviceLabel || "",
-    category: g.category || "",
-    tipo: g.tipo || "",
-    catalogRole: g.catalogRole || "",
-    parentServiceId: g.parentServiceId,
+  const candidates: Candidate[] = Array.from(grouped.values()).map((entry) => ({
+    serviceId: entry.serviceId,
+    label: entry.serviceLabel || "",
+    category: entry.category || "",
+    tipo: entry.tipo || "",
+    catalogRole: entry.catalogRole || "",
+    parentServiceId: entry.parentServiceId,
 
-    serviceNameTokens: Array.from(g.serviceNameTokenSet),
-    variantNameTokens: Array.from(g.variantNameTokenSet),
+    serviceNameTokens: Array.from(entry.serviceNameTokenSet),
+    variantNameTokens: Array.from(entry.variantNameTokenSet),
 
-    categoryTokens: Array.from(g.categoryTokenSet),
-    tipoTokens: Array.from(g.tipoTokenSet),
+    categoryTokens: Array.from(entry.categoryTokenSet),
+    tipoTokens: Array.from(entry.tipoTokenSet),
 
-    supportTokens: Array.from(g.supportTokenSet),
+    supportTokens: Array.from(entry.supportTokenSet),
   }));
 
   if (!candidates.length) {
@@ -531,75 +435,67 @@ export async function resolveServiceCandidatesFromText(
   const dfMap = buildTenantTokenDf(candidates);
   const totalCandidates = candidates.length;
 
+  // solo usamos tokens realmente observados en el catálogo del tenant
+  const observedQueryTokens = buildObservedQueryTokens(queryTokens, dfMap);
+
+  if (!observedQueryTokens.length) {
+    console.log("[RESOLVE-SERVICE] query sin tokens observados en catalogo, devolviendo null", {
+      userText,
+      queryTokens,
+    });
+    return { hit: null, ambiguous: false, candidates: [] };
+  }
+
   const dominantQueryTokens = getDominantQueryTokens(
-    discriminativeQueryTokens,
+    observedQueryTokens,
     dfMap,
     totalCandidates
   );
 
-  type Scored = {
-    cand: Candidate;
-    score: number;
-    exactNameHits: number;
-    exactVariantHits: number;
-
-    overlapNameTokens: string[];
-    overlapVariantTokens: string[];
-    overlapCategoryTokens: string[];
-    overlapTipoTokens: string[];
-    overlapSupportTokens: string[];
-
-    allOverlapTokens: string[];
-    dominantOverlapTokens: string[];
-    dominantOverlapCount: number;
-
-    hasResolvableEntityEvidence: boolean;
-  };
-
   const scored: Scored[] = candidates.map((cand) => {
     const nameScore = scoreTokensWeighted(
-      queryTokens,
+      observedQueryTokens,
       cand.serviceNameTokens,
       dfMap,
       totalCandidates
     );
 
     const variantScore = scoreTokensWeighted(
-      queryTokens,
+      observedQueryTokens,
       cand.variantNameTokens,
       dfMap,
       totalCandidates
     );
 
     const categoryScore = scoreTokensWeighted(
-      queryTokens,
+      observedQueryTokens,
       cand.categoryTokens,
       dfMap,
       totalCandidates
     );
 
     const tipoScore = scoreTokensWeighted(
-      queryTokens,
+      observedQueryTokens,
       cand.tipoTokens,
       dfMap,
       totalCandidates
     );
 
     const supportScore = scoreTokensWeighted(
-      queryTokens,
+      observedQueryTokens,
       cand.supportTokens,
       dfMap,
       totalCandidates
     );
 
-    const exactNameHits = countExactHits(queryTokens, cand.serviceNameTokens);
-    const exactVariantHits = countExactHits(queryTokens, cand.variantNameTokens);
+    const exactNameHits = countExactHits(observedQueryTokens, cand.serviceNameTokens);
+    const exactVariantHits = countExactHits(observedQueryTokens, cand.variantNameTokens);
 
-    const overlapNameTokens = uniqueOverlapTokens(queryTokens, cand.serviceNameTokens);
-    const overlapVariantTokens = uniqueOverlapTokens(queryTokens, cand.variantNameTokens);
-    const overlapCategoryTokens = uniqueOverlapTokens(queryTokens, cand.categoryTokens);
-    const overlapTipoTokens = uniqueOverlapTokens(queryTokens, cand.tipoTokens);
-    const overlapSupportTokens = uniqueOverlapTokens(queryTokens, cand.supportTokens);
+    const overlapNameTokens = uniqueOverlapTokens(observedQueryTokens, cand.serviceNameTokens);
+    const overlapVariantTokens = uniqueOverlapTokens(observedQueryTokens, cand.variantNameTokens);
+    const overlapCategoryTokens = uniqueOverlapTokens(observedQueryTokens, cand.categoryTokens);
+    const overlapTipoTokens = uniqueOverlapTokens(observedQueryTokens, cand.tipoTokens);
+    const overlapSupportTokens = uniqueOverlapTokens(observedQueryTokens, cand.supportTokens);
 
     const resolvableOverlapTokens = uniqueUnion([
       overlapNameTokens,
@@ -620,7 +516,7 @@ export async function resolveServiceCandidatesFromText(
     const hasResolvableEntityEvidence =
       overlapNameTokens.length > 0 || overlapVariantTokens.length > 0;
 
-    if (allOverlapTokens.length === 0) {
+    if (!allOverlapTokens.length) {
       return {
         cand,
         score: 0,
@@ -638,32 +534,30 @@ export async function resolveServiceCandidatesFromText(
       };
     }
 
-    const dominantOverlapTokens = dominantQueryTokens.filter((t) =>
-      allOverlapTokens.includes(t)
+    const dominantOverlapTokens = dominantQueryTokens.filter((token) =>
+      uniqueUnion([
+        overlapNameTokens,
+        overlapVariantTokens,
+        overlapCategoryTokens,
+        overlapTipoTokens,
+      ]).includes(token)
     );
 
     const dominantOverlapCount = dominantOverlapTokens.length;
 
-    const discriminativeOverlapTokens = allOverlapTokens.filter(
-      (t) => discriminativeQueryTokens.includes(t)
-    );
-
     const queryCoverage =
-      discriminativeQueryTokens.length > 0
-        ? discriminativeOverlapTokens.length / discriminativeQueryTokens.length
+      observedQueryTokens.length > 0
+        ? resolvableOverlapTokens.length / observedQueryTokens.length
         : 0;
 
     let score = 0;
 
-    // evidencia resolutiva principal
-    score += nameScore * 0.42;
-    score += variantScore * 0.34;
+    score += nameScore * 0.44;
+    score += variantScore * 0.36;
 
-    // evidencia estructural secundaria
-    score += categoryScore * 0.10;
-    score += tipoScore * 0.08;
+    score += categoryScore * 0.08;
+    score += tipoScore * 0.06;
 
-    // soporte solo ayuda si ya existe evidencia resolutiva real
     if (hasResolvableEntityEvidence) {
       score += supportScore * 0.06;
     }
@@ -677,11 +571,6 @@ export async function resolveServiceCandidatesFromText(
       score += Math.min(0.18, dominantOverlapCount * 0.12);
     }
 
-    if (dominantQueryTokens.length > 0 && dominantOverlapCount === 0 && allOverlapTokens.length > 0) {
-      score -= 0.14;
-    }
-
-    // ajustes universales multitenant-safe
     const categoryNorm = normalizeLabel(cand.category || "");
     const catalogRoleNorm = normalizeLabel(cand.catalogRole || "");
     const hasParent = !!cand.parentServiceId;
@@ -707,11 +596,8 @@ export async function resolveServiceCandidatesFromText(
 
     if (isAddOn) score -= 0.45;
     if (hasParent) score -= 0.12;
-
     if (isPrimaryRole) score += 0.18;
-
-    const isPrimary = isPrimaryRole || (!isAddOn && !hasParent);
-    if (isPrimary) score += 0.08;
+    if (isPrimaryRole || (!isAddOn && !hasParent)) score += 0.08;
 
     return {
       cand,
@@ -739,6 +625,7 @@ export async function resolveServiceCandidatesFromText(
     userText,
     idioma,
     queryTokens,
+    observedQueryTokens,
     best: best
       ? {
           label: best.cand.label,
@@ -750,12 +637,11 @@ export async function resolveServiceCandidatesFromText(
           parentServiceId: best.cand.parentServiceId,
           exactNameHits: best.exactNameHits,
           exactVariantHits: best.exactVariantHits,
+          overlapNameTokens: best.overlapNameTokens,
           overlapVariantTokens: best.overlapVariantTokens,
           overlapCategoryTokens: best.overlapCategoryTokens,
           overlapTipoTokens: best.overlapTipoTokens,
-          overlapNameTokens: best.overlapNameTokens,
           overlapSupportTokens: best.overlapSupportTokens,
-          allOverlapTokens: best.allOverlapTokens,
           dominantQueryTokens,
           dominantOverlapTokens: best.dominantOverlapTokens,
           dominantOverlapCount: best.dominantOverlapCount,
@@ -771,12 +657,11 @@ export async function resolveServiceCandidatesFromText(
           catalogRole: second.cand.catalogRole,
           exactNameHits: second.exactNameHits,
           exactVariantHits: second.exactVariantHits,
+          overlapNameTokens: second.overlapNameTokens,
           overlapVariantTokens: second.overlapVariantTokens,
           overlapCategoryTokens: second.overlapCategoryTokens,
           overlapTipoTokens: second.overlapTipoTokens,
-          overlapNameTokens: second.overlapNameTokens,
           overlapSupportTokens: second.overlapSupportTokens,
-          allOverlapTokens: second.allOverlapTokens,
           dominantQueryTokens,
           dominantOverlapTokens: second.dominantOverlapTokens,
           dominantOverlapCount: second.dominantOverlapCount,
@@ -797,8 +682,8 @@ export async function resolveServiceCandidatesFromText(
       score: s.score,
     }));
 
-  if (queryTokens.length === 1) {
-    const token = queryTokens[0];
+  if (observedQueryTokens.length === 1) {
+    const token = observedQueryTokens[0];
 
     const withToken = scored.filter((s) => {
       const allTokens = [
@@ -813,7 +698,7 @@ export async function resolveServiceCandidatesFromText(
     if (mode === "strict") {
       if (withToken.length !== 1) {
         console.log(
-          "[RESOLVE-SERVICE] (strict) 1 token útil pero",
+          "[RESOLVE-SERVICE] (strict) 1 token observado pero",
           withToken.length,
           "candidatos → ambiguo, devolviendo null"
         );
@@ -832,11 +717,10 @@ export async function resolveServiceCandidatesFromText(
 
       const enoughEvidence =
         only.score >= SINGLE_TOKEN_THRESHOLD &&
-        only.exactNameHits >= 1 &&
-        withToken.length === 1;
+        (only.exactNameHits >= 1 || only.exactVariantHits >= 1);
 
       if (enoughEvidence) {
-        console.log("[RESOLVE-SERVICE] (strict) match único por token útil", {
+        console.log("[RESOLVE-SERVICE] (strict) match único por token observado", {
           userText,
           token,
           label: only.cand.label,
@@ -850,7 +734,7 @@ export async function resolveServiceCandidatesFromText(
       }
 
       console.log(
-        "[RESOLVE-SERVICE] (strict) evidencia insuficiente con 1 token útil, devolviendo null",
+        "[RESOLVE-SERVICE] (strict) evidencia insuficiente con 1 token observado, devolviendo null",
         {
           userText,
           token,
@@ -858,6 +742,7 @@ export async function resolveServiceCandidatesFromText(
           score: only.score,
         }
       );
+
       return {
         hit: null,
         ambiguous: false,
@@ -866,9 +751,10 @@ export async function resolveServiceCandidatesFromText(
     }
 
     console.log(
-      "[RESOLVE-SERVICE] (loose) 1 token útil → no auto-resolver, devolviendo null",
+      "[RESOLVE-SERVICE] (loose) 1 token observado → no auto-resolver, devolviendo null",
       { userText, token, candidates: withToken.length }
     );
+
     return {
       hit: null,
       ambiguous: withToken.length > 1,
@@ -893,7 +779,7 @@ export async function resolveServiceCandidatesFromText(
       ? uniqueUnion([
           best.overlapNameTokens,
           best.overlapVariantTokens,
-        ]).filter((t) => discriminativeQueryTokens.includes(t)).length
+        ]).filter((token) => observedQueryTokens.includes(token)).length
       : 0;
 
   const enoughEvidence =
@@ -902,10 +788,7 @@ export async function resolveServiceCandidatesFromText(
     (
       bestEvidenceCount >= 1 ||
       (best?.score || 0) >= 0.22 ||
-      (
-        (best?.score || 0) >= 0.16 &&
-        marginVsSecond >= 0.01
-      )
+      ((best?.score || 0) >= 0.16 && marginVsSecond >= 0.01)
     );
 
   if (!best || best.score < BASE_THRESHOLD || !enoughEvidence) {
@@ -966,27 +849,22 @@ export async function resolveServiceCandidatesFromText(
         best.overlapVariantTokens,
       ]).length >= 1;
 
-    // Caso 1:
-    // best matchea tokens dominantes y second no -> aceptamos best
     if (bestHasDominant && !secondHasDominant) {
-      console.log(
-        "[RESOLVE-SERVICE] desempate por dominant query tokens, aceptando best",
-        {
-          userText,
-          best: {
-            label: best.cand.label,
-            score: best.score,
-            dominantOverlapTokens: best.dominantOverlapTokens,
-          },
-          second: {
-            label: second.cand.label,
-            score: second.score,
-            dominantOverlapTokens: second.dominantOverlapTokens,
-          },
-          margin: Math.abs(best.score - second.score),
-          requiredMargin: MARGIN,
-        }
-      );
+      console.log("[RESOLVE-SERVICE] desempate por dominant query tokens, aceptando best", {
+        userText,
+        best: {
+          label: best.cand.label,
+          score: best.score,
+          dominantOverlapTokens: best.dominantOverlapTokens,
+        },
+        second: {
+          label: second.cand.label,
+          score: second.score,
+          dominantOverlapTokens: second.dominantOverlapTokens,
+        },
+        margin: Math.abs(best.score - second.score),
+        requiredMargin: MARGIN,
+      });
 
       return {
         hit: { id: best.cand.serviceId, name: best.cand.label },
@@ -995,10 +873,6 @@ export async function resolveServiceCandidatesFromText(
       };
     }
 
-    // Caso 2:
-    // En modo loose, si ambos candidatos pertenecen a la misma familia/categoría
-    // y el usuario dio evidencia explícita suficientemente fuerte,
-    // aceptamos best en vez de devolver null.
     if (mode === "loose" && sameFamily && strongExplicitEvidence) {
       console.log(
         "[RESOLVE-SERVICE] empate dentro de la misma familia en modo loose, aceptando best",
@@ -1020,7 +894,7 @@ export async function resolveServiceCandidatesFromText(
             category: second.cand.category,
             tipo: second.cand.tipo,
             exactNameHits: second.exactNameHits,
-            exactVariantHits: best.exactVariantHits,
+            exactVariantHits: second.exactVariantHits,
             dominantOverlapTokens: second.dominantOverlapTokens,
             allOverlapTokens: second.allOverlapTokens,
           },
@@ -1072,7 +946,7 @@ export async function resolveServiceCandidatesFromText(
     };
   }
 
-  console.log("[RESOLVE-SERVICE] match aceptado (>=2 tokens útiles)", {
+  console.log("[RESOLVE-SERVICE] match aceptado por evidencia resolutiva", {
     userText,
     label: best.cand.label,
     score: best.score,
@@ -1097,5 +971,6 @@ export async function resolveServiceIdFromText(
     userText,
     opts
   );
+
   return result.hit;
 }
