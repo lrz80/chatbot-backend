@@ -49,6 +49,32 @@ type HandleInterestToLinkInput = {
     serviceUrl?: string | null;
     variantUrl?: string | null;
   }>;
+
+  answerCatalogQuestionLLM: (input: {
+    idiomaDestino: "es" | "en";
+    canonicalReply: string;
+    userInput: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string | null>;
+
+  renderCatalogReplyWithSalesFrame: (args: {
+    lang: Lang;
+    userInput: string;
+    canonicalReply: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    answerCatalogQuestionLLM: (input: {
+      idiomaDestino: "es" | "en";
+      canonicalReply: string;
+      userInput: string;
+      mode?: "grounded_frame_only" | "grounded_catalog_sales";
+      maxIntroLines?: number;
+      maxClosingLines?: number;
+    }) => Promise<string | null>;
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string>;
 };
 
 type HandleInterestToLinkResult =
@@ -106,37 +132,6 @@ function wantsInterestToLink(args: {
   );
 }
 
-function buildDirectLinkReply(args: {
-  idiomaDestino: Lang;
-  title: string;
-  infoText: string;
-  pickedUrl: string;
-  finalUrl?: string | null;
-}): string {
-  const { idiomaDestino, title, infoText, pickedUrl, finalUrl } = args;
-
-  const outro =
-    idiomaDestino === "en"
-      ? "If you need anything else, just let me know 😊"
-      : "Si necesitas algo más, déjame saber 😊";
-
-  let reply =
-    idiomaDestino === "en"
-      ? `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Here it is 😊\n${pickedUrl}\n\n${outro}`
-      : `${title ? `${title}\n\n` : ""}${infoText ? `${infoText}\n\n` : ""}Aquí lo tienes 😊\n${pickedUrl}\n\n${outro}`;
-
-  if (finalUrl) {
-    const linkLine =
-      idiomaDestino === "en"
-        ? `\n\n👉 You can see all the details or purchase here: ${finalUrl}`
-        : `\n\n👉 Puedes ver todos los detalles o comprarlo aquí: ${finalUrl}`;
-
-    reply = `${reply}${linkLine}`;
-  }
-
-  return reply;
-}
-
 function buildAmbiguousReply(args: {
   idiomaDestino: Lang;
   labels: string[];
@@ -164,6 +159,8 @@ export async function handleInterestToLink(
     resolveBestLinkForService,
     getServiceDetailsText,
     getServiceAndVariantUrl,
+    answerCatalogQuestionLLM,
+    renderCatalogReplyWithSalesFrame,
   } = input;
 
   if (shouldSkipBecauseJustSentDetails(convoCtx)) {
@@ -220,15 +217,28 @@ export async function handleInterestToLink(
       );
     }
 
+    const canonicalLines = [
+      title ? `• ${title}` : "",
+      infoText ? `• ${infoText}` : "",
+      pick.url ? `• ${pick.url}` : "",
+      finalUrl && finalUrl !== pick.url ? `• ${finalUrl}` : "",
+    ].filter(Boolean);
+
+    const canonicalReply = canonicalLines.join("\n");
+
+    const finalReply = await renderCatalogReplyWithSalesFrame({
+      lang: idiomaDestino,
+      userInput,
+      canonicalReply,
+      answerCatalogQuestionLLM,
+      mode: "grounded_frame_only",
+      maxIntroLines: 1,
+      maxClosingLines: 1,
+    });
+
     return {
       handled: true,
-      reply: buildDirectLinkReply({
-        idiomaDestino,
-        title,
-        infoText,
-        pickedUrl: pick.url,
-        finalUrl,
-      }),
+      reply: finalReply,
       source: "service_list_db",
       intent: intentOut || "link",
       ctxPatch: {

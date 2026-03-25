@@ -77,6 +77,32 @@ type HandleMultiQuestionSplitAnswerInput = {
     opts?: any
   ) => Promise<any>;
   bestNameMatch: (input: string, list: any[]) => any;
+
+  answerCatalogQuestionLLM: (input: {
+    idiomaDestino: "es" | "en";
+    canonicalReply: string;
+    userInput: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string | null>;
+
+  renderCatalogReplyWithSalesFrame: (args: {
+    lang: Lang;
+    userInput: string;
+    canonicalReply: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    answerCatalogQuestionLLM: (input: {
+      idiomaDestino: "es" | "en";
+      canonicalReply: string;
+      userInput: string;
+      mode?: "grounded_frame_only" | "grounded_catalog_sales";
+      maxIntroLines?: number;
+      maxClosingLines?: number;
+    }) => Promise<string | null>;
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string>;
 };
 
 type HandleMultiQuestionSplitAnswerResult = {
@@ -224,6 +250,8 @@ export async function handleMultiQuestionSplitAnswer(
     resolveServiceMatchesFromText,
     resolveServiceIdFromText,
     bestNameMatch,
+    answerCatalogQuestionLLM,
+    renderCatalogReplyWithSalesFrame,
   } = input;
 
   const frames = extractQueryFrames(userInput);
@@ -437,14 +465,21 @@ export async function handleMultiQuestionSplitAnswer(
     return { handled: false };
   }
 
-  const intro =
-    idiomaDestino === "en"
-      ? "Here’s what I found:"
-      : "Esto fue lo que conseguí 😊";
+  const canonicalReply = subReplies.join("\n\n");
+
+  const reply = await renderCatalogReplyWithSalesFrame({
+    lang: idiomaDestino,
+    userInput,
+    canonicalReply,
+    answerCatalogQuestionLLM,
+    mode: "grounded_catalog_sales",
+    maxIntroLines: 1,
+    maxClosingLines: 1,
+  });
 
   return {
     handled: true,
-    reply: `${intro}\n\n${subReplies.join("\n\n")}`,
+    reply,
     source: "service_list_db",
     intent: intentOut || "info_servicio",
   };

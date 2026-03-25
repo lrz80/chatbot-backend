@@ -293,6 +293,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       resolveServiceMatchesFromText,
       resolveServiceIdFromText,
       bestNameMatch,
+      answerCatalogQuestionLLM,
+      renderCatalogReplyWithSalesFrame,
     });
 
     if (multiQuestionResult.handled) {
@@ -333,10 +335,20 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       last_package_list_at: null,
     };
 
-    const reply = await renderInfoGeneralOverview({
+    const canonicalReply = await renderInfoGeneralOverview({
       pool,
       tenantId,
       lang: idiomaDestino,
+    });
+
+    const reply = await renderCatalogReplyWithSalesFrame({
+      lang: idiomaDestino,
+      userInput,
+      canonicalReply,
+      answerCatalogQuestionLLM,
+      mode: "grounded_frame_only",
+      maxIntroLines: 1,
+      maxClosingLines: 1,
     });
 
     return {
@@ -447,6 +459,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       resolveBestLinkForService,
       getServiceDetailsText,
       getServiceAndVariantUrl,
+      answerCatalogQuestionLLM,
+      renderCatalogReplyWithSalesFrame,
     });
 
     if (interestToLinkResult.handled) {
@@ -537,6 +551,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       isCatalogOverviewTurn,
       catalogReferenceClassification,
       traducirMensaje,
+      answerCatalogQuestionLLM,
+      renderCatalogReplyWithSalesFrame,
       getCatalogStructuredSignals,
       getCatalogDetailSignals,
       handleLastVariantIncludes,

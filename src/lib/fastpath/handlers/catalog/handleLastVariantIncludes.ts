@@ -12,6 +12,30 @@ export type HandleLastVariantIncludesInput = {
   intentOut?: string | null;
   catalogReferenceClassification?: any;
   traducirMensaje: (texto: string, idiomaDestino: string) => Promise<string>;
+  answerCatalogQuestionLLM: (input: {
+    idiomaDestino: "es" | "en";
+    canonicalReply: string;
+    userInput: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string | null>;
+  renderCatalogReplyWithSalesFrame: (args: {
+    lang: any;
+    userInput: string;
+    canonicalReply: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    answerCatalogQuestionLLM: (input: {
+      idiomaDestino: "es" | "en";
+      canonicalReply: string;
+      userInput: string;
+      mode?: "grounded_frame_only" | "grounded_catalog_sales";
+      maxIntroLines?: number;
+      maxClosingLines?: number;
+    }) => Promise<string | null>;
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string>;
 };
 
 export async function handleLastVariantIncludes(
@@ -169,30 +193,23 @@ export async function handleLastVariantIncludes(
       ? `${displayBaseName} — ${displayVariantName}`
       : displayBaseName || displayVariantName || "";
 
-  let reply =
-    input.idiomaDestino === "en"
-      ? title
-        ? `${title}${bullets ? ` includes:\n\n${bullets}` : ""}`
-        : bullets
-        ? `Includes:\n\n${bullets}`
-        : ""
-      : title
-      ? `${title}${bullets ? ` incluye:\n\n${bullets}` : ""}`
-      : bullets
-      ? `Incluye:\n\n${bullets}`
-      : "";
+  const canonicalLines = [
+    title ? `• ${title}` : "",
+    bullets || "",
+    link ? `• ${link}` : "",
+  ].filter(Boolean);
 
-  if (link) {
-    reply +=
-      input.idiomaDestino === "en"
-        ? `\n\nHere’s the link:\n${link}`
-        : `\n\nAquí tienes el link:\n${link}`;
-  } else {
-    reply +=
-      input.idiomaDestino === "en"
-        ? `\n\nIf you need anything else, just let me know. 😊`
-        : `\n\nSi necesitas algo más, avísame. 😊`;
-  }
+  const canonicalReply = canonicalLines.join("\n\n");
+
+  const reply = await input.renderCatalogReplyWithSalesFrame({
+    lang: input.idiomaDestino === "en" ? "en" : "es",
+    userInput: input.userInput,
+    canonicalReply,
+    answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+    mode: "grounded_catalog_sales",
+    maxIntroLines: 1,
+    maxClosingLines: 1,
+  });
 
   console.log("[FASTPATH-INCLUDES] using last_variant_id directly", {
     userInput: input.userInput,

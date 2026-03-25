@@ -86,92 +86,18 @@ export async function renderInfoGeneralOverview(args: {
       .map((r) => r.name)
   );
 
-  const greet =
-    lang === "en"
-      ? `Hi${tenantName ? `! Welcome to ${tenantName}` : ""} 😊`
-      : `Hola${tenantName ? `! Bienvenido a ${tenantName}` : ""} 😊`;
+    const count = mainServices.length;
 
-  const count = mainServices.length;
-
-  // =========================
-  // MODO 0: sin servicios claros
-  // =========================
   if (count === 0) {
     return lang === "en"
-      ? `${greet}
-
-I can help you with information about our services and guide you based on what you need.
-
-What type of service are you looking for?`
-      : `${greet}
-
-Puedo orientarte sobre nuestros servicios y ayudarte según lo que necesites.
-
-¿Qué tipo de servicio estás buscando?`;
+      ? "• Services: overview not available in the catalog"
+      : "• Servicios: resumen no disponible en el catálogo";
   }
 
-  // =========================
-  // MODO 1: solo un servicio
-  // =========================
   if (count === 1) {
-    const s = mainServices[0];
-
-    return lang === "en"
-      ? `${greet}
-
-We mainly help with:
-• ${s}
-
-Would you like more details about it or prefer to see pricing?`
-      : `${greet}
-
-Principalmente te podemos ayudar con:
-• ${s}
-
-¿Te gustaría conocer más detalles o prefieres ver precios?`;
+    return `• ${mainServices[0]}`;
   }
 
-  // =========================
-  // MODO 2: catálogo pequeño
-  // =========================
-  if (count <= 4) {
-    const list = mainServices.map((s) => `• ${s}`).join("\n");
-
-    return lang === "en"
-      ? `${greet}
-
-I can help you with these options:
-
-${list}
-
-Which one are you interested in?`
-      : `${greet}
-
-Te puedo ayudar con estas opciones:
-
-${list}
-
-¿Cuál te interesa?`;
-  }
-
-    // =========================
-  // MODO 3: catálogo grande
-  // =========================
-  const examples = mainServices.slice(0, 7).map((s) => `• ${s}`).join("\n");
-
-  return lang === "en"
-    ? `${greet}
-
-We offer several services, including:
-
-${examples}
-
-If one catches your eye, I can also tell you more details.`
-    : `${greet}
-
-Ofrecemos varios servicios, incluyendo:
-
-${examples}
-
-Si te interesa alguno en particular, también te puedo dar más detalles.`;
+  const list = mainServices.slice(0, 7).map((s) => `• ${s}`).join("\n");
+  return list;
 }
