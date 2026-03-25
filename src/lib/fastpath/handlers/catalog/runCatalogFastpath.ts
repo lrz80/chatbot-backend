@@ -14,6 +14,7 @@ import {
 } from "./helpers/catalogBusinessInfoBlocks";
 import { buildPriceBlock } from "./helpers/catalogPriceBlock";
 import { buildScheduleBlock } from "./helpers/catalogScheduleBlock";
+import { renderCatalogReplyWithSalesFrame } from "../../helpers/catalogRendering";
 
 type CatalogFacets = {
   asksPrices?: boolean;
@@ -66,10 +67,13 @@ export type RunCatalogFastpathInput = {
   answerWithPromptBase: (input: any) => Promise<{ text: string }>;
 
   answerCatalogQuestionLLM: (input: {
-    idiomaDestino: any;
-    systemMsg: string;
-    userMsg: string;
-  }) => Promise<string>;
+    idiomaDestino: "es" | "en";
+    canonicalReply: string;
+    userInput: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string | null>;
 
   postProcessCatalogReply: (input: {
     reply: string;
@@ -222,7 +226,7 @@ export async function runCatalogFastpath(
     !isAskingOtherCatalogOptions;
 
   if (isBusinessInfoFacetTurn) {
-    const finalReply = composeCatalogReplyBlocks({
+    const canonicalReply = composeCatalogReplyBlocks({
       idiomaDestino: input.idiomaDestino,
       asksPrices,
       asksSchedules,
@@ -234,7 +238,17 @@ export async function runCatalogFastpath(
       includeClosingLine: true,
     });
 
-    if (finalReply.trim()) {
+    if (canonicalReply.trim()) {
+      const finalReply = await renderCatalogReplyWithSalesFrame({
+        lang: input.idiomaDestino === "en" ? "en" : "es",
+        userInput: input.userInput,
+        canonicalReply,
+        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+        mode: "grounded_frame_only",
+        maxIntroLines: 1,
+        maxClosingLines: 1,
+      });
+
       return {
         handled: true,
         reply: finalReply,
@@ -462,9 +476,9 @@ export async function runCatalogFastpath(
         catalogRoutingSignal,
         catalogReferenceClassification: input.catalogReferenceClassification,
         rows,
-        answerWithPromptBase: input.answerWithPromptBase,
-        promptBase: input.promptBase,
-        canal: input.canal,
+        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+        renderCatalogReplyWithSalesFrame,
+        catalogRouteIntent: routeIntent,
       });
 
       if (singleServiceCatalogResult.handled) {
@@ -528,53 +542,22 @@ export async function runCatalogFastpath(
     const canonicalReply = priceBlock;
     const namesShown = input.extractPlanNamesFromReply(priceBlock);
 
-    const extraContext = [
-      "CATALOGO_DB_CANONICO:",
-      canonicalReply,
-      "",
-      "REGLAS_CRITICAS_DEL_TURNO:",
-      "- Debes usar EXCLUSIVAMENTE los servicios y precios del CATALOGO_DB_CANONICO.",
-      "- Debes conservar EXACTAMENTE el mismo orden de los bullets.",
-      "- Debes conservar EXACTAMENTE los mismos nombres de servicios.",
-      "- Debes conservar EXACTAMENTE los mismos precios.",
-      "- NO puedes agregar servicios.",
-      "- NO puedes quitar servicios.",
-      "- NO puedes reordenar bullets.",
-      "- NO puedes resumir varios bullets en uno solo.",
-      "- SOLO puedes suavizar el encabezado o la línea final.",
-      "- Si no puedes mejorar sin alterar el contenido, devuelve el CATALOGO_DB_CANONICO tal cual.",
-      "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
-      "",
-      "CONTINUIDAD_CONVERSACIONAL:",
-      "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
-      "- Debes guiar al usuario hacia el siguiente paso (más información, reserva, o aclaración).",
-      "- Evita respuestas que solo informen el precio sin invitar a continuar.",
-    ].join("\n");
-
-    const aiCatalogReply = await input.answerWithPromptBase({
-      tenantId: input.tenantId,
-      promptBase: input.promptBase,
+    const finalReply = await renderCatalogReplyWithSalesFrame({
+      lang: input.idiomaDestino === "en" ? "en" : "es",
       userInput: input.userInput,
-      history: [],
-      idiomaDestino: input.idiomaDestino,
-      canal: input.canal,
-      maxLines: 8,
-      fallbackText: canonicalReply,
-      extraContext,
+      canonicalReply,
+      answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+      mode: "grounded_catalog_sales",
+      maxIntroLines: 1,
+      maxClosingLines: 1,
     });
-
-    const modelReply = String(aiCatalogReply?.text || "").trim();
-    const finalReply =
-      modelReply && input.sameBulletStructure(canonicalReply, modelReply)
-        ? modelReply
-        : canonicalReply;
 
     console.log("[PRICE][catalog_db][SAFE_RENDER]", {
       rowsCount: rowsLocalized.length,
       namesShown,
-      usedModelReply: finalReply === modelReply,
+      usedModelReply: finalReply !== canonicalReply,
       canonicalPreview: canonicalReply.slice(0, 220),
-      modelPreview: modelReply.slice(0, 220),
+      modelPreview: finalReply.slice(0, 220),
       facets: input.facets || {},
     });
 
@@ -773,7 +756,15 @@ export async function runCatalogFastpath(
 
     const namesShown = input.extractPlanNamesFromReply(priceBlock);
 
-    const finalReply = canonicalReply;
+    const finalReply = await renderCatalogReplyWithSalesFrame({
+      lang: input.idiomaDestino === "en" ? "en" : "es",
+      userInput: input.userInput,
+      canonicalReply,
+      answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+      mode: "grounded_catalog_sales",
+      maxIntroLines: 1,
+      maxClosingLines: 1,
+    });
 
     const ctxPatch: any = {
       last_catalog_at: Date.now(),
@@ -862,14 +853,30 @@ export async function runCatalogFastpath(
     const rowsToRender = freshRows.slice(0, 5);
 
     if (!rowsToRender.length) {
-      const reply =
-        input.idiomaDestino === "en"
-          ? "I already showed you the main options. You can ask me about any of the options I mentioned and I’ll gladly give you more details 😊"
-          : "Ya te mostré las opciones principales. Puedes preguntarme por alguna de las opciones que te mencioné y con gusto te doy más detalles 😊";
+      const fallbackNames = (prevFresh ? prevNames : [])
+        .map((name: string) => String(name || "").trim())
+        .filter(Boolean)
+        .slice(0, 5);
+
+      const canonicalReply = fallbackNames.length
+        ? fallbackNames.map((name: string) => `• ${name}`).join("\n")
+        : "";
+
+      const finalReply = canonicalReply
+        ? await renderCatalogReplyWithSalesFrame({
+            lang: input.idiomaDestino === "en" ? "en" : "es",
+            userInput: input.userInput,
+            canonicalReply,
+            answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+            mode: "grounded_catalog_sales",
+            maxIntroLines: 1,
+            maxClosingLines: 1,
+          })
+        : "";
 
       return {
         handled: true,
-        reply,
+        reply: finalReply || canonicalReply,
         source: "catalog_db",
         intent: "precio",
         ctxPatch: {
@@ -898,7 +905,7 @@ export async function runCatalogFastpath(
       );
     }
 
-    const reply = rowsLocalized
+    const canonicalReply = rowsLocalized
       .map((r: any) => {
         const price = Number(r.price_value);
         const priceText =
@@ -913,6 +920,16 @@ export async function runCatalogFastpath(
         return `• ${String(r.option_name || "").trim()}: ${priceText}`;
       })
       .join("\n");
+
+    const reply = await renderCatalogReplyWithSalesFrame({
+      lang: input.idiomaDestino === "en" ? "en" : "es",
+      userInput: input.userInput,
+      canonicalReply,
+      answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+      mode: "grounded_catalog_sales",
+      maxIntroLines: 1,
+      maxClosingLines: 1,
+    });
 
     const namesShown = rowsToRender
       .map((r: any) => String(r.option_name || "").trim())
@@ -937,296 +954,7 @@ export async function runCatalogFastpath(
     };
   }
 
-  console.log("[PRICE][pre-llm-catalog-check]", {
-    userInput: input.userInput,
-    detectedIntent: input.detectedIntent,
-    routeIntent,
-    isCatalogPriceLikeTurn,
-    last_service_id: input.convoCtx?.last_service_id ?? null,
-    last_service_name: input.convoCtx?.last_service_name ?? null,
-    last_variant_name: input.convoCtx?.last_variant_name ?? null,
-    facets: input.facets || {},
-  });
-
-  const systemMsg =
-    input.idiomaDestino === "en"
-      ? `
-You are Aamy, a sales assistant for a multi-tenant SaaS.
-
-You receive:
-- A META section with high-level tags.
-- Optionally a PREVIOUS_PLANS_MENTIONED line.
-- The client's question.
-- A CATALOG text for this business, built from the "services" and "service_variants" tables.
-- Optionally, a BUSINESS_GENERAL_INFO block with general information such as business hours, address, schedules, etc.
-
-META TAGS:
-- QUESTION_TYPE can be "combination_and_price", "price_or_plan", or "other_plans".
-- HAS_MULTI_ACCESS_PLAN is "yes" if the catalog text clearly contains at least one plan/pass/bundle that gives access to multiple services/categories or to "all"/"any"; otherwise "no".
-- PREVIOUS_PLANS_MENTIONED tells you which plans have ALREADY been described. If "none", ignore it; otherwise avoid repeating them unless necessary.
-- ASKS_PRICES / ASKS_SCHEDULES / ASKS_LOCATION / ASKS_AVAILABILITY indicate which information blocks were requested.
-
-GLOBAL RULES:
-- Answer ONLY using information found in the CATALOG and BUSINESS_GENERAL_INFO blocks.
-- Do NOT invent prices, services, bundles or conditions.
-- Be clear, natural, and concise.
-- Intro lines:
-  - You may use up to TWO very short intro lines (greeting + context) ONLY if PREVIOUS_PLANS_MENTIONED is "none".
-  - If PREVIOUS_PLANS_MENTIONED is NOT "none" (follow-up questions), you MUST NOT include any greeting or intro line. Start directly with the list or detail.
-- Apart from those intro lines (when allowed) and an optional closing question/CTA, EVERYTHING must be bullet-listed.
-- NEVER write long paragraphs.
-
-IMPORTANT FORMAT RULE:
-- For each plan/service/product you MUST write EXACTLY ONE line:
-  • “• Plan name: price summary”
-- After the colon ":" you may include ONLY a short price summary:
-  - numbers,
-  - currency symbols,
-  - short terms like “from”, “per”, “USD/month”, “USD for 7 days”,
-  - short conditions like “(autopay, 3 months)”.
-- It is FORBIDDEN to add descriptive text such as: access, unlimited, classes, during, ideal for, includes, suitable for, etc.
-- If the catalog contains a plan name followed by a long description, extract ONLY:
-  - the name,
-  - the price.
-- Benefits/inclusions can ONLY be used later in DETAIL MODE.
-
-QUANTITY RULE (MANDATORY):
-- In LISTING MODE, you MUST show ONLY 3 to 7 options.
-- It is STRICTLY FORBIDDEN to list all catalog items.
-- If the catalog contains more than 7 items, select only the most relevant:
-  - representative price points,
-  - most common plans,
-  - or those best matching the user's intent.
-- NEVER show more than 7 bullets.
-- If a plan has multiple variants (autopay vs monthly, etc.), show ONLY ONE in the initial list. Other variants can only be shown if the client asks about that specific plan.
-
-NEUTRAL LIST INTRO:
-- When listing plans, NEVER say “Main plans”, “Featured plans”, “All plans”, etc.
-- ALWAYS use a neutral phrase indicating these are partial options:
-  - “Some of our plans:”
-  - “Here are a few options:”
-  - “A few choices below:”
-- NEVER imply the list is exhaustive.
-
-HANDLING TIMES & SCHEDULES:
-- Business hours and general schedules appear in BUSINESS_GENERAL_INFO.
-- You may use explicit times from BUSINESS_GENERAL_INFO.
-- DO NOT generalize or invent ranges.
-- If BUSINESS_GENERAL_INFO contains multiple time slots, copy them EXACTLY as bullet points (one per line).
-- If there are NO explicit times, do not mention schedules or hours at all.
-- If CATALOG mentions time restrictions, treat them ONLY as plan-specific restrictions.
-
-HANDLING LOCATION:
-- If ASKS_LOCATION is "yes" and BUSINESS_GENERAL_INFO contains an address/location, include it exactly as provided.
-- Do not invent addresses or directions.
-
-HANDLING AVAILABILITY:
-- If ASKS_AVAILABILITY is "yes" and BUSINESS_GENERAL_INFO contains availability-related information, include it exactly as provided.
-- Do not invent availability.
-
-LISTING MODE:
-- Use LISTING MODE when the user asks generically (“plans?”, “options?”, “plans and schedules?”).
-- In LISTING MODE:
-  - Max 3–7 bullets.
-  - EXACT format: “• Plan name: price summary”.
-  - No descriptions allowed.
-  - Only ONE link, for the most relevant option.
-  - No paragraphs.
-- HANDLING PREVIOUS_PLANS_MENTIONED:
-- If PREVIOUS_PLANS_MENTIONED is not "none", you MUST treat this as a follow-up question like "what other plans do you have?".
-- In that case:
-  - FIRST, try to list ONLY plans/passes/products that are NOT in PREVIOUS_PLANS_MENTIONED.
-  - Select 3–7 items among those “new” plans, following the quantity rules.
-  - If there are fewer than 3 new items available, you may:
-    - list all remaining new ones, and
-    - optionally add 1–2 previously mentioned plans, clearly marking that they were already mentioned.
-- Under no circumstances should you repeat exactly the same list of plans as before when PREVIOUS_PLANS_MENTIONED includes those items.
-- PRICE / PLAN QUESTIONS:
-  - Always list plans in bullet format.
-  - If several options are relevant, compare them using separate bullets.
-  - When you list several options, you MUST order them from the lowest total price to the highest total price.
-  - Plans or products with price 0 must be written as "free".
-
-DETAIL MODE:
-- Use DETAIL MODE only when the user asks about ONE specific plan.
-- STILL use bullets:
-  - one bullet with name + price,
-  - 1–3 sub-bullets with key details.
-- Keep it compact.
-
-COMBINATIONS / BUNDLES:
-- If QUESTION_TYPE is "combination_and_price" AND HAS_MULTI_ACCESS_PLAN is "yes":
-  - You MUST recommend at least one plan that covers multiple services/categories or unlimited usage.
-  - Mention name + price + URL if available.
-- If HAS_MULTI_ACCESS_PLAN is "no":
-  - You may list individual services separately.
-
-OUTPUT LANGUAGE:
-- Answer always in English.
-`.trim()
-      : `
-Eres Aamy, asistente de ventas de una plataforma SaaS multinegocio.
-
-Recibes:
-- Una sección META con etiquetas de alto nivel.
-- Opcionalmente una línea PREVIOUS_PLANS_MENTIONED.
-- La pregunta del cliente.
-- Un texto de CATALOGO del negocio (services + service_variants).
-- Opcionalmente, un bloque INFO_GENERAL_DEL_NEGOCIO con horarios, dirección, etc.
-
-ETIQUETAS META:
-- QUESTION_TYPE puede ser "combination_and_price", "price_or_plan" o "other_plans".
-- HAS_MULTI_ACCESS_PLAN es "yes" si el catálogo contiene un plan/pase que dé acceso a varias categorías o a “todos”; si no, "no".
-- PREVIOUS_PLANS_MENTIONED indica qué planes YA se mencionaron.
-- ASKS_PRICES / ASKS_SCHEDULES / ASKS_LOCATION / ASKS_AVAILABILITY indican qué bloques pidió el cliente.
-
-REGLAS GENERALES:
-- Responde SOLO con la información de CATALOGO e INFO_GENERAL_DEL_NEGOCIO.
-- NO inventes precios, servicios ni condiciones.
-- Líneas de introducción:
-  - Solo puedes usar HASTA DOS líneas muy cortas al inicio (saludo + contexto) cuando PREVIOUS_PLANS_MENTIONED sea "none".
-  - Si PREVIOUS_PLANS_MENTIONED NO es "none", está PROHIBIDO usar saludo o introducción. Debes empezar directamente con la lista o el detalle.
-- Cada una de esas líneas, cuando estén permitidas, debe ser muy corta.
-- PROHIBIDO escribir párrafos largos.
-
-FORMATO DE PLANES OBLIGATORIO:
-- Cada plan/pase/producto debe ir en UNA sola línea:
-  • “• Nombre del plan: resumen de precio”.
-- Después de ":" SOLO puede ir un resumen de precio:
-  - números,
-  - símbolo de moneda,
-  - palabras muy cortas,
-  - condiciones cortas.
-- PROHIBIDO agregar descripciones.
-- Si el nombre del plan viene con descripción, usa SOLO:
-  - nombre,
-  - precio.
-- Los beneficios/inclusiones SOLO se pueden mencionar en MODO DETALLE.
-
-REGLA DE CANTIDAD OBLIGATORIA:
-- En MODO LISTA solo se pueden mostrar entre 3 y 7 opciones.
-- Está TOTALMENTE PROHIBIDO listar TODO el catálogo.
-- Si hay más de 7, elige solo las opciones más relevantes.
-- JAMÁS muestres más de 7 ítems.
-- Si un plan tiene varias variantes, SOLO muestra UNA en la lista inicial.
-
-FRASES NEUTRAS PARA LISTAS:
-- NO digas “Planes principales”, “Planes destacados”, “Todos los planes”, etc.
-- Debes usar frases neutras que indiquen que solo muestras una parte.
-
-CÓMO MANEJAR HORARIOS:
-- Si INFO_GENERAL_DEL_NEGOCIO contiene horarios explícitos:
-  - cópialos EXACTAMENTE como lista, uno por línea.
-- Si NO contiene horarios:
-  - NO menciones horarios ni hagas comentarios genéricos.
-- Si el CATALOGO tiene restricciones horarias, aplícalas SOLO a ese plan.
-
-CÓMO MANEJAR UBICACIÓN:
-- Si ASKS_LOCATION = "yes" y INFO_GENERAL_DEL_NEGOCIO contiene dirección o ubicación, inclúyela exactamente como está.
-- NO inventes dirección ni referencias.
-
-CÓMO MANEJAR DISPONIBILIDAD:
-- Si ASKS_AVAILABILITY = "yes" y INFO_GENERAL_DEL_NEGOCIO contiene disponibilidad, inclúyela exactamente como está.
-- NO inventes disponibilidad.
-
-MODO LISTA:
-- Se usa cuando la pregunta es general.
-- Debes:
-  - mostrar 3–7 opciones,
-  - usar exactamente “• Nombre del plan: precio”,
-  - NO poner descripciones,
-  - NO poner párrafos,
-  - incluir SOLO UN enlace si aplica.
-- MANEJO DE PREVIOUS_PLANS_MENTIONED:
-  - Si PREVIOUS_PLANS_MENTIONED no es "none", debes entender que el cliente está pidiendo seguimiento u otras opciones.
-  - En ese caso:
-    - primero intenta listar SOLO planes nuevos,
-    - si hay pocos, puedes completar con 1–2 ya mencionados.
-- PRECIOS / SERVICIOS:
-  - Siempre usa listas.
-  - Cuando muestres varias opciones, ordénalas de menor a mayor precio total.
-  - Si un plan o producto tiene precio 0, debes escribir "gratis".
-
-MODO DETALLE:
-- Se usa cuando el cliente pide info de un plan específico.
-- Igual en viñetas:
-  - una línea principal con nombre + precio,
-  - 1–3 subviñetas con detalles concretos.
-
-COMBINADOS / PAQUETES:
-- Si QUESTION_TYPE = "combination_and_price" y HAS_MULTI_ACCESS_PLAN = "yes":
-  - debes recomendar un plan que cubra varias categorías o acceso amplio.
-- Si HAS_MULTI_ACCESS_PLAN = "no":
-  - puedes listar servicios individuales.
-
-IDIOMA DE SALIDA:
-- Responde siempre en español.
-`.trim();
-
-  const userMsg =
-    input.idiomaDestino === "en"
-      ? `
-META:
-${metaBlock}
-
-CLIENT QUESTION:
-${input.userInput}
-
-CATALOG:
-${catalogText}${infoGeneralBlock}
-`.trim()
-      : `
-META:
-${metaBlock}
-
-PREGUNTA DEL CLIENTE:
-${input.userInput}
-
-CATALOGO:
-${catalogText}${infoGeneralBlock}
-`.trim();
-
-  const rawReply = await input.answerCatalogQuestionLLM({
-    idiomaDestino: input.idiomaDestino,
-    systemMsg,
-    userMsg,
-  });
-
-  const { finalReply, namesShown } = input.postProcessCatalogReply({
-    reply: rawReply,
-    questionType,
-    prevNames,
-  });
-
-  const cleanedReply = finalReply;
-
-  let localizedReply = cleanedReply;
-
-  if (input.idiomaDestino === "en") {
-    try {
-      localizedReply = await input.traducirTexto(cleanedReply, "en");
-    } catch (e: any) {
-      console.warn(
-        "[FASTPATH][CATALOG] error traduciendo respuesta de catálogo:",
-        e?.message || e
-      );
-    }
-  }
-
-  const ctxPatch: any = {
-    lastResolvedIntent: questionType,
-  };
-
-  if (namesShown.length) {
-    ctxPatch.last_catalog_plans = namesShown;
-    ctxPatch.last_catalog_at = Date.now();
-  }
-
   return {
-    handled: true,
-    reply: localizedReply,
-    source: "catalog_llm",
-    intent: input.intentOut || "catalog",
-    ctxPatch,
+    handled: false,
   };
 }

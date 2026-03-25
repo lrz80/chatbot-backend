@@ -56,6 +56,7 @@ import {
 } from "./helpers/catalogTextMatching";
 import { renderFreeOfferList } from "./helpers/catalogRendering";
 import { normalizeCatalogRole } from "../catalog/normalizeCatalogRole";
+import { renderCatalogReplyWithSalesFrame } from "./helpers/catalogRendering";
 
 type IntentFacets = {
   asksPrices?: boolean;
@@ -420,6 +421,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       catalogReferenceClassification,
       convoCtx,
       renderFreeOfferList,
+      answerCatalogQuestionLLM,
+      renderCatalogReplyWithSalesFrame,
     });
 
     if (freeOfferResult.handled) {

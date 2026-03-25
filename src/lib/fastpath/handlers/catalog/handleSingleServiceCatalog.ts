@@ -14,9 +14,32 @@ export type HandleSingleServiceCatalogInput = {
 
   rows: any[];
 
-  answerWithPromptBase: (input: any) => Promise<{ text: string }>;
-  promptBase: string;
-  canal: any;
+  answerCatalogQuestionLLM: (input: {
+    idiomaDestino: "es" | "en";
+    canonicalReply: string;
+    userInput: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string | null>;
+
+  renderCatalogReplyWithSalesFrame: (args: {
+    lang: any;
+    userInput: string;
+    canonicalReply: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    answerCatalogQuestionLLM: (input: {
+      idiomaDestino: "es" | "en";
+      canonicalReply: string;
+      userInput: string;
+      mode?: "grounded_frame_only" | "grounded_catalog_sales";
+      maxIntroLines?: number;
+      maxClosingLines?: number;
+    }) => Promise<string | null>;
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string>;
+
   catalogRouteIntent?: string | null;
 };
 
@@ -211,7 +234,7 @@ export async function handleSingleServiceCatalog(
         : null,
     });
 
-    // ✅ Si resolvió variante concreta, responder con answerWithPromptBase
+    // ✅ Variante concreta resuelta desde DB -> construir canonicalReply y renderizar con frame comercial grounded
     // usando precio + includes reales desde DB, sin link automático
     // y con guardrail para no alterar la fuente de verdad.
     if (chosenVariant) {
@@ -289,111 +312,14 @@ export async function handleSingleServiceCatalog(
               bulletsText ? `\n\nIncluye:\n${bulletsText}` : ""
             }`;
 
-      const wrapperFallback =
-        input.idiomaDestino === "en"
-          ? {
-              intro: "Perfect 😊",
-              outro: "If you need anything else, just let me know 😊",
-            }
-          : {
-              intro: "Perfecto 😊",
-              outro: "Si necesitas algo más, avísame 😊",
-            };
-
-      const wrapperInstruction =
-        input.idiomaDestino === "en"
-          ? [
-              "You are rendering a WhatsApp sales reply.",
-              "IMPORTANT: You are NOT allowed to rewrite the canonical body.",
-              "You may ONLY produce:",
-              "- a very short natural intro",
-              "- a very short natural outro",
-              "Do NOT change product/service facts.",
-              "Do NOT restate or paraphrase the body.",
-              "Do NOT add prices, conditions, benefits, links, durations, or names not already resolved.",
-              'Return valid JSON with exactly this shape: {"intro":"...","outro":"..."}',
-            ].join("\n")
-          : [
-              "Estás renderizando una respuesta comercial para WhatsApp.",
-              "IMPORTANTE: NO puedes reescribir el cuerpo canónico.",
-              "Solo puedes producir:",
-              "- un intro muy breve y natural",
-              "- un cierre muy breve y natural",
-              "NO cambies hechos del servicio o producto.",
-              "NO repitas ni parafrasees el cuerpo.",
-              "NO agregues precios, condiciones, beneficios, links, duraciones ni nombres no resueltos.",
-              'Devuelve JSON válido con esta forma exacta: {"intro":"...","outro":"..."}',
-            ].join("\n");
-
-      const wrapperContext = [
-        "CANONICAL_BODY_START",
-        canonicalBody,
-        "CANONICAL_BODY_END",
-        "",
-        "REGLAS_CRITICAS:",
-        "- El cuerpo canónico se insertará después por el sistema.",
-        "- No debes reescribirlo.",
-        "- intro: máximo 1 línea.",
-        "- outro: máximo 1 línea.",
-        "- El intro debe sonar natural, cálido y breve.",
-        "- El cierre debe sonar natural y comercial, sin sonar robótico.",
-        "- No hagas preguntas obligatorias de sí/no.",
-        "- No menciones links en intro ni outro.",
-        "- No uses saludo tipo 'Hola' si la conversación ya está en curso.",
-        "- No digas 'te recomiendo' si el usuario ya eligió una opción concreta.",
-        "- El intro debe funcionar como confirmación breve de la selección, no como nueva recomendación.",
-      ].join("\n");
-
-      console.log("[PRICE][single][LLM_RENDER_WRAPPER_ONLY]", {
-        targetServiceId,
-        targetServiceName,
-        variantName,
-        priceNum,
-        resolvedCurrency,
-        hasDetailText: !!serviceDescription,
-      });
-
-      const wrapperReply = await input.answerWithPromptBase({
-        tenantId: input.tenantId,
-        promptBase: `${input.promptBase}\n\n${wrapperInstruction}`,
-        userInput:
-          input.idiomaDestino === "en"
-            ? "Render only a short confirmation intro and a soft commercial closing."
-            : "Renderiza solo un intro breve de confirmación y un cierre comercial suave.",
-        history: [],
-        idiomaDestino: input.idiomaDestino,
-        canal: input.canal,
-        maxLines: 4,
-        fallbackText: JSON.stringify(wrapperFallback),
-        extraContext: wrapperContext,
-      });
-
-      let intro = wrapperFallback.intro;
-      let outro = wrapperFallback.outro;
-
-      try {
-        const parsed = JSON.parse(String(wrapperReply.text || "").trim());
-
-        if (parsed && typeof parsed === "object") {
-          const parsedIntro = String(parsed.intro || "").trim();
-          const parsedOutro = String(parsed.outro || "").trim();
-
-          if (parsedIntro) intro = parsedIntro;
-          if (parsedOutro) outro = parsedOutro;
-        }
-      } catch {
-        // fallback silencioso
-      }
-
-      const finalReply = [intro, canonicalBody, outro]
-        .filter((x) => String(x || "").trim().length > 0)
-        .join("\n\n");
-
-      console.log("[PRICE][single][WRAPPER_RESULT]", {
-        intro,
-        outro,
-        canonicalBodyPreview: canonicalBody.slice(0, 220),
-        finalReplyPreview: finalReply.slice(0, 260),
+      const finalReply = await input.renderCatalogReplyWithSalesFrame({
+        lang: input.idiomaDestino === "en" ? "en" : "es",
+        userInput: input.userInput,
+        canonicalReply: canonicalBody,
+        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+        mode: "grounded_catalog_sales",
+        maxIntroLines: 1,
+        maxClosingLines: 1,
       });
 
       return {
@@ -459,19 +385,21 @@ export async function handleSingleServiceCatalog(
         return `• ${idx + 1}) ${variantName}: ${priceText}`;
       });
 
-      const header =
-        input.idiomaDestino === "en"
-          ? `${targetServiceName} has these options:`
-          : `${targetServiceName} tiene estas opciones:`;
+      const canonicalReply = lines.join("\n");
 
-      const ask =
-        input.idiomaDestino === "en"
-          ? "Which option are you interested in? You can reply with the number or the name."
-          : "¿Cuál opción te interesa? Puedes responder con el número o el nombre.";
+      const finalReply = await input.renderCatalogReplyWithSalesFrame({
+        lang: input.idiomaDestino === "en" ? "en" : "es",
+        userInput: input.userInput,
+        canonicalReply,
+        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+        mode: "grounded_catalog_sales",
+        maxIntroLines: 1,
+        maxClosingLines: 1,
+      });
 
       return {
         handled: true,
-        reply: `${header}\n\n${lines.join("\n")}\n\n${ask}`,
+        reply: finalReply,
         source: "price_disambiguation_db",
         intent: "precio",
         ctxPatch: {
@@ -510,7 +438,7 @@ export async function handleSingleServiceCatalog(
       };
     }
 
-    // ✅ Si resolvió servicio, pero no variante exacta, responder natural usando DB + answerWithPromptBase
+    // ✅ Si resolvió servicio, pero no variante exacta, responder natural usando DB + answerCatalogQuestionLLM
     const matchedRow = input.rows.find(
       (r) => String(r.service_id || "") === targetServiceId
     );
@@ -518,50 +446,24 @@ export async function handleSingleServiceCatalog(
     const hasServicePriceRow = !!matchedRow;
 
     if (pricedVariants.length === 0 && !hasServicePriceRow) {
-      console.log("[PRICE][single][LLM_RENDER] no_price_policy_fallback", {
-        targetServiceId,
-        targetServiceName,
-      });
+      const canonicalReply =
+        input.idiomaDestino === "en"
+          ? `• ${targetServiceName}\n• Price: not available in the catalog`
+          : `• ${targetServiceName}\n• Precio: no disponible en el catálogo`;
 
-      const extraContext = [
-        "PRECIO_DB_RESUELTO:",
-        `- service_name: ${targetServiceName}`,
-        `- pricing_mode: no_explicit_price`,
-        `- source_of_truth: database`,
-        "",
-        "REGLAS_CRITICAS_DEL_TURNO:",
-        "- El servicio fue resuelto correctamente desde DB.",
-        "- Este servicio NO tiene precio explícito en variantes ni en price_base.",
-        "- NO puedes inventar montos, rangos, estimados, visitas, evaluaciones ni cotizaciones si no están explícitamente configurados.",
-        "- NO puedes cambiar a otros servicios del catálogo.",
-        "- Debes responder SOLO sobre este servicio.",
-        "- Si no hay precio disponible, dilo de forma natural y breve sin asumir la causa.",
-        "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
-        "",
-        "CONTINUIDAD_CONVERSACIONAL:",
-        "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
-        "- Debes guiar al usuario hacia el siguiente paso (más información, reserva, o aclaración).",
-        "- Evita respuestas que solo informen el precio sin invitar a continuar.",
-      ].join("\n");
-
-      const aiNoPricePolicyReply = await input.answerWithPromptBase({
-        tenantId: input.tenantId,
-        promptBase: input.promptBase,
+      const finalReply = await input.renderCatalogReplyWithSalesFrame({
+        lang: input.idiomaDestino === "en" ? "en" : "es",
         userInput: input.userInput,
-        history: [],
-        idiomaDestino: input.idiomaDestino,
-        canal: input.canal,
-        maxLines: 6,
-        fallbackText:
-          input.idiomaDestino === "en"
-            ? `We do offer ${targetServiceName}, but I don't currently have a price available for that service.`
-            : `Sí ofrecemos ${targetServiceName}, pero ahora mismo no tengo un precio disponible para ese servicio.`,
-        extraContext,
+        canonicalReply,
+        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+        mode: "grounded_frame_only",
+        maxIntroLines: 1,
+        maxClosingLines: 1,
       });
 
       return {
         handled: true,
-        reply: aiNoPricePolicyReply.text,
+        reply: finalReply,
         source: "price_fastpath_db_no_price_llm_render",
         intent: "precio",
         ctxPatch: {
@@ -582,49 +484,24 @@ export async function handleSingleServiceCatalog(
         Number.isFinite(min) && Number.isFinite(max);
 
       if (!hasExplicitServicePrice) {
-        console.log("[PRICE][single][LLM_RENDER] no_explicit_price", {
-          targetServiceId,
-          targetServiceName,
-        });
+        const canonicalReply =
+          input.idiomaDestino === "en"
+            ? `• ${targetServiceName}\n• Price: not explicitly configured`
+            : `• ${targetServiceName}\n• Precio: no configurado explícitamente`;
 
-        const extraContext = [
-          "PRECIO_DB_RESUELTO:",
-          `- service_name: ${targetServiceName}`,
-          `- pricing_mode: no_explicit_price`,
-          `- source_of_truth: database`,
-          "",
-          "REGLAS_CRITICAS_DEL_TURNO:",
-          "- El servicio sí existe en DB.",
-          "- En este turno NO existe un precio explícito utilizable para este servicio.",
-          "- NO puedes inventar montos, rangos ni precios aproximados.",
-          "- NO puedes mencionar otros servicios como alternativa de precio, a menos que el usuario los pida.",
-          "- Responde de forma natural, útil y comercial, manteniéndote en el servicio resuelto.",
-          "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
-          "",
-          "CONTINUIDAD_CONVERSACIONAL:",
-          "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
-          "- Debes guiar al usuario hacia el siguiente paso (más información, reserva, o aclaración).",
-          "- Evita respuestas que solo informen el precio sin invitar a continuar.",
-        ].join("\n");
-
-        const aiNoPriceReply = await input.answerWithPromptBase({
-          tenantId: input.tenantId,
-          promptBase: input.promptBase,
+        const finalReply = await input.renderCatalogReplyWithSalesFrame({
+          lang: input.idiomaDestino === "en" ? "en" : "es",
           userInput: input.userInput,
-          history: [],
-          idiomaDestino: input.idiomaDestino,
-          canal: input.canal,
-          maxLines: 6,
-          fallbackText:
-            input.idiomaDestino === "en"
-              ? `We do offer ${targetServiceName}, but I don't currently have an explicit price configured for that service.`
-              : `Sí ofrecemos ${targetServiceName}, pero ahora mismo no tengo un precio explícito configurado para ese servicio.`,
-          extraContext,
+          canonicalReply,
+          answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+          mode: "grounded_frame_only",
+          maxIntroLines: 1,
+          maxClosingLines: 1,
         });
 
         return {
           handled: true,
-          reply: aiNoPriceReply.text,
+          reply: finalReply,
           source: "price_fastpath_db_no_price_llm_render",
           intent: "precio",
           ctxPatch: {
@@ -649,46 +526,21 @@ export async function handleSingleServiceCatalog(
         max,
       });
 
-      const extraContext = [
-        "PRECIO_DB_RESUELTO:",
-        `- service_name: ${targetServiceName}`,
-        `- pricing_mode: ${min === max ? "fixed" : "from_price"}`,
-        `- min_price: ${min ?? ""}`,
-        `- max_price: ${max ?? ""}`,
-        `- source_of_truth: database`,
-        "",
-        "REGLAS_CRITICAS_DEL_TURNO:",
-        "- Debes responder usando EXCLUSIVAMENTE estos datos resueltos desde DB.",
-        "- NO puedes inventar otros precios, rangos, variantes ni servicios alternativos.",
-        "- NO puedes mezclar este servicio con otros del catálogo.",
-        "- Si mencionas el precio, debe corresponder únicamente al servicio resuelto.",
-        "- Redacta de forma natural, humana, breve y comercial para WhatsApp.",
-        "- Si el usuario ya está en una conversación activa, NO empieces con saludo como 'Hola'. Ve directo al punto.",
-        "",
-        "CONTINUIDAD_CONVERSACIONAL:",
-        "- La respuesta DEBE terminar con una pregunta o invitación a continuar la conversación.",
-        "- Debes guiar al usuario hacia el siguiente paso (más información, reserva, o aclaración).",
-        "- Evita respuestas que solo informen el precio sin invitar a continuar.",
-      ].join("\n");
+      const canonicalReply = `• ${targetServiceName}: ${priceText}`;
 
-      const aiServicePriceReply = await input.answerWithPromptBase({
-        tenantId: input.tenantId,
-        promptBase: input.promptBase,
+      const finalReply = await input.renderCatalogReplyWithSalesFrame({
+        lang: input.idiomaDestino === "en" ? "en" : "es",
         userInput: input.userInput,
-        history: [],
-        idiomaDestino: input.idiomaDestino,
-        canal: input.canal,
-        maxLines: 6,
-        fallbackText:
-          input.idiomaDestino === "en"
-            ? `${targetServiceName} costs ${priceText}.`
-            : `${targetServiceName} cuesta ${priceText}.`,
-        extraContext,
+        canonicalReply,
+        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+        mode: "grounded_catalog_sales",
+        maxIntroLines: 1,
+        maxClosingLines: 1,
       });
 
       return {
         handled: true,
-        reply: aiServicePriceReply.text,
+        reply: finalReply,
         source: "price_fastpath_db_llm_render",
         intent: "precio",
         ctxPatch: {

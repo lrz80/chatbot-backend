@@ -23,8 +23,43 @@ type HandleFreeOfferInput = {
   convoCtx: Partial<FastpathCtx> | null | undefined;
   renderFreeOfferList: (args: {
     lang: Lang;
+    userInput: string;
     items: Array<{ name: string }>;
-  }) => string;
+    answerCatalogQuestionLLM: (input: {
+      idiomaDestino: "es" | "en";
+      canonicalReply: string;
+      userInput: string;
+      mode?: "grounded_frame_only" | "grounded_catalog_sales";
+      maxIntroLines?: number;
+      maxClosingLines?: number;
+    }) => Promise<string | null>;
+  }) => Promise<string>;
+
+  answerCatalogQuestionLLM: (input: {
+    idiomaDestino: "es" | "en";
+    canonicalReply: string;
+    userInput: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string | null>;
+
+  renderCatalogReplyWithSalesFrame: (args: {
+    lang: Lang;
+    userInput: string;
+    canonicalReply: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    answerCatalogQuestionLLM: (input: {
+      idiomaDestino: "es" | "en";
+      canonicalReply: string;
+      userInput: string;
+      mode?: "grounded_frame_only" | "grounded_catalog_sales";
+      maxIntroLines?: number;
+      maxClosingLines?: number;
+    }) => Promise<string | null>;
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string>;
 };
 
 type HandleFreeOfferResult =
@@ -104,16 +139,6 @@ async function loadFreeOfferItems(
     .filter((x) => x.name && x.url);
 }
 
-function buildNoItemsReply(idiomaDestino: Lang): string {
-  return idiomaDestino === "en"
-    ? "Yes — we can help with a free/trial option 😊 What exactly are you looking for?"
-    : "Sí — podemos ayudarte con una opción gratis/de prueba 😊 ¿Qué estás buscando exactamente?";
-}
-
-function buildSingleItemReply(item: FreeOfferItem): string {
-  return `${item.name}\n${item.url}`;
-}
-
 export async function handleFreeOffer(
   input: HandleFreeOfferInput
 ): Promise<HandleFreeOfferResult> {
@@ -124,6 +149,8 @@ export async function handleFreeOffer(
     detectedIntent,
     catalogReferenceClassification,
     renderFreeOfferList,
+    answerCatalogQuestionLLM,
+    renderCatalogReplyWithSalesFrame,
   } = input;
 
   const shouldHandle = wantsExplicitFreeOfferTurn({
@@ -138,9 +165,25 @@ export async function handleFreeOffer(
   const items = await loadFreeOfferItems(pool, tenantId);
 
   if (!items.length) {
+    const canonicalReply =
+      idiomaDestino === "en"
+        ? "• Free/trial option: not currently available in the catalog"
+        : "• Opción gratis/de prueba: no disponible actualmente en el catálogo";
+
+    const finalReply = await renderCatalogReplyWithSalesFrame({
+      lang: idiomaDestino,
+      userInput:
+        detectedIntent === "free_offer" ? "free offer" : "clase gratis / prueba",
+      canonicalReply,
+      answerCatalogQuestionLLM,
+      mode: "grounded_frame_only",
+      maxIntroLines: 1,
+      maxClosingLines: 1,
+    });
+
     return {
       handled: true,
-      reply: buildNoItemsReply(idiomaDestino),
+      reply: finalReply,
       source: "service_list_db",
       intent: "free_offer",
     };
@@ -149,9 +192,24 @@ export async function handleFreeOffer(
   if (items.length === 1) {
     const one = items[0];
 
+    const canonicalReply = [`• ${one.name}`, one.url ? `• ${one.url}` : ""]
+      .filter(Boolean)
+      .join("\n");
+
+    const finalReply = await renderCatalogReplyWithSalesFrame({
+      lang: idiomaDestino,
+      userInput:
+        detectedIntent === "free_offer" ? "free offer" : "clase gratis / prueba",
+      canonicalReply,
+      answerCatalogQuestionLLM,
+      mode: "grounded_catalog_sales",
+      maxIntroLines: 1,
+      maxClosingLines: 1,
+    });
+
     return {
       handled: true,
-      reply: buildSingleItemReply(one),
+      reply: finalReply,
       source: "service_list_db",
       intent: "free_offer",
       ctxPatch: {
@@ -164,9 +222,12 @@ export async function handleFreeOffer(
 
   const now = Date.now();
 
-  const reply = renderFreeOfferList({
+  const reply = await renderFreeOfferList({
     lang: idiomaDestino,
+    userInput:
+      detectedIntent === "free_offer" ? "free offer" : "clase gratis / prueba",
     items: items.map((x) => ({ name: x.name })),
+    answerCatalogQuestionLLM,
   });
 
   return {

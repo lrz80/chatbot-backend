@@ -1,26 +1,81 @@
 // src/lib/fastpath/helpers/catalogRendering.ts
 import type { Lang } from "../../channels/engine/clients/clientDb";
 
-export function renderFreeOfferList(args: {
+export type CatalogRenderingMode =
+  | "grounded_frame_only"
+  | "grounded_catalog_sales";
+
+export async function renderCatalogReplyWithSalesFrame(args: {
   lang: Lang;
+  userInput: string;
+  canonicalReply: string;
+  mode?: CatalogRenderingMode;
+  answerCatalogQuestionLLM: (input: {
+    idiomaDestino: "es" | "en";
+    canonicalReply: string;
+    userInput: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string | null>;
+  maxIntroLines?: number;
+  maxClosingLines?: number;
+}): Promise<string> {
+  const {
+    lang,
+    userInput,
+    canonicalReply,
+    answerCatalogQuestionLLM,
+    mode = "grounded_catalog_sales",
+    maxIntroLines = 1,
+    maxClosingLines = 1,
+  } = args;
+
+  const canonical = String(canonicalReply || "").trim();
+  if (!canonical) return "";
+
+  const llmReply = await answerCatalogQuestionLLM({
+    idiomaDestino: lang === "en" ? "en" : "es",
+    canonicalReply: canonical,
+    userInput: String(userInput || "").trim(),
+    mode,
+    maxIntroLines,
+    maxClosingLines,
+  });
+
+  return String(llmReply || canonical).trim();
+}
+
+export async function renderFreeOfferList(args: {
+  lang: Lang;
+  userInput: string;
   items: { name: string }[];
-}) {
-  const { lang, items } = args;
+  answerCatalogQuestionLLM: (input: {
+    idiomaDestino: "es" | "en";
+    canonicalReply: string;
+    userInput: string;
+    mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    maxIntroLines?: number;
+    maxClosingLines?: number;
+  }) => Promise<string | null>;
+}): Promise<string> {
+  const { lang, userInput, items, answerCatalogQuestionLLM } = args;
 
-  const intro =
-    lang === "en"
-      ? "Sure! Here are the free/trial options 😊"
-      : "¡Claro! Aquí tienes las opciones gratis/de prueba 😊";
-
-  const ask =
-    lang === "en"
-      ? "Which one are you interested in? Reply with the number or the name."
-      : "¿Cuál te interesa? Responde con el número o el nombre.";
-
-  const listText = items
+  const canonicalReply = items
     .slice(0, 6)
-    .map((x, i) => `• ${i + 1}) ${x.name}`)
+    .map((x, i) => `• ${i + 1}) ${String(x.name || "").trim()}`)
+    .filter(Boolean)
     .join("\n");
 
-  return `${intro}\n\n${listText}\n\n${ask}`;
+  if (!canonicalReply) return "";
+
+  return renderCatalogReplyWithSalesFrame({
+    lang,
+    userInput,
+    canonicalReply,
+    answerCatalogQuestionLLM,
+    mode: "grounded_catalog_sales",
+    maxIntroLines: 1,
+    maxClosingLines: 1,
+  });
 }
