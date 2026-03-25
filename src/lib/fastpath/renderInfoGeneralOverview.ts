@@ -1,16 +1,25 @@
 import type { Pool } from "pg";
 import type { Lang } from "../channels/engine/clients/clientDb";
 
-function normCat(s: unknown) {
-  return String(s || "")
+function normalizeValue(value: unknown): string {
+  return String(value || "")
     .trim()
     .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/-/g, " ");
+    .replace(/\s+/g, " ");
 }
 
-function unique(arr: string[]) {
-  return Array.from(new Set(arr));
+function unique(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function isAddonRole(value: unknown): boolean {
+  const v = normalizeValue(value);
+  return v === "addon" || v === "add on" || v === "add-on";
+}
+
+function isAddonCategory(value: unknown): boolean {
+  const v = normalizeValue(value);
+  return v === "addon" || v === "add on" || v === "add-on";
 }
 
 export async function renderInfoGeneralOverview(args: {
@@ -20,73 +29,46 @@ export async function renderInfoGeneralOverview(args: {
 }): Promise<string> {
   const { pool, tenantId, lang } = args;
 
-  // 1️⃣ Tenant name
-  const tRes = await pool.query(
-    `SELECT name
-     FROM tenants
-     WHERE id = $1
-     LIMIT 1`,
-    [tenantId]
-  );
-
-  const tenantName = String(tRes.rows?.[0]?.name || "").trim();
-
-  // 2️⃣ Servicios activos
   const sRes = await pool.query(
-    `SELECT name, category
-     FROM services
-     WHERE tenant_id = $1
-       AND (active IS NULL OR active = TRUE)
-     ORDER BY name ASC
-     LIMIT 200`,
+    `
+    SELECT
+      s.name,
+      s.category,
+      s.catalog_role,
+      s.parent_service_id
+    FROM services s
+    WHERE s.tenant_id = $1
+      AND (s.active IS NULL OR s.active = TRUE)
+      AND s.name IS NOT NULL
+    ORDER BY s.created_at ASC, s.name ASC
+    LIMIT 200
+    `,
     [tenantId]
   );
 
   const rows = (sRes.rows || [])
     .map((r) => ({
       name: String(r.name || "").trim(),
-      category: normCat((r as any).category),
+      category: normalizeValue((r as any).category),
+      catalogRole: normalizeValue((r as any).catalog_role),
+      parentServiceId: (r as any).parent_service_id
+        ? String((r as any).parent_service_id)
+        : null,
     }))
     .filter((r) => r.name);
-
-  // 3️⃣ Filtros genéricos
-  const isPlan = (n: string) =>
-    /\b(plan|membership|membres[ií]a|suscripci[oó]n|subscription)\b/i.test(n);
-
-  const isPackage = (n: string) =>
-    /\b(paquete|pack|bundle)\b/i.test(n) || /\b\d+\s*clases?\b/i.test(n);
-
-  const isTrial = (n: string) =>
-    /\b(prueba|trial|demo|gratis|free)\b/i.test(n);
-
-  const isSingleClass = (n: string) =>
-    /\b(clase\s+u[nñ]ica|single\s+class|drop[-\s]?in)\b/i.test(n);
-
-  const isVariantNoise = (n: string) =>
-    /\b(autopay|por\s+mes|mensual|per\s+month|monthly)\b/i.test(n);
-
-  const isAddonCategory = (cat: string) =>
-    cat === "add on" || cat === "addon";
 
   const mainServices = unique(
     rows
       .filter((r) => {
+        if (r.parentServiceId) return false;
+        if (isAddonRole(r.catalogRole)) return false;
         if (isAddonCategory(r.category)) return false;
-
-        const n = r.name;
-
-        if (isPlan(n)) return false;
-        if (isPackage(n)) return false;
-        if (isTrial(n)) return false;
-        if (isSingleClass(n)) return false;
-        if (isVariantNoise(n)) return false;
-
         return true;
       })
       .map((r) => r.name)
   );
 
-    const count = mainServices.length;
+  const count = mainServices.length;
 
   if (count === 0) {
     return lang === "en"
@@ -98,6 +80,8 @@ export async function renderInfoGeneralOverview(args: {
     return `• ${mainServices[0]}`;
   }
 
-  const list = mainServices.slice(0, 7).map((s) => `• ${s}`).join("\n");
-  return list;
+  return mainServices
+    .slice(0, 7)
+    .map((name) => `• ${name}`)
+    .join("\n");
 }
