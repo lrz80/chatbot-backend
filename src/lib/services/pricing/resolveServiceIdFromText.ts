@@ -22,11 +22,17 @@ type Candidate = {
   tipo: string;
   catalogRole: string;
   parentServiceId: string | null;
+
+  // evidencia resolutiva
   serviceNameTokens: string[];
-  supportTokens: string[];
-  catalogTokens: string[];
+  variantNameTokens: string[];
+
+  // evidencia estructural secundaria
   categoryTokens: string[];
   tipoTokens: string[];
+
+  // evidencia de soporte (nunca resuelve sola)
+  supportTokens: string[];
 };
 
 const FUNCTION_WORDS = new Set([
@@ -232,7 +238,13 @@ function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
   const df = new Map<string, number>();
 
   for (const cand of candidates) {
-    const seen = new Set([...(cand.catalogTokens || [])]);
+    const seen = new Set([
+      ...(cand.serviceNameTokens || []),
+      ...(cand.variantNameTokens || []),
+      ...(cand.categoryTokens || []),
+      ...(cand.tipoTokens || []),
+    ]);
+
     for (const t of seen) {
       df.set(t, (df.get(t) || 0) + 1);
     }
@@ -437,11 +449,14 @@ export async function resolveServiceCandidatesFromText(
       tipo: string | null;
       catalogRole: string | null;
       parentServiceId: string | null;
+
       serviceNameTokenSet: Set<string>;
-      supportTokenSet: Set<string>;
-      catalogTokenSet: Set<string>;
+      variantNameTokenSet: Set<string>;
+
       categoryTokenSet: Set<string>;
       tipoTokenSet: Set<string>;
+
+      supportTokenSet: Set<string>;
     }
   >();
 
@@ -459,11 +474,14 @@ export async function resolveServiceCandidatesFromText(
         tipo: String(r.service_tipo || "").trim(),
         catalogRole: String(r.service_catalog_role || "").trim(),
         parentServiceId: r.parent_service_id ? String(r.parent_service_id) : null,
+
         serviceNameTokenSet: new Set<string>(),
-        supportTokenSet: new Set<string>(),
-        catalogTokenSet: new Set<string>(),
+        variantNameTokenSet: new Set<string>(),
+
         categoryTokenSet: new Set<string>(),
         tipoTokenSet: new Set<string>(),
+
+        supportTokenSet: new Set<string>(),
       };
       grouped.set(serviceId, entry);
     }
@@ -477,22 +495,14 @@ export async function resolveServiceCandidatesFromText(
     const sizeTokenTokens = tokenize(String(r.size_token || ""));
 
     for (const tk of serviceNameTokens) entry.serviceNameTokenSet.add(tk);
+    for (const tk of variantNameTokens) entry.variantNameTokenSet.add(tk);
 
-    for (const tk of serviceDescTokens) entry.supportTokenSet.add(tk);
-    for (const tk of variantNameTokens) entry.supportTokenSet.add(tk);
-    for (const tk of variantDescTokens) entry.supportTokenSet.add(tk);
-
-    for (const tk of serviceNameTokens) entry.catalogTokenSet.add(tk);
-    for (const tk of serviceDescTokens) entry.catalogTokenSet.add(tk);
-    for (const tk of variantNameTokens) entry.catalogTokenSet.add(tk);
-    for (const tk of variantDescTokens) entry.catalogTokenSet.add(tk);
-
-    for (const tk of categoryTokens) entry.catalogTokenSet.add(tk);
-    for (const tk of tipoTokens) entry.catalogTokenSet.add(tk);
-    for (const tk of sizeTokenTokens) entry.catalogTokenSet.add(tk);
     for (const tk of categoryTokens) entry.categoryTokenSet.add(tk);
     for (const tk of tipoTokens) entry.tipoTokenSet.add(tk);
 
+    // soporte: nunca debe resolver por sí solo
+    for (const tk of serviceDescTokens) entry.supportTokenSet.add(tk);
+    for (const tk of variantDescTokens) entry.supportTokenSet.add(tk);
     for (const tk of sizeTokenTokens) entry.supportTokenSet.add(tk);
   }
 
@@ -503,11 +513,14 @@ export async function resolveServiceCandidatesFromText(
     tipo: g.tipo || "",
     catalogRole: g.catalogRole || "",
     parentServiceId: g.parentServiceId,
+
     serviceNameTokens: Array.from(g.serviceNameTokenSet),
-    supportTokens: Array.from(g.supportTokenSet),
-    catalogTokens: Array.from(g.catalogTokenSet),
+    variantNameTokens: Array.from(g.variantNameTokenSet),
+
     categoryTokens: Array.from(g.categoryTokenSet),
     tipoTokens: Array.from(g.tipoTokenSet),
+
+    supportTokens: Array.from(g.supportTokenSet),
   }));
 
   if (!candidates.length) {
@@ -528,13 +541,19 @@ export async function resolveServiceCandidatesFromText(
     cand: Candidate;
     score: number;
     exactNameHits: number;
-    exactCatalogHits: number;
+    exactVariantHits: number;
+
     overlapNameTokens: string[];
-    overlapCatalogTokens: string[];
+    overlapVariantTokens: string[];
+    overlapCategoryTokens: string[];
+    overlapTipoTokens: string[];
     overlapSupportTokens: string[];
+
     allOverlapTokens: string[];
     dominantOverlapTokens: string[];
     dominantOverlapCount: number;
+
+    hasResolvableEntityEvidence: boolean;
   };
 
   const scored: Scored[] = candidates.map((cand) => {
@@ -545,16 +564,9 @@ export async function resolveServiceCandidatesFromText(
       totalCandidates
     );
 
-    const supportScore = scoreTokensWeighted(
+    const variantScore = scoreTokensWeighted(
       queryTokens,
-      cand.supportTokens,
-      dfMap,
-      totalCandidates
-    );
-
-    const catalogScore = scoreTokensWeighted(
-      queryTokens,
-      cand.catalogTokens,
+      cand.variantNameTokens,
       dfMap,
       totalCandidates
     );
@@ -573,31 +585,56 @@ export async function resolveServiceCandidatesFromText(
       totalCandidates
     );
 
+    const supportScore = scoreTokensWeighted(
+      queryTokens,
+      cand.supportTokens,
+      dfMap,
+      totalCandidates
+    );
+
     const exactNameHits = countExactHits(queryTokens, cand.serviceNameTokens);
-    const exactCatalogHits = countExactHits(queryTokens, cand.catalogTokens);
+    const exactVariantHits = countExactHits(queryTokens, cand.variantNameTokens);
 
     const overlapNameTokens = uniqueOverlapTokens(queryTokens, cand.serviceNameTokens);
-    const overlapCatalogTokens = uniqueOverlapTokens(queryTokens, cand.catalogTokens);
+    const overlapVariantTokens = uniqueOverlapTokens(queryTokens, cand.variantNameTokens);
+    const overlapCategoryTokens = uniqueOverlapTokens(queryTokens, cand.categoryTokens);
+    const overlapTipoTokens = uniqueOverlapTokens(queryTokens, cand.tipoTokens);
     const overlapSupportTokens = uniqueOverlapTokens(queryTokens, cand.supportTokens);
 
-    const allOverlapTokens = uniqueUnion([
+    const resolvableOverlapTokens = uniqueUnion([
       overlapNameTokens,
-      overlapCatalogTokens,
+      overlapVariantTokens,
+    ]);
+
+    const structuralOverlapTokens = uniqueUnion([
+      overlapCategoryTokens,
+      overlapTipoTokens,
+    ]);
+
+    const allOverlapTokens = uniqueUnion([
+      resolvableOverlapTokens,
+      structuralOverlapTokens,
       overlapSupportTokens,
     ]);
+
+    const hasResolvableEntityEvidence =
+      overlapNameTokens.length > 0 || overlapVariantTokens.length > 0;
 
     if (allOverlapTokens.length === 0) {
       return {
         cand,
         score: 0,
         exactNameHits,
-        exactCatalogHits,
+        exactVariantHits,
         overlapNameTokens,
-        overlapCatalogTokens,
+        overlapVariantTokens,
+        overlapCategoryTokens,
+        overlapTipoTokens,
         overlapSupportTokens,
         allOverlapTokens,
         dominantOverlapTokens: [],
         dominantOverlapCount: 0,
+        hasResolvableEntityEvidence,
       };
     }
 
@@ -618,28 +655,28 @@ export async function resolveServiceCandidatesFromText(
 
     let score = 0;
 
-    // texto
-    score += nameScore * 0.28;
-    score += supportScore * 0.32;
-    score += catalogScore * 0.18;
+    // evidencia resolutiva principal
+    score += nameScore * 0.42;
+    score += variantScore * 0.34;
 
-    // estructura del catálogo
-    score += categoryScore * 0.12;
-    score += tipoScore * 0.10;
+    // evidencia estructural secundaria
+    score += categoryScore * 0.10;
+    score += tipoScore * 0.08;
 
-    // evidencia múltiple
+    // soporte solo ayuda si ya existe evidencia resolutiva real
+    if (hasResolvableEntityEvidence) {
+      score += supportScore * 0.06;
+    }
+
     if (exactNameHits >= 2) score += 0.08;
-    if (exactCatalogHits >= 2) score += 0.08;
+    if (exactVariantHits >= 2) score += 0.08;
 
-    // cobertura real del query usando todas las fuentes útiles
-    score += queryCoverage * 0.12;
+    score += queryCoverage * 0.10;
 
-    // bonificación por tokens dominantes del turno
     if (dominantOverlapCount > 0) {
       score += Math.min(0.18, dominantOverlapCount * 0.12);
     }
 
-    // penalización si solo matchea tokens genéricos y no matchea ninguno dominante
     if (dominantQueryTokens.length > 0 && dominantOverlapCount === 0 && allOverlapTokens.length > 0) {
       score -= 0.14;
     }
@@ -680,13 +717,16 @@ export async function resolveServiceCandidatesFromText(
       cand,
       score,
       exactNameHits,
-      exactCatalogHits,
+      exactVariantHits,
       overlapNameTokens,
-      overlapCatalogTokens,
+      overlapVariantTokens,
+      overlapCategoryTokens,
+      overlapTipoTokens,
       overlapSupportTokens,
       allOverlapTokens,
       dominantOverlapTokens,
       dominantOverlapCount,
+      hasResolvableEntityEvidence,
     };
   });
 
@@ -709,9 +749,11 @@ export async function resolveServiceCandidatesFromText(
           catalogRole: best.cand.catalogRole,
           parentServiceId: best.cand.parentServiceId,
           exactNameHits: best.exactNameHits,
-          exactCatalogHits: best.exactCatalogHits,
+          exactVariantHits: best.exactVariantHits,
+          overlapVariantTokens: best.overlapVariantTokens,
+          overlapCategoryTokens: best.overlapCategoryTokens,
+          overlapTipoTokens: best.overlapTipoTokens,
           overlapNameTokens: best.overlapNameTokens,
-          overlapCatalogTokens: best.overlapCatalogTokens,
           overlapSupportTokens: best.overlapSupportTokens,
           allOverlapTokens: best.allOverlapTokens,
           dominantQueryTokens,
@@ -728,9 +770,11 @@ export async function resolveServiceCandidatesFromText(
           tipo: second.cand.tipo,
           catalogRole: second.cand.catalogRole,
           exactNameHits: second.exactNameHits,
-          exactCatalogHits: second.exactCatalogHits,
+          exactVariantHits: second.exactVariantHits,
+          overlapVariantTokens: second.overlapVariantTokens,
+          overlapCategoryTokens: second.overlapCategoryTokens,
+          overlapTipoTokens: second.overlapTipoTokens,
           overlapNameTokens: second.overlapNameTokens,
-          overlapCatalogTokens: second.overlapCatalogTokens,
           overlapSupportTokens: second.overlapSupportTokens,
           allOverlapTokens: second.allOverlapTokens,
           dominantQueryTokens,
@@ -757,7 +801,12 @@ export async function resolveServiceCandidatesFromText(
     const token = queryTokens[0];
 
     const withToken = scored.filter((s) => {
-      const allTokens = [...(s.cand.catalogTokens || [])];
+      const allTokens = [
+        ...(s.cand.serviceNameTokens || []),
+        ...(s.cand.variantNameTokens || []),
+        ...(s.cand.categoryTokens || []),
+        ...(s.cand.tipoTokens || []),
+      ];
       return s.score > 0 && allTokens.includes(token);
     });
 
@@ -833,19 +882,25 @@ export async function resolveServiceCandidatesFromText(
 
   const bestEvidenceCount = Math.max(
     best?.exactNameHits || 0,
-    best?.exactCatalogHits || 0
+    best?.exactVariantHits || 0
   );
 
   const secondScore = second?.score || 0;
   const marginVsSecond = best ? best.score - secondScore : 0;
 
-  const bestDiscriminativeOverlapCount =
-    best?.allOverlapTokens.filter((t) => discriminativeQueryTokens.includes(t)).length || 0;
+  const bestResolvableOverlapCount =
+    best
+      ? uniqueUnion([
+          best.overlapNameTokens,
+          best.overlapVariantTokens,
+        ]).filter((t) => discriminativeQueryTokens.includes(t)).length
+      : 0;
 
   const enoughEvidence =
-    bestDiscriminativeOverlapCount > 0 &&
+    Boolean(best?.hasResolvableEntityEvidence) &&
+    bestResolvableOverlapCount > 0 &&
     (
-      bestEvidenceCount >= 2 ||
+      bestEvidenceCount >= 1 ||
       (best?.score || 0) >= 0.22 ||
       (
         (best?.score || 0) >= 0.16 &&
@@ -904,9 +959,12 @@ export async function resolveServiceCandidatesFromText(
 
     const strongExplicitEvidence =
       best.exactNameHits >= 2 ||
-      best.exactCatalogHits >= 2 ||
+      best.exactVariantHits >= 1 ||
       best.dominantOverlapCount >= 2 ||
-      best.allOverlapTokens.length >= 2;
+      uniqueUnion([
+        best.overlapNameTokens,
+        best.overlapVariantTokens,
+      ]).length >= 1;
 
     // Caso 1:
     // best matchea tokens dominantes y second no -> aceptamos best
@@ -952,7 +1010,7 @@ export async function resolveServiceCandidatesFromText(
             category: best.cand.category,
             tipo: best.cand.tipo,
             exactNameHits: best.exactNameHits,
-            exactCatalogHits: best.exactCatalogHits,
+            exactVariantHits: best.exactVariantHits,
             dominantOverlapTokens: best.dominantOverlapTokens,
             allOverlapTokens: best.allOverlapTokens,
           },
@@ -962,7 +1020,7 @@ export async function resolveServiceCandidatesFromText(
             category: second.cand.category,
             tipo: second.cand.tipo,
             exactNameHits: second.exactNameHits,
-            exactCatalogHits: second.exactCatalogHits,
+            exactVariantHits: best.exactVariantHits,
             dominantOverlapTokens: second.dominantOverlapTokens,
             allOverlapTokens: second.allOverlapTokens,
           },
