@@ -45,12 +45,46 @@ function lineLooksLikeAvailability(line: string): boolean {
   );
 }
 
+function stripLeadingLabel(
+  line: string,
+  labels: string[]
+): string {
+  const raw = String(line || "").trim();
+  const normalized = normalizeText(raw);
+
+  for (const label of labels) {
+    const normalizedLabel = normalizeText(label).replace(/:$/, "");
+    if (!normalizedLabel) continue;
+
+    if (
+      normalized === normalizedLabel ||
+      normalized.startsWith(`${normalizedLabel}:`)
+    ) {
+      const idx = raw.indexOf(":");
+      if (idx >= 0) {
+        return raw.slice(idx + 1).trim();
+      }
+    }
+  }
+
+  return raw;
+}
+
 export function buildLocationBlockFromInfoClave(
   infoClave?: string | null
 ): string {
   const lines = cleanLines(String(infoClave || ""));
   const match = lines.find(lineLooksLikeLocation);
-  return match || "";
+
+  if (!match) return "";
+
+  return stripLeadingLabel(match, [
+    "Ubicación",
+    "Direccion",
+    "Dirección",
+    "Location",
+    "Address",
+  ]);
 }
 
 export function buildAvailabilityBlockFromInfoClave(
@@ -58,5 +92,12 @@ export function buildAvailabilityBlockFromInfoClave(
 ): string {
   const lines = cleanLines(String(infoClave || ""));
   const match = lines.find(lineLooksLikeAvailability);
-  return match || "";
+
+  if (!match) return "";
+
+  return stripLeadingLabel(match, [
+    "Disponibilidad",
+    "Availability",
+    "Available",
+  ]);
 }

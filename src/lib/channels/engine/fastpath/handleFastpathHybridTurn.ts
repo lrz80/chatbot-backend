@@ -168,16 +168,19 @@ export async function handleFastpathHybridTurn(
       { mode: "loose" }
     );
 
-    const topCandidate = entityCandidateResult?.candidates?.[0];
+    const resolvedHit = entityCandidateResult?.hit ?? null;
 
-    if (
-      topCandidate?.id &&
-      Number(topCandidate?.score || 0) >= 0.3
-    ) {
+    if (resolvedHit?.id) {
+      const matchedCandidate = Array.isArray(entityCandidateResult?.candidates)
+        ? entityCandidateResult.candidates.find(
+            (candidate: any) => String(candidate?.id || "") === String(resolvedHit.id)
+          )
+        : null;
+
       explicitEntityCandidateForClassification = {
-        id: String(topCandidate.id),
-        name: String(topCandidate.name || "").trim(),
-        score: Number(topCandidate.score || 0),
+        id: String(resolvedHit.id),
+        name: String(resolvedHit.name || "").trim(),
+        score: Number(matchedCandidate?.score || 1),
       };
     }
   } catch (e: any) {
