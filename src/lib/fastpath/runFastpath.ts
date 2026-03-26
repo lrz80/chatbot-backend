@@ -30,6 +30,8 @@ import type { CatalogReferenceClassification } from "../catalog/types";
 import { buildCatalogRoutingSignal } from "../../lib/catalog/buildCatalogRoutingSignal";
 
 import { runCatalogFastpath } from "./handlers/catalog/runCatalogFastpath";
+import { handleCatalogComparison } from "./handlers/catalog/handleCatalogComparison";
+
 import { getCatalogStructuredSignals } from "./handlers/catalog/getCatalogStructuredSignals";
 import { getCatalogDetailSignals } from "./handlers/catalog/getCatalogDetailSignals";
 import { getCatalogRoutingState } from "./handlers/catalog/getCatalogRoutingState";
@@ -123,6 +125,7 @@ export type FastpathCtx = {
     | "combination_and_price"
     | "includes"
     | "schedule"
+    | "compare"
     | "unknown"
     | null;
 
@@ -132,6 +135,7 @@ export type FastpathCtx = {
     | "combination_and_price"
     | "includes"
     | "schedule"
+    | "compare"
     | "unknown"
     | null;
 
@@ -270,7 +274,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     catalogReferenceKind === "catalog_family" ||
     catalogReferenceKind === "entity_specific" ||
     catalogReferenceKind === "variant_specific" ||
-    catalogReferenceKind === "referential_followup";
+    catalogReferenceKind === "referential_followup" ||
+    catalogReferenceKind === "comparison";
 
   const { isFreshCatalogPriceTurn } = getCatalogRoutingState({
     detectedIntent,
@@ -317,6 +322,27 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
     if (fastpathDismissResult.handled) {
       return fastpathDismissResult;
+    }
+  }
+
+  // ===============================
+  // ✅ CATALOG COMPARISON
+  // comparación entre 2 entidades del catálogo
+  // ===============================
+  {
+    if (catalogReferenceClassification?.kind === "comparison") {
+      const comparisonResult = await handleCatalogComparison({
+        pool,
+        tenantId,
+        idiomaDestino: idiomaDestino as "es" | "en",
+        userInput,
+        catalogReferenceClassification,
+        answerCatalogQuestionLLM,
+      });
+
+      if (comparisonResult.handled) {
+        return comparisonResult;
+      }
     }
   }
 
