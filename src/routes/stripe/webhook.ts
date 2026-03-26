@@ -287,6 +287,27 @@ const getTenantIdBySubscriptionId = async (subscriptionId: string): Promise<stri
   return res.rows[0]?.id || null;
 };
 
+function stripeUnixToDateOrNull(value: unknown): Date | null {
+  const seconds =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string'
+      ? Number(value)
+      : NaN;
+
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return null;
+  }
+
+  const date = new Date(seconds * 1000);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date;
+}
+
 // ⚠️ IMPORTANTE: este endpoint usa express.raw para validar la firma
 router.post('/', express.raw({ type: 'application/json' }), async (req, res) => {
   initStripe();
@@ -768,27 +789,42 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         console.warn("⚠️ No se pudo resolver producto/plan en sub.updated:", e);
       }
 
+      const membresiaInicio = stripeUnixToDateOrNull(subscription.current_period_start);
+      const membresiaVigencia = stripeUnixToDateOrNull(subscription.current_period_end);
+
+      console.log('[STRIPE][sub.updated][dates]', {
+        tenantId,
+        subscriptionId: subscription.id,
+        current_period_start: subscription.current_period_start,
+        current_period_end: subscription.current_period_end,
+        membresiaInicio,
+        membresiaVigencia,
+      });
+
       await pool.query(
         `
         UPDATE tenants
-        SET es_trial           = $1,
-            plan               = COALESCE($2, plan),
-            membresia_inicio   = CASE WHEN $1 = false THEN $3 ELSE membresia_inicio END,
-            membresia_vigencia = $4,
+        SET es_trial = $1,
+            plan = COALESCE($2, plan),
+            membresia_inicio = CASE
+              WHEN $1 = false AND $3 IS NOT NULL THEN $3
+              ELSE membresia_inicio
+            END,
+            membresia_vigencia = COALESCE($4, membresia_vigencia),
             trial_ever_claimed = CASE WHEN $5 THEN true ELSE trial_ever_claimed END,
-            plan_limits        = $6,
-            stripe_product_id  = COALESCE($8, stripe_product_id)   -- 👈 NUEVO
+            plan_limits = $6,
+            stripe_product_id = COALESCE($8, stripe_product_id)
         WHERE id = $7
         `,
         [
           esTrial,
-          planCode, // ✅ antes 'pro'
-          new Date(subscription.current_period_start * 1000),
-          new Date(subscription.current_period_end * 1000),
+          planCode,
+          membresiaInicio,
+          membresiaVigencia,
           hasTrialFlag,
           planLimits,
           tenantId,
-          productId,   // 👈 NUEVO ($8)
+          productId,
         ]
       );
 
