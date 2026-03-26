@@ -104,9 +104,45 @@ function isBusinessInfoIntent(intent: string | null | undefined): boolean {
   );
 }
 
+function isCatalogIntent(intent: string | null | undefined): boolean {
+  const normalized = String(intent || "").trim().toLowerCase();
+
+  return (
+    normalized === "precio" ||
+    normalized === "price" ||
+    normalized === "prices" ||
+    normalized === "horario" ||
+    normalized === "schedule" ||
+    normalized === "ubicacion" ||
+    normalized === "location" ||
+    normalized === "disponibilidad" ||
+    normalized === "availability" ||
+    normalized === "info_servicio" ||
+    normalized === "catalogo" ||
+    normalized === "catalog" ||
+    normalized === "planes" ||
+    normalized === "plan" ||
+    normalized === "membresia" ||
+    normalized === "membership"
+  );
+}
+
 function toFiniteNumber(value: any): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+function hasCatalogContextAnchor(convoCtx: any): boolean {
+  return (
+    Boolean(convoCtx?.last_service_id) ||
+    Boolean(convoCtx?.selectedServiceId) ||
+    Boolean(convoCtx?.selected_service_id) ||
+    Boolean(convoCtx?.last_variant_id) ||
+    Boolean(convoCtx?.selectedVariantId) ||
+    Boolean(convoCtx?.selected_variant_id) ||
+    (Array.isArray(convoCtx?.last_catalog_plans) &&
+      convoCtx.last_catalog_plans.length > 0)
+  );
 }
 
 function hasStrongStructuredEntityEvidence(params: {
@@ -142,10 +178,7 @@ function hasStrongStructuredEntityEvidence(params: {
 
   const scoreGap = bestScore - secondScore;
 
-  const hasAnchoredService =
-    Boolean(convoCtx?.last_service_id) ||
-    Boolean(convoCtx?.selectedServiceId) ||
-    Boolean(convoCtx?.selected_service_id);
+  const hasAnchoredService = hasCatalogContextAnchor(convoCtx);
 
   const classificationSuggestsSpecificEntity =
     classificationKind === "entity_specific" ||
@@ -159,15 +192,11 @@ function hasStrongStructuredEntityEvidence(params: {
   return (
     hasVariantLevelEvidence ||
     hasStrongNameEvidence ||
-    (
+    (classificationSuggestsSpecificEntity &&
+      (hasStrongRankingLead || hasMeaningfulDominance)) ||
+    (hasAnchoredService &&
       classificationSuggestsSpecificEntity &&
-      (hasStrongRankingLead || hasMeaningfulDominance)
-    ) ||
-    (
-      hasAnchoredService &&
-      classificationSuggestsSpecificEntity &&
-      bestScore > 0
-    )
+      bestScore > 0)
   );
 }
 
@@ -176,6 +205,7 @@ function shouldPromoteExplicitEntityCandidate(params: {
   matchedCandidate: any;
   allCandidates: any[];
   classificationKind: string | null | undefined;
+  previewClassification: any;
   convoCtx: any;
 }): boolean {
   const {
@@ -183,21 +213,41 @@ function shouldPromoteExplicitEntityCandidate(params: {
     matchedCandidate,
     allCandidates,
     classificationKind,
+    previewClassification,
     convoCtx,
   } = params;
 
   if (!matchedCandidate) return false;
 
-  if (!isBusinessInfoIntent(currentIntent)) {
-    return true;
+  const signals = previewClassification?.signals || {};
+
+  const turnHasCatalogScope =
+    isCatalogIntent(currentIntent) ||
+    Boolean(signals.hasCatalogScope) ||
+    Boolean(signals.hasReferentialDependency) ||
+    Boolean(signals.hasConversationDependency) ||
+    hasCatalogContextAnchor(convoCtx);
+
+  if (!turnHasCatalogScope) {
+    return false;
   }
 
-  return hasStrongStructuredEntityEvidence({
+  const hasStrongEvidence = hasStrongStructuredEntityEvidence({
     matchedCandidate,
     allCandidates,
     classificationKind,
     convoCtx,
   });
+
+  if (!hasStrongEvidence) {
+    return false;
+  }
+
+  if (isBusinessInfoIntent(currentIntent)) {
+    return true;
+  }
+
+  return true;
 }
 
 function getStructuredServiceSelection(ctxPatch: any, convoCtx: any) {
@@ -330,6 +380,7 @@ export async function handleFastpathHybridTurn(
         matchedCandidate: matchedCandidateRaw,
         allCandidates,
         classificationKind: previewClassification?.kind,
+        previewClassification,
         convoCtx,
       });
 
