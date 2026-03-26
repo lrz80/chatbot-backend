@@ -65,6 +65,31 @@ function firstNonEmptyString(...values: any[]): string | null {
   return null;
 }
 
+function shouldUseRoutingStructuredService(signal: any): boolean {
+  const targetLevel = String(signal?.targetLevel || "").trim().toLowerCase();
+  const routeIntent = String(signal?.routeIntent || "").trim().toLowerCase();
+  const referenceKind = String(signal?.referenceKind || "").trim().toLowerCase();
+
+  const hasSpecificTargetLevel =
+    targetLevel === "service" || targetLevel === "variant";
+
+  const hasSpecificReferenceKind =
+    referenceKind === "entity_specific" ||
+    referenceKind === "variant_specific" ||
+    referenceKind === "referential_followup";
+
+  const hasServiceScopedRouteIntent =
+    routeIntent === "catalog_price" ||
+    routeIntent === "catalog_alternatives" ||
+    routeIntent === "catalog_schedule" ||
+    routeIntent === "catalog_includes";
+
+  return (
+    (hasSpecificTargetLevel || hasSpecificReferenceKind) &&
+    hasServiceScopedRouteIntent
+  );
+}
+
 function isBusinessInfoIntent(intent: string | null | undefined): boolean {
   const normalized = String(intent || "").trim().toLowerCase();
 
@@ -612,15 +637,22 @@ export async function handleFastpathHybridTurn(
     fp.source === "price_missing_db" ||
     (fp.source === "service_list_db" && fp.intent === "info_servicio");
 
-  const routingTargetServiceId = firstNonEmptyString(
-    catalogRoutingSignal?.targetServiceId,
-    catalogReferenceClassification?.targetServiceId
-  );
+  const canUseRoutingStructuredService =
+  shouldUseRoutingStructuredService(catalogRoutingSignal);
 
-  const routingTargetServiceName = firstNonEmptyString(
-    catalogRoutingSignal?.targetServiceName,
-    catalogReferenceClassification?.targetServiceName
-  );
+  const routingTargetServiceId = canUseRoutingStructuredService
+    ? firstNonEmptyString(
+        catalogRoutingSignal?.targetServiceId,
+        catalogReferenceClassification?.targetServiceId
+      )
+    : null;
+
+  const routingTargetServiceName = canUseRoutingStructuredService
+    ? firstNonEmptyString(
+        catalogRoutingSignal?.targetServiceName,
+        catalogReferenceClassification?.targetServiceName
+      )
+    : null;
 
   const routingStructuredService =
     routingTargetServiceId || routingTargetServiceName
@@ -631,6 +663,19 @@ export async function handleFastpathHybridTurn(
           hasResolution: true,
         }
       : null;
+
+  console.log("[STRUCTURED_SERVICE][ROUTING_GATE]", {
+    tenantId,
+    canal,
+    contactoNorm,
+    userInput,
+    routeIntent: catalogRoutingSignal?.routeIntent || null,
+    referenceKind: catalogRoutingSignal?.referenceKind || null,
+    targetLevel: catalogRoutingSignal?.targetLevel || null,
+    canUseRoutingStructuredService,
+    routingTargetServiceId,
+    routingTargetServiceName,
+  });
 
   const structuredServiceBase = routingStructuredService
     ? routingStructuredService
