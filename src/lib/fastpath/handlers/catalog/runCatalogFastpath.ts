@@ -169,7 +169,11 @@ export async function runCatalogFastpath(
     referenceKind === "entity_specific" ||
     referenceKind === "variant_specific" ||
     referenceKind === "referential_followup" ||
-    referenceKind === "catalog_family";
+    referenceKind === "catalog_family" ||
+    (
+      referenceKind === "catalog_overview" &&
+      routeIntent === "catalog_price"
+    );
 
   const intentOutNorm = String(input.intentOut || "").trim().toLowerCase();
 
