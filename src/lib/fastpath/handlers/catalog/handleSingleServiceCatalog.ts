@@ -554,8 +554,8 @@ export async function handleSingleServiceCatalog(
   }
 
   if (
-    input.routeIntent === "catalog_overview" &&
-    input.catalogRouteIntent === "catalog_price"
+    input.routeIntent === "catalog_price" &&
+    input.catalogReferenceClassification?.kind === "catalog_overview"
   ) {
     const priceRows = input.rows.filter((row: any) => {
       const min = row?.min_price === null ? null : Number(row?.min_price);
@@ -619,7 +619,7 @@ export async function handleSingleServiceCatalog(
       };
     }
   }
-  
+
   return {
     handled: false,
   };
