@@ -179,6 +179,7 @@ export type FastpathResult =
         | "catalog_db"
         | "price_fastpath_db_llm_render"
         | "price_summary_db_llm_render"
+        | "catalog_comparison_db_llm_render"
         | "price_fastpath_db_no_price_llm_render";
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;

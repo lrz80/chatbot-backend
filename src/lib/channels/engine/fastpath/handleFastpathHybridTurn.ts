@@ -293,6 +293,126 @@ function getStructuredServiceSelection(ctxPatch: any, convoCtx: any) {
   };
 }
 
+type StructuredCatalogComparison = {
+  hasComparison: boolean;
+  serviceIds: string[];
+  serviceNames: string[];
+  serviceLabels: string[];
+};
+
+function isComparisonFriendlyIntent(intent: string | null | undefined): boolean {
+  const normalized = String(intent || "").trim().toLowerCase();
+
+  return (
+    normalized === "info_servicio" ||
+    normalized === "precio" ||
+    normalized === "planes_precios" ||
+    normalized === "schedule" ||
+    normalized === "info_horarios_generales"
+  );
+}
+
+function toFiniteScore(value: any): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function buildStructuredCatalogComparison(params: {
+  normalizedCurrentIntent: string | null | undefined;
+  entityCandidateResult: any;
+  explicitEntityCandidateForClassification: {
+    id: string;
+    name: string;
+    score: number;
+  } | null;
+  convoCtx: any;
+}): StructuredCatalogComparison | null {
+  const {
+    normalizedCurrentIntent,
+    entityCandidateResult,
+    explicitEntityCandidateForClassification,
+    convoCtx,
+  } = params;
+
+  if (!isComparisonFriendlyIntent(normalizedCurrentIntent)) {
+    return null;
+  }
+
+  const candidates = Array.isArray(entityCandidateResult?.candidates)
+    ? entityCandidateResult.candidates
+    : [];
+
+  const lastAnchoredServiceId = String(
+    convoCtx?.last_service_id ||
+      convoCtx?.selectedServiceId ||
+      convoCtx?.selected_service_id ||
+      ""
+  ).trim();
+
+  const eligible = candidates
+    .map((candidate: any) => {
+      const id = String(candidate?.id || "").trim();
+      const name = String(candidate?.name || "").trim();
+      const score = toFiniteScore(candidate?.score);
+      const catalogRole = String(candidate?.catalogRole || "").trim().toLowerCase();
+      const exactNameHits = Number(candidate?.exactNameHits || 0);
+      const exactVariantHits = Number(candidate?.exactVariantHits || 0);
+
+      return {
+        id,
+        name,
+        score,
+        catalogRole,
+        exactNameHits,
+        exactVariantHits,
+      };
+    })
+    .filter((candidate: any) => {
+      if (!candidate.id || !candidate.name) return false;
+      if (candidate.catalogRole && candidate.catalogRole !== "primary") return false;
+      if (candidate.exactVariantHits > 0) return false;
+      if (candidate.score < 0.25) return false;
+      if (candidate.id === lastAnchoredServiceId) return false;
+      return true;
+    })
+    .sort((a: any, b: any) => b.score - a.score);
+
+  if (eligible.length < 2) {
+    return null;
+  }
+
+  const first = eligible[0];
+  const second = eligible[1];
+
+  if (!first?.id || !second?.id) {
+    return null;
+  }
+
+  if (first.id === second.id) {
+    return null;
+  }
+
+  if (Math.abs(first.score - second.score) > 0.35) {
+    return null;
+  }
+
+  if (
+    explicitEntityCandidateForClassification &&
+    String(explicitEntityCandidateForClassification.id || "").trim() &&
+    String(explicitEntityCandidateForClassification.id || "").trim() !== first.id &&
+    String(explicitEntityCandidateForClassification.id || "").trim() !== second.id
+  ) {
+    return null;
+  }
+
+  return {
+    hasComparison: true,
+    serviceIds: [first.id, second.id],
+    serviceNames: [first.name, second.name],
+    serviceLabels: [first.name, second.name],
+  };
+}
+
 export async function handleFastpathHybridTurn(
   args: FastpathHybridArgs
 ): Promise<FastpathHybridResult> {
@@ -342,82 +462,39 @@ export async function handleFastpathHybridTurn(
     score: number;
   } | null = null;
 
+  let entityCandidateResultLoose: any = null;
+  let structuredComparison: StructuredCatalogComparison | null = null;
+
   try {
-    const entityCandidateResult = await resolveServiceCandidatesFromText(
+    entityCandidateResultLoose = await resolveServiceCandidatesFromText(
       pool,
       tenantId,
       userInput,
       { mode: "loose" }
     );
 
-    const resolvedHit = entityCandidateResult?.hit ?? null;
-    const allCandidates = Array.isArray(entityCandidateResult?.candidates)
-      ? entityCandidateResult.candidates
-      : [];
+    const resolvedHit = entityCandidateResultLoose?.hit ?? null;
 
     if (resolvedHit?.id) {
-      const matchedCandidateRaw: any =
-        allCandidates.find(
-          (candidate: any) =>
-            String(candidate?.id || "") === String(resolvedHit.id)
-        ) || null;
+      const matchedCandidate = Array.isArray(entityCandidateResultLoose?.candidates)
+        ? entityCandidateResultLoose.candidates.find(
+            (candidate: any) => String(candidate?.id || "") === String(resolvedHit.id)
+          )
+        : null;
 
-      const previewClassificationInput =
-        buildCatalogReferenceClassificationInput({
-          userText: userInput,
-          convoCtx,
-          detectedIntent: shouldRouteCatalog ? normalizedCurrentIntent : null,
-        });
-
-      const previewClassification = classifyCatalogReferenceTurn({
-        ...previewClassificationInput,
-        explicitEntityCandidate: null,
-        detectedIntent: shouldRouteCatalog ? normalizedCurrentIntent : null,
-      });
-
-      const canPromoteCandidate = shouldPromoteExplicitEntityCandidate({
-        currentIntent: normalizedCurrentIntent,
-        matchedCandidate: matchedCandidateRaw,
-        allCandidates,
-        classificationKind: previewClassification?.kind,
-        previewClassification,
-        convoCtx,
-      });
-
-      if (canPromoteCandidate) {
-        explicitEntityCandidateForClassification = {
-          id: String(resolvedHit.id),
-          name: String(resolvedHit.name || "").trim(),
-          score: toFiniteNumber(matchedCandidateRaw?.score || 1),
-        };
-      } else {
-        console.log(
-          "[CATALOG_REFERENCE_CLASSIFIER][ENTITY_CANDIDATE_SKIPPED_BY_STRUCTURE]",
-          {
-            tenantId,
-            canal,
-            contactoNorm,
-            userInput,
-            normalizedCurrentIntent,
-            resolvedHitId: String(resolvedHit.id),
-            resolvedHitName: String(resolvedHit.name || "").trim(),
-            previewClassificationKind: previewClassification?.kind || null,
-            matchedCandidate: matchedCandidateRaw
-              ? {
-                  score: toFiniteNumber(matchedCandidateRaw?.score),
-                  exactNameHits: toFiniteNumber(matchedCandidateRaw?.exactNameHits),
-                  exactVariantHits: toFiniteNumber(
-                    matchedCandidateRaw?.exactVariantHits
-                  ),
-                  dominantOverlapCount: toFiniteNumber(
-                    matchedCandidateRaw?.dominantOverlapCount
-                  ),
-                }
-              : null,
-          }
-        );
-      }
+      explicitEntityCandidateForClassification = {
+        id: String(resolvedHit.id),
+        name: String(resolvedHit.name || "").trim(),
+        score: Number(matchedCandidate?.score || 1),
+      };
     }
+
+    structuredComparison = buildStructuredCatalogComparison({
+      normalizedCurrentIntent,
+      entityCandidateResult: entityCandidateResultLoose,
+      explicitEntityCandidateForClassification,
+      convoCtx,
+    });
   } catch (e: any) {
     console.warn(
       "[CATALOG_REFERENCE_CLASSIFIER][EXPLICIT_ENTITY_CANDIDATE] failed:",
@@ -437,15 +514,21 @@ export async function handleFastpathHybridTurn(
       detectedIntent: catalogReferenceIntent,
     });
 
+  if (structuredComparison?.hasComparison) {
+    explicitEntityCandidateForClassification = null;
+  }
+
   const catalogReferenceClassification = shouldRouteCatalog
     ? classifyCatalogReferenceTurn({
         ...catalogReferenceClassificationInput,
         explicitEntityCandidate: explicitEntityCandidateForClassification,
+        structuredComparison,
         detectedIntent: catalogReferenceIntent,
       })
     : classifyCatalogReferenceTurn({
         ...catalogReferenceClassificationInput,
         explicitEntityCandidate: explicitEntityCandidateForClassification,
+        structuredComparison,
         detectedIntent: null,
       });
 
@@ -737,7 +820,7 @@ export async function handleFastpathHybridTurn(
   const shouldIgnoreStructuredService =
     fp.source === "price_disambiguation_db";
 
-  const structuredService = shouldIgnoreStructuredService
+  let structuredService = shouldIgnoreStructuredService
     ? {
         serviceId: null,
         serviceName: null,
@@ -745,6 +828,15 @@ export async function handleFastpathHybridTurn(
         hasResolution: false,
       }
     : structuredServiceBase;
+
+  if (catalogReferenceClassification?.kind === "comparison") {
+    structuredService = {
+      serviceId: null,
+      serviceName: null,
+      serviceLabel: null,
+      hasResolution: false,
+    };
+  }
 
   const shouldBypassStructuredRewrite =
     isDmChatChannel(canal) &&
@@ -770,6 +862,7 @@ export async function handleFastpathHybridTurn(
 
   const shouldPersistStructuredService =
     structuredService.hasResolution &&
+    catalogReferenceClassification?.kind !== "comparison" &&
     fp.source !== "catalog_db" &&
     fp.source !== "price_disambiguation_db" &&
     !(fp.intent === "info_general");
@@ -1139,7 +1232,8 @@ SPECIAL RULE FOR THIS TURN:
       (
         fp?.source === "price_fastpath_db_llm_render" ||
         fp?.source === "price_fastpath_db" ||
-        fp?.source === "price_summary_db_llm_render"
+        fp?.source === "price_summary_db_llm_render" ||
+        fp?.source === "catalog_comparison_db_llm_render"
       ) &&
       typeof fastpathText === "string" &&
       fastpathText.trim().length > 0
