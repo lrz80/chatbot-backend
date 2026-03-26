@@ -177,8 +177,9 @@ export type FastpathResult =
         | "catalog_llm"
         | "fastpath_dismiss"
         | "catalog_db"
-        |"price_fastpath_db_llm_render"
-        |"price_fastpath_db_no_price_llm_render";
+        | "price_fastpath_db_llm_render"
+        | "price_summary_db_llm_render"
+        | "price_fastpath_db_no_price_llm_render";
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;

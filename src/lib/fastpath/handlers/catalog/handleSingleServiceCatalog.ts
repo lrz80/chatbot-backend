@@ -59,8 +59,7 @@ export async function handleSingleServiceCatalog(
     catalogRouteIntent: input.catalogRouteIntent,
   });
 
-    const shouldSkipSinglePriceTargetResolution =
-      input.routeIntent === "catalog_overview";
+    const shouldSkipSinglePriceTargetResolution = false;
 
     const ellipticPriceFollowup =
       input.catalogRoutingSignal.shouldRouteCatalog &&
@@ -554,6 +553,73 @@ export async function handleSingleServiceCatalog(
     }
   }
 
+  if (
+    input.routeIntent === "catalog_overview" &&
+    input.catalogRouteIntent === "catalog_price"
+  ) {
+    const priceRows = input.rows.filter((row: any) => {
+      const min = row?.min_price === null ? null : Number(row?.min_price);
+      const max = row?.max_price === null ? null : Number(row?.max_price);
+      return Number.isFinite(min) || Number.isFinite(max);
+    });
+
+    if (priceRows.length > 0) {
+      const canonicalReply = priceRows
+        .map((row: any) => {
+          const serviceName = String(row?.service_name || "").trim();
+          const min = row?.min_price === null ? null : Number(row?.min_price);
+          const max = row?.max_price === null ? null : Number(row?.max_price);
+
+          let priceText =
+            input.idiomaDestino === "en"
+              ? "price not available"
+              : "precio no disponible";
+
+          if (Number.isFinite(min) && Number.isFinite(max)) {
+            if (min === max) {
+              priceText = `$${min!.toFixed(2)}`;
+            } else {
+              priceText =
+                input.idiomaDestino === "en"
+                  ? `from $${min!.toFixed(2)}`
+                  : `desde $${min!.toFixed(2)}`;
+            }
+          } else if (Number.isFinite(min)) {
+            priceText =
+              input.idiomaDestino === "en"
+                ? `from $${min!.toFixed(2)}`
+                : `desde $${min!.toFixed(2)}`;
+          } else if (Number.isFinite(max)) {
+            priceText = `$${max!.toFixed(2)}`;
+          }
+
+          return `• ${serviceName}: ${priceText}`;
+        })
+        .join("\n");
+
+      const finalReply = await input.renderCatalogReplyWithSalesFrame({
+        lang: input.idiomaDestino === "en" ? "en" : "es",
+        userInput: input.userInput,
+        canonicalReply,
+        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+        mode: "grounded_catalog_sales",
+        maxIntroLines: 1,
+        maxClosingLines: 1,
+      });
+
+      return {
+        handled: true,
+        reply: finalReply,
+        source: "price_summary_db_llm_render",
+        intent: "precio",
+        ctxPatch: {
+          lastResolvedIntent: "price_or_plan",
+          expectedVariantIntent: null,
+        } as any,
+      };
+    }
+  }
+  
   return {
     handled: false,
   };

@@ -1138,7 +1138,8 @@ SPECIAL RULE FOR THIS TURN:
       fp?.handled &&
       (
         fp?.source === "price_fastpath_db_llm_render" ||
-        fp?.source === "price_fastpath_db"
+        fp?.source === "price_fastpath_db" ||
+        fp?.source === "price_summary_db_llm_render"
       ) &&
       typeof fastpathText === "string" &&
       fastpathText.trim().length > 0
