@@ -11,6 +11,7 @@ export type CatalogRouteIntent =
   | "catalog_schedule"
   | "catalog_includes"
   | "catalog_price"
+  | "catalog_compare"
   | "unknown";
 
 export type CatalogRouteSignal = {
@@ -22,6 +23,7 @@ export type CatalogRouteSignal = {
     | "entity_specific"
     | "variant_specific"
     | "referential_followup"
+    | "comparison"
     | "none";
   source: "catalog_classifier" | "intent_layer" | "context" | "none";
 
@@ -122,6 +124,7 @@ function mapClassificationToRouteIntent(
   if (kind === "catalog_family") return "catalog_family";
   if (kind === "catalog_overview") return "catalog_overview";
   if (kind === "referential_followup") return "referential_followup";
+  if (kind === "comparison") return "catalog_compare";
 
   return "unknown";
 }
@@ -157,6 +160,10 @@ function mapIntentOutToRouteIntent(intentOut?: string | null): CatalogRouteInten
     return "entity_detail";
   }
 
+  if (intent === "compare") {
+    return "catalog_compare";
+  }
+
   if (intent === "catalogo" || intent === "catalog") {
     return "catalog_overview";
   }
@@ -174,7 +181,8 @@ export function buildCatalogRoutingSignal({
     catalogReferenceClassification?.kind === "catalog_family" ||
     catalogReferenceClassification?.kind === "entity_specific" ||
     catalogReferenceClassification?.kind === "variant_specific" ||
-    catalogReferenceClassification?.kind === "referential_followup"
+    catalogReferenceClassification?.kind === "referential_followup" ||
+    catalogReferenceClassification?.kind === "comparison"
       ? catalogReferenceClassification.kind
       : "none";
 
