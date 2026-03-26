@@ -7,10 +7,7 @@ import { runFastpath } from "../../../fastpath/runFastpath";
 import { naturalizeSecondaryOptionsLine } from "../../../fastpath/naturalizeSecondaryOptions";
 import { getRecentHistoryForModel } from "../messages/getRecentHistoryForModel";
 import { answerWithPromptBase } from "../../../answers/answerWithPromptBase";
-import {
-  resolveServiceIdFromText,
-  resolveServiceCandidatesFromText,
-} from "../../../services/pricing/resolveServiceIdFromText";
+import { resolveServiceCandidatesFromText } from "../../../services/pricing/resolveServiceIdFromText";
 import { stripMarkdownLinksForDm } from "../../format/stripMarkdownLinks";
 
 import { buildCatalogReferenceClassificationInput } from "../../../catalog/buildCatalogReferenceClassificationInput";
@@ -66,6 +63,116 @@ function firstNonEmptyString(...values: any[]): string | null {
     if (v) return v;
   }
   return null;
+}
+
+function isBusinessInfoIntent(intent: string | null | undefined): boolean {
+  const normalized = String(intent || "").trim().toLowerCase();
+
+  return (
+    normalized === "horario" ||
+    normalized === "schedule" ||
+    normalized === "ubicacion" ||
+    normalized === "location" ||
+    normalized === "disponibilidad" ||
+    normalized === "availability" ||
+    normalized === "info_horarios_generales"
+  );
+}
+
+function toFiniteNumber(value: any): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function hasStrongStructuredEntityEvidence(params: {
+  matchedCandidate: any;
+  allCandidates: any[];
+  classificationKind: string | null | undefined;
+  convoCtx: any;
+}): boolean {
+  const { matchedCandidate, allCandidates, classificationKind, convoCtx } = params;
+
+  if (!matchedCandidate) return false;
+
+  const exactNameHits = toFiniteNumber(matchedCandidate?.exactNameHits);
+  const exactVariantHits = toFiniteNumber(matchedCandidate?.exactVariantHits);
+  const dominantOverlapCount = toFiniteNumber(
+    matchedCandidate?.dominantOverlapCount
+  );
+  const bestScore = toFiniteNumber(matchedCandidate?.score);
+
+  const sortedCandidates = Array.isArray(allCandidates)
+    ? [...allCandidates]
+        .map((candidate) => ({
+          ...candidate,
+          score: toFiniteNumber(candidate?.score),
+        }))
+        .sort((a, b) => b.score - a.score)
+    : [];
+
+  const secondScore =
+    sortedCandidates.length > 1
+      ? toFiniteNumber(sortedCandidates[1]?.score)
+      : 0;
+
+  const scoreGap = bestScore - secondScore;
+
+  const hasAnchoredService =
+    Boolean(convoCtx?.last_service_id) ||
+    Boolean(convoCtx?.selectedServiceId) ||
+    Boolean(convoCtx?.selected_service_id);
+
+  const classificationSuggestsSpecificEntity =
+    classificationKind === "entity_specific" ||
+    classificationKind === "variant_specific";
+
+  const hasVariantLevelEvidence = exactVariantHits >= 1;
+  const hasStrongNameEvidence = exactNameHits >= 2;
+  const hasStrongRankingLead = bestScore > 0 && scoreGap >= 0.35;
+  const hasMeaningfulDominance = dominantOverlapCount >= 2;
+
+  return (
+    hasVariantLevelEvidence ||
+    hasStrongNameEvidence ||
+    (
+      classificationSuggestsSpecificEntity &&
+      (hasStrongRankingLead || hasMeaningfulDominance)
+    ) ||
+    (
+      hasAnchoredService &&
+      classificationSuggestsSpecificEntity &&
+      bestScore > 0
+    )
+  );
+}
+
+function shouldPromoteExplicitEntityCandidate(params: {
+  currentIntent: string | null | undefined;
+  matchedCandidate: any;
+  allCandidates: any[];
+  classificationKind: string | null | undefined;
+  convoCtx: any;
+}): boolean {
+  const {
+    currentIntent,
+    matchedCandidate,
+    allCandidates,
+    classificationKind,
+    convoCtx,
+  } = params;
+
+  if (!matchedCandidate) return false;
+
+  if (!isBusinessInfoIntent(currentIntent)) {
+    return true;
+  }
+
+  return hasStrongStructuredEntityEvidence({
+    matchedCandidate,
+    allCandidates,
+    classificationKind,
+    convoCtx,
+  });
 }
 
 function getStructuredServiceSelection(ctxPatch: any, convoCtx: any) {
@@ -169,19 +276,71 @@ export async function handleFastpathHybridTurn(
     );
 
     const resolvedHit = entityCandidateResult?.hit ?? null;
+    const allCandidates = Array.isArray(entityCandidateResult?.candidates)
+      ? entityCandidateResult.candidates
+      : [];
 
     if (resolvedHit?.id) {
-      const matchedCandidate = Array.isArray(entityCandidateResult?.candidates)
-        ? entityCandidateResult.candidates.find(
-            (candidate: any) => String(candidate?.id || "") === String(resolvedHit.id)
-          )
-        : null;
+      const matchedCandidateRaw: any =
+        allCandidates.find(
+          (candidate: any) =>
+            String(candidate?.id || "") === String(resolvedHit.id)
+        ) || null;
 
-      explicitEntityCandidateForClassification = {
-        id: String(resolvedHit.id),
-        name: String(resolvedHit.name || "").trim(),
-        score: Number(matchedCandidate?.score || 1),
-      };
+      const previewClassificationInput =
+        buildCatalogReferenceClassificationInput({
+          userText: userInput,
+          convoCtx,
+          detectedIntent: shouldRouteCatalog ? normalizedCurrentIntent : null,
+        });
+
+      const previewClassification = classifyCatalogReferenceTurn({
+        ...previewClassificationInput,
+        explicitEntityCandidate: null,
+        detectedIntent: shouldRouteCatalog ? normalizedCurrentIntent : null,
+      });
+
+      const canPromoteCandidate = shouldPromoteExplicitEntityCandidate({
+        currentIntent: normalizedCurrentIntent,
+        matchedCandidate: matchedCandidateRaw,
+        allCandidates,
+        classificationKind: previewClassification?.kind,
+        convoCtx,
+      });
+
+      if (canPromoteCandidate) {
+        explicitEntityCandidateForClassification = {
+          id: String(resolvedHit.id),
+          name: String(resolvedHit.name || "").trim(),
+          score: toFiniteNumber(matchedCandidateRaw?.score || 1),
+        };
+      } else {
+        console.log(
+          "[CATALOG_REFERENCE_CLASSIFIER][ENTITY_CANDIDATE_SKIPPED_BY_STRUCTURE]",
+          {
+            tenantId,
+            canal,
+            contactoNorm,
+            userInput,
+            normalizedCurrentIntent,
+            resolvedHitId: String(resolvedHit.id),
+            resolvedHitName: String(resolvedHit.name || "").trim(),
+            previewClassificationKind: previewClassification?.kind || null,
+            matchedCandidate: matchedCandidateRaw
+              ? {
+                  score: toFiniteNumber(matchedCandidateRaw?.score),
+                  exactNameHits: toFiniteNumber(matchedCandidateRaw?.exactNameHits),
+                  exactVariantHits: toFiniteNumber(
+                    matchedCandidateRaw?.exactVariantHits
+                  ),
+                  dominantOverlapCount: toFiniteNumber(
+                    matchedCandidateRaw?.dominantOverlapCount
+                  ),
+                }
+              : null,
+          }
+        );
+      }
     }
   } catch (e: any) {
     console.warn(
