@@ -4,7 +4,7 @@ import type { FastpathResult } from "../../runFastpath";
 type HandleCatalogComparisonInput = {
   pool: Pool;
   tenantId: string;
-  idiomaDestino: "es" | "en";
+  idiomaDestino: string;
   userInput: string;
   catalogReferenceClassification: any;
   answerCatalogQuestionLLM: (input: {
@@ -20,6 +20,9 @@ type HandleCatalogComparisonInput = {
 export async function handleCatalogComparison(
   input: HandleCatalogComparisonInput
 ): Promise<FastpathResult> {
+  const llmLang: "es" | "en" =
+    input.idiomaDestino === "en" ? "en" : "es";
+
   const ids = Array.isArray(input.catalogReferenceClassification?.targetServiceIds)
     ? input.catalogReferenceClassification.targetServiceIds.slice(0, 2)
     : [];
@@ -64,7 +67,7 @@ export async function handleCatalogComparison(
       const max = row?.max_price === null ? null : Number(row?.max_price);
 
       let priceText =
-        input.idiomaDestino === "en"
+        llmLang === "en"
           ? "price not available"
           : "precio no disponible";
 
@@ -72,12 +75,12 @@ export async function handleCatalogComparison(
         priceText =
           min === max
             ? `$${min!.toFixed(2)}`
-            : input.idiomaDestino === "en"
+            : llmLang === "en"
             ? `from $${min!.toFixed(2)}`
             : `desde $${min!.toFixed(2)}`;
       } else if (Number.isFinite(min)) {
         priceText =
-          input.idiomaDestino === "en"
+          llmLang === "en"
             ? `from $${min!.toFixed(2)}`
             : `desde $${min!.toFixed(2)}`;
       }
@@ -93,7 +96,7 @@ export async function handleCatalogComparison(
 
   const reply =
     (await input.answerCatalogQuestionLLM({
-      idiomaDestino: input.idiomaDestino,
+      idiomaDestino: llmLang,
       canonicalReply,
       userInput: input.userInput,
       mode: "grounded_catalog_sales",

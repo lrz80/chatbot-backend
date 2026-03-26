@@ -15,6 +15,7 @@ import {
 import { buildPriceBlock } from "./helpers/catalogPriceBlock";
 import { buildScheduleBlock } from "./helpers/catalogScheduleBlock";
 import { renderCatalogReplyWithSalesFrame } from "../../helpers/catalogRendering";
+import { handleCatalogComparison } from "./handleCatalogComparison";
 
 type CatalogFacets = {
   asksPrices?: boolean;
@@ -162,17 +163,38 @@ export async function runCatalogFastpath(
     .trim()
     .toLowerCase();
 
+  const classificationIntent = String(
+    input.catalogReferenceClassification?.intent || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const routingTargetLevel = String(
+    catalogRoutingSignal.targetLevel || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const isStructuredComparisonTurn =
+    routeIntent === "catalog_compare" ||
+    classificationIntent === "compare" ||
+    referenceKind === "comparison" ||
+    routingTargetLevel === "comparison";
+
   const shouldTrySingleServiceCatalog =
-    input.hasStructuredTarget ||
-    Boolean(catalogRoutingSignal.targetServiceId) ||
-    Boolean(catalogRoutingSignal.targetVariantId) ||
-    referenceKind === "entity_specific" ||
-    referenceKind === "variant_specific" ||
-    referenceKind === "referential_followup" ||
-    referenceKind === "catalog_family" ||
+    !isStructuredComparisonTurn &&
     (
-      referenceKind === "catalog_overview" &&
-      routeIntent === "catalog_price"
+      input.hasStructuredTarget ||
+      Boolean(catalogRoutingSignal.targetServiceId) ||
+      Boolean(catalogRoutingSignal.targetVariantId) ||
+      referenceKind === "entity_specific" ||
+      referenceKind === "variant_specific" ||
+      referenceKind === "referential_followup" ||
+      referenceKind === "catalog_family" ||
+      (
+        referenceKind === "catalog_overview" &&
+        routeIntent === "catalog_price"
+      )
     );
 
   const intentOutNorm = String(input.intentOut || "").trim().toLowerCase();
@@ -468,6 +490,21 @@ export async function runCatalogFastpath(
       `,
       [input.tenantId]
     );
+
+    if (isStructuredComparisonTurn) {
+      const comparisonResult = await handleCatalogComparison({
+        pool: input.pool,
+        tenantId: input.tenantId,
+        userInput: input.userInput,
+        idiomaDestino: input.idiomaDestino,
+        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
+        catalogReferenceClassification: input.catalogReferenceClassification,
+      });
+
+      if (comparisonResult.handled) {
+        return comparisonResult;
+      }
+    }
 
     if (shouldTrySingleServiceCatalog) {
       const singleServiceCatalogResult = await handleSingleServiceCatalog({
