@@ -351,10 +351,14 @@ function buildStructuredCatalogComparison(params: {
 
   const eligible = candidates
     .map((candidate: any) => {
-      const id = String(candidate?.id || "").trim();
-      const name = String(candidate?.name || "").trim();
+      const id = String(candidate?.serviceId || candidate?.id || "").trim();
+      const name = String(
+        candidate?.label || candidate?.name || candidate?.serviceName || ""
+      ).trim();
       const score = toFiniteScore(candidate?.score);
-      const catalogRole = String(candidate?.catalogRole || "").trim().toLowerCase();
+      const catalogRole = String(candidate?.catalogRole || "")
+        .trim()
+        .toLowerCase();
       const exactNameHits = Number(candidate?.exactNameHits || 0);
       const exactVariantHits = Number(candidate?.exactVariantHits || 0);
 
@@ -465,6 +469,22 @@ export async function handleFastpathHybridTurn(
   let entityCandidateResultLoose: any = null;
   let structuredComparison: StructuredCatalogComparison | null = null;
 
+  console.log("[CATALOG_COMPARISON][CANDIDATES]", {
+    userInput,
+    normalizedCurrentIntent,
+    candidates: Array.isArray(entityCandidateResultLoose?.candidates)
+      ? entityCandidateResultLoose.candidates.map((candidate: any) => ({
+          serviceId: candidate?.serviceId || null,
+          id: candidate?.id || null,
+          label: candidate?.label || null,
+          name: candidate?.name || null,
+          score: candidate?.score || null,
+          catalogRole: candidate?.catalogRole || null,
+        }))
+      : [],
+    structuredComparison,
+  });
+
   try {
     entityCandidateResultLoose = await resolveServiceCandidatesFromText(
       pool,
@@ -478,7 +498,9 @@ export async function handleFastpathHybridTurn(
     if (resolvedHit?.id) {
       const matchedCandidate = Array.isArray(entityCandidateResultLoose?.candidates)
         ? entityCandidateResultLoose.candidates.find(
-            (candidate: any) => String(candidate?.id || "") === String(resolvedHit.id)
+            (candidate: any) =>
+              String(candidate?.serviceId || candidate?.id || "") ===
+              String(resolvedHit.id)
           )
         : null;
 
