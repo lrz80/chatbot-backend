@@ -9,11 +9,26 @@ export type CatalogQuestionLlmMode =
   | "grounded_frame_only"
   | "grounded_catalog_sales";
 
+export type CatalogRenderIntent =
+  | "catalog_compare"
+  | "catalog_detail"
+  | "catalog_list";
+
+export type CatalogComparisonItem = {
+  id: string;
+  name: string;
+  description: string;
+  minPrice: number | null;
+  maxPrice: number | null;
+};
+
 export async function answerCatalogQuestionLLM(params: {
   idiomaDestino: "es" | "en";
   canonicalReply: string;
   userInput: string;
   mode?: CatalogQuestionLlmMode;
+  renderIntent?: CatalogRenderIntent;
+  comparisonItems?: CatalogComparisonItem[];
   maxIntroLines?: number;
   maxClosingLines?: number;
 }): Promise<string | null> {
@@ -22,6 +37,8 @@ export async function answerCatalogQuestionLLM(params: {
     canonicalReply,
     userInput,
     mode = "grounded_frame_only",
+    renderIntent = "catalog_detail",
+    comparisonItems = [],
     maxIntroLines = 1,
     maxClosingLines = 1,
   } = params;
@@ -34,6 +51,7 @@ export async function answerCatalogQuestionLLM(params: {
   const systemMsg = buildSystemMsg({
     idiomaDestino,
     mode,
+    renderIntent,
     maxIntroLines,
     maxClosingLines,
   });
@@ -42,6 +60,8 @@ export async function answerCatalogQuestionLLM(params: {
     idiomaDestino,
     canonicalReply: canonical,
     userInput: userMsgRaw,
+    renderIntent,
+    comparisonItems,
   });
 
   const completion = await openai.chat.completions.create({
@@ -55,6 +75,10 @@ export async function answerCatalogQuestionLLM(params: {
 
   const reply = String(completion.choices[0]?.message?.content || "").trim();
   if (!reply) return null;
+
+  if (renderIntent === "catalog_compare") {
+    return reply;
+  }
 
   const preservesCanonicalBullets = preservesCanonicalCatalogBullets(
     canonical,
@@ -71,10 +95,17 @@ export async function answerCatalogQuestionLLM(params: {
 function buildSystemMsg(params: {
   idiomaDestino: "es" | "en";
   mode: CatalogQuestionLlmMode;
+  renderIntent: CatalogRenderIntent;
   maxIntroLines: number;
   maxClosingLines: number;
 }): string {
-  const { idiomaDestino, mode, maxIntroLines, maxClosingLines } = params;
+  const {
+    idiomaDestino,
+    mode,
+    renderIntent,
+    maxIntroLines,
+    maxClosingLines,
+  } = params;
 
   const langInstruction =
     idiomaDestino === "es"
@@ -101,7 +132,23 @@ function buildSystemMsg(params: {
       : `You may add a short closing/CTA of at most ${maxClosingLines} line(s), but only if it helps move the conversation forward naturally.`;
 
   const bulletInstruction =
-    idiomaDestino === "es"
+    renderIntent === "catalog_compare"
+      ? idiomaDestino === "es"
+        ? [
+            "Estás respondiendo una comparación entre opciones de catálogo resueltas desde DB.",
+            "Debes contrastar las opciones entre sí, no describirlas como fichas separadas.",
+            "No inventes atributos, beneficios, diferencias, precios ni disponibilidad.",
+            "Si faltan datos diferenciales, dilo con claridad sin inventar.",
+            "Puedes usar la información resuelta para explicar diferencia práctica, precio relativo y orientación de elección.",
+          ].join("\n")
+        : [
+            "You are answering a comparison between catalog options resolved from DB.",
+            "You must contrast the options against each other, not describe them as separate cards.",
+            "Do not invent attributes, benefits, differences, prices, or availability.",
+            "If differential data is missing, say so clearly without inventing.",
+            "You may use the resolved information to explain practical differences, relative pricing, and buying guidance.",
+          ].join("\n")
+      : idiomaDestino === "es"
       ? [
           "Debes conservar EXACTAMENTE el cuerpo canónico del catálogo.",
           "No cambies nombres de planes, servicios o variantes.",
@@ -143,7 +190,21 @@ function buildSystemMsg(params: {
         ].join("\n");
 
   const formatInstruction =
-    idiomaDestino === "es"
+    renderIntent === "catalog_compare"
+      ? idiomaDestino === "es"
+        ? [
+            "Formato requerido:",
+            "1. intro opcional breve",
+            "2. explicación comparativa clara entre las opciones",
+            "3. cierre opcional breve",
+          ].join("\n")
+        : [
+            "Required format:",
+            "1. optional brief intro",
+            "2. clear comparative explanation between the options",
+            "3. optional brief closing",
+          ].join("\n")
+      : idiomaDestino === "es"
       ? [
           "Formato requerido:",
           "1. intro opcional breve",
@@ -172,8 +233,46 @@ function buildUserMsg(params: {
   idiomaDestino: "es" | "en";
   canonicalReply: string;
   userInput: string;
+  renderIntent: CatalogRenderIntent;
+  comparisonItems: CatalogComparisonItem[];
 }): string {
-  const { idiomaDestino, canonicalReply, userInput } = params;
+  const {
+    idiomaDestino,
+    canonicalReply,
+    userInput,
+    renderIntent,
+    comparisonItems,
+  } = params;
+
+  if (renderIntent === "catalog_compare") {
+    const comparisonJson = JSON.stringify(comparisonItems, null, 2);
+
+    if (idiomaDestino === "es") {
+      return [
+        `Mensaje del cliente: ${userInput || "(vacío)"}`,
+        "",
+        "Datos resueltos desde DB para comparación:",
+        comparisonJson,
+        "",
+        "Referencia canónica adicional:",
+        canonicalReply,
+        "",
+        "Devuélveme una respuesta final lista para enviar que explique las diferencias entre las opciones comparadas, sin inventar información.",
+      ].join("\n");
+    }
+
+    return [
+      `Customer message: ${userInput || "(empty)"}`,
+      "",
+      "DB-resolved comparison data:",
+      comparisonJson,
+      "",
+      "Additional canonical reference:",
+      canonicalReply,
+      "",
+      "Return the final reply ready to send explaining the differences between the compared options, without inventing information.",
+    ].join("\n");
+  }
 
   if (idiomaDestino === "es") {
     return [

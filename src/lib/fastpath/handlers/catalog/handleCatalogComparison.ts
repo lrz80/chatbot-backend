@@ -12,6 +12,14 @@ type HandleCatalogComparisonInput = {
     canonicalReply: string;
     userInput: string;
     mode?: "grounded_frame_only" | "grounded_catalog_sales";
+    renderIntent?: "catalog_compare" | "catalog_detail" | "catalog_list";
+    comparisonItems?: Array<{
+      id: string;
+      name: string;
+      description: string;
+      minPrice: number | null;
+      maxPrice: number | null;
+    }>;
     maxIntroLines?: number;
     maxClosingLines?: number;
   }) => Promise<string | null>;
@@ -96,12 +104,22 @@ export async function handleCatalogComparison(
 
   const reply =
     (await input.answerCatalogQuestionLLM({
-      idiomaDestino: llmLang,
-      canonicalReply,
-      userInput: input.userInput,
-      mode: "grounded_catalog_sales",
-      maxIntroLines: 1,
-      maxClosingLines: 1,
+        idiomaDestino: llmLang,
+        canonicalReply,
+        userInput: input.userInput,
+        mode: "grounded_catalog_sales",
+        renderIntent: "catalog_compare",
+        comparisonItems: ordered.map((row: any) => ({
+        id: String(row?.id || ""),
+        name: String(row?.name || "").trim(),
+        description: String(row?.description || "").trim(),
+        minPrice:
+            row?.min_price === null ? null : Number(row?.min_price),
+        maxPrice:
+            row?.max_price === null ? null : Number(row?.max_price),
+        })),
+        maxIntroLines: 1,
+        maxClosingLines: 1,
     })) || canonicalReply;
 
   return {
