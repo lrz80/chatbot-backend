@@ -613,6 +613,54 @@ export function classifyCatalogReferenceTurn(
 
   notes.push("insufficient_structural_signal");
 
+  // =========================================================
+  // 9) STRUCTURED COMPARISON
+  // =========================================================
+  if (
+    input.structuredComparison?.hasComparison &&
+    Array.isArray(input.structuredComparison.serviceIds) &&
+    input.structuredComparison.serviceIds.length >= 2
+  ) {
+    notes.push("structured_comparison_detected");
+
+    result.kind = "comparison";
+    result.intent = "compare";
+    result.confidence = 0.9;
+
+    result.signals.hasCatalogScope = true;
+    result.signals.hasSpecificEntityCandidate = true;
+    result.signals.hasVariantCandidate = false;
+    result.signals.hasFamilyCandidate = false;
+    result.signals.hasReferentialDependency = false;
+    result.signals.hasConversationDependency = false;
+    result.signals.hasDisambiguationRisk = false;
+    result.signals.hasAnchorShift = false;
+
+    result.shouldUseContextFirst = false;
+    result.shouldResolvePluralCatalog = false;
+    result.shouldResolveFamily = false;
+    result.shouldResolveEntity = false;
+    result.shouldResolveVariant = false;
+    result.shouldAskDisambiguation = false;
+
+    result.targetLevel = "multi_service";
+    result.targetServiceId = null;
+    result.targetServiceName = null;
+    result.targetVariantId = null;
+    result.targetVariantName = null;
+    result.targetFamilyKey = null;
+    result.targetFamilyName = null;
+
+    result.targetServiceIds = input.structuredComparison.serviceIds;
+    result.targetServiceNames = input.structuredComparison.serviceNames;
+
+    result.disambiguationType = "none";
+    result.anchorShift = "none";
+
+    result.debug.notes = notes;
+    return result;
+  }
+
   if (result.intent === "unknown") {
     result.intent = mapDetectedIntentToCatalogIntent(detectedIntent, "unknown");
   }

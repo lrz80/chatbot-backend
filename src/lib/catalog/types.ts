@@ -6,6 +6,7 @@ export type CatalogReferenceKind =
   | "entity_specific"
   | "variant_specific"
   | "referential_followup"
+  | "comparison"
   | "none";
 
 export type CatalogReferenceIntent =
@@ -100,12 +101,19 @@ export type CatalogReferenceClassificationInput = {
   explicitFamilyCandidate?: CatalogReferenceExplicitFamilyCandidate;
   explicitVariantCandidate?: CatalogReferenceExplicitVariantCandidate;
 
+  structuredComparison?: {
+    hasComparison: boolean;
+    serviceIds: string[];
+    serviceNames: string[];
+    serviceLabels: string[];
+  } | null;
+
   detectedIntent?: string | null;
 };
 
 export type CatalogReferenceClassification = {
   kind: CatalogReferenceKind;
-  intent: CatalogReferenceIntent;
+  intent: CatalogReferenceIntent | "compare";
   confidence: number;
 
   signals: CatalogReferenceSignals;
@@ -117,10 +125,13 @@ export type CatalogReferenceClassification = {
   shouldResolveVariant: boolean;
   shouldAskDisambiguation: boolean;
 
-  targetLevel: CatalogTargetLevel;
+  targetLevel: CatalogTargetLevel | "multi_service";
 
   targetServiceId: string | null;
   targetServiceName: string | null;
+
+  targetServiceIds?: string[];
+  targetServiceNames?: string[];
 
   targetVariantId: string | null;
   targetVariantName: string | null;

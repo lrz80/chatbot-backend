@@ -36,7 +36,7 @@ export type CatalogRouteSignal = {
   targetVariantName: string | null;
   targetFamilyKey: string | null;
   targetFamilyName: string | null;
-  targetLevel: "catalog" | "family" | "service" | "variant" | "none";
+  targetLevel: "none" | "catalog" | "family" | "service" | "variant" | "multi_service";
   disambiguationType: "entity" | "family" | "variant" | "none";
   anchorShift:
     | "stay_on_anchor"
