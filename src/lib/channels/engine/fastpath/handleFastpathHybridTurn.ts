@@ -293,8 +293,18 @@ function getStructuredServiceSelection(ctxPatch: any, convoCtx: any) {
   };
 }
 
+type StructuredCatalogComparisonSide = {
+  key: string;
+  label: string;
+  serviceIds: string[];
+  serviceNames: string[];
+  serviceLabels: string[];
+  score: number;
+};
+
 type StructuredCatalogComparison = {
   hasComparison: boolean;
+  sides: StructuredCatalogComparisonSide[];
   serviceIds: string[];
   serviceNames: string[];
   serviceLabels: string[];
@@ -317,6 +327,35 @@ function toFiniteScore(value: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function getComparisonGroupKey(candidate: any): string {
+  const overlapNameToken = String(candidate?.overlapNameTokens?.[0] || "")
+    .trim()
+    .toLowerCase();
+
+  if (overlapNameToken) return overlapNameToken;
+
+  const overlapSupportToken = String(candidate?.overlapSupportTokens?.[0] || "")
+    .trim()
+    .toLowerCase();
+
+  if (overlapSupportToken) return overlapSupportToken;
+
+  return String(candidate?.serviceId || candidate?.id || "")
+    .trim()
+    .toLowerCase();
+}
+
+function buildComparisonSideLabel(members: any[]): string {
+  const names = members
+    .map((m) => String(m?.label || m?.name || m?.serviceName || "").trim())
+    .filter(Boolean);
+
+  if (!names.length) return "Opción";
+
+  const shortest = [...names].sort((a, b) => a.length - b.length)[0];
+  return shortest;
+}
+
 function buildStructuredCatalogComparison(params: {
   normalizedCurrentIntent: string | null | undefined;
   entityCandidateResult: any;
@@ -331,7 +370,6 @@ function buildStructuredCatalogComparison(params: {
     normalizedCurrentIntent,
     entityCandidateResult,
     explicitEntityCandidateForClassification,
-    convoCtx,
   } = params;
 
   if (!isComparisonFriendlyIntent(normalizedCurrentIntent)) {
@@ -356,20 +394,26 @@ function buildStructuredCatalogComparison(params: {
       const name = String(
         candidate?.label || candidate?.name || candidate?.serviceName || ""
       ).trim();
+      const label = String(
+        candidate?.label || candidate?.name || candidate?.serviceName || ""
+      ).trim();
       const score = toFiniteScore(candidate?.score);
       const catalogRole = String(candidate?.catalogRole || "")
         .trim()
         .toLowerCase();
       const exactNameHits = Number(candidate?.exactNameHits || 0);
       const exactVariantHits = Number(candidate?.exactVariantHits || 0);
+      const groupKey = getComparisonGroupKey(candidate);
 
       return {
         id,
         name,
+        label,
         score,
         catalogRole,
         exactNameHits,
         exactVariantHits,
+        groupKey,
       };
     })
     .filter((candidate: any) => {
@@ -377,43 +421,68 @@ function buildStructuredCatalogComparison(params: {
       if (candidate.catalogRole && candidate.catalogRole !== "primary") return false;
       if (candidate.exactVariantHits > 0) return false;
       if (candidate.score < 0.25) return false;
+      if (!candidate.groupKey) return false;
       return true;
-    })
-    .sort((a: any, b: any) => b.score - a.score);
+    });
 
   if (eligible.length < 2) {
     return null;
   }
 
-  const first = eligible[0];
-  const second = eligible[1];
+  const grouped = new Map<string, any[]>();
 
-  if (!first?.id || !second?.id) {
-    return null;
+  for (const candidate of eligible) {
+    if (!grouped.has(candidate.groupKey)) {
+      grouped.set(candidate.groupKey, []);
+    }
+    grouped.get(candidate.groupKey)!.push(candidate);
   }
 
-  if (first.id === second.id) {
-    return null;
-  }
+  const sides = Array.from(grouped.entries())
+    .map(([key, members]) => {
+      const orderedMembers = [...members].sort(
+        (a: any, b: any) => b.score - a.score
+      );
 
-  if (Math.abs(first.score - second.score) > 0.35) {
+      return {
+        key,
+        label: buildComparisonSideLabel(orderedMembers),
+        score: Math.max(...orderedMembers.map((m: any) => m.score)),
+        serviceIds: orderedMembers.map((m: any) => m.id),
+        serviceNames: orderedMembers.map((m: any) => m.name),
+        serviceLabels: orderedMembers.map((m: any) => m.label),
+      };
+    })
+    .sort((a: any, b: any) => b.score - a.score)
+    .slice(0, 2);
+
+  if (sides.length < 2) {
     return null;
   }
 
   if (
     explicitEntityCandidateForClassification &&
-    String(explicitEntityCandidateForClassification.id || "").trim() &&
-    String(explicitEntityCandidateForClassification.id || "").trim() !== first.id &&
-    String(explicitEntityCandidateForClassification.id || "").trim() !== second.id
+    String(explicitEntityCandidateForClassification.id || "").trim()
   ) {
-    return null;
+    const explicitId = String(
+      explicitEntityCandidateForClassification.id || ""
+    ).trim();
+
+    const explicitExistsInSides = sides.some((side) =>
+      side.serviceIds.includes(explicitId)
+    );
+
+    if (!explicitExistsInSides) {
+      return null;
+    }
   }
 
   return {
     hasComparison: true,
-    serviceIds: [first.id, second.id],
-    serviceNames: [first.name, second.name],
-    serviceLabels: [first.name, second.name],
+    sides,
+    serviceIds: sides.flatMap((side) => side.serviceIds),
+    serviceNames: sides.flatMap((side) => side.serviceNames),
+    serviceLabels: sides.map((side) => side.label),
   };
 }
 
