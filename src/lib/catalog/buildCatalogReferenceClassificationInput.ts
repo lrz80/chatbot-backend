@@ -5,6 +5,11 @@ type BuildCatalogReferenceClassificationInputArgs = {
   userText: string;
   convoCtx: unknown;
   detectedIntent?: string | null;
+
+  explicitEntityCandidate?: CatalogReferenceClassificationInput["explicitEntityCandidate"];
+  explicitVariantCandidate?: CatalogReferenceClassificationInput["explicitVariantCandidate"];
+  explicitFamilyCandidate?: CatalogReferenceClassificationInput["explicitFamilyCandidate"];
+  structuredComparison?: CatalogReferenceClassificationInput["structuredComparison"];
 };
 
 function normalizeUserText(input: string): string {
@@ -23,5 +28,10 @@ export function buildCatalogReferenceClassificationInput(
     userText: normalizeUserText(args.userText),
     context: buildCatalogReferenceContext(args.convoCtx),
     detectedIntent: normalizeDetectedIntent(args.detectedIntent),
+
+    explicitEntityCandidate: args.explicitEntityCandidate,
+    explicitVariantCandidate: args.explicitVariantCandidate,
+    explicitFamilyCandidate: args.explicitFamilyCandidate,
+    structuredComparison: args.structuredComparison,
   };
 }
