@@ -179,7 +179,8 @@ export async function runCatalogFastpath(
     routeIntent === "catalog_compare" ||
     classificationIntent === "compare" ||
     referenceKind === "comparison" ||
-    routingTargetLevel === "comparison";
+    routingTargetLevel === "comparison" ||
+    routingTargetLevel === "multi_service";
 
   const shouldTrySingleServiceCatalog =
     !isStructuredComparisonTurn &&
