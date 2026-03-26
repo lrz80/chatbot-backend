@@ -327,14 +327,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     const wantsCatalogOverview =
       !catalogReferenceClassification?.targetServiceId &&
       !catalogReferenceClassification?.targetVariantId &&
-      Boolean(detectedFacets?.asksPrices) &&
+      !detectedFacets?.asksPrices &&
       !detectedFacets?.asksSchedules &&
       !detectedFacets?.asksLocation &&
       !detectedFacets?.asksAvailability &&
       (
         catalogReferenceClassification?.kind === "catalog_overview" ||
-        intentOut === "precio" ||
-        intentOut === "planes_precios"
+        intentOut === "info_general"
       );
 
     if (wantsCatalogOverview) {
