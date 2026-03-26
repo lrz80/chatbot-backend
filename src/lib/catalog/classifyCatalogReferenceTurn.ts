@@ -305,6 +305,15 @@ function inferAnchorShift(params: {
 export function classifyCatalogReferenceTurn(
   input: CatalogReferenceClassificationInput
 ): CatalogReferenceClassification {
+  console.log("[TRACE_CATALOG][CLASSIFIER_ENTRY]", {
+    userText: input.userText,
+    detectedIntent: input.detectedIntent ?? null,
+    explicitEntityCandidate: input.explicitEntityCandidate ?? null,
+    explicitVariantCandidate: input.explicitVariantCandidate ?? null,
+    explicitFamilyCandidate: input.explicitFamilyCandidate ?? null,
+    structuredComparison: input.structuredComparison ?? null,
+  });
+
   const userText = normalizeUserText(input?.userText || "");
   const context = sanitizeContext(input?.context);
 

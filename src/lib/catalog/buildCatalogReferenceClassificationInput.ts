@@ -24,6 +24,15 @@ function normalizeDetectedIntent(input?: string | null): string | null {
 export function buildCatalogReferenceClassificationInput(
   args: BuildCatalogReferenceClassificationInputArgs
 ): CatalogReferenceClassificationInput {
+  console.log("[CATALOG_INPUT_BUILDER]", {
+    userText: args.userText,
+    detectedIntent: args.detectedIntent,
+    explicitEntityCandidate: args.explicitEntityCandidate ?? null,
+    explicitVariantCandidate: args.explicitVariantCandidate ?? null,
+    explicitFamilyCandidate: args.explicitFamilyCandidate ?? null,
+    structuredComparison: args.structuredComparison ?? null,
+  });
+
   return {
     userText: normalizeUserText(args.userText),
     context: buildCatalogReferenceContext(args.convoCtx),

@@ -559,12 +559,24 @@ export async function handleFastpathHybridTurn(
     ? normalizedCurrentIntent
     : null;
 
+  console.log("[TRACE_CATALOG][PRE_BUILD_INPUT]", {
+    userInput,
+    catalogReferenceIntent,
+    explicitEntityCandidateForClassification:
+      explicitEntityCandidateForClassification ?? null,
+    structuredComparison: structuredComparison ?? null,
+  });
+
   const catalogReferenceClassificationInput =
     buildCatalogReferenceClassificationInput({
       userText: userInput,
       convoCtx,
       detectedIntent: catalogReferenceIntent,
     });
+
+  console.log("[TRACE_CATALOG][POST_BUILD_INPUT]", {
+    catalogReferenceClassificationInput,
+  });
 
   if (structuredComparison?.hasComparison) {
     explicitEntityCandidateForClassification = null;
