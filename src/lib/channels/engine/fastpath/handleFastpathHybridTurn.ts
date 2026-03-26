@@ -350,13 +350,6 @@ function buildStructuredCatalogComparison(params: {
   const candidates =
     rawCandidates.length > 0 ? rawCandidates : fallbackCandidates;
 
-  const lastAnchoredServiceId = String(
-    convoCtx?.last_service_id ||
-      convoCtx?.selectedServiceId ||
-      convoCtx?.selected_service_id ||
-      ""
-  ).trim();
-
   const eligible = candidates
     .map((candidate: any) => {
       const id = String(candidate?.serviceId || candidate?.id || "").trim();
@@ -384,7 +377,6 @@ function buildStructuredCatalogComparison(params: {
       if (candidate.catalogRole && candidate.catalogRole !== "primary") return false;
       if (candidate.exactVariantHits > 0) return false;
       if (candidate.score < 0.25) return false;
-      if (candidate.id === lastAnchoredServiceId) return false;
       return true;
     })
     .sort((a: any, b: any) => b.score - a.score);
@@ -477,34 +469,6 @@ export async function handleFastpathHybridTurn(
   let entityCandidateResultLoose: any = null;
   let structuredComparison: StructuredCatalogComparison | null = null;
 
-  const debugRawCandidates = Array.isArray(entityCandidateResultLoose?.candidates)
-    ? entityCandidateResultLoose.candidates
-    : [];
-
-  const debugFallbackCandidates = [
-    entityCandidateResultLoose?.best || null,
-    entityCandidateResultLoose?.second || null,
-  ].filter(Boolean);
-
-  const debugCandidates =
-    debugRawCandidates.length > 0
-      ? debugRawCandidates
-      : debugFallbackCandidates;
-
-  console.log("[CATALOG_COMPARISON][CANDIDATES]", {
-    userInput,
-    normalizedCurrentIntent,
-    candidates: debugCandidates.map((candidate: any) => ({
-      serviceId: candidate?.serviceId || candidate?.id || null,
-      id: candidate?.id || null,
-      label: candidate?.label || candidate?.name || null,
-      name: candidate?.name || null,
-      score: candidate?.score || null,
-      catalogRole: candidate?.catalogRole || null,
-    })),
-    structuredComparison,
-  });
-
   try {
     entityCandidateResultLoose = await resolveServiceCandidatesFromText(
       pool,
@@ -547,6 +511,36 @@ export async function handleFastpathHybridTurn(
       explicitEntityCandidateForClassification,
       convoCtx,
     });
+    const debugRawCandidates = Array.isArray(entityCandidateResultLoose?.candidates)
+  ? entityCandidateResultLoose.candidates
+  : [];
+
+  const debugFallbackCandidates = [
+    entityCandidateResultLoose?.best || null,
+    entityCandidateResultLoose?.second || null,
+  ].filter(Boolean);
+
+  const debugCandidates =
+    debugRawCandidates.length > 0
+      ? debugRawCandidates
+      : debugFallbackCandidates;
+
+  console.log("[CATALOG_COMPARISON][CANDIDATES]", {
+    userInput,
+    normalizedCurrentIntent,
+    candidates: debugCandidates.map((candidate: any) => ({
+      serviceId: candidate?.serviceId || candidate?.id || null,
+      id: candidate?.id || null,
+      label: candidate?.label || candidate?.name || null,
+      name: candidate?.name || null,
+      score: candidate?.score || null,
+      catalogRole: candidate?.catalogRole || null,
+      exactNameHits: candidate?.exactNameHits || 0,
+      exactVariantHits: candidate?.exactVariantHits || 0,
+    })),
+    explicitEntityCandidateForClassification,
+    structuredComparison,
+  });
   } catch (e: any) {
     console.warn(
       "[CATALOG_REFERENCE_CLASSIFIER][EXPLICIT_ENTITY_CANDIDATE] failed:",
@@ -572,6 +566,8 @@ export async function handleFastpathHybridTurn(
       userText: userInput,
       convoCtx,
       detectedIntent: catalogReferenceIntent,
+      explicitEntityCandidate: explicitEntityCandidateForClassification,
+      structuredComparison,
     });
 
   console.log("[TRACE_CATALOG][POST_BUILD_INPUT]", {
