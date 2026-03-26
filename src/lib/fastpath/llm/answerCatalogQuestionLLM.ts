@@ -84,28 +84,28 @@ function buildSystemMsg(params: {
   const salesInstruction =
     mode === "grounded_catalog_sales"
       ? idiomaDestino === "es"
-        ? "Tu objetivo es ayudar a vender con una respuesta clara, breve y natural."
-        : "Your goal is to help sell with a clear, brief, natural reply."
+        ? "Tu objetivo es ayudar a vender con una respuesta clara, breve, natural y útil."
+        : "Your goal is to help sell with a clear, brief, natural, useful reply."
       : idiomaDestino === "es"
       ? "Tu objetivo es mejorar el framing de la respuesta sin alterar el contenido resuelto."
       : "Your goal is to improve the framing without altering the resolved content.";
 
   const introInstruction =
     idiomaDestino === "es"
-      ? `Puedes agregar un intro corto de máximo ${maxIntroLines} línea(s).`
-      : `You may add a short intro of at most ${maxIntroLines} line(s).`;
+      ? `Puedes agregar un intro corto de máximo ${maxIntroLines} línea(s), pero solo si aporta valor real.`
+      : `You may add a short intro of at most ${maxIntroLines} line(s), but only if it adds real value.`;
 
   const closingInstruction =
     idiomaDestino === "es"
-      ? `Puedes agregar un cierre/CTA corto de máximo ${maxClosingLines} línea(s).`
-      : `You may add a short closing/CTA of at most ${maxClosingLines} line(s).`;
+      ? `Puedes agregar un cierre/CTA corto de máximo ${maxClosingLines} línea(s), pero solo si ayuda a avanzar de forma natural.`
+      : `You may add a short closing/CTA of at most ${maxClosingLines} line(s), but only if it helps move the conversation forward naturally.`;
 
   const bulletInstruction =
     idiomaDestino === "es"
       ? [
           "Debes conservar EXACTAMENTE el cuerpo canónico del catálogo.",
           "No cambies nombres de planes, servicios o variantes.",
-          "No cambies montos, símbolos de moneda, ni el orden.",
+          "No cambies montos, símbolos de moneda, horarios, ubicación, disponibilidad ni el orden.",
           "No elimines ni agregues bullets del cuerpo canónico.",
           "No resumas ni reescribas los bullets.",
           "No conviertas bullets a párrafos.",
@@ -114,11 +114,32 @@ function buildSystemMsg(params: {
       : [
           "You must preserve the catalog canonical body EXACTLY.",
           "Do not change plan, service, or variant names.",
-          "Do not change amounts, currency symbols, or order.",
+          "Do not change amounts, currency symbols, schedules, location, availability, or order.",
           "Do not remove or add bullets from the canonical body.",
           "Do not summarize or rewrite the bullets.",
           "Do not turn bullets into paragraphs.",
           "You may wrap the body with a brief intro and/or closing, but the canonical block must remain intact.",
+        ].join("\n");
+
+  const framingRules =
+    idiomaDestino === "es"
+      ? [
+          "No dupliques el framing.",
+          "No uses dos introducciones seguidas.",
+          "No repitas fórmulas como 'Con gusto te comparto', 'Claro, aquí tienes', 'Aquí tienes la información' en la misma respuesta.",
+          "No agregues un CTA genérico si la respuesta ya resuelve bien la pregunta.",
+          "Si la consulta es de horarios, ubicación o disponibilidad general, prioriza claridad y brevedad sobre entusiasmo comercial.",
+          "Si agregas intro, usa solo una línea.",
+          "Si agregas cierre, usa solo una línea.",
+        ].join("\n")
+      : [
+          "Do not duplicate framing.",
+          "Do not use two introductions in the same reply.",
+          "Do not repeat formulas like 'Of course', 'Here are the details', or similar in the same reply.",
+          "Do not add a generic CTA if the reply already fully answers the question.",
+          "For general schedule, location, or availability questions, prioritize clarity and brevity over sales enthusiasm.",
+          "If you add an intro, use only one line.",
+          "If you add a closing, use only one line.",
         ].join("\n");
 
   const formatInstruction =
@@ -142,6 +163,7 @@ function buildSystemMsg(params: {
     introInstruction,
     closingInstruction,
     bulletInstruction,
+    framingRules,
     formatInstruction,
   ].join("\n\n");
 }
