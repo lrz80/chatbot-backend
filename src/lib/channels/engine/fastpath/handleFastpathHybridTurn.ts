@@ -338,9 +338,17 @@ function buildStructuredCatalogComparison(params: {
     return null;
   }
 
-  const candidates = Array.isArray(entityCandidateResult?.candidates)
+  const rawCandidates = Array.isArray(entityCandidateResult?.candidates)
     ? entityCandidateResult.candidates
     : [];
+
+  const fallbackCandidates = [
+    entityCandidateResult?.best || null,
+    entityCandidateResult?.second || null,
+  ].filter(Boolean);
+
+  const candidates =
+    rawCandidates.length > 0 ? rawCandidates : fallbackCandidates;
 
   const lastAnchoredServiceId = String(
     convoCtx?.last_service_id ||
@@ -469,19 +477,31 @@ export async function handleFastpathHybridTurn(
   let entityCandidateResultLoose: any = null;
   let structuredComparison: StructuredCatalogComparison | null = null;
 
+  const debugRawCandidates = Array.isArray(entityCandidateResultLoose?.candidates)
+    ? entityCandidateResultLoose.candidates
+    : [];
+
+  const debugFallbackCandidates = [
+    entityCandidateResultLoose?.best || null,
+    entityCandidateResultLoose?.second || null,
+  ].filter(Boolean);
+
+  const debugCandidates =
+    debugRawCandidates.length > 0
+      ? debugRawCandidates
+      : debugFallbackCandidates;
+
   console.log("[CATALOG_COMPARISON][CANDIDATES]", {
     userInput,
     normalizedCurrentIntent,
-    candidates: Array.isArray(entityCandidateResultLoose?.candidates)
-      ? entityCandidateResultLoose.candidates.map((candidate: any) => ({
-          serviceId: candidate?.serviceId || null,
-          id: candidate?.id || null,
-          label: candidate?.label || null,
-          name: candidate?.name || null,
-          score: candidate?.score || null,
-          catalogRole: candidate?.catalogRole || null,
-        }))
-      : [],
+    candidates: debugCandidates.map((candidate: any) => ({
+      serviceId: candidate?.serviceId || candidate?.id || null,
+      id: candidate?.id || null,
+      label: candidate?.label || candidate?.name || null,
+      name: candidate?.name || null,
+      score: candidate?.score || null,
+      catalogRole: candidate?.catalogRole || null,
+    })),
     structuredComparison,
   });
 
@@ -496,13 +516,23 @@ export async function handleFastpathHybridTurn(
     const resolvedHit = entityCandidateResultLoose?.hit ?? null;
 
     if (resolvedHit?.id) {
-      const matchedCandidate = Array.isArray(entityCandidateResultLoose?.candidates)
-        ? entityCandidateResultLoose.candidates.find(
-            (candidate: any) =>
-              String(candidate?.serviceId || candidate?.id || "") ===
-              String(resolvedHit.id)
-          )
-        : null;
+      const rawCandidates = Array.isArray(entityCandidateResultLoose?.candidates)
+        ? entityCandidateResultLoose.candidates
+        : [];
+
+      const fallbackCandidates = [
+        entityCandidateResultLoose?.best || null,
+        entityCandidateResultLoose?.second || null,
+      ].filter(Boolean);
+
+      const candidatesForMatch =
+        rawCandidates.length > 0 ? rawCandidates : fallbackCandidates;
+
+      const matchedCandidate = candidatesForMatch.find(
+        (candidate: any) =>
+          String(candidate?.serviceId || candidate?.id || "") ===
+          String(resolvedHit.id)
+      ) || null;
 
       explicitEntityCandidateForClassification = {
         id: String(resolvedHit.id),
