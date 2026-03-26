@@ -564,7 +564,42 @@ export async function handleSingleServiceCatalog(
     });
 
     if (priceRows.length > 0) {
-      const canonicalReply = priceRows
+      const sortedPriceRows = [...priceRows].sort((a: any, b: any) => {
+        const aMinRaw = a?.min_price === null ? null : Number(a?.min_price);
+        const aMaxRaw = a?.max_price === null ? null : Number(a?.max_price);
+        const bMinRaw = b?.min_price === null ? null : Number(b?.min_price);
+        const bMaxRaw = b?.max_price === null ? null : Number(b?.max_price);
+
+        const aMin = Number.isFinite(aMinRaw) ? Number(aMinRaw) : null;
+        const aMax = Number.isFinite(aMaxRaw) ? Number(aMaxRaw) : null;
+        const bMin = Number.isFinite(bMinRaw) ? Number(bMinRaw) : null;
+        const bMax = Number.isFinite(bMaxRaw) ? Number(bMaxRaw) : null;
+
+        const aEffective: number =
+          aMin !== null
+            ? aMin
+            : aMax !== null
+            ? aMax
+            : Number.POSITIVE_INFINITY;
+
+        const bEffective: number =
+          bMin !== null
+            ? bMin
+            : bMax !== null
+            ? bMax
+            : Number.POSITIVE_INFINITY;
+
+        if (aEffective !== bEffective) {
+          return aEffective - bEffective;
+        }
+
+        const aName = String(a?.service_name || "").trim().toLowerCase();
+        const bName = String(b?.service_name || "").trim().toLowerCase();
+
+        return aName.localeCompare(bName);
+      });
+
+      const canonicalReply = sortedPriceRows
         .map((row: any) => {
           const serviceName = String(row?.service_name || "").trim();
           const min = row?.min_price === null ? null : Number(row?.min_price);
