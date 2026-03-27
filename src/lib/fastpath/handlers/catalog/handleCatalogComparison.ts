@@ -25,15 +25,81 @@ type HandleCatalogComparisonInput = {
   }) => Promise<string | null>;
 };
 
+type CatalogComparisonRow = {
+  id: string;
+  name: string;
+  description: string;
+  minPrice: number | null;
+  maxPrice: number | null;
+};
+
+function uniqueOrderedIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const item of value) {
+    const id = String(item || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+
+  return result;
+}
+
+function formatPriceText(
+  minPrice: number | null,
+  maxPrice: number | null,
+  lang: "es" | "en"
+): string {
+  if (Number.isFinite(minPrice) && Number.isFinite(maxPrice)) {
+    if (minPrice === maxPrice) {
+      return `$${minPrice!.toFixed(2)}`;
+    }
+
+    return lang === "en"
+      ? `from $${minPrice!.toFixed(2)}`
+      : `desde $${minPrice!.toFixed(2)}`;
+  }
+
+  if (Number.isFinite(minPrice)) {
+    return lang === "en"
+      ? `from $${minPrice!.toFixed(2)}`
+      : `desde $${minPrice!.toFixed(2)}`;
+  }
+
+  return "";
+}
+
+function buildCanonicalList(
+  items: CatalogComparisonRow[],
+  lang: "es" | "en"
+): string {
+  return items
+    .map((item) => {
+      const priceText = formatPriceText(item.minPrice, item.maxPrice, lang);
+
+      return [
+        priceText ? `• ${item.name}: ${priceText}` : `• ${item.name}`,
+        item.description ? `  - ${item.description}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    })
+    .join("\n\n");
+}
+
 export async function handleCatalogComparison(
   input: HandleCatalogComparisonInput
 ): Promise<FastpathResult> {
   const llmLang: "es" | "en" =
     input.idiomaDestino === "en" ? "en" : "es";
 
-  const ids = Array.isArray(input.catalogReferenceClassification?.targetServiceIds)
-    ? input.catalogReferenceClassification.targetServiceIds.slice(0, 6)
-    : [];
+  const ids = uniqueOrderedIds(
+    input.catalogReferenceClassification?.targetServiceIds
+  );
 
   if (ids.length < 2) {
     return { handled: false };
@@ -45,7 +111,6 @@ export async function handleCatalogComparison(
         s.id,
         s.name,
         s.description,
-        s.price_base,
         COALESCE(MIN(v.price), s.price_base) AS min_price,
         COALESCE(MAX(v.price), s.price_base) AS max_price
       FROM services s
@@ -64,62 +129,80 @@ export async function handleCatalogComparison(
     return { handled: false };
   }
 
-  const byId = new Map(rows.map((row: any) => [String(row.id), row]));
-  const ordered = ids.map((id: string) => byId.get(String(id))).filter(Boolean);
+  const byId = new Map<string, CatalogComparisonRow>();
 
-  const canonicalReply = ordered
-    .map((row: any) => {
-      const name = String(row?.name || "").trim();
-      const description = String(row?.description || "").trim();
-      const min = row?.min_price === null ? null : Number(row?.min_price);
-      const max = row?.max_price === null ? null : Number(row?.max_price);
+  for (const row of rows) {
+    const id = String(row?.id || "").trim();
+    if (!id) continue;
 
-      let priceText =
-        llmLang === "en"
-          ? "price not available"
-          : "precio no disponible";
+    byId.set(id, {
+      id,
+      name: String(row?.name || "").trim(),
+      description: String(row?.description || "").trim(),
+      minPrice: row?.min_price === null ? null : Number(row?.min_price),
+      maxPrice: row?.max_price === null ? null : Number(row?.max_price),
+    });
+  }
 
-      if (Number.isFinite(min) && Number.isFinite(max)) {
-        priceText =
-          min === max
-            ? `$${min!.toFixed(2)}`
-            : llmLang === "en"
-            ? `from $${min!.toFixed(2)}`
-            : `desde $${min!.toFixed(2)}`;
-      } else if (Number.isFinite(min)) {
-        priceText =
-          llmLang === "en"
-            ? `from $${min!.toFixed(2)}`
-            : `desde $${min!.toFixed(2)}`;
-      }
+  const ordered: CatalogComparisonRow[] = ids
+    .map((id) => byId.get(id))
+    .filter((item): item is CatalogComparisonRow => Boolean(item));
 
-      return [
-        `• ${name}: ${priceText}`,
-        description ? `  - ${description}` : "",
-      ]
-        .filter(Boolean)
-        .join("\n");
-    })
-    .join("\n\n");
+  if (ordered.length < 2) {
+    return { handled: false };
+  }
 
-  const reply =
-    (await input.answerCatalogQuestionLLM({
+  if (ordered.length > 2) {
+    const canonicalReply = buildCanonicalList(ordered, llmLang);
+
+    const reply =
+      (await input.answerCatalogQuestionLLM({
         idiomaDestino: llmLang,
         canonicalReply,
         userInput: input.userInput,
-        mode: "grounded_catalog_sales",
-        renderIntent: "catalog_compare",
-        comparisonItems: ordered.map((row: any) => ({
-        id: String(row?.id || ""),
-        name: String(row?.name || "").trim(),
-        description: String(row?.description || "").trim(),
-        minPrice:
-            row?.min_price === null ? null : Number(row?.min_price),
-        maxPrice:
-            row?.max_price === null ? null : Number(row?.max_price),
+        mode: "grounded_frame_only",
+        renderIntent: "catalog_list",
+        comparisonItems: ordered.map((item) => ({
+          id: item.id,
+          name: item.name,
+          description: item.description,
+          minPrice: item.minPrice,
+          maxPrice: item.maxPrice,
         })),
         maxIntroLines: 1,
         maxClosingLines: 1,
+      })) || canonicalReply;
+
+    return {
+      handled: true,
+      source: "catalog_comparison_needs_disambiguation" as any,
+      intent: "info_servicio",
+      reply,
+      ctxPatch: {
+        lastResolvedIntent: "compare",
+        comparisonCandidateServiceIds: ordered.map((item) => item.id),
+      },
+    };
+  }
+
+  const canonicalReply = buildCanonicalList(ordered, llmLang);
+
+  const reply =
+    (await input.answerCatalogQuestionLLM({
+      idiomaDestino: llmLang,
+      canonicalReply,
+      userInput: input.userInput,
+      mode: "grounded_catalog_sales",
+      renderIntent: "catalog_compare",
+      comparisonItems: ordered.map((item) => ({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        minPrice: item.minPrice,
+        maxPrice: item.maxPrice,
+      })),
+      maxIntroLines: 1,
+      maxClosingLines: 1,
     })) || canonicalReply;
 
   return {
