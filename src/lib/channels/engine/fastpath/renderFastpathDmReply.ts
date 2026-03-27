@@ -130,6 +130,27 @@ export async function renderFastpathDmReply(
           "- Suena consultivo, no agresivo.",
         ].join("\n");
 
+  const GROUNDED_FRAME_RULE =
+    idiomaDestino === "en"
+        ? [
+            "GROUNDED FRAME RULE:",
+            "- Keep the structured body as the source of truth.",
+            "- Do NOT rewrite, reorder, summarize, or omit the structured body.",
+            "- You MUST wrap it in a natural DM-style response.",
+            "- Add a short, useful opening line that feels human and consultative.",
+            "- You MAY add one short closing line if it helps move the conversation forward.",
+            "- The body from DATOS_ESTRUCTURADOS_DEL_SISTEMA must remain intact.",
+        ].join("\n")
+        : [
+            "REGLA DE ENMARCADO GROUNDED:",
+            "- Mantén el cuerpo estructurado como fuente de verdad.",
+            "- NO reescribas, reordenes, resumas ni omitas el cuerpo estructurado.",
+            "- DEBES envolverlo en una respuesta natural estilo chat/DM.",
+            "- Agrega una apertura corta, útil, humana y consultiva.",
+            "- PUEDES agregar un cierre corto si ayuda a mover la conversación.",
+            "- El cuerpo de DATOS_ESTRUCTURADOS_DEL_SISTEMA debe permanecer intacto.",
+        ].join("\n");
+
   const promptConFastpath = [
     promptBaseMem,
     "",
@@ -146,7 +167,9 @@ export async function renderFastpathDmReply(
     SALES_OPENING_RULE,
     "",
     SALES_CTA_RULE,
-  ].join("\n");
+    "",
+    replyPolicy.shouldUseGroundedFrameOnly ? GROUNDED_FRAME_RULE : "",
+  ].filter(Boolean).join("\n");
 
   const isCatalogDbReply = String(fp.source || "") === "catalog_db";
   const isPriceDisambiguationReply =
@@ -195,9 +218,9 @@ export async function renderFastpathDmReply(
       allowOutro: true,
       allowBodyRewrite: !replyPolicy.shouldUseGroundedFrameOnly,
       reasoningNotes: isCatalogDbReply
-        ? "Catalog DB reply: improve framing only, never alter the canonical body."
+        ? "Catalog grounded reply. Keep the structured body exactly intact, but wrap it in a natural, consultative DM response with a short opening and optional short closing."
         : isPriceDisambiguationReply
-        ? "Variant/price disambiguation reply: improve framing only, never alter the canonical body."
+        ? "Variant/price disambiguation grounded reply. Keep the structured body exactly intact, but wrap it in a natural, consultative DM response with a short opening and optional short closing."
         : null,
     },
   });
