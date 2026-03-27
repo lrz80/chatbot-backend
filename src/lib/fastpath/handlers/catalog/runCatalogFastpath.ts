@@ -14,7 +14,6 @@ import {
 } from "./helpers/catalogBusinessInfoBlocks";
 import { buildPriceBlock } from "./helpers/catalogPriceBlock";
 import { buildScheduleBlock } from "./helpers/catalogScheduleBlock";
-import { renderCatalogReplyWithSalesFrame } from "../../helpers/catalogRendering";
 import { handleCatalogComparison } from "./handleCatalogComparison";
 
 type CatalogFacets = {
@@ -524,8 +523,6 @@ export async function runCatalogFastpath(
         catalogRoutingSignal,
         catalogReferenceClassification: input.catalogReferenceClassification,
         rows,
-        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-        renderCatalogReplyWithSalesFrame,
         catalogRouteIntent: routeIntent,
       });
 
@@ -590,20 +587,12 @@ export async function runCatalogFastpath(
     const canonicalReply = priceBlock;
     const namesShown = input.extractPlanNamesFromReply(priceBlock);
 
-    const finalReply = await renderCatalogReplyWithSalesFrame({
-      lang: input.idiomaDestino === "en" ? "en" : "es",
-      userInput: input.userInput,
-      canonicalReply,
-      answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-      mode: "grounded_catalog_sales",
-      maxIntroLines: 1,
-      maxClosingLines: 1,
-    });
+    const finalReply = canonicalReply;
 
     console.log("[PRICE][catalog_db][SAFE_RENDER]", {
       rowsCount: rowsLocalized.length,
       namesShown,
-      usedModelReply: finalReply !== canonicalReply,
+      usedModelReply: false,
       canonicalPreview: canonicalReply.slice(0, 220),
       modelPreview: finalReply.slice(0, 220),
       facets: input.facets || {},
@@ -804,15 +793,7 @@ export async function runCatalogFastpath(
 
     const namesShown = input.extractPlanNamesFromReply(priceBlock);
 
-    const finalReply = await renderCatalogReplyWithSalesFrame({
-      lang: input.idiomaDestino === "en" ? "en" : "es",
-      userInput: input.userInput,
-      canonicalReply,
-      answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-      mode: "grounded_catalog_sales",
-      maxIntroLines: 1,
-      maxClosingLines: 1,
-    });
+    const finalReply = canonicalReply;
 
     const ctxPatch: any = {
       last_catalog_at: Date.now(),
@@ -910,17 +891,7 @@ export async function runCatalogFastpath(
         ? fallbackNames.map((name: string) => `• ${name}`).join("\n")
         : "";
 
-      const finalReply = canonicalReply
-        ? await renderCatalogReplyWithSalesFrame({
-            lang: input.idiomaDestino === "en" ? "en" : "es",
-            userInput: input.userInput,
-            canonicalReply,
-            answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-            mode: "grounded_catalog_sales",
-            maxIntroLines: 1,
-            maxClosingLines: 1,
-          })
-        : "";
+      const finalReply = canonicalReply || "";
 
       return {
         handled: true,
@@ -969,15 +940,7 @@ export async function runCatalogFastpath(
       })
       .join("\n");
 
-    const reply = await renderCatalogReplyWithSalesFrame({
-      lang: input.idiomaDestino === "en" ? "en" : "es",
-      userInput: input.userInput,
-      canonicalReply,
-      answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-      mode: "grounded_catalog_sales",
-      maxIntroLines: 1,
-      maxClosingLines: 1,
-    });
+    const reply = canonicalReply;
 
     const namesShown = rowsToRender
       .map((r: any) => String(r.option_name || "").trim())

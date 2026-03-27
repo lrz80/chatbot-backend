@@ -14,32 +14,6 @@ export type HandleSingleServiceCatalogInput = {
 
   rows: any[];
 
-  answerCatalogQuestionLLM: (input: {
-    idiomaDestino: "es" | "en";
-    canonicalReply: string;
-    userInput: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string | null>;
-
-  renderCatalogReplyWithSalesFrame: (args: {
-    lang: any;
-    userInput: string;
-    canonicalReply: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    answerCatalogQuestionLLM: (input: {
-      idiomaDestino: "es" | "en";
-      canonicalReply: string;
-      userInput: string;
-      mode?: "grounded_frame_only" | "grounded_catalog_sales";
-      maxIntroLines?: number;
-      maxClosingLines?: number;
-    }) => Promise<string | null>;
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string>;
-
   catalogRouteIntent?: string | null;
 };
 
@@ -311,20 +285,12 @@ export async function handleSingleServiceCatalog(
               bulletsText ? `\n\nIncluye:\n${bulletsText}` : ""
             }`;
 
-      const finalReply = await input.renderCatalogReplyWithSalesFrame({
-        lang: input.idiomaDestino === "en" ? "en" : "es",
-        userInput: input.userInput,
-        canonicalReply: canonicalBody,
-        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-        mode: "grounded_catalog_sales",
-        maxIntroLines: 1,
-        maxClosingLines: 1,
-      });
+      const finalReply = canonicalBody;
 
       return {
         handled: true,
         reply: finalReply,
-        source: "price_fastpath_db_llm_render",
+        source: "price_fastpath_db",
         intent: "precio",
         ctxPatch: {
           last_service_id: targetServiceId,
@@ -386,15 +352,7 @@ export async function handleSingleServiceCatalog(
 
       const canonicalReply = lines.join("\n");
 
-      const finalReply = await input.renderCatalogReplyWithSalesFrame({
-        lang: input.idiomaDestino === "en" ? "en" : "es",
-        userInput: input.userInput,
-        canonicalReply,
-        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-        mode: "grounded_catalog_sales",
-        maxIntroLines: 1,
-        maxClosingLines: 1,
-      });
+      const finalReply = canonicalReply;
 
       return {
         handled: true,
@@ -450,20 +408,12 @@ export async function handleSingleServiceCatalog(
           ? `• ${targetServiceName}\n• Price: not available in the catalog`
           : `• ${targetServiceName}\n• Precio: no disponible en el catálogo`;
 
-      const finalReply = await input.renderCatalogReplyWithSalesFrame({
-        lang: input.idiomaDestino === "en" ? "en" : "es",
-        userInput: input.userInput,
-        canonicalReply,
-        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-        mode: "grounded_frame_only",
-        maxIntroLines: 1,
-        maxClosingLines: 1,
-      });
+      const finalReply = canonicalReply;
 
       return {
         handled: true,
         reply: finalReply,
-        source: "price_fastpath_db_no_price_llm_render",
+        source: "price_fastpath_db_no_price",
         intent: "precio",
         ctxPatch: {
           last_service_id: targetServiceId,
@@ -488,20 +438,12 @@ export async function handleSingleServiceCatalog(
             ? `• ${targetServiceName}\n• Price: not explicitly configured`
             : `• ${targetServiceName}\n• Precio: no configurado explícitamente`;
 
-        const finalReply = await input.renderCatalogReplyWithSalesFrame({
-          lang: input.idiomaDestino === "en" ? "en" : "es",
-          userInput: input.userInput,
-          canonicalReply,
-          answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-          mode: "grounded_frame_only",
-          maxIntroLines: 1,
-          maxClosingLines: 1,
-        });
+        const finalReply = canonicalReply;
 
         return {
           handled: true,
           reply: finalReply,
-          source: "price_fastpath_db_no_price_llm_render",
+          source: "price_fastpath_db_no_price",
           intent: "precio",
           ctxPatch: {
             last_service_id: targetServiceId,
@@ -527,20 +469,12 @@ export async function handleSingleServiceCatalog(
 
       const canonicalReply = `• ${targetServiceName}: ${priceText}`;
 
-      const finalReply = await input.renderCatalogReplyWithSalesFrame({
-        lang: input.idiomaDestino === "en" ? "en" : "es",
-        userInput: input.userInput,
-        canonicalReply,
-        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-        mode: "grounded_catalog_sales",
-        maxIntroLines: 1,
-        maxClosingLines: 1,
-      });
+      const finalReply = canonicalReply;
 
       return {
         handled: true,
         reply: finalReply,
-        source: "price_fastpath_db_llm_render",
+        source: "price_fastpath_db",
         intent: "precio",
         ctxPatch: {
           last_service_id: targetServiceId,
@@ -632,20 +566,12 @@ export async function handleSingleServiceCatalog(
         })
         .join("\n");
 
-      const finalReply = await input.renderCatalogReplyWithSalesFrame({
-        lang: input.idiomaDestino === "en" ? "en" : "es",
-        userInput: input.userInput,
-        canonicalReply,
-        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-        mode: "grounded_catalog_sales",
-        maxIntroLines: 1,
-        maxClosingLines: 1,
-      });
+      const finalReply = canonicalReply;
 
       return {
         handled: true,
         reply: finalReply,
-        source: "price_summary_db_llm_render",
+        source: "price_summary_db",
         intent: "precio",
         ctxPatch: {
           lastResolvedIntent: "price_or_plan",
