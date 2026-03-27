@@ -20,6 +20,7 @@ import { renderFastpathDmReply } from "./renderFastpathDmReply";
 import { getStructuredServiceForFastpath } from "./getStructuredServiceForFastpath";
 import { getFastpathImmediateReturn } from "./getFastpathImmediateReturn";
 import { getFastpathPostRunDecision } from "./getFastpathPostRunDecision";
+import { applyStructuredServicePersistence } from "./applyStructuredServicePersistence";
 
 const MAX_WHATSAPP_LINES = 9999;
 
@@ -280,7 +281,7 @@ export async function handleFastpathHybridTurn(
     };
   }
 
-  const ctxPatch: any = fp.ctxPatch ? { ...fp.ctxPatch } : {};
+  let ctxPatch: any = fp.ctxPatch ? { ...fp.ctxPatch } : {};
 
   const structuredService = getStructuredServiceForFastpath({
     fp,
@@ -335,28 +336,11 @@ export async function handleFastpathHybridTurn(
 
   console.log("[STRUCTURED_SERVICE][CALLER]", structuredService);
 
-  const shouldPersistStructuredService =
-    replyPolicy.shouldPersistStructuredService;
-
-  if (shouldPersistStructuredService && structuredService.serviceId) {
-    ctxPatch.last_service_id = structuredService.serviceId;
-    ctxPatch.selectedServiceId = structuredService.serviceId;
-  }
-
-  if (shouldPersistStructuredService && structuredService.serviceName) {
-    ctxPatch.last_service_name = structuredService.serviceName;
-    ctxPatch.selectedServiceName = structuredService.serviceName;
-  }
-
-  if (shouldPersistStructuredService && structuredService.serviceLabel) {
-    ctxPatch.last_service_label = structuredService.serviceLabel;
-    ctxPatch.selectedServiceLabel = structuredService.serviceLabel;
-  }
-
-  if (shouldPersistStructuredService) {
-    ctxPatch.last_entity_kind = "service";
-    ctxPatch.last_entity_at = Date.now();
-  }
+  ctxPatch = applyStructuredServicePersistence({
+    shouldPersistStructuredService: replyPolicy.shouldPersistStructuredService,
+    structuredService,
+    ctxPatch,
+  });
 
   if (fp.awaitingEffect?.type === "set_awaiting_yes_no") {
     const { setAwaitingState } = await import("../../../awaiting/setAwaitingState");
