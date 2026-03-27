@@ -308,6 +308,7 @@ type StructuredCatalogComparison = {
   serviceIds: string[];
   serviceNames: string[];
   serviceLabels: string[];
+  requiresDisambiguation: boolean;
 };
 
 function isComparisonFriendlyIntent(intent: string | null | undefined): boolean {
@@ -350,7 +351,7 @@ function buildComparisonSideLabel(members: any[]): string {
     .map((m) => String(m?.label || m?.name || m?.serviceName || "").trim())
     .filter(Boolean);
 
-  if (!names.length) return "Opción";
+  if (!names.length) return "";
 
   const shortest = [...names].sort((a, b) => a.length - b.length)[0];
   return shortest;
@@ -401,7 +402,6 @@ function buildStructuredCatalogComparison(params: {
       const catalogRole = String(candidate?.catalogRole || "")
         .trim()
         .toLowerCase();
-      const exactNameHits = Number(candidate?.exactNameHits || 0);
       const exactVariantHits = Number(candidate?.exactVariantHits || 0);
       const groupKey = getComparisonGroupKey(candidate);
 
@@ -411,7 +411,6 @@ function buildStructuredCatalogComparison(params: {
         label,
         score,
         catalogRole,
-        exactNameHits,
         exactVariantHits,
         groupKey,
       };
@@ -432,31 +431,45 @@ function buildStructuredCatalogComparison(params: {
   const grouped = new Map<string, any[]>();
 
   for (const candidate of eligible) {
-    if (!grouped.has(candidate.groupKey)) {
-      grouped.set(candidate.groupKey, []);
-    }
-    grouped.get(candidate.groupKey)!.push(candidate);
+    const bucket = grouped.get(candidate.groupKey) || [];
+    bucket.push(candidate);
+    grouped.set(candidate.groupKey, bucket);
   }
 
-  const sides = Array.from(grouped.entries())
+  const allSides = Array.from(grouped.entries())
     .map(([key, members]) => {
       const orderedMembers = [...members].sort(
         (a: any, b: any) => b.score - a.score
       );
 
+      const uniqueServiceIds: string[] = [];
+      const uniqueServiceNames: string[] = [];
+      const uniqueServiceLabels: string[] = [];
+      const seenIds = new Set<string>();
+
+      for (const member of orderedMembers) {
+        const memberId = String(member?.id || "").trim();
+        if (!memberId || seenIds.has(memberId)) continue;
+
+        seenIds.add(memberId);
+        uniqueServiceIds.push(memberId);
+        uniqueServiceNames.push(String(member?.name || "").trim());
+        uniqueServiceLabels.push(String(member?.label || member?.name || "").trim());
+      }
+
       return {
         key,
         label: buildComparisonSideLabel(orderedMembers),
         score: Math.max(...orderedMembers.map((m: any) => m.score)),
-        serviceIds: orderedMembers.map((m: any) => m.id),
-        serviceNames: orderedMembers.map((m: any) => m.name),
-        serviceLabels: orderedMembers.map((m: any) => m.label),
+        serviceIds: uniqueServiceIds,
+        serviceNames: uniqueServiceNames,
+        serviceLabels: uniqueServiceLabels,
       };
     })
-    .sort((a: any, b: any) => b.score - a.score)
-    .slice(0, 2);
+    .filter((side) => side.serviceIds.length > 0)
+    .sort((a: any, b: any) => b.score - a.score);
 
-  if (sides.length < 2) {
+  if (allSides.length < 2) {
     return null;
   }
 
@@ -468,7 +481,7 @@ function buildStructuredCatalogComparison(params: {
       explicitEntityCandidateForClassification.id || ""
     ).trim();
 
-    const explicitExistsInSides = sides.some((side) =>
+    const explicitExistsInSides = allSides.some((side) =>
       side.serviceIds.includes(explicitId)
     );
 
@@ -477,12 +490,32 @@ function buildStructuredCatalogComparison(params: {
     }
   }
 
+  const flattenedIds: string[] = [];
+  const flattenedNames: string[] = [];
+  const flattenedLabels: string[] = [];
+  const seenFlattenedIds = new Set<string>();
+
+  for (const side of allSides) {
+    for (let i = 0; i < side.serviceIds.length; i += 1) {
+      const serviceId = String(side.serviceIds[i] || "").trim();
+      if (!serviceId || seenFlattenedIds.has(serviceId)) continue;
+
+      seenFlattenedIds.add(serviceId);
+      flattenedIds.push(serviceId);
+      flattenedNames.push(String(side.serviceNames[i] || "").trim());
+      flattenedLabels.push(String(side.serviceLabels[i] || "").trim());
+    }
+  }
+
   return {
     hasComparison: true,
-    sides,
-    serviceIds: sides.flatMap((side) => side.serviceIds),
-    serviceNames: sides.flatMap((side) => side.serviceNames),
-    serviceLabels: sides.map((side) => side.label),
+    sides: allSides,
+    serviceIds: flattenedIds,
+    serviceNames: flattenedNames,
+    serviceLabels: allSides
+      .map((side) => String(side.label || "").trim())
+      .filter(Boolean),
+    requiresDisambiguation: allSides.some((side) => side.serviceIds.length !== 1),
   };
 }
 
