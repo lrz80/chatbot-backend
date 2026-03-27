@@ -328,22 +328,67 @@ function toFiniteScore(value: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function getComparisonGroupKey(candidate: any): string {
-  const overlapNameToken = String(candidate?.overlapNameTokens?.[0] || "")
-    .trim()
-    .toLowerCase();
+type ComparisonTokenStats = Map<string, number>;
 
-  if (overlapNameToken) return overlapNameToken;
+function getCandidateComparisonTokens(candidate: any): string[] {
+  const raw = [
+    ...(Array.isArray(candidate?.overlapNameTokens)
+      ? candidate.overlapNameTokens
+      : []),
+    ...(Array.isArray(candidate?.overlapSupportTokens)
+      ? candidate.overlapSupportTokens
+      : []),
+  ];
 
-  const overlapSupportToken = String(candidate?.overlapSupportTokens?.[0] || "")
-    .trim()
-    .toLowerCase();
+  const seen = new Set<string>();
+  const tokens: string[] = [];
 
-  if (overlapSupportToken) return overlapSupportToken;
+  for (const value of raw) {
+    const token = String(value || "").trim().toLowerCase();
+    if (!token || seen.has(token)) continue;
+    seen.add(token);
+    tokens.push(token);
+  }
 
-  return String(candidate?.serviceId || candidate?.id || "")
-    .trim()
-    .toLowerCase();
+  return tokens;
+}
+
+function buildComparisonTokenStats(candidates: any[]): ComparisonTokenStats {
+  const stats: ComparisonTokenStats = new Map();
+
+  for (const candidate of candidates) {
+    const tokens = getCandidateComparisonTokens(candidate);
+    for (const token of tokens) {
+      stats.set(token, (stats.get(token) || 0) + 1);
+    }
+  }
+
+  return stats;
+}
+
+function getComparisonGroupKey(
+  candidate: any,
+  tokenStats: ComparisonTokenStats
+): string {
+  const tokens = getCandidateComparisonTokens(candidate);
+
+  if (!tokens.length) {
+    return String(candidate?.serviceId || candidate?.id || "")
+      .trim()
+      .toLowerCase();
+  }
+
+  const sorted = [...tokens].sort((a, b) => {
+    const freqDiff = (tokenStats.get(b) || 0) - (tokenStats.get(a) || 0);
+    if (freqDiff !== 0) return freqDiff;
+
+    const lenDiff = a.length - b.length;
+    if (lenDiff !== 0) return lenDiff;
+
+    return a.localeCompare(b);
+  });
+
+  return sorted[0];
 }
 
 function buildComparisonSideLabel(members: any[]): string {
@@ -389,6 +434,8 @@ function buildStructuredCatalogComparison(params: {
   const candidates =
     rawCandidates.length > 0 ? rawCandidates : fallbackCandidates;
 
+  const tokenStats = buildComparisonTokenStats(candidates);
+
   const eligible = candidates
     .map((candidate: any) => {
       const id = String(candidate?.serviceId || candidate?.id || "").trim();
@@ -403,7 +450,7 @@ function buildStructuredCatalogComparison(params: {
         .trim()
         .toLowerCase();
       const exactVariantHits = Number(candidate?.exactVariantHits || 0);
-      const groupKey = getComparisonGroupKey(candidate);
+      const groupKey = getComparisonGroupKey(candidate, tokenStats);
 
       return {
         id,
