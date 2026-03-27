@@ -136,17 +136,23 @@ function buildSystemMsg(params: {
       ? idiomaDestino === "es"
         ? [
             "Estás respondiendo una comparación entre opciones de catálogo resueltas desde DB.",
-            "Debes contrastar las opciones entre sí, no describirlas como fichas separadas.",
-            "No inventes atributos, beneficios, diferencias, precios ni disponibilidad.",
+            "Debes contrastar las opciones entre sí; no describirlas como fichas separadas.",
+            "No inventes atributos, beneficios, diferencias, precios, descuentos, disponibilidad ni includes.",
             "Si faltan datos diferenciales, dilo con claridad sin inventar.",
-            "Puedes usar la información resuelta para explicar diferencia práctica, precio relativo y orientación de elección.",
-          ].join("\n")
+            "Debes responder de forma útil para venta consultiva, no como catálogo pasivo.",
+            "Después de explicar la diferencia principal, recomienda cuál conviene según el objetivo o uso esperado, pero solo usando los datos resueltos.",
+            "Cierra con una sola pregunta breve que ayude a avanzar la conversación de venta.",
+            "No cierres en seco.",
+            ].join("\n")
         : [
             "You are answering a comparison between catalog options resolved from DB.",
-            "You must contrast the options against each other, not describe them as separate cards.",
-            "Do not invent attributes, benefits, differences, prices, or availability.",
+            "You must contrast the options against each other; do not describe them as separate cards.",
+            "Do not invent attributes, benefits, differences, prices, discounts, availability, or included items.",
             "If differential data is missing, say so clearly without inventing.",
-            "You may use the resolved information to explain practical differences, relative pricing, and buying guidance.",
+            "You must answer in a consultative sales style, not as a passive catalog.",
+            "After explaining the main difference, recommend which option fits better depending on the user's likely goal or use case, using only resolved data.",
+            "End with one brief forward-moving sales question.",
+            "Do not end abruptly.",
           ].join("\n")
       : idiomaDestino === "es"
       ? [
@@ -195,14 +201,16 @@ function buildSystemMsg(params: {
         ? [
             "Formato requerido:",
             "1. intro opcional breve",
-            "2. explicación comparativa clara entre las opciones",
-            "3. cierre opcional breve",
-          ].join("\n")
+            "2. diferencia principal entre las opciones",
+            "3. recomendación breve de cuál conviene según el uso u objetivo",
+            "4. pregunta final breve para avanzar la venta",
+            ].join("\n")
         : [
             "Required format:",
             "1. optional brief intro",
-            "2. clear comparative explanation between the options",
-            "3. optional brief closing",
+            "2. main difference between the options",
+            "3. brief recommendation on which one fits better depending on use case or goal",
+            "4. brief final question to move the sale forward",
           ].join("\n")
       : idiomaDestino === "es"
       ? [
@@ -257,7 +265,11 @@ function buildUserMsg(params: {
         "Referencia canónica adicional:",
         canonicalReply,
         "",
-        "Devuélveme una respuesta final lista para enviar que explique las diferencias entre las opciones comparadas, sin inventar información.",
+        "Devuélveme una respuesta final lista para enviar que:",
+        "1. explique la diferencia principal entre las opciones comparadas,",
+        "2. recomiende cuál conviene más según el uso u objetivo, sin inventar información,",
+        "3. termine con una sola pregunta breve que ayude a avanzar la venta.",
+        "No respondas como catálogo ni como fichas separadas.",
       ].join("\n");
     }
 
@@ -270,7 +282,11 @@ function buildUserMsg(params: {
       "Additional canonical reference:",
       canonicalReply,
       "",
-      "Return the final reply ready to send explaining the differences between the compared options, without inventing information.",
+      "Return the final ready-to-send reply that:",
+      "1. explains the main difference between the compared options,",
+      "2. recommends which one fits better depending on use case or goal, without inventing information,",
+      "3. ends with one brief question that helps move the sale forward.",
+      "Do not answer as a catalog or as separate item cards.",
     ].join("\n");
   }
 
