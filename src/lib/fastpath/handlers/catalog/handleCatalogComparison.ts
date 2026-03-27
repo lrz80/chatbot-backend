@@ -70,7 +70,7 @@ function formatPriceText(
       : `desde $${minPrice!.toFixed(2)}`;
   }
 
-  return "";
+  return lang === "en" ? "price not available" : "precio no disponible";
 }
 
 function buildCanonicalList(
@@ -89,6 +89,45 @@ function buildCanonicalList(
         .join("\n");
     })
     .join("\n\n");
+}
+
+function buildCanonicalComparison(
+  left: CatalogComparisonRow,
+  right: CatalogComparisonRow,
+  lang: "es" | "en"
+): string {
+  const leftPrice = formatPriceText(left.minPrice, left.maxPrice, lang);
+  const rightPrice = formatPriceText(right.minPrice, right.maxPrice, lang);
+
+  if (lang === "en") {
+    return [
+      `Compare these two options: ${left.name} vs ${right.name}`,
+      `• Price`,
+      `  - ${left.name}: ${leftPrice}`,
+      `  - ${right.name}: ${rightPrice}`,
+      `• Description`,
+      `  - ${left.name}: ${left.description || "n/a"}`,
+      `  - ${right.name}: ${right.description || "n/a"}`,
+      `• Instruction`,
+      `  - Explain the key differences only.`,
+      `  - Do not present them as an independent catalog list.`,
+      `  - Compare side by side using only grounded data.`,
+    ].join("\n");
+  }
+
+  return [
+    `Compara estas dos opciones: ${left.name} vs ${right.name}`,
+    `• Precio`,
+    `  - ${left.name}: ${leftPrice}`,
+    `  - ${right.name}: ${rightPrice}`,
+    `• Descripción`,
+    `  - ${left.name}: ${left.description || "sin descripción"}`,
+    `  - ${right.name}: ${right.description || "sin descripción"}`,
+    `• Instrucción`,
+    `  - Explica solo las diferencias clave.`,
+    `  - No los presentes como una lista independiente de catálogo.`,
+    `  - Compara lado a lado usando solo datos grounded.`,
+  ].join("\n");
 }
 
 export async function handleCatalogComparison(
@@ -152,7 +191,12 @@ export async function handleCatalogComparison(
     return { handled: false };
   }
 
-  if (ordered.length > 2) {
+  const requiresDisambiguation = Boolean(
+    input.catalogReferenceClassification?.structuredComparison
+      ?.requiresDisambiguation
+  );
+
+  if (requiresDisambiguation || ordered.length !== 2) {
     const canonicalReply = buildCanonicalList(ordered, llmLang);
 
     const reply =
@@ -185,7 +229,8 @@ export async function handleCatalogComparison(
     };
   }
 
-  const canonicalReply = buildCanonicalList(ordered, llmLang);
+  const [left, right] = ordered;
+  const canonicalReply = buildCanonicalComparison(left, right, llmLang);
 
   const reply =
     (await input.answerCatalogQuestionLLM({
@@ -194,13 +239,22 @@ export async function handleCatalogComparison(
       userInput: input.userInput,
       mode: "grounded_catalog_sales",
       renderIntent: "catalog_compare",
-      comparisonItems: ordered.map((item) => ({
-        id: item.id,
-        name: item.name,
-        description: item.description,
-        minPrice: item.minPrice,
-        maxPrice: item.maxPrice,
-      })),
+      comparisonItems: [
+        {
+          id: left.id,
+          name: left.name,
+          description: left.description,
+          minPrice: left.minPrice,
+          maxPrice: left.maxPrice,
+        },
+        {
+          id: right.id,
+          name: right.name,
+          description: right.description,
+          minPrice: right.minPrice,
+          maxPrice: right.maxPrice,
+        },
+      ],
       maxIntroLines: 1,
       maxClosingLines: 1,
     })) || canonicalReply;
