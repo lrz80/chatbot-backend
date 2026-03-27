@@ -66,15 +66,6 @@ export type RunCatalogFastpathInput = {
 
   answerWithPromptBase: (input: any) => Promise<{ text: string }>;
 
-  answerCatalogQuestionLLM: (input: {
-    idiomaDestino: "es" | "en";
-    canonicalReply: string;
-    userInput: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string | null>;
-
   postProcessCatalogReply: (input: {
     reply: string;
     questionType:
@@ -503,7 +494,6 @@ export async function runCatalogFastpath(
         tenantId: input.tenantId,
         userInput: input.userInput,
         idiomaDestino: input.idiomaDestino,
-        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
         catalogReferenceClassification: input.catalogReferenceClassification,
       });
 

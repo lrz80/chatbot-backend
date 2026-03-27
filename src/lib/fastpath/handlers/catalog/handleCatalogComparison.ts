@@ -7,29 +7,11 @@ type HandleCatalogComparisonInput = {
   idiomaDestino: string;
   userInput: string;
   catalogReferenceClassification: any;
-  answerCatalogQuestionLLM: (input: {
-    idiomaDestino: "es" | "en";
-    canonicalReply: string;
-    userInput: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    renderIntent?: "catalog_compare" | "catalog_detail" | "catalog_list";
-    comparisonItems?: Array<{
-      id: string;
-      name: string;
-      description: string;
-      minPrice: number | null;
-      maxPrice: number | null;
-    }>;
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string | null>;
 };
 
 export async function handleCatalogComparison(
   input: HandleCatalogComparisonInput
 ): Promise<FastpathResult> {
-  const llmLang: "es" | "en" =
-    input.idiomaDestino === "en" ? "en" : "es";
 
   const ids = Array.isArray(input.catalogReferenceClassification?.targetServiceIds)
     ? input.catalogReferenceClassification.targetServiceIds.slice(0, 6)
@@ -75,7 +57,7 @@ export async function handleCatalogComparison(
       const max = row?.max_price === null ? null : Number(row?.max_price);
 
       let priceText =
-        llmLang === "en"
+        input.idiomaDestino === "en"
           ? "price not available"
           : "precio no disponible";
 
@@ -83,12 +65,12 @@ export async function handleCatalogComparison(
         priceText =
           min === max
             ? `$${min!.toFixed(2)}`
-            : llmLang === "en"
+            : input.idiomaDestino === "en"
             ? `from $${min!.toFixed(2)}`
             : `desde $${min!.toFixed(2)}`;
       } else if (Number.isFinite(min)) {
         priceText =
-          llmLang === "en"
+          input.idiomaDestino === "en"
             ? `from $${min!.toFixed(2)}`
             : `desde $${min!.toFixed(2)}`;
       }
@@ -102,29 +84,11 @@ export async function handleCatalogComparison(
     })
     .join("\n\n");
 
-  const reply =
-    (await input.answerCatalogQuestionLLM({
-        idiomaDestino: llmLang,
-        canonicalReply,
-        userInput: input.userInput,
-        mode: "grounded_catalog_sales",
-        renderIntent: "catalog_compare",
-        comparisonItems: ordered.map((row: any) => ({
-        id: String(row?.id || ""),
-        name: String(row?.name || "").trim(),
-        description: String(row?.description || "").trim(),
-        minPrice:
-            row?.min_price === null ? null : Number(row?.min_price),
-        maxPrice:
-            row?.max_price === null ? null : Number(row?.max_price),
-        })),
-        maxIntroLines: 1,
-        maxClosingLines: 1,
-    })) || canonicalReply;
+  const reply = canonicalReply;
 
   return {
     handled: true,
-    source: "catalog_comparison_db_llm_render" as any,
+    source: "catalog_comparison_db" as any,
     intent: "info_servicio",
     reply,
     ctxPatch: {
