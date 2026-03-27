@@ -91,48 +91,37 @@ function mapDetectedIntentToCatalogIntent(
   }
 }
 
+function isSafeContextIntent(
+  value: string | null | undefined
+): value is CatalogReferenceIntent {
+  if (!value) return false;
+
+  return (
+    value === "price_or_plan" ||
+    value === "includes" ||
+    value === "schedule" ||
+    value === "other_plans" ||
+    value === "combination_and_price" ||
+    value === "compare" ||
+    value === "unknown"
+  );
+}
+
 function inferIntentFromContext(params: {
   detectedIntent: string | null;
   context: CatalogReferenceContext;
-  explicitEntityCandidate: CatalogReferenceClassificationInput["explicitEntityCandidate"];
-  explicitFamilyCandidate: CatalogReferenceClassificationInput["explicitFamilyCandidate"];
-  explicitVariantCandidate: CatalogReferenceClassificationInput["explicitVariantCandidate"];
 }): CatalogReferenceIntent {
   const mapped = mapDetectedIntentToCatalogIntent(params.detectedIntent, "unknown");
   if (mapped !== "unknown") return mapped;
 
-  const { context, explicitEntityCandidate, explicitFamilyCandidate, explicitVariantCandidate } = params;
+  const { context } = params;
 
-  if (explicitVariantCandidate?.variantId) {
-    return context.expectedVariantIntent || "includes";
-  }
-
-  if (explicitEntityCandidate?.id) {
-    return context.lastResolvedIntent || "includes";
-  }
-
-  if (explicitFamilyCandidate?.familyKey) {
-    return "price_or_plan";
-  }
-
-  if (context.expectedVariantIntent) {
+  if (isSafeContextIntent(context.expectedVariantIntent)) {
     return context.expectedVariantIntent;
   }
 
-  if (context.lastResolvedIntent) {
+  if (isSafeContextIntent(context.lastResolvedIntent)) {
     return context.lastResolvedIntent;
-  }
-
-  if (context.expectingVariantForEntityId) {
-    return "includes";
-  }
-
-  if (context.lastEntityId) {
-    return "unknown";
-  }
-
-  if (context.lastFamilyKey) {
-    return "price_or_plan";
   }
 
   return "unknown";
@@ -145,7 +134,13 @@ function buildSignals(params: {
   explicitFamilyCandidate: CatalogReferenceClassificationInput["explicitFamilyCandidate"];
   explicitVariantCandidate: CatalogReferenceClassificationInput["explicitVariantCandidate"];
 }): CatalogReferenceSignals {
-  const { userText, context, explicitEntityCandidate, explicitFamilyCandidate, explicitVariantCandidate } = params;
+  const {
+    userText,
+    context,
+    explicitEntityCandidate,
+    explicitFamilyCandidate,
+    explicitVariantCandidate,
+  } = params;
 
   const tokens = tokenizeUserText(userText);
 
@@ -183,15 +178,18 @@ function buildSignals(params: {
   const hasDisambiguationRisk =
     context.lastPresentedEntityIds.length > 1 ||
     context.lastPresentedFamilyKeys.length > 1 ||
-    (Array.isArray(context.presentedVariantOptions) && context.presentedVariantOptions.length > 1);
+    (Array.isArray(context.presentedVariantOptions) &&
+      context.presentedVariantOptions.length > 1);
 
   const hasAnchorShift =
     (hasSpecificEntityCandidate &&
       hasLastEntity &&
-      String(explicitEntityCandidate?.id || "").trim() !== String(context.lastEntityId || "").trim()) ||
+      String(explicitEntityCandidate?.id || "").trim() !==
+        String(context.lastEntityId || "").trim()) ||
     (hasFamilyCandidate &&
       hasLastFamily &&
-      String(explicitFamilyCandidate?.familyKey || "").trim() !== String(context.lastFamilyKey || "").trim()) ||
+      String(explicitFamilyCandidate?.familyKey || "").trim() !==
+        String(context.lastFamilyKey || "").trim()) ||
     (hasVariantCandidate &&
       hasExpectedVariant &&
       Boolean(
@@ -253,7 +251,9 @@ function buildBaseClassification(
   };
 }
 
-function inferDisambiguationType(context: CatalogReferenceContext): CatalogDisambiguationType {
+function inferDisambiguationType(
+  context: CatalogReferenceContext
+): CatalogDisambiguationType {
   const variantCount = Array.isArray(context.presentedVariantOptions)
     ? context.presentedVariantOptions.length
     : 0;
@@ -271,16 +271,25 @@ function inferAnchorShift(params: {
   explicitVariantCandidate: CatalogReferenceClassificationInput["explicitVariantCandidate"];
   signals: CatalogReferenceSignals;
 }): CatalogAnchorShift {
-  const { context, explicitEntityCandidate, explicitFamilyCandidate, explicitVariantCandidate, signals } = params;
+  const {
+    context,
+    explicitEntityCandidate,
+    explicitFamilyCandidate,
+    explicitVariantCandidate,
+    signals,
+  } = params;
 
   if (explicitVariantCandidate?.variantId) {
-    return context.expectingVariantForEntityId ? "switch_variant" : "stay_on_anchor";
+    return context.expectingVariantForEntityId
+      ? "switch_variant"
+      : "stay_on_anchor";
   }
 
   if (explicitEntityCandidate?.id) {
     if (
       context.lastEntityId &&
-      String(explicitEntityCandidate.id || "").trim() !== String(context.lastEntityId || "").trim()
+      String(explicitEntityCandidate.id || "").trim() !==
+        String(context.lastEntityId || "").trim()
     ) {
       return "switch_entity";
     }
@@ -290,7 +299,8 @@ function inferAnchorShift(params: {
   if (explicitFamilyCandidate?.familyKey) {
     if (
       context.lastFamilyKey &&
-      String(explicitFamilyCandidate.familyKey || "").trim() !== String(context.lastFamilyKey || "").trim()
+      String(explicitFamilyCandidate.familyKey || "").trim() !==
+        String(context.lastFamilyKey || "").trim()
     ) {
       return "switch_family";
     }
@@ -381,9 +391,6 @@ export function classifyCatalogReferenceTurn(
   result.intent = inferIntentFromContext({
     detectedIntent,
     context,
-    explicitEntityCandidate,
-    explicitFamilyCandidate,
-    explicitVariantCandidate,
   });
 
   result.disambiguationType = inferDisambiguationType(context);
@@ -403,22 +410,25 @@ export function classifyCatalogReferenceTurn(
     notes.push(`explicit_variant_score:${Number(explicitVariantCandidate.score || 0)}`);
 
     result.kind = "variant_specific";
-    result.confidence = Math.max(0.82, Math.min(0.97, Number(explicitVariantCandidate.score || 0)));
+    result.confidence = Math.max(
+      0.82,
+      Math.min(0.97, Number(explicitVariantCandidate.score || 0))
+    );
 
     result.shouldUseContextFirst = false;
     result.shouldResolveVariant = true;
 
     result.targetLevel = "variant";
 
-    result.targetVariantId = String(explicitVariantCandidate.variantId || "").trim() || null;
-    result.targetVariantName = String(explicitVariantCandidate.label || "").trim() || null;
+    result.targetVariantId =
+      String(explicitVariantCandidate.variantId || "").trim() || null;
+    result.targetVariantName =
+      String(explicitVariantCandidate.label || "").trim() || null;
 
-    result.targetServiceId = String(explicitVariantCandidate.serviceId || "").trim() || null;
-    result.targetServiceName = String(explicitVariantCandidate.serviceName || "").trim() || null;
-
-    if (result.intent === "unknown") {
-      result.intent = context.expectedVariantIntent || context.lastResolvedIntent || "includes";
-    }
+    result.targetServiceId =
+      String(explicitVariantCandidate.serviceId || "").trim() || null;
+    result.targetServiceName =
+      String(explicitVariantCandidate.serviceName || "").trim() || null;
 
     result.debug.notes = notes;
     return result;
@@ -480,7 +490,10 @@ export function classifyCatalogReferenceTurn(
     notes.push(`explicit_entity_score:${Number(explicitEntityCandidate.score || 0)}`);
 
     result.kind = "entity_specific";
-    result.confidence = Math.max(0.8, Math.min(0.96, Number(explicitEntityCandidate.score || 0)));
+    result.confidence = Math.max(
+      0.8,
+      Math.min(0.96, Number(explicitEntityCandidate.score || 0))
+    );
 
     result.signals.hasSpecificEntityCandidate = true;
 
@@ -489,12 +502,10 @@ export function classifyCatalogReferenceTurn(
 
     result.targetLevel = "service";
 
-    result.targetServiceId = String(explicitEntityCandidate.id || "").trim() || null;
-    result.targetServiceName = String(explicitEntityCandidate.name || "").trim() || null;
-
-    if (result.intent === "unknown") {
-      result.intent = context.lastResolvedIntent || "includes";
-    }
+    result.targetServiceId =
+      String(explicitEntityCandidate.id || "").trim() || null;
+    result.targetServiceName =
+      String(explicitEntityCandidate.name || "").trim() || null;
 
     result.debug.notes = notes;
     return result;
@@ -508,14 +519,19 @@ export function classifyCatalogReferenceTurn(
     notes.push(`explicit_family_score:${Number(explicitFamilyCandidate.score || 0)}`);
 
     result.kind = "catalog_family";
-    result.confidence = Math.max(0.76, Math.min(0.94, Number(explicitFamilyCandidate.score || 0)));
+    result.confidence = Math.max(
+      0.76,
+      Math.min(0.94, Number(explicitFamilyCandidate.score || 0))
+    );
 
     result.shouldUseContextFirst = false;
     result.shouldResolveFamily = true;
 
     result.targetLevel = "family";
-    result.targetFamilyKey = String(explicitFamilyCandidate.familyKey || "").trim() || null;
-    result.targetFamilyName = String(explicitFamilyCandidate.familyName || "").trim() || null;
+    result.targetFamilyKey =
+      String(explicitFamilyCandidate.familyKey || "").trim() || null;
+    result.targetFamilyName =
+      String(explicitFamilyCandidate.familyName || "").trim() || null;
 
     if (result.intent === "unknown") {
       result.intent = "price_or_plan";
@@ -539,21 +555,17 @@ export function classifyCatalogReferenceTurn(
     result.shouldResolveVariant = true;
 
     result.targetLevel = "variant";
-    result.targetServiceId = String(context.expectingVariantForEntityId || "").trim() || null;
-    result.targetServiceName = String(context.lastEntityName || "").trim() || null;
+    result.targetServiceId =
+      String(context.expectingVariantForEntityId || "").trim() || null;
+    result.targetServiceName =
+      String(context.lastEntityName || "").trim() || null;
 
-    // ✅ NO asumir primera variante
     result.targetVariantId = null;
     result.targetVariantName = null;
-
-    if (result.intent === "unknown") {
-      result.intent = context.expectedVariantIntent || "includes";
-    }
 
     result.debug.notes = notes;
     return result;
   }
-
 
   // =========================================================
   // 5) REFERENTIAL FOLLOW-UP WITH ENTITY CONTEXT
@@ -582,11 +594,8 @@ export function classifyCatalogReferenceTurn(
 
     result.targetLevel = hasLastEntity ? "service" : "none";
     result.targetServiceId = String(context.lastEntityId || "").trim() || null;
-    result.targetServiceName = String(context.lastEntityName || "").trim() || null;
-
-    if (result.intent === "unknown") {
-      result.intent = context.lastResolvedIntent || "unknown";
-    }
+    result.targetServiceName =
+      String(context.lastEntityName || "").trim() || null;
 
     result.debug.notes = notes;
     return result;
@@ -595,7 +604,12 @@ export function classifyCatalogReferenceTurn(
   // =========================================================
   // 6) FAMILY CONTEXT
   // =========================================================
-  if (!hasLastEntity && (hasLastFamily || hasPresentedFamilies) && tokenCount > 0 && tokenCount <= 10) {
+  if (
+    !hasLastEntity &&
+    (hasLastFamily || hasPresentedFamilies) &&
+    tokenCount > 0 &&
+    tokenCount <= 10
+  ) {
     notes.push("family_context_available");
     notes.push("family_level_resolution");
 
@@ -609,7 +623,8 @@ export function classifyCatalogReferenceTurn(
 
     result.targetLevel = "family";
     result.targetFamilyKey = String(context.lastFamilyKey || "").trim() || null;
-    result.targetFamilyName = String(context.lastFamilyName || "").trim() || null;
+    result.targetFamilyName =
+      String(context.lastFamilyName || "").trim() || null;
 
     if (result.intent === "unknown") {
       result.intent = "price_or_plan";
@@ -621,7 +636,6 @@ export function classifyCatalogReferenceTurn(
 
   // =========================================================
   // 7) ENTITY CONTEXT WITHOUT EXPLICIT MATCH
-  //    ✅ NO arrastrar entity_specific solo por longitud
   // =========================================================
   if (hasLastEntity && tokenCount > 6) {
     notes.push("entity_context_available");
@@ -636,11 +650,8 @@ export function classifyCatalogReferenceTurn(
 
     result.targetLevel = "service";
     result.targetServiceId = String(context.lastEntityId || "").trim() || null;
-    result.targetServiceName = String(context.lastEntityName || "").trim() || null;
-
-    if (result.intent === "unknown") {
-      result.intent = context.lastResolvedIntent || "unknown";
-    }
+    result.targetServiceName =
+      String(context.lastEntityName || "").trim() || null;
 
     result.debug.notes = notes;
     return result;
@@ -648,7 +659,6 @@ export function classifyCatalogReferenceTurn(
 
   // =========================================================
   // 8) NO CONTEXT + EXPLICIT CATALOG BROWSE ONLY
-  //    ✅ no usar longitud como proxy de catálogo
   // =========================================================
   if (!hasAnyContext && isExplicitCatalogBrowseIntent(detectedIntent)) {
     notes.push("no_prior_context");
@@ -661,7 +671,10 @@ export function classifyCatalogReferenceTurn(
     result.targetLevel = "catalog";
 
     if (result.intent === "unknown") {
-      result.intent = mapDetectedIntentToCatalogIntent(detectedIntent, "price_or_plan");
+      result.intent = mapDetectedIntentToCatalogIntent(
+        detectedIntent,
+        "price_or_plan"
+      );
     }
 
     result.debug.notes = notes;
