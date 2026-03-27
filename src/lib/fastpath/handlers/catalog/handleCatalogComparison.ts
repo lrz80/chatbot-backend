@@ -33,6 +33,13 @@ type CatalogComparisonRow = {
   maxPrice: number | null;
 };
 
+type ComparisonSide = {
+  label: string;
+  serviceIds: string[];
+  serviceNames: string[];
+  serviceLabels: string[];
+};
+
 function uniqueOrderedIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
 
@@ -73,7 +80,142 @@ function formatPriceText(
   return lang === "en" ? "price not available" : "precio no disponible";
 }
 
-function buildCanonicalList(
+function normalizeSide(raw: any): ComparisonSide | null {
+  const serviceIds = uniqueOrderedIds(raw?.serviceIds);
+  if (!serviceIds.length) return null;
+
+  const serviceNames = Array.isArray(raw?.serviceNames)
+    ? raw.serviceNames.map((v: unknown) => String(v || "").trim())
+    : [];
+
+  const serviceLabels = Array.isArray(raw?.serviceLabels)
+    ? raw.serviceLabels.map((v: unknown) => String(v || "").trim())
+    : [];
+
+  return {
+    label: String(raw?.label || "").trim(),
+    serviceIds,
+    serviceNames,
+    serviceLabels,
+  };
+}
+
+function getStructuredSides(input: any): ComparisonSide[] {
+  const rawSides = Array.isArray(input?.catalogReferenceClassification?.structuredComparison?.sides)
+    ? input.catalogReferenceClassification.structuredComparison.sides
+    : [];
+
+  return rawSides
+    .map((side: any) => normalizeSide(side))
+    .filter((side: ComparisonSide | null): side is ComparisonSide => Boolean(side));
+}
+
+function buildRowMap(rows: any[]): Map<string, CatalogComparisonRow> {
+  const byId = new Map<string, CatalogComparisonRow>();
+
+  for (const row of rows) {
+    const id = String(row?.id || "").trim();
+    if (!id) continue;
+
+    byId.set(id, {
+      id,
+      name: String(row?.name || "").trim(),
+      description: String(row?.description || "").trim(),
+      minPrice: row?.min_price === null ? null : Number(row?.min_price),
+      maxPrice: row?.max_price === null ? null : Number(row?.max_price),
+    });
+  }
+
+  return byId;
+}
+
+function getRowsForSide(
+  side: ComparisonSide,
+  byId: Map<string, CatalogComparisonRow>
+): CatalogComparisonRow[] {
+  return side.serviceIds
+    .map((id) => byId.get(id))
+    .filter((item): item is CatalogComparisonRow => Boolean(item));
+}
+
+function buildSideSummary(
+  side: ComparisonSide,
+  rows: CatalogComparisonRow[],
+  lang: "es" | "en"
+): string {
+  const title =
+    side.label ||
+    rows[0]?.name ||
+    (lang === "en" ? "Option group" : "Grupo de opciones");
+
+  const lines = rows.map((row) => {
+    const priceText = formatPriceText(row.minPrice, row.maxPrice, lang);
+
+    return [
+      priceText ? `• ${row.name}: ${priceText}` : `• ${row.name}`,
+      row.description ? `  - ${row.description}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  });
+
+  if (lang === "en") {
+    return [`Group: ${title}`, ...lines].join("\n");
+  }
+
+  return [`Grupo: ${title}`, ...lines].join("\n");
+}
+
+function buildGroupedComparisonCanonicalReply(
+  leftSide: ComparisonSide,
+  leftRows: CatalogComparisonRow[],
+  rightSide: ComparisonSide,
+  rightRows: CatalogComparisonRow[],
+  lang: "es" | "en"
+): string {
+  const leftTitle =
+    leftSide.label || leftRows[0]?.name || (lang === "en" ? "Left side" : "Lado izquierdo");
+  const rightTitle =
+    rightSide.label || rightRows[0]?.name || (lang === "en" ? "Right side" : "Lado derecho");
+
+  if (lang === "en") {
+    return [
+      `Compare these two catalog groups: ${leftTitle} vs ${rightTitle}.`,
+      `Explain the main differences only, using grounded data.`,
+      `Do not answer as an independent catalog list.`,
+      `If one side contains multiple plans, summarize what that group usually includes and how it differs from the other side.`,
+      ``,
+      buildSideSummary(leftSide, leftRows, lang),
+      ``,
+      buildSideSummary(rightSide, rightRows, lang),
+      ``,
+      `Output requirements:`,
+      `• Start with the main difference in one short paragraph.`,
+      `• Then explain what ${leftTitle} includes.`,
+      `• Then explain what ${rightTitle} includes as a group.`,
+      `• End with who each option is best for.`,
+    ].join("\n");
+  }
+
+  return [
+    `Compara estos dos grupos del catálogo: ${leftTitle} vs ${rightTitle}.`,
+    `Explica solo las diferencias principales usando datos grounded.`,
+    `No respondas como una lista independiente de catálogo.`,
+    `Si un lado contiene varios planes, resume qué suele incluir ese grupo y cómo se diferencia del otro lado.`,
+    ``,
+    buildSideSummary(leftSide, leftRows, lang),
+    ``,
+    buildSideSummary(rightSide, rightRows, lang),
+    ``,
+    `Requisitos de salida:`,
+    `• Empieza con la diferencia principal en un párrafo corto.`,
+    `• Luego explica qué incluye ${leftTitle}.`,
+    `• Luego explica qué incluye ${rightTitle} como grupo.`,
+    `• Termina con para quién conviene cada opción.`,
+  ].join("\n");
+}
+
+function buildFallbackCanonicalList(
   items: CatalogComparisonRow[],
   lang: "es" | "en"
 ): string {
@@ -89,45 +231,6 @@ function buildCanonicalList(
         .join("\n");
     })
     .join("\n\n");
-}
-
-function buildCanonicalComparison(
-  left: CatalogComparisonRow,
-  right: CatalogComparisonRow,
-  lang: "es" | "en"
-): string {
-  const leftPrice = formatPriceText(left.minPrice, left.maxPrice, lang);
-  const rightPrice = formatPriceText(right.minPrice, right.maxPrice, lang);
-
-  if (lang === "en") {
-    return [
-      `Compare these two options: ${left.name} vs ${right.name}`,
-      `• Price`,
-      `  - ${left.name}: ${leftPrice}`,
-      `  - ${right.name}: ${rightPrice}`,
-      `• Description`,
-      `  - ${left.name}: ${left.description || "n/a"}`,
-      `  - ${right.name}: ${right.description || "n/a"}`,
-      `• Instruction`,
-      `  - Explain the key differences only.`,
-      `  - Do not present them as an independent catalog list.`,
-      `  - Compare side by side using only grounded data.`,
-    ].join("\n");
-  }
-
-  return [
-    `Compara estas dos opciones: ${left.name} vs ${right.name}`,
-    `• Precio`,
-    `  - ${left.name}: ${leftPrice}`,
-    `  - ${right.name}: ${rightPrice}`,
-    `• Descripción`,
-    `  - ${left.name}: ${left.description || "sin descripción"}`,
-    `  - ${right.name}: ${right.description || "sin descripción"}`,
-    `• Instrucción`,
-    `  - Explica solo las diferencias clave.`,
-    `  - No los presentes como una lista independiente de catálogo.`,
-    `  - Compara lado a lado usando solo datos grounded.`,
-  ].join("\n");
 }
 
 export async function handleCatalogComparison(
@@ -168,21 +271,7 @@ export async function handleCatalogComparison(
     return { handled: false };
   }
 
-  const byId = new Map<string, CatalogComparisonRow>();
-
-  for (const row of rows) {
-    const id = String(row?.id || "").trim();
-    if (!id) continue;
-
-    byId.set(id, {
-      id,
-      name: String(row?.name || "").trim(),
-      description: String(row?.description || "").trim(),
-      minPrice: row?.min_price === null ? null : Number(row?.min_price),
-      maxPrice: row?.max_price === null ? null : Number(row?.max_price),
-    });
-  }
-
+  const byId = buildRowMap(rows);
   const ordered: CatalogComparisonRow[] = ids
     .map((id) => byId.get(id))
     .filter((item): item is CatalogComparisonRow => Boolean(item));
@@ -191,81 +280,82 @@ export async function handleCatalogComparison(
     return { handled: false };
   }
 
-  const requiresDisambiguation = Boolean(
-    input.catalogReferenceClassification?.structuredComparison
-      ?.requiresDisambiguation
-  );
+  const structuredSides = getStructuredSides(input);
 
-  if (requiresDisambiguation || ordered.length !== 2) {
-    const canonicalReply = buildCanonicalList(ordered, llmLang);
+  if (structuredSides.length === 2) {
+    const [leftSide, rightSide] = structuredSides;
+    const leftRows = getRowsForSide(leftSide, byId);
+    const rightRows = getRowsForSide(rightSide, byId);
 
-    const reply =
-      (await input.answerCatalogQuestionLLM({
-        idiomaDestino: llmLang,
-        canonicalReply,
-        userInput: input.userInput,
-        mode: "grounded_frame_only",
-        renderIntent: "catalog_list",
-        comparisonItems: ordered.map((item) => ({
-          id: item.id,
-          name: item.name,
-          description: item.description,
-          minPrice: item.minPrice,
-          maxPrice: item.maxPrice,
-        })),
-        maxIntroLines: 1,
-        maxClosingLines: 1,
-      })) || canonicalReply;
+    if (leftRows.length > 0 && rightRows.length > 0) {
+      const canonicalReply = buildGroupedComparisonCanonicalReply(
+        leftSide,
+        leftRows,
+        rightSide,
+        rightRows,
+        llmLang
+      );
 
-    return {
-      handled: true,
-      source: "catalog_comparison_needs_disambiguation" as any,
-      intent: "info_servicio",
-      reply,
-      ctxPatch: {
-        lastResolvedIntent: "compare",
-        comparisonCandidateServiceIds: ordered.map((item) => item.id),
-      },
-    };
+      const comparisonItems = [...leftRows, ...rightRows].map((item) => ({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        minPrice: item.minPrice,
+        maxPrice: item.maxPrice,
+      }));
+
+      const reply =
+        (await input.answerCatalogQuestionLLM({
+          idiomaDestino: llmLang,
+          canonicalReply,
+          userInput: input.userInput,
+          mode: "grounded_catalog_sales",
+          renderIntent: "catalog_compare",
+          comparisonItems,
+          maxIntroLines: 1,
+          maxClosingLines: 1,
+        })) || canonicalReply;
+
+      return {
+        handled: true,
+        source: "catalog_comparison_grouped_db_llm_render" as any,
+        intent: "info_servicio",
+        reply,
+        ctxPatch: {
+          lastResolvedIntent: "compare",
+        },
+      };
+    }
   }
 
-  const [left, right] = ordered;
-  const canonicalReply = buildCanonicalComparison(left, right, llmLang);
+  const canonicalReply = buildFallbackCanonicalList(ordered, llmLang);
 
   const reply =
     (await input.answerCatalogQuestionLLM({
       idiomaDestino: llmLang,
       canonicalReply,
       userInput: input.userInput,
-      mode: "grounded_catalog_sales",
-      renderIntent: "catalog_compare",
-      comparisonItems: [
-        {
-          id: left.id,
-          name: left.name,
-          description: left.description,
-          minPrice: left.minPrice,
-          maxPrice: left.maxPrice,
-        },
-        {
-          id: right.id,
-          name: right.name,
-          description: right.description,
-          minPrice: right.minPrice,
-          maxPrice: right.maxPrice,
-        },
-      ],
+      mode: "grounded_frame_only",
+      renderIntent: "catalog_list",
+      comparisonItems: ordered.map((item) => ({
+        id: item.id,
+        name: item.name,
+        description: item.description,
+        minPrice: item.minPrice,
+        maxPrice: item.maxPrice,
+      })),
       maxIntroLines: 1,
       maxClosingLines: 1,
     })) || canonicalReply;
 
   return {
     handled: true,
-    source: "catalog_comparison_db_llm_render" as any,
+    source: "catalog_comparison_fallback_list" as any,
     intent: "info_servicio",
     reply,
     ctxPatch: {
       lastResolvedIntent: "compare",
+      comparisonCandidateServiceIds: ordered.map((item) => item.id),
     },
   };
 }
