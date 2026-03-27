@@ -257,6 +257,35 @@ function buildObservedQueryTokens(
   return rawQueryTokens.filter((token) => dfMap.has(token));
 }
 
+function isDiscriminativeQueryToken(
+  token: string,
+  dfMap: Map<string, number>,
+  totalCandidates: number
+): boolean {
+  const value = String(token || "").trim();
+  if (!value) return false;
+  if (value.length <= 2) return false;
+  if (totalCandidates <= 0) return false;
+
+  const df = dfMap.get(value) || 0;
+  if (df <= 0) return false;
+
+  const coverage = df / totalCandidates;
+  const weight = getTokenWeight(value, dfMap, totalCandidates);
+
+  return coverage <= 0.35 && weight >= 0.8;
+}
+
+function buildDiscriminativeQueryTokens(
+  observedQueryTokens: string[],
+  dfMap: Map<string, number>,
+  totalCandidates: number
+): string[] {
+  return observedQueryTokens.filter((token) =>
+    isDiscriminativeQueryToken(token, dfMap, totalCandidates)
+  );
+}
+
 export async function resolveServiceCandidatesFromText(
   pool: Pool,
   tenantId: string,
@@ -437,6 +466,11 @@ export async function resolveServiceCandidatesFromText(
 
   // solo usamos tokens realmente observados en el catálogo del tenant
   const observedQueryTokens = buildObservedQueryTokens(queryTokens, dfMap);
+  const discriminativeQueryTokens = buildDiscriminativeQueryTokens(
+    observedQueryTokens,
+    dfMap,
+    totalCandidates
+  );
 
   if (!observedQueryTokens.length) {
     console.log("[RESOLVE-SERVICE] query sin tokens observados en catalogo, devolviendo null", {
@@ -447,21 +481,28 @@ export async function resolveServiceCandidatesFromText(
   }
 
   const dominantQueryTokens = getDominantQueryTokens(
-    observedQueryTokens,
+    discriminativeQueryTokens.length > 0
+      ? discriminativeQueryTokens
+      : observedQueryTokens,
     dfMap,
     totalCandidates
   );
 
   const scored: Scored[] = candidates.map((cand) => {
+    const resolvableQueryTokens =
+      discriminativeQueryTokens.length > 0
+        ? discriminativeQueryTokens
+        : observedQueryTokens;
+
     const nameScore = scoreTokensWeighted(
-      observedQueryTokens,
+      resolvableQueryTokens,
       cand.serviceNameTokens,
       dfMap,
       totalCandidates
     );
 
     const variantScore = scoreTokensWeighted(
-      observedQueryTokens,
+      resolvableQueryTokens,
       cand.variantNameTokens,
       dfMap,
       totalCandidates
@@ -488,11 +529,12 @@ export async function resolveServiceCandidatesFromText(
       totalCandidates
     );
 
-    const exactNameHits = countExactHits(observedQueryTokens, cand.serviceNameTokens);
-    const exactVariantHits = countExactHits(observedQueryTokens, cand.variantNameTokens);
+    const exactNameHits = countExactHits(resolvableQueryTokens, cand.serviceNameTokens);
+    const exactVariantHits = countExactHits(resolvableQueryTokens, cand.variantNameTokens);
 
-    const overlapNameTokens = uniqueOverlapTokens(observedQueryTokens, cand.serviceNameTokens);
-    const overlapVariantTokens = uniqueOverlapTokens(observedQueryTokens, cand.variantNameTokens);
+    const overlapNameTokens = uniqueOverlapTokens(resolvableQueryTokens, cand.serviceNameTokens);
+    const overlapVariantTokens = uniqueOverlapTokens(resolvableQueryTokens, cand.variantNameTokens);
+
     const overlapCategoryTokens = uniqueOverlapTokens(observedQueryTokens, cand.categoryTokens);
     const overlapTipoTokens = uniqueOverlapTokens(observedQueryTokens, cand.tipoTokens);
     const overlapSupportTokens = uniqueOverlapTokens(observedQueryTokens, cand.supportTokens);
@@ -546,8 +588,8 @@ export async function resolveServiceCandidatesFromText(
     const dominantOverlapCount = dominantOverlapTokens.length;
 
     const queryCoverage =
-      observedQueryTokens.length > 0
-        ? resolvableOverlapTokens.length / observedQueryTokens.length
+      resolvableQueryTokens.length > 0
+        ? resolvableOverlapTokens.length / resolvableQueryTokens.length
         : 0;
 
     let score = 0;
@@ -626,6 +668,7 @@ export async function resolveServiceCandidatesFromText(
     idioma,
     queryTokens,
     observedQueryTokens,
+    discriminativeQueryTokens,
     best: best
       ? {
           label: best.cand.label,
@@ -774,12 +817,17 @@ export async function resolveServiceCandidatesFromText(
   const secondScore = second?.score || 0;
   const marginVsSecond = best ? best.score - secondScore : 0;
 
+  const resolvableEvidenceQueryTokens =
+    discriminativeQueryTokens.length > 0
+      ? discriminativeQueryTokens
+      : observedQueryTokens;
+
   const bestResolvableOverlapCount =
     best
       ? uniqueUnion([
           best.overlapNameTokens,
           best.overlapVariantTokens,
-        ]).filter((token) => observedQueryTokens.includes(token)).length
+        ]).filter((token) => resolvableEvidenceQueryTokens.includes(token)).length
       : 0;
 
   const enoughEvidence =
@@ -787,8 +835,8 @@ export async function resolveServiceCandidatesFromText(
     bestResolvableOverlapCount > 0 &&
     (
       bestEvidenceCount >= 1 ||
-      (best?.score || 0) >= 0.22 ||
-      ((best?.score || 0) >= 0.16 && marginVsSecond >= 0.01)
+      ((best?.score || 0) >= 0.24 && bestResolvableOverlapCount >= 1) ||
+      ((best?.score || 0) >= 0.18 && marginVsSecond >= 0.04 && bestResolvableOverlapCount >= 1)
     );
 
   if (!best || best.score < BASE_THRESHOLD || !enoughEvidence) {
