@@ -1,4 +1,3 @@
-// src/lib/fastpath/helpers/catalogRendering.ts
 import type { Lang } from "../../channels/engine/clients/clientDb";
 
 export type CatalogRenderingMode =
@@ -34,16 +33,39 @@ export async function renderCatalogReplyWithSalesFrame(args: {
   const canonical = String(canonicalReply || "").trim();
   if (!canonical) return "";
 
-  const llmReply = await answerCatalogQuestionLLM({
-    idiomaDestino: lang === "en" ? "en" : "es",
-    canonicalReply: canonical,
-    userInput: String(userInput || "").trim(),
-    mode,
-    maxIntroLines,
-    maxClosingLines,
-  });
+  try {
+    const llmReply = await answerCatalogQuestionLLM({
+      idiomaDestino: lang === "en" ? "en" : "es",
+      canonicalReply: canonical,
+      userInput: String(userInput || "").trim(),
+      mode,
+      maxIntroLines,
+      maxClosingLines,
+    });
 
-  return String(llmReply || canonical).trim();
+    const finalReply = String(llmReply || "").trim();
+
+    if (finalReply) {
+      console.log("🧠 [catalogRendering] reply_source=llm", {
+        mode,
+        userInput: String(userInput || "").trim(),
+      });
+      return finalReply;
+    }
+
+    console.log("📦 [catalogRendering] reply_source=canonical_fallback", {
+      mode,
+      userInput: String(userInput || "").trim(),
+    });
+    return canonical;
+  } catch (error) {
+    console.error("❌ [catalogRendering] llm_render_failed", {
+      mode,
+      userInput: String(userInput || "").trim(),
+      error,
+    });
+    return canonical;
+  }
 }
 
 export async function renderFreeOfferList(args: {

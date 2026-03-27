@@ -75,7 +75,7 @@ export async function handleFastpathHybridTurn(
     followupEntityKind,
   } = args;
 
-  const currentIntent = (detectedIntent || intentFallback || null) ?? null;
+  const currentIntent = detectedIntent || intentFallback || null;
   const normalizedCurrentIntent = String(currentIntent || "").trim().toLowerCase();
 
   const previewClassificationInput = buildCatalogReferenceClassificationInput({
@@ -101,18 +101,15 @@ export async function handleFastpathHybridTurn(
     followupNeedsAnchor,
   });
 
-  let {
-    explicitEntityCandidateForClassification,
-    structuredComparison,
-    entityCandidateResultLoose,
-  } = await getFastpathCatalogSignals({
-    pool,
-    tenantId,
-    userInput,
-    convoCtx,
-    previewClassification,
-    previewPolicy,
-  });
+  let { explicitEntityCandidateForClassification, structuredComparison } =
+    await getFastpathCatalogSignals({
+      pool,
+      tenantId,
+      userInput,
+      convoCtx,
+      previewClassification,
+      previewPolicy,
+    });
 
   const catalogReferenceIntent = previewPolicy.shouldRouteCatalog
     ? normalizedCurrentIntent || null
@@ -206,24 +203,18 @@ export async function handleFastpathHybridTurn(
     ? detectedIntent || intentFallback || "precio"
     : detectedIntent || intentFallback || null;
 
-  const {
-    convoCtxForFastpath,
-    preResolvedCtxPatch,
-    forcedAnchorCtxPatch,
-    explicitServiceResolved,
-    explicitResolvedServiceId,
-    explicitResolvedServiceName,
-  } = await getPreResolvedCatalogService({
-    pool,
-    tenantId,
-    userInput,
-    convoCtx,
-    catalogReferenceClassification,
-    routingPolicy,
-    referentialFollowup,
-    followupNeedsAnchor,
-    followupEntityKind,
-  });
+  const { convoCtxForFastpath, preResolvedCtxPatch, forcedAnchorCtxPatch } =
+    await getPreResolvedCatalogService({
+      pool,
+      tenantId,
+      userInput,
+      convoCtx,
+      catalogReferenceClassification,
+      routingPolicy,
+      referentialFollowup,
+      followupNeedsAnchor,
+      followupEntityKind,
+    });
 
   const fp = await runFastpath({
     pool,
@@ -321,19 +312,6 @@ export async function handleFastpathHybridTurn(
     structuredService,
   });
 
-  const shouldBypassStructuredRewrite =
-    replyPolicy.shouldBypassStructuredRewrite;
-
-  if (shouldBypassStructuredRewrite) {
-    return {
-      handled: true,
-      reply: fp.reply,
-      replySource: fp.source,
-      intent: fp.intent || detectedIntent || intentFallback || null,
-      ctxPatch,
-    };
-  }
-
   console.log("[STRUCTURED_SERVICE][CALLER]", structuredService);
 
   ctxPatch = applyStructuredServicePersistence({
@@ -354,88 +332,83 @@ export async function handleFastpathHybridTurn(
     });
   }
 
-  let fastpathText = String(fp.reply || "");
+  let finalReply = String(fp.reply || "").trim();
+  let finalReplySource: string | undefined = fp.source;
+  let finalIntent: string | null =
+    fp.intent || detectedIntent || intentFallback || null;
+
+  const shouldReturnRaw =
+    replyPolicy.shouldBypassStructuredRewrite ||
+    immediateReturn.shouldReturnImmediately ||
+    postRunDecision.shouldReturnRawFastpathForPriceQuestion ||
+    postRunDecision.shouldReturnRawFastpathForUnresolvedServiceIntent;
 
   if (immediateReturn.shouldReturnImmediately) {
-    return {
-      handled: true,
-      reply: immediateReturn.reply,
-      replySource: immediateReturn.replySource,
-      intent: immediateReturn.intent,
-      ctxPatch,
-    };
+    finalReply = String(immediateReturn.reply || "").trim();
+    finalReplySource = immediateReturn.replySource || fp.source;
+    finalIntent = immediateReturn.intent || finalIntent;
+  } else {
+    if (postRunDecision.shouldNaturalizeSecondaryOptions) {
+      finalReply = await naturalizeSecondaryOptionsLine({
+        tenantId,
+        idiomaDestino,
+        canal,
+        baseText: finalReply,
+        primary: "plans",
+        secondaryAvailable: true,
+        maxLines: MAX_WHATSAPP_LINES,
+      });
+    }
+
+    if (!shouldReturnRaw && postRunDecision.isDmChannel) {
+      const rendered = await renderFastpathDmReply({
+        tenantId,
+        canal,
+        idiomaDestino,
+        userInput,
+        contactoNorm,
+        messageId,
+        promptBaseMem,
+        fastpathText: finalReply,
+        fp,
+        detectedIntent,
+        intentFallback,
+        structuredService,
+        replyPolicy,
+        ctxPatch,
+        maxLines: MAX_WHATSAPP_LINES,
+      });
+
+      finalReply = String(rendered.reply || "").trim();
+      ctxPatch = rendered.ctxPatch;
+    }
   }
 
-  if (postRunDecision.shouldReturnRawFastpathForPriceQuestion) {
-    return {
-      handled: true,
-      reply: fastpathText,
-      replySource: fp.source,
-      intent: fp.intent || detectedIntent || intentFallback || null,
-      ctxPatch,
-    };
-  }
-
-  if (postRunDecision.shouldNaturalizeSecondaryOptions) {
-    fastpathText = await naturalizeSecondaryOptionsLine({
+  if (process.env.DEBUG_FASTPATH === "true") {
+    console.log("[FASTPATH_HYBRID][FINAL_OUTPUT]", {
       tenantId,
-      idiomaDestino,
       canal,
-      baseText: fastpathText,
-      primary: "plans",
-      secondaryAvailable: true,
-      maxLines: MAX_WHATSAPP_LINES,
-    });
-  }
-
-  if (postRunDecision.shouldReturnRawFastpathForUnresolvedServiceIntent) {
-    return {
-      handled: true,
-      reply: fastpathText,
-      replySource: fp.source,
-      intent: fp.intent || detectedIntent || intentFallback || null,
-      ctxPatch,
-    };
-  }
-
-  if (postRunDecision.isDmChannel) {
-    const rendered = await renderFastpathDmReply({
-      tenantId,
-      canal,
-      idiomaDestino,
       userInput,
-      contactoNorm,
-      messageId,
-      promptBaseMem,
-      fastpathText,
-      fp,
-      detectedIntent,
-      intentFallback,
-      structuredService,
-      replyPolicy,
-      ctxPatch,
-      maxLines: MAX_WHATSAPP_LINES,
+      shouldBypassStructuredRewrite: replyPolicy.shouldBypassStructuredRewrite,
+      shouldReturnImmediately: immediateReturn.shouldReturnImmediately,
+      shouldReturnRawFastpathForPriceQuestion:
+        postRunDecision.shouldReturnRawFastpathForPriceQuestion,
+      shouldReturnRawFastpathForUnresolvedServiceIntent:
+        postRunDecision.shouldReturnRawFastpathForUnresolvedServiceIntent,
+      shouldNaturalizeSecondaryOptions:
+        postRunDecision.shouldNaturalizeSecondaryOptions,
+      isDmChannel: postRunDecision.isDmChannel,
+      finalReplySource,
+      finalIntent,
+      finalReplyPreview: finalReply.slice(0, 220),
     });
-
-    return {
-      handled: true,
-      reply: rendered.reply,
-      replySource: fp.source,
-      intent: fp.intent || detectedIntent || intentFallback || null,
-      ctxPatch: rendered.ctxPatch,
-    };
   }
-
-  console.log("[DM_CHANNEL_CHECK]", {
-    canal,
-    isDm: postRunDecision.isDmChannel,
-  });
 
   return {
     handled: true,
-    reply: fastpathText,
-    replySource: fp.source,
-    intent: fp.intent || detectedIntent || intentFallback || null,
+    reply: finalReply,
+    replySource: finalReplySource,
+    intent: finalIntent,
     ctxPatch,
   };
 }
