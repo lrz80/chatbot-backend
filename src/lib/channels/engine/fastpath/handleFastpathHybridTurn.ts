@@ -1,5 +1,3 @@
-// backend/src/lib/channels/engine/fastpath/handleFastpathHybridTurn.ts
-
 import { Pool } from "pg";
 import type { Canal } from "../../../detectarIntencion";
 import type { Lang } from "../clients/clientDb";
@@ -12,17 +10,14 @@ import { stripMarkdownLinksForDm } from "../../format/stripMarkdownLinks";
 
 import { buildCatalogReferenceClassificationInput } from "../../../catalog/buildCatalogReferenceClassificationInput";
 import { classifyCatalogReferenceTurn } from "../../../catalog/classifyCatalogReferenceTurn";
-
 import { buildCatalogRoutingSignal } from "../../../catalog/buildCatalogRoutingSignal";
 
-const MAX_WHATSAPP_LINES = 9999; // mantenemos el mismo valor
+import {
+  buildFastpathTurnPolicy,
+  type IntentFacets,
+} from "./buildFastpathTurnPolicy";
 
-type IntentFacets = {
-  asksPrices?: boolean;
-  asksSchedules?: boolean;
-  asksLocation?: boolean;
-  asksAvailability?: boolean;
-};
+const MAX_WHATSAPP_LINES = 9999;
 
 export type FastpathHybridArgs = {
   pool: Pool;
@@ -52,6 +47,26 @@ export type FastpathHybridResult = {
   ctxPatch?: any;
 };
 
+type StructuredCatalogComparisonSide = {
+  key: string;
+  label: string;
+  serviceIds: string[];
+  serviceNames: string[];
+  serviceLabels: string[];
+  score: number;
+};
+
+type StructuredCatalogComparison = {
+  hasComparison: boolean;
+  sides: StructuredCatalogComparisonSide[];
+  serviceIds: string[];
+  serviceNames: string[];
+  serviceLabels: string[];
+  requiresDisambiguation: boolean;
+};
+
+type ComparisonTokenStats = Map<string, number>;
+
 function isDmChatChannel(canal: Canal) {
   const c = String(canal || "").toLowerCase();
   return c === "whatsapp" || c === "facebook" || c === "instagram";
@@ -66,64 +81,10 @@ function firstNonEmptyString(...values: any[]): string | null {
 }
 
 function shouldUseRoutingStructuredService(signal: any): boolean {
-  const targetLevel = String(signal?.targetLevel || "").trim().toLowerCase();
-  const routeIntent = String(signal?.routeIntent || "").trim().toLowerCase();
-  const referenceKind = String(signal?.referenceKind || "").trim().toLowerCase();
-
-  const hasSpecificTargetLevel =
-    targetLevel === "service" || targetLevel === "variant";
-
-  const hasSpecificReferenceKind =
-    referenceKind === "entity_specific" ||
-    referenceKind === "variant_specific" ||
-    referenceKind === "referential_followup";
-
-  const hasServiceScopedRouteIntent =
-    routeIntent === "catalog_price" ||
-    routeIntent === "catalog_alternatives" ||
-    routeIntent === "catalog_schedule" ||
-    routeIntent === "catalog_includes";
-
-  return (
-    (hasSpecificTargetLevel || hasSpecificReferenceKind) &&
-    hasServiceScopedRouteIntent
-  );
-}
-
-function isBusinessInfoIntent(intent: string | null | undefined): boolean {
-  const normalized = String(intent || "").trim().toLowerCase();
-
-  return (
-    normalized === "horario" ||
-    normalized === "schedule" ||
-    normalized === "ubicacion" ||
-    normalized === "location" ||
-    normalized === "disponibilidad" ||
-    normalized === "availability" ||
-    normalized === "info_horarios_generales"
-  );
-}
-
-function isCatalogIntent(intent: string | null | undefined): boolean {
-  const normalized = String(intent || "").trim().toLowerCase();
-
-  return (
-    normalized === "precio" ||
-    normalized === "price" ||
-    normalized === "prices" ||
-    normalized === "horario" ||
-    normalized === "schedule" ||
-    normalized === "ubicacion" ||
-    normalized === "location" ||
-    normalized === "disponibilidad" ||
-    normalized === "availability" ||
-    normalized === "info_servicio" ||
-    normalized === "catalogo" ||
-    normalized === "catalog" ||
-    normalized === "planes" ||
-    normalized === "plan" ||
-    normalized === "membresia" ||
-    normalized === "membership"
+  return Boolean(
+    signal?.targetServiceId &&
+      (String(signal?.targetLevel || "").trim().toLowerCase() === "service" ||
+        String(signal?.targetLevel || "").trim().toLowerCase() === "variant")
   );
 }
 
@@ -132,37 +93,113 @@ function toFiniteNumber(value: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function hasCatalogContextAnchor(convoCtx: any): boolean {
-  return (
-    Boolean(convoCtx?.last_service_id) ||
-    Boolean(convoCtx?.selectedServiceId) ||
-    Boolean(convoCtx?.selected_service_id) ||
-    Boolean(convoCtx?.last_variant_id) ||
-    Boolean(convoCtx?.selectedVariantId) ||
-    Boolean(convoCtx?.selected_variant_id) ||
-    (Array.isArray(convoCtx?.last_catalog_plans) &&
-      convoCtx.last_catalog_plans.length > 0)
+function toFiniteScore(value: any): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function isEntityCandidateAnchoredToContext(params: {
+  matchedCandidate: any;
+  convoCtx: any;
+}): boolean {
+  const candidateId = String(
+    params.matchedCandidate?.serviceId || params.matchedCandidate?.id || ""
+  ).trim();
+
+  if (!candidateId) return false;
+
+  const directIds = [
+    params.convoCtx?.last_service_id,
+    params.convoCtx?.selectedServiceId,
+    params.convoCtx?.selected_service_id,
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+
+  if (directIds.includes(candidateId)) {
+    return true;
+  }
+
+  const presentedIds = Array.isArray(params.convoCtx?.lastPresentedEntityIds)
+    ? params.convoCtx.lastPresentedEntityIds
+    : Array.isArray(params.convoCtx?.last_presented_entity_ids)
+    ? params.convoCtx.last_presented_entity_ids
+    : [];
+
+  return presentedIds.some(
+    (id: any) => String(id || "").trim() === candidateId
   );
 }
 
-function hasStrongStructuredEntityEvidence(params: {
+function canUseResolvedHitAsExplicitEntity(params: {
+  currentIntent: string | null | undefined;
   matchedCandidate: any;
   allCandidates: any[];
-  classificationKind: string | null | undefined;
+  previewClassification: any;
   convoCtx: any;
+  policy: {
+    shouldAllowExplicitEntityPromotion: boolean;
+  };
 }): boolean {
-  const { matchedCandidate, allCandidates, classificationKind, convoCtx } = params;
+  const {
+    currentIntent,
+    matchedCandidate,
+    allCandidates,
+    previewClassification,
+    convoCtx,
+    policy,
+  } = params;
 
   if (!matchedCandidate) return false;
+  if (!policy.shouldAllowExplicitEntityPromotion) return false;
 
+  const score = toFiniteNumber(matchedCandidate?.score);
   const exactNameHits = toFiniteNumber(matchedCandidate?.exactNameHits);
   const exactVariantHits = toFiniteNumber(matchedCandidate?.exactVariantHits);
   const dominantOverlapCount = toFiniteNumber(
     matchedCandidate?.dominantOverlapCount
   );
-  const bestScore = toFiniteNumber(matchedCandidate?.score);
 
-  const sortedCandidates = Array.isArray(allCandidates)
+  if (
+    isEntityCandidateAnchoredToContext({
+      matchedCandidate,
+      convoCtx,
+    })
+  ) {
+    return true;
+  }
+
+  const signals = previewClassification?.signals || {};
+  const hasConversationDependency =
+    Boolean(signals?.hasReferentialDependency) ||
+    Boolean(signals?.hasConversationDependency);
+
+  if (exactVariantHits >= 1) return true;
+  if (exactNameHits >= 2) return true;
+  if (dominantOverlapCount >= 2 && score >= 0.82) return true;
+
+  if (
+    hasConversationDependency &&
+    score >= 0.72 &&
+    (exactNameHits >= 1 || dominantOverlapCount >= 1)
+  ) {
+    return true;
+  }
+
+  const normalizedIntent = String(currentIntent || "").trim().toLowerCase();
+
+  if (
+    normalizedIntent === "disponibilidad" ||
+    normalizedIntent === "availability" ||
+    normalizedIntent === "horario" ||
+    normalizedIntent === "schedule" ||
+    normalizedIntent === "ubicacion" ||
+    normalizedIntent === "location"
+  ) {
+    return false;
+  }
+
+  const sorted = Array.isArray(allCandidates)
     ? [...allCandidates]
         .map((candidate) => ({
           ...candidate,
@@ -171,83 +208,10 @@ function hasStrongStructuredEntityEvidence(params: {
         .sort((a, b) => b.score - a.score)
     : [];
 
-  const secondScore =
-    sortedCandidates.length > 1
-      ? toFiniteNumber(sortedCandidates[1]?.score)
-      : 0;
+  const secondScore = sorted.length > 1 ? toFiniteNumber(sorted[1]?.score) : 0;
+  const scoreGap = score - secondScore;
 
-  const scoreGap = bestScore - secondScore;
-
-  const hasAnchoredService = hasCatalogContextAnchor(convoCtx);
-
-  const classificationSuggestsSpecificEntity =
-    classificationKind === "entity_specific" ||
-    classificationKind === "variant_specific";
-
-  const hasVariantLevelEvidence = exactVariantHits >= 1;
-  const hasStrongNameEvidence = exactNameHits >= 2;
-  const hasStrongRankingLead = bestScore > 0 && scoreGap >= 0.35;
-  const hasMeaningfulDominance = dominantOverlapCount >= 2;
-
-  return (
-    hasVariantLevelEvidence ||
-    hasStrongNameEvidence ||
-    (classificationSuggestsSpecificEntity &&
-      (hasStrongRankingLead || hasMeaningfulDominance)) ||
-    (hasAnchoredService &&
-      classificationSuggestsSpecificEntity &&
-      bestScore > 0)
-  );
-}
-
-function shouldPromoteExplicitEntityCandidate(params: {
-  currentIntent: string | null | undefined;
-  matchedCandidate: any;
-  allCandidates: any[];
-  classificationKind: string | null | undefined;
-  previewClassification: any;
-  convoCtx: any;
-}): boolean {
-  const {
-    currentIntent,
-    matchedCandidate,
-    allCandidates,
-    classificationKind,
-    previewClassification,
-    convoCtx,
-  } = params;
-
-  if (!matchedCandidate) return false;
-
-  const signals = previewClassification?.signals || {};
-
-  const turnHasCatalogScope =
-    isCatalogIntent(currentIntent) ||
-    Boolean(signals.hasCatalogScope) ||
-    Boolean(signals.hasReferentialDependency) ||
-    Boolean(signals.hasConversationDependency) ||
-    hasCatalogContextAnchor(convoCtx);
-
-  if (!turnHasCatalogScope) {
-    return false;
-  }
-
-  const hasStrongEvidence = hasStrongStructuredEntityEvidence({
-    matchedCandidate,
-    allCandidates,
-    classificationKind,
-    convoCtx,
-  });
-
-  if (!hasStrongEvidence) {
-    return false;
-  }
-
-  if (isBusinessInfoIntent(currentIntent)) {
-    return true;
-  }
-
-  return true;
+  return score >= 0.9 && scoreGap >= 0.25;
 }
 
 function getStructuredServiceSelection(ctxPatch: any, convoCtx: any) {
@@ -292,43 +256,6 @@ function getStructuredServiceSelection(ctxPatch: any, convoCtx: any) {
     hasResolution: !!serviceId || !!serviceName || !!serviceLabel,
   };
 }
-
-type StructuredCatalogComparisonSide = {
-  key: string;
-  label: string;
-  serviceIds: string[];
-  serviceNames: string[];
-  serviceLabels: string[];
-  score: number;
-};
-
-type StructuredCatalogComparison = {
-  hasComparison: boolean;
-  sides: StructuredCatalogComparisonSide[];
-  serviceIds: string[];
-  serviceNames: string[];
-  serviceLabels: string[];
-  requiresDisambiguation: boolean;
-};
-
-function isComparisonFriendlyIntent(intent: string | null | undefined): boolean {
-  const normalized = String(intent || "").trim().toLowerCase();
-
-  return (
-    normalized === "info_servicio" ||
-    normalized === "precio" ||
-    normalized === "planes_precios" ||
-    normalized === "schedule" ||
-    normalized === "info_horarios_generales"
-  );
-}
-
-function toFiniteScore(value: any): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
-}
-
-type ComparisonTokenStats = Map<string, number>;
 
 function getCandidateComparisonTokens(candidate: any): string[] {
   const raw = [
@@ -403,22 +330,23 @@ function buildComparisonSideLabel(members: any[]): string {
 }
 
 function buildStructuredCatalogComparison(params: {
-  normalizedCurrentIntent: string | null | undefined;
+  policy: {
+    shouldBuildComparison: boolean;
+  };
   entityCandidateResult: any;
   explicitEntityCandidateForClassification: {
     id: string;
     name: string;
     score: number;
   } | null;
-  convoCtx: any;
 }): StructuredCatalogComparison | null {
   const {
-    normalizedCurrentIntent,
+    policy,
     entityCandidateResult,
     explicitEntityCandidateForClassification,
   } = params;
 
-  if (!isComparisonFriendlyIntent(normalizedCurrentIntent)) {
+  if (!policy.shouldBuildComparison) {
     return null;
   }
 
@@ -589,25 +517,31 @@ export async function handleFastpathHybridTurn(
     followupEntityKind,
   } = args;
 
-  const loweredInput = (userInput || "").toLowerCase();
-
-  // Intención “final” de este turno (signals)
   const currentIntent = (detectedIntent || intentFallback || null) ?? null;
-
   const normalizedCurrentIntent = String(currentIntent || "").trim().toLowerCase();
 
-  const CATALOG_ROUTING_INTENTS = new Set([
-    "precio",
-    "planes_precios",
-    "info_horarios_generales",
-    "schedule",
-    "info_servicio",
-  ]);
+  const previewClassificationInput = buildCatalogReferenceClassificationInput({
+    userText: userInput,
+    convoCtx,
+    detectedIntent: null,
+    explicitEntityCandidate: null,
+    explicitVariantCandidate: null,
+    explicitFamilyCandidate: null,
+    structuredComparison: null,
+  });
 
-  const shouldRouteCatalog =
-    CATALOG_ROUTING_INTENTS.has(normalizedCurrentIntent) ||
-    referentialFollowup === true ||
-    followupNeedsAnchor === true;
+  const previewClassification = classifyCatalogReferenceTurn(
+    previewClassificationInput
+  );
+
+  const previewPolicy = buildFastpathTurnPolicy({
+    classification: previewClassification,
+    facets: detectedFacets || null,
+    structuredComparison: null,
+    convoCtx,
+    referentialFollowup,
+    followupNeedsAnchor,
+  });
 
   let explicitEntityCandidateForClassification: {
     id: string;
@@ -619,12 +553,14 @@ export async function handleFastpathHybridTurn(
   let structuredComparison: StructuredCatalogComparison | null = null;
 
   try {
-    entityCandidateResultLoose = await resolveServiceCandidatesFromText(
-      pool,
-      tenantId,
-      userInput,
-      { mode: "loose" }
-    );
+    if (previewPolicy.shouldAllowLooseResolution) {
+      entityCandidateResultLoose = await resolveServiceCandidatesFromText(
+        pool,
+        tenantId,
+        userInput,
+        { mode: "loose" }
+      );
+    }
 
     const resolvedHit = entityCandidateResultLoose?.hit ?? null;
 
@@ -641,55 +577,67 @@ export async function handleFastpathHybridTurn(
       const candidatesForMatch =
         rawCandidates.length > 0 ? rawCandidates : fallbackCandidates;
 
-      const matchedCandidate = candidatesForMatch.find(
-        (candidate: any) =>
-          String(candidate?.serviceId || candidate?.id || "") ===
-          String(resolvedHit.id)
-      ) || null;
+      const matchedCandidate =
+        candidatesForMatch.find(
+          (candidate: any) =>
+            String(candidate?.serviceId || candidate?.id || "").trim() ===
+            String(resolvedHit.id || "").trim()
+        ) || null;
 
-      explicitEntityCandidateForClassification = {
-        id: String(resolvedHit.id),
-        name: String(resolvedHit.name || "").trim(),
-        score: Number(matchedCandidate?.score || 1),
-      };
+      const canPromoteExplicitEntity = canUseResolvedHitAsExplicitEntity({
+        currentIntent,
+        matchedCandidate,
+        allCandidates: candidatesForMatch,
+        previewClassification,
+        convoCtx,
+        policy: previewPolicy,
+      });
+
+      if (canPromoteExplicitEntity) {
+        explicitEntityCandidateForClassification = {
+          id: String(resolvedHit.id || "").trim(),
+          name: String(resolvedHit.name || "").trim(),
+          score: Number(matchedCandidate?.score || 0),
+        };
+      }
     }
 
     structuredComparison = buildStructuredCatalogComparison({
-      normalizedCurrentIntent,
+      policy: previewPolicy,
       entityCandidateResult: entityCandidateResultLoose,
       explicitEntityCandidateForClassification,
-      convoCtx,
     });
+
     const debugRawCandidates = Array.isArray(entityCandidateResultLoose?.candidates)
-  ? entityCandidateResultLoose.candidates
-  : [];
+      ? entityCandidateResultLoose.candidates
+      : [];
 
-  const debugFallbackCandidates = [
-    entityCandidateResultLoose?.best || null,
-    entityCandidateResultLoose?.second || null,
-  ].filter(Boolean);
+    const debugFallbackCandidates = [
+      entityCandidateResultLoose?.best || null,
+      entityCandidateResultLoose?.second || null,
+    ].filter(Boolean);
 
-  const debugCandidates =
-    debugRawCandidates.length > 0
-      ? debugRawCandidates
-      : debugFallbackCandidates;
+    const debugCandidates =
+      debugRawCandidates.length > 0
+        ? debugRawCandidates
+        : debugFallbackCandidates;
 
-  console.log("[CATALOG_COMPARISON][CANDIDATES]", {
-    userInput,
-    normalizedCurrentIntent,
-    candidates: debugCandidates.map((candidate: any) => ({
-      serviceId: candidate?.serviceId || candidate?.id || null,
-      id: candidate?.id || null,
-      label: candidate?.label || candidate?.name || null,
-      name: candidate?.name || null,
-      score: candidate?.score || null,
-      catalogRole: candidate?.catalogRole || null,
-      exactNameHits: candidate?.exactNameHits || 0,
-      exactVariantHits: candidate?.exactVariantHits || 0,
-    })),
-    explicitEntityCandidateForClassification,
-    structuredComparison,
-  });
+    console.log("[CATALOG_COMPARISON][CANDIDATES]", {
+      userInput,
+      normalizedCurrentIntent,
+      candidates: debugCandidates.map((candidate: any) => ({
+        serviceId: candidate?.serviceId || candidate?.id || null,
+        id: candidate?.id || null,
+        label: candidate?.label || candidate?.name || null,
+        name: candidate?.name || null,
+        score: candidate?.score || null,
+        catalogRole: candidate?.catalogRole || null,
+        exactNameHits: candidate?.exactNameHits || 0,
+        exactVariantHits: candidate?.exactVariantHits || 0,
+      })),
+      explicitEntityCandidateForClassification,
+      structuredComparison,
+    });
   } catch (e: any) {
     console.warn(
       "[CATALOG_REFERENCE_CLASSIFIER][EXPLICIT_ENTITY_CANDIDATE] failed:",
@@ -697,9 +645,8 @@ export async function handleFastpathHybridTurn(
     );
   }
 
-  const catalogReferenceIntent =
-  CATALOG_ROUTING_INTENTS.has(normalizedCurrentIntent)
-    ? normalizedCurrentIntent
+  const catalogReferenceIntent = previewPolicy.shouldRouteCatalog
+    ? normalizedCurrentIntent || null
     : null;
 
   console.log("[TRACE_CATALOG][PRE_BUILD_INPUT]", {
@@ -716,6 +663,8 @@ export async function handleFastpathHybridTurn(
       convoCtx,
       detectedIntent: catalogReferenceIntent,
       explicitEntityCandidate: explicitEntityCandidateForClassification,
+      explicitVariantCandidate: null,
+      explicitFamilyCandidate: null,
       structuredComparison,
     });
 
@@ -727,13 +676,24 @@ export async function handleFastpathHybridTurn(
     explicitEntityCandidateForClassification = null;
   }
 
-  const catalogReferenceClassification = shouldRouteCatalog
-    ? classifyCatalogReferenceTurn({
-        ...catalogReferenceClassificationInput,
-        explicitEntityCandidate: explicitEntityCandidateForClassification,
-        structuredComparison,
-        detectedIntent: catalogReferenceIntent,
-      })
+  const preliminaryClassification = classifyCatalogReferenceTurn({
+    ...catalogReferenceClassificationInput,
+    explicitEntityCandidate: explicitEntityCandidateForClassification,
+    structuredComparison,
+    detectedIntent: catalogReferenceIntent,
+  });
+
+  const routingPolicy = buildFastpathTurnPolicy({
+    classification: preliminaryClassification,
+    facets: detectedFacets || null,
+    structuredComparison,
+    convoCtx,
+    referentialFollowup,
+    followupNeedsAnchor,
+  });
+
+  const catalogReferenceClassification = routingPolicy.shouldRouteCatalog
+    ? preliminaryClassification
     : classifyCatalogReferenceTurn({
         ...catalogReferenceClassificationInput,
         explicitEntityCandidate: explicitEntityCandidateForClassification,
@@ -753,21 +713,33 @@ export async function handleFastpathHybridTurn(
     classification: catalogReferenceClassification,
   });
 
-  const catalogRoutingSignal = buildCatalogRoutingSignal({
+  const rawCatalogRoutingSignal = buildCatalogRoutingSignal({
     intentOut: detectedIntent || intentFallback || null,
     catalogReferenceClassification,
     convoCtx,
   });
+
+  const catalogRoutingSignal = {
+    ...rawCatalogRoutingSignal,
+    hasFreshCatalogContext:
+      Boolean(rawCatalogRoutingSignal?.hasFreshCatalogContext) &&
+      routingPolicy.canReuseCatalogContext,
+    previousCatalogPlans:
+      Boolean(rawCatalogRoutingSignal?.hasFreshCatalogContext) &&
+      routingPolicy.canReuseCatalogContext
+        ? Array.isArray(rawCatalogRoutingSignal?.previousCatalogPlans)
+          ? rawCatalogRoutingSignal.previousCatalogPlans
+          : []
+        : [],
+  };
 
   const isPriceQuestionUser =
     catalogRoutingSignal.routeIntent === "catalog_price" ||
     catalogRoutingSignal.routeIntent === "catalog_alternatives";
 
   const shouldForceCatalogRouting = catalogRoutingSignal.shouldRouteCatalog;
-
   const wantsPlansAndHours =
     catalogRoutingSignal.routeIntent === "catalog_schedule";
-
   const isMorePlansFollowup =
     catalogRoutingSignal.routeIntent === "catalog_alternatives";
 
@@ -777,40 +749,21 @@ export async function handleFastpathHybridTurn(
     normalizedCurrentIntent === "info_servicio";
 
   const fpIntent = shouldForceCatalogRouting
-  ? (detectedIntent || intentFallback || "precio")
-  : (detectedIntent || intentFallback || null);
+    ? detectedIntent || intentFallback || "precio"
+    : detectedIntent || intentFallback || null;
 
-  // ============================================
-  // PRE-RESOLVE DE SERVICIO DESDE EL MENSAJE DEL USUARIO
-  // Esto cubre el caso donde Fastpath no maneja el turno
-  // pero el usuario sí mencionó un servicio de forma suficiente.
-  // ============================================
   const preResolvedCtxPatch: any = {};
 
-  // Solo intentamos pre-resolver entidad cuando el turno parece
-  // realmente sobre un servicio concreto, no sobre catálogo general.
   const shouldTryPreResolveServiceBase =
     !catalogReferenceClassification?.targetServiceId &&
-    (
-      normalizedCurrentIntent === "info_servicio" ||
-      normalizedCurrentIntent === "precio" ||
-      normalizedCurrentIntent === "planes_precios" ||
-      normalizedCurrentIntent === "info_horarios_generales" ||
-      normalizedCurrentIntent === "schedule"
-    ) &&
-    (
-      catalogReferenceClassification.kind === "entity_specific" ||
+    routingPolicy.shouldUseRoutingStructuredService &&
+    (catalogReferenceClassification.kind === "entity_specific" ||
       catalogReferenceClassification.kind === "referential_followup" ||
-      catalogReferenceClassification.kind === "variant_specific"
-    );
+      catalogReferenceClassification.kind === "variant_specific");
 
-  // IMPORTANTE:
-  // Aunque ya exista un servicio previo en convoCtx, igual intentamos resolver
-  // el texto ACTUAL para detectar si el usuario cambió explícitamente de servicio.
   let explicitServiceResolved = false;
   let explicitResolvedServiceId: string | null = null;
   let explicitResolvedServiceName: string | null = null;
-
   let shouldTryPreResolveService = false;
 
   if (shouldTryPreResolveServiceBase) {
@@ -825,18 +778,14 @@ export async function handleFastpathHybridTurn(
       shouldTryPreResolveService =
         shouldTryPreResolveServiceBase &&
         Boolean(candidateResult?.hit?.id) &&
-        (
-          catalogReferenceClassification.kind === "entity_specific" ||
+        (catalogReferenceClassification.kind === "entity_specific" ||
           catalogReferenceClassification.kind === "variant_specific" ||
-          (
-            catalogReferenceClassification.kind === "referential_followup" &&
+          (catalogReferenceClassification.kind === "referential_followup" &&
             Boolean(
               catalogReferenceClassification.targetServiceId ||
-              convoCtx?.last_service_id ||
-              convoCtx?.selectedServiceId
-            )
-          )
-        );
+                convoCtx?.last_service_id ||
+                convoCtx?.selectedServiceId
+            )));
 
       if (shouldTryPreResolveService && candidateResult?.hit?.id) {
         explicitServiceResolved = true;
@@ -852,7 +801,6 @@ export async function handleFastpathHybridTurn(
         preResolvedCtxPatch.selectedServiceLabel = explicitResolvedServiceName;
         preResolvedCtxPatch.last_entity_kind = "service";
         preResolvedCtxPatch.last_entity_at = Date.now();
-
       }
     } catch (e: any) {
       console.warn(
@@ -901,10 +849,6 @@ export async function handleFastpathHybridTurn(
       anchoredServiceLabel || anchoredServiceName || null;
     forcedAnchorCtxPatch.last_entity_kind = "service";
     forcedAnchorCtxPatch.last_entity_at = Date.now();
-
-    if (process.env.DEBUG_FASTPATH === "true") {
-    
-    }
   }
 
   const convoCtxForFastpath = {
@@ -913,7 +857,6 @@ export async function handleFastpathHybridTurn(
     ...preResolvedCtxPatch,
   };
 
-  // 1️⃣ Ejecutar Fastpath "puro" (DB, includes, etc.)
   const fp = await runFastpath({
     pool,
     tenantId,
@@ -944,7 +887,6 @@ export async function handleFastpathHybridTurn(
     });
   }
 
-  // Si no manejó nada, devolvemos directo
   if (!fp.handled) {
     const unhandledCtxPatch = {
       ...(forcedAnchorCtxPatch || {}),
@@ -964,12 +906,13 @@ export async function handleFastpathHybridTurn(
 
     return {
       handled: false,
-      ctxPatch: Object.keys(unhandledCtxPatch).length ? unhandledCtxPatch : undefined,
+      ctxPatch: Object.keys(unhandledCtxPatch).length
+        ? unhandledCtxPatch
+        : undefined,
       intent: detectedIntent || intentFallback || null,
     };
   }
 
-  // ✅ declarar ctxPatch primero
   const ctxPatch: any = fp.ctxPatch ? { ...fp.ctxPatch } : {};
 
   const shouldUseConvoCtxForStructuredService =
@@ -981,7 +924,7 @@ export async function handleFastpathHybridTurn(
     (fp.source === "service_list_db" && fp.intent === "info_servicio");
 
   const canUseRoutingStructuredService =
-  shouldUseRoutingStructuredService(catalogRoutingSignal);
+    shouldUseRoutingStructuredService(catalogRoutingSignal);
 
   const routingTargetServiceId = canUseRoutingStructuredService
     ? firstNonEmptyString(
@@ -1050,14 +993,12 @@ export async function handleFastpathHybridTurn(
   const shouldBypassStructuredRewrite =
     isDmChatChannel(canal) &&
     Boolean(fp.reply) &&
-    (
-      String(ctxPatch?.last_bot_action || "") === "asked_link_option" ||
+    (String(ctxPatch?.last_bot_action || "") === "asked_link_option" ||
       Boolean(ctxPatch?.pending_link_lookup) ||
-      (Array.isArray(ctxPatch?.pending_link_options) && ctxPatch.pending_link_options.length > 0)
-    );
+      (Array.isArray(ctxPatch?.pending_link_options) &&
+        ctxPatch.pending_link_options.length > 0));
 
   if (shouldBypassStructuredRewrite) {
-
     return {
       handled: true,
       reply: fp.reply,
@@ -1096,8 +1037,6 @@ export async function handleFastpathHybridTurn(
     ctxPatch.last_entity_at = Date.now();
   }
 
-  // ✅ HARD BYPASS: si Fastpath ya respondió desde DB con precios/catálogo,
-  // NUNCA pasar por LLM (evita precios inventados).
   const HARD_BYPASS_PRICE_SOURCES = new Set([
     "price_summary_db",
     "price_fastpath_db",
@@ -1132,7 +1071,6 @@ export async function handleFastpathHybridTurn(
     };
   }
 
-  // 2️⃣ awaitingEffect: set_awaiting_yes_no → lo manejamos aquí
   if (fp.awaitingEffect?.type === "set_awaiting_yes_no") {
     const { setAwaitingState } = await import("../../../awaiting/setAwaitingState");
     await setAwaitingState(pool, {
@@ -1145,12 +1083,8 @@ export async function handleFastpathHybridTurn(
     });
   }
 
-  // 3️⃣ Texto factual base que sale de Fastpath
   let fastpathText = String(fp.reply || "");
 
-  // 3.1️⃣ BYPASS LLM PARA DETALLE DE SERVICIO ("qué incluye X")
-  // Si Fastpath ya resolvió info_servicio (incluye/qué trae), en WhatsApp/Meta
-  // NO queremos pasar por el LLM: mandamos la respuesta tal cual.
   if (
     isDmChatChannel(canal) &&
     fp.source === "service_list_db" &&
@@ -1177,9 +1111,6 @@ export async function handleFastpathHybridTurn(
 
   const hasPkgs = (convoCtx as any)?.has_packages_available === true;
 
-  // 3.5️⃣ WHATSAPP/META + PREGUNTA DE PRECIOS/PLANES: NO PASAR POR LLM
-  // EXCEPCIÓN 1: si es "planes + horarios", dejamos que pase al modo híbrido
-  // EXCEPCIÓN 2: tratamos distinto follow-up ("otros planes") y detalle de plan ("qué incluye")
   if (
     isDmChatChannel(canal) &&
     isPriceQuestionUser &&
@@ -1211,10 +1142,8 @@ export async function handleFastpathHybridTurn(
     };
   }
 
-  // 🔍 detecta si ya trae link o viene de info_clave_*
   const isInfoClaveSource = String(fp.source || "").startsWith("info_clave");
 
-  // 4️⃣ BYPASS LLM EN WHATSAPP/META si ya hay link o viene de info_clave
   if (isDmChatChannel(canal) && isInfoClaveSource) {
     console.log("[CHAT][FASTPATH] Bypass LLM (link/info_clave)", {
       source: fp.source,
@@ -1238,7 +1167,6 @@ export async function handleFastpathHybridTurn(
     };
   }
 
-  // 5️⃣ Para otros canales, naturalizar línea secundaria (planes + paquetes)
   if (canal !== "whatsapp" && isPlansList && hasPkgs) {
     fastpathText = await naturalizeSecondaryOptionsLine({
       tenantId,
@@ -1251,9 +1179,7 @@ export async function handleFastpathHybridTurn(
     });
   }
 
-  // 6️⃣ MODO HÍBRIDO PARA WHATSAPP Y META (FB/IG)
   const isDm = isDmChatChannel(canal);
-
   const isServiceIntent =
     (fp.intent || detectedIntent || intentFallback || null) === "info_servicio";
 
@@ -1266,9 +1192,15 @@ export async function handleFastpathHybridTurn(
   ]);
 
   const hasStructuredServiceResolution = structuredService.hasResolution;
-  const hasGroundedServiceSource = SERVICE_GROUNDED_SOURCES.has(String(fp.source || ""));
+  const hasGroundedServiceSource = SERVICE_GROUNDED_SOURCES.has(
+    String(fp.source || "")
+  );
 
-  if (isDm && isServiceIntent && (!hasStructuredServiceResolution || !hasGroundedServiceSource)) {
+  if (
+    isDm &&
+    isServiceIntent &&
+    (!hasStructuredServiceResolution || !hasGroundedServiceSource)
+  ) {
     return {
       handled: true,
       reply: fastpathText,
@@ -1324,7 +1256,6 @@ export async function handleFastpathHybridTurn(
         ? "RULE: You may rephrase for a natural, warm, sales-oriented chat/DM tone, but DO NOT change amounts, ranges, or plan/service names."
         : "REGLA: Puedes re-redactar para que suene natural, cálido y vendedor en chat/DM, pero NO cambies montos, rangos ni nombres de planes/servicios.";
 
-    // Bloque especial solo cuando pidió “planes + horarios”
     let forcedListBlock = "";
     if (wantsPlansAndHours && infoClave) {
       forcedListBlock =
@@ -1425,29 +1356,21 @@ SPECIAL RULE FOR THIS TURN:
       String(fp.source || "") === "price_disambiguation_db";
 
     const hasResolvedEntity = Boolean(
-      structuredService?.serviceId ||
-      structuredService?.serviceLabel
+      structuredService?.serviceId || structuredService?.serviceLabel
     );
 
     const shouldUseGroundedFrameOnly =
       isCatalogDbReply || isPriceDisambiguationReply;
 
-    // ===============================
-    // ✅ BYPASS TEMPRANO PARA PRECIOS GROUNDED DEL FASTPATH
-    // No volver a pasar por answerWithPromptBase.
-    // ===============================
     if (
       fp?.handled &&
-      (
-        fp?.source === "price_fastpath_db_llm_render" ||
+      (fp?.source === "price_fastpath_db_llm_render" ||
         fp?.source === "price_fastpath_db" ||
         fp?.source === "price_summary_db_llm_render" ||
-        fp?.source === "catalog_comparison_db_llm_render"
-      ) &&
+        fp?.source === "catalog_comparison_db_llm_render") &&
       typeof fastpathText === "string" &&
       fastpathText.trim().length > 0
     ) {
-
       const finalDmReply = stripMarkdownLinksForDm(fastpathText);
 
       return {
@@ -1468,7 +1391,6 @@ SPECIAL RULE FOR THIS TURN:
       canal,
       maxLines: MAX_WHATSAPP_LINES,
       fallbackText: fastpathText,
-
       responsePolicy: {
         mode: shouldUseGroundedFrameOnly
           ? "grounded_frame_only"
@@ -1493,7 +1415,8 @@ SPECIAL RULE FOR THIS TURN:
         canUseCatalogLists: isCatalogDbReply || hasResolvedEntity,
         canUseOfficialLinks: true,
         unresolvedEntity: !isCatalogDbReply && !hasResolvedEntity,
-        clarificationTarget: !isCatalogDbReply && !hasResolvedEntity ? "service" : null,
+        clarificationTarget:
+          !isCatalogDbReply && !hasResolvedEntity ? "service" : null,
 
         singleResolvedEntityOnly: hasResolvedEntity && !isCatalogDbReply,
         allowAlternativeEntities: false,
@@ -1522,10 +1445,8 @@ SPECIAL RULE FOR THIS TURN:
         ...composed.pendingCta,
         createdAt: new Date().toISOString(),
       };
-
     }
 
-    // 7️⃣ awaiting_yes_no_action SOLO por señal estructurada, nunca por regex del texto
     if (fp?.awaitingEffect?.type === "set_awaiting_yes_no") {
       const payload = fp.awaitingEffect.payload || null;
 
@@ -1546,8 +1467,7 @@ SPECIAL RULE FOR THIS TURN:
   }
 
   console.log("[DM_CHANNEL_CHECK]", { canal, isDm });
-  
-  // 8️⃣ Otros canales (no WhatsApp/Meta): devolvemos fastpath “plano”
+
   return {
     handled: true,
     reply: fastpathText,
