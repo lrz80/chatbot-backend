@@ -312,6 +312,70 @@ function inferAnchorShift(params: {
   return "none";
 }
 
+function isEntityCandidateAnchoredToContext(params: {
+  candidate: CatalogReferenceClassificationInput["explicitEntityCandidate"];
+  context: CatalogReferenceContext;
+}): boolean {
+  const candidateId = String(params.candidate?.id || "").trim();
+  if (!candidateId) return false;
+
+  if (candidateId === String(params.context.lastEntityId || "").trim()) {
+    return true;
+  }
+
+  if (
+    Array.isArray(params.context.lastPresentedEntityIds) &&
+    params.context.lastPresentedEntityIds.some(
+      (id) => String(id || "").trim() === candidateId
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function canPromoteExplicitEntityCandidate(params: {
+  candidate: CatalogReferenceClassificationInput["explicitEntityCandidate"];
+  context: CatalogReferenceContext;
+  resolvedIntent: CatalogReferenceIntent;
+  tokenCount: number;
+  hasAnyContext: boolean;
+}): boolean {
+  const candidate = params.candidate;
+  if (!candidate?.id) return false;
+
+  const score = Number(candidate.score || 0);
+  const anchoredToContext = isEntityCandidateAnchoredToContext({
+    candidate,
+    context: params.context,
+  });
+
+  // Caso seguro: viene anclado al contexto conversacional real
+  if (anchoredToContext) {
+    return true;
+  }
+
+  // Sin contexto, no promociones una entidad en turnos largos o ambiguos
+  if (!params.hasAnyContext) {
+    // Intent desconocido + turno largo => no secuestrar a catálogo
+    if (params.resolvedIntent === "unknown" && params.tokenCount > 6) {
+      return false;
+    }
+
+    // Preguntas de horarios no deben anclarse a entidad con evidencia floja
+    if (params.resolvedIntent === "schedule" && score < 0.9) {
+      return false;
+    }
+
+    // Sin contexto, solo aceptar candidatos realmente fuertes
+    return score >= 0.9;
+  }
+
+  // Con algo de contexto, permite un poco menos de score
+  return score >= 0.82;
+}
+
 export function classifyCatalogReferenceTurn(
   input: CatalogReferenceClassificationInput
 ): CatalogReferenceClassification {
@@ -486,29 +550,42 @@ export function classifyCatalogReferenceTurn(
   // 2) EXPLICIT ENTITY CANDIDATE
   // =========================================================
   if (explicitEntityCandidate?.id) {
+    const canPromoteEntity = canPromoteExplicitEntityCandidate({
+      candidate: explicitEntityCandidate,
+      context,
+      resolvedIntent: result.intent,
+      tokenCount,
+      hasAnyContext,
+    });
+
     notes.push("explicit_entity_candidate_from_catalog_matcher");
     notes.push(`explicit_entity_score:${Number(explicitEntityCandidate.score || 0)}`);
+    notes.push(`explicit_entity_promotable:${canPromoteEntity ? "yes" : "no"}`);
 
-    result.kind = "entity_specific";
-    result.confidence = Math.max(
-      0.8,
-      Math.min(0.96, Number(explicitEntityCandidate.score || 0))
-    );
+    if (canPromoteEntity) {
+      result.kind = "entity_specific";
+      result.confidence = Math.max(
+        0.8,
+        Math.min(0.96, Number(explicitEntityCandidate.score || 0))
+      );
 
-    result.signals.hasSpecificEntityCandidate = true;
+      result.signals.hasSpecificEntityCandidate = true;
 
-    result.shouldUseContextFirst = false;
-    result.shouldResolveEntity = true;
+      result.shouldUseContextFirst = false;
+      result.shouldResolveEntity = true;
 
-    result.targetLevel = "service";
+      result.targetLevel = "service";
 
-    result.targetServiceId =
-      String(explicitEntityCandidate.id || "").trim() || null;
-    result.targetServiceName =
-      String(explicitEntityCandidate.name || "").trim() || null;
+      result.targetServiceId =
+        String(explicitEntityCandidate.id || "").trim() || null;
+      result.targetServiceName =
+        String(explicitEntityCandidate.name || "").trim() || null;
 
-    result.debug.notes = notes;
-    return result;
+      result.debug.notes = notes;
+      return result;
+    }
+
+    notes.push("explicit_entity_candidate_rejected_as_non_resolutive");
   }
 
   // =========================================================
