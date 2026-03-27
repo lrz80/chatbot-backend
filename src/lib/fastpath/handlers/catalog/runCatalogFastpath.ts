@@ -300,19 +300,9 @@ export async function runCatalogFastpath(
     });
 
     if (canonicalReply.trim()) {
-      const finalReply = await renderCatalogReplyWithSalesFrame({
-        lang: input.idiomaDestino === "en" ? "en" : "es",
-        userInput: input.userInput,
-        canonicalReply,
-        answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-        mode: "grounded_frame_only",
-        maxIntroLines: 1,
-        maxClosingLines: 1,
-      });
-
       return {
         handled: true,
-        reply: finalReply,
+        reply: canonicalReply,
         source: "catalog_db",
         intent: asksLocation
           ? "ubicacion"
