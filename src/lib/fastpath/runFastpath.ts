@@ -335,10 +335,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       const comparisonResult = await handleCatalogComparison({
         pool,
         tenantId,
-        idiomaDestino: idiomaDestino as "es" | "en",
         userInput,
+        idiomaDestino,
         catalogReferenceClassification,
-        answerCatalogQuestionLLM,
       });
 
       if (comparisonResult.handled) {
@@ -632,7 +631,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     extractPlanNamesFromReply,
     sameBulletStructure,
     answerWithPromptBase,
-    answerCatalogQuestionLLM,
     postProcessCatalogReply,
   });
 
