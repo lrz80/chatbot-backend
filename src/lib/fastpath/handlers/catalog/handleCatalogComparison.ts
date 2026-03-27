@@ -32,7 +32,7 @@ export async function handleCatalogComparison(
     input.idiomaDestino === "en" ? "en" : "es";
 
   const ids = Array.isArray(input.catalogReferenceClassification?.targetServiceIds)
-    ? input.catalogReferenceClassification.targetServiceIds.slice(0, 2)
+    ? input.catalogReferenceClassification.targetServiceIds.slice(0, 6)
     : [];
 
   if (ids.length < 2) {
