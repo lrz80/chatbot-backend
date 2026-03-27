@@ -215,6 +215,27 @@ export async function runCatalogFastpath(
     intentOutNorm === "combination_and_price" ||
     intentOutNorm === "catalog_combination";
 
+  type QuestionType =
+    | "combination_and_price"
+    | "price_or_plan"
+    | "schedule_and_price"
+    | "business_info_only"
+    | "other_plans";
+
+  let questionType: QuestionType;
+
+  if (routeIntent === "catalog_combination") {
+    questionType = "combination_and_price";
+  } else if (routeIntent === "catalog_alternatives") {
+    questionType = "other_plans";
+  } else if (asksSchedules && asksPrices) {
+    questionType = "schedule_and_price";
+  } else if (!asksPrices && (asksSchedules || asksLocation || asksAvailability)) {
+    questionType = "business_info_only";
+  } else {
+    questionType = "price_or_plan";
+  }
+
   const locationBody = asksLocation
   ? buildLocationBlockFromInfoClave(input.infoClave)
   : "";
@@ -245,12 +266,25 @@ export async function runCatalogFastpath(
     availabilityBody
   );
 
-  const isBusinessInfoFacetTurn =
-    !asksPrices &&
-    (asksSchedules || asksLocation || asksAvailability) &&
+  const hasCatalogEntitySignal =
+    input.hasStructuredTarget ||
+    Boolean(catalogRoutingSignal.targetServiceId) ||
+    Boolean(catalogRoutingSignal.targetVariantId) ||
+    referenceKind === "entity_specific" ||
+    referenceKind === "variant_specific" ||
+    referenceKind === "referential_followup" ||
+    referenceKind === "catalog_family";
+
+  const isPureBusinessInfoTurn =
+    questionType === "business_info_only" &&
     !asksIncludesOnly &&
     !isCombinationIntent &&
     !isAskingOtherCatalogOptions;
+
+  const isBusinessInfoFacetTurn =
+    isPureBusinessInfoTurn &&
+    !hasCatalogEntitySignal &&
+    !isStructuredComparisonTurn;
 
   if (isBusinessInfoFacetTurn) {
     const canonicalReply = composeCatalogReplyBlocks({
@@ -320,24 +354,6 @@ export async function runCatalogFastpath(
     return {
       handled: false,
     };
-  }
-
-  type QuestionType =
-    | "combination_and_price"
-    | "price_or_plan"
-    | "schedule_and_price"
-    | "other_plans";
-
-  let questionType: QuestionType;
-
-  if (routeIntent === "catalog_combination") {
-    questionType = "combination_and_price";
-  } else if (routeIntent === "catalog_alternatives") {
-    questionType = "other_plans";
-  } else if (asksSchedules) {
-    questionType = "schedule_and_price";
-  } else {
-    questionType = "price_or_plan";
   }
 
   if (routeIntent === "catalog_overview" && intentAllowsCatalogRouting) {
