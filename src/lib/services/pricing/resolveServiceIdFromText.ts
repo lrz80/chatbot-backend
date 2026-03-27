@@ -181,6 +181,7 @@ function buildTenantTokenDf(candidates: Candidate[]): Map<string, number> {
       ...(cand.variantNameTokens || []),
       ...(cand.categoryTokens || []),
       ...(cand.tipoTokens || []),
+      ...(cand.supportTokens || []),
     ]);
 
     for (const token of seen) {
