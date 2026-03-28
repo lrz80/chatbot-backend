@@ -379,21 +379,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         lang: idiomaDestino,
       });
 
-      const reply = await renderCatalogReplyWithSalesFrame({
-        lang: idiomaDestino,
-        userInput,
-        canonicalReply,
-        answerCatalogQuestionLLM,
-        mode: "grounded_frame_only",
-        maxIntroLines: 1,
-        maxClosingLines: 1,
-      });
-
       return {
         handled: true,
         source: "service_list_db",
         intent: intentOut,
-        reply,
+        reply: canonicalReply,
         ctxPatch,
       };
     }
