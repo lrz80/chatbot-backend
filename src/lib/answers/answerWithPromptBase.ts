@@ -558,6 +558,11 @@ function buildGroundedFrameOnlyMessages(params: {
           fallbackText,
           "",
           "Devuélveme la respuesta final lista para enviar, mejorando solo el framing comercial sin alterar el cuerpo canónico.",
+          "Responde en JSON estricto.",
+          'Usa exactamente este formato: {"text":"...", "pendingCta":null}',
+          'Si incluyes un CTA de confirmación para reserva, usa: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
+          'Si incluyes un CTA de confirmación para estimado, usa: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+          "No uses markdown ni bloques de código.",
         ].join("\n")
       : [
           `Customer message: ${userInput || "(empty)"}`,
@@ -566,6 +571,11 @@ function buildGroundedFrameOnlyMessages(params: {
           fallbackText,
           "",
           "Return the final ready-to-send reply, improving only the sales framing without altering the canonical body.",
+          "Return strict JSON.",
+          'Use exactly this format: {"text":"...", "pendingCta":null}',
+          'If you include a confirmation CTA for booking, use: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
+          'If you include a confirmation CTA for estimate, use: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+          "Do not use markdown or code fences.",
         ].join("\n");
 
   return { system, user };
@@ -703,12 +713,14 @@ export async function answerWithPromptBase(
       );
     }
 
-    const rawModelOutput =
-      completion.choices[0]?.message?.content?.trim() || "";
+  const rawModelOutput =
+    completion.choices[0]?.message?.content?.trim() || "";
 
-    const parsedEnvelope = parseModelAnswerEnvelope(rawModelOutput);
+  rawModelOutputForPendingCta = rawModelOutput;
 
-    out = parsedEnvelope?.text || fallbackText || "";
+  const parsedEnvelope = parseModelAnswerEnvelope(rawModelOutput);
+
+  out = parsedEnvelope?.text || rawModelOutput || fallbackText || "";
   } catch (e) {
     console.warn("❌ answerWithPromptBase LLM error; using fallback:", e);
     out = fallbackText || "";
