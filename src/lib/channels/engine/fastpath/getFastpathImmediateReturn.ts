@@ -21,36 +21,15 @@ export type FastpathImmediateReturnDecision = {
   intent: string | null;
 };
 
-function toTrimmedString(value: any): string {
-  return String(value ?? "").trim();
-}
-
 export function getFastpathImmediateReturn(
   input: FastpathImmediateReturnInput
 ): FastpathImmediateReturnDecision {
-  const fpSource = toTrimmedString(input.fp?.source);
-  const fpIntent = toTrimmedString(
-    input.fp?.intent || input.detectedIntent || input.intentFallback
-  );
-  const fpReply = toTrimmedString(input.fp?.reply);
+  void input;
 
-  const isServiceDetailDirectReturn =
-    input.replyPolicy.isDmChannel &&
-    fpSource === "service_list_db" &&
-    (
-      fpIntent === "info_servicio" ||
-      input.catalogReferenceClassification?.intent === "includes"
-    );
-
-  const shouldReturnImmediately =
-    Boolean(input.replyPolicy.shouldDirectReturnPriceLikeReply) ||
-    Boolean(input.replyPolicy.shouldDirectReturnInfoBlock) ||
-    isServiceDetailDirectReturn;
-
-    return {
-      shouldReturnImmediately,
-      reply: shouldReturnImmediately ? fpReply : undefined,
-      replySource: shouldReturnImmediately ? fpSource || undefined : undefined,
-      intent: shouldReturnImmediately ? fpIntent || null : null,
-    };
+  return {
+    shouldReturnImmediately: false,
+    reply: undefined,
+    replySource: undefined,
+    intent: null,
+  };
 }
