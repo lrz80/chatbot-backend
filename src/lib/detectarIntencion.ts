@@ -154,6 +154,13 @@ function sanitizeLlmOutput(parsed: LlmIntentOutput | null | undefined): Intento 
   const rawIntent = String(parsed.intencion || "").trim().toLowerCase();
   if (!rawIntent) return null;
 
+  const normalizedIntent =
+    rawIntent === "servicios_generales" ||
+    rawIntent === "overview_servicios" ||
+    rawIntent === "business_overview"
+      ? "info_general"
+      : rawIntent;
+
   const nivelRaw = Number(parsed.nivel_interes ?? 1);
 
   const facets: IntentFacets = {
@@ -171,11 +178,11 @@ function sanitizeLlmOutput(parsed: LlmIntentOutput | null | undefined): Intento 
 
   // Si el modelo marcó facets útiles, "duda" ya no es una salida válida.
   // Para consultas multi-facet genéricas, usamos info_general como intención principal segura.
-  if (rawIntent === "duda" && hasAnyFacet) {
+  if (normalizedIntent === "duda" && hasAnyFacet) {
     return makeIntent("info_general", Math.max(2, nivelRaw || 1), facets);
   }
 
-  return makeIntent(rawIntent, nivelRaw, facets);
+  return makeIntent(normalizedIntent, nivelRaw, facets);
 }
 
 function buildUniversalIntentGuide(): string {
@@ -191,8 +198,8 @@ function buildUniversalIntentGuide(): string {
     `- cancelar: intención de cancelar algo no relacionado a soporte de reserva`,
     `- soporte: ayuda, problema técnico u operativo`,
     `- queja: molestia, reclamo o insatisfacción`,
-    `- info_general: overview general del negocio o varias dudas generales`,
-    `- info_servicio: pregunta sobre un servicio, plan, paquete, producto u oferta concreta`,
+    `- info_general: overview general del negocio, servicios principales, qué ofrecen, qué hacen o varias dudas generales sin una entidad concreta`,
+    `- info_servicio: pregunta sobre un servicio, plan, paquete, producto, variante u oferta concreta ya identificable o claramente mencionada`,
     `- no_interesado: rechazo claro o desinterés`,
     `- duda: mensaje ambiguo o insuficiente`,
     `- soporte_reserva: cambio, cancelación o problema relacionado con una reserva/cita ya existente`,
@@ -321,6 +328,10 @@ Reglas:
 - Si el mensaje combina varias cosas, conserva una intención principal razonable y usa facets para lo demás.
 - No uses intents compuestos.
 - No conviertas la combinación de varios temas en un nombre de intent nuevo.
+- Usa "info_general" cuando el cliente pida una vista general del negocio o de los servicios principales sin mencionar una entidad concreta.
+- Usa "info_servicio" solo cuando el cliente pregunte por un servicio, plan, paquete, producto o variante concreta, o por el detalle de una entidad identificable.
+- Si el cliente pregunta "qué ofrecen", "qué servicios tienen" o pide una vista general, eso normalmente es "info_general", no "info_servicio".
+- Si el cliente pregunta "qué incluye X", "qué trae X", "cómo funciona X" o pide detalle de un plan o servicio concreto, eso normalmente es "info_servicio".
 - Usa facets independientes:
   - asksPrices
   - asksSchedules

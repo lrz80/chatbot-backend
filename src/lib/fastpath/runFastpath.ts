@@ -350,8 +350,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       Boolean(catalogReferenceClassification?.targetVariantId) ||
       Boolean(catalogReferenceClassification?.targetFamilyKey);
 
-    const asksOnlyGeneralServiceInfo =
-      intentOut === "info_servicio" &&
+    const wantsGeneralBusinessOverview =
+      intentOut === "info_general" &&
       !hasConcreteStructuredTarget &&
       !detectedFacets?.asksPrices &&
       !detectedFacets?.asksSchedules &&
@@ -362,19 +362,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       catalogReferenceKind !== "referential_followup" &&
       catalogReferenceKind !== "comparison";
 
-    const wantsCatalogOverview =
-      !hasConcreteStructuredTarget &&
-      !detectedFacets?.asksPrices &&
-      !detectedFacets?.asksSchedules &&
-      !detectedFacets?.asksLocation &&
-      !detectedFacets?.asksAvailability &&
-      (
-        catalogReferenceClassification?.kind === "catalog_overview" ||
-        intentOut === "info_general" ||
-        asksOnlyGeneralServiceInfo
-      );
-
-    if (wantsCatalogOverview) {
+    if (wantsGeneralBusinessOverview) {
       const canonicalReply = String(infoClave || "").trim();
 
       if (!canonicalReply) {
@@ -395,7 +383,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       return {
         handled: true,
         source: "info_general_overview",
-        intent: "info_servicio",
+        intent: "info_general",
         reply: canonicalReply,
         ctxPatch,
       };
