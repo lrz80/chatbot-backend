@@ -341,23 +341,46 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
-  // ✅ INFO GENERAL OVERVIEW
-  // browse general de catálogo sin entidad resuelta
+  // ✅ INFO GENERAL OVERVIEW DESDE INFO_CLAVE
+  // servicios principales / oferta general del negocio
   // ===============================
   {
+    const hasConcreteStructuredTarget =
+      Boolean(catalogReferenceClassification?.targetServiceId) ||
+      Boolean(catalogReferenceClassification?.targetVariantId) ||
+      Boolean(catalogReferenceClassification?.targetFamilyKey);
+
+    const asksOnlyGeneralServiceInfo =
+      intentOut === "info_servicio" &&
+      !hasConcreteStructuredTarget &&
+      !detectedFacets?.asksPrices &&
+      !detectedFacets?.asksSchedules &&
+      !detectedFacets?.asksLocation &&
+      !detectedFacets?.asksAvailability &&
+      catalogReferenceKind !== "entity_specific" &&
+      catalogReferenceKind !== "variant_specific" &&
+      catalogReferenceKind !== "referential_followup" &&
+      catalogReferenceKind !== "comparison";
+
     const wantsCatalogOverview =
-      !catalogReferenceClassification?.targetServiceId &&
-      !catalogReferenceClassification?.targetVariantId &&
+      !hasConcreteStructuredTarget &&
       !detectedFacets?.asksPrices &&
       !detectedFacets?.asksSchedules &&
       !detectedFacets?.asksLocation &&
       !detectedFacets?.asksAvailability &&
       (
         catalogReferenceClassification?.kind === "catalog_overview" ||
-        intentOut === "info_general"
+        intentOut === "info_general" ||
+        asksOnlyGeneralServiceInfo
       );
 
     if (wantsCatalogOverview) {
+      const canonicalReply = String(infoClave || "").trim();
+
+      if (!canonicalReply) {
+        return { handled: false };
+      }
+
       const ctxPatch: any = {
         last_list_kind: null,
         last_list_kind_at: null,
@@ -365,18 +388,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         last_plan_list_at: null,
         last_package_list: null,
         last_package_list_at: null,
+        last_catalog_at: Date.now(),
+        lastResolvedIntent: "info_general_overview",
       };
-
-      const canonicalReply = await renderInfoGeneralOverview({
-        pool,
-        tenantId,
-        lang: idiomaDestino,
-      });
 
       return {
         handled: true,
-        source: "service_list_db",
-        intent: intentOut,
+        source: "info_general_overview",
+        intent: "info_servicio",
         reply: canonicalReply,
         ctxPatch,
       };
