@@ -480,6 +480,21 @@ function preserveCanonicalBodyOrFallback(args: {
     }
   }
 
+  const normalizedCanonicalBody = normalizeLineForCompare(canonicalBody);
+  const normalizedCandidateBody = normalizeLineForCompare(candidate);
+
+  const canonicalHasBullets = canonicalBullets.length > 0;
+  const canonicalIsSingleLine = canonicalLines.length === 1;
+
+  if (
+    !canonicalHasBullets &&
+    canonicalIsSingleLine &&
+    normalizedCanonicalBody &&
+    normalizedCandidateBody.includes(normalizedCanonicalBody)
+  ) {
+    return candidate || canonicalBody;
+  }
+
   const canonicalAppearsInsideCandidate = canonicalLines.every((line) =>
     candidateLines.some(
       (c) => normalizeLineForCompare(c) === normalizeLineForCompare(line)
