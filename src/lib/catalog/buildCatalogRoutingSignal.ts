@@ -156,15 +156,57 @@ function mapIntentOutToRouteIntent(intentOut?: string | null): CatalogRouteInten
     return "catalog_price";
   }
 
-  if (intent === "info_servicio") {
-    return "entity_detail";
-  }
-
   if (intent === "compare") {
     return "catalog_compare";
   }
 
   if (intent === "catalogo" || intent === "catalog") {
+    return "catalog_overview";
+  }
+
+  return "unknown";
+}
+
+function resolveRouteIntentFromSignals(args: {
+  intentOut?: string | null;
+  classification?: CatalogReferenceClassification | null;
+  referenceKind:
+    | "catalog_overview"
+    | "catalog_family"
+    | "entity_specific"
+    | "variant_specific"
+    | "referential_followup"
+    | "comparison"
+    | "none";
+  targetServiceId: string | null;
+  targetVariantId: string | null;
+  targetFamilyKey: string | null;
+  hasFreshCatalogContext: boolean;
+}): CatalogRouteIntent {
+  const {
+    intentOut,
+    classification,
+    referenceKind,
+    targetServiceId,
+    targetVariantId,
+    targetFamilyKey,
+  } = args;
+
+  const classificationRouteIntent = mapClassificationToRouteIntent(classification);
+  if (classificationRouteIntent !== "unknown") {
+    return classificationRouteIntent;
+  }
+
+  if (targetVariantId) return "variant_detail";
+  if (targetServiceId) return "entity_detail";
+  if (targetFamilyKey) return "catalog_family";
+
+  const intentRouteIntent = mapIntentOutToRouteIntent(intentOut);
+  if (intentRouteIntent !== "unknown") {
+    return intentRouteIntent;
+  }
+
+  if (referenceKind === "none") {
     return "catalog_overview";
   }
 
@@ -231,17 +273,16 @@ export function buildCatalogRoutingSignal({
   const disambiguationType = catalogReferenceClassification?.disambiguationType || "none";
   const anchorShift = catalogReferenceClassification?.anchorShift || "none";
 
-    if (referenceKind !== "none") {
-    const classificationRouteIntent =
-      mapClassificationToRouteIntent(catalogReferenceClassification);
-
-    const intentRouteIntent = mapIntentOutToRouteIntent(normalizedIntentOut);
-
-    const resolvedRouteIntent =
-      classificationRouteIntent === "catalog_price" &&
-      intentRouteIntent === "catalog_schedule"
-        ? "catalog_schedule"
-        : classificationRouteIntent;
+  if (referenceKind !== "none") {
+    const resolvedRouteIntent = resolveRouteIntentFromSignals({
+      intentOut: normalizedIntentOut,
+      classification: catalogReferenceClassification,
+      referenceKind,
+      targetServiceId,
+      targetVariantId,
+      targetFamilyKey,
+      hasFreshCatalogContext,
+    });
 
     return {
       shouldRouteCatalog: true,
@@ -265,9 +306,19 @@ export function buildCatalogRoutingSignal({
   }
 
   if (allowsDbCatalogPath) {
+    const resolvedRouteIntent = resolveRouteIntentFromSignals({
+      intentOut: normalizedIntentOut,
+      classification: catalogReferenceClassification,
+      referenceKind: "none",
+      targetServiceId,
+      targetVariantId,
+      targetFamilyKey,
+      hasFreshCatalogContext,
+    });
+
     return {
       shouldRouteCatalog: true,
-      routeIntent: mapIntentOutToRouteIntent(normalizedIntentOut),
+      routeIntent: resolvedRouteIntent,
       referenceKind: "none",
       source: "intent_layer",
       allowsDbCatalogPath,
