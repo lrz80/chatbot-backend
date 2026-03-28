@@ -71,6 +71,41 @@ function hasPendingLinkState(ctxPatch: any): boolean {
   );
 }
 
+function isVariantDisambiguationState(input: {
+  fp: FastpathReplyPolicyInput["fp"];
+  ctxPatch?: any;
+  structuredService: StructuredServiceSelection;
+}): boolean {
+  const fpSource = String(input.fp?.source || "").trim();
+  const reply = String(input.fp?.reply || "").trim();
+
+  if (fpSource === "price_disambiguation_db") {
+    return true;
+  }
+
+  if (
+    input.structuredService?.hasResolution &&
+    input.ctxPatch?.expectingVariant === true &&
+    !input.ctxPatch?.last_variant_id &&
+    !input.ctxPatch?.last_variant_name
+  ) {
+    return true;
+  }
+
+  if (
+    input.structuredService?.hasResolution &&
+    !input.ctxPatch?.last_variant_id &&
+    !input.ctxPatch?.last_variant_name &&
+    reply.length > 0 &&
+    Array.isArray(input.ctxPatch?.last_variant_options) &&
+    input.ctxPatch.last_variant_options.length > 1
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function getReplySourceKind(params: {
   fpSource: string;
   structuredService: StructuredServiceSelection;
@@ -137,11 +172,18 @@ export function buildFastpathReplyPolicy(
     catalogRoutingSignal: input.catalogRoutingSignal,
   });
 
+  const isVariantDisambiguation = isVariantDisambiguationState({
+    fp: input.fp,
+    ctxPatch: input.ctxPatch,
+    structuredService: input.structuredService,
+  });
+
   const shouldBypassStructuredRewrite =
     isDmChannel && hasPendingLinkState(input.ctxPatch);
 
   const shouldPersistStructuredService =
     hasResolvedEntity &&
+    !isVariantDisambiguation &&
     input.catalogReferenceClassification?.kind !== "comparison" &&
     fpSource !== "catalog_db" &&
     fpSource !== "price_disambiguation_db" &&
@@ -152,6 +194,7 @@ export function buildFastpathReplyPolicy(
   const shouldDirectReturnPriceLikeReply = false;
 
   const shouldUseGroundedFrameOnly =
+    isVariantDisambiguation ||
     replySourceKind === "catalog_grounded" ||
     replySourceKind === "catalog_disambiguation" ||
     replySourceKind === "business_info" ||
