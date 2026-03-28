@@ -21,45 +21,6 @@ type HandleFreeOfferInput = {
   detectedIntent?: string | null;
   catalogReferenceClassification?: any;
   convoCtx: Partial<FastpathCtx> | null | undefined;
-  renderFreeOfferList: (args: {
-    lang: Lang;
-    userInput: string;
-    items: Array<{ name: string }>;
-    answerCatalogQuestionLLM: (input: {
-      idiomaDestino: "es" | "en";
-      canonicalReply: string;
-      userInput: string;
-      mode?: "grounded_frame_only" | "grounded_catalog_sales";
-      maxIntroLines?: number;
-      maxClosingLines?: number;
-    }) => Promise<string | null>;
-  }) => Promise<string>;
-
-  answerCatalogQuestionLLM: (input: {
-    idiomaDestino: "es" | "en";
-    canonicalReply: string;
-    userInput: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string | null>;
-
-  renderCatalogReplyWithSalesFrame: (args: {
-    lang: Lang;
-    userInput: string;
-    canonicalReply: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    answerCatalogQuestionLLM: (input: {
-      idiomaDestino: "es" | "en";
-      canonicalReply: string;
-      userInput: string;
-      mode?: "grounded_frame_only" | "grounded_catalog_sales";
-      maxIntroLines?: number;
-      maxClosingLines?: number;
-    }) => Promise<string | null>;
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string>;
 };
 
 type HandleFreeOfferResult =
@@ -139,6 +100,28 @@ async function loadFreeOfferItems(
     .filter((x) => x.name && x.url);
 }
 
+function buildNoFreeOfferCanonicalReply(lang: Lang): string {
+  return lang === "en"
+    ? "• Free/trial option: not currently available in the catalog"
+    : "• Opción gratis/de prueba: no disponible actualmente en el catálogo";
+}
+
+function buildSingleFreeOfferCanonicalReply(item: FreeOfferItem): string {
+  return [`• ${item.name}`, item.url ? `• ${item.url}` : ""]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildMultiFreeOfferCanonicalReply(items: FreeOfferItem[]): string {
+  return items
+    .flatMap((item) => [
+      `• ${item.name}`,
+      item.url ? `• ${item.url}` : "",
+    ])
+    .filter(Boolean)
+    .join("\n");
+}
+
 export async function handleFreeOffer(
   input: HandleFreeOfferInput
 ): Promise<HandleFreeOfferResult> {
@@ -148,9 +131,6 @@ export async function handleFreeOffer(
     idiomaDestino,
     detectedIntent,
     catalogReferenceClassification,
-    renderFreeOfferList,
-    answerCatalogQuestionLLM,
-    renderCatalogReplyWithSalesFrame,
   } = input;
 
   const shouldHandle = wantsExplicitFreeOfferTurn({
@@ -165,25 +145,9 @@ export async function handleFreeOffer(
   const items = await loadFreeOfferItems(pool, tenantId);
 
   if (!items.length) {
-    const canonicalReply =
-      idiomaDestino === "en"
-        ? "• Free/trial option: not currently available in the catalog"
-        : "• Opción gratis/de prueba: no disponible actualmente en el catálogo";
-
-    const finalReply = await renderCatalogReplyWithSalesFrame({
-      lang: idiomaDestino,
-      userInput:
-        detectedIntent === "free_offer" ? "free offer" : "clase gratis / prueba",
-      canonicalReply,
-      answerCatalogQuestionLLM,
-      mode: "grounded_frame_only",
-      maxIntroLines: 1,
-      maxClosingLines: 1,
-    });
-
     return {
       handled: true,
-      reply: finalReply,
+      reply: buildNoFreeOfferCanonicalReply(idiomaDestino),
       source: "service_list_db",
       intent: "free_offer",
     };
@@ -192,24 +156,9 @@ export async function handleFreeOffer(
   if (items.length === 1) {
     const one = items[0];
 
-    const canonicalReply = [`• ${one.name}`, one.url ? `• ${one.url}` : ""]
-      .filter(Boolean)
-      .join("\n");
-
-    const finalReply = await renderCatalogReplyWithSalesFrame({
-      lang: idiomaDestino,
-      userInput:
-        detectedIntent === "free_offer" ? "free offer" : "clase gratis / prueba",
-      canonicalReply,
-      answerCatalogQuestionLLM,
-      mode: "grounded_catalog_sales",
-      maxIntroLines: 1,
-      maxClosingLines: 1,
-    });
-
     return {
       handled: true,
-      reply: finalReply,
+      reply: buildSingleFreeOfferCanonicalReply(one),
       source: "service_list_db",
       intent: "free_offer",
       ctxPatch: {
@@ -222,17 +171,9 @@ export async function handleFreeOffer(
 
   const now = Date.now();
 
-  const reply = await renderFreeOfferList({
-    lang: idiomaDestino,
-    userInput:
-      detectedIntent === "free_offer" ? "free offer" : "clase gratis / prueba",
-    items: items.map((x) => ({ name: x.name })),
-    answerCatalogQuestionLLM,
-  });
-
   return {
     handled: true,
-    reply,
+    reply: buildMultiFreeOfferCanonicalReply(items),
     source: "service_list_db",
     intent: "free_offer",
     ctxPatch: {

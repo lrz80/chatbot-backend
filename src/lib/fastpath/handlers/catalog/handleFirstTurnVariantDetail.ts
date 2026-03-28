@@ -15,31 +15,6 @@ type HandleFirstTurnVariantDetailInput = {
   traducirMensaje: (texto: string, idiomaDestino: string) => Promise<string>;
 
   getCatalogStructuredSignals: typeof import("./getCatalogStructuredSignals").getCatalogStructuredSignals;
-    answerCatalogQuestionLLM: (input: {
-    idiomaDestino: "es" | "en";
-    canonicalReply: string;
-    userInput: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string | null>;
-
-  renderCatalogReplyWithSalesFrame: (args: {
-    lang: Lang;
-    userInput: string;
-    canonicalReply: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    answerCatalogQuestionLLM: (input: {
-      idiomaDestino: "es" | "en";
-      canonicalReply: string;
-      userInput: string;
-      mode?: "grounded_frame_only" | "grounded_catalog_sales";
-      maxIntroLines?: number;
-      maxClosingLines?: number;
-    }) => Promise<string | null>;
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string>;
 
   getCatalogDetailSignals: typeof import("./getCatalogDetailSignals").getCatalogDetailSignals;
 
@@ -52,30 +27,7 @@ type HandleFirstTurnVariantDetailInput = {
     intentOut?: string | null;
     catalogReferenceClassification?: any;
     traducirMensaje: (texto: string, idiomaDestino: string) => Promise<string>;
-    answerCatalogQuestionLLM: (input: {
-      idiomaDestino: "es" | "en";
-      canonicalReply: string;
-      userInput: string;
-      mode?: "grounded_frame_only" | "grounded_catalog_sales";
-      maxIntroLines?: number;
-      maxClosingLines?: number;
-    }) => Promise<string | null>;
-    renderCatalogReplyWithSalesFrame: (args: {
-      lang: Lang;
-      userInput: string;
-      canonicalReply: string;
-      mode?: "grounded_frame_only" | "grounded_catalog_sales";
-      answerCatalogQuestionLLM: (input: {
-        idiomaDestino: "es" | "en";
-        canonicalReply: string;
-        userInput: string;
-        mode?: "grounded_frame_only" | "grounded_catalog_sales";
-        maxIntroLines?: number;
-        maxClosingLines?: number;
-      }) => Promise<string | null>;
-      maxIntroLines?: number;
-      maxClosingLines?: number;
-    }) => Promise<string>;
+    
   }) => Promise<FastpathResult>;
 
   resolveFirstTurnServiceDetailTarget: (args: {
@@ -187,8 +139,6 @@ export async function handleFirstTurnVariantDetail(
     isCatalogOverviewTurn,
     catalogReferenceClassification,
     traducirMensaje,
-    answerCatalogQuestionLLM,
-    renderCatalogReplyWithSalesFrame,
     getCatalogStructuredSignals,
     getCatalogDetailSignals,
     handleLastVariantIncludes,
@@ -220,8 +170,6 @@ export async function handleFirstTurnVariantDetail(
     intentOut,
     catalogReferenceClassification,
     traducirMensaje,
-    answerCatalogQuestionLLM,
-    renderCatalogReplyWithSalesFrame,
   });
 
   if (lastVariantIncludesResult.handled) {

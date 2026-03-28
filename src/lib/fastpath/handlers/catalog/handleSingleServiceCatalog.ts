@@ -395,7 +395,7 @@ export async function handleSingleServiceCatalog(
       };
     }
 
-    // ✅ Si resolvió servicio, pero no variante exacta, responder natural usando DB + answerCatalogQuestionLLM
+    // ✅ Si resolvió servicio, pero no variante exacta, responder natural usando DB
     const matchedRow = input.rows.find(
       (r) => String(r.service_id || "") === targetServiceId
     );

@@ -20,7 +20,6 @@ import { renderInfoGeneralOverview } from "../fastpath/renderInfoGeneralOverview
 import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
 import { buildCatalogContext } from "../catalog/buildCatalogContext";
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
-import { answerCatalogQuestionLLM } from "./llm/answerCatalogQuestionLLM";
 import { extractQueryFrames } from "./extractQueryFrames";
 import { resolveServiceMatchesFromText } from "../services/pricing/resolveServiceMatchesFromText";
 import { answerWithPromptBase } from "../answers/answerWithPromptBase";
@@ -56,9 +55,7 @@ import {
   postProcessCatalogReply,
   sameBulletStructure,
 } from "./helpers/catalogTextMatching";
-import { renderFreeOfferList } from "./helpers/catalogRendering";
 import { normalizeCatalogRole } from "../catalog/normalizeCatalogRole";
-import { renderCatalogReplyWithSalesFrame } from "./helpers/catalogRendering";
 
 type IntentFacets = {
   asksPrices?: boolean;
@@ -301,8 +298,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       resolveServiceMatchesFromText,
       resolveServiceIdFromText,
       bestNameMatch,
-      answerCatalogQuestionLLM,
-      renderCatalogReplyWithSalesFrame,
     });
 
     if (multiQuestionResult.handled) {
@@ -461,9 +456,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       detectedIntent,
       catalogReferenceClassification,
       convoCtx,
-      renderFreeOfferList,
-      answerCatalogQuestionLLM,
-      renderCatalogReplyWithSalesFrame,
     });
 
     if (freeOfferResult.handled) {
@@ -488,8 +480,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       resolveBestLinkForService,
       getServiceDetailsText,
       getServiceAndVariantUrl,
-      answerCatalogQuestionLLM,
-      renderCatalogReplyWithSalesFrame,
     });
 
     if (interestToLinkResult.handled) {
@@ -580,8 +570,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       isCatalogOverviewTurn,
       catalogReferenceClassification,
       traducirMensaje,
-      answerCatalogQuestionLLM,
-      renderCatalogReplyWithSalesFrame,
       getCatalogStructuredSignals,
       getCatalogDetailSignals,
       handleLastVariantIncludes,

@@ -50,31 +50,6 @@ type HandleInterestToLinkInput = {
     variantUrl?: string | null;
   }>;
 
-  answerCatalogQuestionLLM: (input: {
-    idiomaDestino: "es" | "en";
-    canonicalReply: string;
-    userInput: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string | null>;
-
-  renderCatalogReplyWithSalesFrame: (args: {
-    lang: Lang;
-    userInput: string;
-    canonicalReply: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    answerCatalogQuestionLLM: (input: {
-      idiomaDestino: "es" | "en";
-      canonicalReply: string;
-      userInput: string;
-      mode?: "grounded_frame_only" | "grounded_catalog_sales";
-      maxIntroLines?: number;
-      maxClosingLines?: number;
-    }) => Promise<string | null>;
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string>;
 };
 
 type HandleInterestToLinkResult =
@@ -159,8 +134,6 @@ export async function handleInterestToLink(
     resolveBestLinkForService,
     getServiceDetailsText,
     getServiceAndVariantUrl,
-    answerCatalogQuestionLLM,
-    renderCatalogReplyWithSalesFrame,
   } = input;
 
   if (shouldSkipBecauseJustSentDetails(convoCtx)) {
@@ -226,19 +199,9 @@ export async function handleInterestToLink(
 
     const canonicalReply = canonicalLines.join("\n");
 
-    const finalReply = await renderCatalogReplyWithSalesFrame({
-      lang: idiomaDestino,
-      userInput,
-      canonicalReply,
-      answerCatalogQuestionLLM,
-      mode: "grounded_frame_only",
-      maxIntroLines: 1,
-      maxClosingLines: 1,
-    });
-
     return {
       handled: true,
-      reply: finalReply,
+      reply: canonicalReply,
       source: "service_list_db",
       intent: intentOut || "link",
       ctxPatch: {

@@ -12,30 +12,7 @@ export type HandleLastVariantIncludesInput = {
   intentOut?: string | null;
   catalogReferenceClassification?: any;
   traducirMensaje: (texto: string, idiomaDestino: string) => Promise<string>;
-  answerCatalogQuestionLLM: (input: {
-    idiomaDestino: "es" | "en";
-    canonicalReply: string;
-    userInput: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string | null>;
-  renderCatalogReplyWithSalesFrame: (args: {
-    lang: any;
-    userInput: string;
-    canonicalReply: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    answerCatalogQuestionLLM: (input: {
-      idiomaDestino: "es" | "en";
-      canonicalReply: string;
-      userInput: string;
-      mode?: "grounded_frame_only" | "grounded_catalog_sales";
-      maxIntroLines?: number;
-      maxClosingLines?: number;
-    }) => Promise<string | null>;
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string>;
+  
 };
 
 export async function handleLastVariantIncludes(
@@ -201,16 +178,6 @@ export async function handleLastVariantIncludes(
 
   const canonicalReply = canonicalLines.join("\n\n");
 
-  const reply = await input.renderCatalogReplyWithSalesFrame({
-    lang: input.idiomaDestino === "en" ? "en" : "es",
-    userInput: input.userInput,
-    canonicalReply,
-    answerCatalogQuestionLLM: input.answerCatalogQuestionLLM,
-    mode: "grounded_catalog_sales",
-    maxIntroLines: 1,
-    maxClosingLines: 1,
-  });
-
   console.log("[FASTPATH-INCLUDES] using last_variant_id directly", {
     userInput: input.userInput,
     lastVariantId,
@@ -222,7 +189,7 @@ export async function handleLastVariantIncludes(
 
   return {
     handled: true,
-    reply,
+    reply: canonicalReply,
     source: "service_list_db",
     intent: input.intentOut || "info_servicio",
     ctxPatch: {
