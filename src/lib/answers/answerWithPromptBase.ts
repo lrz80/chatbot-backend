@@ -723,6 +723,7 @@ export async function answerWithPromptBase(
   out = parsedEnvelope?.text || rawModelOutput || fallbackText || "";
   } catch (e) {
     console.warn("❌ answerWithPromptBase LLM error; using fallback:", e);
+    rawModelOutputForPendingCta = "";
     out = fallbackText || "";
   }
 
