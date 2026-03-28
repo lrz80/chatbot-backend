@@ -419,9 +419,10 @@ function preserveCanonicalBodyOrFallback(args: {
   const candidate = String(modelText || "").trim();
 
   if (!canonicalBody) return candidate;
+  if (!candidate) return canonicalBody;
 
   if (policy.mode !== "grounded_frame_only" || !policy.preserveExactBody) {
-    return candidate || canonicalBody;
+    return candidate;
   }
 
   const canonicalLines = extractMeaningfulLines(canonicalBody);
@@ -430,6 +431,50 @@ function preserveCanonicalBodyOrFallback(args: {
   const canonicalBullets = canonicalLines.filter(startsWithBullet);
   const candidateBullets = candidateLines.filter(startsWithBullet);
 
+  const canonicalHasBullets = canonicalBullets.length > 0;
+  const canonicalIsSingleLine = canonicalLines.length === 1;
+
+  // =========================================================
+  // CASO 1: cuerpo canónico SIMPLE (una sola línea, sin bullets)
+  // Permitimos framing si el cuerpo canónico aparece intacto.
+  // =========================================================
+  if (!canonicalHasBullets && canonicalIsSingleLine) {
+    const normalizedCanonicalBody = normalizeLineForCompare(canonicalBody);
+    const normalizedCandidate = normalizeLineForCompare(candidate);
+
+    if (!normalizedCandidate.includes(normalizedCanonicalBody)) {
+      return canonicalBody;
+    }
+
+    if (policy.preserveExactNumbers) {
+      const canonicalNumbers = extractNumbers(canonicalBody);
+      const candidateNumbers = extractNumbers(candidate);
+
+      for (const value of canonicalNumbers) {
+        if (!candidateNumbers.includes(value)) {
+          return canonicalBody;
+        }
+      }
+    }
+
+    if (policy.preserveExactLinks) {
+      const canonicalUrls = extractUrls(canonicalBody);
+      const candidateUrls = extractUrls(candidate);
+
+      for (const url of canonicalUrls) {
+        if (!candidateUrls.includes(url)) {
+          return canonicalBody;
+        }
+      }
+    }
+
+    return candidate;
+  }
+
+  // =========================================================
+  // CASO 2: cuerpo canónico ESTRUCTURADO
+  // Aquí sí exigimos preservación estricta.
+  // =========================================================
   if (policy.preserveExactBullets) {
     if (canonicalBullets.length !== candidateBullets.length) {
       return canonicalBody;
@@ -447,13 +492,18 @@ function preserveCanonicalBodyOrFallback(args: {
 
   if (policy.preserveExactOrder) {
     let lastIndex = -1;
+
     for (const line of canonicalLines) {
       const idx = candidateLines.findIndex(
         (c, i) =>
           i > lastIndex &&
           normalizeLineForCompare(c) === normalizeLineForCompare(line)
       );
-      if (idx === -1) return canonicalBody;
+
+      if (idx === -1) {
+        return canonicalBody;
+      }
+
       lastIndex = idx;
     }
   }
@@ -480,21 +530,6 @@ function preserveCanonicalBodyOrFallback(args: {
     }
   }
 
-  const normalizedCanonicalBody = normalizeLineForCompare(canonicalBody);
-  const normalizedCandidateBody = normalizeLineForCompare(candidate);
-
-  const canonicalHasBullets = canonicalBullets.length > 0;
-  const canonicalIsSingleLine = canonicalLines.length === 1;
-
-  if (
-    !canonicalHasBullets &&
-    canonicalIsSingleLine &&
-    normalizedCanonicalBody &&
-    normalizedCandidateBody.includes(normalizedCanonicalBody)
-  ) {
-    return candidate || canonicalBody;
-  }
-
   const canonicalAppearsInsideCandidate = canonicalLines.every((line) =>
     candidateLines.some(
       (c) => normalizeLineForCompare(c) === normalizeLineForCompare(line)
@@ -505,7 +540,7 @@ function preserveCanonicalBodyOrFallback(args: {
     return canonicalBody;
   }
 
-  return candidate || canonicalBody;
+  return candidate;
 }
 
 function buildGroundedFrameOnlyMessages(params: {
@@ -778,19 +813,25 @@ export async function answerWithPromptBase(
     preserveExactLinks: effectivePolicy.preserveExactLinks,
   });
 
-  try {
-    if (out) {
-      const detected = await detectarIdioma(out);
-      const langOut = detected?.lang ?? null;
+  const shouldSkipPostTranslation =
+    effectivePolicy.mode === "grounded_frame_only" &&
+    effectivePolicy.preserveExactBody;
 
-      if ((langOut === "es" || langOut === "en") && langOut !== idiomaDestino) {
-        out = await traducirMensaje(out, idiomaDestino);
-        out = sanitizeChatOutput(out);
-        out = capLines(out, maxLines);
+  if (!shouldSkipPostTranslation) {
+    try {
+      if (out) {
+        const detected = await detectarIdioma(out);
+        const langOut = detected?.lang ?? null;
+
+        if ((langOut === "es" || langOut === "en") && langOut !== idiomaDestino) {
+          out = await traducirMensaje(out, idiomaDestino);
+          out = sanitizeChatOutput(out);
+          out = capLines(out, maxLines);
+        }
       }
+    } catch (e) {
+      console.warn("⚠️ No se pudo ajustar el idioma en answerWithPromptBase:", e);
     }
-  } catch (e) {
-    console.warn("⚠️ No se pudo ajustar el idioma en answerWithPromptBase:", e);
   }
 
   let pendingCta: PendingCta = null;
