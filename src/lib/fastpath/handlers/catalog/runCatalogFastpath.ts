@@ -277,17 +277,25 @@ export async function runCatalogFastpath(
     !isStructuredComparisonTurn;
 
   if (isBusinessInfoFacetTurn) {
-    const canonicalReply = composeCatalogReplyBlocks({
-      idiomaDestino: input.idiomaDestino,
-      asksPrices,
-      asksSchedules,
-      asksLocation,
-      asksAvailability,
-      scheduleBlock,
-      locationBlock,
-      availabilityBlock,
-      includeClosingLine: true,
-    });
+    let canonicalReply = "";
+
+    if (asksLocation && !asksSchedules && !asksAvailability && !asksPrices) {
+      canonicalReply = locationBody.trim();
+    } else if (asksAvailability && !asksSchedules && !asksLocation && !asksPrices) {
+      canonicalReply = availabilityBody.trim();
+    } else {
+      canonicalReply = composeCatalogReplyBlocks({
+        idiomaDestino: input.idiomaDestino,
+        asksPrices,
+        asksSchedules,
+        asksLocation,
+        asksAvailability,
+        scheduleBlock,
+        locationBlock,
+        availabilityBlock,
+        includeClosingLine: true,
+      });
+    }
 
     if (canonicalReply.trim()) {
       return {
