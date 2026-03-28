@@ -462,8 +462,10 @@ function preserveCanonicalBodyOrFallback(args: {
     const canonicalNumbers = extractNumbers(canonicalBody);
     const candidateNumbers = extractNumbers(candidate);
 
-    if (canonicalNumbers.join("|") !== candidateNumbers.join("|")) {
-      return canonicalBody;
+    for (const value of canonicalNumbers) {
+      if (!candidateNumbers.includes(value)) {
+        return canonicalBody;
+      }
     }
   }
 
@@ -471,16 +473,11 @@ function preserveCanonicalBodyOrFallback(args: {
     const canonicalUrls = extractUrls(canonicalBody);
     const candidateUrls = extractUrls(candidate);
 
-    if (canonicalUrls.join("|") !== candidateUrls.join("|")) {
-      return canonicalBody;
+    for (const url of canonicalUrls) {
+      if (!candidateUrls.includes(url)) {
+        return canonicalBody;
+      }
     }
-  }
-
-  const normalizedCanonical = normalizeLineForCompare(canonicalBody);
-  const normalizedCandidate = normalizeLineForCompare(candidate);
-
-  if (normalizedCandidate === normalizedCanonical) {
-    return canonicalBody;
   }
 
   const canonicalAppearsInsideCandidate = canonicalLines.every((line) =>
@@ -493,7 +490,7 @@ function preserveCanonicalBodyOrFallback(args: {
     return canonicalBody;
   }
 
-  return candidate;
+  return candidate || canonicalBody;
 }
 
 /* =========================
