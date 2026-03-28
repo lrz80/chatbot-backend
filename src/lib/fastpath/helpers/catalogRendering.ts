@@ -9,79 +9,23 @@ export async function renderCatalogReplyWithSalesFrame(args: {
   userInput: string;
   canonicalReply: string;
   mode?: CatalogRenderingMode;
-  answerCatalogQuestionLLM: (input: {
-    idiomaDestino: "es" | "en";
-    canonicalReply: string;
-    userInput: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string | null>;
   maxIntroLines?: number;
   maxClosingLines?: number;
 }): Promise<string> {
-  const {
-    lang,
-    userInput,
-    canonicalReply,
-    answerCatalogQuestionLLM,
-    mode = "grounded_catalog_sales",
-    maxIntroLines = 1,
-    maxClosingLines = 1,
-  } = args;
+  const { canonicalReply } = args;
 
   const canonical = String(canonicalReply || "").trim();
   if (!canonical) return "";
 
-  try {
-    const llmReply = await answerCatalogQuestionLLM({
-      idiomaDestino: lang === "en" ? "en" : "es",
-      canonicalReply: canonical,
-      userInput: String(userInput || "").trim(),
-      mode,
-      maxIntroLines,
-      maxClosingLines,
-    });
-
-    const finalReply = String(llmReply || "").trim();
-
-    if (finalReply) {
-      console.log("🧠 [catalogRendering] reply_source=llm", {
-        mode,
-        userInput: String(userInput || "").trim(),
-      });
-      return finalReply;
-    }
-
-    console.log("📦 [catalogRendering] reply_source=canonical_fallback", {
-      mode,
-      userInput: String(userInput || "").trim(),
-    });
-    return canonical;
-  } catch (error) {
-    console.error("❌ [catalogRendering] llm_render_failed", {
-      mode,
-      userInput: String(userInput || "").trim(),
-      error,
-    });
-    return canonical;
-  }
+  return canonical;
 }
 
 export async function renderFreeOfferList(args: {
   lang: Lang;
   userInput: string;
   items: { name: string }[];
-  answerCatalogQuestionLLM: (input: {
-    idiomaDestino: "es" | "en";
-    canonicalReply: string;
-    userInput: string;
-    mode?: "grounded_frame_only" | "grounded_catalog_sales";
-    maxIntroLines?: number;
-    maxClosingLines?: number;
-  }) => Promise<string | null>;
 }): Promise<string> {
-  const { lang, userInput, items, answerCatalogQuestionLLM } = args;
+  const { items } = args;
 
   const canonicalReply = items
     .slice(0, 6)
@@ -91,13 +35,5 @@ export async function renderFreeOfferList(args: {
 
   if (!canonicalReply) return "";
 
-  return renderCatalogReplyWithSalesFrame({
-    lang,
-    userInput,
-    canonicalReply,
-    answerCatalogQuestionLLM,
-    mode: "grounded_catalog_sales",
-    maxIntroLines: 1,
-    maxClosingLines: 1,
-  });
+  return canonicalReply;
 }
