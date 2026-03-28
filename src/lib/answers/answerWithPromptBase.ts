@@ -66,17 +66,6 @@ type AnswerWithPromptBaseParams = {
   responsePolicy?: ResponsePolicy | null;
 };
 
-type PendingCtaType =
-  | "estimate_offer"
-  | "booking_offer";
-
-type PendingCta =
-  | {
-      type: PendingCtaType;
-      awaitsConfirmation: true;
-    }
-  | null;
-
 /* =========================
    Helpers defensivos
 ========================= */
@@ -84,21 +73,10 @@ type PendingCta =
 function sanitizeChatOutput(text: string) {
   if (!text) return "";
 
-  let t = String(text)
+  return String(text)
+    .replace(/\r\n/g, "\n")
     .replace(/```[\s\S]*?```/g, "")
-    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
-    .replace(/^\s*\d+\)\s+/gm, "")
-    .replace(/^\s*\d+\.\s+/gm, "")
-    .replace(/\r\n/g, "\n");
-
-  t = t
-    .replace(/^\s*text\s*:\s*/i, "")
-    .replace(/^\s*message\s*:\s*/i, "")
-    .replace(/^\s*reply\s*:\s*/i, "");
-
-  t = t.replace(/\n{3,}/g, "\n\n").trim();
-
-  return t;
+    .trim();
 }
 
 function capLines(text: string, maxLines: number) {
@@ -128,64 +106,51 @@ function uniqueStrings(arr: string[]) {
   return Array.from(new Set(arr.map((x) => cleanOneLine(x)).filter(Boolean)));
 }
 
-function inferPendingCtaFromAssistantReply(
-  text: string,
-  idiomaDestino: "es" | "en"
-): PendingCta {
-  const t = String(text || "").toLowerCase().trim();
-  if (!t) return null;
+type PendingCtaType = "estimate_offer" | "booking_offer";
 
-  const estimatePatternsEs = [
-    /te gustar[ií]a agendar un estimado/i,
-    /te gustar[ií]a agendar.*estimado/i,
-    /quieres agendar un estimado/i,
-    /deseas agendar un estimado/i,
-  ];
+type PendingCta =
+  | {
+      type: PendingCtaType;
+      awaitsConfirmation: true;
+    }
+  | null;
 
-  const estimatePatternsEn = [
-    /would you like to schedule an estimate/i,
-    /would you like to book an estimate/i,
-    /do you want to schedule an estimate/i,
-  ];
+type ModelAnswerEnvelope = {
+  text: string;
+  pendingCta: PendingCta;
+};
 
-  const bookingPatternsEs = [
-    /si quieres,\s*te ayudo a reservar/i,
-    /te gustar[ií]a reservar/i,
-    /quieres reservar/i,
-    /deseas reservar/i,
-    /quieres agendar/i,
-    /te ayudo a agendar/i,
-  ];
+function parseModelAnswerEnvelope(raw: string): ModelAnswerEnvelope | null {
+  const text = String(raw || "").trim();
+  if (!text) return null;
 
-  const bookingPatternsEn = [
-    /if you want,\s*i can help you book/i,
-    /would you like to book/i,
-    /do you want to book/i,
-    /would you like to schedule/i,
-    /do you want to schedule/i,
-  ];
+  try {
+    const parsed = JSON.parse(text);
 
-  const estimatePatterns =
-    idiomaDestino === "en" ? estimatePatternsEn : estimatePatternsEs;
+    const replyText =
+      typeof parsed?.text === "string" ? parsed.text.trim() : "";
 
-  const bookingPatterns =
-    idiomaDestino === "en" ? bookingPatternsEn : bookingPatternsEs;
+    const rawPending = parsed?.pendingCta;
+    const pendingCta: PendingCta =
+      rawPending &&
+      (rawPending.type === "estimate_offer" ||
+        rawPending.type === "booking_offer") &&
+      rawPending.awaitsConfirmation === true
+        ? {
+            type: rawPending.type,
+            awaitsConfirmation: true,
+          }
+        : null;
 
-  if (estimatePatterns.some((rx) => rx.test(t))) {
+    if (!replyText) return null;
+
     return {
-      type: "estimate_offer",
-      awaitsConfirmation: true,
+      text: replyText,
+      pendingCta,
     };
+  } catch {
+    return null;
   }
-
-  if (bookingPatterns.some((rx) => rx.test(t))) {
-    return {
-      type: "booking_offer",
-      awaitsConfirmation: true,
-    };
-  }
-
-  return null;
 }
 
 async function buildCatalogDbContext(tenantId: string): Promise<string> {
@@ -279,18 +244,6 @@ async function getBookingActiveForTenant(tenantId: string): Promise<boolean> {
     console.warn("⚠️ No se pudo leer appointment_settings.enabled:", e);
     return false;
   }
-}
-
-function hasExplicitPriceSignals(text: string): boolean {
-  const t = String(text || "");
-
-  return (
-    /\$\s?\d/.test(t) ||
-    /\b\d+(?:[.,]\d{1,2})?\s?(usd|d[oó]lares?)\b/i.test(t) ||
-    /\bdesde\s+\$\s?\d/i.test(t) ||
-    /\bfrom\s+\$\s?\d/i.test(t) ||
-    /\bstarting at\s+\$\s?\d/i.test(t)
-  );
 }
 
 function normalizeResponsePolicy(
@@ -421,6 +374,11 @@ function buildUserPrompt(userInput: string) {
     "TASK:",
     "- Produce the final customer-facing reply.",
     "- Obey RESPONSE_POLICY_JSON and OUTPUT_RULES.",
+    "- Return STRICT JSON only.",
+    '- Use this exact shape: {"text":"...", "pendingCta":null}',
+    '- If the reply includes a confirmation-oriented CTA for booking, use: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
+    '- If the reply includes a confirmation-oriented CTA for estimate, use: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+    "- Do not wrap the JSON in markdown fences.",
   ].join("\n");
 }
 
@@ -595,14 +553,9 @@ export async function answerWithPromptBase(
   const bookingActive = await getBookingActiveForTenant(tenantId);
   const bookingStateBlock = `BOOKING_ACTIVE: ${bookingActive ? "true" : "false"}`;
 
-  const promptHasExplicitPrices =
-    hasExplicitPriceSignals(promptBaseWithLinks) ||
-    hasExplicitPriceSignals(catalogDbContext);
-
   const effectivePolicy: Required<ResponsePolicy> = {
     ...normalizedPolicy,
-    canMentionSpecificPrice:
-      normalizedPolicy.canMentionSpecificPrice && promptHasExplicitPrices,
+    canMentionSpecificPrice: normalizedPolicy.canMentionSpecificPrice,
     canOfferBookingTimes:
       normalizedPolicy.canOfferBookingTimes && bookingActive,
   };
@@ -630,6 +583,7 @@ export async function answerWithPromptBase(
   const userPrompt = buildUserPrompt(userInput);
 
   let out = "";
+  let rawModelOutputForPendingCta = "";
 
   try {
     const completion = await openai.chat.completions.create({
@@ -654,7 +608,12 @@ export async function answerWithPromptBase(
       );
     }
 
-    out = completion.choices[0]?.message?.content?.trim() || fallbackText || "";
+    const rawModelOutput =
+      completion.choices[0]?.message?.content?.trim() || "";
+
+    const parsedEnvelope = parseModelAnswerEnvelope(rawModelOutput);
+
+    out = parsedEnvelope?.text || fallbackText || "";
   } catch (e) {
     console.warn("❌ answerWithPromptBase LLM error; using fallback:", e);
     out = fallbackText || "";
@@ -686,7 +645,14 @@ export async function answerWithPromptBase(
     console.warn("⚠️ No se pudo ajustar el idioma en answerWithPromptBase:", e);
   }
 
-  const pendingCta = inferPendingCtaFromAssistantReply(out, idiomaDestino);
+  let pendingCta: PendingCta = null;
+
+  try {
+    const reparsedEnvelope = parseModelAnswerEnvelope(rawModelOutputForPendingCta);
+    pendingCta = reparsedEnvelope?.pendingCta ?? null;
+  } catch {
+    pendingCta = null;
+  }
 
   return {
     text: out,
