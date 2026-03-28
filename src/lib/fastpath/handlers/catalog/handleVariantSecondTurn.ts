@@ -12,10 +12,6 @@ export type HandleVariantSecondTurnInput = {
   intentOut?: string | null;
   catalogReferenceClassification?: any;
 
-  answerWithPromptBase: (input: any) => Promise<{ text: string }>;
-
-  promptBase: string;
-  canal: any;
 };
 
 function parseSingleDigitSelection(input: string): number | null {
@@ -197,8 +193,8 @@ export async function handleVariantSecondTurn(
 
         const reply =
           input.idiomaDestino === "en"
-            ? `Perfect. The price for ${baseName} — ${variantName} is ${priceText}.${link ? `\n\nHere’s the link:\n${link}` : ""}`
-            : `Perfecto. El precio de ${baseName} — ${variantName} es ${priceText}.${link ? `\n\nAquí tienes el link:\n${link}` : ""}`;
+            ? `${baseName} — ${variantName}\n• ${priceText}${link ? `\n${link}` : ""}`
+            : `${baseName} — ${variantName}\n• ${priceText}${link ? `\n${link}` : ""}`;
 
         console.log("[VARIANT_SECOND_TURN][PRICE_SELECTION]", {
           userInput: input.userInput,
@@ -287,8 +283,8 @@ export async function handleVariantSecondTurn(
   if (!chosen) {
     const retryMsg =
       input.idiomaDestino === "en"
-        ? "I’m not fully sure which option you want 🤔. Tell me the number of the option."
-        : "No terminé de entender cuál opción te interesa 🤔. Dime el número de la opción.";
+        ? "Please tell me which option you want."
+        : "Indícame cuál opción te interesa.";
 
     return {
       handled: true,
@@ -333,72 +329,21 @@ export async function handleVariantSecondTurn(
   const bulletLines = splitLines(descSource).map((line) => `• ${line}`);
   const bullets = bulletLines.join("\n");
 
-  const extraContext = [
-    "VARIANTE_DB_RESUELTA:",
-    `- service_name: ${baseName}`,
-    `- variant_name: ${variantName}`,
-    `- detail_text: ${descSource || ""}`,
-    `- direct_link: ${link || ""}`,
-    `- source_of_truth: database`,
-    "",
-    "REGLAS_CRITICAS_DEL_TURNO:",
-    "- Debes responder usando EXCLUSIVAMENTE los datos de VARIANTE_DB_RESUELTA.",
-    "- NO puedes inventar beneficios, condiciones, precios o detalles que no estén explícitamente presentes en detail_text.",
-    "- NO puedes mezclar esta variante con otras variantes, planes o servicios.",
-    "- Debes conservar el contenido importante de detail_text; NO lo resumas a una sola frase genérica si detail_text contiene varios puntos relevantes.",
-    "- Si detail_text contiene múltiples líneas o puntos, preséntalos de forma clara en formato chat.",
-    "- Si direct_link existe, DEBES incluirlo textualmente al final de la respuesta.",
-    "- Mantén la respuesta natural y adecuada al canal, pero sin perder información importante.",
-    "- Cierra con una sola frase suave y breve.",
-  ].join("\n");
+  const canonicalParts: string[] = [];
 
-  console.log("[FASTPATH-INCLUDES][LLM_RENDER] variant_second_turn", {
-    userInput: input.userInput,
-    serviceId,
-    baseName,
-    variantName,
-    hasLink: !!link,
-    targetVariantId: targetVariantId || null,
-    numericSelectionIndex,
-  });
-
-  const aiVariantReply = await input.answerWithPromptBase({
-    tenantId: input.tenantId,
-    promptBase: input.promptBase,
-    userInput: input.userInput,
-    history: [],
-    idiomaDestino: input.idiomaDestino,
-    canal: input.canal,
-    maxLines: 20,
-    fallbackText:
-      input.idiomaDestino === "en"
-        ? `${title ? `${title}` : ""}${bullets ? `\n\n${bullets}` : ""}${link ? `\n\nHere you can see more details:\n${link}` : ""}`
-        : `${title ? `${title}` : ""}${bullets ? `\n\n${bullets}` : ""}${link ? `\n\nAquí puedes ver más detalles:\n${link}` : ""}`,
-    extraContext,
-  });
-
-  let finalReply = String(aiVariantReply.text || "").trim();
-
-  if (link && !finalReply.includes(link)) {
-    finalReply +=
-      input.idiomaDestino === "en"
-        ? `\n\nHere you can see more details:\n${link}`
-        : `\n\nAquí puedes ver más detalles:\n${link}`;
+  if (title) {
+    canonicalParts.push(title);
   }
 
-  const detailLines = splitLines(descSource);
-
-  const finalReplyLineCount = splitLines(finalReply).length;
-
-  const looksTooShort =
-    detailLines.length >= 3 && finalReplyLineCount <= 4;
-
-  if (looksTooShort && bullets) {
-    finalReply =
-      input.idiomaDestino === "en"
-        ? `${title ? `${title}` : ""}\n\n${bullets}${link ? `\n\nHere you can see more details:\n${link}` : ""}`
-        : `${title ? `${title}` : ""}\n\n${bullets}${link ? `\n\nAquí puedes ver más detalles:\n${link}` : ""}`;
+  if (bullets) {
+    canonicalParts.push(bullets);
   }
+
+  if (link) {
+    canonicalParts.push(link);
+  }
+
+  const finalReply = canonicalParts.join("\n\n").trim();
 
   console.log("[VARIANT_SECOND_TURN][CHOSEN]", {
     userInput: input.userInput,
@@ -412,7 +357,7 @@ export async function handleVariantSecondTurn(
   return {
     handled: true,
     reply: finalReply,
-    source: "service_list_db",
+    source: "catalog_db",
     intent: input.intentOut || "info_servicio",
     ctxPatch: {
       expectingVariant: false,

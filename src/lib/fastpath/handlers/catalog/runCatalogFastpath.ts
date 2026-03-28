@@ -64,8 +64,6 @@ export type RunCatalogFastpathInput = {
   extractPlanNamesFromReply: (reply: string) => string[];
   sameBulletStructure: (canonicalReply: string, modelReply: string) => boolean;
 
-  answerWithPromptBase: (input: any) => Promise<{ text: string }>;
-
   postProcessCatalogReply: (input: {
     reply: string;
     questionType:

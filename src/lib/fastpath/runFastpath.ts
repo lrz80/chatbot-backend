@@ -22,7 +22,6 @@ import { buildCatalogContext } from "../catalog/buildCatalogContext";
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
 import { extractQueryFrames } from "./extractQueryFrames";
 import { resolveServiceMatchesFromText } from "../services/pricing/resolveServiceMatchesFromText";
-import { answerWithPromptBase } from "../answers/answerWithPromptBase";
 
 import type { CatalogReferenceClassification } from "../catalog/types";
 
@@ -537,9 +536,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     detectedIntent,
     intentOut,
     catalogReferenceClassification,
-    answerWithPromptBase,
-    promptBase,
-    canal,
   });
 
   if (variantSecondTurnResult.handled) {
@@ -608,7 +604,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     renderGenericPriceSummaryReply,
     extractPlanNamesFromReply,
     sameBulletStructure,
-    answerWithPromptBase,
     postProcessCatalogReply,
   });
 
