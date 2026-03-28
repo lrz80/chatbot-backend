@@ -337,51 +337,50 @@ export async function handleFastpathHybridTurn(
   let finalIntent: string | null =
     fp.intent || detectedIntent || intentFallback || null;
 
-  const shouldReturnRaw =
-    replyPolicy.shouldBypassStructuredRewrite ||
-    immediateReturn.shouldReturnImmediately ||
-    postRunDecision.shouldReturnRawFastpathForPriceQuestion ||
-    postRunDecision.shouldReturnRawFastpathForUnresolvedServiceIntent;
-
-  if (immediateReturn.shouldReturnImmediately) {
+    if (immediateReturn.shouldReturnImmediately) {
     finalReply = String(immediateReturn.reply || "").trim();
     finalReplySource = immediateReturn.replySource || fp.source;
     finalIntent = immediateReturn.intent || finalIntent;
-  } else {
-    if (postRunDecision.shouldNaturalizeSecondaryOptions) {
-      finalReply = await naturalizeSecondaryOptionsLine({
-        tenantId,
-        idiomaDestino,
-        canal,
-        baseText: finalReply,
-        primary: "plans",
-        secondaryAvailable: true,
-        maxLines: MAX_WHATSAPP_LINES,
-      });
-    }
+  }
 
-    if (!shouldReturnRaw && postRunDecision.isDmChannel) {
-      const rendered = await renderFastpathDmReply({
-        tenantId,
-        canal,
-        idiomaDestino,
-        userInput,
-        contactoNorm,
-        messageId,
-        promptBaseMem,
-        fastpathText: finalReply,
-        fp,
-        detectedIntent,
-        intentFallback,
-        structuredService,
-        replyPolicy,
-        ctxPatch,
-        maxLines: MAX_WHATSAPP_LINES,
-      });
+  if (postRunDecision.shouldNaturalizeSecondaryOptions) {
+    finalReply = await naturalizeSecondaryOptionsLine({
+      tenantId,
+      idiomaDestino,
+      canal,
+      baseText: finalReply,
+      primary: "plans",
+      secondaryAvailable: true,
+      maxLines: MAX_WHATSAPP_LINES,
+    });
+  }
 
-      finalReply = String(rendered.reply || "").trim();
-      ctxPatch = rendered.ctxPatch;
-    }
+  if (postRunDecision.isDmChannel) {
+    const rendered = await renderFastpathDmReply({
+      tenantId,
+      canal,
+      idiomaDestino,
+      userInput,
+      contactoNorm,
+      messageId,
+      promptBaseMem,
+      fastpathText: finalReply,
+      fp: {
+        ...fp,
+        reply: finalReply,
+        source: finalReplySource,
+        intent: finalIntent,
+      },
+      detectedIntent,
+      intentFallback,
+      structuredService,
+      replyPolicy,
+      ctxPatch,
+      maxLines: MAX_WHATSAPP_LINES,
+    });
+
+    finalReply = String(rendered.reply || "").trim();
+    ctxPatch = rendered.ctxPatch;
   }
 
   if (process.env.DEBUG_FASTPATH === "true") {

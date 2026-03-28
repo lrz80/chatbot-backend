@@ -14,6 +14,7 @@ export type RenderFastpathDmReplyInput = {
   promptBaseMem: string;
   fastpathText: string;
   fp: {
+    reply?: string | null;
     source?: string | null;
     intent?: string | null;
     awaitingEffect?: any;
