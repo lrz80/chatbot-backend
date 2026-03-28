@@ -80,7 +80,7 @@ function getReplySourceKind(params: {
   const fpSource = params.fpSource;
   const hasResolvedEntity = Boolean(params.structuredService?.hasResolution);
 
-  if (fpSource === "catalog_comparison_db_llm_render") {
+  if (fpSource === "catalog_comparison_db") {
     return "catalog_comparison_render";
   }
 
@@ -93,11 +93,9 @@ function getReplySourceKind(params: {
   }
 
   if (
-    fpSource === "price_fastpath_db_llm_render" ||
-    fpSource === "price_fastpath_db_no_price_llm_render" ||
     fpSource === "price_fastpath_db" ||
+    fpSource === "price_fastpath_db_no_price" ||
     fpSource === "price_summary_db" ||
-    fpSource === "price_summary_db_llm_render" ||
     fpSource === "price_missing_db"
   ) {
     return "price_like";
@@ -149,30 +147,16 @@ export function buildFastpathReplyPolicy(
     fpSource !== "price_disambiguation_db" &&
     fpIntent !== "info_general";
 
-  const shouldHardBypassReply =
-    isDmChannel &&
-    (
-      replySourceKind === "catalog_comparison_render" ||
-      replySourceKind === "business_info"
-    );
-
-  const shouldDirectReturnInfoBlock =
-    isDmChannel && replySourceKind === "business_info";
-
-  const shouldDirectReturnPriceLikeReply =
-    isDmChannel &&
-    replySourceKind === "price_like" &&
-    (
-      input.catalogRoutingSignal?.routeIntent === "catalog_price" ||
-      input.catalogRoutingSignal?.routeIntent === "catalog_alternatives" ||
-      input.catalogRoutingSignal?.routeIntent === "catalog_schedule" ||
-      input.catalogReferenceClassification?.kind === "comparison" ||
-      input.catalogReferenceClassification?.intent === "includes"
-    );
+  const shouldHardBypassReply = false;
+  const shouldDirectReturnInfoBlock = false;
+  const shouldDirectReturnPriceLikeReply = false;
 
   const shouldUseGroundedFrameOnly =
     replySourceKind === "catalog_grounded" ||
-    replySourceKind === "catalog_disambiguation";
+    replySourceKind === "catalog_disambiguation" ||
+    replySourceKind === "business_info" ||
+    replySourceKind === "price_like" ||
+    replySourceKind === "catalog_comparison_render";
 
   const responsePolicyMode: FastpathReplyPolicy["responsePolicyMode"] =
     shouldUseGroundedFrameOnly
@@ -183,10 +167,7 @@ export function buildFastpathReplyPolicy(
 
   const shouldRunDmRewrite =
     isDmChannel &&
-    !shouldBypassStructuredRewrite &&
-    !shouldHardBypassReply &&
-    !shouldDirectReturnInfoBlock &&
-    !shouldDirectReturnPriceLikeReply;
+    !shouldBypassStructuredRewrite;
 
   return {
     isDmChannel,
