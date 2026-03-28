@@ -493,6 +493,84 @@ function preserveCanonicalBodyOrFallback(args: {
   return candidate || canonicalBody;
 }
 
+function buildGroundedFrameOnlyMessages(params: {
+  idiomaDestino: "es" | "en";
+  fallbackText: string;
+  userInput: string;
+  maxIntroLines: number;
+  maxClosingLines: number;
+}): { system: string; user: string } {
+  const {
+    idiomaDestino,
+    fallbackText,
+    userInput,
+    maxIntroLines,
+    maxClosingLines,
+  } = params;
+
+  const system =
+    idiomaDestino === "es"
+      ? [
+          "Responde solo en español.",
+          "Tu objetivo es vender con una respuesta breve, natural, clara y útil.",
+          `Puedes agregar un intro corto de máximo ${maxIntroLines} línea(s), pero solo si aporta valor real.`,
+          `Puedes agregar un cierre/CTA corto de máximo ${maxClosingLines} línea(s), pero solo si ayuda a avanzar de forma natural.`,
+          "Debes conservar EXACTAMENTE el cuerpo canónico provisto.",
+          "No cambies nombres, montos, horarios, ubicación, disponibilidad ni el orden.",
+          "No elimines ni agregues bullets del cuerpo canónico.",
+          "No resumas ni reescribas los bullets.",
+          "No conviertas bullets a párrafos.",
+          "Puedes envolver el cuerpo con un intro y/o un cierre breve, pero el bloque canónico debe quedar intacto.",
+          "No dupliques el framing.",
+          "No uses dos introducciones.",
+          "Si la consulta es de horarios, ubicación o disponibilidad general, prioriza claridad y brevedad sin sonar frío.",
+          "Formato requerido:",
+          "1. intro opcional breve",
+          "2. bloque canónico EXACTO",
+          "3. cierre opcional breve",
+        ].join("\n\n")
+      : [
+          "Reply only in English.",
+          "Your goal is to sell with a brief, natural, clear, useful reply.",
+          `You may add a short intro of at most ${maxIntroLines} line(s), but only if it adds real value.`,
+          `You may add a short closing/CTA of at most ${maxClosingLines} line(s), but only if it helps move the conversation forward naturally.`,
+          "You must preserve the provided canonical body EXACTLY.",
+          "Do not change names, amounts, schedules, location, availability, or order.",
+          "Do not remove or add bullets from the canonical body.",
+          "Do not summarize or rewrite the bullets.",
+          "Do not turn bullets into paragraphs.",
+          "You may wrap the body with a brief intro and/or closing, but the canonical block must remain intact.",
+          "Do not duplicate framing.",
+          "Do not use two introductions.",
+          "For schedule, location, or availability questions, prioritize clarity and brevity without sounding cold.",
+          "Required format:",
+          "1. optional brief intro",
+          "2. EXACT canonical block",
+          "3. optional brief closing",
+        ].join("\n\n");
+
+  const user =
+    idiomaDestino === "es"
+      ? [
+          `Mensaje del cliente: ${userInput || "(vacío)"}`,
+          "",
+          "Cuerpo canónico resuelto:",
+          fallbackText,
+          "",
+          "Devuélveme la respuesta final lista para enviar, mejorando solo el framing comercial sin alterar el cuerpo canónico.",
+        ].join("\n")
+      : [
+          `Customer message: ${userInput || "(empty)"}`,
+          "",
+          "Resolved canonical body:",
+          fallbackText,
+          "",
+          "Return the final ready-to-send reply, improving only the sales framing without altering the canonical body.",
+        ].join("\n");
+
+  return { system, user };
+}
+
 /* =========================
    Main function
 ========================= */
@@ -557,27 +635,47 @@ export async function answerWithPromptBase(
       normalizedPolicy.canOfferBookingTimes && bookingActive,
   };
 
-  const systemPromptParts = [
-    promptBaseWithLinks,
-    "",
-    bookingStateBlock,
-    "",
-    buildResponsePolicyBlock(effectivePolicy),
-    "",
-    buildInstructionBlock(idiomaDestino, maxLines, effectivePolicy),
-    "",
-    buildEntityLockBlock(idiomaDestino, effectivePolicy),
-    "",
-    catalogDbContext,
-    "",
-    extraContext ? `DATOS_ESTRUCTURADOS_DEL_TURNO:\n${extraContext}` : "",
-    "",
-    `CHANNEL_CONTEXT: ${canal}`,
-  ].filter(Boolean);
+  const shouldUseGroundedFrameOnlyFormatter =
+    effectivePolicy.mode === "grounded_frame_only" &&
+    effectivePolicy.preserveExactBody &&
+    String(fallbackText || "").trim().length > 0;
 
-  const systemPrompt = systemPromptParts.join("\n");
+  let systemPrompt = "";
+  let userPrompt = "";
 
-  const userPrompt = buildUserPrompt(userInput);
+  if (shouldUseGroundedFrameOnlyFormatter) {
+    const groundedMsgs = buildGroundedFrameOnlyMessages({
+      idiomaDestino,
+      fallbackText,
+      userInput,
+      maxIntroLines: 1,
+      maxClosingLines: 1,
+    });
+
+    systemPrompt = groundedMsgs.system;
+    userPrompt = groundedMsgs.user;
+  } else {
+    const systemPromptParts = [
+      promptBaseWithLinks,
+      "",
+      bookingStateBlock,
+      "",
+      buildResponsePolicyBlock(effectivePolicy),
+      "",
+      buildInstructionBlock(idiomaDestino, maxLines, effectivePolicy),
+      "",
+      buildEntityLockBlock(idiomaDestino, effectivePolicy),
+      "",
+      catalogDbContext,
+      "",
+      extraContext ? `DATOS_ESTRUCTURADOS_DEL_TURNO:\n${extraContext}` : "",
+      "",
+      `CHANNEL_CONTEXT: ${canal}`,
+    ].filter(Boolean);
+
+    systemPrompt = systemPromptParts.join("\n");
+    userPrompt = buildUserPrompt(userInput);
+  }
 
   let out = "";
   let rawModelOutputForPendingCta = "";
