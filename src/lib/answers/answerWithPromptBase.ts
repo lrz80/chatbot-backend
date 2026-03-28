@@ -721,6 +721,16 @@ export async function answerWithPromptBase(
   const parsedEnvelope = parseModelAnswerEnvelope(rawModelOutput);
 
   out = parsedEnvelope?.text || rawModelOutput || fallbackText || "";
+
+  console.log("[ANSWER_WITH_PROMPT_BASE][RAW_MODEL_OUTPUT]", {
+    tenantId,
+    canal,
+    userInput,
+    rawModelOutput,
+    parsedEnvelope,
+    selectedOut: out,
+  });
+
   } catch (e) {
     console.warn("❌ answerWithPromptBase LLM error; using fallback:", e);
     rawModelOutputForPendingCta = "";
@@ -736,6 +746,19 @@ export async function answerWithPromptBase(
     fallbackText,
     policy: effectivePolicy,
     idiomaDestino,
+  });
+
+  console.log("[ANSWER_WITH_PROMPT_BASE][POST_PRESERVE]", {
+    tenantId,
+    canal,
+    userInput,
+    fallbackText,
+    finalOut: out,
+    preserveExactBody: effectivePolicy.preserveExactBody,
+    preserveExactOrder: effectivePolicy.preserveExactOrder,
+    preserveExactBullets: effectivePolicy.preserveExactBullets,
+    preserveExactNumbers: effectivePolicy.preserveExactNumbers,
+    preserveExactLinks: effectivePolicy.preserveExactLinks,
   });
 
   try {
