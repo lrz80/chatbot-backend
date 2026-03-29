@@ -75,12 +75,9 @@ export function buildFastpathTurnPolicy(
   const shouldBuildComparison =
     hasComparison ||
     (
-      Boolean(facets?.asksPrices) &&
-      (
-        classification?.kind === "comparison" ||
-        Boolean(signals?.hasSpecificEntityCandidate) ||
-        Boolean(signals?.hasCatalogScope)
-      )
+        shouldRouteCatalog &&
+        !hasExplicitTarget &&
+        classification?.kind !== "variant_specific"
     );
 
   const canReuseCatalogContext =
@@ -98,9 +95,12 @@ export function buildFastpathTurnPolicy(
     );
 
   const shouldAllowExplicitEntityPromotion =
-    hasConversationDependency ||
-    hasExplicitTarget ||
-    Boolean(facets?.asksPrices);
+    !shouldBuildComparison &&
+    (
+        hasConversationDependency ||
+        hasExplicitTarget ||
+        Boolean(facets?.asksPrices)
+    );
 
   const shouldAllowLooseResolution =
     shouldRouteCatalog || Boolean(facets?.asksPrices);
