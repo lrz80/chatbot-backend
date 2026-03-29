@@ -54,30 +54,28 @@ function asNumber(value: unknown): number | null {
   return null;
 }
 
-function normalizeCatalogReferenceIntent(
+function asCatalogReferenceIntent(
   value: unknown
 ): CatalogReferenceIntent | null {
   const v = typeof value === "string" ? value.trim().toLowerCase() : "";
 
   if (!v) return null;
 
-  // Mantener solo intents que el clasificador/routing ya conocen,
-  // pero mapear aliases reales del pipeline a esos valores.
-  if (v === "price_or_plan") return "price_or_plan";
-  if (v === "includes") return "includes";
-  if (v === "schedule") return "schedule";
-  if (v === "other_plans") return "other_plans";
-  if (v === "combination_and_price") return "combination_and_price";
+  const allowed: CatalogReferenceIntent[] = [
+    "price_or_plan",
+    "includes",
+    "schedule",
+    "other_plans",
+    "combination_and_price",
+  ];
 
-  // aliases reales del pipeline
+  if (allowed.includes(v as CatalogReferenceIntent)) {
+    return v as CatalogReferenceIntent;
+  }
+
+  // aliases internos válidos del pipeline de catálogo
   if (v === "schedule_and_price") return "combination_and_price";
   if (v === "compare") return "other_plans";
-
-  // overview/info general NO debe perderse del todo:
-  // para follow-ups cortos como "y precios", lo más cercano y útil es
-  // tratarlo como contexto reutilizable de catálogo/info previa.
-  if (v === "info_general_overview") return "price_or_plan";
-  if (v === "business_info_facets") return "schedule";
 
   return null;
 }
@@ -157,19 +155,13 @@ function extractPresentedVariantOptions(source: AnyRecord) {
   return cleaned.length > 0 ? cleaned : null;
 }
 
-function hasFreshTimestamp(value: unknown, ttlMs: number): boolean {
-  const n = asNumber(value);
-  if (!Number.isFinite(n as number) || (n as number) <= 0) return false;
-  return Date.now() - (n as number) <= ttlMs;
-}
-
 export function buildCatalogReferenceContext(
   convoCtx: unknown
 ): CatalogReferenceContext {
   const ctx = asRecord(convoCtx);
 
+  const now = Date.now();
   const entityTtlMs = 10 * 60 * 1000;
-  const overviewTtlMs = 30 * 60 * 1000;
 
   const lastEntityAt = asNumber(
     ctx["last_entity_at"] ??
@@ -178,17 +170,32 @@ export function buildCatalogReferenceContext(
       ctx["lastServiceAt"]
   );
 
+  const entityContextFresh =
+    Number.isFinite(lastEntityAt as number) &&
+    (lastEntityAt as number) > 0 &&
+    now - (lastEntityAt as number) <= entityTtlMs;
+
+    const overviewTtlMs = 30 * 60 * 1000;
+
   const lastCatalogAt = asNumber(
     ctx["last_catalog_at"] ??
       ctx["lastCatalogAt"]
   );
 
-  const entityContextFresh =
-    Number.isFinite(lastEntityAt as number) &&
-    (lastEntityAt as number) > 0 &&
-    Date.now() - (lastEntityAt as number) <= entityTtlMs;
+  const overviewContextFresh =
+    Number.isFinite(lastCatalogAt as number) &&
+    (lastCatalogAt as number) > 0 &&
+    now - (lastCatalogAt as number) <= overviewTtlMs;
 
-  const overviewContextFresh = hasFreshTimestamp(lastCatalogAt, overviewTtlMs);
+  const lastCatalogScope = pickFirstString(ctx, [
+    "last_catalog_scope",
+    "lastCatalogScope",
+  ]);
+
+  const lastCatalogSource = pickFirstString(ctx, [
+    "last_catalog_source",
+    "lastCatalogSource",
+  ]);
 
   const lastEntityId = pickFirstString(ctx, [
     "lastEntityId",
@@ -208,16 +215,6 @@ export function buildCatalogReferenceContext(
     "last_service_name",
   ]);
 
-  const lastCatalogScope = pickFirstString(ctx, [
-    "last_catalog_scope",
-    "lastCatalogScope",
-  ]);
-
-  const lastCatalogSource = pickFirstString(ctx, [
-    "last_catalog_source",
-    "lastCatalogSource",
-  ]);
-
   const lastFamilyKey = pickFirstString(ctx, [
     "lastFamilyKey",
     "last_family_key",
@@ -229,6 +226,16 @@ export function buildCatalogReferenceContext(
 
   const lastPresentedEntityIds = extractPresentedEntityIds(ctx);
   const lastPresentedFamilyKeys = extractPresentedFamilyKeys(ctx);
+
+  const hasRecentOverviewAnchor =
+    overviewContextFresh &&
+    (
+      lastCatalogScope === "overview" ||
+      lastCatalogSource === "info_clave" ||
+      lastCatalogSource === "db_catalog" ||
+      lastPresentedEntityIds.length > 0 ||
+      lastPresentedFamilyKeys.length > 0
+    );
 
   const expectingVariantForEntityId = pickFirstString(ctx, [
     "expectingVariantForEntityId",
@@ -246,39 +253,27 @@ export function buildCatalogReferenceContext(
     "family_name",
   ]);
 
-  const lastResolvedIntent = normalizeCatalogReferenceIntent(
+  const lastResolvedIntent = asCatalogReferenceIntent(
     ctx["lastResolvedIntent"] ??
       ctx["last_resolved_intent"] ??
       ctx["resolvedIntent"] ??
-      ctx["resolved_intent"] ??
-      ctx["last_intent"]
+      ctx["resolved_intent"]
   );
 
-  const expectedVariantIntent = normalizeCatalogReferenceIntent(
+  const expectedVariantIntent = asCatalogReferenceIntent(
     ctx["expectedVariantIntent"] ?? ctx["expected_variant_intent"]
   );
-
-  const shouldExposeOverviewContext =
-    overviewContextFresh &&
-    (
-      lastCatalogScope === "overview" ||
-      lastCatalogSource === "info_clave" ||
-      lastCatalogSource === "db_catalog" ||
-      lastPresentedEntityIds.length > 0 ||
-      lastPresentedFamilyKeys.length > 0 ||
-      Boolean(lastResolvedIntent)
-    );
 
   return {
     lastEntityId: entityContextFresh ? lastEntityId : null,
     lastEntityName:
       entityContextFresh && lastEntityId ? rawLastEntityName : null,
-    lastFamilyKey: shouldExposeOverviewContext ? lastFamilyKey : lastFamilyKey,
+    lastFamilyKey: hasRecentOverviewAnchor ? lastFamilyKey : lastFamilyKey,
     lastFamilyName,
-    lastPresentedEntityIds: shouldExposeOverviewContext
+    lastPresentedEntityIds: hasRecentOverviewAnchor
       ? lastPresentedEntityIds
       : lastPresentedEntityIds,
-    lastPresentedFamilyKeys: shouldExposeOverviewContext
+    lastPresentedFamilyKeys: hasRecentOverviewAnchor
       ? lastPresentedFamilyKeys
       : lastPresentedFamilyKeys,
     expectingVariantForEntityId,
