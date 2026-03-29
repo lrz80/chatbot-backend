@@ -430,13 +430,24 @@ export async function getFastpathCatalogSignals(
     previewPolicy,
   } = input;
 
+  console.log("[CATALOG_SIGNALS][PREVIEW_POLICY]", {
+    userInput,
+    previewPolicy,
+    previewClassificationKind: previewClassification?.kind ?? null,
+    previewClassificationIntent: previewClassification?.intent ?? null,
+  });
+
   let explicitEntityCandidateForClassification: ExplicitEntityCandidate | null =
     null;
   let entityCandidateResultLoose: any = null;
   let structuredComparison: StructuredCatalogComparison | null = null;
 
   try {
-    if (previewPolicy.shouldAllowLooseResolution) {
+    const shouldRunLooseResolution =
+      previewPolicy.shouldAllowLooseResolution ||
+      previewPolicy.shouldBuildComparison;
+
+    if (shouldRunLooseResolution) {
       entityCandidateResultLoose = await resolveServiceCandidatesFromText(
         pool,
         tenantId,
@@ -444,6 +455,19 @@ export async function getFastpathCatalogSignals(
         { mode: "loose" }
       );
     }
+
+    console.log("[CATALOG_SIGNALS][LOOSE_RESOLUTION]", {
+      userInput,
+      shouldAllowLooseResolution: previewPolicy.shouldAllowLooseResolution,
+      shouldBuildComparison: previewPolicy.shouldBuildComparison,
+      shouldRunLooseResolution,
+      hasEntityCandidateResultLoose: Boolean(entityCandidateResultLoose),
+      looseCandidateCount: Array.isArray(entityCandidateResultLoose?.candidates)
+        ? entityCandidateResultLoose.candidates.length
+        : 0,
+      hasBest: Boolean(entityCandidateResultLoose?.best),
+      hasSecond: Boolean(entityCandidateResultLoose?.second),
+    });
 
     const resolvedHit = entityCandidateResultLoose?.hit ?? null;
 
