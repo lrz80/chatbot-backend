@@ -1860,6 +1860,15 @@ export async function procesarMensajeWhatsApp(
             lastResolvedIntent: "info_general",
           },
         });
+
+        console.log("[BUSINESS_OVERVIEW][CTX_PATCH]", {
+          tenantId: tenant.id,
+          userInput,
+          presentedEntityIds: overview.presentedEntityIds,
+          presentedFamilyKeys: overview.presentedFamilyKeys,
+          lastResolvedIntent: "info_general",
+        });
+
       } catch (e: any) {
         console.warn("⚠️ resolveBusinessOverview failed:", e?.message || e);
       }
