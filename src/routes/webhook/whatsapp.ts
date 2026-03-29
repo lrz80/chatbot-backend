@@ -1098,6 +1098,29 @@ export async function procesarMensajeWhatsApp(
         lastIntent = fpRes.intent;
       }
 
+      const isStructuredNumericSelection =
+        /^[1-9]$/.test(String(userInput || "").trim()) &&
+        (
+          Boolean((convoCtxForFastpath as any)?.expectingVariant) ||
+          Boolean((fpRes.ctxPatch as any)?.expectingVariant) ||
+          Boolean((fpRes.ctxPatch as any)?.last_variant_id) ||
+          Boolean((fpRes.ctxPatch as any)?.last_variant_name) ||
+          Boolean((convoCtxForFastpath as any)?.selectedServiceId) ||
+          Boolean((fpRes.ctxPatch as any)?.selectedServiceId)
+        );
+
+      if (isStructuredNumericSelection) {
+        detectedInterest = Math.max(Number(detectedInterest || 1), 2);
+
+        if (!INTENCION_FINAL_CANONICA || INTENCION_FINAL_CANONICA === "duda") {
+          INTENCION_FINAL_CANONICA = fpRes.intent || "info_servicio";
+        }
+
+        if (!lastIntent || lastIntent === "duda") {
+          lastIntent = fpRes.intent || "info_servicio";
+        }
+      }
+
       return await replyAndExit(
         fpRes.reply,
         fpRes.replySource || "fastpath_hybrid",
