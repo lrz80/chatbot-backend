@@ -20,37 +20,138 @@ function getConversationTtlMs(canal: string) {
   return 30 * 60 * 1000;
 }
 
-function buildContextAfterTtl(rawContext: any): Record<string, any> {
-  const ctx =
-    rawContext && typeof rawContext === "object" && !Array.isArray(rawContext)
-      ? { ...rawContext }
-      : {};
+function asObject(value: any): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? { ...value }
+    : {};
+}
 
-  // conservar anclas conversacionales útiles
-  const preserved: Record<string, any> = {
-    last_service_id: ctx.last_service_id ?? null,
-    last_service_name: ctx.last_service_name ?? null,
-    last_family_key: ctx.last_family_key ?? null,
-    last_variant_id: ctx.last_variant_id ?? null,
-    last_variant_name: ctx.last_variant_name ?? null,
-    last_resolved_intent: ctx.last_resolved_intent ?? null,
-    last_presented_entity_ids: Array.isArray(ctx.last_presented_entity_ids)
-      ? ctx.last_presented_entity_ids
-      : [],
-    last_presented_family_keys: Array.isArray(ctx.last_presented_family_keys)
-      ? ctx.last_presented_family_keys
-      : [],
-    last_catalog_plans: Array.isArray(ctx.last_catalog_plans)
-      ? ctx.last_catalog_plans
-      : [],
-    last_catalog_plans_at: ctx.last_catalog_plans_at ?? null,
-    structuredService:
-      ctx.structuredService && typeof ctx.structuredService === "object"
-        ? ctx.structuredService
-        : null,
+function pickFirst<T>(...values: T[]): T | null {
+  for (const value of values) {
+    if (value !== undefined && value !== null) return value;
+  }
+  return null;
+}
+
+function pickArray(valueA: any, valueB: any): any[] {
+  if (Array.isArray(valueA)) return valueA;
+  if (Array.isArray(valueB)) return valueB;
+  return [];
+}
+
+function normalizeConversationContext(rawContext: any): Record<string, any> {
+  const ctx = asObject(rawContext);
+
+  const lastServiceId = pickFirst(ctx.last_service_id, ctx.lastEntityId);
+  const lastServiceName = pickFirst(ctx.last_service_name, ctx.lastEntityName);
+  const lastFamilyKey = pickFirst(ctx.last_family_key, ctx.lastFamilyKey);
+  const lastFamilyName = pickFirst(ctx.last_family_name, ctx.lastFamilyName);
+  const lastVariantId = pickFirst(ctx.last_variant_id, ctx.lastVariantId);
+  const lastVariantName = pickFirst(ctx.last_variant_name, ctx.lastVariantName);
+  const lastResolvedIntent = pickFirst(
+    ctx.last_resolved_intent,
+    ctx.lastResolvedIntent
+  );
+  const lastPresentedEntityIds = pickArray(
+    ctx.last_presented_entity_ids,
+    ctx.lastPresentedEntityIds
+  );
+  const lastPresentedFamilyKeys = pickArray(
+    ctx.last_presented_family_keys,
+    ctx.lastPresentedFamilyKeys
+  );
+  const lastCatalogPlans = pickArray(
+    ctx.last_catalog_plans,
+    ctx.lastCatalogPlans
+  );
+  const lastCatalogPlansAt = pickFirst(
+    ctx.last_catalog_plans_at,
+    ctx.lastCatalogPlansAt
+  );
+
+  const structuredService =
+    ctx.structuredService && typeof ctx.structuredService === "object"
+      ? ctx.structuredService
+      : null;
+
+  return {
+    ...ctx,
+
+    // snake_case canónico
+    last_service_id: lastServiceId,
+    last_service_name: lastServiceName,
+    last_family_key: lastFamilyKey,
+    last_family_name: lastFamilyName,
+    last_variant_id: lastVariantId,
+    last_variant_name: lastVariantName,
+    last_resolved_intent: lastResolvedIntent,
+    last_presented_entity_ids: lastPresentedEntityIds,
+    last_presented_family_keys: lastPresentedFamilyKeys,
+    last_catalog_plans: lastCatalogPlans,
+    last_catalog_plans_at: lastCatalogPlansAt,
+    structuredService,
+
+    // camelCase compatible
+    lastEntityId: lastServiceId,
+    lastEntityName: lastServiceName,
+    lastFamilyKey: lastFamilyKey,
+    lastFamilyName: lastFamilyName,
+    lastVariantId: lastVariantId,
+    lastVariantName: lastVariantName,
+    lastResolvedIntent: lastResolvedIntent,
+    lastPresentedEntityIds: lastPresentedEntityIds,
+    lastPresentedFamilyKeys: lastPresentedFamilyKeys,
+    lastCatalogPlans: lastCatalogPlans,
+    lastCatalogPlansAt: lastCatalogPlansAt,
   };
+}
 
-  return preserved;
+function buildContextAfterTtl(rawContext: any): Record<string, any> {
+  const normalized = normalizeConversationContext(rawContext);
+
+  return {
+    last_service_id: normalized.last_service_id ?? null,
+    last_service_name: normalized.last_service_name ?? null,
+    last_family_key: normalized.last_family_key ?? null,
+    last_family_name: normalized.last_family_name ?? null,
+    last_variant_id: normalized.last_variant_id ?? null,
+    last_variant_name: normalized.last_variant_name ?? null,
+    last_resolved_intent: normalized.last_resolved_intent ?? null,
+    last_presented_entity_ids: Array.isArray(normalized.last_presented_entity_ids)
+      ? normalized.last_presented_entity_ids
+      : [],
+    last_presented_family_keys: Array.isArray(normalized.last_presented_family_keys)
+      ? normalized.last_presented_family_keys
+      : [],
+    last_catalog_plans: Array.isArray(normalized.last_catalog_plans)
+      ? normalized.last_catalog_plans
+      : [],
+    last_catalog_plans_at: normalized.last_catalog_plans_at ?? null,
+    structuredService:
+      normalized.structuredService &&
+      typeof normalized.structuredService === "object"
+        ? normalized.structuredService
+        : null,
+
+    // compatibilidad camelCase
+    lastEntityId: normalized.last_service_id ?? null,
+    lastEntityName: normalized.last_service_name ?? null,
+    lastFamilyKey: normalized.last_family_key ?? null,
+    lastFamilyName: normalized.last_family_name ?? null,
+    lastVariantId: normalized.last_variant_id ?? null,
+    lastVariantName: normalized.last_variant_name ?? null,
+    lastResolvedIntent: normalized.last_resolved_intent ?? null,
+    lastPresentedEntityIds: Array.isArray(normalized.last_presented_entity_ids)
+      ? normalized.last_presented_entity_ids
+      : [],
+    lastPresentedFamilyKeys: Array.isArray(normalized.last_presented_family_keys)
+      ? normalized.last_presented_family_keys
+      : [],
+    lastCatalogPlans: Array.isArray(normalized.last_catalog_plans)
+      ? normalized.last_catalog_plans
+      : [],
+    lastCatalogPlansAt: normalized.last_catalog_plans_at ?? null,
+  };
 }
 
 export async function getConversationState(
@@ -110,12 +211,9 @@ export async function getConversationState(
     }
   }
 
-  const ctx =
-    row.context && typeof row.context === "object" && !Array.isArray(row.context)
-      ? row.context
-      : {};
+  const ctx = normalizeConversationContext(row.context);
 
-  if (ctx?.estado === "esperando_pago" && ctx?.intent_actual !== "pago") {
+  if (ctx.estado === "esperando_pago" && ctx.intent_actual !== "pago") {
     console.log("🧹 clearing stale payment state");
     ctx.estado = null;
   }
@@ -137,10 +235,13 @@ export async function setConversationState(params: {
   const { tenantId, canal, senderId, activeFlow, activeStep, contextPatch } = params;
 
   const existing = await getConversationState(tenantId, canal, senderId);
-  const mergedContext = {
-    ...(existing?.context && typeof existing.context === "object" ? existing.context : {}),
+
+  const mergedContext = normalizeConversationContext({
+    ...(existing?.context && typeof existing.context === "object"
+      ? existing.context
+      : {}),
     ...(contextPatch && typeof contextPatch === "object" ? contextPatch : {}),
-  };
+  });
 
   await pool.query(
     `
@@ -165,6 +266,8 @@ export async function patchConversationState(params: {
 }): Promise<void> {
   const { tenantId, canal, senderId, patch } = params;
 
+  const normalizedPatch = normalizeConversationContext(patch ?? {});
+
   await pool.query(
     `
     INSERT INTO conversation_state (tenant_id, canal, sender_id, context, updated_at)
@@ -174,7 +277,7 @@ export async function patchConversationState(params: {
       context = COALESCE(conversation_state.context, '{}'::jsonb) || EXCLUDED.context,
       updated_at = NOW()
     `,
-    [tenantId, canal, senderId, JSON.stringify(patch ?? {})]
+    [tenantId, canal, senderId, JSON.stringify(normalizedPatch)]
   );
 }
 
@@ -210,14 +313,11 @@ export async function getOrInitConversationState(params: {
       ...existing,
       active_flow: existing.active_flow ?? defaultFlow,
       active_step: existing.active_step ?? defaultStep,
-      context:
-        existing.context && typeof existing.context === "object" && !Array.isArray(existing.context)
-          ? existing.context
-          : {},
+      context: normalizeConversationContext(existing.context),
     };
   }
 
-  const initialContext = {};
+  const initialContext = normalizeConversationContext({});
 
   await setConversationState({
     tenantId,
