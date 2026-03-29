@@ -314,26 +314,44 @@ export async function runCatalogFastpath(
       });
     }
 
-    if (asksLocation && locationBlock.trim()) {
+    if (asksLocation && locationBody.trim()) {
       replySections.push({
         key: "location",
-        content: locationBlock.trim(),
+        content: locationBody.trim(),
         intent: "ubicacion",
       });
     }
 
-    if (asksAvailability && availabilityBlock.trim()) {
+    if (asksAvailability && availabilityBody.trim()) {
       replySections.push({
         key: "availability",
-        content: availabilityBlock.trim(),
+        content: availabilityBody.trim(),
         intent: "disponibilidad",
       });
     }
 
-    canonicalReply = replySections
-      .map((section) => section.content)
-      .join("\n\n")
-      .trim();
+    const sectionCount = replySections.length;
+
+    const renderedSections = replySections.map((section) => {
+      if (sectionCount === 1) {
+        return section.content.trim();
+      }
+
+      switch (section.key) {
+        case "services":
+          return servicesBlock.trim();
+        case "schedule":
+          return scheduleBlock.trim();
+        case "location":
+          return locationBlock.trim();
+        case "availability":
+          return availabilityBlock.trim();
+        default:
+          return section.content.trim();
+      }
+    });
+
+    canonicalReply = renderedSections.join("\n\n").trim();
 
     if (canonicalReply) {
       const businessInfoIntent =
