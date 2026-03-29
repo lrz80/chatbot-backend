@@ -292,36 +292,60 @@ export async function runCatalogFastpath(
   if (isBusinessInfoFacetTurn) {
     let canonicalReply = "";
 
-    const blocks: string[] = [];
+    const replySections: Array<{
+      key: "services" | "schedule" | "location" | "availability";
+      content: string;
+      intent: "info_general" | "horario" | "ubicacion" | "disponibilidad";
+    }> = [];
 
     if (servicesBlock.trim()) {
-      blocks.push(servicesBlock.trim());
+      replySections.push({
+        key: "services",
+        content: servicesBlock.trim(),
+        intent: "info_general",
+      });
     }
 
     if (asksSchedules && scheduleBlock.trim()) {
-      blocks.push(scheduleBlock.trim());
+      replySections.push({
+        key: "schedule",
+        content: scheduleBlock.trim(),
+        intent: "horario",
+      });
     }
 
     if (asksLocation && locationBlock.trim()) {
-      blocks.push(locationBlock.trim());
+      replySections.push({
+        key: "location",
+        content: locationBlock.trim(),
+        intent: "ubicacion",
+      });
     }
 
     if (asksAvailability && availabilityBlock.trim()) {
-      blocks.push(availabilityBlock.trim());
+      replySections.push({
+        key: "availability",
+        content: availabilityBlock.trim(),
+        intent: "disponibilidad",
+      });
     }
 
-    canonicalReply = blocks.join("\n\n").trim();
+    canonicalReply = replySections
+      .map((section) => section.content)
+      .join("\n\n")
+      .trim();
 
     if (canonicalReply) {
+      const businessInfoIntent =
+        replySections.length === 1
+          ? replySections[0].intent
+          : "info_general";
+
       return {
         handled: true,
         reply: canonicalReply,
         source: "catalog_db",
-        intent: asksLocation
-          ? "ubicacion"
-          : asksSchedules
-          ? "horario"
-          : "info_general",
+        intent: businessInfoIntent,
         ctxPatch: {
           last_catalog_at: Date.now(),
           lastResolvedIntent: "business_info_facets",
