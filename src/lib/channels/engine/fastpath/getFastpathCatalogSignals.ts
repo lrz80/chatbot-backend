@@ -55,6 +55,10 @@ function toTrimmedString(value: any): string {
   return String(value ?? "").trim();
 }
 
+function normalizeComparisonLabel(value: any): string {
+  return toTrimmedString(value).toLowerCase();
+}
+
 function isEntityCandidateAnchoredToContext(params: {
   matchedCandidate: any;
   convoCtx: any;
@@ -380,6 +384,25 @@ function buildStructuredCatalogComparison(params: {
     }
   }
 
+  const normalizedSideLabels = allSides
+    .map((side) => normalizeComparisonLabel(side.label))
+    .filter(Boolean);
+
+    const hasMissingSideLabels = normalizedSideLabels.length !== allSides.length;
+
+    const hasDuplicateSideLabels =
+    new Set(normalizedSideLabels).size !== normalizedSideLabels.length;
+
+    const hasOverlappingServices = allSides.some((side, sideIndex) =>
+    allSides.some((otherSide, otherIndex) => {
+      if (sideIndex === otherIndex) return false;
+
+      return side.serviceIds.some((serviceId) =>
+        otherSide.serviceIds.includes(serviceId)
+      );
+    })
+  );
+
   return {
     hasComparison: true,
     sides: allSides,
@@ -388,7 +411,10 @@ function buildStructuredCatalogComparison(params: {
     serviceLabels: allSides
       .map((side) => toTrimmedString(side.label))
       .filter(Boolean),
-    requiresDisambiguation: allSides.some((side) => side.serviceIds.length !== 1),
+    requiresDisambiguation:
+      hasMissingSideLabels ||
+      hasDuplicateSideLabels ||
+      hasOverlappingServices,
   };
 }
 
