@@ -1053,7 +1053,10 @@ export async function procesarMensajeWhatsApp(
   //    🔒 NO corre si hay booking activo
   // ===============================
   if (!inBooking0) {
-    const convoCtxForFastpath = signals?.convoCtx || convoCtx;
+    const convoCtxForFastpath = {
+      ...(convoCtx || {}),
+      ...((signals as any)?.convoCtx || {}),
+    };
 
     const fpRes = await handleFastpathHybridTurn({
       pool,
@@ -1079,13 +1082,6 @@ export async function procesarMensajeWhatsApp(
       followupNeedsAnchor: signals?.followupNeedsAnchor === true,
       followupEntityKind: signals?.followupEntityKind || null,
     });
-
-    const convoCtxAfterFastpath = fpRes?.ctxPatch
-      ? {
-          ...(convoCtxForFastpath || {}),
-          ...(fpRes.ctxPatch || {}),
-        }
-      : convoCtxForFastpath;
 
     // aplicar patch de contexto devuelto por el helper
     if (fpRes.ctxPatch) {
