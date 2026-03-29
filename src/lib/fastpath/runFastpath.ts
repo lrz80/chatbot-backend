@@ -106,6 +106,11 @@ export type FastpathCtx = {
   last_catalog_plans?: string[] | null;
   last_catalog_at?: number | null;
 
+  lastPresentedEntityIds?: string[] | null;
+  lastPresentedFamilyKeys?: string[] | null;
+  last_catalog_scope?: "overview" | "entity" | "family" | "variant" | null;
+  last_catalog_source?: "info_clave" | "db_catalog" | null;
+
   // selección de servicio/variante para flujo "qué incluye"
   selectedServiceId?: string | null;
   expectingVariant?: boolean;
@@ -134,7 +139,6 @@ export type FastpathCtx = {
     | "compare"
     | "unknown"
     | null;
-
   [k: string]: any;
 };
 
@@ -376,8 +380,35 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         last_plan_list_at: null,
         last_package_list: null,
         last_package_list_at: null,
+
         last_catalog_at: Date.now(),
         lastResolvedIntent: "info_general_overview",
+
+        // ancla estructurada para follow-ups DM tipo:
+        // "y precios", "y horarios", "y ubicación"
+        last_catalog_scope: "overview",
+        last_catalog_source: "info_clave",
+
+        // no conocemos entidades/ids concretos porque el overview sale de infoClave
+        // pero dejamos arrays explícitos para que el clasificador sepa que sí hubo
+        // un overview reciente y no herede basura anterior
+        lastPresentedEntityIds: [],
+        lastPresentedFamilyKeys: [],
+
+        // limpiamos cualquier arrastre viejo de selección puntual
+        last_service_id: null,
+        last_service_name: null,
+        last_service_at: null,
+        last_selected_kind: null,
+        last_selected_id: null,
+        last_selected_name: null,
+        last_selected_at: null,
+        last_variant_id: null,
+        last_variant_name: null,
+        last_variant_url: null,
+        last_variant_at: null,
+        selectedServiceId: null,
+        expectingVariant: false,
       };
 
       return {

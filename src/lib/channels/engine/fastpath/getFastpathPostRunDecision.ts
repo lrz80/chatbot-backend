@@ -1,3 +1,4 @@
+//src/lib/channels/engine/fastpath/getFastpathPostRunDecision.ts
 import type { Canal } from "../../../detectarIntencion";
 
 export type GetFastpathPostRunDecisionInput = {

@@ -1,3 +1,4 @@
+//src/lib/channels/engine/fastpath/getFastpathImmediateReturn.ts
 export type FastpathImmediateReturnInput = {
   fp: {
     source?: string | null;
