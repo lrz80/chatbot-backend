@@ -149,12 +149,28 @@ export async function finalizeReply(
     baseCtx.last_service_id ??
     baseCtx.selectedServiceId ??
     baseCtx.structuredService?.serviceId ??
+    baseCtx.last_service_ref?.service_id ??
     capturedRef?.service_id ??
+    null;
+
+  const canonicalLastEntityName =
+    baseCtx.lastEntityName ??
+    baseCtx.last_entity_name ??
+    baseCtx.last_service_name ??
+    baseCtx.structuredService?.serviceName ??
+    baseCtx.structuredService?.serviceLabel ??
+    baseCtx.last_service_ref?.label ??
+    capturedRef?.label ??
     null;
 
   const canonicalLastFamilyKey =
     baseCtx.lastFamilyKey ??
     baseCtx.last_family_key ??
+    null;
+
+  const canonicalLastFamilyName =
+    baseCtx.lastFamilyName ??
+    baseCtx.last_family_name ??
     null;
 
   const canonicalLastPresentedEntityIds = Array.isArray(baseCtx.lastPresentedEntityIds)
@@ -177,6 +193,23 @@ export async function finalizeReply(
     ? baseCtx.last_presented_family_keys
     : [];
 
+  const canonicalExpectingVariantForEntityId =
+    baseCtx.expectingVariantForEntityId ??
+    baseCtx.expecting_variant_for_entity_id ??
+    (baseCtx.expectingVariant ? canonicalLastEntityId : null) ??
+    null;
+
+  const canonicalExpectedVariantIntent =
+    baseCtx.expectedVariantIntent ??
+    baseCtx.expected_variant_intent ??
+    null;
+
+  const canonicalPresentedVariantOptions = Array.isArray(baseCtx.presentedVariantOptions)
+    ? baseCtx.presentedVariantOptions
+    : Array.isArray(baseCtx.presented_variant_options)
+    ? baseCtx.presented_variant_options
+    : [];
+
   const canonicalLastResolvedIntent =
     baseCtx.lastResolvedIntent ??
     baseCtx.last_resolved_intent ??
@@ -189,15 +222,21 @@ export async function finalizeReply(
     ...baseCtx,
     ...(capturedRef?.service_id ? { last_service_ref: capturedRef } : {}),
 
-    // Canonical anchors para el clasificador
+    // ancla canónica para clasificación/routing
     lastEntityId: canonicalLastEntityId,
+    lastEntityName: canonicalLastEntityName,
     lastFamilyKey: canonicalLastFamilyKey,
+    lastFamilyName: canonicalLastFamilyName,
     lastPresentedEntityIds: canonicalLastPresentedEntityIds,
     lastPresentedFamilyKeys: canonicalLastPresentedFamilyKeys,
+    expectingVariantForEntityId: canonicalExpectingVariantForEntityId,
+    expectedVariantIntent: canonicalExpectedVariantIntent,
     lastResolvedIntent: canonicalLastResolvedIntent,
+    presentedVariantOptions: canonicalPresentedVariantOptions,
 
-    last_reply_source: replySource || null,
+    // compat legacy
     last_intent: canonicalLastResolvedIntent,
+    last_reply_source: replySource || null,
     last_assistant_text: reply,
     last_user_text: userInput,
     last_turn_at: new Date().toISOString(),

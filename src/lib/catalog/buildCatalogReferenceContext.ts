@@ -92,12 +92,31 @@ function extractPresentedEntityIds(source: AnyRecord): string[] {
 
   if (direct.length > 0) return direct;
 
-  const planObjects = asObjectArray(source["last_catalog_plans"]);
-  const objectIds = planObjects
-    .map((item) => asString(item.id ?? item.serviceId ?? item.service_id))
-    .filter((value): value is string => Boolean(value));
+  const candidateArrays = [
+    source["last_catalog_plans"],
+    source["last_plan_list"],
+    source["last_package_list"],
+    source["last_catalog_candidates"],
+  ];
 
-  if (objectIds.length > 0) return Array.from(new Set(objectIds));
+  for (const raw of candidateArrays) {
+    const objects = asObjectArray(raw);
+    const ids = objects
+      .map((item) =>
+        asString(
+          item.id ??
+          item.serviceId ??
+          item.service_id ??
+          item.entityId ??
+          item.entity_id
+        )
+      )
+      .filter((value): value is string => Boolean(value));
+
+    if (ids.length > 0) {
+      return Array.from(new Set(ids));
+    }
+  }
 
   return [];
 }
@@ -197,23 +216,36 @@ export function buildCatalogReferenceContext(
     "lastCatalogSource",
   ]);
 
-  const lastEntityId = pickFirstString(ctx, [
-    "lastEntityId",
-    "last_entity_id",
-    "selectedServiceId",
-    "selected_service_id",
-    "lastServiceId",
-    "last_service_id",
-  ]);
+  const structuredService = asRecord(ctx["structuredService"]);
+  const lastServiceRef = asRecord(ctx["last_service_ref"]);
 
-  const rawLastEntityName = pickFirstString(ctx, [
-    "lastEntityName",
-    "last_entity_name",
-    "selectedServiceName",
-    "selected_service_name",
-    "lastServiceName",
-    "last_service_name",
-  ]);
+  const lastEntityId =
+    pickFirstString(ctx, [
+      "lastEntityId",
+      "last_entity_id",
+      "selectedServiceId",
+      "selected_service_id",
+      "lastServiceId",
+      "last_service_id",
+    ]) ??
+    asString(structuredService["serviceId"] ?? structuredService["id"]) ??
+    asString(lastServiceRef["service_id"]);
+
+  const rawLastEntityName =
+    pickFirstString(ctx, [
+      "lastEntityName",
+      "last_entity_name",
+      "selectedServiceName",
+      "selected_service_name",
+      "lastServiceName",
+      "last_service_name",
+    ]) ??
+    asString(
+      structuredService["serviceName"] ??
+      structuredService["serviceLabel"] ??
+      structuredService["label"]
+    ) ??
+    asString(lastServiceRef["label"]);
 
   const lastFamilyKey = pickFirstString(ctx, [
     "lastFamilyKey",
@@ -257,7 +289,8 @@ export function buildCatalogReferenceContext(
     ctx["lastResolvedIntent"] ??
       ctx["last_resolved_intent"] ??
       ctx["resolvedIntent"] ??
-      ctx["resolved_intent"]
+      ctx["resolved_intent"] ??
+      ctx["last_intent"]
   );
 
   const expectedVariantIntent = asCatalogReferenceIntent(
