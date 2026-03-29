@@ -445,7 +445,20 @@ export function classifyCatalogReferenceTurn(
     "catalog_combination",
   ]);
 
-  if (detectedIntent && !catalogCapableIntents.has(detectedIntent)) {
+  const hasStructuralCatalogEvidence =
+    Boolean(explicitEntityCandidate?.id) ||
+    Boolean(explicitVariantCandidate?.variantId) ||
+    Boolean(explicitFamilyCandidate?.familyKey) ||
+    Boolean(input.structuredComparison?.hasComparison) ||
+    Boolean(context.expectingVariantForEntityId) ||
+    signals.hasReferentialDependency ||
+    signals.hasConversationDependency;
+
+  if (
+    detectedIntent &&
+    !catalogCapableIntents.has(detectedIntent) &&
+    !hasStructuralCatalogEvidence
+  ) {
     notes.push(`non_catalog_intent:${detectedIntent}`);
     result.debug.notes = notes;
     return result;
