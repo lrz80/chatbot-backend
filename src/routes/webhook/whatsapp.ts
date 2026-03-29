@@ -69,6 +69,8 @@ import { classifyCatalogReferenceTurn } from "../../lib/catalog/classifyCatalogR
 
 import { isBusinessGeneralIntent } from "../../lib/channels/engine/intents/isBusinessGeneralIntent";
 
+import { resolveBusinessOverview } from "../../lib/business/resolveBusinessOverview";
+
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
   tenant?: any;
@@ -1834,6 +1836,34 @@ export async function procesarMensajeWhatsApp(
     );
 
     const finalFallbackTextClean = stripMarkdownLinksForDm(finalFallbackText);
+
+    // ✅ overview general de servicios desde info_clave,
+    // pero dejando ancla estructurada para follow-ups de catálogo/DB
+    if (
+      (INTENCION_FINAL_CANONICA === "info_general" || detectedIntent === "info_general") &&
+      !hasResolvedEntity
+    ) {
+      try {
+        const overview = await resolveBusinessOverview({
+          pool,
+          tenantId: tenant.id,
+          infoClave: String(tenant?.info_clave || ""),
+        });
+
+        transition({
+          patchCtx: {
+            last_catalog_source: overview.source,
+            last_catalog_scope: "overview",
+            last_catalog_at: Date.now(),
+            lastPresentedEntityIds: overview.presentedEntityIds,
+            lastPresentedFamilyKeys: overview.presentedFamilyKeys,
+            lastResolvedIntent: "info_general",
+          },
+        });
+      } catch (e: any) {
+        console.warn("⚠️ resolveBusinessOverview failed:", e?.message || e);
+      }
+    }
 
     setReply(finalFallbackTextClean, "sm-fallback");
     await finalizeReply();
