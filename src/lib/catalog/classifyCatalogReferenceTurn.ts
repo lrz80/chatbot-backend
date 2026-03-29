@@ -172,8 +172,7 @@ function buildSignals(params: {
     !hasVariantCandidate &&
     !hasFamilyCandidate &&
     !hasReferentialDependency &&
-    !hasConversationDependency &&
-    false;
+    !hasConversationDependency;
 
   const hasDisambiguationRisk =
     context.lastPresentedEntityIds.length > 1 ||
