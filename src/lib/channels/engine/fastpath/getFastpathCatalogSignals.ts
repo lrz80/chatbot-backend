@@ -157,14 +157,17 @@ function canPromoteResolvedHitAsExplicitEntity(params: {
 }
 
 function getCandidateComparisonTokens(candidate: any): string[] {
-  const raw = [
-    ...(Array.isArray(candidate?.overlapNameTokens)
-      ? candidate.overlapNameTokens
-      : []),
-    ...(Array.isArray(candidate?.overlapSupportTokens)
-      ? candidate.overlapSupportTokens
-      : []),
-  ];
+  const nameTokens = Array.isArray(candidate?.overlapNameTokens)
+    ? candidate.overlapNameTokens
+    : [];
+
+  const supportTokens = Array.isArray(candidate?.overlapSupportTokens)
+    ? candidate.overlapSupportTokens
+    : [];
+
+  // Para comparar entidades, primero usa tokens realmente discriminativos
+  // del nombre. Solo cae a support tokens si no hay name tokens.
+  const raw = nameTokens.length > 0 ? nameTokens : supportTokens;
 
   const seen = new Set<string>();
   const tokens: string[] = [];
@@ -179,6 +182,31 @@ function getCandidateComparisonTokens(candidate: any): string[] {
   return tokens;
 }
 
+function getComparisonGroupKey(
+  candidate: any,
+  tokenStats: ComparisonTokenStats
+): string {
+  const tokens = getCandidateComparisonTokens(candidate);
+
+  if (!tokens.length) {
+    return toTrimmedString(candidate?.serviceId || candidate?.id).toLowerCase();
+  }
+
+  // Para separar lados de una comparación, conviene el token MENOS compartido,
+  // no el más frecuente.
+  const sorted = [...tokens].sort((a, b) => {
+    const freqDiff = (tokenStats.get(a) || 0) - (tokenStats.get(b) || 0);
+    if (freqDiff !== 0) return freqDiff;
+
+    const lenDiff = b.length - a.length;
+    if (lenDiff !== 0) return lenDiff;
+
+    return a.localeCompare(b);
+  });
+
+  return sorted[0];
+}
+
 function buildComparisonTokenStats(candidates: any[]): ComparisonTokenStats {
   const stats: ComparisonTokenStats = new Map();
 
@@ -190,29 +218,6 @@ function buildComparisonTokenStats(candidates: any[]): ComparisonTokenStats {
   }
 
   return stats;
-}
-
-function getComparisonGroupKey(
-  candidate: any,
-  tokenStats: ComparisonTokenStats
-): string {
-  const tokens = getCandidateComparisonTokens(candidate);
-
-  if (!tokens.length) {
-    return toTrimmedString(candidate?.serviceId || candidate?.id).toLowerCase();
-  }
-
-  const sorted = [...tokens].sort((a, b) => {
-    const freqDiff = (tokenStats.get(b) || 0) - (tokenStats.get(a) || 0);
-    if (freqDiff !== 0) return freqDiff;
-
-    const lenDiff = a.length - b.length;
-    if (lenDiff !== 0) return lenDiff;
-
-    return a.localeCompare(b);
-  });
-
-  return sorted[0];
 }
 
 function buildComparisonSideLabel(members: any[]): string {
