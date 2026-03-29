@@ -126,6 +126,9 @@ export type FastpathCtx = {
     | "combination_and_price"
     | "includes"
     | "schedule"
+    | "schedule_and_price"
+    | "business_info_facets"
+    | "info_general_overview"
     | "compare"
     | "unknown"
     | null;
