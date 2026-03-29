@@ -67,15 +67,27 @@ function asCatalogReferenceIntent(
     "schedule",
     "other_plans",
     "combination_and_price",
+    "unknown",
   ];
 
   if (allowed.includes(v as CatalogReferenceIntent)) {
     return v as CatalogReferenceIntent;
   }
 
-  // aliases internos válidos del pipeline de catálogo
   if (v === "schedule_and_price") return "combination_and_price";
   if (v === "compare") return "other_plans";
+
+  return null;
+}
+
+function asCatalogHistoryIntent(
+  value: unknown
+): CatalogReferenceIntent | "info_general" | null {
+  const base = asCatalogReferenceIntent(value);
+  if (base) return base;
+
+  const v = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (v === "info_general") return "info_general";
 
   return null;
 }
@@ -285,7 +297,7 @@ export function buildCatalogReferenceContext(
     "family_name",
   ]);
 
-  const lastResolvedIntent = asCatalogReferenceIntent(
+  const lastResolvedIntent = asCatalogHistoryIntent(
     ctx["lastResolvedIntent"] ??
       ctx["last_resolved_intent"] ??
       ctx["resolvedIntent"] ??

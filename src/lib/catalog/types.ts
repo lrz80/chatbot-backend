@@ -17,6 +17,10 @@ export type CatalogReferenceIntent =
   | "schedule"
   | "unknown";
 
+export type CatalogHistoryIntent =
+  | CatalogReferenceIntent
+  | "info_general";
+
 export type CatalogTargetLevel =
   | "catalog"
   | "family"
@@ -62,7 +66,7 @@ export type CatalogReferenceContext = {
   expectingVariantForEntityId: string | null;
 
   // 👇 memoria estructurada para follow-ups
-  lastResolvedIntent: CatalogReferenceIntent | null;
+  lastResolvedIntent: CatalogHistoryIntent | null;
   expectedVariantIntent: CatalogReferenceIntent | null;
 
   presentedVariantOptions: Array<{

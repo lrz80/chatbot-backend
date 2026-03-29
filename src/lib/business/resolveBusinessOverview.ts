@@ -45,31 +45,25 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
   return out;
 }
 
-function buildServiceSearchCorpus(row: ServiceRow): string {
-  return normalizeText(
-    [
-      row.name,
-      row.category,
-      row.tipo,
-      row.description,
-    ]
-      .filter(Boolean)
-      .join(" | ")
-  );
+function tokenize(value: string): string[] {
+  return normalizeText(value)
+    .split(/[^a-z0-9]+/i)
+    .map((x) => x.trim())
+    .filter((x) => x.length >= 4);
 }
 
-function infoClaveMentionsService(infoClaveNorm: string, row: ServiceRow): boolean {
-  const candidates = uniqueStrings([
-    row.name,
-    row.category,
-    row.tipo,
-  ])
-    .map(normalizeText)
-    .filter(Boolean);
+function overlapScore(a: string, b: string): number {
+  const aTokens = new Set(tokenize(a));
+  const bTokens = new Set(tokenize(b));
 
-  if (candidates.length === 0) return false;
+  if (aTokens.size === 0 || bTokens.size === 0) return 0;
 
-  return candidates.some((candidate) => infoClaveNorm.includes(candidate));
+  let hits = 0;
+  for (const token of aTokens) {
+    if (bTokens.has(token)) hits++;
+  }
+
+  return hits;
 }
 
 export async function resolveBusinessOverview(
@@ -96,24 +90,37 @@ export async function resolveBusinessOverview(
 
   const infoClaveNorm = normalizeText(infoClave);
 
+  const familyCandidates = uniqueStrings(
+    rows.flatMap((row) => [
+      row.category || "",
+      row.tipo || "",
+    ])
+  );
+
+  const matchedFamilyKeys = familyCandidates.filter((family) => {
+    const familyNorm = normalizeText(family);
+    if (!familyNorm) return false;
+
+    if (infoClaveNorm.includes(familyNorm)) return true;
+
+    return overlapScore(infoClaveNorm, familyNorm) >= 1;
+  });
+
   const matchedRows = rows.filter((row) => {
-    if (!row?.id || !row?.name) return false;
+    const familyValues = [row.category || "", row.tipo || ""].filter(Boolean);
 
-    // match principal: el servicio/familia aparece de forma natural en info_clave
-    if (infoClaveMentionsService(infoClaveNorm, row)) {
-      return true;
-    }
+    const familyMatch = familyValues.some((family) =>
+      matchedFamilyKeys.includes(String(family).trim())
+    );
 
-    // fallback semántico ligero: si el corpus del servicio aparece en info_clave
-    const corpus = buildServiceSearchCorpus(row);
-    if (!corpus) return false;
+    if (familyMatch) return true;
 
-    const keyParts = corpus
-      .split("|")
-      .map((x) => normalizeText(x))
-      .filter(Boolean);
+    const serviceCorpus = [
+      row.name || "",
+      row.description || "",
+    ].join(" | ");
 
-    return keyParts.some((part) => part.length >= 4 && infoClaveNorm.includes(part));
+    return overlapScore(infoClaveNorm, serviceCorpus) >= 2;
   });
 
   const presentedEntityIds = uniqueStrings(
