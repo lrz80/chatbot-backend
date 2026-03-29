@@ -1,3 +1,4 @@
+// src/lib/conversationState.ts
 import pool from "./db";
 
 export type ConversationState = {
@@ -6,152 +7,23 @@ export type ConversationState = {
   sender_id: string;
   active_flow?: string | null;
   active_step?: string | null;
-  context?: any;
+  context?: any; // JSON
   updated_at?: string;
   created_at?: string;
 };
 
+// ⏱ TTL global por canal (sin tenant)
 function getConversationTtlMs(canal: string) {
   const c = String(canal || "").toLowerCase();
 
-  if (c === "facebook" || c === "instagram") return 12 * 60 * 60 * 1000;
-  if (c === "whatsapp") return 3 * 60 * 60 * 1000;
+  // Meta: conversaciones tienden a ser más espaciadas
+  if (c === "facebook" || c === "instagram") return 12 * 60 * 60 * 1000; // 12h
 
-  return 30 * 60 * 1000;
-}
+  // WhatsApp: más rápido, pero 15 min es demasiado agresivo
+  if (c === "whatsapp") return 3 * 60 * 60 * 1000; // 3h
 
-function asObject(value: any): Record<string, any> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? { ...value }
-    : {};
-}
-
-function pickFirst<T>(...values: T[]): T | null {
-  for (const value of values) {
-    if (value !== undefined && value !== null) return value;
-  }
-  return null;
-}
-
-function pickArray(valueA: any, valueB: any): any[] {
-  if (Array.isArray(valueA)) return valueA;
-  if (Array.isArray(valueB)) return valueB;
-  return [];
-}
-
-function normalizeConversationContext(rawContext: any): Record<string, any> {
-  const ctx = asObject(rawContext);
-
-  const lastServiceId = pickFirst(ctx.last_service_id, ctx.lastEntityId);
-  const lastServiceName = pickFirst(ctx.last_service_name, ctx.lastEntityName);
-  const lastFamilyKey = pickFirst(ctx.last_family_key, ctx.lastFamilyKey);
-  const lastFamilyName = pickFirst(ctx.last_family_name, ctx.lastFamilyName);
-  const lastVariantId = pickFirst(ctx.last_variant_id, ctx.lastVariantId);
-  const lastVariantName = pickFirst(ctx.last_variant_name, ctx.lastVariantName);
-  const lastResolvedIntent = pickFirst(
-    ctx.last_resolved_intent,
-    ctx.lastResolvedIntent
-  );
-  const lastPresentedEntityIds = pickArray(
-    ctx.last_presented_entity_ids,
-    ctx.lastPresentedEntityIds
-  );
-  const lastPresentedFamilyKeys = pickArray(
-    ctx.last_presented_family_keys,
-    ctx.lastPresentedFamilyKeys
-  );
-  const lastCatalogPlans = pickArray(
-    ctx.last_catalog_plans,
-    ctx.lastCatalogPlans
-  );
-  const lastCatalogPlansAt = pickFirst(
-    ctx.last_catalog_plans_at,
-    ctx.lastCatalogPlansAt
-  );
-
-  const structuredService =
-    ctx.structuredService && typeof ctx.structuredService === "object"
-      ? ctx.structuredService
-      : null;
-
-  return {
-    ...ctx,
-
-    // snake_case canónico
-    last_service_id: lastServiceId,
-    last_service_name: lastServiceName,
-    last_family_key: lastFamilyKey,
-    last_family_name: lastFamilyName,
-    last_variant_id: lastVariantId,
-    last_variant_name: lastVariantName,
-    last_resolved_intent: lastResolvedIntent,
-    last_presented_entity_ids: lastPresentedEntityIds,
-    last_presented_family_keys: lastPresentedFamilyKeys,
-    last_catalog_plans: lastCatalogPlans,
-    last_catalog_plans_at: lastCatalogPlansAt,
-    structuredService,
-
-    // camelCase compatible
-    lastEntityId: lastServiceId,
-    lastEntityName: lastServiceName,
-    lastFamilyKey: lastFamilyKey,
-    lastFamilyName: lastFamilyName,
-    lastVariantId: lastVariantId,
-    lastVariantName: lastVariantName,
-    lastResolvedIntent: lastResolvedIntent,
-    lastPresentedEntityIds: lastPresentedEntityIds,
-    lastPresentedFamilyKeys: lastPresentedFamilyKeys,
-    lastCatalogPlans: lastCatalogPlans,
-    lastCatalogPlansAt: lastCatalogPlansAt,
-  };
-}
-
-function buildContextAfterTtl(rawContext: any): Record<string, any> {
-  const normalized = normalizeConversationContext(rawContext);
-
-  return {
-    last_service_id: normalized.last_service_id ?? null,
-    last_service_name: normalized.last_service_name ?? null,
-    last_family_key: normalized.last_family_key ?? null,
-    last_family_name: normalized.last_family_name ?? null,
-    last_variant_id: normalized.last_variant_id ?? null,
-    last_variant_name: normalized.last_variant_name ?? null,
-    last_resolved_intent: normalized.last_resolved_intent ?? null,
-    last_presented_entity_ids: Array.isArray(normalized.last_presented_entity_ids)
-      ? normalized.last_presented_entity_ids
-      : [],
-    last_presented_family_keys: Array.isArray(normalized.last_presented_family_keys)
-      ? normalized.last_presented_family_keys
-      : [],
-    last_catalog_plans: Array.isArray(normalized.last_catalog_plans)
-      ? normalized.last_catalog_plans
-      : [],
-    last_catalog_plans_at: normalized.last_catalog_plans_at ?? null,
-    structuredService:
-      normalized.structuredService &&
-      typeof normalized.structuredService === "object"
-        ? normalized.structuredService
-        : null,
-
-    // compatibilidad camelCase
-    lastEntityId: normalized.last_service_id ?? null,
-    lastEntityName: normalized.last_service_name ?? null,
-    lastFamilyKey: normalized.last_family_key ?? null,
-    lastFamilyName: normalized.last_family_name ?? null,
-    lastVariantId: normalized.last_variant_id ?? null,
-    lastVariantName: normalized.last_variant_name ?? null,
-    lastResolvedIntent: normalized.last_resolved_intent ?? null,
-    lastPresentedEntityIds: Array.isArray(normalized.last_presented_entity_ids)
-      ? normalized.last_presented_entity_ids
-      : [],
-    lastPresentedFamilyKeys: Array.isArray(normalized.last_presented_family_keys)
-      ? normalized.last_presented_family_keys
-      : [],
-    lastCatalogPlans: Array.isArray(normalized.last_catalog_plans)
-      ? normalized.last_catalog_plans
-      : [],
-    lastCatalogPlansAt: normalized.last_catalog_plans_at ?? null,
-  };
+  // Preview / otros
+  return 30 * 60 * 1000; // 30 min
 }
 
 export async function getConversationState(
@@ -161,10 +33,10 @@ export async function getConversationState(
 ): Promise<ConversationState | null> {
   const { rows } = await pool.query(
     `SELECT *
-     FROM conversation_state
-     WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
-     ORDER BY updated_at DESC
-     LIMIT 1`,
+      FROM conversation_state
+      WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
+      ORDER BY updated_at DESC
+      LIMIT 1`,
     [tenantId, canal, senderId]
   );
 
@@ -172,49 +44,46 @@ export async function getConversationState(
 
   const row = rows[0] as ConversationState;
 
+  // 🧹 AUTO-RESET por inactividad (TTL)
   if (row.updated_at) {
     const last = new Date(row.updated_at).getTime();
     const now = Date.now();
 
     const ttlMs = getConversationTtlMs(canal);
-
     if (Number.isFinite(last) && now - last > ttlMs) {
-      const nextContext = buildContextAfterTtl(row.context);
-
-      console.log("🧹 conversation_state TTL expired, pruning ephemeral context:", {
+      console.log("🧹 conversation_state TTL expired, clearing context:", {
         tenantId,
         canal,
         senderId,
         lastUpdated: row.updated_at,
-        preservedKeys: Object.keys(nextContext),
       });
 
+      // Mejor: resetea (no borra) para evitar "primer turno" falso
       await pool.query(
         `
         UPDATE conversation_state
-        SET active_flow = NULL,
-            active_step = NULL,
-            context = $4::jsonb,
-            updated_at = NOW()
+          SET active_flow = NULL,
+              active_step = NULL,
+              context = '{}'::jsonb,
+              updated_at = NOW()
         WHERE tenant_id = $1 AND canal = $2 AND sender_id = $3
         `,
-        [tenantId, canal, senderId, JSON.stringify(nextContext)]
+        [tenantId, canal, senderId]
       );
 
-      return {
-        ...row,
-        active_flow: null,
-        active_step: null,
-        context: nextContext,
-        updated_at: new Date().toISOString(),
-      };
+      return null;
     }
   }
 
-  const ctx = normalizeConversationContext(row.context);
+  const ctx = row.context || {};
 
-  if (ctx.estado === "esperando_pago" && ctx.intent_actual !== "pago") {
+  // limpieza defensiva de estados de pago pegados
+  if (
+    ctx?.estado === "esperando_pago" &&
+    ctx?.intent_actual !== "pago"
+  ) {
     console.log("🧹 clearing stale payment state");
+
     ctx.estado = null;
   }
 
@@ -235,18 +104,12 @@ export async function setConversationState(params: {
   const { tenantId, canal, senderId, activeFlow, activeStep, contextPatch } = params;
 
   const existing = await getConversationState(tenantId, canal, senderId);
-
-  const mergedContext = normalizeConversationContext({
-    ...(existing?.context && typeof existing.context === "object"
-      ? existing.context
-      : {}),
-    ...(contextPatch && typeof contextPatch === "object" ? contextPatch : {}),
-  });
+  const mergedContext = { ...(existing?.context || {}), ...(contextPatch || {}) };
 
   await pool.query(
     `
     INSERT INTO conversation_state (tenant_id, canal, sender_id, active_flow, active_step, context)
-    VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+    VALUES ($1, $2, $3, $4, $5, $6)
     ON CONFLICT (tenant_id, canal, sender_id)
     DO UPDATE SET
       active_flow = EXCLUDED.active_flow,
@@ -254,7 +117,7 @@ export async function setConversationState(params: {
       context = EXCLUDED.context,
       updated_at = NOW()
     `,
-    [tenantId, canal, senderId, activeFlow, activeStep, JSON.stringify(mergedContext)]
+    [tenantId, canal, senderId, activeFlow, activeStep, mergedContext]
   );
 }
 
@@ -262,11 +125,9 @@ export async function patchConversationState(params: {
   tenantId: string;
   canal: string;
   senderId: string;
-  patch: any;
+  patch: any; // se mergea en context
 }): Promise<void> {
   const { tenantId, canal, senderId, patch } = params;
-
-  const normalizedPatch = normalizeConversationContext(patch ?? {});
 
   await pool.query(
     `
@@ -277,7 +138,7 @@ export async function patchConversationState(params: {
       context = COALESCE(conversation_state.context, '{}'::jsonb) || EXCLUDED.context,
       updated_at = NOW()
     `,
-    [tenantId, canal, senderId, JSON.stringify(normalizedPatch)]
+    [tenantId, canal, senderId, JSON.stringify(patch ?? {})]
   );
 }
 
@@ -306,6 +167,7 @@ export async function getOrInitConversationState(params: {
   const defaultFlow = params.defaultFlow ?? "generic_sales";
   const defaultStep = params.defaultStep ?? "start";
 
+  // 👇 OJO: getConversationState ya aplica TTL
   const existing = await getConversationState(tenantId, canal, senderId);
 
   if (existing) {
@@ -313,11 +175,12 @@ export async function getOrInitConversationState(params: {
       ...existing,
       active_flow: existing.active_flow ?? defaultFlow,
       active_step: existing.active_step ?? defaultStep,
-      context: normalizeConversationContext(existing.context),
+      context:
+        existing.context && typeof existing.context === "object"
+          ? existing.context
+          : {},
     };
   }
-
-  const initialContext = normalizeConversationContext({});
 
   await setConversationState({
     tenantId,
@@ -325,15 +188,15 @@ export async function getOrInitConversationState(params: {
     senderId,
     activeFlow: defaultFlow,
     activeStep: defaultStep,
-    contextPatch: initialContext,
+    contextPatch: {},
   });
 
+  // re-lee para devolver consistente
+  const created = await getConversationState(tenantId, canal, senderId);
   return {
-    tenant_id: tenantId,
-    canal,
-    sender_id: senderId,
+    ...(created as ConversationState),
     active_flow: defaultFlow,
     active_step: defaultStep,
-    context: initialContext,
+    context: {},
   };
 }

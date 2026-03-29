@@ -141,12 +141,63 @@ export async function finalizeReply(
     // no romper el turno
   }
 
+  const baseCtx = convoCtx && typeof convoCtx === "object" ? convoCtx : {};
+
+  const canonicalLastEntityId =
+    baseCtx.lastEntityId ??
+    baseCtx.last_entity_id ??
+    baseCtx.last_service_id ??
+    baseCtx.selectedServiceId ??
+    baseCtx.structuredService?.serviceId ??
+    capturedRef?.service_id ??
+    null;
+
+  const canonicalLastFamilyKey =
+    baseCtx.lastFamilyKey ??
+    baseCtx.last_family_key ??
+    null;
+
+  const canonicalLastPresentedEntityIds = Array.isArray(baseCtx.lastPresentedEntityIds)
+    ? baseCtx.lastPresentedEntityIds
+    : Array.isArray(baseCtx.last_presented_entity_ids)
+    ? baseCtx.last_presented_entity_ids
+    : Array.isArray(baseCtx.last_plan_list)
+    ? baseCtx.last_plan_list
+        .map((item: any) => item?.id ?? item?.service_id ?? null)
+        .filter(Boolean)
+    : Array.isArray(baseCtx.last_package_list)
+    ? baseCtx.last_package_list
+        .map((item: any) => item?.id ?? item?.service_id ?? null)
+        .filter(Boolean)
+    : [];
+
+  const canonicalLastPresentedFamilyKeys = Array.isArray(baseCtx.lastPresentedFamilyKeys)
+    ? baseCtx.lastPresentedFamilyKeys
+    : Array.isArray(baseCtx.last_presented_family_keys)
+    ? baseCtx.last_presented_family_keys
+    : [];
+
+  const canonicalLastResolvedIntent =
+    baseCtx.lastResolvedIntent ??
+    baseCtx.last_resolved_intent ??
+    baseCtx.last_intent ??
+    lastIntent ??
+    intentFallback ??
+    null;
+
   const nextCtx = {
-    ...(convoCtx && typeof convoCtx === "object" ? convoCtx : {}),
+    ...baseCtx,
     ...(capturedRef?.service_id ? { last_service_ref: capturedRef } : {}),
 
+    // Canonical anchors para el clasificador
+    lastEntityId: canonicalLastEntityId,
+    lastFamilyKey: canonicalLastFamilyKey,
+    lastPresentedEntityIds: canonicalLastPresentedEntityIds,
+    lastPresentedFamilyKeys: canonicalLastPresentedFamilyKeys,
+    lastResolvedIntent: canonicalLastResolvedIntent,
+
     last_reply_source: replySource || null,
-    last_intent: (lastIntent || intentFallback || null),
+    last_intent: canonicalLastResolvedIntent,
     last_assistant_text: reply,
     last_user_text: userInput,
     last_turn_at: new Date().toISOString(),
