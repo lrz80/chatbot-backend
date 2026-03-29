@@ -54,24 +54,32 @@ function asNumber(value: unknown): number | null {
   return null;
 }
 
-function asCatalogReferenceIntent(
+function normalizeCatalogReferenceIntent(
   value: unknown
 ): CatalogReferenceIntent | null {
   const v = typeof value === "string" ? value.trim().toLowerCase() : "";
 
   if (!v) return null;
 
-  const allowed: CatalogReferenceIntent[] = [
-    "price_or_plan",
-    "includes",
-    "schedule",
-    "other_plans",
-    "combination_and_price",
-  ];
+  // Mantener solo intents que el clasificador/routing ya conocen,
+  // pero mapear aliases reales del pipeline a esos valores.
+  if (v === "price_or_plan") return "price_or_plan";
+  if (v === "includes") return "includes";
+  if (v === "schedule") return "schedule";
+  if (v === "other_plans") return "other_plans";
+  if (v === "combination_and_price") return "combination_and_price";
 
-  return allowed.includes(v as CatalogReferenceIntent)
-    ? (v as CatalogReferenceIntent)
-    : null;
+  // aliases reales del pipeline
+  if (v === "schedule_and_price") return "combination_and_price";
+  if (v === "compare") return "other_plans";
+
+  // overview/info general NO debe perderse del todo:
+  // para follow-ups cortos como "y precios", lo más cercano y útil es
+  // tratarlo como contexto reutilizable de catálogo/info previa.
+  if (v === "info_general_overview") return "price_or_plan";
+  if (v === "business_info_facets") return "schedule";
+
+  return null;
 }
 
 function extractPresentedEntityIds(source: AnyRecord): string[] {
@@ -149,13 +157,19 @@ function extractPresentedVariantOptions(source: AnyRecord) {
   return cleaned.length > 0 ? cleaned : null;
 }
 
+function hasFreshTimestamp(value: unknown, ttlMs: number): boolean {
+  const n = asNumber(value);
+  if (!Number.isFinite(n as number) || (n as number) <= 0) return false;
+  return Date.now() - (n as number) <= ttlMs;
+}
+
 export function buildCatalogReferenceContext(
   convoCtx: unknown
 ): CatalogReferenceContext {
   const ctx = asRecord(convoCtx);
 
-  const now = Date.now();
   const entityTtlMs = 10 * 60 * 1000;
+  const overviewTtlMs = 30 * 60 * 1000;
 
   const lastEntityAt = asNumber(
     ctx["last_entity_at"] ??
@@ -164,10 +178,17 @@ export function buildCatalogReferenceContext(
       ctx["lastServiceAt"]
   );
 
+  const lastCatalogAt = asNumber(
+    ctx["last_catalog_at"] ??
+      ctx["lastCatalogAt"]
+  );
+
   const entityContextFresh =
     Number.isFinite(lastEntityAt as number) &&
     (lastEntityAt as number) > 0 &&
-    now - (lastEntityAt as number) <= entityTtlMs;
+    Date.now() - (lastEntityAt as number) <= entityTtlMs;
+
+  const overviewContextFresh = hasFreshTimestamp(lastCatalogAt, overviewTtlMs);
 
   const lastEntityId = pickFirstString(ctx, [
     "lastEntityId",
@@ -185,6 +206,16 @@ export function buildCatalogReferenceContext(
     "selected_service_name",
     "lastServiceName",
     "last_service_name",
+  ]);
+
+  const lastCatalogScope = pickFirstString(ctx, [
+    "last_catalog_scope",
+    "lastCatalogScope",
+  ]);
+
+  const lastCatalogSource = pickFirstString(ctx, [
+    "last_catalog_source",
+    "lastCatalogSource",
   ]);
 
   const lastFamilyKey = pickFirstString(ctx, [
@@ -215,25 +246,41 @@ export function buildCatalogReferenceContext(
     "family_name",
   ]);
 
-  const lastResolvedIntent = asCatalogReferenceIntent(
+  const lastResolvedIntent = normalizeCatalogReferenceIntent(
     ctx["lastResolvedIntent"] ??
       ctx["last_resolved_intent"] ??
       ctx["resolvedIntent"] ??
-      ctx["resolved_intent"]
+      ctx["resolved_intent"] ??
+      ctx["last_intent"]
   );
 
-  const expectedVariantIntent = asCatalogReferenceIntent(
+  const expectedVariantIntent = normalizeCatalogReferenceIntent(
     ctx["expectedVariantIntent"] ?? ctx["expected_variant_intent"]
   );
+
+  const shouldExposeOverviewContext =
+    overviewContextFresh &&
+    (
+      lastCatalogScope === "overview" ||
+      lastCatalogSource === "info_clave" ||
+      lastCatalogSource === "db_catalog" ||
+      lastPresentedEntityIds.length > 0 ||
+      lastPresentedFamilyKeys.length > 0 ||
+      Boolean(lastResolvedIntent)
+    );
 
   return {
     lastEntityId: entityContextFresh ? lastEntityId : null,
     lastEntityName:
       entityContextFresh && lastEntityId ? rawLastEntityName : null,
-    lastFamilyKey,
+    lastFamilyKey: shouldExposeOverviewContext ? lastFamilyKey : lastFamilyKey,
     lastFamilyName,
-    lastPresentedEntityIds,
-    lastPresentedFamilyKeys,
+    lastPresentedEntityIds: shouldExposeOverviewContext
+      ? lastPresentedEntityIds
+      : lastPresentedEntityIds,
+    lastPresentedFamilyKeys: shouldExposeOverviewContext
+      ? lastPresentedFamilyKeys
+      : lastPresentedFamilyKeys,
     expectingVariantForEntityId,
     expectedVariantIntent,
     lastResolvedIntent,
