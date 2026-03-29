@@ -271,6 +271,26 @@ export async function handleCatalogComparison(
     ctxPatch: {
       lastResolvedIntent: "compare",
       last_catalog_at: Date.now(),
+
+      // comparación resuelta: no seguimos esperando variante
+      expectingVariantForEntityId: null,
+      expectedVariantIntent: null,
+      presentedVariantOptions: null,
+
+      // evita arrastrar anchors viejos que ya no aplican
+      lastEntityId: null,
+      lastEntityName: null,
+      lastFamilyKey: null,
+      lastFamilyName: null,
+      lastPresentedEntityIds: [],
+      lastPresentedFamilyKeys: [],
+
+      // opcional pero útil para follow-ups posteriores
+      last_catalog_plans: Array.isArray(
+        input.catalogReferenceClassification?.targetServiceNames
+      )
+        ? input.catalogReferenceClassification.targetServiceNames
+        : [],
     } as any,
   };
 }
