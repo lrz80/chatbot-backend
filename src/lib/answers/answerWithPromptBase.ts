@@ -633,6 +633,93 @@ function buildGroundedFrameOnlyMessages(params: {
   return { system, user };
 }
 
+function isStructuredCatalogComparisonCanonical(text: string): boolean {
+  const value = String(text || "").trim();
+  if (!value) return false;
+
+  return (
+    value.includes("COMPARISON_MODE: catalog_compare") &&
+    value.includes("ITEM_COUNT:") &&
+    value.includes("ITEM:")
+  );
+}
+
+function buildGroundedComparisonMessages(params: {
+  idiomaDestino: "es" | "en";
+  fallbackText: string;
+  userInput: string;
+}): { system: string; user: string } {
+  const { idiomaDestino, fallbackText, userInput } = params;
+
+  const system =
+    idiomaDestino === "es"
+      ? [
+          "Responde solo en español.",
+          "Tu objetivo es escribir la respuesta final para un canal DM de ventas.",
+          "La comparación ya fue resuelta por el backend y viene en un bloque canónico estructurado.",
+          "Debes usar SOLO esa data estructurada.",
+          "No inventes atributos, diferencias, precios, beneficios, descuentos, includes ni disponibilidad.",
+          "No copies el bloque canónico literal ni lo muestres como etiquetas técnicas.",
+          "Convierte esa data en una comparación natural, breve, clara y útil.",
+          "Debes contrastar las opciones entre sí, no listarlas como fichas separadas.",
+          "Si existe PRICE_GAP, puedes mencionarlo de forma natural.",
+          "Si existen COMMON, puedes resumir brevemente lo común solo si ayuda.",
+          "Si existen DIFF, prioriza esas diferencias.",
+          "Termina con una sola pregunta breve que ayude a avanzar la conversación.",
+          "Responde en JSON estricto.",
+          'Usa exactamente este formato: {"text":"...", "pendingCta":null}',
+          'Si incluyes un CTA de confirmación para reserva, usa: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
+          'Si incluyes un CTA de confirmación para estimado, usa: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+          "No uses markdown ni bloques de código.",
+        ].join("\n\n")
+      : [
+          "Reply only in English.",
+          "Your goal is to write the final customer-facing reply for a sales DM channel.",
+          "The comparison has already been resolved by the backend and comes as a structured canonical block.",
+          "You must use ONLY that structured data.",
+          "Do not invent attributes, differences, prices, benefits, discounts, included items, or availability.",
+          "Do not copy the canonical block literally or expose technical labels.",
+          "Turn that data into a natural, brief, clear, useful comparison.",
+          "You must contrast the options against each other, not list them as separate cards.",
+          "If PRICE_GAP exists, you may mention it naturally.",
+          "If COMMON exists, you may briefly summarize common ground only if useful.",
+          "If DIFF exists, prioritize those differences.",
+          "End with one brief question that helps move the conversation forward.",
+          "Return strict JSON.",
+          'Use exactly this format: {"text":"...", "pendingCta":null}',
+          'If you include a confirmation CTA for booking, use: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
+          'If you include a confirmation CTA for estimate, use: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+          "Do not use markdown or code fences.",
+        ].join("\n\n");
+
+  const user =
+    idiomaDestino === "es"
+      ? [
+          `Mensaje del cliente: ${userInput || "(vacío)"}`,
+          "",
+          "Bloque canónico estructurado de comparación:",
+          fallbackText,
+          "",
+          "Devuélveme la respuesta final lista para enviar.",
+          "No devuelvas las etiquetas técnicas tal cual.",
+          "No copies el bloque literal.",
+          "Redacta una comparación natural basada únicamente en esos datos.",
+        ].join("\n")
+      : [
+          `Customer message: ${userInput || "(empty)"}`,
+          "",
+          "Structured canonical comparison block:",
+          fallbackText,
+          "",
+          "Return the final ready-to-send reply.",
+          "Do not return the technical labels literally.",
+          "Do not copy the block verbatim.",
+          "Write a natural comparison based only on that data.",
+        ].join("\n");
+
+  return { system, user };
+}
+
 /* =========================
    Main function
 ========================= */
@@ -697,15 +784,35 @@ export async function answerWithPromptBase(
       normalizedPolicy.canOfferBookingTimes && bookingActive,
   };
 
+  const hasFallbackText = String(fallbackText || "").trim().length > 0;
+
+  const isStructuredComparisonCanonical =
+    hasFallbackText && isStructuredCatalogComparisonCanonical(fallbackText);
+
   const shouldUseGroundedFrameOnlyFormatter =
     effectivePolicy.mode === "grounded_frame_only" &&
     effectivePolicy.preserveExactBody &&
-    String(fallbackText || "").trim().length > 0;
+    hasFallbackText &&
+    !isStructuredComparisonCanonical;
+
+  const shouldUseGroundedComparisonFormatter =
+    effectivePolicy.mode === "grounded_frame_only" &&
+    hasFallbackText &&
+    isStructuredComparisonCanonical;
 
   let systemPrompt = "";
   let userPrompt = "";
 
-  if (shouldUseGroundedFrameOnlyFormatter) {
+  if (shouldUseGroundedComparisonFormatter) {
+    const comparisonMsgs = buildGroundedComparisonMessages({
+      idiomaDestino,
+      fallbackText,
+      userInput,
+    });
+
+    systemPrompt = comparisonMsgs.system;
+    userPrompt = comparisonMsgs.user;
+  } else if (shouldUseGroundedFrameOnlyFormatter) {
     const groundedMsgs = buildGroundedFrameOnlyMessages({
       idiomaDestino,
       fallbackText,
@@ -793,12 +900,14 @@ export async function answerWithPromptBase(
   out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
   out = capLines(out, maxLines);
 
-  out = preserveCanonicalBodyOrFallback({
-    modelText: out,
-    fallbackText,
-    policy: effectivePolicy,
-    idiomaDestino,
-  });
+  if (!isStructuredComparisonCanonical) {
+    out = preserveCanonicalBodyOrFallback({
+      modelText: out,
+      fallbackText,
+      policy: effectivePolicy,
+      idiomaDestino,
+    });
+  }
 
   console.log("[ANSWER_WITH_PROMPT_BASE][POST_PRESERVE]", {
     tenantId,
