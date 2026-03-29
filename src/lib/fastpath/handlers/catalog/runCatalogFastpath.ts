@@ -11,6 +11,7 @@ import {
 import {
   buildAvailabilityBlockFromInfoClave,
   buildLocationBlockFromInfoClave,
+  buildServicesBlockFromInfoClave,
 } from "./helpers/catalogBusinessInfoBlocks";
 import { buildPriceBlock } from "./helpers/catalogPriceBlock";
 import { buildScheduleBlock } from "./helpers/catalogScheduleBlock";
@@ -232,6 +233,20 @@ export async function runCatalogFastpath(
     ? buildAvailabilityBlockFromInfoClave(input.infoClave)
     : "";
 
+  const shouldIncludeServicesFromInfoClave =
+  intentOutNorm === "info_general";
+
+  const servicesBody = shouldIncludeServicesFromInfoClave
+    ? buildServicesBlockFromInfoClave(input.infoClave)
+    : "";
+
+  const servicesBlock = withSectionTitle(
+    input.idiomaDestino,
+    "Servicios:",
+    "Services:",
+    servicesBody
+  );
+
   const scheduleBlock =
     asksSchedules
       ? buildScheduleBlock({
@@ -277,25 +292,27 @@ export async function runCatalogFastpath(
   if (isBusinessInfoFacetTurn) {
     let canonicalReply = "";
 
-    if (asksLocation && !asksSchedules && !asksAvailability && !asksPrices) {
-      canonicalReply = locationBody.trim();
-    } else if (asksAvailability && !asksSchedules && !asksLocation && !asksPrices) {
-      canonicalReply = availabilityBody.trim();
-    } else {
-      canonicalReply = composeCatalogReplyBlocks({
-        idiomaDestino: input.idiomaDestino,
-        asksPrices,
-        asksSchedules,
-        asksLocation,
-        asksAvailability,
-        scheduleBlock,
-        locationBlock,
-        availabilityBlock,
-        includeClosingLine: true,
-      });
+    const blocks: string[] = [];
+
+    if (servicesBlock.trim()) {
+      blocks.push(servicesBlock.trim());
     }
 
-    if (canonicalReply.trim()) {
+    if (asksSchedules && scheduleBlock.trim()) {
+      blocks.push(scheduleBlock.trim());
+    }
+
+    if (asksLocation && locationBlock.trim()) {
+      blocks.push(locationBlock.trim());
+    }
+
+    if (asksAvailability && availabilityBlock.trim()) {
+      blocks.push(availabilityBlock.trim());
+    }
+
+    canonicalReply = blocks.join("\n\n").trim();
+
+    if (canonicalReply) {
       return {
         handled: true,
         reply: canonicalReply,
@@ -304,7 +321,7 @@ export async function runCatalogFastpath(
           ? "ubicacion"
           : asksSchedules
           ? "horario"
-          : "disponibilidad",
+          : "info_general",
         ctxPatch: {
           last_catalog_at: Date.now(),
           lastResolvedIntent: "business_info_facets",
