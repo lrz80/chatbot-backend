@@ -221,11 +221,11 @@ export async function finalizeReply(
     : [];
 
   const canonicalLastResolvedIntent =
+    lastIntent ??
+    intentFallback ??
     baseCtx.lastResolvedIntent ??
     baseCtx.last_resolved_intent ??
     baseCtx.last_intent ??
-    lastIntent ??
-    intentFallback ??
     null;
 
   const nextCtx = {
