@@ -452,6 +452,17 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
+  function hasPendingCtaAwaitingConfirmation(ctx: any): boolean {
+    return Boolean(
+      ctx &&
+        typeof ctx === "object" &&
+        ctx.pending_cta &&
+        typeof ctx.pending_cta === "object" &&
+        ctx.pending_cta.type &&
+        ctx.pending_cta.awaitsConfirmation === true
+    );
+  }
+
   // ✅ google_calendar_enabled flag (source of truth)
   let bookingEnabled = false;
   try {
@@ -766,6 +777,18 @@ export async function procesarMensajeWhatsApp(
     classification: whatsappCatalogReferenceClassification,
   });
 
+  const hasPendingCta = hasPendingCtaAwaitingConfirmation(convoCtx);
+
+  if (hasPendingCta) {
+    console.log("[WHATSAPP][PENDING_CTA_AWAITING_GATE]", {
+      tenantId: tenant.id,
+      canal,
+      contactoNorm,
+      userInput,
+      pendingCta: (convoCtx as any)?.pending_cta ?? null,
+    });
+  }
+
   // ===============================
   // 🧹 RESET de selección vieja si entra una intención nueva clara
   // SIN usar detectedInterest ni regex de vertical
@@ -854,76 +877,6 @@ export async function procesarMensajeWhatsApp(
       (convoCtx as any).last_entity_at = null;
 
       (convoCtx as any).structuredService = null;
-    }
-  }
-
-  // ===============================
-  // ✅ PENDING CTA ACCEPTANCE
-  // ===============================
-  {
-    const normalizedInput = String(userInput || "").trim().toLowerCase();
-
-    const isAffirmative =
-      /^(si|sí|si por favor|sí por favor|yes|yes please|ok|okay|dale|claro|sure)$/i.test(normalizedInput);
-
-    const pendingCtaType = String((convoCtx as any)?.pending_cta?.type || "").trim();
-
-    if (pendingCtaType === "estimate_offer" && isAffirmative) {
-      
-      (convoCtx as any).pending_cta = null;
-
-      // ✅ limpiar contexto de selección anterior para que no contamine
-      (convoCtx as any).expectingVariant = false;
-      (convoCtx as any).selectedServiceId = null;
-
-      (convoCtx as any).last_variant_id = null;
-      (convoCtx as any).last_variant_name = null;
-      (convoCtx as any).last_variant_url = null;
-      (convoCtx as any).last_variant_at = null;
-
-      (convoCtx as any).last_price_option_label = null;
-      (convoCtx as any).last_price_option_at = null;
-
-      (convoCtx as any).last_bot_action = "estimate_cta_accepted";
-      (convoCtx as any).last_bot_action_at = Date.now();
-
-      const prevEstimate = (convoCtx as any)?.estimateFlow || {};
-      (convoCtx as any).estimateFlow = {
-        ...prevEstimate,
-        active: true,
-        step: prevEstimate.step && prevEstimate.step !== "idle"
-          ? prevEstimate.step
-          : "start",
-      };
-    }
-
-    if (pendingCtaType === "booking_offer" && isAffirmative) {
-      
-      (convoCtx as any).pending_cta = null;
-
-      // ✅ limpiar contexto de selección anterior para que no contamine
-      (convoCtx as any).expectingVariant = false;
-      (convoCtx as any).selectedServiceId = null;
-
-      (convoCtx as any).last_variant_id = null;
-      (convoCtx as any).last_variant_name = null;
-      (convoCtx as any).last_variant_url = null;
-      (convoCtx as any).last_variant_at = null;
-
-      (convoCtx as any).last_price_option_label = null;
-      (convoCtx as any).last_price_option_at = null;
-
-      (convoCtx as any).last_bot_action = "booking_cta_accepted";
-      (convoCtx as any).last_bot_action_at = Date.now();
-
-      const prevBooking = (convoCtx as any)?.booking || {};
-      (convoCtx as any).booking = {
-        ...prevBooking,
-        active: true,
-        step: prevBooking.step && prevBooking.step !== "idle"
-          ? prevBooking.step
-          : "start",
-      };
     }
   }
 
@@ -1055,7 +1008,7 @@ export async function procesarMensajeWhatsApp(
   // ⚡ FASTPATH (módulo híbrido reutilizable)
   //    🔒 NO corre si hay booking activo
   // ===============================
-  if (!inBooking0) {
+  if (!inBooking0 && !hasPendingCta) {
     const convoCtxForFastpath = {
       ...(convoCtx || {}),
       ...((signals as any)?.convoCtx || {}),
@@ -1223,7 +1176,7 @@ export async function procesarMensajeWhatsApp(
   // ===============================
   // ✅ FALLBACK ÚNICO (solo si SM no respondió)
   // ===============================
-  if (!replied) {
+  if (!replied && !hasPendingCta) {
     const catalogReferenceKind =
       whatsappCatalogReferenceClassification?.kind ?? "none";
 

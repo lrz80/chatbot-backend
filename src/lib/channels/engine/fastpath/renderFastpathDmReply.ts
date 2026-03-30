@@ -227,9 +227,17 @@ export async function renderFastpathDmReply(
   });
 
   if (composed.pendingCta) {
-    ctxPatch.pending_cta = {
+    const pendingCta = {
       ...composed.pendingCta,
       createdAt: new Date().toISOString(),
+    };
+
+    ctxPatch.pending_cta = pendingCta;
+
+    ctxPatch.awaiting_yes_no_action = {
+      kind: "pending_cta",
+      ctaType: pendingCta.type ?? null,
+      source: String(fp?.source || ""),
     };
   }
 
