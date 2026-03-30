@@ -97,20 +97,18 @@ function canPromoteResolvedHitAsExplicitEntity(params: {
   allCandidates: any[];
   previewClassification: any;
   convoCtx: any;
-  previewPolicy: {
-    shouldAllowExplicitEntityPromotion: boolean;
-  };
+  hasStructuredComparison: boolean;
 }): boolean {
   const {
     matchedCandidate,
     allCandidates,
     previewClassification,
     convoCtx,
-    previewPolicy,
+    hasStructuredComparison,
   } = params;
 
   if (!matchedCandidate) return false;
-  if (!previewPolicy.shouldAllowExplicitEntityPromotion) return false;
+  if (hasStructuredComparison) return false;
 
   const score = toFiniteNumber(matchedCandidate?.score);
   const exactNameHits = toFiniteNumber(matchedCandidate?.exactNameHits);
@@ -133,9 +131,11 @@ function canPromoteResolvedHitAsExplicitEntity(params: {
     Boolean(signals?.hasReferentialDependency) ||
     Boolean(signals?.hasConversationDependency);
 
+  // Evidencia grounded fuerte
   if (exactVariantHits >= 1) return true;
   if (exactNameHits >= 2) return true;
-  if (dominantOverlapCount >= 2 && score >= 0.82) return true;
+  if (exactNameHits >= 1 && score >= 0.75) return true;
+  if (dominantOverlapCount >= 1 && score >= 0.78) return true;
 
   if (
     hasConversationDependency &&
@@ -508,7 +508,7 @@ export async function getFastpathCatalogSignals(
         allCandidates: candidatesForMatch,
         previewClassification,
         convoCtx,
-        previewPolicy,
+        hasStructuredComparison: structuredComparison?.hasComparison === true,
       });
 
       if (canPromoteExplicitEntity) {
