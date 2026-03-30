@@ -130,49 +130,16 @@ function buildComparisonCanonicalReply(params: {
 
   const sharedPoints = buildSharedPointSet(rows);
 
-  const normalizedRows = rows.map((row) => {
-    const min = toNumber(row.min_price);
-    const max = toNumber(row.max_price);
-
-    return {
-      id: toText(row.id),
-      name: toText(row.name),
-      min,
-      max,
-      priceText: formatPriceRange({ min, max, idiomaDestino }),
-      uniquePoints: getUniquePointsForRow(row, sharedPoints),
-    };
-  });
-
-  const rowsWithMin = normalizedRows.filter(
-    (row): row is typeof row & { min: number } => row.min != null
-  );
-
-  let cheapestId: string | null = null;
-  let mostExpensiveId: string | null = null;
-  let priceGapText: string | null = null;
-
-  if (rowsWithMin.length >= 2) {
-    const cheapest = [...rowsWithMin].sort((a, b) => a.min - b.min)[0];
-    const mostExpensive = [...rowsWithMin].sort((a, b) => b.min - a.min)[0];
-
-    if (cheapest.id !== mostExpensive.id && mostExpensive.min > cheapest.min) {
-      cheapestId = cheapest.id;
-      mostExpensiveId = mostExpensive.id;
-      priceGapText = `$${(mostExpensive.min - cheapest.min).toFixed(2)}`;
-    }
-  }
+  const normalizedRows = rows.map((row) => ({
+    id: toText(row.id),
+    name: toText(row.name),
+    uniquePoints: getUniquePointsForRow(row, sharedPoints),
+  }));
 
   const lines: string[] = [];
 
   lines.push("COMPARISON_MODE: catalog_compare");
   lines.push(`ITEM_COUNT: ${normalizedRows.length}`);
-
-  if (mostExpensiveId && cheapestId && priceGapText) {
-    lines.push(`PRICE_GAP: ${priceGapText}`);
-    lines.push(`PRICE_LOWEST_ID: ${cheapestId}`);
-    lines.push(`PRICE_HIGHEST_ID: ${mostExpensiveId}`);
-  }
 
   if (sharedPoints.size > 0) {
     const sharedOriginal = splitDescriptionIntoPoints(
@@ -197,7 +164,6 @@ function buildComparisonCanonicalReply(params: {
   for (const row of normalizedRows) {
     lines.push(`ITEM: ${row.name}`);
     lines.push(`ITEM_ID: ${row.id}`);
-    lines.push(`PRICE: ${row.priceText}`);
 
     for (const point of row.uniquePoints) {
       lines.push(`DIFF: ${point}`);
