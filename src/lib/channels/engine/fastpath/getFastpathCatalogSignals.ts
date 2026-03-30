@@ -471,7 +471,19 @@ export async function getFastpathCatalogSignals(
 
     const resolvedHit = entityCandidateResultLoose?.hit ?? null;
 
-    if (resolvedHit?.id) {
+    // 1) Primero intenta construir comparación con los candidatos loose.
+    // Así evitas que una sola entidad secuestre el turno antes de comparar.
+    structuredComparison = buildStructuredCatalogComparison({
+      previewPolicy: {
+        ...previewPolicy,
+        shouldBuildComparison: true,
+      },
+      entityCandidateResult: entityCandidateResultLoose,
+      explicitEntityCandidateForClassification: null,
+    });
+
+    // 2) Solo si NO hubo comparación, permite promover una sola entidad.
+    if (!structuredComparison?.hasComparison && resolvedHit?.id) {
       const rawCandidates = Array.isArray(entityCandidateResultLoose?.candidates)
         ? entityCandidateResultLoose.candidates
         : [];
@@ -507,12 +519,6 @@ export async function getFastpathCatalogSignals(
         };
       }
     }
-
-    structuredComparison = buildStructuredCatalogComparison({
-      previewPolicy,
-      entityCandidateResult: entityCandidateResultLoose,
-      explicitEntityCandidateForClassification,
-    });
 
     if (structuredComparison?.hasComparison) {
       explicitEntityCandidateForClassification = null;
