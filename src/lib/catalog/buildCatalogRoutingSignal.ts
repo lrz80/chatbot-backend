@@ -167,6 +167,20 @@ function mapIntentOutToRouteIntent(intentOut?: string | null): CatalogRouteInten
   return "unknown";
 }
 
+function hasExplicitTargetThisTurn(
+  classification?: CatalogReferenceClassification | null
+): boolean {
+  return Boolean(
+    String(classification?.targetServiceId || "").trim() ||
+      String(classification?.targetVariantId || "").trim() ||
+      String(classification?.targetFamilyKey || "").trim() ||
+      classification?.kind === "entity_specific" ||
+      classification?.kind === "variant_specific" ||
+      classification?.kind === "catalog_family" ||
+      classification?.kind === "referential_followup"
+  );
+}
+
 function resolveRouteIntentFromSignals(args: {
   intentOut?: string | null;
   classification?: CatalogReferenceClassification | null;
@@ -273,6 +287,18 @@ export function buildCatalogRoutingSignal({
   const disambiguationType = catalogReferenceClassification?.disambiguationType || "none";
   const anchorShift = catalogReferenceClassification?.anchorShift || "none";
 
+  const explicitTargetThisTurn = hasExplicitTargetThisTurn(
+    catalogReferenceClassification
+  );
+
+  const shouldDropStaleTargets =
+    !referenceKind || referenceKind === "none"
+      ? (
+          !allowsDbCatalogPath &&
+          !explicitTargetThisTurn
+        )
+      : false;
+
   if (referenceKind !== "none") {
     const resolvedRouteIntent = resolveRouteIntentFromSignals({
       intentOut: normalizedIntentOut,
@@ -366,14 +392,14 @@ export function buildCatalogRoutingSignal({
     source: "none",
     allowsDbCatalogPath,
     hasFreshCatalogContext,
-    previousCatalogPlans,
+    previousCatalogPlans: shouldDropStaleTargets ? [] : previousCatalogPlans,
 
-    targetServiceId,
-    targetServiceName,
-    targetVariantId,
-    targetVariantName,
-    targetFamilyKey,
-    targetFamilyName,
+    targetServiceId: shouldDropStaleTargets ? null : targetServiceId,
+    targetServiceName: shouldDropStaleTargets ? null : targetServiceName,
+    targetVariantId: shouldDropStaleTargets ? null : targetVariantId,
+    targetVariantName: shouldDropStaleTargets ? null : targetVariantName,
+    targetFamilyKey: shouldDropStaleTargets ? null : targetFamilyKey,
+    targetFamilyName: shouldDropStaleTargets ? null : targetFamilyName,
     targetLevel: "none",
     disambiguationType: "none",
     anchorShift: "none",
