@@ -164,6 +164,18 @@ export async function runCatalogFastpath(
     .trim()
     .toLowerCase();
 
+  const targetServiceId = String(
+    catalogRoutingSignal.targetServiceId || ""
+  ).trim();
+
+  const targetVariantId = String(
+    catalogRoutingSignal.targetVariantId || ""
+  ).trim();
+
+  const targetFamilyKey = String(
+    catalogRoutingSignal.targetFamilyKey || ""
+  ).trim();
+
   const isStructuredComparisonTurn =
     routeIntent === "catalog_compare" ||
     classificationIntent === "compare" ||
@@ -171,12 +183,31 @@ export async function runCatalogFastpath(
     routingTargetLevel === "comparison" ||
     routingTargetLevel === "multi_service";
 
+  const hasSpecificStructuredCatalogTarget =
+    !isStructuredComparisonTurn &&
+    (
+      Boolean(targetServiceId) ||
+      Boolean(targetVariantId) ||
+      referenceKind === "entity_specific" ||
+      referenceKind === "variant_specific"
+    );
+
+  const hasFamilyStructuredCatalogTarget =
+    !isStructuredComparisonTurn &&
+    (
+      Boolean(targetFamilyKey) ||
+      referenceKind === "catalog_family"
+    );
+
+  const hasAnyStructuredCatalogTarget =
+    hasSpecificStructuredCatalogTarget || hasFamilyStructuredCatalogTarget;
+
   const shouldTrySingleServiceCatalog =
     !isStructuredComparisonTurn &&
     (
       input.hasStructuredTarget ||
-      Boolean(catalogRoutingSignal.targetServiceId) ||
-      Boolean(catalogRoutingSignal.targetVariantId) ||
+      Boolean(targetServiceId) ||
+      Boolean(targetVariantId) ||
       referenceKind === "entity_specific" ||
       referenceKind === "variant_specific" ||
       referenceKind === "referential_followup" ||
@@ -226,15 +257,15 @@ export async function runCatalogFastpath(
   }
 
   const locationBody = asksLocation
-  ? buildLocationBlockFromInfoClave(input.infoClave)
-  : "";
+    ? buildLocationBlockFromInfoClave(input.infoClave)
+    : "";
 
   const availabilityBody = asksAvailability
     ? buildAvailabilityBlockFromInfoClave(input.infoClave)
     : "";
 
   const shouldIncludeServicesFromInfoClave =
-  intentOutNorm === "info_general";
+    intentOutNorm === "info_general";
 
   const servicesBody = shouldIncludeServicesFromInfoClave
     ? buildServicesBlockFromInfoClave(input.infoClave)
@@ -387,9 +418,12 @@ export async function runCatalogFastpath(
     asksPrices || asksSchedules || asksLocation || asksAvailability;
 
   const allowGenericCatalogDbFallback =
-    hasExplicitCatalogRouting ||
-    hasExplicitCatalogIntent ||
-    hasFacetDrivenCatalogIntent;
+    !hasAnyStructuredCatalogTarget &&
+    (
+      hasExplicitCatalogRouting ||
+      hasExplicitCatalogIntent ||
+      hasFacetDrivenCatalogIntent
+    );
 
   if (isCatalogPriceLikeTurn) {
     console.log("🚫 BLOCK LLM PRICING — forcing DB path");
@@ -428,6 +462,8 @@ export async function runCatalogFastpath(
     input.tenantId
   );
 
+  void catalogText;
+
   const hasMultiAccessPlan = false;
 
   const nowForMeta = Date.now();
@@ -456,6 +492,8 @@ export async function runCatalogFastpath(
     `ASKS_LOCATION: ${asksLocation ? "yes" : "no"}\n` +
     `ASKS_AVAILABILITY: ${asksAvailability ? "yes" : "no"}`;
 
+  void metaBlock;
+
   const shouldAttachBusinessInfo =
     Boolean(input.infoClave) &&
     (
@@ -475,24 +513,10 @@ export async function runCatalogFastpath(
       : `\n\nINFO_GENERAL_DEL_NEGOCIO (horarios, dirección, disponibilidad, etc.):\n${input.infoClave}`
     : "";
 
+  void infoGeneralBlock;
+
   // PRICE OR PLAN
   if (!asksSchedules && !asksIncludesOnly && questionType === "price_or_plan") {
-    if (!allowGenericCatalogDbFallback) {
-      console.log("[CATALOG_DB][BLOCKED_GENERIC_FALLBACK]", {
-        userInput: input.userInput,
-        intentOut: input.intentOut,
-        routeIntent,
-        referenceKind,
-        shouldRouteCatalog: catalogRoutingSignal.shouldRouteCatalog,
-        hasStructuredTarget: input.hasStructuredTarget,
-        facets: input.facets || {},
-      });
-
-      return {
-        handled: false,
-      };
-    }
-
     const { rows } = await input.pool.query<{
       service_id: string;
       service_name: string;
@@ -565,6 +589,17 @@ export async function runCatalogFastpath(
       if (comparisonResult.handled) {
         return comparisonResult;
       }
+
+      console.log("[CATALOG][BLOCK_GENERIC_FALLBACK_AFTER_COMPARISON_MISS]", {
+        userInput: input.userInput,
+        routeIntent,
+        referenceKind,
+        targetLevel: routingTargetLevel,
+      });
+
+      return {
+        handled: false,
+      };
     }
 
     if (shouldTrySingleServiceCatalog) {
@@ -584,6 +619,41 @@ export async function runCatalogFastpath(
       if (singleServiceCatalogResult.handled) {
         return singleServiceCatalogResult;
       }
+
+      if (hasAnyStructuredCatalogTarget) {
+        console.log("[CATALOG][BLOCK_GENERIC_FALLBACK_AFTER_STRUCTURED_TARGET_MISS]", {
+          userInput: input.userInput,
+          routeIntent,
+          referenceKind,
+          targetServiceId,
+          targetVariantId,
+          targetFamilyKey,
+          targetLevel: routingTargetLevel,
+        });
+
+        return {
+          handled: false,
+        };
+      }
+    }
+
+    if (!allowGenericCatalogDbFallback) {
+      console.log("[CATALOG_DB][BLOCKED_GENERIC_FALLBACK]", {
+        userInput: input.userInput,
+        intentOut: input.intentOut,
+        routeIntent,
+        referenceKind,
+        shouldRouteCatalog: catalogRoutingSignal.shouldRouteCatalog,
+        hasStructuredTarget: input.hasStructuredTarget,
+        facets: input.facets || {},
+        targetServiceId,
+        targetVariantId,
+        targetFamilyKey,
+      });
+
+      return {
+        handled: false,
+      };
     }
 
     const rowsPrioritized = [...rows].sort((a, b) => {
@@ -686,6 +756,9 @@ export async function runCatalogFastpath(
         shouldRouteCatalog: catalogRoutingSignal.shouldRouteCatalog,
         hasStructuredTarget: input.hasStructuredTarget,
         facets: input.facets || {},
+        targetServiceId,
+        targetVariantId,
+        targetFamilyKey,
       });
 
       return {
