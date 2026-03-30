@@ -115,30 +115,17 @@ export async function handleFastpathHybridTurn(
 
   const pendingCta = getPendingCtaFromCtx(convoCtx);
 
-  if (hasExplicitPendingCtaAwaitingConfirmation(convoCtx)) {
-    if (process.env.DEBUG_FASTPATH === "true") {
-      console.log("[FASTPATH_HYBRID][PENDING_CTA_STATE_DETECTED]", {
-        tenantId,
-        canal,
-        contactoNorm,
-        userInput,
-        pendingCta,
-      });
-    }
-
-    return {
-      handled: false,
-      intent: detectedIntent || intentFallback || null,
-      ctxPatch: {
-        pendingCta: pendingCta
-          ? {
-              type: pendingCta.type || null,
-              awaitsConfirmation: true,
-            }
-          : null,
-        pendingCtaNeedsResolution: true,
-      },
-    };
+  if (
+    hasExplicitPendingCtaAwaitingConfirmation(convoCtx) &&
+    process.env.DEBUG_FASTPATH === "true"
+  ) {
+    console.log("[FASTPATH_HYBRID][PENDING_CTA_STATE_DETECTED]", {
+      tenantId,
+      canal,
+      contactoNorm,
+      userInput,
+      pendingCta,
+    });
   }
 
   const currentIntent = detectedIntent || intentFallback || null;
@@ -338,7 +325,16 @@ export async function handleFastpathHybridTurn(
     };
   }
 
-  let ctxPatch: any = fp.ctxPatch ? { ...fp.ctxPatch } : {};
+  let ctxPatch: any = {
+    ...(fp.ctxPatch ? { ...fp.ctxPatch } : {}),
+  };
+
+  if (pendingCta?.type) {
+    ctxPatch.pendingCta = {
+      type: pendingCta.type,
+      awaitsConfirmation: pendingCta.awaitsConfirmation === true,
+    };
+  }
 
   const structuredService = getStructuredServiceForFastpath({
     fp,
