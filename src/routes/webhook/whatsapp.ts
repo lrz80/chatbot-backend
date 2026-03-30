@@ -949,7 +949,7 @@ export async function procesarMensajeWhatsApp(
   // ⚡ FASTPATH (módulo híbrido reutilizable)
   //    🔒 NO corre si hay booking activo
   // ===============================
-  if (!inBooking0 && !hasPendingCta) {
+  if (!inBooking0) {
     const convoCtxForFastpath = {
       ...(convoCtx || {}),
       ...((signals as any)?.convoCtx || {}),
@@ -987,6 +987,21 @@ export async function procesarMensajeWhatsApp(
     }
 
     if (fpRes.handled && fpRes.reply) {
+      if (hasPendingCta) {
+        const stalePendingCtaPatch = {
+          pending_cta: null,
+          awaiting_yes_no_action: null,
+          awaiting_yesno: false,
+          yesno_resolution: null,
+        };
+
+        transition({ patchCtx: stalePendingCtaPatch });
+        finalCtxPatch = {
+          ...finalCtxPatch,
+          ...stalePendingCtaPatch,
+        };
+      }
+
       if (fpRes.intent) {
         INTENCION_FINAL_CANONICA = fpRes.intent;
         lastIntent = fpRes.intent;
