@@ -184,11 +184,12 @@ function buildSignals(params: {
   const hasFamilyCandidate = Boolean(explicitFamilyCandidate?.familyKey);
 
   const hasCatalogScope =
-    !hasSpecificEntityCandidate &&
-    !hasVariantCandidate &&
-    !hasFamilyCandidate &&
     !hasReferentialDependency &&
-    !hasConversationDependency;
+    !hasConversationDependency &&
+    (hasSpecificEntityCandidate ||
+      hasVariantCandidate ||
+      hasFamilyCandidate ||
+      tokens.length > 0);
 
   const hasDisambiguationRisk =
     context.lastPresentedEntityIds.length > 1 ||
@@ -325,64 +326,6 @@ function inferAnchorShift(params: {
   if (signals.hasCatalogScope) return "browse_catalog";
 
   return "none";
-}
-
-function isEntityCandidateAnchoredToContext(params: {
-  candidate: CatalogReferenceClassificationInput["explicitEntityCandidate"];
-  context: CatalogReferenceContext;
-}): boolean {
-  const candidateId = String(params.candidate?.id || "").trim();
-  if (!candidateId) return false;
-
-  if (candidateId === String(params.context.lastEntityId || "").trim()) {
-    return true;
-  }
-
-  if (
-    Array.isArray(params.context.lastPresentedEntityIds) &&
-    params.context.lastPresentedEntityIds.some(
-      (id) => String(id || "").trim() === candidateId
-    )
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-function canPromoteExplicitEntityCandidate(params: {
-  candidate: CatalogReferenceClassificationInput["explicitEntityCandidate"];
-  context: CatalogReferenceContext;
-  resolvedIntent: CatalogReferenceIntent;
-  tokenCount: number;
-  hasAnyContext: boolean;
-}): boolean {
-  const candidate = params.candidate;
-  if (!candidate?.id) return false;
-
-  const score = Number(candidate.score || 0);
-  const anchoredToContext = isEntityCandidateAnchoredToContext({
-    candidate,
-    context: params.context,
-  });
-
-  if (anchoredToContext) {
-    return true;
-  }
-
-  if (!params.hasAnyContext) {
-    if (params.resolvedIntent === "unknown" && params.tokenCount > 6) {
-      return false;
-    }
-
-    if (params.resolvedIntent === "schedule" && score < 0.9) {
-      return false;
-    }
-
-    return score >= 0.9;
-  }
-
-  return score >= 0.82;
 }
 
 function hasAnyToken(tokens: string[], allowed: Set<string>): boolean {
@@ -601,6 +544,11 @@ export function classifyCatalogReferenceTurn(
       Math.min(0.97, Number(explicitVariantCandidate.score || 0))
     );
 
+    result.signals.hasCatalogScope = true;
+    result.signals.hasSpecificEntityCandidate = false;
+    result.signals.hasVariantCandidate = true;
+    result.signals.hasFamilyCandidate = false;
+
     result.shouldUseContextFirst = false;
     result.shouldResolveVariant = true;
 
@@ -670,46 +618,50 @@ export function classifyCatalogReferenceTurn(
 
   // =========================================================
   // 2) EXPLICIT ENTITY CANDIDATE
+  // FUENTE DE VERDAD ESTRUCTURADA: si llega aquí, se respeta.
   // =========================================================
   if (explicitEntityCandidate?.id) {
-    const canPromoteEntity = canPromoteExplicitEntityCandidate({
-      candidate: explicitEntityCandidate,
-      context,
-      resolvedIntent: result.intent,
-      tokenCount,
-      hasAnyContext,
-    });
-
     notes.push("explicit_entity_candidate_from_catalog_matcher");
     notes.push(
       `explicit_entity_score:${Number(explicitEntityCandidate.score || 0)}`
     );
-    notes.push(`explicit_entity_promotable:${canPromoteEntity ? "yes" : "no"}`);
+    notes.push("explicit_entity_candidate_accepted_as_authoritative_signal");
 
-    if (canPromoteEntity) {
-      result.kind = "entity_specific";
-      result.confidence = Math.max(
-        0.8,
-        Math.min(0.96, Number(explicitEntityCandidate.score || 0))
-      );
+    result.kind = "entity_specific";
+    result.confidence = Math.max(
+      0.8,
+      Math.min(0.96, Number(explicitEntityCandidate.score || 0))
+    );
 
-      result.signals.hasSpecificEntityCandidate = true;
+    result.signals.hasCatalogScope = true;
+    result.signals.hasSpecificEntityCandidate = true;
+    result.signals.hasVariantCandidate = false;
+    result.signals.hasFamilyCandidate = false;
 
-      result.shouldUseContextFirst = false;
-      result.shouldResolveEntity = true;
+    result.shouldUseContextFirst = false;
+    result.shouldResolvePluralCatalog = false;
+    result.shouldResolveFamily = false;
+    result.shouldResolveEntity = true;
+    result.shouldResolveVariant = false;
+    result.shouldAskDisambiguation = false;
 
-      result.targetLevel = "service";
+    result.targetLevel = "service";
+    result.targetServiceId =
+      String(explicitEntityCandidate.id || "").trim() || null;
+    result.targetServiceName =
+      String(explicitEntityCandidate.name || "").trim() || null;
 
-      result.targetServiceId =
-        String(explicitEntityCandidate.id || "").trim() || null;
-      result.targetServiceName =
-        String(explicitEntityCandidate.name || "").trim() || null;
+    result.targetVariantId = null;
+    result.targetVariantName = null;
+    result.targetFamilyKey = null;
+    result.targetFamilyName = null;
 
-      result.debug.notes = notes;
-      return result;
+    if (result.intent === "unknown") {
+      result.intent = "price_or_plan";
     }
 
-    notes.push("explicit_entity_candidate_rejected_as_non_resolutive");
+    result.debug.notes = notes;
+    return result;
   }
 
   // =========================================================
@@ -726,6 +678,11 @@ export function classifyCatalogReferenceTurn(
       0.76,
       Math.min(0.94, Number(explicitFamilyCandidate.score || 0))
     );
+
+    result.signals.hasCatalogScope = true;
+    result.signals.hasSpecificEntityCandidate = false;
+    result.signals.hasVariantCandidate = false;
+    result.signals.hasFamilyCandidate = true;
 
     result.shouldUseContextFirst = false;
     result.shouldResolveFamily = true;
