@@ -325,7 +325,7 @@ export async function handleVariantSecondTurn(
       handled: true,
       reply: retryMsg,
       source: "service_list_db",
-      intent: input.intentOut || "info_servicio",
+      intent: resolvedVariantTurnIntent,
     };
   }
 

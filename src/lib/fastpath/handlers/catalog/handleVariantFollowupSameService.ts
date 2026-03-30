@@ -21,6 +21,29 @@ function splitLines(text: string): string[] {
     .filter((line: string) => line.length > 0);
 }
 
+function resolveVariantFollowupIntent(params: {
+  intentOut?: string | null;
+  catalogRouteIntent?: string | null;
+}): string {
+  const normalizedIntentOut = String(params.intentOut || "")
+    .trim()
+    .toLowerCase();
+
+  const normalizedRouteIntent = String(params.catalogRouteIntent || "")
+    .trim()
+    .toLowerCase();
+
+  if (normalizedIntentOut && normalizedIntentOut !== "duda") {
+    return normalizedIntentOut;
+  }
+
+  if (normalizedRouteIntent && normalizedRouteIntent !== "unknown") {
+    return normalizedRouteIntent;
+  }
+
+  return "info_servicio";
+}
+
 export async function handleVariantFollowupSameService(
   input: HandleVariantFollowupSameServiceInput
 ): Promise<FastpathResult> {
@@ -32,10 +55,7 @@ export async function handleVariantFollowupSameService(
     return { handled: false };
   }
 
-  const {
-    targetVariantId,
-    targetServiceId,
-  } = getCatalogStructuredSignals({
+  const { targetVariantId, targetServiceId } = getCatalogStructuredSignals({
     catalogReferenceClassification: input.catalogReferenceClassification,
     convoCtx: input.convoCtx,
     catalogRouteIntent: input.catalogRouteIntent,
@@ -114,14 +134,11 @@ export async function handleVariantFollowupSameService(
     chosen.description || service?.description || ""
   ).trim();
 
-  const link: string | null =
-    chosen.variant_url ? String(chosen.variant_url).trim()
-    : service?.service_url ? String(service.service_url).trim()
+  const link: string | null = chosen.variant_url
+    ? String(chosen.variant_url).trim()
+    : service?.service_url
+    ? String(service.service_url).trim()
     : null;
-
-  const bullets = splitLines(descSource)
-    .map((line: string) => `• ${line}`)
-    .join("\n");
 
   const baseName = String(service?.name || "").trim();
   const variantName = String(chosen.variant_name || "").trim();
@@ -131,17 +148,29 @@ export async function handleVariantFollowupSameService(
       ? `${baseName} — ${variantName}`
       : baseName || variantName || "";
 
-  let reply =
-    input.idiomaDestino === "en"
-      ? `Perfect 😊\n\n${title ? `*${title}*` : ""}${bullets ? ` includes:\n\n${bullets}` : ""}`
-      : `Perfecto 😊\n\n${title ? `*${title}*` : ""}${bullets ? ` incluye:\n\n${bullets}` : ""}`;
+  const bulletLines = splitLines(descSource).map((line) => `• ${line}`);
+  const bullets = bulletLines.join("\n");
+
+  const canonicalParts: string[] = [];
+
+  if (title) {
+    canonicalParts.push(title);
+  }
+
+  if (bullets) {
+    canonicalParts.push(bullets);
+  }
 
   if (link) {
-    reply +=
-      input.idiomaDestino === "en"
-        ? `\n\nHere you can see more details:\n${link}`
-        : `\n\nAquí puedes ver más detalles:\n${link}`;
+    canonicalParts.push(link);
   }
+
+  const finalReply = canonicalParts.join("\n\n").trim();
+
+  const resolvedFollowupIntent = resolveVariantFollowupIntent({
+    intentOut: input.intentOut,
+    catalogRouteIntent: input.catalogRouteIntent,
+  });
 
   console.log("[FASTPATH-VARIANT-FOLLOWUP] direct variant switch", {
     userInput: input.userInput,
@@ -150,14 +179,20 @@ export async function handleVariantFollowupSameService(
     variantName,
     link,
     targetVariantId,
+    resolvedFollowupIntent,
   });
 
   return {
     handled: true,
-    reply,
-    source: "service_list_db",
-    intent: input.intentOut || "info_servicio",
+    reply: finalReply,
+    source: "catalog_db",
+    intent: resolvedFollowupIntent,
     ctxPatch: {
+      lastResolvedIntent: resolvedFollowupIntent,
+
+      expectingVariant: false,
+      expectedVariantIntent: null,
+
       last_service_id: lastServiceId,
       last_service_name: baseName || null,
       last_service_at: Date.now(),
