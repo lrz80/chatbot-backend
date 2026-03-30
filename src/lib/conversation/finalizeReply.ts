@@ -59,6 +59,7 @@ type FinalizeInput = {
   reply: string | null;
   replySource: string | null;
   lastIntent: string | null;
+  ctxPatch?: any;
 
   tenantId: string;
   canal: Canal;
@@ -90,6 +91,7 @@ export async function finalizeReply(
     reply,
     replySource,
     lastIntent,
+    ctxPatch,
     tenantId,
     canal,
     messageId,
@@ -141,7 +143,14 @@ export async function finalizeReply(
     // no romper el turno
   }
 
-  const baseCtx = convoCtx && typeof convoCtx === "object" ? convoCtx : {};
+  const rawBaseCtx = convoCtx && typeof convoCtx === "object" ? convoCtx : {};
+  const patchCtx = ctxPatch && typeof ctxPatch === "object" ? ctxPatch : {};
+
+  // IMPORTANTE: el patch del turno actual debe ganar sobre el contexto viejo
+  const baseCtx = {
+    ...rawBaseCtx,
+    ...patchCtx,
+  };
 
   const canonicalLastEntityId =
     baseCtx.lastEntityId ??

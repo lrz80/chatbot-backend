@@ -140,6 +140,7 @@ export async function procesarMensajeWhatsApp(
   let replySource: string | null = null;
   let lastIntent: string | null = null;
   let INTENCION_FINAL_CANONICA: string | null = null;
+  let finalCtxPatch: any = {};
 
   // 🎯 Intent detection (evento)
   let detectedIntent: string | null = null;
@@ -496,7 +497,7 @@ export async function procesarMensajeWhatsApp(
         reply,
         replySource,
         lastIntent,
-
+        ctxPatch: finalCtxPatch,
         tenantId: tenant.id,
         canal,
         messageId,
@@ -1088,6 +1089,7 @@ export async function procesarMensajeWhatsApp(
     // aplicar patch de contexto devuelto por el helper
     if (fpRes.ctxPatch) {
       transition({ patchCtx: fpRes.ctxPatch });
+      finalCtxPatch = { ...finalCtxPatch, ...fpRes.ctxPatch };
     }
 
     if (fpRes.handled && fpRes.reply) {
@@ -1850,16 +1852,20 @@ export async function procesarMensajeWhatsApp(
           infoClave: String(tenant?.info_clave || ""),
         });
 
+        const overviewCtxPatch = {
+          last_catalog_source: overview.source,
+          last_catalog_scope: "overview",
+          last_catalog_at: Date.now(),
+          lastPresentedEntityIds: overview.presentedEntityIds,
+          lastPresentedFamilyKeys: overview.presentedFamilyKeys,
+          lastResolvedIntent: "info_general",
+        };
+
         transition({
-          patchCtx: {
-            last_catalog_source: overview.source,
-            last_catalog_scope: "overview",
-            last_catalog_at: Date.now(),
-            lastPresentedEntityIds: overview.presentedEntityIds,
-            lastPresentedFamilyKeys: overview.presentedFamilyKeys,
-            lastResolvedIntent: "info_general",
-          },
+          patchCtx: overviewCtxPatch,
         });
+
+        finalCtxPatch = { ...finalCtxPatch, ...overviewCtxPatch };
 
         console.log("[BUSINESS_OVERVIEW][CTX_PATCH]", {
           tenantId: tenant.id,
