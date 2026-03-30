@@ -644,6 +644,102 @@ function isStructuredCatalogComparisonCanonical(text: string): boolean {
   );
 }
 
+function isScheduleCanonical(text: string): boolean {
+  const value = String(text || "").trim();
+  if (!value) return false;
+
+  const lines = value
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) return false;
+
+  const firstLine = String(lines[0] || "").toLowerCase();
+  const hasScheduleHeader =
+    firstLine === "horarios:" || firstLine === "schedules:";
+
+  const hasBulletLikeScheduleLines = lines
+    .slice(1)
+    .some((line) => /^[-•*]/.test(line));
+
+  return hasScheduleHeader && hasBulletLikeScheduleLines;
+}
+
+function buildGroundedScheduleMessages(params: {
+  idiomaDestino: "es" | "en";
+  fallbackText: string;
+  userInput: string;
+}): { system: string; user: string } {
+  const { idiomaDestino, fallbackText, userInput } = params;
+
+  const system =
+    idiomaDestino === "es"
+      ? [
+          "Responde solo en español.",
+          "Tu objetivo es escribir la respuesta final para un canal DM de ventas.",
+          "La disponibilidad y horarios ya fueron resueltos por el backend y vienen en un bloque canónico grounded.",
+          "Debes usar SOLO esa información.",
+          "No inventes horarios, días, ubicaciones, disponibilidad ni nombres.",
+          "No copies el bloque literal como única respuesta si puedes responder de forma más útil y comercial.",
+          "Puedes resumir solo la parte relevante para la pregunta del cliente, siempre usando únicamente los datos del bloque canónico.",
+          "Si el cliente pregunta por una hora o disponibilidad concreta, responde primero esa pregunta de forma directa.",
+          "Después puedes agregar una línea breve que ayude a avanzar la conversación de forma natural.",
+          "No suenes robótico ni frío.",
+          "No recomiendes un plan específico a menos que el cliente lo haya pedido explícitamente.",
+          "Responde en JSON estricto.",
+          'Usa exactamente este formato: {"text":"...", "pendingCta":null}',
+          'Si incluyes un CTA de confirmación para reserva, usa: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
+          'Si incluyes un CTA de confirmación para estimado, usa: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+          "No uses markdown ni bloques de código.",
+        ].join("\n\n")
+      : [
+          "Reply only in English.",
+          "Your goal is to write the final reply for a sales DM channel.",
+          "Availability and schedules have already been resolved by the backend and come in a grounded canonical block.",
+          "You must use ONLY that information.",
+          "Do not invent schedules, days, locations, availability, or names.",
+          "Do not copy the block literally as the only answer if you can answer more helpfully.",
+          "You may summarize only the schedule lines relevant to the user's question, using only the canonical block.",
+          "If the customer asks about a specific time or availability, answer that directly first.",
+          "Then you may add one short next-step line to move the conversation forward naturally.",
+          "Do not sound robotic or cold.",
+          "Do not recommend a specific plan unless the customer explicitly asked for one.",
+          "Return strict JSON.",
+          'Use exactly this format: {"text":"...", "pendingCta":null}',
+          'If you include a confirmation CTA for booking, use: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
+          'If you include a confirmation CTA for estimate, use: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+          "Do not use markdown or code fences.",
+        ].join("\n\n");
+
+  const user =
+    idiomaDestino === "es"
+      ? [
+          `Mensaje del cliente: ${userInput || "(vacío)"}`,
+          "",
+          "Bloque canónico de horarios/disponibilidad:",
+          fallbackText,
+          "",
+          "Devuélveme la respuesta final lista para enviar.",
+          "Contesta directamente lo que el cliente preguntó.",
+          "Usa solo los horarios realmente presentes en el bloque.",
+          "Puedes resumir las líneas relevantes y cerrar con una pregunta breve para avanzar la conversación.",
+        ].join("\n")
+      : [
+          `Customer message: ${userInput || "(empty)"}`,
+          "",
+          "Canonical availability/schedule block:",
+          fallbackText,
+          "",
+          "Return the final ready-to-send reply.",
+          "Answer the customer's question directly.",
+          "Use only the schedules actually present in the block.",
+          "You may summarize the relevant lines and close with one brief next-step question.",
+        ].join("\n");
+
+  return { system, user };
+}
+
 function buildGroundedComparisonMessages(params: {
   idiomaDestino: "es" | "en";
   fallbackText: string;
@@ -787,11 +883,20 @@ export async function answerWithPromptBase(
   const isStructuredComparisonCanonical =
     hasFallbackText && isStructuredCatalogComparisonCanonical(fallbackText);
 
+  const isScheduleCanonicalBody =
+    hasFallbackText && isScheduleCanonical(fallbackText);
+
+  const shouldUseGroundedScheduleFormatter =
+    effectivePolicy.mode === "grounded_frame_only" &&
+    hasFallbackText &&
+    isScheduleCanonicalBody;
+
   const shouldUseGroundedFrameOnlyFormatter =
     effectivePolicy.mode === "grounded_frame_only" &&
     effectivePolicy.preserveExactBody &&
     hasFallbackText &&
-    !isStructuredComparisonCanonical;
+    !isStructuredComparisonCanonical &&
+    !isScheduleCanonicalBody;
 
   const shouldUseGroundedComparisonFormatter =
     effectivePolicy.mode === "grounded_frame_only" &&
@@ -810,6 +915,15 @@ export async function answerWithPromptBase(
 
     systemPrompt = comparisonMsgs.system;
     userPrompt = comparisonMsgs.user;
+  } else if (shouldUseGroundedScheduleFormatter) {
+    const scheduleMsgs = buildGroundedScheduleMessages({
+      idiomaDestino,
+      fallbackText,
+      userInput,
+    });
+
+    systemPrompt = scheduleMsgs.system;
+    userPrompt = scheduleMsgs.user;
   } else if (shouldUseGroundedFrameOnlyFormatter) {
     const groundedMsgs = buildGroundedFrameOnlyMessages({
       idiomaDestino,
@@ -898,7 +1012,7 @@ export async function answerWithPromptBase(
   out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
   out = capLines(out, maxLines);
 
-  if (!isStructuredComparisonCanonical) {
+  if (!isStructuredComparisonCanonical && !isScheduleCanonicalBody) {
     out = preserveCanonicalBodyOrFallback({
       modelText: out,
       fallbackText,
