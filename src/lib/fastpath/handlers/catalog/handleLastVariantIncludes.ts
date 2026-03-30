@@ -15,6 +15,24 @@ export type HandleLastVariantIncludesInput = {
   
 };
 
+function resolveLastVariantIncludesIntent(params: {
+  intentOut?: string | null;
+  detectedIntent?: string | null;
+}): string {
+  const normalizedIntentOut = String(params.intentOut || "").trim().toLowerCase();
+  const normalizedDetectedIntent = String(params.detectedIntent || "").trim().toLowerCase();
+
+  if (normalizedIntentOut && normalizedIntentOut !== "duda") {
+    return normalizedIntentOut;
+  }
+
+  if (normalizedDetectedIntent && normalizedDetectedIntent !== "duda") {
+    return normalizedDetectedIntent;
+  }
+
+  return "info_servicio";
+}
+
 export async function handleLastVariantIncludes(
   input: HandleLastVariantIncludesInput
 ): Promise<FastpathResult> {
@@ -187,15 +205,22 @@ export async function handleLastVariantIncludes(
     link,
   });
 
+  const resolvedIncludesIntent = resolveLastVariantIncludesIntent({
+    intentOut: input.intentOut,
+    detectedIntent: input.detectedIntent,
+  });
+
   return {
     handled: true,
     reply: canonicalReply,
     source: "service_list_db",
-    intent: input.intentOut || "info_servicio",
+    intent: resolvedIncludesIntent,
     ctxPatch: {
       selectedServiceId: String(chosen.service_id || ""),
       expectingVariant: false,
       expectedVariantIntent: null,
+
+      lastResolvedIntent: resolvedIncludesIntent,
 
       last_service_id: String(chosen.service_id || ""),
       last_service_name: baseName || null,
