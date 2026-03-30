@@ -4,15 +4,28 @@ import { traducirTexto } from "../../traducirTexto";
 
 export type Hit = { id: string; name: string };
 
-export type ResolveServiceResult = {
-  hit: Hit | null;
-  ambiguous: boolean;
-  candidates: Array<{
-    id: string;
-    name: string;
-    score: number;
-  }>;
+export type ResolveServiceCandidate = {
+  id: string;
+  name: string;
+  score: number;
 };
+
+export type ResolveServiceDecision =
+  | {
+      kind: "resolved_single";
+      hit: Hit;
+      candidates: ResolveServiceCandidate[];
+    }
+  | {
+      kind: "ambiguous";
+      hit: null;
+      candidates: ResolveServiceCandidate[];
+    }
+  | {
+      kind: "none";
+      hit: null;
+      candidates: ResolveServiceCandidate[];
+    };
 
 type Candidate = {
   serviceId: string;
@@ -22,15 +35,12 @@ type Candidate = {
   catalogRole: string;
   parentServiceId: string | null;
 
-  // evidencia resolutiva
   serviceNameTokens: string[];
   variantNameTokens: string[];
 
-  // evidencia estructural secundaria
   categoryTokens: string[];
   tipoTokens: string[];
 
-  // evidencia de soporte (nunca resuelve sola)
   supportTokens: string[];
 };
 
@@ -208,7 +218,9 @@ function scoreTokensWeighted(
   dfMap: Map<string, number>,
   totalCandidates: number
 ): number {
-  if (!queryTokens.length || !candidateTokens.length || totalCandidates <= 0) return 0;
+  if (!queryTokens.length || !candidateTokens.length || totalCandidates <= 0) {
+    return 0;
+  }
 
   const candidateSet = new Set(candidateTokens);
   let matchedWeight = 0;
@@ -292,12 +304,12 @@ export async function resolveServiceCandidatesFromText(
   tenantId: string,
   userText: string,
   opts?: { mode?: "strict" | "loose" }
-): Promise<ResolveServiceResult> {
+): Promise<ResolveServiceDecision> {
   const mode: "strict" | "loose" = opts?.mode || "strict";
   const input = String(userText || "").trim();
 
   if (!input) {
-    return { hit: null, ambiguous: false, candidates: [] };
+    return { kind: "none", hit: null, candidates: [] };
   }
 
   let idioma: "es" | "en" | string = "es";
@@ -329,7 +341,7 @@ export async function resolveServiceCandidatesFromText(
 
   if (!queryTokens.length) {
     console.log("[RESOLVE-SERVICE] sin tokens útiles, devolviendo null");
-    return { hit: null, ambiguous: false, candidates: [] };
+    return { kind: "none", hit: null, candidates: [] };
   }
 
   const { rows } = await pool.query<{
@@ -371,7 +383,7 @@ export async function resolveServiceCandidatesFromText(
 
   if (!rows.length) {
     console.log("[RESOLVE-SERVICE] sin candidatos en DB, devolviendo null");
-    return { hit: null, ambiguous: false, candidates: [] };
+    return { kind: "none", hit: null, candidates: [] };
   }
 
   const grouped = new Map<
@@ -459,13 +471,12 @@ export async function resolveServiceCandidatesFromText(
 
   if (!candidates.length) {
     console.log("[RESOLVE-SERVICE] candidatos sin tokens, devolviendo null");
-    return { hit: null, ambiguous: false, candidates: [] };
+    return { kind: "none", hit: null, candidates: [] };
   }
 
   const dfMap = buildTenantTokenDf(candidates);
   const totalCandidates = candidates.length;
 
-  // solo usamos tokens realmente observados en el catálogo del tenant
   const observedQueryTokens = buildObservedQueryTokens(queryTokens, dfMap);
   const discriminativeQueryTokens = buildDiscriminativeQueryTokens(
     observedQueryTokens,
@@ -478,7 +489,7 @@ export async function resolveServiceCandidatesFromText(
       userText,
       queryTokens,
     });
-    return { hit: null, ambiguous: false, candidates: [] };
+    return { kind: "none", hit: null, candidates: [] };
   }
 
   const dominantQueryTokens = getDominantQueryTokens(
@@ -597,7 +608,6 @@ export async function resolveServiceCandidatesFromText(
 
     score += nameScore * 0.44;
     score += variantScore * 0.36;
-
     score += categoryScore * 0.08;
     score += tipoScore * 0.06;
 
@@ -608,7 +618,7 @@ export async function resolveServiceCandidatesFromText(
     if (exactNameHits >= 2) score += 0.08;
     if (exactVariantHits >= 2) score += 0.08;
 
-    score += queryCoverage * 0.10;
+    score += queryCoverage * 0.1;
 
     if (dominantOverlapCount > 0) {
       score += Math.min(0.18, dominantOverlapCount * 0.12);
@@ -717,7 +727,7 @@ export async function resolveServiceCandidatesFromText(
   const SINGLE_TOKEN_THRESHOLD = mode === "strict" ? 0.45 : 0.25;
   const MARGIN = mode === "strict" ? 0.08 : 0.05;
 
-  const topCandidates = scored
+  const topCandidates: ResolveServiceCandidate[] = scored
     .filter((s) => s.allOverlapTokens.length > 0)
     .slice(0, 3)
     .map((s) => ({
@@ -746,9 +756,10 @@ export async function resolveServiceCandidatesFromText(
           withToken.length,
           "candidatos → ambiguo, devolviendo null"
         );
+
         return {
+          kind: withToken.length > 1 ? "ambiguous" : "none",
           hit: null,
-          ambiguous: withToken.length > 1,
           candidates: withToken.slice(0, 3).map((s) => ({
             id: s.cand.serviceId,
             name: s.cand.label,
@@ -770,9 +781,10 @@ export async function resolveServiceCandidatesFromText(
           label: only.cand.label,
           score: only.score,
         });
+
         return {
+          kind: "resolved_single",
           hit: { id: only.cand.serviceId, name: only.cand.label },
-          ambiguous: false,
           candidates: topCandidates,
         };
       }
@@ -788,8 +800,8 @@ export async function resolveServiceCandidatesFromText(
       );
 
       return {
+        kind: "none",
         hit: null,
-        ambiguous: false,
         candidates: topCandidates,
       };
     }
@@ -800,8 +812,8 @@ export async function resolveServiceCandidatesFromText(
     );
 
     return {
+      kind: withToken.length > 1 ? "ambiguous" : "none",
       hit: null,
-      ambiguous: withToken.length > 1,
       candidates: withToken.slice(0, 3).map((s) => ({
         id: s.cand.serviceId,
         name: s.cand.label,
@@ -837,7 +849,9 @@ export async function resolveServiceCandidatesFromText(
     (
       bestEvidenceCount >= 1 ||
       ((best?.score || 0) >= 0.24 && bestResolvableOverlapCount >= 1) ||
-      ((best?.score || 0) >= 0.18 && marginVsSecond >= 0.04 && bestResolvableOverlapCount >= 1)
+      ((best?.score || 0) >= 0.18 &&
+        marginVsSecond >= 0.04 &&
+        bestResolvableOverlapCount >= 1)
     );
 
   if (!best || best.score < BASE_THRESHOLD || !enoughEvidence) {
@@ -850,7 +864,7 @@ export async function resolveServiceCandidatesFromText(
       marginVsSecond,
     });
 
-    const ambiguous =
+    const isAmbiguous =
       !!best &&
       !!second &&
       best.allOverlapTokens.length > 0 &&
@@ -859,8 +873,8 @@ export async function resolveServiceCandidatesFromText(
       Math.abs((best?.score || 0) - second.score) < MARGIN;
 
     return {
+      kind: isAmbiguous ? "ambiguous" : "none",
       hit: null,
-      ambiguous,
       candidates: topCandidates,
     };
   }
@@ -916,8 +930,8 @@ export async function resolveServiceCandidatesFromText(
       });
 
       return {
+        kind: "resolved_single",
         hit: { id: best.cand.serviceId, name: best.cand.label },
-        ambiguous: false,
         candidates: topCandidates,
       };
     }
@@ -955,8 +969,8 @@ export async function resolveServiceCandidatesFromText(
       );
 
       return {
+        kind: "resolved_single",
         hit: { id: best.cand.serviceId, name: best.cand.label },
-        ambiguous: false,
         candidates: topCandidates,
       };
     }
@@ -989,8 +1003,8 @@ export async function resolveServiceCandidatesFromText(
     );
 
     return {
+      kind: "ambiguous",
       hit: null,
-      ambiguous: true,
       candidates: topCandidates,
     };
   }
@@ -1002,8 +1016,8 @@ export async function resolveServiceCandidatesFromText(
   });
 
   return {
+    kind: "resolved_single",
     hit: { id: best.cand.serviceId, name: best.cand.label },
-    ambiguous: false,
     candidates: topCandidates,
   };
 }
@@ -1021,5 +1035,5 @@ export async function resolveServiceIdFromText(
     opts
   );
 
-  return result.hit;
+  return result.kind === "resolved_single" ? result.hit : null;
 }

@@ -59,107 +59,6 @@ function normalizeComparisonLabel(value: any): string {
   return toTrimmedString(value).toLowerCase();
 }
 
-function isEntityCandidateAnchoredToContext(params: {
-  matchedCandidate: any;
-  convoCtx: any;
-}): boolean {
-  const candidateId = toTrimmedString(
-    params.matchedCandidate?.serviceId || params.matchedCandidate?.id
-  );
-
-  if (!candidateId) return false;
-
-  const directIds = [
-    params.convoCtx?.last_service_id,
-    params.convoCtx?.selectedServiceId,
-    params.convoCtx?.selected_service_id,
-  ]
-    .map((value) => toTrimmedString(value))
-    .filter(Boolean);
-
-  if (directIds.includes(candidateId)) {
-    return true;
-  }
-
-  const presentedIds = Array.isArray(params.convoCtx?.lastPresentedEntityIds)
-    ? params.convoCtx.lastPresentedEntityIds
-    : Array.isArray(params.convoCtx?.last_presented_entity_ids)
-    ? params.convoCtx.last_presented_entity_ids
-    : [];
-
-  return presentedIds.some(
-    (id: any) => toTrimmedString(id) === candidateId
-  );
-}
-
-function canPromoteResolvedHitAsExplicitEntity(params: {
-  matchedCandidate: any;
-  allCandidates: any[];
-  previewClassification: any;
-  convoCtx: any;
-  hasStructuredComparison: boolean;
-}): boolean {
-  const {
-    matchedCandidate,
-    allCandidates,
-    previewClassification,
-    convoCtx,
-    hasStructuredComparison,
-  } = params;
-
-  if (!matchedCandidate) return false;
-  if (hasStructuredComparison) return false;
-
-  const score = toFiniteNumber(matchedCandidate?.score);
-  const exactNameHits = toFiniteNumber(matchedCandidate?.exactNameHits);
-  const exactVariantHits = toFiniteNumber(matchedCandidate?.exactVariantHits);
-  const dominantOverlapCount = toFiniteNumber(
-    matchedCandidate?.dominantOverlapCount
-  );
-
-  if (
-    isEntityCandidateAnchoredToContext({
-      matchedCandidate,
-      convoCtx,
-    })
-  ) {
-    return true;
-  }
-
-  const signals = previewClassification?.signals || {};
-  const hasConversationDependency =
-    Boolean(signals?.hasReferentialDependency) ||
-    Boolean(signals?.hasConversationDependency);
-
-  // Evidencia grounded fuerte
-  if (exactVariantHits >= 1) return true;
-  if (exactNameHits >= 2) return true;
-  if (exactNameHits >= 1 && score >= 0.75) return true;
-  if (dominantOverlapCount >= 1 && score >= 0.78) return true;
-
-  if (
-    hasConversationDependency &&
-    score >= 0.72 &&
-    (exactNameHits >= 1 || dominantOverlapCount >= 1)
-  ) {
-    return true;
-  }
-
-  const sorted = Array.isArray(allCandidates)
-    ? [...allCandidates]
-        .map((candidate) => ({
-          ...candidate,
-          score: toFiniteNumber(candidate?.score),
-        }))
-        .sort((a, b) => b.score - a.score)
-    : [];
-
-  const secondScore = sorted.length > 1 ? toFiniteNumber(sorted[1]?.score) : 0;
-  const scoreGap = score - secondScore;
-
-  return score >= 0.9 && scoreGap >= 0.25;
-}
-
 function getCandidateComparisonTokens(candidate: any): string[] {
   const nameTokens = Array.isArray(candidate?.overlapNameTokens)
     ? candidate.overlapNameTokens
@@ -169,8 +68,6 @@ function getCandidateComparisonTokens(candidate: any): string[] {
     ? candidate.overlapSupportTokens
     : [];
 
-  // Para comparar entidades, primero usa tokens realmente discriminativos
-  // del nombre. Solo cae a support tokens si no hay name tokens.
   const raw = nameTokens.length > 0 ? nameTokens : supportTokens;
 
   const seen = new Set<string>();
@@ -196,8 +93,6 @@ function getComparisonGroupKey(
     return toTrimmedString(candidate?.serviceId || candidate?.id).toLowerCase();
   }
 
-  // Para separar lados de una comparación, conviene el token MENOS compartido,
-  // no el más frecuente.
   const sorted = [...tokens].sort((a, b) => {
     const freqDiff = (tokenStats.get(a) || 0) - (tokenStats.get(b) || 0);
     if (freqDiff !== 0) return freqDiff;
@@ -388,12 +283,12 @@ function buildStructuredCatalogComparison(params: {
     .map((side) => normalizeComparisonLabel(side.label))
     .filter(Boolean);
 
-    const hasMissingSideLabels = normalizedSideLabels.length !== allSides.length;
+  const hasMissingSideLabels = normalizedSideLabels.length !== allSides.length;
 
-    const hasDuplicateSideLabels =
+  const hasDuplicateSideLabels =
     new Set(normalizedSideLabels).size !== normalizedSideLabels.length;
 
-    const hasOverlappingServices = allSides.some((side, sideIndex) =>
+  const hasOverlappingServices = allSides.some((side, sideIndex) =>
     allSides.some((otherSide, otherIndex) => {
       if (sideIndex === otherIndex) return false;
 
@@ -456,90 +351,63 @@ export async function getFastpathCatalogSignals(
       );
     }
 
+    const resolutionKind = entityCandidateResultLoose?.kind ?? "none";
+    const resolvedHit = entityCandidateResultLoose?.hit ?? null;
+
     console.log("[CATALOG_SIGNALS][LOOSE_RESOLUTION]", {
       userInput,
       shouldAllowLooseResolution: previewPolicy.shouldAllowLooseResolution,
       shouldBuildComparison: previewPolicy.shouldBuildComparison,
       shouldRunLooseResolution,
+      resolutionKind,
       hasEntityCandidateResultLoose: Boolean(entityCandidateResultLoose),
       looseCandidateCount: Array.isArray(entityCandidateResultLoose?.candidates)
         ? entityCandidateResultLoose.candidates.length
         : 0,
-      hasBest: Boolean(entityCandidateResultLoose?.best),
-      hasSecond: Boolean(entityCandidateResultLoose?.second),
     });
 
-    const resolvedHit = entityCandidateResultLoose?.hit ?? null;
+    if (resolutionKind === "ambiguous") {
+      structuredComparison = buildStructuredCatalogComparison({
+        previewPolicy: {
+          ...previewPolicy,
+          shouldBuildComparison: true,
+        },
+        entityCandidateResult: entityCandidateResultLoose,
+        explicitEntityCandidateForClassification: null,
+      });
 
-    // 1) Primero intenta construir comparación con los candidatos loose.
-    // Así evitas que una sola entidad secuestre el turno antes de comparar.
-    structuredComparison = buildStructuredCatalogComparison({
-      previewPolicy: {
-        ...previewPolicy,
-        shouldBuildComparison: true,
-      },
-      entityCandidateResult: entityCandidateResultLoose,
-      explicitEntityCandidateForClassification: null,
-    });
-
-    // 2) Solo si NO hubo comparación, permite promover una sola entidad.
-    if (!structuredComparison?.hasComparison && resolvedHit?.id) {
+      explicitEntityCandidateForClassification = null;
+    } else if (resolutionKind === "resolved_single" && resolvedHit?.id) {
       const rawCandidates = Array.isArray(entityCandidateResultLoose?.candidates)
         ? entityCandidateResultLoose.candidates
         : [];
 
-      const fallbackCandidates = [
-        entityCandidateResultLoose?.best || null,
-        entityCandidateResultLoose?.second || null,
-      ].filter(Boolean);
-
-      const candidatesForMatch =
-        rawCandidates.length > 0 ? rawCandidates : fallbackCandidates;
-
       const matchedCandidate =
-        candidatesForMatch.find(
+        rawCandidates.find(
           (candidate: any) =>
             toTrimmedString(candidate?.serviceId || candidate?.id) ===
             toTrimmedString(resolvedHit.id)
         ) || null;
 
-      const canPromoteExplicitEntity = canPromoteResolvedHitAsExplicitEntity({
-        matchedCandidate,
-        allCandidates: candidatesForMatch,
-        previewClassification,
-        convoCtx,
-        hasStructuredComparison: structuredComparison?.hasComparison === true,
-      });
+      explicitEntityCandidateForClassification = {
+        id: toTrimmedString(resolvedHit.id),
+        name: toTrimmedString(resolvedHit.name),
+        score: toFiniteNumber(matchedCandidate?.score),
+      };
 
-      if (canPromoteExplicitEntity) {
-        explicitEntityCandidateForClassification = {
-          id: toTrimmedString(resolvedHit.id),
-          name: toTrimmedString(resolvedHit.name),
-          score: toFiniteNumber(matchedCandidate?.score),
-        };
-      }
-    }
-
-    if (structuredComparison?.hasComparison) {
+      structuredComparison = null;
+    } else {
       explicitEntityCandidateForClassification = null;
+      structuredComparison = null;
     }
 
-    const debugRawCandidates = Array.isArray(entityCandidateResultLoose?.candidates)
+    const debugCandidates = Array.isArray(entityCandidateResultLoose?.candidates)
       ? entityCandidateResultLoose.candidates
       : [];
 
-    const debugFallbackCandidates = [
-      entityCandidateResultLoose?.best || null,
-      entityCandidateResultLoose?.second || null,
-    ].filter(Boolean);
-
-    const debugCandidates =
-      debugRawCandidates.length > 0
-        ? debugRawCandidates
-        : debugFallbackCandidates;
-
     console.log("[CATALOG_COMPARISON][CANDIDATES]", {
       userInput,
+      resolutionKind,
       candidates: debugCandidates.map((candidate: any) => ({
         serviceId: candidate?.serviceId || candidate?.id || null,
         id: candidate?.id || null,
