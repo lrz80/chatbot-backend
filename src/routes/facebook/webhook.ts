@@ -1213,7 +1213,7 @@ async function procesarMensajeMeta(args: {
   // ===============================
   inBooking0 = !!((convoCtx as any)?.booking?.step && (convoCtx as any)?.booking?.step !== "idle");
   if (!inBooking0) {
-    const smHandled = await handleStateMachineTurn({
+    const smTurn = await handleStateMachineTurn({
       pool,
       sm,
       tenant,
@@ -1223,31 +1223,111 @@ async function procesarMensajeMeta(args: {
       messageId: messageId || null,
       idiomaDestino,
       promptBase,
-      promptBaseMem,
-      MAX_LINES: MAX_LINES_META,
-      tryBooking,
       tenantId,
-      eventUserInput: userInput,
       replyAndExit,
+      applyTransitionAndPersist: async (smTransition) => {
+        transition({
+          flow: smTransition.flow,
+          step: smTransition.step,
+          patchCtx: smTransition.patchCtx || {},
+        });
+
+        await setConversationStateCompat(tenantId, canal, contactoNorm, {
+          activeFlow,
+          activeStep,
+          context: convoCtx,
+        });
+      },
       parseDatosCliente,
       extractPaymentLinkFromPrompt: null,
       PAGO_CONFIRM_REGEX: null,
     });
 
-    if (smHandled) {
+    if (smTurn.handled) {
+      if (smTurn.replied) {
+        // ✅ Evita que Meta se quede pegado en generic_sales/start repitiendo el overview
+        if (activeFlow === "generic_sales" && activeStep === "start") {
+          await setConversationStateCompat(tenantId, canal, contactoNorm, {
+            activeFlow,
+            activeStep: "answer",
+            context: convoCtx,
+          });
+          activeStep = "answer";
+        }
+        return;
+      }
+
+      if (smTurn.activatedBooking) {
+        if (await tryBooking("guardrail", "sm_transition_booking")) {
+          if (activeFlow === "generic_sales" && activeStep === "start") {
+            await setConversationStateCompat(tenantId, canal, contactoNorm, {
+              activeFlow,
+              activeStep: "answer",
+              context: convoCtx,
+            });
+            activeStep = "answer";
+          }
+          return;
+        }
+      }
+
+      if (smTurn.activatedEstimate) {
+        const estimateResult = await runEstimateFlowTurn({
+          pool,
+          tenant,
+          convoCtx,
+          userInput,
+          idiomaDestino,
+          canal,
+          contactoNorm,
+        });
+
+        if (estimateResult.handled) {
+          transition({
+            flow: "estimate_flow",
+            step: estimateResult.nextEstimateState.step,
+            patchCtx: {
+              estimateFlow: estimateResult.nextEstimateState,
+              estimate_flow_last_touch_at: Date.now(),
+              last_bot_action: "estimate_flow_turn",
+              last_reply_source: "estimate_flow",
+            },
+          });
+
+          await replyAndExit(
+            estimateResult.finalReply,
+            "estimate_flow",
+            "estimate_flow"
+          );
+
+          if (activeFlow === "generic_sales" && activeStep === "start") {
+            await setConversationStateCompat(tenantId, canal, contactoNorm, {
+              activeFlow,
+              activeStep: "answer",
+              context: convoCtx,
+            });
+            activeStep = "answer";
+          }
+
+          return;
+        }
+
+        return;
+      }
+
       // ✅ Evita que Meta se quede pegado en generic_sales/start repitiendo el overview
       if (activeFlow === "generic_sales" && activeStep === "start") {
         await setConversationStateCompat(tenantId, canal, contactoNorm, {
           activeFlow,
-          activeStep: "answer",          // o "close" si tu SM usa eso
+          activeStep: "answer",
           context: convoCtx,
         });
         activeStep = "answer";
       }
+
       return;
     }
   }
-
   // ===============================
   // 🛡️ Anti-phishing (igual WA)
   // ===============================
