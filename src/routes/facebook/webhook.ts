@@ -1470,7 +1470,7 @@ async function procesarMensajeMeta(args: {
         { mode: "loose" }
       );
 
-      if (resolved.ambiguous && resolved.candidates.length >= 2) {
+      if (resolved.kind === "ambiguous" && resolved.candidates.length >= 2) {
         const MAX_OPTIONS = 2;
         const topCandidates = resolved.candidates.slice(0, MAX_OPTIONS);
 
