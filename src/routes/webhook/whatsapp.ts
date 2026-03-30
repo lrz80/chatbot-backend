@@ -3,15 +3,16 @@
 import { Router, Request, Response } from 'express';
 import pool from '../../lib/db';
 import twilio from 'twilio';
-import { getPromptPorCanal, getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
+
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { enviarWhatsApp } from "../../lib/senders/whatsapp";
 import type { Canal } from '../../lib/detectarIntencion';
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 import { saludoPuroRegex } from '../../lib/saludosConversacionales';
-import { answerWithPromptBase } from '../../lib/answers/answerWithPromptBase';
+
 import { incrementarUsoPorCanal } from '../../lib/incrementUsage';
-import { getMemoryValue } from "../../lib/clientMemory";
+import { getBienvenidaPorCanal } from '../../lib/getPromptPorCanal';
+
 import {
   setConversationState as setConversationStateDB,
   getOrInitConversationState,
@@ -26,7 +27,7 @@ import { createStateMachine } from "../../lib/conversation/stateMachine";
 import { scheduleFollowUpIfEligible, cancelPendingFollowUps } from "../../lib/followups/followUpScheduler";
 import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
 import { saveAssistantMessageAndEmit } from "../../lib/channels/engine/messages/saveAssistantMessageAndEmit";
-import { getRecentHistoryForModel } from "../../lib/channels/engine/messages/getRecentHistoryForModel";
+
 import { safeSendText } from "../../lib/channels/engine/dedupe/safeSendText";
 import {
   looksLikeBookingPayload,
@@ -59,17 +60,6 @@ import { parseDatosCliente } from "../../lib/parseDatosCliente";
 import { runEstimateFlowTurn } from "../../lib/estimateFlow/runEstimateFlowTurn";
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { queryWithTimeout } from "../../lib/dbQuery";
-import {
-  resolveServiceCandidatesFromText,
-} from "../../lib/services/pricing/resolveServiceIdFromText";
-import { stripMarkdownLinksForDm } from "../../lib/channels/format/stripMarkdownLinks";
-
-import { buildCatalogReferenceClassificationInput } from "../../lib/catalog/buildCatalogReferenceClassificationInput";
-import { classifyCatalogReferenceTurn } from "../../lib/catalog/classifyCatalogReferenceTurn";
-
-import { isBusinessGeneralIntent } from "../../lib/channels/engine/intents/isBusinessGeneralIntent";
-
-import { resolveBusinessOverview } from "../../lib/business/resolveBusinessOverview";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -132,8 +122,6 @@ export async function procesarMensajeWhatsApp(
     channelSelected: false,
   };
 
-  let alreadySent = false;
-
   // ✅ OPTION 1 (Single Exit): una sola salida para enviar/guardar/memoria
   let handled = false;
   let reply: string | null = null;
@@ -148,15 +136,6 @@ export async function procesarMensajeWhatsApp(
   let detectedFacets: IntentFacets | null = null;
 
   let replied = false;
-
-  // ✅ Decision metadata (backend NO habla, solo decide)
-  let nextAction: {
-    type: string;
-    decision?: "yes" | "no";
-    kind?: string | null;
-    intent?: string | null;
-  } | null = null;
-
 
   const turn = await buildTurnContext({ pool, body, context });
 
@@ -180,15 +159,6 @@ export async function procesarMensajeWhatsApp(
   const tenantBase: Lang = normalizeLang(tenant?.idioma || "es");
   let idiomaDestino: Lang = tenantBase;
   let forcedLangThisTurn: Lang | null = null;
-
-  const normalizeChoice = (s: string) =>
-  String(s || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
 
   const origen = turn.origen;
 
@@ -680,14 +650,6 @@ export async function procesarMensajeWhatsApp(
     decisionFlags.channelSelected = true;
   }
 
-  // 🔍 MEMORIA – inicio del turno (antes de cualquier lógica)
-  const memStart = await getMemoryValue<string>({
-    tenantId: tenant.id,
-    canal: "whatsapp",
-    senderId: contactoNorm,
-    key: "facts_summary",
-  });
-
   const { mode, status } = await waModePromise;
 
   const guard = await whatsappModeMembershipGuard({
@@ -755,27 +717,6 @@ export async function procesarMensajeWhatsApp(
     ...(convoCtx || {}),
     ...(signals.convoCtx || {}),
   };
-
-  const whatsappCatalogReferenceClassificationInput =
-    buildCatalogReferenceClassificationInput({
-      userText: event.userInput,
-      convoCtx,
-    });
-
-  const whatsappCatalogReferenceClassification =
-    classifyCatalogReferenceTurn({
-      ...whatsappCatalogReferenceClassificationInput,
-      detectedIntent: detectedIntent || INTENCION_FINAL_CANONICA || null,
-    });
-
-  console.log("[WHATSAPP][CATALOG_REFERENCE_CLASSIFIER]", {
-    tenantId: event.tenantId,
-    canal: "whatsapp",
-    contactoNorm,
-    userInput: event.userInput,
-    classificationInput: whatsappCatalogReferenceClassificationInput,
-    classification: whatsappCatalogReferenceClassification,
-  });
 
   const hasPendingCta = hasPendingCtaAwaitingConfirmation(convoCtx);
 
@@ -1196,8 +1137,18 @@ export async function procesarMensajeWhatsApp(
         },
       });
 
+      if (!phishingReply) {
+        console.warn("[WHATSAPP][PHISHING_WITHOUT_REPLY]", {
+          tenantId: tenant.id,
+          canal,
+          contactoNorm,
+          userInput,
+        });
+        return;
+      }
+
       return await replyAndExit(
-        phishingReply || (idiomaDestino === "en" ? "Got it." : "Perfecto."),
+        phishingReply,
         "phishing",
         "seguridad"
       );
@@ -1216,676 +1167,25 @@ export async function procesarMensajeWhatsApp(
     }
   }
 
-  const history = await getRecentHistoryForModel({
-    tenantId: tenant.id,
-    canal,
-    fromNumber: contactoNorm, // ✅ usa fromNumber real
-    excludeMessageId: messageId,
-    limit: 12,
-  });
-
   // ===============================
-  // ✅ FALLBACK ÚNICO (solo si SM no respondió)
+  // 🚫 SIN FALLBACK CONVERSACIONAL EN EL WEBHOOK
+  // El turno no fue resuelto por booking / estimate / fastpath / state machine.
+  // A partir de aquí, cualquier caso faltante se corrige en runFastpath,
+  // no agregando otro motor de respuesta aquí.
   // ===============================
-  if (!replied && !hasPendingCta) {
-    const catalogReferenceKind =
-      whatsappCatalogReferenceClassification?.kind ?? "none";
-
-    const shouldBlockConcreteServiceFallback =
-      catalogReferenceKind === "catalog_overview" ||
-      catalogReferenceKind === "catalog_family";
-
-    if (await tryBooking("guardrail", "sm_fallback")) return;
-
-    const NO_NUMERIC_MENUS =
-      idiomaDestino === "en"
-        ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."
-        : "REGLA: NO muestres menús numerados ni pidas que respondan con un número. Si necesitas aclarar, haz UNA sola pregunta corta. Las selecciones por número las maneja el sistema, no tú.";
-
-    const PRICE_QUALIFIER_RULE =
-      idiomaDestino === "en"
-        ? "RULE: If a price is described as 'FROM/STARTING AT' (or 'desde'), you MUST keep that qualifier. Never rewrite it as an exact price. Use: 'starts at $X' / 'from $X'."
-        : "REGLA: Si un precio está descrito como 'DESDE' (o 'from/starting at'), DEBES mantener ese calificativo. Nunca lo conviertas en precio exacto. Usa: 'desde $X'.";
-
-    const NO_PRICE_INVENTION_RULE =
-      idiomaDestino === "en"
-        ? "RULE: Do not invent exact prices. Only mention prices if explicitly present in the provided business info, and preserve ranges/qualifiers."
-        : "REGLA: No inventes precios exactos. Solo menciona precios si están explícitos en la info del negocio, y preserva rangos/calificativos (DESDE).";
-
-    const PRICE_LIST_FORMAT_RULE =
-      idiomaDestino === "en"
-        ? [
-            "RULE: If your reply mentions any prices or plans from SYSTEM_STRUCTURED_DATA, you MUST format them as a bullet list.",
-            "- You may start with 0–1 very short intro line (e.g. 'Main prices are:').",
-            "- Then put ONE option per line like: '• Plan Gold Autopay: $165.99/month – short benefit'.",
-            "- NEVER put several different prices or plans in one long paragraph.",
-            "- If the user also asks about schedules/hours, answer hours in 1 short sentence and then show the prices as a bullet list."
-          ].join(" ")
-        : [
-            "REGLA: Si tu respuesta menciona precios o planes tomados de DATOS_ESTRUCTURADOS_DEL_SISTEMA, DEBES formatearlos como lista con viñetas.",
-            "- Puedes empezar con 0–1 línea muy corta de introducción (por ejemplo: 'Los precios principales son:').",
-            "- Luego usa UNA línea por opción, por ejemplo: '• Plan Gold Autopay: $165.99/mes – beneficio breve'.",
-            "- NUNCA metas varios precios o planes distintos en un solo párrafo largo.",
-            "- Si el usuario también pregunta por horarios, responde los horarios en 1 frase corta y después muestra los precios como lista con viñetas."
-          ].join(" ");
-
-    // 🚫 ROLLBACK: PROMPT-ONLY (sin DB catalog)
-    const fallbackWelcome = await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino);
-
-    const structuredService =
-      (convoCtx as any)?.structuredService ??
-      null;
-
-    const resolvedEntityId =
-      structuredService?.serviceId ??
-      structuredService?.id ??
-      (convoCtx as any)?.last_service_id ??
-      (convoCtx as any)?.selectedServiceId ??
-      null;
-
-    const resolvedEntityLabel =
-      structuredService?.serviceLabel ??
-      structuredService?.label ??
-      structuredService?.serviceName ??
-      (convoCtx as any)?.last_service_name ??
-      null;
-
-    const hasResolvedEntity = Boolean(
-      resolvedEntityId || resolvedEntityLabel
-    );
-
-    const clarificationTarget =
-      catalogReferenceKind === "catalog_family"
-        ? "family"
-        : hasResolvedEntity
-        ? null
-        : "service";
-
-    if (shouldBlockConcreteServiceFallback && !hasResolvedEntity) {
-      
-    }
-
-    if (
-      (INTENCION_FINAL_CANONICA === "info_servicio" || detectedIntent === "info_servicio") &&
-      !hasResolvedEntity &&
-      !shouldBlockConcreteServiceFallback
-    ) {
-      const resolved = await resolveServiceCandidatesFromText(
-        pool,
-        event.tenantId,
-        event.userInput,
-        { mode: "loose" }
-      );
-
-      if (resolved.ambiguous && resolved.candidates.length >= 2) {
-        const MAX_OPTIONS = 2;
-        const topCandidates = resolved.candidates.slice(0, MAX_OPTIONS);
-
-        const candidateIds = topCandidates
-          .map((c) => String(c.id))
-          .filter(Boolean);
-
-        const { rows: serviceRows } = await pool.query<{
-          id: string;
-          name: string | null;
-        }>(
-          `
-          SELECT s.id, s.name
-          FROM services s
-          WHERE s.tenant_id = $1
-            AND s.id = ANY($2::uuid[])
-            AND s.active = true
-          ORDER BY s.created_at ASC
-          `,
-          [event.tenantId, candidateIds]
-        );
-
-        const nameById = new Map(
-          serviceRows.map((r) => [String(r.id), String(r.name || "").trim()])
-        );
-
-        const options = topCandidates
-          .map((c) => {
-            const dbName = nameById.get(String(c.id));
-            const fallbackName = String(c.name || "").trim();
-            return dbName || fallbackName || "";
-          })
-          .map((v) => v.trim())
-          .filter((v) => v.length > 0)
-          .slice(0, MAX_OPTIONS);
-
-        // ===============================
-        // 0 OPCIONES REALES
-        // Este branch ya no aplica. Dejamos seguir el pipeline normal.
-        // IMPORTANTE: no hacer finalizeReply aquí.
-        // ===============================
-        if (options.length === 0) {
-          
-        } else if (options.length === 1) {
-          // ===============================
-          // 1 OPCIÓN REAL
-          // Ya no hay ambigüedad real, así que no preguntamos.
-          // ===============================
-          let introText =
-            idiomaDestino === "en"
-              ? "I found the closest option for what you're looking for."
-              : "Encontré la opción más cercana a lo que estás buscando.";
-
-          try {
-            const introPrompt =
-              idiomaDestino === "en"
-                ? [
-                    "TASK:",
-                    "Write ONE short, warm, human WhatsApp sentence presenting a single matching service option.",
-                    "",
-                    "CONTEXT:",
-                    "- The user's request matched one valid service after ambiguity collapse.",
-                    "- The service name will be shown immediately after this sentence.",
-                    "",
-                    "RULES:",
-                    "- Do NOT mention prices.",
-                    "- Do NOT recommend booking.",
-                    "- Do NOT ask a question.",
-                    "- Do NOT mention links, appointments, or schedules.",
-                    "- Do NOT mention any business vertical or industry.",
-                    "- Maximum 1 sentence.",
-                    "- Sound natural and confident.",
-                  ].join("\n")
-                : [
-                    "TAREA:",
-                    "Escribe UNA sola frase corta, cálida y humana para WhatsApp presentando una única opción de servicio válida.",
-                    "",
-                    "CONTEXTO:",
-                    "- La solicitud del usuario coincidió con una sola opción válida después del colapso de ambigüedad.",
-                    "- El nombre del servicio se mostrará justo después de esta frase.",
-                    "",
-                    "REGLAS:",
-                    "- No menciones precios.",
-                    "- No recomiendes reservar.",
-                    "- No hagas una pregunta.",
-                    "- No menciones links, citas ni horarios.",
-                    "- No menciones ningún vertical o industria.",
-                    "- Máximo 1 frase.",
-                    "- Debe sonar natural y segura.",
-                  ].join("\n");
-
-            const introRes = await answerWithPromptBase({
-              tenantId: event.tenantId,
-              promptBase: [promptBaseMem, "", introPrompt, "", NO_NUMERIC_MENUS].join("\n"),
-              userInput: [
-                "USER_MESSAGE:",
-                event.userInput,
-                "",
-                "MATCHED_OPTION:",
-                `- ${options[0]}`,
-              ].join("\n"),
-              history,
-              idiomaDestino,
-              canal: "whatsapp",
-              maxLines: 1,
-              fallbackText: introText,
-              responsePolicy: {
-                mode: "clarify_only",
-                resolvedEntityType: null,
-                resolvedEntityId: null,
-                resolvedEntityLabel: null,
-                canMentionSpecificPrice: false,
-                canSelectSpecificCatalogItem: false,
-                canOfferBookingTimes: false,
-                canUseCatalogLists: false,
-                canUseOfficialLinks: false,
-                unresolvedEntity: true,
-                clarificationTarget: "service",
-                reasoningNotes:
-                  "whatsapp_single_service_after_ambiguity_collapse",
-              },
-            });
-
-            const candidateIntro = String(introRes.text || "").trim();
-
-            const normalizedIntro = String(candidateIntro || "").trim();
-
-            const introLooksValid =
-              normalizedIntro.length > 0 &&
-              normalizedIntro.length <= 160 &&
-              !normalizedIntro.includes("?") &&
-              !normalizedIntro.includes("\n") &&
-              !normalizedIntro.startsWith("•") &&
-              !normalizedIntro.startsWith("-") &&
-              !options.some((opt) => normalizedIntro.includes(opt)) &&
-              (/[.!…]$/.test(normalizedIntro) || normalizedIntro.split(/\s+/).length <= 20);
-
-            if (introLooksValid) {
-              introText = candidateIntro;
-            }
-          } catch (err) {
-            
-          }
-
-          const finalText = [introText, "", `• ${options[0]}`].join("\n");
-
-          setReply(
-            finalText,
-            "sm-fallback-single-service-after-ambiguity-collapse",
-            "info_servicio"
-          );
-          await finalizeReply();
-          return;
-        } else {
-          // ===============================
-          // 2+ OPCIONES REALES
-          // Ahora sí hay ambigüedad real y pedimos aclaración.
-          // ===============================
-          let introText =
-            idiomaDestino === "en"
-              ? "I found a couple of options that match what you're looking for."
-              : "Encontré un par de opciones que encajan con lo que estás buscando.";
-
-          try {
-            const introPrompt =
-              idiomaDestino === "en"
-                ? [
-                    "TASK:",
-                    "Write ONE short, warm, human WhatsApp sentence to introduce a small set of service options.",
-                    "",
-                    "CONTEXT:",
-                    "- The user's request matched multiple possible services from the tenant catalog.",
-                    "- We will show the options immediately after this sentence.",
-                    "",
-                    "RULES:",
-                    "- Do NOT mention any specific industry or business type.",
-                    "- Do NOT mention prices.",
-                    "- Do NOT recommend one option over another.",
-                    "- Do NOT ask a question.",
-                    "- Do NOT mention booking, appointments, links, or schedules.",
-                    "- Maximum 1 sentence.",
-                    "- Sound natural, warm, and neutral.",
-                  ].join("\n")
-                : [
-                    "TAREA:",
-                    "Escribe UNA sola frase corta, cálida y humana para WhatsApp que introduzca un pequeño grupo de opciones de servicio.",
-                    "",
-                    "CONTEXTO:",
-                    "- La solicitud del usuario coincidió con varios servicios posibles del catálogo del tenant.",
-                    "- Justo después de esta frase se mostrarán las opciones.",
-                    "",
-                    "REGLAS:",
-                    "- NO menciones ninguna industria ni tipo de negocio.",
-                    "- NO menciones precios.",
-                    "- NO recomiendes una opción sobre otra.",
-                    "- NO hagas una pregunta.",
-                    "- NO menciones reservas, citas, links ni horarios.",
-                    "- Máximo 1 frase.",
-                    "- Debe sonar natural, amable y neutral.",
-                  ].join("\n");
-
-            const introRes = await answerWithPromptBase({
-              tenantId: event.tenantId,
-              promptBase: [promptBaseMem, "", introPrompt, "", NO_NUMERIC_MENUS].join("\n"),
-              userInput: [
-                "USER_MESSAGE:",
-                event.userInput,
-                "",
-                "CANDIDATE_OPTIONS:",
-                options.map((o) => `- ${o}`).join("\n"),
-              ].join("\n"),
-              history,
-              idiomaDestino,
-              canal: "whatsapp",
-              maxLines: 1,
-              fallbackText: introText,
-              responsePolicy: {
-                mode: "clarify_only",
-                resolvedEntityType: null,
-                resolvedEntityId: null,
-                resolvedEntityLabel: null,
-                canMentionSpecificPrice: false,
-                canSelectSpecificCatalogItem: false,
-                canOfferBookingTimes: false,
-                canUseCatalogLists: false,
-                canUseOfficialLinks: false,
-                unresolvedEntity: true,
-                clarificationTarget: "service",
-                reasoningNotes: "whatsapp_ambiguous_service_intro_only_multitenant",
-              },
-            });
-
-            const candidateIntro = String(introRes.text || "").trim();
-
-            const normalizedIntro = String(candidateIntro || "").trim();
-
-            const introLooksValid =
-              normalizedIntro.length > 0 &&
-              normalizedIntro.length <= 160 &&
-              !normalizedIntro.includes("?") &&
-              !normalizedIntro.includes("\n") &&
-              !normalizedIntro.startsWith("•") &&
-              !normalizedIntro.startsWith("-") &&
-              !options.some((opt) => normalizedIntro.includes(opt)) &&
-              (/[.!…]$/.test(normalizedIntro) || normalizedIntro.split(/\s+/).length <= 20);
-
-            if (introLooksValid) {
-              introText = candidateIntro;
-            }
-          } catch (err) {
-            
-          }
-
-          const listOnlyText = options.map((opt) => `• ${opt}`).join("\n");
-
-          const closingText =
-            idiomaDestino === "en"
-              ? "Which of these options are you looking for??"
-              : "¿Cuál de estas opciones buscas?";
-
-          const finalText = [introText, "", listOnlyText, "", closingText].join("\n");
-
-          setReply(
-            finalText,
-            "sm-fallback-ambiguous-service",
-            "info_servicio"
-          );
-          await finalizeReply();
-          return;
-        }
-      }
-    }
-
-    let serviceRecommendationBlock = "";
-    let validServiceNames: string[] = [];
-
-    const nonConcreteClarificationBlock =
-      shouldBlockConcreteServiceFallback &&
-      (INTENCION_FINAL_CANONICA === "info_servicio" || detectedIntent === "info_servicio") &&
-      !hasResolvedEntity
-        ? catalogReferenceKind === "catalog_family"
-          ? idiomaDestino === "en"
-            ? [
-                "STRICT TURN RULES:",
-                "- Do NOT recommend or assume one specific service.",
-                "- Do NOT select a concrete catalog item.",
-                "- Ask ONE short clarification question only.",
-                "- The clarification must narrow the user's need within a family/group of services.",
-                "- Prefer clarifying the type of result they want, not naming a service for them.",
-                "- Do NOT use numbered menus.",
-                "- Do NOT ask more than one question.",
-              ].join("\n")
-            : [
-                "REGLAS ESTRICTAS DEL TURNO:",
-                "- No recomiendes ni asumas un servicio específico.",
-                "- No selecciones un ítem concreto del catálogo.",
-                "- Haz UNA sola pregunta corta de aclaración.",
-                "- La aclaración debe precisar la necesidad del usuario dentro de una familia o grupo de servicios.",
-                "- Prefiere aclarar el resultado que busca, no nombrarle tú un servicio concreto.",
-                "- No uses menús numerados.",
-                "- No hagas más de una pregunta.",
-              ].join("\n")
-          : idiomaDestino === "en"
-          ? [
-              "STRICT TURN RULES:",
-              "- Do NOT recommend or assume one specific service.",
-              "- Do NOT select a concrete catalog item.",
-              "- Do NOT mention a specific service name unless the user clearly selected one before.",
-              "- Ask ONE short clarification question only.",
-              "- The clarification must help narrow the user's need, not force a booking.",
-              "- Do NOT use numbered menus.",
-            ].join("\n")
-          : [
-              "REGLAS ESTRICTAS DEL TURNO:",
-              "- No recomiendes ni asumas un servicio específico.",
-              "- No selecciones un ítem concreto del catálogo.",
-              "- No menciones un nombre de servicio específico a menos que el usuario ya lo haya elegido claramente antes.",
-              "- Haz UNA sola pregunta corta de aclaración.",
-              "- La aclaración debe ayudar a precisar la necesidad del usuario, no forzar una reserva.",
-              "- No uses menús numerados.",
-            ].join("\n")
-        : "";
-
-    if (
-      (INTENCION_FINAL_CANONICA === "info_servicio" || detectedIntent === "info_servicio") &&
-      !hasResolvedEntity &&
-      !shouldBlockConcreteServiceFallback
-    ) {
-      const { rows: serviceRows } = await pool.query<{
-        service_id: string;
-        service_name: string | null;
-        service_description: string | null;
-        variant_name: string | null;
-        variant_description: string | null;
-      }>(
-        `
-        SELECT
-          s.id AS service_id,
-          s.name AS service_name,
-          s.description AS service_description,
-          v.variant_name,
-          v.description AS variant_description
-        FROM services s
-        LEFT JOIN service_variants v
-          ON v.service_id = s.id
-         AND v.active = true
-        WHERE
-          s.tenant_id = $1
-          AND s.active = true
-          AND s.name IS NOT NULL
-        ORDER BY s.created_at ASC, v.created_at ASC NULLS LAST, v.id ASC NULLS LAST
-        `,
-        [event.tenantId]
-      );
-
-      const grouped = new Map<
-        string,
-        {
-          id: string;
-          name: string;
-          snippets: string[];
-        }
-      >();
-
-      for (const r of serviceRows) {
-        const id = String(r.service_id || "").trim();
-        const name = String(r.service_name || "").trim();
-        if (!id || !name) continue;
-
-        let entry = grouped.get(id);
-        if (!entry) {
-          entry = { id, name, snippets: [] };
-          grouped.set(id, entry);
-        }
-
-        const parts = [
-          String(r.service_description || "").trim(),
-          String(r.variant_name || "").trim(),
-          String(r.variant_description || "").trim(),
-        ].filter(Boolean);
-
-        for (const p of parts) {
-          if (!entry.snippets.includes(p)) entry.snippets.push(p);
-        }
-      }
-
-      const serviceCandidates = Array.from(grouped.values()).slice(0, 8);
-      validServiceNames = serviceCandidates.map((s) => s.name);
-
-      serviceRecommendationBlock =
-        idiomaDestino === "en"
-          ? [
-              "SYSTEM_STRUCTURED_SERVICE_CANDIDATES:",
-              ...serviceCandidates.map((s, idx) => {
-                const extra = s.snippets.slice(0, 2).join(" | ");
-                return `${idx + 1}. ${s.name}${extra ? ` — ${extra}` : ""}`;
-              }),
-              "",
-              "STRICT RULES:",
-              "- If you recommend a service, recommend ONLY one service name that appears EXACTLY in the candidate list above.",
-              "- Never invent, translate, merge, generalize, or rename service names.",
-              "- If none is clearly appropriate, ask ONE short clarification question instead.",
-            ].join("\n")
-          : [
-              "CANDIDATOS_DE_SERVICIO_ESTRUCTURADOS_DEL_SISTEMA:",
-              ...serviceCandidates.map((s, idx) => {
-                const extra = s.snippets.slice(0, 2).join(" | ");
-                return `${idx + 1}. ${s.name}${extra ? ` — ${extra}` : ""}`;
-              }),
-              "",
-              "REGLAS ESTRICTAS:",
-              "- Si recomiendas un servicio, recomienda SOLO un nombre de servicio que aparezca EXACTAMENTE en la lista anterior.",
-              "- Nunca inventes, traduzcas, mezcles, generalices ni renombres servicios.",
-              "- Si ninguno encaja claramente, haz UNA sola pregunta corta de aclaración.",
-            ].join("\n");
-
-    }
-
-    const composed = await answerWithPromptBase({
-      tenantId: event.tenantId,
-      promptBase: [
-        promptBaseMem,
-        "",
-        serviceRecommendationBlock,
-        "",
-        nonConcreteClarificationBlock,
-        "",
-        NO_NUMERIC_MENUS,
-        PRICE_QUALIFIER_RULE,
-        NO_PRICE_INVENTION_RULE,
-        PRICE_LIST_FORMAT_RULE,
-      ].join("\n"),
-      userInput: ["USER_MESSAGE:", event.userInput].join("\n"),
-      history,
-      idiomaDestino,
-      canal: "whatsapp",
-      maxLines: MAX_WHATSAPP_LINES,
-      fallbackText: fallbackWelcome,
-
-      responsePolicy: {
-        mode: hasResolvedEntity ? "grounded_only" : "clarify_only",
-        resolvedEntityType: hasResolvedEntity ? "service" : null,
-        resolvedEntityId,
-        resolvedEntityLabel,
-        canMentionSpecificPrice: hasResolvedEntity,
-        canSelectSpecificCatalogItem: hasResolvedEntity,
-        canOfferBookingTimes: false,
-        canUseCatalogLists: hasResolvedEntity,
-        canUseOfficialLinks: true,
-        unresolvedEntity: !hasResolvedEntity,
-        clarificationTarget: hasResolvedEntity ? null : clarificationTarget,
-
-        singleResolvedEntityOnly: hasResolvedEntity,
-        allowAlternativeEntities: false,
-        allowCrossSellEntities: false,
-        allowAddOnSuggestions: false,
-
-        reasoningNotes: "whatsapp_sm_fallback",
-      },
-    });
-
-    const normalizedReply = String(composed.text || "").toLowerCase();
-
-    const shouldBypassEntityLockForGeneralIntent = isBusinessGeneralIntent({
+  if (!replied) {
+    console.warn("[WHATSAPP][UNHANDLED_TURN_AFTER_ORCHESTRATION]", {
+      tenantId: tenant.id,
+      canal,
+      contactoNorm,
+      userInput,
       detectedIntent,
-      canal: "whatsapp",
+      intentFinalCanonica: INTENCION_FINAL_CANONICA,
+      activeFlow,
+      activeStep,
+      hasPendingCta,
+      inBooking0,
     });
-
-    if (!shouldBypassEntityLockForGeneralIntent && hasResolvedEntity && resolvedEntityLabel) {
-      const resolvedNameNorm = String(resolvedEntityLabel).toLowerCase();
-      const mentionsResolvedEntity = normalizedReply.includes(resolvedNameNorm);
-
-      const mentionsOtherValidService =
-        validServiceNames.length > 0 &&
-        validServiceNames.some((name) => {
-          const n = String(name || "").toLowerCase();
-          return n !== resolvedNameNorm && normalizedReply.includes(n);
-        });
-
-      if (!mentionsResolvedEntity || mentionsOtherValidService) {
-        
-        const clarificationText =
-          idiomaDestino === "en"
-            ? `I recommend ${resolvedEntityLabel}. I can also tell you the price or what it includes.`
-            : `Te recomiendo ${resolvedEntityLabel}. También te puedo decir el precio o lo que incluye.`;
-
-        setReply(clarificationText, "sm-fallback-entity-lock-blocked", "info_servicio");
-        await finalizeReply();
-        return;
-      }
-    } else if (shouldBypassEntityLockForGeneralIntent) {
-      
-    } else if (validServiceNames.length > 0) {
-      const matchedValidName = validServiceNames.find((name) =>
-        normalizedReply.includes(name.toLowerCase())
-      );
-
-      if (!matchedValidName) {
-        const clarificationText =
-          idiomaDestino === "en"
-            ? `Sure — what service do you mean exactly? For example: ${validServiceNames.slice(0, 4).join(", ")}.`
-            : `Claro — ¿a cuál servicio te refieres exactamente? Por ejemplo: ${validServiceNames.slice(0, 4).join(", ")}.`;
-
-        setReply(clarificationText, "sm-fallback-invalid-service", "info_servicio");
-        await finalizeReply();
-        return;
-      }
-    }
-
-    if (composed.pendingCta) {
-      (convoCtx as any).pending_cta = {
-        ...composed.pendingCta,
-        createdAt: new Date().toISOString(),
-      };
-
-    }
-
-    const finalFallbackText = await ensureReplyLanguage(
-      composed.text,
-      idiomaDestino,
-      tenantBase
-    );
-
-    const finalFallbackTextClean = stripMarkdownLinksForDm(finalFallbackText);
-
-    // ✅ overview general de servicios desde info_clave,
-    // pero dejando ancla estructurada para follow-ups de catálogo/DB
-    if (
-      (INTENCION_FINAL_CANONICA === "info_general" || detectedIntent === "info_general") &&
-      !hasResolvedEntity
-    ) {
-      try {
-        const overview = await resolveBusinessOverview({
-          pool,
-          tenantId: tenant.id,
-          infoClave: String(tenant?.info_clave || ""),
-        });
-
-        const overviewCtxPatch = {
-          last_catalog_source: overview.source,
-          last_catalog_scope: "overview",
-          last_catalog_at: Date.now(),
-          lastPresentedEntityIds: overview.presentedEntityIds,
-          lastPresentedFamilyKeys: overview.presentedFamilyKeys,
-          lastResolvedIntent: "info_general",
-        };
-
-        transition({
-          patchCtx: overviewCtxPatch,
-        });
-
-        finalCtxPatch = { ...finalCtxPatch, ...overviewCtxPatch };
-
-        console.log("[BUSINESS_OVERVIEW][CTX_PATCH]", {
-          tenantId: tenant.id,
-          userInput,
-          presentedEntityIds: overview.presentedEntityIds,
-          presentedFamilyKeys: overview.presentedFamilyKeys,
-          lastResolvedIntent: "info_general",
-        });
-
-      } catch (e: any) {
-        console.warn("⚠️ resolveBusinessOverview failed:", e?.message || e);
-      }
-    }
-
-    setReply(finalFallbackTextClean, "sm-fallback");
-    await finalizeReply();
     return;
   }
 }
