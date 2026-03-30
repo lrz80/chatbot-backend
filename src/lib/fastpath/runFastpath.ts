@@ -357,8 +357,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       Boolean(catalogReferenceClassification?.targetVariantId) ||
       Boolean(catalogReferenceClassification?.targetFamilyKey);
 
+    const isGenericBusinessOverviewIntent =
+      intentOut === "info_general" ||
+      intentOut === "duda";
+
     const wantsGeneralBusinessOverview =
-      intentOut === "info_general" &&
+      isGenericBusinessOverviewIntent &&
       !hasConcreteStructuredTarget &&
       !detectedFacets?.asksPrices &&
       !detectedFacets?.asksSchedules &&
@@ -368,7 +372,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       catalogReferenceKind !== "variant_specific" &&
       catalogReferenceKind !== "referential_followup" &&
       catalogReferenceKind !== "comparison";
-
+      
     if (wantsGeneralBusinessOverview) {
       const canonicalReply = String(infoClave || "").trim();
 
