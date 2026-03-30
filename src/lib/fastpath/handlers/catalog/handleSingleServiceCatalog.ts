@@ -17,59 +17,112 @@ export type HandleSingleServiceCatalogInput = {
   catalogRouteIntent?: string | null;
 };
 
+function toTrimmedString(value: any): string {
+  return String(value ?? "").trim();
+}
+
+function toNullableNumber(value: any): number | null {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
 export async function handleSingleServiceCatalog(
   input: HandleSingleServiceCatalogInput
 ): Promise<FastpathResult> {
-  const {
-    referenceKind,
-    targetServiceId: structuredTargetServiceId,
-    targetVariantId,
-    targetFamilyKey,
-    hasStructuredTarget,
-    shouldResolveFromStructuredTarget,
-  } = getCatalogStructuredSignals({
+  const structuredSignals = getCatalogStructuredSignals({
     catalogReferenceClassification: input.catalogReferenceClassification,
     convoCtx: input.convoCtx,
     catalogRouteIntent: input.catalogRouteIntent,
   });
 
-    const shouldSkipSinglePriceTargetResolution = false;
+  const referenceKind = toTrimmedString(
+    structuredSignals.referenceKind ||
+      input.catalogReferenceClassification?.kind ||
+      input.catalogRoutingSignal?.referenceKind ||
+      "none"
+  ).toLowerCase();
 
-    const ellipticPriceFollowup =
-      input.catalogRoutingSignal.shouldRouteCatalog &&
-      (
-        referenceKind === "referential_followup" ||
-        input.catalogRoutingSignal.routeIntent === "catalog_alternatives" ||
-        input.catalogRoutingSignal.routeIntent === "catalog_schedule" ||
-        input.catalogRoutingSignal.routeIntent === "catalog_price" ||
-        input.catalogReferenceClassification?.intent === "includes"
-      );
+  const structuredTargetServiceId = toTrimmedString(
+    input.catalogRoutingSignal?.targetServiceId ||
+      input.catalogReferenceClassification?.targetServiceId ||
+      structuredSignals.targetServiceId ||
+      ""
+  );
 
-    const ctxServiceId =
-      String(input.convoCtx?.last_service_id || "").trim() ||
-      String(input.convoCtx?.selectedServiceId || "").trim();
+  const structuredTargetServiceName = toTrimmedString(
+    input.catalogRoutingSignal?.targetServiceName ||
+      input.catalogReferenceClassification?.targetServiceName ||
+      ""
+  );
 
-    const ctxServiceName =
-      String(input.convoCtx?.last_service_name || "").trim();
+  const targetVariantId = toTrimmedString(
+    input.catalogRoutingSignal?.targetVariantId ||
+      input.catalogReferenceClassification?.targetVariantId ||
+      structuredSignals.targetVariantId ||
+      ""
+  );
 
-    const singleHit =
-      shouldSkipSinglePriceTargetResolution
-        ? null
-        : shouldResolveFromStructuredTarget
-        ? {
-            id: String(structuredTargetServiceId || "").trim(),
-            name: String(
-              input.catalogReferenceClassification?.targetServiceName ||
-              ctxServiceName ||
-              ""
-            ).trim(),
-          }
-        : ellipticPriceFollowup && ctxServiceId
-        ? {
-            id: ctxServiceId,
-            name: ctxServiceName,
-          }
-        : null;
+  const targetFamilyKey = toTrimmedString(
+    input.catalogRoutingSignal?.targetFamilyKey ||
+      input.catalogReferenceClassification?.targetFamilyKey ||
+      structuredSignals.targetFamilyKey ||
+      ""
+  );
+
+  const hasStructuredTarget =
+    Boolean(structuredTargetServiceId) ||
+    Boolean(targetVariantId) ||
+    Boolean(targetFamilyKey) ||
+    referenceKind === "entity_specific" ||
+    referenceKind === "variant_specific" ||
+    referenceKind === "catalog_family";
+
+  const shouldSkipSinglePriceTargetResolution = false;
+
+  const ellipticPriceFollowup =
+    input.catalogRoutingSignal.shouldRouteCatalog &&
+    (
+      referenceKind === "referential_followup" ||
+      input.catalogRoutingSignal.routeIntent === "catalog_alternatives" ||
+      input.catalogRoutingSignal.routeIntent === "catalog_schedule" ||
+      input.catalogRoutingSignal.routeIntent === "catalog_price" ||
+      input.catalogReferenceClassification?.intent === "includes"
+    );
+
+  const ctxServiceId =
+    toTrimmedString(input.convoCtx?.last_service_id) ||
+    toTrimmedString(input.convoCtx?.selectedServiceId);
+
+  const ctxServiceName =
+    toTrimmedString(input.convoCtx?.last_service_name);
+
+  const shouldResolveFromStructuredTarget =
+    !shouldSkipSinglePriceTargetResolution &&
+    (
+      Boolean(structuredTargetServiceId) ||
+      Boolean(targetVariantId) ||
+      referenceKind === "entity_specific" ||
+      referenceKind === "variant_specific"
+    );
+
+  const singleHit =
+    shouldSkipSinglePriceTargetResolution
+      ? null
+      : shouldResolveFromStructuredTarget && structuredTargetServiceId
+      ? {
+          id: structuredTargetServiceId,
+          name:
+            structuredTargetServiceName ||
+            toTrimmedString(input.catalogReferenceClassification?.targetServiceName) ||
+            ctxServiceName ||
+            "",
+        }
+      : ellipticPriceFollowup && ctxServiceId
+      ? {
+          id: ctxServiceId,
+          name: ctxServiceName,
+        }
+      : null;
 
   if (shouldSkipSinglePriceTargetResolution) {
     console.log("[PRICE][single] skipped_by_catalog_reference_classification", {
@@ -85,20 +138,21 @@ export async function handleSingleServiceCatalog(
     hasStructuredTarget,
     shouldResolveFromStructuredTarget,
     structuredTargetServiceId,
+    structuredTargetServiceName,
     targetVariantId,
     targetFamilyKey,
     singleHit,
     ctxLastService: input.convoCtx?.last_service_id
-        ? {
-            id: input.convoCtx.last_service_id,
-            name: input.convoCtx.last_service_name || null,
+      ? {
+          id: input.convoCtx.last_service_id,
+          name: input.convoCtx.last_service_name || null,
         }
-        : null,
-    });
+      : null,
+  });
 
   if (singleHit?.id) {
-    const targetServiceId = String(singleHit.id || "").trim();
-    const targetServiceName = String(singleHit.name || "").trim();
+    const targetServiceId = toTrimmedString(singleHit.id);
+    const targetServiceName = toTrimmedString(singleHit.name);
 
     const { rows: variants } = await input.pool.query<any>(
       `
@@ -136,13 +190,13 @@ export async function handleSingleServiceCatalog(
     let chosenVariant: any = null;
 
     if (pricedVariants.length > 0) {
-      const storedVariantOptions = Array.isArray((input.convoCtx as any)?.last_variant_options)
-        ? (input.convoCtx as any).last_variant_options
+      const storedVariantOptions = Array.isArray(input.convoCtx?.last_variant_options)
+        ? input.convoCtx.last_variant_options
         : [];
 
       const isAwaitingPriceVariantSelection =
-        input.convoCtx.expectedVariantIntent === "price_or_plan" &&
-        Boolean((input.convoCtx as any)?.expectingVariant) &&
+        input.convoCtx?.expectedVariantIntent === "price_or_plan" &&
+        Boolean(input.convoCtx?.expectingVariant) &&
         storedVariantOptions.length > 0;
 
       if (targetVariantId) {
@@ -207,9 +261,6 @@ export async function handleSingleServiceCatalog(
         : null,
     });
 
-    // ✅ Variante concreta resuelta desde DB -> construir canonicalReply y renderizar con frame comercial grounded
-    // usando precio + includes reales desde DB, sin link automático
-    // y con guardrail para no alterar la fuente de verdad.
     if (chosenVariant) {
       console.log("[PRICE][chosenVariant]", {
         userInput: input.userInput,
@@ -228,16 +279,10 @@ export async function handleSingleServiceCatalog(
         })),
       });
 
-      const priceNum =
-        chosenVariant.price === null ||
-        chosenVariant.price === undefined ||
-        chosenVariant.price === ""
-          ? null
-          : Number(chosenVariant.price);
-
+      const priceNum = toNullableNumber(chosenVariant.price);
       const baseName = targetServiceName || "";
-      const variantName = String(chosenVariant.variant_name || "").trim();
-      const resolvedCurrency = String(chosenVariant.currency || "USD");
+      const variantName = toTrimmedString(chosenVariant.variant_name);
+      const resolvedCurrency = toTrimmedString(chosenVariant.currency || "USD");
 
       const {
         rows: [serviceBase],
@@ -251,18 +296,18 @@ export async function handleSingleServiceCatalog(
         [targetServiceId]
       );
 
-      const serviceDescription = String(
+      const serviceDescription = toTrimmedString(
         chosenVariant.description || serviceBase?.description || ""
-      ).trim();
+      );
 
       let priceText =
         input.idiomaDestino === "en" ? "price available" : "precio disponible";
 
-      if (Number.isFinite(priceNum)) {
+      if (priceNum !== null) {
         priceText =
           resolvedCurrency === "USD"
-            ? `$${priceNum!.toFixed(2)}`
-            : `${priceNum!.toFixed(2)} ${resolvedCurrency}`;
+            ? `$${priceNum.toFixed(2)}`
+            : `${priceNum.toFixed(2)} ${resolvedCurrency}`;
       }
 
       const detailLines = serviceDescription
@@ -285,11 +330,9 @@ export async function handleSingleServiceCatalog(
               bulletsText ? `\n\nIncluye:\n${bulletsText}` : ""
             }`;
 
-      const finalReply = canonicalBody;
-
       return {
         handled: true,
-        reply: finalReply,
+        reply: canonicalBody,
         source: "price_fastpath_db",
         intent: "precio",
         ctxPatch: {
@@ -297,7 +340,7 @@ export async function handleSingleServiceCatalog(
           last_service_name: baseName || null,
           last_service_at: Date.now(),
 
-          last_variant_id: String(chosenVariant.id || ""),
+          last_variant_id: toTrimmedString(chosenVariant.id),
           last_variant_name: variantName || null,
           last_variant_url: null,
           last_variant_at: Date.now(),
@@ -305,14 +348,13 @@ export async function handleSingleServiceCatalog(
           last_price_option_label: variantName || null,
           last_price_option_at: Date.now(),
 
+          expectingVariant: false,
           expectedVariantIntent: null,
           lastResolvedIntent: "price_or_plan",
         } as any,
       };
     }
 
-    // ✅ Si hay varias variantes con precio y el usuario NO eligió una,
-    // listar variantes para que seleccione en vez de resumir por rango.
     if (pricedVariants.length > 1 && !chosenVariant) {
       console.log("[PRICE][single] multiple priced variants -> list for selection", {
         targetServiceId,
@@ -328,35 +370,26 @@ export async function handleSingleServiceCatalog(
       });
 
       const lines = pricedVariants.map((v: any, idx: number) => {
-        const rawPrice =
-          v.price === null || v.price === undefined || v.price === ""
-            ? NaN
-            : Number(v.price);
-
-        const currency = String(v.currency || "USD").trim();
-        const variantName = String(v.variant_name || "").trim();
+        const rawPrice = toNullableNumber(v.price);
+        const currency = toTrimmedString(v.currency || "USD");
+        const variantName = toTrimmedString(v.variant_name);
 
         let priceText =
           input.idiomaDestino === "en" ? "price available" : "precio disponible";
 
-        if (Number.isFinite(rawPrice)) {
-          if (currency === "USD") {
-            priceText = `$${rawPrice.toFixed(2)}`;
-          } else {
-            priceText = `${rawPrice.toFixed(2)} ${currency}`;
-          }
+        if (rawPrice !== null) {
+          priceText =
+            currency === "USD"
+              ? `$${rawPrice.toFixed(2)}`
+              : `${rawPrice.toFixed(2)} ${currency}`;
         }
 
         return `• ${idx + 1}) ${variantName}: ${priceText}`;
       });
 
-      const canonicalReply = lines.join("\n");
-
-      const finalReply = canonicalReply;
-
       return {
         handled: true,
-        reply: finalReply,
+        reply: lines.join("\n"),
         source: "price_disambiguation_db",
         intent: "precio",
         ctxPatch: {
@@ -375,14 +408,11 @@ export async function handleSingleServiceCatalog(
 
           last_variant_options: pricedVariants.map((v: any, idx: number) => ({
             index: idx + 1,
-            id: String(v.id || ""),
-            name: String(v.variant_name || "").trim(),
-            url: v.variant_url ? String(v.variant_url).trim() : null,
-            price:
-              v.price === null || v.price === undefined || v.price === ""
-                ? null
-                : Number(v.price),
-            currency: String(v.currency || "USD").trim(),
+            id: toTrimmedString(v.id),
+            name: toTrimmedString(v.variant_name),
+            url: v.variant_url ? toTrimmedString(v.variant_url) : null,
+            price: toNullableNumber(v.price),
+            currency: toTrimmedString(v.currency || "USD"),
           })),
           last_variant_options_at: Date.now(),
 
@@ -395,7 +425,6 @@ export async function handleSingleServiceCatalog(
       };
     }
 
-    // ✅ Si resolvió servicio, pero no variante exacta, responder natural usando DB
     const matchedRow = input.rows.find(
       (r) => String(r.service_id || "") === targetServiceId
     );
@@ -408,29 +437,28 @@ export async function handleSingleServiceCatalog(
           ? `• ${targetServiceName}\n• Price: not available in the catalog`
           : `• ${targetServiceName}\n• Precio: no disponible en el catálogo`;
 
-      const finalReply = canonicalReply;
-
       return {
         handled: true,
-        reply: finalReply,
+        reply: canonicalReply,
         source: "price_fastpath_db_no_price",
         intent: "precio",
         ctxPatch: {
           last_service_id: targetServiceId,
           last_service_name: targetServiceName || null,
           last_service_at: Date.now(),
-          lastResolvedIntent: "price_or_plan",
+          expectingVariant: false,
           expectedVariantIntent: null,
+          lastResolvedIntent: "price_or_plan",
         } as any,
       };
     }
 
     if (matchedRow) {
-      const min = matchedRow.min_price === null ? null : Number(matchedRow.min_price);
-      const max = matchedRow.max_price === null ? null : Number(matchedRow.max_price);
+      const min = toNullableNumber(matchedRow.min_price);
+      const max = toNullableNumber(matchedRow.max_price);
 
       const hasExplicitServicePrice =
-        Number.isFinite(min) && Number.isFinite(max);
+        min !== null && max !== null;
 
       if (!hasExplicitServicePrice) {
         const canonicalReply =
@@ -438,29 +466,28 @@ export async function handleSingleServiceCatalog(
             ? `• ${targetServiceName}\n• Price: not explicitly configured`
             : `• ${targetServiceName}\n• Precio: no configurado explícitamente`;
 
-        const finalReply = canonicalReply;
-
         return {
           handled: true,
-          reply: finalReply,
+          reply: canonicalReply,
           source: "price_fastpath_db_no_price",
           intent: "precio",
           ctxPatch: {
             last_service_id: targetServiceId,
             last_service_name: targetServiceName || null,
             last_service_at: Date.now(),
-            lastResolvedIntent: "price_or_plan",
+            expectingVariant: false,
             expectedVariantIntent: null,
+            lastResolvedIntent: "price_or_plan",
           } as any,
         };
       }
 
       const priceText =
         min === max
-          ? `$${min!.toFixed(2)}`
-          : `${input.idiomaDestino === "en" ? "from" : "desde"} $${min!.toFixed(2)}`;
+          ? `$${min.toFixed(2)}`
+          : `${input.idiomaDestino === "en" ? "from" : "desde"} $${min.toFixed(2)}`;
 
-      console.log("[PRICE][single][LLM_RENDER] service_price", {
+      console.log("[PRICE][single][SERVICE_PRICE_RENDER]", {
         targetServiceId,
         targetServiceName,
         min,
@@ -469,19 +496,18 @@ export async function handleSingleServiceCatalog(
 
       const canonicalReply = `• ${targetServiceName}: ${priceText}`;
 
-      const finalReply = canonicalReply;
-
       return {
         handled: true,
-        reply: finalReply,
+        reply: canonicalReply,
         source: "price_fastpath_db",
         intent: "precio",
         ctxPatch: {
           last_service_id: targetServiceId,
           last_service_name: targetServiceName || null,
           last_service_at: Date.now(),
-          lastResolvedIntent: "price_or_plan",
+          expectingVariant: false,
           expectedVariantIntent: null,
+          lastResolvedIntent: "price_or_plan",
         } as any,
       };
     }
@@ -566,11 +592,9 @@ export async function handleSingleServiceCatalog(
         })
         .join("\n");
 
-      const finalReply = canonicalReply;
-
       return {
         handled: true,
-        reply: finalReply,
+        reply: canonicalReply,
         source: "price_summary_db",
         intent: "precio",
         ctxPatch: {
