@@ -193,21 +193,31 @@ export async function finalizeReply(
     ? baseCtx.last_presented_family_keys
     : [];
 
-  const canonicalExpectingVariantForEntityId =
-    baseCtx.expectingVariantForEntityId ??
-    baseCtx.expecting_variant_for_entity_id ??
-    (baseCtx.expectingVariant ? canonicalLastEntityId : null) ??
-    null;
+  const hasOwn = (obj: any, key: string) =>
+    Boolean(obj) && Object.prototype.hasOwnProperty.call(obj, key);
 
-  const canonicalExpectedVariantIntent =
-    baseCtx.expectedVariantIntent ??
-    baseCtx.expected_variant_intent ??
-    null;
+  const canonicalExpectingVariantForEntityId = hasOwn(baseCtx, "expectingVariantForEntityId")
+    ? baseCtx.expectingVariantForEntityId
+    : hasOwn(baseCtx, "expecting_variant_for_entity_id")
+    ? baseCtx.expecting_variant_for_entity_id
+    : hasOwn(baseCtx, "expectingVariant")
+    ? (baseCtx.expectingVariant ? canonicalLastEntityId : null)
+    : null;
 
-  const canonicalPresentedVariantOptions = Array.isArray(baseCtx.presentedVariantOptions)
-    ? baseCtx.presentedVariantOptions
-    : Array.isArray(baseCtx.presented_variant_options)
-    ? baseCtx.presented_variant_options
+  const canonicalExpectedVariantIntent = hasOwn(baseCtx, "expectedVariantIntent")
+    ? baseCtx.expectedVariantIntent
+    : hasOwn(baseCtx, "expected_variant_intent")
+    ? baseCtx.expected_variant_intent
+    : null;
+
+  const canonicalPresentedVariantOptions = hasOwn(baseCtx, "presentedVariantOptions")
+    ? (Array.isArray(baseCtx.presentedVariantOptions)
+        ? baseCtx.presentedVariantOptions
+        : null)
+    : hasOwn(baseCtx, "presented_variant_options")
+    ? (Array.isArray(baseCtx.presented_variant_options)
+        ? baseCtx.presented_variant_options
+        : null)
     : [];
 
   const canonicalLastResolvedIntent =
@@ -240,6 +250,18 @@ export async function finalizeReply(
     last_assistant_text: reply,
     last_user_text: userInput,
     last_turn_at: new Date().toISOString(),
+
+    // mantener consistencia y no revivir valores legacy viejos
+    last_entity_id: canonicalLastEntityId,
+    last_entity_name: canonicalLastEntityName,
+    last_family_key: canonicalLastFamilyKey,
+    last_family_name: canonicalLastFamilyName,
+    last_presented_entity_ids: canonicalLastPresentedEntityIds,
+    last_presented_family_keys: canonicalLastPresentedFamilyKeys,
+    expecting_variant_for_entity_id: canonicalExpectingVariantForEntityId,
+    expected_variant_intent: canonicalExpectedVariantIntent,
+    presented_variant_options: canonicalPresentedVariantOptions,
+    last_resolved_intent: canonicalLastResolvedIntent,
   };
 
   const ok = await deps.safeSend(tenantId, canal, messageId, fromNumber, reply);
