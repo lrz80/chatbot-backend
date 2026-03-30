@@ -1,21 +1,22 @@
 // backend/src/lib/guards/paymentHumanGuard.ts
 import type { Pool } from "pg";
 import type { Canal } from "../../lib/detectarIntencion";
-import type { TurnEvent } from "../conversation/stateMachine";
-import type { GateResult } from "../conversation/stateMachine";
+import type { TurnEvent, GateResult } from "../conversation/stateMachine";
 import { setHumanOverride } from "../humanOverride/setHumanOverride";
 
 type Idioma = "es" | "en";
 
-// ✅ TTL recomendado para evitar estados pegados
-// Puedes cambiarlo sin redeploy si lo pones en Railway Variables.
 const ESPERANDO_PAGO_TTL_HOURS = Math.max(
   1,
   Number(process.env.ESPERANDO_PAGO_TTL_HOURS || "12")
 );
 
-const PAGO_CONFIRM_REGEX =
-  /^(?!.*\b(no|aun\s*no|todav[ií]a\s*no|not)\b).*?\b(pago\s*realizado|listo\s*el\s*pago|ya\s*pagu[eé]|he\s*paga(do|do)|payment\s*(done|made|completed)|i\s*paid|paid)\b/i;
+type ParsedDatosCliente = null | {
+  nombre?: string | null;
+  email?: string | null;
+  telefono?: string | null;
+  pais?: string | null;
+};
 
 export type PaymentGuardResult =
   | { action: "continue" }
@@ -23,9 +24,9 @@ export type PaymentGuardResult =
   | {
       action: "reply";
       replySource:
-        | "pago-link"
         | "pago-confirm"
         | "pago-datos"
+        | "pago-link"
         | "pago-link-missing";
       intent: "pago";
       facts: Record<string, any>;
@@ -37,6 +38,222 @@ export type PaymentGuardResult =
       };
     };
 
+type PaymentStateSnapshot = {
+  estadoActual: string;
+  humanOverride: boolean;
+  overrideActive: boolean;
+  cliente: any;
+};
+
+function normalizeEstado(value: any): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isObject(value: unknown): value is Record<string, any> {
+  return Boolean(value) && typeof value === "object";
+}
+
+function getConvoCtx(event: any): Record<string, any> {
+  return isObject(event?.convoCtx) ? event.convoCtx : {};
+}
+
+function getActiveFlow(event: any): string | null {
+  const value = event?.activeFlow;
+  return typeof value === "string" ? value : null;
+}
+
+function getActiveStep(event: any): string | null {
+  const value = event?.activeStep;
+  return typeof value === "string" ? value : null;
+}
+
+function getStructuredPaymentSignal(ctx: Record<string, any>): string | null {
+  const value =
+    ctx?.payment_signal ??
+    ctx?.paymentSignal ??
+    ctx?.payment?.signal ??
+    ctx?.payment?.event ??
+    null;
+
+  return typeof value === "string" && value.trim()
+    ? value.trim().toLowerCase()
+    : null;
+}
+
+function hasActivePaymentState(input: {
+  estadoActual: string;
+  ctx: Record<string, any>;
+  activeFlow: string | null;
+  activeStep: string | null;
+}): boolean {
+  const { estadoActual, ctx, activeFlow, activeStep } = input;
+
+  if (estadoActual === "esperando_pago" || estadoActual === "pago_en_confirmacion") {
+    return true;
+  }
+
+  if (ctx?.payment?.active === true) {
+    return true;
+  }
+
+  if (ctx?.guard === "payment") {
+    return true;
+  }
+
+  if (ctx?.awaiting_field === "payment_details") {
+    return true;
+  }
+
+  if (activeFlow === "payment") {
+    return true;
+  }
+
+  if (activeStep === "payment" || activeStep === "details") {
+    return true;
+  }
+
+  return false;
+}
+
+function shouldTreatAsPaymentDetails(input: {
+  parsed: ParsedDatosCliente;
+  estadoActual: string;
+  ctx: Record<string, any>;
+  activeFlow: string | null;
+  activeStep: string | null;
+}): boolean {
+  const { parsed, estadoActual, ctx, activeFlow, activeStep } = input;
+
+  if (!parsed) return false;
+
+  if (estadoActual === "esperando_pago") {
+    return true;
+  }
+
+  if (ctx?.awaiting_field === "payment_details") {
+    return true;
+  }
+
+  if (ctx?.guard === "payment") {
+    return true;
+  }
+
+  if (ctx?.payment?.active === true) {
+    return true;
+  }
+
+  if (activeFlow === "payment") {
+    return true;
+  }
+
+  if (activeStep === "details") {
+    return true;
+  }
+
+  return false;
+}
+
+function shouldTreatAsPaymentConfirmation(input: {
+  ctx: Record<string, any>;
+  activeFlow: string | null;
+  activeStep: string | null;
+}): boolean {
+  const { ctx, activeFlow, activeStep } = input;
+
+  const signal = getStructuredPaymentSignal(ctx);
+
+  if (signal === "confirmed" || signal === "payment_confirmed") {
+    return true;
+  }
+
+  if (ctx?.payment?.confirmationDeclared === true) {
+    return true;
+  }
+
+  if (ctx?.payment_confirmation_declared === true) {
+    return true;
+  }
+
+  if (activeFlow === "payment_confirmation") {
+    return true;
+  }
+
+  if (activeStep === "payment_confirmation") {
+    return true;
+  }
+
+  return false;
+}
+
+async function readClienteState(input: {
+  pool: Pool;
+  tenantId: string;
+  canal: Canal;
+  contacto: string;
+}): Promise<PaymentStateSnapshot> {
+  const { pool, tenantId, canal, contacto } = input;
+
+  const { rows } = await pool.query(
+    `
+    SELECT
+      estado,
+      updated_at,
+      human_override,
+      human_override_until,
+      nombre,
+      email,
+      telefono,
+      pais,
+      segmento
+    FROM clientes
+    WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+    LIMIT 1
+    `,
+    [tenantId, canal, contacto]
+  );
+
+  const cliente = rows[0] || null;
+  let estadoActual = normalizeEstado(cliente?.estado);
+  const humanOverride = cliente?.human_override === true;
+
+  if (estadoActual === "esperando_pago" && cliente?.updated_at) {
+    const updatedAtMs = new Date(cliente.updated_at).getTime();
+    const ageMs = Date.now() - updatedAtMs;
+    const ttlMs = ESPERANDO_PAGO_TTL_HOURS * 60 * 60 * 1000;
+
+    if (Number.isFinite(updatedAtMs) && ageMs > ttlMs) {
+      try {
+        await pool.query(
+          `
+          UPDATE clientes
+          SET estado = NULL,
+              updated_at = NOW()
+          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+          `,
+          [tenantId, canal, contacto]
+        );
+        estadoActual = "";
+      } catch {
+        // no bloquear
+      }
+    }
+  }
+
+  const until = cliente?.human_override_until
+    ? new Date(cliente.human_override_until)
+    : null;
+
+  const overrideActive =
+    humanOverride && Boolean(until) && (until as Date).getTime() > Date.now();
+
+  return {
+    estadoActual,
+    humanOverride,
+    overrideActive,
+    cliente,
+  };
+}
+
 export async function paymentHumanGuard(opts: {
   pool: Pool;
   tenantId: string;
@@ -45,13 +262,11 @@ export async function paymentHumanGuard(opts: {
   userInput: string;
   idiomaDestino: Idioma;
   promptBase: string;
-  parseDatosCliente: (text: string) => null | {
-    nombre?: string | null;
-    email?: string | null;
-    telefono?: string | null;
-    pais?: string | null;
-  };
+  parseDatosCliente: (text: string) => ParsedDatosCliente;
   extractPaymentLinkFromPrompt: (prompt: string) => string | null;
+  convoCtx?: Record<string, any>;
+  activeFlow?: string | null;
+  activeStep?: string | null;
 }): Promise<PaymentGuardResult> {
   const {
     pool,
@@ -63,87 +278,75 @@ export async function paymentHumanGuard(opts: {
     promptBase,
     parseDatosCliente,
     extractPaymentLinkFromPrompt,
+    convoCtx = {},
+    activeFlow = null,
+    activeStep = null,
   } = opts;
 
-  // 1) Leer estado cliente (+ updated_at para TTL)
-  const { rows: clienteRows } = await pool.query(
-    `SELECT
-        estado,
-        updated_at,
-        human_override,
-        human_override_until,
-        nombre, email, telefono, pais, segmento
-     FROM clientes
-     WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
-     LIMIT 1`,
-    [tenantId, canal, contacto]
-  );
+  const {
+    estadoActual,
+    humanOverride,
+    overrideActive,
+    cliente,
+  } = await readClienteState({
+    pool,
+    tenantId,
+    canal,
+    contacto,
+  });
 
-  const cliente = clienteRows[0] || null;
-  const estadoActual = String(cliente?.estado || "").toLowerCase();
-  const humanOverride = cliente?.human_override === true;
-
-  // ✅ TTL: si está "esperando_pago" hace demasiado, lo reseteamos
-  if (estadoActual === "esperando_pago" && cliente?.updated_at) {
-    const updatedAtMs = new Date(cliente.updated_at).getTime();
-    const ageMs = Date.now() - updatedAtMs;
-    const ttlMs = ESPERANDO_PAGO_TTL_HOURS * 60 * 60 * 1000;
-
-    if (Number.isFinite(updatedAtMs) && ageMs > ttlMs) {
-      try {
-        await pool.query(
-          `UPDATE clientes
-              SET estado = NULL,
-                  updated_at = NOW()
-            WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
-          [tenantId, canal, contacto]
-        );
-
-        // ✅ refresca estado local para que este turno NO quede atrapado
-        // (no re-query; solo lo tratamos como reseteado)
-        // Nota: si quieres, puedes cambiar NULL por 'lead' según tu sistema.
-        // const estadoActual = ''  // pero como es const, seguimos por flujo normal.
-      } catch {}
-    }
-  }
-
-  const until = cliente?.human_override_until
-    ? new Date(cliente.human_override_until)
-    : null;
-
-  const overrideActive = humanOverride && until && until.getTime() > Date.now();
-
-  // 2) Silencio total SOLO si human_override está vigente (TTL)
   if (overrideActive) {
     return { action: "silence", reason: "human_override" };
   }
 
-  // ✅ Si estaba true pero vencido, limpiamos
   if (humanOverride && !overrideActive) {
     try {
       await pool.query(
-        `UPDATE clientes
-            SET human_override = false,
-                human_override_until = NULL,
-                updated_at = NOW()
-          WHERE tenant_id = $1 AND canal = $2 AND contacto = $3`,
+        `
+        UPDATE clientes
+        SET human_override = false,
+            human_override_until = NULL,
+            updated_at = NOW()
+        WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
+        `,
         [tenantId, canal, contacto]
       );
-    } catch {}
+    } catch {
+      // no bloquear
+    }
   }
 
-  // 3) Silencio total si está en confirmación de pago
   if (estadoActual === "pago_en_confirmacion") {
     return { action: "silence", reason: "pago_en_confirmacion" };
   }
 
-  // 4) Si confirma pago → set estado + human_override (DB)
-  if (PAGO_CONFIRM_REGEX.test(userInput || "")) {
+  const paymentStateActive = hasActivePaymentState({
+    estadoActual,
+    ctx: convoCtx,
+    activeFlow,
+    activeStep,
+  });
+
+  if (!paymentStateActive) {
+    return { action: "continue" };
+  }
+
+  const parsed = parseDatosCliente(userInput || "");
+
+  if (
+    shouldTreatAsPaymentConfirmation({
+      ctx: convoCtx,
+      activeFlow,
+      activeStep,
+    })
+  ) {
     await pool.query(
-      `INSERT INTO clientes (tenant_id, canal, contacto, estado, updated_at)
-       VALUES ($1,$2,$3,'pago_en_confirmacion',now())
-       ON CONFLICT (tenant_id, canal, contacto)
-       DO UPDATE SET estado='pago_en_confirmacion', updated_at=now()`,
+      `
+      INSERT INTO clientes (tenant_id, canal, contacto, estado, updated_at)
+      VALUES ($1, $2, $3, 'pago_en_confirmacion', NOW())
+      ON CONFLICT (tenant_id, canal, contacto)
+      DO UPDATE SET estado = 'pago_en_confirmacion', updated_at = NOW()
+      `,
       [tenantId, canal, contacto]
     );
 
@@ -153,17 +356,6 @@ export async function paymentHumanGuard(opts: {
       contacto,
       minutes: 5,
       reason: "pago_confirmado",
-      source: "payment",
-      customerPhone: contacto,
-      userMessage: userInput,
-    });
-
-    await setHumanOverride({
-      tenantId,
-      canal,
-      contacto,
-      minutes: 5,
-      reason: "pago_confirmado_por_usuario",
       source: "payment_guard",
       userMessage: userInput || null,
     });
@@ -184,94 +376,63 @@ export async function paymentHumanGuard(opts: {
         patchCtx: {
           guard: "payment",
           payment_status: "confirmed_by_user",
+          payment_signal: null,
           last_bot_action: "payment_confirm_received",
         },
       },
     };
   }
 
-  // 5) Reenvío de link si ya está esperando pago y pide link
-  const LINK_REQUEST_REGEX =
-    /\b(link|enlace|pagar|pago|stripe|checkout|payment\s+link)\b/i;
-
-  if (estadoActual === "esperando_pago" && LINK_REQUEST_REGEX.test(userInput || "")) {
-    const paymentLink = extractPaymentLinkFromPrompt(promptBase);
-
-    if (!paymentLink) {
-      return {
-        action: "reply",
-        replySource: "pago-link-missing",
-        intent: "pago",
-        facts: {
-          EVENT: "PAYMENT_LINK_REQUESTED",
-          LANGUAGE: idiomaDestino,
-          PAYMENT_LINK_AVAILABLE: false,
-        },
-        transition: {
-          flow: "generic_sales",
-          step: "close",
-          patchCtx: {
-            guard: "payment",
-            last_bot_action: "payment_link_missing",
-          },
-        },
-      };
-    }
-
-    return {
-      action: "reply",
-      replySource: "pago-link",
-      intent: "pago",
-      facts: {
-        EVENT: "PAYMENT_LINK_REQUESTED",
-        LANGUAGE: idiomaDestino,
-        PAYMENT_LINK_AVAILABLE: true,
-        PAYMENT_LINK: paymentLink,
-        INSTRUCTION: "ASK_USER_TO_TEXT_PAGO_REALIZADO_AFTER_PAYMENT",
-      },
-      transition: {
-        flow: "generic_sales",
-        step: "close",
-        patchCtx: {
-          last_bot_action: "sent_payment_link",
-          payment_link_sent: true,
-        },
-      },
-    };
-  }
-
-  // 6) Si manda datos → tu lógica actual (la puedes dejar como la última versión que ya ajustamos)
-  const parsed = parseDatosCliente(userInput || "");
-  if (parsed) {
+  if (
+    shouldTreatAsPaymentDetails({
+      parsed,
+      estadoActual,
+      ctx: convoCtx,
+      activeFlow,
+      activeStep,
+    })
+  ) {
     await pool.query(
-      `INSERT INTO clientes (tenant_id, canal, contacto, nombre, email, telefono, pais, segmento, estado, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'lead'), 'esperando_pago', now())
-       ON CONFLICT (tenant_id, canal, contacto)
-       DO UPDATE SET
-        nombre   = COALESCE(EXCLUDED.nombre, clientes.nombre),
-        email    = COALESCE(EXCLUDED.email,  clientes.email),
+      `
+      INSERT INTO clientes (
+        tenant_id,
+        canal,
+        contacto,
+        nombre,
+        email,
+        telefono,
+        pais,
+        segmento,
+        estado,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, 'lead'), 'esperando_pago', NOW())
+      ON CONFLICT (tenant_id, canal, contacto)
+      DO UPDATE SET
+        nombre = COALESCE(EXCLUDED.nombre, clientes.nombre),
+        email = COALESCE(EXCLUDED.email, clientes.email),
         telefono = COALESCE(EXCLUDED.telefono, clientes.telefono),
-        pais     = COALESCE(EXCLUDED.pais, clientes.pais),
-        estado   = 'esperando_pago',
-        updated_at = now()`,
+        pais = COALESCE(EXCLUDED.pais, clientes.pais),
+        estado = 'esperando_pago',
+        updated_at = NOW()
+      `,
       [
         tenantId,
         canal,
         contacto,
-        parsed.nombre ?? null,
-        parsed.email ?? null,
-        parsed.telefono ?? null,
-        parsed.pais ?? null,
+        parsed?.nombre ?? null,
+        parsed?.email ?? null,
+        parsed?.telefono ?? null,
+        parsed?.pais ?? null,
         cliente?.segmento || null,
       ]
     );
 
-    const pideLink = LINK_REQUEST_REGEX.test(userInput || "");
     const paymentLink = extractPaymentLinkFromPrompt(promptBase);
 
     return {
       action: "reply",
-      replySource: "pago-datos",
+      replySource: paymentLink ? "pago-datos" : "pago-link-missing",
       intent: "pago",
       dbUpdated: true,
       facts: {
@@ -279,8 +440,6 @@ export async function paymentHumanGuard(opts: {
         LANGUAGE: idiomaDestino,
         PAYMENT_LINK_AVAILABLE: Boolean(paymentLink),
         PAYMENT_LINK: paymentLink || null,
-        USER_REQUESTED_LINK: pideLink,
-        INSTRUCTION: "ASK_USER_TO_TEXT_PAGO_REALIZADO_AFTER_PAYMENT",
       },
       transition: {
         flow: "generic_sales",
@@ -294,11 +453,39 @@ export async function paymentHumanGuard(opts: {
     };
   }
 
+  const paymentLink = extractPaymentLinkFromPrompt(promptBase);
+
+  if (estadoActual === "esperando_pago" && paymentLink) {
+    return {
+      action: "reply",
+      replySource: "pago-link",
+      intent: "pago",
+      facts: {
+        EVENT: "PAYMENT_LINK_AVAILABLE",
+        LANGUAGE: idiomaDestino,
+        PAYMENT_LINK_AVAILABLE: true,
+        PAYMENT_LINK: paymentLink,
+      },
+      transition: {
+        flow: "generic_sales",
+        step: "close",
+        patchCtx: {
+          guard: "payment",
+          payment_link_sent: true,
+          last_bot_action: "payment_link_available",
+        },
+      },
+    };
+  }
+
   return { action: "continue" };
 }
 
 export async function paymentHumanGate(event: TurnEvent): Promise<GateResult> {
   const e = event as any;
+  const convoCtx = getConvoCtx(e);
+  const activeFlow = getActiveFlow(e);
+  const activeStep = getActiveStep(e);
 
   const result = await paymentHumanGuard({
     pool: e.pool,
@@ -310,12 +497,20 @@ export async function paymentHumanGate(event: TurnEvent): Promise<GateResult> {
     promptBase: e.promptBase,
     parseDatosCliente: e.parseDatosCliente,
     extractPaymentLinkFromPrompt: e.extractPaymentLinkFromPrompt,
+    convoCtx,
+    activeFlow,
+    activeStep,
   });
 
-  if (result.action === "continue") return { action: "continue" };
+  if (result.action === "continue") {
+    return { action: "continue" };
+  }
 
   if (result.action === "silence") {
-    return { action: "silence", reason: result.reason };
+    return {
+      action: "silence",
+      reason: result.reason,
+    };
   }
 
   return {
@@ -324,7 +519,7 @@ export async function paymentHumanGate(event: TurnEvent): Promise<GateResult> {
     intent: result.intent,
     facts: result.facts,
     transition: result.transition
-      ? { effects: null, nextAction: null, ...result.transition }
+      ? { ...result.transition }
       : undefined,
-  } as any;
+  } as GateResult;
 }
