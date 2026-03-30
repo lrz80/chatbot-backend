@@ -34,6 +34,34 @@ function splitLines(text: string): string[] {
     .filter((line: string) => line.length > 0);
 }
 
+function resolveVariantTurnIntent(params: {
+  detectedIntent?: string | null;
+  intentOut?: string | null;
+  explicitDetailIntentNow: boolean;
+  askedPriceVariant: boolean;
+}): string {
+  if (params.askedPriceVariant) {
+    return "precio";
+  }
+
+  if (params.explicitDetailIntentNow) {
+    return "info_servicio";
+  }
+
+  const normalizedIntentOut = String(params.intentOut || "").trim().toLowerCase();
+  const normalizedDetectedIntent = String(params.detectedIntent || "").trim().toLowerCase();
+
+  if (normalizedIntentOut && normalizedIntentOut !== "duda") {
+    return normalizedIntentOut;
+  }
+
+  if (normalizedDetectedIntent && normalizedDetectedIntent !== "duda") {
+    return normalizedDetectedIntent;
+  }
+
+  return "info_servicio";
+}
+
 export async function handleVariantSecondTurn(
   input: HandleVariantSecondTurnInput
 ): Promise<FastpathResult> {
@@ -115,6 +143,13 @@ export async function handleVariantSecondTurn(
 
   const askedPriceVariant =
     String(input.convoCtx?.last_bot_action || "") === "asked_price_variant";
+
+  const resolvedVariantTurnIntent = resolveVariantTurnIntent({
+    detectedIntent: input.detectedIntent,
+    intentOut: input.intentOut,
+    explicitDetailIntentNow,
+    askedPriceVariant,
+  });
 
   const storedVariantOptions = Array.isArray(input.convoCtx?.last_variant_options)
     ? input.convoCtx.last_variant_options
@@ -209,11 +244,11 @@ export async function handleVariantSecondTurn(
           handled: true,
           reply,
           source: "price_fastpath_db",
-          intent: "precio",
+          intent: resolvedVariantTurnIntent,
           ctxPatch: {
             expectingVariant: false,
             expectedVariantIntent: null,
-            lastResolvedIntent: "price_or_plan",
+            lastResolvedIntent: resolvedVariantTurnIntent,
 
             selectedServiceId: serviceId,
 
@@ -358,12 +393,12 @@ export async function handleVariantSecondTurn(
     handled: true,
     reply: finalReply,
     source: "catalog_db",
-    intent: input.intentOut || "info_servicio",
+    intent: resolvedVariantTurnIntent,
     ctxPatch: {
       expectingVariant: false,
       expectedVariantIntent: null,
 
-      lastResolvedIntent: "price_or_plan",
+      lastResolvedIntent: resolvedVariantTurnIntent,
 
       selectedServiceId: serviceId,
 
