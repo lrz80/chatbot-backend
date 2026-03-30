@@ -1089,7 +1089,7 @@ export async function procesarMensajeWhatsApp(
   //    🔒 NO corre si hay booking activo
   // ===============================
   if (!inBooking0) {
-    const smHandled = await handleStateMachineTurn({
+    const smTurn = await handleStateMachineTurn({
       pool,
       sm,
       tenant,
@@ -1098,20 +1098,71 @@ export async function procesarMensajeWhatsApp(
       userInput,
       messageId: messageId || null,
       idiomaDestino,
-      promptBase,       // base SIN memoria
-      promptBaseMem,   // base + memoria (si aplica)
-      MAX_LINES: MAX_WHATSAPP_LINES,
-      tryBooking,
+      promptBase,
       tenantId: tenant.id,
-      eventUserInput: event.userInput,
-      replyAndExit,    // callback local que ya usa finalizeReply por debajo
+      replyAndExit,
+      applyTransitionAndPersist: async (smTransition) => {
+        transition({
+          flow: smTransition.flow,
+          step: smTransition.step,
+          patchCtx: smTransition.patchCtx || {},
+        });
+
+        await setConversationStateCompat(tenant.id, canal, contactoNorm, {
+          activeFlow,
+          activeStep,
+          context: convoCtx,
+        });
+      },
       parseDatosCliente,
       extractPaymentLinkFromPrompt: null,
       PAGO_CONFIRM_REGEX: null,
     });
 
-    if (smHandled) {
-      // SM ya respondió (o hizo silencio con log); no seguimos al fallback
+    if (smTurn.handled) {
+      if (smTurn.replied) {
+        return;
+      }
+
+      if (smTurn.activatedBooking) {
+        if (await tryBooking("guardrail", "sm_transition_booking")) {
+          return;
+        }
+      }
+
+      if (smTurn.activatedEstimate) {
+        const estimateResult = await runEstimateFlowTurn({
+          pool,
+          tenant,
+          convoCtx,
+          userInput,
+          idiomaDestino,
+          canal,
+          contactoNorm,
+        });
+
+        if (estimateResult.handled) {
+          transition({
+            flow: "estimate_flow",
+            step: estimateResult.nextEstimateState.step,
+            patchCtx: {
+              estimateFlow: estimateResult.nextEstimateState,
+              estimate_flow_last_touch_at: Date.now(),
+              last_bot_action: "estimate_flow_turn",
+              last_reply_source: "estimate_flow",
+            },
+          });
+
+          return await replyAndExit(
+            estimateResult.finalReply,
+            "estimate_flow",
+            "estimate_flow"
+          );
+        }
+
+        return;
+      }
+
       return;
     }
   } else {

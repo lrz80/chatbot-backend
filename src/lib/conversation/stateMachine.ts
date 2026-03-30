@@ -5,40 +5,6 @@ import type { TurnContext } from "./turnContext";
 // Tu evento del SM es el contexto completo del turno (pool, promptBase, helpers, etc.)
 export type TurnEvent = TurnContext;
 
-export type GateResult =
-  | { action: "continue"; intent?: string; transition?: any }
-  | { action: "silence"; reason: string; intent?: string; transition?: any }
-  | {
-      action: "reply";
-      reply?: string;                 // reply directo
-      replySource?: string;           // opcional
-      facts?: Record<string, any>;    // decision-only
-      intent?: string;
-      transition?: any;
-    };
-
-// Gate SIEMPRE recibe TurnEvent (no TurnContext “aparte”)
-export type Gate = (event: TurnEvent) => Promise<GateResult>;
-
-/**
- * Resultado de la state machine
- */
-export type StateResult =
-  | { type: "continue" }
-  | { type: "silence"; reason: string }
-  | {
-      type: "reply";
-      text?: string;               // si ya viene armado
-      facts?: Record<string, any>; // si hay que generar respuesta con prompt
-      intent?: string | null;
-      source?: string;
-      transition?: StateTransition;
-    }
-  | {
-      type: "transition";
-      transition: StateTransition;
-    };
-
 /**
  * Cambio de estado (flow / step / ctx)
  */
@@ -58,11 +24,52 @@ export type StateTransition = {
   };
 };
 
+export type GateResult =
+  | { action: "continue"; intent?: string; transition?: StateTransition }
+  | { action: "silence"; reason: string; intent?: string; transition?: StateTransition }
+  | {
+      action: "reply";
+      reply?: string;
+      replySource?: string;
+      facts?: Record<string, any>;
+      intent?: string;
+      transition?: StateTransition;
+    }
+  | {
+      action: "transition";
+      intent?: string;
+      transition: StateTransition;
+    };
+
+// Gate SIEMPRE recibe TurnEvent (no TurnContext “aparte”)
+export type Gate = (event: TurnEvent) => Promise<GateResult>;
+
+/**
+ * Resultado de la state machine
+ */
+export type StateResult =
+  | { type: "continue" }
+  | { type: "silence"; reason: string }
+  | {
+      type: "reply";
+      text?: string;
+      facts?: Record<string, any>;
+      intent?: string | null;
+      source?: string;
+      transition?: StateTransition;
+    }
+  | {
+      type: "transition";
+      transition: StateTransition;
+      intent?: string | null;
+    };
+
 export type StateMachineDeps = {
   paymentHumanGuard: (event: TurnEvent) => Promise<
     | { action: "continue" }
     | { action: "silence"; reason: string }
-    | { action: "reply"; facts: any; intent?: string }
+    | { action: "reply"; facts: any; intent?: string; transition?: StateTransition }
+    | { action: "transition"; intent?: string; transition: StateTransition }
   >;
 
   yesNoStateGate: (event: TurnEvent) => Promise<
@@ -74,6 +81,11 @@ export type StateMachineDeps = {
         intent?: string;
         transition?: StateTransition;
       }
+    | {
+        action: "transition";
+        intent?: string;
+        transition: StateTransition;
+      }
   >;
 
   awaitingGate?: (event: TurnEvent) => Promise<
@@ -84,6 +96,11 @@ export type StateMachineDeps = {
         intent?: string;
         transition?: StateTransition;
       }
+    | {
+        action: "transition";
+        intent?: string;
+        transition: StateTransition;
+      }
   >;
 };
 
@@ -93,6 +110,7 @@ export function createStateMachine(gates: Gate[]) {
       const r = await gate(event);
       if (r.action !== "continue") return r;
     }
+
     return { action: "continue" };
   };
 }
