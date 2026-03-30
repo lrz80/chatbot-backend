@@ -24,6 +24,44 @@ import { applyStructuredServicePersistence } from "./applyStructuredServicePersi
 
 const MAX_WHATSAPP_LINES = 9999;
 
+type PendingCtaLike = {
+  type?: string | null;
+  awaitsConfirmation?: boolean | null;
+};
+
+function getPendingCtaFromCtx(convoCtx: any): PendingCtaLike | null {
+  if (!convoCtx || typeof convoCtx !== "object") return null;
+
+  const directPendingCta =
+    convoCtx.pendingCta ??
+    convoCtx.pending_cta ??
+    convoCtx.replyPolicy?.pendingCta ??
+    convoCtx.reply_policy?.pendingCta ??
+    null;
+
+  if (!directPendingCta || typeof directPendingCta !== "object") {
+    return null;
+  }
+
+  return {
+    type:
+      typeof directPendingCta.type === "string"
+        ? directPendingCta.type
+        : null,
+    awaitsConfirmation: directPendingCta.awaitsConfirmation === true,
+  };
+}
+
+function hasExplicitPendingCtaAwaitingConfirmation(convoCtx: any): boolean {
+  const pendingCta = getPendingCtaFromCtx(convoCtx);
+
+  return Boolean(
+    pendingCta &&
+      pendingCta.type &&
+      pendingCta.awaitsConfirmation === true
+  );
+}
+
 export type FastpathHybridArgs = {
   pool: Pool;
   tenantId: string;
@@ -74,6 +112,34 @@ export async function handleFastpathHybridTurn(
     followupNeedsAnchor,
     followupEntityKind,
   } = args;
+
+  const pendingCta = getPendingCtaFromCtx(convoCtx);
+
+  if (hasExplicitPendingCtaAwaitingConfirmation(convoCtx)) {
+    if (process.env.DEBUG_FASTPATH === "true") {
+      console.log("[FASTPATH_HYBRID][PENDING_CTA_STATE_DETECTED]", {
+        tenantId,
+        canal,
+        contactoNorm,
+        userInput,
+        pendingCta,
+      });
+    }
+
+    return {
+      handled: false,
+      intent: detectedIntent || intentFallback || null,
+      ctxPatch: {
+        pendingCta: pendingCta
+          ? {
+              type: pendingCta.type || null,
+              awaitsConfirmation: true,
+            }
+          : null,
+        pendingCtaNeedsResolution: true,
+      },
+    };
+  }
 
   const currentIntent = detectedIntent || intentFallback || null;
   const normalizedCurrentIntent = String(currentIntent || "").trim().toLowerCase();
