@@ -15,6 +15,16 @@ function normalizeUserText(input: string): string {
   return String(input || "").trim();
 }
 
+function normalizeForMatching(input: string): string {
+  return String(input || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function sanitizeContext(
   context?: Partial<CatalogReferenceContext> | null
 ): CatalogReferenceContext {
@@ -52,7 +62,7 @@ function sanitizeContext(
 }
 
 function tokenizeUserText(input: string): string[] {
-  return normalizeUserText(input)
+  return normalizeForMatching(input)
     .split(/\s+/)
     .map((v) => v.trim())
     .filter(Boolean);
@@ -111,7 +121,10 @@ function inferIntentFromContext(params: {
   detectedIntent: string | null;
   context: CatalogReferenceContext;
 }): CatalogReferenceIntent {
-  const mapped = mapDetectedIntentToCatalogIntent(params.detectedIntent, "unknown");
+  const mapped = mapDetectedIntentToCatalogIntent(
+    params.detectedIntent,
+    "unknown"
+  );
   if (mapped !== "unknown") return mapped;
 
   const { context } = params;
@@ -159,7 +172,10 @@ function buildSignals(params: {
 
   const hasReferentialDependency =
     hasExpectedVariant ||
-    ((hasLastEntity || hasPresentedEntities || hasLastFamily || hasPresentedFamilies) &&
+    ((hasLastEntity ||
+      hasPresentedEntities ||
+      hasLastFamily ||
+      hasPresentedFamilies) &&
       tokens.length > 0 &&
       tokens.length <= 6);
 
@@ -350,29 +366,111 @@ function canPromoteExplicitEntityCandidate(params: {
     context: params.context,
   });
 
-  // Caso seguro: viene anclado al contexto conversacional real
   if (anchoredToContext) {
     return true;
   }
 
-  // Sin contexto, no promociones una entidad en turnos largos o ambiguos
   if (!params.hasAnyContext) {
-    // Intent desconocido + turno largo => no secuestrar a catálogo
     if (params.resolvedIntent === "unknown" && params.tokenCount > 6) {
       return false;
     }
 
-    // Preguntas de horarios no deben anclarse a entidad con evidencia floja
     if (params.resolvedIntent === "schedule" && score < 0.9) {
       return false;
     }
 
-    // Sin contexto, solo aceptar candidatos realmente fuertes
     return score >= 0.9;
   }
 
-  // Con algo de contexto, permite un poco menos de score
   return score >= 0.82;
+}
+
+function hasAnyToken(tokens: string[], allowed: Set<string>): boolean {
+  return tokens.some((token) => allowed.has(token));
+}
+
+function isGenericCatalogOverviewSignal(params: {
+  userText: string;
+  detectedIntent: string | null;
+  tokens: string[];
+  hasAnyContext: boolean;
+  hasStructuralCatalogEvidence: boolean;
+}): boolean {
+  const {
+    detectedIntent,
+    tokens,
+    hasAnyContext,
+    hasStructuralCatalogEvidence,
+  } = params;
+
+  if (hasAnyContext || hasStructuralCatalogEvidence) {
+    return false;
+  }
+
+  if (isExplicitCatalogBrowseIntent(detectedIntent)) {
+    return true;
+  }
+
+  const mappedIntent = mapDetectedIntentToCatalogIntent(
+    detectedIntent,
+    "unknown"
+  );
+
+  const catalogOverviewNouns = new Set<string>([
+    "plan",
+    "planes",
+    "paquete",
+    "paquetes",
+    "package",
+    "packages",
+    "membership",
+    "memberships",
+    "membresia",
+    "membresias",
+  ]);
+
+  const browseCues = new Set<string>([
+    "tienes",
+    "tienen",
+    "hay",
+    "ofreces",
+    "ofrecen",
+    "muestrame",
+    "muestra",
+    "mostrar",
+    "ensename",
+    "lista",
+    "available",
+    "show",
+    "list",
+    "offer",
+    "offers",
+    "have",
+  ]);
+
+  const hasCatalogNoun = hasAnyToken(tokens, catalogOverviewNouns);
+  if (!hasCatalogNoun) return false;
+
+  const hasBrowseCue = hasAnyToken(tokens, browseCues);
+  const isShortTurn = tokens.length > 0 && tokens.length <= 8;
+
+  if (mappedIntent === "price_or_plan" || mappedIntent === "other_plans") {
+    return true;
+  }
+
+  if (detectedIntent === "info_general" && isShortTurn) {
+    return true;
+  }
+
+  if (hasBrowseCue && isShortTurn) {
+    return true;
+  }
+
+  if (tokens.length === 1) {
+    return true;
+  }
+
+  return false;
 }
 
 export function classifyCatalogReferenceTurn(
@@ -443,6 +541,7 @@ export function classifyCatalogReferenceTurn(
     "catalog_alternatives",
     "combination_and_price",
     "catalog_combination",
+    "info_general",
   ]);
 
   const hasStructuralCatalogEvidence =
@@ -454,10 +553,19 @@ export function classifyCatalogReferenceTurn(
     signals.hasReferentialDependency ||
     signals.hasConversationDependency;
 
+  const hasGenericCatalogOverviewSignal = isGenericCatalogOverviewSignal({
+    userText,
+    detectedIntent,
+    tokens,
+    hasAnyContext,
+    hasStructuralCatalogEvidence,
+  });
+
   if (
     detectedIntent &&
     !catalogCapableIntents.has(detectedIntent) &&
-    !hasStructuralCatalogEvidence
+    !hasStructuralCatalogEvidence &&
+    !hasGenericCatalogOverviewSignal
   ) {
     notes.push(`non_catalog_intent:${detectedIntent}`);
     result.debug.notes = notes;
@@ -483,7 +591,9 @@ export function classifyCatalogReferenceTurn(
   // =========================================================
   if (explicitVariantCandidate?.variantId) {
     notes.push("explicit_variant_candidate");
-    notes.push(`explicit_variant_score:${Number(explicitVariantCandidate.score || 0)}`);
+    notes.push(
+      `explicit_variant_score:${Number(explicitVariantCandidate.score || 0)}`
+    );
 
     result.kind = "variant_specific";
     result.confidence = Math.max(
@@ -571,7 +681,9 @@ export function classifyCatalogReferenceTurn(
     });
 
     notes.push("explicit_entity_candidate_from_catalog_matcher");
-    notes.push(`explicit_entity_score:${Number(explicitEntityCandidate.score || 0)}`);
+    notes.push(
+      `explicit_entity_score:${Number(explicitEntityCandidate.score || 0)}`
+    );
     notes.push(`explicit_entity_promotable:${canPromoteEntity ? "yes" : "no"}`);
 
     if (canPromoteEntity) {
@@ -605,7 +717,9 @@ export function classifyCatalogReferenceTurn(
   // =========================================================
   if (explicitFamilyCandidate?.familyKey) {
     notes.push("explicit_family_candidate");
-    notes.push(`explicit_family_score:${Number(explicitFamilyCandidate.score || 0)}`);
+    notes.push(
+      `explicit_family_score:${Number(explicitFamilyCandidate.score || 0)}`
+    );
 
     result.kind = "catalog_family";
     result.confidence = Math.max(
@@ -663,13 +777,11 @@ export function classifyCatalogReferenceTurn(
     (hasPresentedEntities || hasLastEntity) &&
     tokenCount > 0 &&
     tokenCount <= 6 &&
-    (
-      signals.hasReferentialDependency ||
+    (signals.hasReferentialDependency ||
       signals.hasSpecificEntityCandidate ||
       signals.hasVariantCandidate ||
       signals.hasFamilyCandidate ||
-      context.expectingVariantForEntityId
-    )
+      context.expectingVariantForEntityId)
   ) {
     notes.push("context_entity_available");
     notes.push("short_turn_with_entity_context");
@@ -747,23 +859,20 @@ export function classifyCatalogReferenceTurn(
   }
 
   // =========================================================
-  // 8) NO CONTEXT + EXPLICIT CATALOG BROWSE ONLY
+  // 8) NO CONTEXT + GENERIC CATALOG OVERVIEW SIGNAL
   // =========================================================
-  if (!hasAnyContext && isExplicitCatalogBrowseIntent(detectedIntent)) {
+  if (!hasAnyContext && hasGenericCatalogOverviewSignal) {
     notes.push("no_prior_context");
-    notes.push("explicit_catalog_browse_intent");
+    notes.push("generic_catalog_overview_signal");
 
     result.kind = "catalog_overview";
-    result.confidence = 0.62;
+    result.confidence = 0.7;
 
     result.shouldResolvePluralCatalog = true;
     result.targetLevel = "catalog";
 
     if (result.intent === "unknown") {
-      result.intent = mapDetectedIntentToCatalogIntent(
-        detectedIntent,
-        "price_or_plan"
-      );
+      result.intent = "price_or_plan";
     }
 
     result.debug.notes = notes;
