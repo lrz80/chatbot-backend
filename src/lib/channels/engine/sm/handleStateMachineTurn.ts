@@ -223,10 +223,10 @@ export async function handleStateMachineTurn(
     });
 
     return {
-      handled: true,
+      handled: false,
       replied: false,
-      activatedBooking,
-      activatedEstimate,
+      activatedBooking: false,
+      activatedEstimate: false,
     };
   }
 
