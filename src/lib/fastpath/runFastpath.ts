@@ -624,6 +624,27 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ===============================
   // 🧠 MOTOR ÚNICO DE CATÁLOGO
   // ===============================
+  const catalogRoutingSignal = buildCatalogRoutingSignal({
+    intentOut,
+    catalogReferenceClassification,
+    convoCtx,
+  });
+
+  const canEnterCatalogFastpath =
+    Boolean(catalogRoutingSignal?.shouldRouteCatalog) ||
+    Boolean(
+      catalogReferenceClassification?.kind === "catalog_overview" ||
+      catalogReferenceClassification?.kind === "catalog_family" ||
+      catalogReferenceClassification?.kind === "entity_specific" ||
+      catalogReferenceClassification?.kind === "variant_specific" ||
+      catalogReferenceClassification?.kind === "referential_followup" ||
+      catalogReferenceClassification?.kind === "comparison"
+    );
+
+  if (!canEnterCatalogFastpath) {
+    return { handled: false };
+  }
+
   const catalogFastpathResult = await runCatalogFastpath({
     pool,
     tenantId,
