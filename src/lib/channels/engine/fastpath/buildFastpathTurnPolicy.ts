@@ -35,6 +35,19 @@ function hasCatalogAnchorInContext(convoCtx: any): boolean {
   );
 }
 
+function isCatalogCapableClassificationIntent(value: unknown): boolean {
+  const intent = String(value || "").trim().toLowerCase();
+
+  return (
+    intent === "price_or_plan" ||
+    intent === "includes" ||
+    intent === "schedule" ||
+    intent === "other_plans" ||
+    intent === "combination_and_price" ||
+    intent === "compare"
+  );
+}
+
 export function buildFastpathTurnPolicy(
   input: FastpathTurnPolicyInput
 ): FastpathTurnPolicy {
@@ -64,27 +77,40 @@ export function buildFastpathTurnPolicy(
     Boolean(input.followupNeedsAnchor) ||
     hasCatalogAnchorInContext(input.convoCtx);
 
-  const hasCatalogNeed =
+  const hasCatalogScope = Boolean(signals?.hasCatalogScope);
+
+  const hasCatalogIntentSignal =
+    isCatalogCapableClassificationIntent(classification?.intent) ||
+    Boolean(facets?.asksPrices) ||
+    Boolean(facets?.asksSchedules) ||
+    Boolean(facets?.asksLocation) ||
+    Boolean(facets?.asksAvailability);
+
+  const shouldRouteCatalog =
     hasExplicitTarget ||
     hasEntityReference ||
     hasComparison ||
-    Boolean(facets?.asksPrices);
-
-  const shouldRouteCatalog = hasCatalogNeed || hasConversationDependency;
+    hasConversationDependency ||
+    hasCatalogIntentSignal ||
+    hasCatalogScope;
 
   const shouldBuildComparison =
     hasComparison ||
     (
-        shouldRouteCatalog &&
-        !hasExplicitTarget &&
-        classification?.kind !== "variant_specific"
+      shouldRouteCatalog &&
+      !hasExplicitTarget &&
+      classification?.kind !== "variant_specific" &&
+      (
+        hasCatalogScope ||
+        isCatalogCapableClassificationIntent(classification?.intent)
+      )
     );
 
   const canReuseCatalogContext =
     hasExplicitTarget ||
     hasEntityReference ||
     hasComparison ||
-    Boolean(facets?.asksPrices) ||
+    hasCatalogIntentSignal ||
     Boolean(signals?.hasReferentialDependency);
 
   const shouldUseRoutingStructuredService =
@@ -97,13 +123,12 @@ export function buildFastpathTurnPolicy(
   const shouldAllowExplicitEntityPromotion =
     !shouldBuildComparison &&
     (
-        hasConversationDependency ||
-        hasExplicitTarget ||
-        Boolean(facets?.asksPrices)
+      hasConversationDependency ||
+      hasExplicitTarget ||
+      Boolean(facets?.asksPrices)
     );
 
-  const shouldAllowLooseResolution =
-    shouldRouteCatalog || Boolean(facets?.asksPrices);
+  const shouldAllowLooseResolution = shouldRouteCatalog;
 
   return {
     shouldRouteCatalog,
