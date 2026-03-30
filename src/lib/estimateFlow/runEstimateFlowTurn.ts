@@ -51,15 +51,24 @@ export async function runEstimateFlowTurn({
 
   let estimateState = getEstimateFlowState(convoCtx);
 
-  if (!estimateState.lang || estimateState.lang !== idiomaDestino) {
+  function normalizeEstimateLang(value: unknown): Lang {
+    return String(value || "").trim().toLowerCase() === "en" ? "en" : "es";
+  }
+
+  const detectedLang = normalizeEstimateLang(idiomaDestino);
+
+  // Si el flow ya está activo, conservamos su idioma.
+  // Solo sembramos idioma al iniciar o si no existe.
+  if (!estimateState.lang) {
     estimateState = {
       ...estimateState,
-      lang: idiomaDestino,
+      lang: detectedLang,
     };
   }
 
-  const effectiveEstimateLang: Lang =
-    (estimateState.lang as Lang) || idiomaDestino;
+  const effectiveEstimateLang: Lang = normalizeEstimateLang(
+    estimateState.lang || detectedLang
+  );
 
   const estimateTurn = handleEstimateFlowTurn({
     userInput,
