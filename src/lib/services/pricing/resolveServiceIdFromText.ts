@@ -8,6 +8,14 @@ export type ResolveServiceCandidate = {
   id: string;
   name: string;
   score: number;
+  category?: string | null;
+  tipo?: string | null;
+  parentServiceId?: string | null;
+  catalogRole?: string | null;
+  overlapNameTokens?: string[];
+  overlapTipoTokens?: string[];
+  overlapSupportTokens?: string[];
+  dominantOverlapTokens?: string[];
 };
 
 export type ResolveServiceDecision =
@@ -734,6 +742,14 @@ export async function resolveServiceCandidatesFromText(
       id: s.cand.serviceId,
       name: s.cand.label,
       score: s.score,
+      category: s.cand.category || null,
+      tipo: s.cand.tipo || null,
+      parentServiceId: s.cand.parentServiceId || null,
+      catalogRole: s.cand.catalogRole || null,
+      overlapNameTokens: s.overlapNameTokens,
+      overlapTipoTokens: s.overlapTipoTokens,
+      overlapSupportTokens: s.overlapSupportTokens,
+      dominantOverlapTokens: s.dominantOverlapTokens,
     }));
 
   if (observedQueryTokens.length === 1) {

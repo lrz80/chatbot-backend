@@ -25,6 +25,24 @@ export type StructuredCatalogComparison = {
   requiresDisambiguation: boolean;
 };
 
+export type StructuredCatalogFamily = {
+  hasFamily: boolean;
+  familyKey: string;
+  familyLabel: string;
+  serviceIds: string[];
+  serviceNames: string[];
+  serviceLabels: string[];
+  requiresDisambiguation: boolean;
+};
+
+export type ExplicitFamilyCandidate = {
+  familyKey: string;
+  familyLabel: string;
+  serviceIds: string[];
+  serviceNames: string[];
+  serviceLabels: string[];
+};
+
 export type GetFastpathCatalogSignalsInput = {
   pool: Pool;
   tenantId: string;
@@ -40,7 +58,9 @@ export type GetFastpathCatalogSignalsInput = {
 
 export type GetFastpathCatalogSignalsResult = {
   explicitEntityCandidateForClassification: ExplicitEntityCandidate | null;
+  explicitFamilyCandidateForClassification: ExplicitFamilyCandidate | null;
   structuredComparison: StructuredCatalogComparison | null;
+  structuredFamily: StructuredCatalogFamily | null;
   entityCandidateResultLoose: any;
 };
 
@@ -128,6 +148,145 @@ function buildComparisonSideLabel(members: any[]): string {
 
   const shortest = [...names].sort((a, b) => a.length - b.length)[0];
   return shortest;
+}
+
+function normalizeFamilyToken(value: any): string {
+  return toTrimmedString(value).toLowerCase();
+}
+
+function getCandidateFamilyTokens(candidate: any): string[] {
+  const overlapNameTokens = Array.isArray(candidate?.overlapNameTokens)
+    ? candidate.overlapNameTokens
+    : [];
+
+  const overlapTipoTokens = Array.isArray(candidate?.overlapTipoTokens)
+    ? candidate.overlapTipoTokens
+    : [];
+
+  const dominantOverlapTokens = Array.isArray(candidate?.dominantOverlapTokens)
+    ? candidate.dominantOverlapTokens
+    : [];
+
+  const raw = [
+    ...overlapNameTokens,
+    ...overlapTipoTokens,
+    ...dominantOverlapTokens,
+  ];
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const item of raw) {
+    const token = normalizeFamilyToken(item);
+    if (!token || seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
+  }
+
+  return out;
+}
+
+function buildStructuredCatalogFamily(params: {
+  entityCandidateResult: any;
+}): StructuredCatalogFamily | null {
+  const rawCandidates: any[] = Array.isArray(params.entityCandidateResult?.candidates)
+    ? params.entityCandidateResult.candidates
+    : [];
+
+  const eligible: Array<{
+    id: string;
+    name: string;
+    score: number;
+    category: string;
+    tipo: string;
+    familyTokens: string[];
+  }> = rawCandidates
+    .map((candidate: any) => {
+      const id = toTrimmedString(candidate?.id);
+      const name = toTrimmedString(candidate?.name);
+      const score = toFiniteNumber(candidate?.score);
+      const category = normalizeFamilyToken(candidate?.category);
+      const tipo = normalizeFamilyToken(candidate?.tipo);
+      const familyTokens = getCandidateFamilyTokens(candidate);
+
+      return {
+        id,
+        name,
+        score,
+        category,
+        tipo,
+        familyTokens,
+      };
+    })
+    .filter((candidate) => {
+      return Boolean(candidate.id && candidate.name && candidate.score >= 0.25);
+    });
+
+  if (eligible.length < 2) {
+    return null;
+  }
+
+  const categoryValues: string[] = eligible
+    .map((candidate) => candidate.category)
+    .filter((value) => Boolean(value));
+
+  const tipoValues: string[] = eligible
+    .map((candidate) => candidate.tipo)
+    .filter((value) => Boolean(value));
+
+  const categories = new Set<string>(categoryValues);
+  const tipos = new Set<string>(tipoValues);
+
+  let sharedTokens: Set<string> | null = null;
+
+  for (const candidate of eligible) {
+    const tokenSet = new Set<string>(candidate.familyTokens);
+
+    if (sharedTokens === null) {
+      sharedTokens = tokenSet;
+      continue;
+    }
+
+    sharedTokens = new Set<string>(
+      Array.from(sharedTokens).filter((token) => tokenSet.has(token))
+    );
+  }
+
+  const sharedTokenValues: string[] = sharedTokens
+    ? Array.from(sharedTokens).filter((value) => Boolean(value))
+    : [];
+
+  const sameCategory = categories.size === 1 && categories.size > 0;
+  const sameTipo = tipos.size === 1 && tipos.size > 0;
+  const hasSharedFamilyToken = sharedTokenValues.length > 0;
+
+  if (!sameCategory && !sameTipo && !hasSharedFamilyToken) {
+    return null;
+  }
+
+  const ordered = [...eligible].sort((a, b) => b.score - a.score);
+
+  const serviceIds: string[] = ordered.map((candidate) => candidate.id);
+  const serviceNames: string[] = ordered.map((candidate) => candidate.name);
+  const serviceLabels: string[] = [...serviceNames];
+
+  const familyKey =
+    sharedTokenValues[0] ||
+    Array.from(tipos)[0] ||
+    Array.from(categories)[0] ||
+    "";
+
+  const familyLabel = serviceLabels[0] || familyKey || "";
+
+  return {
+    hasFamily: true,
+    familyKey,
+    familyLabel,
+    serviceIds,
+    serviceNames,
+    serviceLabels,
+    requiresDisambiguation: false,
+  };
 }
 
 function buildStructuredCatalogComparison(params: {
@@ -334,8 +493,11 @@ export async function getFastpathCatalogSignals(
 
   let explicitEntityCandidateForClassification: ExplicitEntityCandidate | null =
     null;
+  let explicitFamilyCandidateForClassification: ExplicitFamilyCandidate | null =
+    null;
   let entityCandidateResultLoose: any = null;
   let structuredComparison: StructuredCatalogComparison | null = null;
+  let structuredFamily: StructuredCatalogFamily | null = null;
 
   try {
     const shouldRunLooseResolution =
@@ -367,17 +529,36 @@ export async function getFastpathCatalogSignals(
     });
 
     if (resolutionKind === "ambiguous") {
-      structuredComparison = buildStructuredCatalogComparison({
-        previewPolicy: {
-          ...previewPolicy,
-          shouldBuildComparison: true,
-        },
+      structuredFamily = buildStructuredCatalogFamily({
         entityCandidateResult: entityCandidateResultLoose,
-        explicitEntityCandidateForClassification: null,
       });
 
-      explicitEntityCandidateForClassification = null;
-    } else if (resolutionKind === "resolved_single" && resolvedHit?.id) {
+      if (structuredFamily?.hasFamily) {
+        explicitFamilyCandidateForClassification = {
+          familyKey: structuredFamily.familyKey,
+          familyLabel: structuredFamily.familyLabel,
+          serviceIds: structuredFamily.serviceIds,
+          serviceNames: structuredFamily.serviceNames,
+          serviceLabels: structuredFamily.serviceLabels,
+        };
+
+        explicitEntityCandidateForClassification = null;
+        structuredComparison = null;
+      } else {
+        structuredComparison = buildStructuredCatalogComparison({
+          previewPolicy: {
+            ...previewPolicy,
+            shouldBuildComparison: true,
+          },
+          entityCandidateResult: entityCandidateResultLoose,
+          explicitEntityCandidateForClassification: null,
+        });
+
+        explicitEntityCandidateForClassification = null;
+        explicitFamilyCandidateForClassification = null;
+        structuredFamily = null;
+      }
+      } else if (resolutionKind === "resolved_single" && resolvedHit?.id) {
       const rawCandidates = Array.isArray(entityCandidateResultLoose?.candidates)
         ? entityCandidateResultLoose.candidates
         : [];
@@ -395,10 +576,14 @@ export async function getFastpathCatalogSignals(
         score: toFiniteNumber(matchedCandidate?.score),
       };
 
+      explicitFamilyCandidateForClassification = null;
       structuredComparison = null;
+      structuredFamily = null;
     } else {
       explicitEntityCandidateForClassification = null;
+      explicitFamilyCandidateForClassification = null;
       structuredComparison = null;
+      structuredFamily = null;
     }
 
     const debugCandidates = Array.isArray(entityCandidateResultLoose?.candidates)
@@ -419,7 +604,9 @@ export async function getFastpathCatalogSignals(
         exactVariantHits: candidate?.exactVariantHits || 0,
       })),
       explicitEntityCandidateForClassification,
+      explicitFamilyCandidateForClassification,
       structuredComparison,
+      structuredFamily,
     });
   } catch (e: any) {
     console.warn(
@@ -430,7 +617,9 @@ export async function getFastpathCatalogSignals(
 
   return {
     explicitEntityCandidateForClassification,
+    explicitFamilyCandidateForClassification,
     structuredComparison,
+    structuredFamily,
     entityCandidateResultLoose,
   };
 }
