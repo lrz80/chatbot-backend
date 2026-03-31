@@ -22,6 +22,8 @@ import { getFastpathImmediateReturn } from "./getFastpathImmediateReturn";
 import { getFastpathPostRunDecision } from "./getFastpathPostRunDecision";
 import { applyStructuredServicePersistence } from "./applyStructuredServicePersistence";
 
+import { resolveFinalIntentFromTurn } from "./resolveFinalIntentFromTurn";
+
 const MAX_WHATSAPP_LINES = 9999;
 
 type PendingCtaLike = {
@@ -363,11 +365,23 @@ export async function handleFastpathHybridTurn(
     catalogReferenceClassification,
   });
 
+  const resolvedFinalIntent = resolveFinalIntentFromTurn({
+    detectedIntent,
+    intentFallback,
+    fp: {
+      intent: fp.intent ?? null,
+      source: fp.source ?? null,
+    },
+    facets: detectedFacets || null,
+    catalogRoutingSignal,
+    catalogReferenceClassification,
+  });
+  
   const postRunDecision = getFastpathPostRunDecision({
     canal,
     fp,
-    detectedIntent,
-    intentFallback,
+    detectedIntent: resolvedFinalIntent,
+    intentFallback: resolvedFinalIntent,
     convoCtx,
     catalogRoutingSignal,
     catalogReferenceClassification,
@@ -396,13 +410,12 @@ export async function handleFastpathHybridTurn(
 
   let finalReply = String(fp.reply || "").trim();
   let finalReplySource: string | undefined = fp.source;
-  let finalIntent: string | null =
-    fp.intent || detectedIntent || intentFallback || null;
+  let finalIntent: string | null = resolvedFinalIntent;
 
     if (immediateReturn.shouldReturnImmediately) {
     finalReply = String(immediateReturn.reply || "").trim();
     finalReplySource = immediateReturn.replySource || fp.source;
-    finalIntent = immediateReturn.intent || finalIntent;
+    finalIntent = immediateReturn.intent || resolvedFinalIntent;
   }
 
   if (postRunDecision.shouldNaturalizeSecondaryOptions) {
@@ -433,8 +446,8 @@ export async function handleFastpathHybridTurn(
         source: finalReplySource,
         intent: finalIntent,
       },
-      detectedIntent,
-      intentFallback,
+      detectedIntent: finalIntent,
+      intentFallback: finalIntent,
       structuredService,
       replyPolicy,
       ctxPatch,
