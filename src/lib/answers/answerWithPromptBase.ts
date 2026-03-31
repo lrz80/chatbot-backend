@@ -626,6 +626,82 @@ function buildGroundedFrameOnlyMessages(params: {
   return { system, user };
 }
 
+function buildGroundedDisambiguationMessages(params: {
+  idiomaDestino: "es" | "en";
+  fallbackText: string;
+  userInput: string;
+}): { system: string; user: string } {
+  const { idiomaDestino, fallbackText, userInput } = params;
+
+  const system =
+    idiomaDestino === "es"
+      ? [
+          "Responde solo en español.",
+          "Este turno NO es la respuesta final del servicio.",
+          "Este turno es una desambiguación de catálogo.",
+          "El bloque canónico contiene opciones candidatas entre las que el usuario debe elegir.",
+          "NO digas 'aquí tienes lo que incluye'.",
+          "NO expliques qué incluye ninguna opción todavía.",
+          "NO asumas que la ambigüedad ya fue resuelta.",
+          "NO ofrezcas inscripción, reserva ni siguiente paso comercial todavía.",
+          "Debes conservar EXACTAMENTE el bloque canónico.",
+          "Solo puedes agregar un intro muy corto que indique que hay más de una opción coincidente.",
+          "Debes cerrar con una sola pregunta breve para que el usuario elija una opción.",
+          "Formato requerido:",
+          "1. intro breve opcional",
+          "2. bloque canónico EXACTO",
+          "3. una sola pregunta breve para elegir una opción",
+          "Responde en JSON estricto.",
+          'Usa exactamente este formato: {"intro":"...", "closing":"...", "pendingCta":null}',
+          "No uses markdown ni bloques de código.",
+        ].join("\n\n")
+      : [
+          "Reply only in English.",
+          "This turn is NOT the final service answer.",
+          "This turn is a catalog disambiguation.",
+          "The canonical block contains candidate options the user must choose from.",
+          "Do NOT say 'here is what it includes'.",
+          "Do NOT explain what any option includes yet.",
+          "Do NOT assume the ambiguity is resolved.",
+          "Do NOT offer signup, booking, or sales next steps yet.",
+          "You must preserve the canonical block EXACTLY.",
+          "You may only add a very short intro stating there is more than one matching option.",
+          "You must end with exactly one brief question asking the user to choose one option.",
+          "Required format:",
+          "1. optional brief intro",
+          "2. EXACT canonical block",
+          "3. exactly one brief question asking the user to choose one option",
+          "Return strict JSON.",
+          'Use exactly this format: {"intro":"...", "closing":"...", "pendingCta":null}',
+          "Do not use markdown or code fences.",
+        ].join("\n\n");
+
+  const user =
+    idiomaDestino === "es"
+      ? [
+          `Mensaje del cliente: ${userInput || "(vacío)"}`,
+          "",
+          "Bloque canónico de opciones:",
+          fallbackText,
+          "",
+          "Devuélveme la respuesta final lista para enviar.",
+          "No respondas como si ya supieras cuál opción quiso decir.",
+          "Solo presenta las opciones y pide que elija una.",
+        ].join("\n")
+      : [
+          `Customer message: ${userInput || "(empty)"}`,
+          "",
+          "Canonical options block:",
+          fallbackText,
+          "",
+          "Return the final ready-to-send reply.",
+          "Do not answer as if you already know which option the user meant.",
+          "Only present the options and ask the user to choose one.",
+        ].join("\n");
+
+  return { system, user };
+}
+
 function isStructuredCatalogComparisonCanonical(text: string): boolean {
   const value = String(text || "").trim();
   if (!value) return false;
@@ -876,6 +952,13 @@ export async function answerWithPromptBase(
   const isScheduleCanonicalBody =
     hasFallbackText && isScheduleCanonical(fallbackText);
 
+  const isCatalogDisambiguationTurn =
+    effectivePolicy.mode === "grounded_frame_only" &&
+    effectivePolicy.unresolvedEntity === true &&
+    hasFallbackText &&
+    !isStructuredComparisonCanonical &&
+    !isScheduleCanonicalBody;
+
   const shouldUseGroundedScheduleFormatter =
     effectivePolicy.mode === "grounded_frame_only" &&
     hasFallbackText &&
@@ -914,6 +997,15 @@ export async function answerWithPromptBase(
 
     systemPrompt = scheduleMsgs.system;
     userPrompt = scheduleMsgs.user;
+  } else if (isCatalogDisambiguationTurn) {
+    const disambiguationMsgs = buildGroundedDisambiguationMessages({
+      idiomaDestino,
+      fallbackText,
+      userInput,
+    });
+
+    systemPrompt = disambiguationMsgs.system;
+    userPrompt = disambiguationMsgs.user;
   } else if (shouldUseGroundedFrameOnlyFormatter) {
     const groundedMsgs = buildGroundedFrameOnlyMessages({
       idiomaDestino,
