@@ -275,6 +275,7 @@ export async function renderFastpathDmReply(
       allowIntro: true,
       allowOutro: true,
       allowBodyRewrite: !replyPolicy.shouldUseGroundedFrameOnly,
+      mustEndWithSalesQuestion: shouldForceSalesClosingQuestion,
       reasoningNotes: isCatalogDbReply
         ? shouldForceSalesClosingQuestion
           ? "Catalog grounded overview reply in DM. Keep the structured body exactly intact, wrap it naturally, and end with exactly one short consultative sales question."
