@@ -44,7 +44,8 @@ function isGroundedServiceSource(fpSource: string): boolean {
     fpSource === "catalog_db" ||
     fpSource === "price_summary_db" ||
     fpSource === "price_fastpath_db" ||
-    fpSource === "price_disambiguation_db"
+    fpSource === "price_disambiguation_db" ||
+    fpSource === "price_fastpath_db_no_price"
   );
 }
 
@@ -53,15 +54,26 @@ export function getFastpathPostRunDecision(
 ): GetFastpathPostRunDecisionResult {
   const isDmChannel = isDmChatChannel(input.canal);
 
-  const fpSource = String(input.fp?.source || "").trim();
-  const fpIntent = String(
+  const fpSource = toNormalizedString(input.fp?.source);
+  const fpIntent = toNormalizedString(
     input.fp?.intent || input.detectedIntent || input.intentFallback || ""
-  ).trim();
+  );
 
-  const routeIntent = String(input.catalogRoutingSignal?.routeIntent || "").trim();
-  const classificationIntent = String(
-    input.catalogReferenceClassification?.intent || ""
-  ).trim();
+  const routeIntent = toNormalizedString(
+    input.catalogRoutingSignal?.routeIntent
+  );
+
+  const classificationIntent = toNormalizedString(
+    input.catalogReferenceClassification?.intent
+  );
+
+  const classificationKind = toNormalizedString(
+    input.catalogReferenceClassification?.kind
+  );
+
+  const routingTargetLevel = toNormalizedString(
+    input.catalogRoutingSignal?.targetLevel
+  );
 
   const isPriceQuestionUser =
     routeIntent === "catalog_price" ||
@@ -83,20 +95,41 @@ export function getFastpathPostRunDecision(
     fpSource !== "price_fastpath_db_no_price_llm_render";
 
   const isPlansList =
-    fpSource === "service_list_db" &&
+    toNormalizedString(input.fp?.source) === "service_list_db" &&
     (input.convoCtx as any)?.last_list_kind === "plan";
 
   const hasPackagesAvailable =
     (input.convoCtx as any)?.has_packages_available === true;
 
   const shouldNaturalizeSecondaryOptions =
-    String(input.canal || "").trim().toLowerCase() !== "whatsapp" &&
+    toNormalizedString(input.canal) !== "whatsapp" &&
     isPlansList &&
     hasPackagesAvailable;
 
+  const isPluralCatalogTurn =
+    classificationKind === "catalog_overview" ||
+    classificationKind === "catalog_family" ||
+    classificationKind === "comparison" ||
+    routeIntent === "catalog_price" ||
+    routeIntent === "catalog_alternatives" ||
+    routeIntent === "catalog_schedule" ||
+    routingTargetLevel === "catalog" ||
+    routingTargetLevel === "family" ||
+    routingTargetLevel === "multi_service";
+
+  const isExplicitServiceDetailTurn =
+    classificationKind === "entity_specific" ||
+    classificationKind === "variant_specific" ||
+    classificationKind === "referential_followup" ||
+    routeIntent === "catalog_includes" ||
+    classificationIntent === "includes" ||
+    routingTargetLevel === "service" ||
+    routingTargetLevel === "variant";
+
   const shouldReturnRawFastpathForUnresolvedServiceIntent =
     isDmChannel &&
-    fpIntent === "info_servicio" &&
+    !isPluralCatalogTurn &&
+    isExplicitServiceDetailTurn &&
     (
       !input.structuredService?.hasResolution ||
       !isGroundedServiceSource(fpSource)
