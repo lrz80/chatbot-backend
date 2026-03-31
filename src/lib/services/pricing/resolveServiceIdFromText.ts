@@ -1,3 +1,4 @@
+//src/lib/services/pricing/resolverServiceIdFromText.ts
 import type { Pool } from "pg";
 import { detectarIdioma } from "../../detectarIdioma";
 import { traducirTexto } from "../../traducirTexto";
@@ -752,6 +753,31 @@ export async function resolveServiceCandidatesFromText(
       dominantOverlapTokens: s.dominantOverlapTokens,
     }));
 
+  const ambiguousCandidates: ResolveServiceCandidate[] =
+    best
+      ? scored
+          .filter(
+            (s) =>
+              s.score > 0 &&
+              Math.abs(best.score - s.score) < MARGIN &&
+              s.allOverlapTokens.length > 0
+          )
+          .slice(0, 5)
+          .map((s) => ({
+            id: s.cand.serviceId,
+            name: s.cand.label,
+            score: s.score,
+            category: s.cand.category || null,
+            tipo: s.cand.tipo || null,
+            parentServiceId: s.cand.parentServiceId || null,
+            catalogRole: s.cand.catalogRole || null,
+            overlapNameTokens: s.overlapNameTokens,
+            overlapTipoTokens: s.overlapTipoTokens,
+            overlapSupportTokens: s.overlapSupportTokens,
+            dominantOverlapTokens: s.dominantOverlapTokens,
+          }))
+      : [];
+
   if (observedQueryTokens.length === 1) {
     const token = observedQueryTokens[0];
 
@@ -891,7 +917,10 @@ export async function resolveServiceCandidatesFromText(
     return {
       kind: isAmbiguous ? "ambiguous" : "none",
       hit: null,
-      candidates: topCandidates,
+      candidates:
+        isAmbiguous && ambiguousCandidates.length > 0
+          ? ambiguousCandidates
+          : topCandidates,
     };
   }
 
@@ -987,7 +1016,8 @@ export async function resolveServiceCandidatesFromText(
       return {
         kind: "ambiguous",
         hit: null,
-        candidates: topCandidates,
+        candidates:
+          ambiguousCandidates.length > 0 ? ambiguousCandidates : topCandidates,
       };
     }
 
@@ -1021,7 +1051,8 @@ export async function resolveServiceCandidatesFromText(
     return {
       kind: "ambiguous",
       hit: null,
-      candidates: topCandidates,
+      candidates:
+        ambiguousCandidates.length > 0 ? ambiguousCandidates : topCandidates,
     };
   }
 
