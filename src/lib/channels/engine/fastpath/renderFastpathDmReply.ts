@@ -88,6 +88,9 @@ export async function renderFastpathDmReply(
 
   const isCatalogDisambiguationReply = isPriceDisambiguationReply;
 
+  const unresolvedCatalogDisambiguation =
+    isCatalogDisambiguationReply && !replyPolicy.hasResolvedEntity;
+
   const promptConFastpath = buildDmWriterPrompt({
     idiomaDestino,
     promptBaseMem,
@@ -117,9 +120,11 @@ export async function renderFastpathDmReply(
     canOfferBookingTimes: false,
     canUseOfficialLinks: true,
     unresolvedEntity:
-      !isGroundedCatalogReply && !replyPolicy.hasResolvedEntity,
+      unresolvedCatalogDisambiguation ||
+      (!isGroundedCatalogReply && !replyPolicy.hasResolvedEntity),
     clarificationTarget:
-      !isGroundedCatalogReply && !replyPolicy.hasResolvedEntity
+      unresolvedCatalogDisambiguation ||
+      (!isGroundedCatalogReply && !replyPolicy.hasResolvedEntity)
         ? "service"
         : null,
     singleResolvedEntityOnly:
