@@ -245,13 +245,13 @@ export async function renderFastpathDmReply(
     responsePolicy: {
       mode: replyPolicy.responsePolicyMode,
       resolvedEntityType:
-        replyPolicy.hasResolvedEntity && !isCatalogDbReply ? "service" : null,
+        replyPolicy.hasResolvedEntity ? "service" : null,
       resolvedEntityId:
-        replyPolicy.hasResolvedEntity && !isCatalogDbReply
+        replyPolicy.hasResolvedEntity
           ? structuredService?.serviceId ?? null
           : null,
       resolvedEntityLabel:
-        replyPolicy.hasResolvedEntity && !isCatalogDbReply
+        replyPolicy.hasResolvedEntity
           ? structuredService?.serviceLabel ?? null
           : null,
       canMentionSpecificPrice: isGroundedCatalogReply || replyPolicy.hasResolvedEntity,
