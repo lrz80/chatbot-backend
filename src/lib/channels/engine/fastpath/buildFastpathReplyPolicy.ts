@@ -43,6 +43,8 @@ export type FastpathReplyPolicy = {
   isGroundedCatalogOverviewDm: boolean;
   shouldForceSalesClosingQuestion: boolean;
 
+  canonicalBodyOwnsClosing: boolean;
+
   replySourceKind:
     | "catalog_comparison_render"
     | "catalog_grounded"
@@ -186,6 +188,10 @@ export function buildFastpathReplyPolicy(
     structuredService: input.structuredService,
   });
 
+  const canonicalBodyOwnsClosing =
+    isVariantDisambiguation ||
+    input.fp?.awaitingEffect?.type === "set_awaiting_yes_no";
+
   const shouldBypassStructuredRewrite =
     isDmChannel && hasPendingLinkState(input.ctxPatch);
 
@@ -261,5 +267,7 @@ export function buildFastpathReplyPolicy(
 
     replySourceKind,
     responsePolicyMode,
+
+    canonicalBodyOwnsClosing,
   };
 }

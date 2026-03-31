@@ -38,6 +38,8 @@ export type RenderFastpathDmReplyInput = {
     isGroundedCatalogReply: boolean;
     isGroundedCatalogOverviewDm: boolean;
     shouldForceSalesClosingQuestion: boolean;
+
+    canonicalBodyOwnsClosing: boolean;
   };
   ctxPatch: any;
   maxLines?: number;
@@ -82,7 +84,7 @@ export async function renderFastpathDmReply(
     isGroundedCatalogReply,
     shouldForceSalesClosingQuestion,
   } = replyPolicy;
-  
+
   const NO_NUMERIC_MENUS =
     idiomaDestino === "en"
       ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."
@@ -252,9 +254,10 @@ export async function renderFastpathDmReply(
       preserveExactNumbers: replyPolicy.shouldUseGroundedFrameOnly,
       preserveExactLinks: replyPolicy.shouldUseGroundedFrameOnly,
       allowIntro: true,
-      allowOutro: true,
+      allowOutro: !replyPolicy.canonicalBodyOwnsClosing,
       allowBodyRewrite: !replyPolicy.shouldUseGroundedFrameOnly,
-      mustEndWithSalesQuestion: shouldForceSalesClosingQuestion,
+      mustEndWithSalesQuestion:
+        shouldForceSalesClosingQuestion && !replyPolicy.canonicalBodyOwnsClosing,
       reasoningNotes: isCatalogDbReply
         ? shouldForceSalesClosingQuestion
           ? "Catalog grounded overview reply in DM. Keep the structured body exactly intact, wrap it naturally, and end with exactly one short consultative sales question."

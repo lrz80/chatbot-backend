@@ -597,12 +597,18 @@ function composeGroundedFrameOnlyReply(args: {
   intro?: string | null;
   canonicalBody: string;
   closing?: string | null;
+  allowIntro?: boolean;
+  allowOutro?: boolean;
 }): string {
-  const parts = [
-    String(args.intro || "").trim(),
-    String(args.canonicalBody || "").trim(),
-    String(args.closing || "").trim(),
-  ].filter(Boolean);
+  const intro =
+    args.allowIntro === false ? "" : String(args.intro || "").trim();
+
+  const canonicalBody = String(args.canonicalBody || "").trim();
+
+  const closing =
+    args.allowOutro === false ? "" : String(args.closing || "").trim();
+
+  const parts = [intro, canonicalBody, closing].filter(Boolean);
 
   return parts.join("\n").trim();
 }
@@ -1090,6 +1096,8 @@ export async function answerWithPromptBase(
       intro: parsedGroundedFrame?.intro ?? null,
       canonicalBody,
       closing: parsedGroundedFrame?.closing ?? null,
+      allowIntro: effectivePolicy.allowIntro,
+      allowOutro: effectivePolicy.allowOutro,
     });
 
     console.log("[ANSWER_WITH_PROMPT_BASE][RAW_MODEL_OUTPUT][GROUNDED_FRAME_ONLY]", {
