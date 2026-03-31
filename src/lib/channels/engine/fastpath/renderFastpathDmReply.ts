@@ -31,6 +31,13 @@ export type RenderFastpathDmReplyInput = {
     shouldUseGroundedFrameOnly: boolean;
     responsePolicyMode: "grounded_frame_only" | "grounded_only" | "clarify_only";
     hasResolvedEntity: boolean;
+
+    isCatalogDbReply: boolean;
+    isPriceSummaryReply: boolean;
+    isPriceDisambiguationReply: boolean;
+    isGroundedCatalogReply: boolean;
+    isGroundedCatalogOverviewDm: boolean;
+    shouldForceSalesClosingQuestion: boolean;
   };
   ctxPatch: any;
   maxLines?: number;
@@ -40,19 +47,6 @@ export type RenderFastpathDmReplyResult = {
   reply: string;
   ctxPatch: any;
 };
-
-function toNormalizedString(value: unknown): string {
-  return String(value ?? "").trim().toLowerCase();
-}
-
-function isDmChannel(canal: Canal): boolean {
-  const normalized = toNormalizedString(canal);
-  return (
-    normalized === "whatsapp" ||
-    normalized === "facebook" ||
-    normalized === "instagram"
-  );
-}
 
 export async function renderFastpathDmReply(
   input: RenderFastpathDmReplyInput
@@ -67,8 +61,6 @@ export async function renderFastpathDmReply(
     promptBaseMem,
     fastpathText,
     fp,
-    detectedIntent,
-    intentFallback,
     structuredService,
     replyPolicy,
     ctxPatch,
@@ -83,27 +75,14 @@ export async function renderFastpathDmReply(
     limit: 12,
   });
 
-  const fpSource = toNormalizedString(fp?.source);
-  const fpIntent = toNormalizedString(fp?.intent);
-  const detectedIntentNorm = toNormalizedString(detectedIntent);
-  const intentFallbackNorm = toNormalizedString(intentFallback);
-
-  const isCatalogDbReply = fpSource === "catalog_db";
-  const isPriceSummaryReply = fpSource === "price_summary_db";
-  const isPriceDisambiguationReply = fpSource === "price_disambiguation_db";
-  const isGroundedCatalogReply =
-    isCatalogDbReply || isPriceSummaryReply || isPriceDisambiguationReply;
-
-  const isGroundedCatalogOverviewDm =
-    isDmChannel(canal) &&
-    isGroundedCatalogReply &&
-    !replyPolicy.hasResolvedEntity;
-
-  const shouldForceSalesClosingQuestion =
-    isGroundedCatalogOverviewDm &&
-    !ctxPatch?.pending_cta &&
-    !fp?.awaitingEffect;
-
+  const {
+    isCatalogDbReply,
+    isPriceSummaryReply,
+    isPriceDisambiguationReply,
+    isGroundedCatalogReply,
+    shouldForceSalesClosingQuestion,
+  } = replyPolicy;
+  
   const NO_NUMERIC_MENUS =
     idiomaDestino === "en"
       ? "RULE: Do NOT present numbered menus or ask the user to reply with a number. If you need clarification, ask ONE short question. Numbered picks are handled by the system, not you."

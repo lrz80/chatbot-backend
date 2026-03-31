@@ -35,6 +35,14 @@ export type FastpathReplyPolicy = {
   shouldRunDmRewrite: boolean;
   shouldUseGroundedFrameOnly: boolean;
   hasResolvedEntity: boolean;
+
+  isCatalogDbReply: boolean;
+  isPriceSummaryReply: boolean;
+  isPriceDisambiguationReply: boolean;
+  isGroundedCatalogReply: boolean;
+  isGroundedCatalogOverviewDm: boolean;
+  shouldForceSalesClosingQuestion: boolean;
+
   replySourceKind:
     | "catalog_comparison_render"
     | "catalog_grounded"
@@ -193,6 +201,27 @@ export function buildFastpathReplyPolicy(
   const shouldDirectReturnInfoBlock = false;
   const shouldDirectReturnPriceLikeReply = false;
 
+  const isCatalogDbReply = replySourceKind === "catalog_grounded";
+  const isPriceSummaryReply =
+    fpSource === "price_summary_db" || fpSource === "price_missing_db";
+  const isPriceDisambiguationReply =
+    replySourceKind === "catalog_disambiguation";
+
+  const isGroundedCatalogReply =
+    isCatalogDbReply ||
+    isPriceSummaryReply ||
+    isPriceDisambiguationReply;
+
+  const isGroundedCatalogOverviewDm =
+    isDmChannel &&
+    isGroundedCatalogReply &&
+    !hasResolvedEntity;
+
+  const shouldForceSalesClosingQuestion =
+    isGroundedCatalogOverviewDm &&
+    !input.ctxPatch?.pending_cta &&
+    !input.fp?.awaitingEffect;
+
   const shouldUseGroundedFrameOnly =
     isVariantDisambiguation ||
     replySourceKind === "catalog_grounded" ||
@@ -222,6 +251,14 @@ export function buildFastpathReplyPolicy(
     shouldRunDmRewrite,
     shouldUseGroundedFrameOnly,
     hasResolvedEntity,
+
+    isCatalogDbReply,
+    isPriceSummaryReply,
+    isPriceDisambiguationReply,
+    isGroundedCatalogReply,
+    isGroundedCatalogOverviewDm,
+    shouldForceSalesClosingQuestion,
+
     replySourceKind,
     responsePolicyMode,
   };
