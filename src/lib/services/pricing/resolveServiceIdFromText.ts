@@ -938,7 +938,7 @@ export async function resolveServiceCandidatesFromText(
 
     if (mode === "loose" && sameFamily && strongExplicitEvidence) {
       console.log(
-        "[RESOLVE-SERVICE] empate dentro de la misma familia en modo loose, aceptando best",
+        "[RESOLVE-SERVICE] empate dentro de la misma familia en modo loose, devolviendo ambiguous para evitar auto-pick incorrecto",
         {
           userText,
           best: {
@@ -969,8 +969,8 @@ export async function resolveServiceCandidatesFromText(
       );
 
       return {
-        kind: "resolved_single",
-        hit: { id: best.cand.serviceId, name: best.cand.label },
+        kind: "ambiguous",
+        hit: null,
         candidates: topCandidates,
       };
     }
