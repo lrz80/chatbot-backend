@@ -632,39 +632,46 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ===============================
   // 🧠 MOTOR ÚNICO DE CATÁLOGO
   // ===============================
-  const candidateOptionsFromTurn =
-    !hasStructuredTarget &&
+  const hasConcreteStructuredTarget =
+    Boolean(catalogReferenceClassification?.targetServiceId) ||
+    Boolean(catalogReferenceClassification?.targetVariantId) ||
+    Boolean(catalogReferenceClassification?.targetFamilyKey);
+
+  const shouldResolveAmbiguousCandidatesThisTurn =
+    !hasConcreteStructuredTarget &&
     (intentOut === "info_servicio" ||
       intentOut === "precio" ||
       intentOut === "planes_precios" ||
       intentOut === "catalogo" ||
       intentOut === "catalog" ||
       intentOut === "other_plans" ||
-      intentOut === "catalog_alternatives")
-      ? await (async () => {
-          const resolution = await resolveServiceCandidatesFromText(
-            pool,
-            tenantId,
-            userInput,
-            { mode: "loose" }
-          );
+      intentOut === "catalog_alternatives");
 
-          if (
-            resolution.kind !== "ambiguous" ||
-            !Array.isArray(resolution.candidates)
-          ) {
-            return [];
-          }
+  const candidateOptionsFromTurn = shouldResolveAmbiguousCandidatesThisTurn
+    ? await (async () => {
+        const resolution = await resolveServiceCandidatesFromText(
+          pool,
+          tenantId,
+          userInput,
+          { mode: "loose" }
+        );
 
-          return resolution.candidates
-            .map((item) => ({
-              serviceId: String(item.id || "").trim(),
-              label: String(item.name || "").trim(),
-            }))
-            .filter((item) => item.serviceId && item.label)
-            .slice(0, maxDisambiguationOptions);
-        })()
-      : [];
+        if (
+          resolution.kind !== "ambiguous" ||
+          !Array.isArray(resolution.candidates)
+        ) {
+          return [];
+        }
+
+        return resolution.candidates
+          .map((item) => ({
+            serviceId: String(item.id || "").trim(),
+            label: String(item.name || "").trim(),
+          }))
+          .filter((item) => item.serviceId && item.label)
+          .slice(0, maxDisambiguationOptions);
+      })()
+    : [];
 
   const catalogRoutingSignal = buildCatalogRoutingSignal({
     intentOut,
