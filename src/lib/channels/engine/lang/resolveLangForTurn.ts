@@ -249,6 +249,38 @@ export async function resolveLangForTurn(
   const explicitLang = detectExplicitLanguageSwitch(text);
 
   const threadLang = String((convoCtx as any)?.thread_lang || "").toLowerCase();
+
+  const estimateFlow = (convoCtx as any)?.estimateFlow;
+  const estimateFlowActive =
+    estimateFlow &&
+    typeof estimateFlow === "object" &&
+    estimateFlow.active === true;
+
+  const estimateFlowStep = String(estimateFlow?.step || "").trim();
+
+  const ESTIMATE_FLOW_LOCKED_STEPS = new Set([
+    "awaiting_name",
+    "awaiting_phone",
+    "awaiting_address",
+    "awaiting_job_type",
+    "awaiting_date",
+    "awaiting_slot_choice",
+    "offering_slots",
+    "ready_to_schedule",
+    "ready_to_cancel",
+    "manage_existing",
+  ]);
+
+  const estimateFlowLang =
+    estimateFlow?.lang === "es" || estimateFlow?.lang === "en"
+      ? estimateFlow.lang
+      : null;
+
+  const shouldLockLanguageToEstimateFlow =
+    estimateFlowActive &&
+    ESTIMATE_FLOW_LOCKED_STEPS.has(estimateFlowStep) &&
+    (estimateFlowLang === "es" || estimateFlowLang === "en");
+
   const ambiguousTurn = isAmbiguousTurn(text, convoCtx);
 
   const strongDetectedTurn = isStrongDetectedTurn({
@@ -259,11 +291,11 @@ export async function resolveLangForTurn(
     inBookingLang: langRes.inBookingLang,
   });
 
-  // 1) Forced lang manda
+  // 0) Forced lang manda
   if (forcedLangThisTurn) {
     idiomaDestino = forcedLangThisTurn;
   }
-  // 2) Switch explícito del usuario
+  // 1) Switch explícito del usuario
   else if (explicitLang) {
     idiomaDestino = explicitLang;
     convoCtx = {
@@ -271,9 +303,33 @@ export async function resolveLangForTurn(
       thread_lang: explicitLang,
     };
 
+    if (estimateFlowActive) {
+      convoCtx = {
+        ...(convoCtx || {}),
+        estimateFlow: {
+          ...(estimateFlow || {}),
+          lang: explicitLang,
+        },
+      };
+    }
+
     console.log("🌍 LANG EXPLICIT SWITCH", {
       userInput: text,
       to: explicitLang,
+    });
+  }
+  // 2) Si estimate flow está activo en step estructurado, bloquear idioma al del flow
+  else if (shouldLockLanguageToEstimateFlow && estimateFlowLang) {
+    idiomaDestino = estimateFlowLang;
+
+    console.log("🌍 LANG LOCKED TO ESTIMATE FLOW", {
+      userInput: text,
+      estimateFlowStep,
+      estimateFlowLang,
+      detectedLang: langRes.detectedLang,
+      detectedConfidence: langRes.detectedConfidence,
+      detectedSource: langRes.detectedSource,
+      prev: storedLang,
     });
   }
   // 3) Turno fuerte detectado
@@ -288,6 +344,7 @@ export async function resolveLangForTurn(
       prev: storedLang,
     });
   }
+
   // 4) Si el turno es ambiguo, conserva thread_lang si existe
   else if ((threadLang === "es" || threadLang === "en") && ambiguousTurn) {
     idiomaDestino = threadLang as Lang;
@@ -357,6 +414,7 @@ export async function resolveLangForTurn(
   // Persistir solo si hubo señal fuerte o switch explícito
   const shouldPersistDetectedTurn =
     !langRes.inBookingLang &&
+    !shouldLockLanguageToEstimateFlow &&
     (idiomaDestino === "es" || idiomaDestino === "en") &&
     !ambiguousTurn &&
     (

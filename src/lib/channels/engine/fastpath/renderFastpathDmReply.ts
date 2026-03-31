@@ -41,6 +41,19 @@ export type RenderFastpathDmReplyResult = {
   ctxPatch: any;
 };
 
+function toNormalizedString(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function isDmChannel(canal: Canal): boolean {
+  const normalized = toNormalizedString(canal);
+  return (
+    normalized === "whatsapp" ||
+    normalized === "facebook" ||
+    normalized === "instagram"
+  );
+}
+
 export async function renderFastpathDmReply(
   input: RenderFastpathDmReplyInput
 ): Promise<RenderFastpathDmReplyResult> {
@@ -69,6 +82,27 @@ export async function renderFastpathDmReply(
     excludeMessageId: messageId || undefined,
     limit: 12,
   });
+
+  const fpSource = toNormalizedString(fp?.source);
+  const fpIntent = toNormalizedString(fp?.intent);
+  const detectedIntentNorm = toNormalizedString(detectedIntent);
+  const intentFallbackNorm = toNormalizedString(intentFallback);
+
+  const isCatalogDbReply = fpSource === "catalog_db";
+  const isPriceSummaryReply = fpSource === "price_summary_db";
+  const isPriceDisambiguationReply = fpSource === "price_disambiguation_db";
+  const isGroundedCatalogReply =
+    isCatalogDbReply || isPriceSummaryReply || isPriceDisambiguationReply;
+
+  const isGroundedCatalogOverviewDm =
+    isDmChannel(canal) &&
+    isGroundedCatalogReply &&
+    !replyPolicy.hasResolvedEntity;
+
+  const shouldForceSalesClosingQuestion =
+    isGroundedCatalogOverviewDm &&
+    !ctxPatch?.pending_cta &&
+    !fp?.awaitingEffect;
 
   const NO_NUMERIC_MENUS =
     idiomaDestino === "en"
@@ -131,25 +165,48 @@ export async function renderFastpathDmReply(
           "- Suena consultivo, no agresivo.",
         ].join("\n");
 
+  const CATALOG_OVERVIEW_DM_CLOSING_RULE =
+    shouldForceSalesClosingQuestion
+      ? idiomaDestino === "en"
+        ? [
+            "CATALOG OVERVIEW DM RULE:",
+            "- Because this is a catalog overview reply in DM, you MUST end with exactly one short consultative sales question.",
+            "- The question must help the user continue the conversation.",
+            "- Examples of intent only: ask which option interests them most, or whether they want the most affordable or the most complete option.",
+            "- Do NOT add more than one question.",
+            "- Do NOT mention booking times.",
+            "- Do NOT change the catalog body.",
+          ].join("\n")
+        : [
+            "REGLA PARA OVERVIEW DE CATÁLOGO EN DM:",
+            "- Como esta es una respuesta de overview de catálogo en DM, DEBES cerrar con exactamente una pregunta corta, consultiva y vendedora.",
+            "- La pregunta debe ayudar a que el usuario continúe la conversación.",
+            "- Ejemplos de intención solamente: preguntar cuál opción le interesa más, o si busca algo más económico o más completo.",
+            "- NO agregues más de una pregunta.",
+            "- NO menciones horarios de reserva.",
+            "- NO cambies el cuerpo del catálogo.",
+          ].join("\n")
+      : "";
+
   const GROUNDED_FRAME_RULE =
     idiomaDestino === "en"
-        ? [
-            "GROUNDED FRAME RULE:",
-            "- Keep the structured body as the source of truth.",
-            "- Do NOT rewrite, reorder, summarize, or omit the structured body.",
-            "- You MUST wrap it in a natural DM-style response.",
-            "- Add a short, useful opening line that feels human and consultative.",
-            "- You MAY add one short closing line if it helps move the conversation forward.",
-            "- The body from DATOS_ESTRUCTURADOS_DEL_SISTEMA must remain intact.",
+      ? [
+          "GROUNDED FRAME RULE:",
+          "- Keep the structured body as the source of truth.",
+          "- Do NOT rewrite, reorder, summarize, or omit the structured body.",
+          "- You MUST wrap it in a natural DM-style response.",
+          "- Add a short, useful opening line that feels human and consultative.",
+          "- You MAY add one short closing line if it helps move the conversation forward.",
+          "- The body from DATOS_ESTRUCTURADOS_DEL_SISTEMA must remain intact.",
         ].join("\n")
-        : [
-            "REGLA DE ENMARCADO GROUNDED:",
-            "- Mantén el cuerpo estructurado como fuente de verdad.",
-            "- NO reescribas, reordenes, resumas ni omitas el cuerpo estructurado.",
-            "- DEBES envolverlo en una respuesta natural estilo chat/DM.",
-            "- Agrega una apertura corta, útil, humana y consultiva.",
-            "- PUEDES agregar un cierre corto si ayuda a mover la conversación.",
-            "- El cuerpo de DATOS_ESTRUCTURADOS_DEL_SISTEMA debe permanecer intacto.",
+      : [
+          "REGLA DE ENMARCADO GROUNDED:",
+          "- Mantén el cuerpo estructurado como fuente de verdad.",
+          "- NO reescribas, reordenes, resumas ni omitas el cuerpo estructurado.",
+          "- DEBES envolverlo en una respuesta natural estilo chat/DM.",
+          "- Agrega una apertura corta, útil, humana y consultiva.",
+          "- PUEDES agregar un cierre corto si ayuda a mover la conversación.",
+          "- El cuerpo de DATOS_ESTRUCTURADOS_DEL_SISTEMA debe permanecer intacto.",
         ].join("\n");
 
   const promptConFastpath = [
@@ -170,11 +227,11 @@ export async function renderFastpathDmReply(
     SALES_CTA_RULE,
     "",
     replyPolicy.shouldUseGroundedFrameOnly ? GROUNDED_FRAME_RULE : "",
-  ].filter(Boolean).join("\n");
-
-  const isCatalogDbReply = String(fp.source || "") === "catalog_db";
-  const isPriceDisambiguationReply =
-    String(fp.source || "") === "price_disambiguation_db";
+    "",
+    CATALOG_OVERVIEW_DM_CLOSING_RULE,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   const composed = await answerWithPromptBase({
     tenantId,
@@ -197,14 +254,14 @@ export async function renderFastpathDmReply(
         replyPolicy.hasResolvedEntity && !isCatalogDbReply
           ? structuredService?.serviceLabel ?? null
           : null,
-      canMentionSpecificPrice: isCatalogDbReply || replyPolicy.hasResolvedEntity,
-      canSelectSpecificCatalogItem: isCatalogDbReply || replyPolicy.hasResolvedEntity,
+      canMentionSpecificPrice: isGroundedCatalogReply || replyPolicy.hasResolvedEntity,
+      canSelectSpecificCatalogItem: isGroundedCatalogReply || replyPolicy.hasResolvedEntity,
       canOfferBookingTimes: false,
-      canUseCatalogLists: isCatalogDbReply || replyPolicy.hasResolvedEntity,
+      canUseCatalogLists: isGroundedCatalogReply || replyPolicy.hasResolvedEntity,
       canUseOfficialLinks: true,
-      unresolvedEntity: !isCatalogDbReply && !replyPolicy.hasResolvedEntity,
+      unresolvedEntity: !isGroundedCatalogReply && !replyPolicy.hasResolvedEntity,
       clarificationTarget:
-        !isCatalogDbReply && !replyPolicy.hasResolvedEntity ? "service" : null,
+        !isGroundedCatalogReply && !replyPolicy.hasResolvedEntity ? "service" : null,
       singleResolvedEntityOnly:
         replyPolicy.hasResolvedEntity && !isCatalogDbReply,
       allowAlternativeEntities: false,
@@ -219,9 +276,15 @@ export async function renderFastpathDmReply(
       allowOutro: true,
       allowBodyRewrite: !replyPolicy.shouldUseGroundedFrameOnly,
       reasoningNotes: isCatalogDbReply
-        ? "Catalog grounded reply. Keep the structured body exactly intact, but wrap it in a natural, consultative DM response with a short opening and optional short closing."
+        ? shouldForceSalesClosingQuestion
+          ? "Catalog grounded overview reply in DM. Keep the structured body exactly intact, wrap it naturally, and end with exactly one short consultative sales question."
+          : "Catalog grounded reply. Keep the structured body exactly intact, but wrap it in a natural, consultative DM response with a short opening and optional short closing."
         : isPriceDisambiguationReply
         ? "Variant/price disambiguation grounded reply. Keep the structured body exactly intact, but wrap it in a natural, consultative DM response with a short opening and optional short closing."
+        : isPriceSummaryReply
+        ? shouldForceSalesClosingQuestion
+          ? "Grounded price summary overview in DM. Keep the structured body exactly intact, wrap it naturally, and end with exactly one short consultative sales question."
+          : "Grounded price summary reply. Keep the structured body exactly intact, but wrap it in a natural, consultative DM response with a short opening and optional short closing."
         : null,
     },
   });
