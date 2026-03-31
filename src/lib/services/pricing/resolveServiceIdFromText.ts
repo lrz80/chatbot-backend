@@ -72,6 +72,11 @@ type Scored = {
   hasResolvableEntityEvidence: boolean;
 };
 
+type ResolveServiceOptions = {
+  mode?: "strict" | "loose";
+  allowedServiceIds?: string[];
+};
+
 function stripDiacritics(raw: string): string {
   const normalized = String(raw || "").normalize("NFD");
   let out = "";
@@ -312,9 +317,19 @@ export async function resolveServiceCandidatesFromText(
   pool: Pool,
   tenantId: string,
   userText: string,
-  opts?: { mode?: "strict" | "loose" }
+  opts?: ResolveServiceOptions
 ): Promise<ResolveServiceDecision> {
   const mode: "strict" | "loose" = opts?.mode || "strict";
+  const allowedServiceIds =
+    Array.isArray(opts?.allowedServiceIds) && opts!.allowedServiceIds.length > 0
+      ? Array.from(
+          new Set(
+            opts!.allowedServiceIds
+              .map((value) => String(value || "").trim())
+              .filter(Boolean)
+          )
+        )
+      : null;
   const input = String(userText || "").trim();
 
   if (!input) {
@@ -353,6 +368,14 @@ export async function resolveServiceCandidatesFromText(
     return { kind: "none", hit: null, candidates: [] };
   }
 
+  const queryParams: any[] = [tenantId];
+  let allowedServiceFilterSql = "";
+
+  if (allowedServiceIds && allowedServiceIds.length > 0) {
+    queryParams.push(allowedServiceIds);
+    allowedServiceFilterSql = `AND s.id = ANY($${queryParams.length}::uuid[])`;
+  }
+
   const { rows } = await pool.query<{
     service_id: string;
     service_name: string | null;
@@ -380,14 +403,15 @@ export async function resolveServiceCandidatesFromText(
     FROM services s
     LEFT JOIN service_variants v
       ON v.service_id = s.id
-     AND v.active = true
+    AND v.active = true
     WHERE
       s.tenant_id = $1
       AND s.active = true
       AND s.name IS NOT NULL
+      ${allowedServiceFilterSql}
     ORDER BY s.created_at ASC, v.created_at ASC NULLS LAST, v.id ASC NULLS LAST
     `,
-    [tenantId]
+    queryParams
   );
 
   if (!rows.length) {
@@ -1073,7 +1097,7 @@ export async function resolveServiceIdFromText(
   pool: Pool,
   tenantId: string,
   userText: string,
-  opts?: { mode?: "strict" | "loose" }
+  opts?: ResolveServiceOptions
 ): Promise<Hit | null> {
   const result = await resolveServiceCandidatesFromText(
     pool,
