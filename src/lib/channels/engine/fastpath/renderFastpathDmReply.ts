@@ -86,12 +86,15 @@ export async function renderFastpathDmReply(
     shouldForceSalesClosingQuestion,
   } = replyPolicy;
 
+  const isCatalogDisambiguationReply = isPriceDisambiguationReply;
+
   const promptConFastpath = buildDmWriterPrompt({
     idiomaDestino,
     promptBaseMem,
     fastpathText,
     shouldUseGroundedFrameOnly: replyPolicy.shouldUseGroundedFrameOnly,
     shouldForceSalesClosingQuestion,
+    isCatalogDisambiguationReply,
   });
 
   const runtimeCapabilities = {
@@ -130,17 +133,22 @@ export async function renderFastpathDmReply(
     preserveExactNumbers: replyPolicy.shouldUseGroundedFrameOnly,
     preserveExactLinks: replyPolicy.shouldUseGroundedFrameOnly,
     allowIntro: true,
-    allowOutro: !replyPolicy.canonicalBodyOwnsClosing,
+    allowOutro:
+      isCatalogDisambiguationReply
+        ? true
+        : !replyPolicy.canonicalBodyOwnsClosing,
     allowBodyRewrite: !replyPolicy.shouldUseGroundedFrameOnly,
     mustEndWithSalesQuestion:
-      shouldForceSalesClosingQuestion &&
-      !replyPolicy.canonicalBodyOwnsClosing,
+      isCatalogDisambiguationReply
+        ? false
+        : shouldForceSalesClosingQuestion &&
+          !replyPolicy.canonicalBodyOwnsClosing,
     reasoningNotes: isCatalogDbReply
       ? shouldForceSalesClosingQuestion
         ? "Catalog grounded overview reply in DM. Keep the structured body exactly intact, wrap it naturally, and end with exactly one short consultative sales question."
         : "Catalog grounded reply. Keep the structured body exactly intact, but wrap it in a natural, consultative DM response with a short opening and optional short closing."
-      : isPriceDisambiguationReply
-      ? "Variant/price disambiguation grounded reply. Keep the structured body exactly intact, but wrap it in a natural, consultative DM response with a short opening and optional short closing."
+      : isCatalogDisambiguationReply
+      ? "This is a catalog disambiguation turn, not the final service answer. Keep the structured body exactly intact. Do not describe what the plan includes. Do not imply the ambiguity is resolved. Do not offer signup, booking, or next-step sales actions yet. Add only a short clarification framing that tells the user these are the matching options and asks them to choose one."
       : isPriceSummaryReply
       ? shouldForceSalesClosingQuestion
         ? "Grounded price summary overview in DM. Keep the structured body exactly intact, wrap it naturally, and end with exactly one short consultative sales question."

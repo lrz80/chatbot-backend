@@ -4,6 +4,7 @@ type BuildDmWriterPromptInput = {
   fastpathText: string;
   shouldUseGroundedFrameOnly: boolean;
   shouldForceSalesClosingQuestion: boolean;
+  isCatalogDisambiguationReply: boolean;
 };
 
 export function buildDmWriterPrompt(
@@ -20,7 +21,9 @@ export function buildDmWriterPrompt(
         "- If clarification is needed, ask only one short question.",
         "- Keep a natural, warm, consultative DM tone.",
         "- Do not alter exact prices, qualifiers, names, bullets, or order when the response policy requires grounded preservation.",
-        input.shouldForceSalesClosingQuestion
+        input.isCatalogDisambiguationReply
+          ? "- If the grounded body shows multiple matching options, do NOT act as if the question is already resolved. Do NOT explain what any option includes yet. Only say there is more than one match and ask the user to choose one."
+          : input.shouldForceSalesClosingQuestion
           ? "- End with exactly one short consultative sales question."
           : "- Add at most one short consultative closing line only if it helps move the conversation forward.",
         input.shouldUseGroundedFrameOnly
@@ -35,7 +38,9 @@ export function buildDmWriterPrompt(
         "- Si hace falta aclaración, haz solo una pregunta corta.",
         "- Mantén un tono natural, cálido y consultivo de DM.",
         "- No alteres precios exactos, calificativos, nombres, bullets ni orden cuando la policy exija preservación grounded.",
-        input.shouldForceSalesClosingQuestion
+        input.isCatalogDisambiguationReply
+          ? "- Si el cuerpo grounded muestra varias opciones, NO respondas como si la duda ya estuviera resuelta. NO expliques qué incluye ninguna opción todavía. Solo di que hay más de una coincidencia y pide que elija una."
+          : input.shouldForceSalesClosingQuestion
           ? "- Cierra con exactamente una pregunta corta, consultiva y vendedora."
           : "- Agrega como máximo un cierre corto y consultivo solo si ayuda a avanzar la conversación.",
         input.shouldUseGroundedFrameOnly
