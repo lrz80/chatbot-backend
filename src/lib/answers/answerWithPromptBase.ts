@@ -155,6 +155,51 @@ function parseModelAnswerEnvelope(raw: string): ModelAnswerEnvelope | null {
   }
 }
 
+type GroundedFrameEnvelope = {
+  intro: string | null;
+  closing: string | null;
+  pendingCta: PendingCta;
+};
+
+function parseGroundedFrameEnvelope(raw: string): GroundedFrameEnvelope | null {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+
+  try {
+    const parsed = JSON.parse(text);
+
+    const intro =
+      typeof parsed?.intro === "string" && parsed.intro.trim()
+        ? parsed.intro.trim()
+        : null;
+
+    const closing =
+      typeof parsed?.closing === "string" && parsed.closing.trim()
+        ? parsed.closing.trim()
+        : null;
+
+    const rawPending = parsed?.pendingCta;
+    const pendingCta: PendingCta =
+      rawPending &&
+      (rawPending.type === "estimate_offer" ||
+        rawPending.type === "booking_offer") &&
+      rawPending.awaitsConfirmation === true
+        ? {
+            type: rawPending.type,
+            awaitsConfirmation: true,
+          }
+        : null;
+
+    return {
+      intro,
+      closing,
+      pendingCta,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function buildCatalogDbContext(tenantId: string): Promise<string> {
   try {
     const servicesRes = await pool.query<{
@@ -411,6 +456,7 @@ function startsWithBullet(line: string): boolean {
   return /^[-•*]/.test(String(line || "").trim());
 }
 
+
 function preserveCanonicalBodyOrFallback(args: {
   modelText: string;
   fallbackText: string;
@@ -547,6 +593,20 @@ function preserveCanonicalBodyOrFallback(args: {
   return candidate;
 }
 
+function composeGroundedFrameOnlyReply(args: {
+  intro?: string | null;
+  canonicalBody: string;
+  closing?: string | null;
+}): string {
+  const parts = [
+    String(args.intro || "").trim(),
+    String(args.canonicalBody || "").trim(),
+    String(args.closing || "").trim(),
+  ].filter(Boolean);
+
+  return parts.join("\n").trim();
+}
+
 function buildGroundedFrameOnlyMessages(params: {
   idiomaDestino: "es" | "en";
   fallbackText: string;
@@ -573,6 +633,11 @@ function buildGroundedFrameOnlyMessages(params: {
           mustEndWithSalesQuestion
             ? `Debes cerrar obligatoriamente con una sola pregunta corta, consultiva y vendedora de máximo ${maxClosingLines} línea(s).`
             : `Puedes cerrar con un siguiente paso corto y consultivo de máximo ${maxClosingLines} línea(s) cuando ayude a avanzar la conversación.`,
+          "No devuelvas el cuerpo canónico dentro de intro ni closing.",
+          "intro debe ser opcional y breve.",
+          "closing debe ser opcional y breve.",
+          "Si mustEndWithSalesQuestion es true, closing debe ser una sola pregunta breve.",
+          "No reescribas ni repitas el cuerpo canónico.",
           "No cierres en seco si existe una forma natural de avanzar la conversación.",
           "Debes conservar EXACTAMENTE el cuerpo canónico provisto.",
           "No cambies nombres, montos, horarios, ubicación, disponibilidad ni el orden.",
@@ -599,6 +664,11 @@ function buildGroundedFrameOnlyMessages(params: {
           mustEndWithSalesQuestion
             ? `You must end with exactly one short consultative sales question of at most ${maxClosingLines} line(s).`
             : `You may close with one short consultative next step of at most ${maxClosingLines} line(s) when it helps move the conversation forward.`,
+          "Do not return the canonical body inside intro or closing.",
+          "intro must be optional and brief.",
+          "closing must be optional and brief.",
+          "If mustEndWithSalesQuestion is true, closing must be exactly one brief question.",
+          "Do not rewrite or repeat the canonical body.",
           "Do not end abruptly if there is a natural way to move the conversation forward.",
           "You must preserve the provided canonical body EXACTLY.",
           "Do not change names, amounts, schedules, location, availability, or order.",
@@ -629,9 +699,9 @@ function buildGroundedFrameOnlyMessages(params: {
           "",
           "Devuélveme la respuesta final lista para enviar, mejorando solo el framing comercial sin alterar el cuerpo canónico.",
           "Responde en JSON estricto.",
-          'Usa exactamente este formato: {"text":"...", "pendingCta":null}',
-          'Si incluyes un CTA de confirmación para reserva, usa: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
-          'Si incluyes un CTA de confirmación para estimado, usa: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+          'Usa exactamente este formato: {"intro":"...", "closing":"...", "pendingCta":null}',
+          'Si incluyes un CTA de confirmación para reserva, usa: {"intro":"...", "closing":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
+          'Si incluyes un CTA de confirmación para estimado, usa: {"intro":"...", "closing":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
           "No uses markdown ni bloques de código.",
         ].join("\n")
       : [
@@ -642,9 +712,9 @@ function buildGroundedFrameOnlyMessages(params: {
           "",
           "Return the final ready-to-send reply, improving only the sales framing without altering the canonical body.",
           "Return strict JSON.",
-          'Use exactly this format: {"text":"...", "pendingCta":null}',
-          'If you include a confirmation CTA for booking, use: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
-          'If you include a confirmation CTA for estimate, use: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+          'Use exactly this format: {"intro":"...", "closing":"...", "pendingCta":null}',
+          'If you include a confirmation CTA for booking, use: {"intro":"...", "closing":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
+          'If you include a confirmation CTA for estimate, use: {"intro":"...", "closing":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
           "Do not use markdown or code fences.",
         ].join("\n");
 
@@ -1008,18 +1078,42 @@ export async function answerWithPromptBase(
 
   rawModelOutputForPendingCta = rawModelOutput;
 
-  const parsedEnvelope = parseModelAnswerEnvelope(rawModelOutput);
+  const isGroundedFrameOnlyFlow =
+    shouldUseGroundedFrameOnlyFormatter && String(fallbackText || "").trim().length > 0;
 
-  out = parsedEnvelope?.text || rawModelOutput || fallbackText || "";
+  if (isGroundedFrameOnlyFlow) {
+    const parsedGroundedFrame = parseGroundedFrameEnvelope(rawModelOutput);
 
-  console.log("[ANSWER_WITH_PROMPT_BASE][RAW_MODEL_OUTPUT]", {
-    tenantId,
-    canal,
-    userInput,
-    rawModelOutput,
-    parsedEnvelope,
-    selectedOut: out,
-  });
+    const canonicalBody = String(fallbackText || "").trim();
+
+    out = composeGroundedFrameOnlyReply({
+      intro: parsedGroundedFrame?.intro ?? null,
+      canonicalBody,
+      closing: parsedGroundedFrame?.closing ?? null,
+    });
+
+    console.log("[ANSWER_WITH_PROMPT_BASE][RAW_MODEL_OUTPUT][GROUNDED_FRAME_ONLY]", {
+      tenantId,
+      canal,
+      userInput,
+      rawModelOutput,
+      parsedGroundedFrame,
+      selectedOut: out,
+    });
+  } else {
+    const parsedEnvelope = parseModelAnswerEnvelope(rawModelOutput);
+
+    out = parsedEnvelope?.text || rawModelOutput || fallbackText || "";
+
+    console.log("[ANSWER_WITH_PROMPT_BASE][RAW_MODEL_OUTPUT]", {
+      tenantId,
+      canal,
+      userInput,
+      rawModelOutput,
+      parsedEnvelope,
+      selectedOut: out,
+    });
+  }
 
   } catch (e) {
     console.warn("❌ answerWithPromptBase LLM error; using fallback:", e);
@@ -1028,7 +1122,16 @@ export async function answerWithPromptBase(
   }
 
   out = sanitizeChatOutput(out);
-  out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
+
+  const shouldPreserveCanonicalLinks =
+    effectivePolicy.mode === "grounded_frame_only" &&
+    effectivePolicy.preserveExactBody &&
+    effectivePolicy.preserveExactLinks;
+
+  if (!shouldPreserveCanonicalLinks) {
+    out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
+  }
+
   out = capLines(out, maxLines);
 
   if (!isStructuredComparisonCanonical && !isScheduleCanonicalBody) {
@@ -1077,8 +1180,15 @@ export async function answerWithPromptBase(
   let pendingCta: PendingCta = null;
 
   try {
-    const reparsedEnvelope = parseModelAnswerEnvelope(rawModelOutputForPendingCta);
-    pendingCta = reparsedEnvelope?.pendingCta ?? null;
+    if (shouldUseGroundedFrameOnlyFormatter) {
+      const reparsedGroundedFrame =
+        parseGroundedFrameEnvelope(rawModelOutputForPendingCta);
+      pendingCta = reparsedGroundedFrame?.pendingCta ?? null;
+    } else {
+      const reparsedEnvelope =
+        parseModelAnswerEnvelope(rawModelOutputForPendingCta);
+      pendingCta = reparsedEnvelope?.pendingCta ?? null;
+    }
   } catch {
     pendingCta = null;
   }
