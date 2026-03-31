@@ -82,10 +82,16 @@ type CatalogRoutingConvoCtx = {
   last_family_name?: string | null;
 };
 
+type CatalogRoutingCandidateOption = {
+  serviceId: string;
+  label: string;
+};
+
 type BuildCatalogRoutingSignalArgs = {
   intentOut?: string | null;
   catalogReferenceClassification?: CatalogReferenceClassification | null;
   convoCtx?: CatalogRoutingConvoCtx | null;
+  candidateOptionsFromTurn?: CatalogRoutingCandidateOption[] | null;
 };
 
 const CATALOG_INTENTS = new Set([
@@ -245,12 +251,36 @@ function resolveRouteIntentFromSignals(args: {
   return "unknown";
 }
 
-function normalizeCandidateOptions(
+function classificationHasCandidates(
   classification?: CatalogReferenceClassification | null
-): Array<{ serviceId: string; label: string }> {
+): boolean {
+  const candidateOptions = (classification as any)?.candidateOptions;
+  const candidates = (classification as any)?.candidates;
+
+  return (
+    (Array.isArray(candidateOptions) && candidateOptions.length > 0) ||
+    (Array.isArray(candidates) && candidates.length > 0)
+  );
+}
+
+function normalizeCandidateOptions(input: {
+  candidateOptionsFromTurn?: Array<{
+    serviceId?: string;
+    id?: string;
+    label?: string;
+    name?: string;
+  }> | null;
+  classification?: CatalogReferenceClassification | null;
+}): Array<{ serviceId: string; label: string }> {
   const rawCandidates =
-    (classification as any)?.candidateOptions ||
-    (classification as any)?.candidates ||
+    (Array.isArray(input.candidateOptionsFromTurn) &&
+    input.candidateOptionsFromTurn.length > 0
+      ? input.candidateOptionsFromTurn
+      : null) ||
+    (classificationHasCandidates(input.classification)
+      ? ((input.classification as any)?.candidateOptions ||
+         (input.classification as any)?.candidates)
+      : []) ||
     [];
 
   if (!Array.isArray(rawCandidates)) return [];
@@ -276,6 +306,7 @@ export function buildCatalogRoutingSignal({
   intentOut,
   catalogReferenceClassification,
   convoCtx,
+  candidateOptionsFromTurn,
 }: BuildCatalogRoutingSignalArgs): CatalogRouteSignal {
   const referenceKind =
     catalogReferenceClassification?.kind === "catalog_overview" ||
@@ -332,9 +363,10 @@ export function buildCatalogRoutingSignal({
   const disambiguationType = catalogReferenceClassification?.disambiguationType || "none";
   const anchorShift = catalogReferenceClassification?.anchorShift || "none";
 
-  const candidateOptions = normalizeCandidateOptions(
-    catalogReferenceClassification
-  );
+  const candidateOptions = normalizeCandidateOptions({
+    candidateOptionsFromTurn,
+    classification: catalogReferenceClassification,
+  });
 
   const hasAmbiguousEntityCandidates =
     !String(catalogReferenceClassification?.targetServiceId || "").trim() &&

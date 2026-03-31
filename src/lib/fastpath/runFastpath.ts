@@ -14,7 +14,10 @@ import { normalizeText } from "../infoclave/resolveIncludes";
 import { getServiceDetailsText } from "../services/resolveServiceInfo";
 
 // Pricing
-import { resolveServiceIdFromText } from "../services/pricing/resolveServiceIdFromText";
+import {
+  resolveServiceCandidatesFromText,
+  resolveServiceIdFromText,
+} from "../services/pricing/resolveServiceIdFromText";
 import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
 import { renderInfoGeneralOverview } from "../fastpath/renderInfoGeneralOverview";
 import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
@@ -629,10 +632,45 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ===============================
   // 🧠 MOTOR ÚNICO DE CATÁLOGO
   // ===============================
+  const candidateOptionsFromTurn =
+    !hasStructuredTarget &&
+    (intentOut === "info_servicio" ||
+      intentOut === "precio" ||
+      intentOut === "planes_precios" ||
+      intentOut === "catalogo" ||
+      intentOut === "catalog" ||
+      intentOut === "other_plans" ||
+      intentOut === "catalog_alternatives")
+      ? await (async () => {
+          const resolution = await resolveServiceCandidatesFromText(
+            pool,
+            tenantId,
+            userInput,
+            { mode: "loose" }
+          );
+
+          if (
+            resolution.kind !== "ambiguous" ||
+            !Array.isArray(resolution.candidates)
+          ) {
+            return [];
+          }
+
+          return resolution.candidates
+            .map((item) => ({
+              serviceId: String(item.id || "").trim(),
+              label: String(item.name || "").trim(),
+            }))
+            .filter((item) => item.serviceId && item.label)
+            .slice(0, maxDisambiguationOptions);
+        })()
+      : [];
+
   const catalogRoutingSignal = buildCatalogRoutingSignal({
     intentOut,
     catalogReferenceClassification,
     convoCtx,
+    candidateOptionsFromTurn,
   });
 
   const canEnterCatalogFastpath =
@@ -660,6 +698,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     detectedIntent,
     infoClave,
     hasStructuredTarget,
+    catalogRoutingSignal,
     catalogReferenceClassification,
     facets: detectedFacets || {},
     buildCatalogRoutingSignal,

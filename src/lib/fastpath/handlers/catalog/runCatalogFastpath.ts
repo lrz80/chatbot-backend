@@ -74,6 +74,7 @@ export type RunCatalogFastpathInput = {
 
   hasStructuredTarget: boolean;
 
+  catalogRoutingSignal: any;
   catalogReferenceClassification?: any;
   facets?: CatalogFacets | null;
 
@@ -101,11 +102,7 @@ export type RunCatalogFastpathInput = {
 export async function runCatalogFastpath(
   input: RunCatalogFastpathInput
 ): Promise<FastpathResult> {
-  const catalogRoutingSignal = input.buildCatalogRoutingSignal({
-    intentOut: input.intentOut || null,
-    catalogReferenceClassification: input.catalogReferenceClassification,
-    convoCtx: input.convoCtx,
-  });
+  const catalogRoutingSignal = input.catalogRoutingSignal;
 
   console.log("[CATALOG][ROUTING_SIGNAL]", {
     userInput: input.userInput,
