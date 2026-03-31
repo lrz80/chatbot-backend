@@ -51,6 +51,8 @@ type ResponsePolicy = {
   allowIntro?: boolean;
   allowOutro?: boolean;
   allowBodyRewrite?: boolean;
+
+  mustEndWithSalesQuestion?: boolean;
 };
 
 type AnswerWithPromptBaseParams = {
@@ -276,6 +278,8 @@ function normalizeResponsePolicy(
     allowIntro: policy?.allowIntro ?? true,
     allowOutro: policy?.allowOutro ?? true,
     allowBodyRewrite: policy?.allowBodyRewrite ?? true,
+
+    mustEndWithSalesQuestion: policy?.mustEndWithSalesQuestion ?? false,
   };
 }
 
@@ -549,6 +553,7 @@ function buildGroundedFrameOnlyMessages(params: {
   userInput: string;
   maxIntroLines: number;
   maxClosingLines: number;
+  mustEndWithSalesQuestion: boolean;
 }): { system: string; user: string } {
   const {
     idiomaDestino,
@@ -556,6 +561,7 @@ function buildGroundedFrameOnlyMessages(params: {
     userInput,
     maxIntroLines,
     maxClosingLines,
+    mustEndWithSalesQuestion,
   } = params;
 
   const system =
@@ -564,7 +570,9 @@ function buildGroundedFrameOnlyMessages(params: {
           "Responde solo en español.",
           "Tu objetivo es vender con una respuesta breve, natural, clara y útil.",
           `Puedes agregar un intro corto de máximo ${maxIntroLines} línea(s), pero solo si aporta valor real.`,
-          `Debes cerrar con un siguiente paso corto y consultivo de máximo ${maxClosingLines} línea(s) cuando la consulta permita avanzar la conversación sin inventar información.`,
+          mustEndWithSalesQuestion
+            ? `Debes cerrar obligatoriamente con una sola pregunta corta, consultiva y vendedora de máximo ${maxClosingLines} línea(s).`
+            : `Puedes cerrar con un siguiente paso corto y consultivo de máximo ${maxClosingLines} línea(s) cuando ayude a avanzar la conversación.`,
           "No cierres en seco si existe una forma natural de avanzar la conversación.",
           "Debes conservar EXACTAMENTE el cuerpo canónico provisto.",
           "No cambies nombres, montos, horarios, ubicación, disponibilidad ni el orden.",
@@ -574,17 +582,23 @@ function buildGroundedFrameOnlyMessages(params: {
           "Puedes envolver el cuerpo con un intro y/o un cierre breve, pero el bloque canónico debe quedar intacto.",
           "No dupliques el framing.",
           "No uses dos introducciones.",
-          "Si la consulta es de horarios, ubicación o disponibilidad general, prioriza claridad y brevedad sin sonar frío.",
+          mustEndWithSalesQuestion
+            ? "La última línea debe ser exactamente una pregunta breve que ayude a continuar la conversación comercial."
+            : "Si la consulta es de horarios, ubicación o disponibilidad general, prioriza claridad y brevedad sin sonar frío.",
           "Formato requerido:",
           "1. intro opcional breve",
           "2. bloque canónico EXACTO",
-          "3. cierre opcional breve",
+          mustEndWithSalesQuestion
+            ? "3. una sola pregunta breve al final"
+            : "3. cierre opcional breve",
         ].join("\n\n")
       : [
           "Reply only in English.",
           "Your goal is to sell with a brief, natural, clear, useful reply.",
           `You may add a short intro of at most ${maxIntroLines} line(s), but only if it adds real value.`,
-          `You must close with one short consultative next step of at most ${maxClosingLines} line(s) whenever the question allows the conversation to move forward without inventing information.`,
+          mustEndWithSalesQuestion
+            ? `You must end with exactly one short consultative sales question of at most ${maxClosingLines} line(s).`
+            : `You may close with one short consultative next step of at most ${maxClosingLines} line(s) when it helps move the conversation forward.`,
           "Do not end abruptly if there is a natural way to move the conversation forward.",
           "You must preserve the provided canonical body EXACTLY.",
           "Do not change names, amounts, schedules, location, availability, or order.",
@@ -594,11 +608,15 @@ function buildGroundedFrameOnlyMessages(params: {
           "You may wrap the body with a brief intro and/or closing, but the canonical block must remain intact.",
           "Do not duplicate framing.",
           "Do not use two introductions.",
-          "For schedule, location, or availability questions, prioritize clarity and brevity without sounding cold.",
+          mustEndWithSalesQuestion
+            ? "The final line must be exactly one short question that helps continue the sales conversation."
+            : "For schedule, location, or availability questions, prioritize clarity and brevity without sounding cold.",
           "Required format:",
           "1. optional brief intro",
           "2. EXACT canonical block",
-          "3. optional brief closing",
+          mustEndWithSalesQuestion
+            ? "3. exactly one brief question at the end"
+            : "3. optional brief closing",
         ].join("\n\n");
 
   const user =
@@ -931,6 +949,7 @@ export async function answerWithPromptBase(
       userInput,
       maxIntroLines: 1,
       maxClosingLines: 1,
+      mustEndWithSalesQuestion: effectivePolicy.mustEndWithSalesQuestion,
     });
 
     systemPrompt = groundedMsgs.system;
