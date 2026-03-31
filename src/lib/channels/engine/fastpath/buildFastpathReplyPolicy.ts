@@ -129,7 +129,10 @@ function getReplySourceKind(params: {
     return "catalog_comparison_render";
   }
 
-  if (fpSource === "price_disambiguation_db") {
+  if (
+    fpSource === "price_disambiguation_db" ||
+    fpSource === "catalog_disambiguation_db"
+  ) {
     return "catalog_disambiguation";
   }
 
@@ -201,6 +204,7 @@ export function buildFastpathReplyPolicy(
     input.catalogReferenceClassification?.kind !== "comparison" &&
     fpSource !== "catalog_db" &&
     fpSource !== "price_disambiguation_db" &&
+    fpSource !== "catalog_disambiguation_db" &&
     fpIntent !== "info_general";
 
   const shouldHardBypassReply = false;

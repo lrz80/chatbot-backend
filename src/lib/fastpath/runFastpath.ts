@@ -188,7 +188,8 @@ export type FastpathResult =
         | "price_summary_db_llm_render"
         | "catalog_comparison_db_llm_render"
         | "price_fastpath_db_no_price"
-        | "price_fastpath_db_no_price_llm_render";
+        | "price_fastpath_db_no_price_llm_render"
+        | "catalog_disambiguation_db";
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;
@@ -372,7 +373,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       catalogReferenceKind !== "variant_specific" &&
       catalogReferenceKind !== "referential_followup" &&
       catalogReferenceKind !== "comparison";
-      
+
     if (wantsGeneralBusinessOverview) {
       const canonicalReply = String(infoClave || "").trim();
 
@@ -658,19 +659,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     intentOut,
     detectedIntent,
     infoClave,
-    promptBase,
-    canal,
     hasStructuredTarget,
     catalogReferenceClassification,
     facets: detectedFacets || {},
     buildCatalogRoutingSignal,
-    buildCatalogContext,
     normalizeCatalogRole,
     traducirTexto,
     renderGenericPriceSummaryReply,
     extractPlanNamesFromReply,
-    sameBulletStructure,
-    postProcessCatalogReply,
   });
 
   if (catalogFastpathResult.handled) {

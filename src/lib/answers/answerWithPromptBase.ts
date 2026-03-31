@@ -32,7 +32,6 @@ type ResponsePolicy = {
   canMentionSpecificPrice?: boolean;
   canSelectSpecificCatalogItem?: boolean;
   canOfferBookingTimes?: boolean;
-  canUseCatalogLists?: boolean;
   canUseOfficialLinks?: boolean;
   unresolvedEntity?: boolean;
   clarificationTarget?: string | null;
@@ -55,6 +54,10 @@ type ResponsePolicy = {
   mustEndWithSalesQuestion?: boolean;
 };
 
+type RuntimeCapabilities = {
+  bookingActive?: boolean;
+};
+
 type AnswerWithPromptBaseParams = {
   tenantId: string;
   promptBase: string;
@@ -66,6 +69,7 @@ type AnswerWithPromptBaseParams = {
   fallbackText?: string;
   extraContext?: string;
   responsePolicy?: ResponsePolicy | null;
+  runtimeCapabilities?: RuntimeCapabilities | null;
 };
 
 /* =========================
@@ -96,16 +100,6 @@ function stripUrlsIfPromptHasNone(out: string, promptBase: string) {
     .replace(/https?:\/\/\S+/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
-}
-
-function cleanOneLine(s: string) {
-  return String(s || "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function uniqueStrings(arr: string[]) {
-  return Array.from(new Set(arr.map((x) => cleanOneLine(x)).filter(Boolean)));
 }
 
 type PendingCtaType = "estimate_offer" | "booking_offer";
@@ -200,99 +194,6 @@ function parseGroundedFrameEnvelope(raw: string): GroundedFrameEnvelope | null {
   }
 }
 
-async function buildCatalogDbContext(tenantId: string): Promise<string> {
-  try {
-    const servicesRes = await pool.query<{
-      id: string;
-      name: string;
-      description: string | null;
-    }>(
-      `
-      SELECT id, name, description
-      FROM services
-      WHERE tenant_id = $1
-        AND active = true
-      ORDER BY name ASC
-      LIMIT 80
-      `,
-      [tenantId]
-    );
-
-    const variantsRes = await pool.query<{
-      service_id: string;
-      service_name: string;
-      variant_name: string | null;
-      description: string | null;
-    }>(
-      `
-      SELECT
-        v.service_id,
-        s.name AS service_name,
-        v.variant_name,
-        v.description
-      FROM service_variants v
-      JOIN services s
-        ON s.id = v.service_id
-      WHERE s.tenant_id = $1
-        AND s.active = true
-        AND v.active = true
-      ORDER BY s.name ASC, v.created_at ASC, v.id ASC
-      LIMIT 120
-      `,
-      [tenantId]
-    );
-
-    const serviceLines = uniqueStrings(
-      (servicesRes.rows || []).map((r) => `- ${cleanOneLine(r.name)}`)
-    );
-
-    const variantLines = uniqueStrings(
-      (variantsRes.rows || [])
-        .filter((r) => cleanOneLine(r.variant_name || "").length > 0)
-        .map(
-          (r) =>
-            `- ${cleanOneLine(r.service_name)} — ${cleanOneLine(
-              r.variant_name || ""
-            )}`
-        )
-    );
-
-    const parts: string[] = [];
-
-    if (serviceLines.length > 0) {
-      parts.push("SERVICIOS_VALIDOS_DB:", ...serviceLines);
-    }
-
-    if (variantLines.length > 0) {
-      parts.push("", "VARIANTES_VALIDAS_DB:", ...variantLines);
-    }
-
-    return parts.join("\n").trim();
-  } catch (e) {
-    console.warn("⚠️ No se pudo construir SERVICIOS_VALIDOS_DB:", e);
-    return "";
-  }
-}
-
-async function getBookingActiveForTenant(tenantId: string): Promise<boolean> {
-  try {
-    const { rows } = await pool.query<{ enabled: boolean | null }>(
-      `
-      SELECT enabled
-      FROM appointment_settings
-      WHERE tenant_id = $1
-      LIMIT 1
-      `,
-      [tenantId]
-    );
-
-    return rows[0]?.enabled === true;
-  } catch (e) {
-    console.warn("⚠️ No se pudo leer appointment_settings.enabled:", e);
-    return false;
-  }
-}
-
 function normalizeResponsePolicy(
   policy?: ResponsePolicy | null
 ): Required<ResponsePolicy> {
@@ -304,7 +205,6 @@ function normalizeResponsePolicy(
     canMentionSpecificPrice: policy?.canMentionSpecificPrice ?? true,
     canSelectSpecificCatalogItem: policy?.canSelectSpecificCatalogItem ?? true,
     canOfferBookingTimes: policy?.canOfferBookingTimes ?? true,
-    canUseCatalogLists: policy?.canUseCatalogLists ?? true,
     canUseOfficialLinks: policy?.canUseOfficialLinks ?? true,
     unresolvedEntity: policy?.unresolvedEntity ?? false,
     clarificationTarget: policy?.clarificationTarget ?? null,
@@ -353,7 +253,6 @@ function buildInstructionBlock(
     "- if_response_policy_disallows_specific_catalog_item_then_do_not_choose_or_recommend_one",
     "- if_response_policy_disallows_specific_price_then_do_not_output_numeric_price",
     "- if_response_policy_disallows_booking_times_then_do_not_propose_dates_or times",
-    "- if_response_policy_disallows_catalog_lists_then_do_not dump_catalog_lists",
     "- if_response_policy_disallows_official_links_then_do_not include_links",
     "- if_structured_turn_data_exists_then_it_has_highest_priority",
     "- answer_as_business = true",
@@ -935,6 +834,7 @@ export async function answerWithPromptBase(
     fallbackText = "",
     extraContext = "",
     responsePolicy,
+    runtimeCapabilities,
   } = params;
 
   const openai = new OpenAI({
@@ -958,12 +858,8 @@ export async function answerWithPromptBase(
     console.warn("⚠️ No se pudieron cargar ENLACES_OFICIALES para el prompt:", e);
   }
 
-  const catalogDbContext = normalizedPolicy.canUseCatalogLists
-    ? await buildCatalogDbContext(tenantId)
-    : "";
-
-  const bookingActive = await getBookingActiveForTenant(tenantId);
-  const bookingStateBlock = `BOOKING_ACTIVE: ${bookingActive ? "true" : "false"}`;
+  const bookingActive =
+    runtimeCapabilities?.bookingActive === true;
 
   const effectivePolicy: Required<ResponsePolicy> = {
     ...normalizedPolicy,
@@ -1031,18 +927,27 @@ export async function answerWithPromptBase(
     systemPrompt = groundedMsgs.system;
     userPrompt = groundedMsgs.user;
   } else {
+    const runtimeCapabilitiesBlock = [
+      "RUNTIME_CAPABILITIES:",
+      JSON.stringify(
+        {
+          bookingActive,
+        },
+        null,
+        2
+      ),
+    ].join("\n");
+
     const systemPromptParts = [
       promptBaseWithLinks,
       "",
-      bookingStateBlock,
+      runtimeCapabilitiesBlock,
       "",
       buildResponsePolicyBlock(effectivePolicy),
       "",
       buildInstructionBlock(idiomaDestino, maxLines, effectivePolicy),
       "",
       buildEntityLockBlock(idiomaDestino, effectivePolicy),
-      "",
-      catalogDbContext,
       "",
       extraContext ? `DATOS_ESTRUCTURADOS_DEL_TURNO:\n${extraContext}` : "",
       "",

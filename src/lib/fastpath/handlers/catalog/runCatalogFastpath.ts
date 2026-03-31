@@ -51,31 +51,14 @@ function normalizeCatalogDisambiguationOptions(
   return result;
 }
 
-function buildCatalogDisambiguationCanonicalReply(input: {
-  idiomaDestino: string;
+function buildCatalogDisambiguationBody(input: {
   options: CatalogDisambiguationOption[];
 }): string {
-  const options = input.options.slice(0, 5);
-
-  if (!options.length) {
-    return input.idiomaDestino === "en"
-      ? "Please choose the option you want me to detail."
-      : "Elige la opción que quieres que te detalle.";
-  }
-
-  const intro =
-    input.idiomaDestino === "en"
-      ? "I found multiple matching options:"
-      : "Encontré varias opciones que coinciden:";
-
-  const outro =
-    input.idiomaDestino === "en"
-      ? "Which one would you like me to detail?"
-      : "¿Cuál quieres que te detalle?";
-
-  const bullets = options.map((option) => `• ${option.label}`).join("\n");
-
-  return `${intro}\n${bullets}\n\n${outro}`.trim();
+  return input.options
+    .slice(0, 5)
+    .map((option) => `• ${option.label}`)
+    .join("\n")
+    .trim();
 }
 
 export type RunCatalogFastpathInput = {
@@ -88,8 +71,6 @@ export type RunCatalogFastpathInput = {
   intentOut?: string | null;
   detectedIntent?: string | null;
   infoClave?: string | null;
-  promptBase: string;
-  canal: any;
 
   hasStructuredTarget: boolean;
 
@@ -101,8 +82,6 @@ export type RunCatalogFastpathInput = {
     catalogReferenceClassification?: any;
     convoCtx: any;
   }) => any;
-
-  buildCatalogContext: (pool: Pool, tenantId: string) => Promise<string>;
 
   normalizeCatalogRole: (value: string | null | undefined) => string;
   traducirTexto: (
@@ -117,20 +96,6 @@ export type RunCatalogFastpathInput = {
   }) => string;
 
   extractPlanNamesFromReply: (reply: string) => string[];
-  sameBulletStructure: (canonicalReply: string, modelReply: string) => boolean;
-
-  postProcessCatalogReply: (input: {
-    reply: string;
-    questionType:
-      | "combination_and_price"
-      | "price_or_plan"
-      | "schedule_and_price"
-      | "other_plans";
-    prevNames: string[];
-  }) => {
-    finalReply: string;
-    namesShown: string[];
-  };
 };
 
 export async function runCatalogFastpath(
@@ -229,7 +194,7 @@ export async function runCatalogFastpath(
   const targetFamilyKey = String(
     catalogRoutingSignal.targetFamilyKey || ""
   ).trim();
-  
+
   const routingDisambiguationType = String(
     catalogRoutingSignal.disambiguationType || ""
   )
@@ -514,24 +479,19 @@ export async function runCatalogFastpath(
   }
 
   if (shouldReturnCatalogDisambiguation) {
-    const canonicalReply = buildCatalogDisambiguationCanonicalReply({
-      idiomaDestino: input.idiomaDestino,
+    const canonicalReply = buildCatalogDisambiguationBody({
       options: ambiguousCatalogOptions,
     });
 
     return {
       handled: true,
       reply: canonicalReply,
-      source: "catalog_db",
+      source: "catalog_disambiguation_db",
       intent:
-        routeIntent === "catalog_includes"
-          ? "info_servicio"
-          : routeIntent === "catalog_price"
-          ? "precio"
-          : "info_servicio",
+        routeIntent === "catalog_price" ? "precio" : "info_servicio",
       ctxPatch: {
         last_catalog_at: Date.now(),
-        lastResolvedIntent: "unknown",
+        lastResolvedIntent: "catalog_disambiguation",
         lastPresentedEntityIds: ambiguousCatalogOptions.map(
           (option) => option.serviceId
         ),
@@ -561,63 +521,18 @@ export async function runCatalogFastpath(
     });
   }
 
-  const catalogText = await input.buildCatalogContext(
-    input.pool,
-    input.tenantId
-  );
-
-  void catalogText;
-
-  const hasMultiAccessPlan = false;
-
-  const nowForMeta = Date.now();
-  let previousPlansStr = "none";
+  const now = Date.now();
   const prevNames = Array.isArray(input.convoCtx?.last_catalog_plans)
     ? input.convoCtx.last_catalog_plans
     : [];
   const prevAtRaw = input.convoCtx?.last_catalog_at;
   const prevAt = Number(prevAtRaw);
+
   const prevFresh =
     prevNames.length > 0 &&
     Number.isFinite(prevAt) &&
     prevAt > 0 &&
-    nowForMeta - prevAt <= 30 * 60 * 1000;
-
-  if (prevFresh) {
-    previousPlansStr = prevNames.join(" | ");
-  }
-
-  const metaBlock =
-    `QUESTION_TYPE: ${questionType}\n` +
-    `HAS_MULTI_ACCESS_PLAN: ${hasMultiAccessPlan ? "yes" : "no"}\n` +
-    `PREVIOUS_PLANS_MENTIONED: ${previousPlansStr}\n` +
-    `ASKS_PRICES: ${asksPrices ? "yes" : "no"}\n` +
-    `ASKS_SCHEDULES: ${asksSchedules ? "yes" : "no"}\n` +
-    `ASKS_LOCATION: ${asksLocation ? "yes" : "no"}\n` +
-    `ASKS_AVAILABILITY: ${asksAvailability ? "yes" : "no"}`;
-
-  void metaBlock;
-
-  const shouldAttachBusinessInfo =
-    Boolean(input.infoClave) &&
-    (
-      asksSchedules ||
-      asksLocation ||
-      asksAvailability ||
-      routeIntent === "catalog_schedule" ||
-      intentOutNorm === "info_general" ||
-      intentOutNorm === "info_horarios_generales" ||
-      intentOutNorm === "ubicacion" ||
-      intentOutNorm === "disponibilidad"
-    );
-
-  const infoGeneralBlock = shouldAttachBusinessInfo
-    ? input.idiomaDestino === "en"
-      ? `\n\nBUSINESS_GENERAL_INFO (hours, address, availability, etc.):\n${input.infoClave}`
-      : `\n\nINFO_GENERAL_DEL_NEGOCIO (horarios, dirección, disponibilidad, etc.):\n${input.infoClave}`
-    : "";
-
-  void infoGeneralBlock;
+    now - prevAt <= 30 * 60 * 1000;
 
   // PRICE OR PLAN
   if (!asksSchedules && !asksIncludesOnly && questionType === "price_or_plan") {
