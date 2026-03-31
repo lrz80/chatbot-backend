@@ -24,6 +24,60 @@ type CatalogFacets = {
   asksAvailability?: boolean;
 };
 
+type CatalogDisambiguationOption = {
+  serviceId: string;
+  label: string;
+};
+
+function normalizeCatalogDisambiguationOptions(
+  raw: any
+): CatalogDisambiguationOption[] {
+  if (!Array.isArray(raw)) return [];
+
+  const seen = new Set<string>();
+  const result: CatalogDisambiguationOption[] = [];
+
+  for (const item of raw) {
+    const serviceId = String(item?.serviceId || item?.id || "").trim();
+    const label = String(item?.label || item?.name || "").trim();
+
+    if (!serviceId || !label) continue;
+    if (seen.has(serviceId)) continue;
+
+    seen.add(serviceId);
+    result.push({ serviceId, label });
+  }
+
+  return result;
+}
+
+function buildCatalogDisambiguationCanonicalReply(input: {
+  idiomaDestino: string;
+  options: CatalogDisambiguationOption[];
+}): string {
+  const options = input.options.slice(0, 5);
+
+  if (!options.length) {
+    return input.idiomaDestino === "en"
+      ? "Please choose the option you want me to detail."
+      : "Elige la opción que quieres que te detalle.";
+  }
+
+  const intro =
+    input.idiomaDestino === "en"
+      ? "I found multiple matching options:"
+      : "Encontré varias opciones que coinciden:";
+
+  const outro =
+    input.idiomaDestino === "en"
+      ? "Which one would you like me to detail?"
+      : "¿Cuál quieres que te detalle?";
+
+  const bullets = options.map((option) => `• ${option.label}`).join("\n");
+
+  return `${intro}\n${bullets}\n\n${outro}`.trim();
+}
+
 export type RunCatalogFastpathInput = {
   pool: Pool;
   tenantId: string;
@@ -175,6 +229,21 @@ export async function runCatalogFastpath(
   const targetFamilyKey = String(
     catalogRoutingSignal.targetFamilyKey || ""
   ).trim();
+  
+  const routingDisambiguationType = String(
+    catalogRoutingSignal.disambiguationType || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const ambiguousCatalogOptions = normalizeCatalogDisambiguationOptions(
+    catalogRoutingSignal.candidateOptions
+  );
+
+  const hasAmbiguousEntityRouting =
+    routingTargetLevel === "ambiguous_entity" &&
+    routingDisambiguationType === "service_choice" &&
+    ambiguousCatalogOptions.length > 1;
 
   const isStructuredComparisonTurn =
     routeIntent === "catalog_compare" ||
@@ -425,6 +494,15 @@ export async function runCatalogFastpath(
       hasFacetDrivenCatalogIntent
     );
 
+  const shouldReturnCatalogDisambiguation =
+    hasAmbiguousEntityRouting &&
+    (
+      routeIntent === "catalog_includes" ||
+      routeIntent === "catalog_price" ||
+      routeIntent === "entity_detail" ||
+      routeIntent === "variant_detail"
+    );
+
   if (isCatalogPriceLikeTurn) {
     console.log("🚫 BLOCK LLM PRICING — forcing DB path");
   }
@@ -432,6 +510,32 @@ export async function runCatalogFastpath(
   if (!isCatalogQuestion && !hasFacetDrivenCatalogIntent) {
     return {
       handled: false,
+    };
+  }
+
+  if (shouldReturnCatalogDisambiguation) {
+    const canonicalReply = buildCatalogDisambiguationCanonicalReply({
+      idiomaDestino: input.idiomaDestino,
+      options: ambiguousCatalogOptions,
+    });
+
+    return {
+      handled: true,
+      reply: canonicalReply,
+      source: "catalog_db",
+      intent:
+        routeIntent === "catalog_includes"
+          ? "info_servicio"
+          : routeIntent === "catalog_price"
+          ? "precio"
+          : "info_servicio",
+      ctxPatch: {
+        last_catalog_at: Date.now(),
+        lastResolvedIntent: "unknown",
+        lastPresentedEntityIds: ambiguousCatalogOptions.map(
+          (option) => option.serviceId
+        ),
+      } as any,
     };
   }
 

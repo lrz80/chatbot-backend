@@ -38,8 +38,26 @@ export type CatalogRouteSignal = {
   targetVariantName: string | null;
   targetFamilyKey: string | null;
   targetFamilyName: string | null;
-  targetLevel: "none" | "catalog" | "family" | "service" | "variant" | "multi_service";
-  disambiguationType: "entity" | "family" | "variant" | "none";
+  targetLevel:
+    | "none"
+    | "catalog"
+    | "family"
+    | "service"
+    | "variant"
+    | "multi_service"
+    | "ambiguous_entity";
+
+  disambiguationType:
+    | "entity"
+    | "family"
+    | "variant"
+    | "service_choice"
+    | "none";
+
+  candidateOptions?: Array<{
+    serviceId: string;
+    label: string;
+  }>;
   anchorShift:
     | "stay_on_anchor"
     | "switch_entity"
@@ -227,6 +245,33 @@ function resolveRouteIntentFromSignals(args: {
   return "unknown";
 }
 
+function normalizeCandidateOptions(
+  classification?: CatalogReferenceClassification | null
+): Array<{ serviceId: string; label: string }> {
+  const rawCandidates =
+    (classification as any)?.candidateOptions ||
+    (classification as any)?.candidates ||
+    [];
+
+  if (!Array.isArray(rawCandidates)) return [];
+
+  const seen = new Set<string>();
+  const result: Array<{ serviceId: string; label: string }> = [];
+
+  for (const item of rawCandidates) {
+    const serviceId = String(item?.serviceId || item?.id || "").trim();
+    const label = String(item?.label || item?.name || "").trim();
+
+    if (!serviceId || !label) continue;
+    if (seen.has(serviceId)) continue;
+
+    seen.add(serviceId);
+    result.push({ serviceId, label });
+  }
+
+  return result;
+}
+
 export function buildCatalogRoutingSignal({
   intentOut,
   catalogReferenceClassification,
@@ -287,6 +332,25 @@ export function buildCatalogRoutingSignal({
   const disambiguationType = catalogReferenceClassification?.disambiguationType || "none";
   const anchorShift = catalogReferenceClassification?.anchorShift || "none";
 
+  const candidateOptions = normalizeCandidateOptions(
+    catalogReferenceClassification
+  );
+
+  const hasAmbiguousEntityCandidates =
+    !String(catalogReferenceClassification?.targetServiceId || "").trim() &&
+    !String(catalogReferenceClassification?.targetVariantId || "").trim() &&
+    candidateOptions.length > 1;
+
+  const effectiveTargetLevel =
+    hasAmbiguousEntityCandidates
+      ? "ambiguous_entity"
+      : targetLevel;
+
+  const effectiveDisambiguationType =
+    hasAmbiguousEntityCandidates
+      ? "service_choice"
+      : disambiguationType;
+
   const explicitTargetThisTurn = hasExplicitTargetThisTurn(
     catalogReferenceClassification
   );
@@ -325,9 +389,10 @@ export function buildCatalogRoutingSignal({
       targetVariantName,
       targetFamilyKey,
       targetFamilyName,
-      targetLevel,
-      disambiguationType,
+      targetLevel: effectiveTargetLevel,
+      disambiguationType: effectiveDisambiguationType,
       anchorShift,
+      candidateOptions,
     };
   }
 
@@ -357,9 +422,10 @@ export function buildCatalogRoutingSignal({
       targetVariantName,
       targetFamilyKey,
       targetFamilyName,
-      targetLevel: "none",
-      disambiguationType: "none",
-      anchorShift: "none",
+      targetLevel: effectiveTargetLevel,
+      disambiguationType: effectiveDisambiguationType,
+      anchorShift,
+      candidateOptions,
     };
   }
 
