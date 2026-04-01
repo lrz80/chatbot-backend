@@ -330,560 +330,6 @@ function buildUserPrompt(userInput: string) {
   ].join("\n");
 }
 
-function extractUrls(text: string): string[] {
-  return Array.from(new Set(String(text || "").match(/https?:\/\/\S+/gi) || []));
-}
-
-function extractNumbers(text: string): string[] {
-  return Array.from(
-    new Set(String(text || "").match(/\$?\d+(?:[.,]\d{1,2})?/g) || [])
-  );
-}
-
-function normalizeLineForCompare(line: string): string {
-  return String(line || "").replace(/\s+/g, " ").trim();
-}
-
-function extractMeaningfulLines(text: string): string[] {
-  return String(text || "")
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-}
-
-function startsWithBullet(line: string): boolean {
-  return /^[-•*]/.test(String(line || "").trim());
-}
-
-
-function preserveCanonicalBodyOrFallback(args: {
-  modelText: string;
-  fallbackText: string;
-  policy: Required<ResponsePolicy>;
-  idiomaDestino: "es" | "en";
-}): string {
-  const { modelText, fallbackText, policy } = args;
-
-  const canonicalBody = String(fallbackText || "").trim();
-  const candidate = String(modelText || "").trim();
-
-  if (!canonicalBody) return candidate;
-  if (!candidate) return canonicalBody;
-
-  if (policy.mode !== "grounded_frame_only" || !policy.preserveExactBody) {
-    return candidate;
-  }
-
-  const canonicalLines = extractMeaningfulLines(canonicalBody);
-  const candidateLines = extractMeaningfulLines(candidate);
-
-  const canonicalBullets = canonicalLines.filter(startsWithBullet);
-  const candidateBullets = candidateLines.filter(startsWithBullet);
-
-  const canonicalHasBullets = canonicalBullets.length > 0;
-  const canonicalIsSingleLine = canonicalLines.length === 1;
-
-  // =========================================================
-  // CASO 1: cuerpo canónico SIMPLE (una sola línea, sin bullets)
-  // Permitimos framing si el cuerpo canónico aparece intacto.
-  // =========================================================
-  if (!canonicalHasBullets && canonicalIsSingleLine) {
-    const normalizedCanonicalBody = normalizeLineForCompare(canonicalBody);
-    const normalizedCandidate = normalizeLineForCompare(candidate);
-
-    if (!normalizedCandidate.includes(normalizedCanonicalBody)) {
-      return canonicalBody;
-    }
-
-    if (policy.preserveExactNumbers) {
-      const canonicalNumbers = extractNumbers(canonicalBody);
-      const candidateNumbers = extractNumbers(candidate);
-
-      for (const value of canonicalNumbers) {
-        if (!candidateNumbers.includes(value)) {
-          return canonicalBody;
-        }
-      }
-    }
-
-    if (policy.preserveExactLinks) {
-      const canonicalUrls = extractUrls(canonicalBody);
-      const candidateUrls = extractUrls(candidate);
-
-      for (const url of canonicalUrls) {
-        if (!candidateUrls.includes(url)) {
-          return canonicalBody;
-        }
-      }
-    }
-
-    return candidate;
-  }
-
-  // =========================================================
-  // CASO 2: cuerpo canónico ESTRUCTURADO
-  // Aquí sí exigimos preservación estricta.
-  // =========================================================
-  if (policy.preserveExactBullets) {
-    if (canonicalBullets.length !== candidateBullets.length) {
-      return canonicalBody;
-    }
-
-    for (let i = 0; i < canonicalBullets.length; i++) {
-      if (
-        normalizeLineForCompare(canonicalBullets[i]) !==
-        normalizeLineForCompare(candidateBullets[i])
-      ) {
-        return canonicalBody;
-      }
-    }
-  }
-
-  if (policy.preserveExactOrder) {
-    let lastIndex = -1;
-
-    for (const line of canonicalLines) {
-      const idx = candidateLines.findIndex(
-        (c, i) =>
-          i > lastIndex &&
-          normalizeLineForCompare(c) === normalizeLineForCompare(line)
-      );
-
-      if (idx === -1) {
-        return canonicalBody;
-      }
-
-      lastIndex = idx;
-    }
-  }
-
-  if (policy.preserveExactNumbers) {
-    const canonicalNumbers = extractNumbers(canonicalBody);
-    const candidateNumbers = extractNumbers(candidate);
-
-    for (const value of canonicalNumbers) {
-      if (!candidateNumbers.includes(value)) {
-        return canonicalBody;
-      }
-    }
-  }
-
-  if (policy.preserveExactLinks) {
-    const canonicalUrls = extractUrls(canonicalBody);
-    const candidateUrls = extractUrls(candidate);
-
-    for (const url of canonicalUrls) {
-      if (!candidateUrls.includes(url)) {
-        return canonicalBody;
-      }
-    }
-  }
-
-  const canonicalAppearsInsideCandidate = canonicalLines.every((line) =>
-    candidateLines.some(
-      (c) => normalizeLineForCompare(c) === normalizeLineForCompare(line)
-    )
-  );
-
-  if (!canonicalAppearsInsideCandidate) {
-    return canonicalBody;
-  }
-
-  return candidate;
-}
-
-function composeGroundedFrameOnlyReply(args: {
-  intro?: string | null;
-  canonicalBody: string;
-  closing?: string | null;
-  allowIntro?: boolean;
-  allowOutro?: boolean;
-}): string {
-  const intro =
-    args.allowIntro === false ? "" : String(args.intro || "").trim();
-
-  const canonicalBody = String(args.canonicalBody || "").trim();
-
-  const closing =
-    args.allowOutro === false ? "" : String(args.closing || "").trim();
-
-  const parts = [intro, canonicalBody, closing].filter(Boolean);
-
-  return parts.join("\n").trim();
-}
-
-function buildGroundedFrameOnlyMessages(params: {
-  idiomaDestino: "es" | "en";
-  fallbackText: string;
-  userInput: string;
-  maxIntroLines: number;
-  maxClosingLines: number;
-  mustEndWithSalesQuestion: boolean;
-}): { system: string; user: string } {
-  const {
-    idiomaDestino,
-    fallbackText,
-    userInput,
-    maxIntroLines,
-    maxClosingLines,
-    mustEndWithSalesQuestion,
-  } = params;
-
-  const system =
-    idiomaDestino === "es"
-      ? [
-          "Responde solo en español.",
-          "Tu objetivo es vender con una respuesta breve, natural, clara y útil.",
-          `Puedes agregar un intro corto de máximo ${maxIntroLines} línea(s), pero solo si aporta valor real.`,
-          mustEndWithSalesQuestion
-            ? `Debes cerrar obligatoriamente con una sola pregunta corta, consultiva y vendedora de máximo ${maxClosingLines} línea(s).`
-            : `Puedes cerrar con un siguiente paso corto y consultivo de máximo ${maxClosingLines} línea(s) cuando ayude a avanzar la conversación.`,
-          "No devuelvas el cuerpo canónico dentro de intro ni closing.",
-          "intro debe ser opcional y breve.",
-          "closing debe ser opcional y breve.",
-          "Si mustEndWithSalesQuestion es true, closing debe ser una sola pregunta breve.",
-          "No reescribas ni repitas el cuerpo canónico.",
-          "No cierres en seco si existe una forma natural de avanzar la conversación.",
-          "Debes conservar EXACTAMENTE el cuerpo canónico provisto.",
-          "No cambies nombres, montos, horarios, ubicación, disponibilidad ni el orden.",
-          "No elimines ni agregues bullets del cuerpo canónico.",
-          "No resumas ni reescribas los bullets.",
-          "No conviertas bullets a párrafos.",
-          "Puedes envolver el cuerpo con un intro y/o un cierre breve, pero el bloque canónico debe quedar intacto.",
-          "No dupliques el framing.",
-          "No uses dos introducciones.",
-          mustEndWithSalesQuestion
-            ? "La última línea debe ser exactamente una pregunta breve que ayude a continuar la conversación comercial."
-            : "Si la consulta es de horarios, ubicación o disponibilidad general, prioriza claridad y brevedad sin sonar frío.",
-          "Formato requerido:",
-          "1. intro opcional breve",
-          "2. bloque canónico EXACTO",
-          mustEndWithSalesQuestion
-            ? "3. una sola pregunta breve al final"
-            : "3. cierre opcional breve",
-        ].join("\n\n")
-      : [
-          "Reply only in English.",
-          "Your goal is to sell with a brief, natural, clear, useful reply.",
-          `You may add a short intro of at most ${maxIntroLines} line(s), but only if it adds real value.`,
-          mustEndWithSalesQuestion
-            ? `You must end with exactly one short consultative sales question of at most ${maxClosingLines} line(s).`
-            : `You may close with one short consultative next step of at most ${maxClosingLines} line(s) when it helps move the conversation forward.`,
-          "Do not return the canonical body inside intro or closing.",
-          "intro must be optional and brief.",
-          "closing must be optional and brief.",
-          "If mustEndWithSalesQuestion is true, closing must be exactly one brief question.",
-          "Do not rewrite or repeat the canonical body.",
-          "Do not end abruptly if there is a natural way to move the conversation forward.",
-          "You must preserve the provided canonical body EXACTLY.",
-          "Do not change names, amounts, schedules, location, availability, or order.",
-          "Do not remove or add bullets from the canonical body.",
-          "Do not summarize or rewrite the bullets.",
-          "Do not turn bullets into paragraphs.",
-          "You may wrap the body with a brief intro and/or closing, but the canonical block must remain intact.",
-          "Do not duplicate framing.",
-          "Do not use two introductions.",
-          mustEndWithSalesQuestion
-            ? "The final line must be exactly one short question that helps continue the sales conversation."
-            : "For schedule, location, or availability questions, prioritize clarity and brevity without sounding cold.",
-          "Required format:",
-          "1. optional brief intro",
-          "2. EXACT canonical block",
-          mustEndWithSalesQuestion
-            ? "3. exactly one brief question at the end"
-            : "3. optional brief closing",
-        ].join("\n\n");
-
-  const user =
-    idiomaDestino === "es"
-      ? [
-          `Mensaje del cliente: ${userInput || "(vacío)"}`,
-          "",
-          "Cuerpo canónico resuelto:",
-          fallbackText,
-          "",
-          "Devuélveme la respuesta final lista para enviar, mejorando solo el framing comercial sin alterar el cuerpo canónico.",
-          "Responde en JSON estricto.",
-          'Usa exactamente este formato: {"intro":"...", "closing":"...", "pendingCta":null}',
-          'Si incluyes un CTA de confirmación para reserva, usa: {"intro":"...", "closing":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
-          'Si incluyes un CTA de confirmación para estimado, usa: {"intro":"...", "closing":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
-          "No uses markdown ni bloques de código.",
-        ].join("\n")
-      : [
-          `Customer message: ${userInput || "(empty)"}`,
-          "",
-          "Resolved canonical body:",
-          fallbackText,
-          "",
-          "Return the final ready-to-send reply, improving only the sales framing without altering the canonical body.",
-          "Return strict JSON.",
-          'Use exactly this format: {"intro":"...", "closing":"...", "pendingCta":null}',
-          'If you include a confirmation CTA for booking, use: {"intro":"...", "closing":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
-          'If you include a confirmation CTA for estimate, use: {"intro":"...", "closing":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
-          "Do not use markdown or code fences.",
-        ].join("\n");
-
-  return { system, user };
-}
-
-function buildGroundedDisambiguationMessages(params: {
-  idiomaDestino: "es" | "en";
-  fallbackText: string;
-  userInput: string;
-}): { system: string; user: string } {
-  const { idiomaDestino, fallbackText, userInput } = params;
-
-  const system =
-    idiomaDestino === "es"
-      ? [
-          "Responde solo en español.",
-          "Este turno NO es la respuesta final del servicio.",
-          "Este turno es una desambiguación de catálogo.",
-          "El bloque canónico contiene opciones candidatas entre las que el usuario debe elegir.",
-          "NO digas 'aquí tienes lo que incluye'.",
-          "NO expliques qué incluye ninguna opción todavía.",
-          "NO asumas que la ambigüedad ya fue resuelta.",
-          "NO ofrezcas inscripción, reserva ni siguiente paso comercial todavía.",
-          "Debes conservar EXACTAMENTE el bloque canónico.",
-          "Solo puedes agregar un intro muy corto que indique que hay más de una opción coincidente.",
-          "Debes cerrar con una sola pregunta breve para que el usuario aclare cuál de las opciones quiso decir.",
-          "No uses verbos como 'prefieres' o cierres comerciales. Usa una aclaración directa como '¿Cuál de las dos quieres decir?' o equivalente.",
-          "Formato requerido:",
-          "1. intro breve opcional",
-          "2. bloque canónico EXACTO",
-          "3. una sola pregunta breve para elegir una opción",
-          "Responde en JSON estricto.",
-          'Usa exactamente este formato: {"intro":"...", "closing":"...", "pendingCta":null}',
-          "No uses markdown ni bloques de código.",
-        ].join("\n\n")
-      : [
-          "Reply only in English.",
-          "This turn is NOT the final service answer.",
-          "This turn is a catalog disambiguation.",
-          "The canonical block contains candidate options the user must choose from.",
-          "Do NOT say 'here is what it includes'.",
-          "Do NOT explain what any option includes yet.",
-          "Do NOT assume the ambiguity is resolved.",
-          "Do NOT offer signup, booking, or sales next steps yet.",
-          "You must preserve the canonical block EXACTLY.",
-          "You may only add a very short intro stating there is more than one matching option.",
-          "You must end with exactly one brief question asking the user to choose one option.",
-          "Required format:",
-          "1. optional brief intro",
-          "2. EXACT canonical block",
-          "3. exactly one brief question asking the user to choose one option",
-          "Return strict JSON.",
-          'Use exactly this format: {"intro":"...", "closing":"...", "pendingCta":null}',
-          "Do not use markdown or code fences.",
-        ].join("\n\n");
-
-  const user =
-    idiomaDestino === "es"
-      ? [
-          `Mensaje del cliente: ${userInput || "(vacío)"}`,
-          "",
-          "Bloque canónico de opciones:",
-          fallbackText,
-          "",
-          "Devuélveme la respuesta final lista para enviar.",
-          "No respondas como si ya supieras cuál opción quiso decir.",
-          "Solo presenta las opciones y pide que elija una.",
-        ].join("\n")
-      : [
-          `Customer message: ${userInput || "(empty)"}`,
-          "",
-          "Canonical options block:",
-          fallbackText,
-          "",
-          "Return the final ready-to-send reply.",
-          "Do not answer as if you already know which option the user meant.",
-          "Only present the options and ask the user to choose one.",
-        ].join("\n");
-
-  return { system, user };
-}
-
-function isStructuredCatalogComparisonCanonical(text: string): boolean {
-  const value = String(text || "").trim();
-  if (!value) return false;
-
-  return (
-    value.includes("COMPARISON_MODE: catalog_compare") &&
-    value.includes("ITEM_COUNT:") &&
-    value.includes("ITEM:")
-  );
-}
-
-function isScheduleCanonical(text: string): boolean {
-  const value = String(text || "").trim();
-  if (!value) return false;
-
-  const lines = value
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
-
-  if (lines.length < 2) return false;
-
-  const firstLine = String(lines[0] || "").toLowerCase();
-  const hasScheduleHeader =
-    firstLine === "horarios:" || firstLine === "schedules:";
-
-  const hasBulletLikeScheduleLines = lines
-    .slice(1)
-    .some((line) => /^[-•*]/.test(line));
-
-  return hasScheduleHeader && hasBulletLikeScheduleLines;
-}
-
-function buildGroundedScheduleMessages(params: {
-  idiomaDestino: "es" | "en";
-  fallbackText: string;
-  userInput: string;
-}): { system: string; user: string } {
-  const { idiomaDestino, fallbackText, userInput } = params;
-
-  const system =
-    idiomaDestino === "es"
-      ? [
-          "Responde solo en español.",
-          "Tu objetivo es escribir la respuesta final para un canal DM de ventas.",
-          "La disponibilidad y horarios ya fueron resueltos por el backend y vienen en un bloque canónico grounded.",
-          "Debes usar SOLO esa información.",
-          "No inventes horarios, días, ubicaciones, disponibilidad ni nombres.",
-          "No copies el bloque literal como única respuesta si puedes responder de forma más útil y comercial.",
-          "Puedes resumir solo la parte relevante para la pregunta del cliente, siempre usando únicamente los datos del bloque canónico.",
-          "Si el cliente pregunta por una hora o disponibilidad concreta, responde primero esa pregunta de forma directa.",
-          "Después puedes agregar una línea breve que ayude a avanzar la conversación de forma natural.",
-          "No suenes robótico ni frío.",
-          "No recomiendes un plan específico a menos que el cliente lo haya pedido explícitamente.",
-          "Responde en JSON estricto.",
-          'Usa exactamente este formato: {"text":"...", "pendingCta":null}',
-          'Si incluyes un CTA de confirmación para reserva, usa: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
-          'Si incluyes un CTA de confirmación para estimado, usa: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
-          "No uses markdown ni bloques de código.",
-        ].join("\n\n")
-      : [
-          "Reply only in English.",
-          "Your goal is to write the final reply for a sales DM channel.",
-          "Availability and schedules have already been resolved by the backend and come in a grounded canonical block.",
-          "You must use ONLY that information.",
-          "Do not invent schedules, days, locations, availability, or names.",
-          "Do not copy the block literally as the only answer if you can answer more helpfully.",
-          "You may summarize only the schedule lines relevant to the user's question, using only the canonical block.",
-          "If the customer asks about a specific time or availability, answer that directly first.",
-          "Then you may add one short next-step line to move the conversation forward naturally.",
-          "Do not sound robotic or cold.",
-          "Do not recommend a specific plan unless the customer explicitly asked for one.",
-          "Return strict JSON.",
-          'Use exactly this format: {"text":"...", "pendingCta":null}',
-          'If you include a confirmation CTA for booking, use: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
-          'If you include a confirmation CTA for estimate, use: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
-          "Do not use markdown or code fences.",
-        ].join("\n\n");
-
-  const user =
-    idiomaDestino === "es"
-      ? [
-          `Mensaje del cliente: ${userInput || "(vacío)"}`,
-          "",
-          "Bloque canónico de horarios/disponibilidad:",
-          fallbackText,
-          "",
-          "Devuélveme la respuesta final lista para enviar.",
-          "Contesta directamente lo que el cliente preguntó.",
-          "Usa solo los horarios realmente presentes en el bloque.",
-          "Puedes resumir las líneas relevantes y cerrar con una pregunta breve para avanzar la conversación.",
-        ].join("\n")
-      : [
-          `Customer message: ${userInput || "(empty)"}`,
-          "",
-          "Canonical availability/schedule block:",
-          fallbackText,
-          "",
-          "Return the final ready-to-send reply.",
-          "Answer the customer's question directly.",
-          "Use only the schedules actually present in the block.",
-          "You may summarize the relevant lines and close with one brief next-step question.",
-        ].join("\n");
-
-  return { system, user };
-}
-
-function buildGroundedComparisonMessages(params: {
-  idiomaDestino: "es" | "en";
-  fallbackText: string;
-  userInput: string;
-}): { system: string; user: string } {
-  const { idiomaDestino, fallbackText, userInput } = params;
-
-  const system =
-    idiomaDestino === "es"
-      ? [
-          "Responde solo en español.",
-          "Tu objetivo es escribir la respuesta final para un canal DM de ventas.",
-          "La comparación ya fue resuelta por el backend y viene en un bloque canónico estructurado.",
-          "Debes usar SOLO esa data estructurada.",
-          "No inventes atributos, diferencias, precios, beneficios, descuentos, includes ni disponibilidad.",
-          "No copies el bloque canónico literal ni lo muestres como etiquetas técnicas.",
-          "Convierte esa data en una comparación natural, breve, clara y útil.",
-          "Debes contrastar las opciones entre sí, no listarlas como fichas separadas.",
-          "Si existen COMMON, puedes resumir brevemente lo común solo si ayuda.",
-          "Si existen DIFF, prioriza esas diferencias.",
-          "Termina con una sola pregunta breve que ayude a avanzar la conversación.",
-          "Responde en JSON estricto.",
-          'Usa exactamente este formato: {"text":"...", "pendingCta":null}',
-          'Si incluyes un CTA de confirmación para reserva, usa: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
-          'Si incluyes un CTA de confirmación para estimado, usa: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
-          "No uses markdown ni bloques de código.",
-        ].join("\n\n")
-      : [
-          "Reply only in English.",
-          "Your goal is to write the final customer-facing reply for a sales DM channel.",
-          "The comparison has already been resolved by the backend and comes as a structured canonical block.",
-          "You must use ONLY that structured data.",
-          "Do not invent attributes, differences, prices, benefits, discounts, included items, or availability.",
-          "Do not copy the canonical block literally or expose technical labels.",
-          "Turn that data into a natural, brief, clear, useful comparison.",
-          "You must contrast the options against each other, not list them as separate cards.",
-          "If COMMON exists, you may briefly summarize common ground only if useful.",
-          "If DIFF exists, prioritize those differences.",
-          "End with one brief question that helps move the conversation forward.",
-          "Return strict JSON.",
-          'Use exactly this format: {"text":"...", "pendingCta":null}',
-          'If you include a confirmation CTA for booking, use: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
-          'If you include a confirmation CTA for estimate, use: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
-          "Do not use markdown or code fences.",
-        ].join("\n\n");
-
-  const user =
-    idiomaDestino === "es"
-      ? [
-          `Mensaje del cliente: ${userInput || "(vacío)"}`,
-          "",
-          "Bloque canónico estructurado de comparación:",
-          fallbackText,
-          "",
-          "Devuélveme la respuesta final lista para enviar.",
-          "No devuelvas las etiquetas técnicas tal cual.",
-          "No copies el bloque literal.",
-          "Redacta una comparación natural basada únicamente en esos datos.",
-        ].join("\n")
-      : [
-          `Customer message: ${userInput || "(empty)"}`,
-          "",
-          "Structured canonical comparison block:",
-          fallbackText,
-          "",
-          "Return the final ready-to-send reply.",
-          "Do not return the technical labels literally.",
-          "Do not copy the block verbatim.",
-          "Write a natural comparison based only on that data.",
-        ].join("\n");
-
-  return { system, user };
-}
-
 /* =========================
    Main function
 ========================= */
@@ -945,111 +391,42 @@ export async function answerWithPromptBase(
       normalizedPolicy.canOfferBookingTimes && bookingActive,
   };
 
-  const hasFallbackText = String(fallbackText || "").trim().length > 0;
-
-  const isStructuredComparisonCanonical =
-    hasFallbackText && isStructuredCatalogComparisonCanonical(fallbackText);
-
-  const isScheduleCanonicalBody =
-    hasFallbackText && isScheduleCanonical(fallbackText);
-
-  const isCatalogDisambiguationTurn =
-    effectivePolicy.mode === "grounded_frame_only" &&
-    effectivePolicy.unresolvedEntity === true &&
-    hasFallbackText &&
-    !isStructuredComparisonCanonical &&
-    !isScheduleCanonicalBody;
-
-  const shouldUseGroundedScheduleFormatter =
-    effectivePolicy.mode === "grounded_frame_only" &&
-    hasFallbackText &&
-    isScheduleCanonicalBody;
-
-  const shouldUseGroundedFrameOnlyFormatter =
-    effectivePolicy.mode === "grounded_frame_only" &&
-    effectivePolicy.preserveExactBody &&
-    hasFallbackText &&
-    !isStructuredComparisonCanonical &&
-    !isScheduleCanonicalBody;
-
-  const shouldUseGroundedComparisonFormatter =
-    effectivePolicy.mode === "grounded_frame_only" &&
-    hasFallbackText &&
-    isStructuredComparisonCanonical;
-
-  let systemPrompt = "";
-  let userPrompt = "";
-
-  if (shouldUseGroundedComparisonFormatter) {
-    const comparisonMsgs = buildGroundedComparisonMessages({
-      idiomaDestino,
-      fallbackText,
-      userInput,
-    });
-
-    systemPrompt = comparisonMsgs.system;
-    userPrompt = comparisonMsgs.user;
-  } else if (shouldUseGroundedScheduleFormatter) {
-    const scheduleMsgs = buildGroundedScheduleMessages({
-      idiomaDestino,
-      fallbackText,
-      userInput,
-    });
-
-    systemPrompt = scheduleMsgs.system;
-    userPrompt = scheduleMsgs.user;
-  } else if (isCatalogDisambiguationTurn) {
-    const disambiguationMsgs = buildGroundedDisambiguationMessages({
-      idiomaDestino,
-      fallbackText,
-      userInput,
-    });
-
-    systemPrompt = disambiguationMsgs.system;
-    userPrompt = disambiguationMsgs.user;
-  } else if (shouldUseGroundedFrameOnlyFormatter) {
-    const groundedMsgs = buildGroundedFrameOnlyMessages({
-      idiomaDestino,
-      fallbackText,
-      userInput,
-      maxIntroLines: 1,
-      maxClosingLines: 1,
-      mustEndWithSalesQuestion: effectivePolicy.mustEndWithSalesQuestion,
-    });
-
-    systemPrompt = groundedMsgs.system;
-    userPrompt = groundedMsgs.user;
-  } else {
-    const runtimeCapabilitiesBlock = [
-      "RUNTIME_CAPABILITIES:",
-      JSON.stringify(
-        {
-          bookingActive,
-        },
-        null,
-        2
-      ),
-    ].join("\n");
-
-    const systemPromptParts = [
-      promptBaseWithLinks,
-      "",
-      runtimeCapabilitiesBlock,
-      "",
-      buildResponsePolicyBlock(effectivePolicy),
-      "",
-      buildInstructionBlock(idiomaDestino, maxLines, effectivePolicy),
-      "",
-      buildEntityLockBlock(idiomaDestino, effectivePolicy),
-      "",
-      extraContext ? `DATOS_ESTRUCTURADOS_DEL_TURNO:\n${extraContext}` : "",
-      "",
-      `CHANNEL_CONTEXT: ${canal}`,
-    ].filter(Boolean);
-
-    systemPrompt = systemPromptParts.join("\n");
-    userPrompt = buildUserPrompt(userInput);
+  if (effectivePolicy.mode === "grounded_frame_only") {
+    return {
+      text: String(fallbackText || "").trim(),
+      pendingCta: null,
+    };
   }
+
+  const runtimeCapabilitiesBlock = [
+    "RUNTIME_CAPABILITIES:",
+    JSON.stringify(
+      {
+        bookingActive,
+      },
+      null,
+      2
+    ),
+  ].join("\n");
+
+  const systemPromptParts = [
+    promptBaseWithLinks,
+    "",
+    runtimeCapabilitiesBlock,
+    "",
+    buildResponsePolicyBlock(effectivePolicy),
+    "",
+    buildInstructionBlock(idiomaDestino, maxLines, effectivePolicy),
+    "",
+    buildEntityLockBlock(idiomaDestino, effectivePolicy),
+    "",
+    extraContext ? `DATOS_ESTRUCTURADOS_DEL_TURNO:\n${extraContext}` : "",
+    "",
+    `CHANNEL_CONTEXT: ${canal}`,
+  ].filter(Boolean);
+
+  const systemPrompt = systemPromptParts.join("\n");
+  const userPrompt = buildUserPrompt(userInput);
 
   let out = "";
   let rawModelOutputForPendingCta = "";
@@ -1082,44 +459,18 @@ export async function answerWithPromptBase(
 
   rawModelOutputForPendingCta = rawModelOutput;
 
-  const isGroundedFrameOnlyFlow =
-    shouldUseGroundedFrameOnlyFormatter && String(fallbackText || "").trim().length > 0;
+  const parsedEnvelope = parseModelAnswerEnvelope(rawModelOutput);
 
-  if (isGroundedFrameOnlyFlow) {
-    const parsedGroundedFrame = parseGroundedFrameEnvelope(rawModelOutput);
+  out = parsedEnvelope?.text || rawModelOutput || fallbackText || "";
 
-    const canonicalBody = String(fallbackText || "").trim();
-
-    out = composeGroundedFrameOnlyReply({
-      intro: parsedGroundedFrame?.intro ?? null,
-      canonicalBody,
-      closing: parsedGroundedFrame?.closing ?? null,
-      allowIntro: effectivePolicy.allowIntro,
-      allowOutro: effectivePolicy.allowOutro,
-    });
-
-    console.log("[ANSWER_WITH_PROMPT_BASE][RAW_MODEL_OUTPUT][GROUNDED_FRAME_ONLY]", {
-      tenantId,
-      canal,
-      userInput,
-      rawModelOutput,
-      parsedGroundedFrame,
-      selectedOut: out,
-    });
-  } else {
-    const parsedEnvelope = parseModelAnswerEnvelope(rawModelOutput);
-
-    out = parsedEnvelope?.text || rawModelOutput || fallbackText || "";
-
-    console.log("[ANSWER_WITH_PROMPT_BASE][RAW_MODEL_OUTPUT]", {
-      tenantId,
-      canal,
-      userInput,
-      rawModelOutput,
-      parsedEnvelope,
-      selectedOut: out,
-    });
-  }
+  console.log("[ANSWER_WITH_PROMPT_BASE][RAW_MODEL_OUTPUT]", {
+    tenantId,
+    canal,
+    userInput,
+    rawModelOutput,
+    parsedEnvelope,
+    selectedOut: out,
+  });
 
   } catch (e) {
     console.warn("❌ answerWithPromptBase LLM error; using fallback:", e);
@@ -1129,25 +480,8 @@ export async function answerWithPromptBase(
 
   out = sanitizeChatOutput(out);
 
-  const shouldPreserveCanonicalLinks =
-    effectivePolicy.mode === "grounded_frame_only" &&
-    effectivePolicy.preserveExactBody &&
-    effectivePolicy.preserveExactLinks;
-
-  if (!shouldPreserveCanonicalLinks) {
-    out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
-  }
-
+  out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
   out = capLines(out, maxLines);
-
-  if (!isStructuredComparisonCanonical && !isScheduleCanonicalBody) {
-    out = preserveCanonicalBodyOrFallback({
-      modelText: out,
-      fallbackText,
-      policy: effectivePolicy,
-      idiomaDestino,
-    });
-  }
 
   console.log("[ANSWER_WITH_PROMPT_BASE][POST_PRESERVE]", {
     tenantId,
@@ -1162,39 +496,27 @@ export async function answerWithPromptBase(
     preserveExactLinks: effectivePolicy.preserveExactLinks,
   });
 
-  const shouldSkipPostTranslation =
-    effectivePolicy.mode === "grounded_frame_only" &&
-    effectivePolicy.preserveExactBody;
+  try {
+    if (out) {
+      const detected = await detectarIdioma(out);
+      const langOut = detected?.lang ?? null;
 
-  if (!shouldSkipPostTranslation) {
-    try {
-      if (out) {
-        const detected = await detectarIdioma(out);
-        const langOut = detected?.lang ?? null;
-
-        if ((langOut === "es" || langOut === "en") && langOut !== idiomaDestino) {
-          out = await traducirMensaje(out, idiomaDestino);
-          out = sanitizeChatOutput(out);
-          out = capLines(out, maxLines);
-        }
+      if ((langOut === "es" || langOut === "en") && langOut !== idiomaDestino) {
+        out = await traducirMensaje(out, idiomaDestino);
+        out = sanitizeChatOutput(out);
+        out = capLines(out, maxLines);
       }
-    } catch (e) {
-      console.warn("⚠️ No se pudo ajustar el idioma en answerWithPromptBase:", e);
     }
+  } catch (e) {
+    console.warn("⚠️ No se pudo ajustar el idioma en answerWithPromptBase:", e);
   }
 
   let pendingCta: PendingCta = null;
 
   try {
-    if (shouldUseGroundedFrameOnlyFormatter) {
-      const reparsedGroundedFrame =
-        parseGroundedFrameEnvelope(rawModelOutputForPendingCta);
-      pendingCta = reparsedGroundedFrame?.pendingCta ?? null;
-    } else {
-      const reparsedEnvelope =
-        parseModelAnswerEnvelope(rawModelOutputForPendingCta);
-      pendingCta = reparsedEnvelope?.pendingCta ?? null;
-    }
+    const reparsedEnvelope =
+      parseModelAnswerEnvelope(rawModelOutputForPendingCta);
+    pendingCta = reparsedEnvelope?.pendingCta ?? null;
   } catch {
     pendingCta = null;
   }

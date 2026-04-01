@@ -192,7 +192,8 @@ export type FastpathResult =
         | "catalog_comparison_db_llm_render"
         | "price_fastpath_db_no_price"
         | "price_fastpath_db_no_price_llm_render"
-        | "catalog_disambiguation_db";
+        | "catalog_disambiguation_db"
+        | "info_clave_db";
       intent: string | null;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;

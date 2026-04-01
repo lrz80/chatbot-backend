@@ -5,6 +5,26 @@ import { answerWithPromptBase } from "../../../answers/answerWithPromptBase";
 import { stripMarkdownLinksForDm } from "../../format/stripMarkdownLinks";
 import { buildDmWriterPrompt } from "./buildDmWriterPrompt";
 
+function normalizeText(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function shouldBypassWriterModel(input: {
+  isCatalogDisambiguationReply: boolean;
+  isGroundedCatalogReply: boolean;
+  isPriceSummaryReply: boolean;
+  canonicalBodyOwnsClosing: boolean;
+  shouldUseGroundedFrameOnly: boolean;
+}): boolean {
+  return (
+    input.isCatalogDisambiguationReply ||
+    input.isGroundedCatalogReply ||
+    input.isPriceSummaryReply ||
+    input.canonicalBodyOwnsClosing ||
+    input.shouldUseGroundedFrameOnly
+  );
+}
+
 export type RenderFastpathDmReplyInput = {
   tenantId: string;
   canal: Canal;
@@ -91,13 +111,14 @@ export async function renderFastpathDmReply(
   const unresolvedCatalogDisambiguation =
     isCatalogDisambiguationReply && !replyPolicy.hasResolvedEntity;
 
-  const promptConFastpath = buildDmWriterPrompt({
-    idiomaDestino,
-    promptBaseMem,
-    fastpathText,
-    shouldUseGroundedFrameOnly: replyPolicy.shouldUseGroundedFrameOnly,
-    shouldForceSalesClosingQuestion,
+  const canonicalReply = normalizeText(fastpathText);
+
+  const bypassWriterModel = shouldBypassWriterModel({
     isCatalogDisambiguationReply,
+    isGroundedCatalogReply,
+    isPriceSummaryReply,
+    canonicalBodyOwnsClosing: replyPolicy.canonicalBodyOwnsClosing,
+    shouldUseGroundedFrameOnly: replyPolicy.shouldUseGroundedFrameOnly,
   });
 
   const runtimeCapabilities = {
@@ -132,35 +153,48 @@ export async function renderFastpathDmReply(
     allowAlternativeEntities: false,
     allowCrossSellEntities: false,
     allowAddOnSuggestions: false,
-    preserveExactBody: replyPolicy.shouldUseGroundedFrameOnly,
-    preserveExactOrder: replyPolicy.shouldUseGroundedFrameOnly,
-    preserveExactBullets: replyPolicy.shouldUseGroundedFrameOnly,
-    preserveExactNumbers: replyPolicy.shouldUseGroundedFrameOnly,
-    preserveExactLinks: replyPolicy.shouldUseGroundedFrameOnly,
-    allowIntro: true,
-    allowOutro:
-      isCatalogDisambiguationReply
-        ? true
-        : !replyPolicy.canonicalBodyOwnsClosing,
-    allowBodyRewrite: !replyPolicy.shouldUseGroundedFrameOnly,
+    preserveExactBody: bypassWriterModel,
+    preserveExactOrder: bypassWriterModel,
+    preserveExactBullets: bypassWriterModel,
+    preserveExactNumbers: bypassWriterModel,
+    preserveExactLinks: bypassWriterModel,
+    allowIntro: !bypassWriterModel,
+    allowOutro: !bypassWriterModel && !replyPolicy.canonicalBodyOwnsClosing,
+    allowBodyRewrite: !bypassWriterModel,
     mustEndWithSalesQuestion:
-      isCatalogDisambiguationReply
-        ? false
-        : shouldForceSalesClosingQuestion &&
-          !replyPolicy.canonicalBodyOwnsClosing,
-    reasoningNotes: isCatalogDbReply
-      ? shouldForceSalesClosingQuestion
-        ? "Catalog grounded overview reply in DM. Keep the structured body exactly intact, wrap it naturally, and end with exactly one short consultative sales question."
-        : "Catalog grounded reply. Keep the structured body exactly intact, but wrap it in a natural, consultative DM response with a short opening and optional short closing."
-      : isCatalogDisambiguationReply
-      ? "This is a catalog disambiguation turn, not the final service answer. Keep the structured body exactly intact. Do not describe what the plan includes. Do not imply the ambiguity is resolved. Do not offer signup, booking, or next-step sales actions yet. Add only a short clarification framing that tells the user these are the matching options and asks them to choose one."
+      !bypassWriterModel &&
+      !isCatalogDisambiguationReply &&
+      shouldForceSalesClosingQuestion &&
+      !replyPolicy.canonicalBodyOwnsClosing,
+    reasoningNotes: isCatalogDisambiguationReply
+      ? "Catalog disambiguation turn. Keep the canonical body exact and do not resolve or expand it."
+      : isGroundedCatalogReply
+      ? "Grounded catalog turn. Preserve the canonical body exactly."
       : isPriceSummaryReply
-      ? shouldForceSalesClosingQuestion
-        ? "Grounded price summary overview in DM. Keep the structured body exactly intact, wrap it naturally, and end with exactly one short consultative sales question."
-        : "Grounded price summary reply. Keep the structured body exactly intact, but wrap it in a natural, consultative DM response with a short opening and optional short closing."
+      ? "Grounded price summary turn. Preserve the canonical body exactly."
       : null,
   } as const;
 
+  if (bypassWriterModel) {
+    if (fp?.awaitingEffect?.type === "set_awaiting_yes_no") {
+      const payload = fp.awaitingEffect.payload || null;
+      if (payload?.kind) {
+        ctxPatch.awaiting_yes_no_action = payload;
+      }
+    }
+
+    return {
+      reply: stripMarkdownLinksForDm(canonicalReply),
+      ctxPatch,
+    };
+  }
+
+  const promptConFastpath = buildDmWriterPrompt({
+    idiomaDestino,
+    promptBaseMem,
+    fastpathText,
+  });
+  
   const composed = await answerWithPromptBase({
     tenantId,
     promptBase: promptConFastpath,

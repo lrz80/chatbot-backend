@@ -101,6 +101,19 @@ function mapDetectedIntentToCatalogIntent(
   }
 }
 
+function isExplicitCompareIntent(
+  detectedIntent: string | null | undefined
+): boolean {
+  const value = String(detectedIntent || "").trim().toLowerCase();
+
+  return (
+    value === "compare" ||
+    value === "comparison" ||
+    value === "comparacion" ||
+    value === "catalog_compare"
+  );
+}
+
 function isSafeContextIntent(
   value: string | null | undefined
 ): value is CatalogReferenceIntent {
@@ -487,11 +500,15 @@ export function classifyCatalogReferenceTurn(
     "info_general",
   ]);
 
+  const hasStructuredComparisonEvidence =
+    Boolean(input.structuredComparison?.hasComparison) &&
+    isExplicitCompareIntent(detectedIntent);
+
   const hasStructuralCatalogEvidence =
     Boolean(explicitEntityCandidate?.id) ||
     Boolean(explicitVariantCandidate?.variantId) ||
     Boolean(explicitFamilyCandidate?.familyKey) ||
-    Boolean(input.structuredComparison?.hasComparison) ||
+    hasStructuredComparisonEvidence ||
     Boolean(context.expectingVariantForEntityId) ||
     signals.hasReferentialDependency ||
     signals.hasConversationDependency;
