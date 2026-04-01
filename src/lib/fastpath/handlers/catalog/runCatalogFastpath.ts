@@ -118,6 +118,61 @@ function clearPendingCatalogChoiceCtxPatch() {
   };
 }
 
+type PendingCatalogSelectionResolution =
+  | { status: "none" }
+  | { status: "unresolved" }
+  | {
+      status: "resolved";
+      option: CatalogDisambiguationOption;
+    };
+
+function normalizePendingChoiceText(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function resolvePendingCatalogChoiceSelection(input: {
+  userInput: string;
+  pendingCatalogChoice: PendingCatalogChoice | null;
+}): PendingCatalogSelectionResolution {
+  const pending = input.pendingCatalogChoice;
+
+  if (!pending || !Array.isArray(pending.options) || pending.options.length === 0) {
+    return { status: "none" };
+  }
+
+  const text = normalizePendingChoiceText(input.userInput);
+
+  if (!text) {
+    return { status: "unresolved" };
+  }
+
+  const numeric = Number(text);
+
+  if (
+    Number.isInteger(numeric) &&
+    numeric >= 1 &&
+    numeric <= pending.options.length
+  ) {
+    return {
+      status: "resolved",
+      option: pending.options[numeric - 1],
+    };
+  }
+
+  const exactMatches = pending.options.filter((option) => {
+    return normalizePendingChoiceText(option.label) === text;
+  });
+
+  if (exactMatches.length === 1) {
+    return {
+      status: "resolved",
+      option: exactMatches[0],
+    };
+  }
+
+  return { status: "unresolved" };
+}
+
 function normalizeCatalogDisambiguationOptions(
   raw: any
 ): CatalogDisambiguationOption[] {
@@ -515,6 +570,50 @@ export async function runCatalogFastpath(
 
   const pendingCatalogChoice = getPendingCatalogChoice(input.convoCtx);
 
+  const pendingCatalogSelection = resolvePendingCatalogChoiceSelection({
+    userInput: input.userInput,
+    pendingCatalogChoice,
+  });
+
+  let pendingSelectedService:
+    | {
+        serviceId: string;
+        serviceName: string | null;
+      }
+    | null = null;
+
+  let pendingSelectedVariant:
+    | {
+        serviceId: string;
+        serviceName: string | null;
+        variantId: string;
+        variantName: string | null;
+      }
+    | null = null;
+
+  if (pendingCatalogSelection.status === "resolved") {
+    const selected = pendingCatalogSelection.option;
+
+    if (selected.kind === "service") {
+      pendingSelectedService = {
+        serviceId: selected.serviceId,
+        serviceName: selected.serviceName || selected.label || null,
+      };
+    } else {
+      pendingSelectedVariant = {
+        serviceId: selected.serviceId,
+        serviceName: selected.serviceName || null,
+        variantId: selected.variantId,
+        variantName: selected.variantName || selected.label || null,
+      };
+
+      pendingSelectedService = {
+        serviceId: selected.serviceId,
+        serviceName: selected.serviceName || null,
+      };
+    }
+  }
+
   console.log("[CATALOG][ROUTING_SIGNAL]", {
     userInput: input.userInput,
     intentOut: input.intentOut,
@@ -830,7 +929,13 @@ export async function runCatalogFastpath(
 
   let canonicalCatalogResolution: CanonicalCatalogResolution | null = null;
 
-  if (shouldResolveCanonicalTargetEarly) {
+  if (pendingSelectedService) {
+    canonicalCatalogResolution = {
+      status: "resolved_single",
+      serviceId: pendingSelectedService.serviceId,
+      serviceName: pendingSelectedService.serviceName || "",
+    };
+  } else if (shouldResolveCanonicalTargetEarly) {
     canonicalCatalogResolution = await resolveCanonicalCatalogTarget({
       pool: input.pool,
       tenantId: input.tenantId,
@@ -858,6 +963,28 @@ export async function runCatalogFastpath(
 
   if (isCatalogPriceLikeTurn) {
     console.log("🚫 BLOCK LLM PRICING — forcing DB path");
+  }
+
+  if (
+    pendingCatalogChoice &&
+    pendingCatalogSelection.status === "unresolved"
+  ) {
+    return buildCatalogDisambiguationResult({
+      routeIntent:
+        pendingCatalogChoice.originalIntent === "precio"
+          ? "catalog_price"
+          : "catalog_includes",
+      kind: pendingCatalogChoice.kind,
+      options: pendingCatalogChoice.options,
+      serviceId:
+        pendingCatalogChoice.kind === "variant_choice"
+          ? pendingCatalogChoice.serviceId
+          : null,
+      serviceName:
+        pendingCatalogChoice.kind === "variant_choice"
+          ? pendingCatalogChoice.serviceName || null
+          : null,
+    });
   }
 
   if (!isCatalogQuestion && !hasFacetDrivenCatalogIntent) {
@@ -980,13 +1107,15 @@ export async function runCatalogFastpath(
 
       const resolvedRoutingSignal = {
         ...catalogRoutingSignal,
-        targetServiceId: canonicalCatalogResolution.serviceId,
-        targetServiceName: canonicalCatalogResolution.serviceName,
-        targetVariantId: null,
-        targetVariantName: null,
+        targetServiceId:
+          pendingSelectedVariant?.serviceId || canonicalCatalogResolution.serviceId,
+        targetServiceName:
+          pendingSelectedVariant?.serviceName || canonicalCatalogResolution.serviceName,
+        targetVariantId: pendingSelectedVariant?.variantId || null,
+        targetVariantName: pendingSelectedVariant?.variantName || null,
         targetFamilyKey: null,
         targetFamilyName: null,
-        targetLevel: "entity",
+        targetLevel: pendingSelectedVariant ? "variant" : "entity",
         disambiguationType: "none",
       };
 
@@ -1123,13 +1252,15 @@ export async function runCatalogFastpath(
 
       const resolvedRoutingSignal = {
         ...catalogRoutingSignal,
-        targetServiceId: canonicalCatalogResolution.serviceId,
-        targetServiceName: canonicalCatalogResolution.serviceName,
-        targetVariantId: null,
-        targetVariantName: null,
+        targetServiceId:
+          pendingSelectedVariant?.serviceId || canonicalCatalogResolution.serviceId,
+        targetServiceName:
+          pendingSelectedVariant?.serviceName || canonicalCatalogResolution.serviceName,
+        targetVariantId: pendingSelectedVariant?.variantId || null,
+        targetVariantName: pendingSelectedVariant?.variantName || null,
         targetFamilyKey: null,
         targetFamilyName: null,
-        targetLevel: "entity",
+        targetLevel: pendingSelectedVariant ? "variant" : "entity",
         disambiguationType: "none",
       };
 
@@ -1366,13 +1497,15 @@ export async function runCatalogFastpath(
 
       const resolvedRoutingSignal = {
         ...catalogRoutingSignal,
-        targetServiceId: canonicalCatalogResolution.serviceId,
-        targetServiceName: canonicalCatalogResolution.serviceName,
-        targetVariantId: null,
-        targetVariantName: null,
+        targetServiceId:
+          pendingSelectedVariant?.serviceId || canonicalCatalogResolution.serviceId,
+        targetServiceName:
+          pendingSelectedVariant?.serviceName || canonicalCatalogResolution.serviceName,
+        targetVariantId: pendingSelectedVariant?.variantId || null,
+        targetVariantName: pendingSelectedVariant?.variantName || null,
         targetFamilyKey: null,
         targetFamilyName: null,
-        targetLevel: "entity",
+        targetLevel: pendingSelectedVariant ? "variant" : "entity",
         disambiguationType: "none",
       };
 
