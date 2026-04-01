@@ -304,6 +304,18 @@ function buildInstructionBlock(
     "- answer_as_business = true",
   ];
 
+  if (policy.mode === "clarify_only" && policy.preserveExactBody) {
+    base.push(
+      "- clarification_with_canonical_body = true",
+      "- the_system_will_render_the_canonical_options_body = true",
+      "- write_a_short_conversational_intro_before_the_canonical_body = true",
+      "- do_not_return_intro_null_in_this_mode = true",
+      "- do_not_resolve_the_ambiguity = true",
+      "- do_not_explain_includes_or_prices = true",
+      "- do_not_replace_the_canonical_options_with_a_summary = true"
+    );
+  }
+  
   if (policy.mode === "grounded_frame_only") {
     base.push(
       "- grounded_frame_only = true",
@@ -381,8 +393,22 @@ function buildUserPrompt(
           '- Use this exact shape: {"intro":null,"closing":null,"pendingCta":null}',
           "- The canonical fallback body is owned by the system.",
           "- Do not rewrite, replace, summarize, merge, expand, or resolve the canonical body.",
-          "- You may provide only an intro and/or a closing if allowed by the response policy.",
-          "- If no intro or closing is needed, return them as null.",
+          "- The canonical fallback body is owned by the system.",
+          "- Do not rewrite, replace, summarize, merge, expand, or resolve the canonical body.",
+          "- You may only provide an intro and/or a closing if allowed by the response policy.",
+          ...(policy.mode === "clarify_only"
+            ? [
+                "- Because this is a clarification turn, intro is required.",
+                "- The intro must be one short conversational line that preserves continuity with the user's last message.",
+                "- The intro must not resolve the ambiguity or invent catalog facts.",
+                "- The intro should guide the user to choose from the canonical options shown by the system.",
+                "- closing should normally be null unless the response policy explicitly allows and needs one.",
+                '- Use this exact shape: {"intro":"...", "closing":null, "pendingCta":null}',
+              ]
+            : [
+                "- If no intro or closing is needed, return them as null.",
+                '- Use this exact shape: {"intro":null,"closing":null,"pendingCta":null}',
+              ]),
           '- If the reply includes a confirmation-oriented CTA for booking, use: {"intro":null,"closing":null,"pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
           '- If the reply includes a confirmation-oriented CTA for estimate, use: {"intro":null,"closing":null,"pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
         ]

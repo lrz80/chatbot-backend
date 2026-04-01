@@ -182,7 +182,7 @@ export async function renderFastpathDmReply(
       shouldForceSalesClosingQuestion &&
       !replyPolicy.canonicalBodyOwnsClosing,
     reasoningNotes: isCatalogDisambiguationReply
-      ? "Catalog disambiguation turn. Keep the canonical body exact and do not resolve or expand it."
+      ? "Catalog disambiguation turn. Keep the canonical body exact, do not resolve or expand it, and add a short conversational intro that helps the user choose from the shown options."
       : isGroundedCatalogReply
       ? "Grounded catalog turn. Preserve the canonical body exactly."
       : isPriceSummaryReply

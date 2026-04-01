@@ -56,6 +56,12 @@ const FOLLOWUP_BLOCKED_INTENTS = new Set<string>([
   "wrong_number",
   "numero_equivocado",
   "spam",
+
+  // intents no resolutivos: no debe dispararse follow-up todavía
+  "catalog_disambiguation",
+  "price_disambiguation",
+  "clarification",
+  "unknown",
 ]);
 
 function clampLevel(level?: number | null): 1 | 2 | 3 {
@@ -161,11 +167,14 @@ function shouldScheduleFollowUp(args: {
   intFinal?: string | null;
   nivelInteres: number;
 }): { ok: boolean; reason: "no_intent" | "intent_blocked" | "interest_too_low" | "ok" } {
-  const { intFinal, nivelInteres } = args;
+  const normalizedIntent = String(args.intFinal || "").trim().toLowerCase();
+  const { nivelInteres } = args;
 
-  if (!intFinal) return { ok: false, reason: "no_intent" };
+  if (!normalizedIntent) {
+    return { ok: false, reason: "no_intent" };
+  }
 
-  if (FOLLOWUP_BLOCKED_INTENTS.has(intFinal)) {
+  if (FOLLOWUP_BLOCKED_INTENTS.has(normalizedIntent)) {
     return { ok: false, reason: "intent_blocked" };
   }
 
@@ -276,7 +285,9 @@ export async function scheduleFollowUpIfEligible(opts: {
       nivelInteres,
       estadoCliente,
       // para debug: si el intent era “de venta”
-      isSalesLikeIntent: intFinal ? FOLLOWUP_ELIGIBLE_INTENTS.has(intFinal) : false,
+      isSalesLikeIntent: intFinal
+        ? FOLLOWUP_ELIGIBLE_INTENTS.has(String(intFinal).trim().toLowerCase())
+        : false,
     });
 
     return { scheduled: false, reason };
