@@ -11,7 +11,26 @@ export type HandleVariantSecondTurnInput = {
   detectedIntent?: string | null;
   intentOut?: string | null;
   catalogReferenceClassification?: any;
+};
 
+type PendingVariantChoice = {
+  kind: "variant_choice";
+  originalIntent?: string | null;
+  serviceId: string;
+  serviceName?: string | null;
+  options: Array<{
+    kind?: "variant";
+    serviceId?: string;
+    variantId?: string | null;
+    label?: string | null;
+  }>;
+  createdAt?: number | null;
+};
+
+type PresentedVariantOption = {
+  variantId: string;
+  label: string;
+  index: number;
 };
 
 function parseSingleDigitSelection(input: string): number | null {
@@ -34,26 +53,44 @@ function splitLines(text: string): string[] {
     .filter((line: string) => line.length > 0);
 }
 
+function normalizeChoiceText(value: unknown): string {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
+}
+
 function resolveVariantTurnIntent(params: {
   detectedIntent?: string | null;
   intentOut?: string | null;
-  explicitDetailIntentNow: boolean;
+  originalIntent?: string | null;
   askedPriceVariant: boolean;
 }): string {
   if (params.askedPriceVariant) {
     return "precio";
   }
 
-  if (params.explicitDetailIntentNow) {
-    return "info_servicio";
+  const originalIntent = String(params.originalIntent || "")
+    .trim()
+    .toLowerCase();
+
+  if (originalIntent && originalIntent !== "duda") {
+    return originalIntent;
   }
 
-  const normalizedIntentOut = String(params.intentOut || "").trim().toLowerCase();
-  const normalizedDetectedIntent = String(params.detectedIntent || "").trim().toLowerCase();
+  const normalizedIntentOut = String(params.intentOut || "")
+    .trim()
+    .toLowerCase();
 
   if (normalizedIntentOut && normalizedIntentOut !== "duda") {
     return normalizedIntentOut;
   }
+
+  const normalizedDetectedIntent = String(params.detectedIntent || "")
+    .trim()
+    .toLowerCase();
 
   if (normalizedDetectedIntent && normalizedDetectedIntent !== "duda") {
     return normalizedDetectedIntent;
@@ -62,65 +99,214 @@ function resolveVariantTurnIntent(params: {
   return "info_servicio";
 }
 
+function getPendingVariantChoice(convoCtx: any): PendingVariantChoice | null {
+  const pending = convoCtx?.pendingCatalogChoice;
+
+  if (!pending || pending.kind !== "variant_choice") {
+    return null;
+  }
+
+  const serviceId = String(pending.serviceId || "").trim();
+  if (!serviceId) {
+    return null;
+  }
+
+  const rawOptions: Array<{
+    kind?: "variant";
+    serviceId?: string;
+    variantId?: string | null;
+    label?: string | null;
+  }> = Array.isArray(pending.options) ? pending.options : [];
+
+  const options = rawOptions
+    .map((item) => {
+      const variantId = String(item?.variantId || "").trim() || null;
+      const label = String(item?.label || "").trim() || null;
+
+      if (!variantId || !label) {
+        return null;
+      }
+
+      return {
+        kind: "variant" as const,
+        serviceId,
+        variantId,
+        label,
+      };
+    })
+    .filter(
+      (
+        item
+      ): item is {
+        kind: "variant";
+        serviceId: string;
+        variantId: string;
+        label: string;
+      } => item !== null
+    );
+
+  if (options.length < 2) {
+    return null;
+  }
+
+  return {
+    kind: "variant_choice",
+    originalIntent:
+      typeof pending.originalIntent === "string"
+        ? pending.originalIntent
+        : null,
+    serviceId,
+    serviceName:
+      typeof pending.serviceName === "string"
+        ? pending.serviceName
+        : null,
+    options,
+    createdAt:
+      typeof pending.createdAt === "number" ? pending.createdAt : null,
+  };
+}
+
+function getPresentedVariantOptions(convoCtx: any): PresentedVariantOption[] {
+  const fromPresented = Array.isArray(convoCtx?.presentedVariantOptions)
+    ? convoCtx.presentedVariantOptions
+    : [];
+
+  const normalizedPresented = fromPresented
+    .map((item: any, idx: number) => {
+      const variantId = String(item?.variantId || item?.id || "").trim();
+      const label = String(item?.label || item?.variant_name || "").trim();
+
+      if (!variantId || !label) {
+        return null;
+      }
+
+      return {
+        variantId,
+        label,
+        index: idx + 1,
+      };
+    })
+    .filter(Boolean) as PresentedVariantOption[];
+
+  if (normalizedPresented.length > 0) {
+    return normalizedPresented;
+  }
+
+  const fromLastVariantOptions = Array.isArray(convoCtx?.last_variant_options)
+    ? convoCtx.last_variant_options
+    : [];
+
+  return fromLastVariantOptions
+    .map((item: any, idx: number) => {
+      const variantId = String(item?.id || item?.variantId || "").trim();
+      const label = String(item?.variant_name || item?.label || "").trim();
+
+      if (!variantId || !label) {
+        return null;
+      }
+
+      return {
+        variantId,
+        label,
+        index:
+          typeof item?.index === "number" && Number.isInteger(item.index)
+            ? item.index
+            : idx + 1,
+      };
+    })
+    .filter(Boolean) as PresentedVariantOption[];
+}
+
+function resolveVariantIdFromUserInput(params: {
+  userInput: string;
+  numericSelectionIndex: number | null;
+  targetVariantId: string | null;
+  presentedVariantOptions: PresentedVariantOption[];
+  dbVariants: Array<{ id: string; variant_name: string | null }>;
+}): string | null {
+  if (params.targetVariantId) {
+    return params.targetVariantId;
+  }
+
+  if (params.numericSelectionIndex !== null) {
+    const fromPresented = params.presentedVariantOptions.find(
+      (item) => item.index === params.numericSelectionIndex
+    );
+
+    if (fromPresented?.variantId) {
+      return fromPresented.variantId;
+    }
+
+    const idx = params.numericSelectionIndex - 1;
+    if (idx >= 0 && idx < params.dbVariants.length) {
+      return String(params.dbVariants[idx]?.id || "").trim() || null;
+    }
+  }
+
+  const userNorm = normalizeChoiceText(params.userInput);
+  if (!userNorm) {
+    return null;
+  }
+
+  const fromPresentedByLabel = params.presentedVariantOptions.find(
+    (item) => normalizeChoiceText(item.label) === userNorm
+  );
+
+  if (fromPresentedByLabel?.variantId) {
+    return fromPresentedByLabel.variantId;
+  }
+
+  const fromDbByLabel = params.dbVariants.find(
+    (item) => normalizeChoiceText(item.variant_name) === userNorm
+  );
+
+  if (fromDbByLabel?.id) {
+    return String(fromDbByLabel.id).trim();
+  }
+
+  return null;
+}
+
 export async function handleVariantSecondTurn(
   input: HandleVariantSecondTurnInput
 ): Promise<FastpathResult> {
   const {
     targetServiceId: structuredTargetServiceId,
     targetVariantId,
-    targetFamilyKey,
   } = getCatalogStructuredSignals({
     catalogReferenceClassification: input.catalogReferenceClassification,
     convoCtx: input.convoCtx,
   });
 
-  const classifiedIntentNow = String(
-    input.catalogReferenceClassification?.intent || ""
-  )
-    .trim()
-    .toLowerCase();
-
-  const detectedIntentNow = String(input.detectedIntent || "")
-    .trim()
-    .toLowerCase();
-
-  const explicitDetailIntentNow =
-    classifiedIntentNow === "includes" ||
-    detectedIntentNow === "info_servicio";
-
+  const pendingVariantChoice = getPendingVariantChoice(input.convoCtx);
   const numericSelectionIndex = parseSingleDigitSelection(input.userInput);
 
   const selectedServiceId =
     String(
-      structuredTargetServiceId ||
+      pendingVariantChoice?.serviceId ||
+        structuredTargetServiceId ||
         input.convoCtx?.selectedServiceId ||
         input.convoCtx?.last_service_id ||
         ""
     ).trim() || null;
 
+  const selectedServiceName =
+    String(
+      pendingVariantChoice?.serviceName ||
+        input.convoCtx?.last_service_name ||
+        ""
+    ).trim() || null;
+
+  const presentedVariantOptions = getPresentedVariantOptions(input.convoCtx);
+
   const hasVariantSelectionContext =
     Boolean(input.convoCtx?.expectingVariant) ||
-    Boolean(
-      selectedServiceId &&
-        (input.convoCtx?.last_service_id ||
-          input.convoCtx?.last_service_name ||
-          input.convoCtx?.last_variant_name ||
-          input.convoCtx?.last_price_option_label ||
-          (Array.isArray(input.convoCtx?.last_catalog_plans) &&
-            input.convoCtx.last_catalog_plans.length > 0) ||
-          (Array.isArray(input.convoCtx?.pending_link_options) &&
-            input.convoCtx.pending_link_options.length > 0) ||
-          (Array.isArray(input.convoCtx?.last_variant_options) &&
-            input.convoCtx.last_variant_options.length > 0))
-    );
-
-  const shouldSkipVariantSelection = explicitDetailIntentNow;
+    Boolean(pendingVariantChoice) ||
+    Boolean(targetVariantId) ||
+    presentedVariantOptions.length > 0;
 
   const canAttemptVariantResolution =
-    !shouldSkipVariantSelection &&
-    Boolean(selectedServiceId) &&
-    (hasVariantSelectionContext || Boolean(targetVariantId)) &&
-    (Boolean(targetVariantId) || numericSelectionIndex !== null);
+    Boolean(selectedServiceId) && hasVariantSelectionContext;
 
   if (!canAttemptVariantResolution) {
     return {
@@ -132,11 +318,11 @@ export async function handleVariantSecondTurn(
     userInput: input.userInput,
     expectingVariant: input.convoCtx?.expectingVariant,
     selectedServiceId,
-    hasVariantSelectionContext,
+    selectedServiceName,
     numericSelectionIndex,
     targetVariantId,
-    targetFamilyKey,
-    shouldSkipVariantSelection,
+    presentedVariantOptionsCount: presentedVariantOptions.length,
+    pendingVariantChoiceKind: pendingVariantChoice?.kind || null,
   });
 
   const serviceId = String(selectedServiceId);
@@ -147,130 +333,9 @@ export async function handleVariantSecondTurn(
   const resolvedVariantTurnIntent = resolveVariantTurnIntent({
     detectedIntent: input.detectedIntent,
     intentOut: input.intentOut,
-    explicitDetailIntentNow,
+    originalIntent: pendingVariantChoice?.originalIntent || null,
     askedPriceVariant,
   });
-
-  const storedVariantOptions = Array.isArray(input.convoCtx?.last_variant_options)
-    ? input.convoCtx.last_variant_options
-    : [];
-
-  if (askedPriceVariant && storedVariantOptions.length > 0) {
-    let chosenOption: any = null;
-
-    if (targetVariantId) {
-      chosenOption =
-        storedVariantOptions.find(
-          (v: any) => String(v.id || "") === String(targetVariantId)
-        ) || { id: String(targetVariantId) };
-    }
-
-    if (!chosenOption && numericSelectionIndex !== null) {
-      chosenOption =
-        storedVariantOptions.find(
-          (v: any) => Number(v.index) === numericSelectionIndex
-        ) || null;
-    }
-
-    if (chosenOption?.id) {
-      const {
-        rows: [chosenRow],
-      } = await input.pool.query<any>(
-        `
-        SELECT
-          v.id,
-          v.variant_name,
-          v.description,
-          v.variant_url,
-          v.price,
-          v.currency,
-          s.name AS service_name,
-          s.service_url
-        FROM service_variants v
-        JOIN services s
-          ON s.id = v.service_id
-        WHERE v.id = $1
-          AND v.active = true
-        LIMIT 1
-        `,
-        [String(chosenOption.id)]
-      );
-
-      if (chosenRow) {
-        const baseName = String(chosenRow.service_name || "").trim();
-        const variantName = String(chosenRow.variant_name || "").trim();
-        const priceNum =
-          chosenRow.price === null ||
-          chosenRow.price === undefined ||
-          chosenRow.price === ""
-            ? null
-            : Number(chosenRow.price);
-
-        const currency = String(chosenRow.currency || "USD").trim();
-        const link =
-          chosenRow.variant_url
-            ? String(chosenRow.variant_url).trim()
-            : chosenRow.service_url
-            ? String(chosenRow.service_url).trim()
-            : null;
-
-        let priceText =
-          input.idiomaDestino === "en"
-            ? "price available"
-            : "precio disponible";
-
-        if (Number.isFinite(priceNum)) {
-          priceText =
-            currency === "USD"
-              ? `$${priceNum!.toFixed(2)}`
-              : `${priceNum!.toFixed(2)} ${currency}`;
-        }
-
-        const reply =
-          input.idiomaDestino === "en"
-            ? `${baseName} — ${variantName}\n• ${priceText}${link ? `\n${link}` : ""}`
-            : `${baseName} — ${variantName}\n• ${priceText}${link ? `\n${link}` : ""}`;
-
-        console.log("[VARIANT_SECOND_TURN][PRICE_SELECTION]", {
-          userInput: input.userInput,
-          pickedIndex: numericSelectionIndex,
-          chosenVariantId: chosenRow.id,
-          chosenVariantName: variantName,
-          price: chosenRow.price,
-          targetVariantId: targetVariantId || null,
-        });
-
-        return {
-          handled: true,
-          reply,
-          source: "price_fastpath_db",
-          intent: resolvedVariantTurnIntent,
-          ctxPatch: {
-            expectingVariant: false,
-            expectedVariantIntent: null,
-            lastResolvedIntent: resolvedVariantTurnIntent,
-
-            selectedServiceId: serviceId,
-
-            last_service_id: serviceId,
-            last_service_name: baseName || null,
-            last_service_at: Date.now(),
-
-            last_variant_id: String(chosenRow.id || ""),
-            last_variant_name: variantName || null,
-            last_variant_url: link || null,
-            last_variant_at: Date.now(),
-
-            last_price_option_label: variantName || null,
-            last_price_option_at: Date.now(),
-
-            last_bot_action: "answered_price_variant",
-            last_bot_action_at: Date.now(),
-          } as any,
-        };
-      }
-    }
-  }
 
   const { rows: variants } = await input.pool.query<any>(
     `
@@ -295,37 +360,41 @@ export async function handleVariantSecondTurn(
       ctxPatch: {
         expectingVariant: false,
         selectedServiceId: null,
+        pendingCatalogChoice: null,
+        pendingCatalogChoiceAt: null,
+        expectedVariantIntent: null,
+        expectingVariantForEntityId: null,
+        presentedVariantOptions: null,
       } as any,
     };
   }
 
-  let chosen: any = null;
+  const resolvedVariantId = resolveVariantIdFromUserInput({
+    userInput: input.userInput,
+    numericSelectionIndex,
+    targetVariantId: String(targetVariantId || "").trim() || null,
+    presentedVariantOptions,
+    dbVariants: variants.map((v: any) => ({
+      id: String(v.id || "").trim(),
+      variant_name:
+        v.variant_name === null || v.variant_name === undefined
+          ? null
+          : String(v.variant_name),
+    })),
+  });
 
-  if (targetVariantId) {
-    chosen =
-      variants.find(
-        (v: any) => String(v.id || "") === String(targetVariantId)
-      ) || null;
+  if (!resolvedVariantId) {
+    return {
+      handled: false,
+    };
   }
 
-  if (!chosen && numericSelectionIndex !== null) {
-    const idx = numericSelectionIndex - 1;
-    if (idx >= 0 && idx < variants.length) {
-      chosen = variants[idx];
-    }
-  }
+  const chosen =
+    variants.find((v: any) => String(v.id || "") === resolvedVariantId) || null;
 
   if (!chosen) {
-    const retryMsg =
-      input.idiomaDestino === "en"
-        ? "Please tell me which option you want."
-        : "Indícame cuál opción te interesa.";
-
     return {
-      handled: true,
-      reply: retryMsg,
-      source: "service_list_db",
-      intent: resolvedVariantTurnIntent,
+      handled: false,
     };
   }
 
@@ -339,6 +408,7 @@ export async function handleVariantSecondTurn(
       service_url
     FROM services
     WHERE id = $1
+    LIMIT 1
     `,
     [serviceId]
   );
@@ -353,8 +423,68 @@ export async function handleVariantSecondTurn(
     ? String(service.service_url).trim()
     : null;
 
-  const baseName = String(service?.name || "").trim();
+  const baseName =
+    String(service?.name || selectedServiceName || "").trim();
+
   const variantName = String(chosen.variant_name || "").trim();
+
+  if (askedPriceVariant) {
+    const priceNum =
+      chosen.price === null || chosen.price === undefined || chosen.price === ""
+        ? null
+        : Number(chosen.price);
+
+    const currency = String(chosen.currency || "USD").trim();
+
+    let priceText =
+      input.idiomaDestino === "en"
+        ? "price available"
+        : "precio disponible";
+
+    if (Number.isFinite(priceNum)) {
+      priceText =
+        currency === "USD"
+          ? `$${priceNum!.toFixed(2)}`
+          : `${priceNum!.toFixed(2)} ${currency}`;
+    }
+
+    const reply =
+      `${baseName} — ${variantName}\n• ${priceText}${link ? `\n${link}` : ""}`.trim();
+
+    return {
+      handled: true,
+      reply,
+      source: "price_fastpath_db",
+      intent: resolvedVariantTurnIntent,
+      ctxPatch: {
+        expectingVariant: false,
+        expectedVariantIntent: null,
+        expectingVariantForEntityId: null,
+        presentedVariantOptions: null,
+        pendingCatalogChoice: null,
+        pendingCatalogChoiceAt: null,
+
+        lastResolvedIntent: resolvedVariantTurnIntent,
+
+        selectedServiceId: serviceId,
+
+        last_service_id: serviceId,
+        last_service_name: baseName || null,
+        last_service_at: Date.now(),
+
+        last_variant_id: String(chosen.id || ""),
+        last_variant_name: variantName || null,
+        last_variant_url: link || null,
+        last_variant_at: Date.now(),
+
+        last_price_option_label: variantName || null,
+        last_price_option_at: Date.now(),
+
+        last_bot_action: "answered_price_variant",
+        last_bot_action_at: Date.now(),
+      } as any,
+    };
+  }
 
   const title =
     baseName && variantName
@@ -385,8 +515,7 @@ export async function handleVariantSecondTurn(
     serviceId,
     chosenVariantId: chosen?.id,
     chosenVariantName: chosen?.variant_name,
-    targetVariantId: targetVariantId || null,
-    numericSelectionIndex,
+    resolvedVariantTurnIntent,
   });
 
   return {
@@ -397,6 +526,10 @@ export async function handleVariantSecondTurn(
     ctxPatch: {
       expectingVariant: false,
       expectedVariantIntent: null,
+      expectingVariantForEntityId: null,
+      presentedVariantOptions: null,
+      pendingCatalogChoice: null,
+      pendingCatalogChoiceAt: null,
 
       lastResolvedIntent: resolvedVariantTurnIntent,
 

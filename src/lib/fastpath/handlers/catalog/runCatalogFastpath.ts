@@ -25,22 +25,44 @@ type CatalogFacets = {
   asksAvailability?: boolean;
 };
 
-type CatalogDisambiguationOption = {
+type CatalogServiceDisambiguationOption = {
+  kind: "service";
   serviceId: string;
+  variantId?: null;
   label: string;
 };
 
-type PendingCatalogChoice = {
-  kind: "service_choice";
-  originalIntent?: string | null;
-  options: CatalogDisambiguationOption[];
-  createdAt?: number | null;
+type CatalogVariantDisambiguationOption = {
+  kind: "variant";
+  serviceId: string;
+  variantId: string;
+  label: string;
 };
+
+type CatalogDisambiguationOption =
+  | CatalogServiceDisambiguationOption
+  | CatalogVariantDisambiguationOption;
+
+type PendingCatalogChoice =
+  | {
+      kind: "service_choice";
+      originalIntent?: string | null;
+      options: CatalogDisambiguationOption[];
+      createdAt?: number | null;
+    }
+  | {
+      kind: "variant_choice";
+      originalIntent?: string | null;
+      serviceId: string;
+      serviceName?: string | null;
+      options: CatalogDisambiguationOption[];
+      createdAt?: number | null;
+    };
 
 function getPendingCatalogChoice(convoCtx: any): PendingCatalogChoice | null {
   const pending = convoCtx?.pendingCatalogChoice;
 
-  if (!pending || pending.kind !== "service_choice") {
+  if (!pending || (pending.kind !== "service_choice" && pending.kind !== "variant_choice")) {
     return null;
   }
 
@@ -48,6 +70,30 @@ function getPendingCatalogChoice(convoCtx: any): PendingCatalogChoice | null {
 
   if (options.length < 2) {
     return null;
+  }
+
+  if (pending.kind === "variant_choice") {
+    const serviceId = String(pending.serviceId || "").trim();
+
+    if (!serviceId) {
+      return null;
+    }
+
+    return {
+      kind: "variant_choice",
+      originalIntent:
+        typeof pending.originalIntent === "string"
+          ? pending.originalIntent
+          : null,
+      serviceId,
+      serviceName:
+        typeof pending.serviceName === "string"
+          ? pending.serviceName
+          : null,
+      options,
+      createdAt:
+        typeof pending.createdAt === "number" ? pending.createdAt : null,
+    };
   }
 
   return {
@@ -78,14 +124,43 @@ function normalizeCatalogDisambiguationOptions(
   const result: CatalogDisambiguationOption[] = [];
 
   for (const item of raw) {
+    const kind =
+      String(item?.kind || "").trim().toLowerCase() === "variant"
+        ? "variant"
+        : "service";
+
     const serviceId = String(item?.serviceId || item?.id || "").trim();
+    const variantId = String(item?.variantId || "").trim();
     const label = String(item?.label || item?.name || "").trim();
 
     if (!serviceId || !label) continue;
-    if (seen.has(serviceId)) continue;
 
-    seen.add(serviceId);
-    result.push({ serviceId, label });
+    if (kind === "variant") {
+      if (!variantId) continue;
+
+      const dedupeKey = `${serviceId}::${variantId}`;
+      if (seen.has(dedupeKey)) continue;
+
+      seen.add(dedupeKey);
+      result.push({
+        kind: "variant",
+        serviceId,
+        variantId,
+        label,
+      });
+      continue;
+    }
+
+    const dedupeKey = serviceId;
+    if (seen.has(dedupeKey)) continue;
+
+    seen.add(dedupeKey);
+    result.push({
+      kind: "service",
+      serviceId,
+      variantId: null,
+      label,
+    });
   }
 
   return result;
@@ -184,12 +259,154 @@ async function resolveCanonicalCatalogTarget(input: {
   };
 }
 
+function shouldRequireVariantChoice(params: {
+  routeIntent: string;
+  asksPrices: boolean;
+  asksIncludesOnly: boolean;
+  asksSchedules: boolean;
+}): boolean {
+  return (
+    params.routeIntent === "catalog_price" ||
+    params.routeIntent === "catalog_includes" ||
+    params.routeIntent === "entity_detail" ||
+    params.routeIntent === "variant_detail" ||
+    params.asksPrices === true ||
+    params.asksIncludesOnly === true ||
+    params.asksSchedules === true
+  );
+}
+
+async function getActiveVariantOptionsForService(input: {
+  pool: Pool;
+  serviceId: string;
+}): Promise<CatalogVariantDisambiguationOption[]> {
+  const { rows } = await input.pool.query<{
+    id: string;
+    variant_name: string | null;
+  }>(
+    `
+    SELECT id, variant_name
+    FROM service_variants
+    WHERE service_id = $1
+      AND active = true
+      AND variant_name IS NOT NULL
+      AND length(trim(variant_name)) > 0
+    ORDER BY variant_name ASC, id ASC
+    `,
+    [input.serviceId]
+  );
+
+  const options: CatalogVariantDisambiguationOption[] = [];
+
+  for (const row of rows) {
+    const variantId = String(row.id || "").trim();
+    const label = String(row.variant_name || "").trim();
+
+    if (!variantId || !label) {
+      continue;
+    }
+
+    options.push({
+      kind: "variant",
+      serviceId: input.serviceId,
+      variantId,
+      label,
+    });
+  }
+
+  return options;
+}
+
+async function maybeBuildVariantDisambiguationResult(input: {
+  pool: Pool;
+  serviceId: string;
+  serviceName: string;
+  routeIntent: string;
+  asksPrices: boolean;
+  asksIncludesOnly: boolean;
+  asksSchedules: boolean;
+}): Promise<FastpathResult | null> {
+  if (
+    !shouldRequireVariantChoice({
+      routeIntent: input.routeIntent,
+      asksPrices: input.asksPrices,
+      asksIncludesOnly: input.asksIncludesOnly,
+      asksSchedules: input.asksSchedules,
+    })
+  ) {
+    return null;
+  }
+
+  const variantOptions = await getActiveVariantOptionsForService({
+    pool: input.pool,
+    serviceId: input.serviceId,
+  });
+
+  if (variantOptions.length <= 1) {
+    return null;
+  }
+
+  return buildCatalogDisambiguationResult({
+    routeIntent: input.routeIntent,
+    kind: "variant_choice",
+    options: variantOptions,
+    serviceId: input.serviceId,
+    serviceName: input.serviceName,
+  });
+}
+
 function buildCatalogDisambiguationResult(input: {
   routeIntent: string;
+  kind: "service_choice" | "variant_choice";
   options: CatalogDisambiguationOption[];
+  serviceId?: string | null;
+  serviceName?: string | null;
 }): FastpathResult {
   const originalIntent =
     input.routeIntent === "catalog_price" ? "precio" : "info_servicio";
+
+  const baseCtxPatch: any = {
+    last_catalog_at: Date.now(),
+    lastResolvedIntent: "catalog_disambiguation",
+    pendingCatalogChoiceAt: Date.now(),
+  };
+
+  if (input.kind === "service_choice") {
+    baseCtxPatch.lastPresentedEntityIds = input.options.map(
+      (option) => option.serviceId
+    );
+
+    baseCtxPatch.pendingCatalogChoice = {
+      kind: "service_choice",
+      originalIntent,
+      options: input.options,
+      createdAt: Date.now(),
+    };
+  } else {
+    const selectedServiceId = String(input.serviceId || "").trim();
+    const selectedServiceName = String(input.serviceName || "").trim() || null;
+
+    baseCtxPatch.pendingCatalogChoice = {
+      kind: "variant_choice",
+      originalIntent,
+      serviceId: selectedServiceId,
+      serviceName: selectedServiceName,
+      options: input.options,
+      createdAt: Date.now(),
+    };
+
+    baseCtxPatch.selectedServiceId = selectedServiceId || null;
+    baseCtxPatch.last_service_id = selectedServiceId || null;
+    baseCtxPatch.last_service_name = selectedServiceName;
+    baseCtxPatch.last_service_at = Date.now();
+    baseCtxPatch.expectingVariant = true;
+    baseCtxPatch.expectingVariantForEntityId = selectedServiceId || null;
+    baseCtxPatch.expectedVariantIntent = originalIntent;
+    baseCtxPatch.presentedVariantOptions = input.options.map((option) => ({
+      variantId: option.variantId || null,
+      label: option.label,
+    }));
+  }
 
   return {
     handled: true,
@@ -199,18 +416,7 @@ function buildCatalogDisambiguationResult(input: {
       .join("\n"),
     source: "catalog_disambiguation_db",
     intent: "catalog_disambiguation",
-    ctxPatch: {
-      last_catalog_at: Date.now(),
-      lastResolvedIntent: "catalog_disambiguation",
-      lastPresentedEntityIds: input.options.map((option) => option.serviceId),
-      pendingCatalogChoice: {
-        kind: "service_choice",
-        originalIntent,
-        options: input.options,
-        createdAt: Date.now(),
-      },
-      pendingCatalogChoiceAt: Date.now(),
-    } as any,
+    ctxPatch: baseCtxPatch,
   };
 }
 
@@ -573,9 +779,18 @@ export async function runCatalogFastpath(
     });
 
     if (canonicalCatalogResolution.status === "ambiguous") {
+      const serviceOptions: CatalogServiceDisambiguationOption[] =
+        canonicalCatalogResolution.options.map((option) => ({
+          kind: "service",
+          serviceId: option.serviceId,
+          variantId: null,
+          label: option.label,
+        }));
+
       return buildCatalogDisambiguationResult({
         routeIntent,
-        options: canonicalCatalogResolution.options,
+        kind: "service_choice",
+        options: serviceOptions,
       });
     }
   }
@@ -627,6 +842,21 @@ export async function runCatalogFastpath(
 
   if (routeIntent === "catalog_includes") {
     if (canonicalCatalogResolution?.status === "resolved_single") {
+      const variantDisambiguationResult =
+        await maybeBuildVariantDisambiguationResult({
+          pool: input.pool,
+          serviceId: canonicalCatalogResolution.serviceId,
+          serviceName: canonicalCatalogResolution.serviceName,
+          routeIntent,
+          asksPrices,
+          asksIncludesOnly,
+          asksSchedules,
+        });
+
+      if (variantDisambiguationResult) {
+        return variantDisambiguationResult;
+      }
+
       const { rows } = await input.pool.query<{
         service_id: string;
         service_name: string;
@@ -815,6 +1045,21 @@ export async function runCatalogFastpath(
     }
 
     if (canonicalCatalogResolution?.status === "resolved_single") {
+      const variantDisambiguationResult =
+        await maybeBuildVariantDisambiguationResult({
+          pool: input.pool,
+          serviceId: canonicalCatalogResolution.serviceId,
+          serviceName: canonicalCatalogResolution.serviceName,
+          routeIntent,
+          asksPrices,
+          asksIncludesOnly,
+          asksSchedules,
+        });
+
+      if (variantDisambiguationResult) {
+        return variantDisambiguationResult;
+      }
+
       const resolvedRoutingSignal = {
         ...catalogRoutingSignal,
         targetServiceId: canonicalCatalogResolution.serviceId,
@@ -1036,6 +1281,21 @@ export async function runCatalogFastpath(
     );
 
     if (canonicalCatalogResolution?.status === "resolved_single") {
+      const variantDisambiguationResult =
+        await maybeBuildVariantDisambiguationResult({
+          pool: input.pool,
+          serviceId: canonicalCatalogResolution.serviceId,
+          serviceName: canonicalCatalogResolution.serviceName,
+          routeIntent,
+          asksPrices,
+          asksIncludesOnly,
+          asksSchedules,
+        });
+
+      if (variantDisambiguationResult) {
+        return variantDisambiguationResult;
+      }
+
       const resolvedRoutingSignal = {
         ...catalogRoutingSignal,
         targetServiceId: canonicalCatalogResolution.serviceId,
