@@ -304,9 +304,12 @@ export async function renderFastpathDmReply(
     preserveExactBullets: bypassWriterModel || isCatalogChoiceReply,
     preserveExactNumbers: bypassWriterModel || isCatalogChoiceReply,
     preserveExactLinks: bypassWriterModel || isCatalogChoiceReply,
-    allowIntro: !bypassWriterModel,
+    allowIntro:
+      !bypassWriterModel &&
+      !isCatalogChoiceReply,
     allowOutro:
       !bypassWriterModel &&
+      !isCatalogChoiceReply &&
       !replyPolicy.canonicalBodyOwnsClosing,
     allowBodyRewrite: false,
     mustEndWithSalesQuestion:
@@ -315,9 +318,9 @@ export async function renderFastpathDmReply(
       shouldForceSalesClosingQuestion &&
       !replyPolicy.canonicalBodyOwnsClosing,
     reasoningNotes: isServiceChoiceReply
-      ? "Catalog service choice turn. Keep the canonical body exact, do not resolve for the user, and add a short conversational intro that helps the user choose one listed service."
+      ? "Catalog service choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one service."
       : isVariantChoiceReply
-      ? "Catalog variant choice turn. Keep the canonical body exact, do not resolve for the user, and add a short conversational intro that helps the user choose one listed variant."
+      ? "Catalog variant choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one variant."
       : isResolvedCatalogAnswer
       ? "Resolved grounded catalog turn. Preserve the canonical body exactly."
       : isGroundedCatalogReply
