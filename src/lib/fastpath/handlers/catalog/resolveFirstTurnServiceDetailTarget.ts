@@ -107,21 +107,6 @@ async function loadPlanTokenCandidates(args: {
   return rows;
 }
 
-function buildPlanGroupDisambiguationReply(args: {
-  idiomaDestino: Lang;
-  rows: ServiceCandidateRow[];
-}) {
-  const { idiomaDestino, rows } = args;
-
-  return idiomaDestino === "en"
-    ? `Just to confirm 😊 are you asking about:\n\n${rows
-        .map((r, i) => `• ${i + 1}) ${String(r.name || "").trim()}`)
-        .join("\n")}\n\nReply with the number or the name and I'll tell you what it includes.`
-    : `Solo para confirmar 😊 ¿te refieres a:\n\n${rows
-        .map((r, i) => `• ${i + 1}) ${String(r.name || "").trim()}`)
-        .join("\n")}\n\nRespóndeme con el número o el nombre y te explico qué incluye.`;
-}
-
 function normalizeVariantHitToServiceHit(hit: any) {
   if (!hit) return null;
 
@@ -236,37 +221,14 @@ export async function resolveFirstTurnServiceDetailTarget(
       }
 
       if (rows.length > 1) {
-        console.log("[FASTPATH_BRANCH] plan_group_disambiguation", {
+        console.log("[FASTPATH_BRANCH][SKIP_DIRECT_PLAN_GROUP_REPLY]", {
           userInput,
           candidates: rows.map((r) => r.name),
         });
 
         return {
-          handled: true,
-          reply: buildPlanGroupDisambiguationReply({
-            idiomaDestino,
-            rows,
-          }),
-          source: "service_list_db",
-          intent: "info_servicio",
-          ctxPatch: {
-            last_plan_list: rows.map((r) => ({
-              id: String(r.id),
-              name: String(r.name || "").trim(),
-              url: null,
-            })),
-            last_plan_list_at: Date.now(),
-            last_list_kind: "plan",
-            last_list_kind_at: Date.now(),
-
-            pending_price_lookup: true,
-            pending_price_at: Date.now(),
-            pending_price_target_text: userInput,
-            pending_price_raw_user_text: userInput,
-
-            last_bot_action: "asked_plan_group_disambiguation",
-            last_bot_action_at: Date.now(),
-          },
+          handled: false,
+          hit: null,
         };
       }
     }
