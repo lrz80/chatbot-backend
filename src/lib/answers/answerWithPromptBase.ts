@@ -92,6 +92,7 @@ function capLines(text: string, maxLines: number) {
   return lines.slice(0, maxLines).join("\n").trim();
 }
 
+
 function stripUrlsIfPromptHasNone(out: string, promptBase: string) {
   const promptHasUrl = /https?:\/\/\S+/i.test(promptBase);
   if (promptHasUrl) return out;
@@ -142,6 +143,51 @@ function parseModelAnswerEnvelope(raw: string): ModelAnswerEnvelope | null {
 
     return {
       text: replyText,
+      pendingCta,
+    };
+  } catch {
+    return null;
+  }
+}
+
+type CanonicalFrameEnvelope = {
+  intro: string | null;
+  closing: string | null;
+  pendingCta: PendingCta;
+};
+
+function parseCanonicalFrameEnvelope(raw: string): CanonicalFrameEnvelope | null {
+  const text = String(raw || "").trim();
+  if (!text) return null;
+
+  try {
+    const parsed = JSON.parse(text);
+
+    const intro =
+      typeof parsed?.intro === "string" && parsed.intro.trim()
+        ? parsed.intro.trim()
+        : null;
+
+    const closing =
+      typeof parsed?.closing === "string" && parsed.closing.trim()
+        ? parsed.closing.trim()
+        : null;
+
+    const rawPending = parsed?.pendingCta;
+    const pendingCta: PendingCta =
+      rawPending &&
+      (rawPending.type === "estimate_offer" ||
+        rawPending.type === "booking_offer") &&
+      rawPending.awaitsConfirmation === true
+        ? {
+            type: rawPending.type,
+            awaitsConfirmation: true,
+          }
+        : null;
+
+    return {
+      intro,
+      closing,
       pendingCta,
     };
   } catch {
@@ -314,7 +360,14 @@ function buildEntityLockBlock(
   return lines.join("\n");
 }
 
-function buildUserPrompt(userInput: string) {
+function buildUserPrompt(
+  userInput: string,
+  policy: Required<ResponsePolicy>,
+  hasCanonicalFallback: boolean
+) {
+  const mustPreserveCanonicalBody =
+    hasCanonicalFallback && shouldUseCanonicalBodyComposition(policy);
+
   return [
     "MENSAJE_USUARIO:",
     userInput,
@@ -323,11 +376,59 @@ function buildUserPrompt(userInput: string) {
     "- Produce the final customer-facing reply.",
     "- Obey RESPONSE_POLICY_JSON and OUTPUT_RULES.",
     "- Return STRICT JSON only.",
-    '- Use this exact shape: {"text":"...", "pendingCta":null}',
-    '- If the reply includes a confirmation-oriented CTA for booking, use: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
-    '- If the reply includes a confirmation-oriented CTA for estimate, use: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+    ...(mustPreserveCanonicalBody
+      ? [
+          '- Use this exact shape: {"intro":null,"closing":null,"pendingCta":null}',
+          "- The canonical fallback body is owned by the system.",
+          "- Do not rewrite, replace, summarize, merge, expand, or resolve the canonical body.",
+          "- You may provide only an intro and/or a closing if allowed by the response policy.",
+          "- If no intro or closing is needed, return them as null.",
+          '- If the reply includes a confirmation-oriented CTA for booking, use: {"intro":null,"closing":null,"pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
+          '- If the reply includes a confirmation-oriented CTA for estimate, use: {"intro":null,"closing":null,"pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+        ]
+      : [
+          '- Use this exact shape: {"text":"...", "pendingCta":null}',
+          '- If the reply includes a confirmation-oriented CTA for booking, use: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
+          '- If the reply includes a confirmation-oriented CTA for estimate, use: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+        ]),
     "- Do not wrap the JSON in markdown fences.",
   ].join("\n");
+}
+
+function composeCanonicalReply(input: {
+  canonicalBody: string;
+  intro?: string | null;
+  closing?: string | null;
+  allowIntro?: boolean;
+  allowOutro?: boolean;
+}): string {
+  const parts: string[] = [];
+
+  if (input.allowIntro && String(input.intro || "").trim()) {
+    parts.push(String(input.intro || "").trim());
+  }
+
+  if (String(input.canonicalBody || "").trim()) {
+    parts.push(String(input.canonicalBody || "").trim());
+  }
+
+  if (input.allowOutro && String(input.closing || "").trim()) {
+    parts.push(String(input.closing || "").trim());
+  }
+
+  return parts.join("\n").trim();
+}
+
+function shouldUseCanonicalBodyComposition(
+  policy: Required<ResponsePolicy>
+): boolean {
+  return (
+    policy.preserveExactBody === true ||
+    policy.preserveExactOrder === true ||
+    policy.preserveExactBullets === true ||
+    policy.preserveExactNumbers === true ||
+    policy.preserveExactLinks === true
+  );
 }
 
 /* =========================
@@ -426,7 +527,11 @@ export async function answerWithPromptBase(
   ].filter(Boolean);
 
   const systemPrompt = systemPromptParts.join("\n");
-  const userPrompt = buildUserPrompt(userInput);
+    const userPrompt = buildUserPrompt(
+    userInput,
+    effectivePolicy,
+    Boolean(String(fallbackText || "").trim())
+  );
 
   let out = "";
   let rawModelOutputForPendingCta = "";
@@ -459,9 +564,27 @@ export async function answerWithPromptBase(
 
   rawModelOutputForPendingCta = rawModelOutput;
 
-  const parsedEnvelope = parseModelAnswerEnvelope(rawModelOutput);
+    const shouldComposeCanonicalBody =
+    Boolean(String(fallbackText || "").trim()) &&
+    shouldUseCanonicalBodyComposition(effectivePolicy);
 
-  out = parsedEnvelope?.text || rawModelOutput || fallbackText || "";
+  const parsedEnvelope = shouldComposeCanonicalBody
+    ? null
+    : parseModelAnswerEnvelope(rawModelOutput);
+
+  const parsedCanonicalFrame = shouldComposeCanonicalBody
+    ? parseCanonicalFrameEnvelope(rawModelOutput)
+    : null;
+
+  out = shouldComposeCanonicalBody
+    ? composeCanonicalReply({
+        canonicalBody: String(fallbackText || "").trim(),
+        intro: parsedCanonicalFrame?.intro ?? null,
+        closing: parsedCanonicalFrame?.closing ?? null,
+        allowIntro: effectivePolicy.allowIntro,
+        allowOutro: effectivePolicy.allowOutro,
+      })
+    : parsedEnvelope?.text || rawModelOutput || fallbackText || "";
 
   console.log("[ANSWER_WITH_PROMPT_BASE][RAW_MODEL_OUTPUT]", {
     tenantId,
@@ -469,7 +592,9 @@ export async function answerWithPromptBase(
     userInput,
     rawModelOutput,
     parsedEnvelope,
+    parsedCanonicalFrame,
     selectedOut: out,
+    usedCanonicalBodyComposition: shouldComposeCanonicalBody,
   });
 
   } catch (e) {
@@ -514,9 +639,19 @@ export async function answerWithPromptBase(
   let pendingCta: PendingCta = null;
 
   try {
-    const reparsedEnvelope =
-      parseModelAnswerEnvelope(rawModelOutputForPendingCta);
-    pendingCta = reparsedEnvelope?.pendingCta ?? null;
+    const shouldComposeCanonicalBody =
+      Boolean(String(fallbackText || "").trim()) &&
+      shouldUseCanonicalBodyComposition(effectivePolicy);
+
+    if (shouldComposeCanonicalBody) {
+      const reparsedCanonicalFrame =
+        parseCanonicalFrameEnvelope(rawModelOutputForPendingCta);
+      pendingCta = reparsedCanonicalFrame?.pendingCta ?? null;
+    } else {
+      const reparsedEnvelope =
+        parseModelAnswerEnvelope(rawModelOutputForPendingCta);
+      pendingCta = reparsedEnvelope?.pendingCta ?? null;
+    }
   } catch {
     pendingCta = null;
   }
