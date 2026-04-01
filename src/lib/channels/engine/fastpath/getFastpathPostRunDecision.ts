@@ -63,18 +63,6 @@ export function getFastpathPostRunDecision(
     input.catalogRoutingSignal?.routeIntent
   );
 
-  const classificationIntent = toNormalizedString(
-    input.catalogReferenceClassification?.intent
-  );
-
-  const classificationKind = toNormalizedString(
-    input.catalogReferenceClassification?.kind
-  );
-
-  const routingTargetLevel = toNormalizedString(
-    input.catalogRoutingSignal?.targetLevel
-  );
-
   const isPriceQuestionUser =
     routeIntent === "catalog_price" ||
     routeIntent === "catalog_alternatives";
@@ -83,7 +71,7 @@ export function getFastpathPostRunDecision(
 
   const isCatalogDetailQuestion =
     routeIntent === "catalog_includes" ||
-    classificationIntent === "includes";
+    fpIntent === "info_servicio";
 
   const shouldReturnRawFastpathForPriceQuestion =
     isDmChannel &&
@@ -107,24 +95,18 @@ export function getFastpathPostRunDecision(
     hasPackagesAvailable;
 
   const isPluralCatalogTurn =
-    classificationKind === "catalog_overview" ||
-    classificationKind === "catalog_family" ||
-    classificationKind === "comparison" ||
+    routeIntent === "catalog_overview" ||
+    routeIntent === "catalog_family" ||
+    routeIntent === "catalog_compare" ||
     routeIntent === "catalog_price" ||
     routeIntent === "catalog_alternatives" ||
-    routeIntent === "catalog_schedule" ||
-    routingTargetLevel === "catalog" ||
-    routingTargetLevel === "family" ||
-    routingTargetLevel === "multi_service";
+    routeIntent === "catalog_schedule";
 
   const isExplicitServiceDetailTurn =
-    classificationKind === "entity_specific" ||
-    classificationKind === "variant_specific" ||
-    classificationKind === "referential_followup" ||
     routeIntent === "catalog_includes" ||
-    classificationIntent === "includes" ||
-    routingTargetLevel === "service" ||
-    routingTargetLevel === "variant";
+    routeIntent === "entity_detail" ||
+    routeIntent === "variant_detail" ||
+    fpIntent === "info_servicio";
 
   const shouldReturnRawFastpathForUnresolvedServiceIntent =
     isDmChannel &&
