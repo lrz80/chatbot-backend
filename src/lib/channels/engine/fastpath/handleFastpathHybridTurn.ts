@@ -189,10 +189,6 @@ export async function handleFastpathHybridTurn(
       structuredComparison,
     });
 
-  console.log("[TRACE_CATALOG][POST_BUILD_INPUT]", {
-    catalogReferenceClassificationInput,
-  });
-
   if (structuredComparison?.hasComparison) {
     explicitEntityCandidateForClassification = null;
   }

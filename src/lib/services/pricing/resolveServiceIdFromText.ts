@@ -707,31 +707,13 @@ export async function resolveServiceCandidatesFromText(
   const best = scored[0];
   const second = scored[1];
 
-  console.log("[RESOLVE-SERVICE] debug", {
+  console.log("[RESOLVE-SERVICE][SUMMARY]", {
     userText,
-    idioma,
-    queryTokens,
-    observedQueryTokens,
-    discriminativeQueryTokens,
     best: best
       ? {
           label: best.cand.label,
           score: best.score,
           serviceId: best.cand.serviceId,
-          category: best.cand.category,
-          tipo: best.cand.tipo,
-          catalogRole: best.cand.catalogRole,
-          parentServiceId: best.cand.parentServiceId,
-          exactNameHits: best.exactNameHits,
-          exactVariantHits: best.exactVariantHits,
-          overlapNameTokens: best.overlapNameTokens,
-          overlapVariantTokens: best.overlapVariantTokens,
-          overlapCategoryTokens: best.overlapCategoryTokens,
-          overlapTipoTokens: best.overlapTipoTokens,
-          overlapSupportTokens: best.overlapSupportTokens,
-          dominantQueryTokens,
-          dominantOverlapTokens: best.dominantOverlapTokens,
-          dominantOverlapCount: best.dominantOverlapCount,
         }
       : null,
     second: second
@@ -739,19 +721,6 @@ export async function resolveServiceCandidatesFromText(
           label: second.cand.label,
           score: second.score,
           serviceId: second.cand.serviceId,
-          category: second.cand.category,
-          tipo: second.cand.tipo,
-          catalogRole: second.cand.catalogRole,
-          exactNameHits: second.exactNameHits,
-          exactVariantHits: second.exactVariantHits,
-          overlapNameTokens: second.overlapNameTokens,
-          overlapVariantTokens: second.overlapVariantTokens,
-          overlapCategoryTokens: second.overlapCategoryTokens,
-          overlapTipoTokens: second.overlapTipoTokens,
-          overlapSupportTokens: second.overlapSupportTokens,
-          dominantQueryTokens,
-          dominantOverlapTokens: second.dominantOverlapTokens,
-          dominantOverlapCount: second.dominantOverlapCount,
         }
       : null,
   });
