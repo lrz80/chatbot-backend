@@ -157,10 +157,7 @@ function getReplySourceKind(params: {
     return "catalog_grounded";
   }
 
-  if (
-    params.catalogReferenceClassification?.kind === "comparison" ||
-    params.catalogRoutingSignal?.routeIntent === "catalog_compare"
-  ) {
+  if (params.catalogRoutingSignal?.routeIntent === "catalog_compare") {
     return "catalog_comparison_render";
   }
 
@@ -201,7 +198,7 @@ export function buildFastpathReplyPolicy(
   const shouldPersistStructuredService =
     hasResolvedEntity &&
     !isVariantDisambiguation &&
-    input.catalogReferenceClassification?.kind !== "comparison" &&
+    toNormalizedString(input.catalogRoutingSignal?.routeIntent) !== "catalog_compare" &&
     fpSource !== "catalog_db" &&
     fpSource !== "price_disambiguation_db" &&
     fpSource !== "catalog_disambiguation_db" &&
