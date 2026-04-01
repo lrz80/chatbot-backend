@@ -194,6 +194,34 @@ async function resolveCanonicalCatalogTarget(input: {
   };
 }
 
+function buildCatalogDisambiguationResult(input: {
+  routeIntent: string;
+  options: CatalogDisambiguationOption[];
+}): FastpathResult {
+  return {
+    handled: true,
+    reply: buildCatalogDisambiguationBody({
+      options: input.options,
+    }),
+    source: "catalog_disambiguation_db",
+    intent:
+      input.routeIntent === "catalog_price" ? "precio" : "info_servicio",
+    ctxPatch: {
+      last_catalog_at: Date.now(),
+      lastResolvedIntent: "catalog_disambiguation",
+      lastPresentedEntityIds: input.options.map((option) => option.serviceId),
+      pendingCatalogChoice: {
+        kind: "service_choice",
+        originalIntent:
+          input.routeIntent === "catalog_price" ? "precio" : "info_servicio",
+        options: input.options,
+        createdAt: Date.now(),
+      },
+      pendingCatalogChoiceAt: Date.now(),
+    } as any,
+  };
+}
+
 export type RunCatalogFastpathInput = {
   pool: Pool;
   tenantId: string;
@@ -537,7 +565,28 @@ export async function runCatalogFastpath(
     asksSchedules,
   });
 
+  const shouldResolveCanonicalTargetEarly =
+    shouldResolveExplicitCatalogTarget &&
+    !hasFamilyStructuredCatalogTarget &&
+    !isStructuredComparisonTurn;
+
   let canonicalCatalogResolution: CanonicalCatalogResolution | null = null;
+
+  if (shouldResolveCanonicalTargetEarly) {
+    canonicalCatalogResolution = await resolveCanonicalCatalogTarget({
+      pool: input.pool,
+      tenantId: input.tenantId,
+      userInput: input.userInput,
+      pendingCatalogChoice,
+    });
+
+    if (canonicalCatalogResolution.status === "ambiguous") {
+      return buildCatalogDisambiguationResult({
+        routeIntent,
+        options: canonicalCatalogResolution.options,
+      });
+    }
+  }
 
   if (isCatalogPriceLikeTurn) {
     console.log("🚫 BLOCK LLM PRICING — forcing DB path");
@@ -583,6 +632,109 @@ export async function runCatalogFastpath(
     Number.isFinite(prevAt) &&
     prevAt > 0 &&
     now - prevAt <= 30 * 60 * 1000;
+
+  if (routeIntent === "catalog_includes") {
+    if (canonicalCatalogResolution?.status === "resolved_single") {
+      const { rows } = await input.pool.query<{
+        service_id: string;
+        service_name: string;
+        min_price: number | string | null;
+        max_price: number | string | null;
+        parent_service_id: string | null;
+        category: string | null;
+        catalog_role: string | null;
+      }>(
+        `
+        WITH variant_prices AS (
+          SELECT
+            s.id AS service_id,
+            s.name AS service_name,
+            s.parent_service_id,
+            s.category,
+            s.catalog_role,
+            MIN(v.price)::numeric AS min_price,
+            MAX(v.price)::numeric AS max_price
+          FROM services s
+          JOIN service_variants v
+            ON v.service_id = s.id
+          AND v.active = true
+          WHERE s.tenant_id = $1
+            AND s.active = true
+            AND v.price IS NOT NULL
+          GROUP BY s.id, s.name, s.parent_service_id, s.category, s.catalog_role
+        ),
+        base_prices AS (
+          SELECT
+            s.id AS service_id,
+            s.name AS service_name,
+            s.parent_service_id,
+            s.category,
+            s.catalog_role,
+            MIN(s.price_base)::numeric AS min_price,
+            MAX(s.price_base)::numeric AS max_price
+          FROM services s
+          WHERE s.tenant_id = $1
+            AND s.active = true
+            AND s.price_base IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1
+              FROM service_variants v
+              WHERE v.service_id = s.id
+                AND v.active = true
+                AND v.price IS NOT NULL
+            )
+          GROUP BY s.id, s.name, s.parent_service_id, s.category, s.catalog_role
+        )
+        SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role
+        FROM (
+          SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role FROM variant_prices
+          UNION ALL
+          SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role FROM base_prices
+        ) x;
+        `,
+        [input.tenantId]
+      );
+
+      const resolvedRoutingSignal = {
+        ...catalogRoutingSignal,
+        targetServiceId: canonicalCatalogResolution.serviceId,
+        targetServiceName: canonicalCatalogResolution.serviceName,
+        targetVariantId: null,
+        targetVariantName: null,
+        targetFamilyKey: null,
+        targetFamilyName: null,
+        targetLevel: "entity",
+        disambiguationType: "none",
+      };
+
+      const singleServiceCatalogResult = await handleSingleServiceCatalog({
+        pool: input.pool,
+        tenantId: input.tenantId,
+        userInput: input.userInput,
+        idiomaDestino: input.idiomaDestino,
+        convoCtx: input.convoCtx,
+        routeIntent,
+        catalogRoutingSignal: resolvedRoutingSignal,
+        catalogReferenceClassification: input.catalogReferenceClassification,
+        rows,
+        catalogRouteIntent: routeIntent,
+      });
+
+      if (singleServiceCatalogResult.handled) {
+        return {
+          ...singleServiceCatalogResult,
+          ctxPatch: {
+            ...(singleServiceCatalogResult.ctxPatch || {}),
+            ...clearPendingCatalogChoiceCtxPatch(),
+          },
+        };
+      }
+    }
+
+    return {
+      handled: false,
+    };
+  }
 
   // PRICE OR PLAN
   if (!asksSchedules && !asksIncludesOnly && questionType === "price_or_plan") {
@@ -645,46 +797,6 @@ export async function runCatalogFastpath(
       `,
       [input.tenantId]
     );
-
-    if (
-      shouldResolveExplicitCatalogTarget &&
-      !hasFamilyStructuredCatalogTarget &&
-      !isStructuredComparisonTurn
-    ) {
-      canonicalCatalogResolution = await resolveCanonicalCatalogTarget({
-        pool: input.pool,
-        tenantId: input.tenantId,
-        userInput: input.userInput,
-        pendingCatalogChoice,
-      });
-    }
-
-    if (canonicalCatalogResolution?.status === "ambiguous") {
-      return {
-        handled: true,
-        reply: buildCatalogDisambiguationBody({
-          options: canonicalCatalogResolution.options,
-        }),
-        source: "catalog_disambiguation_db",
-        intent:
-          routeIntent === "catalog_price" ? "precio" : "info_servicio",
-        ctxPatch: {
-          last_catalog_at: Date.now(),
-          lastResolvedIntent: "catalog_disambiguation",
-          lastPresentedEntityIds: canonicalCatalogResolution.options.map(
-            (option) => option.serviceId
-          ),
-          pendingCatalogChoice: {
-            kind: "service_choice",
-            originalIntent:
-              routeIntent === "catalog_price" ? "precio" : "info_servicio",
-            options: canonicalCatalogResolution.options,
-            createdAt: Date.now(),
-          },
-          pendingCatalogChoiceAt: Date.now(),
-        } as any,
-      };
-    }
 
     if (isStructuredComparisonTurn) {
       const comparisonResult = await handleCatalogComparison({
@@ -931,89 +1043,54 @@ export async function runCatalogFastpath(
       [input.tenantId]
     );
 
-    if (
-      shouldResolveExplicitCatalogTarget &&
-      !hasFamilyStructuredCatalogTarget &&
-      !isStructuredComparisonTurn
-    ) {
-      const schedulePriceResolution = await resolveCanonicalCatalogTarget({
+    if (canonicalCatalogResolution?.status === "resolved_single") {
+      const resolvedRoutingSignal = {
+        ...catalogRoutingSignal,
+        targetServiceId: canonicalCatalogResolution.serviceId,
+        targetServiceName: canonicalCatalogResolution.serviceName,
+        targetVariantId: null,
+        targetVariantName: null,
+        targetFamilyKey: null,
+        targetFamilyName: null,
+        targetLevel: "entity",
+        disambiguationType: "none",
+      };
+
+      const singleServiceCatalogResult = await handleSingleServiceCatalog({
         pool: input.pool,
         tenantId: input.tenantId,
         userInput: input.userInput,
-        pendingCatalogChoice,
+        idiomaDestino: input.idiomaDestino,
+        convoCtx: input.convoCtx,
+        routeIntent,
+        catalogRoutingSignal: resolvedRoutingSignal,
+        catalogReferenceClassification: input.catalogReferenceClassification,
+        rows,
+        catalogRouteIntent: routeIntent,
       });
 
-      if (schedulePriceResolution.status === "ambiguous") {
+      if (singleServiceCatalogResult.handled) {
         return {
-          handled: true,
-          reply: buildCatalogDisambiguationBody({
-            options: schedulePriceResolution.options,
-          }),
-          source: "catalog_disambiguation_db",
-          intent: "precio",
+          ...singleServiceCatalogResult,
           ctxPatch: {
-            last_catalog_at: Date.now(),
-            lastResolvedIntent: "catalog_disambiguation",
-            lastPresentedEntityIds: schedulePriceResolution.options.map(
-              (option) => option.serviceId
-            ),
-            pendingCatalogChoice: {
-              kind: "service_choice",
-              originalIntent: "precio",
-              options: schedulePriceResolution.options,
-              createdAt: Date.now(),
-            },
-            pendingCatalogChoiceAt: Date.now(),
-          } as any,
+            ...(singleServiceCatalogResult.ctxPatch || {}),
+            ...clearPendingCatalogChoiceCtxPatch(),
+          },
         };
       }
 
-      if (schedulePriceResolution.status === "resolved_single") {
-        const resolvedRoutingSignal = {
-          ...catalogRoutingSignal,
-          targetServiceId: schedulePriceResolution.serviceId,
-          targetServiceName: schedulePriceResolution.serviceName,
-          targetVariantId: null,
-          targetVariantName: null,
-          targetFamilyKey: null,
-          targetFamilyName: null,
-          targetLevel: "entity",
-          disambiguationType: "none",
-        };
+      return {
+        handled: false,
+      };
+    }
 
-        const singleServiceCatalogResult = await handleSingleServiceCatalog({
-          pool: input.pool,
-          tenantId: input.tenantId,
-          userInput: input.userInput,
-          idiomaDestino: input.idiomaDestino,
-          convoCtx: input.convoCtx,
-          routeIntent,
-          catalogRoutingSignal: resolvedRoutingSignal,
-          catalogReferenceClassification: input.catalogReferenceClassification,
-          rows,
-          catalogRouteIntent: routeIntent,
-        });
-
-        if (singleServiceCatalogResult.handled) {
-          return {
-            ...singleServiceCatalogResult,
-            ctxPatch: {
-              ...(singleServiceCatalogResult.ctxPatch || {}),
-              ...clearPendingCatalogChoiceCtxPatch(),
-            },
-          };
-        }
-
-        return {
-          handled: false,
-        };
-      }
-
-      if (schedulePriceResolution.status === "not_found") {
-        return {
-          handled: false,
-        };
-      }
+    if (
+      shouldResolveExplicitCatalogTarget &&
+      canonicalCatalogResolution?.status === "not_found"
+    ) {
+      return {
+        handled: false,
+      };
     }
 
     if (!allowGenericCatalogDbFallback) {
