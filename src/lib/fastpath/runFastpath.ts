@@ -166,6 +166,52 @@ export type FastpathHint =
       };
     };
 
+type CatalogChoiceOption =
+  | {
+      kind: "service";
+      serviceId: string;
+      label: string;
+      serviceName?: string | null;
+    }
+  | {
+      kind: "variant";
+      serviceId: string;
+      variantId: string;
+      label: string;
+      serviceName?: string | null;
+      variantName?: string | null;
+    };
+
+type CatalogPayload =
+  | {
+      kind: "service_choice";
+      originalIntent: string | null;
+      options: CatalogChoiceOption[];
+    }
+  | {
+      kind: "variant_choice";
+      originalIntent: string | null;
+      serviceId: string;
+      serviceName: string | null;
+      options: CatalogChoiceOption[];
+    }
+  | {
+      kind: "resolved_catalog_answer";
+      scope: "service" | "variant" | "family" | "overview";
+      serviceId?: string | null;
+      serviceName?: string | null;
+      variantId?: string | null;
+      variantName?: string | null;
+      canonicalBlocks: {
+        priceBlock?: string | null;
+        includesBlock?: string | null;
+        scheduleBlock?: string | null;
+        locationBlock?: string | null;
+        availabilityBlock?: string | null;
+        servicesBlock?: string | null;
+      };
+    };
+
 export type FastpathResult =
   | {
       handled: true;
@@ -196,6 +242,7 @@ export type FastpathResult =
         | "catalog_disambiguation_db"
         | "info_clave_db";
       intent: string | null;
+      catalogPayload?: CatalogPayload;
       ctxPatch?: Partial<FastpathCtx>;
       awaitingEffect?: FastpathAwaitingEffect;
       fastpathHint?: FastpathHint;

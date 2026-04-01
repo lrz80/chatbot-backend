@@ -30,6 +30,7 @@ type CatalogServiceDisambiguationOption = {
   serviceId: string;
   variantId?: null;
   label: string;
+  serviceName?: string | null;
 };
 
 type CatalogVariantDisambiguationOption = {
@@ -37,6 +38,8 @@ type CatalogVariantDisambiguationOption = {
   serviceId: string;
   variantId: string;
   label: string;
+  serviceName?: string | null;
+  variantName?: string | null;
 };
 
 type CatalogDisambiguationOption =
@@ -132,6 +135,12 @@ function normalizeCatalogDisambiguationOptions(
     const serviceId = String(item?.serviceId || item?.id || "").trim();
     const variantId = String(item?.variantId || "").trim();
     const label = String(item?.label || item?.name || "").trim();
+    const serviceName = String(
+      item?.serviceName || item?.service_name || item?.name || ""
+    ).trim();
+    const variantName = String(
+      item?.variantName || item?.variant_name || item?.label || ""
+    ).trim();
 
     if (!serviceId || !label) continue;
 
@@ -147,6 +156,8 @@ function normalizeCatalogDisambiguationOptions(
         serviceId,
         variantId,
         label,
+        serviceName: serviceName || null,
+        variantName: variantName || null,
       });
       continue;
     }
@@ -160,6 +171,7 @@ function normalizeCatalogDisambiguationOptions(
       serviceId,
       variantId: null,
       label,
+      serviceName: serviceName || null,
     });
   }
 
@@ -283,15 +295,21 @@ async function getActiveVariantOptionsForService(input: {
   const { rows } = await input.pool.query<{
     id: string;
     variant_name: string | null;
+    service_name: string | null;
   }>(
     `
-    SELECT id, variant_name
-    FROM service_variants
-    WHERE service_id = $1
-      AND active = true
-      AND variant_name IS NOT NULL
-      AND length(trim(variant_name)) > 0
-    ORDER BY variant_name ASC, id ASC
+    SELECT
+      v.id,
+      v.variant_name,
+      s.name AS service_name
+    FROM service_variants v
+    JOIN services s
+      ON s.id = v.service_id
+    WHERE v.service_id = $1
+      AND v.active = true
+      AND v.variant_name IS NOT NULL
+      AND length(trim(v.variant_name)) > 0
+    ORDER BY v.variant_name ASC, v.id ASC
     `,
     [input.serviceId]
   );
@@ -301,6 +319,7 @@ async function getActiveVariantOptionsForService(input: {
   for (const row of rows) {
     const variantId = String(row.id || "").trim();
     const label = String(row.variant_name || "").trim();
+    const serviceName = String(row.service_name || "").trim();
 
     if (!variantId || !label) {
       continue;
@@ -311,6 +330,8 @@ async function getActiveVariantOptionsForService(input: {
       serviceId: input.serviceId,
       variantId,
       label,
+      serviceName: serviceName || null,
+      variantName: label,
     });
   }
 
@@ -365,10 +386,12 @@ function buildCatalogDisambiguationResult(input: {
   const originalIntent =
     input.routeIntent === "catalog_price" ? "precio" : "info_servicio";
 
+  const now = Date.now();
+
   const baseCtxPatch: any = {
-    last_catalog_at: Date.now(),
-    lastResolvedIntent: "catalog_disambiguation",
-    pendingCatalogChoiceAt: Date.now(),
+    last_catalog_at: now,
+    lastResolvedIntent: input.kind,
+    pendingCatalogChoiceAt: now,
   };
 
   if (input.kind === "service_choice") {
@@ -380,42 +403,69 @@ function buildCatalogDisambiguationResult(input: {
       kind: "service_choice",
       originalIntent,
       options: input.options,
-      createdAt: Date.now(),
+      createdAt: now,
     };
-  } else {
-    const selectedServiceId = String(input.serviceId || "").trim();
-    const selectedServiceName = String(input.serviceName || "").trim() || null;
 
-    baseCtxPatch.pendingCatalogChoice = {
+    return {
+      handled: true,
+      reply: "",
+      source: "catalog_disambiguation_db",
+      intent: "service_choice",
+      catalogPayload: {
+        kind: "service_choice",
+        originalIntent,
+        options: input.options.map((option) => ({
+          kind: "service",
+          serviceId: option.serviceId,
+          label: option.label,
+          serviceName: option.serviceName || option.label || null,
+        })),
+      },
+      ctxPatch: baseCtxPatch,
+    };
+  }
+
+  const selectedServiceId = String(input.serviceId || "").trim();
+  const selectedServiceName = String(input.serviceName || "").trim() || null;
+
+  baseCtxPatch.pendingCatalogChoice = {
+    kind: "variant_choice",
+    originalIntent,
+    serviceId: selectedServiceId,
+    serviceName: selectedServiceName,
+    options: input.options,
+    createdAt: now,
+  };
+
+  baseCtxPatch.selectedServiceId = selectedServiceId || null;
+  baseCtxPatch.last_service_id = selectedServiceId || null;
+  baseCtxPatch.last_service_name = selectedServiceName;
+  baseCtxPatch.last_service_at = now;
+  baseCtxPatch.expectingVariant = true;
+  baseCtxPatch.expectingVariantForEntityId = selectedServiceId || null;
+  baseCtxPatch.expectedVariantIntent = originalIntent;
+
+  return {
+    handled: true,
+    reply: "",
+    source: "catalog_disambiguation_db",
+    intent: "variant_choice",
+    catalogPayload: {
       kind: "variant_choice",
       originalIntent,
       serviceId: selectedServiceId,
       serviceName: selectedServiceName,
-      options: input.options,
-      createdAt: Date.now(),
-    };
-
-    baseCtxPatch.selectedServiceId = selectedServiceId || null;
-    baseCtxPatch.last_service_id = selectedServiceId || null;
-    baseCtxPatch.last_service_name = selectedServiceName;
-    baseCtxPatch.last_service_at = Date.now();
-    baseCtxPatch.expectingVariant = true;
-    baseCtxPatch.expectingVariantForEntityId = selectedServiceId || null;
-    baseCtxPatch.expectedVariantIntent = originalIntent;
-    baseCtxPatch.presentedVariantOptions = input.options.map((option) => ({
-      variantId: option.variantId || null,
-      label: option.label,
-    }));
-  }
-
-  return {
-    handled: true,
-    reply: input.options
-      .slice(0, 5)
-      .map((option) => `• ${option.label}`)
-      .join("\n"),
-    source: "catalog_disambiguation_db",
-    intent: "catalog_disambiguation",
+      options: input.options
+        .filter((option) => option.kind === "variant")
+        .map((option) => ({
+          kind: "variant" as const,
+          serviceId: option.serviceId,
+          variantId: option.variantId,
+          label: option.label,
+          serviceName: option.serviceName || selectedServiceName,
+          variantName: option.variantName || option.label,
+        })),
+    },
     ctxPatch: baseCtxPatch,
   };
 }
@@ -725,6 +775,16 @@ export async function runCatalogFastpath(
         reply: canonicalReply,
         source: "info_clave_db",
         intent: businessInfoIntent,
+        catalogPayload: {
+          kind: "resolved_catalog_answer",
+          scope: "overview",
+          canonicalBlocks: {
+            servicesBlock: servicesBlock.trim() || null,
+            scheduleBlock: scheduleBlock.trim() || null,
+            locationBlock: locationBlock.trim() || null,
+            availabilityBlock: availabilityBlock.trim() || null,
+          },
+        },
         ctxPatch: {
           last_catalog_at: Date.now(),
           lastResolvedIntent: "business_info_facets",
@@ -785,6 +845,7 @@ export async function runCatalogFastpath(
           serviceId: option.serviceId,
           variantId: null,
           label: option.label,
+          serviceName: option.label,
         }));
 
       return buildCatalogDisambiguationResult({
@@ -1213,6 +1274,13 @@ export async function runCatalogFastpath(
       reply: finalReply,
       source: "catalog_db",
       intent: "precio",
+      catalogPayload: {
+        kind: "resolved_catalog_answer",
+        scope: "overview",
+        canonicalBlocks: {
+          priceBlock: priceBlock || null,
+        },
+      },
       ctxPatch,
     };
   }
@@ -1478,9 +1546,19 @@ export async function runCatalogFastpath(
 
     return {
       handled: true,
-      reply: finalReply,
+      reply: canonicalReply,
       source: "catalog_db",
       intent: "precio",
+      catalogPayload: {
+        kind: "resolved_catalog_answer",
+        scope: "overview",
+        canonicalBlocks: {
+          priceBlock: priceBlock || null,
+          scheduleBlock: scheduleBlock || null,
+          locationBlock: locationBlock || null,
+          availabilityBlock: availabilityBlock || null,
+        },
+      },
       ctxPatch,
     };
   }
@@ -1564,6 +1642,13 @@ export async function runCatalogFastpath(
         reply: finalReply || canonicalReply,
         source: "catalog_db",
         intent: "precio",
+        catalogPayload: {
+          kind: "resolved_catalog_answer",
+          scope: "overview",
+          canonicalBlocks: {
+            priceBlock: (finalReply || canonicalReply) || null,
+          },
+        },
         ctxPatch: {
           last_catalog_at: Date.now(),
           lastResolvedIntent: "other_plans",
@@ -1627,6 +1712,13 @@ export async function runCatalogFastpath(
       reply,
       source: "catalog_db",
       intent: "precio",
+      catalogPayload: {
+        kind: "resolved_catalog_answer",
+        scope: "overview",
+        canonicalBlocks: {
+          priceBlock: canonicalReply || null,
+        },
+      },
       ctxPatch,
     };
   }
