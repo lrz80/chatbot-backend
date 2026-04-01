@@ -16,6 +16,7 @@ import {
 import { buildPriceBlock } from "./helpers/catalogPriceBlock";
 import { buildScheduleBlock } from "./helpers/catalogScheduleBlock";
 import { handleCatalogComparison } from "./handleCatalogComparison";
+import { resolveServiceCandidatesFromText } from "../../../services/pricing/resolveServiceIdFromText";
 
 type CatalogFacets = {
   asksPrices?: boolean;
@@ -28,6 +29,45 @@ type CatalogDisambiguationOption = {
   serviceId: string;
   label: string;
 };
+
+type PendingCatalogChoice = {
+  kind: "service_choice";
+  originalIntent?: string | null;
+  options: CatalogDisambiguationOption[];
+  createdAt?: number | null;
+};
+
+function getPendingCatalogChoice(convoCtx: any): PendingCatalogChoice | null {
+  const pending = convoCtx?.pendingCatalogChoice;
+
+  if (!pending || pending.kind !== "service_choice") {
+    return null;
+  }
+
+  const options = normalizeCatalogDisambiguationOptions(pending.options);
+
+  if (options.length < 2) {
+    return null;
+  }
+
+  return {
+    kind: "service_choice",
+    originalIntent:
+      typeof pending.originalIntent === "string"
+        ? pending.originalIntent
+        : null,
+    options,
+    createdAt:
+      typeof pending.createdAt === "number" ? pending.createdAt : null,
+  };
+}
+
+function clearPendingCatalogChoiceCtxPatch() {
+  return {
+    pendingCatalogChoice: null,
+    pendingCatalogChoiceAt: null,
+  };
+}
 
 function normalizeCatalogDisambiguationOptions(
   raw: any
@@ -103,6 +143,8 @@ export async function runCatalogFastpath(
   input: RunCatalogFastpathInput
 ): Promise<FastpathResult> {
   const catalogRoutingSignal = input.catalogRoutingSignal;
+
+  const pendingCatalogChoice = getPendingCatalogChoice(input.convoCtx);
 
   console.log("[CATALOG][ROUTING_SIGNAL]", {
     userInput: input.userInput,
@@ -492,6 +534,14 @@ export async function runCatalogFastpath(
         lastPresentedEntityIds: ambiguousCatalogOptions.map(
           (option) => option.serviceId
         ),
+        pendingCatalogChoice: {
+          kind: "service_choice",
+          originalIntent:
+            routeIntent === "catalog_price" ? "precio" : "info_servicio",
+          options: ambiguousCatalogOptions,
+          createdAt: Date.now(),
+        },
+        pendingCatalogChoiceAt: Date.now(),
       } as any,
     };
   }
@@ -593,6 +643,97 @@ export async function runCatalogFastpath(
       [input.tenantId]
     );
 
+        if (pendingCatalogChoice) {
+      const scopedResolution = await resolveServiceCandidatesFromText(
+        input.pool,
+        input.tenantId,
+        input.userInput,
+        {
+          mode: "loose",
+          allowedServiceIds: pendingCatalogChoice.options.map(
+            (option) => option.serviceId
+          ),
+        }
+      );
+
+      if (scopedResolution.kind === "resolved_single" && scopedResolution.hit) {
+        const scopedTargetServiceId = String(scopedResolution.hit.id || "").trim();
+
+        const scopedRoutingSignal = {
+          ...catalogRoutingSignal,
+          targetServiceId: scopedTargetServiceId,
+          targetServiceName: scopedResolution.hit.name,
+          targetVariantId: null,
+          targetVariantName: null,
+          targetFamilyKey: null,
+          targetFamilyName: null,
+          targetLevel: "entity",
+          disambiguationType: "none",
+        };
+
+        const singleServiceCatalogResult = await handleSingleServiceCatalog({
+          pool: input.pool,
+          tenantId: input.tenantId,
+          userInput: input.userInput,
+          idiomaDestino: input.idiomaDestino,
+          convoCtx: input.convoCtx,
+          routeIntent:
+            pendingCatalogChoice.originalIntent === "precio"
+              ? "catalog_price"
+              : "entity_detail",
+          catalogRoutingSignal: scopedRoutingSignal,
+          catalogReferenceClassification: input.catalogReferenceClassification,
+          rows,
+          catalogRouteIntent:
+            pendingCatalogChoice.originalIntent === "precio"
+              ? "catalog_price"
+              : "entity_detail",
+        });
+
+        if (singleServiceCatalogResult.handled) {
+          return {
+            ...singleServiceCatalogResult,
+            ctxPatch: {
+              ...(singleServiceCatalogResult.ctxPatch || {}),
+              ...clearPendingCatalogChoiceCtxPatch(),
+            },
+          };
+        }
+      }
+
+      if (scopedResolution.kind === "ambiguous") {
+        const narrowedOptions = normalizeCatalogDisambiguationOptions(
+          scopedResolution.candidates
+        );
+
+        if (narrowedOptions.length > 1) {
+          return {
+            handled: true,
+            reply: buildCatalogDisambiguationBody({
+              options: narrowedOptions,
+            }),
+            source: "catalog_disambiguation_db",
+            intent: pendingCatalogChoice.originalIntent || "info_servicio",
+            ctxPatch: {
+              last_catalog_at: Date.now(),
+              lastResolvedIntent: "catalog_disambiguation",
+              lastPresentedEntityIds: narrowedOptions.map(
+                (option) => option.serviceId
+              ),
+              pendingCatalogChoice: {
+                kind: "service_choice",
+                originalIntent:
+                  pendingCatalogChoice.originalIntent || "info_servicio",
+                options: narrowedOptions,
+                createdAt: Date.now(),
+              },
+              pendingCatalogChoiceAt: Date.now(),
+            } as any,
+          };
+        }
+      }
+    }
+    
     if (isStructuredComparisonTurn) {
       const comparisonResult = await handleCatalogComparison({
         pool: input.pool,
