@@ -109,10 +109,18 @@ export async function renderFastpathDmReply(
     shouldForceSalesClosingQuestion,
   } = replyPolicy;
 
-  const isCatalogDisambiguationReply = isPriceDisambiguationReply;
+  const isCatalogDisambiguationReply =
+    fp?.source === "catalog_disambiguation_db" ||
+    fp?.intent === "catalog_disambiguation" ||
+    ctxPatch?.lastResolvedIntent === "catalog_disambiguation" ||
+    isPriceDisambiguationReply === true;
 
   const unresolvedCatalogDisambiguation =
-    isCatalogDisambiguationReply && !replyPolicy.hasResolvedEntity;
+    isCatalogDisambiguationReply ||
+    (
+      fp?.intent === "catalog_disambiguation" &&
+      !replyPolicy.hasResolvedEntity
+    );
 
   const canonicalReply = normalizeText(fastpathText);
 

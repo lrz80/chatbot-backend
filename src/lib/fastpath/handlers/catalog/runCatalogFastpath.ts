@@ -91,16 +91,6 @@ function normalizeCatalogDisambiguationOptions(
   return result;
 }
 
-function buildCatalogDisambiguationBody(input: {
-  options: CatalogDisambiguationOption[];
-}): string {
-  return input.options
-    .slice(0, 5)
-    .map((option) => `• ${option.label}`)
-    .join("\n")
-    .trim();
-}
-
 type CanonicalCatalogResolution =
   | {
       status: "resolved_single";
@@ -198,22 +188,24 @@ function buildCatalogDisambiguationResult(input: {
   routeIntent: string;
   options: CatalogDisambiguationOption[];
 }): FastpathResult {
+  const originalIntent =
+    input.routeIntent === "catalog_price" ? "precio" : "info_servicio";
+
   return {
     handled: true,
-    reply: buildCatalogDisambiguationBody({
-      options: input.options,
-    }),
+    reply: input.options
+      .slice(0, 5)
+      .map((option) => `• ${option.label}`)
+      .join("\n"),
     source: "catalog_disambiguation_db",
-    intent:
-      input.routeIntent === "catalog_price" ? "precio" : "info_servicio",
+    intent: "catalog_disambiguation",
     ctxPatch: {
       last_catalog_at: Date.now(),
       lastResolvedIntent: "catalog_disambiguation",
       lastPresentedEntityIds: input.options.map((option) => option.serviceId),
       pendingCatalogChoice: {
         kind: "service_choice",
-        originalIntent:
-          input.routeIntent === "catalog_price" ? "precio" : "info_servicio",
+        originalIntent,
         options: input.options,
         createdAt: Date.now(),
       },

@@ -365,18 +365,21 @@ export async function handleFastpathHybridTurn(
     catalogReferenceClassification,
   });
 
-  const resolvedFinalIntent = resolveFinalIntentFromTurn({
-    detectedIntent,
-    intentFallback,
-    fp: {
-      intent: fp.intent ?? null,
-      source: fp.source ?? null,
-    },
-    facets: detectedFacets || null,
-    catalogRoutingSignal,
-    catalogReferenceClassification,
-  });
-  
+  const resolvedFinalIntent =
+    fp.source === "catalog_disambiguation_db"
+      ? "catalog_disambiguation"
+      : resolveFinalIntentFromTurn({
+          detectedIntent,
+          intentFallback,
+          fp: {
+            intent: fp.intent ?? null,
+            source: fp.source ?? null,
+          },
+          facets: detectedFacets || null,
+          catalogRoutingSignal,
+          catalogReferenceClassification,
+        });
+
   const postRunDecision = getFastpathPostRunDecision({
     canal,
     fp,

@@ -133,6 +133,7 @@ export type FastpathCtx = {
     | "business_info_facets"
     | "info_general_overview"
     | "compare"
+    | "catalog_disambiguation"
     | "unknown"
     | null;
 
