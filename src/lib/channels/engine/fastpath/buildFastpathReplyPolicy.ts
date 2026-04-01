@@ -116,6 +116,30 @@ function isVariantDisambiguationState(input: {
   return false;
 }
 
+function isServiceChoiceDisambiguationState(input: {
+  fp: FastpathReplyPolicyInput["fp"];
+  catalogRoutingSignal?: any;
+  structuredService: StructuredServiceSelection;
+}): boolean {
+  const fpSource = toNormalizedString(input.fp?.source);
+  const targetLevel = toNormalizedString(
+    input.catalogRoutingSignal?.targetLevel
+  );
+  const disambiguationType = toNormalizedString(
+    input.catalogRoutingSignal?.disambiguationType
+  );
+
+  if (fpSource === "catalog_disambiguation_db") {
+    return true;
+  }
+
+  return (
+    !input.structuredService?.hasResolution &&
+    targetLevel === "ambiguous_entity" &&
+    disambiguationType === "service_choice"
+  );
+}
+
 function getReplySourceKind(params: {
   fpSource: string;
   structuredService: StructuredServiceSelection;
@@ -188,8 +212,15 @@ export function buildFastpathReplyPolicy(
     structuredService: input.structuredService,
   });
 
+  const isServiceChoiceDisambiguation = isServiceChoiceDisambiguationState({
+    fp: input.fp,
+    catalogRoutingSignal: input.catalogRoutingSignal,
+    structuredService: input.structuredService,
+  });
+
   const canonicalBodyOwnsClosing =
     isVariantDisambiguation ||
+    isServiceChoiceDisambiguation ||
     input.fp?.awaitingEffect?.type === "set_awaiting_yes_no";
 
   const shouldBypassStructuredRewrite =
@@ -212,7 +243,8 @@ export function buildFastpathReplyPolicy(
   const isPriceSummaryReply =
     fpSource === "price_summary_db" || fpSource === "price_missing_db";
   const isPriceDisambiguationReply =
-    replySourceKind === "catalog_disambiguation";
+    replySourceKind === "catalog_disambiguation" ||
+    isServiceChoiceDisambiguation;
 
   const isGroundedCatalogReply =
     isCatalogDbReply ||
@@ -232,13 +264,14 @@ export function buildFastpathReplyPolicy(
   const shouldUseGroundedFrameOnly =
     isVariantDisambiguation ||
     replySourceKind === "catalog_grounded" ||
-    replySourceKind === "catalog_disambiguation" ||
     replySourceKind === "business_info" ||
     replySourceKind === "price_like" ||
     replySourceKind === "catalog_comparison_render";
 
   const responsePolicyMode: FastpathReplyPolicy["responsePolicyMode"] =
-    shouldUseGroundedFrameOnly
+    isServiceChoiceDisambiguation
+      ? "clarify_only"
+      : shouldUseGroundedFrameOnly
       ? "grounded_frame_only"
       : hasResolvedEntity
       ? "grounded_only"
@@ -246,7 +279,8 @@ export function buildFastpathReplyPolicy(
 
   const shouldRunDmRewrite =
     isDmChannel &&
-    !shouldBypassStructuredRewrite;
+    !shouldBypassStructuredRewrite &&
+    !canonicalBodyOwnsClosing;
 
   return {
     isDmChannel,
