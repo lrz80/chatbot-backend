@@ -302,6 +302,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   let convoCtx = initialConvoCtx;
 
+  const hasPendingCatalogChoice =
+    Boolean(convoCtx?.pendingCatalogChoice) &&
+    (
+      convoCtx?.pendingCatalogChoice?.kind === "service_choice" ||
+      convoCtx?.pendingCatalogChoice?.kind === "variant_choice"
+    );
+
   const q = userInput.toLowerCase().trim();
 
   if (inBooking) return { handled: false };
@@ -484,7 +491,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ===============================
   // ✅ RESOLVER SELECCIÓN PENDIENTE DE LINK/VARIANTE
   // ===============================
-  {
+  if (!hasPendingCatalogChoice) {
     const pendingLinkSelectionResult = await handlePendingLinkSelection({
       userInput,
       idiomaDestino,
@@ -503,7 +510,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ===============================
   // ✅ PICK FROM LAST LIST
   // ===============================
-  {
+  if (!hasPendingCatalogChoice) {
     const pickFromLastListResult = await handlePickFromLastList({
       userInput,
       idiomaDestino,
@@ -587,18 +594,20 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // =========================================================
   // ✅ FOLLOW-UP ROUTER
   // =========================================================
-  const followupRouterResult = await handleFollowupRouter({
-    pool,
-    tenantId,
-    userInput,
-    convoCtx,
-    isFreshCatalogPriceTurn,
-    bestNameMatch,
-    resolveServiceIdFromText,
-  });
+  if (!hasPendingCatalogChoice) {
+    const followupRouterResult = await handleFollowupRouter({
+      pool,
+      tenantId,
+      userInput,
+      convoCtx,
+      isFreshCatalogPriceTurn,
+      bestNameMatch,
+      resolveServiceIdFromText,
+    });
 
-  if (followupRouterResult.handled || followupRouterResult.ctxPatch) {
-    return followupRouterResult;
+    if (followupRouterResult.handled || followupRouterResult.ctxPatch) {
+      return followupRouterResult;
+    }
   }
 
   // ===============================
@@ -606,19 +615,21 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // Si ya estamos parados en un servicio con variantes y el usuario
   // menciona una variante, responder directo sin relistar.
   // ===============================
-  const variantFollowupSameServiceResult =
-    await handleVariantFollowupSameService({
-      pool,
-      userInput,
-      idiomaDestino,
-      intentOut,
-      convoCtx,
-      catalogReferenceClassification,
-      isFreshCatalogPriceTurn,
-    });
+  if (!hasPendingCatalogChoice) {
+    const variantFollowupSameServiceResult =
+      await handleVariantFollowupSameService({
+        pool,
+        userInput,
+        idiomaDestino,
+        intentOut,
+        convoCtx,
+        catalogReferenceClassification,
+        isFreshCatalogPriceTurn,
+      });
 
-  if (variantFollowupSameServiceResult.handled) {
-    return variantFollowupSameServiceResult;
+    if (variantFollowupSameServiceResult.handled) {
+      return variantFollowupSameServiceResult;
+    }
   }
 
   // ===============================
