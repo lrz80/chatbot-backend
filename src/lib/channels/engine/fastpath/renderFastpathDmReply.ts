@@ -16,8 +16,11 @@ function shouldBypassWriterModel(input: {
   canonicalBodyOwnsClosing: boolean;
   shouldUseGroundedFrameOnly: boolean;
 }): boolean {
+  if (input.isCatalogDisambiguationReply) {
+    return false;
+  }
+
   return (
-    input.isCatalogDisambiguationReply ||
     input.isGroundedCatalogReply ||
     input.isPriceSummaryReply ||
     input.canonicalBodyOwnsClosing ||
@@ -126,7 +129,9 @@ export async function renderFastpathDmReply(
   };
 
   const responsePolicy = {
-    mode: replyPolicy.responsePolicyMode,
+    mode: isCatalogDisambiguationReply
+      ? "clarify_only"
+      : replyPolicy.responsePolicyMode,
     resolvedEntityType: replyPolicy.hasResolvedEntity ? "service" : null,
     resolvedEntityId: replyPolicy.hasResolvedEntity
       ? structuredService?.serviceId ?? null
@@ -153,14 +158,16 @@ export async function renderFastpathDmReply(
     allowAlternativeEntities: false,
     allowCrossSellEntities: false,
     allowAddOnSuggestions: false,
-    preserveExactBody: bypassWriterModel,
-    preserveExactOrder: bypassWriterModel,
-    preserveExactBullets: bypassWriterModel,
-    preserveExactNumbers: bypassWriterModel,
-    preserveExactLinks: bypassWriterModel,
+    preserveExactBody: bypassWriterModel || isCatalogDisambiguationReply,
+    preserveExactOrder: bypassWriterModel || isCatalogDisambiguationReply,
+    preserveExactBullets: bypassWriterModel || isCatalogDisambiguationReply,
+    preserveExactNumbers: bypassWriterModel || isCatalogDisambiguationReply,
+    preserveExactLinks: bypassWriterModel || isCatalogDisambiguationReply,
     allowIntro: !bypassWriterModel,
-    allowOutro: !bypassWriterModel && !replyPolicy.canonicalBodyOwnsClosing,
-    allowBodyRewrite: !bypassWriterModel,
+    allowOutro:
+      !bypassWriterModel &&
+      !replyPolicy.canonicalBodyOwnsClosing,
+    allowBodyRewrite: false,
     mustEndWithSalesQuestion:
       !bypassWriterModel &&
       !isCatalogDisambiguationReply &&
@@ -194,7 +201,7 @@ export async function renderFastpathDmReply(
     promptBaseMem,
     fastpathText,
   });
-  
+
   const composed = await answerWithPromptBase({
     tenantId,
     promptBase: promptConFastpath,
