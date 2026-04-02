@@ -10,6 +10,9 @@ import { traducirTexto } from "../traducirTexto";
 // INFO_CLAVE includes
 import { normalizeText } from "../infoclave/resolveIncludes";
 
+import { buildServicesBlockFromInfoClave } from "./handlers/catalog/helpers/catalogBusinessInfoBlocks";
+import { withSectionTitle } from "./handlers/catalog/helpers/catalogReplyBlocks";
+
 // DB catalog includes
 import { getServiceDetailsText } from "../services/resolveServiceInfo";
 
@@ -449,7 +452,13 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       catalogReferenceKind !== "comparison";
 
     if (wantsGeneralBusinessOverview) {
-      const canonicalReply = String(infoClave || "").trim();
+      const servicesBody = buildServicesBlockFromInfoClave(infoClave);
+      const canonicalReply = withSectionTitle(
+        idiomaDestino,
+        "Servicios:",
+        "Services:",
+        servicesBody
+      ).trim();
 
       if (!canonicalReply) {
         return { handled: false };
@@ -466,18 +475,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         last_catalog_at: Date.now(),
         lastResolvedIntent: "info_general_overview",
 
-        // ancla estructurada para follow-ups DM tipo:
-        // "y precios", "y horarios", "y ubicación"
         last_catalog_scope: "overview",
         last_catalog_source: "info_clave",
 
-        // no conocemos entidades/ids concretos porque el overview sale de infoClave
-        // pero dejamos arrays explícitos para que el clasificador sepa que sí hubo
-        // un overview reciente y no herede basura anterior
         lastPresentedEntityIds: [],
         lastPresentedFamilyKeys: [],
 
-        // limpiamos cualquier arrastre viejo de selección puntual
         last_service_id: null,
         last_service_name: null,
         last_service_at: null,
