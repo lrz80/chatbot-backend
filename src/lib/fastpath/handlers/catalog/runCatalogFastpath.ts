@@ -261,6 +261,7 @@ function isExplicitCatalogQuestion(params: {
     params.routeIntent === "variant_detail" ||
     params.routeIntent === "catalog_includes" ||
     params.routeIntent === "catalog_combination" ||
+    params.routeIntent === "referential_followup" ||
     params.intentOut === "precio" ||
     params.intentOut === "planes_precios" ||
     params.intentOut === "info_servicio" ||
@@ -664,6 +665,19 @@ export async function runCatalogFastpath(
     ? pendingRouteIntentOverride
     : rawRouteIntent;
 
+  const structuredTargetServiceId = String(
+    catalogRoutingSignal.targetServiceId || ""
+  ).trim();
+
+  const structuredTargetServiceName = String(
+    catalogRoutingSignal.targetServiceName || ""
+  ).trim();
+
+  const executionRouteIntent =
+    routeIntent === "referential_followup" && structuredTargetServiceId
+      ? "entity_detail"
+      : routeIntent;
+
   console.log("[CATALOG][ROUTING_SIGNAL]", {
     userInput: input.userInput,
     intentOut: input.intentOut,
@@ -699,7 +713,7 @@ export async function runCatalogFastpath(
     asksLocation,
     asksAvailability,
   } = getCatalogIntentFlags({
-    routeIntent,
+    routeIntent: executionRouteIntent,
     facets: input.facets || {},
   });
 
@@ -795,9 +809,9 @@ const hasAnyStructuredCatalogTarget =
 
   let questionType: QuestionType;
 
-  if (routeIntent === "catalog_combination") {
+  if (executionRouteIntent === "catalog_combination") {
     questionType = "combination_and_price";
-  } else if (routeIntent === "catalog_alternatives") {
+  } else if (executionRouteIntent === "catalog_alternatives") {
     questionType = "other_plans";
   } else if (asksSchedules && asksPrices) {
     questionType = "schedule_and_price";
@@ -984,7 +998,7 @@ const hasAnyStructuredCatalogTarget =
     );
 
   const shouldResolveExplicitCatalogTarget = isExplicitCatalogQuestion({
-    routeIntent,
+    routeIntent: executionRouteIntent,
     intentOut: intentOutNorm,
     asksPrices,
     asksIncludesOnly,
@@ -1003,6 +1017,12 @@ const hasAnyStructuredCatalogTarget =
       status: "resolved_single",
       serviceId: pendingSelectedService.serviceId,
       serviceName: pendingSelectedService.serviceName || "",
+    };
+  } else if (structuredTargetServiceId) {
+    canonicalCatalogResolution = {
+      status: "resolved_single",
+      serviceId: structuredTargetServiceId,
+      serviceName: structuredTargetServiceName,
     };
   } else if (shouldResolveCanonicalTargetEarly) {
     canonicalCatalogResolution = await resolveCanonicalCatalogTarget({
@@ -1062,7 +1082,7 @@ const hasAnyStructuredCatalogTarget =
     };
   }
 
-  if (routeIntent === "catalog_overview" && intentAllowsCatalogRouting) {
+  if (executionRouteIntent === "catalog_overview" && intentAllowsCatalogRouting) {
     console.log("[CATALOG_OVERVIEW][RUN_FASTPATH]", {
       userInput: input.userInput,
       questionType,
@@ -1073,7 +1093,7 @@ const hasAnyStructuredCatalogTarget =
     });
   }
 
-  if (routeIntent === "catalog_family" && intentAllowsCatalogRouting) {
+  if (executionRouteIntent === "catalog_family" && intentAllowsCatalogRouting) {
     console.log("[CATALOG_FAMILY][RUN_FASTPATH]", {
       userInput: input.userInput,
       questionType,
@@ -1097,7 +1117,7 @@ const hasAnyStructuredCatalogTarget =
     prevAt > 0 &&
     now - prevAt <= 30 * 60 * 1000;
 
-  if (routeIntent === "catalog_includes") {
+  if (executionRouteIntent === "catalog_includes" || executionRouteIntent === "entity_detail") {
     if (canonicalCatalogResolution?.status === "resolved_single") {
       const variantDisambiguationResult =
         await maybeBuildVariantDisambiguationResult({
@@ -1194,11 +1214,11 @@ const hasAnyStructuredCatalogTarget =
         userInput: input.userInput,
         idiomaDestino: input.idiomaDestino,
         convoCtx: input.convoCtx,
-        routeIntent,
+        routeIntent: executionRouteIntent,
         catalogRoutingSignal: resolvedRoutingSignal,
         catalogReferenceClassification: input.catalogReferenceClassification,
         rows,
-        catalogRouteIntent: routeIntent,
+        catalogRouteIntent: executionRouteIntent,
       });
 
       if (singleServiceCatalogResult.handled) {
@@ -1366,11 +1386,11 @@ const hasAnyStructuredCatalogTarget =
         userInput: input.userInput,
         idiomaDestino: input.idiomaDestino,
         convoCtx: input.convoCtx,
-        routeIntent,
+        routeIntent: executionRouteIntent,
         catalogRoutingSignal: resolvedRoutingSignal,
         catalogReferenceClassification: input.catalogReferenceClassification,
         rows,
-        catalogRouteIntent: routeIntent,
+        catalogRouteIntent: executionRouteIntent,
       });
 
       if (singleServiceCatalogResult.handled) {
@@ -1611,11 +1631,11 @@ const hasAnyStructuredCatalogTarget =
         userInput: input.userInput,
         idiomaDestino: input.idiomaDestino,
         convoCtx: input.convoCtx,
-        routeIntent,
+        routeIntent: executionRouteIntent,
         catalogRoutingSignal: resolvedRoutingSignal,
         catalogReferenceClassification: input.catalogReferenceClassification,
         rows,
-        catalogRouteIntent: routeIntent,
+        catalogRouteIntent: executionRouteIntent,
       });
 
       if (singleServiceCatalogResult.handled) {
