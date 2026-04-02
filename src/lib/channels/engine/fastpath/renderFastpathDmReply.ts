@@ -92,15 +92,15 @@ function buildCatalogChoiceCanonicalBody(input: {
 
   if (catalogPayload.kind === "service_choice") {
     return idiomaDestino === "en"
-      ? `Please choose one option:\n\n${optionLines.join("\n")}`
-      : `Por favor elige una opción:\n\n${optionLines.join("\n")}`;
+      ? `I can help you with that. To give you the right details, which option are you interested in?\n\n${optionLines.join("\n")}`
+      : `Claro. Para darte la información correcta, dime cuál de estas opciones te interesa:\n\n${optionLines.join("\n")}`;
   }
 
   const serviceLabel = normalizeText(catalogPayload.serviceName);
 
   return idiomaDestino === "en"
-    ? `${serviceLabel || "This service"} has these options:\n\n${optionLines.join("\n")}`
-    : `${serviceLabel || "Este servicio"} tiene estas opciones:\n\n${optionLines.join("\n")}`;
+    ? `${serviceLabel || "This option"} has these available formats. Which one would you like?\n\n${optionLines.join("\n")}`
+    : `${serviceLabel || "Esta opción"} tiene estas modalidades disponibles. ¿Cuál te interesa?\n\n${optionLines.join("\n")}`;
 }
 
 function buildResolvedCatalogCanonicalBody(input: {
