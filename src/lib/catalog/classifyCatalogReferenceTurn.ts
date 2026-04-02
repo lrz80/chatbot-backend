@@ -207,8 +207,7 @@ function buildSignals(params: {
     !hasConversationDependency &&
     (hasSpecificEntityCandidate ||
       hasVariantCandidate ||
-      hasFamilyCandidate ||
-      tokens.length > 0);
+      hasFamilyCandidate);
 
   const hasDisambiguationRisk =
     context.lastPresentedEntityIds.length > 1 ||

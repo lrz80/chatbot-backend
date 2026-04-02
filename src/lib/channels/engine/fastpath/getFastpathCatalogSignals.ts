@@ -1,3 +1,4 @@
+//src/lib/channels/engine/fastpath/getFastpathCatalogSignals.ts
 import type { Pool } from "pg";
 import { resolveServiceCandidatesFromText } from "../../../services/pricing/resolveServiceIdFromText";
 
@@ -73,8 +74,67 @@ function toTrimmedString(value: any): string {
   return String(value ?? "").trim();
 }
 
+function toNormalizedString(value: any): string {
+  return toTrimmedString(value).toLowerCase();
+}
+
 function normalizeComparisonLabel(value: any): string {
   return toTrimmedString(value).toLowerCase();
+}
+
+function hasExplicitCatalogAnchor(previewClassification: any): boolean {
+  return (
+    Boolean(previewClassification?.targetServiceId) ||
+    Boolean(previewClassification?.targetVariantId) ||
+    Boolean(previewClassification?.targetFamilyKey)
+  );
+}
+
+function isPositiveCatalogClassificationKind(kind: any): boolean {
+  const normalized = toNormalizedString(kind);
+
+  return (
+    normalized === "entity_specific" ||
+    normalized === "variant_specific" ||
+    normalized === "catalog_family" ||
+    normalized === "catalog_overview" ||
+    normalized === "comparison" ||
+    normalized === "referential_followup"
+  );
+}
+
+function isComparisonClassificationKind(kind: any): boolean {
+  return toNormalizedString(kind) === "comparison";
+}
+
+function shouldAllowLooseCatalogSignals(params: {
+  previewClassification: any;
+  previewPolicy: GetFastpathCatalogSignalsInput["previewPolicy"];
+}): boolean {
+  const { previewClassification, previewPolicy } = params;
+
+  if (!previewPolicy.shouldAllowLooseResolution) {
+    return false;
+  }
+
+  if (hasExplicitCatalogAnchor(previewClassification)) {
+    return true;
+  }
+
+  return isPositiveCatalogClassificationKind(previewClassification?.kind);
+}
+
+function shouldAllowStructuredComparison(params: {
+  previewClassification: any;
+  previewPolicy: GetFastpathCatalogSignalsInput["previewPolicy"];
+}): boolean {
+  const { previewClassification, previewPolicy } = params;
+
+  if (!previewPolicy.shouldBuildComparison) {
+    return false;
+  }
+
+  return isComparisonClassificationKind(previewClassification?.kind);
 }
 
 function getCandidateComparisonTokens(candidate: any): string[] {
@@ -356,9 +416,15 @@ export async function getFastpathCatalogSignals(
   let structuredComparison: StructuredCatalogComparison | null = null;
 
   try {
-    const shouldRunLooseResolution =
-      previewPolicy.shouldAllowLooseResolution ||
-      previewPolicy.shouldBuildComparison;
+    const shouldRunLooseResolution = shouldAllowLooseCatalogSignals({
+      previewClassification,
+      previewPolicy,
+    });
+
+    const shouldBuildComparison = shouldAllowStructuredComparison({
+      previewClassification,
+      previewPolicy,
+    });
 
     if (shouldRunLooseResolution) {
       entityCandidateResultLoose = await resolveServiceCandidatesFromText(
@@ -384,11 +450,10 @@ export async function getFastpathCatalogSignals(
         : 0,
     });
 
-    if (resolutionKind === "ambiguous") {
+    if (resolutionKind === "ambiguous" && shouldBuildComparison) {
       structuredComparison = buildStructuredCatalogComparison({
         previewPolicy: {
-          ...previewPolicy,
-          shouldBuildComparison: true,
+          shouldBuildComparison,
         },
         entityCandidateResult: entityCandidateResultLoose,
         explicitEntityCandidateForClassification: null,
