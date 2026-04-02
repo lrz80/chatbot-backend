@@ -72,7 +72,7 @@ function mapDetectedIntentToCatalogIntent(
   detectedIntent: string | null,
   fallback: CatalogReferenceIntent = "unknown"
 ): CatalogReferenceIntent {
-  const value = String(detectedIntent || "").trim();
+  const value = String(detectedIntent || "").trim().toLowerCase();
 
   switch (value) {
     case "precio":
@@ -95,6 +95,12 @@ function mapDetectedIntentToCatalogIntent(
     case "combination_and_price":
     case "catalog_combination":
       return "combination_and_price";
+
+    case "compare":
+    case "comparison":
+    case "comparacion":
+    case "catalog_compare":
+      return "compare";
 
     default:
       return fallback;
@@ -339,6 +345,68 @@ function inferAnchorShift(params: {
   if (signals.hasCatalogScope) return "browse_catalog";
 
   return "none";
+}
+
+function isCatalogFollowupIntent(
+  detectedIntent: string | null | undefined
+): boolean {
+  const mapped = mapDetectedIntentToCatalogIntent(
+    String(detectedIntent || "").trim() || null,
+    "unknown"
+  );
+
+  return (
+    mapped === "price_or_plan" ||
+    mapped === "includes" ||
+    mapped === "schedule" ||
+    mapped === "other_plans" ||
+    mapped === "combination_and_price" ||
+    mapped === "compare"
+  );
+}
+
+function canUseEntityContextAsClearFollowup(params: {
+  detectedIntent: string | null;
+  tokenCount: number;
+  hasExpectedVariant: boolean;
+  hasLastEntity: boolean;
+  hasPresentedEntities: boolean;
+  hasLastFamily: boolean;
+  hasPresentedFamilies: boolean;
+  signals: CatalogReferenceSignals;
+}): boolean {
+  const {
+    detectedIntent,
+    tokenCount,
+    hasExpectedVariant,
+    hasLastEntity,
+    hasPresentedEntities,
+    hasLastFamily,
+    hasPresentedFamilies,
+    signals,
+  } = params;
+
+  if (hasExpectedVariant) {
+    return tokenCount > 0 && tokenCount <= 6;
+  }
+
+  const hasEntityContext = hasLastEntity || hasPresentedEntities;
+  const hasFamilyContext = hasLastFamily || hasPresentedFamilies;
+
+  if (!hasEntityContext && !hasFamilyContext) {
+    return false;
+  }
+
+  if (!isCatalogFollowupIntent(detectedIntent)) {
+    return false;
+  }
+
+  return (
+    signals.hasReferentialDependency ||
+    signals.hasSpecificEntityCandidate ||
+    signals.hasVariantCandidate ||
+    signals.hasFamilyCandidate
+  );
 }
 
 function hasAnyToken(tokens: string[], allowed: Set<string>): boolean {
@@ -738,19 +806,24 @@ export function classifyCatalogReferenceTurn(
 
   // =========================================================
   // 5) REFERENTIAL FOLLOW-UP WITH ENTITY CONTEXT
+  // Solo si hay follow-up claro sobre una entidad/familia activa.
+  // info_general NO debe promover catálogo por sí solo.
   // =========================================================
   if (
-    (hasPresentedEntities || hasLastEntity) &&
-    tokenCount > 0 &&
-    tokenCount <= 6 &&
-    (signals.hasReferentialDependency ||
-      signals.hasSpecificEntityCandidate ||
-      signals.hasVariantCandidate ||
-      signals.hasFamilyCandidate ||
-      context.expectingVariantForEntityId)
+    canUseEntityContextAsClearFollowup({
+      detectedIntent,
+      tokenCount,
+      hasExpectedVariant,
+      hasLastEntity,
+      hasPresentedEntities,
+      hasLastFamily,
+      hasPresentedFamilies,
+      signals,
+    }) &&
+    (hasPresentedEntities || hasLastEntity)
   ) {
-    notes.push("context_entity_available");
-    notes.push("short_turn_with_entity_context");
+    notes.push("clear_followup_with_entity_context");
+    notes.push("entity_context_followup_allowed");
 
     result.kind = "referential_followup";
     result.confidence = hasPresentedEntities ? 0.84 : 0.78;
@@ -803,11 +876,13 @@ export function classifyCatalogReferenceTurn(
 
   // =========================================================
   // 7) ENTITY CONTEXT WITHOUT EXPLICIT MATCH
+  // Contexto viejo NO debe forzar catálogo si el turn actual
+  // no trae intención catalogable clara.
   // =========================================================
-  if (hasLastEntity && tokenCount > 6) {
+  if (hasLastEntity && tokenCount > 6 && isCatalogFollowupIntent(detectedIntent)) {
     notes.push("entity_context_available");
     notes.push("longer_turn_with_entity_context");
-    notes.push("prefer_referential_followup_over_forced_entity_specific");
+    notes.push("catalog_followup_intent_confirmed");
 
     result.kind = "referential_followup";
     result.confidence = 0.66;

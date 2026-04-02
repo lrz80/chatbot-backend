@@ -15,6 +15,7 @@ export type CatalogReferenceIntent =
   | "combination_and_price"
   | "includes"
   | "schedule"
+  | "compare"
   | "unknown";
 
 export type CatalogHistoryIntent =
