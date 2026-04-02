@@ -501,6 +501,26 @@ function buildCatalogDisambiguationResult(input: {
   baseCtxPatch.expectingVariantForEntityId = selectedServiceId || null;
   baseCtxPatch.expectedVariantIntent = originalIntent;
 
+  baseCtxPatch.presentedVariantOptions = input.options
+    .filter((option) => option.kind === "variant")
+    .map((option, idx) => ({
+      variantId: option.variantId,
+      label: option.label,
+      index: idx + 1,
+    }));
+
+  baseCtxPatch.last_variant_options = input.options
+    .filter((option) => option.kind === "variant")
+    .map((option, idx) => ({
+      index: idx + 1,
+      id: option.variantId,
+      variantId: option.variantId,
+      variant_name: option.variantName || option.label,
+      label: option.label,
+    }));
+
+  baseCtxPatch.last_variant_options_at = now;
+
   return {
     handled: true,
     reply: "",
@@ -669,7 +689,7 @@ export async function runCatalogFastpath(
       anchorShift: catalogRoutingSignal.anchorShift,
     },
   });
-  
+
   const {
     isCombinationIntent,
     asksIncludesOnly,

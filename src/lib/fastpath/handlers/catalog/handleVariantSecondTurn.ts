@@ -315,10 +315,18 @@ function resolveVariantIdFromUserInput(params: {
   userInput: string;
   numericSelectionIndex: number | null;
   targetVariantId: string | null;
+  pendingVariantChoice: PendingVariantChoice | null;
   presentedVariantOptions: PresentedVariantOption[];
   dbVariants: Array<{ id: string; variant_name: string | null }>;
 }): string | null {
   if (params.numericSelectionIndex !== null) {
+    const fromPendingChoice =
+      params.pendingVariantChoice?.options?.[params.numericSelectionIndex - 1];
+
+    if (fromPendingChoice?.variantId) {
+      return String(fromPendingChoice.variantId).trim();
+    }
+
     const fromPresented = params.presentedVariantOptions.find(
       (item) => item.index === params.numericSelectionIndex
     );
@@ -335,7 +343,9 @@ function resolveVariantIdFromUserInput(params: {
 
   if (params.targetVariantId) {
     const targetExistsInCurrentService = params.dbVariants.some(
-      (item) => String(item.id || "").trim() === String(params.targetVariantId || "").trim()
+      (item) =>
+        String(item.id || "").trim() ===
+        String(params.targetVariantId || "").trim()
     );
 
     if (targetExistsInCurrentService) {
@@ -591,6 +601,7 @@ export async function handleVariantSecondTurn(
     userInput: input.userInput,
     numericSelectionIndex,
     targetVariantId: String(targetVariantId || "").trim() || null,
+    pendingVariantChoice,
     presentedVariantOptions,
     dbVariants: variants.map((v: any) => ({
       id: String(v.id || "").trim(),
@@ -602,6 +613,23 @@ export async function handleVariantSecondTurn(
   });
 
   if (!resolvedVariantId) {
+    console.log("[VARIANT_SECOND_TURN][UNRESOLVED_SELECTION]", {
+      userInput: input.userInput,
+      serviceId,
+      numericSelectionIndex,
+      targetVariantId,
+      pendingVariantChoice:
+        pendingVariantChoice?.options?.map((opt) => ({
+          variantId: opt.variantId,
+          label: opt.label,
+        })) ?? [],
+      presentedVariantOptions,
+      dbVariants: variants.map((v: any) => ({
+        id: String(v.id || "").trim(),
+        variant_name: String(v.variant_name || "").trim(),
+      })),
+    });
+
     return {
       handled: false,
     };
