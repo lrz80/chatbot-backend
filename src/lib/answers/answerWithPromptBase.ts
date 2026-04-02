@@ -315,7 +315,7 @@ function buildInstructionBlock(
       "- do_not_replace_the_canonical_options_with_a_summary = true"
     );
   }
-  
+
   if (policy.mode === "grounded_frame_only") {
     base.push(
       "- grounded_frame_only = true",
@@ -518,7 +518,10 @@ export async function answerWithPromptBase(
       normalizedPolicy.canOfferBookingTimes && bookingActive,
   };
 
-  if (effectivePolicy.mode === "grounded_frame_only") {
+  if (
+    effectivePolicy.mode === "grounded_frame_only" &&
+    shouldUseCanonicalBodyComposition(effectivePolicy)
+  ) {
     return {
       text: String(fallbackText || "").trim(),
       pendingCta: null,
@@ -603,13 +606,7 @@ export async function answerWithPromptBase(
     : null;
 
   out = shouldComposeCanonicalBody
-    ? composeCanonicalReply({
-        canonicalBody: String(fallbackText || "").trim(),
-        intro: parsedCanonicalFrame?.intro ?? null,
-        closing: parsedCanonicalFrame?.closing ?? null,
-        allowIntro: effectivePolicy.allowIntro,
-        allowOutro: effectivePolicy.allowOutro,
-      })
+    ? String(fallbackText || "").trim()
     : parsedEnvelope?.text || rawModelOutput || fallbackText || "";
 
   console.log("[ANSWER_WITH_PROMPT_BASE][RAW_MODEL_OUTPUT]", {
@@ -621,6 +618,7 @@ export async function answerWithPromptBase(
     parsedCanonicalFrame,
     selectedOut: out,
     usedCanonicalBodyComposition: shouldComposeCanonicalBody,
+    preserveExactBody: effectivePolicy.preserveExactBody,
   });
 
   } catch (e) {
