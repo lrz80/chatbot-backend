@@ -592,6 +592,19 @@ export async function runCatalogFastpath(
       }
     | null = null;
 
+  const pendingOriginalIntent = String(
+    pendingCatalogChoice?.originalIntent || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const pendingRouteIntentOverride =
+    pendingOriginalIntent === "precio"
+      ? "catalog_price"
+      : pendingOriginalIntent === "info_servicio"
+      ? "catalog_includes"
+      : "";
+
   if (pendingCatalogSelection.status === "resolved") {
     const selected = pendingCatalogSelection.option;
 
@@ -615,12 +628,30 @@ export async function runCatalogFastpath(
     }
   }
 
+  const rawRouteIntent = String(catalogRoutingSignal.routeIntent || "").trim();
+
+  const shouldUsePendingRouteIntentOverride =
+    Boolean(pendingCatalogChoice) &&
+    Boolean(pendingRouteIntentOverride) &&
+    (
+      rawRouteIntent === "" ||
+      rawRouteIntent === "referential_followup" ||
+      rawRouteIntent === "entity_detail" ||
+      rawRouteIntent === "variant_detail"
+    );
+
+  const routeIntent = shouldUsePendingRouteIntentOverride
+    ? pendingRouteIntentOverride
+    : rawRouteIntent;
+
   console.log("[CATALOG][ROUTING_SIGNAL]", {
     userInput: input.userInput,
     intentOut: input.intentOut,
     facets: input.facets || {},
     signal: {
       shouldRouteCatalog: catalogRoutingSignal.shouldRouteCatalog,
+      rawRouteIntent: String(catalogRoutingSignal.routeIntent || "").trim(),
+      effectiveRouteIntent: routeIntent,
       routeIntent: catalogRoutingSignal.routeIntent,
       referenceKind: catalogRoutingSignal.referenceKind,
       source: catalogRoutingSignal.source,
@@ -638,9 +669,7 @@ export async function runCatalogFastpath(
       anchorShift: catalogRoutingSignal.anchorShift,
     },
   });
-
-  const routeIntent = String(catalogRoutingSignal.routeIntent || "").trim();
-
+  
   const {
     isCombinationIntent,
     asksIncludesOnly,
