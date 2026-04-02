@@ -1,4 +1,4 @@
-//src/lib/services/pricing/resolverServiceIdFromText.ts
+//src/lib/services/pricing/resolveServiceIdFromText.ts
 import type { Pool } from "pg";
 import { detectarIdioma } from "../../detectarIdioma";
 import { traducirTexto } from "../../traducirTexto";

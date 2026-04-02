@@ -1,3 +1,4 @@
+//src/lib/fastpath/renderInfoGeneralOverview.ts
 import type { Pool } from "pg";
 import type { Lang } from "../channels/engine/clients/clientDb";
 

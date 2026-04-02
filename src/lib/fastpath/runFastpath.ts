@@ -314,6 +314,25 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const catalogReferenceKind =
     catalogReferenceClassification?.kind ?? "none";
 
+  const hasConcreteTargetThisTurn =
+    Boolean(catalogReferenceClassification?.targetServiceId) ||
+    Boolean(catalogReferenceClassification?.targetVariantId) ||
+    Boolean(catalogReferenceClassification?.targetFamilyKey);
+
+  const hasAnyCatalogFacet =
+    detectedFacets?.asksPrices === true ||
+    detectedFacets?.asksSchedules === true ||
+    detectedFacets?.asksLocation === true ||
+    detectedFacets?.asksAvailability === true;
+
+  const isGenericDiscoveryIntent =
+    (intentOut === "info_general" || intentOut === "duda") &&
+    !hasAnyCatalogFacet &&
+    !hasConcreteTargetThisTurn;
+
+  const shouldBypassCatalogFollowupReuse =
+    isGenericDiscoveryIntent && !hasPendingCatalogChoice;
+
   const isCatalogOverviewTurn =
     catalogReferenceKind === "catalog_overview";
 
@@ -590,7 +609,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // =========================================================
   // ✅ FOLLOW-UP ROUTER
   // =========================================================
-  if (!hasPendingCatalogChoice) {
+  if (!hasPendingCatalogChoice && !shouldBypassCatalogFollowupReuse) {
     const followupRouterResult = await handleFollowupRouter({
       pool,
       tenantId,
@@ -611,7 +630,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // Si ya estamos parados en un servicio con variantes y el usuario
   // menciona una variante, responder directo sin relistar.
   // ===============================
-  if (!hasPendingCatalogChoice) {
+  if (!hasPendingCatalogChoice && !shouldBypassCatalogFollowupReuse) {
     const variantFollowupSameServiceResult =
       await handleVariantFollowupSameService({
         pool,
@@ -736,16 +755,27 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     candidateOptionsFromTurn,
   });
 
+  const isGenericInfoIntent =
+  intentOut === "info_general" || intentOut === "duda";
+
   const canEnterCatalogFastpath =
-    Boolean(catalogRoutingSignal?.shouldRouteCatalog) ||
-    Boolean(
-      catalogReferenceClassification?.kind === "catalog_overview" ||
-      catalogReferenceClassification?.kind === "catalog_family" ||
-      catalogReferenceClassification?.kind === "entity_specific" ||
-      catalogReferenceClassification?.kind === "variant_specific" ||
-      catalogReferenceClassification?.kind === "referential_followup" ||
-      catalogReferenceClassification?.kind === "comparison"
+    !isGenericInfoIntent &&
+    !shouldBypassCatalogFollowupReuse &&
+    (
+      Boolean(catalogRoutingSignal?.shouldRouteCatalog) ||
+      Boolean(
+        catalogReferenceClassification?.kind === "catalog_overview" ||
+        catalogReferenceClassification?.kind === "catalog_family" ||
+        catalogReferenceClassification?.kind === "entity_specific" ||
+        catalogReferenceClassification?.kind === "variant_specific" ||
+        catalogReferenceClassification?.kind === "referential_followup" ||
+        catalogReferenceClassification?.kind === "comparison"
+      )
     );
+
+  if (shouldBypassCatalogFollowupReuse) {
+    return { handled: false };
+  }
 
   if (!canEnterCatalogFastpath) {
     return { handled: false };
