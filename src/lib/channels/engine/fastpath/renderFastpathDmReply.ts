@@ -126,6 +126,22 @@ function buildResolvedCatalogCanonicalBody(input: {
     .trim();
 }
 
+function isInfoGeneralOverviewSource(value: unknown): boolean {
+  const normalized = normalizeText(value).toLowerCase();
+  return (
+    normalized === "info_general_overview" ||
+    normalized === "info_general_overview_db"
+  );
+}
+
+function isInfoGeneralOverviewIntent(value: unknown): boolean {
+  const normalized = normalizeText(value).toLowerCase();
+  return (
+    normalized === "info_general" ||
+    normalized === "info_general_overview"
+  );
+}
+
 export type RenderFastpathDmReplyInput = {
   tenantId: string;
   canal: Canal;
@@ -207,6 +223,16 @@ export async function renderFastpathDmReply(
     shouldForceSalesClosingQuestion,
   } = replyPolicy;
 
+  const fpSource = normalizeText(fp?.source).toLowerCase();
+  const fpIntent = normalizeText(
+    fp?.intent || input.detectedIntent || input.intentFallback || ""
+  ).toLowerCase();
+
+  const isInfoGeneralOverviewTurn =
+    isInfoGeneralOverviewSource(fpSource) ||
+    isInfoGeneralOverviewIntent(fpIntent) ||
+    replyPolicy.isGroundedCatalogOverviewDm === true;
+
   const catalogPayload = fp?.catalogPayload;
 
   const isServiceChoiceReply = catalogPayload?.kind === "service_choice";
@@ -250,10 +276,11 @@ export async function renderFastpathDmReply(
   const bypassWriterModel = shouldBypassWriterModel({
     isCatalogChoiceReply,
     isResolvedCatalogAnswer,
-    isGroundedCatalogReply,
+    isGroundedCatalogReply: isGroundedCatalogReply || isInfoGeneralOverviewTurn,
     isPriceSummaryReply,
     canonicalBodyOwnsClosing: replyPolicy.canonicalBodyOwnsClosing,
-    shouldUseGroundedFrameOnly: replyPolicy.shouldUseGroundedFrameOnly,
+    shouldUseGroundedFrameOnly:
+      replyPolicy.shouldUseGroundedFrameOnly || isInfoGeneralOverviewTurn,
   });
 
   const runtimeCapabilities = {
@@ -279,7 +306,7 @@ export async function renderFastpathDmReply(
   const responsePolicy = {
     mode: isCatalogChoiceReply
       ? "clarify_only"
-      : isResolvedCatalogAnswer
+      : isResolvedCatalogAnswer || isInfoGeneralOverviewTurn
       ? "grounded_frame_only"
       : replyPolicy.responsePolicyMode,
     resolvedEntityType:
@@ -289,10 +316,12 @@ export async function renderFastpathDmReply(
     canMentionSpecificPrice:
       isResolvedCatalogAnswer ||
       isGroundedCatalogReply ||
+      isInfoGeneralOverviewTurn ||
       replyPolicy.hasResolvedEntity,
     canSelectSpecificCatalogItem:
       isResolvedCatalogAnswer ||
       isGroundedCatalogReply ||
+      isInfoGeneralOverviewTurn ||
       replyPolicy.hasResolvedEntity,
     canOfferBookingTimes: false,
     canUseOfficialLinks: true,
@@ -335,6 +364,8 @@ export async function renderFastpathDmReply(
       ? "Catalog variant choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one variant."
       : isResolvedCatalogAnswer
       ? "Resolved grounded catalog turn. The canonical body is the source of truth and must be preserved exactly. Do not rewrite, summarize, compress, paraphrase, or omit any fact, condition, number, schedule, bullet, or link from the canonical body. You may add only one short intro before the canonical body and one short sales-oriented closing question after it. The body itself must remain unchanged and in the same order."
+      : isInfoGeneralOverviewTurn
+      ? "Grounded general overview turn for DM. The canonical body is the source of truth. Do not turn this into a clarification. Do not ask the user what kind of information they want unless that question already exists in the canonical body. Preserve the body facts, structure, numbers, schedules, links, and business details exactly. You may add only a short intro before the body and a short sales-oriented closing question after it."
       : isGroundedCatalogReply
       ? "Grounded catalog turn. Preserve the canonical body exactly."
       : isPriceSummaryReply

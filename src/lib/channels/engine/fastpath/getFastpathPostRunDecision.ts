@@ -1,4 +1,4 @@
-//src/lib/channels/engine/fastpath/getFastpathPostRunDecision.ts
+// src/lib/channels/engine/fastpath/getFastpathPostRunDecision.ts
 import type { Canal } from "../../../detectarIntencion";
 
 export type GetFastpathPostRunDecisionInput = {
@@ -49,6 +49,20 @@ function isGroundedServiceSource(fpSource: string): boolean {
   );
 }
 
+function isInfoGeneralOverviewSource(fpSource: string): boolean {
+  return (
+    fpSource === "info_general_overview" ||
+    fpSource === "info_general_overview_db"
+  );
+}
+
+function isInfoGeneralIntent(fpIntent: string): boolean {
+  return (
+    fpIntent === "info_general" ||
+    fpIntent === "info_general_overview"
+  );
+}
+
 export function getFastpathPostRunDecision(
   input: GetFastpathPostRunDecisionInput
 ): GetFastpathPostRunDecisionResult {
@@ -83,7 +97,7 @@ export function getFastpathPostRunDecision(
     fpSource !== "price_fastpath_db_no_price_llm_render";
 
   const isPlansList =
-    toNormalizedString(input.fp?.source) === "service_list_db" &&
+    fpSource === "service_list_db" &&
     (input.convoCtx as any)?.last_list_kind === "plan";
 
   const hasPackagesAvailable =
@@ -108,8 +122,12 @@ export function getFastpathPostRunDecision(
     routeIntent === "variant_detail" ||
     fpIntent === "info_servicio";
 
+  const isInfoGeneralOverviewTurn =
+    isInfoGeneralOverviewSource(fpSource) || isInfoGeneralIntent(fpIntent);
+
   const shouldReturnRawFastpathForUnresolvedServiceIntent =
     isDmChannel &&
+    !isInfoGeneralOverviewTurn &&
     !isPluralCatalogTurn &&
     isExplicitServiceDetailTurn &&
     (
