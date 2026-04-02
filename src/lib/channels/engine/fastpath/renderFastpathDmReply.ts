@@ -57,12 +57,17 @@ type CatalogPayload =
 
 function shouldBypassWriterModel(input: {
   isCatalogChoiceReply: boolean;
+  isResolvedCatalogAnswer: boolean;
   isGroundedCatalogReply: boolean;
   isPriceSummaryReply: boolean;
   canonicalBodyOwnsClosing: boolean;
   shouldUseGroundedFrameOnly: boolean;
 }): boolean {
   if (input.isCatalogChoiceReply) {
+    return false;
+  }
+
+  if (input.isResolvedCatalogAnswer) {
     return false;
   }
 
@@ -242,8 +247,8 @@ export async function renderFastpathDmReply(
 
   const bypassWriterModel = shouldBypassWriterModel({
     isCatalogChoiceReply,
-    isGroundedCatalogReply:
-      isGroundedCatalogReply || isResolvedCatalogAnswer,
+    isResolvedCatalogAnswer,
+    isGroundedCatalogReply,
     isPriceSummaryReply,
     canonicalBodyOwnsClosing: replyPolicy.canonicalBodyOwnsClosing,
     shouldUseGroundedFrameOnly: replyPolicy.shouldUseGroundedFrameOnly,
@@ -313,16 +318,17 @@ export async function renderFastpathDmReply(
       !replyPolicy.canonicalBodyOwnsClosing,
     allowBodyRewrite: false,
     mustEndWithSalesQuestion:
-      !bypassWriterModel &&
-      !isCatalogChoiceReply &&
-      shouldForceSalesClosingQuestion &&
+      (
+        (!bypassWriterModel && !isCatalogChoiceReply && shouldForceSalesClosingQuestion) ||
+        isResolvedCatalogAnswer
+      ) &&
       !replyPolicy.canonicalBodyOwnsClosing,
     reasoningNotes: isServiceChoiceReply
       ? "Catalog service choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one service."
       : isVariantChoiceReply
       ? "Catalog variant choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one variant."
       : isResolvedCatalogAnswer
-      ? "Resolved grounded catalog turn. Preserve the canonical body exactly."
+      ? "Resolved grounded catalog turn. Preserve the canonical body exactly. Add a short natural intro that sounds helpful and sales-oriented without inventing facts. Add a short closing question that moves the conversation forward, such as interest, booking, signup, or next step, depending on the content and link present."
       : isGroundedCatalogReply
       ? "Grounded catalog turn. Preserve the canonical body exactly."
       : isPriceSummaryReply
