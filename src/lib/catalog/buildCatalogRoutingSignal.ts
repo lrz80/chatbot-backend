@@ -80,6 +80,19 @@ type CatalogRoutingConvoCtx = {
 
   last_family_key?: string | null;
   last_family_name?: string | null;
+
+  expectingVariant?: boolean | null;
+  pendingCatalogChoice?:
+    | {
+        kind?: "service_choice" | "variant_choice" | null;
+        serviceId?: string | null;
+        options?: Array<{
+          serviceId?: string | null;
+          variantId?: string | null;
+          label?: string | null;
+        }> | null;
+      }
+    | null;
 };
 
 type CatalogRoutingCandidateOption = {
@@ -205,6 +218,58 @@ function hasExplicitTargetThisTurn(
   );
 }
 
+function hasPendingCatalogChoice(
+  convoCtx?: CatalogRoutingConvoCtx | null
+): boolean {
+  const pending = convoCtx?.pendingCatalogChoice;
+
+  if (!pending) return false;
+
+  return (
+    pending.kind === "service_choice" ||
+    pending.kind === "variant_choice"
+  );
+}
+
+function hasReusableCatalogAnchor(
+  convoCtx?: CatalogRoutingConvoCtx | null
+): boolean {
+  return Boolean(
+    String(convoCtx?.last_service_id || "").trim() ||
+      String(convoCtx?.selectedServiceId || "").trim() ||
+      String(convoCtx?.last_variant_id || "").trim() ||
+      String(convoCtx?.last_family_key || "").trim() ||
+      convoCtx?.expectingVariant === true
+  );
+}
+
+function canIntentLayerRouteCatalog(args: {
+  intentOut: string;
+  explicitTargetThisTurn: boolean;
+  hasFreshCatalogContext: boolean;
+  hasPendingChoice: boolean;
+  hasReusableAnchor: boolean;
+  hasAmbiguousEntityCandidates: boolean;
+}): boolean {
+  const intentOut = normalizeText(args.intentOut);
+
+  if (!CATALOG_INTENTS.has(intentOut)) {
+    return false;
+  }
+
+  if (intentOut !== "info_servicio") {
+    return true;
+  }
+
+  return (
+    args.explicitTargetThisTurn ||
+    args.hasFreshCatalogContext ||
+    args.hasPendingChoice ||
+    args.hasReusableAnchor ||
+    args.hasAmbiguousEntityCandidates
+  );
+}
+
 function resolveRouteIntentFromSignals(args: {
   intentOut?: string | null;
   classification?: CatalogReferenceClassification | null;
@@ -319,7 +384,6 @@ export function buildCatalogRoutingSignal({
       : "none";
 
   const normalizedIntentOut = normalizeText(intentOut);
-  const allowsDbCatalogPath = CATALOG_INTENTS.has(normalizedIntentOut);
   const hasFreshCatalogContext = isFreshCatalogContext(convoCtx);
 
   const previousCatalogPlans = Array.isArray(convoCtx?.last_catalog_plans)
@@ -386,6 +450,18 @@ export function buildCatalogRoutingSignal({
   const explicitTargetThisTurn = hasExplicitTargetThisTurn(
     catalogReferenceClassification
   );
+
+  const hasPendingChoice = hasPendingCatalogChoice(convoCtx);
+  const hasReusableAnchor = hasReusableCatalogAnchor(convoCtx);
+
+  const allowsDbCatalogPath = canIntentLayerRouteCatalog({
+    intentOut: normalizedIntentOut,
+    explicitTargetThisTurn,
+    hasFreshCatalogContext,
+    hasPendingChoice,
+    hasReusableAnchor,
+    hasAmbiguousEntityCandidates,
+  });
 
   const shouldDropStaleTargets =
     !referenceKind || referenceKind === "none"

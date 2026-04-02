@@ -12,6 +12,13 @@ export type IntentFacets = {
   asksAvailability?: boolean;
 };
 
+export type IntentScope =
+  | "general"
+  | "entity"
+  | "family"
+  | "variant"
+  | "none";
+
 export type Intento = {
   intencion: string;
   nivel_interes: number;
@@ -22,6 +29,7 @@ export type Intento = {
 
   // nuevo contrato estructurado
   facets: IntentFacets;
+  scope: IntentScope;
 };
 
 type TenantIntentRow = {
@@ -37,6 +45,7 @@ type TenantIntentRow = {
 type LlmIntentOutput = {
   intencion?: unknown;
   nivel_interes?: unknown;
+  scope?: unknown;
   facets?: {
     asksPrices?: unknown;
     asksSchedules?: unknown;
@@ -75,7 +84,8 @@ const SALES_INTENTS = new Set<string>([
 function makeIntent(
   intencion: string,
   nivel_interes: number,
-  facets: IntentFacets = {}
+  facets: IntentFacets = {},
+  scope: IntentScope = "none"
 ): Intento {
   const cleanIntent = String(intencion || "duda").trim().toLowerCase();
   const cleanNivelRaw = Number(nivel_interes);
@@ -94,6 +104,7 @@ function makeIntent(
       asksLocation: Boolean(facets.asksLocation),
       asksAvailability: Boolean(facets.asksAvailability),
     },
+    scope,
   };
 }
 
@@ -148,6 +159,21 @@ function safeJsonParseObject(raw: string): Record<string, unknown> | null {
   return null;
 }
 
+function normalizeIntentScope(value: unknown): IntentScope {
+  const scope = String(value || "").trim().toLowerCase();
+
+  if (
+    scope === "general" ||
+    scope === "entity" ||
+    scope === "family" ||
+    scope === "variant"
+  ) {
+    return scope;
+  }
+
+  return "none";
+}
+
 function sanitizeLlmOutput(parsed: LlmIntentOutput | null | undefined): Intento | null {
   if (!parsed || typeof parsed !== "object") return null;
 
@@ -162,6 +188,7 @@ function sanitizeLlmOutput(parsed: LlmIntentOutput | null | undefined): Intento 
       : rawIntent;
 
   const nivelRaw = Number(parsed.nivel_interes ?? 1);
+  const scope = normalizeIntentScope(parsed.scope);
 
   const facets: IntentFacets = {
     asksPrices: Boolean(parsed.facets?.asksPrices),
@@ -176,13 +203,15 @@ function sanitizeLlmOutput(parsed: LlmIntentOutput | null | undefined): Intento 
     facets.asksLocation ||
     facets.asksAvailability;
 
-  // Si el modelo marcó facets útiles, "duda" ya no es una salida válida.
-  // Para consultas multi-facet genéricas, usamos info_general como intención principal segura.
   if (normalizedIntent === "duda" && hasAnyFacet) {
-    return makeIntent("info_general", Math.max(2, nivelRaw || 1), facets);
+    return makeIntent("info_general", Math.max(2, nivelRaw || 1), facets, scope);
   }
 
-  return makeIntent(normalizedIntent, nivelRaw, facets);
+  if (normalizedIntent === "info_servicio" && scope === "general") {
+    return makeIntent("info_general", nivelRaw, facets, "general");
+  }
+
+  return makeIntent(normalizedIntent, nivelRaw, facets, scope);
 }
 
 function buildUniversalIntentGuide(): string {
@@ -324,6 +353,14 @@ ${tenantIntentGuide}
 
 Reglas:
 - Debes elegir UNA intención principal.
+- Además de la intención principal, debes devolver un campo estructurado "scope" con uno de estos valores:
+  - "general": consulta general del negocio o del producto sin entidad concreta
+  - "entity": consulta sobre un servicio, plan, producto o entidad concreta
+  - "family": consulta sobre una familia o categoría de servicios
+  - "variant": consulta sobre una modalidad o variante concreta
+  - "none": no aplica o no está claro
+- "info_servicio" solo es válido cuando el scope sea "entity", "family" o "variant".
+- Si la consulta es general y exploratoria, usa "info_general" con scope "general".
 - Puedes elegir una intención universal o una intención específica del tenant si es claramente mejor.
 - Si el mensaje combina varias cosas, conserva una intención principal razonable y usa facets para lo demás.
 - No uses intents compuestos.
@@ -348,6 +385,7 @@ Devuelve SOLO JSON con esta forma exacta:
 {
   "intencion": "string",
   "nivel_interes": 1,
+  "scope": "general",
   "facets": {
     "asksPrices": false,
     "asksSchedules": false,
