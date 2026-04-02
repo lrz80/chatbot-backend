@@ -709,7 +709,13 @@ export async function handleVariantSecondTurn(
       ? `${baseName} — ${variantName}`
       : baseName || variantName || "";
 
-  const bulletLines = splitLines(descSource).map((line) => `• ${line}`);
+  const bulletLines = splitLines(descSource).map((line) => {
+    const cleaned = String(line || "")
+      .trim()
+      .replace(/^[-•*]\s*/, "");
+    return `• ${cleaned}`;
+  });
+
   const bullets = bulletLines.join("\n");
 
   const canonicalParts: string[] = [];

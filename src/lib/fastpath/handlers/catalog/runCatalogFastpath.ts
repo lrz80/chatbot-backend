@@ -17,6 +17,7 @@ import { buildPriceBlock } from "./helpers/catalogPriceBlock";
 import { buildScheduleBlock } from "./helpers/catalogScheduleBlock";
 import { handleCatalogComparison } from "./handleCatalogComparison";
 import { resolveServiceCandidatesFromText } from "../../../services/pricing/resolveServiceIdFromText";
+import { handleResolvedServiceDetail } from "./handleResolvedServiceDetail";
 
 type CatalogFacets = {
   asksPrices?: boolean;
@@ -1137,6 +1138,33 @@ export async function runCatalogFastpath(
           ...singleServiceCatalogResult,
           ctxPatch: {
             ...(singleServiceCatalogResult.ctxPatch || {}),
+            ...clearPendingCatalogChoiceCtxPatch(),
+          },
+        };
+      }
+
+      const resolvedServiceDetailResult = await handleResolvedServiceDetail({
+        pool: input.pool,
+        userInput: input.userInput,
+        idiomaDestino: input.idiomaDestino,
+        intentOut: input.intentOut || "info_servicio",
+        hit: {
+          serviceId:
+            pendingSelectedVariant?.serviceId ||
+            canonicalCatalogResolution.serviceId,
+          id:
+            pendingSelectedVariant?.serviceId ||
+            canonicalCatalogResolution.serviceId,
+        },
+        traducirMensaje: async (texto: string) => texto,
+        convoCtx: input.convoCtx,
+      });
+
+      if (resolvedServiceDetailResult.handled) {
+        return {
+          ...resolvedServiceDetailResult,
+          ctxPatch: {
+            ...(resolvedServiceDetailResult.ctxPatch || {}),
             ...clearPendingCatalogChoiceCtxPatch(),
           },
         };
