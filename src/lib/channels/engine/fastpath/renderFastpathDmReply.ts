@@ -309,12 +309,9 @@ export async function renderFastpathDmReply(
     preserveExactBullets: bypassWriterModel || isCatalogChoiceReply,
     preserveExactNumbers: bypassWriterModel || isCatalogChoiceReply,
     preserveExactLinks: bypassWriterModel || isCatalogChoiceReply,
-    allowIntro:
-      !bypassWriterModel &&
-      !isCatalogChoiceReply,
+    allowIntro: !bypassWriterModel || isResolvedCatalogAnswer,
     allowOutro:
-      !bypassWriterModel &&
-      !isCatalogChoiceReply &&
+      (!bypassWriterModel || isResolvedCatalogAnswer) &&
       !replyPolicy.canonicalBodyOwnsClosing,
     allowBodyRewrite: false,
     mustEndWithSalesQuestion:
