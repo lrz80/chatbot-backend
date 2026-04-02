@@ -13,6 +13,19 @@ export type HandleVariantSecondTurnInput = {
   catalogReferenceClassification?: any;
 };
 
+type PendingServiceChoice = {
+  kind: "service_choice";
+  originalIntent?: string | null;
+  options: Array<{
+    kind?: "service";
+    serviceId?: string;
+    variantId?: null;
+    label?: string | null;
+    serviceName?: string | null;
+  }>;
+  createdAt?: number | null;
+};
+
 type PendingVariantChoice = {
   kind: "variant_choice";
   originalIntent?: string | null;
@@ -23,6 +36,8 @@ type PendingVariantChoice = {
     serviceId?: string;
     variantId?: string | null;
     label?: string | null;
+    serviceName?: string | null;
+    variantName?: string | null;
   }>;
   createdAt?: number | null;
 };
@@ -166,6 +181,56 @@ function getPendingVariantChoice(convoCtx: any): PendingVariantChoice | null {
   };
 }
 
+function getPendingServiceChoice(convoCtx: any): PendingServiceChoice | null {
+  const pending = convoCtx?.pendingCatalogChoice;
+
+  if (!pending || pending.kind !== "service_choice") {
+    return null;
+  }
+
+  const rawOptions = Array.isArray(pending.options) ? pending.options : [];
+
+  const options = rawOptions
+    .map((item: any) => {
+      const serviceId = String(item?.serviceId || item?.id || "").trim();
+      const label = String(item?.label || item?.name || "").trim();
+
+      if (!serviceId || !label) {
+        return null;
+      }
+
+      return {
+        kind: "service" as const,
+        serviceId,
+        variantId: null,
+        label,
+        serviceName: String(item?.serviceName || item?.name || "").trim() || null,
+      };
+    })
+    .filter(Boolean) as Array<{
+      kind: "service";
+      serviceId: string;
+      variantId: null;
+      label: string;
+      serviceName?: string | null;
+    }>;
+
+  if (options.length < 2) {
+    return null;
+  }
+
+  return {
+    kind: "service_choice",
+    originalIntent:
+      typeof pending.originalIntent === "string"
+        ? pending.originalIntent
+        : null,
+    options,
+    createdAt:
+      typeof pending.createdAt === "number" ? pending.createdAt : null,
+  };
+}
+
 function getPresentedVariantOptions(convoCtx: any): PresentedVariantOption[] {
   const fromPresented = Array.isArray(convoCtx?.presentedVariantOptions)
     ? convoCtx.presentedVariantOptions
@@ -278,12 +343,30 @@ export async function handleVariantSecondTurn(
     convoCtx: input.convoCtx,
   });
 
+  const pendingServiceChoice = getPendingServiceChoice(input.convoCtx);
   const pendingVariantChoice = getPendingVariantChoice(input.convoCtx);
   const numericSelectionIndex = parseSingleDigitSelection(input.userInput);
 
+  const selectedServiceIdFromServiceChoice =
+    pendingServiceChoice && numericSelectionIndex !== null
+      ? String(
+          pendingServiceChoice.options[numericSelectionIndex - 1]?.serviceId || ""
+        ).trim() || null
+      : null;
+
+  const selectedServiceLabelFromServiceChoice =
+    pendingServiceChoice && numericSelectionIndex !== null
+      ? String(
+          pendingServiceChoice.options[numericSelectionIndex - 1]?.serviceName ||
+            pendingServiceChoice.options[numericSelectionIndex - 1]?.label ||
+            ""
+        ).trim() || null
+      : null;
+
   const selectedServiceId =
     String(
-      pendingVariantChoice?.serviceId ||
+      selectedServiceIdFromServiceChoice ||
+        pendingVariantChoice?.serviceId ||
         structuredTargetServiceId ||
         input.convoCtx?.selectedServiceId ||
         input.convoCtx?.last_service_id ||
@@ -292,7 +375,8 @@ export async function handleVariantSecondTurn(
 
   const selectedServiceName =
     String(
-      pendingVariantChoice?.serviceName ||
+      selectedServiceLabelFromServiceChoice ||
+        pendingVariantChoice?.serviceName ||
         input.convoCtx?.last_service_name ||
         ""
     ).trim() || null;
@@ -301,6 +385,7 @@ export async function handleVariantSecondTurn(
 
   const hasVariantSelectionContext =
     Boolean(input.convoCtx?.expectingVariant) ||
+    Boolean(pendingServiceChoice) ||
     Boolean(pendingVariantChoice) ||
     Boolean(targetVariantId) ||
     presentedVariantOptions.length > 0;
@@ -367,6 +452,96 @@ export async function handleVariantSecondTurn(
         presentedVariantOptions: null,
       } as any,
     };
+  }
+
+  if (pendingServiceChoice) {
+    const variantOptions = variants
+    .map((variant: any) => {
+      const variantId = String(variant.id || "").trim();
+      const label = String(variant.variant_name || "").trim();
+
+      if (!variantId || !label) {
+        return null;
+      }
+
+      return {
+        kind: "variant" as const,
+        serviceId,
+        variantId,
+        label,
+        serviceName: selectedServiceName || null,
+        variantName: label,
+      };
+    })
+    .filter(
+      (
+        option
+      ): option is {
+        kind: "variant";
+        serviceId: string;
+        variantId: string;
+        label: string;
+        serviceName: string | null;
+        variantName: string;
+      } => option !== null
+    );
+
+    if (variantOptions.length > 1) {
+      return {
+        handled: true,
+        reply: "",
+        source: "catalog_disambiguation_db",
+        intent: "variant_choice",
+        catalogPayload: {
+          kind: "variant_choice",
+          originalIntent: pendingServiceChoice.originalIntent || "info_servicio",
+          serviceId,
+          serviceName: selectedServiceName || null,
+          options: variantOptions,
+        },
+        ctxPatch: {
+          expectingVariant: true,
+          expectedVariantIntent:
+            pendingServiceChoice.originalIntent || "info_servicio",
+          expectingVariantForEntityId: serviceId,
+
+          selectedServiceId: serviceId,
+
+          last_service_id: serviceId,
+          last_service_name: selectedServiceName || null,
+          last_service_at: Date.now(),
+
+          pendingCatalogChoice: {
+            kind: "variant_choice",
+            originalIntent: pendingServiceChoice.originalIntent || "info_servicio",
+            serviceId,
+            serviceName: selectedServiceName || null,
+            options: variantOptions,
+            createdAt: Date.now(),
+          },
+          pendingCatalogChoiceAt: Date.now(),
+
+          presentedVariantOptions: variantOptions.map((option, idx) => ({
+            variantId: option.variantId,
+            label: option.label,
+            index: idx + 1,
+          })),
+
+          last_variant_options: variantOptions.map((option, idx) => ({
+            index: idx + 1,
+            id: option.variantId,
+            variantId: option.variantId,
+            variant_name: option.label,
+            label: option.label,
+          })),
+          last_variant_options_at: Date.now(),
+
+          last_bot_action: "catalog_variant_choice_pending",
+          last_bot_action_at: Date.now(),
+          lastResolvedIntent: "variant_choice",
+        } as any,
+      };
+    }
   }
 
   const resolvedVariantId = resolveVariantIdFromUserInput({
