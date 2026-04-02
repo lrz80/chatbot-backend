@@ -282,6 +282,19 @@ export type RunFastpathArgs = {
   catalogReferenceClassification?: CatalogReferenceClassification;
 };
 
+function buildFallbackOverviewFromInfoClave(
+  infoClave: string,
+  maxLines = 12
+): string {
+  return String(infoClave || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, maxLines)
+    .join("\n")
+    .trim();
+}
+
 export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
   const {
     pool,
@@ -452,17 +465,20 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       catalogReferenceKind !== "comparison";
 
     if (wantsGeneralBusinessOverview) {
-      const servicesBody = buildServicesBlockFromInfoClave(infoClave);
+      const servicesBody = buildServicesBlockFromInfoClave(infoClave).trim();
+      const fallbackOverviewBody = buildFallbackOverviewFromInfoClave(infoClave);
+      const overviewBody = servicesBody || fallbackOverviewBody;
+
+      if (!overviewBody) {
+        return { handled: false };
+      }
+
       const canonicalReply = withSectionTitle(
         idiomaDestino,
         "Servicios:",
         "Services:",
-        servicesBody
+        overviewBody
       ).trim();
-
-      if (!canonicalReply) {
-        return { handled: false };
-      }
 
       const ctxPatch: any = {
         last_list_kind: null,
