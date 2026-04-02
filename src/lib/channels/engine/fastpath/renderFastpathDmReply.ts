@@ -215,6 +215,8 @@ export async function renderFastpathDmReply(
   const isResolvedCatalogAnswer =
     catalogPayload?.kind === "resolved_catalog_answer";
 
+  const mustPreserveResolvedCanonicalBody = isResolvedCatalogAnswer;
+
   const unresolvedCatalogChoice = isCatalogChoiceReply;
 
   const canonicalReply = (() => {
@@ -306,11 +308,16 @@ export async function renderFastpathDmReply(
     allowAlternativeEntities: false,
     allowCrossSellEntities: false,
     allowAddOnSuggestions: false,
-    preserveExactBody: bypassWriterModel || isCatalogChoiceReply,
-    preserveExactOrder: bypassWriterModel || isCatalogChoiceReply,
-    preserveExactBullets: bypassWriterModel || isCatalogChoiceReply,
-    preserveExactNumbers: bypassWriterModel || isCatalogChoiceReply,
-    preserveExactLinks: bypassWriterModel || isCatalogChoiceReply,
+    preserveExactBody:
+      bypassWriterModel || isCatalogChoiceReply || mustPreserveResolvedCanonicalBody,
+    preserveExactOrder:
+      bypassWriterModel || isCatalogChoiceReply || mustPreserveResolvedCanonicalBody,
+    preserveExactBullets:
+      bypassWriterModel || isCatalogChoiceReply || mustPreserveResolvedCanonicalBody,
+    preserveExactNumbers:
+      bypassWriterModel || isCatalogChoiceReply || mustPreserveResolvedCanonicalBody,
+    preserveExactLinks:
+      bypassWriterModel || isCatalogChoiceReply || mustPreserveResolvedCanonicalBody,
     allowIntro: !bypassWriterModel || isResolvedCatalogAnswer,
     allowOutro:
       (!bypassWriterModel || isResolvedCatalogAnswer) &&
@@ -327,7 +334,7 @@ export async function renderFastpathDmReply(
       : isVariantChoiceReply
       ? "Catalog variant choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one variant."
       : isResolvedCatalogAnswer
-      ? "Resolved grounded catalog turn. Keep every fact, price, bullet, and link exact. add one short natural intro before the canonical body and one short sales-oriented closing question after it. Do not rewrite or summarize the body. The closing should move the conversation forward toward signup, booking, or choosing the best option."
+      ? "Resolved grounded catalog turn. The canonical body is the source of truth and must be preserved exactly. Do not rewrite, summarize, compress, paraphrase, or omit any fact, condition, number, schedule, bullet, or link from the canonical body. You may add only one short intro before the canonical body and one short sales-oriented closing question after it. The body itself must remain unchanged and in the same order."
       : isGroundedCatalogReply
       ? "Grounded catalog turn. Preserve the canonical body exactly."
       : isPriceSummaryReply

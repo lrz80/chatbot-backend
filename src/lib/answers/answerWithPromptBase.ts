@@ -201,45 +201,6 @@ type GroundedFrameEnvelope = {
   pendingCta: PendingCta;
 };
 
-function parseGroundedFrameEnvelope(raw: string): GroundedFrameEnvelope | null {
-  const text = String(raw || "").trim();
-  if (!text) return null;
-
-  try {
-    const parsed = JSON.parse(text);
-
-    const intro =
-      typeof parsed?.intro === "string" && parsed.intro.trim()
-        ? parsed.intro.trim()
-        : null;
-
-    const closing =
-      typeof parsed?.closing === "string" && parsed.closing.trim()
-        ? parsed.closing.trim()
-        : null;
-
-    const rawPending = parsed?.pendingCta;
-    const pendingCta: PendingCta =
-      rawPending &&
-      (rawPending.type === "estimate_offer" ||
-        rawPending.type === "booking_offer") &&
-      rawPending.awaitsConfirmation === true
-        ? {
-            type: rawPending.type,
-            awaitsConfirmation: true,
-          }
-        : null;
-
-    return {
-      intro,
-      closing,
-      pendingCta,
-    };
-  } catch {
-    return null;
-  }
-}
-
 function normalizeResponsePolicy(
   policy?: ResponsePolicy | null
 ): Required<ResponsePolicy> {
@@ -518,9 +479,13 @@ export async function answerWithPromptBase(
       normalizedPolicy.canOfferBookingTimes && bookingActive,
   };
 
+  const shouldComposeCanonicalBody =
+    Boolean(String(fallbackText || "").trim()) &&
+    shouldUseCanonicalBodyComposition(effectivePolicy);
+
   if (
     effectivePolicy.mode === "grounded_frame_only" &&
-    shouldUseCanonicalBodyComposition(effectivePolicy) &&
+    shouldComposeCanonicalBody &&
     effectivePolicy.allowIntro !== true &&
     effectivePolicy.allowOutro !== true &&
     effectivePolicy.mustEndWithSalesQuestion !== true
@@ -596,10 +561,6 @@ export async function answerWithPromptBase(
 
   rawModelOutputForPendingCta = rawModelOutput;
 
-    const shouldComposeCanonicalBody =
-    Boolean(String(fallbackText || "").trim()) &&
-    shouldUseCanonicalBodyComposition(effectivePolicy);
-
   const parsedEnvelope = shouldComposeCanonicalBody
     ? null
     : parseModelAnswerEnvelope(rawModelOutput);
@@ -644,8 +605,10 @@ export async function answerWithPromptBase(
 
   out = sanitizeChatOutput(out);
 
-  out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
-  out = capLines(out, maxLines);
+  if (!shouldComposeCanonicalBody) {
+    out = stripUrlsIfPromptHasNone(out, promptBaseWithLinks);
+    out = capLines(out, maxLines);
+  }
 
   console.log("[ANSWER_WITH_PROMPT_BASE][POST_PRESERVE]", {
     tenantId,
@@ -660,28 +623,26 @@ export async function answerWithPromptBase(
     preserveExactLinks: effectivePolicy.preserveExactLinks,
   });
 
-  try {
-    if (out) {
-      const detected = await detectarIdioma(out);
-      const langOut = detected?.lang ?? null;
+  if (!shouldComposeCanonicalBody) {
+    try {
+      if (out) {
+        const detected = await detectarIdioma(out);
+        const langOut = detected?.lang ?? null;
 
-      if ((langOut === "es" || langOut === "en") && langOut !== idiomaDestino) {
-        out = await traducirMensaje(out, idiomaDestino);
-        out = sanitizeChatOutput(out);
-        out = capLines(out, maxLines);
+        if ((langOut === "es" || langOut === "en") && langOut !== idiomaDestino) {
+          out = await traducirMensaje(out, idiomaDestino);
+          out = sanitizeChatOutput(out);
+          out = capLines(out, maxLines);
+        }
       }
+    } catch (e) {
+      console.warn("⚠️ No se pudo ajustar el idioma en answerWithPromptBase:", e);
     }
-  } catch (e) {
-    console.warn("⚠️ No se pudo ajustar el idioma en answerWithPromptBase:", e);
   }
 
   let pendingCta: PendingCta = null;
 
   try {
-    const shouldComposeCanonicalBody =
-      Boolean(String(fallbackText || "").trim()) &&
-      shouldUseCanonicalBodyComposition(effectivePolicy);
-
     if (shouldComposeCanonicalBody) {
       const reparsedCanonicalFrame =
         parseCanonicalFrameEnvelope(rawModelOutputForPendingCta);
