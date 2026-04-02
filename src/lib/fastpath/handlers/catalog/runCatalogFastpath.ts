@@ -743,6 +743,20 @@ export async function runCatalogFastpath(
   const isStructuredComparisonTurn =
     routeIntent === "catalog_compare";
 
+  const hasServiceStructuredCatalogTarget =
+    !isStructuredComparisonTurn &&
+    (
+      Boolean(targetServiceId) ||
+      referenceKind === "entity_specific"
+    );
+
+  const hasVariantStructuredCatalogTarget =
+    !isStructuredComparisonTurn &&
+    (
+      Boolean(targetVariantId) ||
+      referenceKind === "variant_specific"
+    );
+
   const hasFamilyStructuredCatalogTarget =
     !isStructuredComparisonTurn &&
     (
@@ -750,7 +764,10 @@ export async function runCatalogFastpath(
       referenceKind === "catalog_family"
     );
 
-  const hasAnyStructuredCatalogTarget = hasFamilyStructuredCatalogTarget;
+const hasAnyStructuredCatalogTarget =
+  hasServiceStructuredCatalogTarget ||
+  hasVariantStructuredCatalogTarget ||
+  hasFamilyStructuredCatalogTarget;
 
   const intentOutNorm = String(input.intentOut || "").trim().toLowerCase();
 
@@ -836,6 +853,8 @@ export async function runCatalogFastpath(
 
   const hasCatalogEntitySignal =
     Boolean(pendingCatalogChoice) ||
+    hasServiceStructuredCatalogTarget ||
+    hasVariantStructuredCatalogTarget ||
     hasFamilyStructuredCatalogTarget;
 
   const isPureBusinessInfoTurn =
@@ -1165,7 +1184,7 @@ export async function runCatalogFastpath(
         targetVariantName: pendingSelectedVariant?.variantName || null,
         targetFamilyKey: null,
         targetFamilyName: null,
-        targetLevel: pendingSelectedVariant ? "variant" : "entity",
+        targetLevel: pendingSelectedVariant ? "variant" : "service",
         disambiguationType: "none",
       };
 
@@ -1337,7 +1356,7 @@ export async function runCatalogFastpath(
         targetVariantName: pendingSelectedVariant?.variantName || null,
         targetFamilyKey: null,
         targetFamilyName: null,
-        targetLevel: pendingSelectedVariant ? "variant" : "entity",
+        targetLevel: pendingSelectedVariant ? "variant" : "service",
         disambiguationType: "none",
       };
 
@@ -1582,7 +1601,7 @@ export async function runCatalogFastpath(
         targetVariantName: pendingSelectedVariant?.variantName || null,
         targetFamilyKey: null,
         targetFamilyName: null,
-        targetLevel: pendingSelectedVariant ? "variant" : "entity",
+        targetLevel: pendingSelectedVariant ? "variant" : "service",
         disambiguationType: "none",
       };
 

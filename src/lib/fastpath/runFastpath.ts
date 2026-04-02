@@ -19,9 +19,7 @@ import {
   resolveServiceIdFromText,
 } from "../services/pricing/resolveServiceIdFromText";
 import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
-import { renderInfoGeneralOverview } from "../fastpath/renderInfoGeneralOverview";
 import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
-import { buildCatalogContext } from "../catalog/buildCatalogContext";
 import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
 import { extractQueryFrames } from "./extractQueryFrames";
 import { resolveServiceMatchesFromText } from "../services/pricing/resolveServiceMatchesFromText";
@@ -54,8 +52,6 @@ import { handleFirstTurnVariantDetail } from "./handlers/catalog/handleFirstTurn
 import {
   bestNameMatch,
   extractPlanNamesFromReply,
-  postProcessCatalogReply,
-  sameBulletStructure,
 } from "./helpers/catalogTextMatching";
 import { normalizeCatalogRole } from "../catalog/normalizeCatalogRole";
 
