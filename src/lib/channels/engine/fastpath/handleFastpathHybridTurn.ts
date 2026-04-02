@@ -324,6 +324,8 @@ export async function handleFastpathHybridTurn(
   }
 
   let ctxPatch: any = {
+    ...(forcedAnchorCtxPatch || {}),
+    ...(preResolvedCtxPatch || {}),
     ...(fp.ctxPatch ? { ...fp.ctxPatch } : {}),
   };
 
@@ -367,6 +369,7 @@ export async function handleFastpathHybridTurn(
     fp: {
       intent: fp.intent ?? null,
       source: fp.source ?? null,
+      catalogPayload: fp.handled ? fp.catalogPayload ?? null : null,
     },
     facets: detectedFacets || null,
     catalogRoutingSignal,
@@ -455,25 +458,20 @@ export async function handleFastpathHybridTurn(
     ctxPatch = rendered.ctxPatch;
   }
 
-  if (process.env.DEBUG_FASTPATH === "true") {
-    console.log("[FASTPATH_HYBRID][FINAL_OUTPUT]", {
-      tenantId,
-      canal,
-      userInput,
-      shouldBypassStructuredRewrite: replyPolicy.shouldBypassStructuredRewrite,
-      shouldReturnImmediately: immediateReturn.shouldReturnImmediately,
-      shouldReturnRawFastpathForPriceQuestion:
-        postRunDecision.shouldReturnRawFastpathForPriceQuestion,
-      shouldReturnRawFastpathForUnresolvedServiceIntent:
-        postRunDecision.shouldReturnRawFastpathForUnresolvedServiceIntent,
-      shouldNaturalizeSecondaryOptions:
-        postRunDecision.shouldNaturalizeSecondaryOptions,
-      isDmChannel: postRunDecision.isDmChannel,
-      finalReplySource,
-      finalIntent,
-      finalReplyPreview: finalReply.slice(0, 220),
-    });
-  }
+  console.log("[FASTPATH_HYBRID][FINAL_CTX_PATCH_KEYS]", {
+    tenantId,
+    canal,
+    userInput,
+    finalIntent,
+    finalReplySource,
+    ctxPatchKeys: ctxPatch ? Object.keys(ctxPatch) : [],
+    pendingCatalogChoice: ctxPatch?.pendingCatalogChoice ?? null,
+    pendingCatalogChoiceAt: ctxPatch?.pendingCatalogChoiceAt ?? null,
+    lastResolvedIntent: ctxPatch?.lastResolvedIntent ?? null,
+    selectedServiceId: ctxPatch?.selectedServiceId ?? null,
+    last_service_id: ctxPatch?.last_service_id ?? null,
+    last_service_name: ctxPatch?.last_service_name ?? null,
+  });
 
   return {
     handled: true,
