@@ -520,7 +520,10 @@ export async function answerWithPromptBase(
 
   if (
     effectivePolicy.mode === "grounded_frame_only" &&
-    shouldUseCanonicalBodyComposition(effectivePolicy)
+    shouldUseCanonicalBodyComposition(effectivePolicy) &&
+    effectivePolicy.allowIntro !== true &&
+    effectivePolicy.allowOutro !== true &&
+    effectivePolicy.mustEndWithSalesQuestion !== true
   ) {
     return {
       text: String(fallbackText || "").trim(),
@@ -606,7 +609,19 @@ export async function answerWithPromptBase(
     : null;
 
   out = shouldComposeCanonicalBody
-    ? String(fallbackText || "").trim()
+    ? (
+        effectivePolicy.allowIntro ||
+        effectivePolicy.allowOutro ||
+        effectivePolicy.mustEndWithSalesQuestion
+          ? composeCanonicalReply({
+              canonicalBody: String(fallbackText || "").trim(),
+              intro: parsedCanonicalFrame?.intro ?? null,
+              closing: parsedCanonicalFrame?.closing ?? null,
+              allowIntro: effectivePolicy.allowIntro,
+              allowOutro: effectivePolicy.allowOutro,
+            })
+          : String(fallbackText || "").trim()
+      )
     : parsedEnvelope?.text || rawModelOutput || fallbackText || "";
 
   console.log("[ANSWER_WITH_PROMPT_BASE][RAW_MODEL_OUTPUT]", {

@@ -67,14 +67,15 @@ function shouldBypassWriterModel(input: {
     return false;
   }
 
+  if (input.isResolvedCatalogAnswer) {
+    return false;
+  }
+
   return (
     input.isGroundedCatalogReply ||
     input.isPriceSummaryReply ||
     input.canonicalBodyOwnsClosing ||
-    (
-      input.shouldUseGroundedFrameOnly &&
-      !input.isResolvedCatalogAnswer
-    )
+    input.shouldUseGroundedFrameOnly
   );
 }
 
@@ -276,6 +277,8 @@ export async function renderFastpathDmReply(
   const responsePolicy = {
     mode: isCatalogChoiceReply
       ? "clarify_only"
+      : isResolvedCatalogAnswer
+      ? "grounded_frame_only"
       : replyPolicy.responsePolicyMode,
     resolvedEntityType:
       isResolvedCatalogAnswer && resolvedEntityId ? "service" : null,
@@ -324,7 +327,7 @@ export async function renderFastpathDmReply(
       : isVariantChoiceReply
       ? "Catalog variant choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one variant."
       : isResolvedCatalogAnswer
-      ? "Resolved grounded catalog turn. Keep every fact, price, bullet, and link exact. You may add one short natural intro before the canonical body and one short sales-oriented closing question after it. Do not rewrite or summarize the body. The closing should move the conversation forward toward signup, booking, or choosing the best option."
+      ? "Resolved grounded catalog turn. Keep every fact, price, bullet, and link exact. add one short natural intro before the canonical body and one short sales-oriented closing question after it. Do not rewrite or summarize the body. The closing should move the conversation forward toward signup, booking, or choosing the best option."
       : isGroundedCatalogReply
       ? "Grounded catalog turn. Preserve the canonical body exactly."
       : isPriceSummaryReply
