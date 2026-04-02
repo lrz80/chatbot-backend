@@ -318,10 +318,6 @@ function resolveVariantIdFromUserInput(params: {
   presentedVariantOptions: PresentedVariantOption[];
   dbVariants: Array<{ id: string; variant_name: string | null }>;
 }): string | null {
-  if (params.targetVariantId) {
-    return params.targetVariantId;
-  }
-
   if (params.numericSelectionIndex !== null) {
     const fromPresented = params.presentedVariantOptions.find(
       (item) => item.index === params.numericSelectionIndex
@@ -334,6 +330,16 @@ function resolveVariantIdFromUserInput(params: {
     const idx = params.numericSelectionIndex - 1;
     if (idx >= 0 && idx < params.dbVariants.length) {
       return String(params.dbVariants[idx]?.id || "").trim() || null;
+    }
+  }
+
+  if (params.targetVariantId) {
+    const targetExistsInCurrentService = params.dbVariants.some(
+      (item) => String(item.id || "").trim() === String(params.targetVariantId || "").trim()
+    );
+
+    if (targetExistsInCurrentService) {
+      return String(params.targetVariantId || "").trim();
     }
   }
 
