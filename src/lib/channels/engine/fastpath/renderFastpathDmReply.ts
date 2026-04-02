@@ -130,6 +130,7 @@ function isInfoGeneralOverviewSource(value: unknown): boolean {
   const normalized = normalizeText(value).toLowerCase();
   return (
     normalized === "info_general_overview" ||
+    normalized === "info_general_prompt_base" ||
     normalized === "info_general_overview_db"
   );
 }
@@ -337,15 +338,30 @@ export async function renderFastpathDmReply(
     allowCrossSellEntities: false,
     allowAddOnSuggestions: false,
     preserveExactBody:
-      bypassWriterModel || isCatalogChoiceReply || mustPreserveResolvedCanonicalBody,
+      bypassWriterModel ||
+      isCatalogChoiceReply ||
+      mustPreserveResolvedCanonicalBody ||
+      isInfoGeneralOverviewTurn,
     preserveExactOrder:
-      bypassWriterModel || isCatalogChoiceReply || mustPreserveResolvedCanonicalBody,
+      bypassWriterModel ||
+      isCatalogChoiceReply ||
+      mustPreserveResolvedCanonicalBody ||
+      isInfoGeneralOverviewTurn,
     preserveExactBullets:
-      bypassWriterModel || isCatalogChoiceReply || mustPreserveResolvedCanonicalBody,
+      bypassWriterModel ||
+      isCatalogChoiceReply ||
+      mustPreserveResolvedCanonicalBody ||
+      isInfoGeneralOverviewTurn,
     preserveExactNumbers:
-      bypassWriterModel || isCatalogChoiceReply || mustPreserveResolvedCanonicalBody,
+      bypassWriterModel ||
+      isCatalogChoiceReply ||
+      mustPreserveResolvedCanonicalBody ||
+      isInfoGeneralOverviewTurn,
     preserveExactLinks:
-      bypassWriterModel || isCatalogChoiceReply || mustPreserveResolvedCanonicalBody,
+      bypassWriterModel ||
+      isCatalogChoiceReply ||
+      mustPreserveResolvedCanonicalBody ||
+      isInfoGeneralOverviewTurn,
     allowIntro: !bypassWriterModel || isResolvedCatalogAnswer,
     allowOutro:
       (!bypassWriterModel || isResolvedCatalogAnswer) &&

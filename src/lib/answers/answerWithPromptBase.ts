@@ -204,8 +204,11 @@ type GroundedFrameEnvelope = {
 function normalizeResponsePolicy(
   policy?: ResponsePolicy | null
 ): Required<ResponsePolicy> {
+  const mode = policy?.mode ?? "normal";
+  const mustPreserveCanonicalBody = mode === "grounded_frame_only";
+
   return {
-    mode: policy?.mode ?? "normal",
+    mode,
     resolvedEntityType: policy?.resolvedEntityType ?? null,
     resolvedEntityId: policy?.resolvedEntityId ?? null,
     resolvedEntityLabel: policy?.resolvedEntityLabel ?? null,
@@ -222,14 +225,19 @@ function normalizeResponsePolicy(
     allowCrossSellEntities: policy?.allowCrossSellEntities ?? true,
     allowAddOnSuggestions: policy?.allowAddOnSuggestions ?? true,
 
-    preserveExactBody: policy?.preserveExactBody ?? false,
-    preserveExactOrder: policy?.preserveExactOrder ?? false,
-    preserveExactBullets: policy?.preserveExactBullets ?? false,
-    preserveExactNumbers: policy?.preserveExactNumbers ?? false,
-    preserveExactLinks: policy?.preserveExactLinks ?? false,
+    preserveExactBody:
+      policy?.preserveExactBody ?? mustPreserveCanonicalBody,
+    preserveExactOrder:
+      policy?.preserveExactOrder ?? mustPreserveCanonicalBody,
+    preserveExactBullets:
+      policy?.preserveExactBullets ?? mustPreserveCanonicalBody,
+    preserveExactNumbers:
+      policy?.preserveExactNumbers ?? mustPreserveCanonicalBody,
+    preserveExactLinks:
+      policy?.preserveExactLinks ?? mustPreserveCanonicalBody,
     allowIntro: policy?.allowIntro ?? true,
     allowOutro: policy?.allowOutro ?? true,
-    allowBodyRewrite: policy?.allowBodyRewrite ?? true,
+    allowBodyRewrite: policy?.allowBodyRewrite ?? !mustPreserveCanonicalBody,
 
     mustEndWithSalesQuestion: policy?.mustEndWithSalesQuestion ?? false,
   };

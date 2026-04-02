@@ -111,7 +111,7 @@ export type FastpathCtx = {
   lastPresentedEntityIds?: string[] | null;
   lastPresentedFamilyKeys?: string[] | null;
   last_catalog_scope?: "overview" | "entity" | "family" | "variant" | null;
-  last_catalog_source?: "info_clave" | "db_catalog" | null;
+  last_catalog_source?: "prompt_base" | "info_clave" | "db_catalog" | null;
 
   // selección de servicio/variante para flujo "qué incluye"
   selectedServiceId?: string | null;
@@ -227,6 +227,7 @@ export type FastpathResult =
         | "price_fastpath_db"
         | "price_summary_db"
         | "info_general_overview"
+        | "info_general_prompt_base"
         | "price_summary_db_empty"
         | "info_clave_includes_ctx_link"
         | "interest_to_pricing"
@@ -287,6 +288,19 @@ function buildFallbackOverviewFromInfoClave(
   maxLines = 12
 ): string {
   return String(infoClave || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, maxLines)
+    .join("\n")
+    .trim();
+}
+
+function buildGeneralPromptBaseReply(
+  promptBase: string,
+  maxLines = 18
+): string {
+  return String(promptBase || "")
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
@@ -439,8 +453,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
-  // ✅ INFO GENERAL OVERVIEW DESDE INFO_CLAVE
-  // servicios principales / oferta general del negocio
+  // ✅ INFO GENERAL DESDE PROMPT BASE / INFO_CLAVE
+  // preguntas generales del negocio o plataforma
   // ===============================
   {
     const hasConcreteStructuredTarget =
@@ -465,20 +479,18 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       catalogReferenceKind !== "comparison";
 
     if (wantsGeneralBusinessOverview) {
-      const servicesBody = buildServicesBlockFromInfoClave(infoClave).trim();
-      const fallbackOverviewBody = buildFallbackOverviewFromInfoClave(infoClave);
-      const overviewBody = servicesBody || fallbackOverviewBody;
+      const promptBaseBody = buildGeneralPromptBaseReply(promptBase, 18);
+      const infoClaveBody = buildServicesBlockFromInfoClave(infoClave).trim();
 
-      if (!overviewBody) {
+      const canonicalReply = (
+        promptBaseBody ||
+        infoClaveBody ||
+        buildFallbackOverviewFromInfoClave(infoClave)
+      ).trim();
+
+      if (!canonicalReply) {
         return { handled: false };
       }
-
-      const canonicalReply = withSectionTitle(
-        idiomaDestino,
-        "Servicios:",
-        "Services:",
-        overviewBody
-      ).trim();
 
       const ctxPatch: any = {
         last_list_kind: null,
@@ -492,7 +504,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
         lastResolvedIntent: "info_general_overview",
 
         last_catalog_scope: "overview",
-        last_catalog_source: "info_clave",
+        last_catalog_source: promptBaseBody ? "prompt_base" : "info_clave",
 
         lastPresentedEntityIds: [],
         lastPresentedFamilyKeys: [],
@@ -514,7 +526,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
       return {
         handled: true,
-        source: "info_general_overview",
+        source: promptBaseBody
+          ? "info_general_prompt_base"
+          : "info_general_overview",
         intent: "info_general",
         reply: canonicalReply,
         ctxPatch,
