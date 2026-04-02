@@ -364,7 +364,7 @@ export async function renderFastpathDmReply(
       : isResolvedCatalogAnswer
       ? "Resolved grounded catalog turn. The canonical body is the source of truth and must be preserved exactly. Do not rewrite, summarize, compress, paraphrase, or omit any fact, condition, number, schedule, bullet, or link from the canonical body. You may add only one short intro before the canonical body and one short sales-oriented closing question after it. The body itself must remain unchanged and in the same order."
       : isInfoGeneralOverviewTurn
-      ? "General business overview turn for DM. Do not turn this into a clarification. Do not dump the full business knowledge base or every operational detail. Give a short, useful overview grounded in the available business information, highlighting the main services or value proposition first. Only mention prices, schedules, location, availability, links, or policies if they are directly necessary for this turn. Keep it concise and sales-oriented."
+      ? "General business overview turn for DM. The canonical body is the source of truth and must be preserved. Do not replace it with a vague clarification question. Start with a short, warm, sales-oriented intro. Then keep the canonical body in the same order and bullet structure. After that, end with a guided closing question that helps the user advance naturally, offering concrete options such as prices, schedules, or which service fits them best. Do not ask an open generic question like asking what information they want."
       : isGroundedCatalogReply
       ? "Grounded catalog turn. Preserve the canonical body exactly."
       : isPriceSummaryReply
