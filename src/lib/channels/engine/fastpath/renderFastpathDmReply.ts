@@ -64,7 +64,7 @@ function shouldBypassWriterModel(input: {
   shouldUseGroundedFrameOnly: boolean;
 }): boolean {
   if (input.isCatalogChoiceReply) {
-    return false;
+    return true;
   }
 
   if (input.isResolvedCatalogAnswer) {
