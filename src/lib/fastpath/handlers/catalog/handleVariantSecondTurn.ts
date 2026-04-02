@@ -60,6 +60,35 @@ function parseSingleDigitSelection(input: string): number | null {
   return parsed;
 }
 
+function isExplicitVariantSelectionTurn(input: string): boolean {
+  const value = String(input || "").trim();
+  if (!value) return false;
+
+  if (parseSingleDigitSelection(value) !== null) {
+    return true;
+  }
+
+  const normalized = normalizeChoiceText(value);
+
+  if (!normalized) {
+    return false;
+  }
+
+  // turno corto típico de selección, no pregunta nueva
+  if (
+    normalized === "autopago" ||
+    normalized === "por mes" ||
+    normalized === "auto pago" ||
+    normalized === "monthly" ||
+    normalized === "month" ||
+    normalized === "autopay"
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function splitLines(text: string): string[] {
   return String(text || "")
     .replace(/\r/g, "")
@@ -346,6 +375,7 @@ export async function handleVariantSecondTurn(
   const pendingServiceChoice = getPendingServiceChoice(input.convoCtx);
   const pendingVariantChoice = getPendingVariantChoice(input.convoCtx);
   const numericSelectionIndex = parseSingleDigitSelection(input.userInput);
+  const isSelectionTurn = isExplicitVariantSelectionTurn(input.userInput);
 
   const selectedServiceIdFromServiceChoice =
     pendingServiceChoice && numericSelectionIndex !== null
@@ -387,11 +417,18 @@ export async function handleVariantSecondTurn(
     Boolean(input.convoCtx?.expectingVariant) ||
     Boolean(pendingServiceChoice) ||
     Boolean(pendingVariantChoice) ||
-    Boolean(targetVariantId) ||
     presentedVariantOptions.length > 0;
 
   const canAttemptVariantResolution =
-    Boolean(selectedServiceId) && hasVariantSelectionContext;
+    Boolean(selectedServiceId) &&
+    hasVariantSelectionContext &&
+    isSelectionTurn;
+
+  if (!isSelectionTurn) {
+    return {
+      handled: false,
+    };
+  }
 
   if (!canAttemptVariantResolution) {
     return {
