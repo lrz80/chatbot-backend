@@ -276,11 +276,10 @@ export async function renderFastpathDmReply(
   const bypassWriterModel = shouldBypassWriterModel({
     isCatalogChoiceReply,
     isResolvedCatalogAnswer,
-    isGroundedCatalogReply: isGroundedCatalogReply || isInfoGeneralOverviewTurn,
+    isGroundedCatalogReply,
     isPriceSummaryReply,
     canonicalBodyOwnsClosing: replyPolicy.canonicalBodyOwnsClosing,
-    shouldUseGroundedFrameOnly:
-      replyPolicy.shouldUseGroundedFrameOnly || isInfoGeneralOverviewTurn,
+    shouldUseGroundedFrameOnly: replyPolicy.shouldUseGroundedFrameOnly,
   });
 
   const runtimeCapabilities = {
@@ -365,7 +364,7 @@ export async function renderFastpathDmReply(
       : isResolvedCatalogAnswer
       ? "Resolved grounded catalog turn. The canonical body is the source of truth and must be preserved exactly. Do not rewrite, summarize, compress, paraphrase, or omit any fact, condition, number, schedule, bullet, or link from the canonical body. You may add only one short intro before the canonical body and one short sales-oriented closing question after it. The body itself must remain unchanged and in the same order."
       : isInfoGeneralOverviewTurn
-      ? "Grounded general overview turn for DM. The canonical body is the source of truth. Do not turn this into a clarification. Do not ask the user what kind of information they want unless that question already exists in the canonical body. Preserve the body facts, structure, numbers, schedules, links, and business details exactly. You may add only a short intro before the body and a short sales-oriented closing question after it."
+      ? "General business overview turn for DM. Do not turn this into a clarification. Do not dump the full business knowledge base or every operational detail. Give a short, useful overview grounded in the available business information, highlighting the main services or value proposition first. Only mention prices, schedules, location, availability, links, or policies if they are directly necessary for this turn. Keep it concise and sales-oriented."
       : isGroundedCatalogReply
       ? "Grounded catalog turn. Preserve the canonical body exactly."
       : isPriceSummaryReply
