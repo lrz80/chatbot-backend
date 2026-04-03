@@ -71,11 +71,14 @@ function shouldBypassWriterModel(input: {
     return false;
   }
 
+  if (input.shouldUseGroundedFrameOnly) {
+    return false;
+  }
+
   return (
     input.isGroundedCatalogReply ||
     input.isPriceSummaryReply ||
-    input.canonicalBodyOwnsClosing ||
-    input.shouldUseGroundedFrameOnly
+    input.canonicalBodyOwnsClosing
   );
 }
 

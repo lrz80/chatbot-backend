@@ -375,8 +375,22 @@ function buildUserPrompt(
                 '- Use this exact shape: {"intro":"...", "closing":null, "pendingCta":null}',
               ]
             : [
-                "- If no intro or closing is needed, return them as null.",
-                '- Use this exact shape: {"intro":null,"closing":null,"pendingCta":null}',
+                ...(policy.allowIntro
+                  ? [
+                      "- intro is required and must be a short conversational framing line.",
+                    ]
+                  : [
+                      "- intro must be null.",
+                    ]),
+                ...((policy.allowOutro || policy.mustEndWithSalesQuestion)
+                  ? [
+                      "- closing is required and must be a short guided closing line.",
+                    ]
+                  : [
+                      "- closing must be null.",
+                    ]),
+                '- Use this exact shape: {"intro":"...", "closing":"...", "pendingCta":null} when intro/closing are required.',
+                '- Use null only for fields that are explicitly not allowed by the response policy.',
               ]),
           '- If the reply includes a confirmation-oriented CTA for booking, use: {"intro":null,"closing":null,"pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
           '- If the reply includes a confirmation-oriented CTA for estimate, use: {"intro":null,"closing":null,"pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
@@ -424,6 +438,23 @@ function shouldUseCanonicalBodyComposition(
     policy.preserveExactNumbers === true ||
     policy.preserveExactLinks === true
   );
+}
+
+function hasUsableCanonicalFrame(
+  frame: CanonicalFrameEnvelope | null,
+  policy: Required<ResponsePolicy>
+): boolean {
+  const needsIntro = policy.allowIntro === true;
+  const needsClosing =
+    policy.allowOutro === true || policy.mustEndWithSalesQuestion === true;
+
+  const hasIntro = Boolean(String(frame?.intro || "").trim());
+  const hasClosing = Boolean(String(frame?.closing || "").trim());
+
+  if (needsIntro && !hasIntro) return false;
+  if (needsClosing && !hasClosing) return false;
+
+  return true;
 }
 
 /* =========================
@@ -569,28 +600,58 @@ export async function answerWithPromptBase(
 
   rawModelOutputForPendingCta = rawModelOutput;
 
-  const parsedEnvelope = shouldComposeCanonicalBody
+  let parsedEnvelope = shouldComposeCanonicalBody
     ? null
     : parseModelAnswerEnvelope(rawModelOutput);
 
-  const parsedCanonicalFrame = shouldComposeCanonicalBody
+  let parsedCanonicalFrame = shouldComposeCanonicalBody
     ? parseCanonicalFrameEnvelope(rawModelOutput)
     : null;
 
+  if (
+    shouldComposeCanonicalBody &&
+    effectivePolicy.mode === "grounded_frame_only" &&
+    !hasUsableCanonicalFrame(parsedCanonicalFrame, effectivePolicy)
+  ) {
+    const retryCompletion = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      temperature: 0.1,
+      max_tokens: 250,
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...(Array.isArray(history) ? history : []),
+        {
+          role: "user",
+          content: [
+            userPrompt,
+            "",
+            "VALIDATION_ERROR:",
+            "- The previous JSON did not satisfy the response policy.",
+            "- Return strict JSON again.",
+            "- Provide intro if allowIntro=true.",
+            "- Provide closing if allowOutro=true or mustEndWithSalesQuestion=true.",
+            "- Do not rewrite the canonical body.",
+            "- Only regenerate the JSON frame fields."
+          ].join("\n"),
+        },
+      ],
+    });
+
+    const retryRaw =
+      retryCompletion.choices[0]?.message?.content?.trim() || "";
+
+    rawModelOutputForPendingCta = retryRaw;
+    parsedCanonicalFrame = parseCanonicalFrameEnvelope(retryRaw);
+  }
+
   out = shouldComposeCanonicalBody
-    ? (
-        effectivePolicy.allowIntro ||
-        effectivePolicy.allowOutro ||
-        effectivePolicy.mustEndWithSalesQuestion
-          ? composeCanonicalReply({
-              canonicalBody: String(fallbackText || "").trim(),
-              intro: parsedCanonicalFrame?.intro ?? null,
-              closing: parsedCanonicalFrame?.closing ?? null,
-              allowIntro: effectivePolicy.allowIntro,
-              allowOutro: effectivePolicy.allowOutro,
-            })
-          : String(fallbackText || "").trim()
-      )
+    ? composeCanonicalReply({
+        canonicalBody: String(fallbackText || "").trim(),
+        intro: parsedCanonicalFrame?.intro ?? null,
+        closing: parsedCanonicalFrame?.closing ?? null,
+        allowIntro: effectivePolicy.allowIntro,
+        allowOutro: effectivePolicy.allowOutro || effectivePolicy.mustEndWithSalesQuestion,
+      })
     : parsedEnvelope?.text || rawModelOutput || fallbackText || "";
 
   console.log("[ANSWER_WITH_PROMPT_BASE][RAW_MODEL_OUTPUT]", {

@@ -1,5 +1,3 @@
-// src/lib/fastpath/handlers/catalog/helpers/catalogBusinessInfoBlocks.ts
-
 function cleanLines(text: string): string[] {
   return String(text || "")
     .split("\n")
@@ -15,21 +13,43 @@ function normalizeText(value: string): string {
     .trim();
 }
 
-function isHeaderMatch(line: string, labels: string[]): boolean {
-  const normalizedLine = normalizeText(line).replace(/:$/, "");
+type ParsedSection = {
+  rawHeader: string;
+  normalizedHeader: string;
+  value: string;
+};
 
-  return labels.some((label) => {
-    const normalizedLabel = normalizeText(label).replace(/:$/, "");
-    return normalizedLine === normalizedLabel;
-  });
+const SECTION_ALIASES = {
+  location: ["Ubicación", "Direccion", "Dirección", "Location", "Address"],
+  availability: ["Disponibilidad", "Availability", "Available"],
+  services: ["Servicios principales", "Services", "Main services"],
+  schedule: ["Horarios", "Schedules", "Schedule"],
+  pricing: ["Precios", "Pricing", "Price", "Cómo consultar precio"],
+  booking: ["Reserva", "Booking", "CTA principal"],
+  phone: ["Telefono", "Teléfono", "Phone"],
+  contact: ["Contacto", "Contact"],
+  rules: ["Reglas importantes", "Important rules"],
+} as const;
+
+function normalizeLabel(label: string): string {
+  return normalizeText(label).replace(/:$/, "");
 }
 
-function stripInlineHeaderValue(line: string, labels: string[]): string {
+function isHeaderMatch(line: string, labels: readonly string[]): boolean {
+  const normalizedLine = normalizeLabel(line);
+
+  return labels.some((label) => normalizeLabel(label) === normalizedLine);
+}
+
+function stripInlineHeaderValue(
+  line: string,
+  labels: readonly string[]
+): string {
   const raw = String(line || "").trim();
   const normalizedRaw = normalizeText(raw);
 
   for (const label of labels) {
-    const normalizedLabel = normalizeText(label).replace(/:$/, "");
+    const normalizedLabel = normalizeLabel(label);
     if (!normalizedLabel) continue;
 
     if (normalizedRaw === normalizedLabel) {
@@ -47,44 +67,63 @@ function stripInlineHeaderValue(line: string, labels: string[]): string {
   return "";
 }
 
-function isAnyKnownSectionHeader(line: string): boolean {
-  const normalized = normalizeText(line).replace(/:$/, "");
+function isPotentialSectionHeader(line: string): boolean {
+  const raw = String(line || "").trim();
+  if (!raw) return false;
+  if (!raw.endsWith(":")) return false;
 
-  return [
-    "nombre del negocio",
-    "tipo de negocio",
-    "ubicacion",
-    "direccion",
-    "location",
-    "address",
-    "telefono",
-    "phone",
-    "servicios principales",
-    "services",
-    "main services",
-    "contacto",
-    "contact",
-    "idioma de las clases",
-    "class language",
-    "politicas",
-    "policies",
-    "precios",
-    "pricing",
-    "price",
-    "reserva",
-    "booking",
-    "horarios",
-    "schedules",
-    "schedule",
-    "disponibilidad",
-    "availability",
-    "available",
-  ].includes(normalized);
+  const withoutColon = raw.slice(0, -1).trim();
+  if (!withoutColon) return false;
+
+  return true;
+}
+
+function parseSections(infoClave: string | null | undefined): ParsedSection[] {
+  const lines = cleanLines(String(infoClave || ""));
+  if (!lines.length) return [];
+
+  const sections: ParsedSection[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const raw = String(line || "").trim();
+
+    if (!isPotentialSectionHeader(raw)) {
+      i += 1;
+      continue;
+    }
+
+    const rawHeader = raw.replace(/:$/, "").trim();
+    const normalizedHeader = normalizeLabel(rawHeader);
+
+    const collected: string[] = [];
+    let j = i + 1;
+
+    while (j < lines.length) {
+      const nextLine = lines[j];
+      if (isPotentialSectionHeader(nextLine)) {
+        break;
+      }
+      collected.push(nextLine);
+      j += 1;
+    }
+
+    sections.push({
+      rawHeader,
+      normalizedHeader,
+      value: collected.join("\n").trim(),
+    });
+
+    i = j;
+  }
+
+  return sections;
 }
 
 function extractSectionValue(
   infoClave: string | null | undefined,
-  labels: string[]
+  labels: readonly string[]
 ): string {
   const lines = cleanLines(String(infoClave || ""));
   if (!lines.length) return "";
@@ -103,7 +142,7 @@ function extractSectionValue(
       for (let j = i + 1; j < lines.length; j++) {
         const nextLine = lines[j];
 
-        if (isAnyKnownSectionHeader(nextLine)) {
+        if (isPotentialSectionHeader(nextLine)) {
           break;
         }
 
@@ -117,34 +156,58 @@ function extractSectionValue(
   return "";
 }
 
+function isOperationalSection(normalizedHeader: string): boolean {
+  const operationalAliases = [
+    ...SECTION_ALIASES.location,
+    ...SECTION_ALIASES.availability,
+    ...SECTION_ALIASES.schedule,
+    ...SECTION_ALIASES.pricing,
+    ...SECTION_ALIASES.booking,
+    ...SECTION_ALIASES.phone,
+    ...SECTION_ALIASES.contact,
+  ].map(normalizeLabel);
+
+  return operationalAliases.includes(normalizedHeader);
+}
+
 export function buildLocationBlockFromInfoClave(
   infoClave?: string | null
 ): string {
-  return extractSectionValue(infoClave, [
-    "Ubicación",
-    "Direccion",
-    "Dirección",
-    "Location",
-    "Address",
-  ]);
+  return extractSectionValue(infoClave, SECTION_ALIASES.location);
 }
 
 export function buildAvailabilityBlockFromInfoClave(
   infoClave?: string | null
 ): string {
-  return extractSectionValue(infoClave, [
-    "Disponibilidad",
-    "Availability",
-    "Available",
-  ]);
+  return extractSectionValue(infoClave, SECTION_ALIASES.availability);
 }
 
 export function buildServicesBlockFromInfoClave(
   infoClave?: string | null
 ): string {
-  return extractSectionValue(infoClave, [
-    "Servicios principales",
-    "Services",
-    "Main services",
-  ]);
+  const explicitServices = extractSectionValue(infoClave, SECTION_ALIASES.services);
+  if (explicitServices) {
+    return explicitServices;
+  }
+
+  const sections = parseSections(infoClave);
+
+  const overviewSections = sections.filter((section) => {
+    if (!section.value) return false;
+
+    if (isOperationalSection(section.normalizedHeader)) {
+      return false;
+    }
+
+    return true;
+  });
+
+  if (!overviewSections.length) {
+    return "";
+  }
+
+  return overviewSections
+    .map((section) => `${section.rawHeader}:\n${section.value}`)
+    .join("\n\n")
+    .trim();
 }

@@ -466,12 +466,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
     if (wantsGeneralBusinessOverview) {
       const infoClaveBody = buildServicesBlockFromInfoClave(infoClave).trim();
-      const fallbackOverviewBody = buildFallbackOverviewFromInfoClave(infoClave);
-
-      const canonicalReply = (
-        infoClaveBody ||
-        fallbackOverviewBody
-      ).trim();
+      const canonicalReply = infoClaveBody;
 
       if (!canonicalReply) {
         return { handled: false };
