@@ -690,7 +690,7 @@ async function procesarMensajeMeta(args: {
       await runPostReplyActions({
         pool,
         tenant,
-        tenantId,
+        tenantId: tenant.id,
         canal,
 
         contactoNorm,
@@ -704,6 +704,7 @@ async function procesarMensajeMeta(args: {
         intentFallback: INTENCION_FINAL_CANONICA || null,
 
         detectedInterest,
+        detectedCommercial: (signals as any)?.detectedCommercial ?? null,
 
         convoCtx,
       });

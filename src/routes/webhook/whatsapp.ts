@@ -539,6 +539,7 @@ export async function procesarMensajeWhatsApp(
         intentFallback: INTENCION_FINAL_CANONICA || null,
 
         detectedInterest,
+        detectedCommercial: (signals as any)?.detectedCommercial ?? null,
 
         convoCtx,
       });

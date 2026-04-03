@@ -1,5 +1,3 @@
-// backend/src/lib/channels/engine/turn/handleUserSignalsTurn.ts
-
 import { Pool } from "pg";
 import type { Canal } from "../../../detectarIntencion";
 import type { Lang } from "../clients/clientDb";
@@ -17,6 +15,17 @@ type IntentFacets = {
   asksSchedules?: boolean;
   asksLocation?: boolean;
   asksAvailability?: boolean;
+};
+
+type PurchaseIntentLevel = "unknown" | "low" | "medium" | "high";
+type CommercialUrgencyLevel = "unknown" | "low" | "medium" | "high";
+
+type CommercialSignal = {
+  purchaseIntent: PurchaseIntentLevel;
+  wantsBooking: boolean;
+  wantsQuote: boolean;
+  wantsHuman: boolean;
+  urgency: CommercialUrgencyLevel;
 };
 
 type TransitionFn = (params: {
@@ -54,6 +63,44 @@ function normalizeFacets(input: any): IntentFacets {
   };
 }
 
+function normalizePurchaseIntentLevel(value: unknown): PurchaseIntentLevel {
+  const normalized = String(value || "").trim().toLowerCase();
+
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
+  ) {
+    return normalized;
+  }
+
+  return "unknown";
+}
+
+function normalizeUrgencyLevel(value: unknown): CommercialUrgencyLevel {
+  const normalized = String(value || "").trim().toLowerCase();
+
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
+  ) {
+    return normalized;
+  }
+
+  return "unknown";
+}
+
+function normalizeCommercialSignal(input: any): CommercialSignal {
+  return {
+    purchaseIntent: normalizePurchaseIntentLevel(input?.purchaseIntent),
+    wantsBooking: input?.wantsBooking === true,
+    wantsQuote: input?.wantsQuote === true,
+    wantsHuman: input?.wantsHuman === true,
+    urgency: normalizeUrgencyLevel(input?.urgency),
+  };
+}
+
 export type HandleUserSignalsArgs = {
   pool: Pool;
   tenant: any;
@@ -73,11 +120,12 @@ export type HandleUserSignalsResult = {
   detectedIntent: string | null;
   detectedInterest: number | null;
   detectedFacets: IntentFacets;
+  detectedCommercial: CommercialSignal | null;
   INTENCION_FINAL_CANONICA: string | null;
   emotion: string | null;
   promptBaseMem: string;
   convoCtx: any;
-  handled: boolean; // true = ya respondió (p.ej. human override)
+  handled: boolean;
   humanOverrideReply?: string | null;
   humanOverrideSource?: string | null;
 
@@ -107,6 +155,7 @@ export async function handleUserSignalsTurn(
   let detectedIntent: string | null = null;
   let detectedInterest: number | null = null;
   let detectedFacets: IntentFacets = {};
+  let detectedCommercial: CommercialSignal | null = null;
   let emotion: string | null = null;
   let promptBaseMem = promptBase;
 
@@ -114,9 +163,6 @@ export async function handleUserSignalsTurn(
   let humanOverrideReply: string | null = null;
   let humanOverrideSource: string | null = null;
 
-  // ===============================
-  // 🎯 INTENCIÓN
-  // ===============================
   try {
     const det = await detectarIntencion(userInput, tenant.id, canal);
 
@@ -130,11 +176,15 @@ export async function handleUserSignalsTurn(
       : 1;
 
     detectedFacets = normalizeFacets(det?.facets);
+    detectedCommercial = det?.commercial
+      ? normalizeCommercialSignal(det.commercial)
+      : null;
 
     console.log("🎯 detectarIntencion =>", {
       intent,
       nivel,
       facets: detectedFacets,
+      commercial: detectedCommercial,
       canal,
       tenantId: tenant.id,
       messageId,
@@ -149,6 +199,7 @@ export async function handleUserSignalsTurn(
         patchCtx: {
           last_intent: intent,
           last_interest_level: nivel,
+          commercialSignal: detectedCommercial,
         },
       });
     }
@@ -156,9 +207,6 @@ export async function handleUserSignalsTurn(
     console.warn("⚠️ detectarIntencion failed:", e?.message, e?.code, e?.detail);
   }
 
-  // ===============================
-  // ✅ RESET INTELIGENTE de estado esperando_pago (si cambió de tema)
-  // ===============================
   try {
     const intentFinal = normIntent(INTENCION_FINAL_CANONICA || detectedIntent || null);
 
@@ -197,9 +245,6 @@ export async function handleUserSignalsTurn(
     console.warn("[PAYMENT_STATE] reset check failed:", e?.message);
   }
 
-  // ===============================
-  // 🙂 EMOCIÓN
-  // ===============================
   try {
     const emoRaw: any = await detectarEmocion(userInput, idiomaDestino);
 
@@ -210,16 +255,13 @@ export async function handleUserSignalsTurn(
 
     emotion = typeof emotion === "string" ? emotion.trim().toLowerCase() : null;
   } catch {
-    // silencio, no es crítico
+    // no crítico
   }
 
   if (typeof emotion === "string" && emotion.trim()) {
     transition({ patchCtx: { last_emotion: emotion.trim().toLowerCase() } });
   }
 
-  // ===============================
-  // 💾 GUARDAR MENSAJE DEL USUARIO
-  // ===============================
   await saveUserMessageAndEmit({
     tenantId: tenant.id,
     canal,
@@ -231,9 +273,6 @@ export async function handleUserSignalsTurn(
     emotion,
   });
 
-  // ===============================
-  // 🎭 EMOTION TRIGGERS
-  // ===============================
   try {
     const trig = await applyEmotionTriggers({
       tenantId: tenant.id,
@@ -253,9 +292,6 @@ export async function handleUserSignalsTurn(
     console.warn("⚠️ applyEmotionTriggers failed:", e?.message);
   }
 
-  // ===============================
-  // 🆘 SUPPORT + HUMANO (CORTA PIPELINE)
-  // ===============================
   if (!handled) {
     const gate = supportGate({
       canal,
@@ -302,9 +338,6 @@ export async function handleUserSignalsTurn(
     }
   }
 
-  // ===============================
-  // 🧠 MEMORIA → promptBaseMem
-  // ===============================
   try {
     const memRaw = await getMemoryValue<any>({
       tenantId: tenant.id,
@@ -373,13 +406,13 @@ export async function handleUserSignalsTurn(
       intentFinalForFollowup === "precio");
 
   const followupNeedsAnchor = referentialFollowup === true;
-
   const followupEntityKind = referentialFollowup ? "service" : null;
 
   return {
     detectedIntent,
     detectedInterest,
     detectedFacets,
+    detectedCommercial,
     INTENCION_FINAL_CANONICA,
     emotion,
     promptBaseMem,

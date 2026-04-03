@@ -1,6 +1,4 @@
-// backend/src/lib/conversation/postReplyActions.ts
 import type poolType from "../db";
-import { esIntencionDeVenta } from "../detectarIntencion";
 import { recordSalesIntent } from "../sales/recordSalesIntent";
 import {
   capiContactQualified,
@@ -9,6 +7,87 @@ import {
 import { scheduleFollowUpIfEligible } from "../followups/followUpScheduler";
 
 type Canal = "whatsapp" | "facebook" | "instagram" | string;
+
+type PurchaseIntentLevel = "unknown" | "low" | "medium" | "high";
+type CommercialUrgencyLevel = "unknown" | "low" | "medium" | "high";
+
+type CommercialSignal = {
+  purchaseIntent: PurchaseIntentLevel;
+  wantsBooking: boolean;
+  wantsQuote: boolean;
+  wantsHuman: boolean;
+  urgency: CommercialUrgencyLevel;
+};
+
+function normalizeLevel(value: unknown): PurchaseIntentLevel {
+  const normalized = String(value || "").trim().toLowerCase();
+
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
+  ) {
+    return normalized;
+  }
+
+  return "unknown";
+}
+
+function normalizeUrgency(value: unknown): CommercialUrgencyLevel {
+  const normalized = String(value || "").trim().toLowerCase();
+
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
+  ) {
+    return normalized;
+  }
+
+  return "unknown";
+}
+
+function normalizeCommercialSignal(
+  value?: Partial<CommercialSignal> | null
+): CommercialSignal {
+  return {
+    purchaseIntent: normalizeLevel(value?.purchaseIntent),
+    wantsBooking: value?.wantsBooking === true,
+    wantsQuote: value?.wantsQuote === true,
+    wantsHuman: value?.wantsHuman === true,
+    urgency: normalizeUrgency(value?.urgency),
+  };
+}
+
+function shouldTreatAsSalesLead(input: {
+  finalIntent: string;
+  finalNivel: number;
+  commercial: CommercialSignal;
+}): boolean {
+  const { finalIntent, finalNivel, commercial } = input;
+
+  if (!finalIntent) return false;
+
+  if (commercial.purchaseIntent === "high") return true;
+  if (commercial.purchaseIntent === "medium" && finalNivel >= 2) return true;
+  if (commercial.wantsBooking) return true;
+  if (commercial.wantsQuote && finalNivel >= 2) return true;
+
+  return false;
+}
+
+function shouldTreatAsStrongLead(input: {
+  finalNivel: number;
+  commercial: CommercialSignal;
+}): boolean {
+  const { finalNivel, commercial } = input;
+
+  if (commercial.purchaseIntent === "high") return true;
+  if (commercial.urgency === "high") return true;
+  if (commercial.wantsBooking && finalNivel >= 2) return true;
+
+  return finalNivel >= 3;
+}
 
 export async function runPostReplyActions(opts: {
   pool: typeof poolType;
@@ -28,6 +107,7 @@ export async function runPostReplyActions(opts: {
   intentFallback?: string | null;
 
   detectedInterest?: number | null;
+  detectedCommercial?: Partial<CommercialSignal> | null;
 
   convoCtx?: any;
 }) {
@@ -44,14 +124,13 @@ export async function runPostReplyActions(opts: {
     lastIntent,
     intentFallback,
     detectedInterest,
+    detectedCommercial,
     convoCtx,
   } = opts;
 
-  // Solo si hay messageId (para dedupe/trace)
   if (!messageId) return;
 
-  const finalIntent = (lastIntent || intentFallback || "")
-    .toString()
+  const finalIntent = String(lastIntent || intentFallback || "")
     .trim()
     .toLowerCase();
 
@@ -60,17 +139,27 @@ export async function runPostReplyActions(opts: {
       ? Math.min(3, Math.max(1, detectedInterest))
       : 2;
 
-  // -----------------------
-  // 1) Guardar intención de venta (DB)
-  // -----------------------
+  const commercial = normalizeCommercialSignal(detectedCommercial);
+
+  const isSalesLead = shouldTreatAsSalesLead({
+    finalIntent,
+    finalNivel,
+    commercial,
+  });
+
+  const isStrongLead = shouldTreatAsStrongLead({
+    finalNivel,
+    commercial,
+  });
+
   try {
-    if (finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 2) {
+    if (isSalesLead) {
       await recordSalesIntent({
         tenantId,
         contacto: contactoNorm,
         canal,
         mensaje: userInput,
-        intencion: finalIntent,
+        intencion: finalIntent || "unknown",
         nivelInteres: finalNivel,
         messageId,
       });
@@ -79,11 +168,8 @@ export async function runPostReplyActions(opts: {
     console.warn("⚠️ recordSalesIntent failed:", e?.message);
   }
 
-  // -----------------------
-  // 2) META CAPI — Contact Qualified (evento #2)
-  // -----------------------
   try {
-    if (finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 2) {
+    if (isSalesLead) {
       await capiContactQualified({
         pool,
         tenantId,
@@ -91,7 +177,7 @@ export async function runPostReplyActions(opts: {
         contactoNorm,
         fromNumber: fromNumber || null,
         messageId,
-        finalIntent,
+        finalIntent: finalIntent || "unknown",
         finalNivel,
       });
     }
@@ -99,11 +185,8 @@ export async function runPostReplyActions(opts: {
     console.warn("⚠️ capiContactQualified failed:", e?.message);
   }
 
-  // -----------------------
-  // 3) META CAPI — Lead fuerte semanal (evento #3)
-  // -----------------------
   try {
-    if (finalIntent && esIntencionDeVenta(finalIntent) && finalNivel >= 3) {
+    if (isStrongLead) {
       await capiLeadStrongWeekly({
         pool,
         tenantId,
@@ -111,7 +194,7 @@ export async function runPostReplyActions(opts: {
         contactoNorm,
         fromNumber: fromNumber || null,
         messageId,
-        finalIntent,
+        finalIntent: finalIntent || "unknown",
         finalNivel,
       });
     }
@@ -119,19 +202,16 @@ export async function runPostReplyActions(opts: {
     console.warn("⚠️ capiLeadStrongWeekly failed:", e?.message);
   }
 
-  // -----------------------
-  // 4) Follow-up scheduler
-  // -----------------------
   try {
     const bookingStep = (convoCtx as any)?.booking?.step;
     const inBooking = bookingStep && bookingStep !== "idle";
 
-    const bookingJustCompleted = !!(convoCtx as any)?.booking_completed;
+    const bookingJustCompleted = Boolean((convoCtx as any)?.booking_completed);
 
     const skipFollowUp =
       inBooking ||
       bookingJustCompleted ||
-      finalIntent === "agendar_cita";
+      commercial.wantsBooking;
 
     await scheduleFollowUpIfEligible({
       tenant,
