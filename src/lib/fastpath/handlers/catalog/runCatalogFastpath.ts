@@ -1010,6 +1010,17 @@ const hasAnyStructuredCatalogTarget =
     !hasFamilyStructuredCatalogTarget &&
     !isStructuredComparisonTurn;
 
+  const isGenericCatalogPriceOverviewTurn =
+    executionRouteIntent === "catalog_price" &&
+    referenceKind === "catalog_overview" &&
+    !hasAnyStructuredCatalogTarget;
+
+  const shouldNeverSilenceCatalogTurn =
+    catalogRoutingSignal.shouldRouteCatalog === true ||
+    hasExplicitCatalogRouting ||
+    hasExplicitCatalogIntent ||
+    hasFacetDrivenCatalogIntent;
+
   let canonicalCatalogResolution: CanonicalCatalogResolution | null = null;
 
   if (pendingSelectedService) {
@@ -1410,7 +1421,8 @@ const hasAnyStructuredCatalogTarget =
 
     if (
       shouldResolveExplicitCatalogTarget &&
-      canonicalCatalogResolution?.status === "not_found"
+      canonicalCatalogResolution?.status === "not_found" &&
+      !isGenericCatalogPriceOverviewTurn
     ) {
       return {
         handled: false,
@@ -1970,6 +1982,121 @@ const hasAnyStructuredCatalogTarget =
       },
       ctxPatch,
     };
+  }
+
+  if (shouldNeverSilenceCatalogTurn) {
+    const { rows } = await input.pool.query<{
+      service_id: string;
+      service_name: string;
+      min_price: number | string | null;
+      max_price: number | string | null;
+      parent_service_id: string | null;
+      category: string | null;
+      catalog_role: string | null;
+    }>(
+      `
+      WITH variant_prices AS (
+        SELECT
+          s.id AS service_id,
+          s.name AS service_name,
+          s.parent_service_id,
+          s.category,
+          s.catalog_role,
+          MIN(v.price)::numeric AS min_price,
+          MAX(v.price)::numeric AS max_price
+        FROM services s
+        JOIN service_variants v
+          ON v.service_id = s.id
+        AND v.active = true
+        WHERE s.tenant_id = $1
+          AND s.active = true
+          AND v.price IS NOT NULL
+        GROUP BY s.id, s.name, s.parent_service_id, s.category, s.catalog_role
+      ),
+      base_prices AS (
+        SELECT
+          s.id AS service_id,
+          s.name AS service_name,
+          s.parent_service_id,
+          s.category,
+          s.catalog_role,
+          MIN(s.price_base)::numeric AS min_price,
+          MAX(s.price_base)::numeric AS max_price
+        FROM services s
+        WHERE s.tenant_id = $1
+          AND s.active = true
+          AND s.price_base IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM service_variants v
+            WHERE v.service_id = s.id
+              AND v.active = true
+              AND v.price IS NOT NULL
+          )
+        GROUP BY s.id, s.name, s.parent_service_id, s.category, s.catalog_role
+      )
+      SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role
+      FROM (
+        SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role FROM variant_prices
+        UNION ALL
+        SELECT service_id, service_name, min_price, max_price, parent_service_id, category, catalog_role FROM base_prices
+      ) x;
+      `,
+      [input.tenantId]
+    );
+
+    if (rows.length > 0) {
+      const rowsPrioritized = [...rows].sort((a, b) => {
+        const aRole = input.normalizeCatalogRole(a.catalog_role);
+        const bRole = input.normalizeCatalogRole(b.catalog_role);
+
+        const aPrimary = aRole === "primary";
+        const bPrimary = bRole === "primary";
+
+        if (aPrimary !== bPrimary) {
+          return aPrimary ? -1 : 1;
+        }
+
+        const aSortPrice =
+          a.min_price === null ? Number.NEGATIVE_INFINITY : Number(a.min_price);
+        const bSortPrice =
+          b.min_price === null ? Number.NEGATIVE_INFINITY : Number(b.min_price);
+
+        if (aSortPrice !== bSortPrice) {
+          return bSortPrice - aSortPrice;
+        }
+
+        return String(a.service_name || "").localeCompare(
+          String(b.service_name || "")
+        );
+      });
+
+      const priceBlock = buildPriceBlock({
+        idiomaDestino: input.idiomaDestino,
+        rows: rowsPrioritized,
+        renderGenericPriceSummaryReply: input.renderGenericPriceSummaryReply,
+      });
+
+      if (priceBlock.trim()) {
+        return {
+          handled: true,
+          reply: priceBlock,
+          source: "catalog_db",
+          intent: "precio",
+          catalogPayload: {
+            kind: "resolved_catalog_answer",
+            scope: "overview",
+            canonicalBlocks: {
+              priceBlock: priceBlock || null,
+            },
+          },
+          ctxPatch: {
+            last_catalog_at: Date.now(),
+            lastResolvedIntent: "price_or_plan",
+          } as any,
+        };
+      }
+    }
   }
 
   return {
