@@ -1,11 +1,27 @@
+//src/jobs/generarFaqsSugeridas.ts
 import pool from '../lib/db';
 import OpenAI from 'openai';
 import { detectarIntencion } from '../lib/detectarIntencion';
+import type { Canal } from '../lib/detectarIntencion';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || '' });
 
-function normalizarCanal(canal: string) {
-  return (canal === 'facebook' || canal === 'instagram') ? 'meta' : canal;
+function normalizarCanal(canal?: string | null): Canal {
+  const normalized = String(canal || 'meta').trim().toLowerCase();
+
+  if (
+    normalized === 'facebook' ||
+    normalized === 'instagram' ||
+    normalized === 'meta'
+  ) {
+    return 'meta';
+  }
+
+  if (normalized === 'whatsapp') {
+    return 'whatsapp';
+  }
+
+  return 'whatsapp';
 }
 
 async function generarFaqsSugeridas() {
@@ -24,9 +40,8 @@ async function generarFaqsSugeridas() {
     const tenantId = p.tenant_id;
     const canal = normalizarCanal(p.canal || 'meta');
 
-    // Detectar intención (si tu función devuelve objeto, ajusta esta línea)
-    const det = await detectarIntencion(p.pregunta, tenantId);
-    const intencion = typeof det === 'string' ? det : det?.intencion || null;
+    const det = await detectarIntencion(p.pregunta, tenantId, canal);
+    const intencion = String(det?.intencion || det?.intent || '').trim().toLowerCase() || null;
 
     if (intencion) {
       // Verifica EXISTENCIA por tenant + canal + intención en faqs oficiales

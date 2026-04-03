@@ -1,3 +1,4 @@
+//src/routes/faqs/aprobar.ts
 import express from 'express';
 import pool from '../../lib/db';
 import { authenticateUser } from '../../middleware/auth';
@@ -25,9 +26,20 @@ router.post('/', authenticateUser, async (req, res) => {
     const faq = rows[0];
     if (!faq) return res.status(404).json({ error: 'FAQ no encontrada' });
 
-    // [REPLACE] Si es "duda", conviértela en sub-slug ANTES de guardar la FAQ oficial
-    const { intencion } = await detectarIntencion(faq.pregunta, tenantId);
-    let intencionFinal = intencion.trim().toLowerCase();
+    // Si es "duda", conviértela en sub-slug ANTES de guardar la FAQ oficial
+    const canalClasificacion =
+      faq.canal === 'facebook' || faq.canal === 'instagram'
+        ? 'meta'
+        : faq.canal || 'whatsapp';
+
+    const { intencion } = await detectarIntencion(
+      faq.pregunta,
+      tenantId,
+      canalClasificacion
+    );
+
+    let intencionFinal = String(intencion || '').trim().toLowerCase();
+
     if (intencionFinal === 'duda') {
       intencionFinal = buildDudaSlug(faq.pregunta);
     }
