@@ -177,6 +177,35 @@ function collapseWhitespace(value: string): string {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
 
+function tokenizeComparableText(value: string): string[] {
+  return normalizeText(value)
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function startsWithBusinessReference(
+  businessName: string,
+  description: string
+): boolean {
+  const businessTokens = tokenizeComparableText(businessName);
+  const descriptionTokens = tokenizeComparableText(description);
+
+  if (!businessTokens.length || !descriptionTokens.length) {
+    return false;
+  }
+
+  const firstBusinessToken = businessTokens[0];
+  const firstDescriptionToken = descriptionTokens[0];
+
+  if (!firstBusinessToken || !firstDescriptionToken) {
+    return false;
+  }
+
+  return firstBusinessToken === firstDescriptionToken;
+}
+
 function composeBusinessIdentityLine(
   businessName: string,
   description: string
@@ -193,7 +222,8 @@ function composeBusinessIdentityLine(
   if (
     normalizedDescription === normalizedBusinessName ||
     normalizedDescription.startsWith(`${normalizedBusinessName} es `) ||
-    normalizedDescription.startsWith(`${normalizedBusinessName} is `)
+    normalizedDescription.startsWith(`${normalizedBusinessName} is `) ||
+    startsWithBusinessReference(cleanBusinessName, cleanDescription)
   ) {
     return cleanDescription;
   }
