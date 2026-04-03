@@ -324,7 +324,17 @@ export async function handleUserSignalsTurn(
 
     console.log("🧠 facts_summary =", memText);
 
-    if (memText.trim()) {
+    const normalizedIntent = normIntent(
+      detectedIntent || INTENCION_FINAL_CANONICA || null
+    );
+
+    const shouldInjectFactsSummary =
+      Boolean(memText.trim()) &&
+      normalizedIntent !== "info_general" &&
+      normalizedIntent !== "duda" &&
+      normalizedIntent !== "saludo";
+
+    if (shouldInjectFactsSummary) {
       promptBaseMem = [
         promptBase,
         "",

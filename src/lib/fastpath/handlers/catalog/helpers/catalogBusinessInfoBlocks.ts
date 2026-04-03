@@ -182,6 +182,21 @@ export function buildAvailabilityBlockFromInfoClave(
   return extractSectionValue(infoClave, SECTION_ALIASES.availability);
 }
 
+function isOverviewExcludedSection(normalizedHeader: string): boolean {
+  const excludedAliases = [
+    ...SECTION_ALIASES.location,
+    ...SECTION_ALIASES.availability,
+    ...SECTION_ALIASES.schedule,
+    ...SECTION_ALIASES.pricing,
+    ...SECTION_ALIASES.booking,
+    ...SECTION_ALIASES.phone,
+    ...SECTION_ALIASES.contact,
+    ...SECTION_ALIASES.rules,
+  ].map(normalizeLabel);
+
+  return excludedAliases.includes(normalizedHeader);
+}
+
 export function buildServicesBlockFromInfoClave(
   infoClave?: string | null
 ): string {
@@ -194,11 +209,7 @@ export function buildServicesBlockFromInfoClave(
 
   const overviewSections = sections.filter((section) => {
     if (!section.value) return false;
-
-    if (isOperationalSection(section.normalizedHeader)) {
-      return false;
-    }
-
+    if (isOverviewExcludedSection(section.normalizedHeader)) return false;
     return true;
   });
 
