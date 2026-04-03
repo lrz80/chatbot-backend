@@ -591,6 +591,21 @@ export async function procesarMensajeWhatsApp(
       fallbackText: await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
     });
 
+    if (composed.pendingCta) {
+      const pendingCtaPatch = {
+        pending_cta: {
+          ...composed.pendingCta,
+          createdAt: new Date().toISOString(),
+        },
+      };
+
+      transition({ patchCtx: pendingCtaPatch });
+      finalCtxPatch = {
+        ...finalCtxPatch,
+        ...pendingCtaPatch,
+      };
+    }
+
     const finalBusinessInfoText = await ensureReplyLanguage(
       String(composed.text || "").trim(),
       idiomaDestino,
@@ -600,6 +615,9 @@ export async function procesarMensajeWhatsApp(
     if (!finalBusinessInfoText) {
       return false;
     }
+
+    INTENCION_FINAL_CANONICA = routeIntent;
+    lastIntent = routeIntent;
 
     await replyAndExit(
       finalBusinessInfoText,

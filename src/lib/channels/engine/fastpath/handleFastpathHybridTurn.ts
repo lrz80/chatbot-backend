@@ -284,10 +284,7 @@ export async function handleFastpathHybridTurn(
     };
   }
 
-  const fpIntent =
-    routeTarget === "catalog"
-      ? detectedIntent || intentFallback || null
-      : null;
+  const fpIntent = detectedIntent || intentFallback || null;
 
   const { convoCtxForFastpath, preResolvedCtxPatch, forcedAnchorCtxPatch } =
     await getPreResolvedCatalogService({
