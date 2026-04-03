@@ -10,8 +10,9 @@ import { traducirTexto } from "../traducirTexto";
 // INFO_CLAVE includes
 import { normalizeText } from "../infoclave/resolveIncludes";
 
-import { buildServicesBlockFromInfoClave } from "./handlers/catalog/helpers/catalogBusinessInfoBlocks";
-import { withSectionTitle } from "./handlers/catalog/helpers/catalogReplyBlocks";
+import {
+  buildGeneralOverviewBlockFromInfoClave,
+} from "./handlers/catalog/helpers/catalogBusinessInfoBlocks";
 
 // DB catalog includes
 import { getServiceDetailsText } from "../services/resolveServiceInfo";
@@ -452,7 +453,51 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       catalogReferenceKind !== "comparison";
 
     if (wantsGeneralBusinessOverview) {
-      return { handled: false };
+      const canonicalReply = buildGeneralOverviewBlockFromInfoClave(infoClave).trim();
+
+      if (!canonicalReply) {
+        return { handled: false };
+      }
+
+      const ctxPatch: any = {
+        last_list_kind: null,
+        last_list_kind_at: null,
+        last_plan_list: null,
+        last_plan_list_at: null,
+        last_package_list: null,
+        last_package_list_at: null,
+
+        last_catalog_at: Date.now(),
+        lastResolvedIntent: "info_general_overview",
+
+        last_catalog_scope: "overview",
+        last_catalog_source: "info_clave",
+
+        lastPresentedEntityIds: [],
+        lastPresentedFamilyKeys: [],
+
+        last_service_id: null,
+        last_service_name: null,
+        last_service_at: null,
+        last_selected_kind: null,
+        last_selected_id: null,
+        last_selected_name: null,
+        last_selected_at: null,
+        last_variant_id: null,
+        last_variant_name: null,
+        last_variant_url: null,
+        last_variant_at: null,
+        selectedServiceId: null,
+        expectingVariant: false,
+      };
+
+      return {
+        handled: true,
+        source: "info_general_overview",
+        intent: "info_general",
+        reply: canonicalReply,
+        ctxPatch,
+      };
     }
   }
 

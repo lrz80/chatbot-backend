@@ -1,3 +1,4 @@
+//src/lib/fastpath/handlers/catalog/helpers/catalogBusinessInfoBlocks.ts
 function cleanLines(text: string): string[] {
   return String(text || "")
     .split("\n")
@@ -157,21 +158,6 @@ function extractSectionValue(
   return "";
 }
 
-function isOverviewExcludedSection(normalizedHeader: string): boolean {
-  const excludedAliases = [
-    ...SECTION_ALIASES.location,
-    ...SECTION_ALIASES.availability,
-    ...SECTION_ALIASES.schedule,
-    ...SECTION_ALIASES.pricing,
-    ...SECTION_ALIASES.booking,
-    ...SECTION_ALIASES.phone,
-    ...SECTION_ALIASES.contact,
-    ...SECTION_ALIASES.rules,
-  ].map(normalizeLabel);
-
-  return excludedAliases.includes(normalizedHeader);
-}
-
 function isBusinessNameSection(normalizedHeader: string): boolean {
   const aliases = SECTION_ALIASES.businessName.map(normalizeLabel);
   return aliases.includes(normalizedHeader);
@@ -187,7 +173,35 @@ function isDescriptionSection(normalizedHeader: string): boolean {
   );
 }
 
-function composeOverviewForDm(sections: ParsedSection[]): string {
+function collapseWhitespace(value: string): string {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function composeBusinessIdentityLine(
+  businessName: string,
+  description: string
+): string {
+  const cleanBusinessName = collapseWhitespace(businessName);
+  const cleanDescription = collapseWhitespace(description);
+
+  if (!cleanBusinessName) return cleanDescription;
+  if (!cleanDescription) return cleanBusinessName;
+
+  const normalizedBusinessName = normalizeText(cleanBusinessName);
+  const normalizedDescription = normalizeText(cleanDescription);
+
+  if (
+    normalizedDescription === normalizedBusinessName ||
+    normalizedDescription.startsWith(`${normalizedBusinessName} es `) ||
+    normalizedDescription.startsWith(`${normalizedBusinessName} is `)
+  ) {
+    return cleanDescription;
+  }
+
+  return `${cleanBusinessName} es ${cleanDescription}`;
+}
+
+function composeGeneralOverviewForDm(sections: ParsedSection[]): string {
   const businessNameSection = sections.find((section) =>
     isBusinessNameSection(section.normalizedHeader)
   );
@@ -198,31 +212,13 @@ function composeOverviewForDm(sections: ParsedSection[]): string {
 
   const parts: string[] = [];
 
-  if (businessNameSection?.value && descriptionSection?.value) {
-    parts.push(
-      `${businessNameSection.value} es ${descriptionSection.value}`
-        .replace(/\s+/g, " ")
-        .trim()
-    );
-  } else {
-    if (descriptionSection?.value) {
-      parts.push(descriptionSection.value.trim());
-    } else if (businessNameSection?.value) {
-      parts.push(businessNameSection.value.trim());
-    }
-  }
+  const identityLine = composeBusinessIdentityLine(
+    businessNameSection?.value || "",
+    descriptionSection?.value || ""
+  );
 
-  for (const section of sections) {
-    if (!section.value) continue;
-
-    if (
-      isBusinessNameSection(section.normalizedHeader) ||
-      isDescriptionSection(section.normalizedHeader)
-    ) {
-      continue;
-    }
-
-    parts.push(`${section.rawHeader}:\n${section.value}`);
+  if (identityLine) {
+    parts.push(identityLine);
   }
 
   return parts.join("\n\n").trim();
@@ -243,22 +239,17 @@ export function buildAvailabilityBlockFromInfoClave(
 export function buildServicesBlockFromInfoClave(
   infoClave?: string | null
 ): string {
-  const explicitServices = extractSectionValue(infoClave, SECTION_ALIASES.services);
-  if (explicitServices) {
-    return explicitServices;
-  }
+  return extractSectionValue(infoClave, SECTION_ALIASES.services);
+}
 
+export function buildGeneralOverviewBlockFromInfoClave(
+  infoClave?: string | null
+): string {
   const sections = parseSections(infoClave);
 
-  const overviewSections = sections.filter((section) => {
-    if (!section.value) return false;
-    if (isOverviewExcludedSection(section.normalizedHeader)) return false;
-    return true;
-  });
-
-  if (!overviewSections.length) {
+  if (!sections.length) {
     return "";
   }
 
-  return composeOverviewForDm(overviewSections);
+  return composeGeneralOverviewForDm(sections);
 }
