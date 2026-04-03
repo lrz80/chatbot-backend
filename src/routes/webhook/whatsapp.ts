@@ -6,7 +6,10 @@ import twilio from 'twilio';
 
 import { detectarIdioma } from '../../lib/detectarIdioma';
 import { enviarWhatsApp } from "../../lib/senders/whatsapp";
-import type { Canal } from '../../lib/detectarIntencion';
+import type {
+  Canal,
+  CommercialSignal,
+} from '../../lib/detectarIntencion';
 import { antiPhishingGuard } from "../../lib/security/antiPhishing";
 import { saludoPuroRegex } from '../../lib/saludosConversacionales';
 
@@ -134,6 +137,7 @@ export async function procesarMensajeWhatsApp(
   let detectedIntent: string | null = null;
   let detectedInterest: number | null = null;
   let detectedFacets: IntentFacets | null = null;
+  let detectedCommercial: CommercialSignal | null = null;
 
   let replied = false;
 
@@ -780,7 +784,7 @@ export async function procesarMensajeWhatsApp(
   // sincronizar variables locales con lo que devolvió el helper
   detectedIntent           = signals.detectedIntent;
   detectedInterest         = signals.detectedInterest;
-  detectedFacets           = (signals as any).detectedFacets || (signals as any).facets || null;
+  detectedFacets           = signals.detectedFacets || null;
   INTENCION_FINAL_CANONICA = signals.INTENCION_FINAL_CANONICA;
   promptBaseMem            = signals.promptBaseMem;
   convoCtx = {
@@ -1041,6 +1045,7 @@ export async function procesarMensajeWhatsApp(
         (signals as any)?.facets ||
         detectedFacets ||
         {},
+      detectedCommercial,
       intentFallback:
         signals?.INTENCION_FINAL_CANONICA || INTENCION_FINAL_CANONICA || null,
       messageId: messageId || null,
