@@ -437,6 +437,29 @@ export async function procesarMensajeWhatsApp(
     );
   }
 
+  function shouldTreatTurnAsPendingCtaConfirmation(params: {
+    userInput: string;
+    resolvedIntent: string | null;
+  }): boolean {
+    const raw = String(params.userInput || "").trim();
+    const normalizedIntent = String(params.resolvedIntent || "")
+      .trim()
+      .toLowerCase();
+
+    if (!raw) return false;
+
+    const tokenCount = raw.split(/\s+/).filter(Boolean).length;
+    const hasQuestionMark = /[?¿]/.test(raw);
+
+    if (hasQuestionMark) return false;
+
+    if (normalizedIntent && normalizedIntent !== "duda") {
+      return false;
+    }
+
+    return tokenCount <= 3;
+  }
+
   // ✅ google_calendar_enabled flag (source of truth)
   let bookingEnabled = false;
   try {
@@ -792,7 +815,7 @@ export async function procesarMensajeWhatsApp(
     ...(signals.convoCtx || {}),
   };
 
-  const hasPendingCta = hasPendingCtaAwaitingConfirmation(convoCtx);
+  let hasPendingCta = hasPendingCtaAwaitingConfirmation(convoCtx);
 
   if (hasPendingCta) {
     console.log("[WHATSAPP][PENDING_CTA_AWAITING_GATE]", {
@@ -802,6 +825,46 @@ export async function procesarMensajeWhatsApp(
       userInput,
       pendingCta: (convoCtx as any)?.pending_cta ?? null,
     });
+  }
+
+  const currentResolvedIntent = String(
+    INTENCION_FINAL_CANONICA || detectedIntent || ""
+  )
+    .trim()
+    .toLowerCase() || null;
+
+  const shouldHoldTurnForPendingCta =
+    hasPendingCta &&
+    shouldTreatTurnAsPendingCtaConfirmation({
+      userInput,
+      resolvedIntent: currentResolvedIntent,
+    });
+
+  if (hasPendingCta && !shouldHoldTurnForPendingCta) {
+    console.log("[WHATSAPP][PENDING_CTA_RELEASED_FOR_NEW_QUESTION]", {
+      tenantId: tenant.id,
+      canal,
+      contactoNorm,
+      userInput,
+      currentResolvedIntent,
+      pendingCta: (convoCtx as any)?.pending_cta ?? null,
+    });
+
+    const clearPendingCtaPatch = {
+      pending_cta: null,
+      awaiting_yes_no_action: null,
+      awaiting_yesno: false,
+      yesno_resolution: null,
+    };
+
+    transition({ patchCtx: clearPendingCtaPatch });
+
+    finalCtxPatch = {
+      ...finalCtxPatch,
+      ...clearPendingCtaPatch,
+    };
+
+    hasPendingCta = false;
   }
 
   // ===============================

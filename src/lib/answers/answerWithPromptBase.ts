@@ -400,13 +400,17 @@ function buildUserPrompt(
                 '- Use this exact shape: {"intro":"...", "closing":"...", "pendingCta":null} when intro/closing are required.',
                 '- Use null only for fields that are explicitly not allowed by the response policy.',
               ]),
-          '- If the reply includes a confirmation-oriented CTA for booking, use: {"intro":null,"closing":null,"pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
-          '- If the reply includes a confirmation-oriented CTA for estimate, use: {"intro":null,"closing":null,"pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+          "- Only include pendingCta if the response policy clearly supports an immediate confirmation-oriented next step.",
+          "- Never include pendingCta for greetings, general information, exploratory questions, overview turns, or low-intent turns.",
+          "- booking_offer is only valid when the user is clearly ready to book now.",
+          "- estimate_offer is only valid when the user is clearly asking for a quote/estimate and is ready to proceed now.",
         ]
       : [
           '- Use this exact shape: {"text":"...", "pendingCta":null}',
-          '- If the reply includes a confirmation-oriented CTA for booking, use: {"text":"...", "pendingCta":{"type":"booking_offer","awaitsConfirmation":true}}',
-          '- If the reply includes a confirmation-oriented CTA for estimate, use: {"text":"...", "pendingCta":{"type":"estimate_offer","awaitsConfirmation":true}}',
+          "- Only include pendingCta if the response policy clearly supports an immediate confirmation-oriented next step.",
+          "- Never include pendingCta for greetings, general information, exploratory questions, overview turns, or low-intent turns.",
+          "- booking_offer is only valid when the user is clearly ready to book now.",
+          "- estimate_offer is only valid when the user is clearly asking for a quote/estimate and is ready to proceed now.",
         ]),
     "- Do not wrap the JSON in markdown fences.",
   ].join("\n");
