@@ -1017,8 +1017,9 @@ export async function procesarMensajeWhatsApp(
   // ===============================
   // ⚡ FASTPATH (módulo híbrido reutilizable)
   //    🔒 NO corre si hay booking activo
+  //    🔒 NO corre si hay CTA pendiente esperando confirmación
   // ===============================
-  if (!inBooking0) {
+  if (!inBooking0 && !hasPendingCta) {
     const convoCtxForFastpath = {
       ...(convoCtx || {}),
       ...((signals as any)?.convoCtx || {}),
@@ -1122,7 +1123,11 @@ export async function procesarMensajeWhatsApp(
       );
     }
   } else {
-    console.log("🔒 FASTPATH SKIPPED: booking activo", { bookingStep0 });
+    console.log("🔒 FASTPATH SKIPPED", {
+      bookingStep0,
+      hasPendingCta,
+      reason: inBooking0 ? "booking_activo" : "pending_cta_awaiting_confirmation",
+    });
   }
 
   // ===============================

@@ -146,6 +146,55 @@ function isInfoGeneralOverviewIntent(value: unknown): boolean {
   );
 }
 
+function buildCommercialClosingInstruction(input: {
+  idiomaDestino: Lang;
+  commercialPolicy: {
+    purchaseIntent: "unknown" | "low" | "medium" | "high";
+    wantsBooking: boolean;
+    wantsQuote: boolean;
+    wantsHuman: boolean;
+    urgency: "unknown" | "low" | "medium" | "high";
+    shouldUseSalesTone: boolean;
+    shouldUseSoftClosing: boolean;
+    shouldUseDirectClosing: boolean;
+    shouldSuggestHumanHandoff: boolean;
+  };
+}): string | null {
+  const { idiomaDestino, commercialPolicy } = input;
+
+  if (commercialPolicy.shouldSuggestHumanHandoff) {
+    return idiomaDestino === "en"
+      ? "Close by offering a direct next step with a person, without sounding pushy."
+      : "Cierra ofreciendo como siguiente paso hablar con una persona o asesor, sin sonar agresivo.";
+  }
+
+  if (commercialPolicy.shouldUseDirectClosing) {
+    if (commercialPolicy.wantsBooking) {
+      return idiomaDestino === "en"
+        ? "Close with one short, direct booking-oriented question that helps the user move forward now."
+        : "Cierra con una sola pregunta corta y directa orientada a agendar o avanzar ahora.";
+    }
+
+    return idiomaDestino === "en"
+      ? "Close with one short, direct next-step question that helps the user move forward now."
+      : "Cierra con una sola pregunta corta y directa que ayude al cliente a avanzar ahora.";
+  }
+
+  if (commercialPolicy.shouldUseSoftClosing) {
+    return idiomaDestino === "en"
+      ? "Close with one short, guided, low-pressure question that helps the user continue naturally."
+      : "Cierra con una sola pregunta corta, guiada y sin presión para ayudar al cliente a seguir de forma natural.";
+  }
+
+  if (commercialPolicy.shouldUseSalesTone) {
+    return idiomaDestino === "en"
+      ? "Use a consultative sales tone, but keep the close soft and natural."
+      : "Usa un tono consultivo de ventas, pero con un cierre suave y natural.";
+  }
+
+  return null;
+}
+
 export type RenderFastpathDmReplyInput = {
   tenantId: string;
   canal: Canal;
@@ -183,6 +232,18 @@ export type RenderFastpathDmReplyInput = {
     shouldForceSalesClosingQuestion: boolean;
 
     canonicalBodyOwnsClosing: boolean;
+
+    commercialPolicy: {
+      purchaseIntent: "unknown" | "low" | "medium" | "high";
+      wantsBooking: boolean;
+      wantsQuote: boolean;
+      wantsHuman: boolean;
+      urgency: "unknown" | "low" | "medium" | "high";
+      shouldUseSalesTone: boolean;
+      shouldUseSoftClosing: boolean;
+      shouldUseDirectClosing: boolean;
+      shouldSuggestHumanHandoff: boolean;
+    };
   };
   ctxPatch: any;
   maxLines?: number;
@@ -225,6 +286,7 @@ export async function renderFastpathDmReply(
     isPriceSummaryReply,
     isGroundedCatalogReply,
     shouldForceSalesClosingQuestion,
+    commercialPolicy,
   } = replyPolicy;
 
   const fpSource = normalizeText(fp?.source).toLowerCase();
@@ -248,6 +310,11 @@ export async function renderFastpathDmReply(
   const mustPreserveResolvedCanonicalBody = isResolvedCatalogAnswer;
 
   const unresolvedCatalogChoice = isCatalogChoiceReply;
+
+  const commercialClosingInstruction = buildCommercialClosingInstruction({
+    idiomaDestino,
+    commercialPolicy,
+  });
 
   const canonicalReply = (() => {
     if (catalogPayload?.kind === "service_choice") {
@@ -305,6 +372,30 @@ export async function renderFastpathDmReply(
       : replyPolicy.hasResolvedEntity
       ? structuredService?.serviceLabel ?? null
       : null;
+
+    const shouldAllowIntro =
+    (!bypassWriterModel || isResolvedCatalogAnswer) &&
+    (commercialPolicy.shouldUseSalesTone ||
+      isResolvedCatalogAnswer ||
+      isInfoGeneralOverviewTurn);
+
+  const shouldAllowOutro =
+    (!bypassWriterModel || isResolvedCatalogAnswer) &&
+    !replyPolicy.canonicalBodyOwnsClosing &&
+    (commercialPolicy.shouldUseSalesTone ||
+      commercialPolicy.shouldUseSoftClosing ||
+      commercialPolicy.shouldUseDirectClosing ||
+      commercialPolicy.shouldSuggestHumanHandoff);
+
+  const shouldEndWithSalesQuestion =
+    !replyPolicy.canonicalBodyOwnsClosing &&
+    !isCatalogChoiceReply &&
+    (
+      shouldForceSalesClosingQuestion ||
+      commercialPolicy.shouldUseSoftClosing ||
+      commercialPolicy.shouldUseDirectClosing ||
+      commercialPolicy.shouldSuggestHumanHandoff
+    );
 
   const responsePolicy = {
     mode: isCatalogChoiceReply
@@ -365,30 +456,48 @@ export async function renderFastpathDmReply(
       isCatalogChoiceReply ||
       mustPreserveResolvedCanonicalBody ||
       isInfoGeneralOverviewTurn,
-    allowIntro: !bypassWriterModel || isResolvedCatalogAnswer,
-    allowOutro:
-      (!bypassWriterModel || isResolvedCatalogAnswer) &&
-      !replyPolicy.canonicalBodyOwnsClosing,
+    allowIntro: shouldAllowIntro,
+    allowOutro: shouldAllowOutro,
     allowBodyRewrite: false,
-    mustEndWithSalesQuestion:
-      (
-        (!bypassWriterModel && !isCatalogChoiceReply && shouldForceSalesClosingQuestion) ||
-        isResolvedCatalogAnswer
-      ) &&
-      !replyPolicy.canonicalBodyOwnsClosing,
+    mustEndWithSalesQuestion: shouldEndWithSalesQuestion,
     reasoningNotes: isServiceChoiceReply
       ? "Catalog service choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one service."
       : isVariantChoiceReply
       ? "Catalog variant choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one variant."
       : isResolvedCatalogAnswer
-      ? "Resolved grounded catalog turn. The canonical body is the source of truth and must be preserved exactly. Do not rewrite, summarize, compress, paraphrase, or omit any fact, condition, number, schedule, bullet, or link from the canonical body. You may add only one short intro before the canonical body and one short sales-oriented closing question after it. The body itself must remain unchanged and in the same order."
+      ? [
+          "Resolved grounded catalog turn. The canonical body is the source of truth and must be preserved exactly.",
+          "Do not rewrite, summarize, compress, paraphrase, or omit any fact, condition, number, schedule, bullet, or link from the canonical body.",
+          "You may add only one short intro before the canonical body and one short closing question after it.",
+          "The body itself must remain unchanged and in the same order.",
+          commercialClosingInstruction,
+        ]
+          .filter(Boolean)
+          .join(" ")
       : isInfoGeneralOverviewTurn
-      ? "General business overview turn for DM. The canonical body is the source of truth and must be preserved. Do not replace it with a vague clarification question. Start with a short, warm, sales-oriented intro. Then keep the canonical body in the same order and bullet structure. After that, end with a guided closing question that helps the user advance naturally, offering concrete options such as prices, schedules, or which service fits them best. Do not ask an open generic question like asking what information they want."
+      ? [
+          "General business overview turn for DM. The canonical body is the source of truth and must be preserved.",
+          "Do not replace it with a vague clarification question.",
+          "Keep the canonical body in the same order and bullet structure.",
+          commercialClosingInstruction,
+        ]
+          .filter(Boolean)
+          .join(" ")
       : isGroundedCatalogReply
-      ? "Grounded catalog turn. Preserve the canonical body exactly."
+      ? [
+          "Grounded catalog turn. Preserve the canonical body exactly.",
+          commercialClosingInstruction,
+        ]
+          .filter(Boolean)
+          .join(" ")
       : isPriceSummaryReply
-      ? "Grounded price summary turn. Preserve the canonical body exactly."
-      : null,
+      ? [
+          "Grounded price summary turn. Preserve the canonical body exactly.",
+          commercialClosingInstruction,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : commercialClosingInstruction,
   } as const;
 
   if (bypassWriterModel) {

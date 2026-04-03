@@ -264,13 +264,21 @@ function buildInstructionBlock(
     "- style = concise_chat",
     "- use_only_grounded_business_data = true",
     "- if_data_missing = say_so_without_inventing",
+
     "- if_response_policy_mode = clarify_only_then_output_only_a_brief_clarification_question",
+
     "- if_response_policy_disallows_specific_catalog_item_then_do_not_choose_or_recommend_one",
     "- if_response_policy_disallows_specific_price_then_do_not_output_numeric_price",
     "- if_response_policy_disallows_booking_times_then_do_not_propose_dates_or times",
     "- if_response_policy_disallows_official_links_then_do_not include_links",
+
     "- if_structured_turn_data_exists_then_it_has_highest_priority",
     "- answer_as_business = true",
+
+    // 🔥 NUEVO: reglas comerciales duras
+    "- if_mustEndWithSalesQuestion = true_then_the_closing_must_be_a_guided_sales_question",
+    "- if_allowOutro = true_and_sales_context_detected_then_include_a_clear_next_step",
+    "- do_not_end_without_direction_if_sales_intent_present = true",
   ];
 
   if (policy.mode === "clarify_only" && policy.preserveExactBody) {

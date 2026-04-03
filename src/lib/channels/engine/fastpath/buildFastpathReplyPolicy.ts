@@ -1,4 +1,7 @@
-import type { Canal } from "../../../detectarIntencion";
+import type {
+  Canal,
+  CommercialSignal,
+} from "../../../detectarIntencion";
 
 export type StructuredServiceSelection = {
   serviceId: string | null;
@@ -19,6 +22,7 @@ export type FastpathReplyPolicyInput = {
   };
   detectedIntent?: string | null;
   intentFallback?: string | null;
+  detectedCommercial?: CommercialSignal | null;
   catalogRoutingSignal?: any;
   catalogReferenceClassification?: any;
   structuredService: StructuredServiceSelection;
@@ -57,6 +61,18 @@ export type FastpathReplyPolicy = {
     | "grounded_frame_only"
     | "grounded_only"
     | "clarify_only";
+
+  commercialPolicy: {
+    purchaseIntent: "unknown" | "low" | "medium" | "high";
+    wantsBooking: boolean;
+    wantsQuote: boolean;
+    wantsHuman: boolean;
+    urgency: "unknown" | "low" | "medium" | "high";
+    shouldUseSalesTone: boolean;
+    shouldUseSoftClosing: boolean;
+    shouldUseDirectClosing: boolean;
+    shouldSuggestHumanHandoff: boolean;
+  };
 };
 
 function toNormalizedString(value: any): string {
@@ -188,6 +204,85 @@ function getReplySourceKind(params: {
   return "generic";
 }
 
+function normalizePurchaseIntent(
+  value: unknown
+): "unknown" | "low" | "medium" | "high" {
+  const normalized = toNormalizedString(value);
+
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
+  ) {
+    return normalized;
+  }
+
+  return "unknown";
+}
+
+function normalizeUrgency(
+  value: unknown
+): "unknown" | "low" | "medium" | "high" {
+  const normalized = toNormalizedString(value);
+
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
+  ) {
+    return normalized;
+  }
+
+  return "unknown";
+}
+
+function getCommercialSignal(
+  input: FastpathReplyPolicyInput
+): FastpathReplyPolicy["commercialPolicy"] {
+  const raw =
+    input.detectedCommercial ??
+    input.ctxPatch?.commercialSignal ??
+    input.fp?.ctxPatch?.commercialSignal ??
+    null;
+
+  const purchaseIntent = normalizePurchaseIntent(raw?.purchaseIntent);
+  const urgency = normalizeUrgency(raw?.urgency);
+  const wantsBooking = raw?.wantsBooking === true;
+  const wantsQuote = raw?.wantsQuote === true;
+  const wantsHuman = raw?.wantsHuman === true;
+
+  const shouldUseSalesTone =
+    purchaseIntent === "medium" ||
+    purchaseIntent === "high" ||
+    wantsBooking ||
+    wantsQuote;
+
+  const shouldUseDirectClosing =
+    purchaseIntent === "high" ||
+    urgency === "high" ||
+    wantsBooking;
+
+  const shouldUseSoftClosing =
+    !shouldUseDirectClosing &&
+    (purchaseIntent === "medium" || wantsQuote);
+
+  const shouldSuggestHumanHandoff =
+    wantsHuman === true &&
+    purchaseIntent !== "low";
+
+  return {
+    purchaseIntent,
+    wantsBooking,
+    wantsQuote,
+    wantsHuman,
+    urgency,
+    shouldUseSalesTone,
+    shouldUseSoftClosing,
+    shouldUseDirectClosing,
+    shouldSuggestHumanHandoff,
+  };
+}
+
 export function buildFastpathReplyPolicy(
   input: FastpathReplyPolicyInput
 ): FastpathReplyPolicy {
@@ -205,6 +300,8 @@ export function buildFastpathReplyPolicy(
     catalogReferenceClassification: input.catalogReferenceClassification,
     catalogRoutingSignal: input.catalogRoutingSignal,
   });
+
+  const commercialPolicy = getCommercialSignal(input);
 
   const isVariantDisambiguation = isVariantDisambiguationState({
     fp: input.fp,
@@ -229,7 +326,8 @@ export function buildFastpathReplyPolicy(
   const shouldPersistStructuredService =
     hasResolvedEntity &&
     !isVariantDisambiguation &&
-    toNormalizedString(input.catalogRoutingSignal?.routeIntent) !== "catalog_compare" &&
+    toNormalizedString(input.catalogRoutingSignal?.routeIntent) !==
+      "catalog_compare" &&
     fpSource !== "catalog_db" &&
     fpSource !== "price_disambiguation_db" &&
     fpSource !== "catalog_disambiguation_db" &&
@@ -258,6 +356,7 @@ export function buildFastpathReplyPolicy(
 
   const shouldForceSalesClosingQuestion =
     isGroundedCatalogOverviewDm &&
+    commercialPolicy.shouldUseSalesTone &&
     !input.ctxPatch?.pending_cta &&
     !input.fp?.awaitingEffect;
 
@@ -304,5 +403,6 @@ export function buildFastpathReplyPolicy(
     responsePolicyMode,
 
     canonicalBodyOwnsClosing,
+    commercialPolicy,
   };
 }

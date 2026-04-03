@@ -1,6 +1,9 @@
 //src/lib/channels/engine/fastpath/handleFastpathHybridTurn.ts
 import { Pool } from "pg";
-import type { Canal } from "../../../detectarIntencion";
+import type {
+  Canal,
+  CommercialSignal,
+} from "../../../detectarIntencion";
 import type { Lang } from "../clients/clientDb";
 import { runFastpath } from "../../../fastpath/runFastpath";
 import { naturalizeSecondaryOptionsLine } from "../../../fastpath/naturalizeSecondaryOptions";
@@ -76,6 +79,7 @@ export type FastpathHybridArgs = {
   infoClave: string;
   detectedIntent: string | null;
   detectedFacets?: IntentFacets | null;
+  detectedCommercial?: CommercialSignal | null;
   intentFallback: string | null;
   messageId: string | null;
   contactoNorm: string;
@@ -113,6 +117,7 @@ export async function handleFastpathHybridTurn(
     infoClave,
     detectedIntent,
     detectedFacets,
+    detectedCommercial,
     intentFallback,
     messageId,
     contactoNorm,
@@ -338,6 +343,16 @@ export async function handleFastpathHybridTurn(
     ...(fp.ctxPatch ? { ...fp.ctxPatch } : {}),
   };
 
+  if (detectedCommercial) {
+    ctxPatch.commercialSignal = {
+      purchaseIntent: detectedCommercial.purchaseIntent,
+      wantsBooking: detectedCommercial.wantsBooking,
+      wantsQuote: detectedCommercial.wantsQuote,
+      wantsHuman: detectedCommercial.wantsHuman,
+      urgency: detectedCommercial.urgency,
+    };
+  }
+
   if (pendingCta?.type) {
     ctxPatch.pendingCta = {
       type: pendingCta.type,
@@ -358,6 +373,7 @@ export async function handleFastpathHybridTurn(
     fp,
     detectedIntent,
     intentFallback,
+    detectedCommercial,
     catalogRoutingSignal,
     catalogReferenceClassification,
     structuredService,

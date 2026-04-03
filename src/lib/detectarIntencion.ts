@@ -1,4 +1,3 @@
-// src/lib/detectarIntencion.ts
 import OpenAI from "openai";
 import pool from "./db";
 import type { Canal } from "./types/canal";
@@ -19,6 +18,17 @@ export type IntentScope =
   | "variant"
   | "none";
 
+export type PurchaseIntentLevel = "unknown" | "low" | "medium" | "high";
+export type CommercialUrgencyLevel = "unknown" | "low" | "medium" | "high";
+
+export type CommercialSignal = {
+  purchaseIntent: PurchaseIntentLevel;
+  wantsBooking: boolean;
+  wantsQuote: boolean;
+  wantsHuman: boolean;
+  urgency: CommercialUrgencyLevel;
+};
+
 export type Intento = {
   intencion: string;
   nivel_interes: number;
@@ -30,6 +40,7 @@ export type Intento = {
   // nuevo contrato estructurado
   facets: IntentFacets;
   scope: IntentScope;
+  commercial: CommercialSignal;
 };
 
 type TenantIntentRow = {
@@ -52,6 +63,13 @@ type LlmIntentOutput = {
     asksLocation?: unknown;
     asksAvailability?: unknown;
   } | null;
+  commercial?: {
+    purchaseIntent?: unknown;
+    wantsBooking?: unknown;
+    wantsQuote?: unknown;
+    wantsHuman?: unknown;
+    urgency?: unknown;
+  } | null;
 };
 
 const UNIVERSAL_INTENTS = [
@@ -73,19 +91,85 @@ const UNIVERSAL_INTENTS = [
   "soporte_reserva",
 ] as const;
 
-const SALES_INTENTS = new Set<string>([
-  "precio",
-  "agendar",
-  "pago",
-  "disponibilidad",
-  "clase_prueba",
-]);
+function makeDefaultCommercialSignal(): CommercialSignal {
+  return {
+    purchaseIntent: "unknown",
+    wantsBooking: false,
+    wantsQuote: false,
+    wantsHuman: false,
+    urgency: "unknown",
+  };
+}
+
+function normalizePurchaseIntentLevel(value: unknown): PurchaseIntentLevel {
+  const normalized = String(value || "").trim().toLowerCase();
+
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
+  ) {
+    return normalized;
+  }
+
+  return "unknown";
+}
+
+function normalizeUrgencyLevel(value: unknown): CommercialUrgencyLevel {
+  const normalized = String(value || "").trim().toLowerCase();
+
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high"
+  ) {
+    return normalized;
+  }
+
+  return "unknown";
+}
+
+function normalizeCommercialSignal(
+  input?: LlmIntentOutput["commercial"] | null
+): CommercialSignal {
+  const fallback = makeDefaultCommercialSignal();
+
+  if (!input || typeof input !== "object") {
+    return fallback;
+  }
+
+  return {
+    purchaseIntent: normalizePurchaseIntentLevel(input.purchaseIntent),
+    wantsBooking: input.wantsBooking === true,
+    wantsQuote: input.wantsQuote === true,
+    wantsHuman: input.wantsHuman === true,
+    urgency: normalizeUrgencyLevel(input.urgency),
+  };
+}
+
+function deriveLegacyInterestLevelFromCommercial(
+  purchaseIntent: PurchaseIntentLevel,
+  urgency: CommercialUrgencyLevel,
+  explicitNivel?: unknown
+): number {
+  const explicit = Number(explicitNivel);
+  if (Number.isFinite(explicit)) {
+    return Math.max(1, Math.min(3, explicit));
+  }
+
+  if (purchaseIntent === "high" || urgency === "high") return 3;
+  if (purchaseIntent === "medium" || urgency === "medium") return 2;
+  if (purchaseIntent === "low") return 1;
+
+  return 1;
+}
 
 function makeIntent(
   intencion: string,
   nivel_interes: number,
   facets: IntentFacets = {},
-  scope: IntentScope = "none"
+  scope: IntentScope = "none",
+  commercial: CommercialSignal = makeDefaultCommercialSignal()
 ): Intento {
   const cleanIntent = String(intencion || "duda").trim().toLowerCase();
   const cleanNivelRaw = Number(nivel_interes);
@@ -105,12 +189,26 @@ function makeIntent(
       asksAvailability: Boolean(facets.asksAvailability),
     },
     scope,
+    commercial,
   };
 }
 
 function canalesDe(canal?: string): string[] {
-  const c = String(canal || "whatsapp").trim().toLowerCase();
-  return c === "meta" ? ["meta", "facebook", "instagram"] : [c];
+  const c = String(canal || "").trim().toLowerCase();
+
+  if (!c) {
+    return ["whatsapp"];
+  }
+
+  if (c === "meta") {
+    return ["meta", "facebook", "instagram"];
+  }
+
+  if (c === "facebook" || c === "instagram") {
+    return ["meta", c];
+  }
+
+  return [c];
 }
 
 function normalizeExamples(value: TenantIntentRow["ejemplos"]): string[] {
@@ -187,7 +285,6 @@ function sanitizeLlmOutput(parsed: LlmIntentOutput | null | undefined): Intento 
       ? "info_general"
       : rawIntent;
 
-  const nivelRaw = Number(parsed.nivel_interes ?? 1);
   const scope = normalizeIntentScope(parsed.scope);
 
   const facets: IntentFacets = {
@@ -197,6 +294,13 @@ function sanitizeLlmOutput(parsed: LlmIntentOutput | null | undefined): Intento 
     asksAvailability: Boolean(parsed.facets?.asksAvailability),
   };
 
+  const commercial = normalizeCommercialSignal(parsed.commercial);
+  const nivel = deriveLegacyInterestLevelFromCommercial(
+    commercial.purchaseIntent,
+    commercial.urgency,
+    parsed.nivel_interes
+  );
+
   const hasAnyFacet =
     facets.asksPrices ||
     facets.asksSchedules ||
@@ -204,14 +308,14 @@ function sanitizeLlmOutput(parsed: LlmIntentOutput | null | undefined): Intento 
     facets.asksAvailability;
 
   if (normalizedIntent === "duda" && hasAnyFacet) {
-    return makeIntent("info_general", Math.max(2, nivelRaw || 1), facets, scope);
+    return makeIntent("info_general", Math.max(2, nivel), facets, scope, commercial);
   }
 
   if (normalizedIntent === "info_servicio" && scope === "general") {
-    return makeIntent("info_general", nivelRaw, facets, "general");
+    return makeIntent("info_general", nivel, facets, "general", commercial);
   }
 
-  return makeIntent(normalizedIntent, nivelRaw, facets, scope);
+  return makeIntent(normalizedIntent, nivel, facets, scope, commercial);
 }
 
 function buildUniversalIntentGuide(): string {
@@ -331,7 +435,7 @@ async function classifyIntentWithModel(input: {
   const prompt = `
 Eres un clasificador de intención para una plataforma SaaS multitenant.
 
-Tu trabajo es devolver una sola intención principal y facets estructuradas.
+Tu trabajo es devolver una sola intención principal, facets estructuradas y una señal comercial estructurada.
 No uses respuestas narrativas.
 No inventes nuevos campos.
 No devuelvas texto extra fuera del JSON.
@@ -376,7 +480,13 @@ Reglas:
   - asksAvailability
 - Puede haber varios facets en true al mismo tiempo.
 - Si el mensaje es ambiguo y no alcanza para clasificar con confianza, usa "duda".
-- nivel_interes:
+- Devuelve además una señal comercial estructurada:
+  - purchaseIntent: "unknown" | "low" | "medium" | "high"
+  - wantsBooking: true cuando el usuario quiere reservar, agendar o concretar
+  - wantsQuote: true cuando el usuario está buscando precio, cotización o evaluación económica para decidir
+  - wantsHuman: true cuando pide claramente una persona, asesor, agente o ayuda humana
+  - urgency: "unknown" | "low" | "medium" | "high"
+- "nivel_interes" es solo compatibilidad legacy:
   - 1 = curiosidad vaga, saludo, rechazo o duda general
   - 2 = pide información para evaluar
   - 3 = quiere avanzar, reservar, pagar o concretar
@@ -391,6 +501,13 @@ Devuelve SOLO JSON con esta forma exacta:
     "asksSchedules": false,
     "asksLocation": false,
     "asksAvailability": false
+  },
+  "commercial": {
+    "purchaseIntent": "unknown",
+    "wantsBooking": false,
+    "wantsQuote": false,
+    "wantsHuman": false,
+    "urgency": "unknown"
   }
 }
   `.trim();
@@ -411,23 +528,38 @@ Devuelve SOLO JSON con esta forma exacta:
   }
 }
 
-export function esIntencionDeVenta(intencion: string): boolean {
-  const value = String(intencion || "").trim().toLowerCase();
+export function esIntencionDeVenta(input: {
+  intent?: string | null;
+  commercial?: {
+    purchaseIntent?: "unknown" | "low" | "medium" | "high" | null;
+    wantsBooking?: boolean | null;
+    wantsQuote?: boolean | null;
+  } | null;
+}): boolean {
+  const purchaseIntent = String(
+    input.commercial?.purchaseIntent || "unknown"
+  ).trim().toLowerCase();
 
-  if (!value) return false;
-  if (value === "soporte" || value === "queja" || value === "cancelar" || value === "soporte_reserva") {
-    return false;
+  if (
+    purchaseIntent === "medium" ||
+    purchaseIntent === "high" ||
+    input.commercial?.wantsBooking === true ||
+    input.commercial?.wantsQuote === true
+  ) {
+    return true;
   }
 
-  return SALES_INTENTS.has(value) || value.includes("comprar");
+  return false;
 }
 
 export async function detectarIntencion(
   mensaje: string,
   tenantId: string,
-  canal: Canal = "whatsapp"
+  canal: Canal
 ): Promise<Intento> {
   const original = String(mensaje || "").trim();
+  const resolvedCanal: Canal = (String(canal || "").trim().toLowerCase() ||
+    "whatsapp") as Canal;
 
   if (!original) {
     return makeIntent("duda", 1);
@@ -438,8 +570,8 @@ export async function detectarIntencion(
   });
 
   const [tenantInfo, tenantIntents] = await Promise.all([
-    loadTenantContext(tenantId, canal),
-    loadTenantIntents(tenantId, canal),
+    loadTenantContext(tenantId, resolvedCanal),
+    loadTenantIntents(tenantId, resolvedCanal),
   ]);
 
   const classified = await classifyIntentWithModel({
