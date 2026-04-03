@@ -404,25 +404,111 @@ function buildUserPrompt(
   ].join("\n");
 }
 
+function normalizeComparableText(value: string): string {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getFirstNonEmptyLine(text: string): string {
+  return (
+    String(text || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .find(Boolean) || ""
+  );
+}
+
+function getTokenSet(text: string): Set<string> {
+  return new Set(
+    normalizeComparableText(text)
+      .split(" ")
+      .map((token) => token.trim())
+      .filter(Boolean)
+  );
+}
+
+function getTokenOverlapRatio(a: string, b: string): number {
+  const aSet = getTokenSet(a);
+  const bSet = getTokenSet(b);
+
+  if (!aSet.size || !bSet.size) return 0;
+
+  let overlap = 0;
+  for (const token of aSet) {
+    if (bSet.has(token)) overlap += 1;
+  }
+
+  return overlap / Math.min(aSet.size, bSet.size);
+}
+
+function shouldDropIntroForCanonicalBody(args: {
+  intro?: string | null;
+  canonicalBody: string;
+}): boolean {
+  const intro = String(args.intro || "").trim();
+  const canonicalBody = String(args.canonicalBody || "").trim();
+
+  if (!intro || !canonicalBody) return false;
+
+  const firstCanonicalLine = getFirstNonEmptyLine(canonicalBody);
+  if (!firstCanonicalLine) return false;
+
+  const normalizedIntro = normalizeComparableText(intro);
+  const normalizedFirstLine = normalizeComparableText(firstCanonicalLine);
+
+  if (!normalizedIntro || !normalizedFirstLine) return false;
+
+  if (
+    normalizedIntro === normalizedFirstLine ||
+    normalizedIntro.includes(normalizedFirstLine) ||
+    normalizedFirstLine.includes(normalizedIntro)
+  ) {
+    return true;
+  }
+
+  const overlapRatio = getTokenOverlapRatio(intro, firstCanonicalLine);
+  return overlapRatio >= 0.75;
+}
+
 function composeCanonicalReply(input: {
   canonicalBody: string;
   intro?: string | null;
   closing?: string | null;
   allowIntro?: boolean;
   allowOutro?: boolean;
+  dedupeIntroAgainstCanonicalBody?: boolean;
 }): string {
   const parts: string[] = [];
 
-  if (input.allowIntro && String(input.intro || "").trim()) {
-    parts.push(String(input.intro || "").trim());
+  const canonicalBody = String(input.canonicalBody || "").trim();
+  let intro = String(input.intro || "").trim();
+  const closing = String(input.closing || "").trim();
+
+  if (
+    input.dedupeIntroAgainstCanonicalBody === true &&
+    shouldDropIntroForCanonicalBody({
+      intro,
+      canonicalBody,
+    })
+  ) {
+    intro = "";
   }
 
-  if (String(input.canonicalBody || "").trim()) {
-    parts.push(String(input.canonicalBody || "").trim());
+  if (input.allowIntro && intro) {
+    parts.push(intro);
   }
 
-  if (input.allowOutro && String(input.closing || "").trim()) {
-    parts.push(String(input.closing || "").trim());
+  if (canonicalBody) {
+    parts.push(canonicalBody);
+  }
+
+  if (input.allowOutro && closing) {
+    parts.push(closing);
   }
 
   return parts.join("\n").trim();
@@ -650,7 +736,10 @@ export async function answerWithPromptBase(
         intro: parsedCanonicalFrame?.intro ?? null,
         closing: parsedCanonicalFrame?.closing ?? null,
         allowIntro: effectivePolicy.allowIntro,
-        allowOutro: effectivePolicy.allowOutro || effectivePolicy.mustEndWithSalesQuestion,
+        allowOutro:
+          effectivePolicy.allowOutro || effectivePolicy.mustEndWithSalesQuestion,
+        dedupeIntroAgainstCanonicalBody:
+          effectivePolicy.mode === "grounded_frame_only",
       })
     : parsedEnvelope?.text || rawModelOutput || fallbackText || "";
 

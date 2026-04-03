@@ -427,81 +427,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   }
 
   // ===============================
-  // ✅ INFO GENERAL DESDE PROMPT BASE / INFO_CLAVE
-  // preguntas generales del negocio o plataforma
-  // ===============================
-  {
-    const hasConcreteStructuredTarget =
-      Boolean(catalogReferenceClassification?.targetServiceId) ||
-      Boolean(catalogReferenceClassification?.targetVariantId) ||
-      Boolean(catalogReferenceClassification?.targetFamilyKey);
-
-    const isGenericBusinessOverviewIntent =
-      intentOut === "info_general" ||
-      intentOut === "duda";
-
-    const wantsGeneralBusinessOverview =
-      isGenericBusinessOverviewIntent &&
-      !hasConcreteStructuredTarget &&
-      !detectedFacets?.asksPrices &&
-      !detectedFacets?.asksSchedules &&
-      !detectedFacets?.asksLocation &&
-      !detectedFacets?.asksAvailability &&
-      catalogReferenceKind !== "entity_specific" &&
-      catalogReferenceKind !== "variant_specific" &&
-      catalogReferenceKind !== "referential_followup" &&
-      catalogReferenceKind !== "comparison";
-
-    if (wantsGeneralBusinessOverview) {
-      const canonicalReply = buildGeneralOverviewBlockFromInfoClave(infoClave).trim();
-
-      if (!canonicalReply) {
-        return { handled: false };
-      }
-
-      const ctxPatch: any = {
-        last_list_kind: null,
-        last_list_kind_at: null,
-        last_plan_list: null,
-        last_plan_list_at: null,
-        last_package_list: null,
-        last_package_list_at: null,
-
-        last_catalog_at: Date.now(),
-        lastResolvedIntent: "info_general_overview",
-
-        last_catalog_scope: "overview",
-        last_catalog_source: "info_clave",
-
-        lastPresentedEntityIds: [],
-        lastPresentedFamilyKeys: [],
-
-        last_service_id: null,
-        last_service_name: null,
-        last_service_at: null,
-        last_selected_kind: null,
-        last_selected_id: null,
-        last_selected_name: null,
-        last_selected_at: null,
-        last_variant_id: null,
-        last_variant_name: null,
-        last_variant_url: null,
-        last_variant_at: null,
-        selectedServiceId: null,
-        expectingVariant: false,
-      };
-
-      return {
-        handled: true,
-        source: "info_general_overview",
-        intent: "info_general",
-        reply: canonicalReply,
-        ctxPatch,
-      };
-    }
-  }
-
-  // ===============================
   // ✅ RESOLVER SELECCIÓN PENDIENTE DE LINK/VARIANTE
   // ===============================
   if (!hasPendingCatalogChoice) {
@@ -705,20 +630,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   // ===============================
   // 🧠 MOTOR ÚNICO DE CATÁLOGO
   // ===============================
-  const hasConcreteStructuredTarget =
-    Boolean(catalogReferenceClassification?.targetServiceId) ||
-    Boolean(catalogReferenceClassification?.targetVariantId) ||
-    Boolean(catalogReferenceClassification?.targetFamilyKey);
-
   const shouldResolveAmbiguousCandidatesThisTurn =
-    !hasConcreteStructuredTarget &&
-    (intentOut === "info_servicio" ||
-      intentOut === "precio" ||
-      intentOut === "planes_precios" ||
-      intentOut === "catalogo" ||
-      intentOut === "catalog" ||
-      intentOut === "other_plans" ||
-      intentOut === "catalog_alternatives");
+    !hasConcreteTargetThisTurn &&
+    isStructuredCatalogTurn;
 
   const candidateOptionsFromTurn = shouldResolveAmbiguousCandidatesThisTurn
     ? await (async () => {
@@ -753,22 +667,11 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     candidateOptionsFromTurn,
   });
 
-  const isGenericInfoIntent =
-  intentOut === "info_general" || intentOut === "duda";
-
   const canEnterCatalogFastpath =
-    !isGenericInfoIntent &&
     !shouldBypassCatalogFollowupReuse &&
     (
       Boolean(catalogRoutingSignal?.shouldRouteCatalog) ||
-      Boolean(
-        catalogReferenceClassification?.kind === "catalog_overview" ||
-        catalogReferenceClassification?.kind === "catalog_family" ||
-        catalogReferenceClassification?.kind === "entity_specific" ||
-        catalogReferenceClassification?.kind === "variant_specific" ||
-        catalogReferenceClassification?.kind === "referential_followup" ||
-        catalogReferenceClassification?.kind === "comparison"
-      )
+      isStructuredCatalogTurn
     );
 
   if (shouldBypassCatalogFollowupReuse) {

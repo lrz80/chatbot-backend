@@ -85,12 +85,18 @@ export type FastpathHybridArgs = {
   followupEntityKind?: "service" | "plan" | "package" | null;
 };
 
+export type FastpathHybridRoute =
+  | "catalog"
+  | "business_info"
+  | "continue_pipeline";
+
 export type FastpathHybridResult = {
   handled: boolean;
   reply?: string;
   replySource?: string;
   intent?: string | null;
   ctxPatch?: any;
+  routeTarget?: FastpathHybridRoute;
 };
 
 export async function handleFastpathHybridTurn(
@@ -251,9 +257,37 @@ export async function handleFastpathHybridTurn(
         : [],
   };
 
-  const fpIntent = catalogRoutingSignal.shouldRouteCatalog
-    ? detectedIntent || intentFallback || "precio"
-    : detectedIntent || intentFallback || null;
+  const shouldHandleCatalogInFastpath =
+    routingPolicy.shouldRouteCatalog === true ||
+    catalogRoutingSignal.shouldRouteCatalog === true;
+
+  const routeTarget: FastpathHybridRoute = shouldHandleCatalogInFastpath
+    ? "catalog"
+    : "business_info";
+
+  if (routeTarget === "business_info") {
+    console.log("[FASTPATH_HYBRID][ROUTE_BUSINESS_INFO_OUTSIDE_FASTPATH]", {
+      tenantId,
+      canal,
+      contactoNorm,
+      userInput,
+      detectedIntent,
+      intentFallback,
+      routingPolicy,
+      catalogRoutingSignal,
+    });
+
+    return {
+      handled: false,
+      routeTarget: "business_info",
+      intent: detectedIntent || intentFallback || null,
+    };
+  }
+
+  const fpIntent =
+    routeTarget === "catalog"
+      ? detectedIntent || intentFallback || null
+      : null;
 
   const { convoCtxForFastpath, preResolvedCtxPatch, forcedAnchorCtxPatch } =
     await getPreResolvedCatalogService({
@@ -285,38 +319,15 @@ export async function handleFastpathHybridTurn(
     lastServiceTtlMs: 60 * 60 * 1000,
   });
 
-  if (process.env.DEBUG_FASTPATH === "true") {
-    console.log("[FASTPATH_HYBRID][ENTRY_AFTER_RUN]", {
-      tenantId,
-      canal,
-      userInput,
-      fpHandled: fp.handled,
-      fpSource: fp.handled ? fp.source : null,
-      fpIntent: fp.handled ? fp.intent : null,
-      fpReplyPreview: fp.handled ? String(fp.reply || "").slice(0, 200) : null,
-      fpCtxPatchKeys: fp.handled && fp.ctxPatch ? Object.keys(fp.ctxPatch) : [],
-    });
-  }
-
   if (!fp.handled) {
     const unhandledCtxPatch = {
       ...(forcedAnchorCtxPatch || {}),
       ...(preResolvedCtxPatch || {}),
     };
 
-    if (process.env.DEBUG_FASTPATH === "true") {
-      console.log("[FASTPATH_HYBRID][RETURN_UNHANDLED_WITH_CTX]", {
-        tenantId,
-        canal,
-        userInput,
-        forcedAnchorCtxPatch,
-        preResolvedCtxPatch,
-        unhandledCtxPatch,
-      });
-    }
-
     return {
       handled: false,
+      routeTarget: "continue_pipeline",
       ctxPatch: Object.keys(unhandledCtxPatch).length
         ? unhandledCtxPatch
         : undefined,
@@ -476,6 +487,7 @@ export async function handleFastpathHybridTurn(
 
   return {
     handled: true,
+    routeTarget: "catalog",
     reply: finalReply,
     replySource: finalReplySource,
     intent: finalIntent,

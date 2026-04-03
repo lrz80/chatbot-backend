@@ -559,6 +559,57 @@ export async function procesarMensajeWhatsApp(
     return;
   }
 
+  async function tryBusinessInfoOutsideFastpath(params: {
+    intent: string | null;
+  }): Promise<boolean> {
+    const routeIntent = String(params.intent || "").trim() || null;
+
+    const { getRecentHistoryForModel } = await import(
+      "../../lib/channels/engine/messages/getRecentHistoryForModel"
+    );
+
+    const { answerWithPromptBase } = await import(
+      "../../lib/answers/answerWithPromptBase"
+    );
+
+    const history = await getRecentHistoryForModel({
+      tenantId: tenant.id,
+      canal,
+      fromNumber: contactoNorm,
+      excludeMessageId: messageId || null,
+      limit: 12,
+    });
+
+    const composed = await answerWithPromptBase({
+      tenantId: tenant.id,
+      promptBase: promptBaseMem,
+      userInput: ["USER_MESSAGE:", userInput].join("\n"),
+      history,
+      idiomaDestino,
+      canal,
+      maxLines: MAX_WHATSAPP_LINES,
+      fallbackText: await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
+    });
+
+    const finalBusinessInfoText = await ensureReplyLanguage(
+      String(composed.text || "").trim(),
+      idiomaDestino,
+      tenantBase
+    );
+
+    if (!finalBusinessInfoText) {
+      return false;
+    }
+
+    await replyAndExit(
+      finalBusinessInfoText,
+      "business_info_outside_fastpath",
+      routeIntent
+    );
+
+    return true;
+  }
+
   // ===============================
   // 📅 BOOKING helper (usa módulo genérico)
   // ===============================
@@ -984,6 +1035,22 @@ export async function procesarMensajeWhatsApp(
     if (fpRes.ctxPatch) {
       transition({ patchCtx: fpRes.ctxPatch });
       finalCtxPatch = { ...finalCtxPatch, ...fpRes.ctxPatch };
+    }
+
+    if (!fpRes.handled && fpRes.routeTarget === "business_info") {
+      const handledBusinessInfo = await tryBusinessInfoOutsideFastpath({
+        intent:
+          fpRes.intent ||
+          signals?.INTENCION_FINAL_CANONICA ||
+          INTENCION_FINAL_CANONICA ||
+          signals?.detectedIntent ||
+          detectedIntent ||
+          null,
+      });
+
+      if (handledBusinessInfo) {
+        return;
+      }
     }
 
     if (fpRes.handled && fpRes.reply) {
