@@ -29,6 +29,9 @@ const SECTION_ALIASES = {
   phone: ["Telefono", "Teléfono", "Phone"],
   contact: ["Contacto", "Contact"],
   rules: ["Reglas importantes", "Important rules"],
+
+  businessName: ["Nombre del negocio", "Business name", "Nombre"],
+  description: ["Qué es", "What is", "Descripción", "Descripcion", "About"],
 } as const;
 
 function normalizeLabel(label: string): string {
@@ -37,7 +40,6 @@ function normalizeLabel(label: string): string {
 
 function isHeaderMatch(line: string, labels: readonly string[]): boolean {
   const normalizedLine = normalizeLabel(line);
-
   return labels.some((label) => normalizeLabel(label) === normalizedLine);
 }
 
@@ -86,8 +88,7 @@ function parseSections(infoClave: string | null | undefined): ParsedSection[] {
   let i = 0;
 
   while (i < lines.length) {
-    const line = lines[i];
-    const raw = String(line || "").trim();
+    const raw = String(lines[i] || "").trim();
 
     if (!isPotentialSectionHeader(raw)) {
       i += 1;
@@ -156,32 +157,6 @@ function extractSectionValue(
   return "";
 }
 
-function isOperationalSection(normalizedHeader: string): boolean {
-  const operationalAliases = [
-    ...SECTION_ALIASES.location,
-    ...SECTION_ALIASES.availability,
-    ...SECTION_ALIASES.schedule,
-    ...SECTION_ALIASES.pricing,
-    ...SECTION_ALIASES.booking,
-    ...SECTION_ALIASES.phone,
-    ...SECTION_ALIASES.contact,
-  ].map(normalizeLabel);
-
-  return operationalAliases.includes(normalizedHeader);
-}
-
-export function buildLocationBlockFromInfoClave(
-  infoClave?: string | null
-): string {
-  return extractSectionValue(infoClave, SECTION_ALIASES.location);
-}
-
-export function buildAvailabilityBlockFromInfoClave(
-  infoClave?: string | null
-): string {
-  return extractSectionValue(infoClave, SECTION_ALIASES.availability);
-}
-
 function isOverviewExcludedSection(normalizedHeader: string): boolean {
   const excludedAliases = [
     ...SECTION_ALIASES.location,
@@ -195,6 +170,74 @@ function isOverviewExcludedSection(normalizedHeader: string): boolean {
   ].map(normalizeLabel);
 
   return excludedAliases.includes(normalizedHeader);
+}
+
+function isBusinessNameSection(normalizedHeader: string): boolean {
+  const aliases = SECTION_ALIASES.businessName.map(normalizeLabel);
+  return aliases.includes(normalizedHeader);
+}
+
+function isDescriptionSection(normalizedHeader: string): boolean {
+  const aliases = SECTION_ALIASES.description.map(normalizeLabel);
+  if (aliases.includes(normalizedHeader)) return true;
+
+  return (
+    normalizedHeader.startsWith("que es ") ||
+    normalizedHeader.startsWith("what is ")
+  );
+}
+
+function composeOverviewForDm(sections: ParsedSection[]): string {
+  const businessNameSection = sections.find((section) =>
+    isBusinessNameSection(section.normalizedHeader)
+  );
+
+  const descriptionSection = sections.find((section) =>
+    isDescriptionSection(section.normalizedHeader)
+  );
+
+  const parts: string[] = [];
+
+  if (businessNameSection?.value && descriptionSection?.value) {
+    parts.push(
+      `${businessNameSection.value} es ${descriptionSection.value}`
+        .replace(/\s+/g, " ")
+        .trim()
+    );
+  } else {
+    if (descriptionSection?.value) {
+      parts.push(descriptionSection.value.trim());
+    } else if (businessNameSection?.value) {
+      parts.push(businessNameSection.value.trim());
+    }
+  }
+
+  for (const section of sections) {
+    if (!section.value) continue;
+
+    if (
+      isBusinessNameSection(section.normalizedHeader) ||
+      isDescriptionSection(section.normalizedHeader)
+    ) {
+      continue;
+    }
+
+    parts.push(`${section.rawHeader}:\n${section.value}`);
+  }
+
+  return parts.join("\n\n").trim();
+}
+
+export function buildLocationBlockFromInfoClave(
+  infoClave?: string | null
+): string {
+  return extractSectionValue(infoClave, SECTION_ALIASES.location);
+}
+
+export function buildAvailabilityBlockFromInfoClave(
+  infoClave?: string | null
+): string {
+  return extractSectionValue(infoClave, SECTION_ALIASES.availability);
 }
 
 export function buildServicesBlockFromInfoClave(
@@ -217,8 +260,5 @@ export function buildServicesBlockFromInfoClave(
     return "";
   }
 
-  return overviewSections
-    .map((section) => `${section.rawHeader}:\n${section.value}`)
-    .join("\n\n")
-    .trim();
+  return composeOverviewForDm(overviewSections);
 }
