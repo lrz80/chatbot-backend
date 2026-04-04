@@ -64,6 +64,8 @@ import { runEstimateFlowTurn } from "../../lib/estimateFlow/runEstimateFlowTurn"
 import { traducirMensaje } from '../../lib/traducirMensaje';
 import { queryWithTimeout } from "../../lib/dbQuery";
 
+import { renderFastpathDmReply } from "../../lib/channels/engine/fastpath/renderFastpathDmReply";
+
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
   tenant?: any;
@@ -592,50 +594,51 @@ export async function procesarMensajeWhatsApp(
   }): Promise<boolean> {
     const routeIntent = String(params.intent || "").trim() || null;
 
-    const { getRecentHistoryForModel } = await import(
-      "../../lib/channels/engine/messages/getRecentHistoryForModel"
-    );
-
-    const { answerWithPromptBase } = await import(
-      "../../lib/answers/answerWithPromptBase"
-    );
-
-    const history = await getRecentHistoryForModel({
+    const rendered = await renderFastpathDmReply({
       tenantId: tenant.id,
       canal,
-      fromNumber: contactoNorm,
-      excludeMessageId: messageId || null,
-      limit: 12,
-    });
-
-    const composed = await answerWithPromptBase({
-      tenantId: tenant.id,
-      promptBase: promptBaseMem,
-      userInput: ["USER_MESSAGE:", userInput].join("\n"),
-      history,
       idiomaDestino,
-      canal,
+      userInput,
+      contactoNorm,
+      messageId,
+      promptBaseMem,
+      fastpathText: "",
+      fp: {
+        handled: true,
+        reply: "",
+        source: "info_clave_db",
+        intent: routeIntent || "info_general",
+        catalogPayload: null,
+      } as any,
+      detectedIntent: routeIntent || "info_general",
+      intentFallback: routeIntent || "info_general",
+      structuredService: {
+        hasResolution: false,
+      } as any,
+      replyPolicy: {
+        mode: "grounded_frame_only",
+        shouldPersistStructuredService: false,
+        shouldUseBusinessInfoFallback: true,
+        preserveExactBody: false,
+        preserveExactOrder: false,
+        preserveExactBullets: false,
+        preserveExactNumbers: false,
+        preserveExactLinks: false,
+      } as any,
+      ctxPatch: finalCtxPatch || {},
       maxLines: MAX_WHATSAPP_LINES,
-      fallbackText: await getBienvenidaPorCanal("whatsapp", tenant, idiomaDestino),
     });
 
-    if (composed.pendingCta) {
-      const pendingCtaPatch = {
-        pending_cta: {
-          ...composed.pendingCta,
-          createdAt: new Date().toISOString(),
-        },
-      };
-
-      transition({ patchCtx: pendingCtaPatch });
+    if (rendered.ctxPatch) {
+      transition({ patchCtx: rendered.ctxPatch });
       finalCtxPatch = {
         ...finalCtxPatch,
-        ...pendingCtaPatch,
+        ...rendered.ctxPatch,
       };
     }
 
     const finalBusinessInfoText = await ensureReplyLanguage(
-      String(composed.text || "").trim(),
+      String(rendered.reply || "").trim(),
       idiomaDestino,
       tenantBase
     );
