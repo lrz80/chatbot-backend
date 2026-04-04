@@ -286,8 +286,19 @@ export async function renderFastpathDmReply(
     isPriceSummaryReply,
     isGroundedCatalogReply,
     shouldForceSalesClosingQuestion,
-    commercialPolicy,
   } = replyPolicy;
+
+  const commercialPolicy = replyPolicy.commercialPolicy ?? {
+    purchaseIntent: "low",
+    wantsBooking: false,
+    wantsQuote: false,
+    wantsHuman: false,
+    urgency: "low",
+    shouldUseSalesTone: true,
+    shouldUseSoftClosing: true,
+    shouldUseDirectClosing: false,
+    shouldSuggestHumanHandoff: false,
+  };
 
   const fpSource = normalizeText(fp?.source).toLowerCase();
   const fpIntent = normalizeText(

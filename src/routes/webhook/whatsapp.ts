@@ -593,6 +593,23 @@ export async function procesarMensajeWhatsApp(
     intent: string | null;
   }): Promise<boolean> {
     const routeIntent = String(params.intent || "").trim() || null;
+    const canonicalBusinessInfoBody = String(tenant?.info_clave || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  
+    if (!canonicalBusinessInfoBody) {
+      console.warn("[BUSINESS_INFO][EMPTY_CANONICAL_BODY]", {
+        tenantId: tenant.id,
+        canal,
+        contactoNorm,
+        userInput,
+        routeIntent,
+      });
+      return false;
+    }
 
     const rendered = await renderFastpathDmReply({
       tenantId: tenant.id,
@@ -600,31 +617,48 @@ export async function procesarMensajeWhatsApp(
       idiomaDestino,
       userInput,
       contactoNorm,
-      messageId,
+      messageId: messageId || null,
       promptBaseMem,
-      fastpathText: "",
+      fastpathText: canonicalBusinessInfoBody,
       fp: {
-        handled: true,
-        reply: "",
-        source: "info_clave_db",
-        intent: routeIntent || "info_general",
-        catalogPayload: null,
-      } as any,
-      detectedIntent: routeIntent || "info_general",
-      intentFallback: routeIntent || "info_general",
+        reply: canonicalBusinessInfoBody,
+        source: "info_general_overview_db",
+        intent: routeIntent,
+        catalogPayload: undefined,
+      },
+      detectedIntent: routeIntent,
+      intentFallback: routeIntent,
       structuredService: {
+        serviceId: null,
+        serviceName: null,
+        serviceLabel: null,
         hasResolution: false,
-      } as any,
+      },
       replyPolicy: {
-        mode: "grounded_frame_only",
-        shouldPersistStructuredService: false,
-        shouldUseBusinessInfoFallback: true,
-        preserveExactBody: false,
-        preserveExactOrder: false,
-        preserveExactBullets: false,
-        preserveExactNumbers: false,
-        preserveExactLinks: false,
-      } as any,
+        shouldUseGroundedFrameOnly: true,
+        responsePolicyMode: "grounded_frame_only",
+        hasResolvedEntity: false,
+
+        isCatalogDbReply: false,
+        isPriceSummaryReply: false,
+        isPriceDisambiguationReply: false,
+        isGroundedCatalogReply: false,
+        isGroundedCatalogOverviewDm: true,
+        shouldForceSalesClosingQuestion: false,
+        canonicalBodyOwnsClosing: false,
+
+        commercialPolicy: {
+          purchaseIntent: detectedCommercial?.purchaseIntent ?? "low",
+          wantsBooking: detectedCommercial?.wantsBooking === true,
+          wantsQuote: detectedCommercial?.wantsQuote === true,
+          wantsHuman: detectedCommercial?.wantsHuman === true,
+          urgency: detectedCommercial?.urgency ?? "low",
+          shouldUseSalesTone: true,
+          shouldUseSoftClosing: true,
+          shouldUseDirectClosing: false,
+          shouldSuggestHumanHandoff: detectedCommercial?.wantsHuman === true,
+        },
+      },
       ctxPatch: finalCtxPatch || {},
       maxLines: MAX_WHATSAPP_LINES,
     });
