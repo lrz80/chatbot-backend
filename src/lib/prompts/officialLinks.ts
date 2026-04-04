@@ -1,5 +1,6 @@
 // backend/src/lib/prompts/officialLinks.ts
 import pool from "../db";
+import type { LangCode } from "../i18n/lang";
 
 export type OfficialLink = {
   label: string;
@@ -85,14 +86,14 @@ export async function getOfficialLinksForTenant(
  */
 export function renderOfficialLinksSection(
   links: OfficialLink[],
-  lang: "es" | "en"
+  lang: LangCode
 ): string {
   if (!links.length) return "";
 
   const header =
-    lang === "en"
-      ? "OFFICIAL_LINKS (use ONLY these URLs when you want to propose a next step to the user; do not invent other links):"
-      : "ENLACES_OFICIALES (usa SOLO estos enlaces cuando quieras proponer un siguiente paso al usuario; no inventes otros links):";
+    lang === "es"
+      ? "ENLACES_OFICIALES (usa SOLO estos enlaces cuando quieras proponer un siguiente paso al usuario; no inventes otros links):"
+      : "OFFICIAL_LINKS (use ONLY these URLs when you want to propose a next step to the user; do not invent other links):";
 
   const lines = links.map((l) => `- ${l.label}: ${l.url}`);
 

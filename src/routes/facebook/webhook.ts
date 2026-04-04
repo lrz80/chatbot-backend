@@ -1,20 +1,8 @@
 // src/routes/facebook/webhook.ts
-//
-// ✅ Objetivo: que FB/IG use el MISMO pipeline “engine” que WhatsApp
-// (lang resolution + user signals + booking + fastpath + state machine + fallback + finalizeReply + postReplyActions)
-//
-// Nota: aquí conservamos:
-// - Verificación GET de Meta
-// - Resolución tenant por pageId (facebook_page_id / instagram_page_id)
-// - Gates de subcanal + canUseChannel + membresía
-// - Dedupe inbound (interactions) + dedupe corto en memoria
-// Y reemplazamos el resto por la misma lógica del webhook de WhatsApp.
-
 import express from "express";
 import pool from "../../lib/db";
 
 import type { Canal } from "../../lib/detectarIntencion";
-import type { Lang } from "../../lib/channels/engine/clients/clientDb";
 
 import crypto from "crypto";
 
@@ -40,13 +28,17 @@ import { awaitingGate } from "../../lib/guards/awaitingGate";
 import { humanOverrideGate } from "../../lib/guards/humanOverrideGate";
 
 import { resolveLangForTurn } from "../../lib/channels/engine/lang/resolveLangForTurn";
+
 import {
-  normalizeLang,
   ensureClienteBase,
   upsertIdiomaClienteDB,
   getSelectedChannelDB,
   upsertSelectedChannelDB,
 } from "../../lib/channels/engine/clients/clientDb";
+import {
+  normalizeLangCode,
+  type LangCode,
+} from "../../lib/i18n/lang";
 
 import { handleFastpathHybridTurn } from "../../lib/channels/engine/fastpath/handleFastpathHybridTurn";
 import { handleStateMachineTurn } from "../../lib/channels/engine/sm/handleStateMachineTurn";
@@ -338,9 +330,9 @@ async function procesarMensajeMeta(args: {
   // - Forzamos tenantBase (fallback)
   // - forcedLangThisTurn: null (Meta no tiene “hello->en” hardcode aquí; lo maneja detectarIdioma/resolveLangForTurn)
   // ===============================
-  const tenantBase: Lang = normalizeLang(tenant?.idioma || "es");
-  let idiomaDestino: Lang = tenantBase;
-  let forcedLangThisTurn: Lang | null = null;
+  const tenantBase: LangCode = normalizeLangCode(tenant?.idioma) ?? "es";
+  let idiomaDestino: LangCode = tenantBase;
+  let forcedLangThisTurn: LangCode | null = null;
 
   // ✅ FORZAR IDIOMA SOLO en saludo inicial claro (igual WA)
   try {
@@ -348,7 +340,7 @@ async function procesarMensajeMeta(args: {
     const isClearHello = /^(hello|hi|hey)\b/i.test(t0);
     const isClearHola = /^(hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches)\b/i.test(t0);
 
-    let forcedLang: Lang | null = null;
+    let forcedLang: LangCode | null = null;
 
     if (isClearHello) forcedLang = "en";
     else if (isClearHola) forcedLang = "es";
@@ -562,29 +554,34 @@ async function procesarMensajeMeta(args: {
     if (intent !== undefined) lastIntent = intent;
   }
 
-  async function ensureReplyLanguage(text: string, targetLang: Lang): Promise<string> {
+  async function ensureReplyLanguage(
+    text: string,
+    targetLang: LangCode
+  ): Promise<string> {
     const raw = String(text || "").trim();
     if (!raw) return raw;
 
+    const normalizedTargetLang = normalizeLangCode(targetLang);
+    if (!normalizedTargetLang) return raw;
+
     try {
       const detected = await detectarIdioma(raw);
-      const outLang = detected?.lang;
+      const replyLang = normalizeLangCode(detected.lang);
 
-      // Si no se pudo detectar, no tocamos
-      if (outLang !== "es" && outLang !== "en") {
+      // Si no se pudo detectar, no forzamos nada.
+      if (!replyLang) {
         return raw;
       }
 
       // Ya está en el idioma correcto
-      if (outLang === targetLang) {
+      if (replyLang === normalizedTargetLang) {
         return raw;
       }
 
-      // Traducir al idioma del turno
-      const translated = await traducirMensaje(raw, targetLang);
-      return String(translated || raw).trim() || raw;
+      // Traducir al idioma del turno actual
+      return await traducirMensaje(raw, normalizedTargetLang);
     } catch (e: any) {
-      console.warn("⚠️ [META] ensureReplyLanguage failed:", e?.message || e);
+      console.warn("⚠️ ensureReplyLanguage failed:", e?.message || e);
       return raw;
     }
   }

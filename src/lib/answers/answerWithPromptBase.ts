@@ -8,6 +8,8 @@ import {
   getOfficialLinksForTenant,
   renderOfficialLinksSection,
 } from "../prompts/officialLinks";
+import type { LangCode } from "../i18n/lang";
+import { normalizeLangCode } from "../i18n/lang";
 
 type ResolvedEntityType =
   | "service"
@@ -63,7 +65,7 @@ type AnswerWithPromptBaseParams = {
   promptBase: string;
   userInput: string;
   history?: ChatCompletionMessageParam[];
-  idiomaDestino: "es" | "en";
+  idiomaDestino: LangCode;
   canal: string;
   maxLines?: number;
   fallbackText?: string;
@@ -251,11 +253,11 @@ function buildResponsePolicyBlock(policy: Required<ResponsePolicy>): string {
 }
 
 function buildInstructionBlock(
-  idiomaDestino: "es" | "en",
+  idiomaDestino: LangCode,
   maxLines: number,
   policy: Required<ResponsePolicy>
 ): string {
-  const responseLanguage = idiomaDestino === "en" ? "English" : "Español";
+  const responseLanguage = idiomaDestino === "es" ? "Español" : "English";
 
   const base = [
     "OUTPUT_RULES:",
@@ -311,26 +313,26 @@ function buildInstructionBlock(
 }
 
 function buildEntityLockBlock(
-  idiomaDestino: "es" | "en",
+  idiomaDestino: LangCode,
   policy: Required<ResponsePolicy>
 ): string {
   const lines: string[] = ["ENTITY_LOCK_RULES:"];
 
   if (policy.singleResolvedEntityOnly) {
-    if (idiomaDestino === "en") {
-      lines.push("- the_system_has_resolved_exactly_one_entity = true");
-      lines.push("- talk_only_about_the_resolved_entity = true");
-      lines.push("- do_not_introduce_second_entity = true");
-      lines.push("- do_not_compare_with_other_services_or_plans = true");
-      lines.push("- do_not_suggest_add_ons_or_extras = true");
-      lines.push("- do_not_use_or_followed_by_another_service = true");
-    } else {
+    if (idiomaDestino === "es") {
       lines.push("- el_sistema_ya_resolvio_exactamente_una_entidad = true");
       lines.push("- habla_solo_de_la_entidad_resuelta = true");
       lines.push("- no_introduzcas_una_segunda_entidad = true");
       lines.push("- no_compares_con_otros_servicios_o_planes = true");
       lines.push("- no_sugieras_add_ons_complementos_o_extras = true");
       lines.push("- no_uses_o_seguido_de_otro_servicio = true");
+    } else {
+      lines.push("- the_system_has_resolved_exactly_one_entity = true");
+      lines.push("- talk_only_about_the_resolved_entity = true");
+      lines.push("- do_not_introduce_second_entity = true");
+      lines.push("- do_not_compare_with_other_services_or_plans = true");
+      lines.push("- do_not_suggest_add_ons_or_extras = true");
+      lines.push("- do_not_use_or_followed_by_another_service = true");
     }
   }
 
@@ -585,6 +587,8 @@ export async function answerWithPromptBase(
     runtimeCapabilities,
   } = params;
 
+  const normalizedIdiomaDestino = normalizeLangCode(idiomaDestino) ?? "en";
+
   const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY || "",
   });
@@ -596,7 +600,7 @@ export async function answerWithPromptBase(
   try {
     if (normalizedPolicy.canUseOfficialLinks) {
       const links = await getOfficialLinksForTenant(tenantId);
-      const section = renderOfficialLinksSection(links, idiomaDestino);
+      const section = renderOfficialLinksSection(links, normalizedIdiomaDestino);
 
       if (section.trim()) {
         promptBaseWithLinks = [promptBase, "", section].join("\n");
@@ -651,9 +655,9 @@ export async function answerWithPromptBase(
     "",
     buildResponsePolicyBlock(effectivePolicy),
     "",
-    buildInstructionBlock(idiomaDestino, maxLines, effectivePolicy),
+    buildInstructionBlock(normalizedIdiomaDestino, maxLines, effectivePolicy),
     "",
-    buildEntityLockBlock(idiomaDestino, effectivePolicy),
+    buildEntityLockBlock(normalizedIdiomaDestino, effectivePolicy),
     "",
     extraContext ? `DATOS_ESTRUCTURADOS_DEL_TURNO:\n${extraContext}` : "",
     "",
@@ -799,8 +803,8 @@ export async function answerWithPromptBase(
         const detected = await detectarIdioma(out);
         const langOut = detected?.lang ?? null;
 
-        if ((langOut === "es" || langOut === "en") && langOut !== idiomaDestino) {
-          out = await traducirMensaje(out, idiomaDestino);
+        if (langOut && langOut !== normalizedIdiomaDestino) {
+          out = await traducirMensaje(out, normalizedIdiomaDestino);
           out = sanitizeChatOutput(out);
           out = capLines(out, maxLines);
         }

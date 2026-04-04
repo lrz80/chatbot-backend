@@ -1,6 +1,7 @@
 // src/lib/followups/followUpScheduler.ts
 
 import pool from "../db";
+import type { LangCode } from "../i18n/lang";
 
 export type FollowUpChannel =
   | "whatsapp"
@@ -39,7 +40,6 @@ const FOLLOWUP_ELIGIBLE_INTENTS = new Set<string>([
   "membresia",
   "plan",
   "paquete",
-  // ✅ agrega las que ya existen en tu sistema para que queden clasificadas como “venta”
   "info_servicio",
   "info_general",
   "info_general_overview",
@@ -56,8 +56,6 @@ const FOLLOWUP_BLOCKED_INTENTS = new Set<string>([
   "wrong_number",
   "numero_equivocado",
   "spam",
-
-  // intents no resolutivos: no debe dispararse follow-up todavía
   "catalog_disambiguation",
   "price_disambiguation",
   "clarification",
@@ -71,7 +69,9 @@ function clampLevel(level?: number | null): 1 | 2 | 3 {
   return 2;
 }
 
-async function getFollowUpSettings(tenantId: string): Promise<FollowUpSettingsRow | null> {
+async function getFollowUpSettings(
+  tenantId: string
+): Promise<FollowUpSettingsRow | null> {
   try {
     const { rows } = await pool.query(
       `SELECT *
@@ -86,7 +86,10 @@ async function getFollowUpSettings(tenantId: string): Promise<FollowUpSettingsRo
   }
 }
 
-function pickTemplateByLevel(settings: FollowUpSettingsRow, level: 1 | 2 | 3): string | null {
+function pickTemplateByLevel(
+  settings: FollowUpSettingsRow,
+  level: 1 | 2 | 3
+): string | null {
   const bajo = (settings.mensaje_nivel_bajo || "").trim();
   const medio = (settings.mensaje_nivel_medio || "").trim();
   const alto = (settings.mensaje_nivel_alto || "").trim();
@@ -94,7 +97,6 @@ function pickTemplateByLevel(settings: FollowUpSettingsRow, level: 1 | 2 | 3): s
   const picked = level === 1 ? bajo : level === 2 ? medio : alto;
   if (picked) return picked;
 
-  // fallback legacy temporal
   const legacyPrecio = (settings.mensaje_precio || "").trim();
   const legacyGeneral = (settings.mensaje_general || "").trim();
 
@@ -154,19 +156,13 @@ async function insertScheduledMessage(opts: {
   );
 }
 
-/**
- * Determina si debe programar follow-up.
- *
- * ✅ Regla principal: nivel_interes >= 2
- * ❌ Bloquea solo intents de no-contacto (stop/no_interesado/etc.)
- *
- * Nota: FOLLOWUP_ELIGIBLE_INTENTS queda como señal útil para analytics,
- * pero NO se usa como gate estricto para no perder intents como info_servicio.
- */
 function shouldScheduleFollowUp(args: {
   intFinal?: string | null;
   nivelInteres: number;
-}): { ok: boolean; reason: "no_intent" | "intent_blocked" | "interest_too_low" | "ok" } {
+}): {
+  ok: boolean;
+  reason: "no_intent" | "intent_blocked" | "interest_too_low" | "ok";
+} {
   const normalizedIntent = String(args.intFinal || "").trim().toLowerCase();
   const { nivelInteres } = args;
 
@@ -187,27 +183,16 @@ function shouldScheduleFollowUp(args: {
 
 /**
  * ✅ API pública: un solo follow-up (NO secuencias) con delay según nivel.
- *
- * Comportamiento:
- * - Respeta flag skip.
- * - Ignora canal "preview".
- * - Solo programa follow-up si:
- *   - hay tenant.id y contacto,
- *   - nivel de interés >= 2,
- *   - intención NO está bloqueada,
- *   - hay settings + plantilla en DB.
  */
 export async function scheduleFollowUpIfEligible(opts: {
   tenant: any;
   canal: FollowUpChannel;
   contactoNorm: string;
-  idiomaDestino: "es" | "en";
+  idiomaDestino: LangCode;
   intFinal?: string | null;
   nivel?: number | null;
   userText: string;
   skip?: boolean;
-
-  // ✅ opcional: si luego quieres evitar followups en ciertos estados del cliente
   estadoCliente?: string | null;
 }): Promise<{
   scheduled: boolean;
@@ -235,7 +220,6 @@ export async function scheduleFollowUpIfEligible(opts: {
     estadoCliente,
   } = opts;
 
-  // ✅ Respeta flag skip
   if (skip) {
     console.log("[FOLLOWUP] skipped: skip_flag", {
       canal,
@@ -255,7 +239,6 @@ export async function scheduleFollowUpIfEligible(opts: {
     return { scheduled: false, reason: "invalid_contact" };
   }
 
-  // nunca en preview
   if (canal === "preview") {
     console.log("[FOLLOWUP] skipped: preview_channel", {
       canal,
@@ -265,10 +248,8 @@ export async function scheduleFollowUpIfEligible(opts: {
     return { scheduled: false, reason: "preview_channel" };
   }
 
-  // ✅ normalizar nivel de interés
   const nivelInteres = typeof nivel === "number" ? nivel : 0;
 
-  // ✅ gate por reglas genéricas (nivel >= 2 y no bloqueado)
   const gate = shouldScheduleFollowUp({ intFinal, nivelInteres });
   if (!gate.ok) {
     const reason =
@@ -284,7 +265,6 @@ export async function scheduleFollowUpIfEligible(opts: {
       contactoNorm,
       nivelInteres,
       estadoCliente,
-      // para debug: si el intent era “de venta”
       isSalesLikeIntent: intFinal
         ? FOLLOWUP_ELIGIBLE_INTENTS.has(String(intFinal).trim().toLowerCase())
         : false,
@@ -293,14 +273,6 @@ export async function scheduleFollowUpIfEligible(opts: {
     return { scheduled: false, reason };
   }
 
-  // ✅ Si quieres bloquear follow-up en ciertos estados, hazlo aquí.
-  // EJEMPLO (si lo quisieras):
-  // if (estadoCliente === "esperando_pago") {
-  //   console.log("[FOLLOWUP] skipped: waiting_payment_state", { contactoNorm, intFinal });
-  //   return { scheduled: false, reason: "interest_too_low" };
-  // }
-
-  // A partir de aquí, SÍ queremos programar algo
   const level = clampLevel(nivelInteres);
 
   const settings = await getFollowUpSettings(tenant.id);
@@ -323,10 +295,8 @@ export async function scheduleFollowUpIfEligible(opts: {
     return { scheduled: false, reason: "no_template", level };
   }
 
-  // 🕒 minutos_espera en DB se interpreta como delay FINAL en MINUTOS
   const delayMinutes = Math.max(1, Number(settings.minutos_espera || 60));
 
-  // ✅ clave: borrar pending antes de reprogramar
   await cancelPendingFollowUps({
     tenantId: tenant.id,
     canal,
@@ -350,7 +320,9 @@ export async function scheduleFollowUpIfEligible(opts: {
     level,
     delayMinutes,
     estadoCliente,
-    isSalesLikeIntent: intFinal ? FOLLOWUP_ELIGIBLE_INTENTS.has(intFinal) : false,
+    isSalesLikeIntent: intFinal
+      ? FOLLOWUP_ELIGIBLE_INTENTS.has(String(intFinal).trim().toLowerCase())
+      : false,
   });
 
   return { scheduled: true, reason: "scheduled", level };

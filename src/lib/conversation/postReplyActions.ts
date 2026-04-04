@@ -1,4 +1,6 @@
+// src/lib/conversation/postReplyActions.ts
 import type poolType from "../db";
+import type { LangCode } from "../i18n/lang";
 import { recordSalesIntent } from "../sales/recordSalesIntent";
 import {
   capiContactQualified,
@@ -101,7 +103,7 @@ export async function runPostReplyActions(opts: {
   messageId?: string | null;
   userInput: string;
 
-  idiomaDestino: "es" | "en";
+  idiomaDestino: LangCode;
 
   lastIntent?: string | null;
   intentFallback?: string | null;

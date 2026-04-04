@@ -1,3 +1,6 @@
+//src/lib/estimateFlow/types.ts
+import type { LangCode } from "../i18n/lang";
+
 export type EstimateFlowStep =
   | "idle"
   | "awaiting_name"
@@ -23,7 +26,7 @@ export type EstimateFlowState = {
   active: boolean;
   step: EstimateFlowStep;
 
-  lang?: "es" | "en" | null;
+  lang?: LangCode | null;
 
   name?: string | null;
   phone?: string | null;

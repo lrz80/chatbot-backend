@@ -1,12 +1,12 @@
 // backend/src/lib/channels/engine/clients/clientDb.ts
 import type { Pool } from "pg";
+import { normalizeLangCode, type LangCode } from "../../../i18n/lang";
 
-export type Lang = "es" | "en";
+export type Lang = LangCode;
 export type SelectedChannel = "whatsapp" | "instagram" | "facebook" | "multi";
 
-export function normalizeLang(code?: string | null): Lang {
-  const base = String(code || "").toLowerCase().split(/[-_]/)[0];
-  return base === "en" ? "en" : "es";
+export function normalizeLang(code?: string | null): Lang | null {
+  return normalizeLangCode(code);
 }
 
 /**
@@ -53,9 +53,14 @@ export async function getIdiomaClienteDB(
        LIMIT 1`,
       [tenantId, canal, contacto]
     );
-    if (rows[0]?.idioma) return normalizeLang(rows[0].idioma);
-  } catch {}
-  return fallback;
+
+    const dbLang = normalizeLangCode(rows[0]?.idioma);
+    if (dbLang) return dbLang;
+  } catch (e: any) {
+    console.warn("⚠️ getIdiomaClienteDB FAILED", e?.message);
+  }
+
+  return normalizeLangCode(fallback) ?? "es";
 }
 
 export async function upsertIdiomaClienteDB(
@@ -64,8 +69,11 @@ export async function upsertIdiomaClienteDB(
   canal: string,
   contacto: string,
   idioma: Lang
-) {
+): Promise<void> {
   try {
+    const normalizedIdioma = normalizeLangCode(idioma);
+    if (!normalizedIdioma) return;
+
     await pool.query(
       `INSERT INTO clientes (tenant_id, canal, contacto, idioma, updated_at)
        VALUES ($1, $2, $3, $4, NOW())
@@ -73,7 +81,7 @@ export async function upsertIdiomaClienteDB(
        DO UPDATE SET
          idioma = EXCLUDED.idioma,
          updated_at = NOW()`,
-      [tenantId, canal, contacto, idioma]
+      [tenantId, canal, contacto, normalizedIdioma]
     );
   } catch (e: any) {
     console.warn("⚠️ No se pudo guardar idioma del cliente:", e?.message);
@@ -90,14 +98,25 @@ export async function getSelectedChannelDB(
     const { rows } = await pool.query(
       `SELECT selected_channel
        FROM clientes
-       WHERE tenant_id=$1 AND canal=$2 AND contacto=$3
+       WHERE tenant_id = $1 AND canal = $2 AND contacto = $3
        LIMIT 1`,
       [tenantId, canal, contacto]
     );
 
     const v = String(rows[0]?.selected_channel || "").trim().toLowerCase();
-    if (v === "whatsapp" || v === "instagram" || v === "facebook" || v === "multi") return v as any;
-  } catch {}
+
+    if (
+      v === "whatsapp" ||
+      v === "instagram" ||
+      v === "facebook" ||
+      v === "multi"
+    ) {
+      return v;
+    }
+  } catch (e: any) {
+    console.warn("⚠️ getSelectedChannelDB FAILED", e?.message);
+  }
+
   return null;
 }
 
@@ -107,10 +126,17 @@ export async function upsertSelectedChannelDB(
   canal: string,
   contacto: string,
   selected: SelectedChannel
-) {
+): Promise<void> {
   try {
     await pool.query(
-      `INSERT INTO clientes (tenant_id, canal, contacto, selected_channel, selected_channel_updated_at, updated_at)
+      `INSERT INTO clientes (
+         tenant_id,
+         canal,
+         contacto,
+         selected_channel,
+         selected_channel_updated_at,
+         updated_at
+       )
        VALUES ($1, $2, $3, $4, NOW(), NOW())
        ON CONFLICT (tenant_id, canal, contacto)
        DO UPDATE SET

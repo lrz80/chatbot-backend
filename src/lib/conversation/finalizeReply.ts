@@ -1,5 +1,6 @@
 // backend/src/lib/conversation/finalizeReply.ts
-import type { Canal } from '../../lib/detectarIntencion'; 
+import type { Canal } from '../../lib/detectarIntencion';
+import type { LangCode } from '../i18n/lang';
 
 type LastServiceRef = {
   kind: "service" | "variant" | null;
@@ -10,7 +11,6 @@ type LastServiceRef = {
 };
 
 type FinalizeDeps = {
-  // Sender/transport
   safeSend: (
     tenantId: string,
     canal: Canal,
@@ -19,7 +19,6 @@ type FinalizeDeps = {
     reply: string
   ) => Promise<boolean>;
 
-  // Persistencia
   setConversationState: (
     tenantId: string,
     canal: Canal,
@@ -38,18 +37,17 @@ type FinalizeDeps = {
   rememberAfterReply: (args: {
     tenantId: string;
     senderId: string;
-    idiomaDestino: "es" | "en";
+    idiomaDestino: LangCode;
     userText: string;
     assistantText: string;
     lastIntent: string | null;
   }) => Promise<void>;
 
-  // ✅ opcional: permitir que el LLM deje ancla de servicio para turnos siguientes
   captureLastServiceRef?: (args: {
     tenantId: string;
     userInput: string;
     assistantText: string;
-    idiomaDestino: "es" | "en";
+    idiomaDestino: LangCode;
     convoCtx: any;
   }) => Promise<LastServiceRef | null>;
 };
@@ -64,21 +62,18 @@ type FinalizeInput = {
   tenantId: string;
   canal: Canal;
   messageId: string | null;
-  fromNumber: string; // número real del cliente (sin whatsapp:)
-  contactoNorm: string; // llave normalizada
+  fromNumber: string;
+  contactoNorm: string;
   userInput: string;
 
-  idiomaDestino: "es" | "en";
+  idiomaDestino: LangCode;
 
-  // snapshot estado conversacional (lo que tengas en memoria al final del turno)
   activeFlow: string;
   activeStep: string;
   convoCtx: any;
 
-  // si manejas un fallback separado, pasa aquí el valor final
   intentFallback: string | null;
 
-  // callback para mantener sync en el webhook si quieres
   onAfterOk?: (nextCtx: any) => void;
 };
 
@@ -108,10 +103,8 @@ export async function finalizeReply(
 
   if (!handled || !reply) return;
 
-  // ✅ Sender único para estado/memoria
   const senderKey = contactoNorm || fromNumber || "anónimo";
 
-  // ✅ Intentar capturar last_service_ref (para casos donde el LLM respondió un servicio)
   let capturedRef: LastServiceRef | null = null;
 
   try {
@@ -146,7 +139,6 @@ export async function finalizeReply(
   const rawBaseCtx = convoCtx && typeof convoCtx === "object" ? convoCtx : {};
   const patchCtx = ctxPatch && typeof ctxPatch === "object" ? ctxPatch : {};
 
-  // IMPORTANTE: el patch del turno actual debe ganar sobre el contexto viejo
   const baseCtx = {
     ...rawBaseCtx,
     ...patchCtx,
@@ -241,7 +233,6 @@ export async function finalizeReply(
     ...baseCtx,
     ...(capturedRef?.service_id ? { last_service_ref: capturedRef } : {}),
 
-    // ancla canónica para clasificación/routing
     lastEntityId: canonicalLastEntityId,
     lastEntityName: canonicalLastEntityName,
     lastFamilyKey: canonicalLastFamilyKey,
@@ -253,14 +244,12 @@ export async function finalizeReply(
     lastResolvedIntent: canonicalLastResolvedIntent,
     presentedVariantOptions: canonicalPresentedVariantOptions,
 
-    // compat legacy
     last_intent: canonicalLastResolvedIntent,
     last_reply_source: replySource || null,
     last_assistant_text: reply,
     last_user_text: userInput,
     last_turn_at: new Date().toISOString(),
 
-    // mantener consistencia y no revivir valores legacy viejos
     last_entity_id: canonicalLastEntityId,
     last_entity_name: canonicalLastEntityName,
     last_family_key: canonicalLastFamilyKey,
@@ -282,14 +271,12 @@ export async function finalizeReply(
     return;
   }
 
-  // 1) state (una sola vez)
   await deps.setConversationState(tenantId, canal, senderKey, {
     activeFlow: activeFlow || "generic_sales",
     activeStep: activeStep || "start",
     context: nextCtx,
   });
 
-  // 2) mensaje assistant + emit
   await deps.saveAssistantMessageAndEmit({
     tenantId,
     canal,
@@ -298,7 +285,6 @@ export async function finalizeReply(
     content: reply,
   });
 
-  // 3) memoria
   await deps.rememberAfterReply({
     tenantId,
     senderId: senderKey,

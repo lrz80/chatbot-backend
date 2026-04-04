@@ -77,6 +77,29 @@ type ResolveServiceOptions = {
   allowedServiceIds?: string[];
 };
 
+type DetectLangSafeResult = {
+  lang: string | null;
+  confidence: number;
+  source: "openai" | "none";
+};
+
+async function detectarIdiomaSafe(text: string): Promise<DetectLangSafeResult> {
+  try {
+    const result = await detectarIdioma(text);
+    return {
+      lang: result?.lang ?? null,
+      confidence: Number(result?.confidence ?? 0),
+      source: result?.source === "openai" ? "openai" : "none",
+    };
+  } catch {
+    return {
+      lang: null,
+      confidence: 0,
+      source: "none",
+    };
+  }
+}
+
 function stripDiacritics(raw: string): string {
   const normalized = String(raw || "").normalize("NFD");
   let out = "";
@@ -177,6 +200,15 @@ function normalizeLabel(raw: string): string {
       }
       continue;
     }
+
+    if (!isAsciiLetterOrDigit(ch)) {
+      if (!prevSpace) {
+        out += " ";
+        prevSpace = true;
+      }
+      continue;
+    }
+
     out += ch;
     prevSpace = false;
   }
@@ -336,12 +368,8 @@ export async function resolveServiceCandidatesFromText(
     return { kind: "none", hit: null, candidates: [] };
   }
 
-  let idioma: "es" | "en" | string = "es";
-  try {
-    idioma = (await detectarIdioma(input)) as any;
-  } catch {
-    idioma = "es";
-  }
+  const detected = await detectarIdiomaSafe(input);
+  const idioma = detected.lang ?? "es";
 
   const textNorm = normalize(input);
   let translatedAlt = "";

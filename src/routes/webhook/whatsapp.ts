@@ -39,14 +39,16 @@ import {
 import {
   capiLeadFirstInbound,
 } from "../../lib/analytics/capiEvents";
-import type { Lang } from "../../lib/channels/engine/clients/clientDb";
 import {
-  normalizeLang,
   ensureClienteBase,
   upsertIdiomaClienteDB,
   getSelectedChannelDB,
   upsertSelectedChannelDB,
 } from "../../lib/channels/engine/clients/clientDb";
+import {
+  normalizeLangCode,
+  type LangCode,
+} from "../../lib/i18n/lang";
 import { resolveLangForTurn } from "../../lib/channels/engine/lang/resolveLangForTurn";
 import { runPostReplyActions } from "../../lib/conversation/postReplyActions";
 import { postBookingCourtesyGuard } from "../../lib/appointments/booking/postBookingCourtesyGuard";
@@ -162,9 +164,9 @@ export async function procesarMensajeWhatsApp(
   const waModePromise = getWhatsAppModeStatus(tenant.id);
 
   // 👉 idioma base del tenant (fallback)
-  const tenantBase: Lang = normalizeLang(tenant?.idioma || "es");
-  let idiomaDestino: Lang = tenantBase;
-  let forcedLangThisTurn: Lang | null = null;
+  const tenantBase: LangCode = normalizeLangCode(tenant?.idioma) ?? "es";
+  let idiomaDestino: LangCode = tenantBase;
+  let forcedLangThisTurn: LangCode | null = null;
 
   const origen = turn.origen;
 
@@ -201,7 +203,7 @@ export async function procesarMensajeWhatsApp(
     const isClearHello = /^(hello|hi|hey)\b/i.test(t0);
     const isClearHola = /^(hola|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches)\b/i.test(t0);
 
-    let forcedLang: Lang | null = null;
+    let forcedLang: LangCode | null = null;
 
     if (isClearHello) forcedLang = "en";
     else if (isClearHola) forcedLang = "es";
@@ -273,29 +275,30 @@ export async function procesarMensajeWhatsApp(
 
   async function ensureReplyLanguage(
     text: string,
-    targetLang: Lang,
-    fallbackLang: Lang
+    targetLang: LangCode
   ): Promise<string> {
     const raw = String(text || "").trim();
     if (!raw) return raw;
 
+    const normalizedTargetLang = normalizeLangCode(targetLang);
+    if (!normalizedTargetLang) return raw;
+
     try {
       const detected = await detectarIdioma(raw);
-      const replyLang = detected.lang;
+      const replyLang = normalizeLangCode(detected.lang);
 
-      // Si no pudimos detectar, no inventamos nada aquí.
-      // Dejamos pasar el texto original.
-      if (replyLang !== "es" && replyLang !== "en") {
+      // Si no se pudo detectar, no forzamos nada.
+      if (!replyLang) {
         return raw;
       }
 
       // Ya está en el idioma correcto
-      if (replyLang === targetLang) {
+      if (replyLang === normalizedTargetLang) {
         return raw;
       }
 
       // Traducir al idioma del turno actual
-      return await traducirMensaje(raw, targetLang);
+      return await traducirMensaje(raw, normalizedTargetLang);
     } catch (e: any) {
       console.warn("⚠️ ensureReplyLanguage failed:", e?.message || e);
       return raw;
@@ -580,8 +583,7 @@ export async function procesarMensajeWhatsApp(
   async function replyAndExit(text: string, source: string, intent?: string | null) {
     const finalText = await ensureReplyLanguage(
       text,
-      idiomaDestino,
-      tenantBase
+      idiomaDestino
     );
 
     setReply(finalText, source, intent);
@@ -673,8 +675,7 @@ export async function procesarMensajeWhatsApp(
 
     const finalBusinessInfoText = await ensureReplyLanguage(
       String(rendered.reply || "").trim(),
-      idiomaDestino,
-      tenantBase
+      idiomaDestino
     );
 
     if (!finalBusinessInfoText) {

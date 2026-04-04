@@ -14,7 +14,9 @@ import {
   googleDeleteEvent,
 } from "../../services/googleCalendar";
 
-type Lang = "es" | "en";
+import type { LangCode } from "../i18n/lang";
+
+type Lang = LangCode;
 
 type RunEstimateFlowParams = {
   pool: Pool;
@@ -51,11 +53,13 @@ export async function runEstimateFlowTurn({
 
   let estimateState = getEstimateFlowState(convoCtx);
 
-  function normalizeEstimateLang(value: unknown): Lang {
-    return String(value || "").trim().toLowerCase() === "en" ? "en" : "es";
+  function normalizeEstimateLang(value: unknown, fallback: Lang = "es"): Lang {
+    const raw = String(value || "").trim().toLowerCase();
+    const normalized = raw.split(/[-_]/)[0]?.trim();
+    return normalized || fallback;
   }
 
-  const detectedLang = normalizeEstimateLang(idiomaDestino);
+  const detectedLang = normalizeEstimateLang(idiomaDestino, "es");
 
   // Si el flow ya está activo, conservamos su idioma.
   // Solo sembramos idioma al iniciar o si no existe.
@@ -67,7 +71,8 @@ export async function runEstimateFlowTurn({
   }
 
   const effectiveEstimateLang: Lang = normalizeEstimateLang(
-    estimateState.lang || detectedLang
+    estimateState.lang || detectedLang,
+    detectedLang
   );
 
   const estimateTurn = handleEstimateFlowTurn({
@@ -93,8 +98,10 @@ export async function runEstimateFlowTurn({
   let nextEstimateState = {
     ...estimateState,
     ...(estimateTurn.nextState || {}),
-    lang:
-      ((estimateTurn.nextState as any)?.lang as Lang) || effectiveEstimateLang,
+    lang: normalizeEstimateLang(
+      (estimateTurn.nextState as any)?.lang,
+      effectiveEstimateLang
+    ),
   };
 
   let finalReply = estimateTurn.handled ? estimateTurn.reply : "";
