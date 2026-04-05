@@ -41,7 +41,11 @@ import { handleAskPurpose } from "./booking/handlers/askPurpose";
 import { handleStartBooking } from "./booking/handlers/start";
 import pool from "../../lib/db";
 import { getSlotsForDateWindow } from "./booking/slots";
-
+import type { LangCode } from "../i18n/lang";
+import {
+  wantsManageExisting,
+  detectManageExistingAction,
+} from "./booking/signals/manageExistingSignals";
 
 const BOOKING_FLOW_TTL_MS = 30 * 60 * 1000; // 30 minutos (ajústalo a 15/60 si quieres)
 
@@ -217,7 +221,7 @@ export async function bookingFlowMvp(opts: {
   tenantId: string;
   canal: "whatsapp" | "facebook" | "instagram";
   contacto: string;
-  idioma: "es" | "en";
+  idioma: LangCode;
   userText: string;
   ctx: any; // convoCtx (object)
   bookingLink?: string | null; // ✅ viene del prompt
@@ -309,9 +313,9 @@ export async function bookingFlowMvp(opts: {
     if (quickWants) {
       return {
       handled: true,
-      reply: idioma === "en"
-        ? "Scheduling is unavailable right now."
-        : "El agendamiento no está disponible en este momento.",
+      reply: idioma === "es"
+        ? "El agendamiento no está disponible en este momento."
+        : "Scheduling is unavailable right now.",
       ctxPatch: { 
         booking: { ...(booking || {}), step: "idle" }, 
         booking_last_touch_at: Date.now(),
@@ -381,9 +385,9 @@ export async function bookingFlowMvp(opts: {
 
       return {
         handled: true,
-        reply: idioma === "en"
-          ? `Already booked. ${link}`.trim()
-          : `Ya quedó agendado. ${link}`.trim(),
+        reply: idioma === "es"
+          ? `Ya quedó agendado. ${link}`.trim()
+          : `Already booked. ${link}`.trim(),
         ctxPatch: {
           booking: { step: "idle" },
           booking_last_touch_at: Date.now(),
@@ -471,9 +475,9 @@ if (!bookingEnabled) {
     if (bookingLink) {
       return {
         handled: true,
-        reply: idioma === "en"
-          ? `You can book here: ${bookingLink}`
-          : `Puedes agendar aquí: ${bookingLink}`,
+        reply: idioma === "es"
+          ? `Puedes agendar aquí: ${bookingLink}`
+          : `You can book here: ${bookingLink}`,
         ctxPatch: {
           booking: { step: "idle" },
           booking_last_touch_at: Date.now(),
@@ -483,9 +487,9 @@ if (!bookingEnabled) {
 
     return {
       handled: true,
-      reply: idioma === "en"
-        ? "Scheduling is unavailable right now."
-        : "El agendamiento no está disponible en este momento.",
+      reply: idioma === "es"
+        ? "El agendamiento no está disponible en este momento."
+        : "Scheduling is unavailable right now.",
       ctxPatch: {
         booking: { step: "idle" },
         booking_last_touch_at: Date.now(),
@@ -499,9 +503,9 @@ if (!bookingEnabled) {
 if (wantsBooking && bookingLink) {
   return {
     handled: true,
-    reply: idioma === "en"
-      ? `You can book here: ${bookingLink}`
-      : `Puedes agendar aquí: ${bookingLink}`,
+    reply: idioma === "es"
+      ? `Puedes agendar aquí: ${bookingLink}`
+      : `You can book here: ${bookingLink}`,
     ctxPatch: { 
         booking: { step: "idle" }, 
         booking_last_touch_at: Date.now(), },
@@ -512,9 +516,9 @@ if (wantsBooking && bookingLink) {
 if (wantsBooking && !bookingLink && !googleConnected) {
   return {
     handled: true,
-    reply: idioma === "en"
-      ? "Scheduling is unavailable right now."
-      : "El agendamiento no está disponible en este momento.",
+    reply: idioma === "es"
+      ? "El agendamiento no está disponible en este momento."
+      : "Scheduling is unavailable right now.",
     ctxPatch: { 
         booking: { step: "idle" }, 
         booking_last_touch_at: Date.now(), },
@@ -535,6 +539,8 @@ if (booking.step === "idle" || booking.step === "manage_existing") {
     timeZone,
     wantsBooking,
     detectPurpose,
+    wantsManageExisting,
+    detectManageExistingAction,
     durationMin,
     minLeadMinutes,
     hours,
@@ -571,7 +577,7 @@ if (booking.step === "ask_daypart") {
 }
 
 if (booking.step === "ask_all") {
-  const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma; // ✅ sticky
+  const effectiveLang: LangCode = (booking?.lang as LangCode) || idioma;
 
   return handleAskAll({
     tenantId,
@@ -604,7 +610,7 @@ if (booking.step === "ask_name") {
   });
 }
 
-const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
+const effectiveLang: LangCode = (booking?.lang as LangCode) || idioma;
 
 if (booking.step === "offer_slots") {
   return handleOfferSlots({
@@ -624,7 +630,7 @@ if (booking.step === "offer_slots") {
 if (booking.step === "ask_email_phone") {
   const requirePhone = canal === "facebook" || canal === "instagram";
 
-  const effectiveLang = (booking?.lang as "es" | "en") || idioma;
+  const effectiveLang: LangCode = (booking?.lang as LangCode) || idioma;
 
   return handleAskEmailPhone({
     tenantId,
@@ -640,29 +646,29 @@ if (booking.step === "ask_email_phone") {
   });
 }
 
-if (booking.step === "ask_datetime") {
-  // Usamos el mismo motor de start.ts también en reprogramaciones.
-  // wantsBooking = true porque ya sabemos que está en modo booking.
-  return handleStartBooking({
-    tenantId,
-    canal: canal as any,
-    contacto,
-    bufferMin,
-    getSlotsForDateWindow,
-    idioma: (booking?.lang as any) || idioma,
-    userText,
-    timeZone,
-    wantsBooking: true,      // 👈 clave: forzamos que sí está agendando
-    detectPurpose,
-    durationMin,
-    minLeadMinutes,
-    hours,
-    booking,
-  });
-}
+  if (booking.step === "ask_datetime") {
+    return handleStartBooking({
+      tenantId,
+      canal: canal as any,
+      contacto,
+      bufferMin,
+      getSlotsForDateWindow,
+      idioma: (booking?.lang as LangCode) || idioma,
+      userText,
+      timeZone,
+      wantsBooking: true,
+      detectPurpose,
+      wantsManageExisting,
+      detectManageExistingAction,
+      durationMin,
+      minLeadMinutes,
+      hours,
+      booking,
+    });
+  }
 
   if (booking.step === "confirm") {
-    const effectiveLang: "es" | "en" = (booking?.lang as any) || idioma;
+    const effectiveLang: LangCode = (booking?.lang as LangCode) || idioma;
 
     // ===============================
     // 🔧 Leer modo de link para este tenant

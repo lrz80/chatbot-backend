@@ -1,4 +1,5 @@
 // src/lib/appointments/booking/types.ts
+import type { LangCode } from "../../i18n/lang";
 
 export type BookingCtx = {
   booking?: {
@@ -21,7 +22,7 @@ export type BookingCtx = {
     name?: string | null;
     email?: string | null;
     phone?: string | null;
-    lang?: "es" | "en";
+    lang?: LangCode;
     purpose?: string | null;
 
     date_only?: string | null;

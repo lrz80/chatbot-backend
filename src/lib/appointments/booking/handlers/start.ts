@@ -11,16 +11,21 @@ import { extractBusyBlocks } from "../freebusy";
 import { cancelAppointmentById } from "../../cancelAppointment";
 import { findActiveAppointmentsByPhone } from "../../find";
 import pool from "../../../db";  // 👈 ruta desde handlers → booking → appointments → lib/db
+import type { LangCode } from "../../../i18n/lang";
+import { toCanonicalLangOrFallback } from "../../../i18n/lang";
+import type { BookingPurpose } from "../signals/bookingSignals";
 
 export type StartBookingDeps = {
-  idioma: "es" | "en";
+  idioma: LangCode;
   userText: string;
   timeZone: string;
   canal: "whatsapp" | "facebook" | "instagram";
   contacto: string; // WhatsApp: phone, Meta: senderId
 
   wantsBooking: boolean;
-  detectPurpose: (s: string) => string | null;
+  detectPurpose: (s: string) => BookingPurpose | null;
+  wantsManageExisting: (s: string) => boolean;
+  detectManageExistingAction: (s: string) => "cancel" | "reschedule" | null;
 
   durationMin: number;
 
@@ -34,12 +39,48 @@ export type StartBookingDeps = {
   getSlotsForDateWindow?: typeof getSlotsForDateWindow;
 };
 
+function renderPurposeLabel(
+  purpose: BookingPurpose,
+  lang: LangCode
+): string {
+  const isEs = lang === "es";
+
+  switch (purpose) {
+    case "appointment":
+      return isEs ? "cita" : "appointment";
+    case "class":
+      return isEs ? "clase" : "class";
+    case "consultation":
+      return isEs ? "consulta" : "consultation";
+    case "call":
+      return isEs ? "llamada" : "call";
+    case "visit":
+      return isEs ? "visita" : "visit";
+    case "demo":
+      return "demo";
+    default:
+      return isEs ? "cita" : "appointment";
+  }
+}
+
 export async function handleStartBooking(deps: StartBookingDeps): Promise<{
   handled: boolean;
   reply?: string;
   ctxPatch?: any;
 }> {
-  const { idioma, userText, timeZone, wantsBooking, detectPurpose, durationMin, minLeadMinutes, hours, booking } = deps;
+    const {
+      idioma,
+      userText,
+      timeZone,
+      wantsBooking,
+      detectPurpose,
+      wantsManageExisting,
+      detectManageExistingAction,
+      durationMin,
+      minLeadMinutes,
+      hours,
+      booking,
+    } = deps;
 
   // ------------------------------------------------------------------
   // ✅ Gestionar cita ya creada: cancelar / reprogramar (post-booking)
@@ -57,22 +98,19 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
   // hay teléfono válido?
   const hasCustomerPhone = !!customerPhone && customerPhone.length >= 7;
 
-  const wantsManageExisting =
-    /\b(cancel(ar|ar la)?|cancelé|cancela|anular|reprogram(ar|ar la)?|reagendar|mover la cita|cambiar la cita|reschedule|cancel appointment)\b/i.test(
-      String(deps.userText || "")
-    );
+  const manageExistingRequested = wantsManageExisting(userText);
 
   // 1) Si el usuario pide cancelar/reprogramar y tenemos una cita previa -> preguntar
-  if (hasCustomerPhone && wantsManageExisting && deps.booking?.step !== "manage_existing") {
-    const lang: "es" | "en" = ((deps as any)?.booking?.lang as any) || deps.idioma;
+  if (hasCustomerPhone && manageExistingRequested && deps.booking?.step !== "manage_existing") {
+    const lang: LangCode = ((deps as any)?.booking?.lang as LangCode) || deps.idioma;
 
     if (!(deps as any)?.tenantId) {
       return {
         handled: true,
         reply:
-          lang === "en"
-            ? "I can’t access scheduling right now. Please try again."
-            : "Ahora mismo no puedo acceder al calendario. Intenta de nuevo.",
+          lang === "es"
+            ? "Ahora mismo no puedo acceder al calendario. Intenta de nuevo."
+            : "I can’t access scheduling right now. Please try again.",
         ctxPatch: { booking: { ...(deps as any).booking }, booking_last_touch_at: Date.now() },
       };
     }
@@ -83,9 +121,9 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
       return {
         handled: true,
         reply:
-          lang === "en"
-            ? "I can’t find an active appointment for this phone number. If you want, tell me the new date and time to book (YYYY-MM-DD HH:mm)."
-            : "No encuentro una cita activa con este número. Si quieres, dime la nueva fecha y hora para agendar (YYYY-MM-DD HH:mm).",
+          lang === "es"
+            ? "No encuentro una cita activa con este número. Si quieres, dime la nueva fecha y hora para agendar (YYYY-MM-DD HH:mm)."
+            : "I can’t find an active appointment for this phone number. If you want, tell me the new date and time to book (YYYY-MM-DD HH:mm).",
         ctxPatch: { booking: { ...(deps as any).booking }, booking_last_touch_at: Date.now() },
       };
     }
@@ -95,10 +133,10 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
       const apptId = String(appts[0].id);
 
       const msg =
-        lang === "en"
-          ? "Got it. What would you like to do?\n1) Cancel the appointment\n2) Reschedule it\nReply with 1 or 2."
-          : "Entiendo. ¿Qué deseas hacer?\n1) Cancelar la cita\n2) Reprogramarla\nResponde con 1 o 2.";
-
+        lang === "es"
+          ? "Entiendo. ¿Qué deseas hacer?\n1) Cancelar la cita\n2) Reprogramarla\nResponde con 1 o 2."
+          : "Got it. What would you like to do?\n1) Cancel the appointment\n2) Reschedule it\nReply with 1 or 2.";
+         
       return {
         handled: true,
         reply: msg,
@@ -117,10 +155,10 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
     const apptId = String(appts[0].id);
 
     const msg =
-      lang === "en"
-        ? "I found more than one appointment. I’ll use the next one. What would you like to do?\n1) Cancel\n2) Reschedule\nReply with 1 or 2."
-        : "Encontré más de una cita. Usaré la más próxima. ¿Qué deseas hacer?\n1) Cancelar\n2) Reprogramar\nResponde con 1 o 2.";
-
+      lang === "es"
+        ? "Encontré más de una cita. Usaré la más próxima. ¿Qué deseas hacer?\n1) Cancelar\n2) Reprogramar\nResponde con 1 o 2."
+        : "I found more than one appointment. I’ll use the next one. What would you like to do?\n1) Cancel\n2) Reschedule\nReply with 1 or 2.";
+        
     return {
       handled: true,
       reply: msg,
@@ -137,21 +175,22 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
   // 2) Si estamos en modo manage_existing -> procesar 1 o 2
   if ((deps as any)?.booking?.step === "manage_existing") {
-    const lang: "es" | "en" = ((deps as any)?.booking?.lang as any) || deps.idioma;
+    const lang: LangCode = ((deps as any)?.booking?.lang as LangCode) || deps.idioma;
     const apptId = String((deps as any)?.booking?.manage_existing_appt_id || "").trim();
 
-    const raw = String(deps.userText || "").trim().toLowerCase();
+    const raw = String(deps.userText || "").trim();
+    const manageAction = detectManageExistingAction(raw);
 
-    const chooseCancel = raw === "1" || /\b(cancel|cancelar|anular)\b/i.test(raw);
-    const chooseReschedule = raw === "2" || /\b(reprogram|reagendar|mover|cambiar|reschedule)\b/i.test(raw);
+    const chooseCancel = raw === "1" || manageAction === "cancel";
+    const chooseReschedule = raw === "2" || manageAction === "reschedule";
 
     if (!apptId) {
       return {
         handled: true,
         reply:
-          lang === "en"
-            ? "I can’t find your last appointment. Please tell me the date/time you want to book (YYYY-MM-DD HH:mm)."
-            : "No encuentro tu última cita. Envíame la fecha y hora para agendar (YYYY-MM-DD HH:mm).",
+          lang === "es"
+            ? "No encuentro tu última cita. Envíame la fecha y hora para agendar (YYYY-MM-DD HH:mm)."
+            : "I can’t find your last appointment. Please tell me the date/time you want to book (YYYY-MM-DD HH:mm).",
         ctxPatch: {
           booking: {
             ...(deps as any).booking,
@@ -191,14 +230,14 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         }
 
         const replyError =
-          lang === "en"
+          lang === "es"
             ? businessPhone
-              ? `I couldn’t cancel it right now. Please contact us at ${businessPhone}.`
-              : "I couldn’t cancel it right now. Please try again in a moment."
-            : businessPhone
               ? `No pude cancelarla en este momento. Por favor comunícate con nosotros al ${businessPhone}.`
-              : "No pude cancelarla en este momento. Intenta de nuevo en unos segundos.";
-
+              : "No pude cancelarla en este momento. Intenta de nuevo en unos segundos."
+            : businessPhone
+              ? `I couldn’t cancel it right now. Please contact us at ${businessPhone}.`
+              : "I couldn’t cancel it right now. Please try again in a moment.";
+           
         return {
           handled: true,
           reply: replyError,
@@ -217,9 +256,9 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
       return {
         handled: true,
         reply:
-          lang === "en"
-            ? "Done — your appointment has been canceled."
-            : "Listo — tu cita quedó cancelada.",
+          lang === "es"
+            ? "Listo — tu cita quedó cancelada."
+            : "Done — your appointment has been canceled.",
         ctxPatch: {
           booking: {
             ...(deps as any).booking,
@@ -236,9 +275,9 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
       return {
         handled: true,
         reply:
-          lang === "en"
-            ? "Sure — what new date and time would you like? (YYYY-MM-DD HH:mm)"
-            : "Perfecto — ¿qué nueva fecha y hora deseas? (YYYY-MM-DD HH:mm)",
+          lang === "es"
+            ? "Perfecto — ¿qué nueva fecha y hora deseas? (YYYY-MM-DD HH:mm)"
+            : "Sure — what new date and time would you like? (YYYY-MM-DD HH:mm)",
         ctxPatch: {
           booking: {
             ...(deps as any).booking,
@@ -255,20 +294,25 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
     return {
       handled: true,
       reply:
-        lang === "en"
-          ? "Reply with 1 to cancel or 2 to reschedule."
-          : "Responde con 1 para cancelar o 2 para reprogramar.",
+        lang === "es"
+          ? "Responde con 1 para cancelar o 2 para reprogramar."
+          : "Reply with 1 to cancel or 2 to reschedule.",
       ctxPatch: { booking: { ...(deps as any).booking }, booking_last_touch_at: Date.now() },
     };
   }
 
+  const resolvedLang = toCanonicalLangOrFallback(
+    (booking?.lang as LangCode) || idioma,
+    "en"
+  );
+
   const hydratedBooking = {
     ...(booking || {}),
-    timeZone: (booking?.timeZone as any) || timeZone, // ✅ sticky tz
-    lang: (booking?.lang as any) || idioma,           // ✅ sticky lang
+    timeZone: booking?.timeZone || timeZone,
+    lang: resolvedLang,
   };
 
-  const effectiveLang: "es" | "en" = hydratedBooking.lang;
+  const effectiveLang: LangCode = resolvedLang;
   const tz = hydratedBooking.timeZone;
 
   async function isSlotReallyFree(startISO: string, endISO: string) {
@@ -407,9 +451,9 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
   // Si buildDateTimeFromText devolvió error, responde algo usable
   if (dt && "error" in dt) {
     const canonicalText =
-      effectiveLang === "en"
-            ? "I'm sorry! That time is not available. What other time works for you?"
-            : "Lo siento! Ese horario no está disponible. ¿Qué otra hora te funciona?";
+      effectiveLang === "es"
+            ? "Lo siento! Ese horario no está disponible. ¿Qué otra hora te funciona?"
+            : "I'm sorry! That time is not available. What other time works for you?";
 
       const humanReply = await humanizeBookingReply({
         idioma: effectiveLang,
@@ -467,9 +511,9 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         });
 
         const canonicalText =
-          effectiveLang === "en"
-            ? `That time isn't available. Here are other available times that day:\n\n${optionsText}`
-            : `Ese horario no está disponible. Aquí tienes otras horas disponibles ese día:\n\n${optionsText}`;
+          effectiveLang === "es"
+            ? `Ese horario no está disponible. Aquí tienes otras horas disponibles ese día:\n\n${optionsText}`
+            : `That time isn't available. Here are other available times that day:\n\n${optionsText}`;
 
         const humanReply = await humanizeBookingReply({
           idioma: effectiveLang,
@@ -509,14 +553,14 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         });
 
         const prettyDay =
-          effectiveLang === "en"
-            ? DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("cccc, LLL d")
-            : DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("cccc d 'de' LLL");
+          effectiveLang === "es"
+            ? DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("cccc d 'de' LLL")
+            : DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("cccc, LLL d");
 
         const canonicalText =
-          effectiveLang === "en"
-            ? `I’m fully booked that day. The next available day is ${prettyDay}.\n\n${optionsText}`
-            : `Ese día no tengo disponibilidad. El próximo día disponible es ${prettyDay}.\n\n${optionsText}`;
+          effectiveLang === "es"
+            ? `Ese día no tengo disponibilidad. El próximo día disponible es ${prettyDay}.\n\n${optionsText}`
+            : `I’m fully booked that day. The next available day is ${prettyDay}.\n\n${optionsText}`;
 
         const humanReply = await humanizeBookingReply({
           idioma: effectiveLang,
@@ -548,9 +592,9 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
       }
 
       const canonicalText =
-        effectiveLang === "en"
-          ? "I don’t see availability in the next days. What other date works for you?"
-          : "No veo disponibilidad en los próximos días. ¿Qué otra fecha te funciona?";
+        effectiveLang === "es"
+          ? "No veo disponibilidad en los próximos días. ¿Qué otra fecha te funciona?"
+          : "I don’t see availability in the next days. What other date works for you?";
 
       const humanReply = await humanizeBookingReply({
         idioma: effectiveLang,
@@ -605,9 +649,9 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
           const optionsText = renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take, style: "closest" });
 
           const canonicalText =
-            effectiveLang === "en"
-              ? `Sorry, that time isn't available. I have these times available:\n\n${optionsText}`
-              : `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`;
+            effectiveLang === "es"
+              ? `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`
+              : `Sorry, that time isn't available. I have these times available:\n\n${optionsText}`;
 
           const humanReply = await humanizeBookingReply({
             idioma: effectiveLang,
@@ -655,10 +699,10 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
           const optionsText = renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take, style: "closest" });
 
           const canonicalText =
-            effectiveLang === "en"
-              ? `Sorry, that time isn't available. I have these times available:\n\n${optionsText}`
-              : `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`;
-
+            effectiveLang === "es"
+              ? `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`
+              : `Sorry, that time isn't available. I have these times available:\n\n${optionsText}`;
+ 
           const humanReply = await humanizeBookingReply({
             idioma: effectiveLang,
             intent: "slot_exact_unavailable_with_options",
@@ -688,9 +732,9 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         }
 
         const canonicalText =
-          effectiveLang === "en"
-            ? "Sorry, that time isn't available. What other time works for you?"
-            : "Lo siento, esa hora no está disponible. ¿Qué otra hora te funciona?";
+          effectiveLang === "es"
+            ? "Lo siento, esa hora no está disponible. ¿Qué otra hora te funciona?"
+            : "Sorry, that time isn't available. What other time works for you?";
 
         const humanReply = await humanizeBookingReply({
           idioma: effectiveLang,
@@ -712,15 +756,15 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
 
       // ✅ confirmado
       const prettyWhen =
-        effectiveLang === "en"
-          ? DateTime.fromISO(exact.startISO, { zone: tz }).setLocale("en").toFormat("cccc, LLL d 'at' h:mm a")
-          : DateTime.fromISO(exact.startISO, { zone: tz }).setLocale("es").toFormat("cccc d 'de' LLL 'a las' h:mm a");
-
+        effectiveLang === "es"
+          ? DateTime.fromISO(exact.startISO, { zone: tz }).setLocale("es").toFormat("cccc d 'de' LLL 'a las' h:mm a")
+          : DateTime.fromISO(exact.startISO, { zone: tz }).setLocale("en").toFormat("cccc, LLL d 'at' h:mm a");
+          
       const canonicalText =
-        effectiveLang === "en"
-          ? `Perfect — I do have ${prettyWhen}. Confirm?`
-          : `Perfecto — tengo ${prettyWhen}. ¿La reservo?`;
-
+        effectiveLang === "es"
+          ? `Perfecto — tengo ${prettyWhen}. ¿La reservo?`
+          : `Perfect — I do have ${prettyWhen}. Confirm?`;
+ 
       const humanReply = await humanizeBookingReply({
         idioma: effectiveLang,
         intent: "slot_exact_available",
@@ -767,10 +811,10 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
     });
 
     const canonicalText =
-      effectiveLang === "en"
-        ? `Sorry, that time isn’t available. I have these times available:\n\n${optionsText}`
-        : `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`;
-
+      effectiveLang === "es"
+        ? `Lo siento, esa hora no está disponible. Tengo estas horas disponibles:\n\n${optionsText}`
+        : `Sorry, that time isn’t available. I have these times available:\n\n${optionsText}`;
+        
     const humanReply = await humanizeBookingReply({
       idioma: effectiveLang,
       intent: "slot_exact_unavailable_with_options",
@@ -835,10 +879,10 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         });
 
         const canonicalText =
-          effectiveLang === "en"
-            ? `Sorry, that time isn't available.\n\n${optionsText}`
-            : `Lo siento, esa hora no está disponible.\n\n${optionsText}`;
-
+          effectiveLang === "es"
+            ? `Lo siento, esa hora no está disponible.\n\n${optionsText}`
+            : `Sorry, that time isn't available.\n\n${optionsText}`;
+     
         const humanReply = await humanizeBookingReply({
           idioma: effectiveLang,
           intent: "slot_exact_unavailable_with_options",
@@ -872,10 +916,10 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
       if (anySameDay.length) {
         const optionsText = renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: anySameDay, style: "closest" });
         const canonicalText =
-          effectiveLang === "en"
-            ? `That time isn't available. Here are other available times that day:\n\n${optionsText}`
-            : `Ese horario no está disponible. Aquí tienes otras horas disponibles ese día:\n\n${optionsText}`;
-
+          effectiveLang === "es"
+            ? `Ese horario no está disponible. Aquí tienes otras horas disponibles ese día:\n\n${optionsText}`
+            : `That time isn't available. Here are other available times that day:\n\n${optionsText}`;
+  
         const humanReply = await humanizeBookingReply({
           idioma: effectiveLang,
           intent: "slot_exact_unavailable_with_options",
@@ -901,15 +945,15 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
         const optionsText = renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: next.take, style: "closest" });
 
         const prettyDay =
-          effectiveLang === "en"
-            ? DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("cccc, LLL d")
-            : DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("cccc d 'de' LLL");
-
+          effectiveLang === "es"
+            ? DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("cccc d 'de' LLL")
+            : DateTime.fromFormat(next.dateISO, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("cccc, LLL d");
+            
         const canonicalText =
-          effectiveLang === "en"
-            ? `I’m fully booked that day. The next available day is ${prettyDay}. Here are a few options:\n\n${optionsText}`
-            : `Ese día no tengo disponibilidad. El próximo día disponible es ${prettyDay}. Aquí tienes algunas opciones:\n\n${optionsText}`;
-
+          effectiveLang === "es"
+            ? `Ese día no tengo disponibilidad. El próximo día disponible es ${prettyDay}. Aquí tienes algunas opciones:\n\n${optionsText}`
+            : `I’m fully booked that day. The next available day is ${prettyDay}. Here are a few options:\n\n${optionsText}`;
+           
         const humanReply = await humanizeBookingReply({
           idioma: effectiveLang,
           intent: "offer_slots_for_date",
@@ -934,10 +978,10 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
     // si no es busy o no tenemos slots para sugerir:
     if (!check.ok) {
       const canonicalText =
-        effectiveLang === "en"
-          ? "That time isn't available. What other time works for you?"
-          : "Ese horario no está disponible. ¿Qué otra hora te funciona?";
-
+        effectiveLang === "es"
+          ? "Ese horario no está disponible. ¿Qué otra hora te funciona?"
+          : "That time isn't available. What other time works for you?";
+   
       const humanReply = await humanizeBookingReply({
         idioma: effectiveLang,
         intent: "ask_other_time",
@@ -957,15 +1001,15 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
     }
 
     const prettyWhen =
-      effectiveLang === "en"
-        ? d.toFormat("cccc, LLL d 'at' h:mm a")
-        : d.toFormat("cccc d 'de' LLL 'a las' h:mm a");
-
+      effectiveLang === "es"
+        ? d.toFormat("cccc d 'de' LLL 'a las' h:mm a")
+        : d.toFormat("cccc, LLL d 'at' h:mm a");
+       
     const canonicalText =
-      effectiveLang === "en"
-        ? `Perfect — I do have ${prettyWhen}. Confirm?`
-        : `Perfecto — tengo ${prettyWhen}. ¿Confirmas?`;
-
+      effectiveLang === "es"
+        ? `Perfecto — tengo ${prettyWhen}. ¿Confirmas?`
+        : `Perfect — I do have ${prettyWhen}. Confirm?`;
+     
     const humanReply = await humanizeBookingReply({
       idioma: effectiveLang,
       intent: "slot_exact_available",
@@ -997,10 +1041,10 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
   // 1) Sin propósito -> pregunta propósito
   if (!purpose) {
     const canonicalText =
-      effectiveLang === "en"
-        ? "Sure — what would you like to schedule? (appointment, class, consultation, or a call)"
-        : "¡Claro! ¿Qué te gustaría agendar? (cita, clase, consulta o llamada)";
-
+      effectiveLang === "es"
+        ? "¡Claro! ¿Qué te gustaría agendar? (cita, clase, consulta o llamada)"
+        : "Sure — what would you like to schedule? (appointment, class, consultation, or a call)";
+     
     const humanReply = await humanizeBookingReply({
       idioma: effectiveLang,
       intent: "ask_purpose",
@@ -1020,17 +1064,19 @@ export async function handleStartBooking(deps: StartBookingDeps): Promise<{
   }
 
   // 2) Con propósito -> pregunta daypart
-  const canonicalText =
-    effectiveLang === "en"
-      ? `Got it — for ${purpose}, do mornings or afternoons work better?`
-      : `Perfecto — para ${purpose}, ¿te funciona mejor en la mañana o en la tarde?`;
+  const purposeLabel = renderPurposeLabel(purpose, effectiveLang);
 
+  const canonicalText =
+    effectiveLang === "es"
+      ? `Perfecto — para ${purposeLabel}, ¿te funciona mejor en la mañana o en la tarde?`
+      : `Got it — for ${purposeLabel}, do mornings or afternoons work better?`;
+    
   const humanReply = await humanizeBookingReply({
     idioma: effectiveLang,
     intent: "ask_daypart",
     askedText: userText,
     canonicalText,
-    locked: [purpose], // ✅ no es crítico, pero ayuda a que no lo cambie
+    locked: [purposeLabel],
     purpose,
   });
 

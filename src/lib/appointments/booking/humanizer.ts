@@ -1,5 +1,6 @@
 //src/lib/appointments/booking/humanizer.ts
 import OpenAI from "openai";
+import type { LangCode } from "../../i18n/lang";
 
 const HUMANIZER_DEBUG = process.env.HUMANIZER_DEBUG === "1";
 
@@ -35,14 +36,14 @@ export type BookingHumanizeIntent =
   | "ask_other_time";;
 
 export type HumanizeArgs = {
-  idioma: "es" | "en";
+  idioma: LangCode;
   intent: BookingHumanizeIntent;
   askedText?: string;
   canonicalText: string;
   locked?: string[];
   prettyWhen?: string;
   optionsText?: string;
-  purpose?: string;
+  purpose?: string | null;
   datePrefix?: string;
 };
 
@@ -132,7 +133,7 @@ function respectsLocked(out: string, locked: string[] = []) {
 }
 
 // ✅ (opcional) también evitamos que el modelo meta "sí/no" si no es confirm
-function confirmWordsViolation(out: string, intent: BookingHumanizeIntent, idioma: "es" | "en") {
+function confirmWordsViolation(out: string, intent: BookingHumanizeIntent, idioma: LangCode) {
   // Solo permitimos pedir "SI/NO" cuando el intent es confirmación.
   if (intent === "ask_confirm_yes_no") return false;
 

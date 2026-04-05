@@ -13,10 +13,11 @@ import { getSlotsForDateOnly } from "../slots/getSlotsForDateOnly";
 import { extractTimeOnlyToken, extractTimeConstraint } from "../text";
 import { getSlotsForDateWindow, getSlotsForDate } from "../slots";
 import { humanizeBookingReply } from "../humanizer";
+import type { LangCode } from "../../../i18n/lang";
 
 export type AskDaypartDeps = {
   tenantId: string;
-  idioma: "es" | "en";
+  idioma: LangCode;
   userText: string;
 
   booking: any; // BookingCtx.booking
@@ -122,14 +123,14 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     lang: (booking?.lang as any) || idioma,      // ✅ sticky lang
   };
 
-  const effectiveLang: "es" | "en" = (hydratedBooking.lang as any) || idioma;
+  const effectiveLang: LangCode = (hydratedBooking.lang as LangCode) || idioma;
   const tz = hydratedBooking.timeZone;
 
   // helper: siempre preserva el lang
   const withLang = (b: any) => ({
     ...(b || {}),
-    lang: (b?.lang as any) || effectiveLang,
-    timeZone: b?.timeZone || tz, // ✅ sticky tz
+    lang: (b?.lang as LangCode) || effectiveLang,
+    timeZone: b?.timeZone || tz,
   });
 
   if (wantsToChangeTopic(userText)) {
@@ -138,9 +139,9 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
   if (wantsToCancel(userText)) {
     const canonicalText =
-      effectiveLang === "en"
-        ? "No worries — I’ll pause scheduling for now. Whenever you’re ready, just tell me."
-        : "Perfecto — pauso el agendamiento por ahora. Cuando estés listo, me dices.";
+      effectiveLang === "es"
+        ? "Perfecto — pauso el agendamiento por ahora. Cuando estés listo, me dices."
+        : "No worries — I’ll pause scheduling for now. Whenever you’re ready, just tell me.";
 
     const reply = await humanizeBookingReply({
       idioma: effectiveLang,
@@ -181,7 +182,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     if (!hours) {
       return {
         handled: true,
-        reply: buildAskAllMessage(idioma, booking?.purpose || null),
+        reply: buildAskAllMessage(effectiveLang, booking?.purpose || null),
         ctxPatch: {
           booking: withLang({
             ...booking,
@@ -228,13 +229,13 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       // ✅ Exacto -> confirm directo (sin lista)
       if (exact) {
         const prettyWhen = DateTime.fromISO(exact.startISO, { zone: tz })
-          .setLocale(effectiveLang === "en" ? "en" : "es")
-          .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+          .setLocale(effectiveLang === "es" ? "es" : "en")
+          .toFormat(effectiveLang === "es" ? "ccc dd LLL, h:mm a" : "EEE, LLL dd 'at' h:mm a");
 
         const canonicalText =
-          effectiveLang === "en"
-            ? `Yes — I do have ${prettyWhen} available. Want me to book it?`
-            : `Sí — tengo ${prettyWhen} disponible. ¿Quieres que la reserve?`;
+          effectiveLang === "es"
+            ? `Sí — tengo ${prettyWhen} disponible. ¿Quieres que la reserve?`
+            : `Yes — I do have ${prettyWhen} available. Want me to book it?`;
 
         const reply = await humanizeBookingReply({
           idioma: effectiveLang,
@@ -280,17 +281,17 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       const todayISO = now.toFormat("yyyy-MM-dd");
       const datePrefix =
         dateOnly !== todayISO
-          ? (effectiveLang === "en"
-              ? `For ${DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("EEE, LLL dd")}, `
-              : `Para ${DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `)
+          ? (effectiveLang === "es"
+              ? `Para ${DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `
+              : `For ${DateTime.fromFormat(dateOnly, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("EEE, LLL dd")}, `)
           : "";
 
-      const optionsText = renderSlotsMessage({ idioma, timeZone: tz, slots: take });
+      const optionsText = renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take });
 
       const canonicalText =
-        effectiveLang === "en"
-          ? `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n${optionsText}`
-          : `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n${optionsText}`;
+        effectiveLang === "es"
+          ? `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n${optionsText}`
+          : `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n${optionsText}`;
 
       const reply = await humanizeBookingReply({
         idioma: effectiveLang,
@@ -329,13 +330,14 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     if (!hours) {
       return {
         handled: true,
-        reply: buildAskAllMessage(idioma, booking?.purpose || null),
+        reply: buildAskAllMessage(effectiveLang, booking?.purpose || null),
         ctxPatch: {
           booking: {
             ...booking,
             step: "ask_all",
             timeZone: tz,
             date_only: dateOnly,
+            lang: effectiveLang,
           },
           booking_last_touch_at: Date.now(),
         },
@@ -355,9 +357,9 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
     if (!slotsForDay?.length) {
       const canonicalText =
-        effectiveLang === "en"
-          ? "I don’t have openings that day. Want to try another day or morning/afternoon?"
-          : "Ese día no tengo disponibilidad. ¿Quieres probar otro día o prefieres mañana/tarde?";
+        effectiveLang === "es"
+          ? "Ese día no tengo disponibilidad. ¿Quieres probar otro día o prefieres mañana/tarde?"
+          : "I don’t have openings that day. Want to try another day or morning/afternoon?";
 
       const reply = await humanizeBookingReply({
         idioma: effectiveLang,
@@ -379,7 +381,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
     return {
       handled: true,
-      reply: renderSlotsMessage({ idioma, timeZone: tz, slots: slotsForDay }),
+      reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: slotsForDay }),
       ctxPatch: {
         booking: {
           step: "offer_slots",
@@ -402,7 +404,7 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
     if (!hours) {
       return {
         handled: true,
-        reply: buildAskAllMessage(idioma, booking?.purpose || null),
+        reply: buildAskAllMessage(effectiveLang, booking?.purpose || null),
         ctxPatch: {
           booking: withLang({
             ...booking,
@@ -464,20 +466,20 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       const todayISO = now.toFormat("yyyy-MM-dd");
       const datePrefix =
         ctxDate !== todayISO
-          ? (effectiveLang === "en"
-              ? `For ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("EEE, LLL dd")}, `
-              : `Para ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `)
+          ? (effectiveLang === "es"
+              ? `Para ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `
+              : `For ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("EEE, LLL dd")}, `)
           : "";
 
       if (exact) {
         const prettyWhen = DateTime.fromISO(exact.startISO, { zone: tz })
-          .setLocale(effectiveLang === "en" ? "en" : "es")
-          .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+          .setLocale(effectiveLang === "es" ? "es" : "en")
+          .toFormat(effectiveLang === "es" ? "ccc dd LLL, h:mm a" : "EEE, LLL dd 'at' h:mm a");
 
         const canonicalText =
-          effectiveLang === "en"
-            ? `${datePrefix}Yes — I do have ${prettyWhen} available. Want me to book it?`
-            : `${datePrefix}Sí — tengo ${prettyWhen} disponible. ¿Quieres que la reserve?`;
+          effectiveLang === "es"
+            ? `${datePrefix}Sí — tengo ${prettyWhen} disponible. ¿Quieres que la reserve?`
+            : `${datePrefix}Yes — I do have ${prettyWhen} available. Want me to book it?`;
 
         const reply = await humanizeBookingReply({
           idioma: effectiveLang,
@@ -521,12 +523,12 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
         max: 5,
       });
 
-      const optionsText = renderSlotsMessage({ idioma, timeZone: tz, slots: take });
+      const optionsText = renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take });
 
       const canonicalText =
-        effectiveLang === "en"
-          ? `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n${optionsText}`
-          : `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n${optionsText}`;
+        effectiveLang === "es"
+          ? `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n${optionsText}`
+          : `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n${optionsText}`;
 
       const reply = await humanizeBookingReply({
         idioma: effectiveLang,
@@ -577,20 +579,20 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
       const todayISO = now.toFormat("yyyy-MM-dd");
       const datePrefix =
         ctxDate !== todayISO
-          ? (effectiveLang === "en"
-              ? `For ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("EEE, LLL dd")}, `
-              : `Para ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `)
+          ? (effectiveLang === "es"
+              ? `Para ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("es").toFormat("ccc dd LLL")}, `
+              : `For ${DateTime.fromFormat(ctxDate, "yyyy-MM-dd", { zone: tz }).setLocale("en").toFormat("EEE, LLL dd")}, `)
           : "";
 
       if (exact) {
         const prettyWhen = DateTime.fromISO(exact.startISO, { zone: tz })
-          .setLocale(effectiveLang === "en" ? "en" : "es")
-          .toFormat(effectiveLang === "en" ? "EEE, LLL dd 'at' h:mm a" : "ccc dd LLL, h:mm a");
+          .setLocale(effectiveLang === "es" ? "es" : "en")
+          .toFormat(effectiveLang === "es" ? "ccc dd LLL, h:mm a" : "EEE, LLL dd 'at' h:mm a");
 
         const canonicalText =
-          effectiveLang === "en"
-            ? `${datePrefix}Yes — I do have ${prettyWhen} available. Want me to book it?`
-            : `${datePrefix}Sí — tengo ${prettyWhen} disponible. ¿Quieres que la reserve?`;
+          effectiveLang === "es"
+            ? `${datePrefix}Sí — tengo ${prettyWhen} disponible. ¿Quieres que la reserve?`
+            : `${datePrefix}Yes — I do have ${prettyWhen} available. Want me to book it?`;
 
         const reply = await humanizeBookingReply({
           idioma: effectiveLang,
@@ -633,12 +635,12 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
         max: 5,
       });
 
-      const optionsText = renderSlotsMessage({ idioma, timeZone: tz, slots: take });
+      const optionsText = renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots: take });
 
       const canonicalText =
-        effectiveLang === "en"
-          ? `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n${optionsText}`
-          : `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n${optionsText}`;
+        effectiveLang === "es"
+          ? `${datePrefix}No tengo esa hora exacta. Estas son las opciones más cercanas:\n\n${optionsText}`
+          : `${datePrefix}I don’t have that exact time. Here are the closest options:\n\n${optionsText}`;
 
       const reply = await humanizeBookingReply({
         idioma: effectiveLang,
@@ -671,9 +673,9 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
     // ✅ nada cerca
     const canonicalText =
-      effectiveLang === "en"
-        ? "I don’t see openings near that time. Would you prefer earlier or later?"
-        : "No veo disponibilidad cerca de esa hora. ¿Te sirve más temprano o más tarde?";
+      effectiveLang === "es"
+        ? "No veo disponibilidad cerca de esa hora. ¿Te sirve más temprano o más tarde?"
+        : "I don’t see openings near that time. Would you prefer earlier or later?";
 
     const reply = await humanizeBookingReply({
       idioma: effectiveLang,
@@ -696,9 +698,9 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
   const dp = detectDaypart(userText);
   if (!dp) {
     const canonicalText =
-      effectiveLang === "en"
-        ? "Got it — what day works best for you, and do you prefer morning or afternoon?"
-      : "Perfecto, ¿para qué día te gustaría y en qué horario, en la mañana o en la tarde?";
+      effectiveLang === "es"
+        ? "Perfecto, ¿para qué día te gustaría y en qué horario, en la mañana o en la tarde?"
+        : "Got it — what day works best for you, and do you prefer morning or afternoon?";
 
     const reply = await humanizeBookingReply({
       idioma: effectiveLang,
@@ -722,13 +724,14 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
   if (!hours) {
     return {
       handled: true,
-      reply: buildAskAllMessage(idioma, booking?.purpose || null),
+      reply: buildAskAllMessage(effectiveLang, booking?.purpose || null),
       ctxPatch: {
         booking: {
           ...booking,
           step: "ask_all",
           timeZone: tz,
           daypart: dp,
+          lang: effectiveLang,
         },
         booking_last_touch_at: Date.now(),
       },
@@ -752,11 +755,13 @@ export async function handleAskDaypart(deps: AskDaypartDeps): Promise<{
 
   return {
     handled: true,
-    reply: renderSlotsMessage({ idioma, timeZone: tz, slots }),
+    reply: renderSlotsMessage({ idioma: effectiveLang, timeZone: tz, slots }),
     ctxPatch: {
       booking: {
+        ...booking,
         step: "offer_slots",
         timeZone: tz,
+        lang: effectiveLang,
         purpose: booking?.purpose || null,
         daypart: dp,
         slots,

@@ -4,12 +4,14 @@ import { wantsToCancel } from "../text";
 import { renderSlotsMessage } from "../time";
 import { getSlotsForDate } from "../slots";
 import { cancelAppointmentById } from "../../cancelAppointment";
+import type { LangCode } from "../../../i18n/lang";
+import { toCanonicalLangOrFallback } from "../../../i18n/lang";
 
 type ConfirmDeps = {
   tenantId: string;
   canal: string;
   contacto: string;
-  idioma: "es" | "en";
+  idioma: LangCode;
   userText: string;
 
   booking: any; // BookingCtx.booking
@@ -74,7 +76,7 @@ function buildIdempotencyKey(args: {
   return `appt:${tenantId}:${channel}:${phone}:${s}:${e}`;
 }
 
-function resetBooking(tz: string, lang: "es" | "en") {
+function resetBooking(tz: string, lang: LangCode) {
   return {
     step: "idle",
     timeZone: tz,
@@ -128,8 +130,34 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
   } = deps;
 
   const t = String(userText || "").trim().toLowerCase();
-  const yes = /^(si|sí|yes|y)$/i.test(t);
-  const no = /^(no|n)$/i.test(t);
+
+  const resolvedLang = toCanonicalLangOrFallback(
+    booking?.lang || idioma,
+    "en"
+  );
+
+  const hydratedBooking = {
+    ...booking,
+    timeZone: booking?.timeZone || timeZone,
+    lang: resolvedLang,
+
+    start_time: booking?.picked_start || booking?.start_time || null,
+    end_time: booking?.picked_end || booking?.end_time || null,
+  };
+
+  const effectiveLang: LangCode = hydratedBooking.lang;
+  const tz = hydratedBooking.timeZone;
+
+  const yesValues = new Set(["yes", "y"]);
+  const noValues = new Set(["no", "n"]);
+
+  if (effectiveLang === "es") {
+    yesValues.add("si");
+    yesValues.add("sí");
+  }
+
+  const yes = yesValues.has(t);
+  const no = noValues.has(t);
 
   console.log("🧨 [CONFIRM ENTER]", {
     tenantId,
@@ -148,17 +176,6 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     picked_end: booking?.picked_end,
   });
 
-  // ✅ Hydrate start/end desde picked_* por seguridad
-  const hydratedBooking = {
-    ...booking,
-    timeZone: booking?.timeZone || timeZone,
-    lang: (booking?.lang as any) || idioma,
-
-    // ✅ picked_* es la fuente de verdad en confirmación
-    start_time: booking?.picked_start || booking?.start_time || null,
-    end_time: booking?.picked_end || booking?.end_time || null,
-  };
-
   // ⭐⭐⭐ NUEVO: cita desde la que estamos reprogramando (si aplica)
   const rescheduleFromApptId = booking?.reschedule_from_appt_id
     ? String(booking.reschedule_from_appt_id).trim()
@@ -174,17 +191,14 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     }
   }
 
-  const effectiveLang: "es" | "en" = (hydratedBooking?.lang as any) || idioma;
-  const tz = hydratedBooking.timeZone;
-
   // 1) cancelación explícita (aunque no haya respondido yes/no)
   if (wantsToCancel(userText)) {
     return {
       handled: true,
       reply:
-        effectiveLang === "en"
-          ? "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me."
-          : "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame.",
+        effectiveLang === "es"
+          ? "Claro, no hay problema. Detengo todo por ahora. Cuando estés listo, solo avísame."
+          : "Of course, no problem. I’ll stop the process for now. Whenever you’re ready, just tell me.",
       ctxPatch: { booking: resetBooking(tz, effectiveLang), booking_last_touch_at: Date.now() }
     };
   }
@@ -193,11 +207,14 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
   if (!yes && !no) {
     return {
       handled: true,
-      reply: effectiveLang === "en" ? "Please reply YES to confirm or NO to cancel." : "Responde SI para confirmar o NO para cancelar.",
+        reply:
+          effectiveLang === "es"
+            ? "Responde SI para confirmar o NO para cancelar."
+            : "Please reply YES to confirm or NO to cancel.",
       ctxPatch: {
         booking: {
           ...hydratedBooking,
-          lang: (hydratedBooking?.lang as any) || idioma, // ✅
+          lang: effectiveLang,
         },
         booking_last_touch_at: Date.now(),
       },
@@ -209,9 +226,9 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     return {
       handled: true,
       reply:
-        effectiveLang === "en"
-          ? "Okay — canceled. If you want to book another time, just send the date and time (YYYY-MM-DD HH:mm)."
-          : "Listo — cancelado. Si quieres agendar otro horario, envíame la fecha y hora (YYYY-MM-DD HH:mm).",
+        effectiveLang === "es"
+          ? "Listo — cancelado. Si quieres agendar otro horario, envíame la fecha y hora (YYYY-MM-DD HH:mm)."
+          : "Okay — canceled. If you want to book another time, just send the date and time (YYYY-MM-DD HH:mm).",
       ctxPatch: {
         booking: resetBooking(tz, effectiveLang),
         booking_last_touch_at: Date.now(),
@@ -233,7 +250,6 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
 
   const isValidName = (s: string) => {
     const t = s.trim();
-    // mínimo 2 palabras o al menos 3 letras
     return t.length >= 3;
   };
 
@@ -265,19 +281,19 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
 
     if (missingName || missingEmail || missingPhone) {
       const example = isMeta
-        ? (effectiveLang === "en"
-            ? "John Smith, john@email.com, +13055551234"
-            : "Juan Pérez, juan@email.com, +13055551234")
-        : (effectiveLang === "en"
-            ? "John Smith, john@email.com"
-            : "Juan Pérez, juan@email.com");
-
+        ? (effectiveLang === "es"
+            ? "Juan Pérez, juan@email.com, +13055551234"
+            : "John Smith, john@email.com, +13055551234")
+        : (effectiveLang === "es"
+            ? "Juan Pérez, juan@email.com"
+            : "John Smith, john@email.com")
+          
       return {
         handled: true,
         reply:
-          effectiveLang === "en"
-            ? `Perfect. Before I book it, send ${isMeta ? "your full name, email, and phone" : "your full name and email"} in ONE message. Example: ${example}`
-            : `Perfecto. Antes de agendarla, envíame ${isMeta ? "tu nombre completo, email y teléfono" : "tu nombre completo y tu email"} en *un solo mensaje*. Ej: ${example}`,
+          effectiveLang === "es"
+            ? `Perfecto. Antes de agendarla, envíame ${isMeta ? "tu nombre completo, email y teléfono" : "tu nombre completo y tu email"} en un solo mensaje. Ej: ${example}`
+            : `Perfect. Before I book it, send ${isMeta ? "your full name, email, and phone" : "your full name and email"} in one message. Example: ${example}`,
         ctxPatch: {
           booking: {
             ...hydratedBooking,
@@ -287,7 +303,7 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
             name: missingName ? null : nameRaw,
             email: missingEmail ? null : emailRaw,
             phone: missingPhone ? null : phoneNorm,
-            lang: (hydratedBooking?.lang as any) || idioma,
+            lang: effectiveLang,
           },
           booking_last_touch_at: Date.now(),
         },
@@ -303,14 +319,14 @@ if (!startISO || !endISO) {
   return {
     handled: true,
     reply:
-      effectiveLang === "en"
-        ? "Send me the date and time (YYYY-MM-DD HH:mm)."
-        : "Envíame la fecha y hora (YYYY-MM-DD HH:mm).",
+      effectiveLang === "es"
+        ? "Envíame la fecha y hora (YYYY-MM-DD HH:mm)."
+        : "Send me the date and time (YYYY-MM-DD HH:mm).",
     ctxPatch: {
       booking: {
         ...hydratedBooking,
         step: "ask_datetime",
-        lang: (hydratedBooking?.lang as any) || idioma, // ✅
+        lang: effectiveLang,
       },
       booking_last_touch_at: Date.now(),
     },
@@ -333,9 +349,9 @@ if (!startISO || !endISO) {
   if (isJunk(customer_name) || !isValidName(customer_name) || isJunk(customer_email_clean) || !isValidEmail(customer_email_clean)) {
     return {
       handled: true,
-      reply: effectiveLang === "en"
-        ? "Before confirming, please send your full name and email in one message."
-        : "Antes de confirmar, envíame tu nombre completo y tu email en un solo mensaje.",
+      reply: effectiveLang === "es"
+        ? "Antes de confirmar, envíame tu nombre completo y tu email en un solo mensaje."
+        : "Before confirming, please send your full name and email in one message.",
       ctxPatch: { booking: { ...hydratedBooking, step: "ask_all" }, booking_last_touch_at: Date.now() },
     };
   }
@@ -379,7 +395,7 @@ if (!startISO || !endISO) {
   if (!pending) {
     return {
       handled: true,
-      reply: effectiveLang === "en" ? "Something went wrong creating your booking. Please try again." : "Ocurrió un problema creando la reserva. Por favor intenta de nuevo.",
+      reply: effectiveLang === "es" ? "Ocurrió un problema creando la reserva. Por favor intenta de nuevo." : "Something went wrong creating your booking. Please try again.",
       ctxPatch: {
         booking: {
           ...hydratedBooking,
@@ -388,7 +404,7 @@ if (!startISO || !endISO) {
           start_time: null,
           end_time: null,
           date_only: null,
-          lang: (hydratedBooking?.lang as any) || idioma,
+          lang: effectiveLang,
         },
         booking_last_touch_at: Date.now(),
       },
@@ -403,9 +419,9 @@ if (!startISO || !endISO) {
   if (pending.status === "confirmed" && pending.google_event_link && sameSlot) {
     return {
       handled: true,
-      reply: effectiveLang === "en"
-        ? `Already booked for that time. ${pending.google_event_link}`.trim()
-        : `Ya quedó agendado para ese horario. ${pending.google_event_link}`.trim(),
+      reply: effectiveLang === "es"
+        ? `Ya quedó agendado para ese horario. ${pending.google_event_link}`.trim()
+        : `Already booked for that time. ${pending.google_event_link}`.trim(),
       ctxPatch: {
         booking: { step: "idle" },
         booking_last_touch_at: Date.now(),
@@ -420,7 +436,7 @@ if (!startISO || !endISO) {
   if (!googleConnected) {
     return {
       handled: true,
-      reply: effectiveLang === "en" ? "Scheduling isn’t available for this business right now." : "El agendamiento no está disponible en este momento para este negocio.",
+      reply: effectiveLang === "es" ? "El agendamiento no está disponible en este momento para este negocio." : "Scheduling isn’t available for this business right now.",
       ctxPatch: { booking: resetBooking(tz, effectiveLang), booking_last_touch_at: Date.now() },
     };
   }
@@ -507,7 +523,7 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
                 end_time: null,
                 picked_start: null,
                 picked_end: null,
-                lang: (hydratedBooking?.lang as any) || idioma,
+                lang: effectiveLang,
               },
               booking_last_touch_at: Date.now(),
             },
@@ -520,9 +536,9 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
       return {
         handled: true,
         reply:
-          effectiveLang === "en"
-            ? "That date/time isn’t available. Please send a future date and time (YYYY-MM-DD HH:mm)."
-            : "Esa fecha/hora no esta disponible. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm).",
+          effectiveLang === "es"
+            ? "Esa fecha/hora no esta disponible. Envíame una fecha y hora futura (YYYY-MM-DD HH:mm)."
+            : "That date/time isn’t available. Please send a future date and time (YYYY-MM-DD HH:mm).",
         ctxPatch: {
           booking: {
             ...hydratedBooking,
@@ -531,7 +547,7 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
             start_time: null,
             end_time: null,
             date_only: null,
-            lang: (hydratedBooking?.lang as any) || idioma,
+            lang: effectiveLang,
           },
           booking_last_touch_at: Date.now(),
         },
@@ -542,9 +558,9 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
       return {
         handled: true,
         reply:
-          effectiveLang === "en"
-            ? "That time isn’t available. Please choose a different time."
-            : "Ese horario no está disponible. Elige otro horario.",
+          effectiveLang === "es"
+            ? "Ese horario no está disponible. Elige otro horario."
+            : "That time isn’t available. Please choose a different time.",
         ctxPatch: {
           booking: {
             ...hydratedBooking,
@@ -553,7 +569,7 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
             start_time: null,
             end_time: null,
             date_only: null,
-            lang: (hydratedBooking?.lang as any) || idioma,
+            lang: effectiveLang,
           },
           booking_last_touch_at: Date.now(),
         },
@@ -563,9 +579,9 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
     return {
       handled: true,
       reply:
-        effectiveLang === "en"
-          ? "That time doesn’t seem to be available. Could you send me another date and time? (YYYY-MM-DD HH:mm)"
-          : "Ese horario ya no está disponible. ¿Me compartes otra fecha y hora? (YYYY-MM-DD HH:mm)",
+        effectiveLang === "es"
+          ? "Ese horario ya no está disponible. ¿Me compartes otra fecha y hora? (YYYY-MM-DD HH:mm)"
+          : "That time doesn’t seem to be available. Could you send me another date and time? (YYYY-MM-DD HH:mm)",
       ctxPatch: {
         booking: {
           ...hydratedBooking,
@@ -574,7 +590,7 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
           start_time: null,
           end_time: null,
           date_only: null,
-          lang: (hydratedBooking?.lang as any) || idioma,
+          lang: effectiveLang,
         },
         booking_last_touch_at: Date.now(),
       },
@@ -594,9 +610,9 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
 
     return {
       handled: true,
-      reply: effectiveLang === "en"
-        ? "I couldn’t confirm the booking with Google. Please send a new date and time (YYYY-MM-DD HH:mm)."
-        : "No pude confirmar la cita con Google. Envíame una nueva fecha y hora (YYYY-MM-DD HH:mm).",
+      reply: effectiveLang === "es"
+        ? "No pude confirmar la cita con Google. Envíame una nueva fecha y hora (YYYY-MM-DD HH:mm)."
+        : "I couldn’t confirm the booking with Google. Please send a new date and time (YYYY-MM-DD HH:mm).",
       ctxPatch: {
         booking: resetBooking(tz, effectiveLang),
         booking_last_touch_at: Date.now(),
@@ -655,14 +671,14 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
 
   if (publicLink) {
     replyText =
-      effectiveLang === "en"
-        ? `You're all set — your appointment is confirmed. Here is your confirmation link: ${publicLink}`
-        : `Perfecto, tu cita quedó confirmada. Aquí tienes el enlace de confirmación: ${publicLink}`;
+      effectiveLang === "es"
+        ? `Perfecto, tu cita quedó confirmada. Aquí tienes el enlace de confirmación: ${publicLink}`
+        : `You're all set — your appointment is confirmed. Here is your confirmation link: ${publicLink}`;
   } else {
     replyText =
-      effectiveLang === "en"
-        ? "You're all set — your appointment is confirmed."
-        : "Perfecto, tu cita quedó confirmada.";
+      effectiveLang === "es"
+        ? "Perfecto, tu cita quedó confirmada."
+        : "You're all set — your appointment is confirmed.";
   }
 
   return {

@@ -1,12 +1,13 @@
 // src/lib/appointments/booking/handlers/askContact.ts
 import { formatSlotHuman } from "../time";
 import { parsePhone } from "../text";
+import type { LangCode } from "../../../i18n/lang";
 
 export type AskContactDeps = {
   tenantId: string;
   canal: string;
   contacto: string;
-  idioma: "es" | "en";
+  idioma: LangCode;
   userText: string;
 
   booking: any;
@@ -57,7 +58,7 @@ export async function handleAskContact(deps: AskContactDeps): Promise<{
     lang: (booking?.lang as any) || idioma,           // ✅ sticky lang
   };
 
-  const effectiveLang: "es" | "en" = hydratedBooking.lang;
+  const effectiveLang: LangCode = (hydratedBooking.lang as LangCode) || idioma;
   const tz = hydratedBooking.timeZone;
 
   if (wantsToChangeTopic(userText)) {

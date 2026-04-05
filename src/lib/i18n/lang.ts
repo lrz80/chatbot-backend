@@ -2,7 +2,7 @@
 
 export type LangCode = string;
 
-export const DEFAULT_CANONICAL_LANG = "es";
+export const DEFAULT_CANONICAL_LANG = "en";
 
 export function normalizeLangCode(code?: string | null): LangCode | null {
   const raw = String(code ?? "").trim().toLowerCase();

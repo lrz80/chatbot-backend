@@ -2,7 +2,7 @@
 
 import { Pool } from "pg";
 import type { Canal } from "../../../detectarIntencion";
-import type { Lang } from "../clients/clientDb";
+import type { LangCode } from "../../../i18n/lang";
 import { runBookingPipeline } from "../../../appointments/booking/bookingPipeline";
 
 type TransitionFn = (params: {
@@ -32,7 +32,7 @@ export type HandleBookingTurnArgs = {
   tenantId: string;
   canal: Canal | string;         // puede venir "whatsapp", "meta", etc.
   contactoNorm: string;
-  idiomaDestino: Lang;
+  idiomaDestino: LangCode;
   userInput: string;
   messageId: string | null;
 

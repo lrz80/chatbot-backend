@@ -12,6 +12,7 @@ import {
 import { renderSlotsMessage, formatSlotHuman } from "../time";
 import { getSlotsForDate } from "../slots";
 import { humanizeBookingReply } from "../humanizer";
+import type { LangCode } from "../../../i18n/lang";
 
 // parseDateTimeExplicit viene de booking/time en tu flujo principal,
 // pero aquí lo recibimos como dependencia para no acoplar el handler.
@@ -25,7 +26,7 @@ type ParseDateTimeExplicitFn = (
 export type AskAllDeps = {
   tenantId: string;
   canal: string;
-  idioma: "es" | "en";
+  idioma: LangCode;
   userText: string;
 
   booking: any; // BookingCtx.booking
@@ -75,7 +76,7 @@ export async function handleAskAll(deps: AskAllDeps): Promise<{
     slots: booking?.slots || [],
   };
 
-  const effectiveLang: "es" | "en" = (hydratedBooking.lang as any) || idioma;
+  const effectiveLang: LangCode = (hydratedBooking.lang as LangCode) || idioma;
   const tz = hydratedBooking.timeZone; // ✅ single source of truth
 
   const hasChosenSlot = !!hydratedBooking.start_time && !!hydratedBooking.end_time;

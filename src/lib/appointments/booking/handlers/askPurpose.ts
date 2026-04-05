@@ -1,8 +1,16 @@
-// src/lib/appointments/booking/handlers/askPurpose.ts
+import { toCanonicalLangOrFallback } from "../../../i18n/lang";
 import { humanizeBookingReply } from "../humanizer";
 
+type BookingPurpose =
+  | "appointment"
+  | "class"
+  | "consultation"
+  | "call"
+  | "visit"
+  | "demo";
+
 export type AskPurposeDeps = {
-  idioma: "es" | "en";
+  idioma?: string | null;
   userText: string;
 
   booking: any;
@@ -12,8 +20,43 @@ export type AskPurposeDeps = {
 
   wantsToChangeTopic: (s: string) => boolean;
   wantsToCancel: (s: string) => boolean;
-  detectPurpose: (s: string) => string | null;
+  detectPurpose: (s: string) => BookingPurpose | null;
 };
+
+const PURPOSE_LABELS: Record<BookingPurpose, { en: string; es: string }> = {
+  appointment: {
+    en: "an appointment",
+    es: "una cita",
+  },
+  class: {
+    en: "a class",
+    es: "una clase",
+  },
+  consultation: {
+    en: "a consultation",
+    es: "una consulta",
+  },
+  call: {
+    en: "a call",
+    es: "una llamada",
+  },
+  visit: {
+    en: "a visit",
+    es: "una visita",
+  },
+  demo: {
+    en: "a demo",
+    es: "una demostración",
+  },
+};
+
+function getPurposeLabel(
+  purpose: BookingPurpose,
+  lang: string
+): string {
+  const labels = PURPOSE_LABELS[purpose];
+  return lang === "es" ? labels.es : labels.en;
+}
 
 export async function handleAskPurpose(
   deps: AskPurposeDeps
@@ -32,31 +75,39 @@ export async function handleAskPurpose(
     detectPurpose,
   } = deps;
 
+  const resolvedLang = toCanonicalLangOrFallback(
+    booking?.lang ?? idioma,
+    "en"
+  );
+
   const hydratedBooking = {
     ...(booking || {}),
-    timeZone: (booking?.timeZone as any) || timeZone, // ✅ sticky tz
-    lang: (booking?.lang as any) || idioma,           // ✅ sticky lang
+    timeZone: booking?.timeZone || timeZone,
+    lang: resolvedLang,
   };
 
-  const effectiveLang: "es" | "en" = hydratedBooking.lang;
+  const effectiveLang = resolvedLang;
   const tz = hydratedBooking.timeZone;
 
-  // Escape: usuario cambió de tema
   if (wantsToChangeTopic(userText)) {
     return {
       handled: false,
       ctxPatch: {
-        booking: { ...hydratedBooking, step: "idle", timeZone: tz, lang: effectiveLang },
+        booking: {
+          ...hydratedBooking,
+          step: "idle",
+          timeZone: tz,
+          lang: effectiveLang,
+        },
       },
     };
   }
 
-  // Cancelar proceso
   if (wantsToCancel(userText)) {
     const canonicalText =
-      effectiveLang === "en"
-        ? "No problem — I’ll pause scheduling for now. Whenever you’re ready, just tell me."
-        : "Perfecto — pauso el agendamiento por ahora. Cuando estés listo, me dices.";
+      effectiveLang === "es"
+        ? "Perfecto — pauso el agendamiento por ahora. Cuando estés listo, me dices."
+        : "No problem — I’ll pause scheduling for now. Whenever you’re ready, just tell me.";
 
     const reply = await humanizeBookingReply({
       idioma: effectiveLang,
@@ -70,21 +121,24 @@ export async function handleAskPurpose(
       handled: true,
       reply,
       ctxPatch: {
-        booking: { ...hydratedBooking, step: "idle", timeZone: tz, lang: effectiveLang },
+        booking: {
+          ...hydratedBooking,
+          step: "idle",
+          timeZone: tz,
+          lang: effectiveLang,
+        },
         booking_last_touch_at: Date.now(),
       },
     };
   }
 
-  // Intentar identificar propósito
   const purpose = detectPurpose(userText);
 
-  // Si no entendimos el propósito, aclaramos (humanizado)
   if (!purpose) {
     const canonicalText =
-      effectiveLang === "en"
-        ? "Got it — what are you trying to book? (class, appointment, consultation, or a call)"
-        : "Entiendo — ¿qué te gustaría agendar? (clase, cita, consulta o llamada)";
+      effectiveLang === "es"
+        ? "Entiendo — ¿qué te gustaría agendar? (clase, cita, consulta, llamada, visita o demostración)"
+        : "Got it — what are you trying to book? (class, appointment, consultation, call, visit, or demo)";
 
     const reply = await humanizeBookingReply({
       idioma: effectiveLang,
@@ -98,24 +152,30 @@ export async function handleAskPurpose(
       handled: true,
       reply,
       ctxPatch: {
-        booking: { ...hydratedBooking, step: "ask_purpose", timeZone: tz, lang: effectiveLang },
+        booking: {
+          ...hydratedBooking,
+          step: "ask_purpose",
+          timeZone: tz,
+          lang: effectiveLang,
+        },
         booking_last_touch_at: Date.now(),
       },
     };
   }
 
-  // Avanza a ask_daypart (humanizado)
+  const purposeLabel = getPurposeLabel(purpose, effectiveLang);
+
   const canonicalText =
-    effectiveLang === "en"
-      ? `Perfect — for ${purpose}, do mornings or afternoons work better?`
-      : `Perfecto — para ${purpose}, ¿te funciona mejor en la mañana o en la tarde?`;
+    effectiveLang === "es"
+      ? `Perfecto — para ${purposeLabel}, ¿te funciona mejor en la mañana o en la tarde?`
+      : `Perfect — for ${purposeLabel}, do mornings or afternoons work better?`;
 
   const reply = await humanizeBookingReply({
     idioma: effectiveLang,
     intent: "ask_daypart",
     askedText: userText,
     canonicalText,
-    locked: [purpose], // ✅ evita que lo “traducca” raro o lo cambie
+    locked: [purposeLabel],
     purpose,
   });
 

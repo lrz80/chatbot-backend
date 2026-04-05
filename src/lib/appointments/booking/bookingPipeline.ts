@@ -2,6 +2,7 @@
 import type poolType from "../../db";
 import { bookingFlowMvp } from "../bookingFlow";
 import { runBookingGuardrail } from "./guardrail";
+import type { LangCode } from "../../i18n/lang";
 
 // helper local: extrae LINK_RESERVA del prompt base (sin adivinar)
 function extractBookingLinkFromPrompt(promptBase: string): string | null {
@@ -19,7 +20,7 @@ export type BookingPipelineDeps = {
   tenantId: string;
   canal: "whatsapp" | "facebook" | "instagram"; // aquí usas whatsapp hoy
   contacto: string;
-  idioma: "es" | "en";
+  idioma: LangCode;
   userText: string;
 
   messageId: string | null;
@@ -108,7 +109,7 @@ export async function runBookingPipeline(deps: BookingPipelineDeps): Promise<Boo
       return {
         handled: true,
         ctx: nextCtx,
-        reply: bk.reply || (idioma === "en" ? "Ok." : "Perfecto."),
+        reply: bk.reply || (idioma === "es" ? "Perfecto." : "Ok."),
         intent: "agendar_cita",
         source: `booking_flow${sourceTag ? ":" + sourceTag : ""}`,
         bookingLink,
@@ -145,7 +146,7 @@ export async function runBookingPipeline(deps: BookingPipelineDeps): Promise<Boo
     return {
       handled: true,
       ctx: nextCtx,
-      reply: gr.result.reply || (idioma === "en" ? "Ok." : "Perfecto."),
+      reply: gr.result.reply || (idioma === "es" ? "Perfecto." : "Ok."),
       intent: "agendar_cita",
       source: `booking_guardrail${sourceTag ? ":" + sourceTag : ""}`,
       bookingLink,

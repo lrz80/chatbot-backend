@@ -1,53 +1,63 @@
 // backend/src/lib/appointments/booking/guardrail.ts
+import type { LangCode } from "../../i18n/lang";
+import { hasExplicitDateTime } from "./parsers/dateTimeParsers";
 import {
   hasAppointmentContext,
-  hasExplicitDateTime,
   isDirectBookingRequest,
   wantsSpecificTime,
-} from "./text";
+} from "./signals/bookingSignals";
 
 export type BookingGuardrailSignalsOpts = {
   userText: string;
   detectedIntent?: string | null;
-  // si quieres, luego puedes inyectar "bookingTerms" o flags por tenant
 };
+
+const BOOKING_INTENT_KEYS = new Set([
+  "booking",
+  "book_appointment",
+  "appointment",
+  "availability",
+  "schedule",
+  "schedule_appointment",
+  "agendar_cita",
+  "disponibilidad",
+]);
 
 export function hasBookingSignal(opts: BookingGuardrailSignalsOpts): boolean {
   const { userText, detectedIntent } = opts;
 
-  // Señales fuertes / conservadoras
+  const normalizedIntent = String(detectedIntent || "").trim().toLowerCase();
+
   const signal =
     hasExplicitDateTime(userText) ||
     isDirectBookingRequest(userText) ||
     hasAppointmentContext(userText) ||
     wantsSpecificTime(userText) ||
-    detectedIntent === "disponibilidad" ||
-    detectedIntent === "agendar_cita";
+    BOOKING_INTENT_KEYS.has(normalizedIntent);
 
-  return !!signal;
+  return Boolean(signal);
 }
 
 export type BookingGuardrailRunOpts = {
-  // gating
-  bookingEnabled: boolean;           // toggle ON/OFF (channel_settings.google_calendar_enabled)
-  bookingLink?: string | null;       // LINK_RESERVA si existe
-  // turn context
+  bookingEnabled: boolean;
+  bookingLink?: string | null;
+
   tenantId: string;
   canal: "whatsapp" | "facebook" | "instagram" | string;
   contacto: string;
-  idioma: "es" | "en";
+  idioma: LangCode;
   userText: string;
   ctx: any;
   messageId?: string | null;
 
-  // señales externas (opcional)
   detectedIntent?: string | null;
 
-  // dependency injection (para reusar en otros routes sin importar directo)
   bookingFlow: (opts: any) => Promise<{ handled: boolean; reply?: string; ctxPatch?: any }>;
 };
 
-export async function runBookingGuardrail(opts: BookingGuardrailRunOpts): Promise<{
+export async function runBookingGuardrail(
+  opts: BookingGuardrailRunOpts
+): Promise<{
   hit: boolean;
   result?: { handled: boolean; reply?: string; ctxPatch?: any };
 }> {
@@ -60,8 +70,9 @@ export async function runBookingGuardrail(opts: BookingGuardrailRunOpts): Promis
 
   if (!bookingEnabled) return { hit: false };
 
-  // si NO hay señal de booking, no corras nada
-  if (!hasBookingSignal({ userText, detectedIntent })) return { hit: false };
+  if (!hasBookingSignal({ userText, detectedIntent })) {
+    return { hit: false };
+  }
 
   const bk = await bookingFlow({
     tenantId: opts.tenantId,
@@ -74,8 +85,9 @@ export async function runBookingGuardrail(opts: BookingGuardrailRunOpts): Promis
     messageId: opts.messageId || null,
   });
 
-  // aunque handled=false, igual devolvemos result por si quieres aplicar ctxPatch afuera
-  if (bk?.handled) return { hit: true, result: bk };
+  if (bk?.handled) {
+    return { hit: true, result: bk };
+  }
 
   return { hit: false, result: bk };
 }

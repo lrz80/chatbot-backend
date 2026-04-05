@@ -1,7 +1,7 @@
 // src/lib/appointments/booking/time.ts
 import { DateTime } from "luxon";
 import type { HoursByWeekday } from "./types";
-
+import type { LangCode } from "../../i18n/lang";
 
 type Slot = { startISO: string; endISO: string };
 
@@ -80,8 +80,8 @@ export function isWithinBusinessHours(opts: {
     : { ok: false as const, reason: "outside" as const, bizStart, bizEnd, key };
 }
 
-export function formatBizWindow(idioma: "es" | "en", bizStart: DateTime, bizEnd: DateTime) {
-  const fmt = idioma === "en" ? "h:mm a" : "HH:mm";
+export function formatBizWindow(idioma: LangCode, bizStart: DateTime, bizEnd: DateTime) {
+  const fmt = idioma === "es" ? "HH:mm" : "h:mm a";
   return `${bizStart.toFormat(fmt)} - ${bizEnd.toFormat(fmt)}`;
 }
 
@@ -122,33 +122,31 @@ function allSlotsSameDay(slots: Array<{ startISO: string }>, tz: string) {
   return slots.every((s) => isSameLocalDay(first, s.startISO, tz));
 }
 
-function formatTimeOnly(opts: { startISO: string; timeZone: string; idioma: "es" | "en" }) {
+function formatTimeOnly(opts: { startISO: string; timeZone: string; idioma: LangCode }) {
   const { startISO, timeZone, idioma } = opts;
   const dt = DateTime.fromISO(startISO, { zone: timeZone });
   if (!dt.isValid) return startISO;
 
   // 12h con am/pm (EN) y "p. m." (ES) como en tu screenshot
   const fmt = "h:mm a";
-  return dt.setLocale(idioma === "en" ? "en" : "es").toFormat(fmt);
+  return dt.setLocale(idioma === "es" ? "es" : "en").toFormat(fmt);
 }
 
-function formatDayLabelNoYear(opts: { startISO: string; timeZone: string; idioma: "es" | "en" }) {
+function formatDayLabelNoYear(opts: { startISO: string; timeZone: string; idioma: LangCode }) {
   const { startISO, timeZone, idioma } = opts;
   const dt = DateTime.fromISO(startISO, { zone: timeZone });
   if (!dt.isValid) return "";
 
-  if (idioma === "en") {
-    // Wed, Jan 28
-    return dt.setLocale("en").toFormat("ccc, LLL d");
-  }
-  // mié 28 ene
+if (idioma === "es") {
   return dt.setLocale("es").toFormat("ccc d LLL");
+}
+return dt.setLocale("en").toFormat("ccc, LLL d");
 }
 
 export function formatSlotHuman(opts: {
   startISO: string;
   timeZone: string;
-  idioma: "es" | "en";
+  idioma: LangCode;
 }) {
   const { startISO, timeZone, idioma } = opts;
 
@@ -163,7 +161,7 @@ export function formatSlotHuman(opts: {
 }
 
 export function renderSlotsMessage(opts: {
-  idioma: "es" | "en";
+  idioma: LangCode;
   timeZone: string;
   slots: Array<{ startISO: string; endISO: string }>;
 
@@ -181,9 +179,9 @@ export function renderSlotsMessage(opts: {
   } = opts;
 
   if (!slots.length) {
-    return idioma === "en"
-      ? "I'm sorry! I couldn’t find availability for that date. What other day works for you?"
-      : "Lo siento! No encontré disponibilidad para esa fecha. ¿Qué otro día te funciona?";
+    return idioma === "es"
+      ? "Lo siento! No encontré disponibilidad para esa fecha. ¿Qué otro día te funciona?"
+      : "I'm sorry! I couldn’t find availability for that date. What other day works for you?";
   }
 
   const sameDay = allSlotsSameDay(slots, timeZone);
@@ -218,16 +216,16 @@ export function renderSlotsMessage(opts: {
   const introLine =
     !intro || style === "neutral"
       ? ""
-      : (idioma === "en" ? introEnMap[style] : introEsMap[style]) + "\n";
+      : (idioma === "es" ? introEsMap[style] : introEnMap[style]) + "\n";
 
   const askLine =
     ask === "anything"
-      ? idioma === "en"
-        ? `Please Reply with a number (1-${slots.length}) or tell me a time (like "2pm" / "14:00").`
-        : `Por favor responde con un número (1-${slots.length}) o dime una hora (como "2pm" / "14:00").`
-      : idioma === "en"
-        ? `Please Reply with the number you prefer (1-${slots.length}).`
-        : `Por favor Responde con el número que prefieras (1-${slots.length}).`;
+      ? idioma === "es"
+        ? `Por favor responde con un número (1-${slots.length}) o dime una hora (como "2pm" / "14:00").`
+        : `Please Reply with a number (1-${slots.length}) or tell me a time (like "2pm" / "14:00").`
+      : idioma === "es"
+        ? `Por favor Responde con el número que prefieras (1-${slots.length}).`
+        : `Please Reply with the number you prefer (1-${slots.length}).`;
 
   return `${introLine}${lines.join("\n")}\n${askLine}`.trim();
 }

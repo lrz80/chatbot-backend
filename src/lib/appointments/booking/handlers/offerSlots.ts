@@ -1,6 +1,8 @@
 // src/lib/appointments/booking/handlers/offerSlots.ts
 import { DateTime } from "luxon";
 import type { TimeConstraint } from "../text";
+import type { LangCode } from "../../../i18n/lang";
+import { toCanonicalLangOrFallback } from "../../../i18n/lang";
 
 import {
   normalizeText,
@@ -12,6 +14,12 @@ import {
   extractTimeConstraint,
   extractDateOnlyToken,
 } from "../text";
+
+import {
+  detectOfferSlotDaypart,
+  asksAvailabilityList,
+  detectWeekdayFromCanonicalText,
+} from "../signals/offerSlotSignals";
 
 import {
   renderSlotsMessage,
@@ -33,7 +41,7 @@ export type OfferSlotsDeps = {
   tenantId: string;
   canal: string;
 
-  idioma: "es" | "en";
+  idioma: LangCode;
   userText: string;
 
   booking: any;
@@ -62,82 +70,26 @@ function getCtxDateFromBookingOrSlots(slots: Slot[], booking: any, tz: string) {
   );
 }
 
-function resolveWeekdayDateISO(userText: string, tz: string, baseISO?: string | null) {
-  const s = normalizeText(userText);
+function pickSlotsStyle(daypart: "morning" | "afternoon" | null) {
+  return daypart ? ("daypart" as const) : ("sameDay" as const);
+}
 
-  // Luxon weekday: 1=Mon ... 7=Sun
-  const map: Record<string, number> = {
-    // ES
-    lunes: 1,
-    martes: 2,
-    miercoles: 3,
-    miércoles: 3,
-    jueves: 4,
-    viernes: 5,
-    sabado: 6,
-    sábado: 6,
-    domingo: 7,
-
-    // EN (abreviaciones y full)
-    mon: 1,
-    monday: 1,
-    tue: 2,
-    tues: 2,
-    tuesday: 2,
-    wed: 3,
-    weds: 3,
-    wednesday: 3,
-    thu: 4,
-    thur: 4,
-    thurs: 4,
-    thursday: 4,
-    fri: 5,
-    friday: 5,
-    sat: 6,
-    saturday: 6,
-    sun: 7,
-    sunday: 7,
-  };
-
-  let target: number | null = null;
-  for (const k of Object.keys(map)) {
-    if (new RegExp(`\\b${k}\\b`, "i").test(s)) {
-      target = map[k];
-      break;
-    }
-  }
+function resolveWeekdayDateISOFromCanonicalText(
+  userText: string,
+  tz: string,
+  baseISO?: string | null
+) {
+  const target = detectWeekdayFromCanonicalText(userText);
   if (!target) return null;
 
   const base = baseISO
     ? DateTime.fromFormat(baseISO, "yyyy-MM-dd", { zone: tz })
     : DateTime.now().setZone(tz).startOf("day");
 
-  const diff = (target - base.weekday + 7) % 7; // 0..6
+  const diff = (target - base.weekday + 7) % 7;
   const picked = base.plus({ days: diff });
 
   return picked.toFormat("yyyy-MM-dd");
-}
-
-function pickSlotsStyle(daypart: "morning" | "afternoon" | null) {
-  return daypart ? ("daypart" as const) : ("sameDay" as const);
-}
-
-function inferDaypartFromText(userText: string): "morning" | "afternoon" | null {
-  const s = normalizeText(userText);
-
-  // ES
-  if (/\b(tarde|por la tarde)\b/i.test(s)) return "afternoon";
-  if (/\b(mañana|por la mañana)\b/i.test(s)) return "morning";
-
-  // EN
-  if (/\b(afternoon)\b/i.test(s)) return "afternoon";
-  if (/\b(morning)\b/i.test(s)) return "morning";
-
-  // Si menciona am/pm explícito, ayuda
-  if (/\b(pm|p\.m\.)\b/i.test(userText)) return "afternoon";
-  if (/\b(am|a\.m\.)\b/i.test(userText)) return "morning";
-
-  return null;
 }
 
 export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
@@ -157,10 +109,15 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     hours,
   } = deps;
 
+  const resolvedLang = toCanonicalLangOrFallback(
+    booking?.lang || idioma,
+    "en"
+  );
+
   const hydratedBooking = {
     ...booking,
     timeZone: booking?.timeZone || timeZone,
-    lang: booking?.lang || idioma, // ✅ sticky lang
+    lang: resolvedLang,
   };
 
   const resetPersonal = {
@@ -169,7 +126,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
     phone: hydratedBooking.phone || null,
   };
 
-  const effectiveLang: "es" | "en" = (hydratedBooking.lang as any) || idioma;
+  const effectiveLang: LangCode = hydratedBooking.lang;
   const tz = hydratedBooking.timeZone;
   const calendarId = hydratedBooking?.calendar_id || "primary";
 
@@ -178,8 +135,8 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   const slots: Slot[] = sortSlotsAsc(slotsRaw);
 
   const daypartSaved = (hydratedBooking?.daypart || null) as ("morning" | "afternoon" | null);
-  const daypartAsked = inferDaypartFromText(userText);
-  const daypart = daypartAsked || daypartSaved; // 👈 prioridad: lo que el usuario pidió en ESTE mensaje
+  const daypartAsked = detectOfferSlotDaypart(userText);
+  const daypart = daypartAsked || daypartSaved;
 
   const step = hydratedBooking?.step;
 
@@ -194,10 +151,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   const slotsShown: Slot[] = daypart ? filterSlotsByDaypart(slots, tz, daypart) : slots;
 
   // ✅ Detectar si el usuario pide explícitamente "mañana" o "tarde"
-  const asksAfternoon = /\b(tarde|afternoon|pm)\b/i.test(t);
-  const asksMorning = /\b(mañana|morning|am)\b/i.test(t);
-  const askedDaypart: "morning" | "afternoon" | null =
-    asksAfternoon ? "afternoon" : asksMorning ? "morning" : null;
+  const askedDaypart = detectOfferSlotDaypart(userText);
 
   // ✅ Si pidió daypart, refrescamos slots del DÍA COMPLETO y filtramos por daypart.
   // Esto evita que se quede atrapado con los 3 slots guardados (que pueden ser solo mañana).
@@ -386,10 +340,7 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
   // ⚠️ Solo repetir lista si NO pide hora específica
   const hasExplicitHour = extractTimeOnlyToken(userText) || extractTimeConstraint(userText);
 
-  if (
-    !hasExplicitHour &&
-    /\b(horario|horarios|hours|available|availability|openings|slots|disponible|disponibles|disponibilidad)\b/i.test(t)
-  ) {
+  if (!hasExplicitHour && asksAvailabilityList(userText)) {
 
     return {
       handled: true,
@@ -508,7 +459,11 @@ export async function handleOfferSlots(deps: OfferSlotsDeps): Promise<{
         ? DateTime.fromISO(slots[0].startISO, { zone: tz }).toFormat("yyyy-MM-dd")
         : null);
 
-    const weekdayDate = resolveWeekdayDateISO(userText, tz, baseForWeekday);
+    const weekdayDate = resolveWeekdayDateISOFromCanonicalText(
+      userText,
+      tz,
+      baseForWeekday
+    );
 
     const ctxDate =
       dateFromText ||
