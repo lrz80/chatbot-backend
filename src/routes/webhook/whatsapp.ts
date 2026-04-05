@@ -67,6 +67,7 @@ import { traducirMensaje } from '../../lib/traducirMensaje';
 import { queryWithTimeout } from "../../lib/dbQuery";
 
 import { renderFastpathDmReply } from "../../lib/channels/engine/fastpath/renderFastpathDmReply";
+import { resolveBusinessInfoOverviewCanonicalBody } from "../../lib/channels/engine/businessInfo/resolveBusinessInfoOverviewCanonicalBody";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -594,14 +595,18 @@ export async function procesarMensajeWhatsApp(
   async function tryBusinessInfoOutsideFastpath(params: {
     intent: string | null;
   }): Promise<boolean> {
-    const routeIntent = String(params.intent || "").trim() || null;
-    const canonicalBusinessInfoBody = String(tenant?.info_clave || "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-  
+    const routeIntent = String(params.intent || "").trim() || "info_general";
+
+    const canonicalBusinessInfoBody =
+      await resolveBusinessInfoOverviewCanonicalBody({
+        tenantId: tenant.id,
+        canal,
+        idiomaDestino,
+        userInput,
+        promptBaseMem,
+        infoClave: String(tenant?.info_clave || ""),
+      });
+
     if (!canonicalBusinessInfoBody) {
       console.warn("[BUSINESS_INFO][EMPTY_CANONICAL_BODY]", {
         tenantId: tenant.id,
