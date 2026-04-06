@@ -103,6 +103,13 @@ function buildSystemPrompt(params: {
     "",
     "OUTPUT STYLE:",
     "- Keep canonicalBody useful, compact, direct, and faithful to source truth.",
+    "- For broad discovery turns, canonicalBody must be short and easy to scan in a messaging app.",
+    "- Prefer 1 short summary line followed by a short bullet list when BUSINESS_SOURCE supports main services clearly.",
+    "- Use at most 4 bullets for broad discovery turns.",
+    "- Each bullet must be short, customer-facing, and grounded.",
+    "- Do not produce long narrative paragraphs for broad discovery turns.",
+    "- If BUSINESS_SOURCE supports a business description plus main services, keep the description to one short line and then list only the main services.",
+    "- Do not include schedule, location, contact, or policy details in broad discovery turns unless the USER_MESSAGE explicitly asks for them.",
     "- Preserve the user's output language.",
     `- Output language must be: ${idiomaDestino}.`,
     "",
@@ -134,8 +141,12 @@ function buildUserPrompt(params: {
     "TASK:",
     "- Determine whether USER_MESSAGE is a broad discovery turn or a specific business-information question.",
     "- Return only the grounded canonicalBody for business-info scope.",
-    "- For broad discovery turns, summarize the business and its main services only.",
+    "- For broad discovery turns, summarize only the business at a high level and its main services.",
+    "- For broad discovery turns, prefer this structure when supported by BUSINESS_SOURCE:",
+    "  1) one short summary line",
+    "  2) a short bullet list of main services",
     "- Do not output pricing detail or catalog detail.",
+    "- Do not output long paragraphs for broad discovery turns.",
   ].join("\n");
 }
 
