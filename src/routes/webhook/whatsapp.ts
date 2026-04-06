@@ -70,6 +70,8 @@ import { renderFastpathDmReply } from "../../lib/channels/engine/fastpath/render
 import { resolveBusinessInfoOverviewCanonicalBody } from "../../lib/channels/engine/businessInfo/resolveBusinessInfoOverviewCanonicalBody";
 import { composeFacetReply } from "../../lib/channels/engine/turn/composeFacetReply";
 
+import { resolveUnhandledTurnFallback } from "../../lib/channels/engine/fallback/resolveUnhandledTurnFallback";
+
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
   tenant?: any;
@@ -1501,6 +1503,35 @@ export async function procesarMensajeWhatsApp(
       hasPendingCta,
       inBooking0,
     });
-    return;
+
+    const fallback = await resolveUnhandledTurnFallback({
+      tenantId: tenant.id,
+      canal,
+      idiomaDestino,
+      userInput,
+      contactoNorm,
+      messageId: messageId || null,
+      promptBaseMem,
+      infoClave: String(tenant?.info_clave || ""),
+      detectedIntent: detectedIntent || null,
+      intentFallback: INTENCION_FINAL_CANONICA || null,
+      detectedFacets: detectedFacets || null,
+      detectedCommercial: detectedCommercial || null,
+      ctxPatch: finalCtxPatch || {},
+    });
+
+    if (fallback.ctxPatch) {
+      transition({ patchCtx: fallback.ctxPatch });
+      finalCtxPatch = {
+        ...finalCtxPatch,
+        ...fallback.ctxPatch,
+      };
+    }
+
+    return await replyAndExit(
+      fallback.reply,
+      fallback.source,
+      fallback.intent || null
+    );
   }
 }
