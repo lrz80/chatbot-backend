@@ -460,7 +460,7 @@ function getTokenOverlapRatio(a: string, b: string): number {
   return overlap / Math.min(aSet.size, bSet.size);
 }
 
-function shouldDropIntroForCanonicalBody(args: {
+function shouldStripFirstCanonicalLineFromBody(args: {
   intro?: string | null;
   canonicalBody: string;
 }): boolean {
@@ -479,14 +479,45 @@ function shouldDropIntroForCanonicalBody(args: {
 
   if (
     normalizedIntro === normalizedFirstLine ||
-    normalizedIntro.includes(normalizedFirstLine) ||
-    normalizedFirstLine.includes(normalizedIntro)
+    normalizedIntro.includes(normalizedFirstLine)
   ) {
     return true;
   }
 
   const overlapRatio = getTokenOverlapRatio(intro, firstCanonicalLine);
-  return overlapRatio >= 0.75;
+  return overlapRatio >= 0.9;
+}
+
+function stripFirstCanonicalLineIfDuplicated(args: {
+  intro?: string | null;
+  canonicalBody: string;
+}): string {
+  const canonicalBody = String(args.canonicalBody || "").trim();
+  if (!canonicalBody) return "";
+
+  if (!shouldStripFirstCanonicalLineFromBody(args)) {
+    return canonicalBody;
+  }
+
+  const lines = canonicalBody
+    .split("\n")
+    .map((line) => line.trim());
+
+  let removed = false;
+  const nextLines: string[] = [];
+
+  for (const line of lines) {
+    if (!removed && line) {
+      removed = true;
+      continue;
+    }
+
+    if (line) {
+      nextLines.push(line);
+    }
+  }
+
+  return nextLines.join("\n").trim();
 }
 
 function composeCanonicalReply(input: {
@@ -499,18 +530,15 @@ function composeCanonicalReply(input: {
 }): string {
   const parts: string[] = [];
 
-  const canonicalBody = String(input.canonicalBody || "").trim();
-  let intro = String(input.intro || "").trim();
+  let canonicalBody = String(input.canonicalBody || "").trim();
+  const intro = String(input.intro || "").trim();
   const closing = String(input.closing || "").trim();
 
-  if (
-    input.dedupeIntroAgainstCanonicalBody === true &&
-    shouldDropIntroForCanonicalBody({
+  if (input.dedupeIntroAgainstCanonicalBody === true) {
+    canonicalBody = stripFirstCanonicalLineIfDuplicated({
       intro,
       canonicalBody,
-    })
-  ) {
-    intro = "";
+    });
   }
 
   if (input.allowIntro && intro) {
