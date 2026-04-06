@@ -585,6 +585,43 @@ function hasUsableCanonicalFrame(
   return true;
 }
 
+async function forceMissingClosingFrame(args: {
+  openai: OpenAI;
+  model: string;
+  systemPrompt: string;
+  history: ChatCompletionMessageParam[];
+  userPrompt: string;
+}): Promise<CanonicalFrameEnvelope | null> {
+  const completion = await args.openai.chat.completions.create({
+    model: args.model,
+    temperature: 0,
+    max_tokens: 120,
+    messages: [
+      { role: "system", content: args.systemPrompt },
+      ...(Array.isArray(args.history) ? args.history : []),
+      {
+        role: "user",
+        content: [
+          args.userPrompt,
+          "",
+          "VALIDATION_ERROR:",
+          "- closing is mandatory for this response.",
+          "- Return STRICT JSON only.",
+          '- Use this exact shape: {"intro":null,"closing":"...","pendingCta":null}',
+          "- intro must be null.",
+          "- closing must not be null or empty.",
+          "- Follow the tenant-specific closing policy from PROMPT_BASE if present.",
+          "- Do not rewrite, summarize, or replace the canonical body.",
+          "- Generate only the missing closing field.",
+        ].join("\n"),
+      },
+    ],
+  });
+
+  const raw = completion.choices[0]?.message?.content?.trim() || "";
+  return parseCanonicalFrameEnvelope(raw);
+}
+
 /* =========================
    Main function
 ========================= */
@@ -759,7 +796,8 @@ export async function answerWithPromptBase(
             "- The previous JSON did not satisfy the response policy.",
             "- Return strict JSON again.",
             "- Provide intro if allowIntro=true.",
-            "- Provide closing if allowOutro=true or mustEndWithSalesQuestion=true.",
+            "- If allowOutro=true or mustEndWithSalesQuestion=true, closing is mandatory and must not be null or empty.",
+            "- Follow the tenant-specific closing policy from PROMPT_BASE if present.",
             "- Do not rewrite the canonical body.",
             "- Only regenerate the JSON frame fields."
           ].join("\n"),
@@ -772,6 +810,41 @@ export async function answerWithPromptBase(
 
     rawModelOutputForPendingCta = retryRaw;
     parsedCanonicalFrame = parseCanonicalFrameEnvelope(retryRaw);
+  }
+
+    const requiresClosing =
+    shouldComposeCanonicalBody &&
+    (effectivePolicy.allowOutro === true ||
+      effectivePolicy.mustEndWithSalesQuestion === true);
+
+  const hasClosing =
+    typeof parsedCanonicalFrame?.closing === "string" &&
+    parsedCanonicalFrame.closing.trim().length > 0;
+
+  if (
+    shouldComposeCanonicalBody &&
+    requiresClosing &&
+    !hasClosing
+  ) {
+    const forcedFrame = await forceMissingClosingFrame({
+      openai,
+      model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+      systemPrompt,
+      history: Array.isArray(history) ? history : [],
+      userPrompt,
+    });
+
+    if (forcedFrame?.closing?.trim()) {
+      parsedCanonicalFrame = {
+        intro:
+          effectivePolicy.allowIntro === true
+            ? parsedCanonicalFrame?.intro ?? null
+            : null,
+        closing: forcedFrame.closing.trim(),
+        pendingCta: forcedFrame.pendingCta ?? null,
+      };
+      rawModelOutputForPendingCta = JSON.stringify(parsedCanonicalFrame);
+    }
   }
 
   out = shouldComposeCanonicalBody
