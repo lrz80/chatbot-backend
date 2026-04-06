@@ -1,5 +1,5 @@
 import type { Canal } from "../../../detectarIntencion";
-import type { Lang } from "../clients/clientDb";
+import type { LangCode } from "../../../i18n/lang";
 import { getRecentHistoryForModel } from "../messages/getRecentHistoryForModel";
 import { answerWithPromptBase } from "../../../answers/answerWithPromptBase";
 import { stripMarkdownLinksForDm } from "../../format/stripMarkdownLinks";
@@ -82,35 +82,6 @@ function shouldBypassWriterModel(input: {
   );
 }
 
-function buildCatalogChoiceCanonicalBody(input: {
-  idiomaDestino: Lang;
-  catalogPayload:
-    | Extract<CatalogPayload, { kind: "service_choice" }>
-    | Extract<CatalogPayload, { kind: "variant_choice" }>;
-}): string {
-  const { idiomaDestino, catalogPayload } = input;
-
-  const options = Array.isArray(catalogPayload.options)
-    ? catalogPayload.options
-    : [];
-
-  const optionLines = options
-    .map((option, idx) => `${idx + 1}) ${String(option.label || "").trim()}`)
-    .filter(Boolean);
-
-  if (catalogPayload.kind === "service_choice") {
-    return idiomaDestino === "en"
-      ? `I can help you with that. To give you the right details, which option are you interested in?\n\n${optionLines.join("\n")}`
-      : `Claro. Para darte la información correcta, dime cuál de estas opciones te interesa:\n\n${optionLines.join("\n")}`;
-  }
-
-  const serviceLabel = normalizeText(catalogPayload.serviceName);
-
-  return idiomaDestino === "en"
-    ? `${serviceLabel || "This option"} has these available formats. Which one would you like?\n\n${optionLines.join("\n")}`
-    : `${serviceLabel || "Esta opción"} tiene estas modalidades disponibles. ¿Cuál te interesa?\n\n${optionLines.join("\n")}`;
-}
-
 function buildResolvedCatalogCanonicalBody(input: {
   catalogPayload: Extract<CatalogPayload, { kind: "resolved_catalog_answer" }>;
 }): string {
@@ -129,25 +100,64 @@ function buildResolvedCatalogCanonicalBody(input: {
     .trim();
 }
 
-function isInfoGeneralOverviewSource(value: unknown): boolean {
-  const normalized = normalizeText(value).toLowerCase();
-  return (
-    normalized === "info_general_overview" ||
-    normalized === "info_general_prompt_base" ||
-    normalized === "info_general_overview_db"
-  );
+function isBusinessInfoReply(input: {
+  fpSource: string;
+  fpIntent: string;
+  replyPolicy: RenderFastpathDmReplyInput["replyPolicy"];
+}): boolean {
+  if (input.replyPolicy.isGroundedCatalogOverviewDm === true) {
+    return true;
+  }
+
+  if (input.fpIntent === "info_general") {
+    return true;
+  }
+
+  return input.fpSource.startsWith("business_info");
 }
 
-function isInfoGeneralOverviewIntent(value: unknown): boolean {
-  const normalized = normalizeText(value).toLowerCase();
-  return (
-    normalized === "info_general" ||
-    normalized === "info_general_overview"
-  );
+function buildCatalogChoiceCanonicalBody(input: {
+  catalogPayload:
+    | Extract<CatalogPayload, { kind: "service_choice" }>
+    | Extract<CatalogPayload, { kind: "variant_choice" }>;
+}): string {
+  const { catalogPayload } = input;
+
+  const options = Array.isArray(catalogPayload.options)
+    ? catalogPayload.options
+    : [];
+
+  const optionLines = options
+    .map((option, idx) => `${idx + 1}) ${String(option.label || "").trim()}`)
+    .filter(Boolean);
+
+  if (catalogPayload.kind === "service_choice") {
+    return [
+      "CANONICAL_CHOICE_KIND: service",
+      "CANONICAL_CHOICE_INSTRUCTION: Ask the user to choose one option from the list. Do not add explanations outside this purpose.",
+      "",
+      optionLines.join("\n"),
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+
+  const serviceLabel = normalizeText(catalogPayload.serviceName);
+
+  return [
+    "CANONICAL_CHOICE_KIND: variant",
+    `CANONICAL_PARENT_LABEL: ${serviceLabel || ""}`,
+    "CANONICAL_CHOICE_INSTRUCTION: Ask the user to choose one available variant for the selected option. Do not add explanations outside this purpose.",
+    "",
+    optionLines.join("\n"),
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
 }
 
 function buildCommercialClosingInstruction(input: {
-  idiomaDestino: Lang;
   commercialPolicy: {
     purchaseIntent: "unknown" | "low" | "medium" | "high";
     wantsBooking: boolean;
@@ -160,36 +170,26 @@ function buildCommercialClosingInstruction(input: {
     shouldSuggestHumanHandoff: boolean;
   };
 }): string | null {
-  const { idiomaDestino, commercialPolicy } = input;
+  const { commercialPolicy } = input;
 
   if (commercialPolicy.shouldSuggestHumanHandoff) {
-    return idiomaDestino === "en"
-      ? "Close by offering a direct next step with a person, without sounding pushy."
-      : "Cierra ofreciendo como siguiente paso hablar con una persona o asesor, sin sonar agresivo.";
+    return "Offer a direct next step with a person, without sounding pushy.";
   }
 
   if (commercialPolicy.shouldUseDirectClosing) {
     if (commercialPolicy.wantsBooking) {
-      return idiomaDestino === "en"
-        ? "Close with one short, direct booking-oriented question that helps the user move forward now."
-        : "Cierra con una sola pregunta corta y directa orientada a agendar o avanzar ahora.";
+      return "Close with one short and direct next-step question focused on booking or moving forward now.";
     }
 
-    return idiomaDestino === "en"
-      ? "Close with one short, direct next-step question that helps the user move forward now."
-      : "Cierra con una sola pregunta corta y directa que ayude al cliente a avanzar ahora.";
+    return "Close with one short and direct next-step question that helps the user move forward now.";
   }
 
   if (commercialPolicy.shouldUseSoftClosing) {
-    return idiomaDestino === "en"
-      ? "Close with one short, guided, low-pressure question that helps the user continue naturally."
-      : "Cierra con una sola pregunta corta, guiada y sin presión para ayudar al cliente a seguir de forma natural.";
+    return "Close with one short, guided, low-pressure question that helps the user continue naturally.";
   }
 
   if (commercialPolicy.shouldUseSalesTone) {
-    return idiomaDestino === "en"
-      ? "Use a consultative sales tone, but keep the close soft and natural."
-      : "Usa un tono consultivo de ventas, pero con un cierre suave y natural.";
+    return "Use a consultative sales tone and keep the close soft and natural.";
   }
 
   return null;
@@ -198,7 +198,7 @@ function buildCommercialClosingInstruction(input: {
 export type RenderFastpathDmReplyInput = {
   tenantId: string;
   canal: Canal;
-  idiomaDestino: Lang;
+  idiomaDestino: LangCode;
   userInput: string;
   contactoNorm: string;
   messageId: string | null;
@@ -305,10 +305,11 @@ export async function renderFastpathDmReply(
     fp?.intent || input.detectedIntent || input.intentFallback || ""
   ).toLowerCase();
 
-  const isInfoGeneralOverviewTurn =
-    isInfoGeneralOverviewSource(fpSource) ||
-    isInfoGeneralOverviewIntent(fpIntent) ||
-    replyPolicy.isGroundedCatalogOverviewDm === true;
+  const isInfoGeneralOverviewTurn = isBusinessInfoReply({
+    fpSource,
+    fpIntent,
+    replyPolicy,
+  });
 
   const catalogPayload = fp?.catalogPayload;
 
@@ -323,21 +324,18 @@ export async function renderFastpathDmReply(
   const unresolvedCatalogChoice = isCatalogChoiceReply;
 
   const commercialClosingInstruction = buildCommercialClosingInstruction({
-    idiomaDestino,
     commercialPolicy,
   });
 
   const canonicalReply = (() => {
     if (catalogPayload?.kind === "service_choice") {
       return buildCatalogChoiceCanonicalBody({
-        idiomaDestino,
         catalogPayload,
       });
     }
 
     if (catalogPayload?.kind === "variant_choice") {
       return buildCatalogChoiceCanonicalBody({
-        idiomaDestino,
         catalogPayload,
       });
     }
