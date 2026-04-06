@@ -42,9 +42,8 @@ export async function getIdiomaClienteDB(
   pool: Pool,
   tenantId: string,
   canal: string,
-  contacto: string,
-  fallback: Lang
-): Promise<Lang> {
+  contacto: string
+): Promise<Lang | null> {
   try {
     const { rows } = await pool.query(
       `SELECT idioma
@@ -54,13 +53,11 @@ export async function getIdiomaClienteDB(
       [tenantId, canal, contacto]
     );
 
-    const dbLang = normalizeLangCode(rows[0]?.idioma);
-    if (dbLang) return dbLang;
+    return normalizeLangCode(rows[0]?.idioma);
   } catch (e: any) {
     console.warn("⚠️ getIdiomaClienteDB FAILED", e?.message);
+    return null;
   }
-
-  return normalizeLangCode(fallback) ?? "es";
 }
 
 export async function upsertIdiomaClienteDB(

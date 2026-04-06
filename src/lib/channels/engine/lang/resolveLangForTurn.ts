@@ -192,7 +192,7 @@ export async function resolveLangForTurn(
     normalizeLangCode(tenantBase) ?? languagePolicy.fallbackOutputLanguage;
 
   const storedLang = normalizeLangCode(
-    await getIdiomaClienteDB(pool, tenant.id, canal, contactoNorm, normalizedTenantBase)
+    await getIdiomaClienteDB(pool, tenant.id, canal, contactoNorm)
   );
 
   let idiomaDestino: LangCode = normalizedTenantBase;
@@ -279,11 +279,9 @@ export async function resolveLangForTurn(
     policy: languagePolicy,
   });
 
-  idiomaDestino = baseResolution.outputLang;
-
   if (forcedLangThisTurn) {
     idiomaDestino =
-      normalizeLangCode(forcedLangThisTurn) ?? baseResolution.outputLang;
+      normalizeLangCode(forcedLangThisTurn) ?? normalizedTenantBase;
   } else if (explicitLang) {
     idiomaDestino = explicitLang;
 
@@ -328,11 +326,9 @@ export async function resolveLangForTurn(
       detectedSource: langRes.detectedSource,
       prev: storedLang,
     });
-  } else if (threadLang && ambiguousTurn) {
+  } else if (ambiguousTurn && threadLang) {
     idiomaDestino = threadLang;
-  } else if (threadLang) {
-    idiomaDestino = threadLang;
-  } else if (storedLang) {
+  } else if (ambiguousTurn && storedLang) {
     idiomaDestino = storedLang;
   } else {
     idiomaDestino = normalizedTenantBase;
