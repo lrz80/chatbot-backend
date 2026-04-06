@@ -652,7 +652,7 @@ export async function procesarMensajeWhatsApp(
         isGroundedCatalogReply: false,
         isGroundedCatalogOverviewDm: true,
         shouldForceSalesClosingQuestion: false,
-        canonicalBodyOwnsClosing: false,
+        canonicalBodyOwnsClosing: true,
 
         commercialPolicy: {
           purchaseIntent: detectedCommercial?.purchaseIntent ?? "low",
