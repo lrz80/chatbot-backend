@@ -382,11 +382,10 @@ export async function renderFastpathDmReply(
       ? structuredService?.serviceLabel ?? null
       : null;
 
-    const shouldAllowIntro =
-    (!bypassWriterModel || isResolvedCatalogAnswer) &&
-    (commercialPolicy.shouldUseSalesTone ||
-      isResolvedCatalogAnswer ||
-      isInfoGeneralOverviewTurn);
+  const shouldAllowIntro =
+    !isResolvedCatalogAnswer &&
+    (!bypassWriterModel || isInfoGeneralOverviewTurn) &&
+    (commercialPolicy.shouldUseSalesTone || isInfoGeneralOverviewTurn);
 
   const shouldAllowOutro =
     (!bypassWriterModel || isResolvedCatalogAnswer) &&
@@ -477,7 +476,9 @@ export async function renderFastpathDmReply(
       ? [
           "Resolved grounded catalog turn. The canonical body is the source of truth and must be preserved exactly.",
           "Do not rewrite, summarize, compress, paraphrase, or omit any fact, condition, number, schedule, bullet, or link from the canonical body.",
-          "You may add only one short intro before the canonical body and one short closing question after it.",
+          "Do not add an intro before the canonical body.",
+          "Do not restate, preview, summarize, or paraphrase facts already contained in the canonical body.",
+          "Do not mention prices, numbers, includes, service details, schedules, locations, policies, or links outside the canonical body.",
           "The body itself must remain unchanged and in the same order.",
           commercialClosingInstruction,
         ]
