@@ -1,9 +1,13 @@
 import type { Pool } from "pg";
-import { resolveServiceCandidatesFromText } from "../../../services/pricing/resolveServiceIdFromText";
+import {
+  resolveServiceCandidatesFromText,
+  type ResolveServiceDecision,
+} from "../../../services/pricing/resolveServiceIdFromText";
 
 export type CanonicalCatalogRouteDecision = {
   shouldRouteCatalog: boolean;
   resolutionKind: "resolved_single" | "ambiguous" | "none";
+  resolution: ResolveServiceDecision;
 };
 
 type Args = {
@@ -26,6 +30,7 @@ export async function getCanonicalCatalogRouteDecision(
     return {
       shouldRouteCatalog: true,
       resolutionKind: "resolved_single",
+      resolution,
     };
   }
 
@@ -33,11 +38,13 @@ export async function getCanonicalCatalogRouteDecision(
     return {
       shouldRouteCatalog: true,
       resolutionKind: "ambiguous",
+      resolution,
     };
   }
 
   return {
     shouldRouteCatalog: false,
     resolutionKind: "none",
+    resolution,
   };
 }
