@@ -407,17 +407,23 @@ export async function renderFastpathDmReply(
     commercialPolicy.shouldUseSalesTone;
 
   const shouldAllowOutro =
-    (!bypassWriterModel || isResolvedCatalogAnswer) &&
+    (!bypassWriterModel || isResolvedCatalogAnswer || isInfoGeneralOverviewTurn) &&
     !replyPolicy.canonicalBodyOwnsClosing &&
-    (commercialPolicy.shouldUseSalesTone ||
+    (
+      isResolvedCatalogAnswer ||
+      isInfoGeneralOverviewTurn ||
+      commercialPolicy.shouldUseSalesTone ||
       commercialPolicy.shouldUseSoftClosing ||
       commercialPolicy.shouldUseDirectClosing ||
-      commercialPolicy.shouldSuggestHumanHandoff);
+      commercialPolicy.shouldSuggestHumanHandoff
+    );
 
   const shouldEndWithSalesQuestion =
     !replyPolicy.canonicalBodyOwnsClosing &&
     !isCatalogChoiceReply &&
     (
+      isResolvedCatalogAnswer ||
+      isInfoGeneralOverviewTurn ||
       shouldForceSalesClosingQuestion ||
       commercialPolicy.shouldUseSoftClosing ||
       commercialPolicy.shouldUseDirectClosing ||
@@ -514,7 +520,8 @@ export async function renderFastpathDmReply(
           "Do not replace it with a vague clarification question.",
           "Do not turn the intro into a broad generic question about what the user wants to know.",
           "Do not use the intro to weaken, delay, or redirect the overview.",
-          "If an intro is used, it must be a very short acknowledgment only.",
+          "Do not omit the closing.",
+          "After the canonical body, add exactly one short closing move that helps the user continue.",
           "The tenant-specific closing policy may apply only to the closing, never to the intro.",
           "Keep the canonical body in the same order and bullet structure.",
           tenantClosingPolicyInstruction,
