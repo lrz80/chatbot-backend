@@ -113,12 +113,6 @@ const CATALOG_INTENTS = new Set([
   "info_servicio",
   "catalogo",
   "catalog",
-  "horario",
-  "horario_y_precios",
-  "horarios_y_precios",
-  "info_horarios_generales",
-  "schedule",
-  "schedule_and_price",
   "other_plans",
   "catalog_alternatives",
   "combination_and_price",
@@ -175,18 +169,6 @@ function mapIntentOutToRouteIntent(intentOut?: string | null): CatalogRouteInten
 
   if (intent === "combination_and_price" || intent === "catalog_combination") {
     return "catalog_combination";
-  }
-
-  if (
-    intent === "info_horarios_generales" ||
-    intent === "schedule" ||
-    intent === "horario_y_precios" ||
-    intent === "horario_y_precio" ||
-    intent === "horarios_y_precio" ||
-    intent === "horarios_y_precios" ||
-    intent === "schedule_and_price"
-  ) {
-    return "catalog_schedule";
   }
 
   if (intent === "precio" || intent === "planes_precios") {

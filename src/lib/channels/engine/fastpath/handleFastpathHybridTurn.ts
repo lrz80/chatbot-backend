@@ -147,6 +147,11 @@ export async function handleFastpathHybridTurn(
   const currentIntent = detectedIntent || intentFallback || null;
   const normalizedCurrentIntent = String(currentIntent || "").trim().toLowerCase();
 
+  const asksSchedules = detectedFacets?.asksSchedules === true;
+  const asksPrices = detectedFacets?.asksPrices === true;
+
+  const isMixedScheduleAndPriceTurn = asksSchedules && asksPrices;
+
   const previewClassificationInput = buildCatalogReferenceClassificationInput({
     userText: userInput,
     convoCtx,
@@ -291,7 +296,10 @@ export async function handleFastpathHybridTurn(
             ? catalogReferenceClassification.intent
             : detectedIntent === "info_servicio"
             ? "includes"
-            : detectedIntent === "horario" || detectedIntent === "info_horarios_generales"
+            : (
+                (detectedIntent === "horario" || detectedIntent === "info_horarios_generales") &&
+                !isMixedScheduleAndPriceTurn
+              )
             ? "schedule"
             : detectedIntent === "other_plans" || detectedIntent === "catalog_alternatives"
             ? "other_plans"
@@ -422,16 +430,20 @@ export async function handleFastpathHybridTurn(
 
   const routeTarget: FastpathHybridRoute = shouldHandleCatalogInFastpath
     ? "catalog"
+    : isMixedScheduleAndPriceTurn
+    ? "continue_pipeline"
     : "business_info";
 
-  if (routeTarget === "business_info") {
-    console.log("[FASTPATH_HYBRID][ROUTE_BUSINESS_INFO_OUTSIDE_FASTPATH]", {
+  if (routeTarget !== "catalog") {
+    console.log("[FASTPATH_HYBRID][ROUTE_OUTSIDE_FASTPATH]", {
       tenantId,
       canal,
       contactoNorm,
       userInput,
       detectedIntent,
       intentFallback,
+      routeTarget,
+      isMixedScheduleAndPriceTurn,
       routingPolicy,
       catalogRoutingSignal: effectiveCatalogRoutingSignal,
       canonicalCatalogRouteDecision,
@@ -439,7 +451,7 @@ export async function handleFastpathHybridTurn(
 
     return {
       handled: false,
-      routeTarget: "business_info",
+      routeTarget,
       intent: detectedIntent || intentFallback || null,
     };
   }
