@@ -592,10 +592,48 @@ export async function procesarMensajeWhatsApp(
     return;
   }
 
+  function shouldUseGuidedBusinessEntryOutsideFastpath(params: {
+    routeTarget?: "catalog" | "business_info" | "continue_pipeline";
+    detectedIntent: string | null;
+    intentFallback: string | null;
+    detectedFacets?: IntentFacets | null;
+    detectedCommercial?: CommercialSignal | null;
+  }): boolean {
+    const resolvedIntent = String(
+      params.detectedIntent || params.intentFallback || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    const asksSchedules = params.detectedFacets?.asksSchedules === true;
+    const asksPrices = params.detectedFacets?.asksPrices === true;
+    const asksLocation = params.detectedFacets?.asksLocation === true;
+    const asksAvailability = params.detectedFacets?.asksAvailability === true;
+
+    return (
+      params.routeTarget === "continue_pipeline" &&
+      !asksSchedules &&
+      !asksPrices &&
+      !asksLocation &&
+      !asksAvailability &&
+      params.detectedCommercial?.wantsBooking !== true &&
+      params.detectedCommercial?.wantsQuote !== true &&
+      params.detectedCommercial?.wantsHuman !== true &&
+      (
+        !resolvedIntent ||
+        resolvedIntent === "duda" ||
+        resolvedIntent === "info_general"
+      )
+    );
+  }
+
   async function tryBusinessInfoOutsideFastpath(params: {
     intent: string | null;
+    overviewMode?: "general_overview" | "guided_entry";
   }): Promise<boolean> {
     const routeIntent = String(params.intent || "").trim() || "info_general";
+
+    const overviewMode = params.overviewMode ?? "general_overview";
 
     const canonicalBusinessInfoBody =
       await resolveBusinessInfoOverviewCanonicalBody({
@@ -605,6 +643,7 @@ export async function procesarMensajeWhatsApp(
         userInput,
         promptBaseMem,
         infoClave: String(tenant?.info_clave || ""),
+        overviewMode,
       });
 
     if (!canonicalBusinessInfoBody) {
@@ -629,7 +668,10 @@ export async function procesarMensajeWhatsApp(
       fastpathText: canonicalBusinessInfoBody,
       fp: {
         reply: canonicalBusinessInfoBody,
-        source: "info_general_overview_db",
+        source:
+          overviewMode === "guided_entry"
+            ? "info_general_guided_entry_db"
+            : "info_general_overview_db",
         intent: routeIntent,
         catalogPayload: undefined,
       },
@@ -1168,19 +1210,43 @@ export async function procesarMensajeWhatsApp(
       finalCtxPatch = { ...finalCtxPatch, ...fpRes.ctxPatch };
     }
 
-    if (!fpRes.handled && fpRes.routeTarget === "business_info") {
-      const handledBusinessInfo = await tryBusinessInfoOutsideFastpath({
-        intent:
-          fpRes.intent ||
-          signals?.INTENCION_FINAL_CANONICA ||
-          INTENCION_FINAL_CANONICA ||
-          signals?.detectedIntent ||
-          detectedIntent ||
-          null,
-      });
+    if (!fpRes.handled) {
+      const nextIntent =
+        fpRes.intent ||
+        signals?.INTENCION_FINAL_CANONICA ||
+        INTENCION_FINAL_CANONICA ||
+        signals?.detectedIntent ||
+        detectedIntent ||
+        null;
 
-      if (handledBusinessInfo) {
-        return;
+      const shouldUseGuidedEntryOutsideFastpath =
+        shouldUseGuidedBusinessEntryOutsideFastpath({
+          routeTarget: fpRes.routeTarget,
+          detectedIntent: signals?.detectedIntent || detectedIntent || null,
+          intentFallback:
+            signals?.INTENCION_FINAL_CANONICA || INTENCION_FINAL_CANONICA || null,
+          detectedFacets:
+            (signals as any)?.detectedFacets ||
+            (signals as any)?.facets ||
+            detectedFacets ||
+            null,
+          detectedCommercial,
+        });
+
+      if (
+        fpRes.routeTarget === "business_info" ||
+        shouldUseGuidedEntryOutsideFastpath
+      ) {
+        const handledBusinessInfo = await tryBusinessInfoOutsideFastpath({
+          intent: nextIntent,
+          overviewMode: shouldUseGuidedEntryOutsideFastpath
+            ? "guided_entry"
+            : "general_overview",
+        });
+
+        if (handledBusinessInfo) {
+          return;
+        }
       }
     }
 

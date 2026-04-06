@@ -152,6 +152,18 @@ export async function handleFastpathHybridTurn(
 
   const isMixedScheduleAndPriceTurn = asksSchedules && asksPrices;
 
+  const isGuidedBusinessEntryTurn =
+    !asksSchedules &&
+    !asksPrices &&
+    !detectedCommercial?.wantsBooking &&
+    !detectedCommercial?.wantsQuote &&
+    !detectedCommercial?.wantsHuman &&
+    (
+      normalizedCurrentIntent === "duda" ||
+      normalizedCurrentIntent === "info_general" ||
+      normalizedCurrentIntent === ""
+    );
+
   const previewClassificationInput = buildCatalogReferenceClassificationInput({
     userText: userInput,
     convoCtx,
@@ -435,6 +447,11 @@ export async function handleFastpathHybridTurn(
     : "business_info";
 
   if (routeTarget !== "catalog") {
+    const nextRouteTarget: FastpathHybridRoute =
+      routeTarget === "business_info" && isGuidedBusinessEntryTurn
+        ? "continue_pipeline"
+        : routeTarget;
+
     console.log("[FASTPATH_HYBRID][ROUTE_OUTSIDE_FASTPATH]", {
       tenantId,
       canal,
@@ -442,8 +459,9 @@ export async function handleFastpathHybridTurn(
       userInput,
       detectedIntent,
       intentFallback,
-      routeTarget,
+      routeTarget: nextRouteTarget,
       isMixedScheduleAndPriceTurn,
+      isGuidedBusinessEntryTurn,
       routingPolicy,
       catalogRoutingSignal: effectiveCatalogRoutingSignal,
       canonicalCatalogRouteDecision,
@@ -451,7 +469,7 @@ export async function handleFastpathHybridTurn(
 
     return {
       handled: false,
-      routeTarget,
+      routeTarget: nextRouteTarget,
       intent: detectedIntent || intentFallback || null,
     };
   }

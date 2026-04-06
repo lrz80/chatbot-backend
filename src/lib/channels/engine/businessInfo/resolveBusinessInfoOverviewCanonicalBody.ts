@@ -10,6 +10,7 @@ type ResolveBusinessInfoOverviewCanonicalBodyArgs = {
   userInput: string;
   promptBaseMem: string;
   infoClave: string;
+  overviewMode?: "general_overview" | "guided_entry";
 };
 
 type BusinessInfoResolverStrategy =
@@ -73,8 +74,9 @@ function buildSystemPrompt(params: {
   tenantId: string;
   canal: Canal;
   idiomaDestino: LangCode;
+  overviewMode: "general_overview" | "guided_entry";
 }): string {
-  const { tenantId, canal, idiomaDestino } = params;
+  const { tenantId, canal, idiomaDestino, overviewMode } = params;
 
   return [
     "SYSTEM_ROLE:",
@@ -108,6 +110,20 @@ function buildSystemPrompt(params: {
     "- If the user asks something specific, answer only that specific business-information request using grounded facts.",
     "- If the source does not support a concrete answer, return empty canonicalBody.",
     "",
+    "OVERVIEW_MODE:",
+    `- overviewMode: ${overviewMode}`,
+    ...(overviewMode === "guided_entry"
+      ? [
+          "- This is an early commercial entry turn in direct messages.",
+          "- Return a guided options-oriented overview, not a generic company summary.",
+          "- Prefer compact customer-facing options supported by BUSINESS_SOURCE.",
+          "- Do not return a cold descriptive paragraph about the business.",
+          "- Help the final DM writer continue the conversation naturally.",
+        ]
+      : [
+          "- This is a general business-information overview turn.",
+          "- Return a concise grounded overview only.",
+        ]),
     "OUTPUT STYLE:",
     "- Keep canonicalBody useful, compact, direct, and faithful to source truth.",
     "- For broad discovery turns, canonicalBody must be short and easy to scan in a messaging app.",
@@ -239,6 +255,7 @@ export async function resolveBusinessInfoOverviewCanonicalBody(
           tenantId,
           canal,
           idiomaDestino,
+          overviewMode: args.overviewMode ?? "general_overview",
         }),
       },
       {
