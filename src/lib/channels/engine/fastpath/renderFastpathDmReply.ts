@@ -163,11 +163,12 @@ function buildTenantClosingPolicyInstruction(promptBaseMem: string): string | nu
   if (!text) return null;
 
   return [
-    "If PROMPT_BASE contains a tenant-specific closing policy, follow that policy for the closing.",
-    "Treat the tenant closing policy in PROMPT_BASE as higher priority than generic closing style defaults.",
-    "Use the tenant's preferred closing style, wording pattern, and next-step format when present.",
-    "Do not ignore tenant closing rules just because generic sales-closing behavior is available.",
-    "Never let the tenant closing policy alter or rewrite the canonical body facts.",
+    "If PROMPT_BASE contains a tenant-specific closing policy, follow that policy for the closing only.",
+    "Treat the tenant closing policy in PROMPT_BASE as higher priority than generic closing style defaults only for the closing.",
+    "Use the tenant's preferred closing style, wording pattern, and next-step format when present, but only in the closing.",
+    "Do not let the tenant closing policy modify the intro.",
+    "Do not let the tenant closing policy replace the canonical body with a vague question or generic opener.",
+    "Never let the tenant closing policy alter, weaken, summarize, or rewrite the canonical body facts.",
   ].join(" ");
 }
 
@@ -401,8 +402,9 @@ export async function renderFastpathDmReply(
 
   const shouldAllowIntro =
     !isResolvedCatalogAnswer &&
-    (!bypassWriterModel || isInfoGeneralOverviewTurn) &&
-    (commercialPolicy.shouldUseSalesTone || isInfoGeneralOverviewTurn);
+    !isInfoGeneralOverviewTurn &&
+    !bypassWriterModel &&
+    commercialPolicy.shouldUseSalesTone;
 
   const shouldAllowOutro =
     (!bypassWriterModel || isResolvedCatalogAnswer) &&
@@ -510,9 +512,11 @@ export async function renderFastpathDmReply(
       ? [
           "General business overview turn for DM. The canonical body is the source of truth and must be preserved.",
           "Do not replace it with a vague clarification question.",
+          "Do not turn the intro into a broad generic question about what the user wants to know.",
+          "Do not use the intro to weaken, delay, or redirect the overview.",
+          "If an intro is used, it must be a very short acknowledgment only.",
+          "The tenant-specific closing policy may apply only to the closing, never to the intro.",
           "Keep the canonical body in the same order and bullet structure.",
-          "If PROMPT_BASE contains a tenant-specific closing policy, you must follow it for the closing.",
-          "The tenant closing policy overrides generic closing style defaults, as long as the canonical body remains unchanged.",
           tenantClosingPolicyInstruction,
           commercialClosingInstruction,
         ]
