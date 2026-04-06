@@ -27,6 +27,7 @@ import { getFastpathPostRunDecision } from "./getFastpathPostRunDecision";
 import { applyStructuredServicePersistence } from "./applyStructuredServicePersistence";
 
 import { resolveFinalIntentFromTurn } from "./resolveFinalIntentFromTurn";
+import { getCanonicalCatalogRouteDecision } from "./getCanonicalCatalogRouteDecision";
 
 const MAX_WHATSAPP_LINES = 9999;
 
@@ -262,7 +263,15 @@ export async function handleFastpathHybridTurn(
         : [],
   };
 
+  const canonicalCatalogRouteDecision =
+    await getCanonicalCatalogRouteDecision({
+      pool,
+      tenantId,
+      userInput,
+    });
+    
   const shouldHandleCatalogInFastpath =
+    canonicalCatalogRouteDecision.shouldRouteCatalog === true ||
     routingPolicy.shouldRouteCatalog === true ||
     catalogRoutingSignal.shouldRouteCatalog === true;
 
