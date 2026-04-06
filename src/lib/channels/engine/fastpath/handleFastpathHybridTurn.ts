@@ -404,10 +404,21 @@ export async function handleFastpathHybridTurn(
       }
     : catalogRoutingSignal;
 
-  const shouldHandleCatalogInFastpath =
+  const hasConcreteCatalogHandle =
     hasCanonicalCatalogResolution ||
-    routingPolicy.shouldRouteCatalog === true ||
-    catalogRoutingSignal.shouldRouteCatalog === true;
+    effectiveCatalogReferenceClassification.shouldResolveEntity === true ||
+    effectiveCatalogReferenceClassification.shouldAskDisambiguation === true ||
+    Boolean(effectiveCatalogRoutingSignal.targetServiceId) ||
+    Boolean(effectiveCatalogRoutingSignal.targetVariantId) ||
+    (
+      effectiveCatalogRoutingSignal.shouldRouteCatalog === true &&
+      (
+        effectiveCatalogRoutingSignal.referenceKind === "entity_specific" ||
+        effectiveCatalogRoutingSignal.referenceKind === "catalog_family"
+      )
+    );
+
+  const shouldHandleCatalogInFastpath = hasConcreteCatalogHandle;
 
   const routeTarget: FastpathHybridRoute = shouldHandleCatalogInFastpath
     ? "catalog"
@@ -476,9 +487,18 @@ export async function handleFastpathHybridTurn(
       ...(preResolvedCtxPatch || {}),
     };
 
+    const shouldFallbackToBusinessInfo =
+      !hasCanonicalCatalogResolution &&
+      effectiveCatalogReferenceClassification.shouldResolveEntity !== true &&
+      effectiveCatalogReferenceClassification.shouldAskDisambiguation !== true &&
+      !effectiveCatalogRoutingSignal.targetServiceId &&
+      !effectiveCatalogRoutingSignal.targetVariantId;
+
     return {
       handled: false,
-      routeTarget: "continue_pipeline",
+      routeTarget: shouldFallbackToBusinessInfo
+        ? "business_info"
+        : "continue_pipeline",
       ctxPatch: Object.keys(unhandledCtxPatch).length
         ? unhandledCtxPatch
         : undefined,
