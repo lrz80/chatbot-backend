@@ -13,6 +13,11 @@ export type ResolveServiceCandidate = {
   tipo?: string | null;
   parentServiceId?: string | null;
   catalogRole?: string | null;
+
+  variantId?: string | null;
+  variantName?: string | null;
+  candidateKind?: "service" | "variant";
+
   overlapNameTokens?: string[];
   overlapTipoTokens?: string[];
   overlapSupportTokens?: string[];
@@ -36,6 +41,12 @@ export type ResolveServiceDecision =
       candidates: ResolveServiceCandidate[];
     };
 
+type CandidateVariant = {
+  variantId: string | null;
+  variantName: string;
+  variantNameTokens: string[];
+};
+
 type Candidate = {
   serviceId: string;
   label: string;
@@ -51,6 +62,7 @@ type Candidate = {
   tipoTokens: string[];
 
   supportTokens: string[];
+  variants: CandidateVariant[];
 };
 
 type Scored = {
@@ -146,7 +158,7 @@ function tokenize(raw: string): string[] {
   const SegmenterCtor = (Intl as any)?.Segmenter;
 
   if (typeof SegmenterCtor === "function") {
-    const segmenter = new SegmenterCtor("es", { granularity: "word" });
+    const segmenter = new SegmenterCtor("en", { granularity: "word" });
     for (const part of segmenter.segment(text)) {
       if (!part?.isWordLike) continue;
       const token = sanitizeWord(part.segment);
@@ -369,7 +381,7 @@ export async function resolveServiceCandidatesFromText(
   }
 
   const detected = await detectarIdiomaSafe(input);
-  const idioma = detected.lang ?? "es";
+  const idioma = detected.lang ?? "en";
 
   const textNorm = normalize(input);
   let translatedAlt = "";
@@ -412,6 +424,7 @@ export async function resolveServiceCandidatesFromText(
     service_tipo: string | null;
     service_catalog_role: string | null;
     parent_service_id: string | null;
+    variant_id: string | null;
     variant_name: string | null;
     variant_description: string | null;
     size_token: string | null;
@@ -425,6 +438,7 @@ export async function resolveServiceCandidatesFromText(
       s.tipo AS service_tipo,
       s.catalog_role AS service_catalog_role,
       s.parent_service_id,
+      v.id AS variant_id,
       v.variant_name,
       v.description AS variant_description,
       v.size_token
@@ -464,6 +478,7 @@ export async function resolveServiceCandidatesFromText(
       tipoTokenSet: Set<string>;
 
       supportTokenSet: Set<string>;
+      variants: Map<string, CandidateVariant>;
     }
   >();
 
@@ -490,6 +505,7 @@ export async function resolveServiceCandidatesFromText(
         tipoTokenSet: new Set<string>(),
 
         supportTokenSet: new Set<string>(),
+        variants: new Map<string, CandidateVariant>(),
       };
       grouped.set(serviceId, entry);
     }
@@ -497,6 +513,20 @@ export async function resolveServiceCandidatesFromText(
     const serviceNameTokens = tokenize(serviceName);
     const serviceDescTokens = tokenize(String(row.service_description || ""));
     const variantNameTokens = tokenize(String(row.variant_name || ""));
+    const variantId = row.variant_id ? String(row.variant_id) : null;
+    const variantName = String(row.variant_name || "").trim();
+
+    if (variantName) {
+      const variantKey = variantId || `name:${normalize(variantName)}`;
+
+      if (!entry.variants.has(variantKey)) {
+        entry.variants.set(variantKey, {
+          variantId,
+          variantName,
+          variantNameTokens,
+        });
+      }
+    }
     const variantDescTokens = tokenize(String(row.variant_description || ""));
     const categoryTokens = tokenize(String(row.service_category || ""));
     const tipoTokens = tokenize(String(row.service_tipo || ""));
@@ -528,6 +558,7 @@ export async function resolveServiceCandidatesFromText(
     tipoTokens: Array.from(entry.tipoTokenSet),
 
     supportTokens: Array.from(entry.supportTokenSet),
+    variants: Array.from(entry.variants.values()),
   }));
 
   if (!candidates.length) {
@@ -1074,6 +1105,47 @@ export async function resolveServiceCandidatesFromText(
       hit: null,
       candidates:
         ambiguousCandidates.length > 0 ? ambiguousCandidates : topCandidates,
+    };
+  }
+
+  const bestVariants = Array.isArray(best?.cand.variants) ? best.cand.variants : [];
+  const hasMultipleVariants = bestVariants.length > 1;
+  const hasExplicitVariantEvidence =
+    (best?.exactVariantHits || 0) > 0 ||
+    (best?.overlapVariantTokens?.length || 0) > 0;
+
+  if (best && hasMultipleVariants && !hasExplicitVariantEvidence) {
+    const variantCandidates: ResolveServiceCandidate[] = bestVariants.map((variant) => ({
+      id: best.cand.serviceId,
+      name: variant.variantName,
+      score: best.score,
+      category: best.cand.category || null,
+      tipo: best.cand.tipo || null,
+      parentServiceId: best.cand.parentServiceId || null,
+      catalogRole: best.cand.catalogRole || null,
+      variantId: variant.variantId,
+      variantName: variant.variantName,
+      candidateKind: "variant",
+      overlapNameTokens: best.overlapNameTokens,
+      overlapTipoTokens: best.overlapTipoTokens,
+      overlapSupportTokens: best.overlapSupportTokens,
+      dominantOverlapTokens: best.dominantOverlapTokens,
+    }));
+
+    console.log("[RESOLVE-SERVICE] servicio resuelto pero variante ambigua, devolviendo ambiguous", {
+      userText,
+      serviceId: best.cand.serviceId,
+      serviceName: best.cand.label,
+      variantOptions: variantCandidates.map((v) => ({
+        variantId: v.variantId,
+        variantName: v.variantName,
+      })),
+    });
+
+    return {
+      kind: "ambiguous",
+      hit: null,
+      candidates: variantCandidates,
     };
   }
 
