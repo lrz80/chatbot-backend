@@ -160,16 +160,53 @@ function resolvePendingCatalogChoiceSelection(input: {
     };
   }
 
-  const exactMatches = pending.options.filter((option) => {
-    return normalizePendingChoiceText(option.label) === text;
+const tokenizedInput = normalizePendingChoiceText(input.userInput)
+  .split(/\s+/)
+  .map((part) => part.trim())
+  .filter(Boolean);
+
+const semanticMatches = pending.options.filter((option) => {
+  const optionLabel = normalizePendingChoiceText(option.label);
+  const optionVariantName =
+    option.kind === "variant"
+      ? normalizePendingChoiceText(option.variantName || "")
+      : "";
+  const optionServiceName = normalizePendingChoiceText(option.serviceName || "");
+
+  const candidateTexts = [optionLabel, optionVariantName, optionServiceName]
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (!candidateTexts.length) return false;
+
+  if (candidateTexts.some((value) => value === text)) {
+    return true;
+  }
+
+  if (candidateTexts.some((value) => text.includes(value))) {
+    return true;
+  }
+
+  const inputHasAllTokensOfAnyCandidate = candidateTexts.some((value) => {
+    const candidateTokens = value
+      .split(/\s+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    if (!candidateTokens.length) return false;
+
+    return candidateTokens.every((token) => tokenizedInput.includes(token));
   });
 
-  if (exactMatches.length === 1) {
-    return {
-      status: "resolved",
-      option: exactMatches[0],
-    };
-  }
+  return inputHasAllTokensOfAnyCandidate;
+});
+
+if (semanticMatches.length === 1) {
+  return {
+    status: "resolved",
+    option: semanticMatches[0],
+  };
+}
 
   return { status: "unresolved" };
 }
@@ -183,19 +220,35 @@ function normalizeCatalogDisambiguationOptions(
   const result: CatalogDisambiguationOption[] = [];
 
   for (const item of raw) {
-    const kind =
-      String(item?.kind || "").trim().toLowerCase() === "variant"
-        ? "variant"
-        : "service";
+    const rawKind = String(
+      item?.kind || item?.candidateKind || ""
+    ).trim().toLowerCase();
+
+    const kind: "service" | "variant" =
+      rawKind === "variant" ? "variant" : "service";
 
     const serviceId = String(item?.serviceId || item?.id || "").trim();
     const variantId = String(item?.variantId || "").trim();
-    const label = String(item?.label || item?.name || "").trim();
-    const serviceName = String(
-      item?.serviceName || item?.service_name || item?.name || ""
+    const label = String(
+      item?.label ||
+      item?.variantName ||
+      item?.variant_name ||
+      item?.name ||
+      ""
     ).trim();
+
+    const serviceName = String(
+      item?.serviceName ||
+      item?.service_name ||
+      ""
+    ).trim();
+
     const variantName = String(
-      item?.variantName || item?.variant_name || item?.label || ""
+      item?.variantName ||
+      item?.variant_name ||
+      item?.label ||
+      item?.name ||
+      ""
     ).trim();
 
     if (!serviceId || !label) continue;
@@ -227,7 +280,7 @@ function normalizeCatalogDisambiguationOptions(
       serviceId,
       variantId: null,
       label,
-      serviceName: serviceName || null,
+      serviceName: serviceName || label || null,
     });
   }
 
@@ -1044,19 +1097,47 @@ const hasAnyStructuredCatalogTarget =
     });
 
     if (canonicalCatalogResolution.status === "ambiguous") {
-      const serviceOptions: CatalogServiceDisambiguationOption[] =
-        canonicalCatalogResolution.options.map((option) => ({
-          kind: "service",
-          serviceId: option.serviceId,
-          variantId: null,
-          label: option.label,
-          serviceName: option.label,
-        }));
+      const normalizedOptions = normalizeCatalogDisambiguationOptions(
+        canonicalCatalogResolution.options
+      );
+
+      const variantOptions = normalizedOptions.filter(
+        (option): option is CatalogVariantDisambiguationOption =>
+          option.kind === "variant"
+      );
+
+      const serviceOptions = normalizedOptions.filter(
+        (option): option is CatalogServiceDisambiguationOption =>
+          option.kind === "service"
+      );
+
+      const allAreVariants =
+        normalizedOptions.length > 1 &&
+        variantOptions.length === normalizedOptions.length;
+
+      const singleServiceId =
+        allAreVariants
+          ? Array.from(new Set(variantOptions.map((option) => option.serviceId)))
+          : [];
+
+      if (allAreVariants && singleServiceId.length === 1) {
+        const serviceId = singleServiceId[0];
+        const serviceName =
+          variantOptions.find((option) => option.serviceId === serviceId)?.serviceName || null;
+
+        return buildCatalogDisambiguationResult({
+          routeIntent,
+          kind: "variant_choice",
+          options: variantOptions,
+          serviceId,
+          serviceName,
+        });
+      }
 
       return buildCatalogDisambiguationResult({
         routeIntent,
         kind: "service_choice",
-        options: serviceOptions,
+        options: serviceOptions.length > 0 ? serviceOptions : normalizedOptions,
       });
     }
   }
