@@ -68,6 +68,7 @@ import { queryWithTimeout } from "../../lib/dbQuery";
 
 import { renderFastpathDmReply } from "../../lib/channels/engine/fastpath/renderFastpathDmReply";
 import { resolveBusinessInfoOverviewCanonicalBody } from "../../lib/channels/engine/businessInfo/resolveBusinessInfoOverviewCanonicalBody";
+import { composeFacetReply } from "../../lib/channels/engine/turn/composeFacetReply";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -626,6 +627,7 @@ export async function procesarMensajeWhatsApp(
       )
     );
   }
+
 
   async function tryBusinessInfoOutsideFastpath(params: {
     intent: string | null;
@@ -1219,19 +1221,49 @@ export async function procesarMensajeWhatsApp(
         detectedIntent ||
         null;
 
+      const nextDetectedFacets =
+        (signals as any)?.detectedFacets ||
+        (signals as any)?.facets ||
+        detectedFacets ||
+        null;
+
       const shouldUseGuidedEntryOutsideFastpath =
         shouldUseGuidedBusinessEntryOutsideFastpath({
           routeTarget: fpRes.routeTarget,
           detectedIntent: signals?.detectedIntent || detectedIntent || null,
           intentFallback:
             signals?.INTENCION_FINAL_CANONICA || INTENCION_FINAL_CANONICA || null,
-          detectedFacets:
-            (signals as any)?.detectedFacets ||
-            (signals as any)?.facets ||
-            detectedFacets ||
-            null,
+          detectedFacets: nextDetectedFacets,
           detectedCommercial,
         });
+
+      if (
+        fpRes.routeTarget === "continue_pipeline" &&
+        !shouldUseGuidedEntryOutsideFastpath
+      ) {
+        const composed = await composeFacetReply({
+          tenantId: tenant.id,
+          canal,
+          idiomaDestino,
+          userInput,
+          contactoNorm,
+          messageId: messageId || null,
+          promptBaseMem,
+          infoClave: String(tenant?.info_clave || ""),
+          detectedIntent: nextIntent,
+          intentFallback: nextIntent,
+          detectedFacets: nextDetectedFacets,
+          detectedCommercial,
+        });
+
+        if (composed.handled && composed.reply) {
+          return await replyAndExit(
+            composed.reply,
+            composed.source || "facet_composer",
+            composed.intent || null
+          );
+        }
+      }
 
       if (
         fpRes.routeTarget === "business_info" ||
