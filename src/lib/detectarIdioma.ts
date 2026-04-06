@@ -10,20 +10,13 @@ export type DetectIdiomaResult = {
   source: DetectIdiomaSource;
 };
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || "",
-});
-
-function normalizeLangCode(value: string): string | null {
+function normalizeLangCode(value: unknown): string | null {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return null;
 
-  // Normaliza formatos comunes: pt-BR -> pt, en_US -> en
   const normalized = raw.replace("_", "-").split("-")[0]?.trim();
-
   if (!normalized) return null;
 
-  // ISO 639-1 simple: dos letras
   if (/^[a-z]{2}$/.test(normalized)) {
     return normalized;
   }
@@ -31,51 +24,25 @@ function normalizeLangCode(value: string): string | null {
   return null;
 }
 
-export async function detectarIdioma(texto: string): Promise<DetectIdiomaResult> {
-  const raw = String(texto || "").trim();
+function getOpenAIClient(): OpenAI | null {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
 
-  if (!raw) {
-    return { lang: null, confidence: 0, source: "none" };
+  if (!apiKey) {
+    console.warn("[detectarIdioma] OPENAI_API_KEY no está configurada en el backend runtime");
+    return null;
   }
 
-  if (!process.env.OPENAI_API_KEY) {
-    return { lang: null, confidence: 0, source: "none" };
-  }
+  return new OpenAI({ apiKey });
+}
 
-  const res = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0,
-    messages: [
-      {
-        role: "system",
-        content: [
-          "Detect the primary language of the user text.",
-          "Reply with JSON only.",
-          'Use this exact schema: {"lang":"xx","confidence":0.0}.',
-          "Return lang as a lowercase ISO 639-1 language code when possible, for example: es, en, pt, fr, it, de.",
-          "If the language cannot be determined reliably, return lang as null and confidence as 0."
-        ].join(" "),
-      },
-      {
-        role: "user",
-        content: raw,
-      },
-    ],
-    response_format: { type: "json_object" },
-  });
-
-  const content = res.choices[0]?.message?.content?.trim();
-  if (!content) {
-    return { lang: null, confidence: 0, source: "none" };
-  }
-
+function safeParseDetection(content: string): DetectIdiomaResult {
   try {
     const parsed = JSON.parse(content) as {
       lang?: unknown;
       confidence?: unknown;
     };
 
-    const lang = normalizeLangCode(String(parsed.lang ?? ""));
+    const lang = normalizeLangCode(parsed.lang);
     const confidenceRaw = Number(parsed.confidence);
     const confidence = Number.isFinite(confidenceRaw)
       ? Math.max(0, Math.min(1, confidenceRaw))
@@ -90,7 +57,68 @@ export async function detectarIdioma(texto: string): Promise<DetectIdiomaResult>
       confidence,
       source: "openai",
     };
-  } catch {
+  } catch (error) {
+    console.warn("[detectarIdioma] JSON inválido recibido desde OpenAI", {
+      error: error instanceof Error ? error.message : String(error),
+      content,
+    });
+
+    return { lang: null, confidence: 0, source: "none" };
+  }
+}
+
+export async function detectarIdioma(texto: string): Promise<DetectIdiomaResult> {
+  const raw = String(texto || "").trim();
+
+  if (!raw) {
+    return { lang: null, confidence: 0, source: "none" };
+  }
+
+  const openai = getOpenAIClient();
+  if (!openai) {
+    return { lang: null, confidence: 0, source: "none" };
+  }
+
+  try {
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content: [
+            "Detect the primary language of the user's message.",
+            "Return valid JSON only.",
+            'Use this exact schema: {"lang":"xx","confidence":0.0}.',
+            "lang must be a lowercase ISO 639-1 code when possible, such as en, es, pt, fr, it, de.",
+            "confidence must be a number between 0 and 1.",
+            "If the language cannot be determined reliably, return {\"lang\":null,\"confidence\":0}."
+          ].join(" "),
+        },
+        {
+          role: "user",
+          content: raw,
+        },
+      ],
+      response_format: { type: "json_object" },
+    });
+
+    const content = res.choices[0]?.message?.content?.trim();
+
+    if (!content) {
+      console.warn("[detectarIdioma] OpenAI respondió sin content", {
+        input: raw,
+      });
+      return { lang: null, confidence: 0, source: "none" };
+    }
+
+    return safeParseDetection(content);
+  } catch (error) {
+    console.warn("[detectarIdioma] Error llamando OpenAI", {
+      input: raw,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
     return { lang: null, confidence: 0, source: "none" };
   }
 }
