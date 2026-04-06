@@ -157,6 +157,20 @@ function buildCatalogChoiceCanonicalBody(input: {
     .trim();
 }
 
+function buildTenantClosingPolicyInstruction(promptBaseMem: string): string | null {
+  const text = String(promptBaseMem || "").trim();
+
+  if (!text) return null;
+
+  return [
+    "If PROMPT_BASE contains a tenant-specific closing policy, follow that policy for the closing.",
+    "Treat the tenant closing policy in PROMPT_BASE as higher priority than generic closing style defaults.",
+    "Use the tenant's preferred closing style, wording pattern, and next-step format when present.",
+    "Do not ignore tenant closing rules just because generic sales-closing behavior is available.",
+    "Never let the tenant closing policy alter or rewrite the canonical body facts.",
+  ].join(" ");
+}
+
 function buildCommercialClosingInstruction(input: {
   commercialPolicy: {
     purchaseIntent: "unknown" | "low" | "medium" | "high";
@@ -327,6 +341,9 @@ export async function renderFastpathDmReply(
     commercialPolicy,
   });
 
+  const tenantClosingPolicyInstruction =
+    buildTenantClosingPolicyInstruction(promptBaseMem);
+
   const canonicalReply = (() => {
     if (catalogPayload?.kind === "service_choice") {
       return buildCatalogChoiceCanonicalBody({
@@ -479,7 +496,12 @@ export async function renderFastpathDmReply(
           "Do not add an intro before the canonical body.",
           "Do not restate, preview, summarize, or paraphrase facts already contained in the canonical body.",
           "Do not mention prices, numbers, includes, service details, schedules, locations, policies, or links outside the canonical body.",
+          "After the canonical body, add exactly one short closing move that helps the user move forward.",
+          "The closing must be consultative, natural, and sales-oriented.",
+          "If PROMPT_BASE contains a tenant-specific closing policy, you must follow it for the closing.",
+          "The tenant closing policy overrides generic closing style defaults, as long as the canonical body remains unchanged.",
           "The body itself must remain unchanged and in the same order.",
+          tenantClosingPolicyInstruction,
           commercialClosingInstruction,
         ]
           .filter(Boolean)
@@ -489,6 +511,9 @@ export async function renderFastpathDmReply(
           "General business overview turn for DM. The canonical body is the source of truth and must be preserved.",
           "Do not replace it with a vague clarification question.",
           "Keep the canonical body in the same order and bullet structure.",
+          "If PROMPT_BASE contains a tenant-specific closing policy, you must follow it for the closing.",
+          "The tenant closing policy overrides generic closing style defaults, as long as the canonical body remains unchanged.",
+          tenantClosingPolicyInstruction,
           commercialClosingInstruction,
         ]
           .filter(Boolean)
