@@ -1,6 +1,12 @@
+// src/lib/channels/engine/businessInfo/resolveBusinessInfoFacetsCanonicalBody.ts
 import type { Canal } from "../../../detectarIntencion";
 import type { LangCode } from "../../../i18n/lang";
-import { resolveBusinessInfoOverviewCanonicalBody } from "./resolveBusinessInfoOverviewCanonicalBody";
+import { withSectionTitle } from "../../../fastpath/handlers/catalog/helpers/catalogReplyBlocks";
+import {
+  buildAvailabilityBlockFromInfoClave,
+  buildLocationBlockFromInfoClave,
+} from "../../../fastpath/handlers/catalog/helpers/catalogBusinessInfoBlocks";
+import { buildScheduleBlock } from "../../../fastpath/handlers/catalog/helpers/catalogScheduleBlock";
 
 type Args = {
   tenantId: string;
@@ -19,7 +25,7 @@ type Args = {
 export async function resolveBusinessInfoFacetsCanonicalBody(
   args: Args
 ): Promise<string> {
-  const { facets } = args;
+  const { idiomaDestino, infoClave, facets } = args;
 
   const shouldResolveBusinessInfo =
     facets.asksSchedules === true ||
@@ -30,13 +36,48 @@ export async function resolveBusinessInfoFacetsCanonicalBody(
     return "";
   }
 
-  return await resolveBusinessInfoOverviewCanonicalBody({
-    tenantId: args.tenantId,
-    canal: args.canal,
-    idiomaDestino: args.idiomaDestino,
-    userInput: args.userInput,
-    promptBaseMem: args.promptBaseMem,
-    infoClave: args.infoClave,
-    overviewMode: "general_overview",
-  });
+  const blocks: string[] = [];
+
+  if (facets.asksSchedules === true) {
+    const scheduleBlock = buildScheduleBlock({
+      idiomaDestino,
+      infoClave,
+    });
+
+    if (String(scheduleBlock || "").trim()) {
+      blocks.push(String(scheduleBlock).trim());
+    }
+  }
+
+  if (facets.asksLocation === true) {
+    const locationBody = buildLocationBlockFromInfoClave(infoClave);
+
+    const locationBlock = withSectionTitle(
+      idiomaDestino,
+      "Ubicación:",
+      "Location:",
+      locationBody
+    );
+
+    if (String(locationBlock || "").trim()) {
+      blocks.push(String(locationBlock).trim());
+    }
+  }
+
+  if (facets.asksAvailability === true) {
+    const availabilityBody = buildAvailabilityBlockFromInfoClave(infoClave);
+
+    const availabilityBlock = withSectionTitle(
+      idiomaDestino,
+      "Disponibilidad:",
+      "Availability:",
+      availabilityBody
+    );
+
+    if (String(availabilityBlock || "").trim()) {
+      blocks.push(String(availabilityBlock).trim());
+    }
+  }
+
+  return blocks.join("\n\n").trim();
 }
