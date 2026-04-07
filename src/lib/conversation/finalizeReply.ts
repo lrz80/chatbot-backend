@@ -41,6 +41,7 @@ type FinalizeDeps = {
     userText: string;
     assistantText: string;
     lastIntent: string | null;
+    replySource: string | null;
   }) => Promise<void>;
 
   captureLastServiceRef?: (args: {
@@ -292,6 +293,7 @@ export async function finalizeReply(
     userText: userInput,
     assistantText: reply,
     lastIntent: lastIntent || intentFallback || null,
+    replySource: replySource || null,
   });
 
   if (onAfterOk) onAfterOk(nextCtx);
