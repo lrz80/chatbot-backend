@@ -33,13 +33,16 @@ export type AvailabilitySlot = {
 
 export type CreateBookingInput = {
   tenantId: string;
+  appointmentId: string;
+  channel: string;
   startAt: string;
-  endAt?: string | null;
+  endAt: string;
   timezone: string;
   customer: BookingCustomer;
   serviceId?: string | null;
   staffId?: string | null;
   locationId?: string | null;
+  externalCalendarId?: string | null;
   notes?: string | null;
 };
 
@@ -55,7 +58,7 @@ export type CreateBookingResult = {
 export interface BookingProviderAdapter {
   readonly provider: BookingProvider;
 
-  searchAvailability(
+  searchAvailability?(
     input: SearchAvailabilityInput
   ): Promise<AvailabilitySlot[]>;
 

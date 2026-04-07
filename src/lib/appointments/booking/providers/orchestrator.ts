@@ -1,10 +1,5 @@
 import type { Pool } from "pg";
-import type {
-  AvailabilitySlot,
-  CreateBookingInput,
-  CreateBookingResult,
-  SearchAvailabilityInput,
-} from "./types";
+import type { CreateBookingInput, CreateBookingResult } from "./types";
 import { BookingProviderRegistry } from "./registry";
 import { resolveTenantBookingProvider } from "./resolveTenantBookingProvider";
 
@@ -21,21 +16,7 @@ export class BookingProviderOrchestrator {
     this.registry = new BookingProviderRegistry();
   }
 
-  async searchAvailability(
-    input: SearchAvailabilityInput
-  ): Promise<AvailabilitySlot[]> {
-    const provider = await resolveTenantBookingProvider({
-      pool: this.pool,
-      tenantId: input.tenantId,
-    });
-
-    const adapter = this.registry.getAdapter(provider);
-    return adapter.searchAvailability(input);
-  }
-
-  async createBooking(
-    input: CreateBookingInput
-  ): Promise<CreateBookingResult> {
+  async createBooking(input: CreateBookingInput): Promise<CreateBookingResult> {
     const provider = await resolveTenantBookingProvider({
       pool: this.pool,
       tenantId: input.tenantId,

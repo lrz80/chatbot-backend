@@ -1,48 +1,53 @@
 //src/lib/appointments/booking/providers/googleCalendarAdapter.ts
 import type {
-  AvailabilitySlot,
   BookingProvider,
   BookingProviderAdapter,
   CreateBookingInput,
   CreateBookingResult,
-  SearchAvailabilityInput,
 } from "./types";
-
-import {
-  searchGoogleCalendarAvailability,
-  createGoogleCalendarBooking,
-} from "../../../../integrations/googleCalendar";
+import { sendAppointmentToGoogleViaZapier } from "../../../../integrations/googleCalendar";
 
 export class GoogleCalendarAdapter implements BookingProviderAdapter {
   public readonly provider: BookingProvider = "google_calendar";
 
-  async searchAvailability(
-    input: SearchAvailabilityInput
-  ): Promise<AvailabilitySlot[]> {
-    const slots = await searchGoogleCalendarAvailability(input);
-
-    return slots.map((slot: { startAt: string; endAt: string }) => ({
-      startAt: slot.startAt,
-      endAt: slot.endAt,
-      provider: "google_calendar",
-      serviceId: input.serviceId ?? null,
-      staffId: input.staffId ?? null,
-      locationId: input.locationId ?? null,
-    }));
-  }
-
   async createBooking(
     input: CreateBookingInput
   ): Promise<CreateBookingResult> {
-    const result = await createGoogleCalendarBooking(input);
+    if (!input.externalCalendarId) {
+      throw new Error("externalCalendarId is required for google_calendar provider");
+    }
+
+    await sendAppointmentToGoogleViaZapier(
+      {
+        id: input.appointmentId,
+        tenant_id: input.tenantId,
+        service_id: input.serviceId ?? null,
+        channel: input.channel,
+        customer_name: input.customer.name ?? null,
+        customer_phone: input.customer.phone ?? null,
+        customer_email: input.customer.email ?? null,
+        start_time: input.startAt,
+        end_time: input.endAt,
+      },
+      {
+        id: input.externalCalendarId,
+        tenant_id: input.tenantId,
+        provider: "google",
+        external_calendar_id: input.externalCalendarId,
+        display_name: null,
+      }
+    );
 
     return {
-      bookingExternalId: result.bookingExternalId,
-      status: result.status,
-      startAt: result.startAt,
-      endAt: result.endAt ?? null,
+      bookingExternalId: input.appointmentId,
+      status: "confirmed",
+      startAt: input.startAt,
+      endAt: input.endAt ?? null,
       provider: "google_calendar",
-      raw: result,
+      raw: {
+        forwardedVia: "zapier",
+        externalCalendarId: input.externalCalendarId,
+      },
     };
   }
 }
