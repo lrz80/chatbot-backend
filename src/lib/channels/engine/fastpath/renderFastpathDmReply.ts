@@ -176,7 +176,7 @@ async function renderCatalogChoiceBody(input: {
     options,
   };
 
-  const fallbackText = options
+  const deterministicChoiceBody = options
     .map((option) => `${option.index}) ${option.label}`)
     .join("\n")
     .trim();
@@ -187,15 +187,14 @@ async function renderCatalogChoiceBody(input: {
     "",
     "TASK:",
     "- Return STRICT JSON only.",
-    '- Use exactly this shape: {"message":string}.',
-    "- Write a short, natural, human DM message in the user's language.",
-    "- The only goal is to help the user choose one option from the structured data.",
-    "- Do not invent prices, includes, schedules, policies, links, benefits, or business facts.",
-    "- Do not add extra explanations outside the choice itself.",
-    "- Preserve every option label exactly as provided in STRUCTURED_CHOICE_JSON.",
-    "- Present the available options as a numbered list.",
-    "- End with one short choice question.",
-    "- If kind is variant_choice, make clear the options belong to the selected service from STRUCTURED_CHOICE_JSON.",
+    '- Use exactly this shape: {"text":"..."}',
+    "- Write a short natural DM message in the user's language.",
+    "- Use only STRUCTURED_CHOICE_JSON as source of truth.",
+    "- Preserve each option label exactly as provided.",
+    "- Present the options as a numbered list.",
+    "- Do not invent prices, includes, schedules, links, benefits, or extra facts.",
+    "- Do not convert the turn into a generic vague question.",
+    "- If kind is variant_choice, keep the response tied to the selected service.",
     "",
     "PROMPT_BASE:",
     input.promptBaseMem || "",
@@ -215,12 +214,11 @@ async function renderCatalogChoiceBody(input: {
     idiomaDestino: input.idiomaDestino,
     canal: input.canal,
     maxLines: 8,
-    fallbackText,
     runtimeCapabilities: {
       bookingActive: false,
     },
     responsePolicy: {
-      mode: "clarify_only",
+      mode: "normal",
       resolvedEntityType: null,
       resolvedEntityId:
         input.catalogPayload.kind === "variant_choice"
@@ -251,23 +249,17 @@ async function renderCatalogChoiceBody(input: {
       allowBodyRewrite: true,
       mustEndWithSalesQuestion: false,
       reasoningNotes:
-        "Render a short customer-facing clarification message from structured choice data only. Preserve option labels exactly.",
+        "Render a customer-facing clarification reply from structured choice data only. Preserve option labels exactly.",
     },
   });
 
-  try {
-    const parsed = JSON.parse(String(composed.text || "").trim());
-    const message =
-      typeof parsed?.message === "string" ? parsed.message.trim() : "";
+  const finalText = String(composed.text || "").trim();
 
-    if (message) {
-      return message;
-    }
-  } catch {
-    // fallback abajo
+  if (finalText) {
+    return finalText;
   }
 
-  return fallbackText;
+  return deterministicChoiceBody;
 }
 
 function buildTenantClosingPolicyInstruction(promptBaseMem: string): string | null {
