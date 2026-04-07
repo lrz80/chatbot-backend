@@ -548,12 +548,20 @@ export async function procesarMensajeWhatsApp(
           intent: (lastIntent || INTENCION_FINAL_CANONICA || null),
           interest_level: (typeof detectedInterest === "number" ? detectedInterest : null),
         }),
-        rememberAfterReply: (args: any) =>
-        rememberAfterReply({
-          ...args,
-          canal: "whatsapp",
-          replySource: (args?.replySource ?? args?.source ?? null),
-        }),
+        rememberAfterReply: (args: any) => {
+          const normalizedReplySource =
+            typeof args?.replySource === "string" && args.replySource.trim()
+              ? args.replySource.trim()
+              : typeof args?.source === "string" && args.source.trim()
+              ? args.source.trim()
+              : null;
+
+          return rememberAfterReply({
+            ...args,
+            canal: "whatsapp",
+            replySource: normalizedReplySource,
+          });
+        },
       }
     );
 
@@ -899,6 +907,7 @@ export async function procesarMensajeWhatsApp(
   detectedIntent           = signals.detectedIntent;
   detectedInterest         = signals.detectedInterest;
   detectedFacets           = signals.detectedFacets || null;
+  detectedCommercial       = signals.detectedCommercial || null;
   INTENCION_FINAL_CANONICA = signals.INTENCION_FINAL_CANONICA;
   promptBaseMem            = signals.promptBaseMem;
   convoCtx = {
