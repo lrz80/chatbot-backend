@@ -832,10 +832,10 @@ export async function runCatalogFastpath(
       referenceKind === "catalog_family"
     );
 
-const hasAnyStructuredCatalogTarget =
-  hasServiceStructuredCatalogTarget ||
-  hasVariantStructuredCatalogTarget ||
-  hasFamilyStructuredCatalogTarget;
+  const hasAnyStructuredCatalogTarget =
+    hasServiceStructuredCatalogTarget ||
+    hasVariantStructuredCatalogTarget ||
+    hasFamilyStructuredCatalogTarget;
 
   const intentOutNorm = String(input.intentOut || "").trim().toLowerCase();
 
@@ -860,6 +860,44 @@ const hasAnyStructuredCatalogTarget =
     | "schedule_and_price"
     | "business_info_only"
     | "other_plans";
+
+  const shouldForceServiceChoiceFromFamilyAmbiguity =
+    referenceKind === "catalog_family" &&
+    targetFamilyKey === "canonical_ambiguous_family" &&
+    (
+      executionRouteIntent === "catalog_includes" ||
+      executionRouteIntent === "catalog_price" ||
+      intentOutNorm === "info_servicio" ||
+      intentOutNorm === "precio"
+    );
+
+  if (shouldForceServiceChoiceFromFamilyAmbiguity) {
+    const familyResolution = await resolveServiceCandidatesFromText(
+      input.pool,
+      input.tenantId,
+      input.userInput,
+      { mode: "loose" }
+    );
+
+    if (familyResolution.kind === "ambiguous") {
+      const normalizedOptions = normalizeCatalogDisambiguationOptions(
+        familyResolution.candidates
+      );
+
+      const serviceOptions = normalizedOptions.filter(
+        (option): option is CatalogServiceDisambiguationOption =>
+          option.kind === "service"
+      );
+
+      if (serviceOptions.length > 1) {
+        return buildCatalogDisambiguationResult({
+          routeIntent: executionRouteIntent || routeIntent,
+          kind: "service_choice",
+          options: serviceOptions,
+        });
+      }
+    }
+  }
 
   let questionType: QuestionType;
 
