@@ -1,4 +1,4 @@
-//src/lib/channels/engine/turn/composeFacetReply.ts
+// src/lib/channels/engine/turn/composeFacetReply.ts
 import type { Pool } from "pg";
 import { renderFastpathDmReply } from "../fastpath/renderFastpathDmReply";
 import { resolveBusinessInfoFacetsCanonicalBody } from "../businessInfo/resolveBusinessInfoFacetsCanonicalBody";
@@ -39,6 +39,46 @@ type ComposeFacetReplyArgs = {
   }) => string;
 };
 
+function resolveFacetIntent(args: {
+  detectedIntent: string | null;
+  intentFallback: string | null;
+  detectedFacets?: IntentFacets | null;
+}): string {
+  const detected = String(args.detectedIntent || "").trim();
+  if (detected) return detected;
+
+  const fallback = String(args.intentFallback || "").trim();
+  if (fallback) return fallback;
+
+  const facets = args.detectedFacets;
+
+  if (facets?.asksPrices) return "precio";
+  if (facets?.asksSchedules) return "horario";
+  if (facets?.asksLocation) return "ubicacion";
+  if (facets?.asksAvailability) return "disponibilidad";
+
+  return "info_general";
+}
+
+function resolveFacetSource(args: {
+  hasPriceBlock: boolean;
+  hasBusinessInfoBlock: boolean;
+}): string {
+  if (args.hasPriceBlock && args.hasBusinessInfoBlock) {
+    return "facet_composer_mixed";
+  }
+
+  if (args.hasPriceBlock) {
+    return "catalog_db";
+  }
+
+  if (args.hasBusinessInfoBlock) {
+    return "info_clave_db";
+  }
+
+  return "facet_composer";
+}
+
 export async function composeFacetReply(
   args: ComposeFacetReplyArgs
 ): Promise<{ handled: boolean; reply?: string; source?: string; intent?: string | null }> {
@@ -63,6 +103,7 @@ export async function composeFacetReply(
 
   const blocks: string[] = [];
   let hasPriceBlock = false;
+  let hasBusinessInfoBlock = false;
 
   if (detectedFacets?.asksPrices === true) {
     const { priceBlock } = await buildCatalogOverviewPriceBlock({
@@ -94,8 +135,9 @@ export async function composeFacetReply(
     },
   });
 
-  if (businessInfoBlock) {
-    blocks.push(businessInfoBlock);
+  if (String(businessInfoBlock || "").trim()) {
+    blocks.push(String(businessInfoBlock).trim());
+    hasBusinessInfoBlock = true;
   }
 
   const canonicalBody = blocks.filter(Boolean).join("\n\n").trim();
@@ -104,7 +146,16 @@ export async function composeFacetReply(
     return { handled: false };
   }
 
-  const finalIntent = detectedIntent || intentFallback || "info_general";
+  const finalIntent = resolveFacetIntent({
+    detectedIntent,
+    intentFallback,
+    detectedFacets,
+  });
+
+  const finalSource = resolveFacetSource({
+    hasPriceBlock,
+    hasBusinessInfoBlock,
+  });
 
   const rendered = await renderFastpathDmReply({
     tenantId,
@@ -117,7 +168,7 @@ export async function composeFacetReply(
     fastpathText: canonicalBody,
     fp: {
       reply: canonicalBody,
-      source: hasPriceBlock ? "facet_composer_mixed" : "facet_composer",
+      source: finalSource,
       intent: finalIntent,
       catalogPayload: undefined,
     },
@@ -161,7 +212,7 @@ export async function composeFacetReply(
   return {
     handled: true,
     reply: String(rendered.reply || "").trim(),
-    source: hasPriceBlock ? "facet_composer_mixed" : "facet_composer",
+    source: finalSource,
     intent: finalIntent,
   };
 }
