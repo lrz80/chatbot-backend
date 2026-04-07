@@ -562,6 +562,11 @@ export async function renderFastpathDmReply(
     fp?.intent || input.detectedIntent || input.intentFallback || ""
   ).toLowerCase();
 
+  const isCatalogListReply =
+    fpSource === "service_list_db" ||
+    fpSource === "catalog_list_db" ||
+    fpSource === "catalog_overview_db";
+
   const isInfoGeneralOverviewTurn = isBusinessInfoReply({
     fpSource,
     fpIntent,
@@ -627,11 +632,12 @@ export async function renderFastpathDmReply(
 
   const bypassWriterModel = shouldBypassWriterModel({
     isCatalogChoiceReply,
-    isResolvedCatalogAnswer,
-    isGroundedCatalogReply,
-    isPriceSummaryReply,
+    isResolvedCatalogAnswer: isResolvedCatalogAnswer || isCatalogListReply,
+    isGroundedCatalogReply: isGroundedCatalogReply || isCatalogListReply,
+    isPriceSummaryReply: isPriceSummaryReply || isCatalogListReply,
     canonicalBodyOwnsClosing: replyPolicy.canonicalBodyOwnsClosing,
-    shouldUseGroundedFrameOnly: replyPolicy.shouldUseGroundedFrameOnly,
+    shouldUseGroundedFrameOnly:
+      replyPolicy.shouldUseGroundedFrameOnly || isCatalogListReply,
     isInfoGeneralOverviewTurn,
   });
 
@@ -657,15 +663,20 @@ export async function renderFastpathDmReply(
 
   const shouldAllowIntro =
     !isResolvedCatalogAnswer &&
+    !isCatalogListReply &&
     !isInfoGeneralOverviewTurn &&
     !bypassWriterModel &&
     commercialPolicy.shouldUseSalesTone;
 
   const shouldAllowOutro =
-    (!bypassWriterModel || isResolvedCatalogAnswer || isInfoGeneralOverviewTurn) &&
+    (!bypassWriterModel ||
+      isResolvedCatalogAnswer ||
+      isCatalogListReply ||
+      isInfoGeneralOverviewTurn) &&
     !replyPolicy.canonicalBodyOwnsClosing &&
     (
       isResolvedCatalogAnswer ||
+      isCatalogListReply ||
       isInfoGeneralOverviewTurn ||
       commercialPolicy.shouldUseSalesTone ||
       commercialPolicy.shouldUseSoftClosing ||
@@ -678,6 +689,7 @@ export async function renderFastpathDmReply(
     !isCatalogChoiceReply &&
     (
       isResolvedCatalogAnswer ||
+      isCatalogListReply ||
       isInfoGeneralOverviewTurn ||
       shouldForceSalesClosingQuestion ||
       commercialPolicy.shouldUseSoftClosing ||
@@ -688,7 +700,7 @@ export async function renderFastpathDmReply(
   const responsePolicy = {
     mode: isCatalogChoiceReply
       ? "clarify_only"
-      : isResolvedCatalogAnswer || isInfoGeneralOverviewTurn
+      : isResolvedCatalogAnswer || isCatalogListReply || isInfoGeneralOverviewTurn
       ? "grounded_frame_only"
       : replyPolicy.responsePolicyMode,
     resolvedEntityType:
@@ -722,26 +734,31 @@ export async function renderFastpathDmReply(
     preserveExactBody:
       bypassWriterModel ||
       isCatalogChoiceReply ||
+      isCatalogListReply ||
       mustPreserveResolvedCanonicalBody ||
       isInfoGeneralOverviewTurn,
     preserveExactOrder:
       bypassWriterModel ||
       isCatalogChoiceReply ||
+      isCatalogListReply ||
       mustPreserveResolvedCanonicalBody ||
       isInfoGeneralOverviewTurn,
     preserveExactBullets:
       bypassWriterModel ||
       isCatalogChoiceReply ||
+      isCatalogListReply ||
       mustPreserveResolvedCanonicalBody ||
       isInfoGeneralOverviewTurn,
     preserveExactNumbers:
       bypassWriterModel ||
       isCatalogChoiceReply ||
+      isCatalogListReply ||
       mustPreserveResolvedCanonicalBody ||
       isInfoGeneralOverviewTurn,
     preserveExactLinks:
       bypassWriterModel ||
       isCatalogChoiceReply ||
+      isCatalogListReply ||
       mustPreserveResolvedCanonicalBody ||
       isInfoGeneralOverviewTurn,
     allowIntro: shouldAllowIntro,
@@ -752,6 +769,17 @@ export async function renderFastpathDmReply(
       ? "Catalog service choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one service."
       : isVariantChoiceReply
       ? "Catalog variant choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one variant."
+      : isCatalogListReply
+      ? [
+          "Grounded catalog list turn. The canonical body is the source of truth and must be preserved exactly.",
+          "Do not rewrite, summarize, decorate, or enrich the catalog list.",
+          "Do not invent descriptions, includes, prices, schedule details, labels, or benefits not already present in the canonical body.",
+          "After the canonical body, add exactly one short closing move only if allowed by policy.",
+          tenantClosingPolicyInstruction,
+          commercialClosingInstruction,
+        ]
+          .filter(Boolean)
+          .join(" ")
       : isResolvedCatalogAnswer
       ? [
           "Resolved grounded catalog turn. The canonical body is the source of truth and must be preserved exactly.",
