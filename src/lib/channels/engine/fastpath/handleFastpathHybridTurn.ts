@@ -291,7 +291,7 @@ export async function handleFastpathHybridTurn(
 
   const canonicalCatalogRouteDecision = isMixedScheduleAndPriceTurn
     ? {
-        shouldRouteCatalog: false,
+        shouldRouteCatalog: true,
         resolutionKind: "none" as const,
         resolution: {
           kind: "none" as const,
@@ -304,7 +304,8 @@ export async function handleFastpathHybridTurn(
   const canonicalResolution = canonicalCatalogRouteDecision.resolution;
 
   const hasCanonicalCatalogResolution =
-    canonicalCatalogRouteDecision.shouldRouteCatalog === true;
+    canonicalCatalogRouteDecision.resolution.kind === "resolved_single" ||
+    canonicalCatalogRouteDecision.resolution.kind === "ambiguous";
 
   const effectiveCatalogReferenceClassification: CatalogReferenceClassification =
   hasCanonicalCatalogResolution
