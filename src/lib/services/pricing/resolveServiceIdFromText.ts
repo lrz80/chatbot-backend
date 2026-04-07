@@ -17,6 +17,7 @@ export type ResolveServiceCandidate = {
   variantId?: string | null;
   variantName?: string | null;
   candidateKind?: "service" | "variant";
+  serviceName?: string | null;
 
   overlapNameTokens?: string[];
   overlapTipoTokens?: string[];
@@ -1126,6 +1127,7 @@ export async function resolveServiceCandidatesFromText(
       variantId: variant.variantId,
       variantName: variant.variantName,
       candidateKind: "variant",
+      serviceName: best.cand.label,
       overlapNameTokens: best.overlapNameTokens,
       overlapTipoTokens: best.overlapTipoTokens,
       overlapSupportTokens: best.overlapSupportTokens,
