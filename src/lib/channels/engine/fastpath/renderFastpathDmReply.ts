@@ -577,6 +577,7 @@ export async function renderFastpathDmReply(
   const isServiceChoiceReply = catalogPayload?.kind === "service_choice";
   const isVariantChoiceReply = catalogPayload?.kind === "variant_choice";
   const isCatalogChoiceReply = isServiceChoiceReply || isVariantChoiceReply;
+
   const isResolvedCatalogAnswer =
     catalogPayload?.kind === "resolved_catalog_answer";
 
@@ -584,6 +585,9 @@ export async function renderFastpathDmReply(
     fpSource === "catalog_db" &&
     catalogPayload?.kind === "resolved_catalog_answer" &&
     catalogPayload?.scope === "overview";
+
+  const shouldReturnCanonicalDirectly =
+    isCatalogListReply || isOverviewCatalogDbReply;
 
   const mustPreserveResolvedCanonicalBody = isResolvedCatalogAnswer;
 
@@ -645,7 +649,17 @@ export async function renderFastpathDmReply(
       isInfoGeneralOverviewTurn,
     });
 
-    if ((isCatalogListReply || isOverviewCatalogDbReply) && canonicalReply) {
+    if (shouldReturnCanonicalDirectly && canonicalReply) {
+      console.log("[DM_RENDER][EARLY_RETURN_CANONICAL]", {
+        fpSource,
+        catalogPayloadKind: catalogPayload?.kind ?? null,
+        catalogPayloadScope:
+          catalogPayload?.kind === "resolved_catalog_answer"
+            ? catalogPayload.scope
+            : null,
+        canonicalReplyPreview: String(canonicalReply).slice(0, 200),
+      });
+
       if (fp?.awaitingEffect?.type === "set_awaiting_yes_no") {
         const payload = fp.awaitingEffect.payload || null;
         if (payload?.kind) {
@@ -848,6 +862,16 @@ export async function renderFastpathDmReply(
   } as const;
 
   if (bypassWriterModel) {
+    console.log("[DM_RENDER][BYPASS_WRITER_MODEL]", {
+      fpSource,
+      fpIntent,
+      isCatalogListReply,
+      isOverviewCatalogDbReply,
+      isResolvedCatalogAnswer,
+      isCatalogChoiceReply,
+      bypassWriterModel,
+    });
+
     if (fp?.awaitingEffect?.type === "set_awaiting_yes_no") {
       const payload = fp.awaitingEffect.payload || null;
       if (payload?.kind) {
