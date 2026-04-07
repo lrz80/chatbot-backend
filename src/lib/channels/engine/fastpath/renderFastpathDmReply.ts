@@ -586,8 +586,16 @@ export async function renderFastpathDmReply(
     catalogPayload?.kind === "resolved_catalog_answer" &&
     catalogPayload?.scope === "overview";
 
+  const isDirectCanonicalCatalogDbReply =
+    fpSource === "catalog_db" &&
+    !isCatalogChoiceReply &&
+    !isInfoGeneralOverviewTurn &&
+    Boolean(normalizeText(fastpathText));
+
   const shouldReturnCanonicalDirectly =
-    isCatalogListReply || isOverviewCatalogDbReply;
+    isCatalogListReply ||
+    isOverviewCatalogDbReply ||
+    isDirectCanonicalCatalogDbReply;
 
   const mustPreserveResolvedCanonicalBody = isResolvedCatalogAnswer;
 
@@ -657,6 +665,9 @@ export async function renderFastpathDmReply(
           catalogPayload?.kind === "resolved_catalog_answer"
             ? catalogPayload.scope
             : null,
+        isCatalogListReply,
+        isOverviewCatalogDbReply,
+        isDirectCanonicalCatalogDbReply,
         canonicalReplyPreview: String(canonicalReply).slice(0, 200),
       });
 
