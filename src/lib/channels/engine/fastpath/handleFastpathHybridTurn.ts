@@ -304,134 +304,196 @@ export async function handleFastpathHybridTurn(
   const canonicalResolution = canonicalCatalogRouteDecision.resolution;
 
   const hasCanonicalCatalogResolution =
-    canonicalCatalogRouteDecision.resolution.kind === "resolved_single" ||
-    canonicalCatalogRouteDecision.resolution.kind === "ambiguous";
+    canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+    canonicalCatalogRouteDecision.resolutionKind ===
+      "resolved_service_variant_ambiguous" ||
+    canonicalCatalogRouteDecision.resolutionKind === "ambiguous";
 
   const effectiveCatalogReferenceClassification: CatalogReferenceClassification =
-  hasCanonicalCatalogResolution
-    ? {
-        ...catalogReferenceClassification,
-        kind:
-          canonicalResolution.kind === "resolved_single"
-            ? "entity_specific"
-            : canonicalResolution.kind === "ambiguous"
-            ? "catalog_family"
-            : catalogReferenceClassification.kind,
-        intent:
-          catalogReferenceClassification.intent !== "unknown"
-            ? catalogReferenceClassification.intent
-            : detectedIntent === "info_servicio"
-            ? "includes"
-            : (
-                (detectedIntent === "horario" || detectedIntent === "info_horarios_generales") &&
-                !isMixedScheduleAndPriceTurn
-              )
-            ? "schedule"
-            : detectedIntent === "other_plans" || detectedIntent === "catalog_alternatives"
-            ? "other_plans"
-            : detectedIntent === "combination_and_price" || detectedIntent === "catalog_combination"
-            ? "combination_and_price"
-            : detectedIntent === "compare" || detectedIntent === "comparison" || detectedIntent === "comparacion" || detectedIntent === "catalog_compare"
-            ? "compare"
-            : "price_or_plan",
-        confidence:
-          canonicalResolution.kind === "resolved_single"
-            ? 0.95
-            : canonicalResolution.kind === "ambiguous"
-            ? 0.9
-            : catalogReferenceClassification.confidence,
-        shouldResolveEntity: canonicalResolution.kind === "resolved_single",
-        shouldAskDisambiguation: canonicalResolution.kind === "ambiguous",
-        targetLevel:
-          canonicalResolution.kind === "resolved_single"
-            ? "service"
-            : canonicalResolution.kind === "ambiguous"
-            ? "multi_service"
-            : catalogReferenceClassification.targetLevel,
-        targetServiceId:
-          canonicalResolution.kind === "resolved_single"
-            ? String(canonicalResolution.hit?.id || "").trim() || null
-            : null,
-        targetServiceName:
-          canonicalResolution.kind === "resolved_single"
-            ? String(canonicalResolution.hit?.name || "").trim() || null
-            : null,
-        targetVariantId: null,
-        targetVariantName: null,
-        targetFamilyKey:
-          canonicalResolution.kind === "ambiguous"
-            ? "canonical_ambiguous_family"
-            : null,
-        targetFamilyName:
-          canonicalResolution.kind === "ambiguous"
-            ? "canonical_ambiguous_family"
-            : null,
-        signals: {
-          ...(catalogReferenceClassification?.signals || {}),
-          hasCatalogScope: true,
-          hasSpecificEntityCandidate:
-            canonicalResolution.kind === "resolved_single",
-          hasFamilyCandidate: canonicalResolution.kind === "ambiguous",
-          hasDisambiguationRisk: canonicalResolution.kind === "ambiguous",
-        },
-        debug: {
-          source: "catalog_reference_classifier",
-          notes: [
-            "canonical_catalog_resolution_applied",
-            `resolution_kind:${canonicalResolution.kind}`,
-            ...(canonicalResolution.kind === "resolved_single" && canonicalResolution.hit
-              ? [`resolved_service_id:${String(canonicalResolution.hit.id || "").trim()}`]
-              : []),
-            ...(canonicalResolution.kind === "resolved_single" && canonicalResolution.hit
-              ? [`resolved_service_name:${String(canonicalResolution.hit.name || "").trim()}`]
-              : []),
-            ...(canonicalResolution.kind === "ambiguous"
-              ? [`ambiguous_candidates:${String(canonicalResolution.candidates?.length || 0)}`]
-              : []),
-          ],
-        },
-      }
-    : catalogReferenceClassification;
+    hasCanonicalCatalogResolution
+      ? {
+          ...catalogReferenceClassification,
+          kind:
+            canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
+              ? "entity_specific"
+              : canonicalCatalogRouteDecision.resolutionKind ===
+                "resolved_service_variant_ambiguous"
+              ? "entity_specific"
+              : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+              ? "catalog_family"
+              : catalogReferenceClassification.kind,
+          intent:
+            catalogReferenceClassification.intent !== "unknown"
+              ? catalogReferenceClassification.intent
+              : detectedIntent === "info_servicio"
+              ? "includes"
+              : (
+                  (detectedIntent === "horario" ||
+                    detectedIntent === "info_horarios_generales") &&
+                  !isMixedScheduleAndPriceTurn
+                )
+              ? "schedule"
+              : detectedIntent === "other_plans" ||
+                detectedIntent === "catalog_alternatives"
+              ? "other_plans"
+              : detectedIntent === "combination_and_price" ||
+                detectedIntent === "catalog_combination"
+              ? "combination_and_price"
+              : detectedIntent === "compare" ||
+                detectedIntent === "comparison" ||
+                detectedIntent === "comparacion" ||
+                detectedIntent === "catalog_compare"
+              ? "compare"
+              : "price_or_plan",
+          confidence:
+            canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
+              ? 0.95
+              : canonicalCatalogRouteDecision.resolutionKind ===
+                "resolved_service_variant_ambiguous"
+              ? 0.95
+              : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+              ? 0.9
+              : catalogReferenceClassification.confidence,
+          shouldResolveEntity:
+            canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+            canonicalCatalogRouteDecision.resolutionKind ===
+              "resolved_service_variant_ambiguous",
+          shouldAskDisambiguation:
+            canonicalCatalogRouteDecision.resolutionKind ===
+              "resolved_service_variant_ambiguous" ||
+            canonicalCatalogRouteDecision.resolutionKind === "ambiguous",
+          targetLevel:
+            canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
+              ? "service"
+              : canonicalCatalogRouteDecision.resolutionKind ===
+                "resolved_service_variant_ambiguous"
+              ? "service"
+              : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+              ? "multi_service"
+              : catalogReferenceClassification.targetLevel,
+          targetServiceId:
+            canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+            canonicalCatalogRouteDecision.resolutionKind ===
+              "resolved_service_variant_ambiguous"
+              ? canonicalCatalogRouteDecision.resolvedServiceId
+              : null,
+          targetServiceName:
+            canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+            canonicalCatalogRouteDecision.resolutionKind ===
+              "resolved_service_variant_ambiguous"
+              ? canonicalCatalogRouteDecision.resolvedServiceName
+              : null,
+          targetVariantId: null,
+          targetVariantName: null,
+          targetFamilyKey:
+            canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+              ? "canonical_ambiguous_family"
+              : null,
+          targetFamilyName:
+            canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+              ? "canonical_ambiguous_family"
+              : null,
+          signals: {
+            ...(catalogReferenceClassification?.signals || {}),
+            hasCatalogScope: true,
+            hasSpecificEntityCandidate:
+              canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+              canonicalCatalogRouteDecision.resolutionKind ===
+                "resolved_service_variant_ambiguous",
+            hasFamilyCandidate:
+              canonicalCatalogRouteDecision.resolutionKind === "ambiguous",
+            hasDisambiguationRisk:
+              canonicalCatalogRouteDecision.resolutionKind ===
+                "resolved_service_variant_ambiguous" ||
+              canonicalCatalogRouteDecision.resolutionKind === "ambiguous",
+          },
+          debug: {
+            source: "catalog_reference_classifier",
+            notes: [
+              "canonical_catalog_resolution_applied",
+              `resolution_kind:${canonicalCatalogRouteDecision.resolutionKind}`,
+              ...(canonicalCatalogRouteDecision.resolvedServiceId
+                ? [
+                    `resolved_service_id:${String(
+                      canonicalCatalogRouteDecision.resolvedServiceId
+                    ).trim()}`,
+                  ]
+                : []),
+              ...(canonicalCatalogRouteDecision.resolvedServiceName
+                ? [
+                    `resolved_service_name:${String(
+                      canonicalCatalogRouteDecision.resolvedServiceName
+                    ).trim()}`,
+                  ]
+                : []),
+              ...(canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+                ? [
+                    `ambiguous_candidates:${String(
+                      canonicalResolution.candidates?.length || 0
+                    )}`,
+                  ]
+                : []),
+            ],
+          },
+        }
+      : catalogReferenceClassification;
 
   const effectiveCatalogRoutingSignal = hasCanonicalCatalogResolution
     ? {
         ...catalogRoutingSignal,
         shouldRouteCatalog: true,
         allowsDbCatalogPath: true,
-        routeIntent: "entity_detail",
+        routeIntent:
+          canonicalCatalogRouteDecision.resolutionKind ===
+          "resolved_service_variant_ambiguous"
+            ? "catalog_includes"
+            : "entity_detail",
         referenceKind:
-          canonicalResolution.kind === "resolved_single"
+          canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
             ? "entity_specific"
-            : canonicalResolution.kind === "ambiguous"
+            : canonicalCatalogRouteDecision.resolutionKind ===
+              "resolved_service_variant_ambiguous"
+            ? "entity_specific"
+            : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
             ? "catalog_family"
             : catalogRoutingSignal.referenceKind,
         source: "canonical_catalog_resolution",
         targetServiceId:
-          canonicalResolution.kind === "resolved_single"
-            ? String(canonicalResolution.hit?.id || "").trim() || null
+          canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+          canonicalCatalogRouteDecision.resolutionKind ===
+            "resolved_service_variant_ambiguous"
+            ? canonicalCatalogRouteDecision.resolvedServiceId
             : null,
         targetServiceName:
-          canonicalResolution.kind === "resolved_single"
-            ? String(canonicalResolution.hit?.name || "").trim() || null
+          canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+          canonicalCatalogRouteDecision.resolutionKind ===
+            "resolved_service_variant_ambiguous"
+            ? canonicalCatalogRouteDecision.resolvedServiceName
             : null,
         targetVariantId: null,
         targetVariantName: null,
         targetFamilyKey:
-          canonicalResolution.kind === "ambiguous"
+          canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
             ? "canonical_ambiguous_family"
             : null,
         targetFamilyName:
-          canonicalResolution.kind === "ambiguous"
+          canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
             ? "canonical_ambiguous_family"
             : null,
         targetLevel:
-          canonicalResolution.kind === "resolved_single"
+          canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
             ? "service"
-            : canonicalResolution.kind === "ambiguous"
+            : canonicalCatalogRouteDecision.resolutionKind ===
+              "resolved_service_variant_ambiguous"
+            ? "service"
+            : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
             ? "family"
             : catalogRoutingSignal.targetLevel,
         disambiguationType:
-          canonicalResolution.kind === "ambiguous"
+          canonicalCatalogRouteDecision.resolutionKind ===
+          "resolved_service_variant_ambiguous"
+            ? "variant_choice"
+            : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
             ? "service_choice"
             : "none",
         anchorShift: "none",
