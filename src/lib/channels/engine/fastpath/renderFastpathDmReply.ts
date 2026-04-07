@@ -126,45 +126,148 @@ function isBusinessInfoReply(input: {
   return input.fpSource.startsWith("business_info");
 }
 
-function buildCatalogChoiceCanonicalBody(input: {
+async function renderCatalogChoiceBody(input: {
+  tenantId: string;
+  canal: Canal;
+  idiomaDestino: LangCode;
+  userInput: string;
+  promptBaseMem: string;
+  history: ChatCompletionMessageParam[];
   catalogPayload:
     | Extract<CatalogPayload, { kind: "service_choice" }>
     | Extract<CatalogPayload, { kind: "variant_choice" }>;
-}): string {
-  const { catalogPayload } = input;
+}): Promise<string> {
+  const options = Array.isArray(input.catalogPayload.options)
+    ? input.catalogPayload.options
+        .map((option, idx) => {
+          const label = String(option.label || "").trim();
+          if (!label) return null;
 
-  const options = Array.isArray(catalogPayload.options)
-    ? catalogPayload.options
+          return {
+            index: idx + 1,
+            label,
+            kind: option.kind,
+            serviceId: option.serviceId,
+            variantId: option.kind === "variant" ? option.variantId : null,
+            serviceName:
+              "serviceName" in option && option.serviceName
+                ? String(option.serviceName).trim()
+                : null,
+            variantName:
+              option.kind === "variant" && option.variantName
+                ? String(option.variantName).trim()
+                : null,
+          };
+        })
+        .filter((value): value is NonNullable<typeof value> => Boolean(value))
     : [];
 
-  const optionLines = options
-    .map((option, idx) => `${idx + 1}) ${String(option.label || "").trim()}`)
-    .filter(Boolean);
+  const structuredChoice = {
+    kind: input.catalogPayload.kind,
+    originalIntent: input.catalogPayload.originalIntent ?? null,
+    serviceId:
+      input.catalogPayload.kind === "variant_choice"
+        ? input.catalogPayload.serviceId
+        : null,
+    serviceName:
+      input.catalogPayload.kind === "variant_choice"
+        ? normalizeText(input.catalogPayload.serviceName) || null
+        : null,
+    options,
+  };
 
-  if (catalogPayload.kind === "service_choice") {
-    return [
-      "CANONICAL_CHOICE_KIND: service",
-      "CANONICAL_CHOICE_INSTRUCTION: Ask the user to choose one option from the list. Do not add explanations outside this purpose.",
-      "",
-      optionLines.join("\n"),
-    ]
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-  }
-
-  const serviceLabel = normalizeText(catalogPayload.serviceName);
-
-  return [
-    "CANONICAL_CHOICE_KIND: variant",
-    `CANONICAL_PARENT_LABEL: ${serviceLabel || ""}`,
-    "CANONICAL_CHOICE_INSTRUCTION: Ask the user to choose one available variant for the selected option. Do not add explanations outside this purpose.",
-    "",
-    optionLines.join("\n"),
-  ]
-    .filter(Boolean)
+  const fallbackText = options
+    .map((option) => `${option.index}) ${option.label}`)
     .join("\n")
     .trim();
+
+  const prompt = [
+    "SYSTEM_ROLE:",
+    "You write the final customer-facing DM message for a catalog clarification turn.",
+    "",
+    "TASK:",
+    "- Return STRICT JSON only.",
+    '- Use exactly this shape: {"message":string}.',
+    "- Write a short, natural, human DM message in the user's language.",
+    "- The only goal is to help the user choose one option from the structured data.",
+    "- Do not invent prices, includes, schedules, policies, links, benefits, or business facts.",
+    "- Do not add extra explanations outside the choice itself.",
+    "- Preserve every option label exactly as provided in STRUCTURED_CHOICE_JSON.",
+    "- Present the available options as a numbered list.",
+    "- End with one short choice question.",
+    "- If kind is variant_choice, make clear the options belong to the selected service from STRUCTURED_CHOICE_JSON.",
+    "",
+    "PROMPT_BASE:",
+    input.promptBaseMem || "",
+    "",
+    "MENSAJE_USUARIO:",
+    input.userInput || "",
+    "",
+    "STRUCTURED_CHOICE_JSON:",
+    JSON.stringify(structuredChoice),
+  ].join("\n");
+
+  const composed = await answerWithPromptBase({
+    tenantId: input.tenantId,
+    promptBase: prompt,
+    userInput: input.userInput,
+    history: input.history,
+    idiomaDestino: input.idiomaDestino,
+    canal: input.canal,
+    maxLines: 8,
+    fallbackText,
+    runtimeCapabilities: {
+      bookingActive: false,
+    },
+    responsePolicy: {
+      mode: "clarify_only",
+      resolvedEntityType: null,
+      resolvedEntityId:
+        input.catalogPayload.kind === "variant_choice"
+          ? input.catalogPayload.serviceId
+          : null,
+      resolvedEntityLabel:
+        input.catalogPayload.kind === "variant_choice"
+          ? normalizeText(input.catalogPayload.serviceName) || null
+          : null,
+      canMentionSpecificPrice: false,
+      canSelectSpecificCatalogItem: true,
+      canOfferBookingTimes: false,
+      canUseOfficialLinks: false,
+      unresolvedEntity: true,
+      clarificationTarget:
+        input.catalogPayload.kind === "service_choice" ? "service" : "variant",
+      singleResolvedEntityOnly: false,
+      allowAlternativeEntities: false,
+      allowCrossSellEntities: false,
+      allowAddOnSuggestions: false,
+      preserveExactBody: false,
+      preserveExactOrder: true,
+      preserveExactBullets: true,
+      preserveExactNumbers: true,
+      preserveExactLinks: false,
+      allowIntro: false,
+      allowOutro: false,
+      allowBodyRewrite: true,
+      mustEndWithSalesQuestion: false,
+      reasoningNotes:
+        "Render a short customer-facing clarification message from structured choice data only. Preserve option labels exactly.",
+    },
+  });
+
+  try {
+    const parsed = JSON.parse(String(composed.text || "").trim());
+    const message =
+      typeof parsed?.message === "string" ? parsed.message.trim() : "";
+
+    if (message) {
+      return message;
+    }
+  } catch {
+    // fallback abajo
+  }
+
+  return fallbackText;
 }
 
 function buildTenantClosingPolicyInstruction(promptBaseMem: string): string | null {
@@ -492,15 +595,27 @@ export async function renderFastpathDmReply(
   const tenantClosingPolicyInstruction =
     buildTenantClosingPolicyInstruction(promptBaseMem);
 
-  const canonicalReply = (() => {
+  const canonicalReply = await (async () => {
     if (catalogPayload?.kind === "service_choice") {
-      return buildCatalogChoiceCanonicalBody({
+      return await renderCatalogChoiceBody({
+        tenantId,
+        canal,
+        idiomaDestino,
+        userInput,
+        promptBaseMem,
+        history,
         catalogPayload,
       });
     }
 
     if (catalogPayload?.kind === "variant_choice") {
-      return buildCatalogChoiceCanonicalBody({
+      return await renderCatalogChoiceBody({
+        tenantId,
+        canal,
+        idiomaDestino,
+        userInput,
+        promptBaseMem,
+        history,
         catalogPayload,
       });
     }
