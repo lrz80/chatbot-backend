@@ -1,6 +1,8 @@
 //src/lib/channels/engine/turn/composeFacetReply.ts
+import type { Pool } from "pg";
 import { renderFastpathDmReply } from "../fastpath/renderFastpathDmReply";
 import { resolveBusinessInfoFacetsCanonicalBody } from "../businessInfo/resolveBusinessInfoFacetsCanonicalBody";
+import { buildCatalogOverviewPriceBlock } from "../../../fastpath/handlers/catalog/helpers/buildCatalogOverviewPriceBlock";
 
 type IntentFacets = {
   asksPrices?: boolean;
@@ -10,6 +12,7 @@ type IntentFacets = {
 };
 
 type ComposeFacetReplyArgs = {
+  pool: Pool;
   tenantId: string;
   canal: any;
   idiomaDestino: string;
@@ -23,12 +26,24 @@ type ComposeFacetReplyArgs = {
   intentFallback: string | null;
   detectedFacets?: IntentFacets | null;
   detectedCommercial?: any;
+
+  normalizeCatalogRole: (value: string | null | undefined) => string;
+  traducirTexto: (
+    texto: string,
+    idiomaDestino: string,
+    modo?: any
+  ) => Promise<string>;
+  renderGenericPriceSummaryReply: (input: {
+    lang: any;
+    rows: any[];
+  }) => string;
 };
 
 export async function composeFacetReply(
   args: ComposeFacetReplyArgs
 ): Promise<{ handled: boolean; reply?: string; source?: string; intent?: string | null }> {
   const {
+    pool,
     tenantId,
     canal,
     idiomaDestino,
@@ -41,9 +56,29 @@ export async function composeFacetReply(
     intentFallback,
     detectedFacets,
     detectedCommercial,
+    normalizeCatalogRole,
+    traducirTexto,
+    renderGenericPriceSummaryReply,
   } = args;
 
   const blocks: string[] = [];
+  let hasPriceBlock = false;
+
+  if (detectedFacets?.asksPrices === true) {
+    const { priceBlock } = await buildCatalogOverviewPriceBlock({
+      pool,
+      tenantId,
+      idiomaDestino,
+      normalizeCatalogRole,
+      traducirTexto,
+      renderGenericPriceSummaryReply,
+    });
+
+    if (String(priceBlock || "").trim()) {
+      blocks.push(priceBlock.trim());
+      hasPriceBlock = true;
+    }
+  }
 
   const businessInfoBlock = await resolveBusinessInfoFacetsCanonicalBody({
     tenantId,
@@ -62,14 +97,6 @@ export async function composeFacetReply(
   if (businessInfoBlock) {
     blocks.push(businessInfoBlock);
   }
-
-  // TODO: aquí conectas el bloque de catálogo/DB para asksPrices
-  // Por ahora lo dejamos preparado sin hardcode por frase.
-  // Ejemplo:
-  // if (detectedFacets?.asksPrices) {
-  //   const catalogPriceBlock = await resolveCatalogPriceCanonicalBody(...);
-  //   if (catalogPriceBlock) blocks.push(catalogPriceBlock);
-  // }
 
   const canonicalBody = blocks.filter(Boolean).join("\n\n").trim();
 
@@ -90,7 +117,7 @@ export async function composeFacetReply(
     fastpathText: canonicalBody,
     fp: {
       reply: canonicalBody,
-      source: "facet_composer",
+      source: hasPriceBlock ? "facet_composer_mixed" : "facet_composer",
       intent: finalIntent,
       catalogPayload: undefined,
     },
@@ -107,10 +134,10 @@ export async function composeFacetReply(
       responsePolicyMode: "grounded_frame_only",
       hasResolvedEntity: false,
 
-      isCatalogDbReply: false,
-      isPriceSummaryReply: false,
+      isCatalogDbReply: hasPriceBlock,
+      isPriceSummaryReply: hasPriceBlock,
       isPriceDisambiguationReply: false,
-      isGroundedCatalogReply: false,
+      isGroundedCatalogReply: hasPriceBlock,
       isGroundedCatalogOverviewDm: true,
       shouldForceSalesClosingQuestion: false,
       canonicalBodyOwnsClosing: true,
@@ -134,7 +161,7 @@ export async function composeFacetReply(
   return {
     handled: true,
     reply: String(rendered.reply || "").trim(),
-    source: "facet_composer",
+    source: hasPriceBlock ? "facet_composer_mixed" : "facet_composer",
     intent: finalIntent,
   };
 }

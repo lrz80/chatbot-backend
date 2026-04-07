@@ -1,3 +1,4 @@
+//src/lib/channels/engine/fastpath/getCanonicalCatalogRouteDecision.ts
 import type { Pool } from "pg";
 import {
   resolveServiceCandidatesFromText,
