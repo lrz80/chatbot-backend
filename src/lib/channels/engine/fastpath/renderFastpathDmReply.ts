@@ -580,6 +580,11 @@ export async function renderFastpathDmReply(
   const isResolvedCatalogAnswer =
     catalogPayload?.kind === "resolved_catalog_answer";
 
+  const isOverviewCatalogDbReply =
+    fpSource === "catalog_db" &&
+    catalogPayload?.kind === "resolved_catalog_answer" &&
+    catalogPayload?.scope === "overview";
+
   const mustPreserveResolvedCanonicalBody = isResolvedCatalogAnswer;
 
   const unresolvedCatalogChoice = isCatalogChoiceReply;
@@ -640,7 +645,7 @@ export async function renderFastpathDmReply(
       isInfoGeneralOverviewTurn,
     });
 
-    if (isCatalogListReply && canonicalReply) {
+    if ((isCatalogListReply || isOverviewCatalogDbReply) && canonicalReply) {
       if (fp?.awaitingEffect?.type === "set_awaiting_yes_no") {
         const payload = fp.awaitingEffect.payload || null;
         if (payload?.kind) {
