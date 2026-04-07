@@ -318,7 +318,11 @@ export function buildFastpathReplyPolicy(
   const canonicalBodyOwnsClosing =
     isVariantDisambiguation ||
     isServiceChoiceDisambiguation ||
-    input.fp?.awaitingEffect?.type === "set_awaiting_yes_no";
+    input.fp?.awaitingEffect?.type === "set_awaiting_yes_no" ||
+    replySourceKind === "catalog_grounded" ||
+    replySourceKind === "business_info" ||
+    replySourceKind === "price_like" ||
+    replySourceKind === "catalog_comparison_render";
 
   const shouldBypassStructuredRewrite =
     isDmChannel && hasPendingLinkState(input.ctxPatch);
@@ -354,11 +358,7 @@ export function buildFastpathReplyPolicy(
     isGroundedCatalogReply &&
     !hasResolvedEntity;
 
-  const shouldForceSalesClosingQuestion =
-    isGroundedCatalogOverviewDm &&
-    commercialPolicy.shouldUseSalesTone &&
-    !input.ctxPatch?.pending_cta &&
-    !input.fp?.awaitingEffect;
+  const shouldForceSalesClosingQuestion = false;
 
   const shouldUseGroundedFrameOnly =
     isVariantDisambiguation ||
