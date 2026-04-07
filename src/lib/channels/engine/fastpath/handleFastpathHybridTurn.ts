@@ -282,12 +282,24 @@ export async function handleFastpathHybridTurn(
         : [],
   };
 
-  const canonicalCatalogRouteDecision =
+  const rawCanonicalCatalogRouteDecision =
     await getCanonicalCatalogRouteDecision({
       pool,
       tenantId,
       userInput,
     });
+
+  const canonicalCatalogRouteDecision = isMixedScheduleAndPriceTurn
+    ? {
+        shouldRouteCatalog: false,
+        resolutionKind: "none" as const,
+        resolution: {
+          kind: "none" as const,
+          hit: null,
+          candidates: [],
+        },
+      }
+    : rawCanonicalCatalogRouteDecision;
 
   const canonicalResolution = canonicalCatalogRouteDecision.resolution;
 
