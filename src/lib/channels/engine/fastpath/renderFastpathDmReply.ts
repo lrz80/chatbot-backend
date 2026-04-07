@@ -629,20 +629,34 @@ export async function renderFastpathDmReply(
     return normalizeText(fastpathText);
   })();
 
-  const bypassWriterModel = shouldBypassWriterModel({
-    isCatalogChoiceReply,
-    isResolvedCatalogAnswer: isResolvedCatalogAnswer || isCatalogListReply,
-    isGroundedCatalogReply: isGroundedCatalogReply || isCatalogListReply,
-    isPriceSummaryReply: isPriceSummaryReply || isCatalogListReply,
-    canonicalBodyOwnsClosing: replyPolicy.canonicalBodyOwnsClosing,
-    shouldUseGroundedFrameOnly:
-      replyPolicy.shouldUseGroundedFrameOnly || isCatalogListReply,
-    isInfoGeneralOverviewTurn,
-  });
+    const bypassWriterModel = shouldBypassWriterModel({
+      isCatalogChoiceReply,
+      isResolvedCatalogAnswer: isResolvedCatalogAnswer || isCatalogListReply,
+      isGroundedCatalogReply: isGroundedCatalogReply || isCatalogListReply,
+      isPriceSummaryReply: isPriceSummaryReply || isCatalogListReply,
+      canonicalBodyOwnsClosing: replyPolicy.canonicalBodyOwnsClosing,
+      shouldUseGroundedFrameOnly:
+        replyPolicy.shouldUseGroundedFrameOnly || isCatalogListReply,
+      isInfoGeneralOverviewTurn,
+    });
 
-  const runtimeCapabilities = {
-    bookingActive: false,
-  };
+    if (isCatalogListReply && canonicalReply) {
+      if (fp?.awaitingEffect?.type === "set_awaiting_yes_no") {
+        const payload = fp.awaitingEffect.payload || null;
+        if (payload?.kind) {
+          ctxPatch.awaiting_yes_no_action = payload;
+        }
+      }
+
+      return {
+        reply: stripMarkdownLinksForDm(String(canonicalReply).trim()),
+        ctxPatch,
+      };
+    }
+
+    const runtimeCapabilities = {
+      bookingActive: false,
+    };
 
   const resolvedEntityId =
     catalogPayload?.kind === "resolved_catalog_answer"
