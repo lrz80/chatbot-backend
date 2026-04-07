@@ -62,17 +62,26 @@ function shouldBypassWriterModel(input: {
   isPriceSummaryReply: boolean;
   canonicalBodyOwnsClosing: boolean;
   shouldUseGroundedFrameOnly: boolean;
+  isInfoGeneralOverviewTurn: boolean;
 }): boolean {
   if (input.isCatalogChoiceReply) {
     return true;
   }
 
   if (input.isResolvedCatalogAnswer) {
-    return false;
+    return true;
   }
 
-  if (input.shouldUseGroundedFrameOnly) {
-    return false;
+  if (
+    input.shouldUseGroundedFrameOnly &&
+    (
+      input.canonicalBodyOwnsClosing ||
+      input.isGroundedCatalogReply ||
+      input.isPriceSummaryReply ||
+      input.isInfoGeneralOverviewTurn
+    )
+  ) {
+    return true;
   }
 
   return (
@@ -378,6 +387,7 @@ export async function renderFastpathDmReply(
     isPriceSummaryReply,
     canonicalBodyOwnsClosing: replyPolicy.canonicalBodyOwnsClosing,
     shouldUseGroundedFrameOnly: replyPolicy.shouldUseGroundedFrameOnly,
+    isInfoGeneralOverviewTurn,
   });
 
   const runtimeCapabilities = {
