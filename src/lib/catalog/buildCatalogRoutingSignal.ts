@@ -105,6 +105,12 @@ type BuildCatalogRoutingSignalArgs = {
   catalogReferenceClassification?: CatalogReferenceClassification | null;
   convoCtx?: CatalogRoutingConvoCtx | null;
   candidateOptionsFromTurn?: CatalogRoutingCandidateOption[] | null;
+  facets?: {
+    asksPrices?: boolean;
+    asksSchedules?: boolean;
+    asksLocation?: boolean;
+    asksAvailability?: boolean;
+  } | null;
 };
 
 const CATALOG_INTENTS = new Set([
@@ -121,6 +127,13 @@ const CATALOG_INTENTS = new Set([
 
 function normalizeText(input?: string | null): string {
   return String(input || "").trim().toLowerCase();
+}
+
+function isMixedScheduleAndPriceFacetTurn(input?: {
+  asksPrices?: boolean;
+  asksSchedules?: boolean;
+} | null): boolean {
+  return input?.asksPrices === true && input?.asksSchedules === true;
 }
 
 function isFreshCatalogContext(convoCtx?: CatalogRoutingConvoCtx | null): boolean {
@@ -354,6 +367,7 @@ export function buildCatalogRoutingSignal({
   catalogReferenceClassification,
   convoCtx,
   candidateOptionsFromTurn,
+  facets,
 }: BuildCatalogRoutingSignalArgs): CatalogRouteSignal {
   const referenceKind =
     catalogReferenceClassification?.kind === "catalog_overview" ||
@@ -366,6 +380,10 @@ export function buildCatalogRoutingSignal({
       : "none";
 
   const normalizedIntentOut = normalizeText(intentOut);
+
+  const isMixedScheduleAndPriceTurn =
+    isMixedScheduleAndPriceFacetTurn(facets);
+
   const hasFreshCatalogContext = isFreshCatalogContext(convoCtx);
 
   const previousCatalogPlans = Array.isArray(convoCtx?.last_catalog_plans)
@@ -433,6 +451,12 @@ export function buildCatalogRoutingSignal({
     catalogReferenceClassification
   );
 
+  const hasConcreteCatalogTarget =
+    Boolean(targetServiceId) ||
+    Boolean(targetVariantId) ||
+    Boolean(targetFamilyKey) ||
+    explicitTargetThisTurn;
+
   const hasPendingChoice = hasPendingCatalogChoice(convoCtx);
   const hasReusableAnchor = hasReusableCatalogAnchor(convoCtx);
 
@@ -452,6 +476,27 @@ export function buildCatalogRoutingSignal({
           !explicitTargetThisTurn
         )
       : false;
+
+  if (isMixedScheduleAndPriceTurn && !hasConcreteCatalogTarget) {
+    return {
+      shouldRouteCatalog: false,
+      routeIntent: "unknown",
+      referenceKind: "none",
+      source: "none",
+      allowsDbCatalogPath: false,
+      hasFreshCatalogContext,
+      previousCatalogPlans: [],
+      targetServiceId: null,
+      targetServiceName: null,
+      targetVariantId: null,
+      targetVariantName: null,
+      targetFamilyKey: null,
+      targetFamilyName: null,
+      targetLevel: "none",
+      disambiguationType: "none",
+      anchorShift: "none",
+    };
+  }
 
   if (referenceKind !== "none") {
     const resolvedRouteIntent = resolveRouteIntentFromSignals({

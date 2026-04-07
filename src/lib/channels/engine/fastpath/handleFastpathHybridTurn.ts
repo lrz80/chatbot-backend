@@ -265,6 +265,7 @@ export async function handleFastpathHybridTurn(
     intentOut: detectedIntent || intentFallback || null,
     catalogReferenceClassification,
     convoCtx,
+    facets: detectedFacets || null,
   });
 
   const catalogRoutingSignal = {
