@@ -343,6 +343,10 @@ async function buildGroundedFrameOnly(input: {
     return { intro: null, closing: null };
   }
 
+  if (input.fpIntent === "precio") {
+    return { intro: null, closing: null };
+  }
+
   const framePrompt = [
     "SYSTEM_ROLE:",
     "You only generate a conversational frame around a canonical grounded body.",
@@ -394,61 +398,7 @@ async function buildGroundedFrameOnly(input: {
     input.canonicalReply || "",
   ].join("\n");
 
-  const composed = await answerWithPromptBase({
-    tenantId: input.tenantId,
-    promptBase: framePrompt,
-    userInput: input.userInput,
-    history: input.history,
-    idiomaDestino: input.idiomaDestino,
-    canal: input.canal,
-    maxLines: 6,
-    runtimeCapabilities: {
-      bookingActive: false,
-    },
-    responsePolicy: {
-      mode: "normal",
-      resolvedEntityType: null,
-      resolvedEntityId: null,
-      resolvedEntityLabel: null,
-      canMentionSpecificPrice: false,
-      canSelectSpecificCatalogItem: false,
-      canOfferBookingTimes: false,
-      canUseOfficialLinks: false,
-      unresolvedEntity: false,
-      clarificationTarget: null,
-      singleResolvedEntityOnly: false,
-      allowAlternativeEntities: false,
-      allowCrossSellEntities: false,
-      allowAddOnSuggestions: false,
-      preserveExactBody: false,
-      preserveExactOrder: false,
-      preserveExactBullets: false,
-      preserveExactNumbers: false,
-      preserveExactLinks: false,
-      allowIntro: false,
-      allowOutro: false,
-      allowBodyRewrite: true,
-      mustEndWithSalesQuestion: false,
-      reasoningNotes:
-        "Return strict JSON only with intro and closing. Do not produce or replace the canonical body.",
-    },
-  });
-
-  try {
-    const parsed = JSON.parse(String(composed.text || "").trim());
-    return {
-      intro:
-        typeof parsed?.intro === "string" && parsed.intro.trim()
-          ? parsed.intro.trim()
-          : null,
-      closing:
-        typeof parsed?.closing === "string" && parsed.closing.trim()
-          ? parsed.closing.trim()
-          : null,
-    };
-  } catch {
-    return { intro: null, closing: null };
-  }
+  return { intro: null, closing: null };
 }
 
 export type RenderFastpathDmReplyInput = {
@@ -579,23 +529,13 @@ export async function renderFastpathDmReply(
   const isCatalogChoiceReply = isServiceChoiceReply || isVariantChoiceReply;
 
   const isResolvedCatalogAnswer =
-    catalogPayload?.kind === "resolved_catalog_answer";
+    catalogPayload?.kind === "resolved_catalog_answer" ||
+    fpSource === "catalog_db";
 
   const isOverviewCatalogDbReply =
     fpSource === "catalog_db" &&
-    catalogPayload?.kind === "resolved_catalog_answer" &&
-    catalogPayload?.scope === "overview";
-
-  const isDirectCanonicalCatalogDbReply =
-    fpSource === "catalog_db" &&
     !isCatalogChoiceReply &&
-    !isInfoGeneralOverviewTurn &&
-    Boolean(normalizeText(fastpathText));
-
-  const shouldReturnCanonicalDirectly =
-    isCatalogListReply ||
-    isOverviewCatalogDbReply ||
-    isDirectCanonicalCatalogDbReply;
+    !isInfoGeneralOverviewTurn;
 
   const mustPreserveResolvedCanonicalBody = isResolvedCatalogAnswer;
 
@@ -643,9 +583,17 @@ export async function renderFastpathDmReply(
       }
     }
 
+    if (fpSource === "catalog_db") {
+      return normalizeText(fastpathText);
+    }
+
     return normalizeText(fastpathText);
   })();
 
+    const shouldReturnCanonicalDirectly =
+    (isCatalogListReply || isOverviewCatalogDbReply) &&
+    Boolean(canonicalReply);
+    
     const bypassWriterModel = shouldBypassWriterModel({
       isCatalogChoiceReply,
       isResolvedCatalogAnswer: isResolvedCatalogAnswer || isCatalogListReply,
@@ -657,7 +605,7 @@ export async function renderFastpathDmReply(
       isInfoGeneralOverviewTurn,
     });
 
-    if (shouldReturnCanonicalDirectly && canonicalReply) {
+    if (shouldReturnCanonicalDirectly) {
       console.log("[DM_RENDER][EARLY_RETURN_CANONICAL]", {
         fpSource,
         catalogPayloadKind: catalogPayload?.kind ?? null,
@@ -667,7 +615,6 @@ export async function renderFastpathDmReply(
             : null,
         isCatalogListReply,
         isOverviewCatalogDbReply,
-        isDirectCanonicalCatalogDbReply,
         canonicalReplyPreview: String(canonicalReply).slice(0, 200),
       });
 
