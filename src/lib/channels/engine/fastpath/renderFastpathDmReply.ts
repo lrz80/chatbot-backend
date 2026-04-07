@@ -4,6 +4,7 @@ import { getRecentHistoryForModel } from "../messages/getRecentHistoryForModel";
 import { answerWithPromptBase } from "../../../answers/answerWithPromptBase";
 import { stripMarkdownLinksForDm } from "../../format/stripMarkdownLinks";
 import { buildDmWriterPrompt } from "./buildDmWriterPrompt";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
 function normalizeText(value: unknown): string {
   return String(value ?? "").trim();
@@ -217,6 +218,143 @@ function buildCommercialClosingInstruction(input: {
   }
 
   return null;
+}
+
+async function buildGroundedFrameOnly(input: {
+  tenantId: string;
+  canal: Canal;
+  idiomaDestino: LangCode;
+  userInput: string;
+  promptBaseMem: string;
+  history: ChatCompletionMessageParam[];
+  canonicalReply: string;
+  commercialPolicy: {
+    purchaseIntent: "unknown" | "low" | "medium" | "high";
+    wantsBooking: boolean;
+    wantsQuote: boolean;
+    wantsHuman: boolean;
+    urgency: "unknown" | "low" | "medium" | "high";
+    shouldUseSalesTone: boolean;
+    shouldUseSoftClosing: boolean;
+    shouldUseDirectClosing: boolean;
+    shouldSuggestHumanHandoff: boolean;
+  };
+  fpIntent: string;
+  isInfoGeneralOverviewTurn: boolean;
+  isResolvedCatalogAnswer: boolean;
+  isCatalogChoiceReply: boolean;
+}): Promise<{ intro: string | null; closing: string | null }> {
+  if (input.isCatalogChoiceReply) {
+    return { intro: null, closing: null };
+  }
+
+  const framePrompt = [
+    "SYSTEM_ROLE:",
+    "You only generate a conversational frame around a canonical grounded body.",
+    "",
+    "TASK:",
+    "- Return STRICT JSON only.",
+    '- Use exactly this shape: {"intro":string|null,"closing":string|null}.',
+    "- Do not rewrite, summarize, compress, paraphrase, reorder, or replace the canonical body.",
+    "- Do not generate the body.",
+    "- The body will be inserted by the system exactly as-is after your output.",
+    "- intro must be optional and very short.",
+    "- closing must be optional and very short.",
+    "- intro and closing must sound natural, consultative, and sales-oriented when appropriate.",
+    "- Do not mention any facts, prices, schedules, links, service names, or details that are not already in the canonical body.",
+    "- Do not duplicate facts already stated in the canonical body.",
+    "- Do not produce lists, bullets, or long paragraphs.",
+    "- Do not ask broad vague questions like '¿Qué información deseas?' or similar.",
+    "",
+    "GROUNDING_RULES:",
+    "- If the turn is grounded business info or grounded catalog, preserve the body exactly.",
+    "- You may only add framing around it.",
+    "- If the user intent is price-like, closing should help the user move toward choosing the best option.",
+    "- If the user intent is schedule/location/info-like, closing should help the user continue naturally.",
+    "- If human handoff is appropriate, closing may suggest continuing with a person.",
+    "",
+    "TURN_METADATA_JSON:",
+    JSON.stringify({
+      fpIntent: input.fpIntent || null,
+      isInfoGeneralOverviewTurn: input.isInfoGeneralOverviewTurn,
+      isResolvedCatalogAnswer: input.isResolvedCatalogAnswer,
+      purchaseIntent: input.commercialPolicy.purchaseIntent,
+      wantsBooking: input.commercialPolicy.wantsBooking,
+      wantsQuote: input.commercialPolicy.wantsQuote,
+      wantsHuman: input.commercialPolicy.wantsHuman,
+      urgency: input.commercialPolicy.urgency,
+      shouldUseSalesTone: input.commercialPolicy.shouldUseSalesTone,
+      shouldUseSoftClosing: input.commercialPolicy.shouldUseSoftClosing,
+      shouldUseDirectClosing: input.commercialPolicy.shouldUseDirectClosing,
+      shouldSuggestHumanHandoff: input.commercialPolicy.shouldSuggestHumanHandoff,
+    }),
+    "",
+    "PROMPT_BASE:",
+    input.promptBaseMem || "",
+    "",
+    "MENSAJE_USUARIO:",
+    input.userInput || "",
+    "",
+    "CUERPO_CANONICO_REFERENCIA:",
+    input.canonicalReply || "",
+  ].join("\n");
+
+  const composed = await answerWithPromptBase({
+    tenantId: input.tenantId,
+    promptBase: framePrompt,
+    userInput: input.userInput,
+    history: input.history,
+    idiomaDestino: input.idiomaDestino,
+    canal: input.canal,
+    maxLines: 6,
+    fallbackText: '{"intro":null,"closing":null}',
+    runtimeCapabilities: {
+      bookingActive: false,
+    },
+    responsePolicy: {
+      mode: "grounded_frame_only",
+      resolvedEntityType: null,
+      resolvedEntityId: null,
+      resolvedEntityLabel: null,
+      canMentionSpecificPrice: false,
+      canSelectSpecificCatalogItem: false,
+      canOfferBookingTimes: false,
+      canUseOfficialLinks: false,
+      unresolvedEntity: false,
+      clarificationTarget: null,
+      singleResolvedEntityOnly: false,
+      allowAlternativeEntities: false,
+      allowCrossSellEntities: false,
+      allowAddOnSuggestions: false,
+      preserveExactBody: true,
+      preserveExactOrder: true,
+      preserveExactBullets: true,
+      preserveExactNumbers: true,
+      preserveExactLinks: true,
+      allowIntro: true,
+      allowOutro: true,
+      allowBodyRewrite: false,
+      mustEndWithSalesQuestion: false,
+      reasoningNotes:
+        "Return only strict JSON with intro and closing. The system owns the body and will insert it unchanged.",
+    },
+  });
+
+  try {
+    const parsed = JSON.parse(String(composed.text || "").trim());
+    return {
+      intro:
+        typeof parsed?.intro === "string" && parsed.intro.trim()
+          ? parsed.intro.trim()
+          : null,
+      closing:
+        typeof parsed?.closing === "string" && parsed.closing.trim()
+          ? parsed.closing.trim()
+          : null,
+    };
+  } catch {
+    return { intro: null, closing: null };
+  }
 }
 
 export type RenderFastpathDmReplyInput = {
@@ -564,8 +702,32 @@ export async function renderFastpathDmReply(
       }
     }
 
+    const frame = await buildGroundedFrameOnly({
+      tenantId,
+      canal,
+      idiomaDestino,
+      userInput,
+      promptBaseMem,
+      history,
+      canonicalReply,
+      commercialPolicy,
+      fpIntent,
+      isInfoGeneralOverviewTurn,
+      isResolvedCatalogAnswer,
+      isCatalogChoiceReply,
+    });
+
+    const finalGroundedReply = [
+      String(frame.intro || "").trim(),
+      canonicalReply,
+      String(frame.closing || "").trim(),
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+      .trim();
+
     return {
-      reply: stripMarkdownLinksForDm(canonicalReply),
+      reply: stripMarkdownLinksForDm(finalGroundedReply),
       ctxPatch,
     };
   }
