@@ -71,6 +71,8 @@ import { resolveBusinessInfoOverviewCanonicalBody } from "../../lib/channels/eng
 import { composeFacetReply } from "../../lib/channels/engine/turn/composeFacetReply";
 
 import { resolveUnhandledTurnFallback } from "../../lib/channels/engine/fallback/resolveUnhandledTurnFallback";
+import { renderGenericPriceSummaryReply } from "../../lib/services/pricing/renderGenericPriceSummaryReply";
+import { normalizeCatalogRole } from "../../lib/catalog/normalizeCatalogRole";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -1244,6 +1246,7 @@ export async function procesarMensajeWhatsApp(
         !shouldUseGuidedEntryOutsideFastpath
       ) {
         const composed = await composeFacetReply({
+          pool,
           tenantId: tenant.id,
           canal,
           idiomaDestino,
@@ -1256,6 +1259,11 @@ export async function procesarMensajeWhatsApp(
           intentFallback: nextIntent,
           detectedFacets: nextDetectedFacets,
           detectedCommercial,
+          normalizeCatalogRole,
+          traducirTexto: async (texto: string, idioma: string, modo?: any) => {
+            return await traducirMensaje(texto, idioma);
+          },
+          renderGenericPriceSummaryReply,
         });
 
         if (composed.handled && composed.reply) {
