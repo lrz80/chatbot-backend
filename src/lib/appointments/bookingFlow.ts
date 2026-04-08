@@ -1,5 +1,4 @@
 // src/lib/appointments/bookingFlow.ts
-import { googleFreeBusy, googleCreateEvent } from "../../services/googleCalendar";
 import { canUseChannel } from "../features";
 import { DateTime } from "luxon";
 import type { BookingCtx } from "./booking/types";
@@ -31,7 +30,6 @@ import {
   parseDateTimeExplicit,
   isWithinBusinessHours,
 } from "./booking/time";
-import { extractBusyBlocks } from "./booking/freebusy";
 import { handleOfferSlots } from "./booking/handlers/offerSlots";
 import { handleAskDaypart } from "./booking/handlers/askDaypart";
 import { handleAskAll } from "./booking/handlers/askAll";
@@ -46,6 +44,8 @@ import {
   wantsManageExisting,
   detectManageExistingAction,
 } from "./booking/signals/manageExistingSignals";
+
+import { BookingProviderOrchestrator } from "./booking/providers/orchestrator";
 
 const BOOKING_FLOW_TTL_MS = 30 * 60 * 1000; // 30 minutos (ajústalo a 15/60 si quieres)
 
@@ -112,108 +112,55 @@ async function bookInGoogle(opts: {
     }
   } catch {}
 
-  const timeMin = start.minus({ minutes: bufferMin }).toISO();
-  const timeMax = end.plus({ minutes: bufferMin }).toISO();
-
-  if (!timeMin || !timeMax) {
-    return { ok: false as const, error: "INVALID_DATETIME" as const, busy: [] as any[] };
-  }
-
   const calendarId = await getTenantCalendarId(tenantId);
   console.log("🧪 [BOOKING] using calendarId", { tenantId, calendarId });
 
-  const fb = await googleFreeBusy({
-    tenantId,
-    timeMin,
-    timeMax,
-    calendarIds: calendarId ? [calendarId, "primary"] : ["primary"],
-  });
+  const phone = (opts.customer_phone || "").trim();
+  const email = (opts.customer_email || "").trim();
 
-    if ((fb as any)?.degraded) {
-    return { ok: false as const, error: "FREEBUSY_DEGRADED" as const, busy: [] as any[] };
-  }
+  const descriptionLines = [
+    "Agendado por Aamy",
+    `Cliente: ${customer_name}`,
+    phone ? `Teléfono: ${phone}` : null,
+    email ? `Email: ${email}` : null,
+  ].filter(Boolean);
 
-  console.log("🧪 [BOOKING] freebusy response", {
-    tenantId,
-    calendarId,
-    timeMin,
-    timeMax,
-    calendarsKeys: Object.keys((fb as any)?.calendars || {}),
-    combinedBusyCount: (fb as any)?.calendars?.combined?.busy?.length ?? null,
-  });
+  const orchestrator = new BookingProviderOrchestrator();
 
-  const calendars = fb?.calendars || {};
-  console.log("FREEBUSY RAW:", {
-    calendarKeys: Object.keys(calendars),
-    combinedBusyCount: calendars?.combined?.busy?.length ?? null,
-  });
-
-  const busy = extractBusyBlocks(fb);
-  console.log("🧪 [BOOKING] busy extracted", {
+  const result = await orchestrator.createExternalBooking({
     tenantId,
     calendarId,
-    extractedCount: busy.length,
-    extractedSample: busy[0] || null,
+    summary: `Reserva: ${customer_name}`,
+    description: descriptionLines.join("\n"),
+    startISO,
+    endISO,
+    timeZone,
+    bufferMin,
   });
 
-  console.log("🧪 [BOOKING] freebusy raw keys", {
-    tenantId,
-    calendarId,
-    calendarsKeys: Object.keys((fb as any)?.calendars || {}),
-  });
-
-  if (busy.length > 0) {
-    return { ok: false as const, error: "SLOT_BUSY" as const, busy };
-  }
-
-    const phone = (opts.customer_phone || "").trim();
-    const email = (opts.customer_email || "").trim();
-
-    const descriptionLines = [
-        "Agendado por Aamy",
-        `Cliente: ${customer_name}`,
-        phone ? `Teléfono: ${phone}` : null,
-        email ? `Email: ${email}` : null,
-    ].filter(Boolean);
-
-    const event = await googleCreateEvent({
-        tenantId,
-        calendarId,
-        summary: `Reserva: ${customer_name}`,
-        description: descriptionLines.join("\n"),
-        startISO,
-        endISO,
-        timeZone,
-    });
-
-    console.log("✅ [BOOKING] googleCreateEvent response", {
-      tenantId,
-      eventId: event?.id,
-      htmlLink: event?.htmlLink,
-      startISO,
-      endISO,
-      timeZone,
-    });
-
-  // ✅ Si Google no devolvió un evento real, FALLA
-  if (!event?.id || !event?.htmlLink) {
-    console.log("❌ [BOOKING] googleCreateEvent failed or returned empty", {
-      tenantId,
-      event,
-    });
-
+  if (!result.ok) {
     return {
       ok: false as const,
-      error: "CREATE_EVENT_FAILED" as const,
-      busy: [] as any[],
+      error: result.error,
+      busy: result.busy,
     };
   }
 
+  console.log("✅ [BOOKING] provider createExternalBooking response", {
+    tenantId,
+    provider: result.provider,
+    eventId: result.event_id,
+    htmlLink: result.htmlLink,
+    startISO,
+    endISO,
+    timeZone,
+  });
+
   return {
     ok: true as const,
-    event_id: event.id,
-    htmlLink: event.htmlLink,
-    meetLink: (event as any)?.meetLink || (event as any)?.hangoutLink || null,
+    event_id: result.event_id,
+    htmlLink: result.htmlLink,
+    meetLink: result.meetLink || null,
   };
 }
 

@@ -1,18 +1,18 @@
 import type { BookingProvider, BookingProviderAdapter } from "./types";
-import { GoogleCalendarAdapter } from "./googleCalendarAdapter";
+import { GoogleCalendarProvider } from "./googleCalendarProvider";
 
 export class BookingProviderRegistry {
   private readonly adapters: Map<BookingProvider, BookingProviderAdapter>;
 
   constructor() {
-    const googleAdapter = new GoogleCalendarAdapter();
+    const google = new GoogleCalendarProvider();
 
     this.adapters = new Map<BookingProvider, BookingProviderAdapter>([
-      ["google_calendar", googleAdapter],
+      ["google_calendar", google],
     ]);
   }
 
-  getAdapter(provider: BookingProvider): BookingProviderAdapter {
+  get(provider: BookingProvider): BookingProviderAdapter {
     const adapter = this.adapters.get(provider);
 
     if (!adapter) {

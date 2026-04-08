@@ -5,64 +5,40 @@ export type BookingProvider =
   | "glofox"
   | "booksy";
 
-export type BookingCustomer = {
-  name?: string | null;
-  email?: string | null;
-  phone?: string | null;
-  locale?: string | null;
-};
-
-export type SearchAvailabilityInput = {
+export type CreateExternalBookingInput = {
   tenantId: string;
-  from: string;
-  to: string;
-  timezone: string;
-  serviceId?: string | null;
-  staffId?: string | null;
-  locationId?: string | null;
+  calendarId: string;
+  summary: string;
+  description?: string;
+  startISO: string;
+  endISO: string;
+  timeZone: string;
+  bufferMin: number;
 };
 
-export type AvailabilitySlot = {
-  startAt: string;
-  endAt: string;
-  provider: BookingProvider;
-  serviceId?: string | null;
-  staffId?: string | null;
-  locationId?: string | null;
-};
-
-export type CreateBookingInput = {
-  tenantId: string;
-  appointmentId: string;
-  channel: string;
-  startAt: string;
-  endAt: string;
-  timezone: string;
-  customer: BookingCustomer;
-  serviceId?: string | null;
-  staffId?: string | null;
-  locationId?: string | null;
-  externalCalendarId?: string | null;
-  notes?: string | null;
-};
-
-export type CreateBookingResult = {
-  bookingExternalId: string;
-  status: "confirmed" | "pending" | "cancelled";
-  startAt: string;
-  endAt: string | null;
-  provider: BookingProvider;
-  raw?: unknown;
-};
+export type CreateExternalBookingResult =
+  | {
+      ok: true;
+      provider: BookingProvider;
+      event_id: string;
+      htmlLink: string | null;
+      meetLink?: string | null;
+    }
+  | {
+      ok: false;
+      provider: BookingProvider;
+      error:
+        | "INVALID_DATETIME"
+        | "FREEBUSY_DEGRADED"
+        | "SLOT_BUSY"
+        | "CREATE_EVENT_FAILED";
+      busy: Array<{ start: string; end: string }>;
+    };
 
 export interface BookingProviderAdapter {
   readonly provider: BookingProvider;
 
-  searchAvailability?(
-    input: SearchAvailabilityInput
-  ): Promise<AvailabilitySlot[]>;
-
-  createBooking(
-    input: CreateBookingInput
-  ): Promise<CreateBookingResult>;
+  createExternalBooking(
+    input: CreateExternalBookingInput
+  ): Promise<CreateExternalBookingResult>;
 }

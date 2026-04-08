@@ -1,28 +1,21 @@
-import type { Pool } from "pg";
-import type { CreateBookingInput, CreateBookingResult } from "./types";
 import { BookingProviderRegistry } from "./registry";
-import { resolveTenantBookingProvider } from "./resolveTenantBookingProvider";
-
-type Deps = {
-  pool: Pool;
-};
+import type { CreateExternalBookingInput, CreateExternalBookingResult } from "./types";
 
 export class BookingProviderOrchestrator {
-  private readonly pool: Pool;
   private readonly registry: BookingProviderRegistry;
 
-  constructor(deps: Deps) {
-    this.pool = deps.pool;
+  constructor() {
     this.registry = new BookingProviderRegistry();
   }
 
-  async createBooking(input: CreateBookingInput): Promise<CreateBookingResult> {
-    const provider = await resolveTenantBookingProvider({
-      pool: this.pool,
-      tenantId: input.tenantId,
-    });
+  async createExternalBooking(
+    input: CreateExternalBookingInput
+  ): Promise<CreateExternalBookingResult> {
+    // Fase 1: hard default controlado para no romper nada.
+    // Más adelante esto sale de DB por tenant.
+    const provider = "google_calendar" as const;
 
-    const adapter = this.registry.getAdapter(provider);
-    return adapter.createBooking(input);
+    const adapter = this.registry.get(provider);
+    return adapter.createExternalBooking(input);
   }
 }
