@@ -411,4 +411,42 @@ router.get("/sandbox/locations", async (req, res) => {
   }
 });
 
+router.get("/sandbox/team-members", async (req, res) => {
+  try {
+    const accessToken = String(req.query?.accessToken || "").trim();
+
+    if (!accessToken) {
+      return res.status(400).json({
+        ok: false,
+        error: "ACCESS_TOKEN_REQUIRED",
+      });
+    }
+
+    const response = await fetch(
+      "https://connect.squareupsandbox.com/v2/bookings/team-member-profiles",
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Square-Version": "2026-03-18",
+        },
+      }
+    );
+
+    const data = await response.json();
+
+    return res.status(response.ok ? 200 : response.status).json({
+      ok: response.ok,
+      data,
+    });
+  } catch (error) {
+    console.error("[SQUARE_SANDBOX_TEAM_MEMBERS] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_SANDBOX_TEAM_MEMBERS_FAILED",
+    });
+  }
+});
+
 export default router;
