@@ -93,18 +93,91 @@ export async function getConversationState(
   };
 }
 
-export async function setConversationState(params: {
+export function setConversationState(params: {
   tenantId: string;
   canal: string;
   senderId: string;
   activeFlow: string | null;
   activeStep: string | null;
   contextPatch?: Record<string, any>;
-}) {
-  const { tenantId, canal, senderId, activeFlow, activeStep, contextPatch } = params;
+}): Promise<void>;
+
+export function setConversationState(
+  tenantId: string,
+  canal: string,
+  senderId: string,
+  state: {
+    activeFlow?: string | null;
+    activeStep?: string | null;
+    context?: Record<string, any>;
+    contextPatch?: Record<string, any>;
+  }
+): Promise<void>;
+
+export async function setConversationState(
+  paramsOrTenantId:
+    | {
+        tenantId: string;
+        canal: string;
+        senderId: string;
+        activeFlow: string | null;
+        activeStep: string | null;
+        contextPatch?: Record<string, any>;
+      }
+    | string,
+  canalArg?: string,
+  senderIdArg?: string,
+  stateArg?: {
+    activeFlow?: string | null;
+    activeStep?: string | null;
+    context?: Record<string, any>;
+    contextPatch?: Record<string, any>;
+  }
+): Promise<void> {
+  let tenantId: string;
+  let canal: string;
+  let senderId: string;
+  let activeFlow: string | null;
+  let activeStep: string | null;
+  let contextPatch: Record<string, any>;
+
+  if (typeof paramsOrTenantId === "string") {
+    tenantId = paramsOrTenantId;
+    canal = canalArg ?? "";
+    senderId = senderIdArg ?? "";
+
+    const state = stateArg ?? {};
+
+    activeFlow = state.activeFlow ?? null;
+    activeStep = state.activeStep ?? null;
+    contextPatch =
+      (state.context && typeof state.context === "object" ? state.context : null) ||
+      (state.contextPatch && typeof state.contextPatch === "object"
+        ? state.contextPatch
+        : null) ||
+      {};
+  } else {
+    tenantId = paramsOrTenantId.tenantId;
+    canal = paramsOrTenantId.canal;
+    senderId = paramsOrTenantId.senderId;
+    activeFlow = paramsOrTenantId.activeFlow ?? null;
+    activeStep = paramsOrTenantId.activeStep ?? null;
+    contextPatch =
+      paramsOrTenantId.contextPatch &&
+      typeof paramsOrTenantId.contextPatch === "object"
+        ? paramsOrTenantId.contextPatch
+        : {};
+  }
+
+  if (!tenantId || !canal || !senderId) {
+    throw new Error("setConversationState: tenantId, canal y senderId son requeridos");
+  }
 
   const existing = await getConversationState(tenantId, canal, senderId);
-  const mergedContext = { ...(existing?.context || {}), ...(contextPatch || {}) };
+  const mergedContext = {
+    ...(existing?.context || {}),
+    ...(contextPatch || {}),
+  };
 
   await pool.query(
     `
