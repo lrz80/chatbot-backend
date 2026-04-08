@@ -7,7 +7,10 @@ import {
 type SaveSquareConnectionInput = {
   tenantId: string;
   accessToken: string;
+  refreshToken?: string;
+  merchantId?: string;
   locationId: string;
+  expiresAt?: string | null;
   environment: SquareEnvironment;
 };
 
@@ -34,7 +37,12 @@ export async function saveSquareConnection(
 ): Promise<SaveSquareConnectionResult> {
   const tenantId = String(input.tenantId || "").trim();
   const accessToken = String(input.accessToken || "").trim();
+  const refreshToken = String(input.refreshToken || "").trim();
+  const merchantId = String(input.merchantId || "").trim();
   const locationId = String(input.locationId || "").trim();
+  const expiresAt =
+    input.expiresAt == null ? null : String(input.expiresAt).trim() || null;
+
   const environment: SquareEnvironment =
     input.environment === "sandbox" ? "sandbox" : "production";
 
@@ -73,10 +81,14 @@ export async function saveSquareConnection(
       tenantId,
       provider: "square",
       status: "error",
+      externalAccountId: merchantId || null,
       externalLocationId: locationId,
       accessToken,
+      refreshToken: refreshToken || null,
       metadata: {
         environment,
+        expires_at: expiresAt,
+        merchant_id: merchantId || null,
         last_error: locationResult.error,
         last_error_status: locationResult.status,
       },
@@ -91,16 +103,21 @@ export async function saveSquareConnection(
   }
 
   const squareLocation = locationResult.data?.location;
+  const resolvedMerchantId =
+    String(squareLocation?.merchant_id || "").trim() || merchantId || null;
 
   const connection = await upsertBookingProviderConnection({
     tenantId,
     provider: "square",
     status: "active",
-    externalAccountId: squareLocation?.merchant_id ?? null,
+    externalAccountId: resolvedMerchantId,
     externalLocationId: squareLocation?.id ?? locationId,
     accessToken,
+    refreshToken: refreshToken || null,
     metadata: {
       environment,
+      expires_at: expiresAt,
+      merchant_id: resolvedMerchantId,
       location_name: squareLocation?.name ?? null,
       square_location_status: squareLocation?.status ?? null,
     },
@@ -113,7 +130,7 @@ export async function saveSquareConnection(
       id: squareLocation?.id ?? null,
       status: squareLocation?.status ?? null,
       name: squareLocation?.name ?? null,
-      merchantId: squareLocation?.merchant_id ?? null,
+      merchantId: resolvedMerchantId,
     },
   };
 }
