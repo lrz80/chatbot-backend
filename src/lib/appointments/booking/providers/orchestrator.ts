@@ -1,4 +1,6 @@
+//src/lib/appointments/booking/providers/orchestrator.ts
 import { BookingProviderRegistry } from "./registry";
+import { resolveTenantBookingProvider } from "./resolveTenantBookingProvider";
 import type { CreateExternalBookingInput, CreateExternalBookingResult } from "./types";
 
 export class BookingProviderOrchestrator {
@@ -11,9 +13,7 @@ export class BookingProviderOrchestrator {
   async createExternalBooking(
     input: CreateExternalBookingInput
   ): Promise<CreateExternalBookingResult> {
-    // Fase 1: hard default controlado para no romper nada.
-    // Más adelante esto sale de DB por tenant.
-    const provider = "google_calendar" as const;
+    const provider = await resolveTenantBookingProvider(input.tenantId);
 
     const adapter = this.registry.get(provider);
     return adapter.createExternalBooking(input);

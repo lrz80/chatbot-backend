@@ -1,17 +1,11 @@
-import type { Pool } from "pg";
+//src/lib/appointments/booking/providers/resolveTenantBookingProvider.ts
+import pool from "../../../../lib/db";
 import type { BookingProvider } from "./types";
 
-type Args = {
-  pool: Pool;
-  tenantId: string;
-};
-
 export async function resolveTenantBookingProvider(
-  args: Args
+  tenantId: string
 ): Promise<BookingProvider> {
-  const { pool, tenantId } = args;
-
-  const result = await pool.query(
+  const { rows } = await pool.query(
     `
       SELECT booking_provider
       FROM tenants
@@ -21,15 +15,15 @@ export async function resolveTenantBookingProvider(
     [tenantId]
   );
 
-  const value = result.rows[0]?.booking_provider;
+  const raw = String(rows[0]?.booking_provider || "").trim();
 
   if (
-    value === "google_calendar" ||
-    value === "square" ||
-    value === "glofox" ||
-    value === "booksy"
+    raw === "google_calendar" ||
+    raw === "square" ||
+    raw === "glofox" ||
+    raw === "booksy"
   ) {
-    return value;
+    return raw;
   }
 
   return "google_calendar";
