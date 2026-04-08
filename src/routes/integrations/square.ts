@@ -622,22 +622,14 @@ router.post("/sandbox/availability", async (req, res) => {
     const locationId = String(req.body?.locationId || "").trim();
     const teamMemberId = String(req.body?.teamMemberId || "").trim();
     const serviceVariationId = String(req.body?.serviceVariationId || "").trim();
-
-    const serviceVariationVersionRaw = req.body?.serviceVariationVersion;
     const startAt = String(req.body?.startAt || "").trim();
     const endAt = String(req.body?.endAt || "").trim();
-
-    const serviceVariationVersion =
-      typeof serviceVariationVersionRaw === "string" || typeof serviceVariationVersionRaw === "number"
-        ? Number(serviceVariationVersionRaw)
-        : NaN;
 
     if (
       !accessToken ||
       !locationId ||
       !teamMemberId ||
       !serviceVariationId ||
-      !Number.isFinite(serviceVariationVersion) ||
       !startAt ||
       !endAt
     ) {
@@ -667,7 +659,6 @@ router.post("/sandbox/availability", async (req, res) => {
               segment_filters: [
                 {
                   service_variation_id: serviceVariationId,
-                  service_variation_version: serviceVariationVersion,
                   team_member_id_filter: {
                     any: [teamMemberId],
                   },
