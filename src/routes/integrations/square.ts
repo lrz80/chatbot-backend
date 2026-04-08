@@ -71,6 +71,8 @@ function getSquareConfig(environment: SquareEnvironment) {
 
 function getRequiredScopes(): string[] {
   return [
+    "APPOINTMENTS_READ",
+    "APPOINTMENTS_WRITE",
     "APPOINTMENTS_ALL_READ",
     "APPOINTMENTS_ALL_WRITE",
     "APPOINTMENTS_BUSINESS_SETTINGS_READ",
@@ -620,19 +622,11 @@ router.post("/sandbox/availability", async (req, res) => {
   try {
     const accessToken = String(req.body?.accessToken || "").trim();
     const locationId = String(req.body?.locationId || "").trim();
-    const teamMemberId = String(req.body?.teamMemberId || "").trim();
     const serviceVariationId = String(req.body?.serviceVariationId || "").trim();
     const startAt = String(req.body?.startAt || "").trim();
     const endAt = String(req.body?.endAt || "").trim();
 
-    if (
-      !accessToken ||
-      !locationId ||
-      !teamMemberId ||
-      !serviceVariationId ||
-      !startAt ||
-      !endAt
-    ) {
+    if (!accessToken || !locationId || !serviceVariationId || !startAt || !endAt) {
       return res.status(400).json({
         ok: false,
         error: "MISSING_REQUIRED_FIELDS",
