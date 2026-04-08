@@ -670,6 +670,7 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
   const canEnterCatalogFastpath =
     !shouldBypassCatalogFollowupReuse &&
     (
+      hasPendingCatalogChoice ||
       Boolean(catalogRoutingSignal?.shouldRouteCatalog) ||
       isStructuredCatalogTurn
     );
