@@ -66,10 +66,6 @@ function shouldBypassWriterModel(input: {
   shouldUseGroundedFrameOnly: boolean;
   isInfoGeneralOverviewTurn: boolean;
 }): boolean {
-  if (input.isCatalogChoiceReply) {
-    return true;
-  }
-
   if (input.isResolvedCatalogAnswer) {
     return true;
   }
@@ -638,14 +634,16 @@ export async function renderFastpathDmReply(
       isCatalogListReply ||
       mustPreserveResolvedCanonicalBody ||
       isInfoGeneralOverviewTurn,
-    allowIntro: shouldAllowIntro,
-    allowOutro: shouldAllowOutro,
+    allowIntro: isCatalogChoiceReply ? true : shouldAllowIntro,
+    allowOutro: isCatalogChoiceReply ? false : shouldAllowOutro,
     allowBodyRewrite: false,
-    mustEndWithSalesQuestion: shouldEndWithSalesQuestion,
+    mustEndWithSalesQuestion: isCatalogChoiceReply
+      ? false
+      : shouldEndWithSalesQuestion,
     reasoningNotes: isServiceChoiceReply
-      ? "Catalog service choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one service."
+      ? "Catalog service choice turn. The canonical options body is owned by the system. Write one short conversational intro that helps the user choose one service. Do not rewrite, summarize, rename, reorder, or replace the numbered options. Do not add a closing."
       : isVariantChoiceReply
-      ? "Catalog variant choice turn. Do not add any intro, outro, summary, paraphrase, persuasion, or semantic framing. Return the canonical choice body exactly as provided so the user can select one variant."
+      ? "Catalog variant choice turn. The canonical options body is owned by the system. Write one short conversational intro tied to the selected service so the user can choose one variant. Do not rewrite, summarize, rename, reorder, or replace the numbered options. Do not add a closing."
       : isCatalogListReply
       ? [
           "Grounded catalog list turn. The canonical body is the source of truth and must be preserved exactly.",
