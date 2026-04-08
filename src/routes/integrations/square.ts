@@ -423,7 +423,7 @@ router.get("/sandbox/team-members", async (req, res) => {
     }
 
     const response = await fetch(
-      "https://connect.squareupsandbox.com/v2/bookings/team-member-profiles",
+      "https://connect.squareupsandbox.com/v2/bookings/team-member-booking-profiles",
       {
         method: "GET",
         headers: {
