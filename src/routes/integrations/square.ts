@@ -616,4 +616,82 @@ router.post("/sandbox/bookings", async (req, res) => {
   }
 });
 
+router.post("/sandbox/availability", async (req, res) => {
+  try {
+    const accessToken = String(req.body?.accessToken || "").trim();
+    const locationId = String(req.body?.locationId || "").trim();
+    const teamMemberId = String(req.body?.teamMemberId || "").trim();
+    const serviceVariationId = String(req.body?.serviceVariationId || "").trim();
+
+    const serviceVariationVersionRaw = req.body?.serviceVariationVersion;
+    const startAt = String(req.body?.startAt || "").trim();
+    const endAt = String(req.body?.endAt || "").trim();
+
+    const serviceVariationVersion =
+      typeof serviceVariationVersionRaw === "string" || typeof serviceVariationVersionRaw === "number"
+        ? Number(serviceVariationVersionRaw)
+        : NaN;
+
+    if (
+      !accessToken ||
+      !locationId ||
+      !teamMemberId ||
+      !serviceVariationId ||
+      !Number.isFinite(serviceVariationVersion) ||
+      !startAt ||
+      !endAt
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "MISSING_REQUIRED_FIELDS",
+      });
+    }
+
+    const response = await fetch(
+      "https://connect.squareupsandbox.com/v2/bookings/availability/search",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Square-Version": "2026-01-22",
+        },
+        body: JSON.stringify({
+          query: {
+            filter: {
+              start_at_range: {
+                start_at: startAt,
+                end_at: endAt,
+              },
+              location_id: locationId,
+              segment_filters: [
+                {
+                  service_variation_id: serviceVariationId,
+                  service_variation_version: serviceVariationVersion,
+                  team_member_id_filter: {
+                    any: [teamMemberId],
+                  },
+                },
+              ],
+            },
+          },
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    return res.status(response.ok ? 200 : response.status).json({
+      ok: response.ok,
+      data,
+    });
+  } catch (error) {
+    console.error("[SQUARE_SANDBOX_AVAILABILITY] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_SANDBOX_AVAILABILITY_FAILED",
+    });
+  }
+});
+
 export default router;
