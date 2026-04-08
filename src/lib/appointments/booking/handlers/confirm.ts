@@ -441,8 +441,7 @@ if (!startISO || !endISO) {
   }
 
   // Si está confirmed pero NO es el mismo slot, NO bloquees.
-  // Continúa al bookInGoogle y crea otra cita.
-
+  
   // 8) si no hay provider disponible, salir limpio
   if (!providerAvailable) {
     return {

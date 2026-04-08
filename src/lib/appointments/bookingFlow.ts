@@ -65,7 +65,7 @@ async function getTenantCalendarId(tenantId: string): Promise<string> {
   return rows[0]?.calendar_id || "primary";
 }
 
-async function bookInGoogle(opts: {
+async function createExternalBookingForTenant(opts: {
   tenantId: string;
   customer_name: string;
   customer_phone?: string | null;
@@ -285,7 +285,7 @@ export async function bookingFlowMvp(opts: {
   const lead = Number(apptSettings.minLeadMinutes);
   const minLeadMinutes = Number.isFinite(lead) && lead >= 0 ? lead : 0;
 
-  const bookInGoogleTenant = (args: {
+  const createExternalBookingForTenantBound = (args: {
     tenantId: string;
     customer_name: string;
     customer_phone?: string | null;
@@ -294,7 +294,7 @@ export async function bookingFlowMvp(opts: {
     endISO: string;
     timeZone: string;
     bufferMin: number;
-  }) => bookInGoogle({ ...args, minLeadMinutes });
+  }) => createExternalBookingForTenant({ ...args, minLeadMinutes });
 
   const parseDateTimeExplicitTenant = (input: string, tz: string, dur: number) =>
   parseDateTimeExplicit(input, tz, dur, minLeadMinutes);
@@ -459,7 +459,7 @@ if (wantsBooking && bookingLink) {
     };
 }
 
-// 3) Si NO hay link y Google NO está conectado: no inicies flujo
+// 3) Si NO hay link y no hay provider disponible: no inicies flujo
 if (wantsBooking && !bookingLink && !googleConnected) {
   return {
     handled: true,
@@ -614,46 +614,46 @@ if (booking.step === "ask_email_phone") {
     });
   }
 
-  if (booking.step === "confirm") {
-    const effectiveLang: LangCode = (booking?.lang as LangCode) || idioma;
-
-    // ===============================
-    // 🔧 Leer modo de link para este tenant
-    // ===============================
-    const { rows } = await pool.query(
-      `SELECT booking_link_mode
-      FROM channel_settings
-      WHERE tenant_id = $1
-      LIMIT 1`,
-      [tenantId]
-    );
-
-    const bookingLinkMode: "meet" | "calendar" =
-      rows[0]?.booking_link_mode === "meet" ? "meet" : "calendar";
-
     // ===============================
     // 🧩 Ejecutar confirmación
     // ===============================
-    return handleConfirm({
-      tenantId,
-      canal,
-      contacto,
-      idioma: effectiveLang,
-      userText,
-      booking,
-      timeZone,
-      durationMin,
-      bufferMin,
-      hours,
-      minLeadMinutes,
-      providerAvailable: googleConnected,
-      createPendingAppointmentOrGetExisting,
-      markAppointmentFailed,
-      markAppointmentConfirmed,
-      createExternalBooking: bookInGoogleTenant,
-      bookingLinkMode,
-    });
-  }
+    if (booking.step === "confirm") {
+      const effectiveLang: LangCode = (booking?.lang as LangCode) || idioma;
 
-  return { handled: false };
+      const { rows } = await pool.query(
+        `SELECT booking_link_mode
+        FROM channel_settings
+        WHERE tenant_id = $1
+        LIMIT 1`,
+        [tenantId]
+      );
+
+      const bookingLinkMode: "meet" | "calendar" =
+        rows[0]?.booking_link_mode === "meet" ? "meet" : "calendar";
+
+      return handleConfirm({
+        tenantId,
+        canal,
+        contacto,
+        idioma: effectiveLang,
+        userText,
+        booking,
+        timeZone,
+        durationMin,
+        bufferMin,
+        hours,
+        minLeadMinutes,
+
+        providerAvailable: googleConnected,
+
+        createPendingAppointmentOrGetExisting,
+        markAppointmentFailed,
+        markAppointmentConfirmed,
+        createExternalBooking: createExternalBookingForTenantBound,
+
+        bookingLinkMode,
+      });
+    }
+
+    return { handled: false };
 }

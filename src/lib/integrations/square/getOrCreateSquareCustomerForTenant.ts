@@ -1,5 +1,5 @@
 import { getSquareConnectionForTenant } from "./getSquareConnectionForTenant";
-import { createSquareCustomer, type SquareEnvironment } from "./createSquareCustomer";
+import { createSquareCustomer } from "./createSquareCustomer";
 import {
   findSquareCustomerByContact,
   type SquareCustomer,
@@ -53,7 +53,7 @@ export async function getOrCreateSquareCustomerForTenant(
 
   const findResult = await findSquareCustomerByContact({
     accessToken: connection.accessToken,
-    environment: connection.environment as SquareEnvironment,
+    environment: connection.environment,
     email,
     phoneNumber,
   });
