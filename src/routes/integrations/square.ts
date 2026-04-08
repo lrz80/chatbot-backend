@@ -4,6 +4,8 @@ import crypto from "crypto";
 import fetch from "node-fetch";
 import pool from "../../lib/db";
 import { saveSquareConnection } from "../../lib/appointments/booking/providers/saveSquareConnection";
+import { searchSquareAvailability } from "../../lib/integrations/square/searchSquareAvailability";
+import { createSquareBooking } from "../../lib/integrations/square/createSquareBooking";
 
 const router = Router();
 
@@ -546,6 +548,7 @@ router.post("/sandbox/bookings", async (req, res) => {
     const locationId = String(req.body?.locationId || "").trim();
     const teamMemberId = String(req.body?.teamMemberId || "").trim();
     const serviceVariationId = String(req.body?.serviceVariationId || "").trim();
+
     const serviceVariationVersionRaw = req.body?.serviceVariationVersion;
     const durationMinutesRaw = req.body?.durationMinutes;
 
@@ -559,55 +562,28 @@ router.post("/sandbox/bookings", async (req, res) => {
         ? Number(durationMinutesRaw)
         : NaN;
 
-    if (
-      !accessToken ||
-      !customerId ||
-      !startAt ||
-      !locationId ||
-      !teamMemberId ||
-      !serviceVariationId ||
-      !Number.isFinite(serviceVariationVersion) ||
-      !Number.isFinite(durationMinutes)
-    ) {
-      return res.status(400).json({
-        ok: false,
-        error: "MISSING_REQUIRED_FIELDS",
-      });
+    const result = await createSquareBooking({
+      accessToken,
+      environment: "sandbox",
+      customerId,
+      startAt,
+      locationId,
+      teamMemberId,
+      serviceVariationId,
+      serviceVariationVersion,
+      durationMinutes,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
     }
 
-    const response = await fetch(
-      "https://connect.squareupsandbox.com/v2/bookings",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-          "Square-Version": "2026-01-22",
-        },
-        body: JSON.stringify({
-          idempotency_key: crypto.randomUUID(),
-          booking: {
-            customer_id: customerId,
-            start_at: startAt,
-            location_id: locationId,
-            appointment_segments: [
-              {
-                duration_minutes: durationMinutes,
-                team_member_id: teamMemberId,
-                service_variation_id: serviceVariationId,
-                service_variation_version: serviceVariationVersion,
-              },
-            ],
-          },
-        }),
-      }
-    );
-
-    const data = await response.json();
-
-    return res.status(response.ok ? 200 : response.status).json({
-      ok: response.ok,
-      data,
+    return res.status(200).json({
+      ok: true,
+      data: {
+        booking: result.booking,
+        errors: [],
+      },
     });
   } catch (error) {
     console.error("[SQUARE_SANDBOX_CREATE_BOOKING] unexpected error", error);
@@ -626,46 +602,25 @@ router.post("/sandbox/availability", async (req, res) => {
     const startAt = String(req.body?.startAt || "").trim();
     const endAt = String(req.body?.endAt || "").trim();
 
-    if (!accessToken || !locationId || !serviceVariationId || !startAt || !endAt) {
-      return res.status(400).json({
-        ok: false,
-        error: "MISSING_REQUIRED_FIELDS",
-      });
+    const result = await searchSquareAvailability({
+      accessToken,
+      environment: "sandbox",
+      locationId,
+      serviceVariationId,
+      startAt,
+      endAt,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
     }
 
-    const response = await fetch(
-      "https://connect.squareupsandbox.com/v2/bookings/availability/search",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-          "Square-Version": "2026-01-22",
-        },
-        body: JSON.stringify({
-          query: {
-            filter: {
-              start_at_range: {
-                start_at: startAt,
-                end_at: endAt,
-              },
-              location_id: locationId,
-              segment_filters: [
-                {
-                  service_variation_id: serviceVariationId,
-                },
-              ],
-            },
-          },
-        }),
-      }
-    );
-
-    const data = await response.json();
-
-    return res.status(response.ok ? 200 : response.status).json({
-      ok: response.ok,
-      data,
+    return res.status(200).json({
+      ok: true,
+      data: {
+        availabilities: result.availabilities,
+        errors: [],
+      },
     });
   } catch (error) {
     console.error("[SQUARE_SANDBOX_AVAILABILITY] unexpected error", error);
