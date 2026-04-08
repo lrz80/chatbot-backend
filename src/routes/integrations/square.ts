@@ -256,10 +256,7 @@ router.get("/oauth/start", async (req, res) => {
     authUrl.searchParams.set("state", state);
     authUrl.searchParams.set("redirect_uri", config.redirectUri);
 
-    return res.status(200).json({
-      ok: true,
-      url: authUrl.toString(),
-    });
+    return res.redirect(authUrl.toString());
   } catch (error) {
     console.error("[SQUARE_OAUTH_START] unexpected error", error);
     return res.status(500).json({
