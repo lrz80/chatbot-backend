@@ -1,3 +1,4 @@
+//src/lib/appointments/booking/providers/registry.ts
 import type { BookingProvider, BookingProviderAdapter } from "./types";
 import { GoogleCalendarProvider } from "./googleCalendarProvider";
 import { SquareProvider } from "./squareProvider";

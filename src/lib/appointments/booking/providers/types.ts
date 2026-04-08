@@ -7,13 +7,19 @@ export type BookingProvider =
 
 export type CreateExternalBookingInput = {
   tenantId: string;
-  calendarId: string;
   summary: string;
   description?: string;
   startISO: string;
   endISO: string;
   timeZone: string;
   bufferMin: number;
+
+  /**
+   * Contexto opcional del provider.
+   * No todos los providers usan calendarId.
+   * Google sí puede necesitarlo; otros providers pueden ignorarlo.
+   */
+  calendarId?: string | null;
 };
 
 export type CreateExternalBookingResult =

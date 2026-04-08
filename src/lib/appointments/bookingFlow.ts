@@ -5,7 +5,6 @@ import type { BookingCtx } from "./booking/types";
 import {
   getAppointmentSettings,
   getBusinessHours,
-  isGoogleConnected,
   loadBookingTerms,
   upsertClienteBookingData,
   markAppointmentConfirmed,
@@ -46,6 +45,7 @@ import {
 } from "./booking/signals/manageExistingSignals";
 
 import { BookingProviderOrchestrator } from "./booking/providers/orchestrator";
+import { resolveTenantBookingProvider } from "./booking/providers/resolveTenantBookingProvider";
 
 const BOOKING_FLOW_TTL_MS = 30 * 60 * 1000; // 30 minutos (ajústalo a 15/60 si quieres)
 
@@ -275,9 +275,16 @@ export async function bookingFlowMvp(opts: {
 
   const timeZone = booking.timeZone || apptSettings.timeZone || "America/New_York";
 
-  const calendarId = await getTenantCalendarId(tenantId);
+  const resolvedProvider = await resolveTenantBookingProvider(tenantId);
+  const providerAvailable = !!resolvedProvider;
+
+  const calendarId =
+    resolvedProvider === "google_calendar"
+      ? await getTenantCalendarId(tenantId)
+      : null;
 
   (booking as any).calendar_id = calendarId;
+  (booking as any).provider = resolvedProvider;
 
   const durationMin = apptSettings.durationMin ?? 30;
   const bufferMin = apptSettings.bufferMin ?? 10;
@@ -411,7 +418,7 @@ export async function bookingFlowMvp(opts: {
   const bookingEnabled = !!gate.settings_enabled;
   console.log("📅 [BOOKING] gate:", { settings_enabled: gate.settings_enabled, plan_enabled: gate.plan_enabled, enabled: gate.enabled });
 
-  const googleConnected = await isGoogleConnected(tenantId);
+  const providerConnected = providerAvailable;
 
   const bookingLink = opts.bookingLink ? String(opts.bookingLink).trim() : null;
 
@@ -460,7 +467,7 @@ if (wantsBooking && bookingLink) {
 }
 
 // 3) Si NO hay link y no hay provider disponible: no inicies flujo
-if (wantsBooking && !bookingLink && !googleConnected) {
+if (wantsBooking && !bookingLink && !providerAvailable) {
   return {
     handled: true,
     reply: idioma === "es"
@@ -644,7 +651,7 @@ if (booking.step === "ask_email_phone") {
         hours,
         minLeadMinutes,
 
-        providerAvailable: googleConnected,
+        providerAvailable,
 
         createPendingAppointmentOrGetExisting,
         markAppointmentFailed,
