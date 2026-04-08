@@ -1,3 +1,4 @@
+//src/lib/channels/engine/fastpath/renderFastpathDmReply.ts
 import type { Canal } from "../../../detectarIntencion";
 import type { LangCode } from "../../../i18n/lang";
 import { getRecentHistoryForModel } from "../messages/getRecentHistoryForModel";
@@ -126,140 +127,38 @@ function isBusinessInfoReply(input: {
   return input.fpSource.startsWith("business_info");
 }
 
-async function renderCatalogChoiceBody(input: {
-  tenantId: string;
-  canal: Canal;
-  idiomaDestino: LangCode;
-  userInput: string;
-  promptBaseMem: string;
-  history: ChatCompletionMessageParam[];
+function renderCatalogChoiceBody(input: {
   catalogPayload:
     | Extract<CatalogPayload, { kind: "service_choice" }>
     | Extract<CatalogPayload, { kind: "variant_choice" }>;
-}): Promise<string> {
+}): string {
   const options = Array.isArray(input.catalogPayload.options)
     ? input.catalogPayload.options
         .map((option, idx) => {
           const label = String(option.label || "").trim();
           if (!label) return null;
 
-          return {
-            index: idx + 1,
-            label,
-            kind: option.kind,
-            serviceId: option.serviceId,
-            variantId: option.kind === "variant" ? option.variantId : null,
-            serviceName:
-              "serviceName" in option && option.serviceName
-                ? String(option.serviceName).trim()
-                : null,
-            variantName:
-              option.kind === "variant" && option.variantName
-                ? String(option.variantName).trim()
-                : null,
-          };
+          return `${idx + 1}) ${label}`;
         })
-        .filter((value): value is NonNullable<typeof value> => Boolean(value))
+        .filter((value): value is string => Boolean(value))
     : [];
 
-  const structuredChoice = {
-    kind: input.catalogPayload.kind,
-    originalIntent: input.catalogPayload.originalIntent ?? null,
-    serviceId:
-      input.catalogPayload.kind === "variant_choice"
-        ? input.catalogPayload.serviceId
-        : null,
-    serviceName:
-      input.catalogPayload.kind === "variant_choice"
-        ? normalizeText(input.catalogPayload.serviceName) || null
-        : null,
-    options,
-  };
+  const optionsBlock = options.join("\n").trim();
 
-  const deterministicChoiceBody = options
-    .map((option) => `${option.index}) ${option.label}`)
-    .join("\n")
-    .trim();
-
-  const prompt = [
-    "SYSTEM_ROLE:",
-    "You write the final customer-facing DM message for a catalog clarification turn.",
-    "",
-    "TASK:",
-    "- Return STRICT JSON only.",
-    '- Use exactly this shape: {"text":"..."}',
-    "- Write a short natural DM message in the user's language.",
-    "- Use only STRUCTURED_CHOICE_JSON as source of truth.",
-    "- Preserve each option label exactly as provided.",
-    "- Present the options as a numbered list.",
-    "- Do not invent prices, includes, schedules, links, benefits, or extra facts.",
-    "- Do not convert the turn into a generic vague question.",
-    "- If kind is variant_choice, keep the response tied to the selected service.",
-    "",
-    "PROMPT_BASE:",
-    input.promptBaseMem || "",
-    "",
-    "MENSAJE_USUARIO:",
-    input.userInput || "",
-    "",
-    "STRUCTURED_CHOICE_JSON:",
-    JSON.stringify(structuredChoice),
-  ].join("\n");
-
-  const composed = await answerWithPromptBase({
-    tenantId: input.tenantId,
-    promptBase: prompt,
-    userInput: input.userInput,
-    history: input.history,
-    idiomaDestino: input.idiomaDestino,
-    canal: input.canal,
-    maxLines: 8,
-    runtimeCapabilities: {
-      bookingActive: false,
-    },
-    responsePolicy: {
-      mode: "normal",
-      resolvedEntityType: null,
-      resolvedEntityId:
-        input.catalogPayload.kind === "variant_choice"
-          ? input.catalogPayload.serviceId
-          : null,
-      resolvedEntityLabel:
-        input.catalogPayload.kind === "variant_choice"
-          ? normalizeText(input.catalogPayload.serviceName) || null
-          : null,
-      canMentionSpecificPrice: false,
-      canSelectSpecificCatalogItem: true,
-      canOfferBookingTimes: false,
-      canUseOfficialLinks: false,
-      unresolvedEntity: true,
-      clarificationTarget:
-        input.catalogPayload.kind === "service_choice" ? "service" : "variant",
-      singleResolvedEntityOnly: false,
-      allowAlternativeEntities: false,
-      allowCrossSellEntities: false,
-      allowAddOnSuggestions: false,
-      preserveExactBody: false,
-      preserveExactOrder: true,
-      preserveExactBullets: true,
-      preserveExactNumbers: true,
-      preserveExactLinks: false,
-      allowIntro: false,
-      allowOutro: false,
-      allowBodyRewrite: true,
-      mustEndWithSalesQuestion: false,
-      reasoningNotes:
-        "Render a customer-facing clarification reply from structured choice data only. Preserve option labels exactly.",
-    },
-  });
-
-  const finalText = String(composed.text || "").trim();
-
-  if (finalText) {
-    return finalText;
+  if (!optionsBlock) {
+    return "";
   }
 
-  return deterministicChoiceBody;
+  const serviceName =
+    input.catalogPayload.kind === "variant_choice"
+      ? normalizeText(input.catalogPayload.serviceName)
+      : "";
+
+  if (serviceName) {
+    return [serviceName, "", optionsBlock].join("\n").trim();
+  }
+
+  return optionsBlock;
 }
 
 function buildTenantClosingPolicyInstruction(promptBaseMem: string): string | null {
@@ -550,25 +449,13 @@ export async function renderFastpathDmReply(
 
   const canonicalReply = await (async () => {
     if (catalogPayload?.kind === "service_choice") {
-      return await renderCatalogChoiceBody({
-        tenantId,
-        canal,
-        idiomaDestino,
-        userInput,
-        promptBaseMem,
-        history,
+      return renderCatalogChoiceBody({
         catalogPayload,
       });
     }
 
     if (catalogPayload?.kind === "variant_choice") {
-      return await renderCatalogChoiceBody({
-        tenantId,
-        canal,
-        idiomaDestino,
-        userInput,
-        promptBaseMem,
-        history,
+      return renderCatalogChoiceBody({
         catalogPayload,
       });
     }
