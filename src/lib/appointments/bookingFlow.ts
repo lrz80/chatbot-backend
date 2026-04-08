@@ -646,13 +646,12 @@ if (booking.step === "ask_email_phone") {
       bufferMin,
       hours,
       minLeadMinutes,
-      googleConnected,
+      providerAvailable: googleConnected,
       createPendingAppointmentOrGetExisting,
       markAppointmentFailed,
       markAppointmentConfirmed,
-      bookInGoogle: bookInGoogleTenant,
-
-      bookingLinkMode, // ✅ NUEVO
+      createExternalBooking: bookInGoogleTenant,
+      bookingLinkMode,
     });
   }
 

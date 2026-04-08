@@ -3,6 +3,37 @@ import crypto from "crypto";
 import fetch from "node-fetch";
 import type { SquareEnvironment } from "./searchSquareAvailability";
 
+export type SquareBooking = {
+  id: string;
+  version: number;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  location_id: string;
+  customer_id: string;
+  start_at: string;
+  all_day: boolean;
+  appointment_segments: Array<{
+    duration_minutes: number;
+    service_variation_id: string;
+    team_member_id: string;
+    service_variation_version: number;
+    service_variation_client_id?: string;
+    any_team_member?: boolean;
+    intermission_minutes?: number;
+  }>;
+};
+
+type SquareCreateBookingResponse = {
+  booking?: SquareBooking;
+  errors?: Array<{
+    category?: string;
+    code?: string;
+    detail?: string;
+    field?: string;
+  }>;
+};
+
 export type CreateSquareBookingArgs = {
   accessToken: string;
   environment: SquareEnvironment;
@@ -15,39 +46,10 @@ export type CreateSquareBookingArgs = {
   durationMinutes: number;
 };
 
-type SquareCreateBookingResponse = {
-  booking?: {
-    id: string;
-    version: number;
-    status: string;
-    created_at: string;
-    updated_at: string;
-    location_id: string;
-    customer_id: string;
-    start_at: string;
-    all_day: boolean;
-    appointment_segments: Array<{
-      duration_minutes: number;
-      service_variation_id: string;
-      team_member_id: string;
-      service_variation_version: number;
-      service_variation_client_id?: string;
-      any_team_member?: boolean;
-      intermission_minutes?: number;
-    }>;
-  };
-  errors?: Array<{
-    category?: string;
-    code?: string;
-    detail?: string;
-    field?: string;
-  }>;
-};
-
 export type CreateSquareBookingResult =
   | {
       ok: true;
-      booking: NonNullable<SquareCreateBookingResponse["booking"]>;
+      booking: SquareBooking;
     }
   | {
       ok: false;

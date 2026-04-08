@@ -23,7 +23,7 @@ type ConfirmDeps = {
 
   minLeadMinutes: number;
 
-  googleConnected: boolean;
+  providerAvailable: boolean;
 
   // ✅ nuevo: cómo quiere el tenant que se mande el link
   bookingLinkMode: "meet" | "calendar";
@@ -40,14 +40,18 @@ type ConfirmDeps = {
     idempotency_key: string;
   }) => Promise<any | null>;
 
-  markAppointmentFailed: (args: { apptId: string; error_reason: string }) => Promise<void>;
+  markAppointmentFailed: (args: {
+    apptId: string;
+    error_reason: string;
+  }) => Promise<void>;
+
   markAppointmentConfirmed: (args: {
     apptId: string;
     google_event_id: string | null;
     google_event_link: string | null;
   }) => Promise<void>;
 
-  bookInGoogle: (args: {
+  createExternalBooking: (args: {
     tenantId: string;
     customer_name: string;
     customer_phone?: string | null;
@@ -56,7 +60,14 @@ type ConfirmDeps = {
     endISO: string;
     timeZone: string;
     bufferMin: number;
-  }) => Promise<{ ok: boolean; event_id?: string | null; htmlLink?: string | null; error?: string; busy?: any[] }>;
+  }) => Promise<{
+    ok: boolean;
+    event_id?: string | null;
+    htmlLink?: string | null;
+    meetLink?: string | null;
+    error?: string;
+    busy?: any[];
+  }>;
 };
 
 function buildIdempotencyKey(args: {
@@ -121,11 +132,11 @@ export async function handleConfirm(deps: ConfirmDeps): Promise<{
     bufferMin,
     hours,
     minLeadMinutes,
-    googleConnected,
+    providerAvailable,
     createPendingAppointmentOrGetExisting,
     markAppointmentFailed,
     markAppointmentConfirmed,
-    bookInGoogle,
+    createExternalBooking,
     bookingLinkMode, 
   } = deps;
 
@@ -432,12 +443,18 @@ if (!startISO || !endISO) {
   // Si está confirmed pero NO es el mismo slot, NO bloquees.
   // Continúa al bookInGoogle y crea otra cita.
 
-  // 8) si google no conectado, salir limpio
-  if (!googleConnected) {
+  // 8) si no hay provider disponible, salir limpio
+  if (!providerAvailable) {
     return {
       handled: true,
-      reply: effectiveLang === "es" ? "El agendamiento no está disponible en este momento para este negocio." : "Scheduling isn’t available for this business right now.",
-      ctxPatch: { booking: resetBooking(tz, effectiveLang), booking_last_touch_at: Date.now() },
+      reply:
+        effectiveLang === "es"
+          ? "El agendamiento no está disponible en este momento para este negocio."
+          : "Scheduling isn’t available for this business right now.",
+      ctxPatch: {
+        booking: resetBooking(tz, effectiveLang),
+        booking_last_touch_at: Date.now(),
+      },
     };
   }
 
@@ -452,16 +469,17 @@ if (!startISO || !endISO) {
     email: customerEmail,
     phone: customerPhone,
   });
-console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (before bookInGoogle)", {
-  tenantId,
-  canal,
-  contacto,
-  startISO,
-  endISO,
-});
 
-  // 9) intentar reservar en Google
-    const g = await bookInGoogle({
+  console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (before createExternalBooking)", {
+    tenantId,
+    canal,
+    contacto,
+    startISO,
+    endISO,
+  });
+
+  // 9) intentar reservar con el provider configurado
+  const bookingResult = await createExternalBooking({
     tenantId,
     customer_name,
     customer_phone: customerPhone || null,
@@ -471,15 +489,9 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (before bookInGoogle)", 
     timeZone: tz,
     bufferMin,
   });
-console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
-  ok: g?.ok,
-  event_id: (g as any)?.event_id,
-  htmlLink: (g as any)?.htmlLink,
-  error: (g as any)?.error,
-});
 
-  if (!g.ok) {
-    const err = String((g as any)?.error || "GOOGLE_ERROR");
+  if (!bookingResult.ok) {
+    const err = String(bookingResult?.error || "BOOKING_PROVIDER_ERROR");
 
     // ✅ NO guardar "failed" cuando solo es "hora no disponible"
     if (err !== "PAST_SLOT") {
@@ -598,11 +610,11 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
   }
 
   // ✅ Hard check: sin link/id = NO confirmado
-    const link = String(g.htmlLink || "").trim();
-    const gid = String(g.event_id || "").trim();
-    const meet = String((g as any).meetLink || "").trim();
+  const link = String(bookingResult.htmlLink || "").trim();
+  const gid = String(bookingResult.event_id || "").trim();
+  const meet = String(bookingResult.meetLink || "").trim();
 
-    if (!link || !gid) {
+  if (!link || !gid) {
     await markAppointmentFailed({
         apptId: pending.id,
         error_reason: "CREATE_EVENT_FAILED",
@@ -611,8 +623,8 @@ console.log("🟣🟣🟣 CONFIRM VERSION: 2026-01-30-A (after bookInGoogle)", {
     return {
       handled: true,
       reply: effectiveLang === "es"
-        ? "No pude confirmar la cita con Google. Envíame una nueva fecha y hora (YYYY-MM-DD HH:mm)."
-        : "I couldn’t confirm the booking with Google. Please send a new date and time (YYYY-MM-DD HH:mm).",
+        ? "No pude confirmar la cita. Envíame una nueva fecha y hora (YYYY-MM-DD HH:mm)."
+        : "I couldn’t confirm the booking. Please send a new date and time (YYYY-MM-DD HH:mm).",
       ctxPatch: {
         booking: resetBooking(tz, effectiveLang),
         booking_last_touch_at: Date.now(),

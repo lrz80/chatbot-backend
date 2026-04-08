@@ -6,6 +6,16 @@ import pool from "../../lib/db";
 import { saveSquareConnection } from "../../lib/appointments/booking/providers/saveSquareConnection";
 import { searchSquareAvailability } from "../../lib/integrations/square/searchSquareAvailability";
 import { createSquareBooking } from "../../lib/integrations/square/createSquareBooking";
+import { createSquareCustomer } from "../../lib/integrations/square/createSquareCustomer";
+import { getSquareBookableServices } from "../../lib/integrations/square/getSquareBookableServices";
+import { getSquareConnectionForTenant } from "../../lib/integrations/square/getSquareConnectionForTenant";
+import { createSquareCustomerForTenant } from "../../lib/integrations/square/createSquareCustomerForTenant";
+import { createSquareBookingFlowForTenant } from "../../lib/integrations/square/createSquareBookingFlowForTenant";
+import { resolveSquareServiceMappingForTenant } from "../../lib/integrations/square/resolveSquareServiceMappingForTenant";
+import { createSquareBookingFlowFromServiceNameForTenant } from "../../lib/integrations/square/createSquareBookingFlowFromServiceNameForTenant";
+import { saveTenantExternalServiceMapping } from "../../lib/integrations/serviceMappings/saveTenantExternalServiceMapping";
+import { getTenantExternalServiceMapping } from "../../lib/integrations/serviceMappings/getTenantExternalServiceMapping";
+import { createSquareBookingFlowFromInternalServiceForTenant } from "../../lib/integrations/square/createSquareBookingFlowFromInternalServiceForTenant";
 
 const router = Router();
 
@@ -457,34 +467,21 @@ router.get("/sandbox/services", async (req, res) => {
   try {
     const accessToken = String(req.query?.accessToken || "").trim();
 
-    if (!accessToken) {
-      return res.status(400).json({
-        ok: false,
-        error: "ACCESS_TOKEN_REQUIRED",
-      });
+    const result = await getSquareBookableServices({
+      accessToken,
+      environment: "sandbox",
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
     }
 
-    const response = await fetch(
-      "https://connect.squareupsandbox.com/v2/catalog/search",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-          "Square-Version": "2026-03-18",
-        },
-        body: JSON.stringify({
-          object_types: ["ITEM", "ITEM_VARIATION"],
-          include_related_objects: true,
-        }),
-      }
-    );
-
-    const data = await response.json();
-
-    return res.status(response.ok ? 200 : response.status).json({
-      ok: response.ok,
-      data,
+    return res.status(200).json({
+      ok: true,
+      data: {
+        services: result.services,
+        errors: [],
+      },
     });
   } catch (error) {
     console.error("[SQUARE_SANDBOX_SERVICES] unexpected error", error);
@@ -503,33 +500,25 @@ router.post("/sandbox/customers", async (req, res) => {
     const email = String(req.body?.email || "").trim();
     const phoneNumber = String(req.body?.phoneNumber || "").trim();
 
-    if (!accessToken) {
-      return res.status(400).json({ ok: false, error: "ACCESS_TOKEN_REQUIRED" });
+    const result = await createSquareCustomer({
+      accessToken,
+      environment: "sandbox",
+      givenName,
+      familyName,
+      email,
+      phoneNumber,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
     }
 
-    const response = await fetch(
-      "https://connect.squareupsandbox.com/v2/customers",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-          "Square-Version": "2026-01-22",
-        },
-        body: JSON.stringify({
-          given_name: givenName || "Test",
-          family_name: familyName || "Customer",
-          email_address: email || undefined,
-          phone_number: phoneNumber || undefined,
-        }),
-      }
-    );
-
-    const data = await response.json();
-
-    return res.status(response.ok ? 200 : response.status).json({
-      ok: response.ok,
-      data,
+    return res.status(200).json({
+      ok: true,
+      data: {
+        customer: result.customer,
+        errors: [],
+      },
     });
   } catch (error) {
     console.error("[SQUARE_SANDBOX_CREATE_CUSTOMER] unexpected error", error);
@@ -627,6 +616,364 @@ router.post("/sandbox/availability", async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "SQUARE_SANDBOX_AVAILABILITY_FAILED",
+    });
+  }
+});
+
+router.get("/status", async (req, res) => {
+  try {
+    const tenantId = String(req.query?.tenantId || "").trim();
+
+    const result = await getSquareConnectionForTenant(tenantId);
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: {
+        connected: true,
+        tenantId: result.connection.tenantId,
+        merchantId: result.connection.merchantId,
+        locationId: result.connection.locationId,
+        environment: result.connection.environment,
+        expiresAt: result.connection.expiresAt,
+        status: result.connection.status,
+      },
+    });
+  } catch (error) {
+    console.error("[SQUARE_STATUS] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_STATUS_FAILED",
+    });
+  }
+});
+
+router.post("/tenant/customer", async (req, res) => {
+  try {
+    const tenantId = String(req.body?.tenantId || "").trim();
+    const givenName = String(req.body?.givenName || "").trim();
+    const familyName = String(req.body?.familyName || "").trim();
+    const email = String(req.body?.email || "").trim();
+    const phoneNumber = String(req.body?.phoneNumber || "").trim();
+
+    const result = await createSquareCustomerForTenant({
+      tenantId,
+      givenName,
+      familyName,
+      email,
+      phoneNumber,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: {
+        customer: result.customer,
+        errors: [],
+      },
+    });
+  } catch (error) {
+    console.error("[SQUARE_TENANT_CREATE_CUSTOMER] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_TENANT_CREATE_CUSTOMER_FAILED",
+    });
+  }
+});
+
+router.post("/tenant/booking-flow", async (req, res) => {
+  try {
+    const tenantId = String(req.body?.tenantId || "").trim();
+    const serviceVariationId = String(req.body?.serviceVariationId || "").trim();
+    const startAt = String(req.body?.startAt || "").trim();
+    const endAt = String(req.body?.endAt || "").trim();
+    const locationId = String(req.body?.locationId || "").trim() || null;
+
+    const givenName = String(req.body?.customer?.givenName || "").trim();
+    const familyName = String(req.body?.customer?.familyName || "").trim();
+    const email = String(req.body?.customer?.email || "").trim();
+    const phoneNumber = String(req.body?.customer?.phoneNumber || "").trim();
+
+    const result = await createSquareBookingFlowForTenant({
+      tenantId,
+      serviceVariationId,
+      startAt,
+      endAt,
+      locationId,
+      customer: {
+        givenName,
+        familyName,
+        email,
+        phoneNumber,
+      },
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: {
+        customerId: result.customerId,
+        availability: result.availability,
+        booking: result.booking,
+        errors: [],
+      },
+    });
+  } catch (error) {
+    console.error("[SQUARE_TENANT_BOOKING_FLOW] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_TENANT_BOOKING_FLOW_FAILED",
+    });
+  }
+});
+
+router.get("/tenant/services", async (req, res) => {
+  try {
+    const tenantId = String(req.query?.tenantId || "").trim();
+
+    const connectionResult = await getSquareConnectionForTenant(tenantId);
+
+    if (!connectionResult.ok) {
+      return res.status(connectionResult.status || 500).json(connectionResult);
+    }
+
+    const result = await getSquareBookableServices({
+      accessToken: connectionResult.connection.accessToken,
+      environment: connectionResult.connection.environment,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: {
+        services: result.services,
+        errors: [],
+      },
+    });
+  } catch (error) {
+    console.error("[SQUARE_TENANT_SERVICES] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_TENANT_SERVICES_FAILED",
+    });
+  }
+});
+
+router.get("/tenant/resolve-service", async (req, res) => {
+  try {
+    const tenantId = String(req.query?.tenantId || "").trim();
+    const serviceVariationId = String(req.query?.serviceVariationId || "").trim();
+    const serviceName = String(req.query?.serviceName || "").trim();
+
+    const result = await resolveSquareServiceMappingForTenant({
+      tenantId,
+      serviceVariationId,
+      serviceName,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: {
+        service: result.service,
+        errors: [],
+      },
+    });
+  } catch (error) {
+    console.error("[SQUARE_TENANT_RESOLVE_SERVICE] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_TENANT_RESOLVE_SERVICE_FAILED",
+    });
+  }
+});
+
+router.post("/tenant/booking-flow-by-service-name", async (req, res) => {
+  try {
+    const tenantId = String(req.body?.tenantId || "").trim();
+    const serviceName = String(req.body?.serviceName || "").trim();
+    const startAt = String(req.body?.startAt || "").trim();
+    const endAt = String(req.body?.endAt || "").trim();
+    const locationId = String(req.body?.locationId || "").trim() || null;
+
+    const givenName = String(req.body?.customer?.givenName || "").trim();
+    const familyName = String(req.body?.customer?.familyName || "").trim();
+    const email = String(req.body?.customer?.email || "").trim();
+    const phoneNumber = String(req.body?.customer?.phoneNumber || "").trim();
+
+    const result = await createSquareBookingFlowFromServiceNameForTenant({
+      tenantId,
+      serviceName,
+      startAt,
+      endAt,
+      locationId,
+      customer: {
+        givenName,
+        familyName,
+        email,
+        phoneNumber,
+      },
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: {
+        customerId: result.customerId,
+        availability: result.availability,
+        booking: result.booking,
+        errors: [],
+      },
+    });
+  } catch (error) {
+    console.error("[SQUARE_TENANT_BOOKING_FLOW_BY_SERVICE_NAME] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_TENANT_BOOKING_FLOW_BY_SERVICE_NAME_FAILED",
+    });
+  }
+});
+
+router.post("/tenant/service-mappings/save", async (req, res) => {
+  try {
+    const tenantId = String(req.body?.tenantId || "").trim();
+    const internalServiceKey = String(req.body?.internalServiceKey || "").trim();
+    const externalServiceId = String(req.body?.externalServiceId || "").trim();
+
+    const externalServiceVersionRaw = req.body?.externalServiceVersion;
+    const externalLocationId = String(req.body?.externalLocationId || "").trim() || null;
+    const externalMetadata =
+      req.body?.externalMetadata && typeof req.body.externalMetadata === "object"
+        ? req.body.externalMetadata
+        : {};
+    const isActive = req.body?.isActive !== false;
+
+    const externalServiceVersion =
+      externalServiceVersionRaw == null ? null : Number(externalServiceVersionRaw);
+
+    const result = await saveTenantExternalServiceMapping({
+      tenantId,
+      provider: "square",
+      internalServiceKey,
+      externalServiceId,
+      externalServiceVersion,
+      externalLocationId,
+      externalMetadata,
+      isActive,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: {
+        mapping: result.mapping,
+        errors: [],
+      },
+    });
+  } catch (error) {
+    console.error("[SQUARE_TENANT_SERVICE_MAPPING_SAVE] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_TENANT_SERVICE_MAPPING_SAVE_FAILED",
+    });
+  }
+});
+
+router.get("/tenant/service-mappings/get", async (req, res) => {
+  try {
+    const tenantId = String(req.query?.tenantId || "").trim();
+    const internalServiceKey = String(req.query?.internalServiceKey || "").trim();
+
+    const result = await getTenantExternalServiceMapping({
+      tenantId,
+      provider: "square",
+      internalServiceKey,
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: {
+        mapping: result.mapping,
+        errors: [],
+      },
+    });
+  } catch (error) {
+    console.error("[SQUARE_TENANT_SERVICE_MAPPING_GET] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_TENANT_SERVICE_MAPPING_GET_FAILED",
+    });
+  }
+});
+
+router.post("/tenant/booking-flow-by-internal-service", async (req, res) => {
+  try {
+    const tenantId = String(req.body?.tenantId || "").trim();
+    const internalServiceKey = String(req.body?.internalServiceKey || "").trim();
+    const startAt = String(req.body?.startAt || "").trim();
+    const endAt = String(req.body?.endAt || "").trim();
+
+    const givenName = String(req.body?.customer?.givenName || "").trim();
+    const familyName = String(req.body?.customer?.familyName || "").trim();
+    const email = String(req.body?.customer?.email || "").trim();
+    const phoneNumber = String(req.body?.customer?.phoneNumber || "").trim();
+
+    const result = await createSquareBookingFlowFromInternalServiceForTenant({
+      tenantId,
+      internalServiceKey,
+      startAt,
+      endAt,
+      customer: {
+        givenName,
+        familyName,
+        email,
+        phoneNumber,
+      },
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 500).json(result);
+    }
+
+    return res.status(200).json({
+      ok: true,
+      data: {
+        booking: result.booking,
+        availability: result.availability,
+        customerId: result.customerId,
+        errors: [],
+      },
+    });
+  } catch (error) {
+    console.error("[SQUARE_TENANT_BOOKING_FLOW_BY_INTERNAL_SERVICE] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_TENANT_BOOKING_FLOW_BY_INTERNAL_SERVICE_FAILED",
     });
   }
 });
