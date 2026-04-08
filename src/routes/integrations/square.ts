@@ -659,9 +659,6 @@ router.post("/sandbox/availability", async (req, res) => {
               segment_filters: [
                 {
                   service_variation_id: serviceVariationId,
-                  team_member_id_filter: {
-                    any: [teamMemberId],
-                  },
                 },
               ],
             },
