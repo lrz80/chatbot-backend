@@ -491,4 +491,129 @@ router.get("/sandbox/services", async (req, res) => {
   }
 });
 
+router.post("/sandbox/customers", async (req, res) => {
+  try {
+    const accessToken = String(req.body?.accessToken || "").trim();
+    const givenName = String(req.body?.givenName || "").trim();
+    const familyName = String(req.body?.familyName || "").trim();
+    const email = String(req.body?.email || "").trim();
+    const phoneNumber = String(req.body?.phoneNumber || "").trim();
+
+    if (!accessToken) {
+      return res.status(400).json({ ok: false, error: "ACCESS_TOKEN_REQUIRED" });
+    }
+
+    const response = await fetch(
+      "https://connect.squareupsandbox.com/v2/customers",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Square-Version": "2026-01-22",
+        },
+        body: JSON.stringify({
+          given_name: givenName || "Test",
+          family_name: familyName || "Customer",
+          email_address: email || undefined,
+          phone_number: phoneNumber || undefined,
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    return res.status(response.ok ? 200 : response.status).json({
+      ok: response.ok,
+      data,
+    });
+  } catch (error) {
+    console.error("[SQUARE_SANDBOX_CREATE_CUSTOMER] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_SANDBOX_CREATE_CUSTOMER_FAILED",
+    });
+  }
+});
+
+router.post("/sandbox/bookings", async (req, res) => {
+  try {
+    const accessToken = String(req.body?.accessToken || "").trim();
+    const customerId = String(req.body?.customerId || "").trim();
+    const startAt = String(req.body?.startAt || "").trim();
+    const locationId = String(req.body?.locationId || "").trim();
+    const teamMemberId = String(req.body?.teamMemberId || "").trim();
+    const serviceVariationId = String(req.body?.serviceVariationId || "").trim();
+    const serviceVariationVersionRaw = req.body?.serviceVariationVersion;
+    const durationMinutesRaw = req.body?.durationMinutes;
+
+    const serviceVariationVersion =
+      typeof serviceVariationVersionRaw === "string" || typeof serviceVariationVersionRaw === "number"
+        ? Number(serviceVariationVersionRaw)
+        : NaN;
+
+    const durationMinutes =
+      typeof durationMinutesRaw === "string" || typeof durationMinutesRaw === "number"
+        ? Number(durationMinutesRaw)
+        : NaN;
+
+    if (
+      !accessToken ||
+      !customerId ||
+      !startAt ||
+      !locationId ||
+      !teamMemberId ||
+      !serviceVariationId ||
+      !Number.isFinite(serviceVariationVersion) ||
+      !Number.isFinite(durationMinutes)
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error: "MISSING_REQUIRED_FIELDS",
+      });
+    }
+
+    const response = await fetch(
+      "https://connect.squareupsandbox.com/v2/bookings",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Square-Version": "2026-01-22",
+        },
+        body: JSON.stringify({
+          idempotency_key: crypto.randomUUID(),
+          booking: {
+            customer_id: customerId,
+            start_at: startAt,
+            location_id: locationId,
+            appointment_segments: [
+              {
+                duration_minutes: durationMinutes,
+                team_member_id: teamMemberId,
+                service_variation_id: serviceVariationId,
+                service_variation_version: serviceVariationVersion,
+              },
+            ],
+          },
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    return res.status(response.ok ? 200 : response.status).json({
+      ok: response.ok,
+      data,
+    });
+  } catch (error) {
+    console.error("[SQUARE_SANDBOX_CREATE_BOOKING] unexpected error", error);
+    return res.status(500).json({
+      ok: false,
+      error: "SQUARE_SANDBOX_CREATE_BOOKING_FAILED",
+    });
+  }
+});
+
 export default router;
