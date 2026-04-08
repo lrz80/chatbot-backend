@@ -131,6 +131,13 @@ export async function handleFastpathHybridTurn(
 
   const pendingCta = getPendingCtaFromCtx(convoCtx);
 
+  const hasPendingCatalogChoice =
+    Boolean(convoCtx?.pendingCatalogChoice) &&
+    (
+      convoCtx?.pendingCatalogChoice?.kind === "service_choice" ||
+      convoCtx?.pendingCatalogChoice?.kind === "variant_choice"
+    );
+
   if (
     hasExplicitPendingCtaAwaitingConfirmation(convoCtx) &&
     process.env.DEBUG_FASTPATH === "true"
@@ -501,6 +508,7 @@ export async function handleFastpathHybridTurn(
     : catalogRoutingSignal;
 
   const hasConcreteCatalogHandle =
+    hasPendingCatalogChoice ||
     hasCanonicalCatalogResolution ||
     effectiveCatalogReferenceClassification.shouldResolveEntity === true ||
     effectiveCatalogReferenceClassification.shouldAskDisambiguation === true ||
@@ -541,6 +549,7 @@ export async function handleFastpathHybridTurn(
       routingPolicy,
       catalogRoutingSignal: effectiveCatalogRoutingSignal,
       canonicalCatalogRouteDecision,
+      hasPendingCatalogChoice,
     });
 
     return {
