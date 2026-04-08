@@ -1,3 +1,4 @@
+//src/lib/appointments/booking/providers/square.client.ts
 type SquareEnvironment = "sandbox" | "production";
 
 type SquareRequestOptions = {
@@ -31,6 +32,14 @@ function resolveSquareBaseUrl(environment: SquareEnvironment): string {
 
 function resolveSquareVersion(): string {
   return process.env.SQUARE_API_VERSION?.trim() || "2026-01-22";
+}
+
+function safeJsonParse(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 export async function squareRequest<T = unknown>(
@@ -87,19 +96,19 @@ export async function squareRequest<T = unknown>(
   }
 }
 
-function safeJsonParse(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
 export async function squareRetrieveLocation(args: {
   accessToken: string;
   environment: SquareEnvironment;
   locationId: string;
-}): Promise<SquareApiResult<{ location?: { id?: string; status?: string; name?: string } }>> {
+}): Promise<
+  SquareApiResult<{
+    location?: {
+      id?: string;
+      status?: string;
+      name?: string;
+    };
+  }>
+> {
   const locationId = String(args.locationId || "").trim();
 
   if (!locationId) {

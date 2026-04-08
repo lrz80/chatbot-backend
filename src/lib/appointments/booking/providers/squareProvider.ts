@@ -88,8 +88,6 @@ export class SquareProvider implements BookingProviderAdapter {
       squareLocationStatus: locationResult.data?.location?.status ?? null,
     });
 
-    // Fase actual:
-    // conexión OK, pero booking todavía no implementado.
     return {
       ok: false,
       provider: this.provider,
