@@ -1,5 +1,7 @@
 //src/lib/appointments/booking/providers/square.client.ts
-type SquareEnvironment = "sandbox" | "production";
+import fetch from "node-fetch";
+
+export type SquareEnvironment = "sandbox" | "production";
 
 type SquareRequestOptions = {
   accessToken: string;
@@ -22,7 +24,9 @@ export type SquareApiFailure = {
   details?: unknown;
 };
 
-export type SquareApiResult<T = unknown> = SquareApiSuccess<T> | SquareApiFailure;
+export type SquareApiResult<T = unknown> =
+  | SquareApiSuccess<T>
+  | SquareApiFailure;
 
 function resolveSquareBaseUrl(environment: SquareEnvironment): string {
   return environment === "sandbox"
@@ -106,6 +110,7 @@ export async function squareRetrieveLocation(args: {
       id?: string;
       status?: string;
       name?: string;
+      merchant_id?: string;
     };
   }>
 > {

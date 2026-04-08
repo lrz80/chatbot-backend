@@ -16,6 +16,18 @@ export type BookingProviderConnection = {
   updated_at: string;
 };
 
+export type UpsertBookingProviderConnectionInput = {
+  tenantId: string;
+  provider: BookingProvider;
+  status: "active" | "inactive" | "error";
+  externalAccountId?: string | null;
+  externalLocationId?: string | null;
+  accessToken?: string | null;
+  refreshToken?: string | null;
+  tokenExpiresAt?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
 export async function getBookingProviderConnection(
   tenantId: string,
   provider: BookingProvider
@@ -47,23 +59,88 @@ export async function getBookingProviderConnection(
     return null;
   }
 
+  return mapRow(rows[0]);
+}
+
+export async function upsertBookingProviderConnection(
+  input: UpsertBookingProviderConnectionInput
+): Promise<BookingProviderConnection> {
+  const { rows } = await pool.query(
+    `
+      INSERT INTO booking_provider_connections (
+        tenant_id,
+        provider,
+        status,
+        external_account_id,
+        external_location_id,
+        access_token,
+        refresh_token,
+        token_expires_at,
+        metadata,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW(), NOW()
+      )
+      ON CONFLICT (tenant_id, provider)
+      DO UPDATE SET
+        status = EXCLUDED.status,
+        external_account_id = EXCLUDED.external_account_id,
+        external_location_id = EXCLUDED.external_location_id,
+        access_token = EXCLUDED.access_token,
+        refresh_token = EXCLUDED.refresh_token,
+        token_expires_at = EXCLUDED.token_expires_at,
+        metadata = EXCLUDED.metadata,
+        updated_at = NOW()
+      RETURNING
+        id,
+        tenant_id,
+        provider,
+        status,
+        external_account_id,
+        external_location_id,
+        access_token,
+        refresh_token,
+        token_expires_at,
+        metadata,
+        created_at,
+        updated_at
+    `,
+    [
+      input.tenantId,
+      input.provider,
+      input.status,
+      input.externalAccountId ?? null,
+      input.externalLocationId ?? null,
+      input.accessToken ?? null,
+      input.refreshToken ?? null,
+      input.tokenExpiresAt ?? null,
+      JSON.stringify(input.metadata ?? {}),
+    ]
+  );
+
+  return mapRow(rows[0]);
+}
+
+function mapRow(row: any): BookingProviderConnection {
   return {
-    id: String(rows[0].id),
-    tenant_id: String(rows[0].tenant_id),
-    provider: rows[0].provider as BookingProvider,
-    status: rows[0].status as "active" | "inactive" | "error",
-    external_account_id: rows[0].external_account_id ?? null,
-    external_location_id: rows[0].external_location_id ?? null,
-    access_token: rows[0].access_token ?? null,
-    refresh_token: rows[0].refresh_token ?? null,
-    token_expires_at: rows[0].token_expires_at
-      ? new Date(rows[0].token_expires_at).toISOString()
+    id: String(row.id),
+    tenant_id: String(row.tenant_id),
+    provider: row.provider as BookingProvider,
+    status: row.status as "active" | "inactive" | "error",
+    external_account_id: row.external_account_id ?? null,
+    external_location_id: row.external_location_id ?? null,
+    access_token: row.access_token ?? null,
+    refresh_token: row.refresh_token ?? null,
+    token_expires_at: row.token_expires_at
+      ? new Date(row.token_expires_at).toISOString()
       : null,
     metadata:
-      rows[0].metadata && typeof rows[0].metadata === "object"
-        ? rows[0].metadata
+      row.metadata && typeof row.metadata === "object"
+        ? row.metadata
         : {},
-    created_at: new Date(rows[0].created_at).toISOString(),
-    updated_at: new Date(rows[0].updated_at).toISOString(),
+    created_at: new Date(row.created_at).toISOString(),
+    updated_at: new Date(row.updated_at).toISOString(),
   };
 }

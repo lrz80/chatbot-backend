@@ -1,26 +1,9 @@
 import { getBookingProviderConnection } from "./providerConnections.repo";
-import { squareRetrieveLocation } from "./square.client";
 import type {
   BookingProviderAdapter,
   CreateExternalBookingInput,
   CreateExternalBookingResult,
 } from "./types";
-
-type SquareEnvironment = "sandbox" | "production";
-
-function resolveSquareEnvironment(
-  metadata: Record<string, unknown>
-): SquareEnvironment {
-  const raw = String(
-    metadata["environment"] ||
-      process.env.SQUARE_ENVIRONMENT ||
-      "production"
-  )
-    .trim()
-    .toLowerCase();
-
-  return raw === "sandbox" ? "sandbox" : "production";
-}
 
 export class SquareProvider implements BookingProviderAdapter {
   readonly provider = "square" as const;
@@ -56,38 +39,9 @@ export class SquareProvider implements BookingProviderAdapter {
       };
     }
 
-    const environment = resolveSquareEnvironment(connection.metadata);
-
-    const locationResult = await squareRetrieveLocation({
-      accessToken,
-      environment,
-      locationId,
-    });
-
-    if (!locationResult.ok) {
-      console.error("[SQUARE_PROVIDER] connection validation failed", {
-        tenantId: input.tenantId,
-        status: locationResult.status,
-        error: locationResult.error,
-        details: locationResult.details,
-      });
-
-      return {
-        ok: false,
-        provider: this.provider,
-        error: "CREATE_EVENT_FAILED",
-        busy: [],
-      };
-    }
-
-    console.log("[SQUARE_PROVIDER] connection validated", {
-      tenantId: input.tenantId,
-      locationId,
-      environment,
-      squareLocationId: locationResult.data?.location?.id ?? null,
-      squareLocationStatus: locationResult.data?.location?.status ?? null,
-    });
-
+    // La conexión ya quedó validada y persistida en saveSquareConnection.ts.
+    // El booking real por Square entra en el siguiente paso cuando
+    // implementemos availability + service/team mapping.
     return {
       ok: false,
       provider: this.provider,
