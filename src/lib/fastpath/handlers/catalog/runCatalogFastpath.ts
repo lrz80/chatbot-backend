@@ -212,6 +212,58 @@ if (semanticMatches.length === 1) {
   return { status: "unresolved" };
 }
 
+function shouldReusePendingCatalogChoice(params: {
+  userInput: string;
+  pendingCatalogChoice: PendingCatalogChoice | null;
+  pendingCatalogSelection: PendingCatalogSelectionResolution;
+  routeIntent: string;
+  asksPrices: boolean;
+  asksIncludesOnly: boolean;
+  asksSchedules: boolean;
+}): boolean {
+  const {
+    userInput,
+    pendingCatalogChoice,
+    pendingCatalogSelection,
+    routeIntent,
+    asksPrices,
+    asksIncludesOnly,
+    asksSchedules,
+  } = params;
+
+  if (!pendingCatalogChoice) {
+    return false;
+  }
+
+  if (pendingCatalogSelection.status === "resolved") {
+    return true;
+  }
+
+  const normalized = String(userInput || "").trim().toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  // Si el usuario hace una pregunta general nueva de catálogo,
+  // no debemos reciclar una desambiguación vieja.
+  const isFreshGenericCatalogTurn =
+    pendingCatalogSelection.status === "unresolved" &&
+    pendingCatalogChoice.kind === "service_choice" &&
+    (
+      routeIntent === "catalog_price" ||
+      asksPrices === true ||
+      asksIncludesOnly === true ||
+      asksSchedules === true
+    );
+
+  if (isFreshGenericCatalogTurn) {
+    return false;
+  }
+
+  return true;
+}
+
 function normalizeCatalogDisambiguationOptions(
   raw: any
 ): CatalogDisambiguationOption[] {
@@ -1191,9 +1243,20 @@ export async function runCatalogFastpath(
     console.log("🚫 BLOCK LLM PRICING — forcing DB path");
   }
 
+  const shouldReusePendingChoice = shouldReusePendingCatalogChoice({
+    userInput: input.userInput,
+    pendingCatalogChoice,
+    pendingCatalogSelection,
+    routeIntent,
+    asksPrices,
+    asksIncludesOnly,
+    asksSchedules,
+  });
+
   if (
     pendingCatalogChoice &&
-    pendingCatalogSelection.status === "unresolved"
+    pendingCatalogSelection.status === "unresolved" &&
+    shouldReusePendingChoice
   ) {
     return buildCatalogDisambiguationResult({
       routeIntent:
@@ -1211,6 +1274,15 @@ export async function runCatalogFastpath(
           ? pendingCatalogChoice.serviceName || null
           : null,
     });
+  }
+
+  if (
+    pendingCatalogChoice &&
+    pendingCatalogSelection.status === "unresolved" &&
+    !shouldReusePendingChoice
+  ) {
+    // El usuario hizo una nueva pregunta general.
+    // No reciclamos la desambiguación anterior.
   }
 
   if (!isCatalogQuestion && !hasFacetDrivenCatalogIntent) {
@@ -1517,6 +1589,8 @@ export async function runCatalogFastpath(
     const ctxPatch: any = {
       last_catalog_at: Date.now(),
       lastResolvedIntent: "price_or_plan",
+      pendingCatalogChoice: null,
+      pendingCatalogChoiceAt: null,
     };
 
     if (namesShown.length) {
@@ -1683,6 +1757,8 @@ export async function runCatalogFastpath(
     const ctxPatch: any = {
       last_catalog_at: Date.now(),
       lastResolvedIntent: "schedule_and_price",
+      pendingCatalogChoice: null,
+      pendingCatalogChoiceAt: null,
     };
 
     if (namesShown.length) {
@@ -1803,6 +1879,8 @@ export async function runCatalogFastpath(
         ctxPatch: {
           last_catalog_at: Date.now(),
           lastResolvedIntent: "other_plans",
+          pendingCatalogChoice: null,
+          pendingCatalogChoiceAt: null,
         } as any,
       };
     }
@@ -1938,6 +2016,8 @@ export async function runCatalogFastpath(
                 asksSchedules === true && asksPrices === true
                   ? "schedule_and_price"
                   : "price_or_plan",
+              pendingCatalogChoice: null,
+              pendingCatalogChoiceAt: null,
             } as any,
           };
         }
@@ -1982,6 +2062,8 @@ export async function runCatalogFastpath(
           ctxPatch: {
             last_catalog_at: Date.now(),
             lastResolvedIntent: "business_info_facets",
+            pendingCatalogChoice: null,
+            pendingCatalogChoiceAt: null,
           } as any,
         };
       }
