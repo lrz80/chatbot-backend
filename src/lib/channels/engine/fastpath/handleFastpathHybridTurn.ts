@@ -379,7 +379,11 @@ export async function handleFastpathHybridTurn(
   const previewClassificationInput = buildCatalogReferenceClassificationInput({
     userText: userInput,
     convoCtx,
-    detectedIntent: null,
+    catalogReferenceIntent: null,
+    isCatalogOverviewIntent:
+      detectedRoutingHints?.catalogScope === "overview" &&
+      detectedFacets?.asksPrices === true,
+    routingHints: detectedRoutingHints || null,
     explicitEntityCandidate: null,
     explicitVariantCandidate: null,
     explicitFamilyCandidate: null,
@@ -409,13 +413,21 @@ export async function handleFastpathHybridTurn(
       previewPolicy,
     });
 
-  const catalogReferenceIntent = previewPolicy.shouldRouteCatalog
-    ? normalizedCurrentIntent || null
-    : null;
+  const catalogReferenceIntent =
+    previewPolicy.shouldRouteCatalog && detectedRoutingHints?.catalogScope !== "none"
+      ? (
+          detectedFacets?.asksPrices === true
+            ? "price_or_plan"
+            : normalizedCurrentIntent === "info_servicio"
+            ? "includes"
+            : null
+        )
+      : null;
 
   console.log("[TRACE_CATALOG][PRE_BUILD_INPUT]", {
     userInput,
     catalogReferenceIntent,
+    routingHints: detectedRoutingHints || null,
     explicitEntityCandidateForClassification:
       explicitEntityCandidateForClassification ?? null,
     structuredComparison: structuredComparison ?? null,
@@ -425,7 +437,11 @@ export async function handleFastpathHybridTurn(
     buildCatalogReferenceClassificationInput({
       userText: userInput,
       convoCtx,
-      detectedIntent: catalogReferenceIntent,
+      catalogReferenceIntent,
+      isCatalogOverviewIntent:
+        detectedRoutingHints?.catalogScope === "overview" &&
+        detectedFacets?.asksPrices === true,
+      routingHints: detectedRoutingHints || null,
       explicitEntityCandidate: explicitEntityCandidateForClassification,
       explicitVariantCandidate: null,
       explicitFamilyCandidate: null,
@@ -440,7 +456,6 @@ export async function handleFastpathHybridTurn(
     ...catalogReferenceClassificationInput,
     explicitEntityCandidate: explicitEntityCandidateForClassification,
     structuredComparison,
-    detectedIntent: catalogReferenceIntent,
   });
 
   const routingPolicy = buildFastpathTurnPolicy({
@@ -458,7 +473,13 @@ export async function handleFastpathHybridTurn(
         ...catalogReferenceClassificationInput,
         explicitEntityCandidate: explicitEntityCandidateForClassification,
         structuredComparison,
-        detectedIntent: null,
+        catalogReferenceIntent: null,
+        isCatalogOverviewIntent: false,
+        routingHints: {
+          catalogScope: "none",
+          businessInfoScope:
+            detectedRoutingHints?.businessInfoScope || "none",
+        },
       });
 
   console.log("[CATALOG_REFERENCE_CLASSIFIER]", {

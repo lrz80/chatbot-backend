@@ -66,7 +66,6 @@ export type CatalogReferenceContext = {
 
   expectingVariantForEntityId: string | null;
 
-  // 👇 memoria estructurada para follow-ups
   lastResolvedIntent: CatalogHistoryIntent | null;
   expectedVariantIntent: CatalogReferenceIntent | null;
 
@@ -98,6 +97,11 @@ export type CatalogReferenceExplicitVariantCandidate = {
   serviceName: string | null;
 } | null;
 
+export type CatalogRoutingHints = {
+  catalogScope?: "none" | "overview" | "targeted";
+  businessInfoScope?: "none" | "overview" | "facet";
+} | null;
+
 export type CatalogReferenceClassificationInput = {
   userText: string;
   context: CatalogReferenceContext;
@@ -113,10 +117,9 @@ export type CatalogReferenceClassificationInput = {
     serviceLabels: string[];
   } | null;
 
-  detectedIntent?: string | null;
-
   catalogReferenceIntent?: CatalogReferenceIntent | null;
   isCatalogOverviewIntent?: boolean;
+  routingHints?: CatalogRoutingHints;
 };
 
 export type CatalogReferenceClassification = {

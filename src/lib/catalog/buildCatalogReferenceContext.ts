@@ -67,6 +67,7 @@ function asCatalogReferenceIntent(
     "schedule",
     "other_plans",
     "combination_and_price",
+    "compare",
     "unknown",
   ];
 
@@ -75,7 +76,6 @@ function asCatalogReferenceIntent(
   }
 
   if (v === "schedule_and_price") return "combination_and_price";
-  if (v === "compare") return "other_plans";
 
   return null;
 }
@@ -102,7 +102,7 @@ function extractPresentedEntityIds(source: AnyRecord): string[] {
     "last_catalog_candidate_ids",
   ]);
 
-  if (direct.length > 0) return direct;
+  if (direct.length > 0) return Array.from(new Set(direct));
 
   const candidateArrays = [
     source["last_catalog_plans"],
@@ -117,10 +117,10 @@ function extractPresentedEntityIds(source: AnyRecord): string[] {
       .map((item) =>
         asString(
           item.id ??
-          item.serviceId ??
-          item.service_id ??
-          item.entityId ??
-          item.entity_id
+            item.serviceId ??
+            item.service_id ??
+            item.entityId ??
+            item.entity_id
         )
       )
       .filter((value): value is string => Boolean(value));
@@ -134,7 +134,7 @@ function extractPresentedEntityIds(source: AnyRecord): string[] {
 }
 
 function extractPresentedFamilyKeys(source: AnyRecord): string[] {
-  return pickFirstStringArray(source, [
+  const keys = pickFirstStringArray(source, [
     "lastPresentedFamilyKeys",
     "last_presented_family_keys",
     "presentedFamilyKeys",
@@ -142,6 +142,8 @@ function extractPresentedFamilyKeys(source: AnyRecord): string[] {
     "lastCatalogFamilyKeys",
     "last_catalog_family_keys",
   ]);
+
+  return Array.from(new Set(keys));
 }
 
 function extractPresentedVariantOptions(source: AnyRecord) {
@@ -193,6 +195,7 @@ export function buildCatalogReferenceContext(
 
   const now = Date.now();
   const entityTtlMs = 10 * 60 * 1000;
+  const overviewTtlMs = 30 * 60 * 1000;
 
   const lastEntityAt = asNumber(
     ctx["last_entity_at"] ??
@@ -201,37 +204,27 @@ export function buildCatalogReferenceContext(
       ctx["lastServiceAt"]
   );
 
-  const entityContextFresh =
-    Number.isFinite(lastEntityAt as number) &&
-    (lastEntityAt as number) > 0 &&
-    now - (lastEntityAt as number) <= entityTtlMs;
-
-    const overviewTtlMs = 30 * 60 * 1000;
-
   const lastCatalogAt = asNumber(
     ctx["last_catalog_at"] ??
       ctx["lastCatalogAt"]
   );
+
+  const entityContextFresh =
+    Number.isFinite(lastEntityAt as number) &&
+    (lastEntityAt as number) > 0 &&
+    now - (lastEntityAt as number) <= entityTtlMs;
 
   const overviewContextFresh =
     Number.isFinite(lastCatalogAt as number) &&
     (lastCatalogAt as number) > 0 &&
     now - (lastCatalogAt as number) <= overviewTtlMs;
 
-  const lastCatalogScope = pickFirstString(ctx, [
-    "last_catalog_scope",
-    "lastCatalogScope",
-  ]);
-
-  const lastCatalogSource = pickFirstString(ctx, [
-    "last_catalog_source",
-    "lastCatalogSource",
-  ]);
+  const catalogContextFresh = entityContextFresh || overviewContextFresh;
 
   const structuredService = asRecord(ctx["structuredService"]);
   const lastServiceRef = asRecord(ctx["last_service_ref"]);
 
-  const lastEntityId =
+  const rawLastEntityId =
     pickFirstString(ctx, [
       "lastEntityId",
       "last_entity_id",
@@ -254,12 +247,12 @@ export function buildCatalogReferenceContext(
     ]) ??
     asString(
       structuredService["serviceName"] ??
-      structuredService["serviceLabel"] ??
-      structuredService["label"]
+        structuredService["serviceLabel"] ??
+        structuredService["label"]
     ) ??
     asString(lastServiceRef["label"]);
 
-  const lastFamilyKey = pickFirstString(ctx, [
+  const rawLastFamilyKey = pickFirstString(ctx, [
     "lastFamilyKey",
     "last_family_key",
     "familyKey",
@@ -268,34 +261,24 @@ export function buildCatalogReferenceContext(
     "last_category",
   ]);
 
-  const lastPresentedEntityIds = extractPresentedEntityIds(ctx);
-  const lastPresentedFamilyKeys = extractPresentedFamilyKeys(ctx);
+  const rawLastFamilyName = pickFirstString(ctx, [
+    "lastFamilyName",
+    "last_family_name",
+    "familyName",
+    "family_name",
+  ]);
 
-  const hasRecentOverviewAnchor =
-    overviewContextFresh &&
-    (
-      lastCatalogScope === "overview" ||
-      lastCatalogSource === "info_clave" ||
-      lastCatalogSource === "db_catalog" ||
-      lastPresentedEntityIds.length > 0 ||
-      lastPresentedFamilyKeys.length > 0
-    );
+  const rawLastPresentedEntityIds = extractPresentedEntityIds(ctx);
+  const rawLastPresentedFamilyKeys = extractPresentedFamilyKeys(ctx);
 
-  const expectingVariantForEntityId = pickFirstString(ctx, [
+  const rawExpectingVariantForEntityId = pickFirstString(ctx, [
     "expectingVariantForEntityId",
     "expecting_variant_for_entity_id",
     "expectedVariantOfEntityId",
     "expected_variant_of_entity_id",
   ]);
 
-  const presentedVariantOptions = extractPresentedVariantOptions(ctx);
-
-  const lastFamilyName = pickFirstString(ctx, [
-    "lastFamilyName",
-    "last_family_name",
-    "familyName",
-    "family_name",
-  ]);
+  const rawPresentedVariantOptions = extractPresentedVariantOptions(ctx);
 
   const lastResolvedIntent = asCatalogHistoryIntent(
     ctx["lastResolvedIntent"] ??
@@ -309,18 +292,37 @@ export function buildCatalogReferenceContext(
     ctx["expectedVariantIntent"] ?? ctx["expected_variant_intent"]
   );
 
+  const lastEntityId = entityContextFresh ? rawLastEntityId : null;
+  const lastEntityName =
+    entityContextFresh && rawLastEntityId ? rawLastEntityName : null;
+
+  const lastFamilyKey = catalogContextFresh ? rawLastFamilyKey : null;
+  const lastFamilyName = catalogContextFresh ? rawLastFamilyName : null;
+
+  const lastPresentedEntityIds = catalogContextFresh
+    ? rawLastPresentedEntityIds
+    : [];
+
+  const lastPresentedFamilyKeys = catalogContextFresh
+    ? rawLastPresentedFamilyKeys
+    : [];
+
+  const expectingVariantForEntityId = entityContextFresh
+    ? rawExpectingVariantForEntityId
+    : null;
+
+  const presentedVariantOptions =
+    entityContextFresh && Array.isArray(rawPresentedVariantOptions)
+      ? rawPresentedVariantOptions
+      : null;
+
   return {
-    lastEntityId: entityContextFresh ? lastEntityId : null,
-    lastEntityName:
-      entityContextFresh && lastEntityId ? rawLastEntityName : null,
-    lastFamilyKey: hasRecentOverviewAnchor ? lastFamilyKey : lastFamilyKey,
+    lastEntityId,
+    lastEntityName,
+    lastFamilyKey,
     lastFamilyName,
-    lastPresentedEntityIds: hasRecentOverviewAnchor
-      ? lastPresentedEntityIds
-      : lastPresentedEntityIds,
-    lastPresentedFamilyKeys: hasRecentOverviewAnchor
-      ? lastPresentedFamilyKeys
-      : lastPresentedFamilyKeys,
+    lastPresentedEntityIds,
+    lastPresentedFamilyKeys,
     expectingVariantForEntityId,
     expectedVariantIntent,
     lastResolvedIntent,

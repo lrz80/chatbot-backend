@@ -1,10 +1,14 @@
+// src/lib/catalog/buildCatalogReferenceClassificationInput.ts
 import type { CatalogReferenceClassificationInput } from "./types";
 import { buildCatalogReferenceContext } from "./buildCatalogReferenceContext";
 
 type BuildCatalogReferenceClassificationInputArgs = {
   userText: string;
   convoCtx: unknown;
-  detectedIntent?: string | null;
+
+  catalogReferenceIntent?: CatalogReferenceClassificationInput["catalogReferenceIntent"];
+  isCatalogOverviewIntent?: boolean;
+  routingHints?: CatalogReferenceClassificationInput["routingHints"];
 
   explicitEntityCandidate?: CatalogReferenceClassificationInput["explicitEntityCandidate"];
   explicitVariantCandidate?: CatalogReferenceClassificationInput["explicitVariantCandidate"];
@@ -16,17 +20,63 @@ function normalizeUserText(input: string): string {
   return String(input || "").trim();
 }
 
-function normalizeDetectedIntent(input?: string | null): string | null {
+function normalizeCatalogReferenceIntent(
+  input?: CatalogReferenceClassificationInput["catalogReferenceIntent"]
+): CatalogReferenceClassificationInput["catalogReferenceIntent"] {
   const value = String(input || "").trim().toLowerCase();
-  return value || null;
+
+  if (
+    value === "price_or_plan" ||
+    value === "other_plans" ||
+    value === "combination_and_price" ||
+    value === "includes" ||
+    value === "schedule" ||
+    value === "compare" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+
+  return null;
+}
+
+function normalizeRoutingHints(
+  input?: CatalogReferenceClassificationInput["routingHints"]
+): CatalogReferenceClassificationInput["routingHints"] {
+  if (!input || typeof input !== "object") {
+    return null;
+  }
+
+  const catalogScope =
+    input.catalogScope === "overview" || input.catalogScope === "targeted"
+      ? input.catalogScope
+      : "none";
+
+  const businessInfoScope =
+    input.businessInfoScope === "overview" || input.businessInfoScope === "facet"
+      ? input.businessInfoScope
+      : "none";
+
+  return {
+    catalogScope,
+    businessInfoScope,
+  };
 }
 
 export function buildCatalogReferenceClassificationInput(
   args: BuildCatalogReferenceClassificationInputArgs
 ): CatalogReferenceClassificationInput {
+  const normalizedCatalogReferenceIntent = normalizeCatalogReferenceIntent(
+    args.catalogReferenceIntent
+  );
+
+  const normalizedRoutingHints = normalizeRoutingHints(args.routingHints);
+
   console.log("[CATALOG_INPUT_BUILDER]", {
     userText: args.userText,
-    detectedIntent: args.detectedIntent,
+    catalogReferenceIntent: normalizedCatalogReferenceIntent,
+    isCatalogOverviewIntent: args.isCatalogOverviewIntent === true,
+    routingHints: normalizedRoutingHints,
     explicitEntityCandidate: args.explicitEntityCandidate ?? null,
     explicitVariantCandidate: args.explicitVariantCandidate ?? null,
     explicitFamilyCandidate: args.explicitFamilyCandidate ?? null,
@@ -36,11 +86,14 @@ export function buildCatalogReferenceClassificationInput(
   return {
     userText: normalizeUserText(args.userText),
     context: buildCatalogReferenceContext(args.convoCtx),
-    detectedIntent: normalizeDetectedIntent(args.detectedIntent),
 
-    explicitEntityCandidate: args.explicitEntityCandidate,
-    explicitVariantCandidate: args.explicitVariantCandidate,
-    explicitFamilyCandidate: args.explicitFamilyCandidate,
-    structuredComparison: args.structuredComparison,
+    catalogReferenceIntent: normalizedCatalogReferenceIntent,
+    isCatalogOverviewIntent: args.isCatalogOverviewIntent === true,
+    routingHints: normalizedRoutingHints,
+
+    explicitEntityCandidate: args.explicitEntityCandidate ?? null,
+    explicitVariantCandidate: args.explicitVariantCandidate ?? null,
+    explicitFamilyCandidate: args.explicitFamilyCandidate ?? null,
+    structuredComparison: args.structuredComparison ?? null,
   };
 }

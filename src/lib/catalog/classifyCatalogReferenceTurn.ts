@@ -9,20 +9,61 @@ import type {
   CatalogReferenceSignals,
 } from "./types";
 
-import { isExplicitCatalogBrowseIntent } from "./isExplicitCatalogBrowseIntent";
-
 function normalizeUserText(input: string): string {
   return String(input || "").trim();
 }
 
+function stripCombiningMarks(input: string): string {
+  let out = "";
+  for (const ch of input.normalize("NFD")) {
+    const code = ch.charCodeAt(0);
+    const isCombiningMark = code >= 0x0300 && code <= 0x036f;
+    if (!isCombiningMark) {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+function isAsciiLetterOrDigit(ch: string): boolean {
+  if (!ch) return false;
+  const code = ch.charCodeAt(0);
+  const isUpper = code >= 65 && code <= 90;
+  const isLower = code >= 97 && code <= 122;
+  const isDigit = code >= 48 && code <= 57;
+  return isUpper || isLower || isDigit;
+}
+
 function normalizeForMatching(input: string): string {
-  return String(input || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const lowered = stripCombiningMarks(String(input || "")).toLowerCase();
+
+  let out = "";
+  let lastWasSpace = true;
+
+  for (const ch of lowered) {
+    if (isAsciiLetterOrDigit(ch)) {
+      out += ch;
+      lastWasSpace = false;
+      continue;
+    }
+
+    const isWhitespace =
+      ch === " " ||
+      ch === "\n" ||
+      ch === "\t" ||
+      ch === "\r" ||
+      ch === "\f" ||
+      ch === "\v";
+
+    if (isWhitespace || !isAsciiLetterOrDigit(ch)) {
+      if (!lastWasSpace) {
+        out += " ";
+        lastWasSpace = true;
+      }
+    }
+  }
+
+  return out.trim();
 }
 
 function sanitizeContext(
@@ -62,62 +103,34 @@ function sanitizeContext(
 }
 
 function tokenizeUserText(input: string): string[] {
-  return normalizeForMatching(input)
-    .split(/\s+/)
+  const normalized = normalizeForMatching(input);
+  if (!normalized) return [];
+
+  return normalized
+    .split(" ")
     .map((v) => v.trim())
     .filter(Boolean);
 }
 
-function mapDetectedIntentToCatalogIntent(
-  detectedIntent: string | null,
+function normalizeCatalogReferenceIntent(
+  value: string | null | undefined,
   fallback: CatalogReferenceIntent = "unknown"
 ): CatalogReferenceIntent {
-  const value = String(detectedIntent || "").trim().toLowerCase();
+  const normalized = String(value || "").trim().toLowerCase();
 
-  switch (value) {
-    case "precio":
-    case "planes_precios":
-    case "catalogo":
-    case "catalog":
-      return "price_or_plan";
-
-    case "info_servicio":
-      return "includes";
-
-    case "horario":
-    case "info_horarios_generales":
-      return "schedule";
-
-    case "other_plans":
-    case "catalog_alternatives":
-      return "other_plans";
-
-    case "combination_and_price":
-    case "catalog_combination":
-      return "combination_and_price";
-
-    case "compare":
-    case "comparison":
-    case "comparacion":
-    case "catalog_compare":
-      return "compare";
-
-    default:
-      return fallback;
+  if (
+    normalized === "price_or_plan" ||
+    normalized === "includes" ||
+    normalized === "schedule" ||
+    normalized === "other_plans" ||
+    normalized === "combination_and_price" ||
+    normalized === "compare" ||
+    normalized === "unknown"
+  ) {
+    return normalized;
   }
-}
 
-function isExplicitCompareIntent(
-  detectedIntent: string | null | undefined
-): boolean {
-  const value = String(detectedIntent || "").trim().toLowerCase();
-
-  return (
-    value === "compare" ||
-    value === "comparison" ||
-    value === "comparacion" ||
-    value === "catalog_compare"
-  );
+  return fallback;
 }
 
 function isSafeContextIntent(
@@ -137,14 +150,16 @@ function isSafeContextIntent(
 }
 
 function inferIntentFromContext(params: {
-  detectedIntent: string | null;
+  catalogReferenceIntent?: string | null;
   context: CatalogReferenceContext;
 }): CatalogReferenceIntent {
-  const mapped = mapDetectedIntentToCatalogIntent(
-    params.detectedIntent,
+  const direct = normalizeCatalogReferenceIntent(
+    params.catalogReferenceIntent,
     "unknown"
   );
-  if (mapped !== "unknown") return mapped;
+  if (direct !== "unknown") {
+    return direct;
+  }
 
   const { context } = params;
 
@@ -346,61 +361,51 @@ function inferAnchorShift(params: {
   return "none";
 }
 
-function isCatalogFollowupIntent(
-  detectedIntent: string | null | undefined
-): boolean {
-  const mapped = mapDetectedIntentToCatalogIntent(
-    String(detectedIntent || "").trim() || null,
-    "unknown"
-  );
-
+function isCatalogCapableByStructure(input: {
+  routingHintsCatalogScope?: "none" | "overview" | "targeted" | null;
+  hasStructuralCatalogEvidence: boolean;
+  hasGenericCatalogOverviewSignal: boolean;
+  hasConcreteAnchorContext: boolean;
+}): boolean {
   return (
-    mapped === "price_or_plan" ||
-    mapped === "includes" ||
-    mapped === "schedule" ||
-    mapped === "other_plans" ||
-    mapped === "combination_and_price" ||
-    mapped === "compare"
+    input.routingHintsCatalogScope === "overview" ||
+    input.routingHintsCatalogScope === "targeted" ||
+    input.hasStructuralCatalogEvidence ||
+    input.hasGenericCatalogOverviewSignal ||
+    input.hasConcreteAnchorContext
   );
 }
 
 function canUseEntityContextAsClearFollowup(params: {
-  detectedIntent: string | null;
   tokenCount: number;
   hasExpectedVariant: boolean;
   hasLastEntity: boolean;
-  hasPresentedEntities: boolean;
   hasLastFamily: boolean;
-  hasPresentedFamilies: boolean;
   signals: CatalogReferenceSignals;
+  routingHintsCatalogScope?: "none" | "overview" | "targeted" | null;
 }): boolean {
   const {
-    detectedIntent,
     tokenCount,
     hasExpectedVariant,
     hasLastEntity,
     hasLastFamily,
     signals,
+    routingHintsCatalogScope,
   } = params;
 
   if (hasExpectedVariant) {
     return tokenCount > 0 && tokenCount <= 6;
   }
 
-  // Anchor real: entidad o familia activa.
-  // Haber mostrado opciones antes NO basta para tratar el turno actual
-  // como follow-up referencial.
   const hasConcreteAnchor = hasLastEntity || hasLastFamily;
-
   if (!hasConcreteAnchor) {
     return false;
   }
 
-  if (!isCatalogFollowupIntent(detectedIntent)) {
-    return false;
-  }
+  const hasTargetedCatalogTurn = routingHintsCatalogScope === "targeted";
 
   return (
+    hasTargetedCatalogTurn ||
     signals.hasSpecificEntityCandidate ||
     signals.hasVariantCandidate ||
     signals.hasFamilyCandidate ||
@@ -408,14 +413,9 @@ function canUseEntityContextAsClearFollowup(params: {
   );
 }
 
-function hasAnyToken(tokens: string[], allowed: Set<string>): boolean {
-  return tokens.some((token) => allowed.has(token));
-}
-
 export function classifyCatalogReferenceTurn(
   input: CatalogReferenceClassificationInput
 ): CatalogReferenceClassification {
-  
   const userText = normalizeUserText(input?.userText || "");
   const context = sanitizeContext(input?.context);
 
@@ -423,7 +423,6 @@ export function classifyCatalogReferenceTurn(
   const explicitFamilyCandidate = input?.explicitFamilyCandidate ?? null;
   const explicitVariantCandidate = input?.explicitVariantCandidate ?? null;
 
-  const detectedIntent = String(input?.detectedIntent || "").trim() || null;
   const tokens = tokenizeUserText(userText);
 
   const signals = buildSignals({
@@ -451,36 +450,20 @@ export function classifyCatalogReferenceTurn(
   const hasExpectedVariant = Boolean(context.expectingVariantForEntityId);
 
   const hasConcreteAnchorContext =
-    hasLastEntity ||
-    hasLastFamily ||
-    hasExpectedVariant;
-
-  const hasAnyContext =
-    hasConcreteAnchorContext ||
-    hasPresentedEntities ||
-    hasPresentedFamilies;
+    hasLastEntity || hasLastFamily || hasExpectedVariant;
 
   notes.push(`token_count:${tokenCount}`);
 
-  const catalogCapableIntents = new Set([
-    "precio",
-    "planes_precios",
-    "info_servicio",
-    "catalogo",
-    "catalog",
-    "horario",
-    "horarios_y_precios",
-    "info_horarios_generales",
-    "other_plans",
-    "catalog_alternatives",
-    "combination_and_price",
-    "catalog_combination",
-    "info_general",
-  ]);
+  const routingCatalogScope =
+    input?.routingHints?.catalogScope === "overview" ||
+    input?.routingHints?.catalogScope === "targeted"
+      ? input.routingHints.catalogScope
+      : "none";
 
   const hasStructuredComparisonEvidence =
-    Boolean(input.structuredComparison?.hasComparison) &&
-    isExplicitCompareIntent(detectedIntent);
+    Boolean(input?.structuredComparison?.hasComparison) &&
+    Array.isArray(input?.structuredComparison?.serviceIds) &&
+    input.structuredComparison.serviceIds.length >= 2;
 
   const hasStructuralCatalogEvidence =
     Boolean(explicitEntityCandidate?.id) ||
@@ -489,32 +472,40 @@ export function classifyCatalogReferenceTurn(
     hasStructuredComparisonEvidence ||
     hasConcreteAnchorContext;
 
-  const inputCatalogReferenceIntent =
-    input?.catalogReferenceIntent ?? null;
-
   const hasGenericCatalogOverviewSignal =
     input?.isCatalogOverviewIntent === true ||
     (
-      inputCatalogReferenceIntent === "price_or_plan" &&
+      routingCatalogScope === "overview" &&
       !hasConcreteAnchorContext &&
       !hasStructuralCatalogEvidence
     );
 
   if (
-    detectedIntent &&
-    !catalogCapableIntents.has(detectedIntent) &&
-    !hasStructuralCatalogEvidence &&
-    !hasGenericCatalogOverviewSignal
+    !isCatalogCapableByStructure({
+      routingHintsCatalogScope: routingCatalogScope,
+      hasStructuralCatalogEvidence,
+      hasGenericCatalogOverviewSignal,
+      hasConcreteAnchorContext,
+    })
   ) {
-    notes.push(`non_catalog_intent:${detectedIntent}`);
+    notes.push("non_catalog_structural_turn");
     result.debug.notes = notes;
     return result;
   }
 
-  result.intent = inferIntentFromContext({
-    detectedIntent,
-    context,
-  });
+  result.intent =
+    normalizeCatalogReferenceIntent(
+      input?.catalogReferenceIntent,
+      "unknown"
+    ) !== "unknown"
+      ? normalizeCatalogReferenceIntent(
+          input?.catalogReferenceIntent,
+          "unknown"
+        )
+      : inferIntentFromContext({
+          catalogReferenceIntent: input?.catalogReferenceIntent ?? null,
+          context,
+        });
 
   result.disambiguationType = inferDisambiguationType(context);
   result.anchorShift = inferAnchorShift({
@@ -568,7 +559,7 @@ export function classifyCatalogReferenceTurn(
   // 1) STRUCTURED COMPARISON
   // =========================================================
   if (
-    input.structuredComparison?.hasComparison &&
+    input?.structuredComparison?.hasComparison &&
     Array.isArray(input.structuredComparison.serviceIds) &&
     input.structuredComparison.serviceIds.length >= 2
   ) {
@@ -614,7 +605,6 @@ export function classifyCatalogReferenceTurn(
 
   // =========================================================
   // 2) EXPLICIT ENTITY CANDIDATE
-  // FUENTE DE VERDAD ESTRUCTURADA: si llega aquí, se respeta.
   // =========================================================
   if (explicitEntityCandidate?.id) {
     notes.push("explicit_entity_candidate_from_catalog_matcher");
@@ -725,19 +715,15 @@ export function classifyCatalogReferenceTurn(
 
   // =========================================================
   // 5) REFERENTIAL FOLLOW-UP WITH ENTITY CONTEXT
-  // Solo si hay follow-up claro sobre una entidad/familia activa.
-  // info_general NO debe promover catálogo por sí solo.
   // =========================================================
   if (
     canUseEntityContextAsClearFollowup({
-      detectedIntent,
       tokenCount,
       hasExpectedVariant,
       hasLastEntity,
-      hasPresentedEntities,
       hasLastFamily,
-      hasPresentedFamilies,
       signals,
+      routingHintsCatalogScope: routingCatalogScope,
     }) &&
     hasLastEntity
   ) {
@@ -796,13 +782,15 @@ export function classifyCatalogReferenceTurn(
 
   // =========================================================
   // 7) ENTITY CONTEXT WITHOUT EXPLICIT MATCH
-  // Contexto viejo NO debe forzar catálogo si el turn actual
-  // no trae intención catalogable clara.
   // =========================================================
-  if (hasLastEntity && tokenCount > 6 && isCatalogFollowupIntent(detectedIntent)) {
+  if (
+    hasLastEntity &&
+    tokenCount > 6 &&
+    routingCatalogScope === "targeted"
+  ) {
     notes.push("entity_context_available");
     notes.push("longer_turn_with_entity_context");
-    notes.push("catalog_followup_intent_confirmed");
+    notes.push("targeted_catalog_followup_confirmed");
 
     result.kind = "referential_followup";
     result.confidence = 0.66;
@@ -841,10 +829,6 @@ export function classifyCatalogReferenceTurn(
   }
 
   notes.push("insufficient_structural_signal");
-
-  if (result.intent === "unknown") {
-    result.intent = mapDetectedIntentToCatalogIntent(detectedIntent, "unknown");
-  }
 
   result.debug.notes = notes;
   return result;

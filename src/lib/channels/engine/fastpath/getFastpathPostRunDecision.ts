@@ -93,6 +93,7 @@ export function getFastpathPostRunDecision(
 
   const isExplicitServiceDetailTurn =
     input.semanticTurn.domain === "catalog" &&
+    input.semanticTurn.resolution !== "overview" &&
     (
       input.semanticTurn.scope === "service" ||
       input.semanticTurn.scope === "variant" ||
