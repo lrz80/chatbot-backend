@@ -310,11 +310,36 @@ export async function handleFastpathHybridTurn(
 
   const canonicalResolution = canonicalCatalogRouteDecision.resolution;
 
+  const hasConcreteConversationAnchor =
+    Boolean(convoCtx?.lastEntityId) ||
+    Boolean(convoCtx?.lastFamilyKey) ||
+    Boolean(convoCtx?.selectedServiceId) ||
+    Boolean(convoCtx?.last_service_id) ||
+    Boolean(convoCtx?.expectingVariantForEntityId);
+
+  const hasConcreteClassifierAnchor =
+    Boolean(catalogReferenceClassification?.targetServiceId) ||
+    Boolean(catalogReferenceClassification?.targetVariantId) ||
+    Boolean(catalogReferenceClassification?.targetFamilyKey) ||
+    Boolean(explicitEntityCandidateForClassification);
+
+  const isGenericCatalogOverviewTurn =
+    normalizedCurrentIntent === "precio" &&
+    detectedFacets?.asksPrices === true &&
+    !detectedFacets?.asksSchedules &&
+    !detectedFacets?.asksLocation &&
+    !detectedFacets?.asksAvailability &&
+    !hasConcreteConversationAnchor &&
+    !hasConcreteClassifierAnchor;
+
   const hasCanonicalCatalogResolution =
     canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
     canonicalCatalogRouteDecision.resolutionKind ===
       "resolved_service_variant_ambiguous" ||
-    canonicalCatalogRouteDecision.resolutionKind === "ambiguous";
+    (
+      canonicalCatalogRouteDecision.resolutionKind === "ambiguous" &&
+      !isGenericCatalogOverviewTurn
+    );
 
   const effectiveCatalogReferenceClassification: CatalogReferenceClassification =
     hasCanonicalCatalogResolution
