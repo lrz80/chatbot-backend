@@ -121,7 +121,22 @@ function shouldAllowLooseCatalogSignals(params: {
     return true;
   }
 
-  return isPositiveCatalogClassificationKind(previewClassification?.kind);
+  const kind = toNormalizedString(previewClassification?.kind);
+
+  // Para overview genérico del catálogo no intentamos resolver entidad suelta.
+  // Eso evita ruido estructural en preguntas como:
+  // "cuáles son los precios?", "qué planes tienen?", etc.
+  if (kind === "catalog_overview") {
+    return false;
+  }
+
+  return (
+    kind === "entity_specific" ||
+    kind === "variant_specific" ||
+    kind === "catalog_family" ||
+    kind === "comparison" ||
+    kind === "referential_followup"
+  );
 }
 
 function shouldAllowStructuredComparison(params: {

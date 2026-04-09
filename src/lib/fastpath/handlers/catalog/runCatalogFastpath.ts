@@ -871,7 +871,13 @@ export async function runCatalogFastpath(
       intentOutNorm === "precio"
     );
 
-  if (shouldForceServiceChoiceFromFamilyAmbiguity) {
+  const isGenericCatalogOverviewTurn =
+    referenceKind === "catalog_overview" &&
+    !targetServiceId &&
+    !targetVariantId &&
+    !targetFamilyKey;
+
+  if (shouldForceServiceChoiceFromFamilyAmbiguity && !isGenericCatalogOverviewTurn) {
     const familyResolution = await resolveServiceCandidatesFromText(
       input.pool,
       input.tenantId,
