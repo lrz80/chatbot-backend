@@ -379,9 +379,7 @@ function canUseEntityContextAsClearFollowup(params: {
     tokenCount,
     hasExpectedVariant,
     hasLastEntity,
-    hasPresentedEntities,
     hasLastFamily,
-    hasPresentedFamilies,
     signals,
   } = params;
 
@@ -389,10 +387,12 @@ function canUseEntityContextAsClearFollowup(params: {
     return tokenCount > 0 && tokenCount <= 6;
   }
 
-  const hasEntityContext = hasLastEntity || hasPresentedEntities;
-  const hasFamilyContext = hasLastFamily || hasPresentedFamilies;
+  // Anchor real: entidad o familia activa.
+  // Haber mostrado opciones antes NO basta para tratar el turno actual
+  // como follow-up referencial.
+  const hasConcreteAnchor = hasLastEntity || hasLastFamily;
 
-  if (!hasEntityContext && !hasFamilyContext) {
+  if (!hasConcreteAnchor) {
     return false;
   }
 
@@ -401,10 +401,10 @@ function canUseEntityContextAsClearFollowup(params: {
   }
 
   return (
-    signals.hasReferentialDependency ||
     signals.hasSpecificEntityCandidate ||
     signals.hasVariantCandidate ||
-    signals.hasFamilyCandidate
+    signals.hasFamilyCandidate ||
+    signals.hasReferentialDependency
   );
 }
 
@@ -819,19 +819,20 @@ export function classifyCatalogReferenceTurn(
       hasPresentedFamilies,
       signals,
     }) &&
-    (hasPresentedEntities || hasLastEntity)
+    hasLastEntity
   ) {
     notes.push("clear_followup_with_entity_context");
     notes.push("entity_context_followup_allowed");
+    notes.push("concrete_entity_anchor_required");
 
     result.kind = "referential_followup";
-    result.confidence = hasPresentedEntities ? 0.84 : 0.78;
+    result.confidence = 0.78;
 
     result.shouldUseContextFirst = true;
-    result.shouldAskDisambiguation = context.lastPresentedEntityIds.length > 1;
-    result.disambiguationType = inferDisambiguationType(context);
+    result.shouldAskDisambiguation = false;
+    result.disambiguationType = "none";
 
-    result.targetLevel = hasLastEntity ? "service" : "none";
+    result.targetLevel = "service";
     result.targetServiceId = String(context.lastEntityId || "").trim() || null;
     result.targetServiceName =
       String(context.lastEntityName || "").trim() || null;
