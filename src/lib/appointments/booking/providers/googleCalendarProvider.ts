@@ -49,7 +49,7 @@ export class GoogleCalendarProvider implements BookingProviderAdapter {
 
     const event = await googleCreateEvent({
       tenantId: input.tenantId,
-      calendarId: input.calendarId,
+      calendarId: input.calendarId ?? undefined,
       summary: input.summary,
       description: input.description || "",
       startISO: input.startISO,
