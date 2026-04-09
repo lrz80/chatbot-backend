@@ -807,10 +807,13 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
         SET es_trial = $1,
             plan = COALESCE($2, plan),
             membresia_inicio = CASE
-              WHEN $1 = false AND $3 IS NOT NULL THEN $3
+              WHEN $1 = false AND $3::timestamptz IS NOT NULL THEN $3::timestamptz
               ELSE membresia_inicio
             END,
-            membresia_vigencia = COALESCE($4, membresia_vigencia),
+            membresia_vigencia = CASE
+              WHEN $4::timestamptz IS NOT NULL THEN $4::timestamptz
+              ELSE membresia_vigencia
+            END,
             trial_ever_claimed = CASE WHEN $5 THEN true ELSE trial_ever_claimed END,
             plan_limits = $6,
             stripe_product_id = COALESCE($8, stripe_product_id)
