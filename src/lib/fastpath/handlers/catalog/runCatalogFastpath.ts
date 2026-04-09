@@ -939,6 +939,17 @@ export async function runCatalogFastpath(
 
   const intentOutNorm = String(input.intentOut || "").trim().toLowerCase();
 
+  const isGenericCatalogOverviewByIntent =
+    !hasAnyStructuredCatalogTarget &&
+    (referenceKind === "none" || referenceKind === "catalog_overview") &&
+    (
+      intentOutNorm === "precio" ||
+      intentOutNorm === "planes_precios" ||
+      asksPrices === true
+    ) &&
+    asksIncludesOnly !== true &&
+    asksSchedules !== true;
+
   const hasExplicitCatalogRouting =
     catalogRoutingSignal.shouldRouteCatalog === true ||
     referenceKind === "catalog_overview" ||
@@ -1206,16 +1217,19 @@ export async function runCatalogFastpath(
       hasFacetDrivenCatalogIntent
     );
 
-  const shouldResolveExplicitCatalogTarget = isExplicitCatalogQuestion({
-    routeIntent: executionRouteIntent,
-    intentOut: intentOutNorm,
-    asksPrices,
-    asksIncludesOnly,
-    asksSchedules,
-  });
+  const shouldResolveExplicitCatalogTarget =
+    !isGenericCatalogOverviewByIntent &&
+    isExplicitCatalogQuestion({
+      routeIntent: executionRouteIntent,
+      intentOut: intentOutNorm,
+      asksPrices,
+      asksIncludesOnly,
+      asksSchedules,
+    });
 
   const shouldResolveCanonicalTargetEarly =
     shouldResolveExplicitCatalogTarget &&
+    !isGenericCatalogOverviewByIntent &&
     !hasFamilyStructuredCatalogTarget &&
     !isStructuredComparisonTurn;
 
