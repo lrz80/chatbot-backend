@@ -3,10 +3,18 @@ import { Pool } from "pg";
 import type {
   Canal,
   CommercialSignal,
+  IntentRoutingHints,
 } from "../../../detectarIntencion";
 import type { Lang } from "../clients/clientDb";
 import { runFastpath } from "../../../fastpath/runFastpath";
 import { naturalizeSecondaryOptionsLine } from "../../../fastpath/naturalizeSecondaryOptions";
+import {
+  buildAvailabilityBlockFromInfoClave,
+  buildLocationBlockFromInfoClave,
+  buildServicesBlockFromInfoClave,
+} from "../../../fastpath/handlers/catalog/helpers/catalogBusinessInfoBlocks";
+import { buildScheduleBlock } from "../../../fastpath/handlers/catalog/helpers/catalogScheduleBlock";
+import { withSectionTitle } from "../../../fastpath/handlers/catalog/helpers/catalogReplyBlocks";
 
 import { buildCatalogReferenceClassificationInput } from "../../../catalog/buildCatalogReferenceClassificationInput";
 import { classifyCatalogReferenceTurn } from "../../../catalog/classifyCatalogReferenceTurn";
@@ -35,6 +43,71 @@ const MAX_WHATSAPP_LINES = 9999;
 type PendingCtaLike = {
   type?: string | null;
   awaitsConfirmation?: boolean | null;
+};
+
+export type FastpathHybridRoute =
+  | "catalog"
+  | "business_info"
+  | "continue_pipeline";
+
+export type FastpathHybridArgs = {
+  pool: Pool;
+  tenantId: string;
+  canal: Canal;
+  idiomaDestino: Lang;
+  userInput: string;
+  inBooking: boolean;
+  convoCtx: any;
+  infoClave: string;
+  detectedIntent: string | null;
+  detectedFacets?: IntentFacets | null;
+  detectedCommercial?: CommercialSignal | null;
+  detectedRoutingHints?: IntentRoutingHints | null;
+  intentFallback: string | null;
+  messageId: string | null;
+  contactoNorm: string;
+  promptBaseMem: string;
+  referentialFollowup?: boolean;
+  followupNeedsAnchor?: boolean;
+  followupEntityKind?: "service" | "plan" | "package" | null;
+};
+
+export type FastpathHybridResult = {
+  handled: boolean;
+  reply?: string;
+  replySource?: string;
+  intent?: string | null;
+  ctxPatch?: any;
+  routeTarget?: FastpathHybridRoute;
+};
+
+type FastpathSemanticTurn = {
+  domain: "catalog" | "business_info" | "booking" | "other";
+  scope: "overview" | "family" | "service" | "variant" | "none";
+  answerKind:
+    | "price"
+    | "includes"
+    | "schedule"
+    | "location"
+    | "availability"
+    | "comparison"
+    | "overview"
+    | "other";
+  resolution: "resolved" | "ambiguous" | "unresolved" | "overview";
+  grounded: boolean;
+};
+
+type HybridDomainDecision = {
+  routeTarget: FastpathHybridRoute;
+  reason:
+    | "pending_catalog_choice"
+    | "canonical_catalog_resolution"
+    | "catalog_targeted_signal"
+    | "catalog_overview_signal"
+    | "business_info_signal"
+    | "mixed_turn"
+    | "guided_entry"
+    | "insufficient_signal";
 };
 
 function getPendingCtaFromCtx(convoCtx: any): PendingCtaLike | null {
@@ -70,40 +143,293 @@ function hasExplicitPendingCtaAwaitingConfirmation(convoCtx: any): boolean {
   );
 }
 
-export type FastpathHybridArgs = {
-  pool: Pool;
-  tenantId: string;
-  canal: Canal;
-  idiomaDestino: Lang;
-  userInput: string;
-  inBooking: boolean;
-  convoCtx: any;
-  infoClave: string;
-  detectedIntent: string | null;
+function buildFastpathSemanticTurn(input: {
+  detectedIntent?: string | null;
   detectedFacets?: IntentFacets | null;
-  detectedCommercial?: CommercialSignal | null;
-  intentFallback: string | null;
-  messageId: string | null;
-  contactoNorm: string;
-  promptBaseMem: string;
-  referentialFollowup?: boolean;
-  followupNeedsAnchor?: boolean;
-  followupEntityKind?: "service" | "plan" | "package" | null;
-};
+  detectedRoutingHints?: IntentRoutingHints | null;
+  structuredService: {
+    hasResolution: boolean;
+  };
+  fp: {
+    source?: string | null;
+  };
+  catalogReferenceClassification?: CatalogReferenceClassification | null;
+}): FastpathSemanticTurn {
+  const normalizedIntent = String(input.detectedIntent || "")
+    .trim()
+    .toLowerCase();
 
-export type FastpathHybridRoute =
-  | "catalog"
-  | "business_info"
-  | "continue_pipeline";
+  const classificationKind = String(
+    input.catalogReferenceClassification?.kind || ""
+  )
+    .trim()
+    .toLowerCase();
 
-export type FastpathHybridResult = {
+  const catalogScope = input.detectedRoutingHints?.catalogScope || "none";
+  const businessInfoScope =
+    input.detectedRoutingHints?.businessInfoScope || "none";
+
+  const asksPrices = input.detectedFacets?.asksPrices === true;
+  const asksSchedules = input.detectedFacets?.asksSchedules === true;
+  const asksLocation = input.detectedFacets?.asksLocation === true;
+  const asksAvailability = input.detectedFacets?.asksAvailability === true;
+
+  const hasCatalogResolution = input.structuredService?.hasResolution === true;
+  const asksDisambiguation =
+    input.catalogReferenceClassification?.shouldAskDisambiguation === true;
+
+  const grounded =
+    hasCatalogResolution ||
+    classificationKind === "entity_specific" ||
+    classificationKind === "variant_specific" ||
+    String(input.fp?.source || "").trim().toLowerCase() === "catalog_db";
+
+  const scope: FastpathSemanticTurn["scope"] =
+    classificationKind === "variant_specific"
+      ? "variant"
+      : classificationKind === "entity_specific"
+      ? "service"
+      : classificationKind === "catalog_family"
+      ? "family"
+      : catalogScope === "overview" || businessInfoScope === "overview"
+      ? "overview"
+      : "none";
+
+  const answerKind: FastpathSemanticTurn["answerKind"] =
+    classificationKind === "comparison"
+      ? "comparison"
+      : normalizedIntent === "info_servicio"
+      ? "includes"
+      : asksPrices
+      ? "price"
+      : asksSchedules
+      ? "schedule"
+      : asksLocation
+      ? "location"
+      : asksAvailability
+      ? "availability"
+      : normalizedIntent === "info_general"
+      ? "overview"
+      : "other";
+
+  const domain: FastpathSemanticTurn["domain"] =
+    catalogScope !== "none" ||
+    scope === "service" ||
+    scope === "family" ||
+    scope === "variant"
+      ? "catalog"
+      : businessInfoScope !== "none"
+      ? "business_info"
+      : "other";
+
+  const resolution: FastpathSemanticTurn["resolution"] =
+    asksDisambiguation
+      ? "ambiguous"
+      : hasCatalogResolution
+      ? "resolved"
+      : scope === "overview"
+      ? "overview"
+      : "unresolved";
+
+  return {
+    domain,
+    scope,
+    answerKind,
+    resolution,
+    grounded,
+  };
+}
+
+function decideHybridDomain(input: {
+  hasPendingCatalogChoice: boolean;
+  isMixedScheduleAndPriceTurn: boolean;
+  isGuidedBusinessEntryTurn: boolean;
+  detectedFacets?: IntentFacets | null;
+  detectedRoutingHints?: IntentRoutingHints | null;
+  canonicalCatalogRouteDecision: {
+    resolutionKind?: string | null;
+  };
+  catalogReferenceClassification: CatalogReferenceClassification;
+}): HybridDomainDecision {
+  if (input.hasPendingCatalogChoice) {
+    return {
+      routeTarget: "catalog",
+      reason: "pending_catalog_choice",
+    };
+  }
+
+  if (
+    input.canonicalCatalogRouteDecision?.resolutionKind === "resolved_single" ||
+    input.canonicalCatalogRouteDecision?.resolutionKind ===
+      "resolved_service_variant_ambiguous" ||
+    input.canonicalCatalogRouteDecision?.resolutionKind === "ambiguous"
+  ) {
+    return {
+      routeTarget: "catalog",
+      reason: "canonical_catalog_resolution",
+    };
+  }
+
+  if (input.isMixedScheduleAndPriceTurn) {
+    return {
+      routeTarget: "continue_pipeline",
+      reason: "mixed_turn",
+    };
+  }
+
+  if (input.detectedRoutingHints?.catalogScope === "targeted") {
+    return {
+      routeTarget: "catalog",
+      reason: "catalog_targeted_signal",
+    };
+  }
+
+  if (
+    input.detectedRoutingHints?.catalogScope === "overview" &&
+    input.detectedFacets?.asksPrices === true
+  ) {
+    return {
+      routeTarget: "catalog",
+      reason: "catalog_overview_signal",
+    };
+  }
+
+  if (input.detectedRoutingHints?.businessInfoScope !== "none") {
+    return {
+      routeTarget: "business_info",
+      reason: "business_info_signal",
+    };
+  }
+
+  if (input.isGuidedBusinessEntryTurn) {
+    return {
+      routeTarget: "continue_pipeline",
+      reason: "guided_entry",
+    };
+  }
+
+  return {
+    routeTarget: "continue_pipeline",
+    reason: "insufficient_signal",
+  };
+}
+
+type BusinessInfoResolution = {
   handled: boolean;
-  reply?: string;
-  replySource?: string;
-  intent?: string | null;
-  ctxPatch?: any;
-  routeTarget?: FastpathHybridRoute;
+  reply: string;
+  intent: string | null;
+  source: "info_general_overview_db" | "info_clave_db";
+  canonicalBlocks: {
+    servicesBlock?: string | null;
+    scheduleBlock?: string | null;
+    locationBlock?: string | null;
+    availabilityBlock?: string | null;
+  };
 };
+
+function buildBusinessInfoResolution(input: {
+  idiomaDestino: Lang;
+  infoClave: string;
+  detectedIntent?: string | null;
+  detectedFacets?: IntentFacets | null;
+  detectedRoutingHints?: IntentRoutingHints | null;
+}): BusinessInfoResolution {
+  const normalizedIntent = String(input.detectedIntent || "")
+    .trim()
+    .toLowerCase();
+
+  const asksSchedules = input.detectedFacets?.asksSchedules === true;
+  const asksLocation = input.detectedFacets?.asksLocation === true;
+  const asksAvailability = input.detectedFacets?.asksAvailability === true;
+
+  const wantsOverview =
+    input.detectedRoutingHints?.businessInfoScope === "overview" ||
+    normalizedIntent === "info_general";
+
+  const servicesBody = wantsOverview
+    ? buildServicesBlockFromInfoClave(input.infoClave)
+    : "";
+
+  const scheduleBlock = asksSchedules
+    ? buildScheduleBlock({
+        idiomaDestino: input.idiomaDestino,
+        infoClave: input.infoClave,
+      }).trim()
+    : "";
+
+  const locationBody = asksLocation
+    ? buildLocationBlockFromInfoClave(input.infoClave)
+    : "";
+
+  const availabilityBody = asksAvailability
+    ? buildAvailabilityBlockFromInfoClave(input.infoClave)
+    : "";
+
+  const servicesBlock = servicesBody.trim();
+
+  const locationBlock = withSectionTitle(
+    input.idiomaDestino,
+    "Ubicación:",
+    "Location:",
+    locationBody
+  ).trim();
+
+  const availabilityBlock = withSectionTitle(
+    input.idiomaDestino,
+    "Disponibilidad:",
+    "Availability:",
+    availabilityBody
+  ).trim();
+
+  const sections = [
+    servicesBlock,
+    scheduleBlock,
+    locationBlock,
+    availabilityBlock,
+  ].filter((value) => String(value || "").trim().length > 0);
+
+  const reply = sections.join("\n\n").trim();
+
+  if (!reply) {
+    return {
+      handled: false,
+      reply: "",
+      intent: null,
+      source: "info_clave_db",
+      canonicalBlocks: {},
+    };
+  }
+
+  const activeFacetCount = [
+    asksSchedules,
+    asksLocation,
+    asksAvailability,
+  ].filter(Boolean).length;
+
+  const resolvedIntent =
+    wantsOverview
+      ? "info_general"
+      : activeFacetCount === 1 && asksSchedules
+      ? "horario"
+      : activeFacetCount === 1 && asksLocation
+      ? "ubicacion"
+      : activeFacetCount === 1 && asksAvailability
+      ? "disponibilidad"
+      : "info_general";
+
+  return {
+    handled: true,
+    reply,
+    intent: resolvedIntent,
+    source: wantsOverview ? "info_general_overview_db" : "info_clave_db",
+    canonicalBlocks: {
+      servicesBlock: servicesBlock || null,
+      scheduleBlock: scheduleBlock || null,
+      locationBlock: locationBlock || null,
+      availabilityBlock: availabilityBlock || null,
+    },
+  };
+}
 
 export async function handleFastpathHybridTurn(
   args: FastpathHybridArgs
@@ -120,6 +446,7 @@ export async function handleFastpathHybridTurn(
     detectedIntent,
     detectedFacets,
     detectedCommercial,
+    detectedRoutingHints,
     intentFallback,
     messageId,
     contactoNorm,
@@ -308,270 +635,146 @@ export async function handleFastpathHybridTurn(
       }
     : rawCanonicalCatalogRouteDecision;
 
-  const canonicalResolution = canonicalCatalogRouteDecision.resolution;
+  const domainDecision = decideHybridDomain({
+    hasPendingCatalogChoice,
+    isMixedScheduleAndPriceTurn,
+    isGuidedBusinessEntryTurn,
+    detectedFacets: detectedFacets || null,
+    detectedRoutingHints: detectedRoutingHints || null,
+    canonicalCatalogRouteDecision,
+    catalogReferenceClassification,
+  });
 
-  const hasConcreteConversationAnchor =
-    Boolean(convoCtx?.lastEntityId) ||
-    Boolean(convoCtx?.lastFamilyKey) ||
-    Boolean(convoCtx?.selectedServiceId) ||
-    Boolean(convoCtx?.last_service_id) ||
-    Boolean(convoCtx?.expectingVariantForEntityId);
+  const routeTarget = domainDecision.routeTarget;
 
-  const hasConcreteClassifierAnchor =
-    Boolean(catalogReferenceClassification?.targetServiceId) ||
-    Boolean(catalogReferenceClassification?.targetVariantId) ||
-    Boolean(catalogReferenceClassification?.targetFamilyKey) ||
-    Boolean(explicitEntityCandidateForClassification);
+    if (routeTarget === "business_info") {
+    const businessInfo = buildBusinessInfoResolution({
+      idiomaDestino,
+      infoClave,
+      detectedIntent: detectedIntent || intentFallback || null,
+      detectedFacets: detectedFacets || null,
+      detectedRoutingHints: detectedRoutingHints || null,
+    });
 
-  const isGenericCatalogOverviewTurn =
-    normalizedCurrentIntent === "precio" &&
-    detectedFacets?.asksPrices === true &&
-    !detectedFacets?.asksSchedules &&
-    !detectedFacets?.asksLocation &&
-    !detectedFacets?.asksAvailability &&
-    !hasConcreteConversationAnchor &&
-    !hasConcreteClassifierAnchor;
+    console.log("[FASTPATH_HYBRID][BUSINESS_INFO_ROUTE]", {
+      tenantId,
+      canal,
+      contactoNorm,
+      userInput,
+      detectedIntent,
+      intentFallback,
+      reason: domainDecision.reason,
+      businessInfoHandled: businessInfo.handled,
+    });
 
-  const hasCanonicalCatalogResolution =
-    canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
-    canonicalCatalogRouteDecision.resolutionKind ===
-      "resolved_service_variant_ambiguous" ||
-    (
-      canonicalCatalogRouteDecision.resolutionKind === "ambiguous" &&
-      !isGenericCatalogOverviewTurn
-    );
+    if (!businessInfo.handled) {
+      return {
+        handled: false,
+        routeTarget: "business_info",
+        intent: detectedIntent || intentFallback || null,
+      };
+    }
 
-  const effectiveCatalogReferenceClassification: CatalogReferenceClassification =
-    hasCanonicalCatalogResolution
-      ? {
-          ...catalogReferenceClassification,
-          kind:
-            canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
-              ? "entity_specific"
-              : canonicalCatalogRouteDecision.resolutionKind ===
-                "resolved_service_variant_ambiguous"
-              ? "entity_specific"
-              : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
-              ? "catalog_family"
-              : catalogReferenceClassification.kind,
-          intent:
-            catalogReferenceClassification.intent !== "unknown"
-              ? catalogReferenceClassification.intent
-              : detectedIntent === "info_servicio"
-              ? "includes"
-              : (
-                  (detectedIntent === "horario" ||
-                    detectedIntent === "info_horarios_generales") &&
-                  !isMixedScheduleAndPriceTurn
-                )
-              ? "schedule"
-              : detectedIntent === "other_plans" ||
-                detectedIntent === "catalog_alternatives"
-              ? "other_plans"
-              : detectedIntent === "combination_and_price" ||
-                detectedIntent === "catalog_combination"
-              ? "combination_and_price"
-              : detectedIntent === "compare" ||
-                detectedIntent === "comparison" ||
-                detectedIntent === "comparacion" ||
-                detectedIntent === "catalog_compare"
-              ? "compare"
-              : "price_or_plan",
-          confidence:
-            canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
-              ? 0.95
-              : canonicalCatalogRouteDecision.resolutionKind ===
-                "resolved_service_variant_ambiguous"
-              ? 0.95
-              : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
-              ? 0.9
-              : catalogReferenceClassification.confidence,
-          shouldResolveEntity:
-            canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
-            canonicalCatalogRouteDecision.resolutionKind ===
-              "resolved_service_variant_ambiguous",
-          shouldAskDisambiguation:
-            canonicalCatalogRouteDecision.resolutionKind ===
-              "resolved_service_variant_ambiguous" ||
-            canonicalCatalogRouteDecision.resolutionKind === "ambiguous",
-          targetLevel:
-            canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
-              ? "service"
-              : canonicalCatalogRouteDecision.resolutionKind ===
-                "resolved_service_variant_ambiguous"
-              ? "service"
-              : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
-              ? "multi_service"
-              : catalogReferenceClassification.targetLevel,
-          targetServiceId:
-            canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
-            canonicalCatalogRouteDecision.resolutionKind ===
-              "resolved_service_variant_ambiguous"
-              ? canonicalCatalogRouteDecision.resolvedServiceId
-              : null,
-          targetServiceName:
-            canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
-            canonicalCatalogRouteDecision.resolutionKind ===
-              "resolved_service_variant_ambiguous"
-              ? canonicalCatalogRouteDecision.resolvedServiceName
-              : null,
-          targetVariantId: null,
-          targetVariantName: null,
-          targetFamilyKey:
-            canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
-              ? "canonical_ambiguous_family"
-              : null,
-          targetFamilyName:
-            canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
-              ? "canonical_ambiguous_family"
-              : null,
-          signals: {
-            ...(catalogReferenceClassification?.signals || {}),
-            hasCatalogScope: true,
-            hasSpecificEntityCandidate:
-              canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
-              canonicalCatalogRouteDecision.resolutionKind ===
-                "resolved_service_variant_ambiguous",
-            hasFamilyCandidate:
-              canonicalCatalogRouteDecision.resolutionKind === "ambiguous",
-            hasDisambiguationRisk:
-              canonicalCatalogRouteDecision.resolutionKind ===
-                "resolved_service_variant_ambiguous" ||
-              canonicalCatalogRouteDecision.resolutionKind === "ambiguous",
-          },
-          debug: {
-            source: "catalog_reference_classifier",
-            notes: [
-              "canonical_catalog_resolution_applied",
-              `resolution_kind:${canonicalCatalogRouteDecision.resolutionKind}`,
-              ...(canonicalCatalogRouteDecision.resolvedServiceId
-                ? [
-                    `resolved_service_id:${String(
-                      canonicalCatalogRouteDecision.resolvedServiceId
-                    ).trim()}`,
-                  ]
-                : []),
-              ...(canonicalCatalogRouteDecision.resolvedServiceName
-                ? [
-                    `resolved_service_name:${String(
-                      canonicalCatalogRouteDecision.resolvedServiceName
-                    ).trim()}`,
-                  ]
-                : []),
-              ...(canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
-                ? [
-                    `ambiguous_candidates:${String(
-                      canonicalResolution.candidates?.length || 0
-                    )}`,
-                  ]
-                : []),
-            ],
-          },
-        }
-      : catalogReferenceClassification;
+    const businessInfoFp = {
+      handled: true as const,
+      reply: businessInfo.reply,
+      source: businessInfo.source,
+      intent: businessInfo.intent,
+      catalogPayload: {
+        kind: "resolved_catalog_answer" as const,
+        scope: "overview" as const,
+        canonicalBlocks: businessInfo.canonicalBlocks,
+      },
+    };
 
-  const effectiveCatalogRoutingSignal = hasCanonicalCatalogResolution
-    ? {
-        ...catalogRoutingSignal,
-        shouldRouteCatalog: true,
-        allowsDbCatalogPath: true,
-        routeIntent:
-          canonicalCatalogRouteDecision.resolutionKind ===
-          "resolved_service_variant_ambiguous"
-            ? "catalog_includes"
-            : "entity_detail",
-        referenceKind:
-          canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
-            ? "entity_specific"
-            : canonicalCatalogRouteDecision.resolutionKind ===
-              "resolved_service_variant_ambiguous"
-            ? "entity_specific"
-            : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
-            ? "catalog_family"
-            : catalogRoutingSignal.referenceKind,
-        source: "canonical_catalog_resolution",
-        targetServiceId:
-          canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
-          canonicalCatalogRouteDecision.resolutionKind ===
-            "resolved_service_variant_ambiguous"
-            ? canonicalCatalogRouteDecision.resolvedServiceId
-            : null,
-        targetServiceName:
-          canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
-          canonicalCatalogRouteDecision.resolutionKind ===
-            "resolved_service_variant_ambiguous"
-            ? canonicalCatalogRouteDecision.resolvedServiceName
-            : null,
-        targetVariantId: null,
-        targetVariantName: null,
-        targetFamilyKey:
-          canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
-            ? "canonical_ambiguous_family"
-            : null,
-        targetFamilyName:
-          canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
-            ? "canonical_ambiguous_family"
-            : null,
-        targetLevel:
-          canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
-            ? "service"
-            : canonicalCatalogRouteDecision.resolutionKind ===
-              "resolved_service_variant_ambiguous"
-            ? "service"
-            : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
-            ? "family"
-            : catalogRoutingSignal.targetLevel,
-        disambiguationType:
-          canonicalCatalogRouteDecision.resolutionKind ===
-          "resolved_service_variant_ambiguous"
-            ? "variant_choice"
-            : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
-            ? "service_choice"
-            : "none",
-        anchorShift: "none",
-      }
-    : catalogRoutingSignal;
+    let ctxPatch: any = {
+      last_catalog_at: Date.now(),
+      lastResolvedIntent:
+        businessInfo.intent === "horario"
+          ? "business_info_facets"
+          : businessInfo.intent === "ubicacion"
+          ? "business_info_facets"
+          : businessInfo.intent === "disponibilidad"
+          ? "business_info_facets"
+          : "info_general_overview",
+      pendingCatalogChoice: null,
+      pendingCatalogChoiceAt: null,
+    };
 
-  const hasConcreteCatalogHandle =
-    hasPendingCatalogChoice ||
-    hasCanonicalCatalogResolution ||
-    effectiveCatalogReferenceClassification.shouldResolveEntity === true ||
-    effectiveCatalogReferenceClassification.shouldAskDisambiguation === true ||
-    Boolean(effectiveCatalogRoutingSignal.targetServiceId) ||
-    Boolean(effectiveCatalogRoutingSignal.targetVariantId) ||
-    (
-      effectiveCatalogRoutingSignal.shouldRouteCatalog === true &&
-      (
-        effectiveCatalogRoutingSignal.referenceKind === "entity_specific" ||
-        effectiveCatalogRoutingSignal.referenceKind === "catalog_family"
-      )
-    );
+    if (detectedCommercial) {
+      ctxPatch.commercialSignal = {
+        purchaseIntent: detectedCommercial.purchaseIntent,
+        wantsBooking: detectedCommercial.wantsBooking,
+        wantsQuote: detectedCommercial.wantsQuote,
+        wantsHuman: detectedCommercial.wantsHuman,
+        urgency: detectedCommercial.urgency,
+      };
+    }
 
-  const isCatalogOverviewHandle =
-    effectiveCatalogRoutingSignal.shouldRouteCatalog === true &&
-    (
-      effectiveCatalogRoutingSignal.routeIntent === "catalog_price" ||
-      effectiveCatalogRoutingSignal.routeIntent === "catalog_alternatives" ||
-      effectiveCatalogRoutingSignal.routeIntent === "catalog_combination" ||
-      effectiveCatalogReferenceClassification.kind === "catalog_overview" ||
-      detectedFacets?.asksPrices === true
-    );
+    if (pendingCta?.type) {
+      ctxPatch.pendingCta = {
+        type: pendingCta.type,
+        awaitsConfirmation: pendingCta.awaitsConfirmation === true,
+      };
+    }
 
-  const shouldHandleCatalogInFastpath =
-    hasConcreteCatalogHandle || isCatalogOverviewHandle;
+    const structuredService = {
+      hasResolution: false,
+    };
 
-  const routeTarget: FastpathHybridRoute = shouldHandleCatalogInFastpath
-    ? "catalog"
-    : isMixedScheduleAndPriceTurn
-    ? "continue_pipeline"
-    : "business_info";
+    const replyPolicy = buildFastpathReplyPolicy({
+      canal,
+      fp: businessInfoFp as any,
+      detectedIntent: businessInfo.intent,
+      intentFallback: businessInfo.intent,
+      detectedCommercial,
+      catalogRoutingSignal,
+      catalogReferenceClassification,
+      structuredService: structuredService as any,
+      ctxPatch,
+    });
+
+    let finalReply = String(businessInfo.reply || "").trim();
+
+    const isDmChannel =
+      canal === "whatsapp" ||
+      canal === "facebook" ||
+      canal === "instagram";
+
+    if (isDmChannel) {
+      const rendered = await renderFastpathDmReply({
+        tenantId,
+        canal,
+        idiomaDestino,
+        userInput,
+        contactoNorm,
+        messageId,
+        promptBaseMem,
+        fastpathText: finalReply,
+        fp: businessInfoFp as any,
+        detectedIntent: businessInfo.intent,
+        intentFallback: businessInfo.intent,
+        structuredService: structuredService as any,
+        replyPolicy,
+        ctxPatch,
+        maxLines: MAX_WHATSAPP_LINES,
+      });
+
+      finalReply = String(rendered.reply || "").trim();
+      ctxPatch = rendered.ctxPatch;
+    }
+
+    return {
+      handled: true,
+      routeTarget: "business_info",
+      reply: finalReply,
+      replySource: businessInfo.source,
+      intent: businessInfo.intent,
+      ctxPatch,
+    };
+  }
 
   if (routeTarget !== "catalog") {
-    const nextRouteTarget: FastpathHybridRoute =
-      routeTarget === "business_info" && isGuidedBusinessEntryTurn
-        ? "continue_pipeline"
-        : routeTarget;
-
     console.log("[FASTPATH_HYBRID][ROUTE_OUTSIDE_FASTPATH]", {
       tenantId,
       canal,
@@ -579,21 +782,135 @@ export async function handleFastpathHybridTurn(
       userInput,
       detectedIntent,
       intentFallback,
-      routeTarget: nextRouteTarget,
-      isMixedScheduleAndPriceTurn,
-      isGuidedBusinessEntryTurn,
-      routingPolicy,
-      catalogRoutingSignal: effectiveCatalogRoutingSignal,
+      routeTarget,
+      reason: domainDecision.reason,
       canonicalCatalogRouteDecision,
       hasPendingCatalogChoice,
     });
 
     return {
       handled: false,
-      routeTarget: nextRouteTarget,
+      routeTarget,
       intent: detectedIntent || intentFallback || null,
     };
   }
+
+  const hasCanonicalCatalogResolution =
+    canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+    canonicalCatalogRouteDecision.resolutionKind ===
+      "resolved_service_variant_ambiguous" ||
+    canonicalCatalogRouteDecision.resolutionKind === "ambiguous";
+
+  const effectiveCatalogReferenceClassification: CatalogReferenceClassification = {
+    ...catalogReferenceClassification,
+    kind:
+      canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
+        ? "entity_specific"
+        : canonicalCatalogRouteDecision.resolutionKind ===
+          "resolved_service_variant_ambiguous"
+        ? "entity_specific"
+        : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+        ? "catalog_family"
+        : catalogReferenceClassification.kind,
+    shouldResolveEntity:
+      canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+      canonicalCatalogRouteDecision.resolutionKind ===
+        "resolved_service_variant_ambiguous"
+        ? true
+        : catalogReferenceClassification.shouldResolveEntity,
+    shouldAskDisambiguation:
+      canonicalCatalogRouteDecision.resolutionKind ===
+        "resolved_service_variant_ambiguous" ||
+      canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+        ? true
+        : catalogReferenceClassification.shouldAskDisambiguation,
+    targetLevel:
+      canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
+        ? "service"
+        : canonicalCatalogRouteDecision.resolutionKind ===
+          "resolved_service_variant_ambiguous"
+        ? "service"
+        : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+        ? "multi_service"
+        : catalogReferenceClassification.targetLevel,
+    targetServiceId:
+      canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+      canonicalCatalogRouteDecision.resolutionKind ===
+        "resolved_service_variant_ambiguous"
+        ? canonicalCatalogRouteDecision.resolvedServiceId
+        : catalogReferenceClassification.targetServiceId,
+    targetServiceName:
+      canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+      canonicalCatalogRouteDecision.resolutionKind ===
+        "resolved_service_variant_ambiguous"
+        ? canonicalCatalogRouteDecision.resolvedServiceName
+        : catalogReferenceClassification.targetServiceName,
+    targetVariantId: null,
+    targetVariantName: null,
+    targetFamilyKey:
+      canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+        ? "canonical_ambiguous_family"
+        : catalogReferenceClassification.targetFamilyKey,
+    targetFamilyName:
+      canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+        ? "canonical_ambiguous_family"
+        : catalogReferenceClassification.targetFamilyName,
+  };
+
+  const effectiveCatalogRoutingSignal = {
+    ...catalogRoutingSignal,
+    shouldRouteCatalog: true,
+    allowsDbCatalogPath: true,
+    referenceKind:
+      canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
+        ? "entity_specific"
+        : canonicalCatalogRouteDecision.resolutionKind ===
+          "resolved_service_variant_ambiguous"
+        ? "entity_specific"
+        : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+        ? "catalog_family"
+        : catalogRoutingSignal.referenceKind,
+    source: "canonical_catalog_resolution",
+    targetServiceId:
+      canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+      canonicalCatalogRouteDecision.resolutionKind ===
+        "resolved_service_variant_ambiguous"
+        ? canonicalCatalogRouteDecision.resolvedServiceId
+        : catalogRoutingSignal.targetServiceId,
+    targetServiceName:
+      canonicalCatalogRouteDecision.resolutionKind === "resolved_single" ||
+      canonicalCatalogRouteDecision.resolutionKind ===
+        "resolved_service_variant_ambiguous"
+        ? canonicalCatalogRouteDecision.resolvedServiceName
+        : catalogRoutingSignal.targetServiceName,
+    targetVariantId: null,
+    targetVariantName: null,
+    targetFamilyKey:
+      canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+        ? "canonical_ambiguous_family"
+        : catalogRoutingSignal.targetFamilyKey,
+    targetFamilyName:
+      canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+        ? "canonical_ambiguous_family"
+        : catalogRoutingSignal.targetFamilyName,
+    targetLevel:
+      canonicalCatalogRouteDecision.resolutionKind === "resolved_single"
+        ? "service"
+        : canonicalCatalogRouteDecision.resolutionKind ===
+          "resolved_service_variant_ambiguous"
+        ? "service"
+        : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+        ? "family"
+        : catalogRoutingSignal.targetLevel,
+    disambiguationType:
+      canonicalCatalogRouteDecision.resolutionKind ===
+        "resolved_service_variant_ambiguous"
+        ? "variant_choice"
+        : canonicalCatalogRouteDecision.resolutionKind === "ambiguous"
+        ? "service_choice"
+        : "none",
+    anchorShift: "none",
+  };
 
   const fpIntent = detectedIntent || intentFallback || null;
 
@@ -721,14 +1038,20 @@ export async function handleFastpathHybridTurn(
     catalogReferenceClassification: effectiveCatalogReferenceClassification,
   });
 
+  const semanticTurn = buildFastpathSemanticTurn({
+    detectedIntent: resolvedFinalIntent,
+    detectedFacets: detectedFacets || null,
+    detectedRoutingHints: detectedRoutingHints || null,
+    structuredService,
+    fp,
+    catalogReferenceClassification: effectiveCatalogReferenceClassification,
+  });
+
   const postRunDecision = getFastpathPostRunDecision({
     canal,
     fp,
-    detectedIntent: resolvedFinalIntent,
-    intentFallback: resolvedFinalIntent,
+    semanticTurn,
     convoCtx,
-    catalogRoutingSignal: effectiveCatalogRoutingSignal,
-    catalogReferenceClassification: effectiveCatalogReferenceClassification,
     structuredService,
   });
 
@@ -756,7 +1079,7 @@ export async function handleFastpathHybridTurn(
   let finalReplySource: string | undefined = fp.source;
   let finalIntent: string | null = resolvedFinalIntent;
 
-    if (immediateReturn.shouldReturnImmediately) {
+  if (immediateReturn.shouldReturnImmediately) {
     finalReply = String(immediateReturn.reply || "").trim();
     finalReplySource = immediateReturn.replySource || fp.source;
     finalIntent = immediateReturn.intent || resolvedFinalIntent;

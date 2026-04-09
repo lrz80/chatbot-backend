@@ -4,17 +4,6 @@ import type { FastpathResult } from "../../runFastpath";
 import { getCatalogIntentFlags } from "./getCatalogIntentFlags";
 import { getCatalogTurnState } from "./getCatalogTurnState";
 import { handleSingleServiceCatalog } from "./handleSingleServiceCatalog";
-import {
-  composeCatalogReplyBlocks,
-  withSectionTitle,
-} from "./helpers/catalogReplyBlocks";
-import {
-  buildAvailabilityBlockFromInfoClave,
-  buildLocationBlockFromInfoClave,
-  buildServicesBlockFromInfoClave,
-} from "./helpers/catalogBusinessInfoBlocks";
-import { buildPriceBlock } from "./helpers/catalogPriceBlock";
-import { buildScheduleBlock } from "./helpers/catalogScheduleBlock";
 import { handleCatalogComparison } from "./handleCatalogComparison";
 import { resolveServiceCandidatesFromText } from "../../../services/pricing/resolveServiceIdFromText";
 import { handleResolvedServiceDetail } from "./handleResolvedServiceDetail";
@@ -864,8 +853,6 @@ export async function runCatalogFastpath(
     isAskingOtherCatalogOptions,
     asksSchedules,
     asksPrices,
-    asksLocation,
-    asksAvailability,
   } = getCatalogIntentFlags({
     routeIntent: executionRouteIntent,
     facets: input.facets || {},
@@ -873,7 +860,6 @@ export async function runCatalogFastpath(
 
   void isCombinationIntent;
   void isAskingOtherCatalogOptions;
-  void asksAvailability;
 
   const {
     hasRecentCatalogContext,
@@ -969,7 +955,6 @@ export async function runCatalogFastpath(
     | "combination_and_price"
     | "price_or_plan"
     | "schedule_and_price"
-    | "business_info_only"
     | "other_plans";
 
   const shouldForceServiceChoiceFromFamilyAmbiguity =
@@ -1024,55 +1009,9 @@ export async function runCatalogFastpath(
     questionType = "other_plans";
   } else if (asksSchedules && asksPrices) {
     questionType = "schedule_and_price";
-  } else if (!asksPrices && (asksSchedules || asksLocation || asksAvailability)) {
-    questionType = "business_info_only";
   } else {
     questionType = "price_or_plan";
   }
-
-  const locationBody = asksLocation
-    ? buildLocationBlockFromInfoClave(input.infoClave)
-    : "";
-
-  const availabilityBody = asksAvailability
-    ? buildAvailabilityBlockFromInfoClave(input.infoClave)
-    : "";
-
-  const shouldIncludeServicesFromInfoClave =
-    intentOutNorm === "info_general";
-
-  const servicesBody = shouldIncludeServicesFromInfoClave
-    ? buildServicesBlockFromInfoClave(input.infoClave)
-    : "";
-
-  const servicesBlock = withSectionTitle(
-    input.idiomaDestino,
-    "Servicios:",
-    "Services:",
-    servicesBody
-  );
-
-  const scheduleBlock =
-    asksSchedules
-      ? buildScheduleBlock({
-          idiomaDestino: input.idiomaDestino,
-          infoClave: input.infoClave,
-        })
-      : "";
-
-  const locationBlock = withSectionTitle(
-    input.idiomaDestino,
-    "Ubicación:",
-    "Location:",
-    locationBody
-  );
-
-  const availabilityBlock = withSectionTitle(
-    input.idiomaDestino,
-    "Disponibilidad:",
-    "Availability:",
-    availabilityBody
-  );
 
   const hasActivePendingChoiceForThisTurn =
     shouldReusePendingCatalogChoice({
@@ -1091,123 +1030,8 @@ export async function runCatalogFastpath(
     hasVariantStructuredCatalogTarget ||
     hasFamilyStructuredCatalogTarget;
 
-  const isPureBusinessInfoTurn =
-    questionType === "business_info_only" &&
-    !asksIncludesOnly &&
-    !isCombinationIntent &&
-    !isAskingOtherCatalogOptions;
-
-  const isBusinessInfoFacetTurn =
-    isPureBusinessInfoTurn &&
-    !hasCatalogEntitySignal &&
-    !isStructuredComparisonTurn;
-
-  if (isBusinessInfoFacetTurn) {
-    let canonicalReply = "";
-
-    const replySections: Array<{
-      key: "services" | "schedule" | "location" | "availability";
-      content: string;
-      intent: "info_general" | "horario" | "ubicacion" | "disponibilidad";
-    }> = [];
-
-    if (servicesBlock.trim()) {
-      replySections.push({
-        key: "services",
-        content: servicesBlock.trim(),
-        intent: "info_general",
-      });
-    }
-
-    if (asksSchedules && scheduleBlock.trim()) {
-      replySections.push({
-        key: "schedule",
-        content: scheduleBlock.trim(),
-        intent: "horario",
-      });
-    }
-
-    if (asksLocation && locationBody.trim()) {
-      replySections.push({
-        key: "location",
-        content: locationBody.trim(),
-        intent: "ubicacion",
-      });
-    }
-
-    if (asksAvailability && availabilityBody.trim()) {
-      replySections.push({
-        key: "availability",
-        content: availabilityBody.trim(),
-        intent: "disponibilidad",
-      });
-    }
-
-    const sectionCount = replySections.length;
-
-    const renderedSections = replySections.map((section) => {
-      if (sectionCount === 1) {
-        return section.content.trim();
-      }
-
-      switch (section.key) {
-        case "services":
-          return servicesBlock.trim();
-        case "schedule":
-          return scheduleBlock.trim();
-        case "location":
-          return locationBlock.trim();
-        case "availability":
-          return availabilityBlock.trim();
-        default:
-          return section.content.trim();
-      }
-    });
-
-    canonicalReply = renderedSections.join("\n\n").trim();
-
-    if (canonicalReply) {
-      const businessInfoIntent =
-        replySections.length === 1
-          ? replySections[0].intent
-          : "info_general";
-
-      return {
-        handled: true,
-        reply: canonicalReply,
-        source: "info_clave_db",
-        intent: businessInfoIntent,
-        catalogPayload: {
-          kind: "resolved_catalog_answer",
-          scope: "overview",
-          canonicalBlocks: {
-            servicesBlock: servicesBlock.trim() || null,
-            scheduleBlock: scheduleBlock.trim() || null,
-            locationBlock: locationBlock.trim() || null,
-            availabilityBlock: availabilityBlock.trim() || null,
-          },
-        },
-        ctxPatch: {
-          last_catalog_at: Date.now(),
-          lastResolvedIntent: "business_info_facets",
-        } as any,
-      };
-    }
-
-    console.log("[CATALOG][SKIP_BUSINESS_INFO_FACETS_EMPTY]", {
-      userInput: input.userInput,
-      intentOut: input.intentOut,
-      facets: input.facets || {},
-      routeIntent,
-    });
-
-    return {
-      handled: false,
-    };
-  }
-
   const hasFacetDrivenCatalogIntent =
-    asksPrices || asksSchedules || asksLocation || asksAvailability;
+    asksPrices || asksSchedules;
 
   const allowGenericCatalogDbFallback =
     !hasAnyStructuredCatalogTarget &&
@@ -1702,8 +1526,11 @@ export async function runCatalogFastpath(
   }
 
   // SCHEDULE + PRICE
+  // Este archivo ya no responde business info general desde info_clave.
+  // Si el turno mezcla horario + precio, solo seguimos por catálogo
+  // cuando hay target concreto resuelto desde DB.
   if (questionType === "schedule_and_price") {
-    const { rows, priceBlock } = await buildCatalogOverviewPriceBlock({
+    const { rows } = await buildCatalogOverviewPriceBlock({
       pool: input.pool,
       tenantId: input.tenantId,
       idiomaDestino: input.idiomaDestino,
@@ -1764,117 +1591,10 @@ export async function runCatalogFastpath(
           },
         };
       }
-
-      return {
-        handled: false,
-      };
     }
-
-    if (
-      shouldResolveExplicitCatalogTarget &&
-      canonicalCatalogResolution?.status === "not_found"
-    ) {
-      return {
-        handled: false,
-      };
-    }
-
-    if (!allowGenericCatalogDbFallback) {
-      console.log("[CATALOG_DB][BLOCKED_SCHEDULE_PRICE_FALLBACK]", {
-        userInput: input.userInput,
-        intentOut: input.intentOut,
-        routeIntent,
-        referenceKind,
-        shouldRouteCatalog: catalogRoutingSignal.shouldRouteCatalog,
-        hasStructuredTarget: input.hasStructuredTarget,
-        facets: input.facets || {},
-        targetServiceId,
-        targetVariantId,
-        targetFamilyKey,
-      });
-
-      return {
-        handled: false,
-      };
-    }
-
-    const scheduleBlock = buildScheduleBlock({
-      idiomaDestino: input.idiomaDestino,
-      infoClave: input.infoClave,
-    });
-
-    const locationBody = asksLocation
-      ? buildLocationBlockFromInfoClave(input.infoClave)
-      : "";
-
-    const availabilityBody = asksAvailability
-      ? buildAvailabilityBlockFromInfoClave(input.infoClave)
-      : "";
-
-    const locationBlock = withSectionTitle(
-      input.idiomaDestino,
-      "Ubicación:",
-      "Location:",
-      locationBody
-    );
-
-    const availabilityBlock = withSectionTitle(
-      input.idiomaDestino,
-      "Disponibilidad:",
-      "Availability:",
-      availabilityBody
-    );
-
-    const canonicalReply = composeCatalogReplyBlocks({
-      idiomaDestino: input.idiomaDestino,
-      asksPrices,
-      asksSchedules,
-      asksLocation,
-      asksAvailability,
-      priceBlock,
-      scheduleBlock,
-      locationBlock,
-      availabilityBlock,
-      includeClosingLine: true,
-    });
-
-    const namesShown = input.extractPlanNamesFromReply(priceBlock);
-
-    const finalReply = canonicalReply;
-
-    const ctxPatch: any = {
-      last_catalog_at: Date.now(),
-      lastResolvedIntent: "schedule_and_price",
-      pendingCatalogChoice: null,
-      pendingCatalogChoiceAt: null,
-    };
-
-    if (namesShown.length) {
-      ctxPatch.last_catalog_plans = namesShown;
-    }
-
-    console.log("[SCHEDULE_AND_PRICE][FINAL_REPLY]", {
-      canonicalReply,
-      finalReply,
-      facets: input.facets || {},
-    });
 
     return {
-      handled: true,
-      reply: canonicalReply,
-      source: "catalog_db",
-      intent: "precio",
-      catalogPayload: {
-        kind: "resolved_catalog_answer",
-        scope: "overview",
-        canonicalBlocks: {
-          priceBlock: priceBlock || null,
-          scheduleBlock: scheduleBlock || null,
-          locationBlock: locationBlock || null,
-          availabilityBlock: availabilityBlock || null,
-        },
-      },
-      ctxPatch,
+      handled: false,
     };
   }
 
@@ -2048,10 +1768,6 @@ export async function runCatalogFastpath(
       executionRouteIntent === "catalog_price" ||
       executionRouteIntent === "catalog_alternatives";
 
-    const shouldFallbackToBusinessInfoOverview =
-      !shouldFallbackToPriceOverview &&
-      (asksSchedules === true || asksLocation === true || asksAvailability === true);
-
     if (shouldFallbackToPriceOverview) {
       const { priceBlock } = await buildCatalogOverviewPriceBlock({
         pool: input.pool,
@@ -2063,95 +1779,21 @@ export async function runCatalogFastpath(
       });
 
       if (priceBlock.trim()) {
-        const fallbackReply = shouldFallbackToBusinessInfoOverview
-          ? composeCatalogReplyBlocks({
-              idiomaDestino: input.idiomaDestino,
-              asksPrices,
-              asksSchedules,
-              asksLocation,
-              asksAvailability,
-              priceBlock,
-              scheduleBlock,
-              locationBlock,
-              availabilityBlock,
-              includeClosingLine: true,
-            })
-          : priceBlock;
-
-        if (fallbackReply.trim()) {
-          return {
-            handled: true,
-            reply: fallbackReply,
-            source: "catalog_db",
-            intent: "precio",
-            catalogPayload: {
-              kind: "resolved_catalog_answer",
-              scope: "overview",
-              canonicalBlocks: {
-                priceBlock: priceBlock || null,
-                scheduleBlock: shouldFallbackToBusinessInfoOverview
-                  ? scheduleBlock || null
-                  : null,
-                locationBlock: shouldFallbackToBusinessInfoOverview
-                  ? locationBlock || null
-                  : null,
-                availabilityBlock: shouldFallbackToBusinessInfoOverview
-                  ? availabilityBlock || null
-                  : null,
-              },
-            },
-            ctxPatch: {
-              last_catalog_at: Date.now(),
-              lastResolvedIntent:
-                asksSchedules === true && asksPrices === true
-                  ? "schedule_and_price"
-                  : "price_or_plan",
-              pendingCatalogChoice: null,
-              pendingCatalogChoiceAt: null,
-            } as any,
-          };
-        }
-      }
-    }
-
-    if (shouldFallbackToBusinessInfoOverview) {
-      const fallbackBusinessReply = composeCatalogReplyBlocks({
-        idiomaDestino: input.idiomaDestino,
-        asksPrices: false,
-        asksSchedules,
-        asksLocation,
-        asksAvailability,
-        priceBlock: "",
-        scheduleBlock,
-        locationBlock,
-        availabilityBlock,
-        includeClosingLine: true,
-      });
-
-      if (fallbackBusinessReply.trim()) {
         return {
           handled: true,
-          reply: fallbackBusinessReply,
-          source: "info_clave_db",
-          intent: asksSchedules
-            ? "horario"
-            : asksLocation
-            ? "ubicacion"
-            : asksAvailability
-            ? "disponibilidad"
-            : "info_general",
+          reply: priceBlock,
+          source: "catalog_db",
+          intent: "precio",
           catalogPayload: {
             kind: "resolved_catalog_answer",
             scope: "overview",
             canonicalBlocks: {
-              scheduleBlock: scheduleBlock || null,
-              locationBlock: locationBlock || null,
-              availabilityBlock: availabilityBlock || null,
+              priceBlock: priceBlock || null,
             },
           },
           ctxPatch: {
             last_catalog_at: Date.now(),
-            lastResolvedIntent: "business_info_facets",
+            lastResolvedIntent: "price_or_plan",
             pendingCatalogChoice: null,
             pendingCatalogChoiceAt: null,
           } as any,

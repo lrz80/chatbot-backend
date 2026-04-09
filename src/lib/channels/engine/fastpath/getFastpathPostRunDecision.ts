@@ -1,6 +1,22 @@
 // src/lib/channels/engine/fastpath/getFastpathPostRunDecision.ts
 import type { Canal } from "../../../detectarIntencion";
 
+export type FastpathSemanticTurn = {
+  domain: "catalog" | "business_info" | "booking" | "other";
+  scope: "overview" | "family" | "service" | "variant" | "none";
+  answerKind:
+    | "price"
+    | "includes"
+    | "schedule"
+    | "location"
+    | "availability"
+    | "comparison"
+    | "overview"
+    | "other";
+  resolution: "resolved" | "ambiguous" | "unresolved" | "overview";
+  grounded: boolean;
+};
+
 export type GetFastpathPostRunDecisionInput = {
   canal: Canal;
   fp: {
@@ -8,11 +24,8 @@ export type GetFastpathPostRunDecisionInput = {
     intent?: string | null;
     reply?: string | null;
   };
-  detectedIntent?: string | null;
-  intentFallback?: string | null;
+  semanticTurn: FastpathSemanticTurn;
   convoCtx?: any;
-  catalogRoutingSignal?: any;
-  catalogReferenceClassification?: any;
   structuredService: {
     hasResolution: boolean;
   };
@@ -25,7 +38,7 @@ export type GetFastpathPostRunDecisionResult = {
   shouldReturnRawFastpathForUnresolvedServiceIntent: boolean;
 };
 
-function toNormalizedString(value: any): string {
+function toNormalizedString(value: unknown): string {
   return String(value ?? "").trim().toLowerCase();
 }
 
@@ -38,66 +51,36 @@ function isDmChatChannel(canal: Canal): boolean {
   );
 }
 
-function isGroundedServiceSource(fpSource: string): boolean {
-  return (
-    fpSource === "service_list_db" ||
-    fpSource === "catalog_db" ||
-    fpSource === "price_summary_db" ||
-    fpSource === "price_fastpath_db" ||
-    fpSource === "price_disambiguation_db" ||
-    fpSource === "price_fastpath_db_no_price"
-  );
-}
-
-function isInfoGeneralOverviewSource(fpSource: string): boolean {
-  return (
-    fpSource === "info_general_overview" ||
-    fpSource === "info_general_overview_db"
-  );
-}
-
-function isInfoGeneralIntent(fpIntent: string): boolean {
-  return (
-    fpIntent === "info_general" ||
-    fpIntent === "info_general_overview"
-  );
-}
-
 export function getFastpathPostRunDecision(
   input: GetFastpathPostRunDecisionInput
 ): GetFastpathPostRunDecisionResult {
   const isDmChannel = isDmChatChannel(input.canal);
 
-  const fpSource = toNormalizedString(input.fp?.source);
-  const fpIntent = toNormalizedString(
-    input.fp?.intent || input.detectedIntent || input.intentFallback || ""
-  );
-
-  const routeIntent = toNormalizedString(
-    input.catalogRoutingSignal?.routeIntent
-  );
-
   const isPriceQuestionUser =
-    routeIntent === "catalog_price" ||
-    routeIntent === "catalog_alternatives";
+    input.semanticTurn.domain === "catalog" &&
+    input.semanticTurn.answerKind === "price";
 
-  const wantsPlansAndHours = routeIntent === "catalog_schedule";
+  const wantsPlansAndHours =
+    input.semanticTurn.domain === "catalog" &&
+    input.semanticTurn.answerKind === "schedule";
 
   const isCatalogDetailQuestion =
-    routeIntent === "catalog_includes" ||
-    fpIntent === "info_servicio";
+    input.semanticTurn.domain === "catalog" &&
+    (
+      input.semanticTurn.answerKind === "includes" ||
+      input.semanticTurn.scope === "service" ||
+      input.semanticTurn.scope === "variant"
+    );
 
   const shouldReturnRawFastpathForPriceQuestion =
     isDmChannel &&
     isPriceQuestionUser &&
     !wantsPlansAndHours &&
     !isCatalogDetailQuestion &&
-    fpSource !== "catalog_db" &&
-    fpSource !== "price_fastpath_db_llm_render" &&
-    fpSource !== "price_fastpath_db_no_price_llm_render";
+    input.semanticTurn.grounded !== true;
 
   const isPlansList =
-    fpSource === "service_list_db" &&
+    toNormalizedString(input.fp?.source) === "service_list_db" &&
     (input.convoCtx as any)?.last_list_kind === "plan";
 
   const hasPackagesAvailable =
@@ -108,31 +91,25 @@ export function getFastpathPostRunDecision(
     isPlansList &&
     hasPackagesAvailable;
 
-  const isPluralCatalogTurn =
-    routeIntent === "catalog_overview" ||
-    routeIntent === "catalog_family" ||
-    routeIntent === "catalog_compare" ||
-    routeIntent === "catalog_price" ||
-    routeIntent === "catalog_alternatives" ||
-    routeIntent === "catalog_schedule";
-
   const isExplicitServiceDetailTurn =
-    routeIntent === "catalog_includes" ||
-    routeIntent === "entity_detail" ||
-    routeIntent === "variant_detail" ||
-    fpIntent === "info_servicio";
+    input.semanticTurn.domain === "catalog" &&
+    (
+      input.semanticTurn.scope === "service" ||
+      input.semanticTurn.scope === "variant" ||
+      input.semanticTurn.answerKind === "includes"
+    );
 
   const isInfoGeneralOverviewTurn =
-    isInfoGeneralOverviewSource(fpSource) || isInfoGeneralIntent(fpIntent);
+    input.semanticTurn.domain === "business_info" &&
+    input.semanticTurn.answerKind === "overview";
 
   const shouldReturnRawFastpathForUnresolvedServiceIntent =
     isDmChannel &&
     !isInfoGeneralOverviewTurn &&
-    !isPluralCatalogTurn &&
     isExplicitServiceDetailTurn &&
     (
-      !input.structuredService?.hasResolution ||
-      !isGroundedServiceSource(fpSource)
+      input.semanticTurn.resolution !== "resolved" ||
+      !input.structuredService?.hasResolution
     );
 
   return {
