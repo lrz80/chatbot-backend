@@ -114,6 +114,9 @@ export type CatalogReferenceClassificationInput = {
   } | null;
 
   detectedIntent?: string | null;
+
+  catalogReferenceIntent?: CatalogReferenceIntent | null;
+  isCatalogOverviewIntent?: boolean;
 };
 
 export type CatalogReferenceClassification = {

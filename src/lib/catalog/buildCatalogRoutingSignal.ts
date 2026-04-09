@@ -379,6 +379,12 @@ export function buildCatalogRoutingSignal({
       ? catalogReferenceClassification.kind
       : "none";
 
+  const shouldHydrateTargetsFromContext =
+    referenceKind === "referential_followup" ||
+    referenceKind === "entity_specific" ||
+    referenceKind === "variant_specific" ||
+    referenceKind === "catalog_family";
+
   const normalizedIntentOut = normalizeText(intentOut);
 
   const isMixedScheduleAndPriceTurn =
@@ -394,33 +400,57 @@ export function buildCatalogRoutingSignal({
 
   const targetServiceId =
     String(catalogReferenceClassification?.targetServiceId || "").trim() ||
-    String(convoCtx?.last_service_id || "").trim() ||
-    String(convoCtx?.selectedServiceId || "").trim() ||
+    (
+      shouldHydrateTargetsFromContext
+        ? String(convoCtx?.last_service_id || "").trim() ||
+          String(convoCtx?.selectedServiceId || "").trim()
+        : ""
+    ) ||
     null;
 
   const targetServiceName =
     String(catalogReferenceClassification?.targetServiceName || "").trim() ||
-    String(convoCtx?.last_service_name || "").trim() ||
+    (
+      shouldHydrateTargetsFromContext
+        ? String(convoCtx?.last_service_name || "").trim()
+        : ""
+    ) ||
     null;
 
   const targetVariantId =
     String(catalogReferenceClassification?.targetVariantId || "").trim() ||
-    String(convoCtx?.last_variant_id || "").trim() ||
+    (
+      shouldHydrateTargetsFromContext
+        ? String(convoCtx?.last_variant_id || "").trim()
+        : ""
+    ) ||
     null;
 
   const targetVariantName =
     String(catalogReferenceClassification?.targetVariantName || "").trim() ||
-    String(convoCtx?.last_variant_name || "").trim() ||
+    (
+      shouldHydrateTargetsFromContext
+        ? String(convoCtx?.last_variant_name || "").trim()
+        : ""
+    ) ||
     null;
 
   const targetFamilyKey =
     String(catalogReferenceClassification?.targetFamilyKey || "").trim() ||
-    String(convoCtx?.last_family_key || "").trim() ||
+    (
+      shouldHydrateTargetsFromContext
+        ? String(convoCtx?.last_family_key || "").trim()
+        : ""
+    ) ||
     null;
 
   const targetFamilyName =
     String(catalogReferenceClassification?.targetFamilyName || "").trim() ||
-    String(convoCtx?.last_family_name || "").trim() ||
+    (
+      shouldHydrateTargetsFromContext
+        ? String(convoCtx?.last_family_name || "").trim()
+        : ""
+    ) ||
     null;
 
   const targetLevel = catalogReferenceClassification?.targetLevel || "none";

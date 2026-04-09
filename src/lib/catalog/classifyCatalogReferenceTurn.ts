@@ -412,90 +412,6 @@ function hasAnyToken(tokens: string[], allowed: Set<string>): boolean {
   return tokens.some((token) => allowed.has(token));
 }
 
-function isGenericCatalogOverviewSignal(params: {
-  userText: string;
-  detectedIntent: string | null;
-  tokens: string[];
-  hasAnyContext: boolean;
-  hasStructuralCatalogEvidence: boolean;
-}): boolean {
-  const {
-    detectedIntent,
-    tokens,
-    hasAnyContext,
-    hasStructuralCatalogEvidence,
-  } = params;
-
-  if (hasAnyContext || hasStructuralCatalogEvidence) {
-    return false;
-  }
-
-  if (isExplicitCatalogBrowseIntent(detectedIntent)) {
-    return true;
-  }
-
-  const mappedIntent = mapDetectedIntentToCatalogIntent(
-    detectedIntent,
-    "unknown"
-  );
-
-  const catalogOverviewNouns = new Set<string>([
-    "plan",
-    "planes",
-    "paquete",
-    "paquetes",
-    "package",
-    "packages",
-    "membership",
-    "memberships",
-    "membresia",
-    "membresias",
-  ]);
-
-  const browseCues = new Set<string>([
-    "tienes",
-    "tienen",
-    "hay",
-    "ofreces",
-    "ofrecen",
-    "muestrame",
-    "muestra",
-    "mostrar",
-    "ensename",
-    "lista",
-    "available",
-    "show",
-    "list",
-    "offer",
-    "offers",
-    "have",
-  ]);
-
-  const hasCatalogNoun = hasAnyToken(tokens, catalogOverviewNouns);
-  if (!hasCatalogNoun) return false;
-
-  const hasBrowseCue = hasAnyToken(tokens, browseCues);
-  const isShortTurn = tokens.length > 0 && tokens.length <= 8;
-
-  if (mappedIntent === "price_or_plan" || mappedIntent === "other_plans") {
-    return true;
-  }
-
-  if (detectedIntent === "info_general" && isShortTurn) {
-    return true;
-  }
-
-  if (hasBrowseCue && isShortTurn) {
-    return true;
-  }
-
-  if (tokens.length === 1) {
-    return true;
-  }
-
-  return false;
-}
-
 export function classifyCatalogReferenceTurn(
   input: CatalogReferenceClassificationInput
 ): CatalogReferenceClassification {
@@ -534,12 +450,15 @@ export function classifyCatalogReferenceTurn(
   const hasPresentedFamilies = context.lastPresentedFamilyKeys.length > 0;
   const hasExpectedVariant = Boolean(context.expectingVariantForEntityId);
 
-  const hasAnyContext =
+  const hasConcreteAnchorContext =
     hasLastEntity ||
     hasLastFamily ||
-    hasPresentedEntities ||
-    hasPresentedFamilies ||
     hasExpectedVariant;
+
+  const hasAnyContext =
+    hasConcreteAnchorContext ||
+    hasPresentedEntities ||
+    hasPresentedFamilies;
 
   notes.push(`token_count:${tokenCount}`);
 
@@ -568,17 +487,18 @@ export function classifyCatalogReferenceTurn(
     Boolean(explicitVariantCandidate?.variantId) ||
     Boolean(explicitFamilyCandidate?.familyKey) ||
     hasStructuredComparisonEvidence ||
-    Boolean(context.expectingVariantForEntityId) ||
-    signals.hasReferentialDependency ||
-    signals.hasConversationDependency;
+    hasConcreteAnchorContext;
 
-  const hasGenericCatalogOverviewSignal = isGenericCatalogOverviewSignal({
-    userText,
-    detectedIntent,
-    tokens,
-    hasAnyContext,
-    hasStructuralCatalogEvidence,
-  });
+  const inputCatalogReferenceIntent =
+    input?.catalogReferenceIntent ?? null;
+
+  const hasGenericCatalogOverviewSignal =
+    input?.isCatalogOverviewIntent === true ||
+    (
+      inputCatalogReferenceIntent === "price_or_plan" &&
+      !hasConcreteAnchorContext &&
+      !hasStructuralCatalogEvidence
+    );
 
   if (
     detectedIntent &&
@@ -902,7 +822,7 @@ export function classifyCatalogReferenceTurn(
   // =========================================================
   // 8) NO CONTEXT + GENERIC CATALOG OVERVIEW SIGNAL
   // =========================================================
-  if (!hasAnyContext && hasGenericCatalogOverviewSignal) {
+  if (!hasConcreteAnchorContext && hasGenericCatalogOverviewSignal) {
     notes.push("no_prior_context");
     notes.push("generic_catalog_overview_signal");
 
