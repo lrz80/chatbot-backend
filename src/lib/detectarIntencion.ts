@@ -1,6 +1,8 @@
 import OpenAI from "openai";
 import pool from "./db";
 import type { Canal } from "./types/canal";
+import type { IntentDefinition } from "./intent/types";
+import { getSystemIntentDefinitions } from "./intent/getSystemIntentDefinitions";
 
 export type { Canal };
 
@@ -83,13 +85,6 @@ type LlmIntentOutput = {
     wantsHuman?: unknown;
     urgency?: unknown;
   } | null;
-};
-
-export type IntentDefinition = {
-  key: string;
-  description?: string | null;
-  examples?: string[];
-  source: "system" | "tenant";
 };
 
 type DetectIntentCatalog = {
@@ -569,28 +564,6 @@ async function loadTenantIntents(
   return (rows || []) as TenantIntentRow[];
 }
 
-function buildTenantIntentGuide(rows: TenantIntentRow[]): string {
-  if (!rows.length) return "- (ninguna)";
-
-  return rows
-    .map((row) => {
-      const nombre = String(row.nombre || "").trim().toLowerCase();
-      const ejemplos = normalizeExamples(row.ejemplos);
-
-      if (!nombre) return "";
-
-      const parts = [`- ${nombre}`];
-
-      if (ejemplos.length) {
-        parts.push(`ejemplos: ${ejemplos.join(" | ")}`);
-      }
-
-      return parts.join(" | ");
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
 async function classifyIntentWithModel(input: {
   openai: OpenAI;
   mensaje: string;
@@ -710,8 +683,7 @@ export function esIntencionDeVenta(input: {
 export async function detectarIntencion(
   mensaje: string,
   tenantId: string,
-  canal: Canal,
-  systemIntents: IntentDefinition[]
+  canal: Canal
 ): Promise<Intento> {
   const original = String(mensaje || "").trim();
   const resolvedCanal = String(canal || "").trim().toLowerCase() as Canal;
@@ -734,6 +706,8 @@ export async function detectarIntencion(
     loadTenantContext(tenantId, resolvedCanal),
     loadTenantIntents(tenantId, resolvedCanal),
   ]);
+
+  const systemIntents = await getSystemIntentDefinitions();
 
   const allowedIntentCatalog = buildAllowedIntentCatalog({
     systemIntents,

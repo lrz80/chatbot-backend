@@ -8,13 +8,6 @@ import type {
 import type { Lang } from "../clients/clientDb";
 import { runFastpath } from "../../../fastpath/runFastpath";
 import { naturalizeSecondaryOptionsLine } from "../../../fastpath/naturalizeSecondaryOptions";
-import {
-  buildAvailabilityBlockFromInfoClave,
-  buildLocationBlockFromInfoClave,
-  buildServicesBlockFromInfoClave,
-} from "../../../fastpath/handlers/catalog/helpers/catalogBusinessInfoBlocks";
-import { buildScheduleBlock } from "../../../fastpath/handlers/catalog/helpers/catalogScheduleBlock";
-import { withSectionTitle } from "../../../fastpath/handlers/catalog/helpers/catalogReplyBlocks";
 
 import { buildCatalogReferenceClassificationInput } from "../../../catalog/buildCatalogReferenceClassificationInput";
 import { classifyCatalogReferenceTurn } from "../../../catalog/classifyCatalogReferenceTurn";
@@ -36,6 +29,8 @@ import { applyStructuredServicePersistence } from "./applyStructuredServicePersi
 
 import { resolveFinalIntentFromTurn } from "./resolveFinalIntentFromTurn";
 import { getCanonicalCatalogRouteDecision } from "./getCanonicalCatalogRouteDecision";
+import { resolveBusinessInfoOverviewCanonicalBody } from "../businessInfo/resolveBusinessInfoOverviewCanonicalBody";
+import { resolveBusinessInfoFacetsCanonicalBody } from "../businessInfo/resolveBusinessInfoFacetsCanonicalBody";
 import type { CatalogReferenceClassification } from "../../../catalog/types";
 
 const MAX_WHATSAPP_LINES = 9999;
@@ -314,123 +309,6 @@ function decideHybridDomain(input: {
   };
 }
 
-type BusinessInfoResolution = {
-  handled: boolean;
-  reply: string;
-  intent: string | null;
-  source: "info_general_overview_db" | "info_clave_db";
-  canonicalBlocks: {
-    servicesBlock?: string | null;
-    scheduleBlock?: string | null;
-    locationBlock?: string | null;
-    availabilityBlock?: string | null;
-  };
-};
-
-function buildBusinessInfoResolution(input: {
-  idiomaDestino: Lang;
-  infoClave: string;
-  detectedIntent?: string | null;
-  detectedFacets?: IntentFacets | null;
-  detectedRoutingHints?: IntentRoutingHints | null;
-}): BusinessInfoResolution {
-  const normalizedIntent = String(input.detectedIntent || "")
-    .trim()
-    .toLowerCase();
-
-  const asksSchedules = input.detectedFacets?.asksSchedules === true;
-  const asksLocation = input.detectedFacets?.asksLocation === true;
-  const asksAvailability = input.detectedFacets?.asksAvailability === true;
-
-  const wantsOverview =
-    input.detectedRoutingHints?.businessInfoScope === "overview" ||
-    normalizedIntent === "info_general";
-
-  const servicesBody = wantsOverview
-    ? buildServicesBlockFromInfoClave(input.infoClave)
-    : "";
-
-  const scheduleBlock = asksSchedules
-    ? buildScheduleBlock({
-        idiomaDestino: input.idiomaDestino,
-        infoClave: input.infoClave,
-      }).trim()
-    : "";
-
-  const locationBody = asksLocation
-    ? buildLocationBlockFromInfoClave(input.infoClave)
-    : "";
-
-  const availabilityBody = asksAvailability
-    ? buildAvailabilityBlockFromInfoClave(input.infoClave)
-    : "";
-
-  const servicesBlock = servicesBody.trim();
-
-  const locationBlock = withSectionTitle(
-    input.idiomaDestino,
-    "Ubicación:",
-    "Location:",
-    locationBody
-  ).trim();
-
-  const availabilityBlock = withSectionTitle(
-    input.idiomaDestino,
-    "Disponibilidad:",
-    "Availability:",
-    availabilityBody
-  ).trim();
-
-  const sections = [
-    servicesBlock,
-    scheduleBlock,
-    locationBlock,
-    availabilityBlock,
-  ].filter((value) => String(value || "").trim().length > 0);
-
-  const reply = sections.join("\n\n").trim();
-
-  if (!reply) {
-    return {
-      handled: false,
-      reply: "",
-      intent: null,
-      source: "info_clave_db",
-      canonicalBlocks: {},
-    };
-  }
-
-  const activeFacetCount = [
-    asksSchedules,
-    asksLocation,
-    asksAvailability,
-  ].filter(Boolean).length;
-
-  const resolvedIntent =
-    wantsOverview
-      ? "info_general"
-      : activeFacetCount === 1 && asksSchedules
-      ? "horario"
-      : activeFacetCount === 1 && asksLocation
-      ? "ubicacion"
-      : activeFacetCount === 1 && asksAvailability
-      ? "disponibilidad"
-      : "info_general";
-
-  return {
-    handled: true,
-    reply,
-    intent: resolvedIntent,
-    source: wantsOverview ? "info_general_overview_db" : "info_clave_db",
-    canonicalBlocks: {
-      servicesBlock: servicesBlock || null,
-      scheduleBlock: scheduleBlock || null,
-      locationBlock: locationBlock || null,
-      availabilityBlock: availabilityBlock || null,
-    },
-  };
-}
-
 export async function handleFastpathHybridTurn(
   args: FastpathHybridArgs
 ): Promise<FastpathHybridResult> {
@@ -647,14 +525,49 @@ export async function handleFastpathHybridTurn(
 
   const routeTarget = domainDecision.routeTarget;
 
-    if (routeTarget === "business_info") {
-    const businessInfo = buildBusinessInfoResolution({
-      idiomaDestino,
-      infoClave,
-      detectedIntent: detectedIntent || intentFallback || null,
-      detectedFacets: detectedFacets || null,
-      detectedRoutingHints: detectedRoutingHints || null,
-    });
+  if (routeTarget === "business_info") {
+    const wantsBusinessOverview =
+      detectedRoutingHints?.businessInfoScope === "overview" ||
+      normalizedCurrentIntent === "info_general";
+
+    const wantsBusinessFacets =
+      detectedFacets?.asksSchedules === true ||
+      detectedFacets?.asksLocation === true ||
+      detectedFacets?.asksAvailability === true;
+
+    let canonicalBusinessReply = "";
+
+    if (wantsBusinessOverview) {
+      canonicalBusinessReply =
+        await resolveBusinessInfoOverviewCanonicalBody({
+          tenantId,
+          canal,
+          idiomaDestino,
+          userInput,
+          promptBaseMem,
+          infoClave,
+          overviewMode: isGuidedBusinessEntryTurn
+            ? "guided_entry"
+            : "general_overview",
+        });
+    } else if (wantsBusinessFacets) {
+      canonicalBusinessReply =
+        await resolveBusinessInfoFacetsCanonicalBody({
+          tenantId,
+          canal,
+          idiomaDestino,
+          userInput,
+          promptBaseMem,
+          infoClave,
+          facets: {
+            asksSchedules: detectedFacets?.asksSchedules === true,
+            asksLocation: detectedFacets?.asksLocation === true,
+            asksAvailability: detectedFacets?.asksAvailability === true,
+          },
+        });
+    }
+
+    canonicalBusinessReply = String(canonicalBusinessReply || "").trim();
 
     console.log("[FASTPATH_HYBRID][BUSINESS_INFO_ROUTE]", {
       tenantId,
@@ -663,11 +576,14 @@ export async function handleFastpathHybridTurn(
       userInput,
       detectedIntent,
       intentFallback,
+      routeTarget,
       reason: domainDecision.reason,
-      businessInfoHandled: businessInfo.handled,
+      wantsBusinessOverview,
+      wantsBusinessFacets,
+      hasReply: Boolean(canonicalBusinessReply),
     });
 
-    if (!businessInfo.handled) {
+    if (!canonicalBusinessReply) {
       return {
         handled: false,
         routeTarget: "business_info",
@@ -675,28 +591,30 @@ export async function handleFastpathHybridTurn(
       };
     }
 
-    const businessInfoFp = {
-      handled: true as const,
-      reply: businessInfo.reply,
-      source: businessInfo.source,
-      intent: businessInfo.intent,
-      catalogPayload: {
-        kind: "resolved_catalog_answer" as const,
-        scope: "overview" as const,
-        canonicalBlocks: businessInfo.canonicalBlocks,
-      },
-    };
+    let businessIntent: string | null = "info_general";
+
+    if (!wantsBusinessOverview) {
+      const activeFacetCount = [
+        detectedFacets?.asksSchedules === true,
+        detectedFacets?.asksLocation === true,
+        detectedFacets?.asksAvailability === true,
+      ].filter(Boolean).length;
+
+      businessIntent =
+        activeFacetCount === 1 && detectedFacets?.asksSchedules === true
+          ? "horario"
+          : activeFacetCount === 1 && detectedFacets?.asksLocation === true
+          ? "ubicacion"
+          : activeFacetCount === 1 && detectedFacets?.asksAvailability === true
+          ? "disponibilidad"
+          : "info_general";
+    }
 
     let ctxPatch: any = {
       last_catalog_at: Date.now(),
-      lastResolvedIntent:
-        businessInfo.intent === "horario"
-          ? "business_info_facets"
-          : businessInfo.intent === "ubicacion"
-          ? "business_info_facets"
-          : businessInfo.intent === "disponibilidad"
-          ? "business_info_facets"
-          : "info_general_overview",
+      lastResolvedIntent: wantsBusinessOverview
+        ? "info_general_overview"
+        : "business_info_facets",
       pendingCatalogChoice: null,
       pendingCatalogChoiceAt: null,
     };
@@ -718,6 +636,34 @@ export async function handleFastpathHybridTurn(
       };
     }
 
+    const businessInfoFp = {
+      handled: true as const,
+      reply: canonicalBusinessReply,
+      source: wantsBusinessOverview
+        ? "info_general_overview_db"
+        : "info_clave_db",
+      intent: businessIntent,
+      catalogPayload: {
+        kind: "resolved_catalog_answer" as const,
+        scope: "overview" as const,
+        canonicalBlocks: {
+          servicesBlock: wantsBusinessOverview ? canonicalBusinessReply : null,
+          scheduleBlock:
+            !wantsBusinessOverview && detectedFacets?.asksSchedules === true
+              ? canonicalBusinessReply
+              : null,
+          locationBlock:
+            !wantsBusinessOverview && detectedFacets?.asksLocation === true
+              ? canonicalBusinessReply
+              : null,
+          availabilityBlock:
+            !wantsBusinessOverview && detectedFacets?.asksAvailability === true
+              ? canonicalBusinessReply
+              : null,
+        },
+      },
+    };
+
     const structuredService = {
       hasResolution: false,
     };
@@ -725,8 +671,8 @@ export async function handleFastpathHybridTurn(
     const replyPolicy = buildFastpathReplyPolicy({
       canal,
       fp: businessInfoFp as any,
-      detectedIntent: businessInfo.intent,
-      intentFallback: businessInfo.intent,
+      detectedIntent: businessIntent,
+      intentFallback: businessIntent,
       detectedCommercial,
       catalogRoutingSignal,
       catalogReferenceClassification,
@@ -734,7 +680,7 @@ export async function handleFastpathHybridTurn(
       ctxPatch,
     });
 
-    let finalReply = String(businessInfo.reply || "").trim();
+    let finalReply = canonicalBusinessReply;
 
     const isDmChannel =
       canal === "whatsapp" ||
@@ -752,8 +698,8 @@ export async function handleFastpathHybridTurn(
         promptBaseMem,
         fastpathText: finalReply,
         fp: businessInfoFp as any,
-        detectedIntent: businessInfo.intent,
-        intentFallback: businessInfo.intent,
+        detectedIntent: businessIntent,
+        intentFallback: businessIntent,
         structuredService: structuredService as any,
         replyPolicy,
         ctxPatch,
@@ -768,8 +714,10 @@ export async function handleFastpathHybridTurn(
       handled: true,
       routeTarget: "business_info",
       reply: finalReply,
-      replySource: businessInfo.source,
-      intent: businessInfo.intent,
+      replySource: wantsBusinessOverview
+        ? "info_general_overview_db"
+        : "info_clave_db",
+      intent: businessIntent,
       ctxPatch,
     };
   }
