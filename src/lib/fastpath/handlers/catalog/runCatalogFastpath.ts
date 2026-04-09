@@ -264,6 +264,52 @@ function shouldReusePendingCatalogChoice(params: {
   return true;
 }
 
+function shouldScopeCanonicalResolutionToPendingChoice(params: {
+  pendingCatalogChoice: PendingCatalogChoice | null;
+  pendingCatalogSelection: PendingCatalogSelectionResolution;
+  routeIntent: string;
+  asksPrices: boolean;
+  asksIncludesOnly: boolean;
+  asksSchedules: boolean;
+}): boolean {
+  const {
+    pendingCatalogChoice,
+    pendingCatalogSelection,
+    routeIntent,
+    asksPrices,
+    asksIncludesOnly,
+    asksSchedules,
+  } = params;
+
+  if (!pendingCatalogChoice) {
+    return false;
+  }
+
+  // Solo permitimos scope por pending choice si el turno actual
+  // realmente está resolviendo esa selección pendiente.
+  if (pendingCatalogSelection.status === "resolved") {
+    return true;
+  }
+
+  // Un turno nuevo de catálogo/precio/horario no debe quedar
+  // limitado por una lista pendiente vieja.
+  const isFreshCatalogQuestion =
+    pendingCatalogSelection.status === "unresolved" &&
+    (
+      routeIntent === "catalog_price" ||
+      routeIntent === "catalog_includes" ||
+      asksPrices === true ||
+      asksIncludesOnly === true ||
+      asksSchedules === true
+    );
+
+  if (isFreshCatalogQuestion) {
+    return false;
+  }
+
+  return false;
+}
+
 function normalizeCatalogDisambiguationOptions(
   raw: any
 ): CatalogDisambiguationOption[] {
@@ -388,17 +434,19 @@ async function resolveCanonicalCatalogTarget(input: {
   pool: Pool;
   tenantId: string;
   userInput: string;
-  pendingCatalogChoice: PendingCatalogChoice | null;
+  allowedServiceIds?: string[] | null;
 }): Promise<CanonicalCatalogResolution> {
-  const scopedAllowedServiceIds = input.pendingCatalogChoice?.options?.map(
-    (option) => option.serviceId
-  );
+  const scopedAllowedServiceIds = Array.isArray(input.allowedServiceIds)
+    ? input.allowedServiceIds
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    : [];
 
   const resolution = await resolveServiceCandidatesFromText(
     input.pool,
     input.tenantId,
     input.userInput,
-    scopedAllowedServiceIds && scopedAllowedServiceIds.length > 0
+    scopedAllowedServiceIds.length > 0
       ? {
           mode: "loose",
           allowedServiceIds: scopedAllowedServiceIds,
@@ -1015,8 +1063,19 @@ export async function runCatalogFastpath(
     availabilityBody
   );
 
+  const hasActivePendingChoiceForThisTurn =
+    shouldReusePendingCatalogChoice({
+      userInput: input.userInput,
+      pendingCatalogChoice,
+      pendingCatalogSelection,
+      routeIntent,
+      asksPrices,
+      asksIncludesOnly,
+      asksSchedules,
+    });
+
   const hasCatalogEntitySignal =
-    Boolean(pendingCatalogChoice) ||
+    hasActivePendingChoiceForThisTurn ||
     hasServiceStructuredCatalogTarget ||
     hasVariantStructuredCatalogTarget ||
     hasFamilyStructuredCatalogTarget;
@@ -1173,6 +1232,21 @@ export async function runCatalogFastpath(
 
   let canonicalCatalogResolution: CanonicalCatalogResolution | null = null;
 
+  const shouldScopeCanonicalResolution =
+    shouldScopeCanonicalResolutionToPendingChoice({
+      pendingCatalogChoice,
+      pendingCatalogSelection,
+      routeIntent,
+      asksPrices,
+      asksIncludesOnly,
+      asksSchedules,
+    });
+
+  const canonicalResolutionAllowedServiceIds =
+    shouldScopeCanonicalResolution && pendingCatalogChoice
+      ? pendingCatalogChoice.options.map((option) => option.serviceId)
+      : null;
+
   if (pendingSelectedService) {
     canonicalCatalogResolution = {
       status: "resolved_single",
@@ -1190,7 +1264,7 @@ export async function runCatalogFastpath(
       pool: input.pool,
       tenantId: input.tenantId,
       userInput: input.userInput,
-      pendingCatalogChoice,
+      allowedServiceIds: canonicalResolutionAllowedServiceIds,
     });
 
     if (canonicalCatalogResolution.status === "ambiguous") {
@@ -1930,6 +2004,8 @@ export async function runCatalogFastpath(
     const ctxPatch: any = {
       last_catalog_at: Date.now(),
       lastResolvedIntent: "other_plans",
+      pendingCatalogChoice: null,
+      pendingCatalogChoiceAt: null,
     };
 
     if (namesShown.length) {
