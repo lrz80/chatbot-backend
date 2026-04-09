@@ -547,7 +547,18 @@ export async function handleFastpathHybridTurn(
       )
     );
 
-  const shouldHandleCatalogInFastpath = hasConcreteCatalogHandle;
+  const isCatalogOverviewHandle =
+    effectiveCatalogRoutingSignal.shouldRouteCatalog === true &&
+    (
+      effectiveCatalogRoutingSignal.routeIntent === "catalog_price" ||
+      effectiveCatalogRoutingSignal.routeIntent === "catalog_alternatives" ||
+      effectiveCatalogRoutingSignal.routeIntent === "catalog_combination" ||
+      effectiveCatalogReferenceClassification.kind === "catalog_overview" ||
+      detectedFacets?.asksPrices === true
+    );
+
+  const shouldHandleCatalogInFastpath =
+    hasConcreteCatalogHandle || isCatalogOverviewHandle;
 
   const routeTarget: FastpathHybridRoute = shouldHandleCatalogInFastpath
     ? "catalog"
