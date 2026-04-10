@@ -366,12 +366,12 @@ async function buildGroundedFrameOnly(input: {
     idiomaDestino: input.idiomaDestino,
     canal: input.canal,
     maxLines: 6,
-    fallbackText: '{"intro":null,"closing":null}',
+    fallbackText: "",
     runtimeCapabilities: {
       bookingActive: false,
     },
     responsePolicy: {
-      mode: "grounded_frame_only",
+      mode: "frame_only",
       resolvedEntityType: null,
       resolvedEntityId: null,
       resolvedEntityLabel: null,

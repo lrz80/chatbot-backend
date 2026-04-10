@@ -24,7 +24,8 @@ type ResponseMode =
   | "normal"
   | "clarify_only"
   | "grounded_only"
-  | "grounded_frame_only";
+  | "grounded_frame_only"
+  | "frame_only";
 
 type ResponsePolicy = {
   mode?: ResponseMode;
@@ -686,6 +687,7 @@ export async function answerWithPromptBase(
   };
 
   const shouldComposeCanonicalBody =
+    effectivePolicy.mode !== "frame_only" &&
     Boolean(String(fallbackText || "").trim()) &&
     shouldUseCanonicalBodyComposition(effectivePolicy);
 
@@ -876,6 +878,13 @@ export async function answerWithPromptBase(
     console.warn("❌ answerWithPromptBase LLM error; using fallback:", e);
     rawModelOutputForPendingCta = "";
     out = fallbackText || "";
+  }
+
+  if (effectivePolicy.mode === "frame_only") {
+    return {
+      text: rawModelOutputForPendingCta || out || "",
+      pendingCta: null,
+    };
   }
 
   out = sanitizeChatOutput(out);
