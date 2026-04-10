@@ -1255,6 +1255,19 @@ export async function procesarMensajeWhatsApp(
       (convoCtx as any).last_entity_at = null;
 
       (convoCtx as any).structuredService = null;
+
+      (convoCtx as any).pendingCatalogChoice = null;
+      (convoCtx as any).pendingCatalogChoiceAt = null;
+
+      (convoCtx as any).lastPresentedEntityIds = null;
+      (convoCtx as any).lastPresentedFamilyKeys = null;
+
+      (convoCtx as any).expectingVariantForEntityId = null;
+      (convoCtx as any).expectedVariantIntent = null;
+
+      (convoCtx as any).presentedVariantOptions = null;
+      (convoCtx as any).last_variant_options = null;
+      (convoCtx as any).last_variant_options_at = null;
     }
   }
 
