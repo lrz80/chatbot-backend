@@ -1,32 +1,25 @@
-// backend/src/lib/fastpath/runFastpath.ts
+//src/lib/fastpath/runCatalogDomainTurn.ts
 import type { Pool } from "pg";
 
 import type { Canal } from "../detectarIntencion";
 import type { Lang } from "../channels/engine/clients/clientDb";
-
 import { traducirMensaje } from "../traducirMensaje";
-
-// INFO_CLAVE includes
+import { traducirTexto } from "../traducirTexto";
 import { normalizeText } from "../infoclave/resolveIncludes";
-
-// DB catalog includes
 import { getServiceDetailsText } from "../services/resolveServiceInfo";
-
-// Pricing
 import {
+  resolveServiceCandidatesFromText,
   resolveServiceIdFromText,
 } from "../services/pricing/resolveServiceIdFromText";
 import { resolveBestLinkForService } from "../links/resolveBestLinkForService";
 import { getServiceAndVariantUrl } from "../services/getServiceAndVariantUrl";
+import { renderGenericPriceSummaryReply } from "../services/pricing/renderGenericPriceSummaryReply";
 import { extractQueryFrames } from "./extractQueryFrames";
 import { resolveServiceMatchesFromText } from "../services/pricing/resolveServiceMatchesFromText";
-
 import type { CatalogReferenceClassification } from "../catalog/types";
-
-import { buildCatalogRoutingSignal } from "../../lib/catalog/buildCatalogRoutingSignal";
-
+import { buildCatalogRoutingSignal } from "../catalog/buildCatalogRoutingSignal";
+import { runCatalogFastpath } from "./handlers/catalog/runCatalogFastpath";
 import { handleCatalogComparison } from "./handlers/catalog/handleCatalogComparison";
-
 import { getCatalogStructuredSignals } from "./handlers/catalog/getCatalogStructuredSignals";
 import { getCatalogDetailSignals } from "./handlers/catalog/getCatalogDetailSignals";
 import { getCatalogRoutingState } from "./handlers/catalog/getCatalogRoutingState";
@@ -44,11 +37,12 @@ import { handleFreeOffer } from "./handlers/catalog/handleFreeOffer";
 import { handleInterestToLink } from "./handlers/catalog/handleInterestToLink";
 import { resolveFirstTurnServiceDetailTarget } from "./handlers/catalog/resolveFirstTurnServiceDetailTarget";
 import { handleFirstTurnVariantDetail } from "./handlers/catalog/handleFirstTurnVariantDetail";
-
 import {
   bestNameMatch,
+  extractPlanNamesFromReply,
 } from "./helpers/catalogTextMatching";
-import { runCatalogDomainTurn } from "./runCatalogDomainTurn";
+import { normalizeCatalogRole } from "../catalog/normalizeCatalogRole";
+import type { FastpathCtx, FastpathResult } from "./runFastpath";
 
 type IntentFacets = {
   asksPrices?: boolean;
@@ -57,224 +51,24 @@ type IntentFacets = {
   asksAvailability?: boolean;
 };
 
-export type FastpathCtx = {
-  last_service_id?: string | null;
-  last_service_name?: string | null;
-  last_service_at?: number | null;
-
-  pending_price_lookup?: boolean;
-  pending_price_at?: number | null;
-  pending_price_target_text?: string | null;
-  pending_price_raw_user_text?: string | null;
-
-  // ✅ listas para selección posterior
-  last_plan_list?: Array<{ id: string; name: string; url: string | null }>;
-  last_plan_list_at?: number | null;
-
-  last_package_list?: Array<{ id: string; name: string; url: string | null }>;
-  last_package_list_at?: number | null;
-
-  // ✅ señales estructurales (SIN COPY)
-  has_packages_available?: boolean;
-  has_packages_available_at?: number | null;
-
-  last_list_kind?: "plan" | "package";
-  last_list_kind_at?: number | null;
-
-  pending_link_lookup?: boolean;
-  pending_link_at?: number | null;
-  pending_link_options?: Array<{ label: string; url: string }>;
-
-  last_bot_action?: string | null;
-  last_bot_action_at?: number | null;
-
-  last_price_option_label?: string | null;
-  last_price_option_at?: number | null;
-
-  last_selected_kind?: "service" | "option" | "plan" | "package" | null;
-  last_selected_id?: string | null;
-  last_selected_name?: string | null;
-  last_selected_at?: number | null;
-
-  // ✅ histórico de planes listados por el motor de catálogo
-  last_catalog_plans?: string[] | null;
-  last_catalog_at?: number | null;
-
-  lastPresentedEntityIds?: string[] | null;
-  lastPresentedFamilyKeys?: string[] | null;
-  last_catalog_scope?: "overview" | "entity" | "family" | "variant" | null;
-  last_catalog_source?: "info_clave" | "db_catalog" | null;
-
-  // selección de servicio/variante para flujo "qué incluye"
-  selectedServiceId?: string | null;
-  expectingVariant?: boolean;
-
-  last_variant_id?: string | null;
-  last_variant_name?: string | null;
-  last_variant_url?: string | null;
-  last_variant_at?: number | null;
-
-  lastResolvedIntent?:
-    | "price_or_plan"
-    | "other_plans"
-    | "combination_and_price"
-    | "includes"
-    | "schedule"
-    | "schedule_and_price"
-    | "business_info_facets"
-    | "info_general_overview"
-    | "compare"
-    | "catalog_disambiguation"
-    | "unknown"
-    | null;
-
-  expectedVariantIntent?:
-    | "price_or_plan"
-    | "other_plans"
-    | "combination_and_price"
-    | "includes"
-    | "schedule"
-    | "compare"
-    | "unknown"
-    | null;
-  [k: string]: any;
-};
-
-export type FastpathAwaitingEffect =
-  | {
-      type: "set_awaiting_yes_no";
-      ttlSeconds: number;
-      payload: any;
-    }
-  | { type: "none" };
-
-export type FastpathHint =
-  | {
-      type: "price_summary";
-      payload: {
-        lang: Lang;
-        rows: { service_name: string; min_price: number; max_price: number }[];
-      };
-    };
-
-type CatalogChoiceOption =
-  | {
-      kind: "service";
-      serviceId: string;
-      label: string;
-      serviceName?: string | null;
-    }
-  | {
-      kind: "variant";
-      serviceId: string;
-      variantId: string;
-      label: string;
-      serviceName?: string | null;
-      variantName?: string | null;
-    };
-
-type CatalogPayload =
-  | {
-      kind: "service_choice";
-      originalIntent: string | null;
-      options: CatalogChoiceOption[];
-    }
-  | {
-      kind: "variant_choice";
-      originalIntent: string | null;
-      serviceId: string;
-      serviceName: string | null;
-      options: CatalogChoiceOption[];
-    }
-  | {
-      kind: "resolved_catalog_answer";
-      scope: "service" | "variant" | "family" | "overview";
-      serviceId?: string | null;
-      serviceName?: string | null;
-      variantId?: string | null;
-      variantName?: string | null;
-      canonicalBlocks: {
-        priceBlock?: string | null;
-        includesBlock?: string | null;
-        scheduleBlock?: string | null;
-        locationBlock?: string | null;
-        availabilityBlock?: string | null;
-        servicesBlock?: string | null;
-      };
-    };
-
-export type FastpathResult =
-  | {
-      handled: true;
-      reply: string;
-      source:
-        | "service_list_db"
-        | "info_clave_includes"
-        | "info_clave_missing_includes"
-        | "includes_fastpath_db"
-        | "includes_fastpath_db_missing"
-        | "includes_fastpath_db_ambiguous"
-        | "price_disambiguation_db"
-        | "price_missing_db"
-        | "price_fastpath_db"
-        | "price_summary_db"
-        | "info_general_overview"
-        | "price_summary_db_empty"
-        | "info_clave_includes_ctx_link"
-        | "interest_to_pricing"
-        | "catalog_llm"
-        | "fastpath_dismiss"
-        | "catalog_db"
-        | "price_fastpath_db_llm_render"
-        | "price_summary_db_llm_render"
-        | "catalog_comparison_db_llm_render"
-        | "price_fastpath_db_no_price"
-        | "price_fastpath_db_no_price_llm_render"
-        | "catalog_disambiguation_db"
-        | "info_clave_db";
-      intent: string | null;
-      catalogPayload?: CatalogPayload;
-      ctxPatch?: Partial<FastpathCtx>;
-      awaitingEffect?: FastpathAwaitingEffect;
-      fastpathHint?: FastpathHint;
-    }
-  | {
-      handled: false;
-      ctxPatch?: Partial<FastpathCtx>;
-      fastpathHint?: FastpathHint;
-    };
-
-export type RunFastpathArgs = {
+export type RunCatalogDomainTurnArgs = {
   pool: Pool;
-
   tenantId: string;
   canal: Canal;
-
   idiomaDestino: Lang;
   userInput: string;
-
-  // Importante: el caller define si está en booking
   inBooking: boolean;
-
-  // state context actual
   convoCtx: FastpathCtx;
-
-  // multi-tenant: info_clave viene del tenant
   infoClave: string;
-  promptBase: string;
-
-  // intent detectada (si existe) para logging/guardado
   detectedIntent?: string | null;
   detectedFacets?: IntentFacets | null;
-
-  // knobs
-  maxDisambiguationOptions?: number; // default 5
-  lastServiceTtlMs?: number; // default 60 min
-
   catalogReferenceClassification?: CatalogReferenceClassification;
+  maxDisambiguationOptions?: number;
 };
 
-export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult> {
+export async function runCatalogDomainTurn(
+  args: RunCatalogDomainTurnArgs
+): Promise<FastpathResult> {
   const {
     pool,
     tenantId,
@@ -284,12 +78,14 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     inBooking,
     convoCtx: initialConvoCtx,
     infoClave,
-    promptBase,
     detectedIntent,
     detectedFacets,
     catalogReferenceClassification,
     maxDisambiguationOptions = 5,
   } = args;
+
+  void canal;
+  void infoClave;
 
   let convoCtx = initialConvoCtx;
 
@@ -302,7 +98,9 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
 
   const q = userInput.toLowerCase().trim();
 
-  if (inBooking) return { handled: false };
+  if (inBooking) {
+    return { handled: false };
+  }
 
   const intentOut = (detectedIntent || "").trim() || null;
 
@@ -351,6 +149,12 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     catalogReferenceKind === "referential_followup" ||
     catalogReferenceKind === "comparison";
 
+  void isCatalogOverviewTurn;
+  void isCatalogFamilyTurn;
+  void isEntitySpecificTurn;
+  void isVariantSpecificTurn;
+  void isReferentialFollowupTurn;
+
   const { isFreshCatalogPriceTurn } = getCatalogRoutingState({
     detectedIntent,
     isStructuredCatalogTurn,
@@ -359,9 +163,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     buildCatalogRoutingSignal,
   });
 
-  // ===============================
-  // ✅ MULTI-QUESTION SPLIT + ANSWER
-  // ===============================
   {
     const multiQuestionResult = await handleMultiQuestionSplitAnswer({
       userInput,
@@ -381,9 +182,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
-  // ===============================
-  // ✅ Dismiss Fastpath
-  // ===============================
   {
     const fastpathDismissResult = handleFastpathDismiss({
       q,
@@ -397,10 +195,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
-  // ===============================
-  // ✅ CATALOG COMPARISON
-  // comparación entre 2 entidades del catálogo
-  // ===============================
   {
     if (catalogReferenceClassification?.kind === "comparison") {
       const comparisonResult = await handleCatalogComparison({
@@ -417,9 +211,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
-  // ===============================
-  // ✅ RESOLVER SELECCIÓN PENDIENTE DE LINK/VARIANTE
-  // ===============================
   if (!hasPendingCatalogChoice) {
     const pendingLinkSelectionResult = await handlePendingLinkSelection({
       userInput,
@@ -436,9 +227,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
-  // ===============================
-  // ✅ PICK FROM LAST LIST
-  // ===============================
   if (!hasPendingCatalogChoice) {
     const pickFromLastListResult = await handlePickFromLastList({
       userInput,
@@ -460,9 +248,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
-  // ===============================
-  // ✅ ANTI-LOOP PENDING LINK
-  // ===============================
   {
     const pendingLinkGuardrailResult = handlePendingLinkGuardrail({
       userInput,
@@ -478,9 +263,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
-  // ===============================
-  // ✅ FREE OFFER
-  // ===============================
   {
     const freeOfferResult = await handleFreeOffer({
       pool,
@@ -496,9 +278,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
-  // ===============================
-  // ✅ INTEREST -> LINK
-  // ===============================
   {
     const interestToLinkResult = await handleInterestToLink({
       pool,
@@ -520,9 +299,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
-  // =========================================================
-  // ✅ FOLLOW-UP ROUTER
-  // =========================================================
   if (!hasPendingCatalogChoice && !shouldBypassCatalogFollowupReuse) {
     const followupRouterResult = await handleFollowupRouter({
       pool,
@@ -539,11 +315,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
-  // ===============================
-  // ✅ FOLLOW-UP DE VARIANTE DEL MISMO SERVICIO (GENÉRICO / MULTITENANT)
-  // Si ya estamos parados en un servicio con variantes y el usuario
-  // menciona una variante, responder directo sin relistar.
-  // ===============================
   if (!hasPendingCatalogChoice && !shouldBypassCatalogFollowupReuse) {
     const variantFollowupSameServiceResult =
       await handleVariantFollowupSameService({
@@ -561,10 +332,6 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     }
   }
 
-  // ===============================
-  // ✅ VARIANTES: SEGUNDO TURNO
-  // El usuario ya vio las opciones y ahora elige una (1, "autopay", etc.)
-  // ===============================
   const variantSecondTurnResult = await handleVariantSecondTurn({
     pool,
     tenantId,
@@ -580,11 +347,8 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     return variantSecondTurnResult;
   }
 
-  // ===============================
-  // ✅ VARIANTES: PRIMER TURNO
-  // (sin regex ni texto raw; solo señales estructuradas)
-  // ===============================
-  const catalogRouteIntent = String(intentOut || "").trim().toLowerCase() || null;
+  const catalogRouteIntent =
+    String(intentOut || "").trim().toLowerCase() || null;
 
   const { hasStructuredTarget } = getCatalogStructuredSignals({
     catalogReferenceClassification,
@@ -617,14 +381,49 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
       return firstTurnVariantDetailResult;
     }
   }
-  
-  // ===============================
-  // 🧠 ENTRYPOINT DE DOMINIO CATÁLOGO
-  // ===============================
-  const canEnterCatalogDomain =
+
+  const shouldResolveAmbiguousCandidatesThisTurn =
+    !hasConcreteTargetThisTurn &&
+    isStructuredCatalogTurn;
+
+  const candidateOptionsFromTurn = shouldResolveAmbiguousCandidatesThisTurn
+    ? await (async () => {
+        const resolution = await resolveServiceCandidatesFromText(
+          pool,
+          tenantId,
+          userInput,
+          { mode: "loose" }
+        );
+
+        if (
+          resolution.kind !== "ambiguous" ||
+          !Array.isArray(resolution.candidates)
+        ) {
+          return [];
+        }
+
+        return resolution.candidates
+          .map((item) => ({
+            serviceId: String(item.id || "").trim(),
+            label: String(item.name || "").trim(),
+          }))
+          .filter((item) => item.serviceId && item.label)
+          .slice(0, maxDisambiguationOptions);
+      })()
+    : [];
+
+  const catalogRoutingSignal = buildCatalogRoutingSignal({
+    intentOut,
+    catalogReferenceClassification,
+    convoCtx,
+    candidateOptionsFromTurn,
+  });
+
+  const canEnterCatalogFastpath =
     !shouldBypassCatalogFollowupReuse &&
     (
       hasPendingCatalogChoice ||
+      Boolean(catalogRoutingSignal?.shouldRouteCatalog) ||
       isStructuredCatalogTurn
     );
 
@@ -632,24 +431,33 @@ export async function runFastpath(args: RunFastpathArgs): Promise<FastpathResult
     return { handled: false };
   }
 
-  if (!canEnterCatalogDomain) {
+  if (!canEnterCatalogFastpath) {
     return { handled: false };
   }
 
-  return await runCatalogDomainTurn({
+  const catalogFastpathResult = await runCatalogFastpath({
     pool,
     tenantId,
-    canal,
-    idiomaDestino,
     userInput,
-    inBooking,
+    idiomaDestino,
     convoCtx,
-    infoClave,
+    intentOut,
     detectedIntent,
-    detectedFacets,
+    infoClave,
+    hasStructuredTarget,
+    catalogRoutingSignal,
     catalogReferenceClassification,
-    maxDisambiguationOptions,
+    facets: detectedFacets || {},
+    buildCatalogRoutingSignal,
+    normalizeCatalogRole,
+    traducirTexto,
+    renderGenericPriceSummaryReply,
+    extractPlanNamesFromReply,
   });
+
+  if (catalogFastpathResult.handled) {
+    return catalogFastpathResult;
+  }
 
   return { handled: false };
 }

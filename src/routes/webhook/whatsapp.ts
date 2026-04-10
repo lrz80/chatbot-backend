@@ -73,6 +73,8 @@ import { composeFacetReply } from "../../lib/channels/engine/turn/composeFacetRe
 import { resolveUnhandledTurnFallback } from "../../lib/channels/engine/fallback/resolveUnhandledTurnFallback";
 import { renderGenericPriceSummaryReply } from "../../lib/services/pricing/renderGenericPriceSummaryReply";
 import { normalizeCatalogRole } from "../../lib/catalog/normalizeCatalogRole";
+import { runCatalogDomainTurn } from "../../lib/fastpath/runCatalogDomainTurn";
+import { resolveBusinessInfoFacetsCanonicalBody } from "../../lib/channels/engine/businessInfo/resolveBusinessInfoFacetsCanonicalBody";
 
 // Puedes ponerlo debajo de los imports
 export type WhatsAppContext = {
@@ -643,33 +645,72 @@ export async function procesarMensajeWhatsApp(
 
   async function tryBusinessInfoOutsideFastpath(params: {
     intent: string | null;
+    detectedFacets?: IntentFacets | null;
     overviewMode?: "general_overview" | "guided_entry";
   }): Promise<boolean> {
     const routeIntent = String(params.intent || "").trim() || "info_general";
-
     const overviewMode = params.overviewMode ?? "general_overview";
 
-    const canonicalBusinessInfoBody =
-      await resolveBusinessInfoOverviewCanonicalBody({
-        tenantId: tenant.id,
-        canal,
-        idiomaDestino,
-        userInput,
-        promptBaseMem,
-        infoClave: String(tenant?.info_clave || ""),
-        overviewMode,
-      });
+    const asksSchedules = params.detectedFacets?.asksSchedules === true;
+    const asksLocation = params.detectedFacets?.asksLocation === true;
+    const asksAvailability = params.detectedFacets?.asksAvailability === true;
 
-    if (!canonicalBusinessInfoBody) {
+    const wantsBusinessFacets =
+      asksSchedules || asksLocation || asksAvailability;
+
+    const canonicalBusinessInfoBody = wantsBusinessFacets
+      ? await resolveBusinessInfoFacetsCanonicalBody({
+          tenantId: tenant.id,
+          canal,
+          idiomaDestino,
+          userInput,
+          promptBaseMem,
+          infoClave: String(tenant?.info_clave || ""),
+          facets: {
+            asksSchedules,
+            asksLocation,
+            asksAvailability,
+          },
+        })
+      : await resolveBusinessInfoOverviewCanonicalBody({
+          tenantId: tenant.id,
+          canal,
+          idiomaDestino,
+          userInput,
+          promptBaseMem,
+          infoClave: String(tenant?.info_clave || ""),
+          overviewMode,
+        });
+
+    const normalizedCanonicalBody = String(canonicalBusinessInfoBody || "").trim();
+
+    if (!normalizedCanonicalBody) {
       console.warn("[BUSINESS_INFO][EMPTY_CANONICAL_BODY]", {
         tenantId: tenant.id,
         canal,
         contactoNorm,
         userInput,
         routeIntent,
+        wantsBusinessFacets,
+        facets: {
+          asksSchedules,
+          asksLocation,
+          asksAvailability,
+        },
       });
       return false;
     }
+
+    const resolvedBusinessIntent =
+      wantsBusinessFacets
+        ? asksSchedules && !asksLocation && !asksAvailability
+          ? "horario"
+          : asksLocation && !asksSchedules && !asksAvailability
+          ? "ubicacion"
+          : asksAvailability && !asksSchedules && !asksLocation
+          ? "disponibilidad"
+          : "info_general"
+        : routeIntent;
 
     const rendered = await renderFastpathDmReply({
       tenantId: tenant.id,
@@ -679,18 +720,19 @@ export async function procesarMensajeWhatsApp(
       contactoNorm,
       messageId: messageId || null,
       promptBaseMem,
-      fastpathText: canonicalBusinessInfoBody,
+      fastpathText: normalizedCanonicalBody,
       fp: {
-        reply: canonicalBusinessInfoBody,
-        source:
-          overviewMode === "guided_entry"
-            ? "info_general_guided_entry_db"
-            : "info_general_overview_db",
-        intent: routeIntent,
+        reply: normalizedCanonicalBody,
+        source: wantsBusinessFacets
+          ? "info_clave_db"
+          : overviewMode === "guided_entry"
+          ? "info_general_guided_entry_db"
+          : "info_general_overview_db",
+        intent: resolvedBusinessIntent,
         catalogPayload: undefined,
       },
-      detectedIntent: routeIntent,
-      intentFallback: routeIntent,
+      detectedIntent: resolvedBusinessIntent,
+      intentFallback: resolvedBusinessIntent,
       structuredService: {
         serviceId: null,
         serviceName: null,
@@ -706,7 +748,7 @@ export async function procesarMensajeWhatsApp(
         isPriceSummaryReply: false,
         isPriceDisambiguationReply: false,
         isGroundedCatalogReply: false,
-        isGroundedCatalogOverviewDm: true,
+        isGroundedCatalogOverviewDm: !wantsBusinessFacets,
         shouldForceSalesClosingQuestion: false,
         canonicalBodyOwnsClosing: true,
 
@@ -743,13 +785,159 @@ export async function procesarMensajeWhatsApp(
       return false;
     }
 
-    INTENCION_FINAL_CANONICA = routeIntent;
-    lastIntent = routeIntent;
+    INTENCION_FINAL_CANONICA = resolvedBusinessIntent;
+    lastIntent = resolvedBusinessIntent;
 
     await replyAndExit(
       finalBusinessInfoText,
-      "business_info_outside_fastpath",
-      routeIntent
+      wantsBusinessFacets
+        ? "business_info_facets_outside_fastpath"
+        : "business_info_outside_fastpath",
+      resolvedBusinessIntent
+    );
+
+    return true;
+  }
+
+  async function tryCatalogOutsideHybridDecision(params: {
+    intent: string | null;
+    detectedFacets?: IntentFacets | null;
+    convoCtxForCatalog: any;
+    catalogReferenceClassification?: any;
+  }): Promise<boolean> {
+    const catalogRes = await runCatalogDomainTurn({
+      pool,
+      tenantId: tenant.id,
+      canal,
+      idiomaDestino,
+      userInput,
+      inBooking: Boolean(inBooking0),
+      convoCtx: params.convoCtxForCatalog as any,
+      infoClave: String(tenant?.info_clave || ""),
+      detectedIntent: params.intent,
+      detectedFacets: params.detectedFacets || {},
+      catalogReferenceClassification: params.catalogReferenceClassification,
+      maxDisambiguationOptions: 10,
+    });
+
+    if (catalogRes.ctxPatch) {
+      transition({ patchCtx: catalogRes.ctxPatch });
+      finalCtxPatch = {
+        ...finalCtxPatch,
+        ...catalogRes.ctxPatch,
+      };
+    }
+
+    if (!catalogRes.handled || !catalogRes.reply) {
+      return false;
+    }
+
+    const rendered = await renderFastpathDmReply({
+      tenantId: tenant.id,
+      canal,
+      idiomaDestino,
+      userInput,
+      contactoNorm,
+      messageId: messageId || null,
+      promptBaseMem,
+      fastpathText: String(catalogRes.reply || "").trim(),
+      fp: {
+        ...catalogRes,
+        reply: String(catalogRes.reply || "").trim(),
+        source: catalogRes.source,
+        intent: catalogRes.intent,
+        catalogPayload: catalogRes.catalogPayload,
+      },
+      detectedIntent: catalogRes.intent || params.intent,
+      intentFallback: catalogRes.intent || params.intent,
+      structuredService: {
+        serviceId:
+          catalogRes.catalogPayload?.kind === "resolved_catalog_answer"
+            ? catalogRes.catalogPayload.serviceId || null
+            : null,
+        serviceName:
+          catalogRes.catalogPayload?.kind === "resolved_catalog_answer"
+            ? catalogRes.catalogPayload.serviceName || null
+            : null,
+        serviceLabel:
+          catalogRes.catalogPayload?.kind === "resolved_catalog_answer"
+            ? catalogRes.catalogPayload.serviceName || null
+            : null,
+        hasResolution:
+          catalogRes.catalogPayload?.kind === "resolved_catalog_answer" &&
+          (
+            Boolean(catalogRes.catalogPayload.serviceId) ||
+            Boolean(catalogRes.catalogPayload.variantId)
+          ),
+      },
+      replyPolicy: {
+        shouldUseGroundedFrameOnly: true,
+        responsePolicyMode: "grounded_frame_only",
+        hasResolvedEntity:
+          catalogRes.catalogPayload?.kind === "resolved_catalog_answer" &&
+          (
+            Boolean(catalogRes.catalogPayload.serviceId) ||
+            Boolean(catalogRes.catalogPayload.variantId)
+          ),
+
+        isCatalogDbReply: true,
+        isPriceSummaryReply:
+          catalogRes.source === "catalog_db" &&
+          catalogRes.catalogPayload?.kind === "resolved_catalog_answer" &&
+          catalogRes.catalogPayload.scope === "overview",
+        isPriceDisambiguationReply:
+          catalogRes.catalogPayload?.kind === "service_choice" ||
+          catalogRes.catalogPayload?.kind === "variant_choice",
+        isGroundedCatalogReply: true,
+        isGroundedCatalogOverviewDm:
+          catalogRes.catalogPayload?.kind === "resolved_catalog_answer" &&
+          catalogRes.catalogPayload.scope === "overview",
+        shouldForceSalesClosingQuestion: false,
+        canonicalBodyOwnsClosing: true,
+
+        commercialPolicy: {
+          purchaseIntent: detectedCommercial?.purchaseIntent ?? "low",
+          wantsBooking: detectedCommercial?.wantsBooking === true,
+          wantsQuote: detectedCommercial?.wantsQuote === true,
+          wantsHuman: detectedCommercial?.wantsHuman === true,
+          urgency: detectedCommercial?.urgency ?? "low",
+          shouldUseSalesTone: true,
+          shouldUseSoftClosing: true,
+          shouldUseDirectClosing: false,
+          shouldSuggestHumanHandoff: detectedCommercial?.wantsHuman === true,
+        },
+      },
+      ctxPatch: finalCtxPatch || {},
+      maxLines: MAX_WHATSAPP_LINES,
+    });
+
+    if (rendered.ctxPatch) {
+      transition({ patchCtx: rendered.ctxPatch });
+      finalCtxPatch = {
+        ...finalCtxPatch,
+        ...rendered.ctxPatch,
+      };
+    }
+
+    const finalCatalogText = await ensureReplyLanguage(
+      String(rendered.reply || "").trim(),
+      idiomaDestino
+    );
+
+    if (!finalCatalogText) {
+      return false;
+    }
+
+    INTENCION_FINAL_CANONICA =
+      catalogRes.intent || params.intent || INTENCION_FINAL_CANONICA || null;
+
+    lastIntent =
+      catalogRes.intent || params.intent || lastIntent || null;
+
+    await replyAndExit(
+      finalCatalogText,
+      catalogRes.source || "catalog_route",
+      catalogRes.intent || params.intent || null
     );
 
     return true;
@@ -1183,24 +1371,23 @@ export async function procesarMensajeWhatsApp(
   }
 
   // ===============================
-  // ⚡ FASTPATH (módulo híbrido reutilizable)
-  //    🔒 NO corre si hay booking activo
-  //    🔒 NO corre si hay CTA pendiente esperando confirmación
+  // ⚡ DOMAIN ROUTER
+  // handleFastpathHybridTurn SOLO decide dominio
   // ===============================
   if (!inBooking0 && !hasPendingCta) {
-    const convoCtxForFastpath = {
+    const convoCtxForHybrid = {
       ...(convoCtx || {}),
       ...((signals as any)?.convoCtx || {}),
     };
 
-    const fpRes = await handleFastpathHybridTurn({
+    const hybridRes = await handleFastpathHybridTurn({
       pool,
       tenantId: tenant.id,
       canal,
       idiomaDestino,
       userInput,
       inBooking: Boolean(inBooking0),
-      convoCtx: convoCtxForFastpath,
+      convoCtx: convoCtxForHybrid,
       infoClave: String(tenant?.info_clave || ""),
       detectedIntent: signals?.detectedIntent || detectedIntent || null,
       detectedFacets:
@@ -1209,6 +1396,7 @@ export async function procesarMensajeWhatsApp(
         detectedFacets ||
         {},
       detectedCommercial,
+      detectedRoutingHints: (signals as any)?.detectedRoutingHints || null,
       intentFallback:
         signals?.INTENCION_FINAL_CANONICA || INTENCION_FINAL_CANONICA || null,
       messageId: messageId || null,
@@ -1219,143 +1407,105 @@ export async function procesarMensajeWhatsApp(
       followupEntityKind: signals?.followupEntityKind || null,
     });
 
-    // aplicar patch de contexto devuelto por el helper
-    if (fpRes.ctxPatch) {
-      transition({ patchCtx: fpRes.ctxPatch });
-      finalCtxPatch = { ...finalCtxPatch, ...fpRes.ctxPatch };
+    if (hybridRes.ctxPatch) {
+      transition({ patchCtx: hybridRes.ctxPatch });
+      finalCtxPatch = { ...finalCtxPatch, ...hybridRes.ctxPatch };
     }
 
-    if (!fpRes.handled) {
-      const nextIntent =
-        fpRes.intent ||
-        signals?.INTENCION_FINAL_CANONICA ||
-        INTENCION_FINAL_CANONICA ||
-        signals?.detectedIntent ||
-        detectedIntent ||
-        null;
+    const nextIntent =
+      hybridRes.intent ||
+      signals?.INTENCION_FINAL_CANONICA ||
+      INTENCION_FINAL_CANONICA ||
+      signals?.detectedIntent ||
+      detectedIntent ||
+      null;
 
-      const nextDetectedFacets =
-        (signals as any)?.detectedFacets ||
-        (signals as any)?.facets ||
-        detectedFacets ||
-        null;
+    const nextDetectedFacets =
+      (signals as any)?.detectedFacets ||
+      (signals as any)?.facets ||
+      detectedFacets ||
+      null;
 
-      const shouldUseGuidedEntryOutsideFastpath =
-        shouldUseGuidedBusinessEntryOutsideFastpath({
-          routeTarget: fpRes.routeTarget,
-          detectedIntent: signals?.detectedIntent || detectedIntent || null,
-          intentFallback:
-            signals?.INTENCION_FINAL_CANONICA || INTENCION_FINAL_CANONICA || null,
-          detectedFacets: nextDetectedFacets,
-          detectedCommercial,
-        });
+    const shouldUseGuidedEntryOutsideFastpath =
+      shouldUseGuidedBusinessEntryOutsideFastpath({
+        routeTarget: hybridRes.routeTarget,
+        detectedIntent: signals?.detectedIntent || detectedIntent || null,
+        intentFallback:
+          signals?.INTENCION_FINAL_CANONICA || INTENCION_FINAL_CANONICA || null,
+        detectedFacets: nextDetectedFacets,
+        detectedCommercial,
+      });
 
-      if (
-        fpRes.routeTarget === "continue_pipeline" &&
-        !shouldUseGuidedEntryOutsideFastpath
-      ) {
-        const composed = await composeFacetReply({
-          pool,
-          tenantId: tenant.id,
-          canal,
-          idiomaDestino,
-          userInput,
-          contactoNorm,
-          messageId: messageId || null,
-          promptBaseMem,
-          infoClave: String(tenant?.info_clave || ""),
-          detectedIntent: nextIntent,
-          intentFallback: nextIntent,
-          detectedFacets: nextDetectedFacets,
-          detectedCommercial,
-          normalizeCatalogRole,
-          traducirTexto: async (texto: string, idioma: string, modo?: any) => {
-            return await traducirMensaje(texto, idioma);
-          },
-          renderGenericPriceSummaryReply,
-        });
+    if (hybridRes.routeTarget === "catalog") {
+      const handledCatalog = await tryCatalogOutsideHybridDecision({
+        intent: nextIntent,
+        detectedFacets: nextDetectedFacets,
+        convoCtxForCatalog: convoCtxForHybrid,
+        catalogReferenceClassification: (signals as any)?.catalogReferenceClassification,
+      });
 
-        if (composed.handled && composed.reply) {
-          return await replyAndExit(
-            composed.reply,
-            composed.source || "facet_composer",
-            composed.intent || null
-          );
-        }
-      }
-
-      if (
-        fpRes.routeTarget === "business_info" ||
-        shouldUseGuidedEntryOutsideFastpath
-      ) {
-        const handledBusinessInfo = await tryBusinessInfoOutsideFastpath({
-          intent: nextIntent,
-          overviewMode: shouldUseGuidedEntryOutsideFastpath
-            ? "guided_entry"
-            : "general_overview",
-        });
-
-        if (handledBusinessInfo) {
-          return;
-        }
+      if (handledCatalog) {
+        return;
       }
     }
 
-    if (fpRes.handled && fpRes.reply) {
-      if (hasPendingCta) {
-        const stalePendingCtaPatch = {
-          pending_cta: null,
-          awaiting_yes_no_action: null,
-          awaiting_yesno: false,
-          yesno_resolution: null,
-        };
+    if (
+      hybridRes.routeTarget === "business_info" ||
+      shouldUseGuidedEntryOutsideFastpath
+    ) {
+      const handledBusinessInfo = await tryBusinessInfoOutsideFastpath({
+        intent: nextIntent,
+        detectedFacets: nextDetectedFacets,
+        overviewMode: shouldUseGuidedEntryOutsideFastpath
+          ? "guided_entry"
+          : "general_overview",
+      });
 
-        transition({ patchCtx: stalePendingCtaPatch });
-        finalCtxPatch = {
-          ...finalCtxPatch,
-          ...stalePendingCtaPatch,
-        };
+      if (handledBusinessInfo) {
+        return;
       }
+    }
 
-      if (fpRes.intent) {
-        INTENCION_FINAL_CANONICA = fpRes.intent;
-        lastIntent = fpRes.intent;
-      }
+    if (
+      hybridRes.routeTarget === "continue_pipeline" &&
+      !shouldUseGuidedEntryOutsideFastpath
+    ) {
+      const composed = await composeFacetReply({
+        pool,
+        tenantId: tenant.id,
+        canal,
+        idiomaDestino,
+        userInput,
+        contactoNorm,
+        messageId: messageId || null,
+        promptBaseMem,
+        infoClave: String(tenant?.info_clave || ""),
+        detectedIntent: nextIntent,
+        intentFallback: nextIntent,
+        detectedFacets: nextDetectedFacets,
+        detectedCommercial,
+        normalizeCatalogRole,
+        traducirTexto: async (texto: string, idioma: string, modo?: any) => {
+          return await traducirMensaje(texto, idioma);
+        },
+        renderGenericPriceSummaryReply,
+      });
 
-      const isStructuredNumericSelection =
-        /^[1-9]$/.test(String(userInput || "").trim()) &&
-        (
-          Boolean((convoCtxForFastpath as any)?.expectingVariant) ||
-          Boolean((fpRes.ctxPatch as any)?.expectingVariant) ||
-          Boolean((fpRes.ctxPatch as any)?.last_variant_id) ||
-          Boolean((fpRes.ctxPatch as any)?.last_variant_name) ||
-          Boolean((convoCtxForFastpath as any)?.selectedServiceId) ||
-          Boolean((fpRes.ctxPatch as any)?.selectedServiceId)
+      if (composed.handled && composed.reply) {
+        return await replyAndExit(
+          composed.reply,
+          composed.source || "facet_composer",
+          composed.intent || null
         );
-
-      if (isStructuredNumericSelection) {
-        detectedInterest = Math.max(Number(detectedInterest || 1), 2);
-
-        if (!INTENCION_FINAL_CANONICA || INTENCION_FINAL_CANONICA === "duda") {
-          INTENCION_FINAL_CANONICA = fpRes.intent || "info_servicio";
-        }
-
-        if (!lastIntent || lastIntent === "duda") {
-          lastIntent = fpRes.intent || "info_servicio";
-        }
       }
-
-      return await replyAndExit(
-        fpRes.reply,
-        fpRes.replySource || "fastpath_hybrid",
-        fpRes.intent || null
-      );
     }
   } else {
-    console.log("🔒 FASTPATH SKIPPED", {
+    console.log("🔒 DOMAIN ROUTER SKIPPED", {
       bookingStep0,
       hasPendingCta,
-      reason: inBooking0 ? "booking_activo" : "pending_cta_awaiting_confirmation",
+      reason: inBooking0
+        ? "booking_activo"
+        : "pending_cta_awaiting_confirmation",
     });
   }
 
