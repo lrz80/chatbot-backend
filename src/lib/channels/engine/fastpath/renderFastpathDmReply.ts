@@ -11,6 +11,73 @@ function normalizeText(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function normalizeComparableText(value: string): string {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getFirstNonEmptyLine(text: string): string {
+  return (
+    String(text || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .find(Boolean) || ""
+  );
+}
+
+function stripFirstResolvedHeadingFromCanonicalBody(input: {
+  canonicalBody: string;
+  resolvedEntityLabel?: string | null;
+}): string {
+  const canonicalBody = String(input.canonicalBody || "").trim();
+  if (!canonicalBody) return "";
+
+  const firstLine = getFirstNonEmptyLine(canonicalBody);
+  const resolvedLabel = String(input.resolvedEntityLabel || "").trim();
+
+  if (!firstLine || !resolvedLabel) {
+    return canonicalBody;
+  }
+
+  const firstLineNorm = normalizeComparableText(firstLine);
+  const resolvedLabelNorm = normalizeComparableText(resolvedLabel);
+
+  if (!firstLineNorm || !resolvedLabelNorm) {
+    return canonicalBody;
+  }
+
+  const shouldStrip =
+    firstLineNorm === resolvedLabelNorm ||
+    firstLineNorm.includes(resolvedLabelNorm) ||
+    resolvedLabelNorm.includes(firstLineNorm);
+
+  if (!shouldStrip) {
+    return canonicalBody;
+  }
+
+  const lines = canonicalBody.split("\n");
+  let removed = false;
+  const nextLines: string[] = [];
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || "").trim();
+
+    if (!removed && line) {
+      removed = true;
+      continue;
+    }
+
+    nextLines.push(rawLine);
+  }
+
+  return nextLines.join("\n").trim();
+}
+
 function stripJsonCodeFences(value: string): string {
   const raw = String(value || "").trim();
   if (!raw) return raw;
@@ -639,11 +706,13 @@ export async function renderFastpathDmReply(
       : null;
 
   const shouldAllowIntro =
-    !isResolvedCatalogAnswer &&
     !isCatalogListReply &&
     !isInfoGeneralOverviewTurn &&
-    !bypassWriterModel &&
-    commercialPolicy.shouldUseSalesTone;
+    commercialPolicy.shouldUseSalesTone &&
+    (
+      !bypassWriterModel ||
+      isResolvedCatalogAnswer
+    );
 
   const shouldAllowOutro =
     (!bypassWriterModel ||
@@ -763,17 +832,19 @@ export async function renderFastpathDmReply(
       ? [
           "Resolved grounded catalog turn. The canonical body is the source of truth and must be preserved exactly.",
           "Do not rewrite, summarize, compress, paraphrase, or omit any fact, condition, number, schedule, bullet, or link from the canonical body.",
-          "Do not add an intro before the canonical body.",
+          "Return one short commercial intro before the canonical body.",
+          "The intro must be consultative, natural, and sales-oriented.",
+          "The intro must not repeat the exact title or heading of the plan or variant if the canonical body already starts with it.",
           "Do not restate, preview, summarize, or paraphrase facts already contained in the canonical body.",
           "Do not mention prices, numbers, includes, service details, schedules, locations, policies, or links outside the canonical body.",
           "After the canonical body, add exactly one short closing move that helps the user move forward.",
           "The closing must be consultative, natural, and sales-oriented.",
-          "If PROMPT_BASE contains a tenant-specific closing policy, you must follow it for the closing.",
-          "The tenant closing policy overrides generic closing style defaults, as long as the canonical body remains unchanged.",
-          "The body itself must remain unchanged and in the same order.",
           "Do not ask whether the user wants more information about the same plan or variant that was just explained.",
           "Do not use generic closings like asking again for more information.",
           "Prefer a closing that either helps the user compare another option, move forward, or continue naturally.",
+          "If PROMPT_BASE contains a tenant-specific closing policy, you must follow it for the closing.",
+          "The tenant closing policy overrides generic closing style defaults, as long as the canonical body remains unchanged.",
+          "The body itself must remain unchanged and in the same order.",
           tenantClosingPolicyInstruction,
           commercialClosingInstruction,
         ]
@@ -844,9 +915,17 @@ export async function renderFastpathDmReply(
       isCatalogChoiceReply,
     });
 
+    const renderedCanonicalBody =
+      isResolvedCatalogAnswer
+        ? stripFirstResolvedHeadingFromCanonicalBody({
+            canonicalBody: canonicalReply,
+            resolvedEntityLabel,
+          })
+        : canonicalReply;
+
     const finalGroundedReply = [
       String(frame.intro || "").trim(),
-      canonicalReply,
+      renderedCanonicalBody,
       String(frame.closing || "").trim(),
     ]
       .filter(Boolean)
