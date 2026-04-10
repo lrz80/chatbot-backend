@@ -30,37 +30,65 @@ function getFirstNonEmptyLine(text: string): string {
   );
 }
 
+function looksLikeResolvedHeading(line: string): boolean {
+  const value = String(line || "").trim();
+  if (!value) return false;
+
+  if (value.startsWith("•")) return false;
+  if (value.startsWith("-")) return false;
+  if (value.startsWith("http")) return false;
+  if (value.length > 90) return false;
+
+  return true;
+}
+
 function stripFirstResolvedHeadingFromCanonicalBody(input: {
   canonicalBody: string;
   resolvedEntityLabel?: string | null;
+  resolvedServiceName?: string | null;
 }): string {
   const canonicalBody = String(input.canonicalBody || "").trim();
   if (!canonicalBody) return "";
 
-  const firstLine = getFirstNonEmptyLine(canonicalBody);
-  const resolvedLabel = String(input.resolvedEntityLabel || "").trim();
+  const lines = String(canonicalBody).split("\n");
+  const firstNonEmpty = lines.find((line) => String(line || "").trim()) || "";
+  const firstLine = String(firstNonEmpty || "").trim();
 
-  if (!firstLine || !resolvedLabel) {
-    return canonicalBody;
-  }
+  if (!firstLine) return canonicalBody;
 
   const firstLineNorm = normalizeComparableText(firstLine);
-  const resolvedLabelNorm = normalizeComparableText(resolvedLabel);
+  const resolvedEntityLabelNorm = normalizeComparableText(
+    String(input.resolvedEntityLabel || "")
+  );
+  const resolvedServiceNameNorm = normalizeComparableText(
+    String(input.resolvedServiceName || "")
+  );
 
-  if (!firstLineNorm || !resolvedLabelNorm) {
-    return canonicalBody;
-  }
+  const matchesResolvedLabel =
+    !!resolvedEntityLabelNorm &&
+    (
+      firstLineNorm === resolvedEntityLabelNorm ||
+      firstLineNorm.includes(resolvedEntityLabelNorm) ||
+      resolvedEntityLabelNorm.includes(firstLineNorm)
+    );
+
+  const matchesResolvedService =
+    !!resolvedServiceNameNorm &&
+    (
+      firstLineNorm === resolvedServiceNameNorm ||
+      firstLineNorm.includes(resolvedServiceNameNorm) ||
+      resolvedServiceNameNorm.includes(firstLineNorm)
+    );
 
   const shouldStrip =
-    firstLineNorm === resolvedLabelNorm ||
-    firstLineNorm.includes(resolvedLabelNorm) ||
-    resolvedLabelNorm.includes(firstLineNorm);
+    matchesResolvedLabel ||
+    matchesResolvedService ||
+    looksLikeResolvedHeading(firstLine);
 
   if (!shouldStrip) {
     return canonicalBody;
   }
 
-  const lines = canonicalBody.split("\n");
   let removed = false;
   const nextLines: string[] = [];
 
@@ -348,13 +376,15 @@ async function buildGroundedFrameOnly(input: {
     : input.isResolvedCatalogAnswer
     ? [
         "This is a resolved grounded catalog answer.",
-        "intro must be null.",
-        "Return one short closing only.",
+        "Return exactly one short commercial intro before the canonical body.",
+        "The intro must feel consultative, natural, and sales-oriented.",
+        "The intro must not repeat the exact title or heading of the plan or variant.",
+        "The intro must not restate or summarize the canonical body.",
+        "The intro must position the answer as useful and relevant for the user.",
+        "Return exactly one short closing only.",
         "The closing must feel consultative and natural.",
-        "If the user already received the full answer, the closing should help them continue without pressure.",
-        "The closing must not ask if the user wants more information about the same plan or variant that was just explained.",
-        "The closing must assume the canonical body already answered the current question.",
-        "The closing should either help the user compare, move forward, or keep the conversation open naturally.",
+        "The closing must not ask for more information about the same plan or variant that was just explained.",
+        "The closing should either help the user compare, move forward, or continue naturally.",
         "Do not restate or summarize the canonical body.",
         "Do not add new facts.",
       ]
@@ -708,7 +738,10 @@ export async function renderFastpathDmReply(
   const shouldAllowIntro =
     !isCatalogListReply &&
     !isInfoGeneralOverviewTurn &&
-    commercialPolicy.shouldUseSalesTone &&
+    (
+      isResolvedCatalogAnswer ||
+      commercialPolicy.shouldUseSalesTone
+    ) &&
     (
       !bypassWriterModel ||
       isResolvedCatalogAnswer
@@ -920,6 +953,7 @@ export async function renderFastpathDmReply(
         ? stripFirstResolvedHeadingFromCanonicalBody({
             canonicalBody: canonicalReply,
             resolvedEntityLabel,
+            resolvedServiceName: structuredService?.serviceName ?? null,
           })
         : canonicalReply;
 
