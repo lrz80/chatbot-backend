@@ -800,160 +800,196 @@ export async function procesarMensajeWhatsApp(
   }
 
   async function tryCatalogOutsideHybridDecision(params: {
-    intent: string | null;
-    detectedFacets?: IntentFacets | null;
-    convoCtxForCatalog: any;
-    catalogReferenceClassification?: any;
-    canonicalCatalogResolution?: {
-      resolutionKind: string;
-      resolvedServiceId?: string | null;
-      resolvedServiceName?: string | null;
-      variantOptions?: Array<{
-        variantId: string;
-        variantName: string;
-      }>;
+  intent: string | null;
+  detectedFacets?: IntentFacets | null;
+  convoCtxForCatalog: any;
+  catalogReferenceClassification?: any;
+  canonicalCatalogResolution?: {
+    resolutionKind: string;
+    resolvedServiceId?: string | null;
+    resolvedServiceName?: string | null;
+    variantOptions?: Array<{
+      variantId: string;
+      variantName: string;
+    }>;
+  };
+}): Promise<boolean> {
+  const catalogRes = await runCatalogDomainTurn({
+    pool,
+    tenantId: tenant.id,
+    canal,
+    idiomaDestino,
+    userInput,
+    inBooking: Boolean(inBooking0),
+    convoCtx: params.convoCtxForCatalog as any,
+    infoClave: String(tenant?.info_clave || ""),
+    detectedIntent: params.intent,
+    detectedFacets: params.detectedFacets || {},
+    catalogReferenceClassification: params.catalogReferenceClassification,
+    maxDisambiguationOptions: 10,
+    catalogRouteContext: {
+      canonicalCatalogResolution: params.canonicalCatalogResolution,
+    },
+  });
+
+  if (catalogRes.ctxPatch) {
+    transition({ patchCtx: catalogRes.ctxPatch });
+    finalCtxPatch = {
+      ...finalCtxPatch,
+      ...catalogRes.ctxPatch,
     };
-  }): Promise<boolean> {
-    const catalogRes = await runCatalogDomainTurn({
-      pool,
-      tenantId: tenant.id,
-      canal,
-      idiomaDestino,
-      userInput,
-      inBooking: Boolean(inBooking0),
-      convoCtx: params.convoCtxForCatalog as any,
-      infoClave: String(tenant?.info_clave || ""),
-      detectedIntent: params.intent,
-      detectedFacets: params.detectedFacets || {},
-      catalogReferenceClassification: params.catalogReferenceClassification,
-      maxDisambiguationOptions: 10,
-      catalogRouteContext: {
-        canonicalCatalogResolution: params.canonicalCatalogResolution,
-      },
-    });
-
-    if (catalogRes.ctxPatch) {
-      transition({ patchCtx: catalogRes.ctxPatch });
-      finalCtxPatch = {
-        ...finalCtxPatch,
-        ...catalogRes.ctxPatch,
-      };
-    }
-
-    if (!catalogRes.handled || !catalogRes.reply) {
-      return false;
-    }
-
-    const rendered = await renderFastpathDmReply({
-      tenantId: tenant.id,
-      canal,
-      idiomaDestino,
-      userInput,
-      contactoNorm,
-      messageId: messageId || null,
-      promptBaseMem,
-      fastpathText: String(catalogRes.reply || "").trim(),
-      fp: {
-        ...catalogRes,
-        reply: String(catalogRes.reply || "").trim(),
-        source: catalogRes.source,
-        intent: catalogRes.intent,
-        catalogPayload: catalogRes.catalogPayload,
-      },
-      detectedIntent: catalogRes.intent || params.intent,
-      intentFallback: catalogRes.intent || params.intent,
-      structuredService: {
-        serviceId:
-          catalogRes.catalogPayload?.kind === "resolved_catalog_answer"
-            ? catalogRes.catalogPayload.serviceId || null
-            : null,
-        serviceName:
-          catalogRes.catalogPayload?.kind === "resolved_catalog_answer"
-            ? catalogRes.catalogPayload.serviceName || null
-            : null,
-        serviceLabel:
-          catalogRes.catalogPayload?.kind === "resolved_catalog_answer"
-            ? catalogRes.catalogPayload.serviceName || null
-            : null,
-        hasResolution:
-          catalogRes.catalogPayload?.kind === "resolved_catalog_answer" &&
-          (
-            Boolean(catalogRes.catalogPayload.serviceId) ||
-            Boolean(catalogRes.catalogPayload.variantId)
-          ),
-      },
-      replyPolicy: {
-        shouldUseGroundedFrameOnly: true,
-        responsePolicyMode: "grounded_frame_only",
-        hasResolvedEntity:
-          catalogRes.catalogPayload?.kind === "resolved_catalog_answer" &&
-          (
-            Boolean(catalogRes.catalogPayload.serviceId) ||
-            Boolean(catalogRes.catalogPayload.variantId)
-          ),
-
-        isCatalogDbReply: true,
-        isPriceSummaryReply:
-          catalogRes.source === "catalog_db" &&
-          catalogRes.catalogPayload?.kind === "resolved_catalog_answer" &&
-          catalogRes.catalogPayload.scope === "overview",
-        isPriceDisambiguationReply:
-          catalogRes.catalogPayload?.kind === "service_choice" ||
-          catalogRes.catalogPayload?.kind === "variant_choice",
-        isGroundedCatalogReply: true,
-        isGroundedCatalogOverviewDm:
-          catalogRes.catalogPayload?.kind === "resolved_catalog_answer" &&
-          catalogRes.catalogPayload.scope === "overview",
-        shouldForceSalesClosingQuestion: false,
-        canonicalBodyOwnsClosing: true,
-
-        commercialPolicy: {
-          purchaseIntent: detectedCommercial?.purchaseIntent ?? "low",
-          wantsBooking: detectedCommercial?.wantsBooking === true,
-          wantsQuote: detectedCommercial?.wantsQuote === true,
-          wantsHuman: detectedCommercial?.wantsHuman === true,
-          urgency: detectedCommercial?.urgency ?? "low",
-          shouldUseSalesTone: true,
-          shouldUseSoftClosing: true,
-          shouldUseDirectClosing: false,
-          shouldSuggestHumanHandoff: detectedCommercial?.wantsHuman === true,
-        },
-      },
-      ctxPatch: finalCtxPatch || {},
-      maxLines: MAX_WHATSAPP_LINES,
-    });
-
-    if (rendered.ctxPatch) {
-      transition({ patchCtx: rendered.ctxPatch });
-      finalCtxPatch = {
-        ...finalCtxPatch,
-        ...rendered.ctxPatch,
-      };
-    }
-
-    const finalCatalogText = await ensureReplyLanguage(
-      String(rendered.reply || "").trim(),
-      idiomaDestino
-    );
-
-    if (!finalCatalogText) {
-      return false;
-    }
-
-    INTENCION_FINAL_CANONICA =
-      catalogRes.intent || params.intent || INTENCION_FINAL_CANONICA || null;
-
-    lastIntent =
-      catalogRes.intent || params.intent || lastIntent || null;
-
-    await replyAndExit(
-      finalCatalogText,
-      catalogRes.source || "catalog_route",
-      catalogRes.intent || params.intent || null
-    );
-
-    return true;
   }
+
+  if (!catalogRes.handled) {
+    return false;
+  }
+
+  const catalogReply =
+    "reply" in catalogRes && typeof catalogRes.reply === "string"
+      ? catalogRes.reply
+      : "";
+
+  const catalogPayload =
+    "catalogPayload" in catalogRes
+      ? catalogRes.catalogPayload ?? undefined
+      : undefined;
+
+  const catalogSource =
+    "source" in catalogRes && typeof catalogRes.source === "string"
+      ? catalogRes.source
+      : null;
+
+  const catalogIntent =
+    "intent" in catalogRes && typeof catalogRes.intent === "string"
+      ? catalogRes.intent
+      : params.intent;
+
+  const rawCatalogText = String(catalogReply || "").trim();
+  const hasCatalogPayload = Boolean(catalogPayload);
+
+  // Las respuestas de desambiguación pueden venir sin texto
+  // y renderizarse desde catalogPayload
+  if (!rawCatalogText && !hasCatalogPayload) {
+    return false;
+  }
+
+  const rendered = await renderFastpathDmReply({
+    tenantId: tenant.id,
+    canal,
+    idiomaDestino,
+    userInput,
+    contactoNorm,
+    messageId: messageId || null,
+    promptBaseMem,
+    fastpathText: rawCatalogText,
+    fp: {
+      reply: rawCatalogText,
+      source: catalogSource || "catalog_route",
+      intent: catalogIntent,
+      catalogPayload,
+    },
+    detectedIntent: catalogIntent,
+    intentFallback: catalogIntent,
+    structuredService: {
+      serviceId:
+        catalogPayload?.kind === "resolved_catalog_answer"
+          ? catalogPayload.serviceId || null
+          : catalogPayload?.kind === "variant_choice"
+          ? catalogPayload.serviceId || null
+          : null,
+      serviceName:
+        catalogPayload?.kind === "resolved_catalog_answer"
+          ? catalogPayload.serviceName || null
+          : catalogPayload?.kind === "variant_choice"
+          ? catalogPayload.serviceName || null
+          : null,
+      serviceLabel:
+        catalogPayload?.kind === "resolved_catalog_answer"
+          ? catalogPayload.serviceName || null
+          : catalogPayload?.kind === "variant_choice"
+          ? catalogPayload.serviceName || null
+          : null,
+      hasResolution:
+        catalogPayload?.kind === "resolved_catalog_answer" &&
+        (
+          Boolean(catalogPayload.serviceId) ||
+          Boolean(catalogPayload.variantId)
+        ),
+    },
+    replyPolicy: {
+      shouldUseGroundedFrameOnly: true,
+      responsePolicyMode: "grounded_frame_only",
+      hasResolvedEntity:
+        catalogPayload?.kind === "resolved_catalog_answer" &&
+        (
+          Boolean(catalogPayload.serviceId) ||
+          Boolean(catalogPayload.variantId)
+        ),
+
+      isCatalogDbReply:
+        catalogSource === "catalog_db" ||
+        catalogSource === "catalog_disambiguation_db",
+      isPriceSummaryReply:
+        catalogSource === "catalog_db" &&
+        catalogPayload?.kind === "resolved_catalog_answer" &&
+        catalogPayload.scope === "overview",
+      isPriceDisambiguationReply:
+        catalogPayload?.kind === "service_choice" ||
+        catalogPayload?.kind === "variant_choice",
+      isGroundedCatalogReply: true,
+      isGroundedCatalogOverviewDm:
+        catalogPayload?.kind === "resolved_catalog_answer" &&
+        catalogPayload.scope === "overview",
+      shouldForceSalesClosingQuestion: false,
+      canonicalBodyOwnsClosing: true,
+
+      commercialPolicy: {
+        purchaseIntent: detectedCommercial?.purchaseIntent ?? "low",
+        wantsBooking: detectedCommercial?.wantsBooking === true,
+        wantsQuote: detectedCommercial?.wantsQuote === true,
+        wantsHuman: detectedCommercial?.wantsHuman === true,
+        urgency: detectedCommercial?.urgency ?? "low",
+        shouldUseSalesTone: true,
+        shouldUseSoftClosing: true,
+        shouldUseDirectClosing: false,
+        shouldSuggestHumanHandoff: detectedCommercial?.wantsHuman === true,
+      },
+    },
+    ctxPatch: finalCtxPatch || {},
+    maxLines: MAX_WHATSAPP_LINES,
+  });
+
+  if (rendered.ctxPatch) {
+    transition({ patchCtx: rendered.ctxPatch });
+    finalCtxPatch = {
+      ...finalCtxPatch,
+      ...rendered.ctxPatch,
+    };
+  }
+
+  const finalCatalogText = await ensureReplyLanguage(
+    String(rendered.reply || "").trim(),
+    idiomaDestino
+  );
+
+  if (!finalCatalogText) {
+    return false;
+  }
+
+  INTENCION_FINAL_CANONICA =
+    catalogIntent || INTENCION_FINAL_CANONICA || null;
+
+  lastIntent =
+    catalogIntent || lastIntent || null;
+
+  await replyAndExit(
+    finalCatalogText,
+    catalogSource || "catalog_route",
+    catalogIntent || null
+  );
+
+  return true;
+}
 
   // ===============================
   // 📅 BOOKING helper (usa módulo genérico)
