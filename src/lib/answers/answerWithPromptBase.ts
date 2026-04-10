@@ -357,66 +357,77 @@ function buildUserPrompt(
   policy: Required<ResponsePolicy>,
   hasCanonicalFallback: boolean
 ) {
-  const mustPreserveCanonicalBody =
-    hasCanonicalFallback && shouldUseCanonicalBodyComposition(policy);
+  const isFrameOnly = policy.mode === "frame_only";
 
-  return [
+  const mustPreserveCanonicalBody =
+    !isFrameOnly &&
+    hasCanonicalFallback &&
+    shouldUseCanonicalBodyComposition(policy);
+
+  const base = [
     "MENSAJE_USUARIO:",
     userInput,
     "",
     "TASK:",
-    "- Produce the final customer-facing reply.",
+    isFrameOnly
+      ? "- Generate only the requested framing fields."
+      : "- Produce the final customer-facing reply.",
     "- Obey RESPONSE_POLICY_JSON and OUTPUT_RULES.",
     "- Return STRICT JSON only.",
-    ...(mustPreserveCanonicalBody
-      ? [
-          '- Use this exact shape: {"intro":null,"closing":null,"pendingCta":null}',
-          "- The canonical fallback body is owned by the system.",
-          "- Do not rewrite, replace, summarize, merge, expand, or resolve the canonical body.",
-          "- The canonical fallback body is owned by the system.",
-          "- Do not rewrite, replace, summarize, merge, expand, or resolve the canonical body.",
-          "- You may only provide an intro and/or a closing if allowed by the response policy.",
-          ...(policy.mode === "clarify_only"
-            ? [
-                "- Because this is a clarification turn, intro is required.",
-                "- The intro must be one short conversational line that preserves continuity with the user's last message.",
-                "- The intro must not resolve the ambiguity or invent catalog facts.",
-                "- The intro should guide the user to choose from the canonical options shown by the system.",
-                "- closing should normally be null unless the response policy explicitly allows and needs one.",
-                '- Use this exact shape: {"intro":"...", "closing":null, "pendingCta":null}',
-              ]
-            : [
-                ...(policy.allowIntro
-                  ? [
-                      "- intro is required and must be a short conversational framing line.",
-                    ]
-                  : [
-                      "- intro must be null.",
-                    ]),
-                ...((policy.allowOutro || policy.mustEndWithSalesQuestion)
-                  ? [
-                      "- closing is required and must be a short guided closing line.",
-                    ]
-                  : [
-                      "- closing must be null.",
-                    ]),
-                '- Use this exact shape: {"intro":"...", "closing":"...", "pendingCta":null} when intro/closing are required.',
-                '- Use null only for fields that are explicitly not allowed by the response policy.',
-              ]),
-          "- Only include pendingCta if the response policy clearly supports an immediate confirmation-oriented next step.",
-          "- Never include pendingCta for greetings, general information, exploratory questions, overview turns, or low-intent turns.",
-          "- booking_offer is only valid when the user is clearly ready to book now.",
-          "- estimate_offer is only valid when the user is clearly asking for a quote/estimate and is ready to proceed now.",
-        ]
-      : [
-          '- Use this exact shape: {"text":"...", "pendingCta":null}',
-          "- Only include pendingCta if the response policy clearly supports an immediate confirmation-oriented next step.",
-          "- Never include pendingCta for greetings, general information, exploratory questions, overview turns, or low-intent turns.",
-          "- booking_offer is only valid when the user is clearly ready to book now.",
-          "- estimate_offer is only valid when the user is clearly asking for a quote/estimate and is ready to proceed now.",
-        ]),
-    "- Do not wrap the JSON in markdown fences.",
-  ].join("\n");
+  ];
+
+  if (isFrameOnly) {
+    base.push(
+      '- Use this exact shape: {"intro":string|null,"closing":string|null,"pendingCta":null}',
+      "- Do not return a text field.",
+      "- Do not write the body.",
+      "- Only generate intro and/or closing according to the response policy.",
+      "- If allowIntro=true, intro may be present and must be short.",
+      "- If allowIntro=false, intro must be null.",
+      "- If allowOutro=true or mustEndWithSalesQuestion=true, closing may be present and must be short.",
+      "- If allowOutro=false and mustEndWithSalesQuestion=false, closing must be null.",
+      "- pendingCta must be null."
+    );
+  } else if (mustPreserveCanonicalBody) {
+    base.push(
+      '- Use this exact shape: {"intro":null,"closing":null,"pendingCta":null}',
+      "- The canonical fallback body is owned by the system.",
+      "- Do not rewrite, replace, summarize, merge, expand, or resolve the canonical body.",
+      "- You may only provide an intro and/or a closing if allowed by the response policy.",
+      ...(policy.allowIntro
+        ? [
+            "- intro is required and must be a short conversational framing line.",
+          ]
+        : [
+            "- intro must be null.",
+          ]),
+      ...((policy.allowOutro || policy.mustEndWithSalesQuestion)
+        ? [
+            "- closing is required and must be a short guided closing line.",
+          ]
+        : [
+            "- closing must be null.",
+          ]),
+      '- Use this exact shape: {"intro":"...", "closing":"...", "pendingCta":null} when intro/closing are required.',
+      '- Use null only for fields that are explicitly not allowed by the response policy.',
+      "- Only include pendingCta if the response policy clearly supports an immediate confirmation-oriented next step.",
+      "- Never include pendingCta for greetings, general information, exploratory questions, overview turns, or low-intent turns.",
+      "- booking_offer is only valid when the user is clearly ready to book now.",
+      "- estimate_offer is only valid when the user is clearly asking for a quote/estimate and is ready to proceed now."
+    );
+  } else {
+    base.push(
+      '- Use this exact shape: {"text":"...", "pendingCta":null}',
+      "- Only include pendingCta if the response policy clearly supports an immediate confirmation-oriented next step.",
+      "- Never include pendingCta for greetings, general information, exploratory questions, overview turns, or low-intent turns.",
+      "- booking_offer is only valid when the user is clearly ready to book now.",
+      "- estimate_offer is only valid when the user is clearly asking for a quote/estimate and is ready to proceed now."
+    );
+  }
+
+  base.push("- Do not wrap the JSON in markdown fences.");
+
+  return base.join("\n");
 }
 
 function normalizeComparableText(value: string): string {
