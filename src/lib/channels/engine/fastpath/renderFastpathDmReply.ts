@@ -277,8 +277,12 @@ async function buildGroundedFrameOnly(input: {
   const frameTaskRules = input.isCatalogChoiceReply
     ? [
         "This is a catalog choice turn.",
-        "Return one short intro that helps the user choose naturally.",
-        "The intro must include a light CTA to pick one option.",
+        "Return exactly one short intro line before the canonical options body.",
+        "The intro must guide the user to choose one option from the list shown below.",
+        "The intro must not ask whether the user wants more information about the plan or service.",
+        "The intro must not mention includes, prices, benefits, features, conditions, schedules, or links.",
+        "The intro must not imply that the system already answered the question fully.",
+        "The intro should work as a selection CTA, not as a discovery CTA.",
         "closing must be null.",
         "Do not rewrite or summarize the options body.",
         "Do not mention any facts not already implied by the canonical body.",
@@ -290,6 +294,9 @@ async function buildGroundedFrameOnly(input: {
         "Return one short closing only.",
         "The closing must feel consultative and natural.",
         "If the user already received the full answer, the closing should help them continue without pressure.",
+        "The closing must not ask if the user wants more information about the same plan or variant that was just explained.",
+        "The closing must assume the canonical body already answered the current question.",
+        "The closing should either help the user compare, move forward, or keep the conversation open naturally.",
         "Do not restate or summarize the canonical body.",
         "Do not add new facts.",
       ]
@@ -749,7 +756,7 @@ export async function renderFastpathDmReply(
     reasoningNotes: isServiceChoiceReply
       ? "Catalog service choice turn. The canonical options body is owned by the system. Write one short conversational intro that helps the user choose one service. Do not rewrite, summarize, rename, reorder, or replace the numbered options. Do not add a closing."
       : isVariantChoiceReply
-      ? "Catalog variant choice turn. The canonical options body is owned by the system. Write one short conversational intro tied to the selected service so the user can choose one variant. Do not rewrite, summarize, rename, reorder, or replace the numbered options. Do not add a closing."
+      ? "Catalog variant choice turn. The canonical options body is owned by the system. Write one short conversational intro tied to the selected service so the user can choose one variant. The intro must function as a selection CTA. Do not ask if the user wants more information about the plan. Do not mention includes, benefits, or prices. Do not rewrite, summarize, rename, reorder, or replace the numbered options. Do not add a closing."
       : isCatalogListReply
       ? [
           "Grounded catalog list turn. The canonical body is the source of truth and must be preserved exactly.",
