@@ -179,22 +179,7 @@ function renderCatalogChoiceBody(input: {
         .filter((value): value is string => Boolean(value))
     : [];
 
-  const optionsBlock = options.join("\n").trim();
-
-  if (!optionsBlock) {
-    return "";
-  }
-
-  const serviceName =
-    input.catalogPayload.kind === "variant_choice"
-      ? normalizeText(input.catalogPayload.serviceName)
-      : "";
-
-  if (serviceName) {
-    return [serviceName, "", optionsBlock].join("\n").trim();
-  }
-
-  return optionsBlock;
+  return options.join("\n").trim();
 }
 
 function buildTenantClosingPolicyInstruction(promptBaseMem: string): string | null {
@@ -278,12 +263,15 @@ async function buildGroundedFrameOnly(input: {
     ? [
         "This is a catalog choice turn.",
         "Return exactly one short intro line before the canonical options body.",
-        "The intro must guide the user to choose one option from the list shown below.",
+        "The intro must say that the selected plan or service has these options.",
+        "The intro must be contextual, not informational.",
+        "The intro must not say 'here is information about the plan' or similar.",
         "The intro must not ask whether the user wants more information about the plan or service.",
-        "The intro must not mention includes, prices, benefits, features, conditions, schedules, or links.",
-        "The intro must not imply that the system already answered the question fully.",
-        "The intro should work as a selection CTA, not as a discovery CTA.",
-        "closing must be null.",
+        "The intro must not mention includes, benefits, features, prices, conditions, schedules, locations, or links.",
+        "The intro must not repeat the numbered options.",
+        "Return exactly one short closing line after the canonical options body.",
+        "The closing must be a direct selection CTA.",
+        "The closing must ask the user to select one option from the list.",
         "Do not rewrite or summarize the options body.",
         "Do not mention any facts not already implied by the canonical body.",
       ]
@@ -748,15 +736,15 @@ export async function renderFastpathDmReply(
       mustPreserveResolvedCanonicalBody ||
       isInfoGeneralOverviewTurn,
     allowIntro: isCatalogChoiceReply ? true : shouldAllowIntro,
-    allowOutro: isCatalogChoiceReply ? false : shouldAllowOutro,
+    allowOutro: isCatalogChoiceReply ? true : shouldAllowOutro,
     allowBodyRewrite: false,
     mustEndWithSalesQuestion: isCatalogChoiceReply
       ? false
       : shouldEndWithSalesQuestion,
     reasoningNotes: isServiceChoiceReply
-      ? "Catalog service choice turn. The canonical options body is owned by the system. Write one short conversational intro that helps the user choose one service. Do not rewrite, summarize, rename, reorder, or replace the numbered options. Do not add a closing."
+      ? "Catalog service choice turn. The canonical options body is owned by the system. Write one short conversational intro that says these are the available options. After the canonical options body, add one short selection CTA asking the user to choose one option. Do not rewrite, summarize, rename, reorder, or replace the numbered options."
       : isVariantChoiceReply
-      ? "Catalog variant choice turn. The canonical options body is owned by the system. Write one short conversational intro tied to the selected service so the user can choose one variant. The intro must function as a selection CTA. Do not ask if the user wants more information about the plan. Do not mention includes, benefits, or prices. Do not rewrite, summarize, rename, reorder, or replace the numbered options. Do not add a closing."
+      ? "Catalog variant choice turn. The canonical options body is owned by the system. Write one short conversational intro that says the selected plan has these options. After the canonical options body, add one short selection CTA asking the user to choose the option they want. Do not say 'here is information about the plan'. Do not ask if the user wants more information about the plan. Do not mention includes, benefits, or prices. Do not rewrite, summarize, rename, reorder, or replace the numbered options."
       : isCatalogListReply
       ? [
           "Grounded catalog list turn. The canonical body is the source of truth and must be preserved exactly.",
