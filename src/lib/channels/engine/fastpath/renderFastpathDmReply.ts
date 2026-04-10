@@ -263,15 +263,18 @@ async function buildGroundedFrameOnly(input: {
     ? [
         "This is a catalog choice turn.",
         "Return exactly one short intro line before the canonical options body.",
-        "The intro must say that the selected plan or service has these options.",
-        "The intro must be contextual, not informational.",
+        "The intro must state that the selected plan or service has these options.",
+        "The intro must be simple, neutral, and direct.",
+        "The intro must not sound promotional or vague.",
         "The intro must not say 'here is information about the plan' or similar.",
-        "The intro must not ask whether the user wants more information about the plan or service.",
-        "The intro must not mention includes, benefits, features, prices, conditions, schedules, locations, or links.",
+        "The intro must not ask whether the user wants more information.",
+        "The intro must not mention includes, benefits, features, prices, schedules, policies, or links.",
         "The intro must not repeat the numbered options.",
         "Return exactly one short closing line after the canonical options body.",
         "The closing must be a direct selection CTA.",
-        "The closing must ask the user to select one option from the list.",
+        "The closing should tell the user to select the option they want.",
+        "The closing must not be phrased as a broad question.",
+        "Prefer imperative CTA style over question style.",
         "Do not rewrite or summarize the options body.",
         "Do not mention any facts not already implied by the canonical body.",
       ]
@@ -742,9 +745,9 @@ export async function renderFastpathDmReply(
       ? false
       : shouldEndWithSalesQuestion,
     reasoningNotes: isServiceChoiceReply
-      ? "Catalog service choice turn. The canonical options body is owned by the system. Write one short conversational intro that says these are the available options. After the canonical options body, add one short selection CTA asking the user to choose one option. Do not rewrite, summarize, rename, reorder, or replace the numbered options."
+      ? "Catalog service choice turn. The canonical options body is owned by the system. Write one short intro that says these are the available options. After the canonical options body, add one short direct CTA telling the user to select the option they want. Use a clean and simple DM structure. Do not rewrite, summarize, rename, reorder, or replace the numbered options."
       : isVariantChoiceReply
-      ? "Catalog variant choice turn. The canonical options body is owned by the system. Write one short conversational intro that says the selected plan has these options. After the canonical options body, add one short selection CTA asking the user to choose the option they want. Do not say 'here is information about the plan'. Do not ask if the user wants more information about the plan. Do not mention includes, benefits, or prices. Do not rewrite, summarize, rename, reorder, or replace the numbered options."
+      ? "Catalog variant choice turn. The canonical options body is owned by the system. Write one short intro that says the selected plan has these options. After the canonical options body, add one short direct CTA telling the user to select the option they want. Use a clean and simple DM structure. Do not say 'here is information about the plan'. Do not ask if the user wants more information. Do not mention includes, benefits, or prices. Do not rewrite, summarize, rename, reorder, or replace the numbered options."
       : isCatalogListReply
       ? [
           "Grounded catalog list turn. The canonical body is the source of truth and must be preserved exactly.",
@@ -768,6 +771,9 @@ export async function renderFastpathDmReply(
           "If PROMPT_BASE contains a tenant-specific closing policy, you must follow it for the closing.",
           "The tenant closing policy overrides generic closing style defaults, as long as the canonical body remains unchanged.",
           "The body itself must remain unchanged and in the same order.",
+          "Do not ask whether the user wants more information about the same plan or variant that was just explained.",
+          "Do not use generic closings like asking again for more information.",
+          "Prefer a closing that either helps the user compare another option, move forward, or continue naturally.",
           tenantClosingPolicyInstruction,
           commercialClosingInstruction,
         ]
