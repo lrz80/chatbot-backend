@@ -419,21 +419,35 @@ export async function runCatalogDomainTurn(
     candidateOptionsFromTurn,
   });
 
-  const canEnterCatalogFastpath =
+  const hasFacetDrivenCatalogIntent =
+    detectedFacets?.asksPrices === true ||
+    detectedFacets?.asksSchedules === true;
+
+    const hasExplicitCatalogIntent =
+    intentOut === "precio" ||
+    intentOut === "planes_precios" ||
+    intentOut === "info_servicio" ||
+    intentOut === "combination_and_price" ||
+    intentOut === "catalogo" ||
+    intentOut === "catalog";
+
+    const canEnterCatalogFastpath =
     !shouldBypassCatalogFollowupReuse &&
     (
-      hasPendingCatalogChoice ||
-      Boolean(catalogRoutingSignal?.shouldRouteCatalog) ||
-      isStructuredCatalogTurn
+        hasPendingCatalogChoice ||
+        Boolean(catalogRoutingSignal?.shouldRouteCatalog) ||
+        isStructuredCatalogTurn ||
+        hasExplicitCatalogIntent ||
+        hasFacetDrivenCatalogIntent
     );
 
-  if (shouldBypassCatalogFollowupReuse) {
+    if (shouldBypassCatalogFollowupReuse) {
     return { handled: false };
-  }
+    }
 
-  if (!canEnterCatalogFastpath) {
+    if (!canEnterCatalogFastpath) {
     return { handled: false };
-  }
+    }
 
   const catalogFastpathResult = await runCatalogFastpath({
     pool,
