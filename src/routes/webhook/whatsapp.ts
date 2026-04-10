@@ -1441,7 +1441,10 @@ export async function procesarMensajeWhatsApp(
         intent: nextIntent,
         detectedFacets: nextDetectedFacets,
         convoCtxForCatalog: convoCtxForHybrid,
-        catalogReferenceClassification: (signals as any)?.catalogReferenceClassification,
+        catalogReferenceClassification:
+          hybridRes.routeContext?.catalogReferenceClassification ||
+          (signals as any)?.catalogReferenceClassification ||
+          undefined,
       });
 
       if (handledCatalog) {

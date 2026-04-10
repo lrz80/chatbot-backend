@@ -8,6 +8,7 @@ import type {
 import type { Lang } from "../clients/clientDb";
 import { buildCatalogReferenceClassificationInput } from "../../../catalog/buildCatalogReferenceClassificationInput";
 import { classifyCatalogReferenceTurn } from "../../../catalog/classifyCatalogReferenceTurn";
+import type { CatalogReferenceClassification } from "../../../catalog/types";
 import {
   buildFastpathTurnPolicy,
   type IntentFacets,
@@ -48,6 +49,9 @@ export type FastpathHybridResult = {
   intent?: string | null;
   ctxPatch?: any;
   routeTarget?: FastpathHybridRoute;
+  routeContext?: {
+    catalogReferenceClassification?: CatalogReferenceClassification | null;
+  };
 };
 
 type HybridDomainDecision = {
@@ -144,6 +148,82 @@ function decideHybridDomain(input: {
   };
 }
 
+function buildEffectiveCatalogReferenceClassification(input: {
+  baseClassification: CatalogReferenceClassification;
+  canonicalCatalogRouteDecision: any;
+}): CatalogReferenceClassification {
+  const { baseClassification, canonicalCatalogRouteDecision } = input;
+  const resolutionKind = String(
+    canonicalCatalogRouteDecision?.resolutionKind || "none"
+  ).trim();
+
+  const resolutionHit = canonicalCatalogRouteDecision?.resolution?.hit || null;
+  const resolvedServiceId = String(
+    canonicalCatalogRouteDecision?.resolvedServiceId ||
+      resolutionHit?.id ||
+      ""
+  ).trim();
+  const resolvedServiceName = String(
+    canonicalCatalogRouteDecision?.resolvedServiceName ||
+      resolutionHit?.name ||
+      ""
+  ).trim();
+
+  if (resolutionKind === "resolved_single") {
+    return {
+      ...baseClassification,
+      kind: "entity_specific",
+      shouldResolveEntity: true,
+      shouldAskDisambiguation: false,
+      targetLevel: "service",
+      targetServiceId: resolvedServiceId || null,
+      targetServiceName: resolvedServiceName || null,
+      targetVariantId: null,
+      targetVariantName: null,
+      targetFamilyKey: null,
+      targetFamilyName: null,
+      disambiguationType: "none",
+      anchorShift: "none",
+    };
+  }
+
+  if (resolutionKind === "resolved_service_variant_ambiguous") {
+    return {
+      ...baseClassification,
+      kind: "entity_specific",
+      shouldResolveEntity: true,
+      shouldAskDisambiguation: true,
+      targetLevel: "service",
+      targetServiceId: resolvedServiceId || null,
+      targetServiceName: resolvedServiceName || null,
+      targetVariantId: null,
+      targetVariantName: null,
+      targetFamilyKey: null,
+      targetFamilyName: null,
+      anchorShift: "none",
+    };
+  }
+
+  if (resolutionKind === "ambiguous") {
+    return {
+      ...baseClassification,
+      kind: "catalog_family",
+      shouldResolveEntity: false,
+      shouldAskDisambiguation: true,
+      targetLevel: "multi_service",
+      targetServiceId: null,
+      targetServiceName: null,
+      targetVariantId: null,
+      targetVariantName: null,
+      targetFamilyKey: "canonical_ambiguous_family",
+      targetFamilyName: "canonical_ambiguous_family",
+      anchorShift: "none",
+    };
+  }
+
+  return baseClassification;
+}
+
 export async function handleFastpathHybridTurn(
   args: FastpathHybridArgs
 ): Promise<FastpathHybridResult> {
@@ -164,7 +244,9 @@ export async function handleFastpathHybridTurn(
   } = args;
 
   const currentIntent = detectedIntent || intentFallback || null;
-  const normalizedCurrentIntent = String(currentIntent || "").trim().toLowerCase();
+  const normalizedCurrentIntent = String(currentIntent || "")
+    .trim()
+    .toLowerCase();
 
   const asksPrices = detectedFacets?.asksPrices === true;
   const asksSchedules = detectedFacets?.asksSchedules === true;
@@ -224,12 +306,23 @@ export async function handleFastpathHybridTurn(
     ? {
         shouldRouteCatalog: true,
         resolutionKind: "none" as const,
+        resolution: {
+          kind: "none" as const,
+          hit: null,
+          candidates: [],
+        },
       }
     : await getCanonicalCatalogRouteDecision({
         pool,
         tenantId,
         userInput,
       });
+
+  const effectiveCatalogReferenceClassification =
+    buildEffectiveCatalogReferenceClassification({
+      baseClassification: previewClassification,
+      canonicalCatalogRouteDecision: rawCanonicalCatalogRouteDecision,
+    });
 
   const domainDecision = decideHybridDomain({
     hasPendingCatalogChoice,
@@ -260,11 +353,44 @@ export async function handleFastpathHybridTurn(
     canonicalCatalogResolutionKind:
       rawCanonicalCatalogRouteDecision?.resolutionKind || "none",
     detectedRoutingHints: detectedRoutingHints || null,
+    effectiveCatalogReferenceClassification:
+      domainDecision.routeTarget === "catalog"
+        ? {
+            kind: effectiveCatalogReferenceClassification.kind,
+            targetLevel: effectiveCatalogReferenceClassification.targetLevel,
+            targetServiceId:
+              effectiveCatalogReferenceClassification.targetServiceId || null,
+            targetServiceName:
+              effectiveCatalogReferenceClassification.targetServiceName || null,
+            targetVariantId:
+              effectiveCatalogReferenceClassification.targetVariantId || null,
+            targetVariantName:
+              effectiveCatalogReferenceClassification.targetVariantName || null,
+            targetFamilyKey:
+              effectiveCatalogReferenceClassification.targetFamilyKey || null,
+            shouldResolveEntity:
+              effectiveCatalogReferenceClassification.shouldResolveEntity ===
+              true,
+            shouldAskDisambiguation:
+              effectiveCatalogReferenceClassification.shouldAskDisambiguation ===
+              true,
+            disambiguationType:
+              effectiveCatalogReferenceClassification.disambiguationType ||
+              "none",
+          }
+        : null,
   });
 
   return {
     handled: false,
     routeTarget: domainDecision.routeTarget,
     intent: currentIntent,
+    routeContext:
+      domainDecision.routeTarget === "catalog"
+        ? {
+            catalogReferenceClassification:
+              effectiveCatalogReferenceClassification,
+          }
+        : undefined,
   };
 }
