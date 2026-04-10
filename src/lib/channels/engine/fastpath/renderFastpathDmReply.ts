@@ -11,6 +11,46 @@ function normalizeText(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function stripJsonCodeFences(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) return raw;
+
+  return raw
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+}
+
+function parseFrameJson(value: string): { intro: string | null; closing: string | null } {
+  const raw = stripJsonCodeFences(value);
+
+  if (!raw) {
+    return { intro: null, closing: null };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as {
+      intro?: unknown;
+      closing?: unknown;
+    };
+
+    const intro =
+      typeof parsed?.intro === "string" && parsed.intro.trim()
+        ? parsed.intro.trim()
+        : null;
+
+    const closing =
+      typeof parsed?.closing === "string" && parsed.closing.trim()
+        ? parsed.closing.trim()
+        : null;
+
+    return { intro, closing };
+  } catch {
+    return { intro: null, closing: null };
+  }
+}
+
 type CatalogChoiceOption =
   | {
       kind: "service";
@@ -234,13 +274,36 @@ async function buildGroundedFrameOnly(input: {
   isResolvedCatalogAnswer: boolean;
   isCatalogChoiceReply: boolean;
 }): Promise<{ intro: string | null; closing: string | null }> {
-  if (input.isCatalogChoiceReply) {
-    return { intro: null, closing: null };
-  }
-
-  if (input.fpIntent === "precio") {
-    return { intro: null, closing: null };
-  }
+  const frameTaskRules = input.isCatalogChoiceReply
+    ? [
+        "This is a catalog choice turn.",
+        "Return one short intro that helps the user choose naturally.",
+        "The intro must include a light CTA to pick one option.",
+        "closing must be null.",
+        "Do not rewrite or summarize the options body.",
+        "Do not mention any facts not already implied by the canonical body.",
+      ]
+    : input.isResolvedCatalogAnswer
+    ? [
+        "This is a resolved grounded catalog answer.",
+        "intro must be null.",
+        "Return one short closing only.",
+        "The closing must feel consultative and natural.",
+        "If the user already received the full answer, the closing should help them continue without pressure.",
+        "Do not restate or summarize the canonical body.",
+        "Do not add new facts.",
+      ]
+    : input.isInfoGeneralOverviewTurn
+    ? [
+        "This is a grounded business overview turn.",
+        "intro should usually be null.",
+        "Return one short closing that keeps the conversation moving naturally.",
+        "Do not restate or summarize the canonical body.",
+      ]
+    : [
+        "Return optional framing only when it improves the DM reply.",
+        "Do not rewrite or summarize the canonical body.",
+      ];
 
   const framePrompt = [
     "SYSTEM_ROLE:",
@@ -258,13 +321,14 @@ async function buildGroundedFrameOnly(input: {
     "- Do not mention any facts, prices, schedules, links, service names, or details that are not already in the canonical body.",
     "- Do not duplicate facts already stated in the canonical body.",
     "- Do not produce lists, bullets, or long paragraphs.",
-    "- Do not ask broad vague questions like '¿Qué información deseas?' or similar.",
+    "- Never return markdown fences.",
+    "",
+    "FRAME_RULES:",
+    ...frameTaskRules,
     "",
     "GROUNDING_RULES:",
     "- If the turn is grounded business info or grounded catalog, preserve the body exactly.",
     "- You may only add framing around it.",
-    "- If the user intent is price-like, closing should help the user move toward choosing the best option.",
-    "- If the user intent is schedule/location/info-like, closing should help the user continue naturally.",
     "- If human handoff is appropriate, closing may suggest continuing with a person.",
     "",
     "TURN_METADATA_JSON:",
@@ -272,6 +336,7 @@ async function buildGroundedFrameOnly(input: {
       fpIntent: input.fpIntent || null,
       isInfoGeneralOverviewTurn: input.isInfoGeneralOverviewTurn,
       isResolvedCatalogAnswer: input.isResolvedCatalogAnswer,
+      isCatalogChoiceReply: input.isCatalogChoiceReply,
       purchaseIntent: input.commercialPolicy.purchaseIntent,
       wantsBooking: input.commercialPolicy.wantsBooking,
       wantsQuote: input.commercialPolicy.wantsQuote,
@@ -293,7 +358,48 @@ async function buildGroundedFrameOnly(input: {
     input.canonicalReply || "",
   ].join("\n");
 
-  return { intro: null, closing: null };
+  const frameResponse = await answerWithPromptBase({
+    tenantId: input.tenantId,
+    promptBase: framePrompt,
+    userInput: input.userInput,
+    history: input.history,
+    idiomaDestino: input.idiomaDestino,
+    canal: input.canal,
+    maxLines: 6,
+    fallbackText: '{"intro":null,"closing":null}',
+    runtimeCapabilities: {
+      bookingActive: false,
+    },
+    responsePolicy: {
+      mode: "grounded_frame_only",
+      resolvedEntityType: null,
+      resolvedEntityId: null,
+      resolvedEntityLabel: null,
+      canMentionSpecificPrice: false,
+      canSelectSpecificCatalogItem: false,
+      canOfferBookingTimes: false,
+      canUseOfficialLinks: false,
+      unresolvedEntity: input.isCatalogChoiceReply,
+      clarificationTarget: input.isCatalogChoiceReply ? "variant" : null,
+      singleResolvedEntityOnly: input.isResolvedCatalogAnswer,
+      allowAlternativeEntities: false,
+      allowCrossSellEntities: false,
+      allowAddOnSuggestions: false,
+      preserveExactBody: true,
+      preserveExactOrder: true,
+      preserveExactBullets: true,
+      preserveExactNumbers: true,
+      preserveExactLinks: true,
+      allowIntro: true,
+      allowOutro: true,
+      allowBodyRewrite: false,
+      mustEndWithSalesQuestion: false,
+      reasoningNotes:
+        "Return strict JSON only with intro and closing. Do not write the body.",
+    },
+  });
+
+  return parseFrameJson(String(frameResponse.text || ""));
 }
 
 export type RenderFastpathDmReplyInput = {
@@ -474,8 +580,8 @@ export async function renderFastpathDmReply(
   })();
 
     const shouldReturnCanonicalDirectly =
-    (isCatalogListReply || isOverviewCatalogDbReply) &&
-    Boolean(canonicalReply);
+      isCatalogListReply &&
+      Boolean(canonicalReply);
     
     const bypassWriterModel = shouldBypassWriterModel({
       isCatalogChoiceReply,
