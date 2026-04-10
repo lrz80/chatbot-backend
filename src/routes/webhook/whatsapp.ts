@@ -1462,7 +1462,7 @@ export async function procesarMensajeWhatsApp(
       const handledCatalog = await tryCatalogOutsideHybridDecision({
         intent: nextIntent,
         detectedFacets: nextDetectedFacets,
-        convoCtxForCatalog: convoCtxForHybrid,
+        convoCtxForCatalog: convoCtx,
         catalogReferenceClassification:
           hybridRes.routeContext?.catalogReferenceClassification ||
           (signals as any)?.catalogReferenceClassification ||

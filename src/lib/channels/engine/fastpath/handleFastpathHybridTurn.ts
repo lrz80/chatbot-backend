@@ -157,41 +157,126 @@ function decideHybridDomain(input: {
   };
 }
 
-function buildEffectiveCatalogReferenceClassification(input: {
-  baseClassification: CatalogReferenceClassification;
-  canonicalCatalogRouteDecision: any;
-}): CatalogReferenceClassification {
-  const { baseClassification, canonicalCatalogRouteDecision } = input;
-  const resolutionKind = String(
-    canonicalCatalogRouteDecision?.resolutionKind || "none"
-  ).trim();
+function normalizeCanonicalCatalogResolution(decision: unknown): {
+  resolutionKind: string;
+  resolvedServiceId: string | null;
+  resolvedServiceName: string | null;
+  variantOptions: Array<{
+    variantId: string;
+    variantName: string;
+  }>;
+} {
+  const obj =
+    decision && typeof decision === "object"
+      ? (decision as Record<string, unknown>)
+      : null;
 
-  const resolutionHit = canonicalCatalogRouteDecision?.resolution?.hit || null;
+  const resolutionKind =
+    typeof obj?.resolutionKind === "string" && obj.resolutionKind.trim()
+      ? obj.resolutionKind.trim()
+      : "none";
+
+  const resolution =
+    obj?.resolution && typeof obj.resolution === "object"
+      ? (obj.resolution as Record<string, unknown>)
+      : null;
+
+  const hit =
+    resolution?.hit && typeof resolution.hit === "object"
+      ? (resolution.hit as Record<string, unknown>)
+      : null;
+
+  const topLevelResolvedServiceId =
+    typeof obj?.resolvedServiceId === "string" && obj.resolvedServiceId.trim()
+      ? obj.resolvedServiceId.trim()
+      : null;
+
+  const nestedResolvedServiceId =
+    typeof hit?.id === "string" && hit.id.trim()
+      ? hit.id.trim()
+      : null;
+
   const resolvedServiceId =
-  resolutionHit &&
-    typeof resolutionHit === "object" &&
-    "id" in resolutionHit &&
-    typeof resolutionHit.id === "string"
-      ? resolutionHit.id.trim()
-      : "";
+    topLevelResolvedServiceId || nestedResolvedServiceId || null;
+
+  const topLevelResolvedServiceName =
+    typeof obj?.resolvedServiceName === "string" && obj.resolvedServiceName.trim()
+      ? obj.resolvedServiceName.trim()
+      : null;
+
+  const nestedResolvedServiceName =
+    typeof hit?.name === "string" && hit.name.trim()
+      ? hit.name.trim()
+      : null;
 
   const resolvedServiceName =
-    resolutionHit &&
-    typeof resolutionHit === "object" &&
-    "name" in resolutionHit &&
-    typeof resolutionHit.name === "string"
-      ? resolutionHit.name.trim()
-      : "";
+    topLevelResolvedServiceName || nestedResolvedServiceName || null;
 
-  if (resolutionKind === "resolved_single") {
+  const rawVariantOptions = Array.isArray(obj?.variantOptions)
+    ? obj.variantOptions
+    : Array.isArray(resolution?.variantOptions)
+    ? resolution.variantOptions
+    : [];
+
+  const variantOptions = rawVariantOptions
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+
+      const row = item as Record<string, unknown>;
+
+      const variantId =
+        typeof row.variantId === "string" && row.variantId.trim()
+          ? row.variantId.trim()
+          : null;
+
+      const variantName =
+        typeof row.variantName === "string" && row.variantName.trim()
+          ? row.variantName.trim()
+          : null;
+
+      if (!variantId || !variantName) return null;
+
+      return {
+        variantId,
+        variantName,
+      };
+    })
+    .filter(
+      (
+        item
+      ): item is {
+        variantId: string;
+        variantName: string;
+      } => Boolean(item)
+    );
+
+  return {
+    resolutionKind,
+    resolvedServiceId,
+    resolvedServiceName,
+    variantOptions,
+  };
+}
+
+function buildEffectiveCatalogReferenceClassification(input: {
+  baseClassification: CatalogReferenceClassification;
+  canonicalCatalogRouteDecision: unknown;
+}): CatalogReferenceClassification {
+  const { baseClassification, canonicalCatalogRouteDecision } = input;
+
+  const normalized = normalizeCanonicalCatalogResolution(
+    canonicalCatalogRouteDecision
+  );
+
+  if (normalized.resolutionKind === "resolved_single") {
     return {
       ...baseClassification,
       kind: "entity_specific",
       shouldResolveEntity: true,
       shouldAskDisambiguation: false,
       targetLevel: "service",
-      targetServiceId: resolvedServiceId || null,
-      targetServiceName: resolvedServiceName || null,
+      targetServiceId: normalized.resolvedServiceId,
+      targetServiceName: normalized.resolvedServiceName,
       targetVariantId: null,
       targetVariantName: null,
       targetFamilyKey: null,
@@ -201,15 +286,15 @@ function buildEffectiveCatalogReferenceClassification(input: {
     };
   }
 
-  if (resolutionKind === "resolved_service_variant_ambiguous") {
+  if (normalized.resolutionKind === "resolved_service_variant_ambiguous") {
     return {
       ...baseClassification,
       kind: "entity_specific",
       shouldResolveEntity: true,
       shouldAskDisambiguation: true,
       targetLevel: "service",
-      targetServiceId: resolvedServiceId || null,
-      targetServiceName: resolvedServiceName || null,
+      targetServiceId: normalized.resolvedServiceId,
+      targetServiceName: normalized.resolvedServiceName,
       targetVariantId: null,
       targetVariantName: null,
       targetFamilyKey: null,
@@ -218,7 +303,7 @@ function buildEffectiveCatalogReferenceClassification(input: {
     };
   }
 
-  if (resolutionKind === "ambiguous") {
+  if (normalized.resolutionKind === "ambiguous") {
     return {
       ...baseClassification,
       kind: "catalog_family",
@@ -248,92 +333,14 @@ function extractCanonicalCatalogResolutionMeta(input: {
     variantName: string;
   }>;
 } {
-  const decision = input.canonicalCatalogRouteDecision;
-
-  if (!decision || typeof decision !== "object") {
-    return {
-      resolvedServiceId: null,
-      resolvedServiceName: null,
-      variantOptions: [],
-    };
-  }
-
-  const resolution =
-    "resolution" in decision &&
-    decision.resolution &&
-    typeof decision.resolution === "object"
-      ? decision.resolution
-      : null;
-
-  const hit =
-    resolution &&
-    "hit" in resolution &&
-    resolution.hit &&
-    typeof resolution.hit === "object"
-      ? resolution.hit
-      : null;
-
-  const resolvedServiceId =
-    hit &&
-    "id" in hit &&
-    typeof hit.id === "string" &&
-    hit.id.trim()
-      ? hit.id.trim()
-      : null;
-
-  const resolvedServiceName =
-    hit &&
-    "name" in hit &&
-    typeof hit.name === "string" &&
-    hit.name.trim()
-      ? hit.name.trim()
-      : null;
-
-  const variantOptionsRaw =
-    resolution &&
-    "variantOptions" in resolution &&
-    Array.isArray(resolution.variantOptions)
-      ? resolution.variantOptions
-      : [];
-
-  const variantOptions = variantOptionsRaw
-    .map((item) => {
-      if (!item || typeof item !== "object") {
-        return null;
-      }
-
-      const variantId =
-        "variantId" in item && typeof item.variantId === "string"
-          ? item.variantId.trim()
-          : "";
-
-      const variantName =
-        "variantName" in item && typeof item.variantName === "string"
-          ? item.variantName.trim()
-          : "";
-
-      if (!variantId || !variantName) {
-        return null;
-      }
-
-      return {
-        variantId,
-        variantName,
-      };
-    })
-    .filter(
-      (
-        item
-      ): item is {
-        variantId: string;
-        variantName: string;
-      } => Boolean(item)
-    );
+  const normalized = normalizeCanonicalCatalogResolution(
+    input.canonicalCatalogRouteDecision
+  );
 
   return {
-    resolvedServiceId,
-    resolvedServiceName,
-    variantOptions,
+    resolvedServiceId: normalized.resolvedServiceId,
+    resolvedServiceName: normalized.resolvedServiceName,
+    variantOptions: normalized.variantOptions,
   };
 }
 
