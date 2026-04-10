@@ -1400,10 +1400,7 @@ export async function procesarMensajeWhatsApp(
   // handleFastpathHybridTurn SOLO decide dominio
   // ===============================
   if (!inBooking0 && !hasPendingCta) {
-    const convoCtxForHybrid = {
-      ...(convoCtx || {}),
-      ...((signals as any)?.convoCtx || {}),
-    };
+    const convoCtxForHybrid = convoCtx || {};
 
     const hybridRes = await handleFastpathHybridTurn({
       pool,
