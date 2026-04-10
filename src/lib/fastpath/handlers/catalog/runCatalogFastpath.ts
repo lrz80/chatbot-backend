@@ -726,6 +726,16 @@ export type RunCatalogFastpathInput = {
   }) => string;
 
   extractPlanNamesFromReply: (reply: string) => string[];
+
+  canonicalCatalogResolution?: {
+    resolutionKind: string;
+    resolvedServiceId?: string | null;
+    resolvedServiceName?: string | null;
+    variantOptions?: Array<{
+      variantId: string;
+      variantName: string;
+    }>;
+  } | null;
 };
 
 export async function runCatalogFastpath(
@@ -1240,6 +1250,36 @@ export async function runCatalogFastpath(
 
   if (executionRouteIntent === "catalog_includes" || executionRouteIntent === "entity_detail") {
     if (canonicalCatalogResolution?.status === "resolved_single") {
+      const canonicalVariantOptions = Array.isArray(
+        input.canonicalCatalogResolution?.variantOptions
+      )
+        ? input.canonicalCatalogResolution!.variantOptions
+            .map((item) => ({
+              kind: "variant" as const,
+              serviceId: canonicalCatalogResolution.serviceId,
+              variantId: String(item.variantId || "").trim(),
+              label: String(item.variantName || "").trim(),
+              serviceName: canonicalCatalogResolution.serviceName || null,
+              variantName: String(item.variantName || "").trim(),
+            }))
+            .filter((item) => item.variantId && item.label)
+        : [];
+
+      const shouldForceCanonicalVariantChoice =
+        String(input.canonicalCatalogResolution?.resolutionKind || "") ===
+          "resolved_service_variant_ambiguous" &&
+        canonicalVariantOptions.length > 1;
+
+      if (shouldForceCanonicalVariantChoice) {
+        return buildCatalogDisambiguationResult({
+          routeIntent: executionRouteIntent || routeIntent,
+          kind: "variant_choice",
+          options: canonicalVariantOptions,
+          serviceId: canonicalCatalogResolution.serviceId,
+          serviceName: canonicalCatalogResolution.serviceName,
+        });
+      }
+
       const variantDisambiguationResult =
         await maybeBuildVariantDisambiguationResult({
           pool: input.pool,

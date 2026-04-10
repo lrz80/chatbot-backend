@@ -51,6 +51,15 @@ export type FastpathHybridResult = {
   routeTarget?: FastpathHybridRoute;
   routeContext?: {
     catalogReferenceClassification?: CatalogReferenceClassification | null;
+    canonicalCatalogResolution?: {
+      resolutionKind: string;
+      resolvedServiceId?: string | null;
+      resolvedServiceName?: string | null;
+      variantOptions?: Array<{
+        variantId: string;
+        variantName: string;
+      }>;
+    };
   };
 };
 
@@ -158,16 +167,21 @@ function buildEffectiveCatalogReferenceClassification(input: {
   ).trim();
 
   const resolutionHit = canonicalCatalogRouteDecision?.resolution?.hit || null;
-  const resolvedServiceId = String(
-    canonicalCatalogRouteDecision?.resolvedServiceId ||
-      resolutionHit?.id ||
-      ""
-  ).trim();
-  const resolvedServiceName = String(
-    canonicalCatalogRouteDecision?.resolvedServiceName ||
-      resolutionHit?.name ||
-      ""
-  ).trim();
+  const resolvedServiceId =
+  resolutionHit &&
+    typeof resolutionHit === "object" &&
+    "id" in resolutionHit &&
+    typeof resolutionHit.id === "string"
+      ? resolutionHit.id.trim()
+      : "";
+
+  const resolvedServiceName =
+    resolutionHit &&
+    typeof resolutionHit === "object" &&
+    "name" in resolutionHit &&
+    typeof resolutionHit.name === "string"
+      ? resolutionHit.name.trim()
+      : "";
 
   if (resolutionKind === "resolved_single") {
     return {
@@ -222,6 +236,105 @@ function buildEffectiveCatalogReferenceClassification(input: {
   }
 
   return baseClassification;
+}
+
+function extractCanonicalCatalogResolutionMeta(input: {
+  canonicalCatalogRouteDecision: unknown;
+}): {
+  resolvedServiceId: string | null;
+  resolvedServiceName: string | null;
+  variantOptions: Array<{
+    variantId: string;
+    variantName: string;
+  }>;
+} {
+  const decision = input.canonicalCatalogRouteDecision;
+
+  if (!decision || typeof decision !== "object") {
+    return {
+      resolvedServiceId: null,
+      resolvedServiceName: null,
+      variantOptions: [],
+    };
+  }
+
+  const resolution =
+    "resolution" in decision &&
+    decision.resolution &&
+    typeof decision.resolution === "object"
+      ? decision.resolution
+      : null;
+
+  const hit =
+    resolution &&
+    "hit" in resolution &&
+    resolution.hit &&
+    typeof resolution.hit === "object"
+      ? resolution.hit
+      : null;
+
+  const resolvedServiceId =
+    hit &&
+    "id" in hit &&
+    typeof hit.id === "string" &&
+    hit.id.trim()
+      ? hit.id.trim()
+      : null;
+
+  const resolvedServiceName =
+    hit &&
+    "name" in hit &&
+    typeof hit.name === "string" &&
+    hit.name.trim()
+      ? hit.name.trim()
+      : null;
+
+  const variantOptionsRaw =
+    resolution &&
+    "variantOptions" in resolution &&
+    Array.isArray(resolution.variantOptions)
+      ? resolution.variantOptions
+      : [];
+
+  const variantOptions = variantOptionsRaw
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+
+      const variantId =
+        "variantId" in item && typeof item.variantId === "string"
+          ? item.variantId.trim()
+          : "";
+
+      const variantName =
+        "variantName" in item && typeof item.variantName === "string"
+          ? item.variantName.trim()
+          : "";
+
+      if (!variantId || !variantName) {
+        return null;
+      }
+
+      return {
+        variantId,
+        variantName,
+      };
+    })
+    .filter(
+      (
+        item
+      ): item is {
+        variantId: string;
+        variantName: string;
+      } => Boolean(item)
+    );
+
+  return {
+    resolvedServiceId,
+    resolvedServiceName,
+    variantOptions,
+  };
 }
 
 export async function handleFastpathHybridTurn(
@@ -318,6 +431,10 @@ export async function handleFastpathHybridTurn(
         userInput,
       });
 
+  const canonicalResolutionMeta = extractCanonicalCatalogResolutionMeta({
+    canonicalCatalogRouteDecision: rawCanonicalCatalogRouteDecision,
+  });
+
   const effectiveCatalogReferenceClassification =
     buildEffectiveCatalogReferenceClassification({
       baseClassification: previewClassification,
@@ -390,6 +507,13 @@ export async function handleFastpathHybridTurn(
         ? {
             catalogReferenceClassification:
               effectiveCatalogReferenceClassification,
+            canonicalCatalogResolution: {
+              resolutionKind:
+                String(rawCanonicalCatalogRouteDecision?.resolutionKind || "none"),
+              resolvedServiceId: canonicalResolutionMeta.resolvedServiceId,
+              resolvedServiceName: canonicalResolutionMeta.resolvedServiceName,
+              variantOptions: canonicalResolutionMeta.variantOptions,
+            },
           }
         : undefined,
   };

@@ -64,6 +64,17 @@ export type RunCatalogDomainTurnArgs = {
   detectedFacets?: IntentFacets | null;
   catalogReferenceClassification?: CatalogReferenceClassification;
   maxDisambiguationOptions?: number;
+  catalogRouteContext?: {
+    canonicalCatalogResolution?: {
+      resolutionKind: string;
+      resolvedServiceId?: string | null;
+      resolvedServiceName?: string | null;
+      variantOptions?: Array<{
+      variantId: string;
+      variantName: string;
+      }>;
+    };
+  };
 };
 
 export async function runCatalogDomainTurn(
@@ -467,6 +478,8 @@ export async function runCatalogDomainTurn(
     traducirTexto,
     renderGenericPriceSummaryReply,
     extractPlanNamesFromReply,
+    canonicalCatalogResolution:
+        args.catalogRouteContext?.canonicalCatalogResolution || null,
   });
 
   if (catalogFastpathResult.handled) {

@@ -804,6 +804,15 @@ export async function procesarMensajeWhatsApp(
     detectedFacets?: IntentFacets | null;
     convoCtxForCatalog: any;
     catalogReferenceClassification?: any;
+    canonicalCatalogResolution?: {
+      resolutionKind: string;
+      resolvedServiceId?: string | null;
+      resolvedServiceName?: string | null;
+      variantOptions?: Array<{
+        variantId: string;
+        variantName: string;
+      }>;
+    };
   }): Promise<boolean> {
     const catalogRes = await runCatalogDomainTurn({
       pool,
@@ -818,6 +827,9 @@ export async function procesarMensajeWhatsApp(
       detectedFacets: params.detectedFacets || {},
       catalogReferenceClassification: params.catalogReferenceClassification,
       maxDisambiguationOptions: 10,
+      catalogRouteContext: {
+        canonicalCatalogResolution: params.canonicalCatalogResolution,
+      },
     });
 
     if (catalogRes.ctxPatch) {
@@ -1445,6 +1457,8 @@ export async function procesarMensajeWhatsApp(
           hybridRes.routeContext?.catalogReferenceClassification ||
           (signals as any)?.catalogReferenceClassification ||
           undefined,
+        canonicalCatalogResolution:
+          hybridRes.routeContext?.canonicalCatalogResolution || undefined,
       });
 
       if (handledCatalog) {
