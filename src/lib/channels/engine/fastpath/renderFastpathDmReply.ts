@@ -722,8 +722,16 @@ export async function renderFastpathDmReply(
 
       if (fp?.awaitingEffect?.type === "set_awaiting_yes_no") {
         const payload = fp.awaitingEffect.payload || null;
+
         if (payload?.kind) {
           ctxPatch.awaiting_yes_no_action = payload;
+
+          if (payload.kind === "pending_cta") {
+            ctxPatch.pending_cta = {
+              ...payload,
+              createdAt: new Date().toISOString(),
+            };
+          }
         }
       }
 
@@ -947,8 +955,16 @@ export async function renderFastpathDmReply(
 
     if (fp?.awaitingEffect?.type === "set_awaiting_yes_no") {
       const payload = fp.awaitingEffect.payload || null;
+
       if (payload?.kind) {
         ctxPatch.awaiting_yes_no_action = payload;
+
+        if (payload.kind === "pending_cta") {
+          ctxPatch.pending_cta = {
+            ...payload,
+            createdAt: new Date().toISOString(),
+          };
+        }
       }
     }
 
@@ -1090,8 +1106,16 @@ export async function renderFastpathDmReply(
 
   if (fp?.awaitingEffect?.type === "set_awaiting_yes_no") {
     const payload = fp.awaitingEffect.payload || null;
+
     if (payload?.kind) {
       ctxPatch.awaiting_yes_no_action = payload;
+
+      if (payload.kind === "pending_cta") {
+        ctxPatch.pending_cta = {
+          ...payload,
+          createdAt: new Date().toISOString(),
+        };
+      }
     }
   }
 
