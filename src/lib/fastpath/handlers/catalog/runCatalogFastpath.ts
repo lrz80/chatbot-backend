@@ -31,6 +31,8 @@ type CatalogVariantDisambiguationOption = {
   label: string;
   serviceName?: string | null;
   variantName?: string | null;
+  price?: number | null;
+  currency?: string | null;
 };
 
 type CatalogDisambiguationOption =
@@ -522,17 +524,23 @@ function resolveDisambiguationOriginalIntent(input: {
 async function getActiveVariantOptionsForService(input: {
   pool: Pool;
   serviceId: string;
+  includePriceInLabel: boolean;
+  idiomaDestino: string;
 }): Promise<CatalogVariantDisambiguationOption[]> {
   const { rows } = await input.pool.query<{
     id: string;
     variant_name: string | null;
     service_name: string | null;
+    price: number | string | null;
+    currency: string | null;
   }>(
     `
     SELECT
       v.id,
       v.variant_name,
-      s.name AS service_name
+      s.name AS service_name,
+      v.price,
+      v.currency
     FROM service_variants v
     JOIN services s
       ON s.id = v.service_id
@@ -549,11 +557,29 @@ async function getActiveVariantOptionsForService(input: {
 
   for (const row of rows) {
     const variantId = String(row.id || "").trim();
-    const label = String(row.variant_name || "").trim();
+    const variantName = String(row.variant_name || "").trim();
     const serviceName = String(row.service_name || "").trim();
+    const rawPrice = row.price === null ? null : Number(row.price);
+    const currency = String(row.currency || "USD").trim() || "USD";
 
-    if (!variantId || !label) {
+    if (!variantId || !variantName) {
       continue;
+    }
+
+    let label = variantName;
+
+    if (input.includePriceInLabel) {
+      let priceText =
+        input.idiomaDestino === "en" ? "price available" : "precio disponible";
+
+      if (Number.isFinite(rawPrice)) {
+        priceText =
+          currency === "USD"
+            ? `$${rawPrice!.toFixed(2)}`
+            : `${rawPrice!.toFixed(2)} ${currency}`;
+      }
+
+      label = `${variantName} — ${priceText}`;
     }
 
     options.push({
@@ -562,7 +588,9 @@ async function getActiveVariantOptionsForService(input: {
       variantId,
       label,
       serviceName: serviceName || null,
-      variantName: label,
+      variantName: variantName || null,
+      price: Number.isFinite(rawPrice) ? Number(rawPrice) : null,
+      currency: currency || null,
     });
   }
 
@@ -578,6 +606,7 @@ async function maybeBuildVariantDisambiguationResult(input: {
   asksIncludesOnly: boolean;
   asksSchedules: boolean;
   originalIntent: "precio" | "info_servicio";
+  idiomaDestino: string;
 }): Promise<FastpathResult | null> {
   if (
     !shouldRequireVariantChoice({
@@ -593,6 +622,8 @@ async function maybeBuildVariantDisambiguationResult(input: {
   const variantOptions = await getActiveVariantOptionsForService({
     pool: input.pool,
     serviceId: input.serviceId,
+    includePriceInLabel: input.originalIntent === "precio",
+    idiomaDestino: input.idiomaDestino,
   });
 
   if (variantOptions.length <= 1) {
@@ -1346,6 +1377,7 @@ export async function runCatalogFastpath(
           asksIncludesOnly,
           asksSchedules,
           originalIntent: disambiguationOriginalIntent,
+          idiomaDestino: input.idiomaDestino,
         });
 
       if (variantDisambiguationResult) {
@@ -1528,6 +1560,7 @@ export async function runCatalogFastpath(
           asksIncludesOnly,
           asksSchedules,
           originalIntent: disambiguationOriginalIntent,
+          idiomaDestino: input.idiomaDestino,
         });
 
       if (variantDisambiguationResult) {
@@ -1648,6 +1681,7 @@ export async function runCatalogFastpath(
           asksIncludesOnly,
           asksSchedules,
           originalIntent: disambiguationOriginalIntent,
+          idiomaDestino: input.idiomaDestino,
         });
 
       if (variantDisambiguationResult) {
