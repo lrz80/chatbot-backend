@@ -488,6 +488,37 @@ function shouldRequireVariantChoice(params: {
   );
 }
 
+function resolveDisambiguationOriginalIntent(input: {
+  intentOutNorm: string;
+  routeIntent: string;
+  asksPrices: boolean;
+  asksIncludesOnly: boolean;
+  asksSchedules: boolean;
+}): "precio" | "info_servicio" {
+  if (
+    input.intentOutNorm === "precio" ||
+    input.intentOutNorm === "planes_precios" ||
+    input.routeIntent === "catalog_price" ||
+    input.routeIntent === "catalog_alternatives" ||
+    input.asksPrices === true
+  ) {
+    return "precio";
+  }
+
+  if (
+    input.intentOutNorm === "info_servicio" ||
+    input.routeIntent === "catalog_includes" ||
+    input.routeIntent === "entity_detail" ||
+    input.routeIntent === "variant_detail" ||
+    input.asksIncludesOnly === true ||
+    input.asksSchedules === true
+  ) {
+    return "info_servicio";
+  }
+
+  return "info_servicio";
+}
+
 async function getActiveVariantOptionsForService(input: {
   pool: Pool;
   serviceId: string;
@@ -546,6 +577,7 @@ async function maybeBuildVariantDisambiguationResult(input: {
   asksPrices: boolean;
   asksIncludesOnly: boolean;
   asksSchedules: boolean;
+  originalIntent: "precio" | "info_servicio";
 }): Promise<FastpathResult | null> {
   if (
     !shouldRequireVariantChoice({
@@ -573,6 +605,7 @@ async function maybeBuildVariantDisambiguationResult(input: {
     options: variantOptions,
     serviceId: input.serviceId,
     serviceName: input.serviceName,
+    originalIntent: input.originalIntent,
   });
 }
 
@@ -582,9 +615,16 @@ function buildCatalogDisambiguationResult(input: {
   options: CatalogDisambiguationOption[];
   serviceId?: string | null;
   serviceName?: string | null;
+  originalIntent?: "precio" | "info_servicio" | null;
 }): FastpathResult {
   const originalIntent =
-    input.routeIntent === "catalog_price" ? "precio" : "info_servicio";
+    input.originalIntent ||
+    (
+      input.routeIntent === "catalog_price" ||
+      input.routeIntent === "catalog_alternatives"
+        ? "precio"
+        : "info_servicio"
+    );
 
   const now = Date.now();
 
@@ -961,6 +1001,14 @@ export async function runCatalogFastpath(
     intentOutNorm === "combination_and_price" ||
     intentOutNorm === "catalog_combination";
 
+  const disambiguationOriginalIntent = resolveDisambiguationOriginalIntent({
+    intentOutNorm,
+    routeIntent: executionRouteIntent || routeIntent,
+    asksPrices,
+    asksIncludesOnly,
+    asksSchedules,
+  });
+
   type QuestionType =
     | "combination_and_price"
     | "price_or_plan"
@@ -1006,6 +1054,7 @@ export async function runCatalogFastpath(
           routeIntent: executionRouteIntent || routeIntent,
           kind: "service_choice",
           options: serviceOptions,
+          originalIntent: disambiguationOriginalIntent,
         });
       }
     }
@@ -1145,18 +1194,20 @@ export async function runCatalogFastpath(
           variantOptions.find((option) => option.serviceId === serviceId)?.serviceName || null;
 
         return buildCatalogDisambiguationResult({
-          routeIntent,
+          routeIntent: executionRouteIntent || routeIntent,
           kind: "variant_choice",
           options: variantOptions,
           serviceId,
           serviceName,
+          originalIntent: disambiguationOriginalIntent,
         });
       }
 
       return buildCatalogDisambiguationResult({
-        routeIntent,
+        routeIntent: executionRouteIntent || routeIntent,
         kind: "service_choice",
         options: serviceOptions.length > 0 ? serviceOptions : normalizedOptions,
+        originalIntent: disambiguationOriginalIntent,
       });
     }
   }
@@ -1195,6 +1246,10 @@ export async function runCatalogFastpath(
         pendingCatalogChoice.kind === "variant_choice"
           ? pendingCatalogChoice.serviceName || null
           : null,
+      originalIntent:
+        pendingCatalogChoice.originalIntent === "precio"
+          ? "precio"
+          : "info_servicio",
     });
   }
 
@@ -1277,6 +1332,7 @@ export async function runCatalogFastpath(
           options: canonicalVariantOptions,
           serviceId: canonicalCatalogResolution.serviceId,
           serviceName: canonicalCatalogResolution.serviceName,
+          originalIntent: disambiguationOriginalIntent,
         });
       }
 
@@ -1289,6 +1345,7 @@ export async function runCatalogFastpath(
           asksPrices,
           asksIncludesOnly,
           asksSchedules,
+          originalIntent: disambiguationOriginalIntent,
         });
 
       if (variantDisambiguationResult) {
@@ -1470,6 +1527,7 @@ export async function runCatalogFastpath(
           asksPrices,
           asksIncludesOnly,
           asksSchedules,
+          originalIntent: disambiguationOriginalIntent,
         });
 
       if (variantDisambiguationResult) {
@@ -1589,6 +1647,7 @@ export async function runCatalogFastpath(
           asksPrices,
           asksIncludesOnly,
           asksSchedules,
+          originalIntent: disambiguationOriginalIntent,
         });
 
       if (variantDisambiguationResult) {
