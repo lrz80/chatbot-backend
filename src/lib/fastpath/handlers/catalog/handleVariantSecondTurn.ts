@@ -1,3 +1,4 @@
+//src/lib/fastpath/handlers/catalog/handleVariantSecondTurn.ts
 import type { Pool } from "pg";
 import type { FastpathResult } from "../../runFastpath";
 import { getCatalogStructuredSignals } from "./getCatalogStructuredSignals";
@@ -674,6 +675,26 @@ export async function handleVariantSecondTurn(
 
   const variantName = String(chosen.variant_name || "").trim();
 
+  const shouldSetCheckoutYesNo = Boolean(link);
+
+  const checkoutLinkAwaitingEffect =
+    shouldSetCheckoutYesNo
+      ? {
+          type: "set_awaiting_yes_no" as const,
+          ttlSeconds: 1800,
+          payload: {
+            kind: "pending_cta",
+            ctaType: "checkout_link",
+            serviceId,
+            serviceName: baseName || null,
+            variantId: String(chosen.id || ""),
+            variantName: variantName || null,
+            link,
+            originalIntent: resolvedVariantTurnIntent,
+          },
+        }
+      : ({ type: "none" } as const);
+
   if (askedPriceVariant) {
     const priceNum =
       chosen.price === null || chosen.price === undefined || chosen.price === ""
@@ -702,6 +723,7 @@ export async function handleVariantSecondTurn(
       reply,
       source: "price_fastpath_db",
       intent: resolvedVariantTurnIntent,
+      awaitingEffect: checkoutLinkAwaitingEffect,
       ctxPatch: {
         expectingVariant: false,
         expectedVariantIntent: null,
@@ -775,6 +797,7 @@ export async function handleVariantSecondTurn(
     reply: finalReply,
     source: "catalog_db",
     intent: resolvedVariantTurnIntent,
+    awaitingEffect: checkoutLinkAwaitingEffect,
     ctxPatch: {
       expectingVariant: false,
       expectedVariantIntent: null,
