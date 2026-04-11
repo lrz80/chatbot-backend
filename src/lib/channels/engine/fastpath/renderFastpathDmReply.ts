@@ -360,6 +360,7 @@ async function buildGroundedFrameOnly(input: {
     ? [
         "This is a catalog choice turn.",
         "Return exactly one short intro line before the canonical options body.",
+        "For catalog choice turns, intro is required and must never be null.",
         "The intro must state that the selected plan or service has these options.",
         "The intro must be simple, neutral, and direct.",
         "The intro must not sound promotional or vague.",
@@ -374,6 +375,8 @@ async function buildGroundedFrameOnly(input: {
         "Prefer imperative CTA style over question style.",
         "Do not rewrite or summarize the options body.",
         "Do not mention any facts not already implied by the canonical body.",
+        "Do not return intro as null for catalog choice turns.",
+        "If you are unsure, still return a short direct intro instead of null.",
       ]
     : input.isResolvedCatalogAnswer
     ? [
@@ -420,8 +423,11 @@ async function buildGroundedFrameOnly(input: {
     "- You may generate only intro and closing.",
     "- Do not generate, rewrite, summarize, compress, paraphrase, reorder, or replace the canonical body.",
     "- The canonical body will be inserted by the system exactly as-is after your output.",
-    "- intro must be optional and very short.",
-    "- closing must be optional and very short.",
+    "- intro must be very short.",
+    "- closing must be very short.",
+    "- intro may be null only when the turn is not a catalog choice turn.",
+    "- for catalog choice turns, intro is mandatory and must not be null.",
+    "- closing may be null only when the turn does not need a next-step prompt.",
     "- intro and closing must be framing only, never content expansion.",
     "- Do not mention facts, prices, includes, schedules, locations, links, conditions, service names, benefits, or details unless they are already explicit in the canonical body and strictly necessary for a minimal bridge sentence.",
     "- Do not add positioning language, suitability claims, audience assumptions, lifestyle assumptions, or persuasive claims not explicitly present in the canonical body.",
@@ -946,7 +952,7 @@ export async function renderFastpathDmReply(
       }
     }
 
-    const frame = await buildGroundedFrameOnly({
+    let frame = await buildGroundedFrameOnly({
       tenantId,
       canal,
       idiomaDestino,
@@ -960,6 +966,23 @@ export async function renderFastpathDmReply(
       isResolvedCatalogAnswer,
       isCatalogChoiceReply,
     });
+
+    if (isCatalogChoiceReply && !String(frame.intro || "").trim()) {
+      frame = await buildGroundedFrameOnly({
+        tenantId,
+        canal,
+        idiomaDestino,
+        userInput,
+        promptBaseMem,
+        history,
+        canonicalReply,
+        commercialPolicy,
+        fpIntent,
+        isInfoGeneralOverviewTurn,
+        isResolvedCatalogAnswer,
+        isCatalogChoiceReply,
+      });
+    }
 
     const renderedCanonicalBody =
       isResolvedCatalogAnswer
