@@ -890,6 +890,11 @@ export async function procesarMensajeWhatsApp(
       ? catalogRes.intent
       : params.intent;
 
+  const catalogAwaitingEffect =
+    "awaitingEffect" in catalogRes
+      ? catalogRes.awaitingEffect ?? null
+      : null;
+
   const rawCatalogText = String(catalogReply || "").trim();
   const hasCatalogPayload = Boolean(catalogPayload);
 
@@ -912,6 +917,7 @@ export async function procesarMensajeWhatsApp(
       reply: rawCatalogText,
       source: catalogSource || "catalog_route",
       intent: catalogIntent,
+      awaitingEffect: catalogAwaitingEffect,
       catalogPayload,
     },
     detectedIntent: catalogIntent,
