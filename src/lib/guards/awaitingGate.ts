@@ -1,3 +1,4 @@
+//src/lib/guards/awaitingGate.ts
 import { getAwaitingState } from "../awaiting/getAwaitingState";
 import { validateAwaitingInput } from "../awaiting";
 import type { TurnEvent, StateTransition } from "../conversation/stateMachine";

@@ -725,6 +725,8 @@ export async function renderFastpathDmReply(
 
         if (payload?.kind) {
           ctxPatch.awaiting_yes_no_action = payload;
+          ctxPatch.awaiting_yesno = true;
+          ctxPatch.yesno_resolution = null;
 
           if (payload.kind === "pending_cta") {
             ctxPatch.pending_cta = {
@@ -958,6 +960,8 @@ export async function renderFastpathDmReply(
 
       if (payload?.kind) {
         ctxPatch.awaiting_yes_no_action = payload;
+        ctxPatch.awaiting_yesno = true;
+        ctxPatch.yesno_resolution = null;
 
         if (payload.kind === "pending_cta") {
           ctxPatch.pending_cta = {
@@ -1109,6 +1113,8 @@ export async function renderFastpathDmReply(
 
     if (payload?.kind) {
       ctxPatch.awaiting_yes_no_action = payload;
+      ctxPatch.awaiting_yesno = true;
+      ctxPatch.yesno_resolution = null;
 
       if (payload.kind === "pending_cta") {
         ctxPatch.pending_cta = {
