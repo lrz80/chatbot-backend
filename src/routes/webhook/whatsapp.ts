@@ -440,13 +440,39 @@ export async function procesarMensajeWhatsApp(
   }
 
   function hasPendingCtaAwaitingConfirmation(ctx: any): boolean {
+    if (!ctx || typeof ctx !== "object") {
+      return false;
+    }
+
+    const pendingCta =
+      ctx.pending_cta && typeof ctx.pending_cta === "object"
+        ? ctx.pending_cta
+        : null;
+
+    const awaitingYesNoAction =
+      ctx.awaiting_yes_no_action && typeof ctx.awaiting_yes_no_action === "object"
+        ? ctx.awaiting_yes_no_action
+        : null;
+
+    const hasPendingCtaKind =
+      typeof pendingCta?.kind === "string" &&
+      pendingCta.kind.trim() === "pending_cta";
+
+    const hasPendingCtaType =
+      typeof pendingCta?.ctaType === "string" && pendingCta.ctaType.trim()
+        ? true
+        : typeof pendingCta?.type === "string" && pendingCta.type.trim()
+        ? true
+        : false;
+
+    const hasAwaitingPendingCta =
+      typeof awaitingYesNoAction?.kind === "string" &&
+      awaitingYesNoAction.kind.trim() === "pending_cta";
+
     return Boolean(
-      ctx &&
-        typeof ctx === "object" &&
-        ctx.pending_cta &&
-        typeof ctx.pending_cta === "object" &&
-        ctx.pending_cta.type &&
-        ctx.pending_cta.awaitsConfirmation === true
+      hasPendingCtaKind &&
+        hasPendingCtaType &&
+        hasAwaitingPendingCta
     );
   }
 

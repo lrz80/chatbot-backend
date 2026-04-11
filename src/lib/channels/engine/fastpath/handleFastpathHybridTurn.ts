@@ -396,6 +396,18 @@ export async function handleFastpathHybridTurn(
       convoCtx?.pendingCatalogChoice?.kind === "variant_choice"
     );
 
+  const hasAwaitingYesNoAction =
+    Boolean(convoCtx?.awaiting_yes_no_action?.kind);
+
+  const hasPendingCta =
+    Boolean(convoCtx?.pending_cta?.kind);
+
+  const hasActiveConversationalContinuation =
+    hasPendingCatalogChoice ||
+    hasAwaitingYesNoAction ||
+    hasPendingCta ||
+    Boolean(convoCtx?.expectingVariant);
+
   const previewClassificationInput = buildCatalogReferenceClassificationInput({
     userText: userInput,
     convoCtx,
@@ -449,7 +461,7 @@ export async function handleFastpathHybridTurn(
     });
 
   const domainDecision = decideHybridDomain({
-    hasPendingCatalogChoice,
+    hasPendingCatalogChoice: hasActiveConversationalContinuation,
     isMixedScheduleAndPriceTurn,
     isGuidedBusinessEntryTurn,
     asksPrices,
