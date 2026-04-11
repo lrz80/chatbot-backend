@@ -10,6 +10,7 @@ import { saveUserMessageAndEmit } from "../messages/saveUserMessageAndEmit";
 import { getMemoryValue } from "../../../clientMemory";
 import { setHumanOverride } from "../../../humanOverride/setHumanOverride";
 import { supportGate } from "../../../guards/supportGate";
+import { resolveBinaryTurnSignal } from "../../../intent/resolveBinaryTurnSignal";
 
 type IntentFacets = {
   asksPrices?: boolean;
@@ -206,6 +207,44 @@ export async function handleUserSignalsTurn(
     }
   } catch (e: any) {
     console.warn("⚠️ detectarIntencion failed:", e?.message, e?.code, e?.detail);
+  }
+
+  try {
+    const binaryResolution = await resolveBinaryTurnSignal({
+      userInput,
+      idiomaDestino,
+      convoCtx,
+    });
+
+    if (binaryResolution !== "unknown") {
+      transition({
+        patchCtx: {
+          yesno_resolution: binaryResolution,
+        },
+      });
+
+      convoCtx = {
+        ...(convoCtx || {}),
+        yesno_resolution: binaryResolution,
+      };
+    } else if (
+      convoCtx?.awaiting_yesno === true ||
+      convoCtx?.awaiting_yes_no_action?.kind ||
+      convoCtx?.pending_cta?.kind
+    ) {
+      transition({
+        patchCtx: {
+          yesno_resolution: null,
+        },
+      });
+
+      convoCtx = {
+        ...(convoCtx || {}),
+        yesno_resolution: null,
+      };
+    }
+  } catch (e: any) {
+    console.warn("⚠️ resolveBinaryTurnSignal failed:", e?.message || e);
   }
 
   try {
