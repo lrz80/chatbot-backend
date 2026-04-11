@@ -22,15 +22,39 @@ function normalize(text: string): string {
   return String(text || "").trim().toLowerCase();
 }
 
+function coerceYesNoResolution(value: unknown): YesNoResolution {
+  if (value === "yes" || value === "no") return value;
+  return "unknown";
+}
+
+function getTurnYesNoResolution(event: any): YesNoResolution {
+  return coerceYesNoResolution(
+    event?.yesNoResolution ??
+    event?.yesnoResolution ??
+    event?.resolvedYesNo ??
+    null
+  );
+}
+
 function getDeclaredYesNoResolution(ctx: any): YesNoResolution {
-  const value =
+  return coerceYesNoResolution(
     ctx?.yesno_resolution ??
     ctx?.awaiting_yes_no_resolution ??
     ctx?.pending_yesno_resolution ??
-    null;
+    null
+  );
+}
 
-  if (value === "yes" || value === "no") return value;
-  return "unknown";
+function getEffectiveYesNoResolution(params: {
+  event: any;
+  ctx: any;
+}): YesNoResolution {
+  const turnResolution = getTurnYesNoResolution(params.event);
+  if (turnResolution !== "unknown") {
+    return turnResolution;
+  }
+
+  return getDeclaredYesNoResolution(params.ctx);
 }
 
 async function clearAwaitingState(params: {
@@ -113,7 +137,10 @@ export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
     return { action: "silence", reason: "awaiting_yesno_but_empty" };
   }
 
-  const yn = getDeclaredYesNoResolution(ctx);
+  const yn = getEffectiveYesNoResolution({
+    event,
+    ctx,
+  });
 
   if (yn === "unknown") {
     return {
