@@ -40,6 +40,10 @@ export type HandleStateMachineTurnResult =
       replied: boolean;
       activatedBooking: boolean;
       activatedEstimate: boolean;
+      intent?: string | null;
+      replySource?: string | null;
+      facts?: any;
+      transition?: TransitionLike | null;
     };
 
 export type HandleStateMachineTurnArgs = {
@@ -184,6 +188,10 @@ export async function handleStateMachineTurn(
       replied: false,
       activatedBooking,
       activatedEstimate,
+      intent: smResult.intent || null,
+      replySource: smResult.replySource || null,
+      facts: smResult.facts ?? null,
+      transition: smResult.transition || null,
     };
   }
 
@@ -210,6 +218,10 @@ export async function handleStateMachineTurn(
         replied: true,
         activatedBooking,
         activatedEstimate,
+        intent: smResult.intent || null,
+        replySource: smResult.replySource || "state_machine",
+        facts: smResult.facts ?? null,
+        transition: smResult.transition || null,
       };
     }
 
@@ -223,10 +235,14 @@ export async function handleStateMachineTurn(
     });
 
     return {
-      handled: false,
+      handled: true,
       replied: false,
-      activatedBooking: false,
-      activatedEstimate: false,
+      activatedBooking,
+      activatedEstimate,
+      intent: smResult.intent || null,
+      replySource: smResult.replySource || null,
+      facts: smResult.facts ?? null,
+      transition: smResult.transition || null,
     };
   }
 
