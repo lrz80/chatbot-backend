@@ -189,6 +189,7 @@ type CatalogPayload =
         locationBlock?: string | null;
         availabilityBlock?: string | null;
         servicesBlock?: string | null;
+        linkBlock?: string | null;
       };
     };
 
@@ -236,6 +237,7 @@ function buildResolvedCatalogCanonicalBody(input: {
     normalizeText(blocks.scheduleBlock),
     normalizeText(blocks.locationBlock),
     normalizeText(blocks.availabilityBlock),
+    normalizeText(blocks.linkBlock),
   ]
     .filter(Boolean)
     .join("\n\n")

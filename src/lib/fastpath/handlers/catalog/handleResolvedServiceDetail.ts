@@ -1,3 +1,4 @@
+//src/lib/fastpath/handlers/catalog/handleResolvedServiceDetail.ts
 import type { Pool } from "pg";
 import type { FastpathResult } from "../../runFastpath";
 
@@ -149,6 +150,7 @@ export async function handleResolvedServiceDetail(
       variantName: resolvedVariant?.variantName || null,
       canonicalBlocks: {
         includesBlock: serviceDescription || null,
+        linkBlock: serviceUrl || null,
       },
     },
     ctxPatch: {
@@ -166,7 +168,7 @@ export async function handleResolvedServiceDetail(
 
       last_variant_id: resolvedVariant?.variantId || null,
       last_variant_name: resolvedVariant?.variantName || null,
-      last_variant_url: serviceUrl || null,
+      last_variant_url: null,
       last_variant_at: resolvedVariant ? now : null,
     } as any,
   };

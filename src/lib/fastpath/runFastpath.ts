@@ -200,6 +200,7 @@ type CatalogPayload =
         locationBlock?: string | null;
         availabilityBlock?: string | null;
         servicesBlock?: string | null;
+        linkBlock?: string | null;
       };
     };
 
