@@ -230,9 +230,43 @@ export async function finalizeReply(
     baseCtx.last_intent ??
     null;
 
+  const canonicalLastVariantId =
+    baseCtx.last_variant_id ??
+    baseCtx.lastVariantId ??
+    null;
+
+  const canonicalLastVariantName =
+    baseCtx.last_variant_name ??
+    baseCtx.lastVariantName ??
+    null;
+
+  const conversationAnchorDomain =
+    canonicalLastEntityId
+      ? "catalog"
+      : canonicalLastResolvedIntent === "info_general" ||
+        canonicalLastResolvedIntent === "horario" ||
+        canonicalLastResolvedIntent === "ubicacion" ||
+        canonicalLastResolvedIntent === "disponibilidad"
+      ? "business_info"
+      : null;
+
+  const conversationAnchor =
+    conversationAnchorDomain
+      ? {
+          domain: conversationAnchorDomain,
+          entityId: canonicalLastEntityId,
+          entityName: canonicalLastEntityName,
+          variantId: canonicalLastVariantId,
+          variantName: canonicalLastVariantName,
+          intent: canonicalLastResolvedIntent,
+          createdAt: new Date().toISOString(),
+        }
+      : null;
+
   const nextCtx = {
     ...baseCtx,
     ...(capturedRef?.service_id ? { last_service_ref: capturedRef } : {}),
+    conversationAnchor,
 
     lastEntityId: canonicalLastEntityId,
     lastEntityName: canonicalLastEntityName,

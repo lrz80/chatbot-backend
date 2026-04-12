@@ -70,17 +70,98 @@ type HybridDomainDecision = {
     | "canonical_catalog_resolution"
     | "catalog_targeted_signal"
     | "catalog_overview_signal"
+    | "catalog_anchor_continuation"
+    | "business_info_anchor_continuation"
     | "business_info_signal"
     | "mixed_turn"
     | "guided_entry"
     | "insufficient_signal";
 };
 
+function shouldUseConversationAnchor(input: {
+  conversationAnchor: any;
+  normalizedCurrentIntent: string;
+  hasPendingCatalogChoice: boolean;
+  hasVariantSelectionContinuation: boolean;
+  inBooking: boolean;
+  asksPrices: boolean;
+  asksSchedules: boolean;
+  asksLocation: boolean;
+  asksAvailability: boolean;
+  detectedRoutingHints?: IntentRoutingHints | null;
+  canonicalCatalogRouteDecision: {
+    resolutionKind?: string | null;
+  };
+}): boolean {
+  if (!input.conversationAnchor?.domain) {
+    return false;
+  }
+
+  if (input.inBooking) {
+    return false;
+  }
+
+  if (input.hasPendingCatalogChoice || input.hasVariantSelectionContinuation) {
+    return true;
+  }
+
+  const resolutionKind = String(
+    input.canonicalCatalogRouteDecision?.resolutionKind || "none"
+  ).trim();
+
+  if (
+    resolutionKind === "resolved_single" ||
+    resolutionKind === "resolved_service_variant_ambiguous" ||
+    resolutionKind === "ambiguous"
+  ) {
+    return false;
+  }
+
+  const hasExplicitBusinessInfoSignal =
+    input.asksSchedules ||
+    input.asksLocation ||
+    input.asksAvailability ||
+    (
+      input.detectedRoutingHints?.businessInfoScope &&
+      input.detectedRoutingHints.businessInfoScope !== "none"
+    );
+
+  if (hasExplicitBusinessInfoSignal) {
+    return input.conversationAnchor.domain === "business_info";
+  }
+
+  const weakIntent =
+    !input.normalizedCurrentIntent ||
+    input.normalizedCurrentIntent === "duda";
+
+  if (!weakIntent) {
+    return false;
+  }
+
+  if (input.conversationAnchor.domain === "catalog") {
+    return true;
+  }
+
+  if (input.conversationAnchor.domain === "business_info") {
+    return !input.asksPrices;
+  }
+
+  return false;
+}
+
 function decideHybridDomain(input: {
   hasPendingCatalogChoice: boolean;
+  hasConversationAnchor: boolean;
+  hasVariantSelectionContinuation: boolean;
+  conversationAnchor: any;
+  normalizedCurrentIntent: string;
+  inBooking: boolean;
   isMixedScheduleAndPriceTurn: boolean;
   isGuidedBusinessEntryTurn: boolean;
   asksPrices: boolean;
+  asksSchedules: boolean;
+  asksLocation: boolean;
+  asksAvailability: boolean;
   previewShouldRouteCatalog: boolean;
   detectedFacets?: IntentFacets | null;
   detectedRoutingHints?: IntentRoutingHints | null;
@@ -141,6 +222,33 @@ function decideHybridDomain(input: {
     return {
       routeTarget: "catalog",
       reason: "catalog_overview_signal",
+    };
+  }
+
+  if (
+    shouldUseConversationAnchor({
+      conversationAnchor: input.conversationAnchor,
+      normalizedCurrentIntent: input.normalizedCurrentIntent,
+      hasPendingCatalogChoice: input.hasPendingCatalogChoice,
+      hasVariantSelectionContinuation: input.hasVariantSelectionContinuation,
+      inBooking: input.inBooking,
+      asksPrices: input.asksPrices,
+      asksSchedules: input.asksSchedules,
+      asksLocation: input.asksLocation,
+      asksAvailability: input.asksAvailability,
+      detectedRoutingHints: input.detectedRoutingHints || null,
+      canonicalCatalogRouteDecision: input.canonicalCatalogRouteDecision,
+    })
+  ) {
+    return {
+      routeTarget:
+        input.conversationAnchor?.domain === "business_info"
+          ? "business_info"
+          : "catalog",
+      reason:
+        input.conversationAnchor?.domain === "business_info"
+          ? "business_info_anchor_continuation"
+          : "catalog_anchor_continuation",
     };
   }
 
@@ -407,23 +515,19 @@ export async function handleFastpathHybridTurn(
       convoCtx.presented_variant_options.length > 0
     );
 
+  const conversationAnchor = convoCtx?.conversationAnchor ?? null;
+
   const hasConversationAnchor =
+    Boolean(conversationAnchor?.domain) ||
     Boolean(convoCtx?.lastEntityId) ||
     Boolean(convoCtx?.last_entity_id) ||
     Boolean(convoCtx?.last_service_id) ||
     Boolean(convoCtx?.selectedServiceId) ||
-    Boolean(convoCtx?.last_service_ref?.service_id);
+    Boolean(convoCtx?.last_service_ref?.service_id) ||
+    Boolean(convoCtx?.last_variant_id);
 
   const hasActiveCatalogContinuation =
-    hasPendingCatalogChoice ||
-    hasVariantSelectionContinuation ||
-    (
-      hasConversationAnchor &&
-      (
-        referentialFollowup === true ||
-        followupNeedsAnchor === true
-      )
-    );
+    hasPendingCatalogChoice || hasVariantSelectionContinuation;
 
   const previewClassificationInput = buildCatalogReferenceClassificationInput({
     userText: userInput,
@@ -478,10 +582,18 @@ export async function handleFastpathHybridTurn(
     });
 
   const domainDecision = decideHybridDomain({
-    hasPendingCatalogChoice: hasActiveCatalogContinuation,
+    hasPendingCatalogChoice,
+    hasConversationAnchor,
+    hasVariantSelectionContinuation,
+    conversationAnchor,
+    normalizedCurrentIntent,
+    inBooking: args.inBooking,
     isMixedScheduleAndPriceTurn,
     isGuidedBusinessEntryTurn,
     asksPrices,
+    asksSchedules,
+    asksLocation,
+    asksAvailability,
     previewShouldRouteCatalog: previewPolicy.shouldRouteCatalog === true,
     detectedFacets: detectedFacets || null,
     detectedRoutingHints: detectedRoutingHints || null,
