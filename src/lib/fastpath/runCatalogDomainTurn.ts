@@ -230,6 +230,36 @@ function buildEffectiveCatalogReferenceClassificationFromCanonical(input: {
   return base;
 }
 
+function shouldUseCatalogAnchorResolution(input: {
+  convoCtx: any;
+  intentOut: string | null;
+  hasPendingCatalogChoice: boolean;
+  hasConcreteTargetThisTurn: boolean;
+  isStructuredCatalogTurn: boolean;
+}): boolean {
+  const anchor = input.convoCtx?.conversationAnchor ?? null;
+
+  if (!anchor || anchor.domain !== "catalog") {
+    return false;
+  }
+
+  if (input.hasPendingCatalogChoice) {
+    return false;
+  }
+
+  if (input.hasConcreteTargetThisTurn) {
+    return false;
+  }
+
+  const normalizedIntent = String(input.intentOut || "").trim().toLowerCase();
+
+  return (
+    !normalizedIntent ||
+    normalizedIntent === "duda" ||
+    input.isStructuredCatalogTurn
+  );
+}
+
 export async function runCatalogDomainTurn(
   args: RunCatalogDomainTurnArgs
 ): Promise<FastpathResult> {
@@ -283,6 +313,23 @@ export async function runCatalogDomainTurn(
     Boolean(effectiveCatalogReferenceClassification?.targetServiceId) ||
     Boolean(effectiveCatalogReferenceClassification?.targetVariantId) ||
     Boolean(effectiveCatalogReferenceClassification?.targetFamilyKey);
+
+  const conversationAnchor = convoCtx?.conversationAnchor ?? null;
+
+  const anchorServiceId =
+    String(
+      conversationAnchor?.entityId ||
+      convoCtx?.last_service_id ||
+      convoCtx?.selectedServiceId ||
+      ""
+    ).trim() || null;
+
+  const anchorVariantId =
+    String(
+      conversationAnchor?.variantId ||
+      convoCtx?.last_variant_id ||
+      ""
+    ).trim() || null;
 
   const hasAnyCatalogFacet =
     detectedFacets?.asksPrices === true ||
@@ -463,19 +510,80 @@ export async function runCatalogDomainTurn(
     }
   }
 
-  if (!hasPendingCatalogChoice && !shouldBypassCatalogFollowupReuse) {
-    const followupRouterResult = await handleFollowupRouter({
+  if (
+    shouldUseCatalogAnchorResolution({
+      convoCtx,
+      intentOut,
+      hasPendingCatalogChoice,
+      hasConcreteTargetThisTurn,
+      isStructuredCatalogTurn,
+    }) &&
+    anchorServiceId
+  ) {
+    const anchorClassification: CatalogReferenceClassification = {
+      kind: "entity_specific",
+      targetLevel: "service",
+      shouldResolveEntity: true,
+      shouldAskDisambiguation: false,
+      targetServiceId: anchorServiceId,
+      targetServiceName:
+        String(conversationAnchor?.entityName || convoCtx?.last_service_name || "").trim() || null,
+      targetVariantId: anchorVariantId,
+      targetVariantName:
+        String(conversationAnchor?.variantName || convoCtx?.last_variant_name || "").trim() || null,
+      targetFamilyKey: null,
+      targetFamilyName: null,
+      disambiguationType: "none",
+      anchorShift: "none",
+    } as CatalogReferenceClassification;
+
+    const anchorRoutingSignal = buildCatalogRoutingSignal({
+      intentOut:
+        String(intentOut || "").trim().toLowerCase() === "duda"
+          ? String(conversationAnchor?.intent || "info_servicio").trim().toLowerCase()
+          : intentOut,
+      catalogReferenceClassification: anchorClassification,
+      convoCtx: {
+        ...(convoCtx || {}),
+        selectedServiceId: anchorServiceId,
+        last_service_id: anchorServiceId,
+        ...(anchorVariantId ? { last_variant_id: anchorVariantId } : {}),
+      },
+      candidateOptionsFromTurn: [],
+    });
+
+    const anchorCatalogResult = await runCatalogFastpath({
       pool,
       tenantId,
       userInput,
-      convoCtx,
-      isFreshCatalogPriceTurn,
-      bestNameMatch,
-      resolveServiceIdFromText,
+      idiomaDestino,
+      convoCtx: {
+        ...(convoCtx || {}),
+        selectedServiceId: anchorServiceId,
+        last_service_id: anchorServiceId,
+        ...(anchorVariantId ? { last_variant_id: anchorVariantId } : {}),
+      },
+      intentOut:
+        String(intentOut || "").trim().toLowerCase() === "duda"
+          ? String(conversationAnchor?.intent || "info_servicio").trim().toLowerCase()
+          : intentOut,
+      detectedIntent,
+      infoClave,
+      hasStructuredTarget: true,
+      catalogRoutingSignal: anchorRoutingSignal,
+      catalogReferenceClassification: anchorClassification,
+      facets: detectedFacets || {},
+      buildCatalogRoutingSignal,
+      normalizeCatalogRole,
+      traducirTexto,
+      renderGenericPriceSummaryReply,
+      extractPlanNamesFromReply,
+      canonicalCatalogResolution:
+        args.catalogRouteContext?.canonicalCatalogResolution || null,
     });
 
-    if (followupRouterResult.handled || followupRouterResult.ctxPatch) {
-      return followupRouterResult;
+    if (anchorCatalogResult.handled) {
+      return anchorCatalogResult;
     }
   }
 
