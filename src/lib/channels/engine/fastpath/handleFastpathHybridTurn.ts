@@ -396,17 +396,34 @@ export async function handleFastpathHybridTurn(
       convoCtx?.pendingCatalogChoice?.kind === "variant_choice"
     );
 
-  const hasAwaitingYesNoAction =
-    Boolean(convoCtx?.awaiting_yes_no_action?.kind);
+  const hasVariantSelectionContinuation =
+    Boolean(convoCtx?.expectingVariant) ||
+    (
+      Array.isArray(convoCtx?.presentedVariantOptions) &&
+      convoCtx.presentedVariantOptions.length > 0
+    ) ||
+    (
+      Array.isArray(convoCtx?.presented_variant_options) &&
+      convoCtx.presented_variant_options.length > 0
+    );
 
-  const hasPendingCta =
-    Boolean(convoCtx?.pending_cta?.kind);
+  const hasConversationAnchor =
+    Boolean(convoCtx?.lastEntityId) ||
+    Boolean(convoCtx?.last_entity_id) ||
+    Boolean(convoCtx?.last_service_id) ||
+    Boolean(convoCtx?.selectedServiceId) ||
+    Boolean(convoCtx?.last_service_ref?.service_id);
 
-  const hasActiveConversationalContinuation =
+  const hasActiveCatalogContinuation =
     hasPendingCatalogChoice ||
-    hasAwaitingYesNoAction ||
-    hasPendingCta ||
-    Boolean(convoCtx?.expectingVariant);
+    hasVariantSelectionContinuation ||
+    (
+      hasConversationAnchor &&
+      (
+        referentialFollowup === true ||
+        followupNeedsAnchor === true
+      )
+    );
 
   const previewClassificationInput = buildCatalogReferenceClassificationInput({
     userText: userInput,
@@ -461,7 +478,7 @@ export async function handleFastpathHybridTurn(
     });
 
   const domainDecision = decideHybridDomain({
-    hasPendingCatalogChoice: hasActiveConversationalContinuation,
+    hasPendingCatalogChoice: hasActiveCatalogContinuation,
     isMixedScheduleAndPriceTurn,
     isGuidedBusinessEntryTurn,
     asksPrices,
@@ -485,6 +502,9 @@ export async function handleFastpathHybridTurn(
     asksLocation,
     asksAvailability,
     hasPendingCatalogChoice,
+    hasActiveCatalogContinuation,
+    hasConversationAnchor,
+    hasVariantSelectionContinuation,
     previewShouldRouteCatalog: previewPolicy.shouldRouteCatalog === true,
     canonicalCatalogResolutionKind:
       rawCanonicalCatalogRouteDecision?.resolutionKind || "none",
