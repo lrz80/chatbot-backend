@@ -490,6 +490,32 @@ function shouldRequireVariantChoice(params: {
   );
 }
 
+function shouldSkipVariantDisambiguation(params: {
+  catalogRoutingSignal: any;
+  pendingSelectedVariant:
+    | {
+        serviceId: string;
+        serviceName: string | null;
+        variantId: string;
+        variantName: string | null;
+      }
+    | null;
+}): boolean {
+  const targetVariantId = String(
+    params.catalogRoutingSignal?.targetVariantId || ""
+  ).trim();
+
+  if (targetVariantId) {
+    return true;
+  }
+
+  if (params.pendingSelectedVariant?.variantId) {
+    return true;
+  }
+
+  return false;
+}
+
 function resolveDisambiguationOriginalIntent(input: {
   intentOutNorm: string;
   routeIntent: string;
@@ -836,6 +862,12 @@ export async function runCatalogFastpath(
         variantName: string | null;
       }
     | null = null;
+
+  const shouldForceResolvedVariant =
+    shouldSkipVariantDisambiguation({
+      catalogRoutingSignal,
+      pendingSelectedVariant,
+    });
 
   const pendingOriginalIntent = String(
     pendingCatalogChoice?.originalIntent || ""
@@ -1367,21 +1399,23 @@ export async function runCatalogFastpath(
         });
       }
 
-      const variantDisambiguationResult =
-        await maybeBuildVariantDisambiguationResult({
-          pool: input.pool,
-          serviceId: canonicalCatalogResolution.serviceId,
-          serviceName: canonicalCatalogResolution.serviceName,
-          routeIntent,
-          asksPrices,
-          asksIncludesOnly,
-          asksSchedules,
-          originalIntent: disambiguationOriginalIntent,
-          idiomaDestino: input.idiomaDestino,
-        });
+      if (!shouldForceResolvedVariant) {
+        const variantDisambiguationResult =
+          await maybeBuildVariantDisambiguationResult({
+            pool: input.pool,
+            serviceId: canonicalCatalogResolution.serviceId,
+            serviceName: canonicalCatalogResolution.serviceName,
+            routeIntent,
+            asksPrices,
+            asksIncludesOnly,
+            asksSchedules,
+            originalIntent: disambiguationOriginalIntent,
+            idiomaDestino: input.idiomaDestino,
+          });
 
-      if (variantDisambiguationResult) {
-        return variantDisambiguationResult;
+        if (variantDisambiguationResult) {
+          return variantDisambiguationResult;
+        }
       }
 
       const { rows } = await input.pool.query<{
@@ -1550,21 +1584,23 @@ export async function runCatalogFastpath(
     }
 
     if (canonicalCatalogResolution?.status === "resolved_single") {
-      const variantDisambiguationResult =
-        await maybeBuildVariantDisambiguationResult({
-          pool: input.pool,
-          serviceId: canonicalCatalogResolution.serviceId,
-          serviceName: canonicalCatalogResolution.serviceName,
-          routeIntent,
-          asksPrices,
-          asksIncludesOnly,
-          asksSchedules,
-          originalIntent: disambiguationOriginalIntent,
-          idiomaDestino: input.idiomaDestino,
-        });
+      if (!shouldForceResolvedVariant) {
+        const variantDisambiguationResult =
+          await maybeBuildVariantDisambiguationResult({
+            pool: input.pool,
+            serviceId: canonicalCatalogResolution.serviceId,
+            serviceName: canonicalCatalogResolution.serviceName,
+            routeIntent,
+            asksPrices,
+            asksIncludesOnly,
+            asksSchedules,
+            originalIntent: disambiguationOriginalIntent,
+            idiomaDestino: input.idiomaDestino,
+          });
 
-      if (variantDisambiguationResult) {
-        return variantDisambiguationResult;
+        if (variantDisambiguationResult) {
+          return variantDisambiguationResult;
+        }
       }
 
       const resolvedRoutingSignal = {
@@ -1671,21 +1707,23 @@ export async function runCatalogFastpath(
     });
 
     if (canonicalCatalogResolution?.status === "resolved_single") {
-      const variantDisambiguationResult =
-        await maybeBuildVariantDisambiguationResult({
-          pool: input.pool,
-          serviceId: canonicalCatalogResolution.serviceId,
-          serviceName: canonicalCatalogResolution.serviceName,
-          routeIntent,
-          asksPrices,
-          asksIncludesOnly,
-          asksSchedules,
-          originalIntent: disambiguationOriginalIntent,
-          idiomaDestino: input.idiomaDestino,
-        });
+      if (!shouldForceResolvedVariant) {
+        const variantDisambiguationResult =
+          await maybeBuildVariantDisambiguationResult({
+            pool: input.pool,
+            serviceId: canonicalCatalogResolution.serviceId,
+            serviceName: canonicalCatalogResolution.serviceName,
+            routeIntent,
+            asksPrices,
+            asksIncludesOnly,
+            asksSchedules,
+            originalIntent: disambiguationOriginalIntent,
+            idiomaDestino: input.idiomaDestino,
+          });
 
-      if (variantDisambiguationResult) {
-        return variantDisambiguationResult;
+        if (variantDisambiguationResult) {
+          return variantDisambiguationResult;
+        }
       }
 
       const resolvedRoutingSignal = {
