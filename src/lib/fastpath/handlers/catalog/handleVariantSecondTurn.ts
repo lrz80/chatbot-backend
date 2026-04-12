@@ -65,29 +65,7 @@ function isExplicitVariantSelectionTurn(input: string): boolean {
   const value = String(input || "").trim();
   if (!value) return false;
 
-  if (parseSingleDigitSelection(value) !== null) {
-    return true;
-  }
-
-  const normalized = normalizeChoiceText(value);
-
-  if (!normalized) {
-    return false;
-  }
-
-  // turno corto típico de selección, no pregunta nueva
-  if (
-    normalized === "autopago" ||
-    normalized === "por mes" ||
-    normalized === "auto pago" ||
-    normalized === "monthly" ||
-    normalized === "month" ||
-    normalized === "autopay"
-  ) {
-    return true;
-  }
-
-  return false;
+  return parseSingleDigitSelection(value) !== null;
 }
 
 function splitLines(text: string): string[] {
