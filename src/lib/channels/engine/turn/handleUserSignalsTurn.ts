@@ -229,8 +229,7 @@ export async function handleUserSignalsTurn(
       };
     } else if (
       convoCtx?.awaiting_yesno === true ||
-      convoCtx?.awaiting_yes_no_action?.kind ||
-      convoCtx?.pending_cta?.kind
+      convoCtx?.awaiting_yes_no_action?.kind
     ) {
       transition({
         patchCtx: {

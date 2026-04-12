@@ -32,8 +32,12 @@ export type HandleStateMachineTurnResult =
   | {
       handled: false;
       replied: false;
-      activatedBooking: false;
-      activatedEstimate: false;
+      activatedBooking: boolean;
+      activatedEstimate: boolean;
+      intent?: string | null;
+      replySource?: string | null;
+      facts?: any;
+      transition?: TransitionLike | null;
     }
   | {
       handled: true;
@@ -235,7 +239,7 @@ export async function handleStateMachineTurn(
     });
 
     return {
-      handled: true,
+      handled: false,
       replied: false,
       activatedBooking,
       activatedEstimate,

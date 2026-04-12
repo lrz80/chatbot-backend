@@ -15,8 +15,7 @@ const openai = new OpenAI({
 function hasActiveBinaryAwaiting(convoCtx: any): boolean {
   return Boolean(
     convoCtx?.awaiting_yesno === true ||
-      convoCtx?.awaiting_yes_no_action?.kind ||
-      convoCtx?.pending_cta?.kind
+      convoCtx?.awaiting_yes_no_action?.kind
   );
 }
 

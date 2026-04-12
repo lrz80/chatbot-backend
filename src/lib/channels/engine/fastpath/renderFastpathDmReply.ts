@@ -1047,67 +1047,6 @@ export async function renderFastpathDmReply(
     responsePolicy,
   });
 
-  function shouldAcceptPendingCta(input: {
-    commercialPolicy: RenderFastpathDmReplyInput["replyPolicy"]["commercialPolicy"];
-    detectedIntent: string | null;
-    isResolvedCatalogAnswer: boolean;
-    isInfoGeneralOverviewTurn: boolean;
-  }): boolean {
-    const intent = String(input.detectedIntent || "").trim().toLowerCase();
-    const c = input.commercialPolicy;
-
-    // ❌ nunca permitir en estos casos
-    if (input.isInfoGeneralOverviewTurn) return false;
-    if (intent === "info_general") return false;
-    if (intent === "saludo") return false;
-    if (intent === "duda") return false;
-
-    // ✅ casos válidos fuertes
-    if (c.purchaseIntent === "high" && (c.wantsBooking || c.wantsQuote)) {
-      return true;
-    }
-
-    // ✅ casos medios controlados
-    if (
-      input.isResolvedCatalogAnswer &&
-      c.purchaseIntent !== "low" &&
-      (c.wantsBooking || c.wantsQuote)
-    ) {
-      return true;
-    }
-
-    return false;
-  }
-
-  if (composed.pendingCta) {
-    const shouldAccept = shouldAcceptPendingCta({
-      commercialPolicy,
-      detectedIntent: fpIntent || null,
-      isResolvedCatalogAnswer,
-      isInfoGeneralOverviewTurn,
-    });
-
-    if (shouldAccept) {
-      const pendingCta = {
-        ...composed.pendingCta,
-        createdAt: new Date().toISOString(),
-      };
-
-      ctxPatch.pending_cta = pendingCta;
-
-      ctxPatch.awaiting_yes_no_action = {
-        kind: "pending_cta",
-        ctaType: pendingCta.type ?? null,
-        source: String(fp?.source || ""),
-      };
-    } else {
-      console.log("[CTA][REJECTED_BY_POLICY]", {
-        intent: fpIntent,
-        commercialPolicy,
-      });
-    }
-  }
-
   if (fp?.awaitingEffect?.type === "set_awaiting_yes_no") {
     const payload = fp.awaitingEffect.payload || null;
 

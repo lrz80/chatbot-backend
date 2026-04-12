@@ -144,16 +144,7 @@ export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
 
   if (yn === "unknown") {
     return {
-      action: "reply",
-      replySource: "yesno-clarify",
-      intent: "yesno",
-      facts: {
-        EVENT: "YESNO_REQUIRED",
-        LANGUAGE: idiomaDestino,
-        QUESTION_CONTEXT: ctx?.yesno_context ?? null,
-        EXPECTED_ANSWERS: ["yes", "no"],
-        INSTRUCTION: "ASK_USER_TO_REPLY_YES_OR_NO_ONLY",
-      },
+      action: "continue",
     };
   }
 
@@ -271,14 +262,7 @@ export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
     });
 
     return {
-      action: "reply",
-      replySource: "yesno-handled",
-      intent: "yesno",
-      facts: {
-        EVENT: "YESNO_ACCEPTED",
-        LANGUAGE: idiomaDestino,
-        ACTION: yesNoAction,
-      },
+      action: "transition",
       transition: {
         patchCtx: {
           awaiting_yes_no_action: null,
@@ -302,14 +286,7 @@ export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
     });
 
     return {
-      action: "reply",
-      replySource: "yesno-handled",
-      intent: "yesno",
-      facts: {
-        EVENT: "YESNO_REJECTED",
-        LANGUAGE: idiomaDestino,
-        ACTION: yesNoAction,
-      },
+      action: "transition",
       transition: {
         patchCtx: {
           awaiting_yes_no_action: null,
@@ -340,15 +317,7 @@ export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
 
   if (picked) {
     return {
-      action: "reply",
-      replySource: "yesno-handled",
-      intent: "yesno",
-      facts: {
-        EVENT: "YESNO_RECEIVED",
-        LANGUAGE: idiomaDestino,
-        ANSWER: yn,
-        NEXT: picked,
-      },
+      action: "transition",
       transition: {
         flow: picked.flow,
         step: picked.step,
@@ -358,13 +327,6 @@ export async function yesNoStateGate(event: TurnEvent): Promise<GateResult> {
   }
 
   return {
-    action: "reply",
-    replySource: "yesno-unsupported",
-    intent: "yesno",
-    facts: {
-      EVENT: "YESNO_RECEIVED_NO_HANDLER",
-      LANGUAGE: idiomaDestino,
-      ANSWER: yn,
-    },
+    action: "continue",
   };
 }
